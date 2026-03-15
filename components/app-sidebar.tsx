@@ -5,6 +5,7 @@ import * as React from "react"
 import { NavMain } from "@/components/nav-main"
 import { NavUser } from "@/components/nav-user"
 import { TeamSwitcher } from "@/components/team-switcher"
+import { navigation } from "@/lib/navigation"
 import {
   Sidebar,
   SidebarContent,
@@ -12,20 +13,6 @@ import {
   SidebarHeader,
   SidebarRail,
 } from "@/components/ui/sidebar"
-import { LayoutDashboardIcon, SettingsIcon } from "lucide-react"
-
-const navItems = [
-  {
-    title: "Dashboard",
-    url: "/dashboard",
-    icon: <LayoutDashboardIcon />,
-  },
-  {
-    title: "Settings",
-    url: "/dashboard/settings",
-    icon: <SettingsIcon />,
-  },
-]
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   return (
@@ -34,7 +21,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         <TeamSwitcher />
       </SidebarHeader>
       <SidebarContent>
-        <NavMain items={navItems} />
+        <NavMain groups={navigation} />
       </SidebarContent>
       <SidebarFooter>
         <NavUser />

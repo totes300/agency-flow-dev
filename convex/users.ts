@@ -1,4 +1,6 @@
-import { query, mutation, QueryCtx } from "./_generated/server";
+import { query, mutation, internalMutation, QueryCtx } from "./_generated/server";
+import { v, type Validator } from "convex/values";
+import type { UserJSON } from "@clerk/backend";
 
 async function userByExternalId(ctx: QueryCtx, externalId: string) {
   return await ctx.db
@@ -57,5 +59,34 @@ export const syncUser = mutation({
       name,
       externalId: identity.subject,
     });
+  },
+});
+
+// ─── Webhook-driven sync (called by Convex HTTP action, not public) ──────────
+
+export const upsertFromClerk = internalMutation({
+  args: { data: v.any() as Validator<UserJSON> },
+  async handler(ctx, { data }) {
+    const userAttributes = {
+      name: [data.first_name, data.last_name].filter(Boolean).join(" ") || data.email_addresses?.[0]?.email_address || "Anonymous",
+      externalId: data.id,
+    };
+
+    const existing = await userByExternalId(ctx, data.id);
+    if (existing) {
+      await ctx.db.patch(existing._id, userAttributes);
+    } else {
+      await ctx.db.insert("users", userAttributes);
+    }
+  },
+});
+
+export const deleteFromClerk = internalMutation({
+  args: { clerkUserId: v.string() },
+  async handler(ctx, { clerkUserId }) {
+    const user = await userByExternalId(ctx, clerkUserId);
+    if (user !== null) {
+      await ctx.db.delete(user._id);
+    }
   },
 });

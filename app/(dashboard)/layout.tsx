@@ -12,11 +12,7 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb"
-
-const routeLabels: Record<string, string> = {
-  "/dashboard": "Dashboard",
-  "/dashboard/settings": "Settings",
-}
+import { routeLabels } from "@/lib/navigation"
 
 export default function DashboardLayout({
   children,

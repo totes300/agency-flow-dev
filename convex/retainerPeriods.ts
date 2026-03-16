@@ -30,8 +30,15 @@ export const ensure = mutation({
     if (!project || project.orgId !== orgId) throw new Error("Project not found");
     if (project.billingType !== "retainer") throw new Error("Not a retainer project");
 
+    if (!Number.isInteger(args.year) || args.year < 2000) {
+      throw new Error("Year must be an integer >= 2000");
+    }
+    if (!Number.isInteger(args.month) || args.month < 1 || args.month > 12) {
+      throw new Error("Month must be an integer between 1 and 12");
+    }
+
     const periodStart = `${args.year}-${String(args.month).padStart(2, "0")}-01`;
-    const lastDay = new Date(args.year, args.month, 0).getDate();
+    const lastDay = new Date(Date.UTC(args.year, args.month, 0)).getUTCDate();
     const periodEnd = `${args.year}-${String(args.month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
 
     // Check if period already exists

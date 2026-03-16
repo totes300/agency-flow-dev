@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from "react"
 import { useMutation } from "convex/react"
-import { ConvexError } from "convex/values"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import {
@@ -73,6 +72,13 @@ export function SettingsRetainer({
 
   const isActive = project.retainerStatus === "active"
 
+  // Validation
+  const parsedHours = parseFloat(monthlyHours)
+  const parsedRate = parseFloat(overageRate)
+  const hoursValid = !isNaN(parsedHours) && parsedHours > 0
+  const rateValid = !isNaN(parsedRate) && parsedRate >= 0
+  const canSave = hoursValid && rateValid && !!startDate
+
   // Sync from props when project changes
   useEffect(() => {
     setMonthlyHours(project.includedHoursPerMonth ? String(project.includedHoursPerMonth / 60) : "")
@@ -82,25 +88,46 @@ export function SettingsRetainer({
     setRolloverEnabled(project.rolloverEnabled ?? true)
   }, [project.includedHoursPerMonth, project.overageRate, project.startDate, project.cycleLength, project.rolloverEnabled])
 
-  async function handleSave(confirmed = false) {
+  // Determine if any config fields differ from the saved project state
+  function hasConfigChanges(): boolean {
+    const newMinutes = Math.round(parsedHours * 60)
+    const newRate = parsedRate
+    const newStartDate = startDate ? formatDateToYMD(startDate) : undefined
+    const newCycleLength = parseInt(cycleLength) || 3
+    return (
+      newMinutes !== project.includedHoursPerMonth ||
+      newRate !== project.overageRate ||
+      newStartDate !== project.startDate ||
+      newCycleLength !== (project.cycleLength ?? 3) ||
+      rolloverEnabled !== (project.rolloverEnabled ?? true)
+    )
+  }
+
+  function handleSaveClick() {
+    if (!canSave) return
+    if (hasConfigChanges()) {
+      setConfirmSaveOpen(true)
+    } else {
+      executeSave()
+    }
+  }
+
+  async function executeSave() {
+    if (!canSave) return
     setSaving(true)
     try {
       await updateRetainer({
         id: projectId,
-        includedHoursPerMonth: Math.round((parseFloat(monthlyHours) || 0) * 60),
-        overageRate: parseFloat(overageRate) || 0,
+        includedHoursPerMonth: Math.round(parsedHours * 60),
+        overageRate: parsedRate,
         startDate: startDate ? formatDateToYMD(startDate) : undefined,
         cycleLength: parseInt(cycleLength) || 3,
         rolloverEnabled,
-        confirmed,
+        confirmed: true,
       })
       toast.success("Retainer settings saved")
     } catch (err) {
-      if (err instanceof ConvexError && err.data === "CONFIRMATION_REQUIRED") {
-        setConfirmSaveOpen(true)
-      } else {
-        toast.error(err instanceof Error ? err.message : "Failed to save")
-      }
+      toast.error(err instanceof Error ? err.message : "Failed to save")
     } finally {
       setSaving(false)
     }
@@ -154,7 +181,7 @@ export function SettingsRetainer({
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
-              <Label htmlFor="ret-hours">Monthly hours</Label>
+              <Label htmlFor="ret-hours">Monthly hours <span className="text-destructive">*</span></Label>
               <div className="flex items-center gap-2">
                 <Input
                   id="ret-hours"
@@ -163,12 +190,16 @@ export function SettingsRetainer({
                   step="0.5"
                   value={monthlyHours}
                   onChange={(e) => setMonthlyHours(e.target.value)}
+                  aria-invalid={monthlyHours !== "" && !hoursValid}
                 />
                 <span className="shrink-0 text-sm text-muted-foreground">h/mo</span>
               </div>
+              {monthlyHours !== "" && !hoursValid && (
+                <p className="text-xs text-destructive">Must be greater than 0</p>
+              )}
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="ret-overage">Overage rate</Label>
+              <Label htmlFor="ret-overage">Overage rate <span className="text-destructive">*</span></Label>
               <div className="flex items-center gap-2">
                 <Input
                   id="ret-overage"
@@ -177,15 +208,19 @@ export function SettingsRetainer({
                   step="0.01"
                   value={overageRate}
                   onChange={(e) => setOverageRate(e.target.value)}
+                  aria-invalid={overageRate !== "" && !rateValid}
                 />
                 <span className="shrink-0 text-sm text-muted-foreground">{project.currency}/h</span>
               </div>
+              {overageRate !== "" && !rateValid && (
+                <p className="text-xs text-destructive">Must be 0 or greater</p>
+              )}
             </div>
           </div>
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
-              <Label htmlFor="ret-start-date">Start date</Label>
+              <Label htmlFor="ret-start-date">Start date <span className="text-destructive">*</span></Label>
               <DatePicker
                 id="ret-start-date"
                 value={startDate}
@@ -231,7 +266,7 @@ export function SettingsRetainer({
         </CardContent>
 
         <CardFooter className="justify-end">
-          <Button onClick={() => handleSave()} disabled={saving} size="sm">
+          <Button onClick={handleSaveClick} disabled={!canSave || saving} size="sm">
             {saving ? <><Loader2Icon className="size-3.5 animate-spin" /> Saving...</> : "Save"}
           </Button>
         </CardFooter>
@@ -246,7 +281,7 @@ export function SettingsRetainer({
         confirmLabel="Save changes"
         onConfirm={() => {
           setConfirmSaveOpen(false)
-          handleSave(true)
+          executeSave()
         }}
       />
 

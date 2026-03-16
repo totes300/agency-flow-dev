@@ -249,6 +249,9 @@ export const update = mutation({
       if (project.billingType !== "t_and_m" || project.tmRateMode !== "per_category") {
         throw new Error("Category rates can only be set on per-category T&M projects");
       }
+      if (args.tmCategoryRates.length === 0) {
+        throw new Error("Per-category T&M projects must include at least one category rate");
+      }
       for (const cr of args.tmCategoryRates) {
         if (cr.rate < 0) throw new Error("Category rate cannot be negative");
       }

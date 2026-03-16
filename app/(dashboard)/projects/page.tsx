@@ -2,13 +2,10 @@
 
 import { useState, useDeferredValue, useMemo } from "react"
 import { useQuery, useMutation } from "convex/react"
-import { useRouter } from "next/navigation"
 import { api } from "@/convex/_generated/api"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Badge } from "@/components/ui/badge"
 import { Label } from "@/components/ui/label"
-import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
 import {
   Select,
@@ -17,24 +14,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import {
-  Table,
-  TableHeader,
-  TableBody,
-  TableHead,
-  TableRow,
-  TableCell,
-} from "@/components/ui/table"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
 import { ConfirmDialog } from "@/components/confirm-dialog"
 import { EmptyState } from "@/components/empty-state"
-import { BillingTypeBadge } from "@/components/billing-type-badge"
+import { ProjectsListSkeleton } from "@/components/projects/projects-list-skeleton"
+import { ProjectsTable } from "@/components/projects/projects-table"
 import dynamic from "next/dynamic"
 const ProjectFormModal = dynamic(() => import("@/components/projects/project-form-modal").then(m => ({ default: m.ProjectFormModal })))
 import { useUndoAction } from "@/lib/hooks/use-undo-action"
@@ -42,11 +25,6 @@ import {
   FolderIcon,
   PlusIcon,
   SearchIcon,
-  MoreHorizontalIcon,
-  PencilIcon,
-  ArchiveIcon,
-  ArchiveRestoreIcon,
-  Trash2Icon,
   ArrowUpDownIcon,
   ListFilterIcon,
 } from "lucide-react"
@@ -57,64 +35,6 @@ type SortBy = "name" | "client"
 type FilterClient = "all" | string
 type FilterType = "all" | "fixed" | "t_and_m" | "retainer"
 
-function ProjectsListSkeleton() {
-  return (
-    <div className="space-y-5">
-      <div className="flex items-center justify-between">
-        <div className="space-y-1">
-          <Skeleton className="h-7 w-24" />
-          <Skeleton className="h-4 w-44" />
-        </div>
-        <div className="flex items-center gap-3">
-          <Skeleton className="h-9 w-64" />
-          <Skeleton className="h-9 w-32" />
-        </div>
-      </div>
-      <div className="flex items-center justify-between">
-        <div className="flex items-center divide-x">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className="px-4 first:pl-0">
-              <Skeleton className="mb-1 h-3 w-16" />
-              <Skeleton className="h-6 w-8" />
-            </div>
-          ))}
-        </div>
-        <div className="flex items-center gap-2">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <Skeleton key={i} className="h-9 w-28 rounded-full" />
-          ))}
-        </div>
-      </div>
-      <div className="rounded-md border">
-        <Table>
-          <TableHeader>
-            <TableRow className="hover:bg-transparent">
-              <TableHead>Name</TableHead>
-              <TableHead className="w-24">Code</TableHead>
-              <TableHead className="w-20">Type</TableHead>
-              <TableHead>Client</TableHead>
-              <TableHead className="w-20">Currency</TableHead>
-              <TableHead className="w-10" />
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {Array.from({ length: 5 }).map((_, i) => (
-              <TableRow key={i}>
-                <TableCell><Skeleton className="h-4 w-40" /></TableCell>
-                <TableCell><Skeleton className="h-4 w-16 font-mono" /></TableCell>
-                <TableCell><Skeleton className="h-5 w-14 rounded-full" /></TableCell>
-                <TableCell><Skeleton className="h-4 w-24" /></TableCell>
-                <TableCell><Skeleton className="h-5 w-10 rounded-md" /></TableCell>
-                <TableCell><Skeleton className="size-7" /></TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </div>
-    </div>
-  )
-}
-
 export default function ProjectsPage() {
   const [includeArchived, setIncludeArchived] = useState(false)
   const projects = useQuery(api.projects.list, { includeArchived })
@@ -122,7 +42,6 @@ export default function ProjectsPage() {
   const archiveProject = useMutation(api.projects.archive)
   const restoreProject = useMutation(api.projects.restore)
   const removeProject = useMutation(api.projects.remove)
-  const router = useRouter()
 
   const [search, setSearch] = useState("")
   const deferredSearch = useDeferredValue(search)
@@ -294,7 +213,6 @@ export default function ProjectsPage() {
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Client filter */}
           <Select value={filterClient} onValueChange={(v) => setFilterClient(v as FilterClient)}>
             <SelectTrigger className="h-9 w-fit rounded-full px-3.5">
               <span className="flex items-center gap-1.5">
@@ -311,7 +229,6 @@ export default function ProjectsPage() {
             </SelectContent>
           </Select>
 
-          {/* Type filter */}
           <Select value={filterType} onValueChange={(v) => setFilterType(v as FilterType)}>
             <SelectTrigger className="h-9 w-fit rounded-full px-3.5">
               <span className="flex items-center gap-1.5">
@@ -328,7 +245,6 @@ export default function ProjectsPage() {
             </SelectContent>
           </Select>
 
-          {/* Sort */}
           <Select value={sortBy} onValueChange={(v) => setSortBy(v as SortBy)}>
             <SelectTrigger className="h-9 w-fit rounded-full px-3.5">
               <span className="flex items-center gap-1.5">
@@ -343,7 +259,6 @@ export default function ProjectsPage() {
             </SelectContent>
           </Select>
 
-          {/* Archived toggle */}
           <div className="flex h-9 items-center gap-2.5 rounded-full border border-input px-3.5">
             <Switch
               id="show-archived-projects"
@@ -364,95 +279,12 @@ export default function ProjectsPage() {
           {deferredSearch ? "No projects match your search." : "No projects found."}
         </p>
       ) : (
-        <div className="rounded-md border">
-          <Table>
-            <TableHeader>
-              <TableRow className="hover:bg-transparent">
-                <TableHead>Name</TableHead>
-                <TableHead className="w-24">Code</TableHead>
-                <TableHead className="w-20">Type</TableHead>
-                <TableHead>Client</TableHead>
-                <TableHead className="w-20">Currency</TableHead>
-                <TableHead className="w-20">Last activity</TableHead>
-                <TableHead className="w-10" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {processedProjects.map((project) => (
-                <TableRow
-                  key={project._id}
-                  className="cursor-pointer transition-colors hover:bg-muted/50"
-                  onClick={() => router.push(`/projects/${project._id}`)}
-                >
-                  <TableCell>
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="truncate font-medium">{project.name}</span>
-                        {project.archivedAt && (
-                          <Badge variant="secondary" className="shrink-0 text-[10px] leading-tight">Archived</Badge>
-                        )}
-                      </div>
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <span className="font-mono text-xs text-muted-foreground">{project.code}</span>
-                  </TableCell>
-                  <TableCell>
-                    <BillingTypeBadge type={project.billingType} />
-                  </TableCell>
-                  <TableCell>
-                    <span className="text-sm">{project.clientName}</span>
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant="secondary">{project.currency}</Badge>
-                  </TableCell>
-                  <TableCell>
-                    <span className="text-sm text-muted-foreground">&mdash;</span>
-                  </TableCell>
-                  <TableCell>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <MoreHorizontalIcon className="size-4" />
-                          <span className="sr-only">Actions</span>
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
-                        <DropdownMenuItem onClick={() => router.push(`/projects/${project._id}?tab=settings`)}>
-                          <PencilIcon className="size-4" />
-                          Edit
-                        </DropdownMenuItem>
-                        <DropdownMenuSeparator />
-                        {project.archivedAt ? (
-                          <DropdownMenuItem onClick={() => handleRestore(project)}>
-                            <ArchiveRestoreIcon className="size-4" />
-                            Restore
-                          </DropdownMenuItem>
-                        ) : (
-                          <DropdownMenuItem onClick={() => handleArchive(project)}>
-                            <ArchiveIcon className="size-4" />
-                            Archive
-                          </DropdownMenuItem>
-                        )}
-                        <DropdownMenuItem
-                          className="text-destructive focus:text-destructive"
-                          onClick={() => setDeleteTarget(project)}
-                        >
-                          <Trash2Icon className="size-4" />
-                          Delete
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
+        <ProjectsTable
+          projects={processedProjects}
+          onArchive={handleArchive}
+          onRestore={handleRestore}
+          onDelete={setDeleteTarget}
+        />
       )}
 
       {/* Create modal */}

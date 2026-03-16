@@ -1,16 +1,12 @@
 "use client"
 
-import { Fragment, useState, useDeferredValue, useMemo } from "react"
+import { useState, useDeferredValue, useMemo } from "react"
 import { useQuery, useMutation } from "convex/react"
-import { useRouter } from "next/navigation"
 import { api } from "@/convex/_generated/api"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Badge } from "@/components/ui/badge"
 import { Label } from "@/components/ui/label"
-import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
-import { Separator } from "@/components/ui/separator"
 import {
   Select,
   SelectContent,
@@ -18,38 +14,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import {
-  Table,
-  TableHeader,
-  TableBody,
-  TableHead,
-  TableRow,
-  TableCell,
-} from "@/components/ui/table"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
 import { ConfirmDialog } from "@/components/confirm-dialog"
 import { EmptyState } from "@/components/empty-state"
+import { ClientsListSkeleton } from "@/components/clients/clients-list-skeleton"
+import { ClientsTable } from "@/components/clients/clients-table"
 import dynamic from "next/dynamic"
 const ClientFormModal = dynamic(() => import("@/components/clients/client-form-modal").then(m => ({ default: m.ClientFormModal })))
-import { ClientColorAvatar } from "@/components/clients/client-color-avatar"
-import { ProjectCountBadge } from "@/components/project-count-badge"
 import { useUndoAction } from "@/lib/hooks/use-undo-action"
 import {
   UsersIcon,
   PlusIcon,
   SearchIcon,
-  MoreHorizontalIcon,
-  PencilIcon,
-  ArchiveIcon,
-  ArchiveRestoreIcon,
-  Trash2Icon,
-  ChevronDownIcon,
   ListFilterIcon,
   ArrowUpDownIcon,
 } from "lucide-react"
@@ -59,96 +34,12 @@ import type { Doc } from "@/convex/_generated/dataModel"
 type GroupBy = "none" | "currency"
 type SortBy = "name" | "projects"
 
-function ClientsListSkeleton() {
-  return (
-    <div className="space-y-5">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="space-y-1">
-          <Skeleton className="h-7 w-20" />
-          <Skeleton className="h-4 w-48" />
-        </div>
-        <div className="flex items-center gap-3">
-          <Skeleton className="h-9 w-64" />
-          <Skeleton className="h-9 w-28" />
-        </div>
-      </div>
-
-      {/* Stats + Controls */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center divide-x">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <div key={i} className="px-4 first:pl-0">
-              <Skeleton className="mb-1 h-3 w-16" />
-              <Skeleton className="h-6 w-8" />
-            </div>
-          ))}
-        </div>
-        <div className="flex items-center gap-2">
-          <Skeleton className="h-9 w-32 rounded-full" />
-          <Skeleton className="h-9 w-32 rounded-full" />
-          <Skeleton className="h-9 w-28 rounded-full" />
-        </div>
-      </div>
-
-      {/* Table */}
-      <div className="rounded-md border">
-        <Table>
-          <TableHeader>
-            <TableRow className="hover:bg-transparent">
-              <TableHead>Client</TableHead>
-              <TableHead>Primary contact</TableHead>
-              <TableHead>Billing</TableHead>
-              <TableHead className="w-28">Projects</TableHead>
-              <TableHead className="w-24">Currency</TableHead>
-              <TableHead>Notes</TableHead>
-              <TableHead className="w-10" />
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {Array.from({ length: 5 }).map((_, i) => (
-              <TableRow key={i}>
-                <TableCell>
-                  <div className="flex items-center gap-3">
-                    <Skeleton className="size-8 rounded-lg" />
-                    <div className="space-y-1">
-                      <Skeleton className="h-4 w-32" />
-                      <Skeleton className="h-3 w-16" />
-                    </div>
-                  </div>
-                </TableCell>
-                <TableCell>
-                  <div className="space-y-1">
-                    <Skeleton className="h-4 w-24" />
-                    <Skeleton className="h-3 w-32" />
-                  </div>
-                </TableCell>
-                <TableCell>
-                  <div className="space-y-1">
-                    <Skeleton className="h-4 w-28" />
-                    <Skeleton className="h-3 w-20" />
-                  </div>
-                </TableCell>
-                <TableCell><Skeleton className="h-5 w-16 rounded-full" /></TableCell>
-                <TableCell><Skeleton className="h-5 w-10 rounded-md" /></TableCell>
-                <TableCell><Skeleton className="h-4 w-24" /></TableCell>
-                <TableCell><Skeleton className="size-7" /></TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </div>
-    </div>
-  )
-}
-
 export default function ClientsPage() {
   const [includeArchived, setIncludeArchived] = useState(false)
   const clients = useQuery(api.clients.listWithContacts, { includeArchived })
   const archiveClient = useMutation(api.clients.archive)
   const restoreClient = useMutation(api.clients.restore)
   const removeClient = useMutation(api.clients.remove)
-  const router = useRouter()
 
   const [search, setSearch] = useState("")
   const deferredSearch = useDeferredValue(search)
@@ -161,7 +52,6 @@ export default function ClientsPage() {
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set())
   const { trigger: triggerUndo } = useUndoAction()
 
-  // Computed: filtered + sorted clients
   const processedClients = useMemo(() => {
     if (!clients) return []
     const result = []
@@ -181,7 +71,6 @@ export default function ClientsPage() {
     return result
   }, [clients, hiddenIds, deferredSearch, sortBy])
 
-  // Computed stats (from all clients, not filtered)
   const stats = useMemo(() => {
     if (!clients) return { active: 0, projects: 0, currencies: 0 }
     let active = 0, projects = 0
@@ -195,7 +84,6 @@ export default function ClientsPage() {
     return { active, projects, currencies: currencySet.size }
   }, [clients, hiddenIds])
 
-  // Grouping
   const groupedClients = useMemo(() => {
     if (groupBy === "none") return null
     const groups = new Map<string, typeof processedClients>()
@@ -209,7 +97,7 @@ export default function ClientsPage() {
 
   if (!clients) return <ClientsListSkeleton />
 
-  function handleArchive(client: Doc<"clients">) {
+  function handleArchive(client: Doc<"clients"> & { activeProjectCount: number }) {
     const clientId = client._id
     setHiddenIds((prev) => new Set(prev).add(clientId))
 
@@ -276,120 +164,6 @@ export default function ClientsPage() {
         />
         <ClientFormModal open={createOpen} onOpenChange={setCreateOpen} />
       </>
-    )
-  }
-
-  function renderClientRow(client: (typeof processedClients)[number]) {
-    return (
-      <TableRow
-        key={client._id}
-        className="cursor-pointer transition-colors hover:bg-muted/50"
-        onClick={() => router.push(`/clients/${client._id}`)}
-      >
-        {/* Client */}
-        <TableCell>
-          <div className="flex items-center gap-3">
-            <ClientColorAvatar name={client.name} logoUrl={client.logoUrl} />
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="truncate font-medium">{client.name}</span>
-                {client.archivedAt && (
-                  <Badge variant="secondary" className="shrink-0 text-[10px] leading-tight">Archived</Badge>
-                )}
-              </div>
-              <p className="text-xs text-muted-foreground">{client.invoicePrefix}</p>
-            </div>
-          </div>
-        </TableCell>
-
-        {/* Primary contact */}
-        <TableCell>
-          {client.primaryContact ? (
-            <div className="min-w-0">
-              <p className="truncate text-sm">{client.primaryContact.name}</p>
-              <p className="truncate text-xs text-muted-foreground">{client.primaryContact.email}</p>
-            </div>
-          ) : (
-            <span className="text-sm text-muted-foreground">&mdash;</span>
-          )}
-        </TableCell>
-
-        {/* Billing */}
-        <TableCell>
-          {client.billingName ? (
-            <div className="min-w-0">
-              <p className="truncate text-sm">{client.billingName}</p>
-              {(client.billingCity || client.billingCountry) && (
-                <p className="truncate text-xs text-muted-foreground">
-                  {[client.billingCity, client.billingCountry].filter(Boolean).join(", ")}
-                </p>
-              )}
-            </div>
-          ) : (
-            <span className="text-sm text-muted-foreground">&mdash;</span>
-          )}
-        </TableCell>
-
-        {/* Projects */}
-        <TableCell>
-          <ProjectCountBadge count={client.activeProjectCount} />
-        </TableCell>
-
-        {/* Currency */}
-        <TableCell>
-          <Badge variant="secondary">{client.currency}</Badge>
-        </TableCell>
-
-        {/* Notes */}
-        <TableCell>
-          {client.notes ? (
-            <p className="max-w-[200px] truncate text-sm text-muted-foreground">{client.notes}</p>
-          ) : (
-            <span className="text-sm text-muted-foreground">&mdash;</span>
-          )}
-        </TableCell>
-
-        {/* Actions */}
-        <TableCell>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <MoreHorizontalIcon className="size-4" />
-                <span className="sr-only">Actions</span>
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
-              <DropdownMenuItem onClick={() => setEditingClient(client)}>
-                <PencilIcon className="size-4" />
-                Edit
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              {client.archivedAt ? (
-                <DropdownMenuItem onClick={() => handleRestore(client)}>
-                  <ArchiveRestoreIcon className="size-4" />
-                  Restore
-                </DropdownMenuItem>
-              ) : (
-                <DropdownMenuItem onClick={() => handleArchive(client)}>
-                  <ArchiveIcon className="size-4" />
-                  Archive
-                </DropdownMenuItem>
-              )}
-              <DropdownMenuItem
-                className="text-destructive focus:text-destructive"
-                onClick={() => setDeleteTarget(client)}
-              >
-                <Trash2Icon className="size-4" />
-                Delete
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </TableCell>
-      </TableRow>
     )
   }
 
@@ -484,52 +258,16 @@ export default function ClientsPage() {
           {deferredSearch ? "No clients match your search." : "No clients found."}
         </p>
       ) : (
-        <div className="rounded-md border">
-          <Table>
-            <TableHeader>
-              <TableRow className="hover:bg-transparent">
-                <TableHead>Client</TableHead>
-                <TableHead>Primary contact</TableHead>
-                <TableHead>Billing</TableHead>
-                <TableHead className="w-28">
-                  <button
-                    type="button"
-                    className="inline-flex items-center gap-1"
-                    onClick={() => setSortBy(sortBy === "projects" ? "name" : "projects")}
-                  >
-                    Projects
-                    {sortBy === "projects" && <ChevronDownIcon className="size-3" />}
-                  </button>
-                </TableHead>
-                <TableHead className="w-24">Currency</TableHead>
-                <TableHead>Notes</TableHead>
-                <TableHead className="w-10" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {groupedClients ? (
-                Array.from(groupedClients.entries()).map(([currency, group]) => (
-                  <Fragment key={currency}>
-                    <TableRow className="hover:bg-transparent">
-                      <TableCell colSpan={7} className="bg-muted/30 py-2">
-                        <div className="flex items-center gap-3">
-                          <Badge variant="default">{currency}</Badge>
-                          <span className="text-xs text-muted-foreground">
-                            {group.length} {group.length === 1 ? "client" : "clients"}
-                          </span>
-                          <Separator className="flex-1" />
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                    {group.map(renderClientRow)}
-                  </Fragment>
-                ))
-              ) : (
-                processedClients.map(renderClientRow)
-              )}
-            </TableBody>
-          </Table>
-        </div>
+        <ClientsTable
+          clients={processedClients}
+          groupedClients={groupedClients}
+          sortBy={sortBy}
+          onSortToggle={() => setSortBy(sortBy === "projects" ? "name" : "projects")}
+          onEdit={setEditingClient}
+          onArchive={handleArchive}
+          onRestore={handleRestore}
+          onDelete={setDeleteTarget}
+        />
       )}
 
       {/* Create modal */}

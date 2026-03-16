@@ -1,0 +1,122 @@
+"use client"
+
+import {
+  ListChecksIcon,
+  CircleDotIcon,
+  HashIcon,
+  FolderIcon,
+  UserIcon,
+  CalendarIcon,
+  ClockIcon,
+} from "lucide-react"
+import type { Doc } from "@/convex/_generated/dataModel"
+import { TaskGroup } from "@/components/tasks/task-group"
+
+// Grid column template — shared between header and rows
+// Only Task is flexible (1fr). Everything else is fixed width.
+// The table container sets min-width and scrolls horizontally if needed.
+// Checkbox 36 | Task 1fr | Activity 96 | Status 116 | Category 108 | Project 176 | Assignee 80 | Due 96 | Time 76 | Menu 36
+export const TASK_GRID_COLS = "grid-cols-[36px_1fr_96px_116px_108px_176px_80px_96px_76px_36px]"
+// Fixed columns total = 900px + 9 gaps × 16px = 1044px. With 1fr min ~200px → ~1244px.
+export const TASK_TABLE_MIN_W = "min-w-[1240px]"
+
+type TaskWithJoins = Doc<"tasks"> & {
+  status: Pick<Doc<"statuses">, "_id" | "name" | "color" | "type" | "icon"> | null
+  project: Pick<Doc<"projects">, "_id" | "name" | "code"> | null
+  client: Pick<Doc<"clients">, "_id" | "name"> | null
+  category: Pick<Doc<"workCategories">, "_id" | "name" | "color"> | null
+  assignees: Array<Pick<Doc<"users">, "_id" | "name" | "email" | "imageUrl">>
+}
+
+type TaskGroupData = {
+  key: string
+  label: string
+  color?: string
+  count: number
+  tasks: TaskWithJoins[]
+  hasMore: boolean
+}
+
+const COLUMN_HEADERS = [
+  { label: "", width: null }, // checkbox
+  { label: "Task", icon: ListChecksIcon },
+  { label: "Activity", icon: CircleDotIcon },
+  { label: "Status", icon: CircleDotIcon },
+  { label: "Category", icon: HashIcon },
+  { label: "Client / Project", icon: FolderIcon },
+  { label: "Assignee", icon: UserIcon },
+  { label: "Due date", icon: CalendarIcon },
+  { label: "Time", icon: ClockIcon },
+  { label: "", width: null }, // menu
+]
+
+export function TasksTable({
+  groups,
+  isGrouped,
+  groupBy,
+  orgId,
+  renderRow,
+  renderAddTask,
+}: {
+  groups: TaskGroupData[]
+  isGrouped: boolean
+  groupBy: string
+  orgId: string
+  renderRow: (task: TaskWithJoins) => React.ReactNode
+  renderAddTask: (groupKey: string) => React.ReactNode
+}) {
+  return (
+    <div className="overflow-x-auto">
+      <div className={TASK_TABLE_MIN_W}>
+        {/* Column headers */}
+        <div
+          className={`grid ${TASK_GRID_COLS} items-center gap-x-4 px-3 py-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground [&>*]:min-w-0 [&>*]:overflow-hidden`}
+        >
+          {COLUMN_HEADERS.map((col, i) => (
+            <div key={i} className="flex items-center gap-1 truncate">
+              {col.icon && <col.icon className="size-3 shrink-0 opacity-50" />}
+              {col.label && <span>{col.label}</span>}
+            </div>
+          ))}
+        </div>
+
+        {/* Groups + rows */}
+        {groups.map((group) => {
+          const rows = (
+            <>
+              {group.tasks.map((task) => renderRow(task))}
+              {renderAddTask(group.key)}
+              {group.hasMore && (
+                <div className="px-3 py-2">
+                  <button className="text-xs font-medium text-muted-foreground hover:text-foreground">
+                    Load more ({group.count - group.tasks.length} remaining)
+                  </button>
+                </div>
+              )}
+            </>
+          )
+
+          if (!isGrouped) {
+            return <div key={group.key}>{rows}</div>
+          }
+
+          return (
+            <TaskGroup
+              key={group.key}
+              groupKey={group.key}
+              label={group.label}
+              color={group.color}
+              count={group.count}
+              groupBy={groupBy}
+              orgId={orgId}
+            >
+              {rows}
+            </TaskGroup>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+export type { TaskWithJoins, TaskGroupData }

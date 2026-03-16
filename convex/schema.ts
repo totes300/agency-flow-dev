@@ -46,6 +46,7 @@ export default defineSchema({
       v.literal("blocked"),
       v.literal("done")
     ),
+    systemRole: v.optional(v.union(v.literal("today"))),
     sortOrder: v.number(),
     archivedAt: v.optional(v.number()),
     // Base
@@ -55,6 +56,41 @@ export default defineSchema({
   })
     .index("by_orgId", ["orgId"])
     .index("by_orgId_type", ["orgId", "type"]),
+
+  // ─── Tasks ───────────────────────────────────────────────────────────────────
+  tasks: defineTable({
+    orgId: v.string(),
+    title: v.string(),
+    description: v.optional(v.string()),
+    statusId: v.id("statuses"),
+    statusType: v.union(
+      v.literal("backlog"),
+      v.literal("in_progress"),
+      v.literal("review"),
+      v.literal("blocked"),
+      v.literal("done")
+    ),
+    projectId: v.optional(v.id("projects")),
+    assigneeIds: v.array(v.id("users")),
+    workCategoryId: v.optional(v.id("workCategories")),
+    estimate: v.optional(v.number()),
+    billable: v.boolean(),
+    dueDate: v.optional(v.string()),
+    parentTaskId: v.optional(v.id("tasks")),
+    archivedAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    createdBy: v.id("users"),
+  })
+    .index("by_orgId", ["orgId"])
+    .index("by_orgId_statusType", ["orgId", "statusType"])
+    .index("by_projectId", ["projectId"])
+    .index("by_parentTaskId", ["parentTaskId"])
+    .index("by_statusId", ["statusId"])
+    .searchIndex("search_title", {
+      searchField: "title",
+      filterFields: ["orgId"],
+    }),
 
   // ─── Clients ──────────────────────────────────────────────────────────────────
   clients: defineTable({

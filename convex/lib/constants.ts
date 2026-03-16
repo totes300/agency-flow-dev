@@ -69,14 +69,17 @@ export type StatusColorName = (typeof STATUS_COLOR_NAMES)[number];
 
 // ─── Default status seed data ──────────────────────────────────────────────────
 
+export type SystemRole = "today";
+
 export const DEFAULT_STATUSES: Array<{
   name: string;
   type: StatusType;
   color: StatusColorName;
   sortOrder: number;
+  systemRole?: SystemRole;
 }> = [
   { name: "Inbox", type: "backlog", color: "gray", sortOrder: 0 },
-  { name: "Today", type: "backlog", color: "blue", sortOrder: 1 },
+  { name: "Today", type: "backlog", color: "blue", sortOrder: 1, systemRole: "today" },
   { name: "Next up", type: "in_progress", color: "blue", sortOrder: 2 },
   { name: "In progress", type: "in_progress", color: "amber", sortOrder: 3 },
   { name: "Admin review", type: "review", color: "purple", sortOrder: 4 },

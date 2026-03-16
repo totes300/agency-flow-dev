@@ -78,6 +78,17 @@ export const syncUser = mutation({
   },
 });
 
+/** Resolve Clerk external IDs to Convex users. Used by assignee pickers. */
+export const listByExternalIds = query({
+  args: { externalIds: v.array(v.string()) },
+  handler: async (ctx, args) => {
+    const users = await Promise.all(
+      args.externalIds.map((id) => userByExternalId(ctx, id))
+    );
+    return users.filter((u) => u !== null && !u.deletedAt);
+  },
+});
+
 // ─── Webhook-driven sync (called by Convex HTTP action, not public) ──────────
 
 export const upsertFromClerk = internalMutation({

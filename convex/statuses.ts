@@ -149,7 +149,14 @@ export const remove = mutation({
       throw new Error("Status not found");
     }
 
-    // TODO(Phase 5): Check for task references before allowing hard delete
+    // Check for task references before allowing hard delete
+    const taskWithStatus = await ctx.db
+      .query("tasks")
+      .withIndex("by_statusId", (q) => q.eq("statusId", args.id))
+      .first();
+    if (taskWithStatus) {
+      throw new Error("Cannot delete a status that is assigned to tasks. Archive it instead.");
+    }
 
     // Clear defaultStatusId in orgSettings if this status was default
     const settings = await ctx.db
@@ -241,6 +248,7 @@ export const seed = internalMutation({
         color: status.color,
         type: status.type,
         sortOrder: status.sortOrder,
+        ...(status.systemRole ? { systemRole: status.systemRole } : {}),
         createdAt: now,
         updatedAt: now,
         createdBy: args.createdBy,

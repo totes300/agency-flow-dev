@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { ClerkProvider } from "@clerk/nextjs";
 import ConvexClientProvider from "@/components/convex-client-provider";
+import { NuqsAdapter } from "nuqs/adapters/next/app";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 const geistSans = Geist({
@@ -32,9 +33,11 @@ export default function RootLayout({
       <body>
         <ClerkProvider>
           <ConvexClientProvider>
-            <TooltipProvider>
-              {children}
-            </TooltipProvider>
+            <NuqsAdapter>
+              <TooltipProvider>
+                {children}
+              </TooltipProvider>
+            </NuqsAdapter>
           </ConvexClientProvider>
         </ClerkProvider>
       </body>

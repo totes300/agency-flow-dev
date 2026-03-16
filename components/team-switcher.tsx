@@ -16,6 +16,7 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar"
+import { Button } from "@/components/ui/button"
 import { ChevronsUpDownIcon, PlusIcon, BuildingIcon, UserIcon } from "lucide-react"
 
 export function TeamSwitcher() {
@@ -33,12 +34,9 @@ export function TeamSwitcher() {
           afterCreateOrganizationUrl="/dashboard"
           skipInvitationScreen
         />
-        <button
-          onClick={() => setShowCreate(false)}
-          className="mt-2 w-full text-center text-xs text-muted-foreground hover:text-foreground"
-        >
+        <Button variant="ghost" size="sm" className="w-full" onClick={() => setShowCreate(false)}>
           Cancel
-        </button>
+        </Button>
       </div>
     )
   }

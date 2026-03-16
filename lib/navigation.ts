@@ -1,6 +1,11 @@
 import {
   LayoutDashboardIcon,
   SettingsIcon,
+  CheckSquareIcon,
+  UsersIcon,
+  FolderIcon,
+  FileTextIcon,
+  ClockIcon,
   type LucideIcon,
 } from "lucide-react"
 
@@ -8,6 +13,7 @@ export type NavItem = {
   title: string
   url: string
   icon: LucideIcon
+  adminOnly?: boolean
 }
 
 export type NavGroup = {
@@ -28,36 +34,36 @@ export const navigation: NavGroup[] = [
       { title: "Dashboard", url: "/dashboard", icon: LayoutDashboardIcon },
     ],
   },
-  // ── Add module groups below ────────────────────────────────────────────────
-  // {
-  //   label: "CRM",
-  //   items: [
-  //     { title: "Clients", url: "/dashboard/clients", icon: UsersIcon },
-  //     { title: "Contacts", url: "/dashboard/contacts", icon: ContactIcon },
-  //     { title: "Leads", url: "/dashboard/leads", icon: TargetIcon },
-  //   ],
-  // },
-  // {
-  //   label: "Projects",
-  //   items: [
-  //     { title: "Projects", url: "/dashboard/projects", icon: FolderIcon },
-  //     { title: "Tasks", url: "/dashboard/tasks", icon: CheckSquareIcon },
-  //   ],
-  // },
-  // {
-  //   label: "Finance",
-  //   items: [
-  //     { title: "Invoices", url: "/dashboard/invoices", icon: ReceiptIcon },
-  //     { title: "Expenses", url: "/dashboard/expenses", icon: WalletIcon },
-  //   ],
-  // },
+  {
+    label: "Work",
+    items: [
+      { title: "Tasks", url: "/tasks", icon: CheckSquareIcon },
+    ],
+  },
+  {
+    label: "Manage",
+    items: [
+      { title: "Clients", url: "/clients", icon: UsersIcon, adminOnly: true },
+      { title: "Projects", url: "/projects", icon: FolderIcon, adminOnly: true },
+    ],
+  },
+  {
+    label: "Finance",
+    items: [
+      { title: "Reports", url: "/reports", icon: FileTextIcon, adminOnly: true },
+      { title: "My Time", url: "/my-time", icon: ClockIcon },
+    ],
+  },
   {
     label: "System",
     items: [
-      { title: "Settings", url: "/dashboard/settings", icon: SettingsIcon },
+      { title: "Settings", url: "/settings", icon: SettingsIcon, adminOnly: true },
     ],
   },
 ]
+
+// Re-export admin route patterns — canonical list lives in lib/route-access.ts
+export { adminRoutePatterns as adminOnlyPatterns } from "@/lib/route-access"
 
 // Derived from navigation — used by breadcrumbs in dashboard layout
 export const routeLabels: Record<string, string> = Object.fromEntries(

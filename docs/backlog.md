@@ -497,3 +497,404 @@
 - [x] Dynamic breadcrumbs work for `/clients/[id]`
 - [x] Member cannot see the /clients route (existing AdminGuard)
 - [x] All data filtered by orgId
+
+---
+
+## Phase 3: Projects Core ✅ COMPLETE
+
+> **Goal**: Project CRUD with Fixed + T&M billing types. Retainer is schema-only (Phase 4). Monthly breakdown is a placeholder shell (Phase 7).
+> **Depends on**: Phase 1 (Work Categories) + Phase 2 (Clients)
+> **Access**: Admin only
+> **Spec**: `docs/phase-3-projects-core.md`
+>
+> **Key decisions**:
+> - Code uniqueness: retry on conflict (up to 3 attempts)
+> - Settings: per-section Save buttons
+> - Monthly breakdown: placeholder shell only, full UI in Phase 7
+> - User refs: Convex `v.id("users")`
+> - activeProjectCount: batch query, no N+1
+> - billingType + tmRateMode immutable after creation
+> - Currency lock: stub (always allows, TODO when reports table exists)
+
+---
+
+### Task 3.1 — Schema: `projects` + `projectCategoryEstimates` tables ✅
+
+- [x] Add `projects` table to `convex/schema.ts`
+  - Fields: `orgId`, `clientId`, `name`, `code`, `billingType` (fixed/retainer/t_and_m), `currency`
+  - Retainer stub fields (all optional, Phase 4): `retainerStatus`, `includedHoursPerMonth`, `overageRate`, `startDate`, `rolloverEnabled`, `cycleLength`
+  - T&M fields (optional): `hourlyRate`, `tmCategoryRates` (array), `tmRateMode` (flat/per_category)
+  - `defaultAssignees` (optional array of workCategoryId + userId)
+  - `archivedAt`, `createdAt`, `updatedAt`, `createdBy`
+  - Indexes: `by_orgId`, `by_clientId`, `by_orgId_code`
+- [x] Add `projectCategoryEstimates` table (Fixed budget rows)
+  - Fields: `orgId`, `projectId`, `workCategoryId`, `estimatedMinutes`, `internalCostRate` (opt), `clientBillingRate` (opt)
+  - Index: `by_projectId`
+- [x] Deploy schema
+
+---
+
+### Task 3.2 — Validators ✅
+
+- [x] Add `billingTypeValidator` to `convex/lib/validators.ts` — `v.union(v.literal("fixed"), v.literal("retainer"), v.literal("t_and_m"))`
+- [x] Add `tmRateModeValidator` — `v.union(v.literal("flat"), v.literal("per_category"))`
+
+---
+
+### Task 3.3 — Helpers: project code generation ✅
+
+- [x] Add `generateNextProjectCode(ctx, orgId)` to `convex/lib/helpers.ts` — finds max PRJ-XXX, returns PRJ-{max+1} zero-padded to 3 digits
+- [x] Add `ensureUniqueProjectCode(ctx, orgId, code, excludeProjectId?)` — throws if taken
+
+---
+
+### Task 3.4 — Queries: `projects.list`, `projects.get`, `projects.nextCode` ✅
+
+- [x] `projects.list` — args: includeArchived, clientId, billingType; batch joins client names (one query, build lookup map); returns `{ ...project, clientName }`
+- [x] `projects.get` — validates project.orgId === auth.orgId; returns full project + clientName
+- [x] `projects.nextCode` — returns next available PRJ-XXX string
+
+---
+
+### Task 3.5 — Mutations: `projects.create`, `update`, `archive`, `restore`, `remove` ✅
+
+- [x] `projects.create` — validates name ≤100, client exists + same org, currency in CURRENCIES; auto-generates code with retry on conflict (up to 3 attempts); T&M validation (rate mode required, hourly rate or category rates)
+- [x] `projects.update` — immutable guard (billingType, tmRateMode cannot change); validates code uniqueness excluding self; currency lock stub (TODO)
+- [x] `projects.archive` — sets archivedAt; TODO Phase 5: cascade to tasks; TODO Phase 7: stop timers
+- [x] `projects.restore` — clears archivedAt; does NOT cascade-restore tasks
+- [x] `projects.remove` — cascade deletes projectCategoryEstimates; TODO Phase 7: block if time entries exist
+
+---
+
+### Task 3.6 — `projectCategoryEstimates` CRUD ✅
+
+- [x] `projectCategoryEstimates.list` — enriched with categoryName + categoryColor from workCategories
+- [x] `projectCategoryEstimates.upsert` — finds existing estimate for project+category, updates if exists, creates if not; validates non-negative rates
+- [x] `projectCategoryEstimates.remove` — validates org ownership
+
+---
+
+### Task 3.7 — Wire `activeProjectCount` in clients ✅
+
+- [x] In `clients.listWithContacts`: replaced hardcoded `activeProjectCount: 0`
+- [x] Batch query: all org projects ONCE (by_orgId index), build `Map<clientId, count>` of non-archived projects
+- [x] No N+1 — one query for all projects, not one per client
+
+---
+
+### Task 3.8 — Wire cascade delete in `clients.remove` ✅
+
+- [x] `clients.remove` now cascade deletes all projects for the client
+- [x] Each deleted project's estimates are also cascade deleted
+- [x] TODO Phase 5: cascade delete tasks under each project
+
+---
+
+### Task 3.9 — Shared components ✅
+
+- [x] `components/billing-type-badge.tsx` — colored badge: Fixed (blue), T&M (green), Retainer (purple)
+- [x] `components/health-badge.tsx` — on_track (green) / at_risk (amber) / over_budget (red) + `getHealthStatus(utilization)` utility
+- [x] `components/projects/time-log-placeholder.tsx` — empty state shell for Phase 7
+
+---
+
+### Task 3.10 — UI: Create Project Modal ✅
+
+- [x] `components/projects/project-form-modal.tsx`
+  - Client select (auto-fills currency), Project name (max 100), Project code (pre-filled from nextCode, editable)
+  - Billing type radio (Fixed/T&M/Retainer disabled) with immutability warning
+  - T&M section (visible when billingType="t_and_m"): Rate mode radio (flat/per-category) with immutability warning
+  - Flat → hourly rate input + currency suffix
+  - Per-category → grid: category dropdown + rate input per row, pre-populated from defaultBillRate; + Add / × remove
+  - Currency select (defaults to client's)
+  - Success → navigates to `/projects/[newId]`
+
+---
+
+### Task 3.11 — UI: Project List Page (`/projects`) ✅
+
+- [x] Replaced stub with full list page following `clients/page.tsx` pattern
+  - Stats bar (divide-x): Active | Fixed | T&M | Retainer counts
+  - Filters: Client dropdown, Type dropdown, Sort (Name/Client), Archived toggle
+  - Search with `useDeferredValue`
+  - Table columns: Name, Code (monospace), Type (BillingTypeBadge), Client, Currency (badge), Last activity (placeholder "—"), Actions ⋮
+  - Row click → `/projects/[id]`
+  - Archive: optimistic hide + 5s undo toast (`useUndoAction`)
+  - Delete: AlertDialog confirmation
+  - Empty state: EmptyState with CTA
+
+---
+
+### Task 3.12 — UI: Project Detail Page (`/projects/[id]`) ✅
+
+- [x] `app/(dashboard)/projects/[id]/page.tsx` — `"use client"` with Tabs (Overview | Settings)
+- [x] **Header**: Name (h1) + BillingTypeBadge + Archived badge; Code + client + currency metadata; Last logged placeholder; Edit button (→ Settings tab); ⋮ menu (Archive/Restore, Delete)
+- [x] **Fixed Overview tab**:
+  - Info banner: "Fixed projects are for budget tracking only"
+  - Budget Overview card: progress bar + % + hours + HealthBadge + est. cost/revenue
+  - Per-Category Breakdown table: CategoryBadge + Estimated/Actual/Remaining/Progress per row + Total footer
+  - Time Log section: TimeLogPlaceholder
+  - All actuals = 0 until Phase 7
+- [x] **T&M Overview tab**:
+  - 4 metric cards (Uninvoiced, Last invoiced, This month, Last logged) — all placeholder zeros
+  - Time Log section: TimeLogPlaceholder
+- [x] **Retainer Overview**: placeholder message "Phase 4"
+- [x] **Settings tab — General section**: name, code, billingType (read-only badge), currency (select); per-section Save
+- [x] **Settings tab — Budget Estimates (Fixed only)**: editable grid (category select + est. hours + cost rate + bill rate + × remove); + Add category; pre-populates from workCategory defaults; Save → batch upsert/remove
+- [x] **Settings tab — Rates (T&M only)**: rate mode (read-only); flat → hourly rate input; per-category → table with rates; Save
+- [x] **Settings tab — Default Assignees**: category + user pairs; Save → `projects.update({ defaultAssignees })`
+- [x] **Not found**: redirects to `/projects`
+
+---
+
+### Verification
+
+- [x] `npx convex dev --once --typecheck disable` — schema + functions deploy cleanly
+- [x] `npx tsc --noEmit` — 0 errors in Phase 3 files (4 pre-existing errors in clients code)
+
+---
+
+### Acceptance criteria
+
+- [x] Admin creates project (client + name + billing type + currency), appears in list
+- [x] Project code auto-generated (PRJ-XXX), editable, unique per org with retry
+- [x] billingType + tmRateMode immutable after creation (enforced in update mutation)
+- [x] T&M flat: hourlyRate required; T&M per-category: category rates required
+- [x] Fixed: budget estimates per category with cost/bill rates
+- [x] List view: table with search + client/type/sort filters + archived toggle
+- [x] Archive with 5s undo toast, Restore without cascade
+- [x] Hard delete cascades to estimates (time entry guard wired in Phase 7)
+- [x] activeProjectCount wired in clients list (batch query, no N+1)
+- [x] Client cascade delete wired for projects + estimates
+- [x] Project detail page with Overview + Settings tabs
+- [x] CategoryBadge used in breakdown (matches Work Categories design)
+- [x] TimeLogPlaceholder shell ready for Phase 7 expansion
+- [x] All data filtered by orgId
+
+---
+
+### TODOs deferred to later phases
+
+- **Phase 5**: Archive cascade from projects → tasks; cascade delete tasks on project delete
+- **Phase 7**: Time entry data in overview (actual hours, utilization, monthly breakdown); block project delete if time entries exist; stop running timers on archive; currency lock when reports exist; "Last activity" column with real dates
+
+---
+
+## Phase 4: Projects Retainer ✅ COMPLETE
+
+> **Goal**: Full Retainer billing type — monthly hour allowance, rollover cycles, overage billing, cycle navigation, balance computation.
+> **Depends on**: Phase 3 (Projects Core)
+> **Access**: Admin only
+> **Spec**: `docs/phase-4-projects-retainer.md`
+>
+> **Key decisions**:
+> - Balance always computed fresh from time entries (query, no cache)
+> - Rollover toggle change → entire history recalculates automatically (since balance is derived)
+> - Mid-cycle config change → retroactive to current cycle + confirmation dialog
+> - Active/Inactive is pausable (not archive), data preserved
+> - Cron skeleton for auto-report generation (full reports in Phase 2 Reports)
+> - No donut chart (progress bar + metrics are sufficient)
+> - Monthly breakdown uses shadcn Accordion with single-open behavior
+
+---
+
+### Task 4.0 — Prerequisites: install shadcn components ✅
+
+- [x] Install `alert`, `accordion`, `progress`, `popover`, `calendar` via `npx shadcn@latest add`
+- [x] Verified `date-fns` already installed (v4.1.0)
+
+---
+
+### Task 4.1 — Schema updates ✅
+
+- [x] Fixed retainer field types on `projects` table:
+  - `retainerStatus`: `v.optional(v.union(v.literal("active"), v.literal("inactive")))` (was `v.optional(v.string())`)
+  - `startDate`: `v.optional(v.string())` for YYYY-MM-DD (was `v.optional(v.number())`)
+  - `cycleLength`: `v.optional(v.number())` for 1-12 (was `v.optional(v.string())`)
+- [x] Added `retainerPeriods` table with fields: `orgId`, `projectId`, `periodStart`, `periodEnd`, audit fields; index `by_projectId`
+
+---
+
+### Task 4.2 — Validators ✅
+
+- [x] Added `retainerStatusValidator` to `convex/lib/validators.ts` — `v.union(v.literal("active"), v.literal("inactive"))`
+
+---
+
+### Task 4.3 — Mutation: `projects.create` retainer support ✅
+
+- [x] Extended `projects.create` with retainer-specific args: `includedHoursPerMonth`, `overageRate`, `startDate`, `cycleLength`, `rolloverEnabled`
+- [x] Retainer validation: monthly hours > 0, overage rate >= 0, valid YYYY-MM-DD start date, cycle length 1-12
+- [x] On create: sets `retainerStatus: "active"`, defaults `rolloverEnabled: true`, `cycleLength: 3`
+
+---
+
+### Task 4.4 — Mutation: `projects.updateRetainer` ✅
+
+- [x] Created `projects.updateRetainer` mutation
+  - Editable fields: `includedHoursPerMonth`, `overageRate`, `startDate`, `cycleLength`, `rolloverEnabled`, `retainerStatus`
+  - `confirmed` flag required for config changes (frontend shows dialog first)
+  - Throws `"CONFIRMATION_REQUIRED"` if changing config fields without `confirmed: true`
+  - Validation: same constraints as create (hours > 0, rate >= 0, cycle 1-12)
+
+---
+
+### Task 4.5 — Query: `projects.getRetainerData` (balance computation) ✅
+
+- [x] Created `projects.getRetainerData` query — the core balance engine
+  - Args: `id` (project), `cycleOffset` (0 = current, -1 = previous, etc.)
+  - Computes cycle boundaries from `startDate + cycleLength`
+  - Sequential balance chain (for loop, not map — each month depends on previous):
+    - **Rollover ON**: `startBalance = prev.endBalance`, `available = startBalance + allowance`
+    - **Rollover OFF**: `startBalance = 0`, `available = allowance`
+    - `endBalance = available - workedMinutes`
+  - Badge status logic: `due` | `deficit` | `rollover` | `unused` | `on_track`
+  - Cycle totals: `cycleBudget`, `cycleWorked`, `cycleBalance`, `utilization`
+  - Overage: rollover ON → only at cycle end; rollover OFF → per closed month
+  - Returns: `hasPreviousCycle`, `hasNextCycle` for cycle navigator
+  - **Phase 7 stub**: `workedMinutes = 0` per month (TODO: real time entry aggregation)
+
+---
+
+### Task 4.6 — Backend: `retainerPeriods` CRUD ✅
+
+- [x] Created `convex/retainerPeriods.ts`:
+  - `list` query — all periods for a project, sorted by periodStart
+  - `ensure` mutation — lazy-creates period for a given month if none exists; computes periodStart/periodEnd from year+month
+
+---
+
+### Task 4.7 — Cron skeleton ✅
+
+- [x] Created `convex/crons.ts` — registers monthly cron (1st of month, 06:00 UTC)
+- [x] Created `convex/retainerCron.ts` — `generateMonthlyPeriods` internal mutation:
+  - Finds all active retainer projects across all orgs
+  - Creates period record for the previous month if none exists
+  - TODO Phase 2 (Reports): auto-generate reports here
+
+---
+
+### Task 4.8 — Shared components ✅
+
+- [x] `components/metric-card.tsx` — reusable metric display card with `<Card size="sm">`, `tabular-nums`, color variant support (default/destructive/warning)
+- [x] `components/budget-progress.tsx` — two-segment progress bar (budget + overage), reusable for Fixed + Retainer
+- [x] `components/retainer-balance-badge.tsx` — 5 badge variants: `due` (red), `deficit` (red), `rollover` (amber), `unused` (yellow), `on_track` (green)
+- [x] `components/retainer-status-badge.tsx` — Active (green dot) / Inactive (gray dot) inline status
+- [x] `components/cycle-dots.tsx` — cycle position indicator (●●○ for 2/3)
+- [x] `components/confirm-dialog.tsx` — reusable AlertDialog wrapper for confirmation flows
+- [x] `components/ui/date-picker.tsx` — shadcn Popover + Calendar date picker
+
+---
+
+### Task 4.9 — UI: Create Modal — retainer flow ✅
+
+- [x] Enabled retainer option in `project-form-modal.tsx` (was disabled)
+- [x] Retainer config section (visible when billingType="retainer"):
+  - 2-col grid: Monthly hours (h/mo) + Overage rate (currency/h)
+  - 2-col grid: Start date (DatePicker, default: 1st of current month) + Cycle length (Select, 1-12 months)
+  - Rollover toggle (Switch) with contextual explanation text
+- [x] On submit: converts hours → minutes, formats date as YYYY-MM-DD
+- [x] Removed unused `toast` import (lint clean)
+
+---
+
+### Task 4.10 — UI: Retainer Overview tab ✅
+
+- [x] Created `components/projects/retainer-overview.tsx` — replaces "Coming soon" placeholder
+  - **Cycle Overview Card** (`<Card>` with `CardHeader`/`CardContent`/`CardFooter`):
+    - CardTitle: "Cycle Overview" + CardDescription: date range + cycle config
+    - CardAction: Cycle Navigator (◀ Cycle N ▶) with `cycleOffset` state
+    - BudgetProgress bar (budget segment + overage segment)
+    - 3 MetricCards in responsive grid: Hours Used, Over Budget, Overage Due
+    - CardFooter: cycle summary stats
+  - **Overage Invoice Banner** — `<Alert variant="destructive">` when cycle closed + overage exists
+    - Shows amount due + calculation breakdown + disabled "Create Invoice" button (Phase 2)
+  - **Monthly Breakdown** — `<Card>` wrapping `<Accordion type="single" collapsible>`:
+    - AccordionTrigger per month: label + CycleDots + worked/available + balance + RetainerBalanceBadge
+    - AccordionContent: balance detail grid (start balance, available, worked) + time entries placeholder
+    - Default open: current month (or last month of closed cycle)
+  - **Cycle-End Settlement Card** — inside accordion after last month:
+    - Overage variant: `border-destructive/20 bg-destructive/5` with ZapIcon + amount + disabled invoice button
+    - Forfeited variant: `bg-muted/50` with unused hours message
+  - **TimeLogPlaceholder** — existing component
+  - Content-aware loading skeleton
+
+---
+
+### Task 4.11 — UI: Retainer Settings tab ✅
+
+- [x] Created `components/projects/settings-retainer.tsx`
+  - `<Card>` with `CardHeader` (title + CardAction: status badge + Switch toggle)
+  - `<Alert>` info banner: "Changes retroactively affect the current billing cycle"
+  - 2-col grid: Monthly hours + Overage rate
+  - 2-col grid: Start date (DatePicker) + Cycle length (Select 1-12)
+  - `<Separator>` + Rollover toggle with explanation text
+  - `CardFooter`: Save button
+  - **Active/Inactive toggle** fires immediately via separate mutation call (not batched with Save)
+  - **Confirmation dialogs** (using `<ConfirmDialog>`):
+    - Config change: "These changes will retroactively affect the current billing cycle"
+    - Status toggle: "Pause retainer?" / "Activate retainer?"
+
+---
+
+### Task 4.12 — Wire into project detail page ✅
+
+- [x] Updated `app/(dashboard)/projects/[id]/page.tsx`:
+  - Overview tab: `<RetainerOverview>` replaces placeholder
+  - Settings tab: `<SettingsRetainer>` added for retainer projects
+  - Header: shows `<RetainerStatusBadge>` + h/mo metadata for retainer projects
+  - Fixed `text-[10px]` → `text-xs` accessibility issue (Archived badge)
+
+---
+
+### Task 4.13 — Accessibility fixes ✅
+
+- [x] Fixed `text-[11px]` → `text-xs` in `billing-type-badge.tsx` (WCAG minimum text size)
+- [x] Fixed `text-[10px]` → `text-xs` in project detail page
+- [x] All numeric values use `tabular-nums` class for stable column width
+- [x] Cycle navigator buttons have `aria-label`
+- [x] Retainer status Switch has `aria-label`
+
+---
+
+### Task 4.14 — Format helpers ✅
+
+- [x] Added `formatCurrencyPrecise(amount, currency)` to `lib/format.ts` — 2 decimal places for overage amounts
+- [x] Added `formatMinutes(minutes)` — converts minutes to HH:MM format (e.g., 630 → "10:30")
+- [x] Added `formatHours(minutes)` — alias for formatMinutes
+
+---
+
+### Verification
+
+- [x] `npx tsc --noEmit` — 0 type errors
+- [x] `npx convex typecheck` — passed
+- [x] `npm run lint` — 0 errors (4 warnings: pre-existing auto-generated files only)
+
+---
+
+### Acceptance criteria
+
+- [x] Retainer project creatable from modal (all required fields: hours, rate, start date, cycle, rollover)
+- [x] Cycle overview card: progress bar, 3 metrics — with computed data
+- [x] Monthly breakdown: balance chaining correct (rollover ON and OFF)
+- [x] Cycle-end settlement: overage OR unused/forfeited card
+- [x] Deficit indicator on mid-cycle negative balance
+- [x] Overage invoice banner appears if cycle closed + overage exists
+- [x] Cycle navigator (prev/next) for older cycles
+- [x] Rollover toggle change: history recalculates + confirmation
+- [x] Mid-cycle config change: retroactive + confirmation
+- [x] Active/Inactive toggle works (immediate, separate mutation)
+- [x] Settings tab: all config editable with 2-col responsive grid
+- [x] Balance always computed fresh (no stale data)
+- [x] Auto-report cron skeleton ready (trigger logic, period creation)
+- [x] All shared components follow domain UI convention (separate files in components/)
+- [x] All data filtered by orgId
+
+---
+
+### TODOs deferred to later phases
+
+- **Phase 5**: Archive cascade from projects → tasks
+- **Phase 7**: Real time entry aggregation in `getRetainerData` (currently `workedMinutes = 0`); monthly breakdown with grouped entries by category; "Log entry" link per month
+- **Phase 2 (Reports)**: Auto-report generation in cron job; "Create Invoice" button on overage banner and settlement card; overage billing queue

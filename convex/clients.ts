@@ -39,6 +39,19 @@ export const listWithContacts = query({
       ? clients
       : clients.filter((c) => !c.archivedAt);
 
+    // Batch query: all org projects for activeProjectCount (avoids N+1)
+    const allProjects = await ctx.db
+      .query("projects")
+      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+      .collect();
+    const projectCountMap = new Map<string, number>();
+    for (const p of allProjects) {
+      if (!p.archivedAt) {
+        const key = p.clientId.toString();
+        projectCountMap.set(key, (projectCountMap.get(key) ?? 0) + 1);
+      }
+    }
+
     // Enrich each client with primary contact
     const enriched = await Promise.all(
       filtered.map(async (client) => {
@@ -61,7 +74,7 @@ export const listWithContacts = query({
           primaryContact: primary
             ? { name: primary.name, email: primary.email }
             : null,
-          activeProjectCount: 0, // Phase 3 will wire real data
+          activeProjectCount: projectCountMap.get(client._id.toString()) ?? 0,
         };
       })
     );
@@ -120,8 +133,8 @@ export const create = mutation({
       .first();
     if (existing) throw new Error("A client with this name already exists");
 
-    // Currency: default to org's
-    let currency = args.currency;
+    // Currency: default to org's (orgSettings.defaultCurrency is validated at save time)
+    let currency: string = args.currency ?? "";
     if (!currency) {
       const orgSettings = await ctx.db
         .query("orgSettings")
@@ -278,7 +291,23 @@ export const remove = mutation({
       await ctx.db.delete(contact._id);
     }
 
-    // TODO Phase 3: cascade delete projects → tasks
+    // Cascade delete projects and their estimates
+    const projects = await ctx.db
+      .query("projects")
+      .withIndex("by_clientId", (q) => q.eq("clientId", args.id))
+      .collect();
+    for (const project of projects) {
+      // Delete estimates for this project
+      const estimates = await ctx.db
+        .query("projectCategoryEstimates")
+        .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
+        .collect();
+      for (const est of estimates) {
+        await ctx.db.delete(est._id);
+      }
+      // TODO Phase 5: cascade delete tasks
+      await ctx.db.delete(project._id);
+    }
 
     // Clean up uploaded logo file
     if (client.logoStorageId) {

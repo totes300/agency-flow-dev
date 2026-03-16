@@ -22,3 +22,19 @@ export const categoryColorValidator = v.union(
 export const statusColorValidator = v.union(
   ...STATUS_COLOR_NAMES.map((c) => v.literal(c))
 );
+
+export const billingTypeValidator = v.union(
+  v.literal("fixed"),
+  v.literal("retainer"),
+  v.literal("t_and_m"),
+);
+
+export const tmRateModeValidator = v.union(
+  v.literal("flat"),
+  v.literal("per_category"),
+);
+
+export const retainerStatusValidator = v.union(
+  v.literal("active"),
+  v.literal("inactive"),
+);

@@ -96,6 +96,68 @@ export default defineSchema({
     .index("by_clientId", ["clientId"])
     .index("by_orgId_email", ["orgId", "email"]),
 
+  // ─── Projects ─────────────────────────────────────────────────────────────────
+  projects: defineTable({
+    orgId: v.string(),
+    clientId: v.id("clients"),
+    name: v.string(),
+    code: v.string(), // "PRJ-042", editable, unique per org
+    billingType: v.union(v.literal("fixed"), v.literal("retainer"), v.literal("t_and_m")),
+    currency: v.string(),
+    // Retainer fields (Phase 4)
+    retainerStatus: v.optional(v.union(v.literal("active"), v.literal("inactive"))),
+    includedHoursPerMonth: v.optional(v.number()), // stored in MINUTES
+    overageRate: v.optional(v.number()),            // $/h for overage
+    startDate: v.optional(v.string()),              // YYYY-MM-DD
+    rolloverEnabled: v.optional(v.boolean()),
+    cycleLength: v.optional(v.number()),            // 1-12 months
+    // T&M fields
+    hourlyRate: v.optional(v.number()),
+    tmCategoryRates: v.optional(v.array(v.object({
+      workCategoryId: v.id("workCategories"),
+      rate: v.number(),
+    }))),
+    tmRateMode: v.optional(v.union(v.literal("flat"), v.literal("per_category"))),
+    // Default assignees
+    defaultAssignees: v.optional(v.array(v.object({
+      workCategoryId: v.id("workCategories"),
+      userId: v.id("users"),
+    }))),
+    archivedAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    createdBy: v.id("users"),
+  })
+    .index("by_orgId", ["orgId"])
+    .index("by_clientId", ["clientId"])
+    .index("by_orgId_code", ["orgId", "code"])
+    .index("by_billingType_retainerStatus", ["billingType", "retainerStatus"]),
+
+  // ─── Project Category Estimates (Fixed budget rows) ──────────────────────────
+  projectCategoryEstimates: defineTable({
+    orgId: v.string(),
+    projectId: v.id("projects"),
+    workCategoryId: v.id("workCategories"),
+    estimatedMinutes: v.number(),
+    internalCostRate: v.optional(v.number()),
+    clientBillingRate: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    createdBy: v.id("users"),
+  }).index("by_projectId", ["projectId"]),
+
+  // ─── Retainer Periods (lazy-created per project per month) ───────────────────
+  retainerPeriods: defineTable({
+    orgId: v.string(),
+    projectId: v.id("projects"),
+    periodStart: v.string(), // YYYY-MM-DD (1st of month)
+    periodEnd: v.string(),   // YYYY-MM-DD (last of month)
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    createdBy: v.id("users"),
+  }).index("by_projectId", ["projectId"])
+    .index("by_projectId_periodStart", ["projectId", "periodStart"]),
+
   // ─── Work Categories (per org) ──────────────────────────────────────────────
   workCategories: defineTable({
     orgId: v.string(),

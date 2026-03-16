@@ -28,6 +28,7 @@ import { CURRENCIES } from "@/convex/lib/constants"
 import { toast } from "sonner"
 import Image from "next/image"
 import { validateLogoFile } from "@/lib/file-upload"
+import type { Currency } from "@/convex/lib/constants"
 import type { Doc, Id } from "@/convex/_generated/dataModel"
 
 type ClientFormModalProps = {
@@ -184,7 +185,7 @@ export function ClientFormModal({ open, onOpenChange, client, defaultCurrency = 
 
     const payload = {
       name: name.trim(),
-      currency,
+      currency: currency as Currency,
       invoicePrefix: invoicePrefix.trim() || undefined,
       billingName: billingName || undefined,
       billingEmail: billingEmail || undefined,
@@ -311,7 +312,7 @@ export function ClientFormModal({ open, onOpenChange, client, defaultCurrency = 
                 <div className="space-y-1.5">
                   <Label htmlFor="client-currency">Currency</Label>
                   <Select value={currency} onValueChange={setCurrency}>
-                    <SelectTrigger id="client-currency" className="w-full">
+                    <SelectTrigger id="client-currency">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>

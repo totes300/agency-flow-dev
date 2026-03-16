@@ -33,18 +33,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog"
+import { ConfirmDialog } from "@/components/confirm-dialog"
 import { EmptyState } from "@/components/empty-state"
-import { ClientFormModal } from "@/components/clients/client-form-modal"
+import dynamic from "next/dynamic"
+const ClientFormModal = dynamic(() => import("@/components/clients/client-form-modal").then(m => ({ default: m.ClientFormModal })))
 import { ClientColorAvatar } from "@/components/clients/client-color-avatar"
 import { ProjectCountBadge } from "@/components/project-count-badge"
 import { useUndoAction } from "@/lib/hooks/use-undo-action"
@@ -172,31 +164,35 @@ export default function ClientsPage() {
   // Computed: filtered + sorted clients
   const processedClients = useMemo(() => {
     if (!clients) return []
-
-    const filtered = clients
-      .filter((c) => !hiddenIds.has(c._id))
-      .filter((c) => c.name.toLowerCase().includes(deferredSearch.toLowerCase()))
-
-    const sorted = [...filtered].sort((a, b) => {
+    const result = []
+    const q = deferredSearch.toLowerCase()
+    for (const c of clients) {
+      if (hiddenIds.has(c._id)) continue
+      if (q && !c.name.toLowerCase().includes(q)) continue
+      result.push(c)
+    }
+    result.sort((a, b) => {
       if (sortBy === "projects") {
         const diff = b.activeProjectCount - a.activeProjectCount
         if (diff !== 0) return diff
       }
       return a.name.localeCompare(b.name)
     })
-
-    return sorted
+    return result
   }, [clients, hiddenIds, deferredSearch, sortBy])
 
   // Computed stats (from all clients, not filtered)
   const stats = useMemo(() => {
     if (!clients) return { active: 0, projects: 0, currencies: 0 }
-    const nonHidden = clients.filter((c) => !hiddenIds.has(c._id))
-    return {
-      active: nonHidden.filter((c) => !c.archivedAt).length,
-      projects: nonHidden.reduce((sum, c) => sum + c.activeProjectCount, 0),
-      currencies: new Set(nonHidden.map((c) => c.currency)).size,
+    let active = 0, projects = 0
+    const currencySet = new Set<string>()
+    for (const c of clients) {
+      if (hiddenIds.has(c._id)) continue
+      if (!c.archivedAt) active++
+      projects += c.activeProjectCount
+      currencySet.add(c.currency)
     }
+    return { active, projects, currencies: currencySet.size }
   }, [clients, hiddenIds])
 
   // Grouping
@@ -441,28 +437,28 @@ export default function ClientsPage() {
 
         <div className="flex items-center gap-2">
           <Select value={groupBy} onValueChange={(v) => setGroupBy(v as GroupBy)}>
-            <SelectTrigger className="h-9 rounded-full px-3.5">
+            <SelectTrigger className="h-9 w-fit rounded-full px-3.5">
               <span className="flex items-center gap-1.5">
                 <ListFilterIcon className="size-3.5 shrink-0 text-muted-foreground" />
                 <span className="text-sm text-muted-foreground">Group:</span>
                 <span className="text-sm font-semibold"><SelectValue /></span>
               </span>
             </SelectTrigger>
-            <SelectContent position="popper" align="start">
+            <SelectContent>
               <SelectItem value="none" className="py-2 pl-2.5">None</SelectItem>
               <SelectItem value="currency" className="py-2 pl-2.5">Currency</SelectItem>
             </SelectContent>
           </Select>
 
           <Select value={sortBy} onValueChange={(v) => setSortBy(v as SortBy)}>
-            <SelectTrigger className="h-9 rounded-full px-3.5">
+            <SelectTrigger className="h-9 w-fit rounded-full px-3.5">
               <span className="flex items-center gap-1.5">
                 <ArrowUpDownIcon className="size-3.5 shrink-0 text-muted-foreground" />
                 <span className="text-sm text-muted-foreground">Sort:</span>
                 <span className="text-sm font-semibold"><SelectValue /></span>
               </span>
             </SelectTrigger>
-            <SelectContent position="popper" align="start">
+            <SelectContent>
               <SelectItem value="name" className="py-2 pl-2.5">Name</SelectItem>
               <SelectItem value="projects" className="py-2 pl-2.5">Projects</SelectItem>
             </SelectContent>
@@ -547,29 +543,15 @@ export default function ClientsPage() {
       />
 
       {/* Delete confirmation */}
-      <AlertDialog
+      <ConfirmDialog
         open={!!deleteTarget}
         onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete client</AlertDialogTitle>
-            <AlertDialogDescription>
-              This will permanently delete &ldquo;{deleteTarget?.name}&rdquo; and all associated
-              data. This cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={handleDelete}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
-              Delete
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        title="Delete client"
+        description={`This will permanently delete "${deleteTarget?.name}" and all associated data. This cannot be undone.`}
+        confirmLabel="Delete"
+        variant="destructive"
+        onConfirm={handleDelete}
+      />
     </div>
   )
 }

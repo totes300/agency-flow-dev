@@ -23,6 +23,19 @@ export function validateStringLength(
   }
 }
 
+/** Extract orgId and orgRole from a Clerk JWT identity. */
+function parseOrgFromIdentity(identity: Record<string, unknown>): {
+  orgId: string | undefined;
+  orgRole: "admin" | "member";
+} {
+  const rawOrgId = identity.orgId ?? identity.org_id;
+  const orgId = typeof rawOrgId === "string" ? rawOrgId : undefined;
+  const rawOrgRole = identity.orgRole ?? identity.org_role;
+  const orgRoleStr = typeof rawOrgRole === "string" ? rawOrgRole : undefined;
+  const orgRole = orgRoleStr === "org:admin" ? ("admin" as const) : ("member" as const);
+  return { orgId, orgRole };
+}
+
 /**
  * Call at the start of every protected query/mutation.
  * Extracts userId, orgId, orgRole from the Clerk JWT + Convex users table.
@@ -36,20 +49,11 @@ export async function getAuthContext(
     throw new Error("Not authenticated");
   }
 
-  // Clerk Organizations puts these on the JWT token
-  // Extract orgId with runtime type checks (no unsafe `as` casts)
-  const raw = identity as Record<string, unknown>;
-  const rawOrgId = raw.orgId ?? raw.org_id;
-  const orgId = typeof rawOrgId === "string" ? rawOrgId : undefined;
+  const { orgId, orgRole } = parseOrgFromIdentity(identity as Record<string, unknown>);
 
   if (!orgId) {
     throw new Error("No organization selected");
   }
-
-  const rawOrgRole = raw.orgRole ?? raw.org_role;
-  const orgRoleStr = typeof rawOrgRole === "string" ? rawOrgRole : undefined;
-
-  const role = orgRoleStr === "org:admin" ? ("admin" as const) : ("member" as const);
 
   // Look up the Convex user record
   const user = await ctx.db
@@ -64,8 +68,8 @@ export async function getAuthContext(
   return {
     userId: user._id,
     orgId,
-    orgRole: role,
-    isAdmin: role === "admin",
+    orgRole,
+    isAdmin: orgRole === "admin",
     user,
   };
 }
@@ -80,9 +84,7 @@ export async function getAuthContextOptional(
   const identity = await ctx.auth.getUserIdentity();
   if (!identity) return null;
 
-  const raw = identity as Record<string, unknown>;
-  const rawOrgId = raw.orgId ?? raw.org_id;
-  const orgId = typeof rawOrgId === "string" ? rawOrgId : undefined;
+  const { orgId } = parseOrgFromIdentity(identity as Record<string, unknown>);
   if (!orgId) return null;
 
   const user = await ctx.db

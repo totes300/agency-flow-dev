@@ -25,21 +25,21 @@ function DashboardContent() {
 
       <div className="grid gap-4 md:grid-cols-3">
         <Card>
-          <CardContent className="pt-6">
-            <h2 className="mb-1 text-sm font-medium text-muted-foreground">Active Tasks</h2>
-            <p className="text-2xl font-semibold">0</p>
+          <CardContent className="p-5">
+            <h2 className="text-xs font-medium text-muted-foreground">Active Tasks</h2>
+            <p className="mt-1 text-2xl font-semibold tracking-tight">0</p>
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="pt-6">
-            <h2 className="mb-1 text-sm font-medium text-muted-foreground">Hours This Week</h2>
-            <p className="text-2xl font-semibold">0h</p>
+          <CardContent className="p-5">
+            <h2 className="text-xs font-medium text-muted-foreground">Hours This Week</h2>
+            <p className="mt-1 text-2xl font-semibold tracking-tight">0h</p>
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="pt-6">
-            <h2 className="mb-1 text-sm font-medium text-muted-foreground">Active Projects</h2>
-            <p className="text-2xl font-semibold">0</p>
+          <CardContent className="p-5">
+            <h2 className="text-xs font-medium text-muted-foreground">Active Projects</h2>
+            <p className="mt-1 text-2xl font-semibold tracking-tight">0</p>
           </CardContent>
         </Card>
       </div>
@@ -57,9 +57,9 @@ export default function DashboardPage() {
             <Skeleton className="h-5 w-48" />
           </div>
           <div className="grid gap-4 md:grid-cols-3">
-            <Skeleton className="h-24 rounded-xl" />
-            <Skeleton className="h-24 rounded-xl" />
-            <Skeleton className="h-24 rounded-xl" />
+            <Skeleton className="h-[76px] rounded-xl" />
+            <Skeleton className="h-[76px] rounded-xl" />
+            <Skeleton className="h-[76px] rounded-xl" />
           </div>
         </div>
       </AuthLoading>

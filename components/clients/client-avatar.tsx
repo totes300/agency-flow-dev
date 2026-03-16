@@ -13,10 +13,8 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
+import { validateLogoFile } from "@/lib/file-upload"
 import type { Id } from "@/convex/_generated/dataModel"
-
-const MAX_FILE_SIZE = 2 * 1024 * 1024 // 2MB
-const ALLOWED_TYPES = ["image/png", "image/jpeg", "image/svg+xml"]
 
 type ClientAvatarProps = {
   clientId: Id<"clients">
@@ -45,12 +43,9 @@ export function ClientAvatar({
     if (!file) return
     e.target.value = ""
 
-    if (!ALLOWED_TYPES.includes(file.type)) {
-      toast.error("Please upload a PNG, JPG, or SVG file")
-      return
-    }
-    if (file.size > MAX_FILE_SIZE) {
-      toast.error("File must be smaller than 2MB")
+    const validationError = validateLogoFile(file)
+    if (validationError) {
+      toast.error(validationError)
       return
     }
 
@@ -65,10 +60,10 @@ export function ClientAvatar({
       if (!response.ok) throw new Error("Upload failed")
       const { storageId } = await response.json()
 
-      if (logoStorageId) {
-        await removeFile({ storageId: logoStorageId })
-      }
       await updateClient({ id: clientId, logoStorageId: storageId })
+      if (logoStorageId) {
+        removeFile({ storageId: logoStorageId }).catch(() => {})
+      }
       toast.success("Logo updated")
     } catch {
       toast.error("Failed to upload logo")
@@ -80,8 +75,8 @@ export function ClientAvatar({
   async function handleRemove() {
     if (!logoStorageId) return
     try {
-      await removeFile({ storageId: logoStorageId })
       await updateClient({ id: clientId, logoStorageId: null })
+      removeFile({ storageId: logoStorageId }).catch(() => {})
       toast.success("Logo removed")
     } catch {
       toast.error("Failed to remove logo")

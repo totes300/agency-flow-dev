@@ -102,8 +102,8 @@ function SettingsGeneralForm({
   return (
     <div className="space-y-8">
       <div>
-        <h2 className="text-sm font-medium">General</h2>
-        <p className="text-sm text-muted-foreground">
+        <h2 className="text-sm font-semibold">General</h2>
+        <p className="text-[13px] text-muted-foreground">
           Default settings for your organization. These apply to new projects
           unless overridden.
         </p>

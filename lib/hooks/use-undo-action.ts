@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useRef } from "react"
+import { useCallback, useEffect, useRef } from "react"
 import { toast } from "sonner"
 
 type UndoActionOptions = {
@@ -71,6 +71,16 @@ export function useUndoAction() {
     },
     [],
   )
+
+  // Clean up timer on unmount to prevent stale mutations
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current)
+        timerRef.current = null
+      }
+    }
+  }, [])
 
   const cancel = useCallback(() => {
     if (timerRef.current) {

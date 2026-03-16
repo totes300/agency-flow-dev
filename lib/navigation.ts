@@ -62,11 +62,8 @@ export const navigation: NavGroup[] = [
   },
 ]
 
-// Admin-only URLs derived from navigation (used by admin guard)
-export const adminOnlyUrls = navigation
-  .flatMap((group) => group.items)
-  .filter((item) => item.adminOnly)
-  .map((item) => item.url)
+// Re-export admin route patterns — canonical list lives in lib/route-access.ts
+export { adminRoutePatterns as adminOnlyPatterns } from "@/lib/route-access"
 
 // Derived from navigation — used by breadcrumbs in dashboard layout
 export const routeLabels: Record<string, string> = Object.fromEntries(

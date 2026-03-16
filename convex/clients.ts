@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { query, mutation } from "./_generated/server";
 import { getAuthContext, requireAdmin, validateStringLength } from "./lib/auth";
 import { generateInvoicePrefix, ensureUniquePrefix } from "./lib/helpers";
+import { currencyValidator } from "./lib/validators";
 
 // ─── Queries ────────────────────────────────────────────────────────────────────
 
@@ -93,7 +94,7 @@ export const get = query({
 export const create = mutation({
   args: {
     name: v.string(),
-    currency: v.optional(v.string()),
+    currency: v.optional(currencyValidator),
     invoicePrefix: v.optional(v.string()),
     billingName: v.optional(v.string()),
     billingEmail: v.optional(v.string()),
@@ -159,7 +160,7 @@ export const update = mutation({
   args: {
     id: v.id("clients"),
     name: v.optional(v.string()),
-    currency: v.optional(v.string()),
+    currency: v.optional(currencyValidator),
     invoicePrefix: v.optional(v.string()),
     billingName: v.optional(v.string()),
     billingEmail: v.optional(v.string()),
@@ -278,6 +279,15 @@ export const remove = mutation({
     }
 
     // TODO Phase 3: cascade delete projects → tasks
+
+    // Clean up uploaded logo file
+    if (client.logoStorageId) {
+      try {
+        await ctx.storage.delete(client.logoStorageId);
+      } catch {
+        // Tolerate storage failures — don't block client deletion
+      }
+    }
 
     await ctx.db.delete(args.id);
   },

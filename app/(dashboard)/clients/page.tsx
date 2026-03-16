@@ -73,7 +73,7 @@ function ClientsListSkeleton() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="space-y-1">
-          <Skeleton className="h-7 w-28" />
+          <Skeleton className="h-7 w-20" />
           <Skeleton className="h-4 w-48" />
         </div>
         <div className="flex items-center gap-3">
@@ -244,9 +244,13 @@ export default function ClientsPage() {
     })
   }
 
-  function handleRestore(client: Doc<"clients">) {
-    restoreClient({ id: client._id })
-    toast.info("Client restored. Projects and tasks are still archived — restore them individually.")
+  async function handleRestore(client: Doc<"clients">) {
+    try {
+      await restoreClient({ id: client._id })
+      toast.info("Client restored. Projects and tasks are still archived — restore them individually.")
+    } catch {
+      toast.error("Failed to restore client")
+    }
   }
 
   async function handleDelete() {
@@ -398,7 +402,7 @@ export default function ClientsPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-lg font-semibold tracking-tight">Clients</h1>
+          <h1 className="text-xl font-semibold tracking-tight">Clients</h1>
           <p className="text-sm text-muted-foreground">Manage your client directory</p>
         </div>
         <div className="flex items-center gap-3">

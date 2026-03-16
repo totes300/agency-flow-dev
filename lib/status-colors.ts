@@ -17,3 +17,8 @@ export const STATUS_COLOR_CONFIG: Record<
   pink:   { dot: "#EC4899", swatch: "#F5E0E9", label: "Pink" },
   indigo: { dot: "#6366F1", swatch: "#DFE2F8", label: "Indigo" },
 }
+
+/** Resolve a status color config with fallback to `gray`. */
+export function getStatusColor(color: string): (typeof STATUS_COLOR_CONFIG)[StatusColorName] {
+  return STATUS_COLOR_CONFIG[color as StatusColorName] ?? STATUS_COLOR_CONFIG.gray
+}

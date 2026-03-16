@@ -44,6 +44,11 @@ export const CATEGORY_COLOR_NAMES = Object.keys(CATEGORY_COLORS) as (keyof typeo
 
 export type CategoryColor = keyof typeof CATEGORY_COLORS;
 
+/** Resolve a category color config with fallback to `default`. */
+export function getCategoryColor(color: string): (typeof CATEGORY_COLORS)[CategoryColor] {
+  return CATEGORY_COLORS[color as CategoryColor] ?? CATEGORY_COLORS.default;
+}
+
 export const DEFAULT_CATEGORIES: Array<{
   name: string;
   color: CategoryColor;

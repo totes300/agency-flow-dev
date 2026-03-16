@@ -5,7 +5,7 @@ export default function SettingsLoading() {
     <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-6">
       {/* Header */}
       <div className="space-y-1">
-        <Skeleton className="h-6 w-24" />
+        <Skeleton className="h-7 w-24" />
         <Skeleton className="h-4 w-64" />
       </div>
 

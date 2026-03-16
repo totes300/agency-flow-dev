@@ -1,5 +1,4 @@
-import { STATUS_COLOR_CONFIG } from "@/lib/status-colors"
-import type { StatusColorName } from "@/convex/lib/constants"
+import { getStatusColor } from "@/lib/status-colors"
 import { cn } from "@/lib/utils"
 
 /**
@@ -13,11 +12,11 @@ export function StatusDot({
   color: string
   className?: string
 }) {
-  const cfg = STATUS_COLOR_CONFIG[color as StatusColorName]
+  const cfg = getStatusColor(color)
   return (
     <span
       className={cn("inline-block size-3 rounded-full", className)}
-      style={{ backgroundColor: cfg?.dot ?? STATUS_COLOR_CONFIG.gray.dot }}
+      style={{ backgroundColor: cfg.dot }}
     />
   )
 }

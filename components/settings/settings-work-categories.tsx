@@ -40,7 +40,7 @@ import {
   TableRow,
   TableCell,
 } from "@/components/ui/table"
-import { CATEGORY_COLORS, CATEGORY_COLOR_NAMES, CURRENCIES } from "@/convex/lib/constants"
+import { CATEGORY_COLOR_NAMES, CURRENCIES } from "@/convex/lib/constants"
 import type { CategoryColor, Currency } from "@/convex/lib/constants"
 import { CATEGORY_COLOR_LABELS } from "@/lib/display-constants"
 import type { Id } from "@/convex/_generated/dataModel"

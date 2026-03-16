@@ -84,11 +84,15 @@ export const upsertFromClerk = internalMutation({
   args: { data: v.any() as Validator<UserJSON> },
   async handler(ctx, { data }) {
     const now = Date.now();
+    const primaryEmail =
+      data.email_addresses?.find(
+        (e) => e.id === data.primary_email_address_id
+      )?.email_address ?? data.email_addresses?.[0]?.email_address;
     const name =
       [data.first_name, data.last_name].filter(Boolean).join(" ") ||
-      data.email_addresses?.[0]?.email_address ||
+      primaryEmail ||
       "Anonymous";
-    const email = data.email_addresses?.[0]?.email_address ?? undefined;
+    const email = primaryEmail ?? undefined;
     const imageUrl = data.image_url ?? undefined;
 
     const existing = await userByExternalId(ctx, data.id);

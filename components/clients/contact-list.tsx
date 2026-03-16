@@ -91,8 +91,12 @@ export function ContactList({ clientId, contacts }: ContactListProps) {
                   {!contact.isPrimary && (
                     <DropdownMenuItem
                       onClick={async () => {
-                        await setPrimary({ id: contact._id })
-                        toast.success(`${contact.name} is now the primary contact`)
+                        try {
+                          await setPrimary({ id: contact._id })
+                          toast.success(`${contact.name} is now the primary contact`)
+                        } catch {
+                          toast.error("Failed to set primary contact")
+                        }
                       }}
                     >
                       <StarIcon className="size-4" />
@@ -146,8 +150,12 @@ export function ContactList({ clientId, contacts }: ContactListProps) {
             <AlertDialogAction
               onClick={async () => {
                 if (deleteTarget) {
-                  await removeContact({ id: deleteTarget._id })
-                  setDeleteTarget(null)
+                  try {
+                    await removeContact({ id: deleteTarget._id })
+                    setDeleteTarget(null)
+                  } catch {
+                    toast.error("Failed to delete contact")
+                  }
                 }
               }}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"

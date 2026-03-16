@@ -59,9 +59,14 @@ export function OnboardingModal() {
   )
 
   function handleCurrencyChange(newCurrency: Currency) {
+    const previousDefault = currency
     setCurrency(newCurrency)
     setCategories((prev) =>
-      prev.map((c) => ({ ...c, currency: newCurrency }))
+      prev.map((c) =>
+        c.currency === previousDefault
+          ? { ...c, currency: newCurrency }
+          : c
+      )
     )
   }
 
@@ -78,13 +83,17 @@ export function OnboardingModal() {
           color: s.color,
           type: s.type,
         })),
-        workCategories: categories.map((c) => ({
-          name: c.name.trim(),
-          color: c.color,
-          defaultCostRate: c.defaultCostRate ? Math.max(0, Number(c.defaultCostRate)) : undefined,
-          defaultBillRate: c.defaultBillRate ? Math.max(0, Number(c.defaultBillRate)) : undefined,
-          currency: c.currency,
-        })),
+        workCategories: categories.map((c) => {
+          const cost = Number(c.defaultCostRate)
+          const bill = Number(c.defaultBillRate)
+          return {
+            name: c.name.trim(),
+            color: c.color,
+            defaultCostRate: Number.isFinite(cost) ? Math.max(0, cost) : undefined,
+            defaultBillRate: Number.isFinite(bill) ? Math.max(0, bill) : undefined,
+            currency: c.currency,
+          }
+        }),
       })
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong")
@@ -128,7 +137,7 @@ export function OnboardingModal() {
               key={i}
               className={cn(
                 "h-1 flex-1 rounded-full",
-                i <= step ? "bg-foreground" : "bg-muted"
+                i <= step ? "bg-foreground/80" : "bg-muted"
               )}
             />
           ))}

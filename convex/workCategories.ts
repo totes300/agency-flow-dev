@@ -45,6 +45,13 @@ export const create = mutation({
   handler: async (ctx, args) => {
     const { orgId, userId } = await requireAdmin(ctx);
 
+    if (args.defaultCostRate !== undefined && args.defaultCostRate < 0) {
+      throw new Error("Cost rate cannot be negative");
+    }
+    if (args.defaultBillRate !== undefined && args.defaultBillRate < 0) {
+      throw new Error("Bill rate cannot be negative");
+    }
+
     const trimmedName = args.name.trim();
     if (!trimmedName) {
       throw new Error("Name is required");
@@ -90,6 +97,13 @@ export const update = mutation({
   },
   handler: async (ctx, args) => {
     const { orgId } = await requireAdmin(ctx);
+
+    if (args.defaultCostRate !== undefined && args.defaultCostRate < 0) {
+      throw new Error("Cost rate cannot be negative");
+    }
+    if (args.defaultBillRate !== undefined && args.defaultBillRate < 0) {
+      throw new Error("Bill rate cannot be negative");
+    }
 
     const category = await ctx.db.get(args.id);
     if (!category || category.orgId !== orgId) {

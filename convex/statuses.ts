@@ -5,30 +5,21 @@ import { statusTypeValidator, statusColorValidator } from "./lib/validators";
 import { DEFAULT_STATUSES } from "./lib/constants";
 
 export const list = query({
-  args: {},
-  handler: async (ctx) => {
-    const { orgId } = await getAuthContext(ctx);
-    const statuses = await ctx.db
-      .query("statuses")
-      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
-      .collect();
-
-    return statuses
-      .filter((s) => !s.archivedAt)
-      .sort((a, b) => a.sortOrder - b.sortOrder);
+  args: {
+    includeArchived: v.optional(v.boolean()),
   },
-});
-
-export const listAll = query({
-  args: {},
-  handler: async (ctx) => {
+  handler: async (ctx, args) => {
     const { orgId } = await getAuthContext(ctx);
     const statuses = await ctx.db
       .query("statuses")
       .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
       .collect();
 
-    return statuses.sort((a, b) => a.sortOrder - b.sortOrder);
+    const filtered = args.includeArchived
+      ? statuses
+      : statuses.filter((s) => !s.archivedAt);
+
+    return filtered.sort((a, b) => a.sortOrder - b.sortOrder);
   },
 });
 
@@ -184,6 +175,9 @@ export const setDefault = mutation({
     const status = await ctx.db.get(args.id);
     if (!status || status.orgId !== orgId) {
       throw new Error("Status not found");
+    }
+    if (status.archivedAt) {
+      throw new Error("Cannot set an archived status as default");
     }
 
     const settings = await ctx.db

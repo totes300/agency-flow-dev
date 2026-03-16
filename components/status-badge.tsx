@@ -1,5 +1,4 @@
-import { STATUS_COLOR_CONFIG } from "@/lib/status-colors"
-import type { StatusColorName } from "@/convex/lib/constants"
+import { getStatusColor } from "@/lib/status-colors"
 import { cn } from "@/lib/utils"
 
 /**
@@ -15,7 +14,7 @@ export function StatusBadge({
   color: string
   className?: string
 }) {
-  const cfg = STATUS_COLOR_CONFIG[color as StatusColorName]
+  const cfg = getStatusColor(color)
   return (
     <span
       className={cn(
@@ -26,7 +25,7 @@ export function StatusBadge({
       <span
         className="size-2 shrink-0 rounded-full"
         style={{
-          backgroundColor: cfg?.dot ?? STATUS_COLOR_CONFIG.gray.dot,
+          backgroundColor: cfg.dot,
         }}
       />
       {name}

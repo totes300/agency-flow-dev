@@ -48,7 +48,7 @@ export function ColorPickerDropdown<T extends string>({
           return (
             <DropdownMenuItem
               key={c}
-              onClick={() => onChange(c)}
+              onSelect={() => onChange(c)}
               className="gap-2.5"
             >
               {swatch}

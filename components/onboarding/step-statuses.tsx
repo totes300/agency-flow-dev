@@ -74,7 +74,7 @@ export function StepStatuses({
       const movedStatus = { ...current, type: newType }
 
       if (direction === 1) {
-        const lastIdx = findLastIndex(updated, (s) => s.type === newType)
+        const lastIdx = updated.findLastIndex((s) => s.type === newType)
         updated.splice(lastIdx + 1, 0, movedStatus)
       } else {
         const firstIdx = updated.findIndex((s) => s.type === newType)
@@ -236,11 +236,4 @@ export function StepStatuses({
       })}
     </div>
   )
-}
-
-function findLastIndex<T>(arr: T[], predicate: (item: T) => boolean): number {
-  for (let i = arr.length - 1; i >= 0; i--) {
-    if (predicate(arr[i])) return i
-  }
-  return -1
 }

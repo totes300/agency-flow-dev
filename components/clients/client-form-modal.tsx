@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect, useRef } from "react"
-import { useMutation, useQuery } from "convex/react"
+import { useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -27,30 +27,23 @@ import { ImageIcon, Loader2Icon, Trash2Icon } from "lucide-react"
 import { CURRENCIES } from "@/convex/lib/constants"
 import { toast } from "sonner"
 import Image from "next/image"
+import { validateLogoFile } from "@/lib/file-upload"
 import type { Doc, Id } from "@/convex/_generated/dataModel"
-
-const MAX_FILE_SIZE = 2 * 1024 * 1024 // 2MB
-const ALLOWED_TYPES = ["image/png", "image/jpeg", "image/svg+xml"]
 
 type ClientFormModalProps = {
   open: boolean
   onOpenChange: (open: boolean) => void
-  client?: Doc<"clients"> | null
+  client?: (Doc<"clients"> & { logoUrl?: string | null }) | null
+  defaultCurrency?: string
 }
 
-export function ClientFormModal({ open, onOpenChange, client }: ClientFormModalProps) {
-  const orgSettings = useQuery(api.orgSettings.get)
-  const clientData = useQuery(
-    api.clients.get,
-    client ? { id: client._id } : "skip",
-  )
+export function ClientFormModal({ open, onOpenChange, client, defaultCurrency = "USD" }: ClientFormModalProps) {
   const createClient = useMutation(api.clients.create)
   const updateClient = useMutation(api.clients.update)
   const generateUploadUrl = useMutation(api.clients.generateUploadUrl)
   const removeFile = useMutation(api.clients.removeFile)
 
   const isEdit = !!client
-  const defaultCurrency = orgSettings?.defaultCurrency ?? "USD"
 
   // General
   const [name, setName] = useState("")
@@ -77,9 +70,9 @@ export function ClientFormModal({ open, onOpenChange, client }: ClientFormModalP
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState("")
 
-  // Resolve logo URL for edit mode
-  const resolvedLogoUrl = clientData?.logoUrl ?? null
-  const resolvedLogoStorageId = clientData?.logoStorageId ?? null
+  // Resolve logo from the client prop (parent already enriches with logoUrl)
+  const resolvedLogoUrl = client?.logoUrl ?? null
+  const resolvedLogoStorageId = client?.logoStorageId ?? null
 
   useEffect(() => {
     if (open) {
@@ -126,12 +119,9 @@ export function ClientFormModal({ open, onOpenChange, client }: ClientFormModalP
     if (!file) return
     e.target.value = ""
 
-    if (!ALLOWED_TYPES.includes(file.type)) {
-      toast.error("Please upload a PNG, JPG, or SVG file")
-      return
-    }
-    if (file.size > MAX_FILE_SIZE) {
-      toast.error("File must be smaller than 2MB")
+    const validationError = validateLogoFile(file)
+    if (validationError) {
+      toast.error(validationError)
       return
     }
 
@@ -172,12 +162,12 @@ export function ClientFormModal({ open, onOpenChange, client }: ClientFormModalP
       const storageId = json?.storageId
       if (!storageId) throw new Error("Upload did not return a storage ID")
 
-      // Remove old logo if exists
-      if (resolvedLogoStorageId) {
-        await removeFile({ storageId: resolvedLogoStorageId })
-      }
-
       await updateClient({ id: clientId, logoStorageId: storageId })
+
+      // Remove old logo after successful update
+      if (resolvedLogoStorageId) {
+        removeFile({ storageId: resolvedLogoStorageId }).catch(() => {})
+      }
     } catch {
       toast.error("Failed to upload logo")
     } finally {

@@ -93,7 +93,7 @@ function ClientDetailSkeleton() {
 function StatBlock({ label, value }: { label: string; value: string | number }) {
   return (
     <div className="flex flex-col gap-0.5">
-      <span className="text-[11px] font-medium text-muted-foreground">{label}</span>
+      <span className="text-xs font-medium text-muted-foreground">{label}</span>
       <span className="text-xl font-semibold tracking-tight">{value}</span>
     </div>
   )
@@ -106,7 +106,7 @@ function BillingRow({ label, value, multiline }: { label: string; value?: string
   return (
     <div className="flex justify-between gap-4">
       <span className="shrink-0 text-xs text-muted-foreground">{label}</span>
-      <span className={`text-right text-xs font-medium ${multiline ? "whitespace-pre-line" : ""}`}>
+      <span className={`text-right text-[13px] font-medium ${multiline ? "whitespace-pre-line" : ""}`}>
         {value}
       </span>
     </div>
@@ -178,9 +178,13 @@ export default function ClientDetailPage() {
     })
   }
 
-  function handleRestore() {
-    restoreClient({ id: clientId })
-    toast.info("Client restored. Projects and tasks are still archived — restore them individually.")
+  async function handleRestore() {
+    try {
+      await restoreClient({ id: clientId })
+      toast.info("Client restored. Projects and tasks are still archived — restore them individually.")
+    } catch {
+      toast.error("Failed to restore client")
+    }
   }
 
   async function handleDelete() {

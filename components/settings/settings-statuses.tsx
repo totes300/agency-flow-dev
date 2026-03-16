@@ -45,6 +45,7 @@ import {
   PencilIcon,
   StarIcon,
 } from "lucide-react"
+import { toast } from "sonner"
 import { StatusBadge } from "@/components/status-badge"
 import { StatusColorSwatch } from "@/components/status-color-swatch"
 
@@ -72,7 +73,7 @@ function SettingsStatusesSkeleton() {
 // ─── Main Component ─────────────────────────────────────────────────────────────
 
 export function SettingsStatuses() {
-  const statuses = useQuery(api.statuses.listAll)
+  const statuses = useQuery(api.statuses.list, { includeArchived: true })
   const orgSettings = useQuery(api.orgSettings.get)
   const createStatus = useMutation(api.statuses.create)
   const updateStatus = useMutation(api.statuses.update)
@@ -132,7 +133,7 @@ export function SettingsStatuses() {
                 <GripVerticalIcon className="size-3.5 shrink-0 text-muted-foreground/30 group-hover:text-muted-foreground/60" />
                 <StatusBadge name={status.name} color={status.color} />
                 {isDefault && (
-                  <span className="text-xs text-muted-foreground">DEFAULT</span>
+                  <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Default</span>
                 )}
                 <span className="flex-1" />
                 {/* Actions — appear on hover, visible on touch/focus */}
@@ -142,7 +143,13 @@ export function SettingsStatuses() {
                       variant="ghost"
                       size="icon"
                       className="size-7"
-                      onClick={() => setDefaultStatus({ id: status._id })}
+                      onClick={async () => {
+                        try {
+                          await setDefaultStatus({ id: status._id })
+                        } catch {
+                          toast.error("Failed to set default status")
+                        }
+                      }}
                       aria-label="Set as default"
                     >
                       <StarIcon className="size-3.5" />
@@ -188,10 +195,14 @@ export function SettingsStatuses() {
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              onClick={() => {
+              onClick={async () => {
                 if (deleteTarget) {
-                  removeStatus({ id: deleteTarget.id })
-                  setDeleteTarget(null)
+                  try {
+                    await removeStatus({ id: deleteTarget.id })
+                    setDeleteTarget(null)
+                  } catch {
+                    toast.error("Failed to delete status")
+                  }
                 }
               }}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
@@ -275,6 +286,8 @@ function StatusForm({
     setSubmitting(true)
     try {
       await onSubmit({ name: name.trim(), color, type })
+    } catch {
+      toast.error("Failed to save status")
     } finally {
       setSubmitting(false)
     }

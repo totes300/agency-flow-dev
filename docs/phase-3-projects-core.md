@@ -55,7 +55,7 @@ projects: defineTable({
 
   // Retainer only — defined in schema now, implemented in Phase 4
   retainerStatus: v.optional(v.union(v.literal("active"), v.literal("inactive"))),
-  includedHoursPerMonth: v.optional(v.number()),
+  includedMinutesPerMonth: v.optional(v.number()),
   overageRate: v.optional(v.number()),
   startDate: v.optional(v.string()),
   rolloverEnabled: v.optional(v.boolean()),

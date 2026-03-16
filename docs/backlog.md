@@ -522,7 +522,7 @@
 
 - [x] Add `projects` table to `convex/schema.ts`
   - Fields: `orgId`, `clientId`, `name`, `code`, `billingType` (fixed/retainer/t_and_m), `currency`
-  - Retainer stub fields (all optional, Phase 4): `retainerStatus`, `includedHoursPerMonth`, `overageRate`, `startDate`, `rolloverEnabled`, `cycleLength`
+  - Retainer stub fields (all optional, Phase 4): `retainerStatus`, `includedMinutesPerMonth`, `overageRate`, `startDate`, `rolloverEnabled`, `cycleLength`
   - T&M fields (optional): `hourlyRate`, `tmCategoryRates` (array), `tmRateMode` (flat/per_category)
   - `defaultAssignees` (optional array of workCategoryId + userId)
   - `archivedAt`, `createdAt`, `updatedAt`, `createdBy`
@@ -723,7 +723,7 @@
 
 ### Task 4.3 — Mutation: `projects.create` retainer support ✅
 
-- [x] Extended `projects.create` with retainer-specific args: `includedHoursPerMonth`, `overageRate`, `startDate`, `cycleLength`, `rolloverEnabled`
+- [x] Extended `projects.create` with retainer-specific args: `includedMinutesPerMonth`, `overageRate`, `startDate`, `cycleLength`, `rolloverEnabled`
 - [x] Retainer validation: monthly hours > 0, overage rate >= 0, valid YYYY-MM-DD start date, cycle length 1-12
 - [x] On create: sets `retainerStatus: "active"`, defaults `rolloverEnabled: true`, `cycleLength: 3`
 
@@ -732,7 +732,7 @@
 ### Task 4.4 — Mutation: `projects.updateRetainer` ✅
 
 - [x] Created `projects.updateRetainer` mutation
-  - Editable fields: `includedHoursPerMonth`, `overageRate`, `startDate`, `cycleLength`, `rolloverEnabled`, `retainerStatus`
+  - Editable fields: `includedMinutesPerMonth`, `overageRate`, `startDate`, `cycleLength`, `rolloverEnabled`, `retainerStatus`
   - `confirmed` flag required for config changes (frontend shows dialog first)
   - Throws `"CONFIRMATION_REQUIRED"` if changing config fields without `confirmed: true`
   - Validation: same constraints as create (hours > 0, rate >= 0, cycle 1-12)

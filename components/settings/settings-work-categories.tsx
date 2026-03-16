@@ -3,6 +3,7 @@
 import { useState } from "react"
 import { useQuery, useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
+import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -176,10 +177,14 @@ export function SettingsWorkCategories() {
         description={`Are you sure you want to delete \u201c${deleteTarget?.name}\u201d? This action cannot be undone.`}
         confirmLabel="Delete"
         variant="destructive"
-        onConfirm={() => {
+        onConfirm={async () => {
           if (deleteTarget) {
-            removeCategory({ id: deleteTarget.id })
-            setDeleteTarget(null)
+            try {
+              await removeCategory({ id: deleteTarget.id })
+              setDeleteTarget(null)
+            } catch (err) {
+              toast.error(err instanceof Error ? err.message : "Failed to delete category")
+            }
           }
         }}
       />
@@ -280,21 +285,25 @@ function CategoryForm({
   const [error, setError] = useState("")
 
   function handleRateChange(setter: (v: string) => void, value: string) {
-    if (value && Number(value) < 0) return
+    if (value === "") { setter(value); return }
+    const n = Number(value)
+    if (!isFinite(n) || n < 0) return
     setter(value)
   }
 
-  async function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
     if (!name.trim()) return
+    const parsedCost = Number(costRate)
+    const parsedBill = Number(billRate)
     setSubmitting(true)
     setError("")
     try {
       await onSubmit({
         name: name.trim(),
         color,
-        defaultCostRate: costRate ? Math.max(0, Number(costRate)) : undefined,
-        defaultBillRate: billRate ? Math.max(0, Number(billRate)) : undefined,
+        defaultCostRate: costRate && isFinite(parsedCost) ? Math.max(0, parsedCost) : undefined,
+        defaultBillRate: billRate && isFinite(parsedBill) ? Math.max(0, parsedBill) : undefined,
         currency: currency as Currency,
       })
     } catch (err) {

@@ -157,7 +157,7 @@ export function ProjectFormModal({ open, onOpenChange }: ProjectFormModalProps) 
           }),
         } : {}),
         ...(billingType === "retainer" ? {
-          includedHoursPerMonth: Math.round((parseFloat(monthlyHours) || 0) * 60),
+          includedMinutesPerMonth: Math.round((parseFloat(monthlyHours) || 0) * 60),
           overageRate: parseFloat(overageRate) || 0,
           startDate: retainerStartDate ? formatDateToYMD(retainerStartDate) : "",
           cycleLength: parseInt(cycleLength) || 3,

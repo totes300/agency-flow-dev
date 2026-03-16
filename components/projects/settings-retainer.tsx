@@ -34,7 +34,7 @@ import { formatDateToYMD } from "@/lib/format"
 
 type RetainerProject = {
   retainerStatus?: string
-  includedHoursPerMonth?: number
+  includedMinutesPerMonth?: number
   overageRate?: number
   startDate?: string
   cycleLength?: number
@@ -53,7 +53,7 @@ export function SettingsRetainer({
 
   // Form state
   const [monthlyHours, setMonthlyHours] = useState(
-    project.includedHoursPerMonth ? String(project.includedHoursPerMonth / 60) : ""
+    project.includedMinutesPerMonth ? String(project.includedMinutesPerMonth / 60) : ""
   )
   const [overageRate, setOverageRate] = useState(
     project.overageRate !== undefined ? String(project.overageRate) : ""
@@ -70,7 +70,8 @@ export function SettingsRetainer({
   const [confirmStatusOpen, setConfirmStatusOpen] = useState(false)
   const [pendingStatus, setPendingStatus] = useState<"active" | "inactive" | null>(null)
 
-  const isActive = project.retainerStatus === "active"
+  const retainerStatus = project.retainerStatus ?? "active"
+  const isActive = retainerStatus === "active"
 
   // Validation
   const parsedHours = parseFloat(monthlyHours)
@@ -81,12 +82,12 @@ export function SettingsRetainer({
 
   // Sync from props when project changes
   useEffect(() => {
-    setMonthlyHours(project.includedHoursPerMonth ? String(project.includedHoursPerMonth / 60) : "")
+    setMonthlyHours(project.includedMinutesPerMonth ? String(project.includedMinutesPerMonth / 60) : "")
     setOverageRate(project.overageRate !== undefined ? String(project.overageRate) : "")
     setStartDate(project.startDate ? new Date(project.startDate + "T00:00:00") : undefined)
     setCycleLength(String(project.cycleLength ?? 3))
     setRolloverEnabled(project.rolloverEnabled ?? true)
-  }, [project.includedHoursPerMonth, project.overageRate, project.startDate, project.cycleLength, project.rolloverEnabled])
+  }, [project.includedMinutesPerMonth, project.overageRate, project.startDate, project.cycleLength, project.rolloverEnabled])
 
   // Determine if any config fields differ from the saved project state
   function hasConfigChanges(): boolean {
@@ -95,7 +96,7 @@ export function SettingsRetainer({
     const newStartDate = startDate ? formatDateToYMD(startDate) : undefined
     const newCycleLength = parseInt(cycleLength) || 3
     return (
-      newMinutes !== project.includedHoursPerMonth ||
+      newMinutes !== project.includedMinutesPerMonth ||
       newRate !== project.overageRate ||
       newStartDate !== project.startDate ||
       newCycleLength !== (project.cycleLength ?? 3) ||
@@ -118,7 +119,7 @@ export function SettingsRetainer({
     try {
       await updateRetainer({
         id: projectId,
-        includedHoursPerMonth: Math.round(parsedHours * 60),
+        includedMinutesPerMonth: Math.round(parsedHours * 60),
         overageRate: parsedRate,
         startDate: startDate ? formatDateToYMD(startDate) : undefined,
         cycleLength: parseInt(cycleLength) || 3,
@@ -161,7 +162,7 @@ export function SettingsRetainer({
           <CardTitle>Retainer Configuration</CardTitle>
           <CardAction>
             <div className="flex items-center gap-2">
-              <RetainerStatusBadge status={project.retainerStatus ?? "active"} />
+              <RetainerStatusBadge status={retainerStatus} />
               <Switch
                 checked={isActive}
                 onCheckedChange={handleStatusToggle}

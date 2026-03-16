@@ -122,12 +122,12 @@ export default function ProjectDetailPage() {
               <span>{project.clientName}</span>
               <span>&middot;</span>
               <span>{project.currency}</span>
-              {project.billingType === "retainer" && project.includedHoursPerMonth && (
+              {project.billingType === "retainer" && project.includedMinutesPerMonth && (
                 <>
                   <span>&middot;</span>
                   <span className="tabular-nums">
-                    {String(Math.floor(project.includedHoursPerMonth / 60)).padStart(2, "0")}:
-                    {String(project.includedHoursPerMonth % 60).padStart(2, "0")} h/mo
+                    {String(Math.floor(project.includedMinutesPerMonth / 60)).padStart(2, "0")}:
+                    {String(project.includedMinutesPerMonth % 60).padStart(2, "0")} h/mo
                   </span>
                 </>
               )}

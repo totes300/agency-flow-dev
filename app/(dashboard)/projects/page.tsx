@@ -100,30 +100,23 @@ export default function ProjectsPage() {
     const projectId = project._id
     setHiddenIds((prev) => new Set(prev).add(projectId))
 
+    const unhide = () => {
+      setHiddenIds((prev) => {
+        const next = new Set(prev)
+        next.delete(projectId)
+        return next
+      })
+    }
+
     triggerUndo({
+      key: projectId,
       message: `"${project.name}" archived`,
       action: async () => {
         await archiveProject({ id: projectId })
-        setHiddenIds((prev) => {
-          const next = new Set(prev)
-          next.delete(projectId)
-          return next
-        })
+        unhide()
       },
-      onUndo: () => {
-        setHiddenIds((prev) => {
-          const next = new Set(prev)
-          next.delete(projectId)
-          return next
-        })
-      },
-      onError: () => {
-        setHiddenIds((prev) => {
-          const next = new Set(prev)
-          next.delete(projectId)
-          return next
-        })
-      },
+      onUndo: unhide,
+      onError: unhide,
     })
   }
 

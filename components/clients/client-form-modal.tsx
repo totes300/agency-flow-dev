@@ -42,7 +42,7 @@ export function ClientFormModal({ open, onOpenChange, client, defaultCurrency = 
   const createClient = useMutation(api.clients.create)
   const updateClient = useMutation(api.clients.update)
   const generateUploadUrl = useMutation(api.clients.generateUploadUrl)
-  const removeFile = useMutation(api.clients.removeFile)
+  const removeClientLogo = useMutation(api.clients.removeClientLogo)
 
   const isEdit = !!client
 
@@ -75,44 +75,48 @@ export function ClientFormModal({ open, onOpenChange, client, defaultCurrency = 
   const resolvedLogoUrl = client?.logoUrl ?? null
   const resolvedLogoStorageId = client?.logoStorageId ?? null
 
+  const prevOpenRef = useRef(false)
   useEffect(() => {
-    if (open) {
-      if (client) {
-        setName(client.name)
-        setCurrency(client.currency)
-        setInvoicePrefix(client.invoicePrefix)
-        setBillingName(client.billingName ?? "")
-        setTaxId(client.taxId ?? "")
-        setBillingEmail(client.billingEmail ?? "")
-        setBillingCountry(client.billingCountry ?? "")
-        setBillingCity(client.billingCity ?? "")
-        setBillingZip(client.billingZip ?? "")
-        setBillingStreet(client.billingStreet ?? "")
-        setBillingStreet2(client.billingStreet2 ?? "")
-        setNotes(client.notes ?? "")
-      } else {
-        setName("")
-        setCurrency(defaultCurrency)
-        setInvoicePrefix("")
-        setBillingName("")
-        setTaxId("")
-        setBillingEmail("")
-        setBillingCountry("")
-        setBillingCity("")
-        setBillingZip("")
-        setBillingStreet("")
-        setBillingStreet2("")
-        setNotes("")
-      }
-      if (logoPreviewUrlRef.current) {
-        URL.revokeObjectURL(logoPreviewUrlRef.current)
-        logoPreviewUrlRef.current = null
-      }
-      setLogoPreview(null)
-      setPendingLogoFile(null)
-      setRemoveExistingLogo(false)
-      setError("")
+    const justOpened = open && !prevOpenRef.current
+    prevOpenRef.current = open
+
+    if (!justOpened) return
+
+    if (client) {
+      setName(client.name)
+      setCurrency(client.currency)
+      setInvoicePrefix(client.invoicePrefix)
+      setBillingName(client.billingName ?? "")
+      setTaxId(client.taxId ?? "")
+      setBillingEmail(client.billingEmail ?? "")
+      setBillingCountry(client.billingCountry ?? "")
+      setBillingCity(client.billingCity ?? "")
+      setBillingZip(client.billingZip ?? "")
+      setBillingStreet(client.billingStreet ?? "")
+      setBillingStreet2(client.billingStreet2 ?? "")
+      setNotes(client.notes ?? "")
+    } else {
+      setName("")
+      setCurrency(defaultCurrency)
+      setInvoicePrefix("")
+      setBillingName("")
+      setTaxId("")
+      setBillingEmail("")
+      setBillingCountry("")
+      setBillingCity("")
+      setBillingZip("")
+      setBillingStreet("")
+      setBillingStreet2("")
+      setNotes("")
     }
+    if (logoPreviewUrlRef.current) {
+      URL.revokeObjectURL(logoPreviewUrlRef.current)
+      logoPreviewUrlRef.current = null
+    }
+    setLogoPreview(null)
+    setPendingLogoFile(null)
+    setRemoveExistingLogo(false)
+    setError("")
   }, [open, client, defaultCurrency])
 
   function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
@@ -167,10 +171,11 @@ export function ClientFormModal({ open, onOpenChange, client, defaultCurrency = 
 
       // Remove old logo after successful update
       if (resolvedLogoStorageId) {
-        removeFile({ storageId: resolvedLogoStorageId }).catch(() => {})
+        removeClientLogo({ clientId, storageId: resolvedLogoStorageId }).catch(() => {})
       }
-    } catch {
+    } catch (err) {
       toast.error("Failed to upload logo")
+      throw err
     } finally {
       setUploading(false)
     }
@@ -210,7 +215,7 @@ export function ClientFormModal({ open, onOpenChange, client, defaultCurrency = 
         }
         await updateClient(updatePayload)
         if (removeExistingLogo && resolvedLogoStorageId && !pendingLogoFile) {
-          await removeFile({ storageId: resolvedLogoStorageId })
+          await removeClientLogo({ clientId: client._id, storageId: resolvedLogoStorageId })
         } else if (pendingLogoFile) {
           await uploadLogo(client._id)
         }

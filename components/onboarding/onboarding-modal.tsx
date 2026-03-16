@@ -84,8 +84,10 @@ export function OnboardingModal() {
           type: s.type,
         })),
         workCategories: categories.map((c) => {
-          const cost = Number(c.defaultCostRate)
-          const bill = Number(c.defaultBillRate)
+          const costStr = String(c.defaultCostRate ?? "").trim()
+          const billStr = String(c.defaultBillRate ?? "").trim()
+          const cost = costStr ? Number(costStr) : NaN
+          const bill = billStr ? Number(billStr) : NaN
           return {
             name: c.name.trim(),
             color: c.color,

@@ -163,9 +163,16 @@ export default function ClientDetailPage() {
   function handleArchive() {
     if (!client) return
     triggerUndo({
+      key: clientId,
       message: `"${client.name}" archived`,
       action: async () => { await archiveClient({ id: clientId }) },
-      onUndo: () => {},
+      onUndo: async () => {
+        try {
+          await restoreClient({ id: clientId })
+        } catch {
+          toast.error("Failed to undo archive")
+        }
+      },
     })
   }
 

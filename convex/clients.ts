@@ -330,10 +330,15 @@ export const generateUploadUrl = mutation({
   },
 });
 
-export const removeFile = mutation({
-  args: { storageId: v.id("_storage") },
+export const removeClientLogo = mutation({
+  args: { clientId: v.id("clients"), storageId: v.id("_storage") },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx);
+    const { orgId } = await requireAdmin(ctx);
+    const client = await ctx.db.get(args.clientId);
+    if (!client || client.orgId !== orgId) throw new Error("Client not found");
+    if (client.logoStorageId !== args.storageId) {
+      throw new Error("Storage ID does not belong to this client");
+    }
     await ctx.storage.delete(args.storageId);
   },
 });

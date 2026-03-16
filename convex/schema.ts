@@ -106,7 +106,7 @@ export default defineSchema({
     currency: v.string(),
     // Retainer fields (Phase 4)
     retainerStatus: v.optional(v.union(v.literal("active"), v.literal("inactive"))),
-    includedHoursPerMonth: v.optional(v.number()), // stored in MINUTES
+    includedMinutesPerMonth: v.optional(v.number()), // monthly budget in minutes
     overageRate: v.optional(v.number()),            // $/h for overage
     startDate: v.optional(v.string()),              // YYYY-MM-DD
     rolloverEnabled: v.optional(v.boolean()),

@@ -82,7 +82,7 @@ export const create = mutation({
       rate: v.number(),
     }))),
     // Retainer fields
-    includedHoursPerMonth: v.optional(v.number()),
+    includedMinutesPerMonth: v.optional(v.number()),
     overageRate: v.optional(v.number()),
     startDate: v.optional(v.string()),
     cycleLength: v.optional(v.number()),
@@ -122,7 +122,7 @@ export const create = mutation({
 
     // Retainer validation
     if (args.billingType === "retainer") {
-      if (!args.includedHoursPerMonth || args.includedHoursPerMonth <= 0) {
+      if (!args.includedMinutesPerMonth || args.includedMinutesPerMonth <= 0) {
         throw new Error("Monthly hours is required for retainer projects");
       }
       if (args.overageRate === undefined || args.overageRate < 0) {
@@ -142,21 +142,28 @@ export const create = mutation({
       }
     }
 
-    // Generate or validate code with retry on conflict
-    let code = args.code?.trim() || await generateNextProjectCode(ctx, orgId);
-    let attempts = 0;
-    const maxAttempts = 3;
+    // Validate or generate project code
+    const userCode = args.code?.trim();
+    let code: string;
 
-    while (attempts < maxAttempts) {
-      try {
-        await ensureUniqueProjectCode(ctx, orgId, code);
-        break;
-      } catch {
-        attempts++;
-        if (attempts >= maxAttempts) {
-          throw new Error(`Could not find a unique project code after ${maxAttempts} attempts`);
+    if (userCode) {
+      await ensureUniqueProjectCode(ctx, orgId, userCode);
+      code = userCode;
+    } else {
+      code = await generateNextProjectCode(ctx, orgId);
+      let attempts = 0;
+      const maxAttempts = 3;
+      while (attempts < maxAttempts) {
+        try {
+          await ensureUniqueProjectCode(ctx, orgId, code);
+          break;
+        } catch {
+          attempts++;
+          if (attempts >= maxAttempts) {
+            throw new Error(`Could not generate a unique project code after ${maxAttempts} attempts`);
+          }
+          code = await generateNextProjectCode(ctx, orgId);
         }
-        code = await generateNextProjectCode(ctx, orgId);
       }
     }
 
@@ -177,7 +184,7 @@ export const create = mutation({
       // Retainer fields
       ...(args.billingType === "retainer" ? {
         retainerStatus: "active" as const,
-        includedHoursPerMonth: args.includedHoursPerMonth,
+        includedMinutesPerMonth: args.includedMinutesPerMonth,
         overageRate: args.overageRate,
         startDate: args.startDate,
         rolloverEnabled: args.rolloverEnabled ?? true,
@@ -292,7 +299,7 @@ export const restore = mutation({
 export const updateRetainer = mutation({
   args: {
     id: v.id("projects"),
-    includedHoursPerMonth: v.optional(v.number()),
+    includedMinutesPerMonth: v.optional(v.number()),
     overageRate: v.optional(v.number()),
     startDate: v.optional(v.string()),
     cycleLength: v.optional(v.number()),
@@ -310,7 +317,7 @@ export const updateRetainer = mutation({
 
     // Check if any config-changing fields are being modified (require confirmation)
     const needsConfirmation =
-      (args.includedHoursPerMonth !== undefined && args.includedHoursPerMonth !== project.includedHoursPerMonth) ||
+      (args.includedMinutesPerMonth !== undefined && args.includedMinutesPerMonth !== project.includedMinutesPerMonth) ||
       (args.overageRate !== undefined && args.overageRate !== project.overageRate) ||
       (args.cycleLength !== undefined && args.cycleLength !== project.cycleLength) ||
       (args.rolloverEnabled !== undefined && args.rolloverEnabled !== project.rolloverEnabled) ||
@@ -320,9 +327,9 @@ export const updateRetainer = mutation({
       throw new ConvexError("CONFIRMATION_REQUIRED");
     }
 
-    if (args.includedHoursPerMonth !== undefined) {
-      if (args.includedHoursPerMonth <= 0) throw new Error("Monthly hours must be greater than 0");
-      updates.includedHoursPerMonth = args.includedHoursPerMonth;
+    if (args.includedMinutesPerMonth !== undefined) {
+      if (args.includedMinutesPerMonth <= 0) throw new Error("Monthly hours must be greater than 0");
+      updates.includedMinutesPerMonth = args.includedMinutesPerMonth;
     }
 
     if (args.overageRate !== undefined) {
@@ -378,7 +385,7 @@ export const getRetainerData = query({
     if (project.billingType !== "retainer") return null;
 
     const {
-      includedHoursPerMonth = 0,
+      includedMinutesPerMonth = 0,
       overageRate = 0,
       startDate,
       rolloverEnabled = true,
@@ -472,7 +479,7 @@ export const getRetainerData = query({
         startBalance = 0;
       }
 
-      const available = startBalance + includedHoursPerMonth;
+      const available = startBalance + includedMinutesPerMonth;
       const endBalance = available - workedMinutes;
 
       // Badge status
@@ -509,7 +516,7 @@ export const getRetainerData = query({
     }
 
     // Cycle totals
-    const cycleBudget = includedHoursPerMonth * cycleLength;
+    const cycleBudget = includedMinutesPerMonth * cycleLength;
     const cycleWorked = monthlyData.reduce((sum, m) => sum + m.workedMinutes, 0);
     const cycleBalance = cycleBudget - cycleWorked;
     const utilization = cycleBudget > 0 ? (cycleWorked / cycleBudget) * 100 : 0;
@@ -549,7 +556,7 @@ export const getRetainerData = query({
       overageMinutes,
       overageDue,
       overageRate,
-      includedHoursPerMonth,
+      includedMinutesPerMonth,
       rolloverEnabled,
       currency: project.currency,
     };

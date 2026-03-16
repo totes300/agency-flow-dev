@@ -31,7 +31,7 @@ Retainer fields on the `projects` table (defined in Phase 3, implemented here):
 ```typescript
 // Retainer only fields on projects:
 retainerStatus: "active" | "inactive"     // pausable, not archive
-includedHoursPerMonth: number             // stored in MINUTES (e.g., 600 = 10 hours)
+includedMinutesPerMonth: number             // monthly budget in minutes (e.g., 600 = 10 hours)
 overageRate: number                       // hourly rate for overage
 startDate: string                         // YYYY-MM-DD, cycle start
 rolloverEnabled: boolean                  // default: true
@@ -56,7 +56,7 @@ retainerPeriods: defineTable({
 The client pays a fixed monthly fee in exchange for X hours of work per month. If the team works more than the allowance → overage → billed separately.
 
 ### Configuration
-- **Monthly hours** (`includedHoursPerMonth`): stored in minutes, e.g., 10h = 600 min
+- **Monthly hours** (`includedMinutesPerMonth`): in minutes, e.g., 10h = 600 min
 - **Overage rate**: $/h for overage billing
 - **Start date**: when the retainer started (cycles are calculated from here)
 - **Rollover**: on/off toggle
@@ -64,7 +64,7 @@ The client pays a fixed monthly fee in exchange for X hours of work per month. I
 
 ### Rollover ON — rolling budget
 
-A cycle is a `cycleLength`-month unit. `cycleBudget = includedHoursPerMonth × cycleLength`.
+A cycle is a `cycleLength`-month unit. `cycleBudget = includedMinutesPerMonth × cycleLength`.
 
 **Balance chains month-to-month (within a cycle)**:
 
@@ -125,7 +125,7 @@ If admin toggles rolloverEnabled → **entire history recalculates** (automatica
 - **Confirmation dialog**: "This will recalculate all historical balances. Continue?"
 
 ### Mid-cycle config change
-If admin modifies `includedHoursPerMonth` or `overageRate` → **retroactive to the entire cycle**, recalculates.
+If admin modifies `includedMinutesPerMonth` or `overageRate` → **retroactive to the entire cycle**, recalculates.
 - **Confirmation dialog**: "This change affects the current cycle retroactively. Continue?"
 
 ### Active / Inactive

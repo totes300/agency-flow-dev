@@ -101,30 +101,23 @@ export default function ClientsPage() {
     const clientId = client._id
     setHiddenIds((prev) => new Set(prev).add(clientId))
 
+    const unhide = () => {
+      setHiddenIds((prev) => {
+        const next = new Set(prev)
+        next.delete(clientId)
+        return next
+      })
+    }
+
     triggerUndo({
+      key: clientId,
       message: `"${client.name}" archived`,
       action: async () => {
         await archiveClient({ id: clientId })
-        setHiddenIds((prev) => {
-          const next = new Set(prev)
-          next.delete(clientId)
-          return next
-        })
+        unhide()
       },
-      onUndo: () => {
-        setHiddenIds((prev) => {
-          const next = new Set(prev)
-          next.delete(clientId)
-          return next
-        })
-      },
-      onError: () => {
-        setHiddenIds((prev) => {
-          const next = new Set(prev)
-          next.delete(clientId)
-          return next
-        })
-      },
+      onUndo: unhide,
+      onError: unhide,
     })
   }
 

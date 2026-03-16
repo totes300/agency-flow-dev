@@ -34,7 +34,7 @@ export function ClientAvatar({
 }: ClientAvatarProps) {
   const generateUploadUrl = useMutation(api.clients.generateUploadUrl)
   const updateClient = useMutation(api.clients.update)
-  const removeFile = useMutation(api.clients.removeFile)
+  const removeClientLogo = useMutation(api.clients.removeClientLogo)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [uploading, setUploading] = useState(false)
 
@@ -42,6 +42,7 @@ export function ClientAvatar({
     const file = e.target.files?.[0]
     if (!file) return
     e.target.value = ""
+    if (uploading) return
 
     const validationError = validateLogoFile(file)
     if (validationError) {
@@ -49,6 +50,7 @@ export function ClientAvatar({
       return
     }
 
+    const previousLogoStorageId = logoStorageId
     setUploading(true)
     try {
       const uploadUrl = await generateUploadUrl()
@@ -61,8 +63,8 @@ export function ClientAvatar({
       const { storageId } = await response.json()
 
       await updateClient({ id: clientId, logoStorageId: storageId })
-      if (logoStorageId) {
-        removeFile({ storageId: logoStorageId }).catch(() => {})
+      if (previousLogoStorageId) {
+        removeClientLogo({ clientId, storageId: previousLogoStorageId }).catch(() => {})
       }
       toast.success("Logo updated")
     } catch {
@@ -73,13 +75,17 @@ export function ClientAvatar({
   }
 
   async function handleRemove() {
-    if (!logoStorageId) return
+    if (!logoStorageId || uploading) return
+    const previousLogoStorageId = logoStorageId
+    setUploading(true)
     try {
       await updateClient({ id: clientId, logoStorageId: null })
-      removeFile({ storageId: logoStorageId }).catch(() => {})
+      removeClientLogo({ clientId, storageId: previousLogoStorageId }).catch(() => {})
       toast.success("Logo removed")
     } catch {
       toast.error("Failed to remove logo")
+    } finally {
+      setUploading(false)
     }
   }
 
@@ -118,12 +124,14 @@ export function ClientAvatar({
       {logoUrl ? (
         // Has logo → dropdown: Replace / Remove
         <DropdownMenu>
-          <DropdownMenuTrigger asChild>
+          <DropdownMenuTrigger asChild disabled={uploading}>
             <button
               type="button"
+              disabled={uploading}
               className={cn(
                 "group relative flex size-12 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted",
                 "cursor-pointer ring-offset-background transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+                uploading && "pointer-events-none",
               )}
             >
               {avatarContent}
@@ -150,10 +158,12 @@ export function ClientAvatar({
         // No logo → click to upload directly
         <button
           type="button"
+          disabled={uploading}
           onClick={() => fileInputRef.current?.click()}
           className={cn(
             "group relative flex size-12 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted",
             "cursor-pointer ring-offset-background transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+            uploading && "pointer-events-none",
           )}
         >
           {avatarContent}

@@ -1,0 +1,172 @@
+"use client"
+
+import Image from "next/image"
+import { useState, useRef } from "react"
+import { useMutation } from "convex/react"
+import { api } from "@/convex/_generated/api"
+import { CameraIcon, Loader2Icon, Trash2Icon } from "lucide-react"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { toast } from "sonner"
+import { cn } from "@/lib/utils"
+import type { Id } from "@/convex/_generated/dataModel"
+
+const MAX_FILE_SIZE = 2 * 1024 * 1024 // 2MB
+const ALLOWED_TYPES = ["image/png", "image/jpeg", "image/svg+xml"]
+
+type ClientAvatarProps = {
+  clientId: Id<"clients">
+  clientName: string
+  logoUrl?: string | null
+  logoStorageId?: Id<"_storage"> | null
+  /** When false, renders a static avatar (e.g. in list view) */
+  editable?: boolean
+}
+
+export function ClientAvatar({
+  clientId,
+  clientName,
+  logoUrl,
+  logoStorageId,
+  editable = false,
+}: ClientAvatarProps) {
+  const generateUploadUrl = useMutation(api.clients.generateUploadUrl)
+  const updateClient = useMutation(api.clients.update)
+  const removeFile = useMutation(api.clients.removeFile)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [uploading, setUploading] = useState(false)
+
+  async function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    e.target.value = ""
+
+    if (!ALLOWED_TYPES.includes(file.type)) {
+      toast.error("Please upload a PNG, JPG, or SVG file")
+      return
+    }
+    if (file.size > MAX_FILE_SIZE) {
+      toast.error("File must be smaller than 2MB")
+      return
+    }
+
+    setUploading(true)
+    try {
+      const uploadUrl = await generateUploadUrl()
+      const response = await fetch(uploadUrl, {
+        method: "POST",
+        headers: { "Content-Type": file.type },
+        body: file,
+      })
+      if (!response.ok) throw new Error("Upload failed")
+      const { storageId } = await response.json()
+
+      if (logoStorageId) {
+        await removeFile({ storageId: logoStorageId })
+      }
+      await updateClient({ id: clientId, logoStorageId: storageId })
+      toast.success("Logo updated")
+    } catch {
+      toast.error("Failed to upload logo")
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  async function handleRemove() {
+    if (!logoStorageId) return
+    try {
+      await removeFile({ storageId: logoStorageId })
+      await updateClient({ id: clientId, logoStorageId: null })
+      toast.success("Logo removed")
+    } catch {
+      toast.error("Failed to remove logo")
+    }
+  }
+
+  const avatarContent = uploading ? (
+    <Loader2Icon className="size-5 animate-spin text-muted-foreground" />
+  ) : logoUrl ? (
+    <div className="relative size-full">
+      <Image src={logoUrl} alt="" fill className="object-contain" />
+    </div>
+  ) : (
+    <span className="text-base font-semibold text-muted-foreground">
+      {clientName.charAt(0).toUpperCase()}
+    </span>
+  )
+
+  // Static (non-editable) avatar — used in list view
+  if (!editable) {
+    return (
+      <div className="flex size-12 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted">
+        {avatarContent}
+      </div>
+    )
+  }
+
+  // Editable avatar — click to upload or change
+  return (
+    <>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".png,.jpg,.jpeg,.svg"
+        onChange={handleFileSelect}
+        className="hidden"
+      />
+
+      {logoUrl ? (
+        // Has logo → dropdown: Replace / Remove
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              className={cn(
+                "group relative flex size-12 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted",
+                "cursor-pointer ring-offset-background transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+              )}
+            >
+              {avatarContent}
+              <div className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 transition-opacity group-hover:opacity-100">
+                <CameraIcon className="size-4 text-white" />
+              </div>
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start">
+            <DropdownMenuItem onClick={() => fileInputRef.current?.click()}>
+              <CameraIcon className="size-4" />
+              Replace logo
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              className="text-destructive focus:text-destructive"
+              onClick={handleRemove}
+            >
+              <Trash2Icon className="size-4" />
+              Remove logo
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : (
+        // No logo → click to upload directly
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          className={cn(
+            "group relative flex size-12 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted",
+            "cursor-pointer ring-offset-background transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+          )}
+        >
+          {avatarContent}
+          <div className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 transition-opacity group-hover:opacity-100">
+            <CameraIcon className="size-4 text-white" />
+          </div>
+        </button>
+      )}
+    </>
+  )
+}

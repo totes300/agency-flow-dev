@@ -12,7 +12,9 @@ async function userByExternalId(ctx: QueryCtx, externalId: string) {
 export async function getCurrentUser(ctx: QueryCtx) {
   const identity = await ctx.auth.getUserIdentity();
   if (!identity) return null;
-  return await userByExternalId(ctx, identity.subject);
+  const user = await userByExternalId(ctx, identity.subject);
+  if (user?.deletedAt) return null;
+  return user;
 }
 
 export async function getCurrentUserOrThrow(ctx: QueryCtx) {
@@ -28,9 +30,6 @@ export const current = query({
   },
 });
 
-// Example: authenticated-only query pattern.
-// Use getCurrentUserOrThrow to reject unauthenticated requests.
-// Copy this pattern for any query that requires a logged-in user.
 export const viewer = query({
   args: {},
   handler: async (ctx) => {
@@ -46,18 +45,35 @@ export const syncUser = mutation({
     if (!identity) throw new Error("Not authenticated");
 
     const existing = await userByExternalId(ctx, identity.subject);
+    const now = Date.now();
     const name = identity.name ?? identity.email ?? "Anonymous";
+    const email = identity.email ?? undefined;
+    const imageUrl = identity.pictureUrl ?? undefined;
 
     if (existing) {
-      if (existing.name !== name) {
-        await ctx.db.patch(existing._id, { name });
+      // Compare before patching to avoid unnecessary writes
+      if (
+        existing.name !== name ||
+        existing.email !== email ||
+        existing.imageUrl !== imageUrl
+      ) {
+        await ctx.db.patch(existing._id, {
+          name,
+          email,
+          imageUrl,
+          updatedAt: now,
+        });
       }
       return existing._id;
     }
 
     return await ctx.db.insert("users", {
       name,
+      email,
+      imageUrl,
       externalId: identity.subject,
+      createdAt: now,
+      updatedAt: now,
     });
   },
 });
@@ -67,16 +83,38 @@ export const syncUser = mutation({
 export const upsertFromClerk = internalMutation({
   args: { data: v.any() as Validator<UserJSON> },
   async handler(ctx, { data }) {
-    const userAttributes = {
-      name: [data.first_name, data.last_name].filter(Boolean).join(" ") || data.email_addresses?.[0]?.email_address || "Anonymous",
-      externalId: data.id,
-    };
+    const now = Date.now();
+    const name =
+      [data.first_name, data.last_name].filter(Boolean).join(" ") ||
+      data.email_addresses?.[0]?.email_address ||
+      "Anonymous";
+    const email = data.email_addresses?.[0]?.email_address ?? undefined;
+    const imageUrl = data.image_url ?? undefined;
 
     const existing = await userByExternalId(ctx, data.id);
     if (existing) {
-      await ctx.db.patch(existing._id, userAttributes);
+      // Compare before patching to avoid unnecessary writes
+      if (
+        existing.name !== name ||
+        existing.email !== email ||
+        existing.imageUrl !== imageUrl
+      ) {
+        await ctx.db.patch(existing._id, {
+          name,
+          email,
+          imageUrl,
+          updatedAt: now,
+        });
+      }
     } else {
-      await ctx.db.insert("users", userAttributes);
+      await ctx.db.insert("users", {
+        name,
+        email,
+        imageUrl,
+        externalId: data.id,
+        createdAt: now,
+        updatedAt: now,
+      });
     }
   },
 });
@@ -86,7 +124,7 @@ export const deleteFromClerk = internalMutation({
   async handler(ctx, { clerkUserId }) {
     const user = await userByExternalId(ctx, clerkUserId);
     if (user !== null) {
-      await ctx.db.delete(user._id);
+      await ctx.db.patch(user._id, { deletedAt: Date.now() });
     }
   },
 });

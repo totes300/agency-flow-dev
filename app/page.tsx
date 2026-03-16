@@ -1,5 +1,6 @@
 import Link from "next/link"
 import { Show } from "@clerk/nextjs"
+import { Button } from "@/components/ui/button"
 
 export default function Home() {
   return (
@@ -14,26 +15,17 @@ export default function Home() {
 
       <div className="flex gap-4">
         <Show when="signed-in">
-          <Link
-            href="/dashboard"
-            className="inline-flex h-10 items-center justify-center rounded-md bg-primary px-6 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-          >
-            Go to Dashboard
-          </Link>
+          <Button asChild>
+            <Link href="/dashboard">Go to Dashboard</Link>
+          </Button>
         </Show>
         <Show when="signed-out">
-          <Link
-            href="/sign-in"
-            className="inline-flex h-10 items-center justify-center rounded-md bg-primary px-6 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-          >
-            Sign In
-          </Link>
-          <Link
-            href="/sign-up"
-            className="inline-flex h-10 items-center justify-center rounded-md border px-6 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
-          >
-            Sign Up
-          </Link>
+          <Button asChild>
+            <Link href="/sign-in">Sign In</Link>
+          </Button>
+          <Button variant="outline" asChild>
+            <Link href="/sign-up">Sign Up</Link>
+          </Button>
         </Show>
       </div>
     </div>

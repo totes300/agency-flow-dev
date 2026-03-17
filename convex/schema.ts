@@ -13,6 +13,19 @@ export default defineSchema({
     updatedAt: v.number(),
   }).index("byExternalId", ["externalId"]),
 
+  // ─── Org Members (synced from Clerk org memberships) ──────────────────────
+  orgMembers: defineTable({
+    orgId: v.string(),
+    clerkUserId: v.string(),
+    userId: v.optional(v.id("users")),
+    role: v.union(v.literal("admin"), v.literal("member")),
+    joinedAt: v.number(),
+  })
+    .index("by_orgId", ["orgId"])
+    .index("by_orgId_clerkUserId", ["orgId", "clerkUserId"])
+    .index("by_clerkUserId", ["clerkUserId"])
+    .index("by_userId", ["userId"]),
+
   // ─── Org Settings (one per org) ────────────────────────────────────────────
   orgSettings: defineTable({
     orgId: v.string(),

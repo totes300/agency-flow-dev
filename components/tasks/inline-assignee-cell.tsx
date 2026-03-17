@@ -1,8 +1,7 @@
 "use client"
 
-import { useState, useMemo } from "react"
+import { useState } from "react"
 import { useMutation, useQuery } from "convex/react"
-import { useOrganization } from "@clerk/nextjs"
 import { api } from "@/convex/_generated/api"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import {
@@ -16,7 +15,6 @@ import {
 import { UserAvatar } from "@/components/user-avatar"
 import { Avatar, AvatarFallback, AvatarGroup, AvatarGroupCount } from "@/components/ui/avatar"
 import { CheckIcon } from "lucide-react"
-import { cn } from "@/lib/utils"
 import type { Doc, Id } from "@/convex/_generated/dataModel"
 
 export function InlineAssigneeCell({
@@ -29,18 +27,8 @@ export function InlineAssigneeCell({
   const [open, setOpen] = useState(false)
   const updateTask = useMutation(api.tasks.update)
 
-  // Get org members from Clerk, resolve to Convex users
-  const { memberships } = useOrganization({ memberships: true })
-  const externalIds = useMemo(
-    () => memberships?.data
-      ?.map((m) => m.publicUserData?.userId)
-      .filter((id): id is string => !!id) ?? [],
-    [memberships?.data]
-  )
-  const orgUsers = useQuery(
-    api.users.listByExternalIds,
-    externalIds.length > 0 ? { externalIds } : "skip"
-  )
+  // Org members from Convex — no Clerk API calls
+  const orgMembers = useQuery(api.orgMembers.listOrgMembers)
 
   const assigneeIdSet = new Set(assignees.map((a) => a._id.toString()))
 
@@ -65,30 +53,36 @@ export function InlineAssigneeCell({
         >
           {assignees.length === 0 ? (
             <span className="text-xs text-muted-foreground">—</span>
-          ) : assignees.length === 1 ? (
-            <UserAvatar
-              name={assignees[0].name}
-              imageUrl={assignees[0].imageUrl}
-              size="sm"
-            />
           ) : (
-            <AvatarGroup>
-              {assignees.slice(0, 2).map((a) => (
-                <UserAvatar
-                  key={a._id}
-                  name={a.name}
-                  imageUrl={a.imageUrl}
-                  size="sm"
-                />
-              ))}
-              {assignees.length > 2 && (
-                <AvatarGroupCount>
-                  <Avatar size="sm">
-                    <AvatarFallback>+{assignees.length - 2}</AvatarFallback>
-                  </Avatar>
-                </AvatarGroupCount>
+            <span className="flex items-center gap-1">
+              {assignees.length === 1 ? (
+                <>
+                  <UserAvatar name={assignees[0].name} imageUrl={assignees[0].imageUrl} className="size-5 text-[8px]" />
+                  <span className="truncate text-[11px] text-muted-foreground">{firstName(assignees[0].name)}</span>
+                </>
+              ) : assignees.length === 2 ? (
+                <>
+                  <AvatarGroup>
+                    <UserAvatar name={assignees[0].name} imageUrl={assignees[0].imageUrl} className="size-5 text-[8px]" />
+                    <UserAvatar name={assignees[1].name} imageUrl={assignees[1].imageUrl} className="size-5 text-[8px]" />
+                  </AvatarGroup>
+                  <span className="truncate text-[11px] text-muted-foreground">
+                    {firstName(assignees[0].name)}, {firstName(assignees[1].name)}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <AvatarGroup>
+                    <UserAvatar name={assignees[0].name} imageUrl={assignees[0].imageUrl} className="size-5 text-[8px]" />
+                    <AvatarGroupCount>
+                      <Avatar className="size-5">
+                        <AvatarFallback className="text-[8px]">+{assignees.length - 1}</AvatarFallback>
+                      </Avatar>
+                    </AvatarGroupCount>
+                  </AvatarGroup>
+                </>
               )}
-            </AvatarGroup>
+            </span>
           )}
         </button>
       </PopoverTrigger>
@@ -98,17 +92,16 @@ export function InlineAssigneeCell({
           <CommandList>
             <CommandEmpty>No members found.</CommandEmpty>
             <CommandGroup>
-              {orgUsers?.filter(Boolean).map((user) => {
-                if (!user) return null
-                const selected = assigneeIdSet.has(user._id.toString())
+              {orgMembers?.map((member) => {
+                const selected = assigneeIdSet.has(member._id.toString())
                 return (
                   <CommandItem
-                    key={user._id}
-                    onSelect={() => handleToggle(user._id)}
+                    key={member._id}
+                    onSelect={() => handleToggle(member._id)}
                   >
                     <span className="flex items-center gap-2">
-                      <UserAvatar name={user.name} imageUrl={user.imageUrl} size="sm" />
-                      <span className="truncate">{user.name}</span>
+                      <UserAvatar name={member.name} imageUrl={member.imageUrl} size="sm" />
+                      <span className="truncate">{member.name}</span>
                     </span>
                     {selected && <CheckIcon className="ml-auto size-3.5" />}
                   </CommandItem>
@@ -120,4 +113,8 @@ export function InlineAssigneeCell({
       </PopoverContent>
     </Popover>
   )
+}
+
+function firstName(name: string): string {
+  return name.split(/\s+/)[0]
 }

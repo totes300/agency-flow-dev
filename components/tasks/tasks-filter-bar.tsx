@@ -27,6 +27,7 @@ export function TasksFilterBar({
   const statuses = useQuery(api.statuses.list, {})
   const categories = useQuery(api.workCategories.list, {})
   const projects = useQuery(api.projects.list, {})
+  const orgMembers = useQuery(api.orgMembers.listOrgMembers)
 
   const statusOptions = (statuses ?? []).map((s) => ({
     id: s._id,
@@ -97,10 +98,12 @@ export function TasksFilterBar({
         {...pillProps("category", categoryFilter)}
       />
 
-      {/* Assignee — TODO: wire Clerk org members for options */}
       <FilterPill
         label="Assignee"
-        options={[]}
+        options={(orgMembers ?? []).map((m) => ({
+          id: m._id,
+          label: m.name,
+        }))}
         multiSelect
         {...pillProps("assignee", assigneeFilter)}
       />

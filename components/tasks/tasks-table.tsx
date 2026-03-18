@@ -2,6 +2,7 @@
 
 import {
   ListChecksIcon,
+  LoaderIcon,
   CircleDotIcon,
   HashIcon,
   FolderIcon,
@@ -10,6 +11,8 @@ import {
   ClockIcon,
 } from "lucide-react"
 import type { Doc } from "@/convex/_generated/dataModel"
+import { cn } from "@/lib/utils"
+import { Checkbox } from "@/components/ui/checkbox"
 import { TaskGroup } from "@/components/tasks/task-group"
 
 // Grid column template — shared between header and rows
@@ -41,7 +44,7 @@ const COLUMN_HEADERS = [
   { label: "", width: null }, // checkbox
   { label: "Task", icon: ListChecksIcon },
   { label: "Activity", icon: CircleDotIcon },
-  { label: "Status", icon: CircleDotIcon },
+  { label: "Status", icon: LoaderIcon },
   { label: "Category", icon: HashIcon },
   { label: "Client / Project", icon: FolderIcon },
   { label: "Assignee", icon: UserIcon },
@@ -55,6 +58,8 @@ export function TasksTable({
   isGrouped,
   groupBy,
   orgId,
+  selectedIds,
+  onSelectAll,
   renderRow,
   renderAddTask,
 }: {
@@ -62,25 +67,49 @@ export function TasksTable({
   isGrouped: boolean
   groupBy: string
   orgId: string
+  selectedIds: Set<string>
+  onSelectAll: (taskIds: string[], selected: boolean) => void
   renderRow: (task: TaskWithJoins) => React.ReactNode
   renderAddTask: (groupKey: string) => React.ReactNode
 }) {
+  // All visible task IDs across groups
+  const allTaskIds = groups.flatMap((g) => g.tasks.map((t) => t._id as string))
+  const allSelected = allTaskIds.length > 0 && allTaskIds.every((id) => selectedIds.has(id))
+  const someSelected = allTaskIds.some((id) => selectedIds.has(id))
+
   return (
     <div className="overflow-x-auto">
       <div className={TASK_TABLE_MIN_W}>
         {/* Column headers */}
         <div
-          className={`grid ${TASK_GRID_COLS} items-center gap-x-4 px-3 py-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground [&>*]:min-w-0 [&>*]:overflow-hidden`}
+          className={`group/header grid ${TASK_GRID_COLS} items-center gap-x-4 border-b px-3 pt-1.5 pb-4 text-[11px] font-medium uppercase tracking-wide text-muted-foreground [&>*]:min-w-0 [&>*]:overflow-hidden`}
         >
           {COLUMN_HEADERS.map((col, i) => (
             <div key={i} className="flex items-center gap-1 truncate">
-              {col.icon && <col.icon className="size-3 shrink-0 opacity-50" />}
-              {col.label && <span>{col.label}</span>}
+              {i === 0 ? (
+                <div className={cn(
+                  "transition-opacity",
+                  selectedIds.size > 0 ? "opacity-100" : "opacity-0 group-hover/header:opacity-100",
+                )}>
+                  <SelectCheckbox
+                    checked={allSelected}
+                    indeterminate={someSelected && !allSelected}
+                    onChange={(checked) => onSelectAll(allTaskIds.slice(0, 50), checked)}
+                    label="Select all"
+                  />
+                </div>
+              ) : (
+                <>
+                  {col.icon && <col.icon className="size-3 shrink-0 opacity-50" />}
+                  {col.label && <span>{col.label}</span>}
+                </>
+              )}
             </div>
           ))}
         </div>
 
         {/* Groups + rows */}
+        <div className={cn(isGrouped && "flex flex-col gap-6")}>
         {groups.map((group) => {
           const rows = (
             <>
@@ -100,6 +129,7 @@ export function TasksTable({
             return <div key={group.key}>{rows}</div>
           }
 
+          const groupTaskIds = group.tasks.map((t) => t._id as string)
           return (
             <TaskGroup
               key={group.key}
@@ -109,13 +139,39 @@ export function TasksTable({
               count={group.count}
               groupBy={groupBy}
               orgId={orgId}
+              taskIds={groupTaskIds}
+              selectedIds={selectedIds}
+              onSelectGroup={onSelectAll}
             >
               {rows}
             </TaskGroup>
           )
         })}
+        </div>
       </div>
     </div>
+  )
+}
+
+/** Checkbox with indeterminate support for select-all patterns. */
+export function SelectCheckbox({
+  checked,
+  indeterminate,
+  onChange,
+  label,
+}: {
+  checked: boolean
+  indeterminate: boolean
+  onChange: (checked: boolean) => void
+  label: string
+}) {
+  return (
+    <Checkbox
+      checked={indeterminate ? "indeterminate" : checked}
+      onCheckedChange={(val) => onChange(val === true)}
+      aria-label={label}
+      onClick={(e) => e.stopPropagation()}
+    />
   )
 }
 

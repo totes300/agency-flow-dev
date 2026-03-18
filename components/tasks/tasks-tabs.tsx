@@ -1,7 +1,6 @@
 "use client"
 
 import { cn } from "@/lib/utils"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -18,11 +17,11 @@ type TabDef = {
 }
 
 const TABS: TabDef[] = [
-  { key: "active", label: "Active" },
-  { key: "backlog", label: "All" },
-  { key: "today", label: "Today" },
+  { key: "all", label: "All" },
+  { key: "backlog", label: "Backlog" },
+  { key: "in_progress", label: "In Progress" },
   { key: "review", label: "Review" },
-  { key: "blocked", label: "Stuck" },
+  { key: "blocked", label: "Blocked" },
   { key: "done", label: "Done" },
 ]
 
@@ -35,10 +34,20 @@ const GROUP_BY_OPTIONS: { key: GroupByOption; label: string; adminOnly?: boolean
   { key: "status", label: "Status" },
 ]
 
+export type TabCounts = {
+  all: number
+  backlog: number
+  in_progress: number
+  review: number
+  blocked: number
+  done: number
+}
+
 export function TasksTabs({
   activeTab,
   onTabChange,
   counts,
+  isSearching,
   groupBy,
   onGroupByChange,
   hasActiveFilters,
@@ -47,14 +56,8 @@ export function TasksTabs({
 }: {
   activeTab: TaskTab
   onTabChange: (tab: TaskTab) => void
-  counts?: {
-    active: number
-    backlog: number
-    today: number
-    review: number
-    blocked: number
-    done: number
-  }
+  counts?: TabCounts
+  isSearching: boolean
   groupBy: GroupByOption
   onGroupByChange: (option: GroupByOption) => void
   hasActiveFilters: boolean
@@ -69,38 +72,38 @@ export function TasksTabs({
   const groupByLabel = GROUP_BY_OPTIONS.find((o) => o.key === groupBy)?.label ?? "None"
 
   return (
-    <div className="flex items-center justify-between border-b">
+    <div className="flex items-center justify-between gap-2 border-b">
       {/* Tabs */}
-      <div className="flex items-center gap-1">
+      <div className="flex items-center overflow-x-auto scrollbar-none">
         {TABS.map((tab) => {
           const count = getCount(tab.key)
-          const isActive = activeTab === tab.key
+          const isActive = !isSearching && activeTab === tab.key
           return (
             <button
               key={tab.key}
               onClick={() => onTabChange(tab.key)}
               className={cn(
-                "relative flex items-center gap-1.5 px-3 py-2.5 text-sm font-medium transition-colors",
-                isActive
-                  ? "text-foreground"
-                  : "text-muted-foreground hover:text-foreground",
+                "relative flex shrink-0 items-center gap-1.5 px-3 py-2 text-[13px] whitespace-nowrap transition-colors",
+                isSearching
+                  ? "text-muted-foreground/40"
+                  : isActive
+                    ? "font-medium text-foreground"
+                    : "text-muted-foreground hover:text-foreground",
               )}
             >
               {tab.label}
               {count !== undefined && count > 0 && (
-                <Badge
-                  variant={isActive ? "default" : "secondary"}
-                  className={cn(
-                    "h-5 min-w-5 px-1.5 text-[11px] font-semibold",
-                    tab.key === "blocked" && count > 0 && "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
-                  )}
-                >
+                <span className={cn(
+                  "inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] tabular-nums leading-none",
+                  isActive
+                    ? "bg-foreground/8 text-foreground/45"
+                    : "bg-foreground/5 text-muted-foreground/45",
+                )}>
                   {count}
-                </Badge>
+                </span>
               )}
-              {/* Active indicator */}
               {isActive && (
-                <span className="absolute bottom-0 left-3 right-3 h-0.5 rounded-full bg-foreground" />
+                <span className="absolute inset-x-3 bottom-0 h-px bg-foreground/80" />
               )}
             </button>
           )

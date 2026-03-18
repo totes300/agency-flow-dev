@@ -16,6 +16,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { Checkbox } from "@/components/ui/checkbox"
 import { PlusCircleIcon, XCircleIcon, ChevronDownIcon, CheckIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { FilterOp } from "@/lib/hooks/use-task-filters"
@@ -135,7 +136,7 @@ export function FilterPill({
       {/* Value(s) — click to reopen */}
       <Popover open={valueOpen} onOpenChange={setValueOpen}>
         <PopoverTrigger asChild>
-          <button className="flex max-w-[160px] items-center gap-0.5 truncate pl-1 pr-2 text-xs font-medium text-indigo-600 transition-colors hover:text-indigo-700">
+          <button className="flex max-w-[160px] items-center gap-0.5 truncate pl-1 pr-2 text-xs font-medium text-primary transition-colors hover:text-primary/80">
             <span className="truncate">{selectedLabels || "..."}</span>
             <ChevronDownIcon className="size-2.5 shrink-0 text-muted-foreground" />
           </button>
@@ -188,7 +189,7 @@ function ValueList({
 }) {
   return (
     <Command>
-      <div className="px-3 pt-3 pb-1.5 text-[13px] font-semibold text-slate-900">
+      <div className="px-3 pt-3 pb-1.5 text-[13px] font-semibold text-foreground">
         Filter by: {label.toLowerCase()}
       </div>
       <CommandInput placeholder="Search..." />
@@ -204,16 +205,13 @@ function ValueList({
                 className="gap-2.5"
               >
                 {isMulti ? (
-                  <div className={cn(
-                    "flex size-4 shrink-0 items-center justify-center rounded border-[1.5px]",
-                    isSelected
-                      ? "border-indigo-600 bg-indigo-600 text-white"
-                      : "border-slate-300"
-                  )}>
-                    {isSelected && <CheckIcon className="size-2.5" />}
-                  </div>
+                  <Checkbox
+                    checked={isSelected}
+                    className="pointer-events-none size-4"
+                    tabIndex={-1}
+                  />
                 ) : (
-                  isSelected && <CheckIcon className="size-3.5 shrink-0 text-indigo-600" />
+                  isSelected && <CheckIcon className="size-3.5 shrink-0 text-primary" />
                 )}
                 {opt.color && (
                   <span

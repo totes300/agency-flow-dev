@@ -56,3 +56,26 @@ export function formatDateToYMD(date: Date): string {
   const d = String(date.getDate()).padStart(2, "0")
   return `${y}-${m}-${d}`
 }
+
+/** Format a timestamp as relative time (e.g., "2m ago", "3h ago", "5d ago"). */
+export function formatRelativeTime(timestamp: number): string {
+  const diff = Date.now() - timestamp
+  const minutes = Math.floor(diff / 60000)
+  if (minutes < 1) return "just now"
+  if (minutes < 60) return `${minutes}m ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.floor(hours / 24)
+  return `${days}d ago`
+}
+
+/** Format a YYYY-MM-DD date string as short display (e.g., "Mar 20"). */
+export function formatShortDate(dateStr: string): string {
+  const date = new Date(dateStr + "T00:00:00")
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" })
+}
+
+/** Extract the first name from a full name string. */
+export function firstName(name: string): string {
+  return name.split(/\s+/)[0]
+}

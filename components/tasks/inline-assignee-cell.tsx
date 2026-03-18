@@ -14,33 +14,42 @@ import {
 } from "@/components/ui/command"
 import { UserAvatar } from "@/components/user-avatar"
 import { Avatar, AvatarFallback, AvatarGroup, AvatarGroupCount } from "@/components/ui/avatar"
-import { CheckIcon } from "lucide-react"
+import { CheckIcon, UserIcon } from "lucide-react"
+import { firstName } from "@/lib/format"
+import { toast } from "sonner"
 import type { Doc, Id } from "@/convex/_generated/dataModel"
 
 export function InlineAssigneeCell({
   taskId,
   assignees,
+  onToggle: onToggleProp,
 }: {
-  taskId: Id<"tasks">
+  taskId?: Id<"tasks">
   assignees: Array<Pick<Doc<"users">, "_id" | "name" | "email" | "imageUrl">>
+  onToggle?: (userId: Id<"users">, member: Pick<Doc<"users">, "_id" | "name" | "email" | "imageUrl">) => void
 }) {
   const [open, setOpen] = useState(false)
   const updateTask = useMutation(api.tasks.update)
 
-  // Org members from Convex — no Clerk API calls
   const orgMembers = useQuery(api.orgMembers.listOrgMembers)
 
   const assigneeIdSet = new Set(assignees.map((a) => a._id.toString()))
 
   async function handleToggle(userId: Id<"users">) {
+    if (onToggleProp) {
+      const member = orgMembers?.find((m) => m._id === userId)
+      if (member) onToggleProp(userId, { _id: member._id, name: member.name, email: member.email, imageUrl: member.imageUrl })
+      return
+    }
+    if (!taskId) return
     const currentIds = assignees.map((a) => a._id)
     const newIds = assigneeIdSet.has(userId.toString())
       ? currentIds.filter((id) => id !== userId)
       : [...currentIds, userId]
     try {
       await updateTask({ id: taskId, assigneeIds: newIds })
-    } catch {
-      // Convex subscription reverts on failure
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to update")
     }
   }
 
@@ -48,11 +57,14 @@ export function InlineAssigneeCell({
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button
-          className="flex w-full items-center rounded-sm py-0.5 transition-colors hover:bg-muted/50"
+          className={`flex w-full items-center rounded-sm py-0.5 transition-colors ${assignees.length > 0 ? "hover:bg-muted/50" : ""}`}
           onClick={(e) => e.stopPropagation()}
         >
           {assignees.length === 0 ? (
-            <span className="text-xs text-muted-foreground">—</span>
+            <span className="flex items-center gap-1.5 text-muted-foreground/20 transition-colors group-hover/row:text-muted-foreground/50">
+              <UserIcon className="size-3.5" />
+              <span className="text-xs">Assign</span>
+            </span>
           ) : (
             <span className="flex items-center gap-1">
               {assignees.length === 1 ? (
@@ -115,6 +127,3 @@ export function InlineAssigneeCell({
   )
 }
 
-function firstName(name: string): string {
-  return name.split(/\s+/)[0]
-}

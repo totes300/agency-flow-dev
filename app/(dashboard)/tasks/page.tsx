@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useCallback, useEffect } from "react"
+import { useState, useCallback, useEffect, useRef } from "react"
 import { useQuery, useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { useConvexAuth } from "convex/react"
@@ -13,9 +13,14 @@ import { TasksTable } from "@/components/tasks/tasks-table"
 import { TaskRow } from "@/components/tasks/task-row"
 import { InlineAddTask } from "@/components/tasks/inline-add-task"
 import { TasksFilterBar } from "@/components/tasks/tasks-filter-bar"
+import { TaskFormModal } from "@/components/tasks/task-form-modal"
+import { BulkToolbar } from "@/components/tasks/bulk-toolbar"
 import { TasksEmptyState } from "@/components/tasks/tasks-empty-state"
+import { TaskCard } from "@/components/tasks/task-card"
 import { TasksListSkeleton } from "@/components/tasks/tasks-list-skeleton"
+import { Button } from "@/components/ui/button"
 import { ConfirmDialog } from "@/components/confirm-dialog"
+import { PlusIcon } from "lucide-react"
 import { toast } from "sonner"
 import type { Id } from "@/convex/_generated/dataModel"
 
@@ -26,21 +31,33 @@ export default function TasksPage() {
   const orgId = organization?.id ?? ""
 
   const filters = useTaskFilters()
-  const [filterBarOpen, setFilterBarOpen] = useState(filters.hasActiveFilters)
+  const [filterBarOpen, setFilterBarOpen] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null)
+  const [createModalOpen, setCreateModalOpen] = useState(false)
 
   // Clear selection when tab changes
   useEffect(() => {
     setSelectedIds(new Set())
   }, [filters.tab])
 
-  // Auto-open filter bar when filters become active (e.g. from URL on mount)
+  // Auto-open filter bar when filters are active
   useEffect(() => {
     if (filters.hasActiveFilters && !filterBarOpen) {
       setFilterBarOpen(true)
     }
   }, [filters.hasActiveFilters]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Escape to deselect all
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape" && selectedIds.size > 0 && !createModalOpen && !deleteTargetId) {
+        setSelectedIds(new Set())
+      }
+    }
+    document.addEventListener("keydown", handleKeyDown)
+    return () => document.removeEventListener("keydown", handleKeyDown)
+  }, [selectedIds.size, createModalOpen, deleteTargetId])
 
   const archiveTask = useMutation(api.tasks.archive)
   const restoreTask = useMutation(api.tasks.restore)
@@ -50,6 +67,13 @@ export default function TasksPage() {
   // Queries
   const counts = useQuery(api.tasks.counts, isAuthenticated ? {} : "skip")
   const listResult = useQuery(api.tasks.list, isAuthenticated ? filters.toListArgs() : "skip")
+
+  // Stale-while-revalidate: keep last result visible during tab switches
+  const lastResultRef = useRef(listResult)
+  if (listResult !== undefined) {
+    lastResultRef.current = listResult
+  }
+  const displayResult = listResult ?? lastResultRef.current
 
   // Selection
   const handleSelect = useCallback((taskId: string, selected: boolean) => {
@@ -90,32 +114,34 @@ export default function TasksPage() {
     }
   }
 
-  // Loading
-  if (!isAuthenticated || counts === undefined || listResult === undefined) {
+  // Initial load — skeleton only on first render, never on tab switch
+  if (!isAuthenticated || counts === undefined || displayResult === undefined) {
     return <TasksListSkeleton />
   }
 
-  const isEmpty = listResult.totalCount === 0
+  const isEmpty = displayResult.totalCount === 0
 
   return (
-    <div className="space-y-4">
+    <div>
       <TasksHeader
         search={filters.search}
         onSearchChange={filters.setSearch}
-        onNewTask={() => {/* TODO: Chunk 8 */}}
-        totalCount={counts[filters.tab]}
+        onNewTask={() => setCreateModalOpen(true)}
       />
 
-      <TasksTabs
-        activeTab={filters.tab}
-        onTabChange={filters.setTab}
-        counts={counts}
-        groupBy={filters.groupBy}
-        onGroupByChange={filters.setGroupBy}
-        hasActiveFilters={filters.hasActiveFilters}
-        onFilterToggle={() => setFilterBarOpen(!filterBarOpen)}
-        isAdmin={isAdmin ?? false}
-      />
+      <div className="mt-4">
+        <TasksTabs
+          activeTab={filters.tab}
+          onTabChange={filters.setTab}
+          counts={counts}
+          isSearching={filters.isSearching}
+          groupBy={filters.groupBy}
+          onGroupByChange={filters.setGroupBy}
+          hasActiveFilters={filters.hasActiveFilters}
+          onFilterToggle={() => setFilterBarOpen(!filterBarOpen)}
+          isAdmin={isAdmin ?? false}
+        />
+      </div>
 
       {filterBarOpen && (
         <TasksFilterBar
@@ -129,41 +155,98 @@ export default function TasksPage() {
         />
       )}
 
+      <div className="mt-2" />
+
       {isEmpty ? (
         <TasksEmptyState
           tab={filters.tab}
           hasFilters={filters.hasActiveFilters}
+          isSearching={filters.isSearching}
           onClearFilters={filters.clearAllFilters}
-          onNewTask={() => {/* TODO: Chunk 8 */}}
+          onNewTask={() => setCreateModalOpen(true)}
         />
       ) : (
-        <TasksTable
-          groups={listResult.groups}
-          isGrouped={!!filters.groupBy}
-          groupBy={filters.groupBy ?? ""}
-          orgId={orgId}
-          renderRow={(task) => (
-            <TaskRow
-              key={task._id}
-              task={task}
-              isAdmin={isAdmin ?? false}
-              isSelected={selectedIds.has(task._id)}
-              onSelect={handleSelect}
-              onArchive={handleArchive}
-              onDelete={setDeleteTargetId}
+        <>
+          {/* Desktop: table view */}
+          <div className="hidden md:block">
+            <TasksTable
+              groups={displayResult.groups}
+              isGrouped={!!filters.groupBy}
+              groupBy={filters.groupBy ?? ""}
+              orgId={orgId}
+              selectedIds={selectedIds}
+              onSelectAll={(taskIds, selected) => {
+                setSelectedIds((prev) => {
+                  const next = new Set(prev)
+                  for (const id of taskIds) {
+                    if (selected) {
+                      if (next.size < 50) next.add(id)
+                    } else {
+                      next.delete(id)
+                    }
+                  }
+                  return next
+                })
+              }}
+              renderRow={(task) => (
+                <TaskRow
+                  key={task._id}
+                  task={task}
+                  isAdmin={isAdmin ?? false}
+                  isSelected={selectedIds.has(task._id)}
+                  hasSelection={selectedIds.size > 0}
+                  onSelect={handleSelect}
+                  onArchive={handleArchive}
+                  onDelete={setDeleteTargetId}
+                />
+              )}
+              renderAddTask={(groupKey) => (
+                <InlineAddTask
+                  key={`add-${groupKey}`}
+                  groupBy={filters.groupBy}
+                  groupKey={groupKey}
+                  isAdmin={isAdmin ?? false}
+                  tab={filters.tab}
+                />
+              )}
             />
-          )}
-          renderAddTask={(groupKey) => (
-            <InlineAddTask
-              key={`add-${groupKey}`}
-              groupBy={filters.groupBy}
-              groupKey={groupKey}
-            />
-          )}
-        />
+          </div>
+
+          {/* Mobile: card view */}
+          <div className="md:hidden">
+            {displayResult.groups.map((group) => (
+              <div key={group.key}>
+                {group.tasks.map((task) => (
+                  <TaskCard
+                    key={task._id}
+                    task={task}
+                    isSelected={selectedIds.has(task._id)}
+                    hasSelection={selectedIds.size > 0}
+                    onSelect={handleSelect}
+                  />
+                ))}
+              </div>
+            ))}
+          </div>
+        </>
       )}
 
-      {/* TODO: Chunk 8 — bulk toolbar + creation modal */}
+      <BulkToolbar
+        selectedIds={selectedIds}
+        onDeselectAll={() => setSelectedIds(new Set())}
+        isAdmin={isAdmin ?? false}
+      />
+
+      {/* Mobile FAB */}
+      <Button
+        onClick={() => setCreateModalOpen(true)}
+        className="fixed bottom-6 right-6 z-40 size-12 rounded-full shadow-lg md:hidden"
+        size="icon"
+      >
+        <PlusIcon className="size-5" />
+      </Button>
+
+      <TaskFormModal open={createModalOpen} onOpenChange={setCreateModalOpen} />
 
       <ConfirmDialog
         open={!!deleteTargetId}

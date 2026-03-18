@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react"
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react"
+import { Checkbox } from "@/components/ui/checkbox"
 import { cn } from "@/lib/utils"
 import { getStatusColor } from "@/lib/status-colors"
 import { getCategoryColor } from "@/convex/lib/constants"
@@ -19,6 +20,9 @@ export function TaskGroup({
   count,
   groupBy,
   orgId,
+  taskIds,
+  selectedIds,
+  onSelectGroup,
   children,
 }: {
   groupKey: string
@@ -27,6 +31,9 @@ export function TaskGroup({
   count: number
   groupBy: string
   orgId: string
+  taskIds?: string[]
+  selectedIds?: Set<string>
+  onSelectGroup?: (taskIds: string[], selected: boolean) => void
   children: React.ReactNode
 }) {
   const storageKey = getCollapseKey(orgId, groupBy, groupKey)
@@ -46,15 +53,37 @@ export function TaskGroup({
 
   const contentId = `group-content-${groupKey}`
 
+  // Group selection state
+  const groupAllSelected = taskIds && selectedIds && taskIds.length > 0
+    ? taskIds.every((id) => selectedIds.has(id))
+    : false
+  const groupSomeSelected = taskIds && selectedIds
+    ? taskIds.some((id) => selectedIds.has(id))
+    : false
+
   return (
     <div>
-      {/* Group header — Linear-style subtle divider */}
-      <button
-        onClick={() => setCollapsed(!collapsed)}
-        aria-expanded={!collapsed}
-        aria-controls={contentId}
-        className="flex w-full items-center gap-2 border-b border-border/60 px-3 py-2 text-left transition-colors hover:bg-muted/30"
-      >
+      <div className="group/group flex w-full items-center gap-2 border-b border-border/60 px-3 py-2 transition-colors hover:bg-muted/30">
+        {/* Group checkbox — hidden until hover or selection active */}
+        {taskIds && selectedIds && onSelectGroup && (
+          <div className={cn(
+            "transition-opacity",
+            selectedIds.size > 0 || groupSomeSelected ? "opacity-100" : "opacity-0 group-hover/group:opacity-100",
+          )}>
+            <Checkbox
+              checked={groupSomeSelected && !groupAllSelected ? "indeterminate" : groupAllSelected}
+              onCheckedChange={() => onSelectGroup(taskIds.slice(0, 50), !groupAllSelected)}
+              aria-label={`Select all in ${label}`}
+              onClick={(e) => e.stopPropagation()}
+            />
+          </div>
+        )}
+        <button
+          onClick={() => setCollapsed(!collapsed)}
+          aria-expanded={!collapsed}
+          aria-controls={contentId}
+          className="flex flex-1 items-center gap-2 text-left"
+        >
         {collapsed ? (
           <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground" />
         ) : (
@@ -62,19 +91,18 @@ export function TaskGroup({
         )}
         {color && (
           <span
-            className="size-2.5 shrink-0 rounded-full"
+            className="size-2 shrink-0 rounded-full"
             style={{ backgroundColor: resolveGroupColor(color) }}
           />
         )}
-        <span
-          className={cn("text-sm font-semibold", !color && "text-muted-foreground")}
-        >
+        <span className="text-[13px] font-medium text-foreground">
           {label}
         </span>
-        <span className="text-xs text-muted-foreground">
-          {count} {count === 1 ? "task" : "tasks"}
+        <span className="text-[11px] text-muted-foreground/60">
+          {count}
         </span>
-      </button>
+        </button>
+      </div>
 
       {/* Group content */}
       {!collapsed && <div id={contentId}>{children}</div>}

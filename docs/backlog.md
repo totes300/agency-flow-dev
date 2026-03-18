@@ -898,3 +898,68 @@
 - **Phase 5**: Archive cascade from projects → tasks
 - **Phase 7**: Real time entry aggregation in `getRetainerData` (currently `workedMinutes = 0`); monthly breakdown with grouped entries by category; "Log entry" link per month
 - **Phase 2 (Reports)**: Auto-report generation in cron job; "Create Invoice" button on overage banner and settlement card; overage billing queue
+
+---
+
+## Phase 5: Tasks Core ✅ COMPLETE
+
+> **Goal**: Main task list — table, filtering, grouping, inline editing, bulk operations, task creation modal.
+> **Depends on**: Phase 3 (Projects Core)
+> **Access**: Admin: all tasks. Member: only assigned tasks.
+> **Spec**: `docs/phase-5-tasks-core.md`, `docs/superpowers/specs/2026-03-16-phase-5-tasks-core-design.md`
+
+---
+
+### Implemented
+
+- [x] Schema: `tasks` table with statusType denormalization, searchIndex, 5 indexes
+- [x] Schema: `orgMembers` junction table (Clerk webhook-synced membership)
+- [x] Schema: `systemRole: "today"` on statuses table
+- [x] Backend: `tasks.counts` (per-tab, permission-filtered, Today via systemRole)
+- [x] Backend: `tasks.list` (tab + filter operators + grouping + search + server-side enrichment)
+- [x] Backend: `tasks.create/update/archive/restore/remove/duplicate/bulkUpdate`
+- [x] Backend: `orgMembers.listOrgMembers` query + `upsertMembership/deleteMembership` mutations
+- [x] Webhook: `organizationMembership.created/updated/deleted` events handled
+- [x] URL state via `nuqs` (tab, groupBy, search, filters with operators)
+- [x] 6 tabs with count badges
+- [x] 10-column CSS Grid table (desktop)
+- [x] Inline editing: status, category, client/project, assignee (Popover + Command)
+- [x] Grouping: project, client, category, assignee, status, none
+- [x] Collapsible group headers with localStorage persistence
+- [x] Inline task creation ("+ Add task..." with rapid entry, group-inherited defaults)
+- [x] Stripe-style filter pills with operators (is/isNot/anyOf/noneOf)
+- [x] Status, Project, Category, Assignee filters (all multi-select)
+- [x] Task creation modal (Linear-style, project picker, property pills, Cmd+Enter)
+- [x] Bulk operations toolbar (status, add/remove assignee, category, archive)
+- [x] Select all (header + per-group), max 50 cap
+- [x] Checkboxes hidden by default, appear on row hover (ClickUp-style)
+- [x] Mobile card view below md breakpoint
+- [x] Mobile FAB for task creation
+- [x] Horizontally scrollable tabs on mobile
+- [x] Responsive header (stacks on mobile)
+- [x] Empty cell placeholders (dashed circle icon + label, hover-to-reveal)
+- [x] Search with debounce (local state + 300ms delay)
+- [x] Archive with undo toast
+- [x] Delete with confirmation dialog
+- [x] Done tasks: green checkbox + strikethrough + opacity
+- [x] Activity column with mock data (subtask, comment, attachment icons)
+- [x] UserAvatar shared component (shadcn Avatar + initials fallback)
+- [x] Content-aware loading skeleton
+
+---
+
+### Verification
+
+- [x] `npx tsc --noEmit` — 0 type errors
+- [x] `npx convex dev --once` — schema + functions deployed
+- [x] All shadcn Checkbox used (no hand-rolled checkboxes)
+- [x] All inline cells use toast.error on failure
+- [x] Design tokens used throughout (no hardcoded colors)
+
+---
+
+### TODOs deferred to later phases
+
+- **Phase 6**: Activity column real data (subtask/comment/attachment queries); task subtitle real activity feed; task detail modal (replaces creation modal for editing); subtasks; rich text description (Tiptap)
+- **Phase 7**: Time column real data (timer + logged time); play/pause button wired to timer system; project lock (prevent change if time entries exist); stop timers on archive
+- **v2**: Column-header sorting; drag-and-drop reordering (add sortOrder field); arrow-key row navigation; saved views (URL state covers need for now); cursor-based per-group pagination ("Load more"); denormalized task counts for scale; assigneeIds → junction table at ~2000 tasks/org

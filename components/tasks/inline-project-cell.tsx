@@ -12,7 +12,8 @@ import {
   CommandGroup,
   CommandEmpty,
 } from "@/components/ui/command"
-import { LockIcon } from "lucide-react"
+import { LockIcon, FolderIcon } from "lucide-react"
+import { toast } from "sonner"
 import type { Doc, Id } from "@/convex/_generated/dataModel"
 
 export function InlineProjectCell({
@@ -20,11 +21,13 @@ export function InlineProjectCell({
   project,
   client,
   hasTimeEntries,
+  onSelect: onSelectProp,
 }: {
-  taskId: Id<"tasks">
+  taskId?: Id<"tasks">
   project: Pick<Doc<"projects">, "_id" | "name" | "code"> | null
   client: Pick<Doc<"clients">, "_id" | "name"> | null
   hasTimeEntries?: boolean
+  onSelect?: (projectId: Id<"projects"> | null, project: Pick<Doc<"projects">, "_id" | "name" | "code"> | null, client: Pick<Doc<"clients">, "_id" | "name"> | null) => void
 }) {
   const [open, setOpen] = useState(false)
   const projects = useQuery(api.projects.list, {})
@@ -32,10 +35,21 @@ export function InlineProjectCell({
 
   async function handleSelect(projectId: Id<"projects"> | null) {
     setOpen(false)
+    if (onSelectProp) {
+      if (!projectId) { onSelectProp(null, null, null); return }
+      const p = projects?.find((pr) => pr._id === projectId)
+      onSelectProp(
+        projectId,
+        p ? { _id: p._id, name: p.name, code: p.code } : null,
+        p ? { _id: p.clientId as Id<"clients">, name: p.clientName ?? "Unknown" } : null,
+      )
+      return
+    }
+    if (!taskId) return
     try {
       await updateTask({ id: taskId, projectId })
-    } catch {
-      // Convex subscription reverts on failure
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to update")
     }
   }
 
@@ -57,7 +71,7 @@ export function InlineProjectCell({
     <Popover open={locked ? false : open} onOpenChange={locked ? undefined : setOpen}>
       <PopoverTrigger asChild>
         <button
-          className="flex w-full items-center gap-1 rounded-sm py-0.5 text-left transition-colors hover:bg-muted/50"
+          className={`flex w-full items-center gap-1 rounded-sm py-0.5 text-left transition-colors ${project ? "hover:bg-muted/50" : ""}`}
           onClick={(e) => e.stopPropagation()}
           title={locked ? "Has time entries — project cannot be changed" : undefined}
         >
@@ -70,7 +84,10 @@ export function InlineProjectCell({
               <div className="truncate text-[11px] text-muted-foreground">{project.name}</div>
             </div>
           ) : (
-            <span className="text-xs text-muted-foreground">—</span>
+            <span className="flex items-center gap-1.5 text-muted-foreground/20 transition-colors group-hover/row:text-muted-foreground/50">
+              <FolderIcon className="size-3.5" />
+              <span className="text-xs">Project</span>
+            </span>
           )}
         </button>
       </PopoverTrigger>

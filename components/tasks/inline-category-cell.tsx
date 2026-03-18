@@ -12,15 +12,20 @@ import {
   CommandGroup,
 } from "@/components/ui/command"
 import { CategoryBadge } from "@/components/category-badge"
+import { cn } from "@/lib/utils"
 import { getCategoryColor } from "@/convex/lib/constants"
+import { TagIcon } from "lucide-react"
+import { toast } from "sonner"
 import type { Doc, Id } from "@/convex/_generated/dataModel"
 
 export function InlineCategoryCell({
   taskId,
   category,
+  onSelect: onSelectProp,
 }: {
-  taskId: Id<"tasks">
+  taskId?: Id<"tasks">
   category: Pick<Doc<"workCategories">, "_id" | "name" | "color"> | null
+  onSelect?: (categoryId: Id<"workCategories"> | null, category: Pick<Doc<"workCategories">, "_id" | "name" | "color"> | null) => void
 }) {
   const [open, setOpen] = useState(false)
   const categories = useQuery(api.workCategories.list, {})
@@ -28,10 +33,16 @@ export function InlineCategoryCell({
 
   async function handleSelect(categoryId: Id<"workCategories"> | null) {
     setOpen(false)
+    if (onSelectProp) {
+      const c = categoryId ? categories?.find((cat) => cat._id === categoryId) : null
+      onSelectProp(categoryId, c ? { _id: c._id, name: c.name, color: c.color } : null)
+      return
+    }
+    if (!taskId) return
     try {
       await updateTask({ id: taskId, workCategoryId: categoryId })
-    } catch {
-      // Convex subscription reverts on failure
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to update")
     }
   }
 
@@ -39,13 +50,16 @@ export function InlineCategoryCell({
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button
-          className="flex w-full items-center rounded-sm py-0.5 transition-colors hover:bg-muted/50"
+          className={cn("flex w-full items-center rounded-sm py-0.5 transition-colors", category && "hover:bg-muted/50")}
           onClick={(e) => e.stopPropagation()}
         >
           {category ? (
             <CategoryBadge name={category.name} color={category.color} />
           ) : (
-            <span className="text-xs text-muted-foreground">—</span>
+            <span className="flex items-center gap-1.5 text-muted-foreground/20 transition-colors group-hover/row:text-muted-foreground/50">
+              <TagIcon className="size-3.5" />
+              <span className="text-xs">Category</span>
+            </span>
           )}
         </button>
       </PopoverTrigger>

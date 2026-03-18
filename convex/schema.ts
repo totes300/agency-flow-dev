@@ -59,7 +59,6 @@ export default defineSchema({
       v.literal("blocked"),
       v.literal("done")
     ),
-    systemRole: v.optional(v.union(v.literal("today"))),
     sortOrder: v.number(),
     archivedAt: v.optional(v.number()),
     // Base
@@ -97,13 +96,23 @@ export default defineSchema({
   })
     .index("by_orgId", ["orgId"])
     .index("by_orgId_statusType", ["orgId", "statusType"])
+    .index("by_orgId_statusId", ["orgId", "statusId"])
     .index("by_projectId", ["projectId"])
     .index("by_parentTaskId", ["parentTaskId"])
-    .index("by_statusId", ["statusId"])
     .searchIndex("search_title", {
       searchField: "title",
       filterFields: ["orgId"],
     }),
+
+  // ─── Task Counts (denormalized, one per org, O(1) tab badge reads) ─────────
+  taskCounts: defineTable({
+    orgId: v.string(),
+    backlog: v.number(),
+    in_progress: v.number(),
+    review: v.number(),
+    blocked: v.number(),
+    done: v.number(),
+  }).index("by_orgId", ["orgId"]),
 
   // ─── Clients ──────────────────────────────────────────────────────────────────
   clients: defineTable({

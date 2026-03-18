@@ -3,11 +3,14 @@
 import { useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { cn } from "@/lib/utils"
-import { TASK_GRID_COLS, TASK_TABLE_MIN_W } from "@/components/tasks/tasks-table"
+import { formatRelativeTime, formatShortDate } from "@/lib/format"
+import { Checkbox } from "@/components/ui/checkbox"
+import { TASK_GRID_COLS } from "@/components/tasks/tasks-table"
 import { InlineStatusCell } from "@/components/tasks/inline-status-cell"
 import { InlineCategoryCell } from "@/components/tasks/inline-category-cell"
 import { InlineProjectCell } from "@/components/tasks/inline-project-cell"
 import { InlineAssigneeCell } from "@/components/tasks/inline-assignee-cell"
+import { InlineDueDateCell } from "@/components/tasks/inline-due-date-cell"
 import { RowActionMenu } from "@/components/row-action-menu"
 import { DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
 import {
@@ -27,6 +30,7 @@ export function TaskRow({
   task,
   isAdmin,
   isSelected,
+  hasSelection,
   onSelect,
   onArchive,
   onDelete,
@@ -34,6 +38,7 @@ export function TaskRow({
   task: TaskWithJoins
   isAdmin: boolean
   isSelected: boolean
+  hasSelection: boolean
   onSelect: (taskId: string, selected: boolean) => void
   onArchive: (taskId: string) => void
   onDelete: (taskId: string) => void
@@ -46,29 +51,23 @@ export function TaskRow({
   return (
     <div
       className={cn(
-        `grid ${TASK_GRID_COLS} items-center gap-x-4 border-b border-border/40 px-3 py-2 transition-colors hover:bg-muted/30 [&>*]:min-w-0 [&>*]:overflow-hidden`,
+        `group/row grid ${TASK_GRID_COLS} items-center gap-x-4 border-b border-border/40 px-3 py-2 transition-colors hover:bg-muted/30 [&>*]:min-w-0 [&>*]:overflow-hidden`,
         isSelected && "bg-primary/5",
         isDone && "opacity-50",
       )}
     >
-      {/* 1. Checkbox */}
-      <div className="flex items-center justify-center">
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            onSelect(task._id, !isSelected)
-          }}
-          className={cn(
-            "flex size-4 items-center justify-center rounded-full border-[1.5px] transition-colors",
-            isDone
-              ? "border-green-500 bg-green-500"
-              : isSelected
-                ? "border-primary bg-primary"
-                : "border-muted-foreground/40 hover:border-muted-foreground",
-          )}
-        >
-          {(isDone || isSelected) && <CheckIcon className="size-2.5 text-white" />}
-        </button>
+      {/* 1. Checkbox — hidden until row hover or selection active */}
+      <div className={cn(
+        "flex items-center justify-center transition-opacity",
+        hasSelection || isSelected || isDone ? "opacity-100" : "opacity-0 group-hover/row:opacity-100",
+      )}>
+        <Checkbox
+          checked={isDone || isSelected}
+          onCheckedChange={() => onSelect(task._id, !isSelected)}
+          onClick={(e) => e.stopPropagation()}
+          aria-label={`Select ${task.title}`}
+          className={cn(isDone && "border-green-600 bg-green-600 text-white data-[state=checked]:border-green-600 data-[state=checked]:bg-green-600")}
+        />
       </div>
 
       {/* 2. Task name + subtitle */}
@@ -100,23 +99,8 @@ export function TaskRow({
       {/* 7. Assignee (inline edit) */}
       <InlineAssigneeCell taskId={task._id} assignees={task.assignees} />
 
-      {/* 8. Due date */}
-      <div className="truncate">
-        {task.dueDate ? (
-          <span className={cn("text-xs", isOverdue ? "font-medium text-red-600" : "text-muted-foreground")}>
-            {isOverdue ? (
-              "Overdue"
-            ) : (
-              <>
-                <CalendarIcon className="mr-1 inline size-3 opacity-50" />
-                {formatShortDate(task.dueDate)}
-              </>
-            )}
-          </span>
-        ) : (
-          <span className="text-xs text-muted-foreground">—</span>
-        )}
-      </div>
+      {/* 8. Due date (inline edit) */}
+      <InlineDueDateCell taskId={task._id} dueDate={task.dueDate ?? null} isOverdue={!!isOverdue} />
 
       {/* 9. Time (mock) */}
       <div className="flex items-center">
@@ -201,18 +185,3 @@ function simpleHash(str: string): number {
   return Math.abs(hash)
 }
 
-function formatRelativeTime(timestamp: number): string {
-  const diff = Date.now() - timestamp
-  const minutes = Math.floor(diff / 60000)
-  if (minutes < 1) return "just now"
-  if (minutes < 60) return `${minutes}m ago`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h ago`
-  const days = Math.floor(hours / 24)
-  return `${days}d ago`
-}
-
-function formatShortDate(dateStr: string): string {
-  const date = new Date(dateStr + "T00:00:00")
-  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" })
-}

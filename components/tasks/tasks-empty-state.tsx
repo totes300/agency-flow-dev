@@ -7,17 +7,17 @@ import { PlusIcon } from "lucide-react"
 import type { TaskTab } from "@/lib/hooks/use-task-filters"
 
 const TAB_MESSAGES: Record<TaskTab, { title: string; description: string }> = {
-  active: {
-    title: "No active tasks",
-    description: "Create one to get started.",
+  all: {
+    title: "No tasks yet",
+    description: "Create your first task to get started.",
   },
   backlog: {
     title: "Backlog is empty",
     description: "Tasks in backlog statuses will appear here.",
   },
-  today: {
-    title: "Nothing planned for today",
-    description: "Move tasks to \"Today\" status to see them here.",
+  in_progress: {
+    title: "Nothing in progress",
+    description: "Tasks with in-progress statuses will appear here.",
   },
   review: {
     title: "Nothing waiting for review",
@@ -36,14 +36,26 @@ const TAB_MESSAGES: Record<TaskTab, { title: string; description: string }> = {
 export function TasksEmptyState({
   tab,
   hasFilters,
+  isSearching,
   onClearFilters,
   onNewTask,
 }: {
   tab: TaskTab
   hasFilters: boolean
+  isSearching: boolean
   onClearFilters: () => void
   onNewTask: () => void
 }) {
+  if (isSearching) {
+    return (
+      <EmptyState
+        icon={CheckSquareIcon}
+        title="No tasks match your search"
+        description="Try a different search term."
+      />
+    )
+  }
+
   if (hasFilters) {
     return (
       <EmptyState
@@ -66,7 +78,7 @@ export function TasksEmptyState({
       title={msg.title}
       description={msg.description}
       action={
-        tab === "active" ? (
+        tab === "all" ? (
           <Button onClick={onNewTask}>
             <PlusIcon className="size-4" />
             New task

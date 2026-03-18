@@ -1,33 +1,20 @@
 import { v } from "convex/values";
-import { query, mutation, QueryCtx, MutationCtx } from "./_generated/server";
+import { query, mutation, internalMutation, QueryCtx, MutationCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { getAuthContext, requireAdmin, validateStringLength } from "./lib/auth";
 import type { StatusType } from "./lib/constants";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────────
 
-/** Map of tab name → which statusTypes it includes. */
-const TAB_STATUS_TYPES: Record<string, StatusType[]> = {
-  active: ["in_progress", "review", "blocked"],
-  backlog: ["backlog"],
-  // "today" is special — uses systemRole lookup, not statusType
-  review: ["review"],
-  blocked: ["blocked"],
-  done: ["done"],
+/** 1:1 mapping — each tab filters by exactly one statusType. "all" = no filter. */
+const TAB_STATUS_TYPE: Record<string, StatusType | null> = {
+  all: null,
+  backlog: "backlog",
+  in_progress: "in_progress",
+  review: "review",
+  blocked: "blocked",
+  done: "done",
 };
-
-/** Find the status with systemRole="today" for an org. */
-async function getTodayStatusId(
-  ctx: QueryCtx,
-  orgId: string
-): Promise<Id<"statuses"> | null> {
-  const statuses = await ctx.db
-    .query("statuses")
-    .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
-    .collect();
-  const today = statuses.find((s) => s.systemRole === "today" && !s.archivedAt);
-  return today?._id ?? null;
-}
 
 /** Find the first backlog-type status (used as default for new tasks). */
 async function getDefaultStatusId(
@@ -45,6 +32,51 @@ async function getDefaultStatusId(
   return { statusId: active[0]._id, statusType: "backlog" };
 }
 
+/**
+ * Atomically update the denormalized taskCounts document for an org.
+ * Called by every mutation that changes a task's statusType or archived state.
+ * Creates the document if it doesn't exist (first task in org).
+ */
+async function adjustCounts(
+  ctx: MutationCtx,
+  orgId: string,
+  changes: Partial<Record<StatusType, number>>
+) {
+  const existing = await ctx.db
+    .query("taskCounts")
+    .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+    .unique();
+
+  if (existing) {
+    const patch: Record<string, number> = {};
+    for (const [type, delta] of Object.entries(changes)) {
+      if (delta) {
+        const current = (existing as unknown as Record<string, number>)[type] ?? 0;
+        const newVal = current + delta;
+        if (newVal < 0) {
+          console.warn(`taskCounts drift detected: ${type} would be ${newVal} for org ${orgId}. Clamping to 0.`);
+        }
+        patch[type] = Math.max(0, newVal);
+      }
+    }
+    if (Object.keys(patch).length > 0) {
+      await ctx.db.patch(existing._id, patch);
+    }
+  } else {
+    // First task in org — create counts document with all types at 0
+    const counts = {
+      orgId,
+      backlog: 0, in_progress: 0, review: 0, blocked: 0, done: 0,
+    };
+    for (const [type, delta] of Object.entries(changes)) {
+      if (delta) {
+        (counts as Record<string, number | string>)[type] = Math.max(0, delta);
+      }
+    }
+    await ctx.db.insert("taskCounts", counts);
+  }
+}
+
 // Type for enriched task returned by list queries
 type TaskWithJoins = Doc<"tasks"> & {
   status: Pick<Doc<"statuses">, "_id" | "name" | "color" | "type" | "icon"> | null;
@@ -57,63 +89,54 @@ type TaskWithJoins = Doc<"tasks"> & {
 // ─── Queries ────────────────────────────────────────────────────────────────────
 
 /**
- * Per-tab count badges. Global totals unaffected by filters.
- * Admin sees all, member sees only assigned tasks.
- * Uses by_orgId_statusType index per type to avoid unbounded collect.
+ * Per-tab count badges. Raw statusType totals, unaffected by filters or search.
+ *
+ * Performance: Admin O(1) via denormalized taskCounts, Member O(n) via index scans.
  */
 export const counts = query({
   args: {},
   handler: async (ctx) => {
     const { orgId, userId, isAdmin } = await getAuthContext(ctx);
 
-    // Count per statusType using the compound index (avoids loading all tasks)
     const typeKeys: StatusType[] = ["backlog", "in_progress", "review", "blocked", "done"];
-    const tasksByType = await Promise.all(
-      typeKeys.map((type) =>
-        ctx.db
-          .query("tasks")
-          .withIndex("by_orgId_statusType", (q) =>
-            q.eq("orgId", orgId).eq("statusType", type)
-          )
-          .collect()
-      )
-    );
 
-    // Filter: non-archived + permission
+    if (isAdmin) {
+      const counterDoc = await ctx.db
+        .query("taskCounts")
+        .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+        .unique();
+
+      const c = counterDoc ?? { backlog: 0, in_progress: 0, review: 0, blocked: 0, done: 0 };
+      return {
+        all: c.backlog + c.in_progress + c.review + c.blocked + c.done,
+        backlog: c.backlog,
+        in_progress: c.in_progress,
+        review: c.review,
+        blocked: c.blocked,
+        done: c.done,
+      };
+    }
+
+    // Member: per-type index scans (bounded by assigned tasks)
     const typeCounts: Record<StatusType, number> = {
       backlog: 0, in_progress: 0, review: 0, blocked: 0, done: 0,
     };
-    for (let i = 0; i < typeKeys.length; i++) {
-      typeCounts[typeKeys[i]] = tasksByType[i].filter((t) => {
-        if (t.archivedAt) return false;
-        if (!isAdmin && !t.assigneeIds.includes(userId)) return false;
-        return true;
-      }).length;
-    }
 
-    // Today count: separate code path via systemRole
-    const todayStatusId = await getTodayStatusId(ctx, orgId);
-    let todayCount = 0;
-    if (todayStatusId) {
-      const todayTasks = await ctx.db
+    for (const type of typeKeys) {
+      const tasks = await ctx.db
         .query("tasks")
-        .withIndex("by_statusId", (q) => q.eq("statusId", todayStatusId))
+        .withIndex("by_orgId_statusType", (q) =>
+          q.eq("orgId", orgId).eq("statusType", type)
+        )
         .collect();
-      todayCount = todayTasks.filter((t) => {
-        if (t.orgId !== orgId) return false;
-        if (t.archivedAt) return false;
-        if (!isAdmin && !t.assigneeIds.includes(userId)) return false;
-        return true;
-      }).length;
+      typeCounts[type] = tasks.filter((t) =>
+        !t.archivedAt && t.assigneeIds.includes(userId)
+      ).length;
     }
 
     return {
-      active: typeCounts.in_progress + typeCounts.review + typeCounts.blocked,
-      backlog: typeCounts.backlog, // includes today tasks (intentional overlap)
-      today: todayCount,
-      review: typeCounts.review,
-      blocked: typeCounts.blocked,
-      done: typeCounts.done,
+      all: typeCounts.backlog + typeCounts.in_progress + typeCounts.review + typeCounts.blocked + typeCounts.done,
+      ...typeCounts,
     };
   },
 });
@@ -125,7 +148,7 @@ export const counts = query({
 export const list = query({
   args: {
     tab: v.union(
-      v.literal("active"), v.literal("backlog"), v.literal("today"),
+      v.literal("all"), v.literal("backlog"), v.literal("in_progress"),
       v.literal("review"), v.literal("blocked"), v.literal("done")
     ),
     filters: v.optional(v.object({
@@ -165,33 +188,21 @@ export const list = query({
 
     // ── Step 1: Fetch tasks by tab ──────────────────────────────────────────
     let tasks: Doc<"tasks">[];
+    const tabType = TAB_STATUS_TYPE[args.tab];
 
     if (args.search) {
-      // Use search index for title search
+      // Search always spans all tasks — tab is ignored during search
       tasks = await ctx.db
         .query("tasks")
         .withSearchIndex("search_title", (q) =>
           q.search("title", args.search!).eq("orgId", orgId)
         )
         .collect();
-    } else if (args.tab === "today") {
-      // Today tab: find status with systemRole="today", filter by statusId
-      const todayStatusId = await getTodayStatusId(ctx, orgId);
-      if (!todayStatusId) {
-        return { groups: [], totalCount: 0 };
-      }
-      tasks = await ctx.db
-        .query("tasks")
-        .withIndex("by_statusId", (q) => q.eq("statusId", todayStatusId))
-        .collect();
-    } else {
-      // Use statusType index for other tabs
-      const statusTypes = TAB_STATUS_TYPES[args.tab];
-      if (!statusTypes) {
-        return { groups: [], totalCount: 0 };
-      }
+    } else if (tabType === null) {
+      // "all" tab — parallel reads across all 5 statusTypes
+      const allTypes: StatusType[] = ["backlog", "in_progress", "review", "blocked", "done"];
       const taskArrays = await Promise.all(
-        statusTypes.map((type) =>
+        allTypes.map((type) =>
           ctx.db
             .query("tasks")
             .withIndex("by_orgId_statusType", (q) =>
@@ -201,25 +212,20 @@ export const list = query({
         )
       );
       tasks = taskArrays.flat();
+    } else {
+      // Single statusType tab
+      tasks = await ctx.db
+        .query("tasks")
+        .withIndex("by_orgId_statusType", (q) =>
+          q.eq("orgId", orgId).eq("statusType", tabType)
+        )
+        .collect();
     }
 
-    // ── Step 2: Filter out archived + permission + tab constraint for search
+    // ── Step 2: Filter out archived + permission ────────────────────────────
     tasks = tasks.filter((t) => {
       if (t.archivedAt) return false;
-      if (t.orgId !== orgId) return false; // safety for statusId-only index
       if (!isAdmin && !t.assigneeIds.includes(userId)) return false;
-      // When searching, constrain to the selected tab's statusTypes
-      if (args.search) {
-        if (args.tab === "today") {
-          // For today tab + search, filter to today status
-          // We can't use statusId here easily, so we fall back to checking
-          // if the task's statusType is backlog (today is a backlog subtype)
-          // This is acceptable — search + today is an edge case
-          return t.statusType === "backlog";
-        }
-        const tabTypes = TAB_STATUS_TYPES[args.tab];
-        if (tabTypes && !tabTypes.includes(t.statusType)) return false;
-      }
       return true;
     });
 
@@ -561,7 +567,7 @@ export const create = mutation({
     }
 
     const now = Date.now();
-    return await ctx.db.insert("tasks", {
+    const taskId = await ctx.db.insert("tasks", {
       orgId,
       title,
       description: args.description?.trim() || undefined,
@@ -577,6 +583,9 @@ export const create = mutation({
       updatedAt: now,
       createdBy: userId,
     });
+
+    await adjustCounts(ctx, orgId, { [statusType]: 1 });
+    return taskId;
   },
 });
 
@@ -660,6 +669,15 @@ export const update = mutation({
     }
 
     await ctx.db.patch(args.id, updates);
+
+    // Adjust counts if statusType changed on a non-archived task
+    if (updates.statusType && !task.archivedAt) {
+      const oldType = task.statusType;
+      const newType = updates.statusType as StatusType;
+      if (oldType !== newType) {
+        await adjustCounts(ctx, orgId, { [oldType]: -1, [newType]: 1 });
+      }
+    }
   },
 });
 
@@ -689,6 +707,16 @@ export const archive = mutation({
       }
     }
 
+    // Adjust counts: -1 for the archived task + each archived subtask
+    if (!task.archivedAt) {
+      await adjustCounts(ctx, orgId, { [task.statusType]: -1 });
+    }
+    for (const sub of subtasks) {
+      if (!sub.archivedAt) {
+        await adjustCounts(ctx, orgId, { [sub.statusType]: -1 });
+      }
+    }
+
     // TODO(Phase 7): stop active timers for this task
   },
 });
@@ -705,10 +733,16 @@ export const restore = mutation({
       throw new Error("You can only restore tasks assigned to you");
     }
 
+    if (!task.archivedAt) {
+      throw new Error("Task is not archived");
+    }
+
     await ctx.db.patch(args.id, {
       archivedAt: undefined,
       updatedAt: Date.now(),
     });
+
+    await adjustCounts(ctx, orgId, { [task.statusType]: 1 });
   },
 });
 
@@ -728,7 +762,15 @@ export const remove = mutation({
       .withIndex("by_parentTaskId", (q) => q.eq("parentTaskId", args.id))
       .collect();
     for (const sub of subtasks) {
+      if (!sub.archivedAt) {
+        await adjustCounts(ctx, orgId, { [sub.statusType]: -1 });
+      }
       await ctx.db.delete(sub._id);
+    }
+
+    // Adjust counts for the task itself
+    if (!task.archivedAt) {
+      await adjustCounts(ctx, orgId, { [task.statusType]: -1 });
     }
 
     await ctx.db.delete(args.id);
@@ -744,7 +786,7 @@ export const duplicate = mutation({
     if (!task || task.orgId !== orgId) throw new Error("Task not found");
 
     const now = Date.now();
-    return await ctx.db.insert("tasks", {
+    const newId = await ctx.db.insert("tasks", {
       orgId,
       title: `${task.title} (copy)`,
       description: task.description,
@@ -760,6 +802,9 @@ export const duplicate = mutation({
       updatedAt: now,
       createdBy: userId,
     });
+
+    await adjustCounts(ctx, orgId, { [task.statusType]: 1 });
+    return newId;
   },
 });
 
@@ -821,6 +866,9 @@ export const bulkUpdate = mutation({
             statusType: newStatusType!,
             updatedAt: now,
           });
+          if (!task.archivedAt && task.statusType !== newStatusType!) {
+            await adjustCounts(ctx, orgId, { [task.statusType]: -1, [newStatusType!]: 1 });
+          }
           updated++;
           break;
 
@@ -870,6 +918,7 @@ export const bulkUpdate = mutation({
         case "archive":
           if (!task.archivedAt) {
             await ctx.db.patch(taskId, { archivedAt: now, updatedAt: now });
+            await adjustCounts(ctx, orgId, { [task.statusType]: -1 });
             // Cascade to subtasks
             const subtasks = await ctx.db
               .query("tasks")
@@ -878,6 +927,7 @@ export const bulkUpdate = mutation({
             for (const sub of subtasks) {
               if (!sub.archivedAt) {
                 await ctx.db.patch(sub._id, { archivedAt: now, updatedAt: now });
+                await adjustCounts(ctx, orgId, { [sub.statusType]: -1 });
               }
             }
           }
@@ -887,5 +937,89 @@ export const bulkUpdate = mutation({
     }
 
     return { updated, skipped };
+  },
+});
+
+// ─── Counter backfill (run once to initialize taskCounts from existing data) ──
+
+/** Recompute taskCounts for an org from scratch. Idempotent. */
+export const backfillCounts = internalMutation({
+  args: { orgId: v.string() },
+  handler: async (ctx, args) => {
+    const tasks = await ctx.db
+      .query("tasks")
+      .withIndex("by_orgId", (q) => q.eq("orgId", args.orgId))
+      .collect();
+
+    const counts: Record<StatusType, number> = {
+      backlog: 0, in_progress: 0, review: 0, blocked: 0, done: 0,
+    };
+    for (const t of tasks) {
+      if (!t.archivedAt) {
+        counts[t.statusType]++;
+      }
+    }
+
+    const existing = await ctx.db
+      .query("taskCounts")
+      .withIndex("by_orgId", (q) => q.eq("orgId", args.orgId))
+      .unique();
+
+    if (existing) {
+      await ctx.db.patch(existing._id, counts);
+    } else {
+      await ctx.db.insert("taskCounts", { orgId: args.orgId, ...counts });
+    }
+  },
+});
+
+/** Compare cached taskCounts against live count. Returns discrepancies if any. */
+export const verifyTaskCounts = internalMutation({
+  args: { orgId: v.string() },
+  handler: async (ctx, args) => {
+    const tasks = await ctx.db
+      .query("tasks")
+      .withIndex("by_orgId", (q) => q.eq("orgId", args.orgId))
+      .collect();
+
+    const live: Record<StatusType, number> = {
+      backlog: 0, in_progress: 0, review: 0, blocked: 0, done: 0,
+    };
+    for (const t of tasks) {
+      if (!t.archivedAt) live[t.statusType]++;
+    }
+
+    const cached = await ctx.db
+      .query("taskCounts")
+      .withIndex("by_orgId", (q) => q.eq("orgId", args.orgId))
+      .unique();
+
+    const cachedCounts: Record<StatusType, number> = {
+      backlog: cached?.backlog ?? 0,
+      in_progress: cached?.in_progress ?? 0,
+      review: cached?.review ?? 0,
+      blocked: cached?.blocked ?? 0,
+      done: cached?.done ?? 0,
+    };
+
+    const drifts: Array<{ type: string; cached: number; live: number }> = [];
+    for (const type of Object.keys(live) as StatusType[]) {
+      if (cachedCounts[type] !== live[type]) {
+        drifts.push({ type, cached: cachedCounts[type], live: live[type] });
+      }
+    }
+
+    if (drifts.length > 0) {
+      console.warn(`taskCounts drift for org ${args.orgId}:`, drifts);
+      // Auto-repair
+      if (cached) {
+        await ctx.db.patch(cached._id, live);
+      } else {
+        await ctx.db.insert("taskCounts", { orgId: args.orgId, ...live });
+      }
+      return { status: "repaired", drifts };
+    }
+
+    return { status: "ok", drifts: [] };
   },
 });

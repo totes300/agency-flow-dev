@@ -1,11 +1,11 @@
 "use client"
 
-import { useQueryStates, parseAsString, parseAsStringEnum } from "nuqs"
+import { useState, useCallback } from "react"
 import type { Id } from "@/convex/_generated/dataModel"
 
 // ─── Types ──────────────────────────────────────────────────────────────────────
 
-export type TaskTab = "active" | "backlog" | "today" | "review" | "blocked" | "done"
+export type TaskTab = "all" | "backlog" | "in_progress" | "review" | "blocked" | "done"
 export type GroupByOption = "project" | "client" | "category" | "assignee" | "status" | null
 export type FilterOp = "is" | "isNot" | "anyOf" | "noneOf"
 
@@ -14,145 +14,93 @@ export type FilterValue = {
   value: string // single ID or comma-separated IDs for anyOf/noneOf
 }
 
-// ─── Parsers ────────────────────────────────────────────────────────────────────
+// ─── State shape ────────────────────────────────────────────────────────────────
 
-const TABS: TaskTab[] = ["active", "backlog", "today", "review", "blocked", "done"]
-const GROUP_BY_OPTIONS = ["project", "client", "category", "assignee", "status"] as const
-
-/**
- * Custom parser for filter values in the format "op:value" or "op:val1,val2"
- * e.g. "is:abc123" or "anyOf:abc123,def456"
- */
-function parseAsFilter() {
-  return {
-    parse: (value: string): FilterValue | null => {
-      const colonIdx = value.indexOf(":")
-      if (colonIdx === -1) return null
-      const op = value.slice(0, colonIdx) as FilterOp
-      const val = value.slice(colonIdx + 1)
-      if (!["is", "isNot", "anyOf", "noneOf"].includes(op)) return null
-      if (!val) return null
-      return { op, value: val }
-    },
-    serialize: (filter: FilterValue): string => {
-      return `${filter.op}:${filter.value}`
-    },
-    eq: (a: FilterValue | null, b: FilterValue | null): boolean => {
-      if (a === null && b === null) return true
-      if (a === null || b === null) return false
-      return a.op === b.op && a.value === b.value
-    },
-  }
+type TaskViewState = {
+  tab: TaskTab
+  search: string
+  groupBy: GroupByOption
+  statusFilter: FilterValue | null
+  clientFilter: FilterValue | null
+  projectFilter: FilterValue | null
+  assigneeFilter: FilterValue | null
+  categoryFilter: FilterValue | null
+  dateFrom: string | null
+  dateTo: string | null
 }
 
-// ─── nuqs state definition ──────────────────────────────────────────────────────
-
-const taskFilterParsers = {
-  tab: parseAsStringEnum<TaskTab>(TABS).withDefault("active"),
-  groupBy: parseAsString.withDefault(""),
-  search: parseAsString.withDefault(""),
-  // Filter params — each is "op:value" format
-  status: parseAsString.withDefault(""),
-  client: parseAsString.withDefault(""),
-  project: parseAsString.withDefault(""),
-  assignee: parseAsString.withDefault(""),
-  category: parseAsString.withDefault(""),
-  dateFrom: parseAsString.withDefault(""),
-  dateTo: parseAsString.withDefault(""),
+const INITIAL_STATE: TaskViewState = {
+  tab: "backlog",
+  search: "",
+  groupBy: null,
+  statusFilter: null,
+  clientFilter: null,
+  projectFilter: null,
+  assigneeFilter: null,
+  categoryFilter: null,
+  dateFrom: null,
+  dateTo: null,
 }
 
 // ─── Hook ───────────────────────────────────────────────────────────────────────
 
 export function useTaskFilters() {
-  const [params, setParams] = useQueryStates(taskFilterParsers, {
-    history: "replace",
-  })
+  const [state, setState] = useState<TaskViewState>(INITIAL_STATE)
 
-  // ── Derived values ──────────────────────────────────────────────────────
-
-  const tab: TaskTab = params.tab
-
-  const groupBy: GroupByOption = GROUP_BY_OPTIONS.includes(params.groupBy as any)
-    ? (params.groupBy as GroupByOption)
-    : null
-
-  const search = params.search || ""
-
-  // Parse filter strings into structured objects
-  const filterParser = parseAsFilter()
-
-  function parseFilterParam(raw: string): FilterValue | null {
-    if (!raw) return null
-    return filterParser.parse(raw)
-  }
-
-  const statusFilter = parseFilterParam(params.status)
-  const clientFilter = parseFilterParam(params.client)
-  const projectFilter = parseFilterParam(params.project)
-  const assigneeFilter = parseFilterParam(params.assignee)
-  const categoryFilter = parseFilterParam(params.category)
+  // ── Derived ─────────────────────────────────────────────────────────────
 
   const hasActiveFilters = !!(
-    params.status || params.client || params.project || params.assignee ||
-    params.category || params.dateFrom || params.dateTo
+    state.statusFilter || state.clientFilter || state.projectFilter ||
+    state.assigneeFilter || state.categoryFilter || state.dateFrom || state.dateTo
   )
+
+  const isSearching = state.search.length > 0
 
   // ── Setters ─────────────────────────────────────────────────────────────
 
-  function setTab(newTab: TaskTab) {
-    setParams({ tab: newTab }, { history: "push" })
-  }
+  const setTab = useCallback((tab: TaskTab) => {
+    setState((s) => ({ ...s, tab, search: "" }))
+  }, [])
 
-  function setGroupBy(option: GroupByOption) {
-    setParams({ groupBy: option ?? "" })
-  }
+  const setSearch = useCallback((search: string) => {
+    setState((s) => ({ ...s, search }))
+  }, [])
 
-  function setSearch(value: string) {
-    setParams({ search: value || "" })
-  }
+  const setGroupBy = useCallback((groupBy: GroupByOption) => {
+    setState((s) => ({ ...s, groupBy }))
+  }, [])
 
-  function setFilter(
+  const setFilter = useCallback((
     field: "status" | "client" | "project" | "assignee" | "category",
-    value: FilterValue | null
-  ) {
-    setParams({
-      [field]: value ? filterParser.serialize(value) : "",
-    })
-  }
+    value: FilterValue | null,
+  ) => {
+    const key = `${field}Filter` as keyof TaskViewState
+    setState((s) => ({ ...s, [key]: value }))
+  }, [])
 
-  function setDateRange(from: string | null, to: string | null) {
-    setParams({
-      dateFrom: from ?? "",
-      dateTo: to ?? "",
-    })
-  }
+  const setDateRange = useCallback((from: string | null, to: string | null) => {
+    setState((s) => ({ ...s, dateFrom: from, dateTo: to }))
+  }, [])
 
-  function clearAllFilters() {
-    setParams({
-      status: "",
-      client: "",
-      project: "",
-      assignee: "",
-      category: "",
-      dateFrom: "",
-      dateTo: "",
-    })
-  }
+  const clearAllFilters = useCallback(() => {
+    setState((s) => ({
+      ...s,
+      statusFilter: null,
+      clientFilter: null,
+      projectFilter: null,
+      assigneeFilter: null,
+      categoryFilter: null,
+      dateFrom: null,
+      dateTo: null,
+    }))
+  }, [])
 
-  // ── Build Convex query args ─────────────────────────────────────────────
+  // ── Build Convex query args ───────────────────────────────────────────
 
-  /**
-   * Convert parsed URL state into the args shape expected by `tasks.list`.
-   * Returns a plain object that can be spread directly into `useQuery(api.tasks.list, ...)`.
-   *
-   * Note: Convex ID strings from the URL are passed as-is — Convex accepts valid
-   * ID strings for `v.id()` validators at runtime.
-   */
   function toListArgs() {
     type SingleOp = "is" | "isNot"
     type MultiOp = "is" | "isNot" | "anyOf" | "noneOf"
 
-    // Normalize multi-value ops to single-value ops for single-value fields
     function toSingleOp(op: FilterOp): SingleOp {
       if (op === "anyOf") return "is"
       if (op === "noneOf") return "isNot"
@@ -169,67 +117,71 @@ export function useTaskFilters() {
       dateTo?: string
     } = {}
 
-    if (statusFilter) {
+    if (state.statusFilter) {
       filters.statusId = {
-        op: statusFilter.op,
-        value: statusFilter.value.split(",") as Id<"statuses">[],
+        op: state.statusFilter.op,
+        value: state.statusFilter.value.split(",") as Id<"statuses">[],
       }
     }
 
-    if (clientFilter) {
+    if (state.clientFilter) {
       filters.clientId = {
-        op: toSingleOp(clientFilter.op),
-        value: clientFilter.value.split(",")[0] as Id<"clients">,
+        op: toSingleOp(state.clientFilter.op),
+        value: state.clientFilter.value.split(",")[0] as Id<"clients">,
       }
     }
 
-    if (projectFilter) {
+    if (state.projectFilter) {
       filters.projectId = {
-        op: projectFilter.op,
-        value: projectFilter.value.split(",") as Id<"projects">[],
+        op: state.projectFilter.op,
+        value: state.projectFilter.value.split(",") as Id<"projects">[],
       }
     }
 
-    if (assigneeFilter) {
+    if (state.assigneeFilter) {
       filters.assigneeIds = {
-        op: assigneeFilter.op,
-        value: assigneeFilter.value.split(",") as Id<"users">[],
+        op: state.assigneeFilter.op,
+        value: state.assigneeFilter.value.split(",") as Id<"users">[],
       }
     }
 
-    if (categoryFilter) {
+    if (state.categoryFilter) {
       filters.workCategoryId = {
-        op: categoryFilter.op,
-        value: categoryFilter.value.split(",") as Id<"workCategories">[],
+        op: state.categoryFilter.op,
+        value: state.categoryFilter.value.split(",") as Id<"workCategories">[],
       }
     }
 
-    if (params.dateFrom) filters.dateFrom = params.dateFrom
-    if (params.dateTo) filters.dateTo = params.dateTo
+    if (state.dateFrom) filters.dateFrom = state.dateFrom
+    if (state.dateTo) filters.dateTo = state.dateTo
 
     const hasFilters = Object.keys(filters).length > 0
 
+    // Search spans all tasks — send "all" tab to backend
+    const effectiveTab = isSearching ? "all" as const : state.tab
+
     return {
-      tab,
+      tab: effectiveTab,
       filters: hasFilters ? (filters as typeof filters) : undefined,
-      groupBy: groupBy,
-      search: search || undefined,
+      groupBy: state.groupBy,
+      search: state.search || undefined,
     }
   }
 
   return {
     // State
-    tab,
-    groupBy,
-    search,
-    statusFilter,
-    clientFilter,
-    projectFilter,
-    assigneeFilter,
-    categoryFilter,
-    dateFrom: params.dateFrom || null,
-    dateTo: params.dateTo || null,
+    tab: state.tab,
+    groupBy: state.groupBy,
+    search: state.search,
+    statusFilter: state.statusFilter,
+    clientFilter: state.clientFilter,
+    projectFilter: state.projectFilter,
+    assigneeFilter: state.assigneeFilter,
+    categoryFilter: state.categoryFilter,
+    dateFrom: state.dateFrom,
+    dateTo: state.dateTo,
     hasActiveFilters,
+    isSearching,
 
     // Setters
     setTab,

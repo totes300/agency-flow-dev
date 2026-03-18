@@ -89,6 +89,18 @@ export default function TasksPage() {
   }
   const displayResult = listResult ?? lastResultRef.current
 
+  // Batch time query — all visible task IDs in one call (N+1 prevention)
+  const allVisibleTaskIds = useMemo(() => {
+    if (!displayResult) return []
+    return displayResult.groups.flatMap((g) => g.tasks.map((t) => t._id))
+  }, [displayResult])
+  const timeMap = useQuery(
+    api.timeEntries.sumByTasks,
+    isAuthenticated && allVisibleTaskIds.length > 0
+      ? { taskIds: allVisibleTaskIds }
+      : "skip",
+  )
+
   // Selection
   const handleSelect = useCallback((taskId: string, selected: boolean) => {
     setSelectedIds((prev) => {
@@ -211,6 +223,7 @@ export default function TasksPage() {
                   onSelect={handleSelect}
                   onArchive={handleArchive}
                   onDelete={setDeleteTargetId}
+                  totalMinutes={timeMap?.[task._id] ?? 0}
                 />
               )}
               renderAddTask={(groupKey) => (

@@ -19,12 +19,12 @@ import {
   CopyIcon,
   ArchiveIcon,
   Trash2Icon,
-  PlayIcon,
   CalendarIcon,
   ListChecksIcon,
   MessageSquareIcon,
   FileTextIcon,
 } from "lucide-react"
+import { InlineTimeCell } from "@/components/tasks/inline-time-cell"
 import type { TaskWithJoins } from "@/components/tasks/tasks-table"
 
 export function TaskRow({
@@ -35,6 +35,7 @@ export function TaskRow({
   onSelect,
   onArchive,
   onDelete,
+  totalMinutes = 0,
 }: {
   task: TaskWithJoins
   isAdmin: boolean
@@ -43,6 +44,7 @@ export function TaskRow({
   onSelect: (taskId: string, selected: boolean) => void
   onArchive: (taskId: string) => void
   onDelete: (taskId: string) => void
+  totalMinutes?: number
 }) {
   const duplicateTask = useMutation(api.tasks.duplicate)
   const isDone = task.statusType === "done"
@@ -104,12 +106,8 @@ export function TaskRow({
       {/* 8. Due date (inline edit) */}
       <InlineDueDateCell taskId={task._id} dueDate={task.dueDate ?? null} isOverdue={overdue} />
 
-      {/* 9. Time (mock) */}
-      <div className="flex items-center">
-        <button className="text-muted-foreground/50 hover:text-muted-foreground">
-          <PlayIcon className="size-3.5" />
-        </button>
-      </div>
+      {/* 9. Time */}
+      <InlineTimeCell taskId={task._id} totalMinutes={totalMinutes} isDone={isDone} />
 
       {/* 10. Action menu */}
       <RowActionMenu>

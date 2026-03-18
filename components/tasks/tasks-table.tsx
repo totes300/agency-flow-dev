@@ -11,6 +11,7 @@ import {
   ClockIcon,
 } from "lucide-react"
 import type { Doc } from "@/convex/_generated/dataModel"
+import type { GroupByOption } from "@/lib/hooks/use-task-filters"
 import { cn } from "@/lib/utils"
 import { Checkbox } from "@/components/ui/checkbox"
 import { TaskGroup } from "@/components/tasks/task-group"
@@ -65,7 +66,7 @@ export function TasksTable({
 }: {
   groups: TaskGroupData[]
   isGrouped: boolean
-  groupBy: string
+  groupBy: GroupByOption | ""
   orgId: string
   selectedIds: Set<string>
   onSelectAll: (taskIds: string[], selected: boolean) => void

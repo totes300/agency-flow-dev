@@ -5,7 +5,7 @@ import { useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { useTaskReferenceData } from "@/components/tasks/task-reference-data"
 import { PlusIcon } from "lucide-react"
-import { toast } from "sonner"
+import { toastError } from "@/lib/toast-helpers"
 import { TASK_GRID_COLS } from "@/components/tasks/tasks-table"
 import { InlineStatusCell } from "@/components/tasks/inline-status-cell"
 import { InlineCategoryCell } from "@/components/tasks/inline-category-cell"
@@ -13,7 +13,7 @@ import { InlineProjectCell } from "@/components/tasks/inline-project-cell"
 import { InlineAssigneeCell } from "@/components/tasks/inline-assignee-cell"
 import { InlineDueDateCell } from "@/components/tasks/inline-due-date-cell"
 import type { Doc, Id } from "@/convex/_generated/dataModel"
-import type { GroupByOption } from "@/lib/hooks/use-task-filters"
+import type { GroupByOption, TaskTab } from "@/lib/hooks/use-task-filters"
 
 type StatusPick = Pick<Doc<"statuses">, "_id" | "name" | "color" | "type">
 type CategoryPick = Pick<Doc<"workCategories">, "_id" | "name" | "color">
@@ -30,7 +30,7 @@ export function InlineAddTask({
   groupBy: GroupByOption
   groupKey: string
   isAdmin: boolean
-  tab: string
+  tab: TaskTab
 }) {
   const [active, setActive] = useState(false)
   const [title, setTitle] = useState("")
@@ -150,7 +150,7 @@ export function InlineAddTask({
       resetFields()
       inputRef.current?.focus()
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to create task")
+      toastError(err, "Failed to create task")
     } finally {
       setIsSubmitting(false)
     }

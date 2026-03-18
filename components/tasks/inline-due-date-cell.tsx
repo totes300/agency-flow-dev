@@ -7,7 +7,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { CalendarIcon, ClockIcon, ArrowRightIcon, ChevronLeftIcon, ChevronRightIcon, XIcon, RepeatIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { formatDateToYMD, formatShortDate } from "@/lib/format"
-import { toast } from "sonner"
+import { toastError } from "@/lib/toast-helpers"
 import type { Id } from "@/convex/_generated/dataModel"
 
 // ─── Date helpers ────────────────────────────────────────────────────────────
@@ -198,7 +198,7 @@ export function InlineDueDateCell({
     try {
       await updateTask({ id: taskId, dueDate: date })
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to update")
+      toastError(err, "Failed to update")
     }
   }
 

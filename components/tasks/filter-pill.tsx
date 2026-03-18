@@ -121,7 +121,13 @@ export function FilterPill({
           {OPERATORS.filter((o) => multiSelect || !MULTI_OPS.includes(o.key) || MULTI_OPS.includes(operator)).map((op) => (
             <DropdownMenuItem
               key={op.key}
-              onClick={() => onOperatorChange(op.key)}
+              onClick={() => {
+                // Normalize multi-value to single when switching to single-value operator
+                if (!MULTI_OPS.includes(op.key) && selectedIds.length > 1) {
+                  onSelect(selectedIds[0] ?? "")
+                }
+                onOperatorChange(op.key)
+              }}
               className={cn(operator === op.key && "font-semibold")}
             >
               {op.label}

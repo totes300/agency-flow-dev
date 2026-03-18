@@ -70,12 +70,19 @@ export function formatRelativeTime(timestamp: number): string {
 }
 
 /** Format a YYYY-MM-DD date string as short display (e.g., "Mar 20"). */
-export function formatShortDate(dateStr: string): string {
+export function formatShortDate(dateStr: string, locale = "en-US"): string {
   const date = new Date(dateStr + "T00:00:00")
-  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" })
+  return date.toLocaleDateString(locale, { month: "short", day: "numeric" })
 }
 
 /** Extract the first name from a full name string. */
 export function firstName(name: string): string {
   return name.split(/\s+/)[0]
 }
+
+/** Check if a YYYY-MM-DD date string is before today. */
+export function isOverdue(dueDate: string | undefined | null): boolean {
+  if (!dueDate) return false
+  return dueDate < formatDateToYMD(new Date())
+}
+

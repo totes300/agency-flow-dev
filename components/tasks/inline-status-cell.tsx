@@ -16,16 +16,12 @@ import { StatusBadge } from "@/components/status-badge"
 import { LoaderIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { getStatusColor } from "@/lib/status-colors"
-import { toast } from "sonner"
+import { TYPE_LABELS } from "@/lib/display-constants"
+import { toastError } from "@/lib/toast-helpers"
+import type { StatusType } from "@/convex/lib/constants"
 import type { Doc, Id } from "@/convex/_generated/dataModel"
 
-const STATUS_TYPE_GROUPS = [
-  { type: "backlog", label: "Backlog" },
-  { type: "in_progress", label: "In Progress" },
-  { type: "review", label: "Review" },
-  { type: "blocked", label: "Blocked" },
-  { type: "done", label: "Done" },
-] as const
+const STATUS_TYPE_KEYS = Object.keys(TYPE_LABELS) as StatusType[]
 
 export function InlineStatusCell({
   taskId,
@@ -53,7 +49,7 @@ export function InlineStatusCell({
     try {
       await updateTask({ id: taskId, statusId })
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to update")
+      toastError(err, "Failed to update")
     }
   }
 
@@ -79,7 +75,8 @@ export function InlineStatusCell({
         <Command>
           <CommandInput placeholder="Search status..." />
           <CommandList>
-            {STATUS_TYPE_GROUPS.map(({ type, label }) => {
+            {STATUS_TYPE_KEYS.map((type) => {
+              const label = TYPE_LABELS[type]
               const group = statuses?.filter((s) => s.type === type)
               if (!group || group.length === 0) return null
               return (

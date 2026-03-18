@@ -3,7 +3,7 @@
 import { useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { cn } from "@/lib/utils"
-import { formatRelativeTime, formatShortDate } from "@/lib/format"
+import { formatRelativeTime, formatShortDate, isOverdue } from "@/lib/format"
 import { Checkbox } from "@/components/ui/checkbox"
 import { TASK_GRID_COLS } from "@/components/tasks/tasks-table"
 import { InlineStatusCell } from "@/components/tasks/inline-status-cell"
@@ -13,6 +13,7 @@ import { InlineAssigneeCell } from "@/components/tasks/inline-assignee-cell"
 import { InlineDueDateCell } from "@/components/tasks/inline-due-date-cell"
 import { RowActionMenu } from "@/components/row-action-menu"
 import { DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
+import { toastError } from "@/lib/toast-helpers"
 import {
   CheckIcon,
   CopyIcon,
@@ -46,7 +47,7 @@ export function TaskRow({
   const duplicateTask = useMutation(api.tasks.duplicate)
   const isDone = task.statusType === "done"
 
-  const isOverdue = task.dueDate && task.dueDate < new Date().toISOString().slice(0, 10)
+  const overdue = isOverdue(task.dueDate)
 
   return (
     <div
@@ -65,7 +66,8 @@ export function TaskRow({
           checked={isDone || isSelected}
           onCheckedChange={() => onSelect(task._id, !isSelected)}
           onClick={(e) => e.stopPropagation()}
-          aria-label={`Select ${task.title}`}
+          disabled={isDone}
+          aria-label={isDone ? `${task.title} (done)` : `Select ${task.title}`}
           className={cn(isDone && "border-green-600 bg-green-600 text-white data-[state=checked]:border-green-600 data-[state=checked]:bg-green-600")}
         />
       </div>
@@ -76,7 +78,7 @@ export function TaskRow({
           {task.title}
         </div>
         <div className="truncate text-[11px] text-muted-foreground">
-          {task.createdBy ? "Created" : ""} · {formatRelativeTime(task.updatedAt)}
+          {task.createdBy ? "Created · " : ""}{formatRelativeTime(task.updatedAt)}
         </div>
       </div>
 
@@ -100,7 +102,7 @@ export function TaskRow({
       <InlineAssigneeCell taskId={task._id} assignees={task.assignees} />
 
       {/* 8. Due date (inline edit) */}
-      <InlineDueDateCell taskId={task._id} dueDate={task.dueDate ?? null} isOverdue={!!isOverdue} />
+      <InlineDueDateCell taskId={task._id} dueDate={task.dueDate ?? null} isOverdue={overdue} />
 
       {/* 9. Time (mock) */}
       <div className="flex items-center">
@@ -113,7 +115,7 @@ export function TaskRow({
       <RowActionMenu>
         <DropdownMenuItem
           onClick={async () => {
-            try { await duplicateTask({ id: task._id }) } catch { /* toast in future */ }
+            try { await duplicateTask({ id: task._id }) } catch (err) { toastError(err, "Failed to duplicate task") }
           }}
         >
           <CopyIcon className="size-4" />

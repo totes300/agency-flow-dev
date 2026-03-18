@@ -1,8 +1,9 @@
 "use client"
 
 import { useState, useRef, useEffect } from "react"
-import { useMutation, useQuery } from "convex/react"
+import { useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
+import { useTaskReferenceData } from "@/components/tasks/task-reference-data"
 import {
   Dialog,
   DialogContent,
@@ -25,6 +26,8 @@ import { UserAvatar } from "@/components/user-avatar"
 import { getStatusColor } from "@/lib/status-colors"
 import { getCategoryColor } from "@/convex/lib/constants"
 import { toast } from "sonner"
+import { firstName } from "@/lib/format"
+import { toastError } from "@/lib/toast-helpers"
 import {
   FolderIcon,
   ChevronDownIcon,
@@ -53,10 +56,7 @@ export function TaskFormModal({
   const [showDescription, setShowDescription] = useState(false)
 
   const createTask = useMutation(api.tasks.create)
-  const statuses = useQuery(api.statuses.list, open ? {} : "skip")
-  const categories = useQuery(api.workCategories.list, open ? {} : "skip")
-  const projects = useQuery(api.projects.list, open ? {} : "skip")
-  const orgMembers = useQuery(api.orgMembers.listOrgMembers, open ? undefined : "skip")
+  const { statuses, categories, projects, orgMembers } = useTaskReferenceData()
 
   // Focus title on open
   useEffect(() => {
@@ -97,7 +97,7 @@ export function TaskFormModal({
         toast.success("Task created")
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to create task")
+      toastError(err, "Failed to create task")
     } finally {
       setIsSubmitting(false)
     }
@@ -350,7 +350,7 @@ function AssigneePicker({
             <>
               <UserAvatar name={selected[0].name} imageUrl={selected[0].imageUrl} className="size-4 text-[7px]" />
               <span className="font-medium text-foreground">
-                {selected[0].name.split(/\s+/)[0]}
+                {firstName(selected[0].name)}
                 {selected.length > 1 && ` +${selected.length - 1}`}
               </span>
             </>

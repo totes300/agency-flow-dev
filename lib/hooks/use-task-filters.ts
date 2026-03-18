@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useCallback } from "react"
+import { useState, useCallback, useMemo } from "react"
 import type { Id } from "@/convex/_generated/dataModel"
 
 // ─── Types ──────────────────────────────────────────────────────────────────────
@@ -95,12 +95,12 @@ export function useTaskFilters() {
     }))
   }, [])
 
-  // ── Build Convex query args ───────────────────────────────────────────
+  // ── Build Convex query args (memoized to avoid re-subscriptions) ─────
 
-  function toListArgs() {
-    type SingleOp = "is" | "isNot"
-    type MultiOp = "is" | "isNot" | "anyOf" | "noneOf"
+  type SingleOp = "is" | "isNot"
+  type MultiOp = "is" | "isNot" | "anyOf" | "noneOf"
 
+  const listArgs = useMemo(() => {
     function toSingleOp(op: FilterOp): SingleOp {
       if (op === "anyOf") return "is"
       if (op === "noneOf") return "isNot"
@@ -158,7 +158,7 @@ export function useTaskFilters() {
     const hasFilters = Object.keys(filters).length > 0
 
     // Search spans all tasks — send "all" tab to backend
-    const effectiveTab = isSearching ? "all" as const : state.tab
+    const effectiveTab = state.search ? "all" as const : state.tab
 
     return {
       tab: effectiveTab,
@@ -166,7 +166,7 @@ export function useTaskFilters() {
       groupBy: state.groupBy,
       search: state.search || undefined,
     }
-  }
+  }, [state])
 
   return {
     // State
@@ -191,7 +191,7 @@ export function useTaskFilters() {
     setDateRange,
     clearAllFilters,
 
-    // Convex args builder
-    toListArgs,
+    // Convex args (memoized)
+    listArgs,
   }
 }

@@ -6,7 +6,7 @@ import { StatusBadge } from "@/components/status-badge"
 import { CategoryBadge } from "@/components/category-badge"
 import { UserAvatar } from "@/components/user-avatar"
 import { CalendarIcon } from "lucide-react"
-import { formatRelativeTime, formatShortDate, firstName } from "@/lib/format"
+import { formatRelativeTime, formatShortDate, isOverdue, firstName } from "@/lib/format"
 import type { TaskWithJoins } from "@/components/tasks/tasks-table"
 
 export function TaskCard({
@@ -21,7 +21,7 @@ export function TaskCard({
   onSelect: (taskId: string, selected: boolean) => void
 }) {
   const isDone = task.statusType === "done"
-  const isOverdue = task.dueDate && task.dueDate < new Date().toISOString().slice(0, 10)
+  const overdue = isOverdue(task.dueDate)
 
   return (
     <div
@@ -39,7 +39,8 @@ export function TaskCard({
         <Checkbox
           checked={isDone || isSelected}
           onCheckedChange={() => onSelect(task._id, !isSelected)}
-          className={cn(isDone && "border-green-600 bg-green-600 text-white data-[state=checked]:border-green-600 data-[state=checked]:bg-green-600")}
+          disabled={isDone}
+          className={cn(isDone && !isSelected && "border-green-600 bg-green-600 text-white data-[state=checked]:border-green-600 data-[state=checked]:bg-green-600")}
         />
       </div>
 
@@ -79,9 +80,9 @@ export function TaskCard({
             </span>
           )}
           {task.dueDate && (
-            <span className={cn("flex items-center gap-0.5", isOverdue && "font-medium text-destructive")}>
+            <span className={cn("flex items-center gap-0.5", overdue && "font-medium text-destructive")}>
               <CalendarIcon className="size-3" />
-              {isOverdue ? "Overdue" : formatShortDate(task.dueDate)}
+              {overdue ? "Overdue" : formatShortDate(task.dueDate)}
             </span>
           )}
         </div>

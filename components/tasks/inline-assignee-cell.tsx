@@ -17,7 +17,7 @@ import { UserAvatar } from "@/components/user-avatar"
 import { Avatar, AvatarFallback, AvatarGroup, AvatarGroupCount } from "@/components/ui/avatar"
 import { CheckIcon, UserIcon } from "lucide-react"
 import { firstName } from "@/lib/format"
-import { toast } from "sonner"
+import { toastError } from "@/lib/toast-helpers"
 import type { Doc, Id } from "@/convex/_generated/dataModel"
 
 export function InlineAssigneeCell({
@@ -50,7 +50,7 @@ export function InlineAssigneeCell({
     try {
       await updateTask({ id: taskId, assigneeIds: newIds })
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to update")
+      toastError(err, "Failed to update")
     }
   }
 
@@ -85,7 +85,6 @@ export function InlineAssigneeCell({
                   </span>
                 </>
               ) : (
-                <>
                   <AvatarGroup>
                     <UserAvatar name={assignees[0].name} imageUrl={assignees[0].imageUrl} className="size-5 text-[8px]" />
                     <AvatarGroupCount>
@@ -94,7 +93,6 @@ export function InlineAssigneeCell({
                       </Avatar>
                     </AvatarGroupCount>
                   </AvatarGroup>
-                </>
               )}
             </span>
           )}

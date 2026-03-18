@@ -272,7 +272,7 @@ export const list = query({
 
     // ── Step 3: Apply filters ───────────────────────────────────────────────
     // Batch-load projects when needed for client filter or grouping
-    let projectMap = new Map<string, Doc<"projects">>();
+    const projectMap = new Map<string, Doc<"projects">>();
     const needProjects = args.filters?.clientId || args.groupBy === "client" || args.groupBy === "project";
     if (needProjects) {
       const allProjects = await ctx.db
@@ -404,7 +404,7 @@ export const list = query({
       }
 
       // Load clients for project/client grouping
-      let clientMap = new Map<string, Doc<"clients">>();
+      const clientMap = new Map<string, Doc<"clients">>();
       if (args.groupBy === "project" || args.groupBy === "client") {
         const clientIds = new Set<string>();
         for (const p of projectMap.values()) clientIds.add(p.clientId.toString());

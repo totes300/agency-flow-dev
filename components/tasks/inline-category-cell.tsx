@@ -16,7 +16,7 @@ import { CategoryBadge } from "@/components/category-badge"
 import { cn } from "@/lib/utils"
 import { getCategoryColor } from "@/convex/lib/constants"
 import { TagIcon } from "lucide-react"
-import { toast } from "sonner"
+import { toastError } from "@/lib/toast-helpers"
 import type { Doc, Id } from "@/convex/_generated/dataModel"
 
 export function InlineCategoryCell({
@@ -43,7 +43,7 @@ export function InlineCategoryCell({
     try {
       await updateTask({ id: taskId, workCategoryId: categoryId })
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to update")
+      toastError(err, "Failed to update")
     }
   }
 

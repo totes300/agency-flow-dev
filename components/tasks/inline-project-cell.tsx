@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useMemo } from "react"
 import { useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { useTaskReferenceData } from "@/components/tasks/task-reference-data"
@@ -14,7 +14,7 @@ import {
   CommandEmpty,
 } from "@/components/ui/command"
 import { LockIcon, FolderIcon } from "lucide-react"
-import { toast } from "sonner"
+import { toastError } from "@/lib/toast-helpers"
 import type { Doc, Id } from "@/convex/_generated/dataModel"
 
 export function InlineProjectCell({
@@ -50,12 +50,12 @@ export function InlineProjectCell({
     try {
       await updateTask({ id: taskId, projectId })
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to update")
+      toastError(err, "Failed to update")
     }
   }
 
   // Group projects by client name (Toggl-style)
-  const groupedProjects = (() => {
+  const groupedProjects = useMemo(() => {
     if (!projects) return new Map<string, typeof projects>()
     const groups = new Map<string, typeof projects>()
     for (const p of projects) {
@@ -64,7 +64,7 @@ export function InlineProjectCell({
       groups.get(clientName)!.push(p)
     }
     return groups
-  })()
+  }, [projects])
 
   const locked = hasTimeEntries === true
 

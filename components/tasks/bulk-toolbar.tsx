@@ -13,16 +13,7 @@ import {
   CommandItem,
   CommandGroup,
 } from "@/components/ui/command"
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog"
+import { ConfirmDialog } from "@/components/confirm-dialog"
 import { StatusBadge } from "@/components/status-badge"
 import { CategoryBadge } from "@/components/category-badge"
 import { UserAvatar } from "@/components/user-avatar"
@@ -30,6 +21,7 @@ import { getStatusColor } from "@/lib/status-colors"
 import { getCategoryColor } from "@/convex/lib/constants"
 import { Separator } from "@/components/ui/separator"
 import { toast } from "sonner"
+import { toastError } from "@/lib/toast-helpers"
 import {
   LoaderIcon,
   UserPlusIcon,
@@ -93,8 +85,6 @@ export function BulkToolbar({
   )
 }
 
-// Uses shadcn Separator — imported at top of file
-
 // ─── Actions ────────────────────────────────────────────────────────────────
 
 function StatusAction({ taskIds, isAdmin }: { taskIds: Id<"tasks">[]; isAdmin: boolean }) {
@@ -114,7 +104,7 @@ function StatusAction({ taskIds, isAdmin }: { taskIds: Id<"tasks">[]; isAdmin: b
         toast.info(`${result.skipped.length} tasks skipped`)
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to update")
+      toastError(err, "Failed to update")
     }
   }
 
@@ -169,7 +159,7 @@ function AssigneeAction({ taskIds, type }: { taskIds: Id<"tasks">[]; type: "add"
       })
       toast.success(`${result.updated} tasks updated`)
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to update")
+      toastError(err, "Failed to update")
     }
   }
 
@@ -214,7 +204,7 @@ function CategoryAction({ taskIds }: { taskIds: Id<"tasks">[] }) {
       })
       toast.success(`${result.updated} tasks updated`)
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to update")
+      toastError(err, "Failed to update")
     }
   }
 
@@ -253,7 +243,6 @@ function ArchiveAction({ taskIds, onDeselectAll }: { taskIds: Id<"tasks">[]; onD
 
   async function handleArchive() {
     setConfirmOpen(false)
-    const count = taskIds.length
     try {
       const result = await bulkUpdate({
         taskIds,
@@ -262,7 +251,7 @@ function ArchiveAction({ taskIds, onDeselectAll }: { taskIds: Id<"tasks">[]; onD
       onDeselectAll()
       toast.success(`${result.updated} tasks archived`)
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to archive")
+      toastError(err, "Failed to archive")
     }
   }
 
@@ -278,22 +267,14 @@ function ArchiveAction({ taskIds, onDeselectAll }: { taskIds: Id<"tasks">[]; onD
         Archive
       </Button>
 
-      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Archive {taskIds.length} tasks?</AlertDialogTitle>
-            <AlertDialogDescription>
-              These tasks and their subtasks will be archived. You can restore them later.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleArchive}>
-              Archive
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ConfirmDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        title={`Archive ${taskIds.length} tasks?`}
+        description="These tasks and their subtasks will be archived. You can restore them later."
+        confirmLabel="Archive"
+        onConfirm={handleArchive}
+      />
     </>
   )
 }

@@ -30,6 +30,10 @@ export function TasksHeader({
   }
 
   function handleClear() {
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current)
+      debounceRef.current = null
+    }
     setLocalSearch("")
     onSearchChange("")
   }
@@ -54,6 +58,8 @@ export function TasksHeader({
           />
           {localSearch && (
             <button
+              type="button"
+              aria-label="Clear search"
               onClick={handleClear}
               className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground/50 hover:text-muted-foreground"
             >

@@ -36,32 +36,36 @@ http.route({
         const memberData = event.data;
         const memberClerkUserId = memberData.public_user_data?.user_id;
         const memberOrgId = memberData.organization?.id;
-        if (memberClerkUserId && memberOrgId) {
-          const pubData = memberData.public_user_data;
-          await ctx.runMutation(internal.orgMembers.upsertMembership, {
-            orgId: memberOrgId,
-            clerkUserId: memberClerkUserId,
-            role: memberData.role ?? "org:member",
-            userData: pubData ? {
-              firstName: pubData.first_name ?? undefined,
-              lastName: pubData.last_name ?? undefined,
-              imageUrl: pubData.image_url ?? undefined,
-              identifier: pubData.identifier ?? undefined,
-            } : undefined,
-          });
+        if (!memberClerkUserId || !memberOrgId) {
+          console.error("Malformed organizationMembership webhook payload", { type: event.type });
+          return new Response("Missing membership identifiers", { status: 400 });
         }
+        const pubData = memberData.public_user_data;
+        await ctx.runMutation(internal.orgMembers.upsertMembership, {
+          orgId: memberOrgId,
+          clerkUserId: memberClerkUserId,
+          role: memberData.role ?? "org:member",
+          userData: pubData ? {
+            firstName: pubData.first_name ?? undefined,
+            lastName: pubData.last_name ?? undefined,
+            imageUrl: pubData.image_url ?? undefined,
+            identifier: pubData.identifier ?? undefined,
+          } : undefined,
+        });
         break;
       }
       case "organizationMembership.deleted": {
         const deletedData = event.data;
         const deletedClerkUserId = deletedData.public_user_data?.user_id;
         const deletedOrgId = deletedData.organization?.id;
-        if (deletedClerkUserId && deletedOrgId) {
-          await ctx.runMutation(internal.orgMembers.deleteMembership, {
-            orgId: deletedOrgId,
-            clerkUserId: deletedClerkUserId,
-          });
+        if (!deletedClerkUserId || !deletedOrgId) {
+          console.error("Malformed organizationMembership.deleted webhook payload", { type: event.type });
+          return new Response("Missing membership identifiers", { status: 400 });
         }
+        await ctx.runMutation(internal.orgMembers.deleteMembership, {
+          orgId: deletedOrgId,
+          clerkUserId: deletedClerkUserId,
+        });
         break;
       }
     }

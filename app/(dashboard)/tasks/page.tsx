@@ -23,6 +23,7 @@ import { Button } from "@/components/ui/button"
 import { ConfirmDialog } from "@/components/confirm-dialog"
 import { PlusIcon } from "lucide-react"
 import { toast } from "sonner"
+import { toastError } from "@/lib/toast-helpers"
 import type { Id } from "@/convex/_generated/dataModel"
 
 export default function TasksPage() {
@@ -67,7 +68,7 @@ export default function TasksPage() {
 
   // Queries
   const counts = useQuery(api.tasks.counts, isAuthenticated ? {} : "skip")
-  const listResult = useQuery(api.tasks.list, isAuthenticated ? filters.toListArgs() : "skip")
+  const listResult = useQuery(api.tasks.list, isAuthenticated ? filters.listArgs : "skip")
 
   // Reference data — single subscription each, shared via context
   const statuses = useQuery(api.statuses.list, isAuthenticated ? {} : "skip")
@@ -123,7 +124,7 @@ export default function TasksPage() {
       setDeleteTargetId(null)
       toast.success("Task deleted")
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to delete task")
+      toastError(err, "Failed to delete task")
     }
   }
 
@@ -168,8 +169,6 @@ export default function TasksPage() {
           onClearAll={filters.clearAllFilters}
         />
       )}
-
-      <div className="mt-2" />
 
       {isEmpty ? (
         <TasksEmptyState

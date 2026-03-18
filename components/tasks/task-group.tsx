@@ -6,6 +6,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { cn } from "@/lib/utils"
 import { getStatusColor } from "@/lib/status-colors"
 import { getCategoryColor } from "@/convex/lib/constants"
+import type { GroupByOption } from "@/lib/hooks/use-task-filters"
 
 const STORAGE_PREFIX = "task-group-collapse:"
 
@@ -29,14 +30,14 @@ export function TaskGroup({
   label: string
   color?: string
   count: number
-  groupBy: string
+  groupBy: GroupByOption | ""
   orgId: string
   taskIds?: string[]
   selectedIds?: Set<string>
   onSelectGroup?: (taskIds: string[], selected: boolean) => void
   children: React.ReactNode
 }) {
-  const storageKey = getCollapseKey(orgId, groupBy, groupKey)
+  const storageKey = getCollapseKey(orgId, groupBy ?? "", groupKey)
 
   const [collapsed, setCollapsed] = useState(() => {
     if (typeof window === "undefined") return false

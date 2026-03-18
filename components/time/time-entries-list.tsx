@@ -4,7 +4,7 @@ import { useState } from "react"
 import { useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { formatDuration } from "@/lib/duration"
-import { formatShortDate } from "@/lib/format"
+import { formatShortDate, getInitials } from "@/lib/format"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import {
   AlertDialog,
@@ -20,8 +20,6 @@ import { MoreHorizontalIcon, Trash2Icon } from "lucide-react"
 import { toast } from "sonner"
 import { toastError } from "@/lib/toast-helpers"
 import type { Id } from "@/convex/_generated/dataModel"
-
-const WHITESPACE = /\s+/
 
 type TimeEntry = {
   _id: Id<"timeEntries">
@@ -65,12 +63,7 @@ export function TimeEntriesList({
       <div className="flex flex-col gap-2">
         {entries.map((entry) => {
           const canEdit = isAdmin || (currentUserId && entry.userId === currentUserId)
-          const initials = entry.userName
-            .split(WHITESPACE)
-            .map((w) => w[0])
-            .join("")
-            .toUpperCase()
-            .slice(0, 2)
+          const initials = getInitials(entry.userName)
 
           return (
             <div key={entry._id} className="flex items-start gap-2">

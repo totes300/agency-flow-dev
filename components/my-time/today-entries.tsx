@@ -3,6 +3,7 @@
 import { useTimer } from "@/lib/hooks/use-timer"
 import { useUser } from "@clerk/nextjs"
 import { formatDuration } from "@/lib/duration"
+import { getInitials } from "@/lib/format"
 import { ClockIcon } from "lucide-react"
 import { EmptyState } from "@/components/empty-state"
 
@@ -45,10 +46,7 @@ export function TodayEntries({ entries }: { entries: TodayEntry[] }) {
     )
   }
 
-  const raw = user
-    ? (user.firstName?.[0] ?? "") + (user.lastName?.[0] ?? "")
-    : ""
-  const initials = raw || "?"
+  const initials = getInitials(user?.fullName ?? user?.firstName)
 
   return (
     <div className="flex flex-col">

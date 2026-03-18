@@ -7,7 +7,7 @@ import { useOrganization } from "@clerk/nextjs"
 import { api } from "@/convex/_generated/api"
 import { useTimerActions } from "@/lib/hooks/use-timer"
 import { parseDuration, formatDuration, QUICK_DURATIONS } from "@/lib/duration"
-import { formatShortDate } from "@/lib/format"
+import { formatShortDate, getInitials } from "@/lib/format"
 import { TimeEntriesList } from "@/components/time/time-entries-list"
 import { Switch } from "@/components/ui/switch"
 import { Button } from "@/components/ui/button"
@@ -16,13 +16,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
-import { ClockIcon, AlignLeftIcon, ChevronDownIcon, PlayIcon } from "lucide-react"
+import { ClockIcon, AlignLeftIcon, ChevronDownIcon, PlayIcon, CheckIcon } from "lucide-react"
 import { toast } from "sonner"
 import { toastError } from "@/lib/toast-helpers"
 import { cn } from "@/lib/utils"
@@ -45,18 +39,19 @@ export function TimeLogPopover({
 
   const isAdmin = membership?.role === "org:admin"
 
-  // Admin: load org members for the user selector
-  const orgMembers = useQuery(
-    api.orgMembers.listOrgMembers,
-    isAuthenticated && isAdmin ? {} : "skip",
-  )
-
   const [open, setOpen] = useState(false)
   const [durationStr, setDurationStr] = useState("")
   const [note, setNote] = useState("")
   const [billable, setBillable] = useState(isBillable)
   const [saving, setSaving] = useState(false)
   const [selectedUserId, setSelectedUserId] = useState<Id<"users"> | null>(null)
+  const [userPickerOpen, setUserPickerOpen] = useState(false)
+
+  // Only load members when admin AND popover is open
+  const orgMembers = useQuery(
+    api.orgMembers.listOrgMembers,
+    isAuthenticated && isAdmin && open ? {} : "skip",
+  )
 
   const entries = useQuery(
     api.timeEntries.listByTask,
@@ -71,12 +66,6 @@ export function TimeLogPopover({
     ? orgMembers.find((m) => m._id === selectedUserId)
     : null
   const displayName = selectedMember?.name ?? currentUser?.name ?? "You"
-  const displayInitials = displayName
-    .split(/\s+/)
-    .map((w) => w[0])
-    .join("")
-    .toUpperCase()
-    .slice(0, 2) || "?"
 
   function resetForm() {
     setDurationStr("")
@@ -84,6 +73,7 @@ export function TimeLogPopover({
     setBillable(isBillable)
     setEntriesExpanded(false)
     setSelectedUserId(null)
+    setUserPickerOpen(false)
   }
 
   async function handleSave() {
@@ -101,7 +91,8 @@ export function TimeLogPopover({
         isBillable: billable,
         ...(isAdmin && selectedUserId ? { userId: selectedUserId } : {}),
       })
-      toast.success(`${formatDuration(minutes)} logged`)
+      const forUser = selectedMember ? ` for ${selectedMember.name}` : ""
+      toast.success(`${formatDuration(minutes)} logged${forUser}`)
       resetForm()
     } catch (err) {
       toastError(err, "Failed to log time")
@@ -129,42 +120,59 @@ export function TimeLogPopover({
         align="start"
         sideOffset={4}
       >
-        {/* User selector (admin) or current user label */}
+        {/* User selector (admin only) */}
         {isAdmin && orgMembers ? (
-          <div className="border-b border-border/40 px-4 py-2.5">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button className="flex items-center gap-2 text-sm">
-                  <div className="flex size-6 shrink-0 items-center justify-center rounded-full bg-muted">
-                    <span className="text-[9px] font-semibold text-muted-foreground">{displayInitials}</span>
-                  </div>
-                  <span className="font-medium text-foreground">{displayName}</span>
-                  <ChevronDownIcon className="size-3 text-muted-foreground" strokeWidth={2} />
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="w-56">
-                {orgMembers.map((member) => (
-                  <DropdownMenuItem
-                    key={member._id}
-                    onClick={() => setSelectedUserId(
-                      member._id === currentUser?._id ? null : member._id,
-                    )}
-                  >
-                    <div className="flex items-center gap-2">
+          <div className="border-b border-border/40">
+            <button
+              type="button"
+              onClick={() => setUserPickerOpen(prev => !prev)}
+              className="flex w-full items-center gap-2 px-4 py-2.5 text-sm"
+            >
+              <div className="flex size-6 shrink-0 items-center justify-center rounded-full bg-muted">
+                <span className="text-[9px] font-semibold text-muted-foreground">
+                  {getInitials(displayName)}
+                </span>
+              </div>
+              <span className="font-medium text-foreground">{displayName}</span>
+              <ChevronDownIcon
+                className={cn(
+                  "size-3 text-muted-foreground transition-transform duration-150",
+                  userPickerOpen && "rotate-180",
+                )}
+                strokeWidth={2}
+              />
+            </button>
+            {userPickerOpen && (
+              <div className="border-t border-border/40 py-1">
+                {orgMembers.map((member) => {
+                  const isSelected = member._id === effectiveUserId
+                  return (
+                    <button
+                      key={member._id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedUserId(member._id === currentUser?._id ? null : member._id)
+                        setUserPickerOpen(false)
+                      }}
+                      className={cn(
+                        "flex w-full items-center gap-2 px-4 py-1.5 text-sm transition-colors hover:bg-muted",
+                        isSelected && "bg-muted/50",
+                      )}
+                    >
                       <div className="flex size-5 shrink-0 items-center justify-center rounded-full bg-muted">
                         <span className="text-[8px] font-semibold text-muted-foreground">
-                          {member.name.split(/\s+/).map((w) => w[0]).join("").toUpperCase().slice(0, 2) || "?"}
+                          {getInitials(member.name)}
                         </span>
                       </div>
-                      <span>{member.name}</span>
-                      {member._id === effectiveUserId && (
-                        <span className="ml-auto text-xs text-muted-foreground">selected</span>
+                      <span className="flex-1 text-left">{member.name}</span>
+                      {isSelected && (
+                        <CheckIcon className="size-3.5 text-foreground" strokeWidth={2} />
                       )}
-                    </div>
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
+                    </button>
+                  )
+                })}
+              </div>
+            )}
           </div>
         ) : null}
 
@@ -248,6 +256,7 @@ export function TimeLogPopover({
             <div className="h-px bg-border" />
             <div className="flex flex-col px-4 py-2.5">
               <button
+                type="button"
                 onClick={() => setEntriesExpanded(prev => !prev)}
                 className="flex items-center justify-between"
                 aria-expanded={entriesExpanded}

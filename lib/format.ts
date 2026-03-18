@@ -75,6 +75,18 @@ export function formatShortDate(dateStr: string, locale = "en-US"): string {
   return date.toLocaleDateString(locale, { month: "short", day: "numeric" })
 }
 
+/** Extract up to 2 initials from a name string. Returns "?" for empty/missing names. */
+export function getInitials(name: string | undefined | null): string {
+  if (!name) return "?"
+  const initials = name
+    .split(/\s+/)
+    .map((w) => w[0])
+    .join("")
+    .toUpperCase()
+    .slice(0, 2)
+  return initials || "?"
+}
+
 /** Extract the first name from a full name string. */
 export function firstName(name: string): string {
   return name.split(/\s+/)[0]

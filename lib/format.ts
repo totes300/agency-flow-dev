@@ -86,3 +86,6 @@ export function isOverdue(dueDate: string | undefined | null): boolean {
   return dueDate < formatDateToYMD(new Date())
 }
 
+// Re-export duration formatters for discoverability
+export { formatDuration, formatTimerDisplay } from "@/lib/duration"
+

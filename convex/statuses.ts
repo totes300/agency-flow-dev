@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { getAuthContext, requireAdmin, validateStringLength } from "./lib/auth";
 import { statusTypeValidator, statusColorValidator } from "./lib/validators";
 import { DEFAULT_STATUSES } from "./lib/constants";
+import type { StatusType } from "./lib/constants";
 
 export const list = query({
   args: {
@@ -98,8 +99,45 @@ export const update = mutation({
     }
     if (args.color !== undefined) patch.color = args.color;
     if (args.icon !== undefined) patch.icon = args.icon;
-    if (args.type !== undefined) patch.type = args.type;
     if (args.sortOrder !== undefined) patch.sortOrder = args.sortOrder;
+
+    // If type changes, cascade to all tasks with this statusId
+    if (args.type !== undefined && args.type !== status.type) {
+      const oldType = status.type as StatusType;
+      const newType = args.type as StatusType;
+
+      const affectedTasks = await ctx.db
+        .query("tasks")
+        .withIndex("by_orgId_statusId", (q) =>
+          q.eq("orgId", orgId).eq("statusId", args.id)
+        )
+        .collect();
+
+      let nonArchivedCount = 0;
+      const now = Date.now();
+      for (const task of affectedTasks) {
+        await ctx.db.patch(task._id, { statusType: newType, updatedAt: now });
+        if (!task.archivedAt) nonArchivedCount++;
+      }
+
+      // Adjust taskCounts: move non-archived tasks from old type to new type
+      if (nonArchivedCount > 0) {
+        const countsDoc = await ctx.db
+          .query("taskCounts")
+          .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+          .unique();
+        if (countsDoc) {
+          const oldCount = (countsDoc as unknown as Record<string, number>)[oldType] ?? 0;
+          const newCount = (countsDoc as unknown as Record<string, number>)[newType] ?? 0;
+          await ctx.db.patch(countsDoc._id, {
+            [oldType]: Math.max(0, oldCount - nonArchivedCount),
+            [newType]: newCount + nonArchivedCount,
+          });
+        }
+      }
+
+      patch.type = args.type;
+    }
 
     await ctx.db.patch(args.id, patch);
   },
@@ -149,7 +187,16 @@ export const remove = mutation({
       throw new Error("Status not found");
     }
 
-    // TODO(Phase 5): Check for task references before allowing hard delete
+    // Check for task references before allowing hard delete (org-scoped)
+    const taskWithStatus = await ctx.db
+      .query("tasks")
+      .withIndex("by_orgId_statusId", (q) =>
+        q.eq("orgId", orgId).eq("statusId", args.id)
+      )
+      .first();
+    if (taskWithStatus) {
+      throw new Error("Cannot delete a status that is assigned to tasks. Archive it instead.");
+    }
 
     // Clear defaultStatusId in orgSettings if this status was default
     const settings = await ctx.db
@@ -226,7 +273,6 @@ export const seed = internalMutation({
     createdBy: v.id("users"),
   },
   handler: async (ctx, args) => {
-    // Check if statuses already exist for this org
     const existing = await ctx.db
       .query("statuses")
       .withIndex("by_orgId", (q) => q.eq("orgId", args.orgId))

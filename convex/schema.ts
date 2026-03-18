@@ -13,6 +13,19 @@ export default defineSchema({
     updatedAt: v.number(),
   }).index("byExternalId", ["externalId"]),
 
+  // ─── Org Members (synced from Clerk org memberships) ──────────────────────
+  orgMembers: defineTable({
+    orgId: v.string(),
+    clerkUserId: v.string(),
+    userId: v.optional(v.id("users")),
+    role: v.union(v.literal("admin"), v.literal("member")),
+    joinedAt: v.number(),
+  })
+    .index("by_orgId", ["orgId"])
+    .index("by_orgId_clerkUserId", ["orgId", "clerkUserId"])
+    .index("by_clerkUserId", ["clerkUserId"])
+    .index("by_userId", ["userId"]),
+
   // ─── Org Settings (one per org) ────────────────────────────────────────────
   orgSettings: defineTable({
     orgId: v.string(),
@@ -55,6 +68,51 @@ export default defineSchema({
   })
     .index("by_orgId", ["orgId"])
     .index("by_orgId_type", ["orgId", "type"]),
+
+  // ─── Tasks ───────────────────────────────────────────────────────────────────
+  tasks: defineTable({
+    orgId: v.string(),
+    title: v.string(),
+    description: v.optional(v.string()),
+    statusId: v.id("statuses"),
+    statusType: v.union(
+      v.literal("backlog"),
+      v.literal("in_progress"),
+      v.literal("review"),
+      v.literal("blocked"),
+      v.literal("done")
+    ),
+    projectId: v.optional(v.id("projects")),
+    assigneeIds: v.array(v.id("users")),
+    workCategoryId: v.optional(v.id("workCategories")),
+    estimate: v.optional(v.number()),
+    billable: v.boolean(),
+    dueDate: v.optional(v.string()),
+    parentTaskId: v.optional(v.id("tasks")),
+    archivedAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    createdBy: v.id("users"),
+  })
+    .index("by_orgId", ["orgId"])
+    .index("by_orgId_statusType", ["orgId", "statusType"])
+    .index("by_orgId_statusId", ["orgId", "statusId"])
+    .index("by_orgId_projectId", ["orgId", "projectId"])
+    .index("by_orgId_parentTaskId", ["orgId", "parentTaskId"])
+    .searchIndex("search_title", {
+      searchField: "title",
+      filterFields: ["orgId"],
+    }),
+
+  // ─── Task Counts (denormalized, one per org, O(1) tab badge reads) ─────────
+  taskCounts: defineTable({
+    orgId: v.string(),
+    backlog: v.number(),
+    in_progress: v.number(),
+    review: v.number(),
+    blocked: v.number(),
+    done: v.number(),
+  }).index("by_orgId", ["orgId"]),
 
   // ─── Clients ──────────────────────────────────────────────────────────────────
   clients: defineTable({

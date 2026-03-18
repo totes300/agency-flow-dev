@@ -1,5 +1,6 @@
 import { query, mutation, internalMutation, QueryCtx } from "./_generated/server";
 import { v, type Validator } from "convex/values";
+import { internal } from "./_generated/api";
 import type { UserJSON } from "@clerk/backend";
 
 async function userByExternalId(ctx: QueryCtx, externalId: string) {
@@ -96,7 +97,9 @@ export const upsertFromClerk = internalMutation({
     const imageUrl = data.image_url ?? undefined;
 
     const existing = await userByExternalId(ctx, data.id);
+    let userId;
     if (existing) {
+      userId = existing._id;
       // Compare before patching to avoid unnecessary writes
       if (
         existing.name !== name ||
@@ -111,7 +114,7 @@ export const upsertFromClerk = internalMutation({
         });
       }
     } else {
-      await ctx.db.insert("users", {
+      userId = await ctx.db.insert("users", {
         name,
         email,
         imageUrl,
@@ -120,6 +123,12 @@ export const upsertFromClerk = internalMutation({
         updatedAt: now,
       });
     }
+
+    // Resolve any unlinked org memberships for this user
+    await ctx.scheduler.runAfter(0, internal.orgMembers.resolveUserMemberships, {
+      clerkUserId: data.id,
+      userId,
+    });
   },
 });
 

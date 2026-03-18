@@ -5,7 +5,9 @@ import { useQuery, useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { useConvexAuth } from "convex/react"
 import { useOrganization } from "@clerk/nextjs"
+import { useSearchParams, useRouter, usePathname } from "next/navigation"
 import { useTaskFilters } from "@/lib/hooks/use-task-filters"
+import { buildDetailUrl } from "@/lib/task-detail"
 import { useUndoAction } from "@/lib/hooks/use-undo-action"
 import { TaskReferenceDataProvider } from "@/components/tasks/task-reference-data"
 import { TasksHeader } from "@/components/tasks/tasks-header"
@@ -15,6 +17,7 @@ import { TaskRow } from "@/components/tasks/task-row"
 import { InlineAddTask } from "@/components/tasks/inline-add-task"
 import { TasksFilterBar } from "@/components/tasks/tasks-filter-bar"
 import { TaskFormModal } from "@/components/tasks/task-form-modal"
+import { TaskDetailModal } from "@/components/tasks/task-detail-modal"
 import { BulkToolbar } from "@/components/tasks/bulk-toolbar"
 import { TasksEmptyState } from "@/components/tasks/tasks-empty-state"
 import { TaskCard } from "@/components/tasks/task-card"
@@ -31,6 +34,10 @@ export default function TasksPage() {
   const { membership, organization } = useOrganization()
   const isAdmin = membership?.role === "org:admin"
   const orgId = organization?.id ?? ""
+
+  const searchParams = useSearchParams()
+  const router = useRouter()
+  const pathname = usePathname()
 
   const filters = useTaskFilters()
   const [filterBarOpen, setFilterBarOpen] = useState(false)
@@ -100,6 +107,12 @@ export default function TasksPage() {
       ? { taskIds: allVisibleTaskIds }
       : "skip",
   )
+
+  // Open task detail via URL param
+  const handleOpenDetail = useCallback((taskId: string) => {
+    const url = buildDetailUrl(searchParams, taskId as Id<"tasks">)
+    router.push(`${pathname}${url}`, { scroll: false })
+  }, [searchParams, router, pathname])
 
   // Selection
   const handleSelect = useCallback((taskId: string, selected: boolean) => {
@@ -223,6 +236,7 @@ export default function TasksPage() {
                   onSelect={handleSelect}
                   onArchive={handleArchive}
                   onDelete={setDeleteTargetId}
+                  onOpenDetail={handleOpenDetail}
                   totalMinutes={timeMap?.[task._id] ?? 0}
                 />
               )}
@@ -282,6 +296,11 @@ export default function TasksPage() {
         confirmLabel="Delete"
         variant="destructive"
         onConfirm={handleDelete}
+      />
+
+      <TaskDetailModal
+        taskIds={allVisibleTaskIds}
+        isAdmin={isAdmin ?? false}
       />
     </div>
     </TaskReferenceDataProvider>

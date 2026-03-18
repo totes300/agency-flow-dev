@@ -35,6 +35,7 @@ export function TaskRow({
   onSelect,
   onArchive,
   onDelete,
+  onOpenDetail,
   totalMinutes = 0,
 }: {
   task: TaskWithJoins
@@ -44,6 +45,7 @@ export function TaskRow({
   onSelect: (taskId: string, selected: boolean) => void
   onArchive: (taskId: string) => void
   onDelete: (taskId: string) => void
+  onOpenDetail?: (taskId: string) => void
   totalMinutes?: number
 }) {
   const duplicateTask = useMutation(api.tasks.duplicate)
@@ -75,8 +77,11 @@ export function TaskRow({
       </div>
 
       {/* 2. Task name + subtitle */}
-      <div>
-        <div className={cn("truncate text-sm font-medium", isDone && "line-through")}>
+      <div
+        className="cursor-pointer"
+        onClick={() => onOpenDetail?.(task._id)}
+      >
+        <div className={cn("truncate text-sm font-medium hover:text-primary transition-colors", isDone && "line-through")}>
           {task.title}
         </div>
         <div className="truncate text-[11px] text-muted-foreground">

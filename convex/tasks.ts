@@ -124,6 +124,100 @@ type TaskWithJoins = Doc<"tasks"> & {
  *
  * Performance: Admin O(1) via denormalized taskCounts, Member O(n) via index scans.
  */
+
+// ─── Get Detail ─────────────────────────────────────────────────────────────────
+
+/**
+ * Fetch a single task with all joined metadata for the detail modal.
+ * Returns task + status + project + client + category + assignees.
+ */
+export const getDetail = query({
+  args: { id: v.id("tasks") },
+  handler: async (ctx, { id }) => {
+    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
+
+    const task = await ctx.db.get(id);
+    if (!task || task.orgId !== orgId) throw new ConvexError("Task not found");
+
+    // Member: must be assigned
+    if (!isAdmin && !task.assigneeIds.includes(userId)) {
+      throw new ConvexError("You don't have access to this task");
+    }
+
+    // Join status
+    const status = task.statusId ? await ctx.db.get(task.statusId) : null;
+
+    // Join project + client
+    let project: { _id: Id<"projects">; name: string; code: string } | null = null;
+    let client: { _id: Id<"clients">; name: string } | null = null;
+    if (task.projectId) {
+      const p = await ctx.db.get(task.projectId);
+      if (p) {
+        project = { _id: p._id, name: p.name, code: p.code };
+        if (p.clientId) {
+          const c = await ctx.db.get(p.clientId);
+          if (c) client = { _id: c._id, name: c.name };
+        }
+      }
+    }
+
+    // Join category
+    const category = task.workCategoryId
+      ? await ctx.db.get(task.workCategoryId)
+      : null;
+
+    // Join assignees
+    const assignees: Array<Pick<Doc<"users">, "_id" | "name" | "email" | "imageUrl">> = [];
+    for (const uid of task.assigneeIds) {
+      const user = await ctx.db.get(uid);
+      if (user) {
+        assignees.push({
+          _id: user._id,
+          name: user.name,
+          email: user.email,
+          imageUrl: user.imageUrl,
+        });
+      }
+    }
+
+    // Total time logged
+    const timeEntries = await ctx.db
+      .query("timeEntries")
+      .withIndex("by_taskId", (q) => q.eq("taskId", id))
+      .collect();
+    const totalMinutes = timeEntries.reduce((sum, e) => sum + e.durationMinutes, 0);
+
+    return {
+      _id: task._id,
+      title: task.title,
+      description: task.description,
+      statusType: task.statusType,
+      billable: task.billable,
+      estimate: task.estimate,
+      dueDate: task.dueDate,
+      parentTaskId: task.parentTaskId,
+      projectId: task.projectId,
+      createdAt: task.createdAt,
+      updatedAt: task.updatedAt,
+      createdBy: task.createdBy,
+      status: status
+        ? { _id: status._id, name: status.name, color: status.color, type: status.type }
+        : null,
+      project,
+      client,
+      clientName: client?.name,
+      projectName: project?.name,
+      category: category
+        ? { _id: category._id, name: category.name, color: category.color }
+        : null,
+      assignees,
+      totalMinutes,
+    };
+  },
+});
+
+// ─── Counts ─────────────────────────────────────────────────────────────────────
+
 export const counts = query({
   args: {},
   handler: async (ctx) => {

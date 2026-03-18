@@ -1,5 +1,3 @@
-"use client"
-
 import { cn } from "@/lib/utils"
 
 export function TimerDisplay({
@@ -15,10 +13,11 @@ export function TimerDisplay({
     <div
       className={cn(
         "font-mono text-[26px] font-normal tracking-tight",
-        status === "running" ? "text-red-500" : "text-stone-300",
+        status === "running" && "text-red-500",
+        status === "paused" && "text-muted-foreground",
+        status === "committing" && "text-muted-foreground/60",
         className,
       )}
-      style={{ fontFamily: "'JetBrains Mono', monospace" }}
     >
       {time}
     </div>

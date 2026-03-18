@@ -1,15 +1,8 @@
 "use client"
 
 import { cn } from "@/lib/utils"
-
-const QUICK_BUTTONS = [
-  { label: "15m", minutes: 15 },
-  { label: "30m", minutes: 30 },
-  { label: "1h", minutes: 60 },
-  { label: "2h", minutes: 120 },
-  { label: "4h", minutes: 240 },
-  { label: "8h", minutes: 480 },
-]
+import { QUICK_DURATIONS } from "@/lib/duration"
+import { Button } from "@/components/ui/button"
 
 export function DurationInput({
   value,
@@ -30,22 +23,23 @@ export function DurationInput({
         type="text"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="w-full bg-transparent font-mono text-sm text-stone-900 outline-none placeholder:text-stone-300"
-        style={{ fontFamily: "'JetBrains Mono', monospace" }}
+        className="w-full bg-transparent font-mono text-sm text-foreground outline-none placeholder:text-muted-foreground/40"
         placeholder="0h 00m"
+        aria-label="Duration"
         autoFocus={autoFocus}
       />
       {showQuickButtons && (
         <div className="mt-2 flex flex-wrap gap-1.5">
-          {QUICK_BUTTONS.map((btn) => (
-            <button
+          {QUICK_DURATIONS.map((btn) => (
+            <Button
               key={btn.label}
               type="button"
+              variant="secondary"
+              size="xs"
               onClick={() => onChange(btn.label)}
-              className="rounded-md bg-stone-100 px-2.5 py-1 text-xs font-medium text-stone-600 transition-colors hover:bg-stone-200"
             >
               {btn.label}
-            </button>
+            </Button>
           ))}
         </div>
       )}

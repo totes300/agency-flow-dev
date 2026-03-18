@@ -1,11 +1,12 @@
 import { v, ConvexError } from "convex/values";
 import { query, mutation } from "./_generated/server";
-import type { MutationCtx, QueryCtx } from "./_generated/server";
-import type { Doc, Id } from "./_generated/dataModel";
+import type { MutationCtx } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
 import { getAuthContext } from "./lib/auth";
 import { computeElapsedMs, totalElapsedMs, msToMinutes, getDateInTimezone } from "./lib/timer";
 import { roundMinutes } from "./lib/rounding";
-import { resolveRate, type RateContext } from "./lib/rates";
+import { resolveRate } from "./lib/rates";
+import { getOrgSettings, buildRateContext } from "./lib/orgHelpers";
 
 const MAX_TIMER_MS = 16 * 60 * 60 * 1000; // 16 hours
 const STALE_THRESHOLD_MS = 8 * 60 * 60 * 1000; // 8 hours
@@ -19,47 +20,6 @@ async function clearTimerFields(ctx: MutationCtx, userId: Id<"users">) {
     timerAccumulatedMs: undefined,
     timerStatus: undefined,
   });
-}
-
-async function getOrgSettings(ctx: QueryCtx | MutationCtx, orgId: string) {
-  return await ctx.db
-    .query("orgSettings")
-    .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
-    .first();
-}
-
-async function buildRateContext(
-  ctx: QueryCtx | MutationCtx,
-  task: Doc<"tasks">,
-  project: Doc<"projects">,
-): Promise<RateContext> {
-  const rateCtx: RateContext = {
-    billingType: project.billingType,
-    tmRateMode: project.tmRateMode,
-    hourlyRate: project.hourlyRate,
-    tmCategoryRates: project.tmCategoryRates,
-    overageRate: project.overageRate,
-    workCategoryId: task.workCategoryId?.toString(),
-  };
-
-  // For fixed projects, look up the category estimate
-  if (project.billingType === "fixed" && task.workCategoryId) {
-    const estimates = await ctx.db
-      .query("projectCategoryEstimates")
-      .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
-      .collect();
-    const match = estimates.find(
-      (e) => e.workCategoryId.toString() === task.workCategoryId!.toString(),
-    );
-    if (match) {
-      rateCtx.categoryEstimate = {
-        internalCostRate: match.internalCostRate,
-        clientBillingRate: match.clientBillingRate,
-      };
-    }
-  }
-
-  return rateCtx;
 }
 
 // ─── Queries ────────────────────────────────────────────────────────────────────
@@ -107,7 +67,7 @@ export const start = mutation({
     const task = await ctx.db.get(args.taskId);
     if (!task || task.orgId !== orgId) throw new ConvexError("Task not found");
     if (task.archivedAt) throw new ConvexError("Cannot start timer on an archived task");
-    if (!task.projectId) throw new ConvexError("Assign a project first");
+    if (!task.projectId) throw new ConvexError("Assign a project to this task before starting a timer");
 
     // Member: only on assigned tasks
     if (!isAdmin && !task.assigneeIds.includes(userId)) {

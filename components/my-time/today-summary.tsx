@@ -1,5 +1,3 @@
-"use client"
-
 import { formatDuration } from "@/lib/duration"
 
 export function TodaySummary({ totalMinutes }: { totalMinutes: number }) {
@@ -14,17 +12,14 @@ export function TodaySummary({ totalMinutes }: { totalMinutes: number }) {
   return (
     <div className="flex items-center justify-between">
       <div className="flex flex-col gap-0.5">
-        <h1 className="text-xl font-semibold text-stone-900">My Time</h1>
-        <p className="text-sm text-stone-400">{dateStr}</p>
+        <h1 className="text-lg font-semibold tracking-tight text-foreground">My Time</h1>
+        <p className="text-sm text-muted-foreground">{dateStr}</p>
       </div>
       <div className="flex flex-col items-end gap-0.5">
-        <span className="text-[11px] font-medium uppercase tracking-wide text-stone-500">
+        <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
           Today
         </span>
-        <span
-          className="text-2xl font-normal text-stone-900"
-          style={{ fontFamily: "'JetBrains Mono', monospace" }}
-        >
+        <span className="font-mono text-2xl font-normal text-foreground">
           {formatDuration(totalMinutes)}
         </span>
       </div>

@@ -1,10 +1,11 @@
 "use client"
 
 import { useState } from "react"
-import { useTimer } from "@/lib/hooks/use-timer"
-import { parseDuration, formatDuration } from "@/lib/duration"
+import { useTimerActions } from "@/lib/hooks/use-timer"
+import { parseDuration, formatDuration, formatTimerDisplay } from "@/lib/duration"
 import { TimerDisplay } from "@/components/timer/timer-display"
 import { Switch } from "@/components/ui/switch"
+import { Button } from "@/components/ui/button"
 import { toast } from "sonner"
 import { toastError } from "@/lib/toast-helpers"
 import { ClockIcon, AlignLeftIcon } from "lucide-react"
@@ -17,7 +18,7 @@ export function TimerCommitForm({
   stopResult: StopResult
   onDone: () => void
 }) {
-  const { commitEntry } = useTimer()
+  const { commitEntry } = useTimerActions()
   const [durationStr, setDurationStr] = useState(formatDuration(stopResult.roundedMinutes))
   const [note, setNote] = useState("")
   const [isBillable, setIsBillable] = useState(stopResult.isBillable)
@@ -46,46 +47,43 @@ export function TimerCommitForm({
     }
   }
 
-  function handleDiscard() {
-    onDone()
-  }
-
   return (
     <div className="flex flex-col gap-3.5 p-5">
       <TimerDisplay
-        time={formatTimerFromMs(stopResult.elapsedMs)}
+        time={formatTimerDisplay(stopResult.elapsedMs)}
         status="committing"
       />
       {/* Task context */}
       <div className="flex flex-col gap-0.5">
-        <div className="text-sm font-medium text-stone-900">{stopResult.taskName}</div>
-        <div className="text-xs text-stone-400">
+        <div className="truncate text-sm font-medium text-foreground">{stopResult.taskName}</div>
+        <div className="text-xs text-muted-foreground">
           {[stopResult.clientName, stopResult.projectName].filter(Boolean).join(" / ")}
         </div>
       </div>
       {/* Duration input row */}
-      <div className="flex items-center gap-2.5 border-b border-stone-100 py-2">
-        <ClockIcon className="size-4 shrink-0 text-stone-400" strokeWidth={1.5} />
+      <div className="flex items-center gap-2.5 border-b border-border/40 py-2">
+        <ClockIcon className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.5} />
         <input
           type="text"
           value={durationStr}
           onChange={(e) => setDurationStr(e.target.value)}
-          className="flex-1 bg-transparent font-mono text-sm text-stone-900 outline-none placeholder:text-stone-300"
-          style={{ fontFamily: "'JetBrains Mono', monospace" }}
+          className="flex-1 bg-transparent font-mono text-sm text-foreground outline-none placeholder:text-muted-foreground/40"
           placeholder="0h 00m"
+          aria-label="Duration"
           autoFocus
         />
-        <span className="text-[11px] text-stone-400">rounded</span>
+        <span className="text-[11px] text-muted-foreground">rounded</span>
       </div>
       {/* Note input row */}
-      <div className="flex items-center gap-2.5 border-b border-stone-100 py-2">
-        <AlignLeftIcon className="size-4 shrink-0 text-stone-400" strokeWidth={1.5} />
+      <div className="flex items-center gap-2.5 border-b border-border/40 py-2">
+        <AlignLeftIcon className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.5} />
         <input
           type="text"
           value={note}
           onChange={(e) => setNote(e.target.value)}
-          className="flex-1 bg-transparent text-sm text-stone-900 outline-none placeholder:text-stone-400"
+          className="flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground/60"
           placeholder="What did you work on?"
+          aria-label="Note"
           onKeyDown={(e) => { if (e.key === "Enter") handleSave() }}
         />
       </div>
@@ -93,33 +91,18 @@ export function TimerCommitForm({
       {stopResult.isBillable && (
         <div className="flex items-center gap-2.5 py-1">
           <Switch checked={isBillable} onCheckedChange={setIsBillable} />
-          <span className="text-sm text-stone-600">Billable</span>
+          <span className="text-sm text-muted-foreground">Billable</span>
         </div>
       )}
       {/* Buttons */}
       <div className="mt-0.5 flex flex-col gap-1.5">
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          className="flex h-9 items-center justify-center rounded-lg bg-stone-900 text-sm font-medium text-white transition-colors hover:bg-stone-800 disabled:opacity-50"
-        >
+        <Button size="lg" onClick={handleSave} disabled={saving} className="w-full">
           Save
-        </button>
-        <button
-          onClick={handleDiscard}
-          className="flex h-9 items-center justify-center rounded-lg border border-stone-200 text-sm font-medium text-stone-500 transition-colors hover:bg-stone-50"
-        >
+        </Button>
+        <Button variant="outline" size="lg" onClick={onDone} className="w-full">
           Discard
-        </button>
+        </Button>
       </div>
     </div>
   )
-}
-
-function formatTimerFromMs(ms: number): string {
-  const totalSeconds = Math.floor(ms / 1000)
-  const h = Math.floor(totalSeconds / 3600)
-  const m = Math.floor((totalSeconds % 3600) / 60)
-  const s = totalSeconds % 60
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`
 }

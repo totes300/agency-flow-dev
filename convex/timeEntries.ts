@@ -1,53 +1,11 @@
 import { v, ConvexError } from "convex/values";
 import { query, mutation } from "./_generated/server";
-import type { MutationCtx, QueryCtx } from "./_generated/server";
-import type { Doc, Id } from "./_generated/dataModel";
+import type { Id } from "./_generated/dataModel";
 import { getAuthContext } from "./lib/auth";
 import { roundMinutes } from "./lib/rounding";
 import { getDateInTimezone } from "./lib/timer";
-import { resolveRate, type RateContext } from "./lib/rates";
-
-// ─── Helpers ────────────────────────────────────────────────────────────────────
-
-async function getOrgSettings(ctx: QueryCtx | MutationCtx, orgId: string) {
-  return await ctx.db
-    .query("orgSettings")
-    .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
-    .first();
-}
-
-async function buildRateContext(
-  ctx: QueryCtx | MutationCtx,
-  task: Doc<"tasks">,
-  project: Doc<"projects">,
-): Promise<RateContext> {
-  const rateCtx: RateContext = {
-    billingType: project.billingType,
-    tmRateMode: project.tmRateMode,
-    hourlyRate: project.hourlyRate,
-    tmCategoryRates: project.tmCategoryRates,
-    overageRate: project.overageRate,
-    workCategoryId: task.workCategoryId?.toString(),
-  };
-
-  if (project.billingType === "fixed" && task.workCategoryId) {
-    const estimates = await ctx.db
-      .query("projectCategoryEstimates")
-      .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
-      .collect();
-    const match = estimates.find(
-      (e) => e.workCategoryId.toString() === task.workCategoryId!.toString(),
-    );
-    if (match) {
-      rateCtx.categoryEstimate = {
-        internalCostRate: match.internalCostRate,
-        clientBillingRate: match.clientBillingRate,
-      };
-    }
-  }
-
-  return rateCtx;
-}
+import { resolveRate } from "./lib/rates";
+import { getOrgSettings, buildRateContext } from "./lib/orgHelpers";
 
 // ─── Queries ────────────────────────────────────────────────────────────────────
 
@@ -131,15 +89,20 @@ export const listToday = query({
 export const sumByTasks = query({
   args: { taskIds: v.array(v.id("tasks")) },
   handler: async (ctx, args) => {
-    await getAuthContext(ctx);
+    const { orgId } = await getAuthContext(ctx);
 
     if (args.taskIds.length === 0) return {};
+    if (args.taskIds.length > 100) {
+      throw new ConvexError("Cannot query more than 100 tasks at once");
+    }
 
-    // Batch query: for each task, get all entries
     const results: Record<string, number> = {};
 
     await Promise.all(
       args.taskIds.map(async (taskId) => {
+        const task = await ctx.db.get(taskId);
+        if (!task || task.orgId !== orgId) return;
+
         const entries = await ctx.db
           .query("timeEntries")
           .withIndex("by_taskId", (q) => q.eq("taskId", taskId))

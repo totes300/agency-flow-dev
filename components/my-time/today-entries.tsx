@@ -1,6 +1,7 @@
 "use client"
 
 import { useTimer } from "@/lib/hooks/use-timer"
+import { useUser } from "@clerk/nextjs"
 import { formatDuration } from "@/lib/duration"
 import { ClockIcon } from "lucide-react"
 import { EmptyState } from "@/components/empty-state"
@@ -20,14 +21,11 @@ export function ActiveTimerBanner() {
   return (
     <div className="flex items-center justify-between rounded-lg border border-red-200 bg-red-50 px-5 py-3">
       <div className="flex items-center gap-2.5">
-        <span className="size-2 rounded-full bg-red-500" />
+        <span className="size-2 animate-pulse rounded-full bg-red-500" />
         <span className="text-sm font-medium text-red-600">Recording</span>
-        <span className="text-sm text-stone-600">{timerState.taskName}</span>
+        <span className="text-sm text-foreground">{timerState.taskName}</span>
       </div>
-      <span
-        className="text-sm font-normal text-red-500"
-        style={{ fontFamily: "'JetBrains Mono', monospace" }}
-      >
+      <span className="font-mono text-sm font-normal text-red-500">
         {formattedTime}
       </span>
     </div>
@@ -35,6 +33,8 @@ export function ActiveTimerBanner() {
 }
 
 export function TodayEntries({ entries }: { entries: TodayEntry[] }) {
+  const { user } = useUser()
+
   if (entries.length === 0) {
     return (
       <EmptyState
@@ -45,39 +45,40 @@ export function TodayEntries({ entries }: { entries: TodayEntry[] }) {
     )
   }
 
+  const initials = user
+    ? (user.firstName?.[0] ?? "") + (user.lastName?.[0] ?? "")
+    : "?"
+
   return (
     <div className="flex flex-col">
-      {entries.map((entry) => {
-        const initials = "AT" // Current user — will be from auth context
-
-        return (
-          <div
-            key={entry._id}
-            className="flex items-center gap-3 border-b border-stone-100 px-1 py-3 last:border-b-0"
-          >
-            <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-blue-100">
-              <span className="text-[11px] font-semibold text-blue-500">{initials}</span>
-            </div>
-            <div className="flex flex-1 flex-col gap-0.5">
-              <span className="text-sm font-medium text-stone-900">{entry.taskName}</span>
-              {entry.note && (
-                <span className="text-xs text-stone-400">{entry.note}</span>
-              )}
-            </div>
-            <div className="flex items-center gap-1.5">
-              {entry.isBillable && (
-                <span className="size-1.5 rounded-full bg-green-500" />
-              )}
-              <span
-                className="text-sm text-stone-600"
-                style={{ fontFamily: "'JetBrains Mono', monospace" }}
-              >
-                {formatDuration(entry.durationMinutes)}
-              </span>
-            </div>
+      {entries.map((entry) => (
+        <div
+          key={entry._id}
+          className="flex items-center gap-3 border-b border-border/40 px-1 py-3 last:border-b-0"
+        >
+          <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted">
+            <span className="text-[11px] font-semibold text-muted-foreground">{initials}</span>
           </div>
-        )
-      })}
+          <div className="flex flex-1 flex-col gap-0.5">
+            <span className="text-sm font-medium text-foreground">{entry.taskName}</span>
+            {entry.note && (
+              <span className="text-xs text-muted-foreground">{entry.note}</span>
+            )}
+          </div>
+          <div className="flex items-center gap-1.5">
+            {entry.isBillable && (
+              <span
+                className="size-1.5 rounded-full bg-green-500"
+                title="Billable"
+                aria-label="Billable"
+              />
+            )}
+            <span className="font-mono text-sm text-muted-foreground">
+              {formatDuration(entry.durationMinutes)}
+            </span>
+          </div>
+        </div>
+      ))}
     </div>
   )
 }

@@ -19,28 +19,26 @@ export function TimerTodaySection() {
 
   return (
     <>
-      <div className="h-px bg-stone-200" />
+      <div className="h-px bg-border" />
       <div className="flex flex-col px-5 py-3">
         <button
-          onClick={() => setExpanded(!expanded)}
+          onClick={() => setExpanded(prev => !prev)}
           className="flex items-center justify-between"
+          aria-expanded={expanded}
         >
           <div className="flex items-center gap-1.5">
             <ChevronRightIcon
               className={cn(
-                "size-2.5 text-stone-400 transition-transform duration-150",
+                "size-2.5 text-muted-foreground transition-transform duration-150",
                 expanded && "rotate-90",
               )}
               strokeWidth={2}
             />
-            <span className="text-[11px] font-semibold uppercase tracking-wide text-stone-500">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
               Today
             </span>
           </div>
-          <span
-            className="font-mono text-xs text-stone-500"
-            style={{ fontFamily: "'JetBrains Mono', monospace" }}
-          >
+          <span className="font-mono text-xs text-muted-foreground">
             {formatDuration(totalMinutes)}
           </span>
         </button>
@@ -50,12 +48,9 @@ export function TimerTodaySection() {
             {entries.map((entry) => (
               <div key={entry._id} className="flex items-center justify-between">
                 <div className="flex flex-col">
-                  <span className="text-xs font-medium text-stone-600">{entry.taskName}</span>
+                  <span className="text-xs font-medium text-foreground">{entry.taskName}</span>
                 </div>
-                <span
-                  className="font-mono text-xs text-stone-500"
-                  style={{ fontFamily: "'JetBrains Mono', monospace" }}
-                >
+                <span className="font-mono text-xs text-muted-foreground">
                   {formatDuration(entry.durationMinutes)}
                 </span>
               </div>

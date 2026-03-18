@@ -3,12 +3,14 @@
 import { useState } from "react"
 import { useQuery, useMutation } from "convex/react"
 import { useConvexAuth } from "convex/react"
+import { useOrganization } from "@clerk/nextjs"
 import { api } from "@/convex/_generated/api"
-import { useTimer } from "@/lib/hooks/use-timer"
-import { parseDuration, formatDuration } from "@/lib/duration"
+import { useTimerActions } from "@/lib/hooks/use-timer"
+import { parseDuration, formatDuration, QUICK_DURATIONS } from "@/lib/duration"
 import { formatShortDate } from "@/lib/format"
 import { TimeEntriesList } from "@/components/time/time-entries-list"
 import { Switch } from "@/components/ui/switch"
+import { Button } from "@/components/ui/button"
 import {
   Popover,
   PopoverContent,
@@ -17,16 +19,8 @@ import {
 import { ClockIcon, AlignLeftIcon, ChevronDownIcon, PlayIcon } from "lucide-react"
 import { toast } from "sonner"
 import { toastError } from "@/lib/toast-helpers"
+import { cn } from "@/lib/utils"
 import type { Id } from "@/convex/_generated/dataModel"
-
-const QUICK_BUTTONS = [
-  { label: "15m", minutes: 15 },
-  { label: "30m", minutes: 30 },
-  { label: "1h", minutes: 60 },
-  { label: "2h", minutes: 120 },
-  { label: "4h", minutes: 240 },
-  { label: "8h", minutes: 480 },
-]
 
 export function TimeLogPopover({
   taskId,
@@ -38,8 +32,12 @@ export function TimeLogPopover({
   children: React.ReactNode
 }) {
   const { isAuthenticated } = useConvexAuth()
-  const { startTimer } = useTimer()
+  const { membership } = useOrganization()
+  const { startTimer } = useTimerActions()
   const createEntry = useMutation(api.timeEntries.create)
+  const currentUser = useQuery(api.users.current, isAuthenticated ? {} : "skip")
+
+  const isAdmin = membership?.role === "org:admin"
 
   const [open, setOpen] = useState(false)
   const [durationStr, setDurationStr] = useState("")
@@ -47,7 +45,6 @@ export function TimeLogPopover({
   const [billable, setBillable] = useState(isBillable)
   const [saving, setSaving] = useState(false)
 
-  // Entries for this task
   const entries = useQuery(
     api.timeEntries.listByTask,
     isAuthenticated && open ? { taskId } : "skip",
@@ -59,6 +56,7 @@ export function TimeLogPopover({
     setDurationStr("")
     setNote("")
     setBillable(isBillable)
+    setEntriesExpanded(false)
   }
 
   async function handleSave() {
@@ -104,99 +102,100 @@ export function TimeLogPopover({
         sideOffset={4}
       >
         {/* Duration input + play button */}
-        <div className="flex items-center gap-2 border-b border-stone-100 px-4 py-2.5">
+        <div className="flex items-center gap-2 border-b border-border/40 px-4 py-2.5">
           <input
             type="text"
             value={durationStr}
             onChange={(e) => setDurationStr(e.target.value)}
-            className="flex-1 bg-transparent font-mono text-sm text-stone-900 outline-none placeholder:text-stone-300"
-            style={{ fontFamily: "'JetBrains Mono', monospace" }}
+            className="flex-1 bg-transparent font-mono text-sm text-foreground outline-none placeholder:text-muted-foreground/40"
             placeholder="0h 00m"
+            aria-label="Duration"
             autoFocus
             onKeyDown={(e) => { if (e.key === "Enter") handleSave() }}
           />
-          <button
+          <Button
+            variant="secondary"
+            size="icon-sm"
             onClick={handlePlayClick}
-            className="flex size-8 items-center justify-center rounded-full bg-stone-100 text-stone-500 transition-colors hover:bg-stone-200"
+            className="rounded-full"
             aria-label="Start timer"
           >
             <PlayIcon className="size-3.5" fill="currentColor" strokeWidth={0} />
-          </button>
+          </Button>
         </div>
 
         {/* Quick buttons */}
-        <div className="flex flex-wrap gap-1.5 border-b border-stone-100 px-4 py-2.5">
-          {QUICK_BUTTONS.map((btn) => (
-            <button
+        <div className="flex flex-wrap gap-1.5 border-b border-border/40 px-4 py-2.5">
+          {QUICK_DURATIONS.map((btn) => (
+            <Button
               key={btn.label}
+              variant="secondary"
+              size="xs"
               onClick={() => setDurationStr(btn.label)}
-              className="rounded-md bg-stone-100 px-2.5 py-1 text-xs font-medium text-stone-600 transition-colors hover:bg-stone-200"
             >
               {btn.label}
-            </button>
+            </Button>
           ))}
         </div>
 
         {/* Icon rows: date + note */}
         <div className="flex flex-col px-4 py-1.5">
-          <div className="flex items-center gap-2.5 border-b border-stone-100 py-2">
-            <ClockIcon className="size-3.5 shrink-0 text-stone-400" strokeWidth={1.5} />
-            <span className="text-sm text-stone-600">
+          <div className="flex items-center gap-2.5 border-b border-border/40 py-2">
+            <ClockIcon className="size-3.5 shrink-0 text-muted-foreground" strokeWidth={1.5} />
+            <span className="text-sm text-muted-foreground">
               Today, {formatShortDate(new Date().toISOString().slice(0, 10))}
             </span>
           </div>
           <div className="flex items-center gap-2.5 py-2">
-            <AlignLeftIcon className="size-3.5 shrink-0 text-stone-400" strokeWidth={1.5} />
+            <AlignLeftIcon className="size-3.5 shrink-0 text-muted-foreground" strokeWidth={1.5} />
             <input
               type="text"
               value={note}
               onChange={(e) => setNote(e.target.value)}
-              className="flex-1 bg-transparent text-sm text-stone-900 outline-none placeholder:text-stone-400"
+              className="flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground/60"
               placeholder="Add a note"
+              aria-label="Note"
               onKeyDown={(e) => { if (e.key === "Enter") handleSave() }}
             />
           </div>
         </div>
 
         {/* Billable + Save */}
-        <div className="flex items-center justify-between border-t border-stone-100 px-4 py-2.5">
+        <div className="flex items-center justify-between border-t border-border/40 px-4 py-2.5">
           {isBillable ? (
             <div className="flex items-center gap-2">
               <Switch checked={billable} onCheckedChange={setBillable} />
-              <span className="text-sm text-stone-600">Billable</span>
+              <span className="text-sm text-muted-foreground">Billable</span>
             </div>
           ) : (
             <div />
           )}
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            className="rounded-lg bg-stone-900 px-5 py-1.5 text-sm font-medium text-white transition-colors hover:bg-stone-800 disabled:opacity-50"
-          >
+          <Button onClick={handleSave} disabled={saving}>
             Save
-          </button>
+          </Button>
         </div>
 
         {/* Time entries section */}
         {entries && entries.length > 0 && (
           <>
-            <div className="h-px bg-stone-200" />
+            <div className="h-px bg-border" />
             <div className="flex flex-col px-4 py-2.5">
               <button
-                onClick={() => setEntriesExpanded(!entriesExpanded)}
+                onClick={() => setEntriesExpanded(prev => !prev)}
                 className="flex items-center justify-between"
+                aria-expanded={entriesExpanded}
               >
                 <div className="flex items-center gap-1.5">
                   <ChevronDownIcon
-                    className={`size-3 text-stone-400 transition-transform duration-150 ${entriesExpanded ? "" : "-rotate-90"}`}
+                    className={cn(
+                      "size-3 text-muted-foreground transition-transform duration-150",
+                      !entriesExpanded && "-rotate-90",
+                    )}
                     strokeWidth={2}
                   />
-                  <span className="text-xs font-medium text-stone-600">Time entries</span>
+                  <span className="text-xs font-medium text-muted-foreground">Time entries</span>
                 </div>
-                <span
-                  className="font-mono text-xs text-stone-500"
-                  style={{ fontFamily: "'JetBrains Mono', monospace" }}
-                >
+                <span className="font-mono text-xs text-muted-foreground">
                   {formatDuration(totalMinutes)}
                 </span>
               </button>
@@ -204,8 +203,8 @@ export function TimeLogPopover({
                 <div className="mt-2.5">
                   <TimeEntriesList
                     entries={entries}
-                    isAdmin={false}
-                    currentUserId={"" as Id<"users">}
+                    isAdmin={isAdmin}
+                    currentUserId={currentUser?._id}
                   />
                 </div>
               )}

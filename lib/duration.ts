@@ -72,6 +72,16 @@ export function formatDuration(minutes: number): string {
  * Format milliseconds as a live timer display: "HH:MM:SS"
  * Examples: 0→"00:00:00", 3661000→"01:01:01"
  */
+/** Quick duration presets for time entry forms */
+export const QUICK_DURATIONS = [
+  { label: "15m", minutes: 15 },
+  { label: "30m", minutes: 30 },
+  { label: "1h", minutes: 60 },
+  { label: "2h", minutes: 120 },
+  { label: "4h", minutes: 240 },
+  { label: "8h", minutes: 480 },
+] as const;
+
 export function formatTimerDisplay(ms: number): string {
   if (ms < 0) ms = 0;
   const totalSeconds = Math.floor(ms / 1000);

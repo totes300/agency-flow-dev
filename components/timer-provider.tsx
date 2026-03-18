@@ -1,10 +1,11 @@
 "use client"
 
-import { createContext, useEffect, useRef, useState } from "react"
+import { createContext, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useQuery, useMutation } from "convex/react"
 import { useConvexAuth } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
+import { formatTimerDisplay } from "@/lib/duration"
 
 export type TimerState = {
   taskId: Id<"tasks">
@@ -29,9 +30,9 @@ export type StopResult = {
   rateSnapshot: Record<string, number | undefined>
 }
 
-export type TimerContextValue = {
+// Stable context — actions + state that changes rarely
+export type TimerActionsValue = {
   timerState: TimerState
-  elapsedMs: number
   startTimer: (taskId: Id<"tasks">) => Promise<void>
   stopTimer: () => Promise<StopResult | null>
   pauseTimer: () => Promise<void>
@@ -45,9 +46,18 @@ export type TimerContextValue = {
     date?: string
   }) => Promise<Id<"timeEntries">>
   isRunningOn: (taskId: Id<"tasks">) => boolean
+  pendingStopResult: StopResult | null
+  setPendingStopResult: (result: StopResult | null) => void
 }
 
-export const TimerContext = createContext<TimerContextValue | null>(null)
+// Tick context — changes every second when timer is running
+export type TimerTickValue = {
+  elapsedMs: number
+  formattedTime: string
+}
+
+export const TimerActionsContext = createContext<TimerActionsValue | null>(null)
+export const TimerTickContext = createContext<TimerTickValue | null>(null)
 
 export function TimerProvider({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useConvexAuth()
@@ -60,11 +70,11 @@ export function TimerProvider({ children }: { children: React.ReactNode }) {
   const discardMutation = useMutation(api.timer.discard)
   const commitMutation = useMutation(api.timer.commitEntry)
 
-  // Live elapsed computed client-side.
-  // For running timers, an interval ticks every second and updates `runningMs`.
-  // For paused/stopped, elapsed is derived directly without state.
   const [runningMs, setRunningMs] = useState(0)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // Pending stop result from task-switch (so widget can show commit form)
+  const [pendingStopResult, setPendingStopResult] = useState<StopResult | null>(null)
 
   const timerState: TimerState = serverState ?? null
 
@@ -72,7 +82,6 @@ export function TimerProvider({ children }: { children: React.ReactNode }) {
   const startedAt = timerState?.startedAt ?? null
   const accumulatedMs = timerState?.accumulatedMs ?? 0
 
-  // Only set up / tear down the interval — setState happens inside the interval callback
   useEffect(() => {
     if (intervalRef.current) {
       clearInterval(intervalRef.current)
@@ -93,50 +102,73 @@ export function TimerProvider({ children }: { children: React.ReactNode }) {
     }
   }, [isRunning, startedAt, accumulatedMs])
 
-  // Derive elapsed: use interval-driven state when running, otherwise compute directly
   const elapsedMs = isRunning
     ? runningMs
     : timerState?.status === "paused"
       ? timerState.accumulatedMs
       : 0
 
-  const value: TimerContextValue = {
+  // Stable callbacks
+  const startTimer = useCallback(async (taskId: Id<"tasks">) => {
+    await startMutation({ taskId })
+  }, [startMutation])
+
+  const stopTimer = useCallback(async () => {
+    const result = await stopMutation()
+    return result as StopResult
+  }, [stopMutation])
+
+  const pauseTimer = useCallback(async () => {
+    await pauseMutation()
+  }, [pauseMutation])
+
+  const resumeTimer = useCallback(async () => {
+    await resumeMutation()
+  }, [resumeMutation])
+
+  const discardTimer = useCallback(async () => {
+    await discardMutation()
+  }, [discardMutation])
+
+  const commitEntry = useCallback(async (args: {
+    taskId: Id<"tasks">
+    durationMinutes: number
+    note?: string
+    isBillable: boolean
+    date?: string
+  }) => {
+    return await commitMutation(args)
+  }, [commitMutation])
+
+  const isRunningOn = useCallback((taskId: Id<"tasks">) => {
+    return timerState?.taskId === taskId && timerState?.status === "running"
+  }, [timerState?.taskId, timerState?.status])
+
+  // Actions context — only changes when timerState changes (not every second)
+  const actionsValue = useMemo<TimerActionsValue>(() => ({
     timerState,
+    startTimer,
+    stopTimer,
+    pauseTimer,
+    resumeTimer,
+    discardTimer,
+    commitEntry,
+    isRunningOn,
+    pendingStopResult,
+    setPendingStopResult,
+  }), [timerState, startTimer, stopTimer, pauseTimer, resumeTimer, discardTimer, commitEntry, isRunningOn, pendingStopResult])
+
+  // Tick context — changes every second when running
+  const tickValue = useMemo<TimerTickValue>(() => ({
     elapsedMs,
-
-    startTimer: async (taskId) => {
-      await startMutation({ taskId })
-    },
-
-    stopTimer: async () => {
-      const result = await stopMutation()
-      return result as StopResult
-    },
-
-    pauseTimer: async () => {
-      await pauseMutation()
-    },
-
-    resumeTimer: async () => {
-      await resumeMutation()
-    },
-
-    discardTimer: async () => {
-      await discardMutation()
-    },
-
-    commitEntry: async (args) => {
-      return await commitMutation(args)
-    },
-
-    isRunningOn: (taskId) => {
-      return timerState?.taskId === taskId && timerState?.status === "running"
-    },
-  }
+    formattedTime: formatTimerDisplay(elapsedMs),
+  }), [elapsedMs])
 
   return (
-    <TimerContext.Provider value={value}>
-      {children}
-    </TimerContext.Provider>
+    <TimerActionsContext.Provider value={actionsValue}>
+      <TimerTickContext.Provider value={tickValue}>
+        {children}
+      </TimerTickContext.Provider>
+    </TimerActionsContext.Provider>
   )
 }

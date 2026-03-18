@@ -1,8 +1,9 @@
 "use client"
 
 import { useState } from "react"
-import { useMutation, useQuery } from "convex/react"
+import { useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
+import { useTaskReferenceData } from "@/components/tasks/task-reference-data"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import {
   Command,
@@ -30,7 +31,7 @@ export function InlineProjectCell({
   onSelect?: (projectId: Id<"projects"> | null, project: Pick<Doc<"projects">, "_id" | "name" | "code"> | null, client: Pick<Doc<"clients">, "_id" | "name"> | null) => void
 }) {
   const [open, setOpen] = useState(false)
-  const projects = useQuery(api.projects.list, {})
+  const { projects } = useTaskReferenceData()
   const updateTask = useMutation(api.tasks.update)
 
   async function handleSelect(projectId: Id<"projects"> | null) {
@@ -41,7 +42,7 @@ export function InlineProjectCell({
       onSelectProp(
         projectId,
         p ? { _id: p._id, name: p.name, code: p.code } : null,
-        p ? { _id: p.clientId as Id<"clients">, name: p.clientName ?? "Unknown" } : null,
+        p?.clientId ? { _id: p.clientId as Id<"clients">, name: p.clientName ?? "Unknown" } : null,
       )
       return
     }

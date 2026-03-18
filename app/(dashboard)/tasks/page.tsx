@@ -1,12 +1,13 @@
 "use client"
 
-import { useState, useCallback, useEffect, useRef } from "react"
+import { useState, useCallback, useEffect, useRef, useMemo } from "react"
 import { useQuery, useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { useConvexAuth } from "convex/react"
 import { useOrganization } from "@clerk/nextjs"
 import { useTaskFilters } from "@/lib/hooks/use-task-filters"
 import { useUndoAction } from "@/lib/hooks/use-undo-action"
+import { TaskReferenceDataProvider } from "@/components/tasks/task-reference-data"
 import { TasksHeader } from "@/components/tasks/tasks-header"
 import { TasksTabs } from "@/components/tasks/tasks-tabs"
 import { TasksTable } from "@/components/tasks/tasks-table"
@@ -68,6 +69,18 @@ export default function TasksPage() {
   const counts = useQuery(api.tasks.counts, isAuthenticated ? {} : "skip")
   const listResult = useQuery(api.tasks.list, isAuthenticated ? filters.toListArgs() : "skip")
 
+  // Reference data — single subscription each, shared via context
+  const statuses = useQuery(api.statuses.list, isAuthenticated ? {} : "skip")
+  const categories = useQuery(api.workCategories.list, isAuthenticated ? {} : "skip")
+  const projects = useQuery(api.projects.list, isAuthenticated ? {} : "skip")
+  const orgMembersData = useQuery(api.orgMembers.listOrgMembers, isAuthenticated ? undefined : "skip")
+  const referenceData = useMemo(() => ({
+    statuses,
+    categories,
+    projects,
+    orgMembers: orgMembersData,
+  }), [statuses, categories, projects, orgMembersData])
+
   // Stale-while-revalidate: keep last result visible during tab switches
   const lastResultRef = useRef(listResult)
   if (listResult !== undefined) {
@@ -81,7 +94,7 @@ export default function TasksPage() {
       const next = new Set(prev)
       if (selected && next.size < 50) {
         next.add(taskId)
-      } else {
+      } else if (!selected) {
         next.delete(taskId)
       }
       return next
@@ -122,6 +135,7 @@ export default function TasksPage() {
   const isEmpty = displayResult.totalCount === 0
 
   return (
+    <TaskReferenceDataProvider value={referenceData}>
     <div>
       <TasksHeader
         search={filters.search}
@@ -258,5 +272,6 @@ export default function TasksPage() {
         onConfirm={handleDelete}
       />
     </div>
+    </TaskReferenceDataProvider>
   )
 }

@@ -53,10 +53,10 @@ export function TaskFormModal({
   const [showDescription, setShowDescription] = useState(false)
 
   const createTask = useMutation(api.tasks.create)
-  const statuses = useQuery(api.statuses.list, {})
-  const categories = useQuery(api.workCategories.list, {})
-  const projects = useQuery(api.projects.list, {})
-  const orgMembers = useQuery(api.orgMembers.listOrgMembers)
+  const statuses = useQuery(api.statuses.list, open ? {} : "skip")
+  const categories = useQuery(api.workCategories.list, open ? {} : "skip")
+  const projects = useQuery(api.projects.list, open ? {} : "skip")
+  const orgMembers = useQuery(api.orgMembers.listOrgMembers, open ? undefined : "skip")
 
   // Focus title on open
   useEffect(() => {
@@ -130,7 +130,7 @@ export function TaskFormModal({
             projects={projects ?? []}
             value={projectId}
             onChange={setProjectId}
-            selectedLabel={selectedProject ? `${selectedProject.clientName} · ${selectedProject.name}` : undefined}
+            selectedLabel={selectedProject ? (selectedProject.clientName ? `${selectedProject.clientName} · ${selectedProject.name}` : selectedProject.name) : undefined}
           />
         </div>
 

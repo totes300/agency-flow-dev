@@ -1,8 +1,9 @@
 "use client"
 
 import { useState } from "react"
-import { useMutation, useQuery } from "convex/react"
+import { useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
+import { useTaskReferenceData } from "@/components/tasks/task-reference-data"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import {
   Command,
@@ -28,7 +29,7 @@ export function InlineCategoryCell({
   onSelect?: (categoryId: Id<"workCategories"> | null, category: Pick<Doc<"workCategories">, "_id" | "name" | "color"> | null) => void
 }) {
   const [open, setOpen] = useState(false)
-  const categories = useQuery(api.workCategories.list, {})
+  const { categories } = useTaskReferenceData()
   const updateTask = useMutation(api.tasks.update)
 
   async function handleSelect(categoryId: Id<"workCategories"> | null) {

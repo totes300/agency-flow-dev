@@ -1,8 +1,9 @@
 "use client"
 
 import { useState, useRef, useCallback, useEffect } from "react"
-import { useMutation, useQuery } from "convex/react"
+import { useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
+import { useTaskReferenceData } from "@/components/tasks/task-reference-data"
 import { PlusIcon } from "lucide-react"
 import { toast } from "sonner"
 import { TASK_GRID_COLS } from "@/components/tasks/tasks-table"
@@ -43,43 +44,50 @@ export function InlineAddTask({
   const inputRef = useRef<HTMLInputElement>(null)
   const createTask = useMutation(api.tasks.create)
 
-  // Queries — only subscribe when active (lazy-load)
-  const statuses = useQuery(api.statuses.list, active ? {} : "skip")
-  const categories = useQuery(api.workCategories.list, active ? {} : "skip")
-  const projects = useQuery(api.projects.list, active ? {} : "skip")
-  const orgMembers = useQuery(api.orgMembers.listOrgMembers, active ? undefined : "skip")
+  // Reference data from page-level context (no per-row subscriptions)
+  const { statuses, categories, projects, orgMembers } = useTaskReferenceData()
 
   const activate = useCallback(() => {
-    // Pre-fill from group context (not status — that's a submit-time fallback)
-    if (groupBy && groupKey && !groupKey.startsWith("__")) {
-      switch (groupBy) {
-        case "status": {
-          const s = statuses?.find((st) => st._id === groupKey)
-          if (s) setStatus({ _id: s._id, name: s.name, color: s.color, type: s.type })
-          break
+    setActive(true)
+  }, [])
+
+  // Pre-fill from group context once queries load
+  const hasPrefilled = useRef(false)
+  useEffect(() => {
+    if (!active || hasPrefilled.current) return
+    if (!groupBy || !groupKey || groupKey.startsWith("__")) return
+
+    switch (groupBy) {
+      case "status": {
+        if (!statuses) return
+        const s = statuses.find((st) => st._id === groupKey)
+        if (s) setStatus({ _id: s._id, name: s.name, color: s.color, type: s.type })
+        break
+      }
+      case "category": {
+        if (!categories) return
+        const c = categories.find((cat) => cat._id === groupKey)
+        if (c) setCategory({ _id: c._id, name: c.name, color: c.color })
+        break
+      }
+      case "project": {
+        if (!projects) return
+        const p = projects.find((pr) => pr._id === groupKey)
+        if (p) {
+          setProject({ _id: p._id, name: p.name, code: p.code })
+          setClient({ _id: p.clientId as Id<"clients">, name: p.clientName ?? "Unknown" })
         }
-        case "category": {
-          const c = categories?.find((cat) => cat._id === groupKey)
-          if (c) setCategory({ _id: c._id, name: c.name, color: c.color })
-          break
-        }
-        case "project": {
-          const p = projects?.find((pr) => pr._id === groupKey)
-          if (p) {
-            setProject({ _id: p._id, name: p.name, code: p.code })
-            setClient({ _id: p.clientId as Id<"clients">, name: p.clientName ?? "Unknown" })
-          }
-          break
-        }
-        case "assignee": {
-          const m = orgMembers?.find((u) => u._id === groupKey)
-          if (m) setAssignees([{ _id: m._id, name: m.name, email: m.email, imageUrl: m.imageUrl }])
-          break
-        }
+        break
+      }
+      case "assignee": {
+        if (!orgMembers) return
+        const m = orgMembers.find((u) => u._id === groupKey)
+        if (m) setAssignees([{ _id: m._id, name: m.name, email: m.email, imageUrl: m.imageUrl }])
+        break
       }
     }
-    setActive(true)
-  }, [groupBy, groupKey, statuses, categories, projects, orgMembers])
+    hasPrefilled.current = true
+  }, [active, groupBy, groupKey, statuses, categories, projects, orgMembers])
 
   function resetFields() {
     setTitle("")
@@ -166,6 +174,7 @@ export function InlineAddTask({
         submitRef.current()
       } else if (e.key === "Escape") {
         resetRef.current()
+        hasPrefilled.current = false
         setActive(false)
       }
     }

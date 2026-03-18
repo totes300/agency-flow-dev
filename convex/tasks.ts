@@ -1,4 +1,4 @@
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { query, mutation, internalMutation, QueryCtx, MutationCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { getAuthContext, requireAdmin, validateStringLength } from "./lib/auth";
@@ -16,6 +16,37 @@ const TAB_STATUS_TYPE: Record<string, StatusType | null> = {
   done: "done",
 };
 
+/** Validate that all user IDs belong to the given org via orgMembers table. */
+async function validateAssignees(
+  ctx: QueryCtx | MutationCtx,
+  orgId: string,
+  assigneeIds: Id<"users">[]
+) {
+  if (assigneeIds.length === 0) return;
+  const members = await ctx.db
+    .query("orgMembers")
+    .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+    .collect();
+  const memberUserIds = new Set(members.map((m) => m.userId?.toString()).filter(Boolean));
+  for (const uid of assigneeIds) {
+    if (!memberUserIds.has(uid.toString())) {
+      throw new ConvexError("One or more assignees are not members of this organization");
+    }
+  }
+}
+
+/** Validate that a work category belongs to the given org. */
+async function validateWorkCategory(
+  ctx: QueryCtx | MutationCtx,
+  orgId: string,
+  workCategoryId: Id<"workCategories">
+) {
+  const cat = await ctx.db.get(workCategoryId);
+  if (!cat || cat.orgId !== orgId) {
+    throw new ConvexError("Work category not found");
+  }
+}
+
 /** Find the first backlog-type status (used as default for new tasks). */
 async function getDefaultStatusId(
   ctx: QueryCtx | MutationCtx,
@@ -28,7 +59,7 @@ async function getDefaultStatusId(
   const active = statuses
     .filter((s) => !s.archivedAt)
     .sort((a, b) => a.sortOrder - b.sortOrder);
-  if (active.length === 0) throw new Error("No backlog status found for org");
+  if (active.length === 0) throw new ConvexError("No backlog status found for org");
   return { statusId: active[0]._id, statusType: "backlog" };
 }
 
@@ -117,19 +148,20 @@ export const counts = query({
       };
     }
 
-    // Member: per-type index scans (bounded by assigned tasks)
+    // Member: per-type bounded scans (cap at 1000 docs per type)
+    const memberMaxScan = 1000;
     const typeCounts: Record<StatusType, number> = {
       backlog: 0, in_progress: 0, review: 0, blocked: 0, done: 0,
     };
 
     for (const type of typeKeys) {
-      const tasks = await ctx.db
+      const docs = await ctx.db
         .query("tasks")
         .withIndex("by_orgId_statusType", (q) =>
           q.eq("orgId", orgId).eq("statusType", type)
         )
-        .collect();
-      typeCounts[type] = tasks.filter((t) =>
+        .take(memberMaxScan);
+      typeCounts[type] = docs.filter((t) =>
         !t.archivedAt && t.assigneeIds.includes(userId)
       ).length;
     }
@@ -186,48 +218,57 @@ export const list = query({
     const { orgId, userId, isAdmin } = await getAuthContext(ctx);
     const limit = args.limit ?? 50;
 
-    // ── Step 1: Fetch tasks by tab ──────────────────────────────────────────
+    // ── Step 1+2: Fetch tasks by tab with bounded scan ────────────────────
+    // Instead of .collect() (unbounded), scan up to maxScan documents and
+    // integrate archive/permission filters into the loop to avoid loading
+    // the entire table into memory.
+    const maxScan = 1000;
     let tasks: Doc<"tasks">[];
+    let hitScanLimit = false;
     const tabType = TAB_STATUS_TYPE[args.tab];
 
+    function passesBaseFilter(t: Doc<"tasks">): boolean {
+      if (t.archivedAt) return false;
+      if (!isAdmin && !t.assigneeIds.includes(userId)) return false;
+      return true;
+    }
+
     if (args.search) {
-      // Search always spans all tasks — tab is ignored during search
-      tasks = await ctx.db
+      // Search is bounded by Convex's search index (max 256 results)
+      const searchResults = await ctx.db
         .query("tasks")
         .withSearchIndex("search_title", (q) =>
           q.search("title", args.search!).eq("orgId", orgId)
         )
         .collect();
+      tasks = searchResults.filter(passesBaseFilter);
     } else if (tabType === null) {
-      // "all" tab — parallel reads across all 5 statusTypes
+      // "all" tab — bounded reads across all 5 statusTypes
       const allTypes: StatusType[] = ["backlog", "in_progress", "review", "blocked", "done"];
       const taskArrays = await Promise.all(
-        allTypes.map((type) =>
-          ctx.db
+        allTypes.map(async (type) => {
+          const docs = await ctx.db
             .query("tasks")
             .withIndex("by_orgId_statusType", (q) =>
               q.eq("orgId", orgId).eq("statusType", type)
             )
-            .collect()
-        )
+            .take(maxScan);
+          return { docs: docs.filter(passesBaseFilter), limited: docs.length >= maxScan };
+        })
       );
-      tasks = taskArrays.flat();
+      tasks = taskArrays.flatMap((r) => r.docs);
+      hitScanLimit = taskArrays.some((r) => r.limited);
     } else {
-      // Single statusType tab
-      tasks = await ctx.db
+      // Single statusType tab — bounded read
+      const docs = await ctx.db
         .query("tasks")
         .withIndex("by_orgId_statusType", (q) =>
           q.eq("orgId", orgId).eq("statusType", tabType)
         )
-        .collect();
+        .take(maxScan);
+      tasks = docs.filter(passesBaseFilter);
+      hitScanLimit = docs.length >= maxScan;
     }
-
-    // ── Step 2: Filter out archived + permission ────────────────────────────
-    tasks = tasks.filter((t) => {
-      if (t.archivedAt) return false;
-      if (!isAdmin && !t.assigneeIds.includes(userId)) return false;
-      return true;
-    });
 
     // ── Step 3: Apply filters ───────────────────────────────────────────────
     // Batch-load projects when needed for client filter or grouping
@@ -515,7 +556,7 @@ export const list = query({
       hasMore: bucket.tasks.length > limit,
     }));
 
-    return { groups, totalCount };
+    return { groups, totalCount, hitScanLimit };
   },
 });
 
@@ -537,7 +578,7 @@ export const create = mutation({
     const { orgId, userId, isAdmin } = await getAuthContext(ctx);
 
     const title = args.title.trim();
-    if (!title) throw new Error("Task title is required");
+    if (!title) throw new ConvexError("Task title is required");
     validateStringLength(title, 500, "Task title");
 
     // Resolve status
@@ -545,7 +586,7 @@ export const create = mutation({
     let statusType: StatusType;
     if (args.statusId) {
       const status = await ctx.db.get(args.statusId);
-      if (!status || status.orgId !== orgId) throw new Error("Status not found");
+      if (!status || status.orgId !== orgId) throw new ConvexError("Status not found");
       statusId = args.statusId;
       statusType = status.type;
     } else {
@@ -557,7 +598,12 @@ export const create = mutation({
     // Validate project belongs to org
     if (args.projectId) {
       const project = await ctx.db.get(args.projectId);
-      if (!project || project.orgId !== orgId) throw new Error("Project not found");
+      if (!project || project.orgId !== orgId) throw new ConvexError("Project not found");
+    }
+
+    // Validate work category belongs to org
+    if (args.workCategoryId) {
+      await validateWorkCategory(ctx, orgId, args.workCategoryId);
     }
 
     // Member auto-assigned
@@ -565,6 +611,9 @@ export const create = mutation({
     if (!isAdmin && !assigneeIds.includes(userId)) {
       assigneeIds = [userId, ...assigneeIds];
     }
+
+    // Validate all assignees belong to org
+    await validateAssignees(ctx, orgId, assigneeIds);
 
     const now = Date.now();
     const taskId = await ctx.db.insert("tasks", {
@@ -606,18 +655,18 @@ export const update = mutation({
     const { orgId, userId, isAdmin } = await getAuthContext(ctx);
 
     const task = await ctx.db.get(args.id);
-    if (!task || task.orgId !== orgId) throw new Error("Task not found");
+    if (!task || task.orgId !== orgId) throw new ConvexError("Task not found");
 
     // Member can only edit assigned tasks
     if (!isAdmin && !task.assigneeIds.includes(userId)) {
-      throw new Error("You can only edit tasks assigned to you");
+      throw new ConvexError("You can only edit tasks assigned to you");
     }
 
     const updates: Record<string, unknown> = { updatedAt: Date.now() };
 
     if (args.title !== undefined) {
       const title = args.title.trim();
-      if (!title) throw new Error("Task title is required");
+      if (!title) throw new ConvexError("Task title is required");
       validateStringLength(title, 500, "Task title");
       updates.title = title;
     }
@@ -628,11 +677,11 @@ export const update = mutation({
 
     if (args.statusId !== undefined) {
       const status = await ctx.db.get(args.statusId);
-      if (!status || status.orgId !== orgId) throw new Error("Status not found");
+      if (!status || status.orgId !== orgId) throw new ConvexError("Status not found");
 
       // Member cannot set done-type status
       if (!isAdmin && status.type === "done") {
-        throw new Error("Only admins can mark tasks as done");
+        throw new ConvexError("Only admins can mark tasks as done");
       }
 
       updates.statusId = args.statusId;
@@ -642,17 +691,21 @@ export const update = mutation({
     if (args.projectId !== undefined) {
       if (args.projectId !== null) {
         const project = await ctx.db.get(args.projectId);
-        if (!project || project.orgId !== orgId) throw new Error("Project not found");
+        if (!project || project.orgId !== orgId) throw new ConvexError("Project not found");
       }
       // TODO(Phase 7): block project change if task has time entries
       updates.projectId = args.projectId === null ? undefined : args.projectId;
     }
 
     if (args.assigneeIds !== undefined) {
+      await validateAssignees(ctx, orgId, args.assigneeIds);
       updates.assigneeIds = args.assigneeIds;
     }
 
     if (args.workCategoryId !== undefined) {
+      if (args.workCategoryId !== null) {
+        await validateWorkCategory(ctx, orgId, args.workCategoryId);
+      }
       updates.workCategoryId = args.workCategoryId === null ? undefined : args.workCategoryId;
     }
 
@@ -687,10 +740,10 @@ export const archive = mutation({
     const { orgId, userId, isAdmin } = await getAuthContext(ctx);
 
     const task = await ctx.db.get(args.id);
-    if (!task || task.orgId !== orgId) throw new Error("Task not found");
+    if (!task || task.orgId !== orgId) throw new ConvexError("Task not found");
 
     if (!isAdmin && !task.assigneeIds.includes(userId)) {
-      throw new Error("You can only archive tasks assigned to you");
+      throw new ConvexError("You can only archive tasks assigned to you");
     }
 
     const now = Date.now();
@@ -699,7 +752,7 @@ export const archive = mutation({
     // Cascade archive to subtasks
     const subtasks = await ctx.db
       .query("tasks")
-      .withIndex("by_parentTaskId", (q) => q.eq("parentTaskId", args.id))
+      .withIndex("by_orgId_parentTaskId", (q) => q.eq("orgId", orgId).eq("parentTaskId", args.id))
       .collect();
     for (const sub of subtasks) {
       if (!sub.archivedAt) {
@@ -727,14 +780,14 @@ export const restore = mutation({
     const { orgId, userId, isAdmin } = await getAuthContext(ctx);
 
     const task = await ctx.db.get(args.id);
-    if (!task || task.orgId !== orgId) throw new Error("Task not found");
+    if (!task || task.orgId !== orgId) throw new ConvexError("Task not found");
 
     if (!isAdmin && !task.assigneeIds.includes(userId)) {
-      throw new Error("You can only restore tasks assigned to you");
+      throw new ConvexError("You can only restore tasks assigned to you");
     }
 
     if (!task.archivedAt) {
-      throw new Error("Task is not archived");
+      throw new ConvexError("Task is not archived");
     }
 
     await ctx.db.patch(args.id, {
@@ -752,14 +805,14 @@ export const remove = mutation({
     const { orgId } = await requireAdmin(ctx);
 
     const task = await ctx.db.get(args.id);
-    if (!task || task.orgId !== orgId) throw new Error("Task not found");
+    if (!task || task.orgId !== orgId) throw new ConvexError("Task not found");
 
     // TODO(Phase 7): if task has time entries, suggest archive instead
 
     // Cascade delete subtasks
     const subtasks = await ctx.db
       .query("tasks")
-      .withIndex("by_parentTaskId", (q) => q.eq("parentTaskId", args.id))
+      .withIndex("by_orgId_parentTaskId", (q) => q.eq("orgId", orgId).eq("parentTaskId", args.id))
       .collect();
     for (const sub of subtasks) {
       if (!sub.archivedAt) {
@@ -783,7 +836,7 @@ export const duplicate = mutation({
     const { orgId, userId } = await getAuthContext(ctx);
 
     const task = await ctx.db.get(args.id);
-    if (!task || task.orgId !== orgId) throw new Error("Task not found");
+    if (!task || task.orgId !== orgId) throw new ConvexError("Task not found");
 
     const now = Date.now();
     const newId = await ctx.db.insert("tasks", {
@@ -824,23 +877,31 @@ export const bulkUpdate = mutation({
     const { orgId, userId, isAdmin } = await getAuthContext(ctx);
 
     if (args.taskIds.length > 50) {
-      throw new Error("Maximum 50 tasks per bulk operation");
+      throw new ConvexError("Maximum 50 tasks per bulk operation");
     }
 
     // Pre-validate action-specific data
     let newStatusType: StatusType | undefined;
     if (args.action.type === "status") {
       const status = await ctx.db.get(args.action.statusId);
-      if (!status || status.orgId !== orgId) throw new Error("Status not found");
+      if (!status || status.orgId !== orgId) throw new ConvexError("Status not found");
       if (!isAdmin && status.type === "done") {
-        throw new Error("Only admins can mark tasks as done");
+        throw new ConvexError("Only admins can mark tasks as done");
       }
       newStatusType = status.type;
     }
 
     if (args.action.type === "project") {
       const project = await ctx.db.get(args.action.projectId);
-      if (!project || project.orgId !== orgId) throw new Error("Project not found");
+      if (!project || project.orgId !== orgId) throw new ConvexError("Project not found");
+    }
+
+    if (args.action.type === "addAssignee") {
+      await validateAssignees(ctx, orgId, [args.action.userId]);
+    }
+
+    if (args.action.type === "category") {
+      await validateWorkCategory(ctx, orgId, args.action.workCategoryId);
     }
 
     const now = Date.now();
@@ -922,7 +983,7 @@ export const bulkUpdate = mutation({
             // Cascade to subtasks
             const subtasks = await ctx.db
               .query("tasks")
-              .withIndex("by_parentTaskId", (q) => q.eq("parentTaskId", taskId))
+              .withIndex("by_orgId_parentTaskId", (q) => q.eq("orgId", orgId).eq("parentTaskId", taskId))
               .collect();
             for (const sub of subtasks) {
               if (!sub.archivedAt) {

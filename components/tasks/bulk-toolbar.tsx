@@ -1,8 +1,9 @@
 "use client"
 
 import { useState } from "react"
-import { useMutation, useQuery } from "convex/react"
+import { useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
+import { useTaskReferenceData } from "@/components/tasks/task-reference-data"
 import { Button } from "@/components/ui/button"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import {
@@ -60,6 +61,8 @@ export function BulkToolbar({
         <div className="flex items-center gap-2 pr-2">
           <span className="text-sm font-medium">{count} selected</span>
           <button
+            type="button"
+            aria-label="Clear selection"
             onClick={onDeselectAll}
             className="text-muted-foreground hover:text-foreground"
           >
@@ -96,7 +99,7 @@ export function BulkToolbar({
 
 function StatusAction({ taskIds, isAdmin }: { taskIds: Id<"tasks">[]; isAdmin: boolean }) {
   const [open, setOpen] = useState(false)
-  const statuses = useQuery(api.statuses.list, {})
+  const { statuses } = useTaskReferenceData()
   const bulkUpdate = useMutation(api.tasks.bulkUpdate)
 
   async function handleSelect(statusId: Id<"statuses">) {
@@ -152,7 +155,7 @@ function StatusAction({ taskIds, isAdmin }: { taskIds: Id<"tasks">[]; isAdmin: b
 
 function AssigneeAction({ taskIds, type }: { taskIds: Id<"tasks">[]; type: "add" | "remove" }) {
   const [open, setOpen] = useState(false)
-  const orgMembers = useQuery(api.orgMembers.listOrgMembers)
+  const { orgMembers } = useTaskReferenceData()
   const bulkUpdate = useMutation(api.tasks.bulkUpdate)
 
   async function handleSelect(userId: Id<"users">) {
@@ -199,7 +202,7 @@ function AssigneeAction({ taskIds, type }: { taskIds: Id<"tasks">[]; type: "add"
 
 function CategoryAction({ taskIds }: { taskIds: Id<"tasks">[] }) {
   const [open, setOpen] = useState(false)
-  const categories = useQuery(api.workCategories.list, {})
+  const { categories } = useTaskReferenceData()
   const bulkUpdate = useMutation(api.tasks.bulkUpdate)
 
   async function handleSelect(workCategoryId: Id<"workCategories">) {

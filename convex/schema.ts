@@ -97,8 +97,8 @@ export default defineSchema({
     .index("by_orgId", ["orgId"])
     .index("by_orgId_statusType", ["orgId", "statusType"])
     .index("by_orgId_statusId", ["orgId", "statusId"])
-    .index("by_projectId", ["projectId"])
-    .index("by_parentTaskId", ["parentTaskId"])
+    .index("by_orgId_projectId", ["orgId", "projectId"])
+    .index("by_orgId_parentTaskId", ["orgId", "parentTaskId"])
     .searchIndex("search_title", {
       searchField: "title",
       filterFields: ["orgId"],

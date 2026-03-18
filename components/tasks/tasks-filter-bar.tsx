@@ -1,8 +1,7 @@
 "use client"
 
-import { useQuery } from "convex/react"
-import { api } from "@/convex/_generated/api"
 import { FilterPill } from "@/components/tasks/filter-pill"
+import { useTaskReferenceData } from "@/components/tasks/task-reference-data"
 import { getStatusColor } from "@/lib/status-colors"
 import { getCategoryColor } from "@/convex/lib/constants"
 import type { FilterOp, FilterValue } from "@/lib/hooks/use-task-filters"
@@ -24,10 +23,7 @@ export function TasksFilterBar({
   onFilterChange: (field: "status" | "client" | "project" | "assignee" | "category", value: FilterValue | null) => void
   onClearAll: () => void
 }) {
-  const statuses = useQuery(api.statuses.list, {})
-  const categories = useQuery(api.workCategories.list, {})
-  const projects = useQuery(api.projects.list, {})
-  const orgMembers = useQuery(api.orgMembers.listOrgMembers)
+  const { statuses, categories, projects, orgMembers } = useTaskReferenceData()
 
   const statusOptions = (statuses ?? []).map((s) => ({
     id: s._id,

@@ -44,3 +44,6 @@ convex/_generated/
 next-env.d.ts
 # next-agents-md
 .next-docs/
+
+# claude code
+.claude/worktrees/

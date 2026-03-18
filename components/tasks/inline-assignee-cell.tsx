@@ -1,8 +1,9 @@
 "use client"
 
 import { useState } from "react"
-import { useMutation, useQuery } from "convex/react"
+import { useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
+import { useTaskReferenceData } from "@/components/tasks/task-reference-data"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import {
   Command,
@@ -31,7 +32,7 @@ export function InlineAssigneeCell({
   const [open, setOpen] = useState(false)
   const updateTask = useMutation(api.tasks.update)
 
-  const orgMembers = useQuery(api.orgMembers.listOrgMembers)
+  const { orgMembers } = useTaskReferenceData()
 
   const assigneeIdSet = new Set(assignees.map((a) => a._id.toString()))
 

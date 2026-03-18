@@ -1,5 +1,7 @@
 import { v, ConvexError } from "convex/values";
 import { query, mutation } from "./_generated/server";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
+import type { Doc, Id } from "./_generated/dataModel";
 import { getAuthContext } from "./lib/auth";
 import { computeElapsedMs, totalElapsedMs, msToMinutes, getDateInTimezone } from "./lib/timer";
 import { roundMinutes } from "./lib/rounding";
@@ -10,7 +12,7 @@ const STALE_THRESHOLD_MS = 8 * 60 * 60 * 1000; // 8 hours
 
 // ─── Helpers ────────────────────────────────────────────────────────────────────
 
-async function clearTimerFields(ctx: { db: { patch: (id: any, data: any) => Promise<void> } }, userId: any) {
+async function clearTimerFields(ctx: MutationCtx, userId: Id<"users">) {
   await ctx.db.patch(userId, {
     timerTaskId: undefined,
     timerStartedAt: undefined,
@@ -19,17 +21,17 @@ async function clearTimerFields(ctx: { db: { patch: (id: any, data: any) => Prom
   });
 }
 
-async function getOrgSettings(ctx: any, orgId: string) {
+async function getOrgSettings(ctx: QueryCtx | MutationCtx, orgId: string) {
   return await ctx.db
     .query("orgSettings")
-    .withIndex("by_orgId", (q: any) => q.eq("orgId", orgId))
+    .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
     .first();
 }
 
 async function buildRateContext(
-  ctx: any,
-  task: any,
-  project: any,
+  ctx: QueryCtx | MutationCtx,
+  task: Doc<"tasks">,
+  project: Doc<"projects">,
 ): Promise<RateContext> {
   const rateCtx: RateContext = {
     billingType: project.billingType,
@@ -44,10 +46,10 @@ async function buildRateContext(
   if (project.billingType === "fixed" && task.workCategoryId) {
     const estimates = await ctx.db
       .query("projectCategoryEstimates")
-      .withIndex("by_projectId", (q: any) => q.eq("projectId", project._id))
+      .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
       .collect();
     const match = estimates.find(
-      (e: any) => e.workCategoryId.toString() === task.workCategoryId.toString(),
+      (e) => e.workCategoryId.toString() === task.workCategoryId!.toString(),
     );
     if (match) {
       rateCtx.categoryEstimate = {

@@ -1,7 +1,5 @@
 "use client"
 
-import { useState, useEffect } from "react"
-import { parseDuration, formatDuration } from "@/lib/duration"
 import { cn } from "@/lib/utils"
 
 const QUICK_BUTTONS = [
@@ -26,8 +24,6 @@ export function DurationInput({
   autoFocus?: boolean
   className?: string
 }) {
-  const parsed = parseDuration(value)
-
   return (
     <div className={cn("flex flex-col", className)}>
       <input

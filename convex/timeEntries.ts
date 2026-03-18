@@ -1,6 +1,7 @@
 import { v, ConvexError } from "convex/values";
 import { query, mutation } from "./_generated/server";
-import { Id } from "./_generated/dataModel";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
+import type { Doc, Id } from "./_generated/dataModel";
 import { getAuthContext } from "./lib/auth";
 import { roundMinutes } from "./lib/rounding";
 import { getDateInTimezone } from "./lib/timer";
@@ -8,17 +9,17 @@ import { resolveRate, type RateContext } from "./lib/rates";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────────
 
-async function getOrgSettings(ctx: any, orgId: string) {
+async function getOrgSettings(ctx: QueryCtx | MutationCtx, orgId: string) {
   return await ctx.db
     .query("orgSettings")
-    .withIndex("by_orgId", (q: any) => q.eq("orgId", orgId))
+    .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
     .first();
 }
 
 async function buildRateContext(
-  ctx: any,
-  task: any,
-  project: any,
+  ctx: QueryCtx | MutationCtx,
+  task: Doc<"tasks">,
+  project: Doc<"projects">,
 ): Promise<RateContext> {
   const rateCtx: RateContext = {
     billingType: project.billingType,
@@ -32,10 +33,10 @@ async function buildRateContext(
   if (project.billingType === "fixed" && task.workCategoryId) {
     const estimates = await ctx.db
       .query("projectCategoryEstimates")
-      .withIndex("by_projectId", (q: any) => q.eq("projectId", project._id))
+      .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
       .collect();
     const match = estimates.find(
-      (e: any) => e.workCategoryId.toString() === task.workCategoryId.toString(),
+      (e) => e.workCategoryId.toString() === task.workCategoryId!.toString(),
     );
     if (match) {
       rateCtx.categoryEstimate = {
@@ -130,7 +131,7 @@ export const listToday = query({
 export const sumByTasks = query({
   args: { taskIds: v.array(v.id("tasks")) },
   handler: async (ctx, args) => {
-    const { orgId } = await getAuthContext(ctx);
+    await getAuthContext(ctx);
 
     if (args.taskIds.length === 0) return {};
 
@@ -278,8 +279,10 @@ export const update = mutation({
       throw new ConvexError("You can only edit your own time entries");
     }
 
-    // Invoiced check (field will exist in future phase)
-    if ((entry as any).invoicedInReportId) {
+    // Invoiced check — `invoicedInReportId` will be added to the schema in a
+    // future invoicing phase. We guard here proactively so entries are protected
+    // as soon as the field ships.
+    if ("invoicedInReportId" in entry && entry.invoicedInReportId) {
       throw new ConvexError("Cannot edit an invoiced time entry");
     }
 
@@ -323,7 +326,10 @@ export const remove = mutation({
       throw new ConvexError("You can only delete your own time entries");
     }
 
-    if ((entry as any).invoicedInReportId) {
+    // Invoiced check — `invoicedInReportId` will be added to the schema in a
+    // future invoicing phase. We guard here proactively so entries are protected
+    // as soon as the field ships.
+    if ("invoicedInReportId" in entry && entry.invoicedInReportId) {
       throw new ConvexError("Cannot delete an invoiced time entry");
     }
 

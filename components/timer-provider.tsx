@@ -60,37 +60,45 @@ export function TimerProvider({ children }: { children: React.ReactNode }) {
   const discardMutation = useMutation(api.timer.discard)
   const commitMutation = useMutation(api.timer.commitEntry)
 
-  // Live elapsed computed client-side
-  const [elapsedMs, setElapsedMs] = useState(0)
+  // Live elapsed computed client-side.
+  // For running timers, an interval ticks every second and updates `runningMs`.
+  // For paused/stopped, elapsed is derived directly without state.
+  const [runningMs, setRunningMs] = useState(0)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const timerState: TimerState = serverState ?? null
 
-  // Update elapsed every second when running
+  const isRunning = timerState?.status === "running" && timerState.startedAt != null
+  const startedAt = timerState?.startedAt ?? null
+  const accumulatedMs = timerState?.accumulatedMs ?? 0
+
+  // Only set up / tear down the interval — setState happens inside the interval callback
   useEffect(() => {
     if (intervalRef.current) {
       clearInterval(intervalRef.current)
       intervalRef.current = null
     }
 
-    if (timerState?.status === "running" && timerState.startedAt) {
+    if (isRunning && startedAt != null) {
       const tick = () => {
-        const now = Date.now()
-        const currentSegment = Math.max(0, now - timerState.startedAt!)
-        setElapsedMs(timerState.accumulatedMs + currentSegment)
+        const currentSegment = Math.max(0, Date.now() - startedAt)
+        setRunningMs(accumulatedMs + currentSegment)
       }
       tick()
       intervalRef.current = setInterval(tick, 1000)
-    } else if (timerState?.status === "paused") {
-      setElapsedMs(timerState.accumulatedMs)
-    } else {
-      setElapsedMs(0)
     }
 
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current)
     }
-  }, [timerState?.status, timerState?.startedAt, timerState?.accumulatedMs])
+  }, [isRunning, startedAt, accumulatedMs])
+
+  // Derive elapsed: use interval-driven state when running, otherwise compute directly
+  const elapsedMs = isRunning
+    ? runningMs
+    : timerState?.status === "paused"
+      ? timerState.accumulatedMs
+      : 0
 
   const value: TimerContextValue = {
     timerState,

@@ -47,7 +47,7 @@ export function TodayEntries({ entries }: { entries: TodayEntry[] }) {
 
   return (
     <div className="flex flex-col">
-      {entries.map((entry, i) => {
+      {entries.map((entry) => {
         const initials = "AT" // Current user — will be from auth context
 
         return (

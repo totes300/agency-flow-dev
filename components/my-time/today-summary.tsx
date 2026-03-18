@@ -1,10 +1,8 @@
 "use client"
 
-import { useTimer } from "@/lib/hooks/use-timer"
 import { formatDuration } from "@/lib/duration"
 
 export function TodaySummary({ totalMinutes }: { totalMinutes: number }) {
-  const { timerState, formattedTime } = useTimer()
   const today = new Date()
   const dateStr = today.toLocaleDateString("en-US", {
     weekday: "long",

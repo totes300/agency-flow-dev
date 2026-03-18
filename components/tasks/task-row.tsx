@@ -107,7 +107,7 @@ export function TaskRow({
       <InlineDueDateCell taskId={task._id} dueDate={task.dueDate ?? null} isOverdue={overdue} />
 
       {/* 9. Time */}
-      <InlineTimeCell taskId={task._id} totalMinutes={totalMinutes} isDone={isDone} />
+      <InlineTimeCell taskId={task._id} totalMinutes={totalMinutes} isDone={isDone} isBillable={task.billable} />
 
       {/* 10. Action menu */}
       <RowActionMenu>

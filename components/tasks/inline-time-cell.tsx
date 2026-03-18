@@ -5,16 +5,19 @@ import { formatDuration } from "@/lib/duration"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 import { toastError } from "@/lib/toast-helpers"
+import { TimeLogPopover } from "@/components/tasks/time-log-popover"
 import type { Id } from "@/convex/_generated/dataModel"
 
 export function InlineTimeCell({
   taskId,
   totalMinutes,
   isDone,
+  isBillable = true,
 }: {
   taskId: Id<"tasks">
   totalMinutes: number
   isDone: boolean
+  isBillable?: boolean
 }) {
   const { timerState, formattedTime, startTimer, stopTimer, isRunningOn } = useTimer()
   const isRunning = isRunningOn(taskId)
@@ -26,7 +29,6 @@ export function InlineTimeCell({
     if (isDone) return
 
     if (isTimerOnAnotherTask) {
-      // Client-side auto-stop: stop previous, then start new
       try {
         const result = await stopTimer()
         if (result && result.roundedMinutes > 0 && !result.isStale) {
@@ -56,17 +58,6 @@ export function InlineTimeCell({
     }
   }
 
-  function handleTextClick(e: React.MouseEvent) {
-    e.stopPropagation()
-    if (isDone) return
-    if (isRunning) {
-      // When running, clicking anywhere stops
-      handleStopClick(e)
-      return
-    }
-    // TODO(7.4): open log popover
-  }
-
   // Done state — just faded text, no icon
   if (isDone) {
     return (
@@ -87,7 +78,6 @@ export function InlineTimeCell({
         className="flex cursor-pointer items-center gap-[5px]"
         onClick={handleStopClick}
       >
-        {/* Stop icon — filled red rounded rect, 10px */}
         <button
           onClick={handleStopClick}
           className="flex size-3.5 shrink-0 items-center justify-center"
@@ -102,10 +92,9 @@ export function InlineTimeCell({
     )
   }
 
-  // Idle state (with or without logged time)
+  // Idle state — text wrapped in popover trigger
   return (
     <div className="flex items-center gap-[5px]">
-      {/* Play icon — filled triangle, 10px, 40% opacity */}
       <button
         onClick={handlePlayClick}
         className="flex size-3.5 shrink-0 items-center justify-center opacity-40 transition-opacity duration-150 hover:opacity-70"
@@ -115,17 +104,19 @@ export function InlineTimeCell({
           <polygon points="1,0 10,5 1,10" />
         </svg>
       </button>
-      <span
-        onClick={handleTextClick}
-        className={cn(
-          "cursor-pointer text-xs transition-colors duration-150",
-          hasTime
-            ? "font-mono text-stone-500 hover:text-stone-600"
-            : "font-sans text-stone-400",
-        )}
-      >
-        {hasTime ? formatDuration(totalMinutes) : "Add time"}
-      </span>
+      <TimeLogPopover taskId={taskId} isBillable={isBillable}>
+        <span
+          onClick={(e) => e.stopPropagation()}
+          className={cn(
+            "cursor-pointer text-xs transition-colors duration-150",
+            hasTime
+              ? "font-mono text-stone-500 hover:text-stone-600"
+              : "font-sans text-stone-400",
+          )}
+        >
+          {hasTime ? formatDuration(totalMinutes) : "Add time"}
+        </span>
+      </TimeLogPopover>
     </div>
   )
 }

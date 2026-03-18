@@ -43,6 +43,7 @@ export function parseDuration(input: string): number | null {
   }
 
   // Numeric: "1.5" (decimal hours) or "90" (plain minutes)
+  if (!/^\d+(\.\d+)?$/.test(s)) return null;
   const num = parseFloat(s);
   if (isNaN(num) || num <= 0) return null;
 

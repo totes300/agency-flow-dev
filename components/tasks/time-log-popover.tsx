@@ -16,6 +16,12 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { ClockIcon, AlignLeftIcon, ChevronDownIcon, PlayIcon } from "lucide-react"
 import { toast } from "sonner"
 import { toastError } from "@/lib/toast-helpers"
@@ -39,11 +45,18 @@ export function TimeLogPopover({
 
   const isAdmin = membership?.role === "org:admin"
 
+  // Admin: load org members for the user selector
+  const orgMembers = useQuery(
+    api.orgMembers.listOrgMembers,
+    isAuthenticated && isAdmin ? {} : "skip",
+  )
+
   const [open, setOpen] = useState(false)
   const [durationStr, setDurationStr] = useState("")
   const [note, setNote] = useState("")
   const [billable, setBillable] = useState(isBillable)
   const [saving, setSaving] = useState(false)
+  const [selectedUserId, setSelectedUserId] = useState<Id<"users"> | null>(null)
 
   const entries = useQuery(
     api.timeEntries.listByTask,
@@ -52,11 +65,25 @@ export function TimeLogPopover({
   const [entriesExpanded, setEntriesExpanded] = useState(false)
   const totalMinutes = entries?.reduce((sum, e) => sum + e.durationMinutes, 0) ?? 0
 
+  // Resolve selected user display info
+  const effectiveUserId = selectedUserId ?? currentUser?._id
+  const selectedMember = isAdmin && selectedUserId && orgMembers
+    ? orgMembers.find((m) => m._id === selectedUserId)
+    : null
+  const displayName = selectedMember?.name ?? currentUser?.name ?? "You"
+  const displayInitials = displayName
+    .split(/\s+/)
+    .map((w) => w[0])
+    .join("")
+    .toUpperCase()
+    .slice(0, 2) || "?"
+
   function resetForm() {
     setDurationStr("")
     setNote("")
     setBillable(isBillable)
     setEntriesExpanded(false)
+    setSelectedUserId(null)
   }
 
   async function handleSave() {
@@ -72,6 +99,7 @@ export function TimeLogPopover({
         durationMinutes: minutes,
         note: note.trim() || undefined,
         isBillable: billable,
+        ...(isAdmin && selectedUserId ? { userId: selectedUserId } : {}),
       })
       toast.success(`${formatDuration(minutes)} logged`)
       resetForm()
@@ -101,6 +129,45 @@ export function TimeLogPopover({
         align="start"
         sideOffset={4}
       >
+        {/* User selector (admin) or current user label */}
+        {isAdmin && orgMembers ? (
+          <div className="border-b border-border/40 px-4 py-2.5">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button className="flex items-center gap-2 text-sm">
+                  <div className="flex size-6 shrink-0 items-center justify-center rounded-full bg-muted">
+                    <span className="text-[9px] font-semibold text-muted-foreground">{displayInitials}</span>
+                  </div>
+                  <span className="font-medium text-foreground">{displayName}</span>
+                  <ChevronDownIcon className="size-3 text-muted-foreground" strokeWidth={2} />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-56">
+                {orgMembers.map((member) => (
+                  <DropdownMenuItem
+                    key={member._id}
+                    onClick={() => setSelectedUserId(
+                      member._id === currentUser?._id ? null : member._id,
+                    )}
+                  >
+                    <div className="flex items-center gap-2">
+                      <div className="flex size-5 shrink-0 items-center justify-center rounded-full bg-muted">
+                        <span className="text-[8px] font-semibold text-muted-foreground">
+                          {member.name.split(/\s+/).map((w) => w[0]).join("").toUpperCase().slice(0, 2) || "?"}
+                        </span>
+                      </div>
+                      <span>{member.name}</span>
+                      {member._id === effectiveUserId && (
+                        <span className="ml-auto text-xs text-muted-foreground">selected</span>
+                      )}
+                    </div>
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        ) : null}
+
         {/* Duration input + play button */}
         <div className="flex items-center gap-2 border-b border-border/40 px-4 py-2.5">
           <input

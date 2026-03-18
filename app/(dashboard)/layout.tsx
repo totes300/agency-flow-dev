@@ -4,6 +4,9 @@ import { Separator } from "@/components/ui/separator"
 import { DashboardBreadcrumb } from "@/components/dashboard-breadcrumb"
 import { OnboardingGate } from "@/components/onboarding-gate"
 import { BreadcrumbTitleProvider } from "@/components/breadcrumb-title-provider"
+import { TimerProvider } from "@/components/timer-provider"
+import { FloatingTimerWidget } from "@/components/timer/floating-timer-widget"
+import { StaleTimerDialog } from "@/components/timer/stale-timer-dialog"
 import { Toaster } from "@/components/ui/sonner"
 
 export default function DashboardLayout({
@@ -28,7 +31,11 @@ export default function DashboardLayout({
           </header>
           <div className="flex flex-1 flex-col gap-4 px-6 pb-6 pt-0 lg:px-10">
             <OnboardingGate>
-              {children}
+              <TimerProvider>
+                {children}
+                <FloatingTimerWidget />
+                <StaleTimerDialog />
+              </TimerProvider>
             </OnboardingGate>
           </div>
         </BreadcrumbTitleProvider>

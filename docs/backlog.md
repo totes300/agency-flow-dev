@@ -961,5 +961,58 @@
 ### TODOs deferred to later phases
 
 - **Phase 6**: Activity column real data (subtask/comment/attachment queries); task subtitle real activity feed; task detail modal (replaces creation modal for editing); subtasks; rich text description (Tiptap)
-- **Phase 7**: Time column real data (timer + logged time); play/pause button wired to timer system; project lock (prevent change if time entries exist); stop timers on archive
+- **Phase 7**: ✅ Time column real data (timer + logged time); play/pause button wired to timer system; project lock (prevent change if time entries exist); stop timers on archive
 - **v2**: Column-header sorting; drag-and-drop reordering (add sortOrder field); arrow-key row navigation; saved views (URL state covers need for now); cursor-based per-group pagination ("Load more"); denormalized task counts for scale; assigneeIds → junction table at ~2000 tasks/org
+
+---
+
+## Phase 7: Time Tracking ✅ COMPLETE
+
+> **Goal**: Server-side timer + manual entry + floating widget + rate snapshot + time entry CRUD.
+> **Depends on**: Phase 5 (Tasks Core)
+> **Spec**: `docs/phase-7-time-tracking.md` (backend), `docs/time-tracking-prd.md` (UI/UX)
+
+---
+
+### Implemented
+
+- [x] Schema: `timeEntries` table with 4 indexes (orgId, taskId, userId+date, orgId+date)
+- [x] Schema: Timer state on users table (timerTaskId, timerStartedAt, timerAccumulatedMs, timerStatus)
+- [x] Pure utilities: duration parser (6 formats), rounding (4 modes), timer math, rate resolver — 92 Vitest tests
+- [x] Backend: Timer mutations (start, stop, pause, resume, discard, commitEntry, getState)
+- [x] Backend: Time entry CRUD (create, update, remove, listByTask, listToday, sumByTasks, sumByProject)
+- [x] Backend: Rate snapshot at entry creation (T&M flat, T&M per-category, Fixed, Retainer)
+- [x] Backend: Block time entry if no rate (T&M per-category without category)
+- [x] Backend: Stop timers on task/project archive
+- [x] Backend: Block delete tasks/projects with time entries (suggest archive instead)
+- [x] Backend: Block project change on tasks with time entries
+- [x] Frontend: TimerProvider (Convex subscription + setInterval live elapsed)
+- [x] Frontend: useTimer hook with formattedTime
+- [x] Frontend: InlineTimeCell (Linear-style: filled 10px play/stop icons, no pills)
+- [x] Frontend: Batch sumByTasks query in tasks page (N+1 prevention)
+- [x] Frontend: FloatingTimerWidget (running/paused/committing states, morphs in-place)
+- [x] Frontend: TimerCommitForm (editable duration + note + billable + save/discard)
+- [x] Frontend: TimerTodaySection (collapsible today entries in widget)
+- [x] Frontend: StaleTimerDialog (blocking modal when timer >= 8h, empty duration)
+- [x] Frontend: TimeLogPopover (combined input + play, quick buttons, date/note, billable, entries)
+- [x] Frontend: DurationInput (JetBrains Mono + quick buttons)
+- [x] Frontend: TimeEntriesList (avatars, billable dots, delete action)
+- [x] Frontend: My Time page (/my-time) with today summary + active timer banner + entries
+- [x] Frontend: Content-aware loading skeleton for My Time
+- [x] Format helpers re-exported from lib/format.ts
+
+---
+
+### Verification
+
+- [x] `npm run test` — 92 tests pass (duration parser, rounding, timer math, rate resolver)
+- [x] `npx tsc --noEmit` — 0 type errors
+- [x] `npx convex codegen` — schema + functions deployed
+
+---
+
+### TODOs deferred to later phases
+
+- **Phase 6 (Tasks Detail)**: Time tab in task detail modal with full entry editing (duration, note, date, billable)
+- **Phase 2 (Reports)**: `invoicedInReportId` field on timeEntries; lock icon on invoiced entries; `getUninvoiced` query
+- **v2**: Weekly timesheet view (/my-time Harvest-style grid); quick-switch / recent timers; "Who's working now" dashboard; idle detection; nudges/reminders; time entry tags; global shortcut (Cmd+T); browser tab title with timer; activity log for time edits ("AT changed 2:00 → 8:00")

@@ -276,11 +276,32 @@ export const archive = mutation({
     const project = await ctx.db.get(args.id);
     if (!project || project.orgId !== orgId) throw new Error("Project not found");
 
+    // Stop running timers on this project's tasks
+    const projectTasks = await ctx.db
+      .query("tasks")
+      .withIndex("by_orgId_projectId", (q) => q.eq("orgId", orgId).eq("projectId", args.id))
+      .collect();
+    const projectTaskIds = new Set(projectTasks.map((t) => t._id.toString()));
+
+    const orgMembers = await ctx.db
+      .query("orgMembers")
+      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+      .collect();
+    for (const member of orgMembers) {
+      if (!member.userId) continue;
+      const user = await ctx.db.get(member.userId);
+      if (user?.timerTaskId && projectTaskIds.has(user.timerTaskId.toString())) {
+        await ctx.db.patch(member.userId, {
+          timerTaskId: undefined,
+          timerStartedAt: undefined,
+          timerAccumulatedMs: undefined,
+          timerStatus: undefined,
+        });
+      }
+    }
+
     const now = Date.now();
     await ctx.db.patch(args.id, { archivedAt: now, updatedAt: now });
-
-    // TODO Phase 5: cascade archive to tasks
-    // TODO Phase 7: stop running timers
   },
 });
 
@@ -570,8 +591,20 @@ export const remove = mutation({
     const project = await ctx.db.get(args.id);
     if (!project || project.orgId !== orgId) throw new Error("Project not found");
 
-    // TODO Phase 7: block if time entries exist
-    // Guard: if time entries exist → throw "Cannot delete project with time entries — archive instead"
+    // Block if any task has time entries
+    const projectTasks = await ctx.db
+      .query("tasks")
+      .withIndex("by_orgId_projectId", (q) => q.eq("orgId", orgId).eq("projectId", args.id))
+      .collect();
+    for (const task of projectTasks) {
+      const hasEntries = await ctx.db
+        .query("timeEntries")
+        .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
+        .first();
+      if (hasEntries) {
+        throw new Error("Cannot delete a project with time entries — archive it instead");
+      }
+    }
 
     // Cascade delete: fetch estimates and periods in parallel
     const [estimates, periods] = await Promise.all([

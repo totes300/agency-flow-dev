@@ -1,6 +1,14 @@
 import { toast } from "sonner"
+import { ConvexError } from "convex/values"
 
-/** Show a toast error with a fallback message for non-Error objects. */
+/** Show a toast error, extracting clean messages from ConvexError. */
 export function toastError(err: unknown, fallback: string): void {
-  toast.error(err instanceof Error ? err.message : fallback)
+  if (err instanceof ConvexError) {
+    const msg = typeof err.data === "string" ? err.data : fallback
+    toast.error(msg)
+  } else if (err instanceof Error) {
+    toast.error(err.message)
+  } else {
+    toast.error(fallback)
+  }
 }

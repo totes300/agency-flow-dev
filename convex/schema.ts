@@ -9,6 +9,11 @@ export default defineSchema({
     imageUrl: v.optional(v.string()),
     externalId: v.string(),
     deletedAt: v.optional(v.number()),
+    // Timer state (server-side, survives browser close)
+    timerTaskId: v.optional(v.id("tasks")),
+    timerStartedAt: v.optional(v.number()),
+    timerAccumulatedMs: v.optional(v.number()),
+    timerStatus: v.optional(v.union(v.literal("running"), v.literal("paused"))),
     createdAt: v.number(),
     updatedAt: v.number(),
   }).index("byExternalId", ["externalId"]),
@@ -215,6 +220,29 @@ export default defineSchema({
     createdBy: v.id("users"),
   }).index("by_projectId", ["projectId"])
     .index("by_projectId_periodStart", ["projectId", "periodStart"]),
+
+  // ─── Time Entries ────────────────────────────────────────────────────────────
+  timeEntries: defineTable({
+    orgId: v.string(),
+    taskId: v.id("tasks"),
+    userId: v.id("users"),
+    date: v.string(),                         // YYYY-MM-DD (org timezone)
+    durationMinutes: v.number(),
+    note: v.optional(v.string()),
+    isBillable: v.boolean(),
+    method: v.union(v.literal("timer"), v.literal("manual")),
+    // invoicedInReportId deferred to Reports phase (no reports table yet)
+    appliedRate: v.optional(v.number()),
+    appliedCostRate: v.optional(v.number()),
+    appliedBillRate: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    createdBy: v.id("users"),
+  })
+    .index("by_orgId", ["orgId"])
+    .index("by_taskId", ["taskId"])
+    .index("by_userId_date", ["userId", "date"])
+    .index("by_orgId_date", ["orgId", "date"]),
 
   // ─── Work Categories (per org) ──────────────────────────────────────────────
   workCategories: defineTable({

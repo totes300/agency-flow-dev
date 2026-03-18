@@ -693,7 +693,16 @@ export const update = mutation({
         const project = await ctx.db.get(args.projectId);
         if (!project || project.orgId !== orgId) throw new ConvexError("Project not found");
       }
-      // TODO(Phase 7): block project change if task has time entries
+      // Warn if task has time entries — changing project may affect rate snapshots
+      if (args.projectId !== null && task.projectId) {
+        const hasEntries = await ctx.db
+          .query("timeEntries")
+          .withIndex("by_taskId", (q) => q.eq("taskId", args.id))
+          .first();
+        if (hasEntries) {
+          throw new ConvexError("Cannot change the project of a task with time entries — existing entries keep their original rate snapshots");
+        }
+      }
       updates.projectId = args.projectId === null ? undefined : args.projectId;
     }
 
@@ -749,6 +758,24 @@ export const archive = mutation({
     const now = Date.now();
     await ctx.db.patch(args.id, { archivedAt: now, updatedAt: now });
 
+    // Stop any active timers on this task
+    const orgMembers = await ctx.db
+      .query("orgMembers")
+      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+      .collect();
+    for (const member of orgMembers) {
+      if (!member.userId) continue;
+      const user = await ctx.db.get(member.userId);
+      if (user?.timerTaskId?.toString() === args.id.toString()) {
+        await ctx.db.patch(member.userId, {
+          timerTaskId: undefined,
+          timerStartedAt: undefined,
+          timerAccumulatedMs: undefined,
+          timerStatus: undefined,
+        });
+      }
+    }
+
     // Cascade archive to subtasks
     const subtasks = await ctx.db
       .query("tasks")
@@ -769,8 +796,6 @@ export const archive = mutation({
         await adjustCounts(ctx, orgId, { [sub.statusType]: -1 });
       }
     }
-
-    // TODO(Phase 7): stop active timers for this task
   },
 });
 
@@ -820,7 +845,14 @@ export const remove = mutation({
     const task = await ctx.db.get(args.id);
     if (!task || task.orgId !== orgId) throw new ConvexError("Task not found");
 
-    // TODO(Phase 7): if task has time entries, suggest archive instead
+    // Block delete if time entries exist — suggest archive instead
+    const timeEntries = await ctx.db
+      .query("timeEntries")
+      .withIndex("by_taskId", (q) => q.eq("taskId", args.id))
+      .first();
+    if (timeEntries) {
+      throw new ConvexError("Cannot delete a task with time entries — archive it instead");
+    }
 
     // Cascade delete subtasks
     const subtasks = await ctx.db
@@ -979,7 +1011,17 @@ export const bulkUpdate = mutation({
         }
 
         case "project": {
-          // TODO(Phase 7): skip if task has time entries
+          // Skip if task has time entries (changing project breaks rate snapshots)
+          if (task.projectId) {
+            const hasEntries = await ctx.db
+              .query("timeEntries")
+              .withIndex("by_taskId", (q) => q.eq("taskId", taskId))
+              .first();
+            if (hasEntries) {
+              skipped.push({ taskId, title: task.title, reason: "Has time entries — cannot change project" });
+              continue;
+            }
+          }
           const projId = args.action.projectId;
           await ctx.db.patch(taskId, {
             projectId: projId,

@@ -38,3 +38,8 @@ export const retainerStatusValidator = v.union(
   v.literal("active"),
   v.literal("inactive"),
 );
+
+export const timeEntryMethodValidator = v.union(
+  v.literal("timer"),
+  v.literal("manual"),
+);

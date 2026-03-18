@@ -217,6 +217,12 @@ export const commitEntry = mutation({
       throw new ConvexError("Duration must be greater than 0");
     }
 
+    if (args.date) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(args.date) || isNaN(new Date(args.date).getTime())) {
+        throw new ConvexError("Invalid date format — expected YYYY-MM-DD");
+      }
+    }
+
     const task = await ctx.db.get(args.taskId);
     if (!task || task.orgId !== orgId) throw new ConvexError("Task not found");
     if (!task.projectId) throw new ConvexError("Task must have a project");

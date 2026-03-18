@@ -45,9 +45,10 @@ export function TodayEntries({ entries }: { entries: TodayEntry[] }) {
     )
   }
 
-  const initials = user
+  const raw = user
     ? (user.firstName?.[0] ?? "") + (user.lastName?.[0] ?? "")
-    : "?"
+    : ""
+  const initials = raw || "?"
 
   return (
     <div className="flex flex-col">

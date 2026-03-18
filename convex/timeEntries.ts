@@ -175,6 +175,12 @@ export const create = mutation({
       entryUserId = args.userId;
     }
 
+    if (args.date) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(args.date) || isNaN(new Date(args.date).getTime())) {
+        throw new ConvexError("Invalid date format — expected YYYY-MM-DD");
+      }
+    }
+
     const task = await ctx.db.get(args.taskId);
     if (!task || task.orgId !== auth.orgId) throw new ConvexError("Task not found");
     if (task.archivedAt) throw new ConvexError("Cannot log time on an archived task");

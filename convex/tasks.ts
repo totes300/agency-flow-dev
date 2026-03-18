@@ -694,7 +694,7 @@ export const update = mutation({
         if (!project || project.orgId !== orgId) throw new ConvexError("Project not found");
       }
       // Warn if task has time entries — changing project may affect rate snapshots
-      if (args.projectId !== null && task.projectId) {
+      if (args.projectId !== null && task.projectId && args.projectId !== task.projectId) {
         const hasEntries = await ctx.db
           .query("timeEntries")
           .withIndex("by_taskId", (q) => q.eq("taskId", args.id))
@@ -758,24 +758,6 @@ export const archive = mutation({
     const now = Date.now();
     await ctx.db.patch(args.id, { archivedAt: now, updatedAt: now });
 
-    // Stop any active timers on this task
-    const orgMembers = await ctx.db
-      .query("orgMembers")
-      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
-      .collect();
-    for (const member of orgMembers) {
-      if (!member.userId) continue;
-      const user = await ctx.db.get(member.userId);
-      if (user?.timerTaskId?.toString() === args.id.toString()) {
-        await ctx.db.patch(member.userId, {
-          timerTaskId: undefined,
-          timerStartedAt: undefined,
-          timerAccumulatedMs: undefined,
-          timerStatus: undefined,
-        });
-      }
-    }
-
     // Cascade archive to subtasks
     const subtasks = await ctx.db
       .query("tasks")
@@ -784,6 +766,25 @@ export const archive = mutation({
     for (const sub of subtasks) {
       if (!sub.archivedAt) {
         await ctx.db.patch(sub._id, { archivedAt: now, updatedAt: now });
+      }
+    }
+
+    // Stop any active timers on this task or its subtasks
+    const affectedTaskIds = new Set([args.id.toString(), ...subtasks.map((s) => s._id.toString())]);
+    const orgMembers = await ctx.db
+      .query("orgMembers")
+      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+      .collect();
+    for (const member of orgMembers) {
+      if (!member.userId) continue;
+      const user = await ctx.db.get(member.userId);
+      if (user?.timerTaskId && affectedTaskIds.has(user.timerTaskId.toString())) {
+        await ctx.db.patch(member.userId, {
+          timerTaskId: undefined,
+          timerStartedAt: undefined,
+          timerAccumulatedMs: undefined,
+          timerStatus: undefined,
+        });
       }
     }
 
@@ -845,7 +846,7 @@ export const remove = mutation({
     const task = await ctx.db.get(args.id);
     if (!task || task.orgId !== orgId) throw new ConvexError("Task not found");
 
-    // Block delete if time entries exist — suggest archive instead
+    // Block delete if task or any subtask has time entries — suggest archive instead
     const timeEntries = await ctx.db
       .query("timeEntries")
       .withIndex("by_taskId", (q) => q.eq("taskId", args.id))
@@ -854,11 +855,23 @@ export const remove = mutation({
       throw new ConvexError("Cannot delete a task with time entries — archive it instead");
     }
 
-    // Cascade delete subtasks
     const subtasks = await ctx.db
       .query("tasks")
       .withIndex("by_orgId_parentTaskId", (q) => q.eq("orgId", orgId).eq("parentTaskId", args.id))
       .collect();
+
+    // Check subtasks for time entries before deleting any
+    for (const sub of subtasks) {
+      const subEntries = await ctx.db
+        .query("timeEntries")
+        .withIndex("by_taskId", (q) => q.eq("taskId", sub._id))
+        .first();
+      if (subEntries) {
+        throw new ConvexError(`Cannot delete — subtask "${sub.title}" has time entries. Archive instead.`);
+      }
+    }
+
+    // Safe to cascade delete subtasks
     for (const sub of subtasks) {
       if (!sub.archivedAt) {
         await adjustCounts(ctx, orgId, { [sub.statusType]: -1 });
@@ -1011,6 +1024,11 @@ export const bulkUpdate = mutation({
         }
 
         case "project": {
+          // Skip if project is already the target (no-op)
+          if (task.projectId === args.action.projectId) {
+            updated++;
+            break;
+          }
           // Skip if task has time entries (changing project breaks rate snapshots)
           if (task.projectId) {
             const hasEntries = await ctx.db

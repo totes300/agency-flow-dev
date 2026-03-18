@@ -22,6 +22,7 @@ export function TimerTodaySection() {
       <div className="h-px bg-border" />
       <div className="flex flex-col px-5 py-3">
         <button
+          type="button"
           onClick={() => setExpanded(prev => !prev)}
           className="flex items-center justify-between"
           aria-expanded={expanded}

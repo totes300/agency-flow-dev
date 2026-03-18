@@ -41,7 +41,9 @@ export function StaleTimerDialog() {
 
   const elapsedMinutes = Math.floor(elapsedMs / 60000)
 
-  async function handleSave() {
+  async function handleSave(e?: React.MouseEvent) {
+    e?.preventDefault() // Prevent AlertDialogAction from auto-closing
+    if (saving) return // Guard against double-click
     const minutes = parseDuration(durationStr)
     if (!minutes) {
       toast.error("Enter a valid duration")
@@ -69,7 +71,8 @@ export function StaleTimerDialog() {
     }
   }
 
-  async function handleDiscard() {
+  async function handleDiscard(e: React.MouseEvent) {
+    e.preventDefault() // Prevent AlertDialogCancel from auto-closing
     try {
       await discardTimer()
       setDismissed(true)

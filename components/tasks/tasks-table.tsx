@@ -72,10 +72,11 @@ export function TasksTable({
   renderRow: (task: TaskWithJoins) => React.ReactNode
   renderAddTask: (groupKey: string) => React.ReactNode
 }) {
-  // All visible task IDs across groups
+  // Selectable task IDs — capped at 50 to match the bulk operation limit
   const allTaskIds = groups.flatMap((g) => g.tasks.map((t) => t._id as string))
-  const allSelected = allTaskIds.length > 0 && allTaskIds.every((id) => selectedIds.has(id))
-  const someSelected = allTaskIds.some((id) => selectedIds.has(id))
+  const selectableIds = allTaskIds.slice(0, 50)
+  const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selectedIds.has(id))
+  const someSelected = selectableIds.some((id) => selectedIds.has(id))
 
   return (
     <div className="overflow-x-auto">
@@ -94,7 +95,7 @@ export function TasksTable({
                   <SelectCheckbox
                     checked={allSelected}
                     indeterminate={someSelected && !allSelected}
-                    onChange={(checked) => onSelectAll(allTaskIds.slice(0, 50), checked)}
+                    onChange={(checked) => onSelectAll(selectableIds, checked)}
                     label="Select all"
                   />
                 </div>

@@ -53,12 +53,13 @@ export function TaskGroup({
 
   const contentId = `group-content-${groupKey}`
 
-  // Group selection state
-  const groupAllSelected = taskIds && selectedIds && taskIds.length > 0
-    ? taskIds.every((id) => selectedIds.has(id))
+  // Group selection state — derived from the same capped subset used by the toggle
+  const selectableIds = taskIds?.slice(0, 50) ?? []
+  const groupAllSelected = selectableIds.length > 0 && selectedIds
+    ? selectableIds.every((id) => selectedIds.has(id))
     : false
-  const groupSomeSelected = taskIds && selectedIds
-    ? taskIds.some((id) => selectedIds.has(id))
+  const groupSomeSelected = selectableIds.length > 0 && selectedIds
+    ? selectableIds.some((id) => selectedIds.has(id))
     : false
 
   return (
@@ -68,11 +69,11 @@ export function TaskGroup({
         {taskIds && selectedIds && onSelectGroup && (
           <div className={cn(
             "transition-opacity",
-            selectedIds.size > 0 || groupSomeSelected ? "opacity-100" : "opacity-0 group-hover/group:opacity-100",
+            selectedIds.size > 0 || groupSomeSelected ? "opacity-100" : "opacity-0 group-hover/group:opacity-100 focus-within:opacity-100",
           )}>
             <Checkbox
               checked={groupSomeSelected && !groupAllSelected ? "indeterminate" : groupAllSelected}
-              onCheckedChange={() => onSelectGroup(taskIds.slice(0, 50), !groupAllSelected)}
+              onCheckedChange={() => onSelectGroup(selectableIds, !groupAllSelected)}
               aria-label={`Select all in ${label}`}
               onClick={(e) => e.stopPropagation()}
             />

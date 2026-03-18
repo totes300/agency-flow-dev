@@ -790,12 +790,25 @@ export const restore = mutation({
       throw new ConvexError("Task is not archived");
     }
 
+    const now = Date.now();
     await ctx.db.patch(args.id, {
       archivedAt: undefined,
-      updatedAt: Date.now(),
+      updatedAt: now,
     });
 
     await adjustCounts(ctx, orgId, { [task.statusType]: 1 });
+
+    // Cascade restore to subtasks (mirrors archive cascade)
+    const subtasks = await ctx.db
+      .query("tasks")
+      .withIndex("by_orgId_parentTaskId", (q) => q.eq("orgId", orgId).eq("parentTaskId", args.id))
+      .collect();
+    for (const sub of subtasks) {
+      if (sub.archivedAt) {
+        await ctx.db.patch(sub._id, { archivedAt: undefined, updatedAt: now });
+        await adjustCounts(ctx, orgId, { [sub.statusType]: 1 });
+      }
+    }
   },
 });
 

@@ -58,6 +58,7 @@ export function InlineAssigneeCell({
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button
+          type="button"
           className={`flex w-full items-center rounded-sm py-0.5 transition-colors ${assignees.length > 0 ? "hover:bg-muted/50" : ""}`}
           onClick={(e) => e.stopPropagation()}
         >

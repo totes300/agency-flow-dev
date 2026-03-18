@@ -72,6 +72,7 @@ export function InlineProjectCell({
     <Popover open={locked ? false : open} onOpenChange={locked ? undefined : setOpen}>
       <PopoverTrigger asChild>
         <button
+          type="button"
           className={`flex w-full items-center gap-1 rounded-sm py-0.5 text-left transition-colors ${project ? "hover:bg-muted/50" : ""}`}
           onClick={(e) => e.stopPropagation()}
           title={locked ? "Has time entries — project cannot be changed" : undefined}

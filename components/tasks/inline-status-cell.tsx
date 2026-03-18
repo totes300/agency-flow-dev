@@ -61,6 +61,7 @@ export function InlineStatusCell({
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button
+          type="button"
           className="flex w-full items-center py-0.5"
           onClick={(e) => e.stopPropagation()}
         >

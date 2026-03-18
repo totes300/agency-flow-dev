@@ -51,6 +51,7 @@ export function InlineCategoryCell({
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button
+          type="button"
           className={cn("flex w-full items-center rounded-sm py-0.5 transition-colors", category && "hover:bg-muted/50")}
           onClick={(e) => e.stopPropagation()}
         >

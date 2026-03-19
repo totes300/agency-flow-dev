@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect } from "react"
+import { useCallback, useEffect, useMemo } from "react"
 import { useQuery } from "convex/react"
 import { useConvexAuth } from "convex/react"
 import { useSearchParams, useRouter, usePathname } from "next/navigation"
@@ -8,8 +8,10 @@ import { api } from "@/convex/_generated/api"
 import { Dialog, DialogOverlay, DialogPortal, DialogTitle } from "@/components/ui/dialog"
 import { Dialog as DialogPrimitive } from "radix-ui"
 import { TaskDetailHeader } from "@/components/tasks/task-detail-header"
+import { TaskDetailTitle } from "@/components/tasks/task-detail-title"
 import { TaskDetailMetadata } from "@/components/tasks/task-detail-metadata"
 import { TaskDetailTabs } from "@/components/tasks/task-detail-tabs"
+import { TaskDetailSidebar } from "@/components/tasks/task-detail-sidebar"
 import { parseDetailParam, buildDetailUrl, getAdjacentTaskId } from "@/lib/task-detail"
 import type { Id } from "@/convex/_generated/dataModel"
 
@@ -58,12 +60,17 @@ export function TaskDetailModal({
     [detailId, taskIds, navigateToTask],
   )
 
-  // ─── Keyboard: J/K navigation, Escape ───────────────────────────────────────
+  // Memoize nav state to avoid O(n) indexOf on every render
+  const { hasNext, hasPrev } = useMemo(() => ({
+    hasNext: !!detailId && !!getAdjacentTaskId(detailId, taskIds, "next"),
+    hasPrev: !!detailId && !!getAdjacentTaskId(detailId, taskIds, "prev"),
+  }), [detailId, taskIds])
+
+  // ─── Keyboard: J/K navigation ──────────────────────────────────────────────
   useEffect(() => {
     if (!isOpen) return
 
     function handleKeyDown(e: KeyboardEvent) {
-      // Don't intercept when typing in inputs
       const tag = (e.target as HTMLElement)?.tagName
       if (tag === "INPUT" || tag === "TEXTAREA" || (e.target as HTMLElement)?.isContentEditable) return
 
@@ -91,8 +98,7 @@ export function TaskDetailModal({
           onPointerDownOutside={handleClose}
         >
           <div
-            className="flex h-full max-h-[calc(100vh-4rem)] w-full max-w-[1300px] flex-col overflow-hidden rounded-xl bg-background ring-1 ring-foreground/10 shadow-xl"
-            onClick={(e) => e.stopPropagation()}
+            className="flex h-full max-h-[calc(100vh-4rem)] w-full max-w-[1300px] flex-col overflow-hidden rounded-xl bg-background ring-1 ring-border shadow-xl"
           >
             <DialogTitle className="sr-only">Task detail</DialogTitle>
 
@@ -102,8 +108,8 @@ export function TaskDetailModal({
               isAdmin={isAdmin}
               onClose={handleClose}
               onNavigate={handleNavigate}
-              hasNext={!!detailId && !!getAdjacentTaskId(detailId, taskIds, "next")}
-              hasPrev={!!detailId && !!getAdjacentTaskId(detailId, taskIds, "prev")}
+              hasNext={hasNext}
+              hasPrev={hasPrev}
             />
 
             {/* Body: left content + right sidebar */}
@@ -112,14 +118,9 @@ export function TaskDetailModal({
               <div className="flex flex-1 flex-col overflow-hidden">
                 {task ? (
                   <>
-                    {/* Title */}
                     <TaskDetailTitle taskId={task._id} title={task.title} />
-
-                    {/* Metadata grid */}
                     <TaskDetailMetadata task={task} isAdmin={isAdmin} />
-
-                    {/* Tabs */}
-                    <TaskDetailTabs task={task} isAdmin={isAdmin} />
+                    <TaskDetailTabs task={task} isAdmin={isAdmin} onOpenDetail={navigateToTask} />
                   </>
                 ) : (
                   <TaskDetailSkeleton />
@@ -127,14 +128,9 @@ export function TaskDetailModal({
               </div>
 
               {/* Right: activity sidebar */}
-              <div className="flex w-[340px] shrink-0 flex-col border-l border-border/40 bg-sidebar">
-                <div className="flex items-center justify-between border-b border-border/40 px-4 py-3">
-                  <span className="text-sm font-semibold">Activity</span>
-                </div>
-                <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
-                  Coming in PR3
-                </div>
-              </div>
+              {detailId && (
+                <TaskDetailSidebar taskId={detailId as Id<"tasks">} />
+              )}
             </div>
           </div>
         </DialogPrimitive.Content>
@@ -143,87 +139,31 @@ export function TaskDetailModal({
   )
 }
 
-// ─── Title (inline editable) ────────────────────────────────────────────────
-
-import { useState, useRef } from "react"
-import { useMutation } from "convex/react"
-
-function TaskDetailTitle({
-  taskId,
-  title,
-}: {
-  taskId: Id<"tasks">
-  title: string
-}) {
-  const [editing, setEditing] = useState(false)
-  const [value, setValue] = useState(title)
-  const inputRef = useRef<HTMLInputElement>(null)
-  const updateTask = useMutation(api.tasks.update)
-
-  // Sync with prop when not editing
-  useEffect(() => {
-    if (!editing) setValue(title)
-  }, [title, editing])
-
-  async function handleSave() {
-    const trimmed = value.trim()
-    if (!trimmed || trimmed === title) {
-      setValue(title)
-      setEditing(false)
-      return
-    }
-    try {
-      await updateTask({ id: taskId, title: trimmed })
-    } catch {
-      setValue(title)
-    }
-    setEditing(false)
-  }
-
-  return (
-    <div className="shrink-0 px-7 pt-6 pb-2">
-      {editing ? (
-        <input
-          ref={inputRef}
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          onBlur={handleSave}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") handleSave()
-            if (e.key === "Escape") { setValue(title); setEditing(false) }
-          }}
-          className="w-full text-[22px] font-semibold tracking-tight text-foreground outline-none"
-          autoFocus
-        />
-      ) : (
-        <h1
-          onClick={() => {
-            setEditing(true)
-            setTimeout(() => inputRef.current?.focus(), 0)
-          }}
-          className="cursor-text text-[22px] font-semibold tracking-tight text-foreground"
-        >
-          {title}
-        </h1>
-      )}
-    </div>
-  )
-}
-
-// ─── Skeleton ───────────────────────────────────────────────────────────────
+// ─── Content-aware skeleton ─────────────────────────────────────────────────────
 
 function TaskDetailSkeleton() {
   return (
-    <div className="flex flex-1 flex-col gap-4 p-7">
-      <div className="h-7 w-2/3 animate-pulse rounded bg-muted" />
-      <div className="flex flex-col gap-2">
-        <div className="h-4 w-1/2 animate-pulse rounded bg-muted" />
-        <div className="h-4 w-1/3 animate-pulse rounded bg-muted" />
-        <div className="h-4 w-2/5 animate-pulse rounded bg-muted" />
-        <div className="h-4 w-1/4 animate-pulse rounded bg-muted" />
+    <div className="flex flex-1 flex-col p-7 gap-5">
+      {/* Title */}
+      <div className="h-7 w-2/3 animate-pulse rounded-md bg-muted" />
+      {/* Metadata grid — 2 columns × 4 rows */}
+      <div className="grid grid-cols-2 gap-x-8 gap-y-2">
+        {Array.from({ length: 8 }).map((_, i) => (
+          <div key={i} className="flex items-center gap-2 h-9">
+            <div className="size-3.5 animate-pulse rounded bg-muted" />
+            <div className="h-3.5 w-16 animate-pulse rounded bg-muted" />
+            <div className="h-3.5 w-24 animate-pulse rounded bg-muted" />
+          </div>
+        ))}
       </div>
-      <div className="h-8 w-full animate-pulse rounded bg-muted" />
-      <div className="h-32 w-full animate-pulse rounded bg-muted" />
+      {/* Tab bar */}
+      <div className="flex gap-4 border-b border-border/40 pb-2">
+        {["w-16", "w-10", "w-20", "w-12"].map((w, i) => (
+          <div key={i} className={`h-3.5 ${w} animate-pulse rounded bg-muted`} />
+        ))}
+      </div>
+      {/* Content area */}
+      <div className="h-32 animate-pulse rounded-lg bg-muted" />
     </div>
   )
 }

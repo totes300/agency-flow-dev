@@ -98,6 +98,60 @@ export function isOverdue(dueDate: string | undefined | null): boolean {
   return dueDate < formatDateToYMD(new Date())
 }
 
+/**
+ * Format a timestamp in ClickUp style:
+ * < 1 min:   "Just now"
+ * < 60 min:  "5 mins"
+ * Today:     "Today at 2:30 pm"
+ * Yesterday: "Yesterday at 8:36 pm"
+ * Older:     "Mar 15 at 10:00 am"
+ */
+export function formatActivityTimestamp(timestamp: number, now: number = Date.now()): string {
+  const diff = now - timestamp
+  const minutes = Math.floor(diff / 60000)
+
+  if (minutes < 1) return "Just now"
+  if (minutes < 60) return `${minutes} min${minutes === 1 ? "" : "s"}`
+
+  const eventDate = new Date(timestamp)
+  const today = new Date(now)
+  const yesterday = new Date(now)
+  yesterday.setDate(today.getDate() - 1)
+
+  const timeStr = eventDate.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).toLowerCase()
+
+  const isSameDay = (a: Date, b: Date) =>
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+
+  if (isSameDay(eventDate, today)) return `Today at ${timeStr}`
+  if (isSameDay(eventDate, yesterday)) return `Yesterday at ${timeStr}`
+
+  const dateStr = eventDate.toLocaleDateString("en-US", { month: "short", day: "numeric" })
+  return `${dateStr} at ${timeStr}`
+}
+
+/**
+ * Get the Monday–Sunday bounds of a week, offset by N weeks from current.
+ * offset=0 → this week, offset=-1 → last week
+ */
+export function getWeekBounds(offset: number): { start: string; end: string } {
+  const now = new Date()
+  const day = now.getDay()
+  const mondayOffset = day === 0 ? -6 : 1 - day
+  const monday = new Date(now)
+  monday.setDate(now.getDate() + mondayOffset + offset * 7)
+  monday.setHours(0, 0, 0, 0)
+  const sunday = new Date(monday)
+  sunday.setDate(monday.getDate() + 6)
+  return { start: formatDateToYMD(monday), end: formatDateToYMD(sunday) }
+}
+
 // Re-export duration formatters for discoverability
 export { formatDuration, formatTimerDisplay } from "@/lib/duration"
 

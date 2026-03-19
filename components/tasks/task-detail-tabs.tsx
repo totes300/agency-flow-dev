@@ -1,19 +1,32 @@
 "use client"
 
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
-import type { Id, Doc } from "@/convex/_generated/dataModel"
+import { TaskDetailOverview } from "@/components/tasks/task-detail-overview"
+import { TaskDetailTime } from "@/components/tasks/task-detail-time"
+import { TaskDetailAttachments } from "@/components/tasks/task-detail-attachments"
+import { MailIcon } from "lucide-react"
+import type { Id } from "@/convex/_generated/dataModel"
 
 type TaskData = {
   _id: Id<"tasks">
   title: string
+  description?: unknown
+  statusType: string
+  projectId?: Id<"projects">
+  billable: boolean
+  workCategoryId?: Id<"workCategories">
+  assigneeIds: Id<"users">[]
+  totalMinutes?: number
 }
 
 export function TaskDetailTabs({
   task,
   isAdmin,
+  onOpenDetail,
 }: {
   task: TaskData
   isAdmin: boolean
+  onOpenDetail: (taskId: string) => void
 }) {
   return (
     <Tabs defaultValue="overview" className="flex flex-1 flex-col overflow-hidden gap-0">
@@ -27,39 +40,26 @@ export function TaskDetailTabs({
       </div>
 
       <TabsContent value="overview" className="flex-1 overflow-y-auto px-7 py-5">
-        <div className="flex flex-col gap-6">
-          {/* Description placeholder — Tiptap in PR2 */}
-          <div className="rounded-lg border border-border/40 p-4">
-            <p className="text-sm text-muted-foreground/50">Add a description...</p>
-          </div>
-
-          {/* Subtasks placeholder — full implementation in PR2 */}
-          <div>
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-sm font-semibold">Subtasks</span>
-            </div>
-            <div className="rounded-lg border border-border/40 p-4 text-center text-sm text-muted-foreground/50">
-              Subtask list — coming in PR2
-            </div>
-          </div>
-        </div>
+        <TaskDetailOverview task={task} isAdmin={isAdmin} onOpenDetail={onOpenDetail} />
       </TabsContent>
 
       <TabsContent value="time" className="flex-1 overflow-y-auto px-7 py-5">
-        <div className="rounded-lg border border-border/40 p-4 text-center text-sm text-muted-foreground/50">
-          Time entries — coming in PR4
-        </div>
+        <TaskDetailTime
+          taskId={task._id}
+          isBillable={task.billable}
+          isDone={task.statusType === "done"}
+          totalMinutes={task.totalMinutes ?? 0}
+        />
       </TabsContent>
 
       <TabsContent value="attachments" className="flex-1 overflow-y-auto px-7 py-5">
-        <div className="rounded-lg border border-border/40 p-4 text-center text-sm text-muted-foreground/50">
-          Attachments — coming in PR4
-        </div>
+        <TaskDetailAttachments taskId={task._id} />
       </TabsContent>
 
       <TabsContent value="emails" className="flex-1 overflow-y-auto px-7 py-5">
-        <div className="rounded-lg border border-border/40 p-4 text-center text-sm text-muted-foreground/50">
-          Email integration coming soon
+        <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-border/40 p-12">
+          <MailIcon className="size-8 text-muted-foreground/30" />
+          <p className="text-sm text-muted-foreground/50">Email integration coming soon</p>
         </div>
       </TabsContent>
     </Tabs>

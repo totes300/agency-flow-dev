@@ -2,6 +2,7 @@ import { v, ConvexError } from "convex/values";
 import { query, mutation, internalMutation, QueryCtx, MutationCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { getAuthContext, requireAdmin, validateStringLength } from "./lib/auth";
+import { logActivity } from "./activityLog";
 import type { StatusType } from "./lib/constants";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────────
@@ -211,8 +212,189 @@ export const getDetail = query({
         ? { _id: category._id, name: category.name, color: category.color }
         : null,
       assignees,
+      assigneeIds: task.assigneeIds,
+      workCategoryId: task.workCategoryId,
       totalMinutes,
     };
+  },
+});
+
+// ─── Subtask Queries & Mutations ────────────────────────────────────────────────
+
+/**
+ * Get subtasks for a parent task, sorted by sortOrder.
+ * Returns enriched subtask data with status/category/assignee joins.
+ */
+export const getSubtasks = query({
+  args: { parentTaskId: v.id("tasks") },
+  handler: async (ctx, { parentTaskId }) => {
+    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
+
+    const parent = await ctx.db.get(parentTaskId);
+    if (!parent || parent.orgId !== orgId) throw new ConvexError("Task not found");
+    if (!isAdmin && !parent.assigneeIds.includes(userId)) {
+      throw new ConvexError("You don't have access to this task");
+    }
+
+    const subtasks = await ctx.db
+      .query("tasks")
+      .withIndex("by_orgId_parentTaskId", (q) => q.eq("orgId", orgId).eq("parentTaskId", parentTaskId))
+      .filter((q) => q.eq(q.field("archivedAt"), undefined))
+      .collect();
+
+    // Sort by sortOrder (or createdAt as fallback)
+    subtasks.sort((a, b) => (a.sortOrder ?? a.createdAt) - (b.sortOrder ?? b.createdAt));
+
+    // Enrich with joins
+    const enriched = await Promise.all(subtasks.map(async (sub) => {
+      const status = sub.statusId ? await ctx.db.get(sub.statusId) : null;
+      const category = sub.workCategoryId ? await ctx.db.get(sub.workCategoryId) : null;
+      const assignees: Array<{ _id: Id<"users">; name: string; email?: string; imageUrl?: string }> = [];
+      for (const uid of sub.assigneeIds) {
+        const user = await ctx.db.get(uid);
+        if (user) assignees.push({ _id: user._id, name: user.name, email: user.email, imageUrl: user.imageUrl });
+      }
+
+      // Total time
+      const entries = await ctx.db
+        .query("timeEntries")
+        .withIndex("by_taskId", (q) => q.eq("taskId", sub._id))
+        .collect();
+      const totalMinutes = entries.reduce((sum, e) => sum + e.durationMinutes, 0);
+
+      return {
+        _id: sub._id,
+        title: sub.title,
+        statusType: sub.statusType,
+        sortOrder: sub.sortOrder,
+        billable: sub.billable,
+        dueDate: sub.dueDate,
+        status: status ? { _id: status._id, name: status.name, color: status.color, type: status.type } : null,
+        category: category ? { _id: category._id, name: category.name, color: category.color } : null,
+        assignees,
+        totalMinutes,
+      };
+    }));
+
+    return enriched;
+  },
+});
+
+/**
+ * Create a subtask under a parent task.
+ * Inherits projectId from parent (mandatory). Other fields optional with inheritance defaults.
+ */
+export const createSubtask = mutation({
+  args: {
+    parentTaskId: v.id("tasks"),
+    title: v.string(),
+    statusId: v.optional(v.id("statuses")),
+    workCategoryId: v.optional(v.id("workCategories")),
+    assigneeIds: v.optional(v.array(v.id("users"))),
+  },
+  handler: async (ctx, args) => {
+    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
+
+    const parent = await ctx.db.get(args.parentTaskId);
+    if (!parent || parent.orgId !== orgId) throw new ConvexError("Parent task not found");
+
+    // Max 1 level: parent cannot itself be a subtask
+    if (parent.parentTaskId) {
+      throw new ConvexError("Subtasks cannot have subtasks (max 1 level)");
+    }
+
+    const title = args.title.trim();
+    if (!title) throw new ConvexError("Subtask title is required");
+    validateStringLength(title, 500, "Subtask title");
+
+    // Resolve status (default to first backlog status)
+    let statusId = args.statusId;
+    let statusType: StatusType = "backlog";
+    if (statusId) {
+      const status = await ctx.db.get(statusId);
+      if (!status || status.orgId !== orgId) throw new ConvexError("Status not found");
+      statusType = status.type as StatusType;
+    } else {
+      const defaults = await getDefaultStatusId(ctx, orgId);
+      statusId = defaults.statusId;
+      statusType = defaults.statusType;
+    }
+
+    // Validate optional fields
+    if (args.workCategoryId) {
+      await validateWorkCategory(ctx, orgId, args.workCategoryId);
+    }
+    const assigneeIds = args.assigneeIds ?? [...parent.assigneeIds];
+    if (assigneeIds.length > 0) {
+      await validateAssignees(ctx, orgId, assigneeIds);
+    }
+
+    // Compute sortOrder
+    const existingSubtasks = await ctx.db
+      .query("tasks")
+      .withIndex("by_orgId_statusType", (q) => q.eq("orgId", orgId))
+      .filter((q) => q.and(
+        q.eq(q.field("parentTaskId"), args.parentTaskId),
+        q.eq(q.field("archivedAt"), undefined),
+      ))
+      .collect();
+    const maxSort = existingSubtasks.reduce((max, s) => Math.max(max, s.sortOrder ?? 0), -1);
+
+    const now = Date.now();
+    const subtaskId = await ctx.db.insert("tasks", {
+      orgId,
+      title,
+      statusId: statusId!,
+      statusType,
+      projectId: parent.projectId, // Inherited — mandatory
+      assigneeIds,
+      workCategoryId: args.workCategoryId ?? parent.workCategoryId,
+      billable: parent.billable, // Inherited
+      parentTaskId: args.parentTaskId,
+      sortOrder: maxSort + 1,
+      createdAt: now,
+      updatedAt: now,
+      createdBy: userId,
+    });
+
+    // Adjust counts
+    await adjustCounts(ctx, orgId, { [statusType]: 1 });
+
+    // Activity log on parent task
+    await logActivity(ctx, {
+      taskId: args.parentTaskId,
+      orgId,
+      userId,
+      type: "subtask_created",
+      metadata: { subtaskId, title },
+    });
+
+    return subtaskId;
+  },
+});
+
+/**
+ * Reorder subtasks within a parent task.
+ * Accepts an ordered array of subtask IDs and updates their sortOrder.
+ */
+export const reorderSubtasks = mutation({
+  args: {
+    parentTaskId: v.id("tasks"),
+    orderedIds: v.array(v.id("tasks")),
+  },
+  handler: async (ctx, { parentTaskId, orderedIds }) => {
+    const { orgId } = await getAuthContext(ctx);
+
+    const parent = await ctx.db.get(parentTaskId);
+    if (!parent || parent.orgId !== orgId) throw new ConvexError("Task not found");
+
+    for (let i = 0; i < orderedIds.length; i++) {
+      const sub = await ctx.db.get(orderedIds[i]);
+      if (!sub || sub.parentTaskId !== parentTaskId) {
+        throw new ConvexError("Subtask does not belong to this parent");
+      }
+      await ctx.db.patch(orderedIds[i], { sortOrder: i, updatedAt: Date.now() });
+    }
   },
 });
 
@@ -728,6 +910,15 @@ export const create = mutation({
     });
 
     await adjustCounts(ctx, orgId, { [statusType]: 1 });
+
+    await logActivity(ctx, {
+      taskId,
+      orgId,
+      userId,
+      type: "task_created",
+      metadata: {},
+    });
+
     return taskId;
   },
 });
@@ -833,6 +1024,58 @@ export const update = mutation({
       if (oldType !== newType) {
         await adjustCounts(ctx, orgId, { [oldType]: -1, [newType]: 1 });
       }
+    }
+
+    // ── Activity logging (business-critical changes only) ─────────────────
+    const logCtx = { taskId: args.id, orgId, userId };
+
+    // Status — log ANY status change (not just type change)
+    if (args.statusId !== undefined && args.statusId !== task.statusId) {
+      const newStatus = await ctx.db.get(args.statusId);
+      const oldStatus = task.statusId ? await ctx.db.get(task.statusId) : null;
+      await logActivity(ctx, { ...logCtx, type: "status_changed", metadata: { from: oldStatus?.name ?? "None", to: newStatus?.name ?? "Unknown", fromId: task.statusId, toId: args.statusId } });
+    }
+
+    // Assignees
+    if (args.assigneeIds !== undefined) {
+      const oldSet = new Set(task.assigneeIds.map(String));
+      const newSet = new Set(args.assigneeIds.map(String));
+      for (const uid of args.assigneeIds) {
+        if (!oldSet.has(uid.toString())) {
+          const user = await ctx.db.get(uid);
+          await logActivity(ctx, { ...logCtx, type: "assignee_added", metadata: { userId: uid, userName: user?.name ?? "Unknown" } });
+        }
+      }
+      for (const uid of task.assigneeIds) {
+        if (!newSet.has(uid.toString())) {
+          const user = await ctx.db.get(uid);
+          await logActivity(ctx, { ...logCtx, type: "assignee_removed", metadata: { userId: uid, userName: user?.name ?? "Unknown" } });
+        }
+      }
+    }
+
+    // Category
+    if (args.workCategoryId !== undefined && args.workCategoryId !== (task.workCategoryId ?? null)) {
+      const oldCat = task.workCategoryId ? await ctx.db.get(task.workCategoryId) : null;
+      const newCat = args.workCategoryId ? await ctx.db.get(args.workCategoryId) : null;
+      await logActivity(ctx, { ...logCtx, type: "category_changed", metadata: { from: oldCat?.name ?? "None", to: newCat?.name ?? "None" } });
+    }
+
+    // Due date
+    if (args.dueDate !== undefined && args.dueDate !== (task.dueDate ?? null)) {
+      await logActivity(ctx, { ...logCtx, type: "due_date_changed", metadata: { from: task.dueDate ?? null, to: args.dueDate } });
+    }
+
+    // Project
+    if (args.projectId !== undefined && args.projectId !== (task.projectId ?? null)) {
+      const oldProj = task.projectId ? await ctx.db.get(task.projectId) : null;
+      const newProj = args.projectId ? await ctx.db.get(args.projectId) : null;
+      await logActivity(ctx, { ...logCtx, type: "project_changed", metadata: { from: oldProj?.name ?? null, to: newProj?.name ?? null } });
+    }
+
+    // Billable
+    if (args.billable !== undefined && args.billable !== task.billable) {
+      await logActivity(ctx, { ...logCtx, type: "billable_changed", metadata: { from: task.billable, to: args.billable } });
     }
   },
 });

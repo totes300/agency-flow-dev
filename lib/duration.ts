@@ -91,3 +91,14 @@ export function formatTimerDisplay(ms: number): string {
   const s = totalSeconds % 60;
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
+
+/**
+ * Format minutes as HH:MM display (no seconds).
+ * e.g., 90 → "01:30", 0 → "00:00", 480 → "08:00"
+ */
+export function formatMinutesDisplay(minutes: number): string {
+  if (minutes <= 0) return "00:00";
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}

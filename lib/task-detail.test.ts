@@ -201,7 +201,7 @@ describe("mergeActivityFeed", () => {
       id: "c1",
       userId: "u2",
       userName: "Emma",
-      userAvatarColor: "#EC4899",
+      userImageUrl: "https://example.com/emma.jpg",
       content: { type: "doc", content: [] },
       createdAt: 600,
     }]
@@ -210,7 +210,7 @@ describe("mergeActivityFeed", () => {
     expect(item.kind).toBe("comment")
     if (item.kind === "comment") {
       expect(item.userName).toBe("Emma")
-      expect(item.userAvatarColor).toBe("#EC4899")
+      expect(item.userImageUrl).toBe("https://example.com/emma.jpg")
       expect(item.content).toEqual({ type: "doc", content: [] })
     }
   })

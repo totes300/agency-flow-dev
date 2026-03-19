@@ -8,6 +8,7 @@ import { InlineDueDateCell } from "@/components/tasks/inline-due-date-cell"
 import { Switch } from "@/components/ui/switch"
 import { useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
+import { InlineTimeCell } from "@/components/tasks/inline-time-cell"
 import { formatDuration } from "@/lib/duration"
 import { isOverdue } from "@/lib/format"
 import { toastError } from "@/lib/toast-helpers"
@@ -30,6 +31,7 @@ type TaskDetailData = {
   project: Pick<Doc<"projects">, "_id" | "name" | "code"> | null
   client: Pick<Doc<"clients">, "_id" | "name"> | null
   category: Pick<Doc<"workCategories">, "_id" | "name" | "color"> | null
+  statusType: string
   dueDate?: string
   estimate?: number
   billable: boolean
@@ -118,11 +120,14 @@ export function TaskDetailMetadata({
             </span>
           </MetadataRow>
           <MetadataRow icon={TimerIcon} label="Tracked">
-            <span className="text-[13px]">
-              {task.totalMinutes ? formatDuration(task.totalMinutes) : (
-                <span className="text-muted-foreground/40">-</span>
-              )}
-            </span>
+            <div className="group/row">
+              <InlineTimeCell
+                taskId={task._id}
+                totalMinutes={task.totalMinutes ?? 0}
+                isDone={task.statusType === "done"}
+                isBillable={task.billable}
+              />
+            </div>
           </MetadataRow>
         </div>
       </div>

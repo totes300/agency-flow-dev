@@ -167,6 +167,7 @@ export default function TasksPage() {
         search={filters.search}
         onSearchChange={filters.setSearch}
         onNewTask={() => setCreateModalOpen(true)}
+        totalCount={counts.all}
       />
 
       <div className="mt-4">

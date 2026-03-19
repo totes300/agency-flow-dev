@@ -1,7 +1,7 @@
 "use client"
 
 import { useTimerActions, useTimerTick } from "@/lib/hooks/use-timer"
-import { formatDuration } from "@/lib/duration"
+import { formatDuration, formatTimerDisplay, formatMinutesDisplay } from "@/lib/duration"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 import { toastError } from "@/lib/toast-helpers"
@@ -13,6 +13,11 @@ const PlayIcon = (
     <polygon points="1,0 10,5 1,10" />
   </svg>
 )
+
+/** Convert minutes to HH:MM display */
+function minutesToDisplay(minutes: number): string {
+  return formatMinutesDisplay(minutes)
+}
 
 export function InlineTimeCell({
   taskId,
@@ -33,7 +38,7 @@ export function InlineTimeCell({
       <div className="flex items-center gap-[5px] opacity-35">
         {totalMinutes > 0 && (
           <span className="font-mono text-xs text-muted-foreground">
-            {formatDuration(totalMinutes)}
+            {minutesToDisplay(totalMinutes)}
           </span>
         )}
       </div>
@@ -78,7 +83,7 @@ function RunningTimeCell() {
         <span className="block size-[10px] rounded-[2px] bg-red-500" />
       </button>
       <span className="font-mono text-xs text-red-500">
-        {formattedTime.replace(/^00:/, "")}
+        {formattedTime}
       </span>
     </div>
   )
@@ -129,7 +134,7 @@ function IdleTimeCell({
     <div className="flex items-center gap-[5px]">
       <button
         onClick={handlePlayClick}
-        className="flex size-3.5 shrink-0 items-center justify-center opacity-0 transition-opacity duration-150 group-hover/row:opacity-40 group-hover/row:hover:opacity-70"
+        className="flex size-3.5 shrink-0 items-center justify-center opacity-40 transition-opacity duration-150 hover:opacity-70"
         aria-label="Start timer"
       >
         {PlayIcon}
@@ -144,7 +149,7 @@ function IdleTimeCell({
               : "font-sans text-muted-foreground/50 group-hover/row:text-muted-foreground",
           )}
         >
-          {hasTime ? formatDuration(totalMinutes) : "Add time"}
+          {hasTime ? minutesToDisplay(totalMinutes) : "Add time"}
         </button>
       </TimeLogPopover>
     </div>

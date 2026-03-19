@@ -1,6 +1,5 @@
 "use client"
 
-import { useState } from "react"
 import { useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { Button } from "@/components/ui/button"
@@ -11,8 +10,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { useTimerActions } from "@/lib/hooks/use-timer"
-import { formatDuration } from "@/lib/duration"
+import { InlineTimeCell } from "@/components/tasks/inline-time-cell"
 import { toast } from "sonner"
 import { toastError } from "@/lib/toast-helpers"
 import {
@@ -23,8 +21,6 @@ import {
   CopyIcon,
   ArchiveIcon,
   Trash2Icon,
-  PlayIcon,
-  SquareIcon,
   LinkIcon,
 } from "lucide-react"
 import type { Id } from "@/convex/_generated/dataModel"
@@ -37,6 +33,8 @@ type TaskHeaderData = {
   createdAt: number
   projectId?: Id<"projects">
   billable: boolean
+  statusType: string
+  totalMinutes?: number
 } | null
 
 export function TaskDetailHeader({
@@ -54,32 +52,9 @@ export function TaskDetailHeader({
   hasNext: boolean
   hasPrev: boolean
 }) {
-  const { timerState, startTimer, stopTimer, isRunningOn } = useTimerActions()
   const duplicateTask = useMutation(api.tasks.duplicate)
   const archiveTask = useMutation(api.tasks.archive)
-
-  const isTimerOnThis = task ? isRunningOn(task._id) : false
-
-  async function handleTimerToggle() {
-    if (!task) return
-    if (isTimerOnThis) {
-      try {
-        await stopTimer()
-      } catch (err) {
-        toastError(err, "Failed to stop timer")
-      }
-    } else {
-      if (!task.projectId) {
-        toast.error("Assign a project to start tracking time")
-        return
-      }
-      try {
-        await startTimer(task._id)
-      } catch (err) {
-        toastError(err, "Failed to start timer")
-      }
-    }
-  }
+  const removeTask = useMutation(api.tasks.remove)
 
   async function handleCopyLink() {
     if (!task) return
@@ -158,27 +133,16 @@ export function TaskDetailHeader({
 
       {/* Right: timer + meta + actions */}
       <div className="flex items-center gap-1">
-        {/* Timer button */}
+        {/* Timer — same InlineTimeCell as task rows, wrapped in group/row so play button shows */}
         {task && (
-          <Button
-            variant={isTimerOnThis ? "destructive" : "ghost"}
-            size="xs"
-            onClick={handleTimerToggle}
-            disabled={!task.projectId && !isTimerOnThis}
-            className="gap-1.5"
-          >
-            {isTimerOnThis ? (
-              <>
-                <SquareIcon className="size-3 fill-current" />
-                <span className="font-mono text-xs">Stop</span>
-              </>
-            ) : (
-              <>
-                <PlayIcon className="size-3 fill-current" />
-                <span className="text-xs">Timer</span>
-              </>
-            )}
-          </Button>
+          <div className="group/row">
+            <InlineTimeCell
+              taskId={task._id}
+              totalMinutes={task.totalMinutes ?? 0}
+              isDone={task.statusType === "done"}
+              isBillable={task.billable}
+            />
+          </div>
         )}
 
         <div className="h-4 w-px bg-border/40 mx-1" />
@@ -206,10 +170,22 @@ export function TaskDetailHeader({
               <ArchiveIcon className="size-4" />
               Archive
             </DropdownMenuItem>
-            {isAdmin && (
+            {isAdmin && task && (
               <>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem className="text-destructive focus:text-destructive">
+                <DropdownMenuItem
+                  className="text-destructive focus:text-destructive"
+                  onClick={async () => {
+                    if (!confirm("Permanently delete this task and all subtasks?")) return
+                    try {
+                      await removeTask({ id: task._id })
+                      onClose()
+                      toast.success("Task deleted")
+                    } catch (err) {
+                      toastError(err, "Failed to delete")
+                    }
+                  }}
+                >
                   <Trash2Icon className="size-4" />
                   Delete
                 </DropdownMenuItem>

@@ -94,6 +94,7 @@ export default defineSchema({
     billable: v.boolean(),
     dueDate: v.optional(v.string()),
     parentTaskId: v.optional(v.id("tasks")),
+    sortOrder: v.optional(v.number()),
     archivedAt: v.optional(v.number()),
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -258,4 +259,48 @@ export default defineSchema({
     updatedAt: v.number(),
     createdBy: v.id("users"),
   }).index("by_orgId", ["orgId"]),
+
+  // ─── Activity Log (audit trail per task) ───────────────────────────────────
+  activityLog: defineTable({
+    taskId: v.id("tasks"),
+    orgId: v.string(),
+    userId: v.id("users"),
+    type: v.string(),
+    metadata: v.any(),
+    createdAt: v.number(),
+  })
+    .index("by_task", ["taskId", "createdAt"])
+    .index("by_org", ["orgId", "createdAt"]),
+
+  // ─── Attachments (per task, Convex file storage) ────────────────────────────
+  attachments: defineTable({
+    taskId: v.id("tasks"),
+    orgId: v.string(),
+    userId: v.id("users"),
+    fileId: v.id("_storage"),
+    fileName: v.string(),
+    fileSize: v.number(),
+    mimeType: v.string(),
+    createdAt: v.number(),
+  })
+    .index("by_task", ["taskId", "createdAt"]),
+
+  // ─── Comment read receipts (per user per task) ─────────────────────────────
+  commentReadReceipts: defineTable({
+    taskId: v.id("tasks"),
+    userId: v.id("users"),
+    lastSeenAt: v.number(),
+  })
+    .index("by_user_task", ["userId", "taskId"]),
+
+  // ─── Comments (per task) ───────────────────────────────────────────────────
+  comments: defineTable({
+    taskId: v.id("tasks"),
+    orgId: v.string(),
+    userId: v.id("users"),
+    content: v.any(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_task", ["taskId", "createdAt"]),
 });

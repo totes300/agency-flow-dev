@@ -84,10 +84,10 @@ export function TasksTable({
       <div className={TASK_TABLE_MIN_W}>
         {/* Column headers */}
         <div
-          className={`group/header grid ${TASK_GRID_COLS} items-center gap-x-4 border-b px-3 pt-1.5 pb-4 text-[11px] font-medium uppercase tracking-wide text-muted-foreground [&>*]:min-w-0 [&>*]:overflow-hidden`}
+          className={`group/header grid ${TASK_GRID_COLS} items-center gap-x-4 border-b border-border/60 px-3 py-2 text-xs text-muted-foreground/70 [&>*]:min-w-0 [&>*]:overflow-hidden`}
         >
           {COLUMN_HEADERS.map((col, i) => (
-            <div key={i} className="flex items-center gap-1 truncate">
+            <div key={i} className="flex items-center gap-1.5 truncate">
               {i === 0 ? (
                 <div className={cn(
                   "transition-opacity",
@@ -102,7 +102,7 @@ export function TasksTable({
                 </div>
               ) : (
                 <>
-                  {col.icon && <col.icon className="size-3 shrink-0 opacity-50" />}
+                  {col.icon && <col.icon className="size-3 shrink-0" />}
                   {col.label && <span>{col.label}</span>}
                 </>
               )}

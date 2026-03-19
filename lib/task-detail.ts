@@ -90,7 +90,7 @@ export type CommentEvent = {
   kind: "comment"
   userId: string
   userName?: string
-  userAvatarColor?: string
+  userImageUrl?: string
   content: unknown // Tiptap JSON
   createdAt: number
 }

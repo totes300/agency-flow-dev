@@ -12,9 +12,8 @@ import { ConfirmDialog } from "@/components/confirm-dialog"
 import { computeSubtaskProgress } from "@/lib/task-detail"
 import { toast } from "sonner"
 import { toastError } from "@/lib/toast-helpers"
+import { SUBTASK_GRID_COLS } from "@/components/tasks/subtask-constants"
 import type { Id } from "@/convex/_generated/dataModel"
-
-const SUBTASK_HEADER_GRID = "grid-cols-[20px_1fr_116px_108px_80px_96px_76px_36px]"
 
 export function SubtaskList({
   parentTaskId,
@@ -113,7 +112,7 @@ export function SubtaskList({
       {hasSubtasks && (
         <div className="overflow-hidden rounded-lg border border-border/40">
           {/* Column headers */}
-          <div className={`grid ${SUBTASK_HEADER_GRID} items-center gap-x-3 border-b border-border/40 px-2 py-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground [&>*]:min-w-0 [&>*]:overflow-hidden`}>
+          <div className={`grid ${SUBTASK_GRID_COLS} items-center gap-x-3 border-b border-border/40 px-2 py-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground [&>*]:min-w-0 [&>*]:overflow-hidden`}>
             <div />
             <div>Task</div>
             <div>Status</div>

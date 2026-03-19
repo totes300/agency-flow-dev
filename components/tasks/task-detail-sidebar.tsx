@@ -21,12 +21,12 @@ export function TaskDetailSidebar({ taskId }: { taskId: Id<"tasks"> }) {
   const comments = useQuery(api.comments.byTask, isAuthenticated ? { taskId } : "skip")
   const commentStats = useQuery(api.comments.unreadCount, isAuthenticated ? { taskId } : "skip")
 
-  // Mark comments as seen once on mount and when task changes (not on every new comment)
+  // Mark comments as seen — debounced to avoid firing on rapid J/K navigation
   const markSeen = useMutation(api.comments.markSeen)
   useEffect(() => {
-    if (isAuthenticated) {
-      markSeen({ taskId })
-    }
+    if (!isAuthenticated) return
+    const timeout = setTimeout(() => markSeen({ taskId }), 500)
+    return () => clearTimeout(timeout)
   }, [isAuthenticated, taskId, markSeen])
 
   // Build unified timeline — memoized to avoid re-sorting on unrelated re-renders
@@ -35,7 +35,7 @@ export function TaskDetailSidebar({ taskId }: { taskId: Id<"tasks"> }) {
   const currentUserId = currentUser?._id
 
   return (
-    <div className="flex w-[340px] shrink-0 flex-col border-l border-border/40">
+    <div className="hidden w-[340px] shrink-0 flex-col border-l border-border/40 md:flex">
       {/* Header — ClickUp style */}
       <div className="flex items-center justify-between border-b border-border/40 px-4 py-3">
         <span className="text-sm font-semibold">Activity</span>

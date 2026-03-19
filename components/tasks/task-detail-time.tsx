@@ -230,12 +230,14 @@ export function TaskDetailTime({
 
       {/* Show more */}
       {hasMore && (
-        <button
+        <Button
+          variant="link"
+          size="sm"
           onClick={() => setShowAll(true)}
-          className="py-1 text-center text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+          className="w-full text-xs text-muted-foreground"
         >
           Show all {filteredEntries.length} entries
-        </button>
+        </Button>
       )}
     </div>
   )

@@ -5,8 +5,7 @@ import { useQuery } from "convex/react"
 import { useConvexAuth } from "convex/react"
 import { useSearchParams, useRouter, usePathname } from "next/navigation"
 import { api } from "@/convex/_generated/api"
-import { Dialog, DialogOverlay, DialogPortal, DialogTitle } from "@/components/ui/dialog"
-import { Dialog as DialogPrimitive } from "radix-ui"
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 import { TaskDetailHeader } from "@/components/tasks/task-detail-header"
 import { TaskDetailTitle } from "@/components/tasks/task-detail-title"
 import { TaskDetailMetadata } from "@/components/tasks/task-detail-metadata"
@@ -91,50 +90,49 @@ export function TaskDetailModal({
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => { if (!open) handleClose() }}>
-      <DialogPortal>
-        <DialogOverlay />
-        <DialogPrimitive.Content
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 outline-none sm:p-8 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0"
-          onPointerDownOutside={handleClose}
+      <DialogContent
+        showCloseButton={false}
+        className="fixed inset-0 top-0 left-0 flex h-full max-h-none w-full max-w-none -translate-x-0 -translate-y-0 items-center justify-center rounded-none border-0 bg-transparent p-4 ring-0 shadow-none sm:max-w-none sm:p-8 data-open:zoom-in-100 data-closed:zoom-out-100"
+        onPointerDownOutside={handleClose}
+      >
+        <div
+          className="flex h-full max-h-[calc(100vh-4rem)] w-full max-w-[1300px] flex-col overflow-hidden rounded-xl bg-background ring-1 ring-border shadow-xl"
         >
-          <div
-            className="flex h-full max-h-[calc(100vh-4rem)] w-full max-w-[1300px] flex-col overflow-hidden rounded-xl bg-background ring-1 ring-border shadow-xl"
-          >
-            <DialogTitle className="sr-only">Task detail</DialogTitle>
+          <DialogTitle className="sr-only">Task detail</DialogTitle>
+          <DialogDescription className="sr-only">View and edit task details, subtasks, time entries, and activity</DialogDescription>
 
-            {/* Top bar */}
-            <TaskDetailHeader
-              task={task ?? null}
-              isAdmin={isAdmin}
-              onClose={handleClose}
-              onNavigate={handleNavigate}
-              hasNext={hasNext}
-              hasPrev={hasPrev}
-            />
+          {/* Top bar */}
+          <TaskDetailHeader
+            task={task ?? null}
+            isAdmin={isAdmin}
+            onClose={handleClose}
+            onNavigate={handleNavigate}
+            hasNext={hasNext}
+            hasPrev={hasPrev}
+          />
 
-            {/* Body: left content + right sidebar */}
-            <div className="flex flex-1 overflow-hidden">
-              {/* Left: main content */}
-              <div className="flex flex-1 flex-col overflow-hidden">
-                {task ? (
-                  <>
-                    <TaskDetailTitle taskId={task._id} title={task.title} />
-                    <TaskDetailMetadata task={task} isAdmin={isAdmin} />
-                    <TaskDetailTabs task={task} isAdmin={isAdmin} onOpenDetail={navigateToTask} />
-                  </>
-                ) : (
-                  <TaskDetailSkeleton />
-                )}
-              </div>
-
-              {/* Right: activity sidebar */}
-              {detailId && (
-                <TaskDetailSidebar taskId={detailId as Id<"tasks">} />
+          {/* Body: left content + right sidebar */}
+          <div className="flex flex-1 overflow-hidden">
+            {/* Left: main content */}
+            <div className="flex flex-1 flex-col overflow-hidden">
+              {task ? (
+                <>
+                  <TaskDetailTitle taskId={task._id} title={task.title} />
+                  <TaskDetailMetadata task={task} isAdmin={isAdmin} />
+                  <TaskDetailTabs task={task} isAdmin={isAdmin} onOpenDetail={navigateToTask} />
+                </>
+              ) : (
+                <TaskDetailSkeleton />
               )}
             </div>
+
+            {/* Right: activity sidebar */}
+            {detailId && (
+              <TaskDetailSidebar taskId={detailId as Id<"tasks">} />
+            )}
           </div>
-        </DialogPrimitive.Content>
-      </DialogPortal>
+          </div>
+      </DialogContent>
     </Dialog>
   )
 }

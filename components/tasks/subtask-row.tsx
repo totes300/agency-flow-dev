@@ -13,7 +13,7 @@ import { isOverdue } from "@/lib/format"
 import { GripVerticalIcon, ArchiveIcon, Trash2Icon } from "lucide-react"
 import type { Doc, Id } from "@/convex/_generated/dataModel"
 
-const SUBTASK_GRID_COLS = "grid-cols-[20px_1fr_116px_108px_80px_96px_76px_36px]"
+import { SUBTASK_GRID_COLS } from "@/components/tasks/subtask-constants"
 
 export type SubtaskData = {
   _id: Id<"tasks">

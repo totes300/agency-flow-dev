@@ -245,6 +245,16 @@ export const getSubtasks = query({
     // Sort by sortOrder (or createdAt as fallback)
     subtasks.sort((a, b) => (a.sortOrder ?? a.createdAt) - (b.sortOrder ?? b.createdAt));
 
+    // Batch time entry aggregation to avoid N+1
+    const timeMap = new Map<string, number>();
+    for (const sub of subtasks) {
+      const entries = await ctx.db
+        .query("timeEntries")
+        .withIndex("by_taskId", (q) => q.eq("taskId", sub._id))
+        .collect();
+      timeMap.set(sub._id, entries.reduce((sum, e) => sum + e.durationMinutes, 0));
+    }
+
     // Enrich with joins
     const enriched = await Promise.all(subtasks.map(async (sub) => {
       const status = sub.statusId ? await ctx.db.get(sub.statusId) : null;
@@ -254,13 +264,6 @@ export const getSubtasks = query({
         const user = await ctx.db.get(uid);
         if (user) assignees.push({ _id: user._id, name: user.name, email: user.email, imageUrl: user.imageUrl });
       }
-
-      // Total time
-      const entries = await ctx.db
-        .query("timeEntries")
-        .withIndex("by_taskId", (q) => q.eq("taskId", sub._id))
-        .collect();
-      const totalMinutes = entries.reduce((sum, e) => sum + e.durationMinutes, 0);
 
       return {
         _id: sub._id,
@@ -272,7 +275,7 @@ export const getSubtasks = query({
         status: status ? { _id: status._id, name: status.name, color: status.color, type: status.type } : null,
         category: category ? { _id: category._id, name: category.name, color: category.color } : null,
         assignees,
-        totalMinutes,
+        totalMinutes: timeMap.get(sub._id) ?? 0,
       };
     }));
 
@@ -332,11 +335,8 @@ export const createSubtask = mutation({
     // Compute sortOrder
     const existingSubtasks = await ctx.db
       .query("tasks")
-      .withIndex("by_orgId_statusType", (q) => q.eq("orgId", orgId))
-      .filter((q) => q.and(
-        q.eq(q.field("parentTaskId"), args.parentTaskId),
-        q.eq(q.field("archivedAt"), undefined),
-      ))
+      .withIndex("by_orgId_parentTaskId", (q) => q.eq("orgId", orgId).eq("parentTaskId", args.parentTaskId))
+      .filter((q) => q.eq(q.field("archivedAt"), undefined))
       .collect();
     const maxSort = existingSubtasks.reduce((max, s) => Math.max(max, s.sortOrder ?? 0), -1);
 

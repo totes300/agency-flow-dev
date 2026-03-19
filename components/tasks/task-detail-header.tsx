@@ -1,8 +1,10 @@
 "use client"
 
+import { useState } from "react"
 import { useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { Button } from "@/components/ui/button"
+import { ConfirmDialog } from "@/components/confirm-dialog"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -55,6 +57,7 @@ export function TaskDetailHeader({
   const duplicateTask = useMutation(api.tasks.duplicate)
   const archiveTask = useMutation(api.tasks.archive)
   const removeTask = useMutation(api.tasks.remove)
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
 
   async function handleCopyLink() {
     if (!task) return
@@ -175,16 +178,7 @@ export function TaskDetailHeader({
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
                   className="text-destructive focus:text-destructive"
-                  onClick={async () => {
-                    if (!confirm("Permanently delete this task and all subtasks?")) return
-                    try {
-                      await removeTask({ id: task._id })
-                      onClose()
-                      toast.success("Task deleted")
-                    } catch (err) {
-                      toastError(err, "Failed to delete")
-                    }
-                  }}
+                  onClick={() => setShowDeleteConfirm(true)}
                 >
                   <Trash2Icon className="size-4" />
                   Delete
@@ -199,6 +193,25 @@ export function TaskDetailHeader({
           <XIcon className="size-4" />
         </Button>
       </div>
+
+      <ConfirmDialog
+        open={showDeleteConfirm}
+        onOpenChange={setShowDeleteConfirm}
+        title="Delete task"
+        description="Permanently delete this task and all subtasks? This cannot be undone."
+        confirmLabel="Delete"
+        variant="destructive"
+        onConfirm={async () => {
+          if (!task) return
+          try {
+            await removeTask({ id: task._id })
+            onClose()
+            toast.success("Task deleted")
+          } catch (err) {
+            toastError(err, "Failed to delete")
+          }
+        }}
+      />
     </div>
   )
 }

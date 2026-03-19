@@ -4,8 +4,12 @@ import { useCallback, useRef, useEffect } from "react"
 import { useMutation } from "convex/react"
 import dynamic from "next/dynamic"
 import { api } from "@/convex/_generated/api"
-import { SubtaskList } from "@/components/tasks/subtask-list"
 import type { Id } from "@/convex/_generated/dataModel"
+
+const SubtaskList = dynamic(
+  () => import("@/components/tasks/subtask-list").then((m) => ({ default: m.SubtaskList })),
+  { ssr: false, loading: () => null },
+)
 
 const TiptapEditor = dynamic(
   () => import("@/components/tasks/tiptap-editor").then((mod) => ({ default: mod.TiptapEditor })),

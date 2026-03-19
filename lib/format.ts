@@ -58,8 +58,8 @@ export function formatDateToYMD(date: Date): string {
 }
 
 /** Format a timestamp as relative time (e.g., "2m ago", "3h ago", "5d ago"). */
-export function formatRelativeTime(timestamp: number): string {
-  const diff = Date.now() - timestamp
+export function formatRelativeTime(timestamp: number, now: number = Date.now()): string {
+  const diff = now - timestamp
   const minutes = Math.floor(diff / 60000)
   if (minutes < 1) return "just now"
   if (minutes < 60) return `${minutes}m ago`
@@ -93,9 +93,9 @@ export function firstName(name: string): string {
 }
 
 /** Check if a YYYY-MM-DD date string is before today. */
-export function isOverdue(dueDate: string | undefined | null): boolean {
+export function isOverdue(dueDate: string | undefined | null, now: Date = new Date()): boolean {
   if (!dueDate) return false
-  return dueDate < formatDateToYMD(new Date())
+  return dueDate < formatDateToYMD(now)
 }
 
 /**
@@ -140,8 +140,8 @@ export function formatActivityTimestamp(timestamp: number, now: number = Date.no
  * Get the Monday–Sunday bounds of a week, offset by N weeks from current.
  * offset=0 → this week, offset=-1 → last week
  */
-export function getWeekBounds(offset: number): { start: string; end: string } {
-  const now = new Date()
+export function getWeekBounds(offset: number, now: Date = new Date()): { start: string; end: string } {
+  now = new Date(now) // clone to avoid mutation
   const day = now.getDay()
   const mondayOffset = day === 0 ? -6 : 1 - day
   const monday = new Date(now)

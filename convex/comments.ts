@@ -12,10 +12,13 @@ import { logActivity } from "./activityLog";
 export const byTask = query({
   args: { taskId: v.id("tasks") },
   handler: async (ctx, { taskId }) => {
-    const { orgId } = await getAuthContext(ctx);
+    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
 
     const task = await ctx.db.get(taskId);
     if (!task || task.orgId !== orgId) return [];
+
+    // Member access check — non-admin can only see comments on assigned tasks
+    if (!isAdmin && !task.assigneeIds.includes(userId)) return [];
 
     const comments = await ctx.db
       .query("comments")
@@ -106,6 +109,18 @@ export const update = mutation({
     const comment = await ctx.db.get(args.id);
     if (!comment || comment.orgId !== orgId) throw new ConvexError("Comment not found");
     if (comment.userId !== userId) throw new ConvexError("You can only edit your own comments");
+
+    // Validate Tiptap JSON structure (same as create)
+    if (
+      !args.content ||
+      typeof args.content !== "object" ||
+      (args.content as Record<string, unknown>).type !== "doc"
+    ) {
+      throw new ConvexError("Invalid comment content");
+    }
+    if (JSON.stringify(args.content).length > 100_000) {
+      throw new ConvexError("Comment content too large");
+    }
 
     await ctx.db.patch(args.id, {
       content: args.content,

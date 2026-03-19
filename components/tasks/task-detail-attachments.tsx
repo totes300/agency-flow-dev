@@ -188,12 +188,15 @@ export function TaskDetailAttachments({
 
                 {/* Delete */}
                 {canDelete && (
-                  <button
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label="Delete attachment"
                     onClick={() => setDeleteTarget(att._id)}
                     className="shrink-0 opacity-0 transition-opacity group-hover/att:opacity-60 hover:!opacity-100"
                   >
                     <Trash2Icon className="size-3.5 text-muted-foreground" />
-                  </button>
+                  </Button>
                 )}
               </div>
             )

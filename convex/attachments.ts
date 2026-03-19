@@ -7,10 +7,13 @@ import { getAuthContext } from "./lib/auth";
 export const byTask = query({
   args: { taskId: v.id("tasks") },
   handler: async (ctx, { taskId }) => {
-    const { orgId } = await getAuthContext(ctx);
+    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
 
     const task = await ctx.db.get(taskId);
     if (!task || task.orgId !== orgId) return [];
+
+    // Member access check — non-admin can only see attachments on assigned tasks
+    if (!isAdmin && !task.assigneeIds.includes(userId)) return [];
 
     const attachments = await ctx.db
       .query("attachments")

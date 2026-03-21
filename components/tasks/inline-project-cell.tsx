@@ -78,12 +78,11 @@ export function InlineProjectCell({
           title={locked ? "Has time entries — project cannot be changed" : undefined}
         >
           {project ? (
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-1">
-                <span className="truncate text-xs font-medium">{client?.name}</span>
-                {locked && <LockIcon className="size-3 shrink-0 text-muted-foreground" />}
-              </div>
-              <div className="truncate text-[11px] text-muted-foreground">{project.name}</div>
+            <div className="min-w-0 flex-1 flex items-center gap-1">
+              <span className="truncate text-xs font-medium">{client?.name}</span>
+              <span className="text-muted-foreground/40 text-xs">—</span>
+              <span className="truncate text-xs text-muted-foreground">{project.name}</span>
+              {locked && <LockIcon className="size-3 shrink-0 text-muted-foreground" />}
             </div>
           ) : (
             <span className="flex items-center gap-1.5 text-muted-foreground/20 transition-colors group-hover/row:text-muted-foreground/50">

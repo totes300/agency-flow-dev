@@ -90,7 +90,7 @@ export function TiptapEditor({
   return (
     <div className="tiptap-editor rounded-lg border border-border/40 overflow-hidden">
       {/* Toolbar */}
-      <div className="flex items-center gap-0.5 border-b border-border/40 bg-muted/30 px-2 py-1">
+      <div className="flex items-center gap-0.5 border-b border-border/40 bg-muted/80 px-2 py-1">
         <ToolbarButton
           active={editor.isActive("bold")}
           onClick={() => editor.chain().focus().toggleBold().run()}

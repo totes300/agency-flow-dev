@@ -48,12 +48,12 @@ function MetadataRow({
   children: React.ReactNode
 }) {
   return (
-    <div className="flex items-center h-9">
-      <div className="flex items-center gap-2 w-[110px] shrink-0">
-        <Icon className="size-3.5 text-muted-foreground" />
-        <span className="text-[13px] font-medium text-muted-foreground">{label}</span>
+    <div className="flex items-center min-h-9 py-1">
+      <div className="flex items-center gap-2.5 w-[130px] shrink-0">
+        <Icon className="size-4 text-muted-foreground/50" />
+        <span className="text-[13px] font-medium text-foreground/70">{label}</span>
       </div>
-      <div className="flex-1 min-w-0">{children}</div>
+      <div className="flex-1 min-w-0 px-2 py-1 -mx-2 rounded-md transition-colors hover:bg-muted/50 cursor-default">{children}</div>
     </div>
   )
 }
@@ -77,40 +77,26 @@ export function TaskDetailMetadata({
   }
 
   return (
-    <div className="shrink-0 px-7 pb-4">
-      <div className="grid grid-cols-2 gap-x-8">
+    <div className="shrink-0 px-7 pb-6">
+      <div className="grid grid-cols-2 gap-x-0">
         {/* Left column */}
-        <div className="flex flex-col">
+        <div className="flex flex-col pr-6 border-r border-border/50">
           <MetadataRow icon={CircleCheckIcon} label="Status">
             <InlineStatusCell taskId={task._id} status={task.status} isAdmin={isAdmin} />
           </MetadataRow>
-          <MetadataRow icon={FolderIcon} label="Project">
-            <InlineProjectCell taskId={task._id} project={task.project} client={task.client} />
+          <MetadataRow icon={UsersIcon} label="Assignees">
+            <InlineAssigneeCell taskId={task._id} assignees={task.assignees} />
           </MetadataRow>
           <MetadataRow icon={CalendarIcon} label="Due date">
             <InlineDueDateCell taskId={task._id} dueDate={task.dueDate ?? null} isOverdue={overdue} />
           </MetadataRow>
-          <MetadataRow icon={DollarSignIcon} label="Billable">
-            <div className="flex items-center gap-2">
-              <Switch
-                checked={task.billable}
-                onCheckedChange={handleBillableChange}
-                disabled={!isAdmin}
-                aria-label="Billable"
-                className="scale-[0.8] origin-left"
-              />
-              <span className="text-[13px] text-muted-foreground">
-                {task.billable ? "Yes" : "No"}
-              </span>
-            </div>
+          <MetadataRow icon={FolderIcon} label="Project">
+            <InlineProjectCell taskId={task._id} project={task.project} client={task.client} />
           </MetadataRow>
         </div>
 
         {/* Right column */}
-        <div className="flex flex-col">
-          <MetadataRow icon={UsersIcon} label="Assignees">
-            <InlineAssigneeCell taskId={task._id} assignees={task.assignees} />
-          </MetadataRow>
+        <div className="flex flex-col pl-6">
           <MetadataRow icon={TagIcon} label="Category">
             <InlineCategoryCell taskId={task._id} category={task.category} />
           </MetadataRow>
@@ -129,6 +115,20 @@ export function TaskDetailMetadata({
                 isDone={task.statusType === "done"}
                 isBillable={task.billable}
               />
+            </div>
+          </MetadataRow>
+          <MetadataRow icon={DollarSignIcon} label="Billable">
+            <div className="flex items-center gap-2">
+              <Switch
+                checked={task.billable}
+                onCheckedChange={handleBillableChange}
+                disabled={!isAdmin}
+                aria-label="Billable"
+                className="scale-[0.8] origin-left"
+              />
+              <span className="text-[13px] text-muted-foreground">
+                {task.billable ? "Yes" : "No"}
+              </span>
             </div>
           </MetadataRow>
         </div>

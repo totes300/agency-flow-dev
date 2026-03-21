@@ -66,13 +66,13 @@ export function TaskDetailSidebar({ taskId }: { taskId: Id<"tasks"> }) {
   // Scroll to bottom when feed or read receipts change
   const scrollRef = useRef<HTMLDivElement>(null)
   const feedLength = feed?.length ?? 0
-  const lastSeenAt = readReceipts?.[0]?.lastSeenAt ?? 0
+  const receiptKey = readReceipts?.map((r) => r.lastSeenAt).join() ?? ""
 
   useEffect(() => {
     const el = scrollRef.current
     if (!el || feedLength === 0) return
     el.scrollTop = el.scrollHeight
-  }, [feedLength, lastSeenAt])
+  }, [feedLength, receiptKey])
 
   return (
     <div className="hidden w-[460px] shrink-0 flex-col overflow-hidden border-l border-border/60 bg-muted/60 md:flex">
@@ -91,39 +91,44 @@ export function TaskDetailSidebar({ taskId }: { taskId: Id<"tasks"> }) {
           </div>
         ) : (
           <div className="flex flex-col">
-            {feed.map((item, i) => {
-              const showNewDivider =
-                newDividerAt.current !== null &&
-                newDividerAt.current > 0 &&
-                item.createdAt > newDividerAt.current &&
-                item.userId !== currentUserId &&
-                !feed
-                  .slice(0, i)
-                  .some(
-                    (prev) =>
-                      prev.createdAt > newDividerAt.current! &&
-                      prev.userId !== currentUserId,
-                  )
+            {(() => {
+              const lastCommentIndex = feed.findLastIndex((item) => item.kind === "comment")
+              return feed.map((item, i) => {
+                const showNewDivider =
+                  newDividerAt.current !== null &&
+                  newDividerAt.current > 0 &&
+                  item.createdAt > newDividerAt.current &&
+                  item.userId !== currentUserId &&
+                  !feed
+                    .slice(0, i)
+                    .some(
+                      (prev) =>
+                        prev.createdAt > newDividerAt.current! &&
+                        prev.userId !== currentUserId,
+                    )
 
-              return (
-                <Fragment key={item.id}>
-                  {showNewDivider && <NewDivider />}
-                  {item.kind === "comment" ? (
-                    <CommentCard
-                      item={item}
-                      currentUserId={currentUserId}
-                      reactions={reactionsMap?.[item.id]}
-                      attachments={attachmentsMap?.[item.id]}
-                      onReply={handleReply}
-                      onToggleReaction={handleToggleReaction}
-                    />
-                  ) : (
-                    <AuditLine item={item} currentUserId={currentUserId} />
-                  )}
-                </Fragment>
-              )
-            })}
-            <SeenBy feed={feed} readReceipts={readReceipts} currentUserId={currentUserId} />
+                return (
+                  <Fragment key={item.id}>
+                    {showNewDivider && <NewDivider />}
+                    {item.kind === "comment" ? (
+                      <CommentCard
+                        item={item}
+                        currentUserId={currentUserId}
+                        reactions={reactionsMap?.[item.id]}
+                        attachments={attachmentsMap?.[item.id]}
+                        onReply={handleReply}
+                        onToggleReaction={handleToggleReaction}
+                      />
+                    ) : (
+                      <AuditLine item={item} currentUserId={currentUserId} />
+                    )}
+                    {i === lastCommentIndex && (
+                      <SeenBy feed={feed} readReceipts={readReceipts} currentUserId={currentUserId} />
+                    )}
+                  </Fragment>
+                )
+              })
+            })()}
           </div>
         )}
       </div>
@@ -247,7 +252,7 @@ function SeenBy({
 
   return (
     <TooltipProvider>
-      <div className="flex items-center justify-end gap-0.5 px-4 pt-1">
+      <div className="-mt-1.5 mb-4 flex items-center justify-end gap-0.5 px-1">
         <span className="text-[10px] text-muted-foreground/40">Seen by</span>
         {seenUsers.map((user, i) => (
           <Tooltip key={user.userId}>

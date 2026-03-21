@@ -153,8 +153,19 @@ export function TaskDetailCommentInput({
         class:
           "comment-editor tiptap-content focus:outline-none min-h-[60px] max-h-[min(300px,50vh)] overflow-y-auto px-3 py-2 text-sm",
       },
-      handleKeyDown: (_view, event) => {
+      handleKeyDown: (view, event) => {
         if (event.key === "Enter" && !event.shiftKey && !event.metaKey && !event.ctrlKey) {
+          // Don't intercept Enter inside lists or code blocks — let TipTap handle it
+          const { state } = view
+          const { $from } = state.selection
+          const parent = $from.node(-1)
+          if (parent && (
+            parent.type.name === "listItem" ||
+            parent.type.name === "taskItem" ||
+            parent.type.name === "codeBlock"
+          )) {
+            return false
+          }
           event.preventDefault()
           handleSubmitRef.current()
           return true

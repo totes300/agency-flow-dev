@@ -156,7 +156,7 @@ export function CommentCard({
   onToggleReaction,
 }: CommentCardProps) {
   return (
-    <div id={`comment-${item.id}`} className="group/comment my-3 rounded-lg border border-border/60 bg-background transition-shadow duration-300">
+    <div id={`comment-${item.id}`} className="group/comment my-3 rounded-lg border border-border/60 bg-background">
       {/* Header: avatar + name + time */}
       <div className="flex items-center gap-3 px-4 pt-3.5 pb-1.5">
         <UserAvatar
@@ -197,13 +197,13 @@ export function CommentCard({
       )}
 
       {/* Body — render TipTap JSON with mentions */}
-      <div className="px-4 pb-2 pl-4">
+      <div className="px-4 pb-2">
         {renderTiptapContent(item.content)}
       </div>
 
       {/* Attachments */}
       {attachments && attachments.length > 0 && (
-        <div className="flex flex-wrap gap-1.5 px-4 pb-2 pl-4">
+        <div className="flex flex-wrap gap-1.5 px-4 pb-2">
           {attachments.map((att) => (
             <CommentAttachmentChip
               key={att._id}
@@ -218,7 +218,7 @@ export function CommentCard({
 
       {/* Reaction badges */}
       {reactions && reactions.length > 0 && (
-        <div className="flex flex-wrap gap-1.5 px-4 pb-2 pl-4">
+        <div className="flex flex-wrap gap-1.5 px-4 pb-2">
           <TooltipProvider>
             {reactions.map((r) => (
               <Tooltip key={r.emoji}>
@@ -247,7 +247,7 @@ export function CommentCard({
       )}
 
       {/* Footer: quick actions */}
-      <div className="flex items-center justify-between border-t-2 border-border/40 px-4 py-2">
+      <div className="flex items-center justify-between border-t-2 border-border/40 px-4 py-2 opacity-40 transition-opacity duration-200 group-hover/comment:opacity-100">
         <div className="flex items-center gap-1">
           <button
             type="button"

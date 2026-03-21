@@ -124,7 +124,11 @@ export function TimeEntriesTable({
                 {canEdit ? (
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
-                      <button className="flex size-6 items-center justify-center rounded text-muted-foreground/40 opacity-0 transition-opacity group-hover/entry:opacity-100 hover:!text-foreground hover:bg-muted">
+                      <button
+                        type="button"
+                        aria-label="Time entry actions"
+                        className="flex size-6 items-center justify-center rounded text-muted-foreground/40 opacity-0 transition-opacity group-hover/entry:opacity-100 focus-visible:opacity-100 hover:!text-foreground hover:bg-muted"
+                      >
                         <MoreHorizontalIcon className="size-3.5" />
                       </button>
                     </DropdownMenuTrigger>

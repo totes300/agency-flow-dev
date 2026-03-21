@@ -1,19 +1,11 @@
 import { v, ConvexError } from "convex/values";
 import { query, mutation } from "./_generated/server";
 import { getAuthContext } from "./lib/auth";
+import { isMimeTypeBlocked } from "./lib/content-validation";
 
 const MAX_FILES_PER_COMMENT = 5;
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 const MAX_FILE_NAME_LENGTH = 255;
-const BLOCKED_MIME_TYPES = new Set([
-  "text/html",
-  "application/javascript",
-  "application/x-javascript",
-  "text/javascript",
-  "application/xhtml+xml",
-  "application/x-executable",
-  "application/x-msdownload",
-]);
 
 // ─── Query ──────────────────────────────────────────────────────────────────────
 
@@ -24,10 +16,11 @@ const BLOCKED_MIME_TYPES = new Set([
 export const byTask = query({
   args: { taskId: v.id("tasks") },
   handler: async (ctx, { taskId }) => {
-    const { orgId } = await getAuthContext(ctx);
+    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
 
     const task = await ctx.db.get(taskId);
     if (!task || task.orgId !== orgId) return {};
+    if (!isAdmin && !task.assigneeIds.includes(userId)) return {};
 
     const attachments = await ctx.db
       .query("commentAttachments")
@@ -80,7 +73,7 @@ export const save = mutation({
     mimeType: v.string(),
   },
   handler: async (ctx, args) => {
-    const { orgId, userId } = await getAuthContext(ctx);
+    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
 
     // Validate file name length
     if (args.fileName.length > MAX_FILE_NAME_LENGTH) {
@@ -88,12 +81,18 @@ export const save = mutation({
     }
 
     // Block dangerous MIME types (XSS prevention)
-    if (BLOCKED_MIME_TYPES.has(args.mimeType.toLowerCase())) {
+    if (isMimeTypeBlocked(args.mimeType)) {
       throw new ConvexError("This file type is not allowed");
     }
 
     const comment = await ctx.db.get(args.commentId);
     if (!comment || comment.orgId !== orgId) {
+      throw new ConvexError("Comment not found");
+    }
+
+    // Task-assignment guard — non-admins can only attach to tasks they're assigned to
+    const task = await ctx.db.get(comment.taskId);
+    if (!task || (!isAdmin && !task.assigneeIds.includes(userId))) {
       throw new ConvexError("Comment not found");
     }
 

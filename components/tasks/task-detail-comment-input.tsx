@@ -6,7 +6,6 @@ import {
   useRef,
   useEffect,
 } from "react"
-// Mention dropdown rendered inline (no portal) to avoid ProseMirror focus issues
 import { useMutation, useQuery } from "convex/react"
 import { useConvexAuth } from "convex/react"
 import { useEditor, EditorContent } from "@tiptap/react"
@@ -22,6 +21,8 @@ import { Button } from "@/components/ui/button"
 import { ToolbarButton } from "@/components/toolbar-button"
 import { EmojiPickerPopover } from "@/components/emoji-picker-popover"
 import { CommentAttachmentChip } from "@/components/comment-attachment-chip"
+import { MentionDropdown } from "@/components/tasks/mention-dropdown"
+import type { MentionSuggestion, MentionDropdownState } from "@/components/tasks/mention-dropdown"
 import { toastError } from "@/lib/toast-helpers"
 import { cn } from "@/lib/utils"
 import {
@@ -45,14 +46,6 @@ import "./tiptap-editor.css"
 
 // ─── Types ──────────────────────────────────────────────────────────────────────
 
-type MentionSuggestion = { id: string; label: string }
-
-interface MentionDropdownState {
-  items: MentionSuggestion[]
-  command: (item: MentionSuggestion) => void
-  clientRect: (() => DOMRect | null) | null | undefined
-}
-
 interface PendingFile {
   fileId: string
   fileName: string
@@ -66,81 +59,6 @@ interface TaskDetailCommentInputProps {
   taskId: Id<"tasks">
   replyContext: { commentId: string; userName: string } | null
   onClearReply: () => void
-}
-
-// ─── Mention dropdown (rendered via React, no tippy) ────────────────────────────
-
-function MentionDropdown({
-  state,
-  onKeyDownRef,
-}: {
-  state: MentionDropdownState
-  onKeyDownRef: React.MutableRefObject<((e: SuggestionKeyDownProps) => boolean) | null>
-}) {
-  const [selectedIndex, setSelectedIndex] = useState(0)
-  const { items, command, clientRect } = state
-
-  // Keep command in a ref so it's always fresh when clicked
-  const commandRef = useRef(command)
-  commandRef.current = command
-
-  // Reset selection when items change
-  useEffect(() => setSelectedIndex(0), [items])
-
-  // Expose keyboard handler to suggestion plugin via ref
-  useEffect(() => {
-    onKeyDownRef.current = ({ event }: SuggestionKeyDownProps) => {
-      if (event.key === "ArrowUp") {
-        setSelectedIndex((i) => (i + items.length - 1) % items.length)
-        return true
-      }
-      if (event.key === "ArrowDown") {
-        setSelectedIndex((i) => (i + 1) % items.length)
-        return true
-      }
-      if (event.key === "Enter") {
-        const item = items[selectedIndex]
-        if (item) commandRef.current(item)
-        return true
-      }
-      if (event.key === "Escape") {
-        return true
-      }
-      return false
-    }
-    return () => { onKeyDownRef.current = null }
-  }, [onKeyDownRef, items, selectedIndex])
-
-  if (items.length === 0) return null
-
-  const rect = clientRect?.()
-  if (!rect) return null
-
-  return (
-    <div
-      className="fixed z-50 overflow-hidden rounded-lg border border-border bg-popover p-1 shadow-md"
-      style={{ top: rect.bottom + 4, left: rect.left }}
-      // Prevent any mouse events from reaching the editor and causing blur
-      onMouseDown={(e) => e.preventDefault()}
-    >
-      {items.map((item, index) => (
-        <button
-          key={item.id}
-          type="button"
-          tabIndex={-1}
-          onClick={() => commandRef.current(item)}
-          className={cn(
-            "flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-sm transition-colors",
-            index === selectedIndex
-              ? "bg-accent text-accent-foreground"
-              : "text-popover-foreground hover:bg-accent/50",
-          )}
-        >
-          {item.label}
-        </button>
-      ))}
-    </div>
-  )
 }
 
 // ─── Main comment input ─────────────────────────────────────────────────────────
@@ -314,19 +232,38 @@ export function TaskDetailCommentInput({
     [generateUploadUrl, pendingFiles.length],
   )
 
+  const hasPendingUploads = pendingFiles.some((f) => f.uploading)
+
   const handleSubmit = useCallback(async () => {
-    if (!editor || isSubmitting) return
+    if (!editor || isSubmitting || hasPendingUploads) return
     if (editor.isEmpty && pendingFiles.length === 0) return
     const json = editor.getJSON()
 
     setIsSubmitting(true)
+    let commentId: Id<"comments"> | undefined
     try {
-      const commentId = await createComment({
+      commentId = await createComment({
         taskId,
         content: json,
         parentCommentId: replyContext?.commentId as Id<"comments"> | undefined,
       })
+    } catch (err) {
+      toastError(err, "Failed to post comment")
+      setIsSubmitting(false)
+      return
+    }
 
+    // Comment created — clear editor immediately so retrying won't duplicate
+    void clearTypingMutation({ taskId })
+    lastTypingRef.current = 0
+    suppressTypingRef.current = true
+    editor.commands.clearContent()
+    editor.commands.focus()
+    suppressTypingRef.current = false
+    onClearReply()
+
+    // Attach files (best-effort after comment is committed)
+    try {
       for (const file of pendingFiles) {
         if (file.storageId) {
           await saveAttachment({
@@ -338,21 +275,13 @@ export function TaskDetailCommentInput({
           })
         }
       }
-
-      void clearTypingMutation({ taskId })
-      lastTypingRef.current = 0
-      suppressTypingRef.current = true
-      editor.commands.clearContent()
-      editor.commands.focus()
-      suppressTypingRef.current = false
-      setPendingFiles([])
-      onClearReply()
     } catch (err) {
-      toastError(err, "Failed to post comment")
-    } finally {
-      setIsSubmitting(false)
+      toastError(err, "Some attachments failed to save")
     }
-  }, [editor, isSubmitting, createComment, taskId, replyContext, pendingFiles, saveAttachment, onClearReply, clearTypingMutation])
+
+    setPendingFiles([])
+    setIsSubmitting(false)
+  }, [editor, isSubmitting, hasPendingUploads, createComment, taskId, replyContext, pendingFiles, saveAttachment, onClearReply, clearTypingMutation])
 
   const handleSubmitRef = useRef(handleSubmit)
   handleSubmitRef.current = handleSubmit
@@ -474,7 +403,7 @@ export function TaskDetailCommentInput({
         <Button
           size="sm"
           onClick={() => handleSubmit()}
-          disabled={isSubmitting}
+          disabled={isSubmitting || hasPendingUploads}
         >
           Comment
         </Button>
@@ -517,26 +446,18 @@ function insertMentionTrigger(editor: ReturnType<typeof useEditor>) {
 // ─── Action button ───────────────────────────────────────────────────────────
 
 function ActionBtn({
-  onClick,
   children,
   ...props
-}: {
-  onClick: () => void
-  children: React.ReactNode
-} & React.ButtonHTMLAttributes<HTMLButtonElement>) {
+}: React.ButtonHTMLAttributes<HTMLButtonElement> & { children: React.ReactNode }) {
   return (
-    <button
+    <Button
       type="button"
-      onClick={onClick}
-      className={cn(
-        "flex size-8 items-center justify-center rounded-full text-muted-foreground/60 transition-colors",
-        "hover:bg-muted hover:text-foreground",
-        "focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
-        "disabled:pointer-events-none disabled:opacity-40",
-      )}
+      variant="ghost"
+      size="icon"
+      className="size-8 rounded-full text-muted-foreground/60 hover:text-foreground"
       {...props}
     >
       {children}
-    </button>
+    </Button>
   )
 }

@@ -291,7 +291,8 @@ export default defineSchema({
     userId: v.id("users"),
     lastSeenAt: v.number(),
   })
-    .index("by_user_task", ["userId", "taskId"]),
+    .index("by_user_task", ["userId", "taskId"])
+    .index("by_task", ["taskId"]),
 
   // ─── Comments (per task) ───────────────────────────────────────────────────
   comments: defineTable({

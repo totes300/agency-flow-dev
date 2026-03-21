@@ -65,14 +65,15 @@ export function SubtaskRow({
       </div>
 
       {/* 2. Task name */}
-      <div
-        className="cursor-pointer"
+      <button
+        type="button"
+        className="cursor-pointer text-left"
         onClick={() => onOpenDetail(subtask._id)}
       >
-        <div className={cn("truncate text-sm font-medium hover:text-primary transition-colors", isDone && "line-through")}>
+        <span className={cn("block truncate text-sm font-medium hover:text-primary transition-colors", isDone && "line-through")}>
           {subtask.title}
-        </div>
-      </div>
+        </span>
+      </button>
 
       {/* 3. Status */}
       <InlineStatusCell taskId={subtask._id} status={subtask.status} isAdmin={isAdmin} />

@@ -46,20 +46,30 @@ export function TaskDetailOverview({
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const taskIdRef = useRef(task._id)
 
+  const pendingSaveRef = useRef<(() => void) | null>(null)
+
   // Keep taskId ref in sync — prevents stale closure in debounce
   useEffect(() => {
     taskIdRef.current = task._id
   }, [task._id])
 
-  // Clear pending debounce when task changes (J/K nav)
-  useEffect(() => {
-    if (debounceRef.current) clearTimeout(debounceRef.current)
-  }, [task._id])
-
-  // Cleanup on unmount
+  // Flush pending autosave then clear debounce when task changes (J/K nav)
   useEffect(() => {
     return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current)
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current)
+        pendingSaveRef.current?.()
+      }
+    }
+  }, [task._id])
+
+  // Cleanup on unmount — flush any pending save
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current)
+        pendingSaveRef.current?.()
+      }
     }
   }, [])
 
@@ -67,16 +77,17 @@ export function TaskDetailOverview({
   const handleDescriptionUpdate = useCallback(
     (content: unknown) => {
       if (debounceRef.current) clearTimeout(debounceRef.current)
-      debounceRef.current = setTimeout(async () => {
-        try {
-          await updateTask({
-            id: taskIdRef.current,
-            description: JSON.stringify(content),
-          })
-        } catch {
+      const doSave = () => {
+        pendingSaveRef.current = null
+        void updateTask({
+          id: taskIdRef.current,
+          description: JSON.stringify(content),
+        }).catch(() => {
           // Silently fail — user will see stale content on next load
-        }
-      }, 1000)
+        })
+      }
+      pendingSaveRef.current = doSave
+      debounceRef.current = setTimeout(doSave, 1000)
     },
     [updateTask],
   )

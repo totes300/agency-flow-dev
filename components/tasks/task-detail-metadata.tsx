@@ -95,6 +95,8 @@ export function TaskDetailMetadata({
               <Switch
                 checked={task.billable}
                 onCheckedChange={handleBillableChange}
+                disabled={!isAdmin}
+                aria-label="Billable"
                 className="scale-[0.8] origin-left"
               />
               <span className="text-[13px] text-muted-foreground">

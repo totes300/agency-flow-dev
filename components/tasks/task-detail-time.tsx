@@ -79,6 +79,7 @@ export function TaskDetailTime({
   // ─── Handlers ───────────────────────────────────────────────────────────────
 
   async function handleSave() {
+    if (saving) return
     const minutes = parseDuration(durationStr)
     if (!minutes) {
       toast.error("Enter a valid duration")
@@ -127,6 +128,7 @@ export function TaskDetailTime({
         {/* Duration input — no timer here, timer is in the modal header */}
         <div className="flex items-center gap-2 border-b border-border/40 px-4 py-2.5">
           <input
+            aria-label="Duration"
             value={durationStr}
             onChange={(e) => setDurationStr(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") handleSave() }}
@@ -162,6 +164,7 @@ export function TaskDetailTime({
           <div className="flex items-center gap-2.5 py-2">
             <AlignLeftIcon className="size-3.5 shrink-0 text-muted-foreground" strokeWidth={1.5} />
             <input
+              aria-label="Note"
               value={note}
               onChange={(e) => setNote(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") handleSave() }}

@@ -107,6 +107,12 @@ export default function TasksPage() {
       ? { taskIds: allVisibleTaskIds }
       : "skip",
   )
+  const activityMap = useQuery(
+    api.tasks.activityIndicators,
+    isAuthenticated && allVisibleTaskIds.length > 0
+      ? { taskIds: allVisibleTaskIds }
+      : "skip",
+  )
 
   // Open task detail via URL param
   const handleOpenDetail = useCallback((taskId: string) => {
@@ -239,6 +245,7 @@ export default function TasksPage() {
                   onDelete={setDeleteTargetId}
                   onOpenDetail={handleOpenDetail}
                   totalMinutes={timeMap?.[task._id] ?? 0}
+                  activity={activityMap?.[task._id]}
                 />
               )}
               renderAddTask={(groupKey) => (

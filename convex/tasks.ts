@@ -836,6 +836,53 @@ export const list = query({
   },
 });
 
+/**
+ * Batch activity indicators for a list of task IDs.
+ * Returns subtask counts (total/done), comment count, and attachment presence per task.
+ * Used by the task list row to show real activity icons.
+ */
+export const activityIndicators = query({
+  args: { taskIds: v.array(v.id("tasks")) },
+  handler: async (ctx, { taskIds }) => {
+    const { orgId } = await getAuthContext(ctx);
+
+    const capped = taskIds.slice(0, 100);
+    const result: Record<string, {
+      subtaskTotal: number;
+      subtaskDone: number;
+      commentCount: number;
+      hasAttachments: boolean;
+    }> = {};
+
+    await Promise.all(capped.map(async (taskId) => {
+      const [subtasks, comments, attachments] = await Promise.all([
+        ctx.db
+          .query("tasks")
+          .withIndex("by_orgId_parentTaskId", (q) => q.eq("orgId", orgId).eq("parentTaskId", taskId))
+          .filter((q) => q.eq(q.field("archivedAt"), undefined))
+          .collect(),
+        ctx.db
+          .query("comments")
+          .withIndex("by_task", (q) => q.eq("taskId", taskId))
+          .take(500),
+        ctx.db
+          .query("attachments")
+          .withIndex("by_task", (q) => q.eq("taskId", taskId))
+          .take(1),
+      ]);
+
+      result[taskId] = {
+        subtaskTotal: subtasks.length,
+        subtaskDone: subtasks.filter((s) => s.statusType === "done").length,
+        commentCount: comments.length,
+        hasAttachments: attachments.length > 0,
+      };
+    }));
+
+    return result;
+  },
+});
+
 // ─── Mutations ──────────────────────────────────────────────────────────────────
 
 export const create = mutation({

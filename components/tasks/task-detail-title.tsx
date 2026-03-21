@@ -15,6 +15,7 @@ export function TaskDetailTitle({
   const [editing, setEditing] = useState(false)
   const [value, setValue] = useState(title)
   const inputRef = useRef<HTMLInputElement>(null)
+  const savingRef = useRef(false)
   const updateTask = useMutation(api.tasks.update)
 
   // Sync with prop when not editing
@@ -23,17 +24,20 @@ export function TaskDetailTitle({
   }, [title, editing])
 
   async function handleSave() {
+    if (savingRef.current) return
     const trimmed = value.trim()
     if (!trimmed || trimmed === title) {
       setValue(title)
       setEditing(false)
       return
     }
+    savingRef.current = true
     try {
       await updateTask({ id: taskId, title: trimmed })
     } catch {
       setValue(title)
     }
+    savingRef.current = false
     setEditing(false)
   }
 
@@ -42,11 +46,12 @@ export function TaskDetailTitle({
       {editing ? (
         <input
           ref={inputRef}
+          aria-label="Task title"
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onBlur={handleSave}
           onKeyDown={(e) => {
-            if (e.key === "Enter") handleSave()
+            if (e.key === "Enter" && !e.nativeEvent.isComposing) handleSave()
             if (e.key === "Escape") { setValue(title); setEditing(false) }
           }}
           className="w-full text-[22px] font-semibold tracking-tight text-foreground outline-none"
@@ -54,11 +59,20 @@ export function TaskDetailTitle({
         />
       ) : (
         <h1
+          tabIndex={0}
+          role="button"
           onClick={() => {
             setEditing(true)
             setTimeout(() => inputRef.current?.focus(), 0)
           }}
-          className="cursor-text text-[22px] font-semibold tracking-tight text-foreground"
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault()
+              setEditing(true)
+              setTimeout(() => inputRef.current?.focus(), 0)
+            }
+          }}
+          className="cursor-text text-[22px] font-semibold tracking-tight text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
         >
           {title}
         </h1>

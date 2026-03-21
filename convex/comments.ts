@@ -78,10 +78,13 @@ export const create = mutation({
     parentCommentId: v.optional(v.id("comments")),
   },
   handler: async (ctx, args) => {
-    const { orgId, userId } = await getAuthContext(ctx);
+    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
 
     const task = await ctx.db.get(args.taskId);
     if (!task || task.orgId !== orgId) throw new ConvexError("Task not found");
+    if (!isAdmin && !task.assigneeIds.includes(userId)) {
+      throw new ConvexError("Task not found");
+    }
 
     // Validate parent comment if replying
     if (args.parentCommentId) {
@@ -91,18 +94,7 @@ export const create = mutation({
       }
     }
 
-    // Validate Tiptap JSON structure
-    if (
-      !args.content ||
-      typeof args.content !== "object" ||
-      (args.content as Record<string, unknown>).type !== "doc"
-    ) {
-      throw new ConvexError("Invalid comment content");
-    }
-    // Guard against excessively large content (100KB)
-    if (JSON.stringify(args.content).length > 100_000) {
-      throw new ConvexError("Comment content too large");
-    }
+    validateTiptapContent(args.content);
 
     const now = Date.now();
     const commentId = await ctx.db.insert("comments", {
@@ -136,23 +128,19 @@ export const update = mutation({
     content: v.any(),
   },
   handler: async (ctx, args) => {
-    const { orgId, userId } = await getAuthContext(ctx);
+    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
 
     const comment = await ctx.db.get(args.id);
     if (!comment || comment.orgId !== orgId) throw new ConvexError("Comment not found");
     if (comment.userId !== userId) throw new ConvexError("You can only edit your own comments");
 
-    // Validate Tiptap JSON structure (same as create)
-    if (
-      !args.content ||
-      typeof args.content !== "object" ||
-      (args.content as Record<string, unknown>).type !== "doc"
-    ) {
-      throw new ConvexError("Invalid comment content");
+    // Task-assignment guard
+    const task = await ctx.db.get(comment.taskId);
+    if (!task || (!isAdmin && !task.assigneeIds.includes(userId))) {
+      throw new ConvexError("Comment not found");
     }
-    if (JSON.stringify(args.content).length > 100_000) {
-      throw new ConvexError("Comment content too large");
-    }
+
+    validateTiptapContent(args.content);
 
     await ctx.db.patch(args.id, {
       content: args.content,
@@ -173,6 +161,12 @@ export const remove = mutation({
     if (!comment || comment.orgId !== orgId) throw new ConvexError("Comment not found");
     if (!isAdmin && comment.userId !== userId) {
       throw new ConvexError("You can only delete your own comments");
+    }
+
+    // Task-assignment guard
+    const task = await ctx.db.get(comment.taskId);
+    if (!task || (!isAdmin && !task.assigneeIds.includes(userId))) {
+      throw new ConvexError("Comment not found");
     }
 
     // Cascade delete: reactions
@@ -208,10 +202,11 @@ export const remove = mutation({
 export const unreadCount = query({
   args: { taskId: v.id("tasks") },
   handler: async (ctx, { taskId }) => {
-    const { orgId, userId } = await getAuthContext(ctx);
+    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
 
     const task = await ctx.db.get(taskId);
     if (!task || task.orgId !== orgId) return { total: 0, unread: 0 };
+    if (!isAdmin && !task.assigneeIds.includes(userId)) return { total: 0, unread: 0 };
 
     const comments = await ctx.db
       .query("comments")
@@ -242,15 +237,15 @@ export const unreadCount = query({
 export const readReceipts = query({
   args: { taskId: v.id("tasks") },
   handler: async (ctx, { taskId }) => {
-    const { orgId, userId } = await getAuthContext(ctx);
+    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
 
     const task = await ctx.db.get(taskId);
     if (!task || task.orgId !== orgId) return [];
+    if (!isAdmin && !task.assigneeIds.includes(userId)) return [];
 
     const receipts = await ctx.db
       .query("commentReadReceipts")
-      .withIndex("by_user_task")
-      .filter((q) => q.eq(q.field("taskId"), taskId))
+      .withIndex("by_task", (q) => q.eq("taskId", taskId))
       .collect();
 
     const results: Array<{
@@ -283,11 +278,14 @@ export const readReceipts = query({
 export const markSeen = mutation({
   args: { taskId: v.id("tasks") },
   handler: async (ctx, { taskId }) => {
-    const { orgId, userId } = await getAuthContext(ctx);
+    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
 
-    // Verify task belongs to caller's org
+    // Verify task belongs to caller's org + assignment guard
     const task = await ctx.db.get(taskId);
     if (!task || task.orgId !== orgId) throw new ConvexError("Task not found");
+    if (!isAdmin && !task.assigneeIds.includes(userId)) {
+      throw new ConvexError("Task not found");
+    }
 
     const existing = await ctx.db
       .query("commentReadReceipts")
@@ -306,6 +304,21 @@ export const markSeen = mutation({
     }
   },
 });
+
+// ─── Validators ──────────────────────────────────────────────────────────────────
+
+import { validateTiptapContent as _validateTiptap } from "./lib/content-validation";
+
+/**
+ * Validate Tiptap JSON and throw ConvexError on failure.
+ * Must be called by EVERY mutation that writes to the `content` field.
+ */
+function validateTiptapContent(content: unknown): void {
+  const result = _validateTiptap(content);
+  if (!result.valid) {
+    throw new ConvexError(result.reason);
+  }
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────────
 

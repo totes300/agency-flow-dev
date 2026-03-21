@@ -1,6 +1,7 @@
 import { v, ConvexError } from "convex/values";
 import { query, mutation } from "./_generated/server";
 import { getAuthContext } from "./lib/auth";
+import { isMimeTypeBlocked } from "./lib/content-validation";
 
 // ─── Query ──────────────────────────────────────────────────────────────────────
 
@@ -61,10 +62,18 @@ export const save = mutation({
     mimeType: v.string(),
   },
   handler: async (ctx, args) => {
-    const { orgId, userId } = await getAuthContext(ctx);
+    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
 
     const task = await ctx.db.get(args.taskId);
     if (!task || task.orgId !== orgId) throw new ConvexError("Task not found");
+    if (!isAdmin && !task.assigneeIds.includes(userId)) {
+      throw new ConvexError("Task not found");
+    }
+
+    // Block dangerous MIME types (XSS prevention)
+    if (isMimeTypeBlocked(args.mimeType)) {
+      throw new ConvexError("This file type is not allowed");
+    }
 
     // Check file count limit
     const existing = await ctx.db

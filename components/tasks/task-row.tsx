@@ -15,17 +15,22 @@ import { RowActionMenu } from "@/components/row-action-menu"
 import { DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
 import { toastError } from "@/lib/toast-helpers"
 import {
-  CheckIcon,
   CopyIcon,
   ArchiveIcon,
   Trash2Icon,
-  CalendarIcon,
   ListChecksIcon,
   MessageSquareIcon,
   FileTextIcon,
 } from "lucide-react"
 import { InlineTimeCell } from "@/components/tasks/inline-time-cell"
 import type { TaskWithJoins } from "@/components/tasks/tasks-table"
+
+export type ActivityIndicator = {
+  subtaskTotal: number
+  subtaskDone: number
+  commentCount: number
+  hasAttachments: boolean
+}
 
 export function TaskRow({
   task,
@@ -37,6 +42,7 @@ export function TaskRow({
   onDelete,
   onOpenDetail,
   totalMinutes = 0,
+  activity,
 }: {
   task: TaskWithJoins
   isAdmin: boolean
@@ -47,6 +53,7 @@ export function TaskRow({
   onDelete: (taskId: string) => void
   onOpenDetail?: (taskId: string) => void
   totalMinutes?: number
+  activity?: ActivityIndicator
 }) {
   const duplicateTask = useMutation(api.tasks.duplicate)
   const isDone = task.statusType === "done"
@@ -89,8 +96,8 @@ export function TaskRow({
         </div>
       </div>
 
-      {/* 3. Activity (mock — wired to real data in Phase 6) */}
-      <ActivityIcons title={task.title} hasDescription={!!task.description} />
+      {/* 3. Activity indicators */}
+      <ActivityIcons activity={activity} hasDescription={!!task.description} />
 
       {/* 4. Status (inline edit) */}
       <InlineStatusCell taskId={task._id} status={task.status} isAdmin={isAdmin} />
@@ -145,48 +152,35 @@ export function TaskRow({
   )
 }
 
-/**
- * Mock activity indicators — subtask progress, comment count, description icon.
- * Uses a simple hash of the title to generate deterministic mock data.
- * Will be replaced with real data from subtask/comment queries in Phase 6.
- */
-function ActivityIcons({ title, hasDescription }: { title: string; hasDescription: boolean }) {
-  // Deterministic mock from title hash
-  const hash = simpleHash(title)
-  const totalSubs = (hash % 8) + 1      // 1-8 subtasks
-  const doneSubs = hash % (totalSubs + 1) // 0-total done
-  const comments = (hash >> 3) % 10      // 0-9 comments
-  const hasAttachment = hash % 3 === 0
+function ActivityIcons({ activity, hasDescription }: { activity?: ActivityIndicator; hasDescription: boolean }) {
+  const subtaskTotal = activity?.subtaskTotal ?? 0
+  const subtaskDone = activity?.subtaskDone ?? 0
+  const commentCount = activity?.commentCount ?? 0
+  const hasAttachments = activity?.hasAttachments ?? false
 
   return (
     <div className="flex items-center gap-2 text-muted-foreground/70">
       {/* Subtask progress */}
-      <span className="flex items-center gap-0.5 text-[11px]" title={`${doneSubs}/${totalSubs} subtasks`}>
-        <ListChecksIcon className="size-3 shrink-0" />
-        <span>{doneSubs}/{totalSubs}</span>
-      </span>
+      {subtaskTotal > 0 && (
+        <span className="flex items-center gap-0.5 text-[11px]" title={`${subtaskDone}/${subtaskTotal} subtasks`}>
+          <ListChecksIcon className="size-3 shrink-0" />
+          <span>{subtaskDone}/{subtaskTotal}</span>
+        </span>
+      )}
       {/* Comment count */}
-      {comments > 0 && (
-        <span className="flex items-center gap-0.5 text-[11px]" title={`${comments} comments`}>
+      {commentCount > 0 && (
+        <span className="flex items-center gap-0.5 text-[11px]" title={`${commentCount} comments`}>
           <MessageSquareIcon className="size-3 shrink-0" />
-          <span>{comments}</span>
+          <span>{commentCount}</span>
         </span>
       )}
       {/* Description/attachment icon */}
-      {(hasDescription || hasAttachment) && (
-        <span title="Has description">
+      {(hasDescription || hasAttachments) && (
+        <span title={hasAttachments ? "Has attachments" : "Has description"}>
           <FileTextIcon className="size-3 shrink-0" />
         </span>
       )}
     </div>
   )
-}
-
-function simpleHash(str: string): number {
-  let hash = 0
-  for (let i = 0; i < str.length; i++) {
-    hash = ((hash << 5) - hash + str.charCodeAt(i)) | 0
-  }
-  return Math.abs(hash)
 }
 

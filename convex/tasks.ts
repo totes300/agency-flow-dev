@@ -357,8 +357,7 @@ export const createSubtask = mutation({
       createdBy: userId,
     });
 
-    // Adjust counts
-    await adjustCounts(ctx, orgId, { [statusType]: 1 });
+    // Subtasks do NOT affect taskCounts (only top-level tasks count)
 
     // Activity log on parent task
     await logActivity(ctx, {
@@ -505,6 +504,7 @@ export const list = query({
 
     function passesBaseFilter(t: Doc<"tasks">): boolean {
       if (t.archivedAt) return false;
+      if (t.parentTaskId) return false; // Subtasks never appear in main list
       if (!isAdmin && !t.assigneeIds.includes(userId)) return false;
       return true;
     }
@@ -1017,8 +1017,8 @@ export const update = mutation({
 
     await ctx.db.patch(args.id, updates);
 
-    // Adjust counts if statusType changed on a non-archived task
-    if (updates.statusType && !task.archivedAt) {
+    // Adjust counts if statusType changed on a non-archived, top-level task
+    if (updates.statusType && !task.archivedAt && !task.parentTaskId) {
       const oldType = task.statusType;
       const newType = updates.statusType as StatusType;
       if (oldType !== newType) {
@@ -1125,14 +1125,9 @@ export const archive = mutation({
       }
     }
 
-    // Adjust counts: -1 for the archived task + each archived subtask
-    if (!task.archivedAt) {
+    // Adjust counts only for top-level tasks (subtasks never affect counts)
+    if (!task.archivedAt && !task.parentTaskId) {
       await adjustCounts(ctx, orgId, { [task.statusType]: -1 });
-    }
-    for (const sub of subtasks) {
-      if (!sub.archivedAt) {
-        await adjustCounts(ctx, orgId, { [sub.statusType]: -1 });
-      }
     }
   },
 });
@@ -1159,7 +1154,10 @@ export const restore = mutation({
       updatedAt: now,
     });
 
-    await adjustCounts(ctx, orgId, { [task.statusType]: 1 });
+    // Adjust counts only for top-level tasks
+    if (!task.parentTaskId) {
+      await adjustCounts(ctx, orgId, { [task.statusType]: 1 });
+    }
 
     // Cascade restore to subtasks (mirrors archive cascade)
     const subtasks = await ctx.db
@@ -1169,7 +1167,6 @@ export const restore = mutation({
     for (const sub of subtasks) {
       if (sub.archivedAt) {
         await ctx.db.patch(sub._id, { archivedAt: undefined, updatedAt: now });
-        await adjustCounts(ctx, orgId, { [sub.statusType]: 1 });
       }
     }
   },
@@ -1208,16 +1205,13 @@ export const remove = mutation({
       }
     }
 
-    // Safe to cascade delete subtasks
+    // Safe to cascade delete subtasks (no counts adjustment — subtasks never counted)
     for (const sub of subtasks) {
-      if (!sub.archivedAt) {
-        await adjustCounts(ctx, orgId, { [sub.statusType]: -1 });
-      }
       await ctx.db.delete(sub._id);
     }
 
-    // Adjust counts for the task itself
-    if (!task.archivedAt) {
+    // Adjust counts only for top-level tasks
+    if (!task.archivedAt && !task.parentTaskId) {
       await adjustCounts(ctx, orgId, { [task.statusType]: -1 });
     }
 
@@ -1322,7 +1316,7 @@ export const bulkUpdate = mutation({
             statusType: newStatusType!,
             updatedAt: now,
           });
-          if (!task.archivedAt && task.statusType !== newStatusType!) {
+          if (!task.archivedAt && !task.parentTaskId && task.statusType !== newStatusType!) {
             await adjustCounts(ctx, orgId, { [task.statusType]: -1, [newStatusType!]: 1 });
           }
           updated++;
@@ -1389,8 +1383,11 @@ export const bulkUpdate = mutation({
         case "archive":
           if (!task.archivedAt) {
             await ctx.db.patch(taskId, { archivedAt: now, updatedAt: now });
-            await adjustCounts(ctx, orgId, { [task.statusType]: -1 });
-            // Cascade to subtasks
+            // Adjust counts only for top-level tasks
+            if (!task.parentTaskId) {
+              await adjustCounts(ctx, orgId, { [task.statusType]: -1 });
+            }
+            // Cascade to subtasks (no counts adjustment)
             const subtasks = await ctx.db
               .query("tasks")
               .withIndex("by_orgId_parentTaskId", (q) => q.eq("orgId", orgId).eq("parentTaskId", taskId))
@@ -1398,7 +1395,6 @@ export const bulkUpdate = mutation({
             for (const sub of subtasks) {
               if (!sub.archivedAt) {
                 await ctx.db.patch(sub._id, { archivedAt: now, updatedAt: now });
-                await adjustCounts(ctx, orgId, { [sub.statusType]: -1 });
               }
             }
           }
@@ -1426,7 +1422,7 @@ export const backfillCounts = internalMutation({
       backlog: 0, in_progress: 0, review: 0, blocked: 0, done: 0,
     };
     for (const t of tasks) {
-      if (!t.archivedAt) {
+      if (!t.archivedAt && !t.parentTaskId) {
         counts[t.statusType]++;
       }
     }
@@ -1457,7 +1453,7 @@ export const verifyTaskCounts = internalMutation({
       backlog: 0, in_progress: 0, review: 0, blocked: 0, done: 0,
     };
     for (const t of tasks) {
-      if (!t.archivedAt) live[t.statusType]++;
+      if (!t.archivedAt && !t.parentTaskId) live[t.statusType]++;
     }
 
     const cached = await ctx.db

@@ -25,20 +25,42 @@ export const byTask = query({
       .withIndex("by_task", (q) => q.eq("taskId", taskId))
       .take(500);
 
-    const enriched = await Promise.all(
-      comments.map(async (comment) => {
-        const user = await ctx.db.get(comment.userId);
-        return {
-          _id: comment._id,
-          content: comment.content,
-          createdAt: comment.createdAt,
-          updatedAt: comment.updatedAt,
-          userId: comment.userId,
-          userName: user?.name ?? "Unknown",
-          userImageUrl: user?.imageUrl,
-        };
-      })
-    );
+    // Build user cache + comment-to-userName map for parentUserName lookup
+    const userCache = new Map<string, { name: string; imageUrl?: string }>();
+    for (const c of comments) {
+      if (!userCache.has(c.userId)) {
+        const user = await ctx.db.get(c.userId);
+        userCache.set(c.userId, { name: user?.name ?? "Unknown", imageUrl: user?.imageUrl });
+      }
+    }
+
+    // Build maps for parent comment lookups
+    const commentUserMap = new Map<string, string>();
+    const commentPreviewMap = new Map<string, string>();
+    for (const c of comments) {
+      commentUserMap.set(c._id, userCache.get(c.userId)?.name ?? "Unknown");
+      commentPreviewMap.set(c._id, extractContentPreview(c.content));
+    }
+
+    const enriched = comments.map((comment) => {
+      const user = userCache.get(comment.userId) ?? { name: "Unknown" };
+      return {
+        _id: comment._id,
+        content: comment.content,
+        createdAt: comment.createdAt,
+        updatedAt: comment.updatedAt,
+        userId: comment.userId,
+        userName: user.name,
+        userImageUrl: user.imageUrl,
+        parentCommentId: comment.parentCommentId,
+        parentUserName: comment.parentCommentId
+          ? commentUserMap.get(comment.parentCommentId)
+          : undefined,
+        parentPreview: comment.parentCommentId
+          ? commentPreviewMap.get(comment.parentCommentId)
+          : undefined,
+      };
+    });
 
     return enriched;
   },
@@ -53,12 +75,21 @@ export const create = mutation({
   args: {
     taskId: v.id("tasks"),
     content: v.any(),
+    parentCommentId: v.optional(v.id("comments")),
   },
   handler: async (ctx, args) => {
     const { orgId, userId } = await getAuthContext(ctx);
 
     const task = await ctx.db.get(args.taskId);
     if (!task || task.orgId !== orgId) throw new ConvexError("Task not found");
+
+    // Validate parent comment if replying
+    if (args.parentCommentId) {
+      const parent = await ctx.db.get(args.parentCommentId);
+      if (!parent || parent.taskId !== args.taskId) {
+        throw new ConvexError("Parent comment not found");
+      }
+    }
 
     // Validate Tiptap JSON structure
     if (
@@ -79,6 +110,7 @@ export const create = mutation({
       orgId,
       userId,
       content: args.content,
+      parentCommentId: args.parentCommentId,
       createdAt: now,
       updatedAt: now,
     });
@@ -143,6 +175,25 @@ export const remove = mutation({
       throw new ConvexError("You can only delete your own comments");
     }
 
+    // Cascade delete: reactions
+    const reactions = await ctx.db
+      .query("commentReactions")
+      .withIndex("by_comment", (q) => q.eq("commentId", args.id))
+      .collect();
+    for (const r of reactions) {
+      await ctx.db.delete(r._id);
+    }
+
+    // Cascade delete: attachments (+ storage cleanup)
+    const attachments = await ctx.db
+      .query("commentAttachments")
+      .withIndex("by_comment", (q) => q.eq("commentId", args.id))
+      .collect();
+    for (const att of attachments) {
+      await ctx.storage.delete(att.fileId);
+      await ctx.db.delete(att._id);
+    }
+
     await ctx.db.delete(args.id);
   },
 });
@@ -184,6 +235,48 @@ export const unreadCount = query({
 });
 
 /**
+ * Get read receipts for a task — who has seen up to which point.
+ * Returns array of { userId, userName, userImageUrl, lastSeenAt }.
+ * Excludes the current user (you don't need to see your own "seen" status).
+ */
+export const readReceipts = query({
+  args: { taskId: v.id("tasks") },
+  handler: async (ctx, { taskId }) => {
+    const { orgId, userId } = await getAuthContext(ctx);
+
+    const task = await ctx.db.get(taskId);
+    if (!task || task.orgId !== orgId) return [];
+
+    const receipts = await ctx.db
+      .query("commentReadReceipts")
+      .withIndex("by_user_task")
+      .filter((q) => q.eq(q.field("taskId"), taskId))
+      .collect();
+
+    const results: Array<{
+      userId: string;
+      userName: string;
+      userImageUrl?: string;
+      lastSeenAt: number;
+    }> = [];
+
+    for (const receipt of receipts) {
+      if (receipt.userId === userId) continue;
+      const user = await ctx.db.get(receipt.userId);
+      if (!user) continue;
+      results.push({
+        userId: receipt.userId,
+        userName: user.name,
+        userImageUrl: user.imageUrl,
+        lastSeenAt: receipt.lastSeenAt,
+      });
+    }
+
+    return results;
+  },
+});
+
+/**
  * Mark all comments on a task as seen by the current user.
  * Called when user opens the Comments tab.
  */
@@ -213,3 +306,22 @@ export const markSeen = mutation({
     }
   },
 });
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────────
+
+/** Extract a short plain-text preview from Tiptap JSON content (max ~40 chars). */
+function extractContentPreview(content: unknown, maxLen = 40): string {
+  const text = extractPlain(content)
+  if (text.length <= maxLen) return text
+  return text.slice(0, maxLen).trimEnd() + "…"
+}
+
+function extractPlain(content: unknown): string {
+  if (!content || typeof content !== "object") return ""
+  const node = content as { type?: string; text?: string; content?: unknown[]; attrs?: Record<string, unknown> }
+  if (node.type === "text" && node.text) return node.text
+  if (node.type === "mention") return `@${node.attrs?.label ?? node.attrs?.id ?? ""}`
+  if (node.type === "hardBreak") return " "
+  if (!node.content) return ""
+  return node.content.map(extractPlain).join("")
+}

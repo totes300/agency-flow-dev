@@ -96,7 +96,7 @@ export function TaskDetailModal({
         onPointerDownOutside={handleClose}
       >
         <div
-          className="flex h-full max-h-[calc(100vh-4rem)] w-full max-w-[1300px] flex-col overflow-hidden rounded-xl bg-background ring-1 ring-border shadow-xl"
+          className="flex h-full max-h-[calc(100vh-4rem)] w-full max-w-[1500px] flex-col overflow-hidden rounded-xl bg-background ring-1 ring-border shadow-xl"
         >
           <DialogTitle className="sr-only">Task detail</DialogTitle>
           <DialogDescription className="sr-only">View and edit task details, subtasks, time entries, and activity</DialogDescription>

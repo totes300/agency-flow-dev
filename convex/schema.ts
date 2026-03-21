@@ -299,8 +299,49 @@ export default defineSchema({
     orgId: v.string(),
     userId: v.id("users"),
     content: v.any(),
+    parentCommentId: v.optional(v.id("comments")),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
     .index("by_task", ["taskId", "createdAt"]),
+
+  // ─── Comment reactions ────────────────────────────────────────────────────
+  commentReactions: defineTable({
+    commentId: v.id("comments"),
+    taskId: v.id("tasks"),
+    orgId: v.string(),
+    userId: v.id("users"),
+    emoji: v.string(),
+    createdAt: v.number(),
+  })
+    .index("by_task", ["taskId"])
+    .index("by_comment", ["commentId"])
+    .index("by_comment_user_emoji", ["commentId", "userId", "emoji"])
+    .index("by_orgId", ["orgId"]),
+
+  // ─── Comment attachments ──────────────────────────────────────────────────
+  commentAttachments: defineTable({
+    commentId: v.id("comments"),
+    taskId: v.id("tasks"),
+    orgId: v.string(),
+    userId: v.id("users"),
+    fileId: v.id("_storage"),
+    fileName: v.string(),
+    fileSize: v.number(),
+    mimeType: v.string(),
+    createdAt: v.number(),
+  })
+    .index("by_task", ["taskId"])
+    .index("by_comment", ["commentId"])
+    .index("by_orgId", ["orgId"]),
+
+  // ─── Typing indicators (ephemeral presence) ──────────────────────────────
+  typingIndicators: defineTable({
+    taskId: v.id("tasks"),
+    orgId: v.string(),
+    userId: v.id("users"),
+    lastTypedAt: v.number(),
+  })
+    .index("by_task", ["taskId"])
+    .index("by_task_user", ["taskId", "userId"]),
 });

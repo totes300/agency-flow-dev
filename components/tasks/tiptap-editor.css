@@ -219,3 +219,42 @@
 .tiptap-content ::selection {
   background: oklch(from var(--ring) l c h / 0.3);
 }
+
+/* ─── Mentions ───────────────────────────────────────────────────────────────── */
+
+.tiptap-content .mention,
+.comment-editor .mention {
+  background: #dbeafe; /* blue-100 */
+  color: #2563eb; /* blue-600 */
+  border-radius: 4px;
+  padding: 0.1rem 0.3rem;
+  font-weight: 500;
+  font-size: 0.9em;
+  white-space: nowrap;
+}
+
+.dark .tiptap-content .mention,
+.dark .comment-editor .mention {
+  background: #172554; /* blue-950 */
+  color: #60a5fa; /* blue-400 */
+}
+
+/* ─── Comment editor ─────────────────────────────────────────────────────────── */
+
+.comment-editor {
+  color: var(--foreground);
+  line-height: 1.5;
+}
+
+.comment-editor p {
+  margin: 0;
+}
+
+.comment-editor p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  color: var(--muted-foreground);
+  opacity: 0.4;
+  pointer-events: none;
+  height: 0;
+}

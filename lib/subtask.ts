@@ -69,8 +69,9 @@ export function computeNextSortOrder(
  */
 export function extractPlainText(content: unknown): string {
   if (!content || typeof content !== "object") return ""
-  const node = content as { type?: string; text?: string; content?: unknown[] }
+  const node = content as { type?: string; text?: string; content?: unknown[]; attrs?: Record<string, unknown> }
   if (node.type === "text" && node.text) return node.text
+  if (node.type === "mention") return `@${node.attrs?.label ?? node.attrs?.id ?? ""}`
   if (node.type === "hardBreak") return "\n"
   if (!node.content) return ""
   return node.content.map(extractPlainText).join("")

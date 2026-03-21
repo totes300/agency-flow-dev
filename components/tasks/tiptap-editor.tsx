@@ -9,7 +9,7 @@ import Image from "@tiptap/extension-image"
 import TaskList from "@tiptap/extension-task-list"
 import TaskItem from "@tiptap/extension-task-item"
 import Underline from "@tiptap/extension-underline"
-import { cn } from "@/lib/utils"
+import { ToolbarButton } from "@/components/toolbar-button"
 import "./tiptap-editor.css"
 import {
   BoldIcon,
@@ -189,27 +189,3 @@ export function TiptapEditor({
   )
 }
 
-function ToolbarButton({
-  active,
-  onClick,
-  children,
-  ...props
-}: {
-  active: boolean
-  onClick: () => void
-  children: React.ReactNode
-} & React.ButtonHTMLAttributes<HTMLButtonElement>) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
-        active && "bg-muted text-foreground",
-      )}
-      {...props}
-    >
-      {children}
-    </button>
-  )
-}

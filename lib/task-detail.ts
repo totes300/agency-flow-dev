@@ -92,6 +92,9 @@ export type CommentEvent = {
   userName?: string
   userImageUrl?: string
   content: unknown // Tiptap JSON
+  parentCommentId?: string
+  parentUserName?: string
+  parentPreview?: string
   createdAt: number
 }
 

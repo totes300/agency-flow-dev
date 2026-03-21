@@ -92,7 +92,7 @@ export function TaskDetailHeader({
     : ""
 
   return (
-    <div className="flex shrink-0 items-center justify-between border-b border-border/40 px-4 h-11">
+    <div className="flex shrink-0 items-center justify-between border-b border-border/60 px-4 h-11">
       {/* Left: nav + breadcrumb */}
       <div className="flex items-center gap-2">
         <div className="flex items-center gap-0.5">

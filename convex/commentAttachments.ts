@@ -1,7 +1,7 @@
 import { v, ConvexError } from "convex/values";
 import { query, mutation } from "./_generated/server";
 import { getAuthContext } from "./lib/auth";
-import { isMimeTypeBlocked } from "./lib/content-validation";
+import { isMimeTypeBlocked } from "./lib/content_validation";
 
 const MAX_FILES_PER_COMMENT = 5;
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB

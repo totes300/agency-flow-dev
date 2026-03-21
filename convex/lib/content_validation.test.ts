@@ -6,7 +6,7 @@ import {
   applyCountChanges,
   buildInitialCounts,
   extractPlainText,
-} from "./content-validation";
+} from "./content_validation";
 
 // ─── validateTiptapContent ──────────────────────────────────────────────────────
 

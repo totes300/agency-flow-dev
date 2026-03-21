@@ -37,7 +37,7 @@ function renderTiptapContent(content: unknown): ReactNode {
   const doc = content as TiptapNode
   if (doc.type === "doc" && doc.content) {
     return (
-      <div className="tiptap-content text-[13px] leading-relaxed">
+      <div className="tiptap-content text-sm leading-relaxed">
         {doc.content.map((node, i) => renderNode(node, i))}
       </div>
     )
@@ -156,15 +156,15 @@ export function CommentCard({
   onToggleReaction,
 }: CommentCardProps) {
   return (
-    <div id={`comment-${item.id}`} className="group/comment my-3 rounded-lg border border-border/40 bg-muted/20 transition-shadow duration-300">
+    <div id={`comment-${item.id}`} className="group/comment my-3 rounded-lg border border-border/60 bg-background transition-shadow duration-300">
       {/* Header: avatar + name + time */}
-      <div className="flex items-center gap-2 px-4 pt-3.5 pb-1.5">
+      <div className="flex items-center gap-3 px-4 pt-3.5 pb-1.5">
         <UserAvatar
           name={item.userName ?? "?"}
           imageUrl={isDefaultAvatar(item.userImageUrl) ? null : item.userImageUrl}
           className="size-6 text-[9px]"
         />
-        <span className="text-[13px] font-semibold text-foreground">
+        <span className="text-sm font-medium text-foreground">
           {item.userName}
         </span>
         <span className="text-[11px] text-muted-foreground/50">
@@ -184,7 +184,7 @@ export function CommentCard({
               setTimeout(() => el.classList.remove("ring-2", "ring-primary/30"), 1500)
             }
           }}
-          className="flex items-center gap-1 pl-[48px] pr-4 text-[11px] text-muted-foreground/60 transition-colors hover:text-muted-foreground"
+          className="flex items-center gap-1 pl-4 pr-4 text-[11px] text-muted-foreground/60 transition-colors hover:text-muted-foreground"
         >
           <CornerDownRightIcon className="size-3 shrink-0" />
           <span className="truncate">
@@ -197,13 +197,13 @@ export function CommentCard({
       )}
 
       {/* Body — render TipTap JSON with mentions */}
-      <div className="px-4 pb-2 pl-[48px]">
+      <div className="px-4 pb-2 pl-4">
         {renderTiptapContent(item.content)}
       </div>
 
       {/* Attachments */}
       {attachments && attachments.length > 0 && (
-        <div className="flex flex-wrap gap-1.5 px-4 pb-2 pl-[48px]">
+        <div className="flex flex-wrap gap-1.5 px-4 pb-2 pl-4">
           {attachments.map((att) => (
             <CommentAttachmentChip
               key={att._id}
@@ -218,7 +218,7 @@ export function CommentCard({
 
       {/* Reaction badges */}
       {reactions && reactions.length > 0 && (
-        <div className="flex flex-wrap gap-1.5 px-4 pb-2 pl-[48px]">
+        <div className="flex flex-wrap gap-1.5 px-4 pb-2 pl-4">
           <TooltipProvider>
             {reactions.map((r) => (
               <Tooltip key={r.emoji}>
@@ -247,7 +247,7 @@ export function CommentCard({
       )}
 
       {/* Footer: quick actions */}
-      <div className="flex items-center justify-between border-t border-border/20 px-4 py-2">
+      <div className="flex items-center justify-between border-t-2 border-border/40 px-4 py-2">
         <div className="flex items-center gap-1">
           <button
             type="button"

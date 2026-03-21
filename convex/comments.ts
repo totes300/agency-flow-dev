@@ -272,6 +272,28 @@ export const readReceipts = query({
 });
 
 /**
+ * Return the current user's lastSeenAt timestamp for a task.
+ * Used client-side to render the "New" divider on initial load.
+ */
+export const myLastSeen = query({
+  args: { taskId: v.id("tasks") },
+  handler: async (ctx, { taskId }) => {
+    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
+
+    const task = await ctx.db.get(taskId);
+    if (!task || task.orgId !== orgId) return 0;
+    if (!isAdmin && !task.assigneeIds.includes(userId)) return 0;
+
+    const receipt = await ctx.db
+      .query("commentReadReceipts")
+      .withIndex("by_user_task", (q) => q.eq("userId", userId).eq("taskId", taskId))
+      .first();
+
+    return receipt?.lastSeenAt ?? 0;
+  },
+});
+
+/**
  * Mark all comments on a task as seen by the current user.
  * Called when user opens the Comments tab.
  */
@@ -307,7 +329,7 @@ export const markSeen = mutation({
 
 // ─── Validators ──────────────────────────────────────────────────────────────────
 
-import { validateTiptapContent as _validateTiptap } from "./lib/content-validation";
+import { validateTiptapContent as _validateTiptap } from "./lib/content_validation";
 
 /**
  * Validate Tiptap JSON and throw ConvexError on failure.

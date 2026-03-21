@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useQuery, useMutation } from "convex/react"
 import { useConvexAuth } from "convex/react"
 import { api } from "@/convex/_generated/api"
@@ -8,11 +8,10 @@ import { TaskDetailCommentInput } from "@/components/tasks/task-detail-comment-i
 import { CommentCard } from "@/components/tasks/comment-card"
 import { formatActivityText, type ActivityEventType } from "@/lib/activity"
 import { mergeActivityFeed, type FeedItem } from "@/lib/task-detail"
-import { UserAvatar } from "@/components/user-avatar"
 import { formatActivityTimestamp, firstName } from "@/lib/format"
-import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip"
 import type { Id } from "@/convex/_generated/dataModel"
 import { TypingIndicator } from "@/components/typing-indicator"
+import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip"
 
 export function TaskDetailSidebar({ taskId }: { taskId: Id<"tasks"> }) {
   const { isAuthenticated } = useConvexAuth()
@@ -23,6 +22,7 @@ export function TaskDetailSidebar({ taskId }: { taskId: Id<"tasks"> }) {
   const reactionsMap = useQuery(api.commentReactions.byTask, isAuthenticated ? { taskId } : "skip")
   const attachmentsMap = useQuery(api.commentAttachments.byTask, isAuthenticated ? { taskId } : "skip")
   const readReceipts = useQuery(api.comments.readReceipts, isAuthenticated ? { taskId } : "skip")
+  const myLastSeen = useQuery(api.comments.myLastSeen, isAuthenticated ? { taskId } : "skip")
 
   const typingUsers = useQuery(api.typingIndicators.getTyping, isAuthenticated ? { taskId } : "skip")
 
@@ -42,65 +42,88 @@ export function TaskDetailSidebar({ taskId }: { taskId: Id<"tasks"> }) {
     [toggleReaction],
   )
 
-  // Mark comments as seen — debounced to avoid firing on rapid J/K navigation
+  // Mark comments as seen — debounced to avoid firing on rapid J/K navigation.
+  // Re-triggers when new comments arrive while dialog is open (Messenger-style).
   const markSeen = useMutation(api.comments.markSeen)
+  const commentCount = comments?.length ?? 0
   useEffect(() => {
     if (!isAuthenticated) return
     const timeout = setTimeout(() => markSeen({ taskId }), 500)
     return () => clearTimeout(timeout)
-  }, [isAuthenticated, taskId, markSeen])
+  }, [isAuthenticated, taskId, markSeen, commentCount])
+
+  // Freeze lastSeenAt on first load so the "New" divider survives the markSeen update.
+  // Once captured, it stays constant for the lifetime of this dialog mount.
+  const newDividerAt = useRef<number | null>(null)
+  if (myLastSeen !== undefined && newDividerAt.current === null) {
+    newDividerAt.current = myLastSeen
+  }
 
   // Build unified timeline — memoized to avoid re-sorting on unrelated re-renders
   const feed = useMemo(() => buildFeed(activities, comments), [activities, comments])
   const currentUserId = currentUser?._id
 
-  // Auto-scroll: always start at bottom, scroll down on new messages
+  // Scroll to bottom when feed or read receipts change
   const scrollRef = useRef<HTMLDivElement>(null)
   const feedLength = feed?.length ?? 0
+  const lastSeenAt = readReceipts?.[0]?.lastSeenAt ?? 0
 
   useEffect(() => {
     const el = scrollRef.current
     if (!el || feedLength === 0) return
-    // Use requestAnimationFrame to wait for DOM render
-    requestAnimationFrame(() => {
-      el.scrollTop = el.scrollHeight
-    })
-  }, [feedLength])
+    el.scrollTop = el.scrollHeight
+  }, [feedLength, lastSeenAt])
 
   return (
-    <div className="hidden w-[460px] shrink-0 flex-col border-l border-border/60 bg-background md:flex">
+    <div className="hidden w-[460px] shrink-0 flex-col overflow-hidden border-l border-border/60 bg-muted/60 md:flex">
       {/* Header */}
       <div className="flex items-center border-b border-border/60 px-4 py-3">
         <span className="text-sm font-semibold">Activity</span>
       </div>
 
       {/* Unified timeline */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto">
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto p-3 pb-2.5">
         {feed === null ? (
           <FeedSkeleton />
         ) : feed.length === 0 ? (
-          <div className="flex flex-1 items-center justify-center p-8 text-xs text-muted-foreground/50">
+          <div className="flex items-center justify-center p-8 text-xs text-muted-foreground/50">
             No activity yet
           </div>
         ) : (
-          <div className="flex flex-col p-3">
-            {feed.map((item) =>
-              item.kind === "comment" ? (
-                <CommentCard
-                  key={item.id}
-                  item={item}
-                  currentUserId={currentUserId}
-                  reactions={reactionsMap?.[item.id]}
-                  attachments={attachmentsMap?.[item.id]}
-                  onReply={handleReply}
-                  onToggleReaction={handleToggleReaction}
-                />
-              ) : (
-                <AuditLine key={item.id} item={item} currentUserId={currentUserId} />
-              ),
-            )}
-            {/* Seen by — show who has seen the latest comment */}
-            <SeenBy feed={feed} readReceipts={readReceipts} />
+          <div className="flex flex-col">
+            {feed.map((item, i) => {
+              const showNewDivider =
+                newDividerAt.current !== null &&
+                newDividerAt.current > 0 &&
+                item.createdAt > newDividerAt.current &&
+                item.userId !== currentUserId &&
+                !feed
+                  .slice(0, i)
+                  .some(
+                    (prev) =>
+                      prev.createdAt > newDividerAt.current! &&
+                      prev.userId !== currentUserId,
+                  )
+
+              return (
+                <Fragment key={item.id}>
+                  {showNewDivider && <NewDivider />}
+                  {item.kind === "comment" ? (
+                    <CommentCard
+                      item={item}
+                      currentUserId={currentUserId}
+                      reactions={reactionsMap?.[item.id]}
+                      attachments={attachmentsMap?.[item.id]}
+                      onReply={handleReply}
+                      onToggleReaction={handleToggleReaction}
+                    />
+                  ) : (
+                    <AuditLine item={item} currentUserId={currentUserId} />
+                  )}
+                </Fragment>
+              )
+            })}
+            <SeenBy feed={feed} readReceipts={readReceipts} currentUserId={currentUserId} />
           </div>
         )}
       </div>
@@ -184,6 +207,18 @@ function AuditLine({ item, currentUserId }: { item: FeedItem & { kind: "audit" }
   )
 }
 
+// ─── New divider — Slack-style unread marker ─────────────────────────────────────
+
+function NewDivider() {
+  return (
+    <div className="my-2 flex items-center gap-3">
+      <div className="h-px flex-1 bg-muted-foreground/20" />
+      <span className="text-[9px] text-muted-foreground/40">New</span>
+      <div className="h-px flex-1 bg-muted-foreground/20" />
+    </div>
+  )
+}
+
 // ─── Seen by — chat-style read receipts ──────────────────────────────────────────
 
 type ReadReceipt = { userId: string; userName: string; userImageUrl?: string; lastSeenAt: number }
@@ -191,9 +226,11 @@ type ReadReceipt = { userId: string; userName: string; userImageUrl?: string; la
 function SeenBy({
   feed,
   readReceipts,
+  currentUserId,
 }: {
   feed: FeedItem[]
   readReceipts: ReadReceipt[] | undefined
+  currentUserId?: string
 }) {
   if (!readReceipts || readReceipts.length === 0) return null
 
@@ -201,34 +238,30 @@ function SeenBy({
   const lastComment = [...feed].reverse().find((item) => item.kind === "comment")
   if (!lastComment) return null
 
+  // Only show "Seen by" if the current user wrote the last comment
+  if (lastComment.userId !== currentUserId) return null
+
   // Users who have seen the last comment (lastSeenAt >= comment createdAt)
   const seenUsers = readReceipts.filter((r) => r.lastSeenAt >= lastComment.createdAt)
   if (seenUsers.length === 0) return null
 
-  const names = seenUsers.map((u) => u.userName).join(", ")
-
   return (
     <TooltipProvider>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <div className="flex items-center justify-end gap-1 px-4 pt-1">
-            <span className="text-[10px] text-muted-foreground/40">Seen</span>
-            <div className="flex -space-x-1.5">
-              {seenUsers.slice(0, 5).map((user) => (
-                <UserAvatar
-                  key={user.userId}
-                  name={user.userName}
-                  imageUrl={user.userImageUrl}
-                  className="size-4 text-[7px] ring-1 ring-background"
-                />
-              ))}
-            </div>
-          </div>
-        </TooltipTrigger>
-        <TooltipContent side="top" className="text-xs">
-          Seen by {names}
-        </TooltipContent>
-      </Tooltip>
+      <div className="flex items-center justify-end gap-0.5 px-4 pt-1">
+        <span className="text-[10px] text-muted-foreground/40">Seen by</span>
+        {seenUsers.map((user, i) => (
+          <Tooltip key={user.userId}>
+            <TooltipTrigger asChild>
+              <span className="cursor-default text-[10px] text-muted-foreground/40 hover:text-muted-foreground/70">
+                {firstName(user.userName)}{i < seenUsers.length - 1 ? "," : ""}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="text-xs">
+              Seen at {new Date(user.lastSeenAt).toLocaleString()}
+            </TooltipContent>
+          </Tooltip>
+        ))}
+      </div>
     </TooltipProvider>
   )
 }

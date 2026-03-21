@@ -154,7 +154,7 @@ export function TaskDetailCommentInput({
           "comment-editor tiptap-content focus:outline-none min-h-[60px] max-h-[min(300px,50vh)] overflow-y-auto px-3 py-2 text-sm",
       },
       handleKeyDown: (_view, event) => {
-        if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+        if (event.key === "Enter" && !event.shiftKey && !event.metaKey && !event.ctrlKey) {
           event.preventDefault()
           handleSubmitRef.current()
           return true
@@ -289,7 +289,7 @@ export function TaskDetailCommentInput({
   if (!editor) return null
 
   return (
-    <div className="border-t border-border/40 p-3">
+    <div className="border-t border-border/60 bg-muted/40 p-3">
       {/* Reply context banner */}
       {replyContext && (
         <div className="mb-2 flex items-center justify-between rounded-lg bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground">
@@ -401,7 +401,7 @@ export function TaskDetailCommentInput({
           </EmojiPickerPopover>
         </div>
         <Button
-          size="sm"
+          size="default"
           onClick={() => handleSubmit()}
           disabled={isSubmitting || hasPendingUploads}
         >

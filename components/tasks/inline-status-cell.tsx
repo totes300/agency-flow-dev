@@ -15,7 +15,6 @@ import {
 import { StatusBadge } from "@/components/status-badge"
 import { LoaderIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { getStatusColor } from "@/lib/status-colors"
 import { TYPE_LABELS } from "@/lib/display-constants"
 import { toastError } from "@/lib/toast-helpers"
 import type { StatusType } from "@/convex/lib/constants"
@@ -71,7 +70,7 @@ export function InlineStatusCell({
           )}
         </button>
       </PopoverTrigger>
-      <PopoverContent className="w-52 p-0" align="start">
+      <PopoverContent className="w-60 p-0" align="start">
         <Command>
           <CommandInput placeholder="Search status..." />
           <CommandList>
@@ -83,19 +82,14 @@ export function InlineStatusCell({
                 <CommandGroup key={type} heading={label}>
                   {group.map((s) => {
                     const disabled = !isAdmin && s.type === "done"
-                    const cfg = getStatusColor(s.color)
                     return (
                       <CommandItem
                         key={s._id}
                         onSelect={() => !disabled && handleSelect(s._id)}
                         disabled={disabled}
-                        className={cn(disabled && "opacity-50")}
+                        className={cn("px-2 py-1.5", disabled && "opacity-50")}
                       >
-                        <span
-                          className="size-2 shrink-0 rounded-full"
-                          style={{ backgroundColor: cfg.dot }}
-                        />
-                        <span className="truncate">{s.name}</span>
+                        <StatusBadge name={s.name} color={s.color} />
                       </CommandItem>
                     )
                   })}

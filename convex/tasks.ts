@@ -10,6 +10,7 @@ import type { StatusType } from "./lib/constants";
 /** 1:1 mapping — each tab filters by exactly one statusType. "all" = no filter. */
 const TAB_STATUS_TYPE: Record<string, StatusType | null> = {
   all: null,
+  archived: null,
   backlog: "backlog",
   in_progress: "in_progress",
   review: "review",
@@ -405,29 +406,12 @@ export const counts = query({
     const { orgId, userId, isAdmin } = await getAuthContext(ctx);
 
     const typeKeys: StatusType[] = ["backlog", "in_progress", "review", "blocked", "done"];
+    const maxScan = 1000;
 
-    if (isAdmin) {
-      const counterDoc = await ctx.db
-        .query("taskCounts")
-        .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
-        .unique();
-
-      const c = counterDoc ?? { backlog: 0, in_progress: 0, review: 0, blocked: 0, done: 0 };
-      return {
-        all: c.backlog + c.in_progress + c.review + c.blocked + c.done,
-        backlog: c.backlog,
-        in_progress: c.in_progress,
-        review: c.review,
-        blocked: c.blocked,
-        done: c.done,
-      };
-    }
-
-    // Member: per-type bounded scans (cap at 1000 docs per type)
-    const memberMaxScan = 1000;
     const typeCounts: Record<StatusType, number> = {
       backlog: 0, in_progress: 0, review: 0, blocked: 0, done: 0,
     };
+    let archivedCount = 0;
 
     for (const type of typeKeys) {
       const docs = await ctx.db
@@ -435,15 +419,22 @@ export const counts = query({
         .withIndex("by_orgId_statusType", (q) =>
           q.eq("orgId", orgId).eq("statusType", type)
         )
-        .take(memberMaxScan);
-      typeCounts[type] = docs.filter((t) =>
-        !t.archivedAt && t.assigneeIds.includes(userId)
-      ).length;
+        .take(maxScan);
+      for (const t of docs) {
+        if (t.parentTaskId) continue;
+        if (!isAdmin && !t.assigneeIds.includes(userId)) continue;
+        if (t.archivedAt) {
+          archivedCount++;
+        } else {
+          typeCounts[type]++;
+        }
+      }
     }
 
     return {
       all: typeCounts.backlog + typeCounts.in_progress + typeCounts.review + typeCounts.blocked + typeCounts.done,
       ...typeCounts,
+      archived: archivedCount,
     };
   },
 });
@@ -456,7 +447,8 @@ export const list = query({
   args: {
     tab: v.union(
       v.literal("all"), v.literal("backlog"), v.literal("in_progress"),
-      v.literal("review"), v.literal("blocked"), v.literal("done")
+      v.literal("review"), v.literal("blocked"), v.literal("done"),
+      v.literal("archived")
     ),
     filters: v.optional(v.object({
       statusId: v.optional(v.object({
@@ -502,9 +494,15 @@ export const list = query({
     let hitScanLimit = false;
     const tabType = TAB_STATUS_TYPE[args.tab];
 
+    const isArchivedTab = args.tab === "archived";
+
     function passesBaseFilter(t: Doc<"tasks">): boolean {
-      if (t.archivedAt) return false;
       if (t.parentTaskId) return false; // Subtasks never appear in main list
+      if (isArchivedTab) {
+        if (!t.archivedAt) return false; // Archived tab: only show archived
+      } else {
+        if (t.archivedAt) return false; // Normal tabs: exclude archived
+      }
       if (!isAdmin && !t.assigneeIds.includes(userId)) return false;
       return true;
     }
@@ -519,7 +517,7 @@ export const list = query({
         .collect();
       tasks = searchResults.filter(passesBaseFilter);
     } else if (tabType === null) {
-      // "all" tab — bounded reads across all 5 statusTypes
+      // "all" or "archived" tab — bounded reads across all 5 statusTypes
       const allTypes: StatusType[] = ["backlog", "in_progress", "review", "blocked", "done"];
       const taskArrays = await Promise.all(
         allTypes.map(async (type) => {
@@ -1219,6 +1217,67 @@ export const restore = mutation({
   },
 });
 
+/**
+ * Cascade-delete all related data for a single task (not subtasks — call separately for those).
+ * Removes: time entries, activity log, comments (+ reactions + attachments), attachments, read receipts.
+ */
+async function cascadeDeleteTaskData(ctx: MutationCtx, taskId: Id<"tasks">) {
+  // Time entries
+  const timeEntries = await ctx.db
+    .query("timeEntries")
+    .withIndex("by_taskId", (q) => q.eq("taskId", taskId))
+    .collect();
+  for (const te of timeEntries) await ctx.db.delete(te._id);
+
+  // Activity log
+  const activities = await ctx.db
+    .query("activityLog")
+    .withIndex("by_task", (q) => q.eq("taskId", taskId))
+    .collect();
+  for (const a of activities) await ctx.db.delete(a._id);
+
+  // Comment reactions
+  const reactions = await ctx.db
+    .query("commentReactions")
+    .withIndex("by_task", (q) => q.eq("taskId", taskId))
+    .collect();
+  for (const r of reactions) await ctx.db.delete(r._id);
+
+  // Comment attachments
+  const commentAttachments = await ctx.db
+    .query("commentAttachments")
+    .withIndex("by_task", (q) => q.eq("taskId", taskId))
+    .collect();
+  for (const ca of commentAttachments) {
+    await ctx.storage.delete(ca.fileId);
+    await ctx.db.delete(ca._id);
+  }
+
+  // Comments
+  const comments = await ctx.db
+    .query("comments")
+    .withIndex("by_task", (q) => q.eq("taskId", taskId))
+    .collect();
+  for (const c of comments) await ctx.db.delete(c._id);
+
+  // Task attachments
+  const attachments = await ctx.db
+    .query("attachments")
+    .withIndex("by_task", (q) => q.eq("taskId", taskId))
+    .collect();
+  for (const att of attachments) {
+    await ctx.storage.delete(att.fileId);
+    await ctx.db.delete(att._id);
+  }
+
+  // Comment read receipts
+  const receipts = await ctx.db
+    .query("commentReadReceipts")
+    .withIndex("by_task", (q) => q.eq("taskId", taskId))
+    .collect();
+  for (const r of receipts) await ctx.db.delete(r._id);
+}
+
 export const remove = mutation({
   args: { id: v.id("tasks") },
   handler: async (ctx, args) => {
@@ -1227,37 +1286,39 @@ export const remove = mutation({
     const task = await ctx.db.get(args.id);
     if (!task || task.orgId !== orgId) throw new ConvexError("Task not found");
 
-    // Block delete if task or any subtask has time entries — suggest archive instead
-    const timeEntries = await ctx.db
-      .query("timeEntries")
-      .withIndex("by_taskId", (q) => q.eq("taskId", args.id))
-      .first();
-    if (timeEntries) {
-      throw new ConvexError("Cannot delete a task with time entries — archive it instead");
-    }
-
+    // Cascade delete subtasks + their data
     const subtasks = await ctx.db
       .query("tasks")
       .withIndex("by_orgId_parentTaskId", (q) => q.eq("orgId", orgId).eq("parentTaskId", args.id))
       .collect();
-
-    // Check subtasks for time entries before deleting any
     for (const sub of subtasks) {
-      const subEntries = await ctx.db
-        .query("timeEntries")
-        .withIndex("by_taskId", (q) => q.eq("taskId", sub._id))
-        .first();
-      if (subEntries) {
-        throw new ConvexError(`Cannot delete — subtask "${sub.title}" has time entries. Archive instead.`);
-      }
-    }
-
-    // Safe to cascade delete subtasks (no counts adjustment — subtasks never counted)
-    for (const sub of subtasks) {
+      await cascadeDeleteTaskData(ctx, sub._id);
       await ctx.db.delete(sub._id);
     }
 
-    // Adjust counts only for top-level tasks
+    // Cascade delete task's own data
+    await cascadeDeleteTaskData(ctx, args.id);
+
+    // Stop any active timers on this task or its subtasks
+    const affectedTaskIds = new Set([args.id.toString(), ...subtasks.map((s) => s._id.toString())]);
+    const orgMembers = await ctx.db
+      .query("orgMembers")
+      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+      .collect();
+    for (const member of orgMembers) {
+      if (!member.userId) continue;
+      const user = await ctx.db.get(member.userId);
+      if (user?.timerTaskId && affectedTaskIds.has(user.timerTaskId.toString())) {
+        await ctx.db.patch(member.userId, {
+          timerTaskId: undefined,
+          timerStartedAt: undefined,
+          timerAccumulatedMs: undefined,
+          timerStatus: undefined,
+        });
+      }
+    }
+
+    // Adjust counts only for non-archived top-level tasks
     if (!task.archivedAt && !task.parentTaskId) {
       await adjustCounts(ctx, orgId, { [task.statusType]: -1 });
     }
@@ -1306,7 +1367,9 @@ export const bulkUpdate = mutation({
       v.object({ type: v.literal("removeAssignee"), userId: v.id("users") }),
       v.object({ type: v.literal("category"), workCategoryId: v.id("workCategories") }),
       v.object({ type: v.literal("project"), projectId: v.id("projects") }),
-      v.object({ type: v.literal("archive") })
+      v.object({ type: v.literal("archive") }),
+      v.object({ type: v.literal("delete") }),
+      v.object({ type: v.literal("restore") })
     ),
   },
   handler: async (ctx, args) => {
@@ -1435,11 +1498,11 @@ export const bulkUpdate = mutation({
               await adjustCounts(ctx, orgId, { [task.statusType]: -1 });
             }
             // Cascade to subtasks (no counts adjustment)
-            const subtasks = await ctx.db
+            const archiveSubtasks = await ctx.db
               .query("tasks")
               .withIndex("by_orgId_parentTaskId", (q) => q.eq("orgId", orgId).eq("parentTaskId", taskId))
               .collect();
-            for (const sub of subtasks) {
+            for (const sub of archiveSubtasks) {
               if (!sub.archivedAt) {
                 await ctx.db.patch(sub._id, { archivedAt: now, updatedAt: now });
               }
@@ -1447,6 +1510,55 @@ export const bulkUpdate = mutation({
           }
           updated++;
           break;
+
+        case "delete": {
+          if (!isAdmin) {
+            skipped.push({ taskId, title: task.title, reason: "Only admins can delete tasks" });
+            continue;
+          }
+          // Cascade delete subtasks + their data
+          const deleteSubtasks = await ctx.db
+            .query("tasks")
+            .withIndex("by_orgId_parentTaskId", (q) => q.eq("orgId", orgId).eq("parentTaskId", taskId))
+            .collect();
+          for (const sub of deleteSubtasks) {
+            await cascadeDeleteTaskData(ctx, sub._id);
+            await ctx.db.delete(sub._id);
+          }
+          // Cascade delete task's own data
+          await cascadeDeleteTaskData(ctx, taskId);
+          // Adjust counts only for non-archived top-level tasks
+          if (!task.archivedAt && !task.parentTaskId) {
+            await adjustCounts(ctx, orgId, { [task.statusType]: -1 });
+          }
+          await ctx.db.delete(taskId);
+          updated++;
+          break;
+        }
+
+        case "restore": {
+          if (!task.archivedAt) {
+            skipped.push({ taskId, title: task.title, reason: "Task is not archived" });
+            continue;
+          }
+          await ctx.db.patch(taskId, { archivedAt: undefined, updatedAt: now });
+          // Adjust counts only for top-level tasks
+          if (!task.parentTaskId) {
+            await adjustCounts(ctx, orgId, { [task.statusType]: 1 });
+          }
+          // Cascade restore to subtasks
+          const restoreSubtasks = await ctx.db
+            .query("tasks")
+            .withIndex("by_orgId_parentTaskId", (q) => q.eq("orgId", orgId).eq("parentTaskId", taskId))
+            .collect();
+          for (const sub of restoreSubtasks) {
+            if (sub.archivedAt) {
+              await ctx.db.patch(sub._id, { archivedAt: undefined, updatedAt: now });
+            }
+          }
+          updated++;
+          break;
+        }
       }
     }
 

@@ -31,6 +31,10 @@ const TAB_MESSAGES: Record<TaskTab, { title: string; description: string }> = {
     title: "No completed tasks yet",
     description: "Completed tasks will appear here.",
   },
+  archived: {
+    title: "No archived tasks",
+    description: "Archived tasks will appear here.",
+  },
 }
 
 export function TasksEmptyState({

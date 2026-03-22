@@ -71,7 +71,7 @@ export function TasksTable({
   selectedIds: Set<string>
   onSelectAll: (taskIds: string[], selected: boolean) => void
   renderRow: (task: TaskWithJoins) => React.ReactNode
-  renderAddTask: (groupKey: string) => React.ReactNode
+  renderAddTask?: (groupKey: string) => React.ReactNode
 }) {
   // Selectable task IDs — capped at 50 to match the bulk operation limit
   const allTaskIds = groups.flatMap((g) => g.tasks.map((t) => t._id as string))
@@ -116,7 +116,7 @@ export function TasksTable({
           const rows = (
             <>
               {group.tasks.map((task) => renderRow(task))}
-              {renderAddTask(group.key)}
+              {renderAddTask?.(group.key)}
               {group.hasMore && (
                 <div className="px-3 py-2">
                   <button className="text-xs font-medium text-muted-foreground hover:text-foreground">

@@ -121,7 +121,7 @@ function resolveGroupColor(color: string): string {
 
   // Try category color
   const catCfg = getCategoryColor(color)
-  if (catCfg.text !== "#373530") return catCfg.text // not the default fallback
+  if (catCfg.text !== "#4b5563") return catCfg.text // not the default gray fallback
 
   return color // pass through if it's already a CSS color
 }

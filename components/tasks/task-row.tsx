@@ -17,6 +17,7 @@ import { toastError } from "@/lib/toast-helpers"
 import {
   CopyIcon,
   ArchiveIcon,
+  ArchiveRestoreIcon,
   Trash2Icon,
   ListChecksIcon,
   MessageSquareIcon,
@@ -39,10 +40,12 @@ export function TaskRow({
   hasSelection,
   onSelect,
   onArchive,
+  onRestore,
   onDelete,
   onOpenDetail,
   totalMinutes = 0,
   activity,
+  isArchivedView = false,
 }: {
   task: TaskWithJoins
   isAdmin: boolean
@@ -50,10 +53,12 @@ export function TaskRow({
   hasSelection: boolean
   onSelect: (taskId: string, selected: boolean) => void
   onArchive: (taskId: string) => void
+  onRestore?: (taskId: string) => void
   onDelete: (taskId: string) => void
   onOpenDetail?: (taskId: string) => void
   totalMinutes?: number
   activity?: ActivityIndicator
+  isArchivedView?: boolean
 }) {
   const duplicateTask = useMutation(api.tasks.duplicate)
   const isDone = task.statusType === "done"
@@ -123,28 +128,51 @@ export function TaskRow({
 
       {/* 10. Action menu */}
       <RowActionMenu>
-        <DropdownMenuItem
-          onClick={async () => {
-            try { await duplicateTask({ id: task._id }) } catch (err) { toastError(err, "Failed to duplicate task") }
-          }}
-        >
-          <CopyIcon className="size-4" />
-          Duplicate
-        </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => onArchive(task._id)}>
-          <ArchiveIcon className="size-4" />
-          Archive
-        </DropdownMenuItem>
-        {isAdmin && (
+        {isArchivedView ? (
           <>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              className="text-destructive focus:text-destructive"
-              onClick={() => onDelete(task._id)}
-            >
-              <Trash2Icon className="size-4" />
-              Delete
+            <DropdownMenuItem onClick={() => onRestore?.(task._id)}>
+              <ArchiveRestoreIcon className="size-4" />
+              Restore
             </DropdownMenuItem>
+            {isAdmin && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  className="text-destructive focus:text-destructive"
+                  onClick={() => onDelete(task._id)}
+                >
+                  <Trash2Icon className="size-4" />
+                  Delete permanently
+                </DropdownMenuItem>
+              </>
+            )}
+          </>
+        ) : (
+          <>
+            <DropdownMenuItem
+              onClick={async () => {
+                try { await duplicateTask({ id: task._id }) } catch (err) { toastError(err, "Failed to duplicate task") }
+              }}
+            >
+              <CopyIcon className="size-4" />
+              Duplicate
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => onArchive(task._id)}>
+              <ArchiveIcon className="size-4" />
+              Archive
+            </DropdownMenuItem>
+            {isAdmin && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  className="text-destructive focus:text-destructive"
+                  onClick={() => onDelete(task._id)}
+                >
+                  <Trash2Icon className="size-4" />
+                  Delete
+                </DropdownMenuItem>
+              </>
+            )}
           </>
         )}
       </RowActionMenu>

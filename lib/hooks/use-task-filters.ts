@@ -1,18 +1,15 @@
 "use client"
 
 import { useState, useCallback, useMemo } from "react"
+import type { Filter } from "@/components/ui/filters"
+import { FilterOperator } from "@/components/ui/filters"
 import type { Id } from "@/convex/_generated/dataModel"
 
 // ─── Types ──────────────────────────────────────────────────────────────────────
 
-export type TaskTab = "all" | "backlog" | "in_progress" | "review" | "blocked" | "done"
+export type TaskTab = "all" | "backlog" | "in_progress" | "review" | "blocked" | "done" | "archived"
 export type GroupByOption = "project" | "client" | "category" | "assignee" | "status" | null
 export type FilterOp = "is" | "isNot" | "anyOf" | "noneOf"
-
-export type FilterValue = {
-  op: FilterOp
-  value: string // single ID or comma-separated IDs for anyOf/noneOf
-}
 
 // ─── State shape ────────────────────────────────────────────────────────────────
 
@@ -20,26 +17,37 @@ type TaskViewState = {
   tab: TaskTab
   search: string
   groupBy: GroupByOption
-  statusFilter: FilterValue | null
-  clientFilter: FilterValue | null
-  projectFilter: FilterValue | null
-  assigneeFilter: FilterValue | null
-  categoryFilter: FilterValue | null
-  dateFrom: string | null
-  dateTo: string | null
+  filters: Filter[]
 }
 
 const INITIAL_STATE: TaskViewState = {
   tab: "backlog",
   search: "",
   groupBy: null,
-  statusFilter: null,
-  clientFilter: null,
-  projectFilter: null,
-  assigneeFilter: null,
-  categoryFilter: null,
-  dateFrom: null,
-  dateTo: null,
+  filters: [],
+}
+
+// ─── Helpers: map new filter model → Convex args ─────────────────────────────
+
+function operatorToFilterOp(op: FilterOperator, multiValue: boolean): FilterOp {
+  switch (op) {
+    case FilterOperator.IS:
+      return multiValue ? "anyOf" : "is"
+    case FilterOperator.IS_NOT:
+      return multiValue ? "noneOf" : "isNot"
+    case FilterOperator.IS_ANY_OF:
+    case FilterOperator.INCLUDE_ANY_OF:
+    case FilterOperator.INCLUDE:
+      return "anyOf"
+    case FilterOperator.DO_NOT_INCLUDE:
+    case FilterOperator.EXCLUDE_ALL_OF:
+    case FilterOperator.EXCLUDE_IF_ANY_OF:
+      return "noneOf"
+    case FilterOperator.INCLUDE_ALL_OF:
+      return "anyOf"
+    default:
+      return "is"
+  }
 }
 
 // ─── Hook ───────────────────────────────────────────────────────────────────────
@@ -49,11 +57,7 @@ export function useTaskFilters() {
 
   // ── Derived ─────────────────────────────────────────────────────────────
 
-  const hasActiveFilters = !!(
-    state.statusFilter || state.clientFilter || state.projectFilter ||
-    state.assigneeFilter || state.categoryFilter || state.dateFrom || state.dateTo
-  )
-
+  const hasActiveFilters = state.filters.some((f) => f.value.length > 0)
   const isSearching = state.search.length > 0
 
   // ── Setters ─────────────────────────────────────────────────────────────
@@ -70,29 +74,15 @@ export function useTaskFilters() {
     setState((s) => ({ ...s, groupBy }))
   }, [])
 
-  const setFilter = useCallback((
-    field: "status" | "client" | "project" | "assignee" | "category",
-    value: FilterValue | null,
-  ) => {
-    const key = `${field}Filter` as keyof TaskViewState
-    setState((s) => ({ ...s, [key]: value }))
-  }, [])
-
-  const setDateRange = useCallback((from: string | null, to: string | null) => {
-    setState((s) => ({ ...s, dateFrom: from, dateTo: to }))
+  const setFilters = useCallback((updater: Filter[] | ((prev: Filter[]) => Filter[])) => {
+    setState((s) => ({
+      ...s,
+      filters: typeof updater === "function" ? updater(s.filters) : updater,
+    }))
   }, [])
 
   const clearAllFilters = useCallback(() => {
-    setState((s) => ({
-      ...s,
-      statusFilter: null,
-      clientFilter: null,
-      projectFilter: null,
-      assigneeFilter: null,
-      categoryFilter: null,
-      dateFrom: null,
-      dateTo: null,
-    }))
+    setState((s) => ({ ...s, filters: [] }))
   }, [])
 
   // ── Build Convex query args (memoized to avoid re-subscriptions) ─────
@@ -101,13 +91,7 @@ export function useTaskFilters() {
   type MultiOp = "is" | "isNot" | "anyOf" | "noneOf"
 
   const listArgs = useMemo(() => {
-    function toSingleOp(op: FilterOp): SingleOp {
-      if (op === "anyOf") return "is"
-      if (op === "noneOf") return "isNot"
-      return op as SingleOp
-    }
-
-    const filters: {
+    const convexFilters: {
       statusId?: { op: MultiOp; value: Id<"statuses">[] }
       clientId?: { op: SingleOp; value: Id<"clients"> }
       projectId?: { op: MultiOp; value: Id<"projects">[] }
@@ -117,52 +101,47 @@ export function useTaskFilters() {
       dateTo?: string
     } = {}
 
-    if (state.statusFilter) {
-      filters.statusId = {
-        op: state.statusFilter.op,
-        value: state.statusFilter.value.split(",") as Id<"statuses">[],
+    for (const filter of state.filters) {
+      if (filter.value.length === 0) continue
+      const isMulti = filter.value.length > 1
+      const op = operatorToFilterOp(filter.operator, isMulti)
+
+      switch (filter.type) {
+        case "status":
+          convexFilters.statusId = {
+            op,
+            value: filter.value as unknown as Id<"statuses">[],
+          }
+          break
+        case "project":
+          convexFilters.projectId = {
+            op,
+            value: filter.value as unknown as Id<"projects">[],
+          }
+          break
+        case "category":
+          convexFilters.workCategoryId = {
+            op,
+            value: filter.value as unknown as Id<"workCategories">[],
+          }
+          break
+        case "assignee":
+          convexFilters.assigneeIds = {
+            op,
+            value: filter.value as unknown as Id<"users">[],
+          }
+          break
       }
     }
 
-    if (state.clientFilter) {
-      filters.clientId = {
-        op: toSingleOp(state.clientFilter.op),
-        value: state.clientFilter.value.split(",")[0] as Id<"clients">,
-      }
-    }
-
-    if (state.projectFilter) {
-      filters.projectId = {
-        op: state.projectFilter.op,
-        value: state.projectFilter.value.split(",") as Id<"projects">[],
-      }
-    }
-
-    if (state.assigneeFilter) {
-      filters.assigneeIds = {
-        op: state.assigneeFilter.op,
-        value: state.assigneeFilter.value.split(",") as Id<"users">[],
-      }
-    }
-
-    if (state.categoryFilter) {
-      filters.workCategoryId = {
-        op: state.categoryFilter.op,
-        value: state.categoryFilter.value.split(",") as Id<"workCategories">[],
-      }
-    }
-
-    if (state.dateFrom) filters.dateFrom = state.dateFrom
-    if (state.dateTo) filters.dateTo = state.dateTo
-
-    const hasFilters = Object.keys(filters).length > 0
+    const hasFilters = Object.keys(convexFilters).length > 0
 
     // Search spans all tasks — send "all" tab to backend
     const effectiveTab = state.search ? "all" as const : state.tab
 
     return {
       tab: effectiveTab,
-      filters: hasFilters ? (filters as typeof filters) : undefined,
+      filters: hasFilters ? (convexFilters as typeof convexFilters) : undefined,
       groupBy: state.groupBy,
       search: state.search || undefined,
     }
@@ -173,13 +152,7 @@ export function useTaskFilters() {
     tab: state.tab,
     groupBy: state.groupBy,
     search: state.search,
-    statusFilter: state.statusFilter,
-    clientFilter: state.clientFilter,
-    projectFilter: state.projectFilter,
-    assigneeFilter: state.assigneeFilter,
-    categoryFilter: state.categoryFilter,
-    dateFrom: state.dateFrom,
-    dateTo: state.dateTo,
+    filters: state.filters,
     hasActiveFilters,
     isSearching,
 
@@ -187,8 +160,7 @@ export function useTaskFilters() {
     setTab,
     setGroupBy,
     setSearch,
-    setFilter,
-    setDateRange,
+    setFilters,
     clearAllFilters,
 
     // Convex args (memoized)

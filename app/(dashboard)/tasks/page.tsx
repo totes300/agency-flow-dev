@@ -15,7 +15,6 @@ import { TasksTabs } from "@/components/tasks/tasks-tabs"
 import { TasksTable } from "@/components/tasks/tasks-table"
 import { TaskRow } from "@/components/tasks/task-row"
 import { InlineAddTask } from "@/components/tasks/inline-add-task"
-import { TasksFilterBar } from "@/components/tasks/tasks-filter-bar"
 import { TaskFormModal } from "@/components/tasks/task-form-modal"
 import { TaskDetailModal } from "@/components/tasks/task-detail-modal"
 import { BulkToolbar } from "@/components/tasks/bulk-toolbar"
@@ -40,7 +39,6 @@ export default function TasksPage() {
   const pathname = usePathname()
 
   const filters = useTaskFilters()
-  const [filterBarOpen, setFilterBarOpen] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null)
   const [createModalOpen, setCreateModalOpen] = useState(false)
@@ -49,13 +47,6 @@ export default function TasksPage() {
   useEffect(() => {
     setSelectedIds(new Set())
   }, [filters.tab])
-
-  // Auto-open filter bar when filters are active
-  useEffect(() => {
-    if (filters.hasActiveFilters && !filterBarOpen) {
-      setFilterBarOpen(true)
-    }
-  }, [filters.hasActiveFilters]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Escape to deselect all
   useEffect(() => {
@@ -133,6 +124,8 @@ export default function TasksPage() {
     })
   }, [])
 
+  const isArchivedView = filters.tab === "archived"
+
   // Archive with undo
   function handleArchive(taskId: string) {
     triggerUndo({
@@ -145,6 +138,16 @@ export default function TasksPage() {
         await restoreTask({ id: taskId as Id<"tasks"> })
       },
     })
+  }
+
+  // Restore from archived
+  async function handleRestore(taskId: string) {
+    try {
+      await restoreTask({ id: taskId as Id<"tasks"> })
+      toast.success("Task restored")
+    } catch (err) {
+      toastError(err, "Failed to restore task")
+    }
   }
 
   // Delete with confirmation
@@ -184,23 +187,11 @@ export default function TasksPage() {
           isSearching={filters.isSearching}
           groupBy={filters.groupBy}
           onGroupByChange={filters.setGroupBy}
-          hasActiveFilters={filters.hasActiveFilters}
-          onFilterToggle={() => setFilterBarOpen(!filterBarOpen)}
+          filters={filters.filters}
+          setFilters={filters.setFilters}
           isAdmin={isAdmin ?? false}
         />
       </div>
-
-      {filterBarOpen && (
-        <TasksFilterBar
-          statusFilter={filters.statusFilter}
-          projectFilter={filters.projectFilter}
-          assigneeFilter={filters.assigneeFilter}
-          categoryFilter={filters.categoryFilter}
-          isAdmin={isAdmin ?? false}
-          onFilterChange={filters.setFilter}
-          onClearAll={filters.clearAllFilters}
-        />
-      )}
 
       {isEmpty ? (
         <TasksEmptyState
@@ -242,13 +233,15 @@ export default function TasksPage() {
                   hasSelection={selectedIds.size > 0}
                   onSelect={handleSelect}
                   onArchive={handleArchive}
+                  onRestore={handleRestore}
                   onDelete={setDeleteTargetId}
                   onOpenDetail={handleOpenDetail}
                   totalMinutes={timeMap?.[task._id] ?? 0}
                   activity={activityMap?.[task._id]}
+                  isArchivedView={isArchivedView}
                 />
               )}
-              renderAddTask={(groupKey) => (
+              renderAddTask={isArchivedView ? undefined : (groupKey) => (
                 <InlineAddTask
                   key={`add-${groupKey}`}
                   groupBy={filters.groupBy}
@@ -283,6 +276,7 @@ export default function TasksPage() {
         selectedIds={selectedIds}
         onDeselectAll={() => setSelectedIds(new Set())}
         isAdmin={isAdmin ?? false}
+        activeTab={filters.tab}
       />
 
       {/* Mobile FAB */}
@@ -300,7 +294,7 @@ export default function TasksPage() {
         open={!!deleteTargetId}
         onOpenChange={(open) => { if (!open) setDeleteTargetId(null) }}
         title="Delete task"
-        description="This will permanently delete this task and all subtasks. This cannot be undone."
+        description="This will permanently delete this task including all subtasks, time entries, comments, and attachments. This cannot be undone."
         confirmLabel="Delete"
         variant="destructive"
         onConfirm={handleDelete}

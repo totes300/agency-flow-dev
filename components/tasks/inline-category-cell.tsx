@@ -14,7 +14,6 @@ import {
 } from "@/components/ui/command"
 import { CategoryBadge } from "@/components/category-badge"
 import { cn } from "@/lib/utils"
-import { getCategoryColor } from "@/convex/lib/constants"
 import { TagIcon } from "lucide-react"
 import { toastError } from "@/lib/toast-helpers"
 import type { Doc, Id } from "@/convex/_generated/dataModel"
@@ -65,26 +64,19 @@ export function InlineCategoryCell({
           )}
         </button>
       </PopoverTrigger>
-      <PopoverContent className="w-44 p-0" align="start">
+      <PopoverContent className="w-60 p-0" align="start">
         <Command>
           <CommandInput placeholder="Search category..." />
           <CommandList>
             <CommandGroup>
-              <CommandItem onSelect={() => handleSelect(null)}>
-                <span className="text-muted-foreground">None</span>
+              <CommandItem onSelect={() => handleSelect(null)} className="px-2 py-1.5">
+                <span className="text-muted-foreground text-xs">None</span>
               </CommandItem>
-              {categories?.map((c) => {
-                const colors = getCategoryColor(c.color)
-                return (
-                  <CommandItem key={c._id} onSelect={() => handleSelect(c._id)}>
-                    <span
-                      className="size-2.5 shrink-0 rounded-sm"
-                      style={{ backgroundColor: colors.bg, border: `1px solid ${colors.text}30` }}
-                    />
-                    <span className="truncate">{c.name}</span>
+              {categories?.map((c) => (
+                  <CommandItem key={c._id} onSelect={() => handleSelect(c._id)} className="px-2 py-1.5">
+                    <CategoryBadge name={c.name} color={c.color} />
                   </CommandItem>
-                )
-              })}
+              ))}
             </CommandGroup>
           </CommandList>
         </Command>

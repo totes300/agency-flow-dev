@@ -8,8 +8,10 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { FilterIcon, LayoutListIcon, CheckIcon } from "lucide-react"
+import { LayoutListIcon, CheckIcon } from "lucide-react"
 import type { TaskTab, GroupByOption } from "@/lib/hooks/use-task-filters"
+import type { Filter } from "@/components/ui/filters"
+import { TasksFilterBar } from "@/components/tasks/tasks-filter-bar"
 
 type TabDef = {
   key: TaskTab
@@ -23,6 +25,7 @@ const TABS: TabDef[] = [
   { key: "review", label: "Review" },
   { key: "blocked", label: "Blocked" },
   { key: "done", label: "Done" },
+  { key: "archived", label: "Archived" },
 ]
 
 const GROUP_BY_OPTIONS: { key: GroupByOption; label: string; adminOnly?: boolean }[] = [
@@ -41,6 +44,7 @@ export type TabCounts = {
   review: number
   blocked: number
   done: number
+  archived: number
 }
 
 export function TasksTabs({
@@ -50,8 +54,8 @@ export function TasksTabs({
   isSearching,
   groupBy,
   onGroupByChange,
-  hasActiveFilters,
-  onFilterToggle,
+  filters,
+  setFilters,
   isAdmin,
 }: {
   activeTab: TaskTab
@@ -60,8 +64,8 @@ export function TasksTabs({
   isSearching: boolean
   groupBy: GroupByOption
   onGroupByChange: (option: GroupByOption) => void
-  hasActiveFilters: boolean
-  onFilterToggle: () => void
+  filters: Filter[]
+  setFilters: React.Dispatch<React.SetStateAction<Filter[]>>
   isAdmin: boolean
 }) {
   function getCount(tab: TaskTab): number | undefined {
@@ -112,18 +116,7 @@ export function TasksTabs({
 
       {/* Right side: Filter + Group by */}
       <div className="flex items-center gap-2 pb-1">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onFilterToggle}
-          className={cn(
-            "h-8 gap-1.5 text-muted-foreground",
-            hasActiveFilters && "text-primary",
-          )}
-        >
-          <FilterIcon className="size-3.5" />
-          Filter
-        </Button>
+        <TasksFilterBar filters={filters} setFilters={setFilters} />
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>

@@ -6,11 +6,11 @@ const PALETTE = [
   CATEGORY_COLORS.blue,
   CATEGORY_COLORS.purple,
   CATEGORY_COLORS.green,
-  CATEGORY_COLORS.orange,
+  CATEGORY_COLORS.indigo,
   CATEGORY_COLORS.pink,
   CATEGORY_COLORS.red,
-  CATEGORY_COLORS.brown,
   CATEGORY_COLORS.yellow,
+  CATEGORY_COLORS.gray,
 ] as const
 
 function hashName(name: string): number {

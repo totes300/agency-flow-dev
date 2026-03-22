@@ -1,5 +1,6 @@
 "use client"
 
+import { memo } from "react"
 import { useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { cn } from "@/lib/utils"
@@ -15,11 +16,10 @@ import { RowActionMenu } from "@/components/row-action-menu"
 import { DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
 import { toastError } from "@/lib/toast-helpers"
 import {
-  CheckIcon,
   CopyIcon,
   ArchiveIcon,
+  ArchiveRestoreIcon,
   Trash2Icon,
-  CalendarIcon,
   ListChecksIcon,
   MessageSquareIcon,
   FileTextIcon,
@@ -27,15 +27,26 @@ import {
 import { InlineTimeCell } from "@/components/tasks/inline-time-cell"
 import type { TaskWithJoins } from "@/components/tasks/tasks-table"
 
-export function TaskRow({
+export type ActivityIndicator = {
+  subtaskTotal: number
+  subtaskDone: number
+  commentCount: number
+  hasAttachments: boolean
+}
+
+export const TaskRow = memo(function TaskRow({
   task,
   isAdmin,
   isSelected,
   hasSelection,
   onSelect,
   onArchive,
+  onRestore,
   onDelete,
+  onOpenDetail,
   totalMinutes = 0,
+  activity,
+  isArchivedView = false,
 }: {
   task: TaskWithJoins
   isAdmin: boolean
@@ -43,8 +54,12 @@ export function TaskRow({
   hasSelection: boolean
   onSelect: (taskId: string, selected: boolean) => void
   onArchive: (taskId: string) => void
+  onRestore?: (taskId: string) => void
   onDelete: (taskId: string) => void
+  onOpenDetail?: (taskId: string) => void
   totalMinutes?: number
+  activity?: ActivityIndicator
+  isArchivedView?: boolean
 }) {
   const duplicateTask = useMutation(api.tasks.duplicate)
   const isDone = task.statusType === "done"
@@ -70,22 +85,25 @@ export function TaskRow({
           onClick={(e) => e.stopPropagation()}
           disabled={isDone}
           aria-label={isDone ? `${task.title} (done)` : `Select ${task.title}`}
-          className={cn(isDone && "border-green-600 bg-green-600 text-white data-[state=checked]:border-green-600 data-[state=checked]:bg-green-600")}
+          className={cn(isDone && "border-emerald-600 bg-emerald-600 text-white data-[state=checked]:border-emerald-600 data-[state=checked]:bg-emerald-600 dark:border-emerald-500 dark:bg-emerald-500 dark:data-[state=checked]:border-emerald-500 dark:data-[state=checked]:bg-emerald-500")}
         />
       </div>
 
       {/* 2. Task name + subtitle */}
-      <div>
-        <div className={cn("truncate text-sm font-medium", isDone && "line-through")}>
+      <div
+        className="cursor-pointer"
+        onClick={() => onOpenDetail?.(task._id)}
+      >
+        <div className={cn("truncate text-sm font-medium hover:text-primary transition-colors", isDone && "line-through")}>
           {task.title}
         </div>
         <div className="truncate text-[11px] text-muted-foreground">
-          {task.createdBy ? "Created · " : ""}{formatRelativeTime(task.updatedAt)}
+          {task.updatedAt !== task.createdAt ? "Updated · " : "Created · "}{formatRelativeTime(task.updatedAt)}
         </div>
       </div>
 
-      {/* 3. Activity (mock — wired to real data in Phase 6) */}
-      <ActivityIcons title={task.title} hasDescription={!!task.description} />
+      {/* 3. Activity indicators */}
+      <ActivityIcons activity={activity} hasDescription={!!task.description} />
 
       {/* 4. Status (inline edit) */}
       <InlineStatusCell taskId={task._id} status={task.status} isAdmin={isAdmin} />
@@ -111,77 +129,87 @@ export function TaskRow({
 
       {/* 10. Action menu */}
       <RowActionMenu>
-        <DropdownMenuItem
-          onClick={async () => {
-            try { await duplicateTask({ id: task._id }) } catch (err) { toastError(err, "Failed to duplicate task") }
-          }}
-        >
-          <CopyIcon className="size-4" />
-          Duplicate
-        </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => onArchive(task._id)}>
-          <ArchiveIcon className="size-4" />
-          Archive
-        </DropdownMenuItem>
-        {isAdmin && (
+        {isArchivedView ? (
           <>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              className="text-destructive focus:text-destructive"
-              onClick={() => onDelete(task._id)}
-            >
-              <Trash2Icon className="size-4" />
-              Delete
+            <DropdownMenuItem onClick={() => onRestore?.(task._id)}>
+              <ArchiveRestoreIcon className="size-4" />
+              Restore
             </DropdownMenuItem>
+            {isAdmin && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  className="text-destructive focus:text-destructive"
+                  onClick={() => onDelete(task._id)}
+                >
+                  <Trash2Icon className="size-4" />
+                  Delete permanently
+                </DropdownMenuItem>
+              </>
+            )}
+          </>
+        ) : (
+          <>
+            <DropdownMenuItem
+              onClick={async () => {
+                try { await duplicateTask({ id: task._id }) } catch (err) { toastError(err, "Failed to duplicate task") }
+              }}
+            >
+              <CopyIcon className="size-4" />
+              Duplicate
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => onArchive(task._id)}>
+              <ArchiveIcon className="size-4" />
+              Archive
+            </DropdownMenuItem>
+            {isAdmin && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  className="text-destructive focus:text-destructive"
+                  onClick={() => onDelete(task._id)}
+                >
+                  <Trash2Icon className="size-4" />
+                  Delete
+                </DropdownMenuItem>
+              </>
+            )}
           </>
         )}
       </RowActionMenu>
     </div>
   )
-}
+})
 
-/**
- * Mock activity indicators — subtask progress, comment count, description icon.
- * Uses a simple hash of the title to generate deterministic mock data.
- * Will be replaced with real data from subtask/comment queries in Phase 6.
- */
-function ActivityIcons({ title, hasDescription }: { title: string; hasDescription: boolean }) {
-  // Deterministic mock from title hash
-  const hash = simpleHash(title)
-  const totalSubs = (hash % 8) + 1      // 1-8 subtasks
-  const doneSubs = hash % (totalSubs + 1) // 0-total done
-  const comments = (hash >> 3) % 10      // 0-9 comments
-  const hasAttachment = hash % 3 === 0
+function ActivityIcons({ activity, hasDescription }: { activity?: ActivityIndicator; hasDescription: boolean }) {
+  const subtaskTotal = activity?.subtaskTotal ?? 0
+  const subtaskDone = activity?.subtaskDone ?? 0
+  const commentCount = activity?.commentCount ?? 0
+  const hasAttachments = activity?.hasAttachments ?? false
 
   return (
     <div className="flex items-center gap-2 text-muted-foreground/70">
       {/* Subtask progress */}
-      <span className="flex items-center gap-0.5 text-[11px]" title={`${doneSubs}/${totalSubs} subtasks`}>
-        <ListChecksIcon className="size-3 shrink-0" />
-        <span>{doneSubs}/{totalSubs}</span>
-      </span>
+      {subtaskTotal > 0 && (
+        <span className="flex items-center gap-0.5 text-[11px]" title={`${subtaskDone}/${subtaskTotal} subtasks`}>
+          <ListChecksIcon className="size-3 shrink-0" />
+          <span>{subtaskDone}/{subtaskTotal}</span>
+        </span>
+      )}
       {/* Comment count */}
-      {comments > 0 && (
-        <span className="flex items-center gap-0.5 text-[11px]" title={`${comments} comments`}>
+      {commentCount > 0 && (
+        <span className="flex items-center gap-0.5 text-[11px]" title={`${commentCount} comments`}>
           <MessageSquareIcon className="size-3 shrink-0" />
-          <span>{comments}</span>
+          <span>{commentCount}</span>
         </span>
       )}
       {/* Description/attachment icon */}
-      {(hasDescription || hasAttachment) && (
-        <span title="Has description">
+      {(hasDescription || hasAttachments) && (
+        <span title={hasAttachments ? "Has attachments" : "Has description"}>
           <FileTextIcon className="size-3 shrink-0" />
         </span>
       )}
     </div>
   )
-}
-
-function simpleHash(str: string): number {
-  let hash = 0
-  for (let i = 0; i < str.length; i++) {
-    hash = ((hash << 5) - hash + str.charCodeAt(i)) | 0
-  }
-  return Math.abs(hash)
 }
 

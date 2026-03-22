@@ -12,7 +12,10 @@ export function CategoryColorSwatch({
   return (
     <span
       className={cn("inline-block size-[18px] shrink-0 rounded-sm", className)}
-      style={{ backgroundColor: c.bg }}
+      style={{
+        backgroundColor: c.bg,
+        boxShadow: `inset 0 0 0 1px ${c.ring}`,
+      }}
     />
   )
 }

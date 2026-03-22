@@ -4,6 +4,9 @@ import * as React from "react"
 import { Popover as PopoverPrimitive } from "radix-ui"
 
 import { cn } from "@/lib/utils"
+import { usePortalContainer } from "@/components/ui/portal-context"
+
+// ─── Popover components ──────────────────────────────────────────────────────
 
 function Popover({
   ...props
@@ -21,10 +24,16 @@ function PopoverContent({
   className,
   align = "center",
   sideOffset = 4,
+  container,
   ...props
-}: React.ComponentProps<typeof PopoverPrimitive.Content>) {
+}: React.ComponentProps<typeof PopoverPrimitive.Content> & {
+  container?: HTMLElement | null
+}) {
+  const ctxContainer = usePortalContainer()
+  const resolvedContainer = container ?? ctxContainer ?? undefined
+
   return (
-    <PopoverPrimitive.Portal>
+    <PopoverPrimitive.Portal container={resolvedContainer}>
       <PopoverPrimitive.Content
         data-slot="popover-content"
         align={align}

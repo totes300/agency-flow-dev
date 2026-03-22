@@ -2,7 +2,7 @@
 
 import {
   ListChecksIcon,
-  LoaderIcon,
+  CircleDashedIcon,
   CircleDotIcon,
   HashIcon,
   FolderIcon,
@@ -45,7 +45,7 @@ const COLUMN_HEADERS = [
   { label: "", width: null }, // checkbox
   { label: "Task", icon: ListChecksIcon },
   { label: "Activity", icon: CircleDotIcon },
-  { label: "Status", icon: LoaderIcon },
+  { label: "Status", icon: CircleDashedIcon },
   { label: "Category", icon: HashIcon },
   { label: "Client / Project", icon: FolderIcon },
   { label: "Assignee", icon: UserIcon },
@@ -61,6 +61,7 @@ export function TasksTable({
   orgId,
   selectedIds,
   onSelectAll,
+  onLoadMore,
   renderRow,
   renderAddTask,
 }: {
@@ -70,8 +71,9 @@ export function TasksTable({
   orgId: string
   selectedIds: Set<string>
   onSelectAll: (taskIds: string[], selected: boolean) => void
+  onLoadMore?: () => void
   renderRow: (task: TaskWithJoins) => React.ReactNode
-  renderAddTask: (groupKey: string) => React.ReactNode
+  renderAddTask?: (groupKey: string) => React.ReactNode
 }) {
   // Selectable task IDs — capped at 50 to match the bulk operation limit
   const allTaskIds = groups.flatMap((g) => g.tasks.map((t) => t._id as string))
@@ -84,10 +86,10 @@ export function TasksTable({
       <div className={TASK_TABLE_MIN_W}>
         {/* Column headers */}
         <div
-          className={`group/header grid ${TASK_GRID_COLS} items-center gap-x-4 border-b px-3 pt-1.5 pb-4 text-[11px] font-medium uppercase tracking-wide text-muted-foreground [&>*]:min-w-0 [&>*]:overflow-hidden`}
+          className={`group/header grid ${TASK_GRID_COLS} items-center gap-x-4 border-b border-border/60 px-3 py-2 text-xs text-muted-foreground/70 [&>*]:min-w-0 [&>*]:overflow-hidden`}
         >
           {COLUMN_HEADERS.map((col, i) => (
-            <div key={i} className="flex items-center gap-1 truncate">
+            <div key={i} className="flex items-center gap-1.5 truncate">
               {i === 0 ? (
                 <div className={cn(
                   "transition-opacity",
@@ -102,7 +104,7 @@ export function TasksTable({
                 </div>
               ) : (
                 <>
-                  {col.icon && <col.icon className="size-3 shrink-0 opacity-50" />}
+                  {col.icon && <col.icon className="size-3 shrink-0" />}
                   {col.label && <span>{col.label}</span>}
                 </>
               )}
@@ -116,10 +118,14 @@ export function TasksTable({
           const rows = (
             <>
               {group.tasks.map((task) => renderRow(task))}
-              {renderAddTask(group.key)}
-              {group.hasMore && (
+              {renderAddTask?.(group.key)}
+              {group.hasMore && onLoadMore && (
                 <div className="px-3 py-2">
-                  <button className="text-xs font-medium text-muted-foreground hover:text-foreground">
+                  <button
+                    type="button"
+                    onClick={onLoadMore}
+                    className="text-xs font-medium text-muted-foreground hover:text-foreground"
+                  >
                     Load more ({group.count - group.tasks.length} remaining)
                   </button>
                 </div>

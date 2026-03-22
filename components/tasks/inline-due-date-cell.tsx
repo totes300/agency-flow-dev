@@ -1,43 +1,15 @@
 "use client"
 
-import { useState, useMemo } from "react"
+import { useState } from "react"
 import { useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { CalendarIcon, ClockIcon, ArrowRightIcon, ChevronLeftIcon, ChevronRightIcon, XIcon, RepeatIcon } from "lucide-react"
+import { MiniCalendar, addDays, nextDayOfWeek } from "@/components/ui/mini-calendar"
+import { CalendarIcon, ClockIcon, ArrowRightIcon, XIcon, RepeatIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { formatDateToYMD, formatShortDate } from "@/lib/format"
 import { toastError } from "@/lib/toast-helpers"
 import type { Id } from "@/convex/_generated/dataModel"
-
-// ─── Date helpers ────────────────────────────────────────────────────────────
-
-function addDays(date: Date, days: number): Date {
-  const d = new Date(date)
-  d.setDate(d.getDate() + days)
-  return d
-}
-
-function nextDayOfWeek(date: Date, dayOfWeek: number): Date {
-  const d = new Date(date)
-  const diff = (dayOfWeek - d.getDay() + 7) % 7
-  d.setDate(d.getDate() + (diff === 0 ? 7 : diff))
-  return d
-}
-
-function isSameDay(a: Date, b: Date): boolean {
-  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
-}
-
-function getDaysInMonth(year: number, month: number): number {
-  return new Date(year, month + 1, 0).getDate()
-}
-
-function getFirstDayOfWeek(year: number, month: number): number {
-  // 0=Mon, 1=Tue, ... 6=Sun (ISO week)
-  const day = new Date(year, month, 1).getDay()
-  return day === 0 ? 6 : day - 1
-}
 
 // ─── Presets ─────────────────────────────────────────────────────────────────
 
@@ -61,115 +33,6 @@ function PresetIcon({ type, className }: { type: Preset["icon"]; className?: str
     case "calendar": return <CalendarIcon {...props} />
     case "repeat": return <RepeatIcon {...props} />
   }
-}
-
-// ─── Mini Calendar ──────────────────────────────────────────────────────────
-
-function MiniCalendar({
-  selected,
-  onSelect,
-}: {
-  selected: string | null // YYYY-MM-DD
-  onSelect: (date: string) => void
-}) {
-  const today = useMemo(() => new Date(), [])
-  const [viewYear, setViewYear] = useState(today.getFullYear())
-  const [viewMonth, setViewMonth] = useState(today.getMonth())
-
-  const daysInMonth = getDaysInMonth(viewYear, viewMonth)
-  const firstDay = getFirstDayOfWeek(viewYear, viewMonth)
-
-  // Previous month padding
-  const prevMonthDays = getDaysInMonth(viewYear, viewMonth - 1)
-  const prevPadding = Array.from({ length: firstDay }, (_, i) => ({
-    day: prevMonthDays - firstDay + 1 + i,
-    current: false,
-  }))
-
-  // Current month days
-  const currentDays = Array.from({ length: daysInMonth }, (_, i) => ({
-    day: i + 1,
-    current: true,
-  }))
-
-  // Next month padding
-  const totalCells = prevPadding.length + currentDays.length
-  const nextPadding = Array.from({ length: (7 - (totalCells % 7)) % 7 }, (_, i) => ({
-    day: i + 1,
-    current: false,
-  }))
-
-  const allDays = [...prevPadding, ...currentDays, ...nextPadding]
-  const weeks: typeof allDays[] = []
-  for (let i = 0; i < allDays.length; i += 7) {
-    weeks.push(allDays.slice(i, i + 7))
-  }
-
-  const monthLabel = new Date(viewYear, viewMonth).toLocaleDateString("en-US", { month: "long", year: "numeric" })
-
-  function prevMonth() {
-    if (viewMonth === 0) { setViewYear(viewYear - 1); setViewMonth(11) }
-    else setViewMonth(viewMonth - 1)
-  }
-  function nextMonth() {
-    if (viewMonth === 11) { setViewYear(viewYear + 1); setViewMonth(0) }
-    else setViewMonth(viewMonth + 1)
-  }
-
-  return (
-    <div className="flex flex-col gap-1">
-      {/* Month nav */}
-      <div className="flex items-center justify-between px-1 pb-1">
-        <button onClick={prevMonth} className="rounded p-0.5 text-muted-foreground hover:text-foreground">
-          <ChevronLeftIcon className="size-4" />
-        </button>
-        <span className="text-[13px] font-semibold">{monthLabel}</span>
-        <button onClick={nextMonth} className="rounded p-0.5 text-muted-foreground hover:text-foreground">
-          <ChevronRightIcon className="size-4" />
-        </button>
-      </div>
-
-      {/* Day headers */}
-      <div className="grid grid-cols-7">
-        {["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"].map((d) => (
-          <div key={d} className="flex h-7 items-center justify-center text-[10px] font-medium text-muted-foreground">
-            {d}
-          </div>
-        ))}
-      </div>
-
-      {/* Day grid */}
-      {weeks.map((week, wi) => (
-        <div key={wi} className="grid grid-cols-7">
-          {week.map((cell, ci) => {
-            const cellDate = cell.current
-              ? new Date(viewYear, viewMonth, cell.day)
-              : null
-            const dateStr = cellDate ? formatDateToYMD(cellDate) : null
-            const isToday = cellDate && isSameDay(cellDate, today)
-            const isSelected = dateStr && dateStr === selected
-
-            return (
-              <button
-                key={ci}
-                onClick={() => dateStr && onSelect(dateStr)}
-                disabled={!cell.current}
-                className={cn(
-                  "flex h-7 w-full items-center justify-center rounded-md text-xs transition-colors",
-                  !cell.current && "text-muted-foreground/30",
-                  cell.current && !isToday && !isSelected && "text-foreground hover:bg-muted",
-                  isToday && !isSelected && "font-semibold text-primary",
-                  isSelected && "bg-primary font-semibold text-primary-foreground",
-                )}
-              >
-                {cell.day}
-              </button>
-            )
-          })}
-        </div>
-      ))}
-    </div>
-  )
 }
 
 // ─── Main Component ─────────────────────────────────────────────────────────
@@ -217,12 +80,8 @@ export function InlineDueDateCell({
         >
           {dueDate ? (
             <span className={cn("text-xs", isOverdue ? "font-medium text-red-600" : "text-muted-foreground")}>
-              {isOverdue ? "Overdue" : (
-                <>
-                  <CalendarIcon className="mr-1 inline size-3 opacity-50" />
-                  {formatShortDate(dueDate)}
-                </>
-              )}
+              <CalendarIcon className={cn("mr-1 inline size-3", isOverdue ? "opacity-70" : "opacity-50")} />
+              {formatShortDate(dueDate)}
             </span>
           ) : (
             <span className="flex items-center gap-1.5 text-muted-foreground/20 transition-colors group-hover/row:text-muted-foreground/50">
@@ -261,7 +120,7 @@ export function InlineDueDateCell({
             <div className="mt-1 border-t pt-1">
               <button
                 onClick={() => handleSelect(null)}
-                className="flex items-center gap-2 rounded-md px-2 py-1.5 text-xs font-medium text-red-500 transition-colors hover:bg-red-50"
+                className="flex items-center gap-2 rounded-md px-2 py-1.5 text-xs font-medium text-red-500 transition-colors hover:bg-red-500/10"
               >
                 <XIcon className="size-3.5 shrink-0" />
                 No date

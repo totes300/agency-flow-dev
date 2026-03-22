@@ -1,6 +1,7 @@
 "use client"
 
 import { useState } from "react"
+import { AnimatePresence, motion } from "motion/react"
 import { useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { useTaskReferenceData } from "@/components/tasks/task-reference-data"
@@ -17,37 +18,48 @@ import { ConfirmDialog } from "@/components/confirm-dialog"
 import { StatusBadge } from "@/components/status-badge"
 import { CategoryBadge } from "@/components/category-badge"
 import { UserAvatar } from "@/components/user-avatar"
-import { getStatusColor } from "@/lib/status-colors"
-import { getCategoryColor } from "@/convex/lib/constants"
+import { cn } from "@/lib/utils"
 import { Separator } from "@/components/ui/separator"
 import { toast } from "sonner"
 import { toastError } from "@/lib/toast-helpers"
 import {
-  LoaderIcon,
+  CircleDashedIcon,
   UserPlusIcon,
   UserMinusIcon,
   TagIcon,
   ArchiveIcon,
+  ArchiveRestoreIcon,
+  Trash2Icon,
   XIcon,
 } from "lucide-react"
 import type { Id } from "@/convex/_generated/dataModel"
+import type { TaskTab } from "@/lib/hooks/use-task-filters"
 
 export function BulkToolbar({
   selectedIds,
   onDeselectAll,
   isAdmin,
+  activeTab,
 }: {
   selectedIds: Set<string>
   onDeselectAll: () => void
   isAdmin: boolean
+  activeTab: TaskTab
 }) {
   const count = selectedIds.size
-  if (count === 0) return null
-
   const taskIds = [...selectedIds] as Id<"tasks">[]
+  const isArchived = activeTab === "archived"
 
   return (
-    <div className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2">
+    <AnimatePresence>
+    {count > 0 && (
+    <motion.div
+      initial={{ y: 20, opacity: 0 }}
+      animate={{ y: 0, opacity: 1 }}
+      exit={{ y: 20, opacity: 0 }}
+      transition={{ duration: 0.15, ease: "easeOut" }}
+      className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2"
+    >
       <div className="flex items-center gap-1 rounded-xl border border-border bg-background px-3 py-2 shadow-lg">
         {/* Count + deselect */}
         <div className="flex items-center gap-2 pr-2">
@@ -64,24 +76,34 @@ export function BulkToolbar({
 
         <Separator orientation="vertical" className="mx-1 h-5" />
 
-        {/* Status */}
-        <StatusAction taskIds={taskIds} isAdmin={isAdmin} />
+        {isArchived ? (
+          <>
+            {/* Archived tab: Restore + Delete */}
+            <RestoreAction taskIds={taskIds} onDeselectAll={onDeselectAll} />
+            {isAdmin && (
+              <DeleteAction taskIds={taskIds} onDeselectAll={onDeselectAll} />
+            )}
+          </>
+        ) : (
+          <>
+            {/* Normal tabs: Status, Assignee, Category, Archive, Delete */}
+            <StatusAction taskIds={taskIds} isAdmin={isAdmin} />
+            <AssigneeAction taskIds={taskIds} type="add" />
+            <AssigneeAction taskIds={taskIds} type="remove" />
+            <CategoryAction taskIds={taskIds} />
 
-        {/* Add assignee */}
-        <AssigneeAction taskIds={taskIds} type="add" />
+            <Separator orientation="vertical" className="mx-1 h-5" />
 
-        {/* Remove assignee */}
-        <AssigneeAction taskIds={taskIds} type="remove" />
-
-        {/* Category */}
-        <CategoryAction taskIds={taskIds} />
-
-        <Separator orientation="vertical" className="mx-1 h-5" />
-
-        {/* Archive */}
-        <ArchiveAction taskIds={taskIds} onDeselectAll={onDeselectAll} />
+            <ArchiveAction taskIds={taskIds} onDeselectAll={onDeselectAll} />
+            {isAdmin && (
+              <DeleteAction taskIds={taskIds} onDeselectAll={onDeselectAll} />
+            )}
+          </>
+        )}
       </div>
-    </div>
+    </motion.div>
+    )}
+    </AnimatePresence>
   )
 }
 
@@ -112,26 +134,24 @@ function StatusAction({ taskIds, isAdmin }: { taskIds: Id<"tasks">[]; isAdmin: b
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <Button variant="ghost" size="sm" className="h-8 gap-1.5 text-xs">
-          <LoaderIcon className="size-3.5" />
+          <CircleDashedIcon className="size-3.5" />
           Status
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-48 p-0" align="center">
+      <PopoverContent className="w-60 p-0" align="center">
         <Command>
           <CommandList>
             <CommandGroup>
               {statuses?.map((s) => {
                 const disabled = !isAdmin && s.type === "done"
-                const cfg = getStatusColor(s.color)
                 return (
                   <CommandItem
                     key={s._id}
                     disabled={disabled}
                     onSelect={() => !disabled && handleSelect(s._id)}
-                    className={disabled ? "opacity-50" : ""}
+                    className={cn("px-2 py-1.5", disabled && "opacity-50")}
                   >
-                    <span className="size-2 shrink-0 rounded-full" style={{ backgroundColor: cfg.dot }} />
-                    {s.name}
+                    <StatusBadge name={s.name} color={s.color} />
                   </CommandItem>
                 )
               })}
@@ -171,7 +191,7 @@ function AssigneeAction({ taskIds, type }: { taskIds: Id<"tasks">[]; type: "add"
           {type === "add" ? "Add" : "Remove"}
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-52 p-0" align="center">
+      <PopoverContent className="w-60 p-0" align="center">
         <Command>
           <CommandInput placeholder="Search..." />
           <CommandList>
@@ -216,19 +236,15 @@ function CategoryAction({ taskIds }: { taskIds: Id<"tasks">[] }) {
           Category
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-44 p-0" align="center">
+      <PopoverContent className="w-60 p-0" align="center">
         <Command>
           <CommandList>
             <CommandGroup>
-              {categories?.map((c) => {
-                const colors = getCategoryColor(c.color)
-                return (
-                  <CommandItem key={c._id} onSelect={() => handleSelect(c._id)}>
-                    <span className="size-2.5 shrink-0 rounded-sm" style={{ backgroundColor: colors.bg, border: `1px solid ${colors.text}30` }} />
-                    {c.name}
+              {categories?.map((c) => (
+                  <CommandItem key={c._id} onSelect={() => handleSelect(c._id)} className="px-2 py-1.5">
+                    <CategoryBadge name={c.name} color={c.color} />
                   </CommandItem>
-                )
-              })}
+              ))}
             </CommandGroup>
           </CommandList>
         </Command>
@@ -260,7 +276,7 @@ function ArchiveAction({ taskIds, onDeselectAll }: { taskIds: Id<"tasks">[]; onD
       <Button
         variant="ghost"
         size="sm"
-        className="h-8 gap-1.5 text-xs text-destructive hover:text-destructive"
+        className="h-8 gap-1.5 text-xs text-muted-foreground hover:text-foreground"
         onClick={() => setConfirmOpen(true)}
       >
         <ArchiveIcon className="size-3.5" />
@@ -276,5 +292,80 @@ function ArchiveAction({ taskIds, onDeselectAll }: { taskIds: Id<"tasks">[]; onD
         onConfirm={handleArchive}
       />
     </>
+  )
+}
+
+function DeleteAction({ taskIds, onDeselectAll }: { taskIds: Id<"tasks">[]; onDeselectAll: () => void }) {
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const bulkUpdate = useMutation(api.tasks.bulkUpdate)
+
+  async function handleDelete() {
+    setConfirmOpen(false)
+    try {
+      const result = await bulkUpdate({
+        taskIds,
+        action: { type: "delete" },
+      })
+      onDeselectAll()
+      toast.success(`${result.updated} tasks deleted`)
+      if (result.skipped.length > 0) {
+        toast.info(`${result.skipped.length} tasks skipped`)
+      }
+    } catch (err) {
+      toastError(err, "Failed to delete")
+    }
+  }
+
+  return (
+    <>
+      <Button
+        variant="ghost"
+        size="sm"
+        className="h-8 gap-1.5 text-xs text-destructive hover:text-destructive"
+        onClick={() => setConfirmOpen(true)}
+      >
+        <Trash2Icon className="size-3.5" />
+        Delete
+      </Button>
+
+      <ConfirmDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        title={`Permanently delete ${taskIds.length} tasks?`}
+        description="This will permanently delete these tasks including all subtasks, time entries, comments, and attachments. This cannot be undone."
+        confirmLabel="Delete"
+        variant="destructive"
+        onConfirm={handleDelete}
+      />
+    </>
+  )
+}
+
+function RestoreAction({ taskIds, onDeselectAll }: { taskIds: Id<"tasks">[]; onDeselectAll: () => void }) {
+  const bulkUpdate = useMutation(api.tasks.bulkUpdate)
+
+  async function handleRestore() {
+    try {
+      const result = await bulkUpdate({
+        taskIds,
+        action: { type: "restore" },
+      })
+      onDeselectAll()
+      toast.success(`${result.updated} tasks restored`)
+    } catch (err) {
+      toastError(err, "Failed to restore")
+    }
+  }
+
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      className="h-8 gap-1.5 text-xs"
+      onClick={handleRestore}
+    >
+      <ArchiveRestoreIcon className="size-3.5" />
+      Restore
+    </Button>
   )
 }

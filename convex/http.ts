@@ -3,8 +3,32 @@ import { httpAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { WebhookEvent } from "@clerk/backend";
 import { Webhook } from "svix";
+import type { Id } from "./_generated/dataModel";
 
 const http = httpRouter();
+
+// ─── Public image serving (permanent URLs for editor content) ────────────────
+http.route({
+  path: "/image",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    const { searchParams } = new URL(request.url);
+    const storageId = searchParams.get("id");
+    if (!storageId) {
+      return new Response("Missing id parameter", { status: 400 });
+    }
+    const blob = await ctx.storage.get(storageId as Id<"_storage">);
+    if (!blob) {
+      return new Response("Image not found", { status: 404 });
+    }
+    return new Response(blob, {
+      headers: {
+        "Cache-Control": "public, max-age=31536000, immutable",
+        "Content-Type": blob.type || "application/octet-stream",
+      },
+    });
+  }),
+});
 
 http.route({
   path: "/clerk-users-webhook",

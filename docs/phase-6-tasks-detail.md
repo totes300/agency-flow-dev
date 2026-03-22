@@ -10,14 +10,15 @@
 | Question | Decision |
 |----------|----------|
 | Task detail UI? | Centered modal (Linear/Asana pattern), not drawer, not separate page |
-| Rich text editor? | Tiptap, auto-save with 1s debounce, stored as Tiptap JSON |
+| Rich text editor? | Tiptap, auto-sav, stored as Tiptap JSON |
 | Subtasks in v1? | ✅ Lite version: same entity (parentTaskId), lives in parent detail, not in main list |
 | Max depth? | 1 level (subtask cannot have subtasks) |
 | Subtask inheritance? | projectId must match parent's (not overridable), billable defaults to parent's |
-| Subtask in main list? | No — only progress bar on parent row ("2/3 done") |
+| Subtask in main list? | No — only progress numbers on parent row ("2/3 done") - nor progress bars
 | Subtask in billing view? | Nested rows under parent: "↳ Build components · Dev · 04:00" |
-| Comments tab? | Placeholder in v1 (Phase 2: Collaboration) |
-| Attachments tab? | Placeholder in v1 (Phase 2: Collaboration) |
+| Comments tab? | beatufil tip tab editor and timeline view of comments from pepople |
+| Attachments tab? |   |
+Email tabs- we will having emails coming into the software under semails tab and i can create a task from an eam or attach e,mail to alredy exsitsing task. Right now just create the placeholder for it i will develop this feature later but i need the tab to be ready. 
 
 ---
 
@@ -102,9 +103,11 @@ Time entries for this task. **Phase 7 (Time Tracking) implements the full logic*
 - "Attachments coming soon" message
 - Or: simple file upload (Convex file storage, max 10MB, max 20/task)
 
+### Tab 4: Emails
+
 ---
 
-## Subtask lite system
+## Subtask  system
 
 ### Data model
 - Subtask = **task** in the tasks table, with `parentTaskId` set
@@ -136,21 +139,14 @@ Each subtask row:
 - Category badge
 - Assignee avatar
 - Status badge
-- Logged time total
+- timer component
 - ⋮ menu: Edit, Archive, Delete
 
 ### Subtask creation
 - "+ Add subtask" button below the subtask list
 - Inline: title input → Enter → created
-- Auto-inheritance: projectId = parent's projectId, billable = parent's billable
-- Defaults: statusId = inbox, assigneeIds = []
+- Auto-inheritance: projectId = parent's projectId, billable = parent's billable, category=parents category, assignee = parents asignee
 
-### Subtask detail
-- **Its own detail modal** (opens the subtask as a task)
-- Modal header: "↳ Subtask of: [Parent task name]" link (click → navigates to parent)
-- All tabs work the same as a regular task
-- Restriction: projectId not editable (lock, "Inherited from parent")
-- Restriction: cannot add subtasks (no "+ Add subtask" button)
 
 ### Subtask reordering
 - Drag handle or up/down arrows in parent detail

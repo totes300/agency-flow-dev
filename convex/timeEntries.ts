@@ -6,6 +6,7 @@ import { roundMinutes } from "./lib/rounding";
 import { getDateInTimezone } from "./lib/timer";
 import { resolveRate } from "./lib/rates";
 import { getOrgSettings, buildRateContext } from "./lib/orgHelpers";
+import { logActivity } from "./activityLog";
 
 // ─── Queries ────────────────────────────────────────────────────────────────────
 
@@ -212,7 +213,7 @@ export const create = mutation({
     const isBillable = args.isBillable ?? task.billable;
 
     const now = Date.now();
-    return await ctx.db.insert("timeEntries", {
+    const entryId = await ctx.db.insert("timeEntries", {
       orgId: auth.orgId,
       taskId: args.taskId,
       userId: entryUserId,
@@ -226,6 +227,20 @@ export const create = mutation({
       updatedAt: now,
       createdBy: auth.userId,
     });
+
+    // Activity log
+    const h = Math.floor(rounded / 60);
+    const m = rounded % 60;
+    const durStr = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+    await logActivity(ctx, {
+      taskId: args.taskId,
+      orgId: auth.orgId,
+      userId: auth.userId,
+      type: "time_entry_logged",
+      metadata: { entryId, duration: durStr, note: args.note?.trim() || null },
+    });
+
+    return entryId;
   },
 });
 
@@ -280,6 +295,26 @@ export const update = mutation({
     // Rate snapshot does NOT update on edit (stays from creation time)
 
     await ctx.db.patch(args.id, updates);
+
+    // Activity log if duration changed
+    if (args.durationMinutes !== undefined && updates.durationMinutes !== entry.durationMinutes) {
+      const fmtDur = (mins: number) => {
+        const h = Math.floor(mins / 60);
+        const m = mins % 60;
+        return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+      };
+      await logActivity(ctx, {
+        taskId: entry.taskId,
+        orgId,
+        userId,
+        type: "time_entry_edited",
+        metadata: {
+          entryId: args.id,
+          oldDuration: fmtDur(entry.durationMinutes),
+          newDuration: fmtDur(updates.durationMinutes as number),
+        },
+      });
+    }
   },
 });
 
@@ -301,6 +336,18 @@ export const remove = mutation({
     if ("invoicedInReportId" in entry && entry.invoicedInReportId) {
       throw new ConvexError("Cannot delete an invoiced time entry");
     }
+
+    // Activity log before deleting
+    const h = Math.floor(entry.durationMinutes / 60);
+    const m = entry.durationMinutes % 60;
+    const durStr = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+    await logActivity(ctx, {
+      taskId: entry.taskId,
+      orgId,
+      userId,
+      type: "time_entry_deleted",
+      metadata: { entryId: args.id, duration: durStr },
+    });
 
     await ctx.db.delete(args.id);
   },

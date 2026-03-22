@@ -94,6 +94,7 @@ export default defineSchema({
     billable: v.boolean(),
     dueDate: v.optional(v.string()),
     parentTaskId: v.optional(v.id("tasks")),
+    sortOrder: v.optional(v.number()),
     archivedAt: v.optional(v.number()),
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -117,6 +118,7 @@ export default defineSchema({
     review: v.number(),
     blocked: v.number(),
     done: v.number(),
+    archived: v.optional(v.number()),
   }).index("by_orgId", ["orgId"]),
 
   // ─── Clients ──────────────────────────────────────────────────────────────────
@@ -258,4 +260,95 @@ export default defineSchema({
     updatedAt: v.number(),
     createdBy: v.id("users"),
   }).index("by_orgId", ["orgId"]),
+
+  // ─── Activity Log (audit trail per task) ───────────────────────────────────
+  activityLog: defineTable({
+    taskId: v.id("tasks"),
+    orgId: v.string(),
+    userId: v.id("users"),
+    type: v.string(),
+    metadata: v.any(),
+    createdAt: v.number(),
+  })
+    .index("by_task", ["taskId", "createdAt"])
+    .index("by_org", ["orgId", "createdAt"]),
+
+  // ─── Attachments (per task, Convex file storage) ────────────────────────────
+  attachments: defineTable({
+    taskId: v.id("tasks"),
+    orgId: v.string(),
+    userId: v.id("users"),
+    fileId: v.id("_storage"),
+    fileName: v.string(),
+    fileSize: v.number(),
+    mimeType: v.string(),
+    createdAt: v.number(),
+  })
+    .index("by_task", ["taskId", "createdAt"]),
+
+  // ─── Comment read receipts (per user per task) ─────────────────────────────
+  commentReadReceipts: defineTable({
+    taskId: v.id("tasks"),
+    orgId: v.string(),
+    userId: v.id("users"),
+    lastSeenAt: v.number(),
+  })
+    .index("by_user_task", ["userId", "taskId"])
+    .index("by_task", ["taskId"])
+    .index("by_orgId", ["orgId"]),
+
+  // ─── Comments (per task) ───────────────────────────────────────────────────
+  comments: defineTable({
+    taskId: v.id("tasks"),
+    orgId: v.string(),
+    userId: v.id("users"),
+    content: v.object({
+      type: v.string(),
+      content: v.optional(v.any()),
+    }),
+    parentCommentId: v.optional(v.id("comments")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_task", ["taskId", "createdAt"]),
+
+  // ─── Comment reactions ────────────────────────────────────────────────────
+  commentReactions: defineTable({
+    commentId: v.id("comments"),
+    taskId: v.id("tasks"),
+    orgId: v.string(),
+    userId: v.id("users"),
+    emoji: v.string(),
+    createdAt: v.number(),
+  })
+    .index("by_task", ["taskId"])
+    .index("by_comment", ["commentId"])
+    .index("by_comment_user_emoji", ["commentId", "userId", "emoji"])
+    .index("by_orgId", ["orgId"]),
+
+  // ─── Comment attachments ──────────────────────────────────────────────────
+  commentAttachments: defineTable({
+    commentId: v.id("comments"),
+    taskId: v.id("tasks"),
+    orgId: v.string(),
+    userId: v.id("users"),
+    fileId: v.id("_storage"),
+    fileName: v.string(),
+    fileSize: v.number(),
+    mimeType: v.string(),
+    createdAt: v.number(),
+  })
+    .index("by_task", ["taskId"])
+    .index("by_comment", ["commentId"])
+    .index("by_orgId", ["orgId"]),
+
+  // ─── Typing indicators (ephemeral presence) ──────────────────────────────
+  typingIndicators: defineTable({
+    taskId: v.id("tasks"),
+    orgId: v.string(),
+    userId: v.id("users"),
+    lastTypedAt: v.number(),
+  })
+    .index("by_task", ["taskId"])
+    .index("by_task_user", ["taskId", "userId"]),
 });

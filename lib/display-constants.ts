@@ -3,16 +3,14 @@ import type { StatusType, CategoryColor } from "@/convex/lib/constants"
 // ─── Shared display constants (used by onboarding + settings) ─────────────────
 
 export const CATEGORY_COLOR_LABELS: Record<CategoryColor, string> = {
-  default: "Default",
   gray:    "Gray",
-  brown:   "Brown",
-  orange:  "Orange",
+  red:     "Red",
   yellow:  "Yellow",
   green:   "Green",
   blue:    "Blue",
+  indigo:  "Indigo",
   purple:  "Purple",
   pink:    "Pink",
-  red:     "Red",
 }
 
 export const COMMON_TIMEZONES = [

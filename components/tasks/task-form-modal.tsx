@@ -7,6 +7,7 @@ import { useTaskReferenceData } from "@/components/tasks/task-reference-data"
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
@@ -23,8 +24,6 @@ import { Textarea } from "@/components/ui/textarea"
 import { StatusBadge } from "@/components/status-badge"
 import { CategoryBadge } from "@/components/category-badge"
 import { UserAvatar } from "@/components/user-avatar"
-import { getStatusColor } from "@/lib/status-colors"
-import { getCategoryColor } from "@/convex/lib/constants"
 import { toast } from "sonner"
 import { firstName } from "@/lib/format"
 import { toastError } from "@/lib/toast-helpers"
@@ -121,9 +120,9 @@ export function TaskFormModal({
       <DialogContent
         className="flex max-h-[80vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-[560px]"
         onKeyDown={handleKeyDown}
-        aria-describedby={undefined}
       >
         <DialogTitle className="sr-only">Create task</DialogTitle>
+        <DialogDescription className="sr-only">Fill in the details to create a new task</DialogDescription>
         {/* Project picker */}
         <div className="flex items-center gap-2 px-5 pt-4 pb-3">
           <ProjectPicker
@@ -298,20 +297,16 @@ function StatusPicker({
           )}
         </button>
       </PopoverTrigger>
-      <PopoverContent className="w-48 p-0" align="start">
+      <PopoverContent className="w-60 p-0" align="start">
         <Command>
           <CommandList>
             <CommandGroup>
-              {statuses.map((s) => {
-                const cfg = getStatusColor(s.color)
-                return (
-                  <CommandItem key={s._id} onSelect={() => { onChange(s._id); setOpen(false) }}>
-                    <span className="size-2 shrink-0 rounded-full" style={{ backgroundColor: cfg.dot }} />
-                    {s.name}
-                    {value === s._id && <CheckIcon className="ml-auto size-3.5" />}
+              {statuses.map((s) => (
+                  <CommandItem key={s._id} onSelect={() => { onChange(s._id); setOpen(false) }} className="px-2 py-1.5">
+                    <StatusBadge name={s.name} color={s.color} />
+                    {value === s._id && <CheckIcon className="ml-auto size-3.5 text-muted-foreground" />}
                   </CommandItem>
-                )
-              })}
+              ))}
             </CommandGroup>
           </CommandList>
         </Command>
@@ -362,7 +357,7 @@ function AssigneePicker({
           )}
         </button>
       </PopoverTrigger>
-      <PopoverContent className="w-52 p-0" align="start">
+      <PopoverContent className="w-60 p-0" align="start">
         <Command>
           <CommandInput placeholder="Search..." />
           <CommandList>
@@ -410,23 +405,19 @@ function CategoryPicker({
           )}
         </button>
       </PopoverTrigger>
-      <PopoverContent className="w-44 p-0" align="start">
+      <PopoverContent className="w-60 p-0" align="start">
         <Command>
           <CommandList>
             <CommandGroup>
-              <CommandItem onSelect={() => { onChange(undefined); setOpen(false) }}>
-                <span className="text-muted-foreground">None</span>
+              <CommandItem onSelect={() => { onChange(undefined); setOpen(false) }} className="px-2 py-1.5">
+                <span className="text-muted-foreground text-xs">None</span>
               </CommandItem>
-              {categories.map((c) => {
-                const colors = getCategoryColor(c.color)
-                return (
-                  <CommandItem key={c._id} onSelect={() => { onChange(c._id); setOpen(false) }}>
-                    <span className="size-2.5 shrink-0 rounded-sm" style={{ backgroundColor: colors.bg, border: `1px solid ${colors.text}30` }} />
-                    {c.name}
-                    {value === c._id && <CheckIcon className="ml-auto size-3.5" />}
+              {categories.map((c) => (
+                  <CommandItem key={c._id} onSelect={() => { onChange(c._id); setOpen(false) }} className="px-2 py-1.5">
+                    <CategoryBadge name={c.name} color={c.color} />
+                    {value === c._id && <CheckIcon className="ml-auto size-3.5 text-muted-foreground" />}
                   </CommandItem>
-                )
-              })}
+              ))}
             </CommandGroup>
           </CommandList>
         </Command>

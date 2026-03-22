@@ -1,3 +1,12 @@
+/** Check if two dates fall on the same calendar day. */
+export function isSameDay(a: Date, b: Date): boolean {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  )
+}
+
 const formatterCache = new Map<string, Intl.NumberFormat>()
 
 function getCurrencyFormatter(currency: string, fractionDigits: number): Intl.NumberFormat {
@@ -58,8 +67,8 @@ export function formatDateToYMD(date: Date): string {
 }
 
 /** Format a timestamp as relative time (e.g., "2m ago", "3h ago", "5d ago"). */
-export function formatRelativeTime(timestamp: number): string {
-  const diff = Date.now() - timestamp
+export function formatRelativeTime(timestamp: number, now: number = Date.now()): string {
+  const diff = now - timestamp
   const minutes = Math.floor(diff / 60000)
   if (minutes < 1) return "just now"
   if (minutes < 60) return `${minutes}m ago`
@@ -93,9 +102,58 @@ export function firstName(name: string): string {
 }
 
 /** Check if a YYYY-MM-DD date string is before today. */
-export function isOverdue(dueDate: string | undefined | null): boolean {
+export function isOverdue(dueDate: string | undefined | null, now: Date = new Date()): boolean {
   if (!dueDate) return false
-  return dueDate < formatDateToYMD(new Date())
+  return dueDate < formatDateToYMD(now)
+}
+
+/**
+ * Format a timestamp in ClickUp style:
+ * < 1 min:   "Just now"
+ * < 60 min:  "5 mins"
+ * Today:     "Today at 2:30 pm"
+ * Yesterday: "Yesterday at 8:36 pm"
+ * Older:     "Mar 15 at 10:00 am"
+ */
+export function formatActivityTimestamp(timestamp: number, now: number = Date.now()): string {
+  const diff = now - timestamp
+  const minutes = Math.floor(diff / 60000)
+
+  if (minutes < 1) return "Just now"
+  if (minutes < 60) return `${minutes} min${minutes === 1 ? "" : "s"}`
+
+  const eventDate = new Date(timestamp)
+  const today = new Date(now)
+  const yesterday = new Date(now)
+  yesterday.setDate(today.getDate() - 1)
+
+  const timeStr = eventDate.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).toLowerCase()
+
+  if (isSameDay(eventDate, today)) return `Today at ${timeStr}`
+  if (isSameDay(eventDate, yesterday)) return `Yesterday at ${timeStr}`
+
+  const dateStr = eventDate.toLocaleDateString("en-US", { month: "short", day: "numeric" })
+  return `${dateStr} at ${timeStr}`
+}
+
+/**
+ * Get the Monday–Sunday bounds of a week, offset by N weeks from current.
+ * offset=0 → this week, offset=-1 → last week
+ */
+export function getWeekBounds(offset: number, now: Date = new Date()): { start: string; end: string } {
+  now = new Date(now) // clone to avoid mutation
+  const day = now.getDay()
+  const mondayOffset = day === 0 ? -6 : 1 - day
+  const monday = new Date(now)
+  monday.setDate(now.getDate() + mondayOffset + offset * 7)
+  monday.setHours(0, 0, 0, 0)
+  const sunday = new Date(monday)
+  sunday.setDate(monday.getDate() + 6)
+  return { start: formatDateToYMD(monday), end: formatDateToYMD(sunday) }
 }
 
 // Re-export duration formatters for discoverability

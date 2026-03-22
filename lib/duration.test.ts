@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseDuration, formatDuration, formatTimerDisplay } from "./duration";
+import { parseDuration, formatDuration, formatTimerDisplay, formatMinutesDisplay } from "./duration";
 
 describe("parseDuration", () => {
   // ─── Hours + minutes ──────────────────────────────────────────────────────
@@ -62,4 +62,14 @@ describe("formatTimerDisplay", () => {
   it("formats 86399000 → '23:59:59'", () => expect(formatTimerDisplay(86399000)).toBe("23:59:59"));
   it("handles negative → '00:00:00'", () => expect(formatTimerDisplay(-1000)).toBe("00:00:00"));
   it("formats 500ms → '00:00:00' (floors)", () => expect(formatTimerDisplay(500)).toBe("00:00:00"));
+});
+
+describe("formatMinutesDisplay", () => {
+  it("formats 0 → '00:00'", () => expect(formatMinutesDisplay(0)).toBe("00:00"));
+  it("formats 30 → '00:30'", () => expect(formatMinutesDisplay(30)).toBe("00:30"));
+  it("formats 60 → '01:00'", () => expect(formatMinutesDisplay(60)).toBe("01:00"));
+  it("formats 90 → '01:30'", () => expect(formatMinutesDisplay(90)).toBe("01:30"));
+  it("formats 480 → '08:00'", () => expect(formatMinutesDisplay(480)).toBe("08:00"));
+  it("formats 1 → '00:01'", () => expect(formatMinutesDisplay(1)).toBe("00:01"));
+  it("handles negative → '00:00'", () => expect(formatMinutesDisplay(-10)).toBe("00:00"));
 });

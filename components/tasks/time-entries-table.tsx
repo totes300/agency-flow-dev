@@ -230,7 +230,7 @@ export function TimeEntriesTable({
               {/* Billable dot */}
               <div className="flex items-center justify-center">
                 <div
-                  className={`size-1.5 rounded-full ${entry.isBillable ? "bg-green-500" : "bg-border"}`}
+                  className={cn("size-1.5 rounded-full", entry.isBillable ? "bg-green-500" : "bg-border")}
                   title={entry.isBillable ? "Billable" : "Non-billable"}
                 />
               </div>

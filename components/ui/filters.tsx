@@ -380,9 +380,16 @@ export default function Filters({
                   typeConfigs={typeConfigs}
                   setFilterValues={(filterValues) => {
                     setFilters((prev) =>
-                      prev.map((f) =>
-                        f.id === filter.id ? { ...f, value: filterValues } : f
-                      )
+                      prev.map((f) => {
+                        if (f.id !== filter.id) return f
+                        const getOps = typeConfigs.find((t) => t.key === f.type)?.operators ?? defaultOperators
+                        const validOps = getOps(filterValues)
+                        return {
+                          ...f,
+                          value: filterValues,
+                          operator: validOps.includes(f.operator) ? f.operator : validOps[0],
+                        }
+                      })
                     )
                   }}
                 />
@@ -390,6 +397,7 @@ export default function Filters({
               <Button
                 variant="ghost"
                 size="icon"
+                aria-label={`Remove ${config?.label ?? filter.type} filter`}
                 onClick={() => {
                   setFilters((prev) => prev.filter((f) => f.id !== filter.id))
                 }}

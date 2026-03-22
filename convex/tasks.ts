@@ -164,10 +164,13 @@ export const createSubtask = mutation({
     assigneeIds: v.optional(v.array(v.id("users"))),
   },
   handler: async (ctx, args) => {
-    const { orgId, userId } = await getAuthContext(ctx);
+    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
 
     const parent = await ctx.db.get(args.parentTaskId);
     if (!parent || parent.orgId !== orgId) throw new ConvexError("Parent task not found");
+    if (!isAdmin && !parent.assigneeIds.includes(userId)) {
+      throw new ConvexError("You don't have access to this task");
+    }
     if (parent.parentTaskId) {
       throw new ConvexError("Subtasks cannot have subtasks (max 1 level)");
     }
@@ -238,10 +241,13 @@ export const reorderSubtasks = mutation({
     orderedIds: v.array(v.id("tasks")),
   },
   handler: async (ctx, { parentTaskId, orderedIds }) => {
-    const { orgId } = await getAuthContext(ctx);
+    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
 
     const parent = await ctx.db.get(parentTaskId);
     if (!parent || parent.orgId !== orgId) throw new ConvexError("Task not found");
+    if (!isAdmin && !parent.assigneeIds.includes(userId)) {
+      throw new ConvexError("You don't have access to this task");
+    }
 
     for (let i = 0; i < orderedIds.length; i++) {
       const sub = await ctx.db.get(orderedIds[i]);

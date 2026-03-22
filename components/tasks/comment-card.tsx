@@ -1,6 +1,6 @@
 "use client"
 
-import type { ReactNode } from "react"
+import { useState, useCallback, useEffect, memo, type ReactNode } from "react"
 import { UserAvatar } from "@/components/user-avatar"
 import { CommentAttachmentChip } from "@/components/comment-attachment-chip"
 import { EmojiPickerPopover } from "@/components/emoji-picker-popover"
@@ -11,16 +11,29 @@ import {
   TooltipContent,
   TooltipProvider,
 } from "@/components/ui/tooltip"
-import { ThumbsUpIcon, SmilePlusIcon, CornerDownRightIcon } from "lucide-react"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import {
+  ThumbsUpIcon,
+  SmilePlusIcon,
+  CornerDownRightIcon,
+  MoreHorizontalIcon,
+  PencilIcon,
+  TrashIcon,
+} from "lucide-react"
 import type { FeedItem } from "@/lib/task-detail"
+import type { Id } from "@/convex/_generated/dataModel"
+import { cn } from "@/lib/utils"
 
 /** Clerk default avatars contain "default" in the URL — show monogram instead */
 function isDefaultAvatar(url?: string | null): boolean {
   if (!url) return true
   return url.includes("/eyJ0eXBlIjoiZGVmYXVsdCI")
 }
-import type { Id } from "@/convex/_generated/dataModel"
-import { cn } from "@/lib/utils"
 
 // ─── TipTap JSON renderer ────────────────────────────────────────────────────────
 
@@ -60,6 +73,10 @@ function renderNode(node: TiptapNode, key: number): ReactNode {
         if (mark.type === "code") element = <code>{element}</code>
         if (mark.type === "underline") element = <u>{element}</u>
         if (mark.type === "strike") element = <s>{element}</s>
+        if (mark.type === "highlight") {
+          const color = mark.attrs?.color as string | undefined
+          element = <mark style={color ? { backgroundColor: color } : undefined}>{element}</mark>
+        }
         if (mark.type === "link") {
           const href = mark.attrs?.href as string | undefined
           element = <a href={href ?? "#"} target="_blank" rel="noopener noreferrer">{element}</a>
@@ -74,7 +91,7 @@ function renderNode(node: TiptapNode, key: number): ReactNode {
     return (
       <span
         key={key}
-        className="inline rounded bg-blue-100 px-1 py-0.5 text-[12px] font-medium text-blue-600 dark:bg-blue-950 dark:text-blue-400"
+        className="mention inline rounded px-1 py-0.5 text-[12px] font-medium"
       >
         @{label}
       </span>
@@ -116,6 +133,53 @@ function renderNode(node: TiptapNode, key: number): ReactNode {
 
   if (node.type === "hardBreak") return <br key={key} />
 
+  // Images
+  if (node.type === "image") {
+    const src = node.attrs?.src as string | undefined
+    const alt = (node.attrs?.alt as string) ?? ""
+    if (!src) return null
+    return (
+      <img
+        key={key}
+        src={src}
+        alt={alt}
+        className="my-2 max-h-64 max-w-full rounded-md object-contain"
+        loading="lazy"
+      />
+    )
+  }
+
+  // Tables
+  if (node.type === "table") {
+    return (
+      <table key={key} className="my-2 w-full border-collapse text-sm">
+        <tbody>{node.content?.map((child, i) => renderNode(child, i))}</tbody>
+      </table>
+    )
+  }
+  if (node.type === "tableRow") {
+    return <tr key={key}>{node.content?.map((child, i) => renderNode(child, i))}</tr>
+  }
+  if (node.type === "tableHeader") {
+    return (
+      <th key={key} className="border border-border/50 bg-muted/50 px-2 py-1 text-left font-medium">
+        {node.content?.map((child, i) => renderNode(child, i))}
+      </th>
+    )
+  }
+  if (node.type === "tableCell") {
+    return (
+      <td key={key} className="border border-border/50 px-2 py-1">
+        {node.content?.map((child, i) => renderNode(child, i))}
+      </td>
+    )
+  }
+
+  // Highlight mark support (handled in text marks, but also as a node wrapper)
+  if (node.type === "highlight") {
+    return <mark key={key}>{node.content?.map((child, i) => renderNode(child, i))}</mark>
+  }
+
   // Fallback: render children
   if (node.content) {
     return <span key={key}>{node.content.map((child, i) => renderNode(child, i))}</span>
@@ -129,6 +193,7 @@ function renderNode(node: TiptapNode, key: number): ReactNode {
 interface CommentCardProps {
   item: FeedItem & { kind: "comment" }
   currentUserId?: Id<"users">
+  isAdmin?: boolean
   reactions?: Array<{
     emoji: string
     count: number
@@ -144,20 +209,51 @@ interface CommentCardProps {
   }>
   onReply: (commentId: string, userName: string) => void
   onToggleReaction: (commentId: string, emoji: string) => void
+  onEdit?: (commentId: string, content: unknown) => void
+  onDelete?: (commentId: string) => void
 }
 
 // ─── Component ──────────────────────────────────────────────────────────────────
 
-export function CommentCard({
+export const CommentCard = memo(function CommentCard({
   item,
+  currentUserId,
+  isAdmin,
   reactions,
   attachments,
   onReply,
   onToggleReaction,
+  onEdit,
+  onDelete,
 }: CommentCardProps) {
+  const [isEditing, setIsEditing] = useState(false)
+  const [editContent, setEditContent] = useState<unknown>(null)
+
+  const isOwn = currentUserId && item.userId === currentUserId
+  const canEdit = isOwn && onEdit
+  const canDelete = (isOwn || isAdmin) && onDelete
+
+  const handleStartEdit = useCallback(() => {
+    setEditContent(item.content)
+    setIsEditing(true)
+  }, [item.content])
+
+  const handleSaveEdit = useCallback(() => {
+    if (editContent && onEdit) {
+      onEdit(item.id, editContent)
+    }
+    setIsEditing(false)
+    setEditContent(null)
+  }, [editContent, onEdit, item.id])
+
+  const handleCancelEdit = useCallback(() => {
+    setIsEditing(false)
+    setEditContent(null)
+  }, [])
+
   return (
     <div id={`comment-${item.id}`} className="group/comment my-3 rounded-lg border border-border/60 bg-background">
-      {/* Header: avatar + name + time */}
+      {/* Header: avatar + name + time + actions */}
       <div className="flex items-center gap-3 px-4 pt-3.5 pb-1.5">
         <UserAvatar
           name={item.userName ?? "?"}
@@ -170,6 +266,42 @@ export function CommentCard({
         <span className="text-[11px] text-muted-foreground/50">
           {formatActivityTimestamp(item.createdAt)}
         </span>
+        {item.updatedAt && item.updatedAt !== item.createdAt && (
+          <span className="text-[10px] text-muted-foreground/40">(edited)</span>
+        )}
+
+        {/* Edit/Delete menu — hover-to-reveal */}
+        {(canEdit || canDelete) && !isEditing && (
+          <div className="ml-auto opacity-0 transition-opacity group-hover/comment:opacity-100">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  className="flex size-6 items-center justify-center rounded text-muted-foreground/50 transition-colors hover:bg-muted hover:text-foreground"
+                >
+                  <MoreHorizontalIcon className="size-3.5" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-32">
+                {canEdit && (
+                  <DropdownMenuItem onClick={handleStartEdit}>
+                    <PencilIcon className="mr-2 size-3.5" />
+                    Edit
+                  </DropdownMenuItem>
+                )}
+                {canDelete && (
+                  <DropdownMenuItem
+                    onClick={() => onDelete!(item.id)}
+                    className="text-destructive focus:text-destructive"
+                  >
+                    <TrashIcon className="mr-2 size-3.5" />
+                    Delete
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        )}
       </div>
 
       {/* Reply label — clickable, scrolls to parent comment */}
@@ -180,8 +312,10 @@ export function CommentCard({
             const el = document.getElementById(`comment-${item.parentCommentId}`)
             if (el) {
               el.scrollIntoView({ behavior: "smooth", block: "center" })
-              el.classList.add("ring-2", "ring-primary/30")
-              setTimeout(() => el.classList.remove("ring-2", "ring-primary/30"), 1500)
+              el.classList.remove("comment-highlight")
+              // Force reflow so re-adding the class restarts the animation
+              void el.offsetWidth
+              el.classList.add("comment-highlight")
             }
           }}
           className="flex items-center gap-1 pl-4 pr-4 text-[11px] text-muted-foreground/60 transition-colors hover:text-muted-foreground"
@@ -196,13 +330,22 @@ export function CommentCard({
         </button>
       )}
 
-      {/* Body — render TipTap JSON with mentions */}
+      {/* Body — render or edit */}
       <div className="px-4 pb-2">
-        {renderTiptapContent(item.content)}
+        {isEditing ? (
+          <CommentEditArea
+            content={editContent}
+            onChange={setEditContent}
+            onSave={handleSaveEdit}
+            onCancel={handleCancelEdit}
+          />
+        ) : (
+          renderTiptapContent(item.content)
+        )}
       </div>
 
       {/* Attachments */}
-      {attachments && attachments.length > 0 && (
+      {!isEditing && attachments && attachments.length > 0 && (
         <div className="flex flex-wrap gap-1.5 px-4 pb-2">
           {attachments.map((att) => (
             <CommentAttachmentChip
@@ -217,7 +360,7 @@ export function CommentCard({
       )}
 
       {/* Reaction badges */}
-      {reactions && reactions.length > 0 && (
+      {!isEditing && reactions && reactions.length > 0 && (
         <div className="flex flex-wrap gap-1.5 px-4 pb-2">
           <TooltipProvider>
             {reactions.map((r) => (
@@ -247,34 +390,96 @@ export function CommentCard({
       )}
 
       {/* Footer: quick actions */}
-      <div className="flex items-center justify-between border-t-2 border-border/40 px-4 py-2 opacity-40 transition-opacity duration-200 group-hover/comment:opacity-100">
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={() => onToggleReaction(item.id, "\u{1F44D}")}
-            aria-label="Toggle thumbs up reaction"
-            className="flex size-7 items-center justify-center rounded-full text-muted-foreground/50 transition-colors hover:bg-muted hover:text-foreground"
-          >
-            <ThumbsUpIcon className="size-3.5" />
-          </button>
-          <EmojiPickerPopover
-            onSelect={(emoji) => onToggleReaction(item.id, emoji)}
-          >
+      {!isEditing && (
+        <div className="flex items-center justify-between border-t border-border/40 px-4 py-2 opacity-40 transition-opacity duration-200 group-hover/comment:opacity-100">
+          <div className="flex items-center gap-1">
             <button
               type="button"
-              aria-label="Add reaction"
+              onClick={() => onToggleReaction(item.id, "\u{1F44D}")}
+              aria-label="Toggle thumbs up reaction"
               className="flex size-7 items-center justify-center rounded-full text-muted-foreground/50 transition-colors hover:bg-muted hover:text-foreground"
             >
-              <SmilePlusIcon className="size-3.5" />
+              <ThumbsUpIcon className="size-3.5" />
             </button>
-          </EmojiPickerPopover>
+            <EmojiPickerPopover
+              onSelect={(emoji) => onToggleReaction(item.id, emoji)}
+            >
+              <button
+                type="button"
+                aria-label="Add reaction"
+                className="flex size-7 items-center justify-center rounded-full text-muted-foreground/50 transition-colors hover:bg-muted hover:text-foreground"
+              >
+                <SmilePlusIcon className="size-3.5" />
+              </button>
+            </EmojiPickerPopover>
+          </div>
+          <button
+            type="button"
+            onClick={() => onReply(item.id, item.userName ?? "Someone")}
+            className="text-xs text-muted-foreground/50 transition-colors hover:text-foreground"
+          >
+            Reply
+          </button>
         </div>
+      )}
+    </div>
+  )
+})
+
+// ─── Inline edit area ───────────────────────────────────────────────────────────
+
+function CommentEditArea({
+  content,
+  onChange,
+  onSave,
+  onCancel,
+}: {
+  content: unknown
+  onChange: (content: unknown) => void
+  onSave: () => void
+  onCancel: () => void
+}) {
+  // Lazy-load TipTap to avoid bundle bloat in the comment card
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [TiptapEditor, setTiptapEditor] = useState<React.ComponentType<any> | null>(null)
+
+  useEffect(() => {
+    void import("@/components/tasks/tiptap-editor").then((mod) => {
+      setTiptapEditor(() => mod.TiptapEditor)
+    })
+  }, [])
+
+  if (!TiptapEditor) {
+    return (
+      <div className="rounded-lg border border-border/40 p-3">
+        <div className="h-5 w-2/3 animate-pulse rounded bg-muted" />
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="rounded-lg border border-border/60 focus-within:border-primary/40">
+        <TiptapEditor
+          content={content}
+          onUpdate={onChange}
+          autoFocus
+        />
+      </div>
+      <div className="flex items-center justify-end gap-2">
         <button
           type="button"
-          onClick={() => onReply(item.id, item.userName ?? "Someone")}
-          className="text-xs text-muted-foreground/50 transition-colors hover:text-foreground"
+          onClick={onCancel}
+          className="rounded px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
         >
-          Reply
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={onSave}
+          className="rounded bg-primary px-2.5 py-1 text-xs text-primary-foreground transition-colors hover:bg-primary/90"
+        >
+          Save
         </button>
       </div>
     </div>

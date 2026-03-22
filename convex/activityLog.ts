@@ -51,21 +51,22 @@ export const byTask = query({
       .withIndex("by_task", (q) => q.eq("taskId", taskId))
       .take(500);
 
-    // Join user names
-    const enriched = await Promise.all(
-      events.map(async (event) => {
+    // Join user names with dedup cache
+    const userCache = new Map<string, string>();
+    for (const event of events) {
+      if (!userCache.has(event.userId)) {
         const user = await ctx.db.get(event.userId);
-        return {
-          _id: event._id,
-          type: event.type,
-          metadata: event.metadata,
-          createdAt: event.createdAt,
-          userId: event.userId,
-          userName: user?.name ?? "Unknown",
-        };
-      })
-    );
+        userCache.set(event.userId, user?.name ?? "Unknown");
+      }
+    }
 
-    return enriched;
+    return events.map((event) => ({
+      _id: event._id,
+      type: event.type,
+      metadata: event.metadata,
+      createdAt: event.createdAt,
+      userId: event.userId,
+      userName: userCache.get(event.userId) ?? "Unknown",
+    }));
   },
 });

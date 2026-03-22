@@ -68,43 +68,15 @@ export const AnimateChangeInHeight: React.FC<AnimateChangeInHeightProps> = ({
   )
 }
 
-// ─── Generic types ───────────────────────────────────────────────────────────
+// ─── Generic types (re-exported from lib for colocation with UI) ─────────────
 
-export enum FilterOperator {
-  IS = "is",
-  IS_NOT = "is not",
-  IS_ANY_OF = "is any of",
-  INCLUDE = "include",
-  DO_NOT_INCLUDE = "do not include",
-  INCLUDE_ALL_OF = "include all of",
-  INCLUDE_ANY_OF = "include any of",
-  EXCLUDE_ALL_OF = "exclude all of",
-  EXCLUDE_IF_ANY_OF = "exclude if any of",
-}
-
-export type FilterOption = {
-  id: string
-  name: string
-  icon?: React.ReactNode
-  label?: string
-  group?: string
-}
-
-export type FilterTypeConfig = {
-  key: string
-  label: string
-  icon?: React.ReactNode
-  options: FilterOption[]
-  operators?: (values: string[]) => FilterOperator[]
-  popoverWidth?: string
-}
-
-export type Filter = {
-  id: string
-  type: string
-  operator: FilterOperator
-  value: string[]
-}
+export {
+  FilterOperator,
+  type FilterOption,
+  type FilterTypeConfig,
+  type Filter,
+} from "@/lib/filter-types"
+import { FilterOperator, type FilterOption, type FilterTypeConfig, type Filter } from "@/lib/filter-types"
 
 // ─── Default operator logic ──────────────────────────────────────────────────
 
@@ -310,6 +282,39 @@ const FilterValueCombobox = ({
   )
 }
 
+// ─── Date range value component ─────────────────────────────────────────────
+
+const DateRangeFilterValue = ({
+  filterValues,
+  setFilterValues,
+}: {
+  filterValues: string[] // [from, to]
+  setFilterValues: (values: string[]) => void
+}) => {
+  const from = filterValues[0] ?? ""
+  const to = filterValues[1] ?? ""
+
+  return (
+    <div className="flex items-center gap-[1px]">
+      <input
+        type="date"
+        value={from}
+        onChange={(e) => setFilterValues([e.target.value, to])}
+        className="bg-muted hover:bg-muted/50 px-1.5 py-1 text-muted-foreground hover:text-primary transition shrink-0 outline-none text-xs h-6 w-[110px]"
+        placeholder="From"
+      />
+      <span className="bg-muted px-1 py-1 text-muted-foreground text-xs shrink-0 h-6 flex items-center">&ndash;</span>
+      <input
+        type="date"
+        value={to}
+        onChange={(e) => setFilterValues([from, e.target.value])}
+        className="bg-muted hover:bg-muted/50 px-1.5 py-1 text-muted-foreground hover:text-primary transition shrink-0 outline-none text-xs h-6 w-[110px]"
+        placeholder="To"
+      />
+    </div>
+  )
+}
+
 // ─── Main Filters component ──────────────────────────────────────────────────
 
 export default function Filters({
@@ -324,9 +329,15 @@ export default function Filters({
   return (
     <div className="flex gap-2 flex-wrap">
       {filters
-        .filter((filter) => filter.value?.length > 0)
+        .filter((filter) => {
+          const config = typeConfigs.find((t) => t.key === filter.type)
+          // Date range filters are always shown (even with empty strings)
+          if (config?.isDateRange) return true
+          return filter.value?.length > 0
+        })
         .map((filter) => {
           const config = typeConfigs.find((t) => t.key === filter.type)
+          const isDateRange = config?.isDateRange ?? false
           return (
             <div
               key={filter.id}
@@ -336,31 +347,46 @@ export default function Filters({
                 {config?.icon}
                 {config?.label ?? filter.type}
               </div>
-              <FilterOperatorDropdown
-                filterType={filter.type}
-                operator={filter.operator}
-                filterValues={filter.value}
-                typeConfigs={typeConfigs}
-                setOperator={(operator) => {
-                  setFilters((prev) =>
-                    prev.map((f) =>
-                      f.id === filter.id ? { ...f, operator } : f
+              {!isDateRange && (
+                <FilterOperatorDropdown
+                  filterType={filter.type}
+                  operator={filter.operator}
+                  filterValues={filter.value}
+                  typeConfigs={typeConfigs}
+                  setOperator={(operator) => {
+                    setFilters((prev) =>
+                      prev.map((f) =>
+                        f.id === filter.id ? { ...f, operator } : f
+                      )
                     )
-                  )
-                }}
-              />
-              <FilterValueCombobox
-                filterType={filter.type}
-                filterValues={filter.value}
-                typeConfigs={typeConfigs}
-                setFilterValues={(filterValues) => {
-                  setFilters((prev) =>
-                    prev.map((f) =>
-                      f.id === filter.id ? { ...f, value: filterValues } : f
+                  }}
+                />
+              )}
+              {isDateRange ? (
+                <DateRangeFilterValue
+                  filterValues={filter.value}
+                  setFilterValues={(filterValues) => {
+                    setFilters((prev) =>
+                      prev.map((f) =>
+                        f.id === filter.id ? { ...f, value: filterValues } : f
+                      )
                     )
-                  )
-                }}
-              />
+                  }}
+                />
+              ) : (
+                <FilterValueCombobox
+                  filterType={filter.type}
+                  filterValues={filter.value}
+                  typeConfigs={typeConfigs}
+                  setFilterValues={(filterValues) => {
+                    setFilters((prev) =>
+                      prev.map((f) =>
+                        f.id === filter.id ? { ...f, value: filterValues } : f
+                      )
+                    )
+                  }}
+                />
+              )}
               <Button
                 variant="ghost"
                 size="icon"

@@ -13,7 +13,7 @@ import type { Id } from "@/convex/_generated/dataModel"
 import { TypingIndicator } from "@/components/typing-indicator"
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip"
 
-export function TaskDetailSidebar({ taskId }: { taskId: Id<"tasks"> }) {
+export function TaskDetailSidebar({ taskId, isAdmin }: { taskId: Id<"tasks">; isAdmin?: boolean }) {
   const { isAuthenticated } = useConvexAuth()
 
   const currentUser = useQuery(api.users.current, isAuthenticated ? {} : "skip")
@@ -27,6 +27,8 @@ export function TaskDetailSidebar({ taskId }: { taskId: Id<"tasks"> }) {
   const typingUsers = useQuery(api.typingIndicators.getTyping, isAuthenticated ? { taskId } : "skip")
 
   const toggleReaction = useMutation(api.commentReactions.toggle)
+  const updateComment = useMutation(api.comments.update)
+  const removeComment = useMutation(api.comments.remove)
 
   // Reply context state
   const [replyContext, setReplyContext] = useState<{ commentId: string; userName: string } | null>(null)
@@ -42,22 +44,47 @@ export function TaskDetailSidebar({ taskId }: { taskId: Id<"tasks"> }) {
     [toggleReaction],
   )
 
+  const handleEditComment = useCallback(
+    (commentId: string, content: unknown) => {
+      void updateComment({ id: commentId as Id<"comments">, content })
+    },
+    [updateComment],
+  )
+
+  const handleDeleteComment = useCallback(
+    (commentId: string) => {
+      void removeComment({ id: commentId as Id<"comments"> })
+    },
+    [removeComment],
+  )
+
   // Mark comments as seen — debounced to avoid firing on rapid J/K navigation.
-  // Re-triggers when new comments arrive while dialog is open (Messenger-style).
+  // Skips if the latest comment is by the current user (no redundant server write).
   const markSeen = useMutation(api.comments.markSeen)
   const commentCount = comments?.length ?? 0
+  const latestCommentUserId = comments && comments.length > 0 ? comments[comments.length - 1].userId : null
   useEffect(() => {
     if (!isAuthenticated) return
+    if (latestCommentUserId && currentUser && latestCommentUserId === currentUser._id) return
     const timeout = setTimeout(() => markSeen({ taskId }), 500)
     return () => clearTimeout(timeout)
-  }, [isAuthenticated, taskId, markSeen, commentCount])
+  }, [isAuthenticated, taskId, markSeen, commentCount, latestCommentUserId, currentUser])
 
   // Freeze lastSeenAt on first load so the "New" divider survives the markSeen update.
   // Once captured, it stays constant for the lifetime of this dialog mount.
-  const newDividerAt = useRef<number | null>(null)
-  if (myLastSeen !== undefined && newDividerAt.current === null) {
-    newDividerAt.current = myLastSeen
-  }
+  const [newDividerAt, setNewDividerAt] = useState<number | null>(null)
+  const newDividerCaptured = useRef(false)
+  useEffect(() => {
+    if (!newDividerCaptured.current && myLastSeen !== undefined) {
+      newDividerCaptured.current = true
+      setNewDividerAt(myLastSeen)
+    }
+  }, [myLastSeen])
+
+  // Stabilize reaction/attachment maps — Convex returns new object refs on every update,
+  // but the inner arrays are identical if the data hasn't changed. Serialize to detect real changes.
+  const stableReactionsMap = useMemo(() => reactionsMap, [JSON.stringify(reactionsMap)])
+  const stableAttachmentsMap = useMemo(() => attachmentsMap, [JSON.stringify(attachmentsMap)])
 
   // Build unified timeline — memoized to avoid re-sorting on unrelated re-renders
   const feed = useMemo(() => buildFeed(activities, comments), [activities, comments])
@@ -93,19 +120,12 @@ export function TaskDetailSidebar({ taskId }: { taskId: Id<"tasks"> }) {
           <div className="flex flex-col">
             {(() => {
               const lastCommentIndex = feed.findLastIndex((item) => item.kind === "comment")
+              // Pre-compute the first "new" item index (O(n) instead of O(n²))
+              const firstNewIndex = newDividerAt !== null && newDividerAt > 0
+                ? feed.findIndex((item) => item.createdAt > newDividerAt && item.userId !== currentUserId)
+                : -1
               return feed.map((item, i) => {
-                const showNewDivider =
-                  newDividerAt.current !== null &&
-                  newDividerAt.current > 0 &&
-                  item.createdAt > newDividerAt.current &&
-                  item.userId !== currentUserId &&
-                  !feed
-                    .slice(0, i)
-                    .some(
-                      (prev) =>
-                        prev.createdAt > newDividerAt.current! &&
-                        prev.userId !== currentUserId,
-                    )
+                const showNewDivider = i === firstNewIndex
 
                 return (
                   <Fragment key={item.id}>
@@ -114,10 +134,13 @@ export function TaskDetailSidebar({ taskId }: { taskId: Id<"tasks"> }) {
                       <CommentCard
                         item={item}
                         currentUserId={currentUserId}
-                        reactions={reactionsMap?.[item.id]}
-                        attachments={attachmentsMap?.[item.id]}
+                        isAdmin={isAdmin}
+                        reactions={stableReactionsMap?.[item.id]}
+                        attachments={stableAttachmentsMap?.[item.id]}
                         onReply={handleReply}
                         onToggleReaction={handleToggleReaction}
+                        onEdit={handleEditComment}
+                        onDelete={handleDeleteComment}
                       />
                     ) : (
                       <AuditLine item={item} currentUserId={currentUserId} />
@@ -152,7 +175,7 @@ export function TaskDetailSidebar({ taskId }: { taskId: Id<"tasks"> }) {
 
 function buildFeed(
   activities: { _id: string; type: string; userId: string; userName: string; metadata: unknown; createdAt: number }[] | undefined,
-  comments: { _id: string; userId: string; userName: string; userImageUrl?: string; content: unknown; parentCommentId?: Id<"comments">; parentUserName?: string; parentPreview?: string; createdAt: number }[] | undefined,
+  comments: { _id: string; userId: string; userName: string; userImageUrl?: string; content: unknown; parentCommentId?: Id<"comments">; parentUserName?: string; parentPreview?: string; createdAt: number; updatedAt?: number }[] | undefined,
 ): FeedItem[] | null {
   if (!activities || !comments) return null
 
@@ -177,6 +200,7 @@ function buildFeed(
     parentUserName: c.parentUserName,
     parentPreview: c.parentPreview,
     createdAt: c.createdAt,
+    updatedAt: c.updatedAt,
   }))
 
   return mergeActivityFeed(activityEvents, commentEvents)

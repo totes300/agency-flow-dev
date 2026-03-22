@@ -2,6 +2,8 @@
  * Pure functions for grouping and collapsing activity events.
  */
 
+import { isSameDay } from "@/lib/format"
+
 // ─── Types ──────────────────────────────────────────────────────────────────────
 
 export type RawEvent = {
@@ -32,11 +34,6 @@ export function getDayLabel(timestamp: number, now: number = Date.now()): string
   const today = new Date(now)
   const yesterday = new Date(now)
   yesterday.setDate(today.getDate() - 1)
-
-  const isSameDay = (a: Date, b: Date) =>
-    a.getFullYear() === b.getFullYear() &&
-    a.getMonth() === b.getMonth() &&
-    a.getDate() === b.getDate()
 
   if (isSameDay(eventDate, today)) return "Today"
   if (isSameDay(eventDate, yesterday)) return "Yesterday"

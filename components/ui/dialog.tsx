@@ -4,7 +4,7 @@ import * as React from "react"
 import { Dialog as DialogPrimitive } from "radix-ui"
 
 import { cn } from "@/lib/utils"
-import { PopoverContainerProvider } from "@/components/ui/popover"
+import { PortalContainerProvider } from "@/components/ui/portal-context"
 import { Button } from "@/components/ui/button"
 import { XIcon } from "lucide-react"
 
@@ -40,7 +40,7 @@ function DialogOverlay({
     <DialogPrimitive.Overlay
       data-slot="dialog-overlay"
       className={cn(
-        "fixed inset-0 isolate z-50 bg-black/40 duration-100 supports-backdrop-filter:backdrop-blur-xs data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
+        "fixed inset-0 isolate z-50 bg-black/10 duration-100 supports-backdrop-filter:backdrop-blur-xs data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
         className
       )}
       {...props}
@@ -70,9 +70,9 @@ function DialogContent({
         )}
         {...props}
       >
-        <PopoverContainerProvider container={container}>
+        <PortalContainerProvider container={container}>
           {children}
-        </PopoverContainerProvider>
+        </PortalContainerProvider>
         {showCloseButton && (
           <DialogPrimitive.Close data-slot="dialog-close" asChild>
             <Button
@@ -86,6 +86,38 @@ function DialogContent({
             </Button>
           </DialogPrimitive.Close>
         )}
+      </DialogPrimitive.Content>
+    </DialogPortal>
+  )
+}
+
+/**
+ * Full-screen dialog content — used for large modals like task detail.
+ * Provides a transparent centered container with padding, no default card styles.
+ * The consumer provides its own inner card/panel.
+ */
+function DialogFullscreenContent({
+  className,
+  children,
+  ...props
+}: React.ComponentProps<typeof DialogPrimitive.Content>) {
+  const [container, setContainer] = React.useState<HTMLElement | null>(null)
+
+  return (
+    <DialogPortal>
+      <DialogOverlay className="bg-black/40" />
+      <DialogPrimitive.Content
+        ref={setContainer}
+        data-slot="dialog-fullscreen-content"
+        className={cn(
+          "fixed inset-0 z-50 flex items-center justify-center bg-transparent p-4 outline-none duration-150 sm:p-8 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-[0.97] data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-[0.97]",
+          className,
+        )}
+        {...props}
+      >
+        <PortalContainerProvider container={container}>
+          {children}
+        </PortalContainerProvider>
       </DialogPrimitive.Content>
     </DialogPortal>
   )
@@ -163,6 +195,7 @@ export {
   DialogContent,
   DialogDescription,
   DialogFooter,
+  DialogFullscreenContent,
   DialogHeader,
   DialogOverlay,
   DialogPortal,

@@ -161,8 +161,9 @@
 }
 
 .tiptap-content pre {
-  background: var(--foreground);
-  color: var(--background);
+  background: var(--muted);
+  color: var(--foreground);
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 0.75rem 1rem;
   margin: 0.5rem 0;
@@ -196,6 +197,67 @@
   margin: 0.5rem 0;
 }
 
+/* ─── Tables ────────────────────────────────────────────────────────────────── */
+
+.tiptap-content table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.5rem 0;
+  overflow: hidden;
+  table-layout: fixed;
+}
+
+.tiptap-content table td,
+.tiptap-content table th {
+  border: 1px solid var(--border);
+  padding: 0.375rem 0.625rem;
+  vertical-align: top;
+  position: relative;
+  min-width: 80px;
+}
+
+.tiptap-content table th {
+  background: var(--muted);
+  font-weight: 600;
+  text-align: left;
+}
+
+.tiptap-content table td > p,
+.tiptap-content table th > p {
+  margin: 0;
+}
+
+/* Selected cell highlight */
+.tiptap-content table .selectedCell::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: oklch(from var(--primary) l c h / 0.08);
+  pointer-events: none;
+}
+
+/* Column resize handle */
+.tiptap-content .column-resize-handle {
+  position: absolute;
+  top: 0;
+  right: -2px;
+  bottom: 0;
+  width: 4px;
+  background: var(--primary);
+  opacity: 0;
+  cursor: col-resize;
+  transition: opacity 0.15s ease;
+}
+
+.tiptap-content table:hover .column-resize-handle,
+.tiptap-content .column-resize-handle:hover {
+  opacity: 0.4;
+}
+
+.tiptap-content .resize-cursor {
+  cursor: col-resize;
+}
+
 /* ─── Horizontal rule ────────────────────────────────────────────────────────── */
 
 .tiptap-content hr {
@@ -220,12 +282,29 @@
   background: oklch(from var(--ring) l c h / 0.3);
 }
 
+/* Override ProseMirror's heavy black node-selection outline */
+.tiptap-content .ProseMirror-selectednode {
+  outline: none !important;
+}
+
+/* ─── Highlight ──────────────────────────────────────────────────────────────── */
+
+.tiptap-content mark {
+  border-radius: 3px;
+  padding: 0.1rem 0.15rem;
+  color: inherit;
+}
+
+.dark .tiptap-content mark {
+  opacity: 0.85;
+}
+
 /* ─── Mentions ───────────────────────────────────────────────────────────────── */
 
 .tiptap-content .mention,
 .comment-editor .mention {
-  background: #dbeafe; /* blue-100 */
-  color: #2563eb; /* blue-600 */
+  background: oklch(0.93 0.04 250);
+  color: oklch(0.55 0.18 250);
   border-radius: 4px;
   padding: 0.1rem 0.3rem;
   font-weight: 500;
@@ -235,8 +314,19 @@
 
 .dark .tiptap-content .mention,
 .dark .comment-editor .mention {
-  background: #172554; /* blue-950 */
-  color: #60a5fa; /* blue-400 */
+  background: oklch(0.25 0.06 250);
+  color: oklch(0.7 0.14 250);
+}
+
+/* ─── Comment highlight animation (reply scroll-to) ─────────────────────────── */
+
+@keyframes comment-flash {
+  0% { box-shadow: 0 0 0 2px oklch(0.65 0.15 250 / 0.3); }
+  100% { box-shadow: 0 0 0 2px transparent; }
+}
+
+.comment-highlight {
+  animation: comment-flash 1.5s ease-out forwards;
 }
 
 /* ─── Comment editor ─────────────────────────────────────────────────────────── */

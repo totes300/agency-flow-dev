@@ -3,11 +3,11 @@
 import {
   useState,
   useCallback,
+  useMemo,
   useRef,
   useEffect,
 } from "react"
-import { useMutation, useQuery } from "convex/react"
-import { useConvexAuth } from "convex/react"
+import { useMutation } from "convex/react"
 import { useEditor, EditorContent } from "@tiptap/react"
 import StarterKit from "@tiptap/starter-kit"
 import Placeholder from "@tiptap/extension-placeholder"
@@ -17,8 +17,10 @@ import TaskList from "@tiptap/extension-task-list"
 import TaskItem from "@tiptap/extension-task-item"
 import Underline from "@tiptap/extension-underline"
 import { api } from "@/convex/_generated/api"
+import { useTaskReferenceData } from "@/components/tasks/task-reference-data"
 import { Button } from "@/components/ui/button"
 import { ToolbarButton } from "@/components/toolbar-button"
+import { LinkPopover } from "@/components/tasks/link-popover"
 import { EmojiPickerPopover } from "@/components/emoji-picker-popover"
 import { CommentAttachmentChip } from "@/components/comment-attachment-chip"
 import { MentionDropdown } from "@/components/tasks/mention-dropdown"
@@ -33,7 +35,7 @@ import {
   BoldIcon,
   ItalicIcon,
   StrikethroughIcon,
-  LinkIcon,
+
   ListIcon,
   ListOrderedIcon,
   ListChecksIcon,
@@ -73,7 +75,7 @@ export function TaskDetailCommentInput({
   const [mentionState, setMentionState] = useState<MentionDropdownState | null>(null)
   const mentionKeyDownRef = useRef<((e: SuggestionKeyDownProps) => boolean) | null>(null)
 
-  const { isAuthenticated } = useConvexAuth()
+  const { orgMembers: members } = useTaskReferenceData()
   const createComment = useMutation(api.comments.create)
   const generateUploadUrl = useMutation(api.commentAttachments.generateUploadUrl)
   const saveAttachment = useMutation(api.commentAttachments.save)
@@ -82,16 +84,12 @@ export function TaskDetailCommentInput({
   const fileInputRef = useRef<HTMLInputElement>(null)
   const lastTypingRef = useRef(0)
   const suppressTypingRef = useRef(false)
-  const members = useQuery(
-    api.orgMembers.listOrgMembers,
-    isAuthenticated ? {} : "skip",
-  )
 
-  // Build mention items — ref so suggestion config always reads latest
-  const mentionItems: MentionSuggestion[] = (members ?? []).map((m) => ({
-    id: m._id,
-    label: m.name,
-  }))
+  // Build mention items — memoized to avoid re-mapping on every render
+  const mentionItems = useMemo<MentionSuggestion[]>(
+    () => (members ?? []).map((m) => ({ id: m._id, label: m.name })),
+    [members],
+  )
   const mentionItemsRef = useRef(mentionItems)
   mentionItemsRef.current = mentionItems
 
@@ -328,20 +326,7 @@ export function TaskDetailCommentInput({
           <ToolbarButton active={editor.isActive("strike")} onClick={() => editor.chain().focus().toggleStrike().run()} aria-label="Strikethrough">
             <StrikethroughIcon className="size-3.5" />
           </ToolbarButton>
-          <ToolbarButton
-            active={editor.isActive("link")}
-            onClick={() => {
-              if (editor.isActive("link")) {
-                editor.chain().focus().unsetLink().run()
-              } else {
-                const url = window.prompt("URL")
-                if (url) editor.chain().focus().setLink({ href: url }).run()
-              }
-            }}
-            aria-label="Link"
-          >
-            <LinkIcon className="size-3.5" />
-          </ToolbarButton>
+          <LinkPopover editor={editor} />
 
           <div className="mx-1 h-4 w-px bg-border/40" />
 

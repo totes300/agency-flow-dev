@@ -52,8 +52,12 @@ function operatorToFilterOp(op: FilterOperator, multiValue: boolean): FilterOp {
 
 // ─── Hook ───────────────────────────────────────────────────────────────────────
 
+const DEFAULT_LIMIT = 50
+const LOAD_MORE_INCREMENT = 50
+
 export function useTaskFilters() {
   const [state, setState] = useState<TaskViewState>(INITIAL_STATE)
+  const [limit, setLimit] = useState(DEFAULT_LIMIT)
 
   // ── Derived ─────────────────────────────────────────────────────────────
 
@@ -64,6 +68,7 @@ export function useTaskFilters() {
 
   const setTab = useCallback((tab: TaskTab) => {
     setState((s) => ({ ...s, tab, search: "" }))
+    setLimit(DEFAULT_LIMIT)
   }, [])
 
   const setSearch = useCallback((search: string) => {
@@ -83,6 +88,11 @@ export function useTaskFilters() {
 
   const clearAllFilters = useCallback(() => {
     setState((s) => ({ ...s, filters: [] }))
+    setLimit(DEFAULT_LIMIT)
+  }, [])
+
+  const loadMore = useCallback(() => {
+    setLimit((prev) => prev + LOAD_MORE_INCREMENT)
   }, [])
 
   // ── Build Convex query args (memoized to avoid re-subscriptions) ─────
@@ -131,6 +141,22 @@ export function useTaskFilters() {
             value: filter.value as unknown as Id<"users">[],
           }
           break
+        case "client": {
+          // Client filter uses single value with is/isNot op
+          const clientOp = op === "anyOf" || op === "is" ? "is" : "isNot"
+          convexFilters.clientId = {
+            op: clientOp as SingleOp,
+            value: filter.value[0] as unknown as Id<"clients">,
+          }
+          break
+        }
+        case "dueDate": {
+          // Date range filter: value is [from, to] as ISO date strings
+          const [from, to] = filter.value
+          if (from) convexFilters.dateFrom = from
+          if (to) convexFilters.dateTo = to
+          break
+        }
       }
     }
 
@@ -144,8 +170,9 @@ export function useTaskFilters() {
       filters: hasFilters ? (convexFilters as typeof convexFilters) : undefined,
       groupBy: state.groupBy,
       search: state.search || undefined,
+      limit,
     }
-  }, [state])
+  }, [state, limit])
 
   return {
     // State
@@ -162,6 +189,7 @@ export function useTaskFilters() {
     setSearch,
     setFilters,
     clearAllFilters,
+    loadMore,
 
     // Convex args (memoized)
     listArgs,

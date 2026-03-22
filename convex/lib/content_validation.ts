@@ -25,6 +25,8 @@ export type TiptapValidationResult =
  * Validate Tiptap JSON content structure and size.
  * Returns a result object instead of throwing so callers can decide error handling.
  */
+const MAX_NESTING_DEPTH = 24;
+
 export function validateTiptapContent(content: unknown): TiptapValidationResult {
   if (!content || typeof content !== "object") {
     return { valid: false, reason: "Content must be an object" };
@@ -36,7 +38,23 @@ export function validateTiptapContent(content: unknown): TiptapValidationResult 
   if (size > MAX_CONTENT_SIZE) {
     return { valid: false, reason: `Content too large (${size} bytes, max ${MAX_CONTENT_SIZE})` };
   }
+  if (!checkDepth(content as Record<string, unknown>, 0)) {
+    return { valid: false, reason: `Content nesting exceeds maximum depth of ${MAX_NESTING_DEPTH}` };
+  }
   return { valid: true };
+}
+
+function checkDepth(node: Record<string, unknown>, depth: number): boolean {
+  if (depth > MAX_NESTING_DEPTH) return false;
+  const children = node.content;
+  if (Array.isArray(children)) {
+    for (const child of children) {
+      if (child && typeof child === "object" && !checkDepth(child as Record<string, unknown>, depth + 1)) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 // ─── MIME type validation ───────────────────────────────────────────────────────
@@ -94,21 +112,5 @@ export function buildInitialCounts(
 
 // ─── Plain text extraction from Tiptap JSON ─────────────────────────────────────
 
-/**
- * Recursively extract plain text from Tiptap JSON content.
- * Handles text nodes, @mention nodes, and hardBreak.
- */
-export function extractPlainText(content: unknown): string {
-  if (!content || typeof content !== "object") return "";
-  const node = content as {
-    type?: string;
-    text?: string;
-    content?: unknown[];
-    attrs?: Record<string, unknown>;
-  };
-  if (node.type === "text" && node.text) return node.text;
-  if (node.type === "mention") return `@${node.attrs?.label ?? node.attrs?.id ?? ""}`;
-  if (node.type === "hardBreak") return " ";
-  if (!node.content) return "";
-  return node.content.map(extractPlainText).join("");
-}
+// Re-export from the shared pure utility so existing imports keep working
+export { extractPlainText } from "../../lib/tiptap-utils";

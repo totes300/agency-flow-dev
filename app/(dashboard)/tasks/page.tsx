@@ -82,9 +82,11 @@ export default function TasksPage() {
 
   // Stale-while-revalidate: keep last result visible during tab switches
   const lastResultRef = useRef(listResult)
-  if (listResult !== undefined) {
-    lastResultRef.current = listResult
-  }
+  useEffect(() => {
+    if (listResult !== undefined) {
+      lastResultRef.current = listResult
+    }
+  }, [listResult])
   const displayResult = listResult ?? lastResultRef.current
 
   // Batch time query — all visible task IDs in one call (N+1 prevention)
@@ -124,10 +126,24 @@ export default function TasksPage() {
     })
   }, [])
 
+  const handleSelectAll = useCallback((taskIds: string[], selected: boolean) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      for (const id of taskIds) {
+        if (selected) {
+          if (next.size < 50) next.add(id)
+        } else {
+          next.delete(id)
+        }
+      }
+      return next
+    })
+  }, [])
+
   const isArchivedView = filters.tab === "archived"
 
   // Archive with undo
-  function handleArchive(taskId: string) {
+  const handleArchive = useCallback((taskId: string) => {
     triggerUndo({
       key: taskId,
       message: "Task archived",
@@ -138,17 +154,17 @@ export default function TasksPage() {
         await restoreTask({ id: taskId as Id<"tasks"> })
       },
     })
-  }
+  }, [triggerUndo, archiveTask, restoreTask])
 
   // Restore from archived
-  async function handleRestore(taskId: string) {
+  const handleRestore = useCallback(async (taskId: string) => {
     try {
       await restoreTask({ id: taskId as Id<"tasks"> })
       toast.success("Task restored")
     } catch (err) {
       toastError(err, "Failed to restore task")
     }
-  }
+  }, [restoreTask])
 
   // Delete with confirmation
   async function handleDelete() {
@@ -211,19 +227,8 @@ export default function TasksPage() {
               groupBy={filters.groupBy ?? ""}
               orgId={orgId}
               selectedIds={selectedIds}
-              onSelectAll={(taskIds, selected) => {
-                setSelectedIds((prev) => {
-                  const next = new Set(prev)
-                  for (const id of taskIds) {
-                    if (selected) {
-                      if (next.size < 50) next.add(id)
-                    } else {
-                      next.delete(id)
-                    }
-                  }
-                  return next
-                })
-              }}
+              onLoadMore={filters.loadMore}
+              onSelectAll={handleSelectAll}
               renderRow={(task) => (
                 <TaskRow
                   key={task._id}

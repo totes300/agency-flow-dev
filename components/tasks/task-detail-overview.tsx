@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useRef, useEffect } from "react"
+import { useCallback, useRef, useEffect, useMemo } from "react"
 import { useMutation } from "convex/react"
 import dynamic from "next/dynamic"
 import { api } from "@/convex/_generated/api"
@@ -53,7 +53,7 @@ export function TaskDetailOverview({
     taskIdRef.current = task._id
   }, [task._id])
 
-  // Flush pending autosave then clear debounce when task changes (J/K nav)
+  // Flush pending autosave when task changes (J/K nav) or component unmounts
   useEffect(() => {
     return () => {
       if (debounceRef.current) {
@@ -62,16 +62,6 @@ export function TaskDetailOverview({
       }
     }
   }, [task._id])
-
-  // Cleanup on unmount — flush any pending save
-  useEffect(() => {
-    return () => {
-      if (debounceRef.current) {
-        clearTimeout(debounceRef.current)
-        pendingSaveRef.current?.()
-      }
-    }
-  }, [])
 
   // Auto-save description with 1s debounce — uses ref for taskId to prevent stale closure
   const handleDescriptionUpdate = useCallback(
@@ -93,7 +83,7 @@ export function TaskDetailOverview({
   )
 
   // Parse description — could be JSON string or object
-  const descriptionContent = (() => {
+  const descriptionContent = useMemo(() => {
     if (!task.description) return undefined
     if (typeof task.description === "string") {
       try {
@@ -103,7 +93,7 @@ export function TaskDetailOverview({
       }
     }
     return task.description
-  })()
+  }, [task.description])
 
   return (
     <div className="flex flex-col gap-6">

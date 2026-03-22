@@ -28,26 +28,31 @@ export function MentionDropdown({
   const [selectedIndex, setSelectedIndex] = useState(0)
   const { items, command, clientRect } = state
 
-  // Keep command in a ref so it's always fresh when clicked
+  // Refs for stable access in the keyboard handler — avoids stale closures
+  const itemsRef = useRef(items)
+  itemsRef.current = items
+  const selectedIndexRef = useRef(selectedIndex)
+  selectedIndexRef.current = selectedIndex
   const commandRef = useRef(command)
   commandRef.current = command
 
   // Reset selection when items change
   useEffect(() => setSelectedIndex(0), [items])
 
-  // Expose keyboard handler to suggestion plugin via ref
+  // Expose keyboard handler — only depends on the ref, so registered once
   useEffect(() => {
     onKeyDownRef.current = ({ event }: SuggestionKeyDownProps) => {
+      const currentItems = itemsRef.current
       if (event.key === "ArrowUp") {
-        setSelectedIndex((i) => (i + items.length - 1) % items.length)
+        setSelectedIndex((i) => (i + currentItems.length - 1) % currentItems.length)
         return true
       }
       if (event.key === "ArrowDown") {
-        setSelectedIndex((i) => (i + 1) % items.length)
+        setSelectedIndex((i) => (i + 1) % currentItems.length)
         return true
       }
       if (event.key === "Enter") {
-        const item = items[selectedIndex]
+        const item = currentItems[selectedIndexRef.current]
         if (item) commandRef.current(item)
         return true
       }
@@ -57,7 +62,7 @@ export function MentionDropdown({
       return false
     }
     return () => { onKeyDownRef.current = null }
-  }, [onKeyDownRef, items, selectedIndex])
+  }, [onKeyDownRef])
 
   if (items.length === 0) return null
 

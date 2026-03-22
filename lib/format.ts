@@ -1,3 +1,12 @@
+/** Check if two dates fall on the same calendar day. */
+export function isSameDay(a: Date, b: Date): boolean {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  )
+}
+
 const formatterCache = new Map<string, Intl.NumberFormat>()
 
 function getCurrencyFormatter(currency: string, fractionDigits: number): Intl.NumberFormat {
@@ -123,11 +132,6 @@ export function formatActivityTimestamp(timestamp: number, now: number = Date.no
     minute: "2-digit",
     hour12: true,
   }).toLowerCase()
-
-  const isSameDay = (a: Date, b: Date) =>
-    a.getFullYear() === b.getFullYear() &&
-    a.getMonth() === b.getMonth() &&
-    a.getDate() === b.getDate()
 
   if (isSameDay(eventDate, today)) return `Today at ${timeStr}`
   if (isSameDay(eventDate, yesterday)) return `Yesterday at ${timeStr}`

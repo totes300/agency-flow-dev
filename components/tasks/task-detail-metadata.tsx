@@ -1,5 +1,6 @@
 "use client"
 
+import { useState, useRef, useEffect } from "react"
 import { InlineStatusCell } from "@/components/tasks/inline-status-cell"
 import { InlineAssigneeCell } from "@/components/tasks/inline-assignee-cell"
 import { InlineProjectCell } from "@/components/tasks/inline-project-cell"
@@ -9,7 +10,7 @@ import { Switch } from "@/components/ui/switch"
 import { useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { InlineTimeCell } from "@/components/tasks/inline-time-cell"
-import { formatDuration } from "@/lib/duration"
+import { formatDuration, parseDuration } from "@/lib/duration"
 import { isOverdue } from "@/lib/format"
 import { toastError } from "@/lib/toast-helpers"
 import {
@@ -101,11 +102,7 @@ export function TaskDetailMetadata({
             <InlineCategoryCell taskId={task._id} category={task.category} />
           </MetadataRow>
           <MetadataRow icon={ClockIcon} label="Estimate">
-            <span className="text-[13px]">
-              {task.estimate ? formatDuration(task.estimate) : (
-                <span className="text-muted-foreground/40">-</span>
-              )}
-            </span>
+            <InlineEstimateCell taskId={task._id} estimate={task.estimate} />
           </MetadataRow>
           <MetadataRow icon={TimerIcon} label="Tracked">
             <div className="group/row">
@@ -134,5 +131,91 @@ export function TaskDetailMetadata({
         </div>
       </div>
     </div>
+  )
+}
+
+// ─── Inline estimate editor ──────────────────────────────────────────────────────
+
+function InlineEstimateCell({
+  taskId,
+  estimate,
+}: {
+  taskId: Id<"tasks">
+  estimate?: number
+}) {
+  const [editing, setEditing] = useState(false)
+  const [value, setValue] = useState("")
+  const inputRef = useRef<HTMLInputElement>(null)
+  const updateTask = useMutation(api.tasks.update)
+
+  useEffect(() => {
+    if (editing && inputRef.current) {
+      inputRef.current.focus()
+      inputRef.current.select()
+    }
+  }, [editing])
+
+  function handleOpen() {
+    setValue(estimate ? formatDuration(estimate) : "")
+    setEditing(true)
+  }
+
+  async function handleSave() {
+    const trimmed = value.trim()
+    if (!trimmed) {
+      // Clear estimate
+      try {
+        await updateTask({ id: taskId, estimate: null })
+      } catch (err) {
+        toastError(err, "Failed to update estimate")
+      }
+      setEditing(false)
+      return
+    }
+
+    const minutes = parseDuration(trimmed)
+    if (minutes === null) {
+      // Invalid input — reset
+      setEditing(false)
+      return
+    }
+
+    if (minutes !== estimate) {
+      try {
+        await updateTask({ id: taskId, estimate: minutes })
+      } catch (err) {
+        toastError(err, "Failed to update estimate")
+      }
+    }
+    setEditing(false)
+  }
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={handleSave}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.nativeEvent.isComposing) handleSave()
+          if (e.key === "Escape") setEditing(false)
+        }}
+        placeholder="e.g. 2h 30m"
+        className="h-6 w-full rounded bg-transparent text-[13px] outline-none placeholder:text-muted-foreground/40"
+      />
+    )
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleOpen}
+      className="text-[13px]"
+    >
+      {estimate ? formatDuration(estimate) : (
+        <span className="text-muted-foreground/40">-</span>
+      )}
+    </button>
   )
 }

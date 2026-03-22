@@ -1,11 +1,12 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useRef, useEffect } from "react"
 import { useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { UserAvatar } from "@/components/user-avatar"
-import { formatShortDate } from "@/lib/format"
-import { formatMinutesDisplay } from "@/lib/duration"
+import { formatShortDate, firstName } from "@/lib/format"
+import { cn } from "@/lib/utils"
+import { formatMinutesDisplay, formatDuration, parseDuration } from "@/lib/duration"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -22,7 +23,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { MoreHorizontalIcon, Trash2Icon } from "lucide-react"
+import { MoreHorizontalIcon, Trash2Icon, PencilIcon } from "lucide-react"
 import { toast } from "sonner"
 import { toastError } from "@/lib/toast-helpers"
 import type { Id } from "@/convex/_generated/dataModel"
@@ -50,7 +51,52 @@ export function TimeEntriesTable({
   currentUserId?: Id<"users">
 }) {
   const removeEntry = useMutation(api.timeEntries.remove)
+  const updateEntry = useMutation(api.timeEntries.update)
   const [deleteTarget, setDeleteTarget] = useState<Id<"timeEntries"> | null>(null)
+  const [editingId, setEditingId] = useState<Id<"timeEntries"> | null>(null)
+  const [editDuration, setEditDuration] = useState("")
+  const [editNote, setEditNote] = useState("")
+  const durationInputRef = useRef<HTMLInputElement>(null)
+
+  function startEdit(entry: TimeEntry) {
+    setEditingId(entry._id)
+    setEditDuration(formatDuration(entry.durationMinutes))
+    setEditNote(entry.note ?? "")
+  }
+
+  function cancelEdit() {
+    setEditingId(null)
+    setEditDuration("")
+    setEditNote("")
+  }
+
+  async function saveEdit() {
+    if (!editingId) return
+    const minutes = parseDuration(editDuration)
+    if (!minutes) {
+      toast.error("Enter a valid duration (e.g. 2h 30m, 90m)")
+      return
+    }
+    try {
+      await updateEntry({
+        id: editingId,
+        durationMinutes: minutes,
+        note: editNote.trim() || null,
+      })
+      toast.success("Time entry updated")
+      cancelEdit()
+    } catch (err) {
+      toastError(err, "Failed to update")
+    }
+  }
+
+  // Focus duration input when entering edit mode
+  useEffect(() => {
+    if (editingId && durationInputRef.current) {
+      durationInputRef.current.focus()
+      durationInputRef.current.select()
+    }
+  }, [editingId])
 
   async function handleDelete() {
     if (!deleteTarget) return
@@ -82,6 +128,76 @@ export function TimeEntriesTable({
         {/* Rows */}
         {entries.map((entry) => {
           const canEdit = isAdmin || (currentUserId && entry.userId === currentUserId)
+          const isEditing = editingId === entry._id
+
+          if (isEditing) {
+            return (
+              <div
+                key={entry._id}
+                className={`group/entry grid ${COL} items-center gap-x-2 px-3.5 h-[38px] border-b border-border/20 last:border-b-0 bg-muted/30`}
+              >
+                {/* Date (read-only in edit mode) */}
+                <span className="text-[13px] text-foreground">{formatShortDate(entry.date)}</span>
+
+                {/* Person (read-only) */}
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <UserAvatar
+                    name={entry.userName}
+                    imageUrl={entry.userImageUrl}
+                    className="size-5 text-[8px]"
+                  />
+                  <span className="text-[13px] text-foreground truncate">{firstName(entry.userName)}</span>
+                </div>
+
+                {/* Note (editable) */}
+                <input
+                  aria-label="Edit note"
+                  value={editNote}
+                  onChange={(e) => setEditNote(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") saveEdit()
+                    if (e.key === "Escape") cancelEdit()
+                  }}
+                  placeholder="Add a note"
+                  className="h-6 rounded border border-border/60 bg-background px-1.5 text-[13px] text-foreground outline-none focus:ring-1 focus:ring-ring"
+                />
+
+                {/* Duration (editable) */}
+                <input
+                  ref={durationInputRef}
+                  aria-label="Edit duration"
+                  value={editDuration}
+                  onChange={(e) => setEditDuration(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") saveEdit()
+                    if (e.key === "Escape") cancelEdit()
+                  }}
+                  onBlur={saveEdit}
+                  className="h-6 w-full rounded border border-border/60 bg-background px-1.5 text-[13px] font-mono font-medium text-foreground text-right outline-none focus:ring-1 focus:ring-ring"
+                />
+
+                {/* Billable dot */}
+                <div className="flex items-center justify-center">
+                  <div
+                    className={cn("size-1.5 rounded-full", entry.isBillable ? "bg-emerald-500" : "bg-border")}
+                    title={entry.isBillable ? "Billable" : "Non-billable"}
+                  />
+                </div>
+
+                {/* Cancel hint */}
+                <div className="flex items-center justify-center">
+                  <button
+                    type="button"
+                    aria-label="Cancel editing"
+                    onClick={cancelEdit}
+                    className="flex size-6 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted text-xs"
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+            )
+          }
 
           return (
             <div
@@ -98,7 +214,7 @@ export function TimeEntriesTable({
                   imageUrl={entry.userImageUrl}
                   className="size-5 text-[8px]"
                 />
-                <span className="text-[13px] text-foreground truncate">{entry.userName.split(" ")[0]}</span>
+                <span className="text-[13px] text-foreground truncate">{firstName(entry.userName)}</span>
               </div>
 
               {/* Note */}
@@ -133,6 +249,10 @@ export function TimeEntriesTable({
                       </button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end" className="w-32">
+                      <DropdownMenuItem onClick={() => startEdit(entry)}>
+                        <PencilIcon className="size-3.5" />
+                        Edit
+                      </DropdownMenuItem>
                       <DropdownMenuItem
                         className="text-destructive focus:text-destructive"
                         onClick={() => setDeleteTarget(entry._id)}

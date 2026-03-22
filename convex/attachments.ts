@@ -1,5 +1,5 @@
 import { v, ConvexError } from "convex/values";
-import { query, mutation } from "./_generated/server";
+import { query, mutation, action } from "./_generated/server";
 import { getAuthContext } from "./lib/auth";
 import { isMimeTypeBlocked } from "./lib/content_validation";
 
@@ -21,11 +21,19 @@ export const byTask = query({
       .withIndex("by_task", (q) => q.eq("taskId", taskId))
       .take(100);
 
-    // Generate URLs for all files
+    // Build user cache to avoid N+1
+    const userCache = new Map<string, string>();
+    for (const att of attachments) {
+      if (!userCache.has(att.userId)) {
+        const user = await ctx.db.get(att.userId);
+        userCache.set(att.userId, user?.name ?? "Unknown");
+      }
+    }
+
+    // Generate URLs for all files in parallel
     const enriched = await Promise.all(
       attachments.map(async (att) => {
         const url = await ctx.storage.getUrl(att.fileId);
-        const user = await ctx.db.get(att.userId);
         return {
           _id: att._id,
           fileName: att.fileName,
@@ -34,7 +42,7 @@ export const byTask = query({
           url,
           userId: att.userId,
           createdAt: att.createdAt,
-          userName: user?.name ?? "Unknown",
+          userName: userCache.get(att.userId) ?? "Unknown",
         };
       })
     );
@@ -50,6 +58,77 @@ export const generateUploadUrl = mutation({
   handler: async (ctx) => {
     await getAuthContext(ctx); // Auth check
     return await ctx.storage.generateUploadUrl();
+  },
+});
+
+const MAX_REUPLOAD_SIZE = 10 * 1024 * 1024; // 10MB
+
+/**
+ * Fetch an image from an external URL and store it in Convex storage.
+ * Used to re-host images pasted from Notion, Google Docs, etc.
+ * Runs server-side to avoid CORS restrictions.
+ */
+export const reuploadFromUrl = action({
+  args: { url: v.string() },
+  handler: async (ctx, { url }) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new ConvexError("Not authenticated");
+
+    // SSRF protection: only allow http(s) and block private/internal ranges
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      throw new ConvexError("Invalid URL");
+    }
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      throw new ConvexError("Only HTTP(S) URLs are allowed");
+    }
+    const hostname = parsed.hostname;
+    // Strip IPv6 brackets for comparison
+    const bare = hostname.startsWith("[") ? hostname.slice(1, -1) : hostname;
+    if (
+      bare === "localhost" ||
+      bare.startsWith("127.") ||
+      bare.startsWith("10.") ||
+      bare.startsWith("192.168.") ||
+      bare.startsWith("169.254.") ||
+      bare.startsWith("172.") && (() => {
+        const second = parseInt(bare.split(".")[1], 10);
+        return second >= 16 && second <= 31;
+      })() ||
+      bare === "::1" ||
+      bare === "0.0.0.0" ||
+      bare.startsWith("fc") || bare.startsWith("fd") || // fc00::/7 (ULA)
+      bare.startsWith("fe80") || // fe80::/10 (link-local)
+      hostname.endsWith(".internal") ||
+      bare === "metadata.google.internal"
+    ) {
+      throw new ConvexError("URL points to a private network");
+    }
+
+    const response = await fetch(url);
+    if (!response.ok) throw new ConvexError("Failed to fetch external image");
+
+    // Validate content-type is an image
+    const contentType = response.headers.get("content-type") ?? "";
+    if (!contentType.startsWith("image/")) {
+      throw new ConvexError("URL does not point to an image");
+    }
+
+    // Enforce size limit
+    const contentLength = response.headers.get("content-length");
+    if (contentLength && parseInt(contentLength, 10) > MAX_REUPLOAD_SIZE) {
+      throw new ConvexError("Image exceeds 10MB limit");
+    }
+
+    const blob = await response.blob();
+    if (blob.size > MAX_REUPLOAD_SIZE) {
+      throw new ConvexError("Image exceeds 10MB limit");
+    }
+
+    const storageId = await ctx.storage.store(blob);
+    return storageId;
   },
 });
 

@@ -118,6 +118,7 @@ export default defineSchema({
     review: v.number(),
     blocked: v.number(),
     done: v.number(),
+    archived: v.optional(v.number()),
   }).index("by_orgId", ["orgId"]),
 
   // ─── Clients ──────────────────────────────────────────────────────────────────
@@ -288,18 +289,23 @@ export default defineSchema({
   // ─── Comment read receipts (per user per task) ─────────────────────────────
   commentReadReceipts: defineTable({
     taskId: v.id("tasks"),
+    orgId: v.string(),
     userId: v.id("users"),
     lastSeenAt: v.number(),
   })
     .index("by_user_task", ["userId", "taskId"])
-    .index("by_task", ["taskId"]),
+    .index("by_task", ["taskId"])
+    .index("by_orgId", ["orgId"]),
 
   // ─── Comments (per task) ───────────────────────────────────────────────────
   comments: defineTable({
     taskId: v.id("tasks"),
     orgId: v.string(),
     userId: v.id("users"),
-    content: v.any(),
+    content: v.object({
+      type: v.string(),
+      content: v.optional(v.any()),
+    }),
     parentCommentId: v.optional(v.id("comments")),
     createdAt: v.number(),
     updatedAt: v.number(),

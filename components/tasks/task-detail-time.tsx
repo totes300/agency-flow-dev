@@ -9,15 +9,37 @@ import { TimeEntriesTable } from "@/components/tasks/time-entries-table"
 import { UserAvatar } from "@/components/user-avatar"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { MiniCalendar, addDays } from "@/components/ui/mini-calendar"
 
 import { parseDuration, formatDuration, QUICK_DURATIONS } from "@/lib/duration"
 import { formatTimerDisplay, formatMinutesDisplay } from "@/lib/duration"
-import { formatDateToYMD, getWeekBounds } from "@/lib/format"
+import { formatDateToYMD, formatShortDate, getWeekBounds } from "@/lib/format"
 import { toast } from "sonner"
 import { toastError } from "@/lib/toast-helpers"
 import { cn } from "@/lib/utils"
-import { CalendarIcon, AlignLeftIcon, ChevronDownIcon } from "lucide-react"
+import { CalendarIcon, AlignLeftIcon, ChevronDownIcon, ClockIcon, ArrowLeftIcon } from "lucide-react"
 import type { Id } from "@/convex/_generated/dataModel"
+
+// ─── Time Entry Date Presets ─────────────────────────────────────────────────
+
+type TimePreset = { label: string; icon: "clock" | "arrow"; getDate: (today: Date) => Date }
+
+function getPreviousFriday(today: Date): Date {
+  const d = new Date(today)
+  const day = d.getDay()
+  // days since last Friday: Sun=2, Mon=3, Tue=4, Wed=5, Thu=6, Fri=7(same day→go back 7), Sat=1
+  const diff = day === 5 ? 7 : ((day - 5 + 7) % 7) || 7
+  d.setDate(d.getDate() - diff)
+  return d
+}
+
+const TIME_PRESETS: TimePreset[] = [
+  { label: "Today", icon: "clock", getDate: (d) => d },
+  { label: "Yesterday", icon: "arrow", getDate: (d) => addDays(d, -1) },
+  { label: "2 days ago", icon: "arrow", getDate: (d) => addDays(d, -2) },
+  { label: "Last Friday", icon: "arrow", getDate: (d) => getPreviousFriday(d) },
+]
 
 // ─── Types ──────────────────────────────────────────────────────────────────────
 
@@ -58,6 +80,7 @@ export function TaskDetailTime({
   // ─── Form state ─────────────────────────────────────────────────────────────
   const [durationStr, setDurationStr] = useState("")
   const [note, setNote] = useState("")
+  const [selectedDate, setSelectedDate] = useState(() => formatDateToYMD(new Date()))
   const [billable, setBillable] = useState(isBillable)
   const [saving, setSaving] = useState(false)
 
@@ -92,10 +115,12 @@ export function TaskDetailTime({
         durationMinutes: minutes,
         note: note.trim() || undefined,
         isBillable: billable,
+        date: selectedDate,
       })
       toast.success(`${formatDuration(minutes)} logged`)
       setDurationStr("")
       setNote("")
+      setSelectedDate(formatDateToYMD(new Date()))
       setBillable(isBillable)
     } catch (err) {
       toastError(err, "Failed to log time")
@@ -156,10 +181,59 @@ export function TaskDetailTime({
         {/* Date + Note — icon rows matching popover */}
         <div className="flex flex-col px-4 py-1.5">
           <div className="flex items-center gap-2.5 border-b border-border/40 py-2">
-            <CalendarIcon className="size-3.5 shrink-0 text-muted-foreground" strokeWidth={1.5} />
-            <span className="text-sm text-muted-foreground">
-              Today, {new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-            </span>
+            <Popover>
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  className="flex items-center gap-2.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  <CalendarIcon className="size-3.5 shrink-0" strokeWidth={1.5} />
+                  <span>{formatShortDate(selectedDate)}</span>
+                </button>
+              </PopoverTrigger>
+              <PopoverContent className="w-[380px] p-0" align="start">
+                <div className="flex">
+                  {/* Left: Presets */}
+                  <div className="flex w-[140px] flex-col gap-0.5 border-r bg-muted/30 p-2">
+                    <div className="px-2 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                      Quick set
+                    </div>
+                    {TIME_PRESETS.map((preset) => {
+                      const presetDate = formatDateToYMD(preset.getDate(new Date()))
+                      const isActive = selectedDate === presetDate
+                      return (
+                        <button
+                          key={preset.label}
+                          onClick={() => setSelectedDate(presetDate)}
+                          className={cn(
+                            "flex items-center gap-2 rounded-md px-2 py-1.5 text-xs font-medium transition-colors",
+                            isActive
+                              ? "bg-primary/10 text-primary"
+                              : "text-foreground hover:bg-muted",
+                          )}
+                        >
+                          {preset.icon === "clock" ? (
+                            <ClockIcon className={cn("size-3.5 shrink-0", isActive ? "text-primary" : "text-muted-foreground")} />
+                          ) : (
+                            <ArrowLeftIcon className={cn("size-3.5 shrink-0", isActive ? "text-primary" : "text-muted-foreground")} />
+                          )}
+                          {preset.label}
+                        </button>
+                      )
+                    })}
+                  </div>
+
+                  {/* Right: Calendar */}
+                  <div className="flex-1 p-3">
+                    <MiniCalendar
+                      selected={selectedDate}
+                      onSelect={setSelectedDate}
+                      disableFuture
+                    />
+                  </div>
+                </div>
+              </PopoverContent>
+            </Popover>
           </div>
           <div className="flex items-center gap-2.5 py-2">
             <AlignLeftIcon className="size-3.5 shrink-0 text-muted-foreground" strokeWidth={1.5} />

@@ -4,27 +4,7 @@ import * as React from "react"
 import { Popover as PopoverPrimitive } from "radix-ui"
 
 import { cn } from "@/lib/utils"
-
-// ─── Portal container context ────────────────────────────────────────────────
-// When a Popover is rendered inside a Dialog, the Popover portal must target
-// the Dialog's DOM tree so that scroll and pointer events work correctly.
-// DialogContent sets this automatically; PopoverContent reads it.
-
-const PopoverContainerContext = React.createContext<HTMLElement | null>(null)
-
-export function PopoverContainerProvider({
-  container,
-  children,
-}: {
-  container: HTMLElement | null
-  children: React.ReactNode
-}) {
-  return (
-    <PopoverContainerContext.Provider value={container}>
-      {children}
-    </PopoverContainerContext.Provider>
-  )
-}
+import { usePortalContainer } from "@/components/ui/portal-context"
 
 // ─── Popover components ──────────────────────────────────────────────────────
 
@@ -49,7 +29,7 @@ function PopoverContent({
 }: React.ComponentProps<typeof PopoverPrimitive.Content> & {
   container?: HTMLElement | null
 }) {
-  const ctxContainer = React.useContext(PopoverContainerContext)
+  const ctxContainer = usePortalContainer()
   const resolvedContainer = container ?? ctxContainer ?? undefined
 
   return (
@@ -59,7 +39,7 @@ function PopoverContent({
         align={align}
         sideOffset={sideOffset}
         className={cn(
-          "z-50 flex w-72 origin-(--radix-popover-content-transform-origin) flex-col gap-2.5 rounded-lg bg-popover p-2.5 text-sm text-popover-foreground shadow-sm ring-1 ring-border/60 outline-hidden duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          "z-50 flex w-72 origin-(--radix-popover-content-transform-origin) flex-col gap-2.5 rounded-lg bg-popover p-2.5 text-sm text-popover-foreground shadow-md ring-1 ring-foreground/10 outline-hidden duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           className
         )}
         {...props}

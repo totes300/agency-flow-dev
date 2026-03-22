@@ -1,5 +1,6 @@
 "use client"
 
+import { memo } from "react"
 import { useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { cn } from "@/lib/utils"
@@ -33,7 +34,7 @@ export type ActivityIndicator = {
   hasAttachments: boolean
 }
 
-export function TaskRow({
+export const TaskRow = memo(function TaskRow({
   task,
   isAdmin,
   isSelected,
@@ -84,7 +85,7 @@ export function TaskRow({
           onClick={(e) => e.stopPropagation()}
           disabled={isDone}
           aria-label={isDone ? `${task.title} (done)` : `Select ${task.title}`}
-          className={cn(isDone && "border-green-600 bg-green-600 text-white data-[state=checked]:border-green-600 data-[state=checked]:bg-green-600")}
+          className={cn(isDone && "border-emerald-600 bg-emerald-600 text-white data-[state=checked]:border-emerald-600 data-[state=checked]:bg-emerald-600 dark:border-emerald-500 dark:bg-emerald-500 dark:data-[state=checked]:border-emerald-500 dark:data-[state=checked]:bg-emerald-500")}
         />
       </div>
 
@@ -97,7 +98,7 @@ export function TaskRow({
           {task.title}
         </div>
         <div className="truncate text-[11px] text-muted-foreground">
-          {task.createdBy ? "Created · " : ""}{formatRelativeTime(task.updatedAt)}
+          {task.updatedAt !== task.createdAt ? "Updated · " : "Created · "}{formatRelativeTime(task.updatedAt)}
         </div>
       </div>
 
@@ -178,7 +179,7 @@ export function TaskRow({
       </RowActionMenu>
     </div>
   )
-}
+})
 
 function ActivityIcons({ activity, hasDescription }: { activity?: ActivityIndicator; hasDescription: boolean }) {
   const subtaskTotal = activity?.subtaskTotal ?? 0

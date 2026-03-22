@@ -2,7 +2,7 @@
 
 import {
   ListChecksIcon,
-  LoaderIcon,
+  CircleDashedIcon,
   CircleDotIcon,
   HashIcon,
   FolderIcon,
@@ -45,7 +45,7 @@ const COLUMN_HEADERS = [
   { label: "", width: null }, // checkbox
   { label: "Task", icon: ListChecksIcon },
   { label: "Activity", icon: CircleDotIcon },
-  { label: "Status", icon: LoaderIcon },
+  { label: "Status", icon: CircleDashedIcon },
   { label: "Category", icon: HashIcon },
   { label: "Client / Project", icon: FolderIcon },
   { label: "Assignee", icon: UserIcon },
@@ -61,6 +61,7 @@ export function TasksTable({
   orgId,
   selectedIds,
   onSelectAll,
+  onLoadMore,
   renderRow,
   renderAddTask,
 }: {
@@ -70,6 +71,7 @@ export function TasksTable({
   orgId: string
   selectedIds: Set<string>
   onSelectAll: (taskIds: string[], selected: boolean) => void
+  onLoadMore?: () => void
   renderRow: (task: TaskWithJoins) => React.ReactNode
   renderAddTask?: (groupKey: string) => React.ReactNode
 }) {
@@ -117,9 +119,13 @@ export function TasksTable({
             <>
               {group.tasks.map((task) => renderRow(task))}
               {renderAddTask?.(group.key)}
-              {group.hasMore && (
+              {group.hasMore && onLoadMore && (
                 <div className="px-3 py-2">
-                  <button className="text-xs font-medium text-muted-foreground hover:text-foreground">
+                  <button
+                    type="button"
+                    onClick={onLoadMore}
+                    className="text-xs font-medium text-muted-foreground hover:text-foreground"
+                  >
                     Load more ({group.count - group.tasks.length} remaining)
                   </button>
                 </div>

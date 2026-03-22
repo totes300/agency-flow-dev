@@ -1,6 +1,7 @@
 "use client"
 
 import { useState } from "react"
+import { AnimatePresence, motion } from "motion/react"
 import { useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { useTaskReferenceData } from "@/components/tasks/task-reference-data"
@@ -22,7 +23,7 @@ import { Separator } from "@/components/ui/separator"
 import { toast } from "sonner"
 import { toastError } from "@/lib/toast-helpers"
 import {
-  LoaderIcon,
+  CircleDashedIcon,
   UserPlusIcon,
   UserMinusIcon,
   TagIcon,
@@ -46,13 +47,19 @@ export function BulkToolbar({
   activeTab: TaskTab
 }) {
   const count = selectedIds.size
-  if (count === 0) return null
-
   const taskIds = [...selectedIds] as Id<"tasks">[]
   const isArchived = activeTab === "archived"
 
   return (
-    <div className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2">
+    <AnimatePresence>
+    {count > 0 && (
+    <motion.div
+      initial={{ y: 20, opacity: 0 }}
+      animate={{ y: 0, opacity: 1 }}
+      exit={{ y: 20, opacity: 0 }}
+      transition={{ duration: 0.15, ease: "easeOut" }}
+      className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2"
+    >
       <div className="flex items-center gap-1 rounded-xl border border-border bg-background px-3 py-2 shadow-lg">
         {/* Count + deselect */}
         <div className="flex items-center gap-2 pr-2">
@@ -94,7 +101,9 @@ export function BulkToolbar({
           </>
         )}
       </div>
-    </div>
+    </motion.div>
+    )}
+    </AnimatePresence>
   )
 }
 
@@ -125,7 +134,7 @@ function StatusAction({ taskIds, isAdmin }: { taskIds: Id<"tasks">[]; isAdmin: b
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <Button variant="ghost" size="sm" className="h-8 gap-1.5 text-xs">
-          <LoaderIcon className="size-3.5" />
+          <CircleDashedIcon className="size-3.5" />
           Status
         </Button>
       </PopoverTrigger>

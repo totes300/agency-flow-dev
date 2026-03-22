@@ -32,6 +32,8 @@ type TaskHeaderData = {
   title: string
   projectName?: string
   clientName?: string
+  parentTaskId?: Id<"tasks">
+  parentTaskTitle?: string
   createdAt: number
   projectId?: Id<"projects">
   billable: boolean
@@ -44,6 +46,7 @@ export function TaskDetailHeader({
   isAdmin,
   onClose,
   onNavigate,
+  onOpenDetail,
   hasNext,
   hasPrev,
 }: {
@@ -51,6 +54,7 @@ export function TaskDetailHeader({
   isAdmin: boolean
   onClose: () => void
   onNavigate: (direction: "next" | "prev") => void
+  onOpenDetail?: (taskId: string) => void
   hasNext: boolean
   hasPrev: boolean
 }) {
@@ -62,8 +66,12 @@ export function TaskDetailHeader({
   async function handleCopyLink() {
     if (!task) return
     const url = `${window.location.origin}${window.location.pathname}?detail=${task._id}`
-    await navigator.clipboard.writeText(url)
-    toast.success("Link copied")
+    try {
+      await navigator.clipboard.writeText(url)
+      toast.success("Link copied")
+    } catch {
+      toastError(new Error("Clipboard access denied"), "Failed to copy link")
+    }
   }
 
   async function handleDuplicate() {
@@ -121,6 +129,18 @@ export function TaskDetailHeader({
         {/* Breadcrumb */}
         {task && (
           <div className="flex items-center gap-1 text-xs text-muted-foreground">
+            {task.parentTaskId && task.parentTaskTitle && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => onOpenDetail?.(task.parentTaskId!)}
+                  className="truncate max-w-[200px] text-primary/80 hover:text-primary hover:underline"
+                >
+                  Subtask of: {task.parentTaskTitle}
+                </button>
+                <span className="text-muted-foreground/40">/</span>
+              </>
+            )}
             {task.clientName && (
               <>
                 <span>{task.clientName}</span>

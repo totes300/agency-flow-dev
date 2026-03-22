@@ -38,15 +38,20 @@ export const byTask = query({
       }>
     > = {};
 
-    for (const att of attachments) {
+    // Fetch all storage URLs in parallel
+    const urls = await Promise.all(
+      attachments.map((att) => ctx.storage.getUrl(att.fileId))
+    );
+
+    for (let i = 0; i < attachments.length; i++) {
+      const att = attachments[i];
       if (!grouped[att.commentId]) grouped[att.commentId] = [];
-      const url = await ctx.storage.getUrl(att.fileId);
       grouped[att.commentId].push({
         _id: att._id,
         fileName: att.fileName,
         fileSize: att.fileSize,
         mimeType: att.mimeType,
-        url,
+        url: urls[i],
       });
     }
 

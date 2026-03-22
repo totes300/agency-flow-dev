@@ -5,7 +5,8 @@ import { useQuery } from "convex/react"
 import { useConvexAuth } from "convex/react"
 import { useSearchParams, useRouter, usePathname } from "next/navigation"
 import { api } from "@/convex/_generated/api"
-import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog"
+import { Dialog, DialogFullscreenContent, DialogTitle, DialogDescription } from "@/components/ui/dialog"
+import { ErrorBoundary } from "@/components/error-boundary"
 import { TaskDetailHeader } from "@/components/tasks/task-detail-header"
 import { TaskDetailTitle } from "@/components/tasks/task-detail-title"
 import { TaskDetailMetadata } from "@/components/tasks/task-detail-metadata"
@@ -90,9 +91,7 @@ export function TaskDetailModal({
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => { if (!open) handleClose() }}>
-      <DialogContent
-        showCloseButton={false}
-        className="fixed inset-0 top-0 left-0 flex h-full max-h-none w-full max-w-none -translate-x-0 -translate-y-0 items-center justify-center rounded-none border-0 bg-transparent p-4 ring-0 shadow-none sm:max-w-none sm:p-8 data-open:zoom-in-100 data-closed:zoom-out-100"
+      <DialogFullscreenContent
         onPointerDownOutside={handleClose}
       >
         <div
@@ -101,12 +100,14 @@ export function TaskDetailModal({
           <DialogTitle className="sr-only">Task detail</DialogTitle>
           <DialogDescription className="sr-only">View and edit task details, subtasks, time entries, and activity</DialogDescription>
 
+          <ErrorBoundary>
           {/* Top bar */}
           <TaskDetailHeader
             task={task ?? null}
             isAdmin={isAdmin}
             onClose={handleClose}
             onNavigate={handleNavigate}
+            onOpenDetail={navigateToTask}
             hasNext={hasNext}
             hasPrev={hasPrev}
           />
@@ -128,11 +129,12 @@ export function TaskDetailModal({
 
             {/* Right: activity sidebar */}
             {detailId && (
-              <TaskDetailSidebar taskId={detailId as Id<"tasks">} />
+              <TaskDetailSidebar taskId={detailId as Id<"tasks">} isAdmin={isAdmin} />
             )}
           </div>
+          </ErrorBoundary>
           </div>
-      </DialogContent>
+      </DialogFullscreenContent>
     </Dialog>
   )
 }

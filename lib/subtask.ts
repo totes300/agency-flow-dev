@@ -62,38 +62,6 @@ export function computeNextSortOrder(
   return Math.max(...existingSortOrders) + 1
 }
 
-// ─── Description debounce ───────────────────────────────────────────────────────
+// ─── TipTap utilities — re-exported from shared module ─────────────────────────
 
-/**
- * Recursively extract plain text from Tiptap JSON content.
- */
-export function extractPlainText(content: unknown): string {
-  if (!content || typeof content !== "object") return ""
-  const node = content as { type?: string; text?: string; content?: unknown[]; attrs?: Record<string, unknown> }
-  if (node.type === "text" && node.text) return node.text
-  if (node.type === "mention") return `@${node.attrs?.label ?? node.attrs?.id ?? ""}`
-  if (node.type === "hardBreak") return "\n"
-  if (!node.content) return ""
-  return node.content.map(extractPlainText).join("")
-}
-
-/**
- * Check if Tiptap JSON content is effectively empty.
- * An empty Tiptap doc is { type: "doc", content: [{ type: "paragraph" }] }
- * or { type: "doc", content: [] }.
- */
-export function isTiptapEmpty(content: unknown): boolean {
-  if (!content || typeof content !== "object") return true
-  const doc = content as { type?: string; content?: Array<{ type?: string; content?: unknown[] }> }
-  if (doc.type !== "doc") return true
-  if (!doc.content || doc.content.length === 0) return true
-  // Single empty paragraph
-  if (
-    doc.content.length === 1 &&
-    doc.content[0].type === "paragraph" &&
-    (!doc.content[0].content || doc.content[0].content.length === 0)
-  ) {
-    return true
-  }
-  return false
-}
+export { extractPlainText, isTiptapEmpty } from "@/lib/tiptap-utils"

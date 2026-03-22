@@ -7,6 +7,7 @@ import { useTaskReferenceData } from "@/components/tasks/task-reference-data"
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
@@ -119,9 +120,9 @@ export function TaskFormModal({
       <DialogContent
         className="flex max-h-[80vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-[560px]"
         onKeyDown={handleKeyDown}
-        aria-describedby={undefined}
       >
         <DialogTitle className="sr-only">Create task</DialogTitle>
+        <DialogDescription className="sr-only">Fill in the details to create a new task</DialogDescription>
         {/* Project picker */}
         <div className="flex items-center gap-2 px-5 pt-4 pb-3">
           <ProjectPicker

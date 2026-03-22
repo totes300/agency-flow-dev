@@ -72,7 +72,7 @@ export function TaskDetailTitle({
               setTimeout(() => inputRef.current?.focus(), 0)
             }
           }}
-          className="cursor-text text-[22px] font-semibold tracking-tight text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
+          className="-mx-2 cursor-text rounded-md px-2 text-[22px] font-semibold tracking-tight text-foreground outline-none transition-colors hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring"
         >
           {title}
         </h1>

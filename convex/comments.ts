@@ -316,10 +316,11 @@ export const markSeen = mutation({
 
     const now = Date.now();
     if (existing) {
-      await ctx.db.patch(existing._id, { lastSeenAt: now });
+      await ctx.db.patch(existing._id, { lastSeenAt: now, orgId });
     } else {
       await ctx.db.insert("commentReadReceipts", {
         taskId,
+        orgId,
         userId,
         lastSeenAt: now,
       });
@@ -344,19 +345,11 @@ function validateTiptapContent(content: unknown): void {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────────
 
+import { extractPlainText } from "../lib/tiptap-utils";
+
 /** Extract a short plain-text preview from Tiptap JSON content (max ~40 chars). */
 function extractContentPreview(content: unknown, maxLen = 40): string {
-  const text = extractPlain(content)
+  const text = extractPlainText(content)
   if (text.length <= maxLen) return text
   return text.slice(0, maxLen).trimEnd() + "…"
-}
-
-function extractPlain(content: unknown): string {
-  if (!content || typeof content !== "object") return ""
-  const node = content as { type?: string; text?: string; content?: unknown[]; attrs?: Record<string, unknown> }
-  if (node.type === "text" && node.text) return node.text
-  if (node.type === "mention") return `@${node.attrs?.label ?? node.attrs?.id ?? ""}`
-  if (node.type === "hardBreak") return " "
-  if (!node.content) return ""
-  return node.content.map(extractPlain).join("")
 }

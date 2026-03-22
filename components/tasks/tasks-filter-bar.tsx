@@ -8,6 +8,8 @@ import {
   FolderKanban,
   Tag,
   UserCircle,
+  Building2,
+  CalendarDays,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
@@ -36,7 +38,7 @@ import { getStatusColor } from "@/lib/status-colors"
 import { getCategoryColor } from "@/convex/lib/constants"
 import { cn } from "@/lib/utils"
 
-function useFilterTypeConfigs(): FilterTypeConfig[] {
+function useFilterTypeConfigs(isAdmin?: boolean): FilterTypeConfig[] {
   const { statuses, categories, projects, orgMembers } = useTaskReferenceData()
 
   return useMemo(() => {
@@ -71,7 +73,20 @@ function useFilterTypeConfigs(): FilterTypeConfig[] {
       icon: <UserCircle className="size-3.5 text-muted-foreground" />,
     }))
 
-    return [
+    // Derive unique clients from projects
+    const clientMap = new Map<string, { id: string; name: string }>()
+    for (const p of projects ?? []) {
+      if (p.clientId && !clientMap.has(p.clientId)) {
+        clientMap.set(p.clientId, { id: p.clientId, name: p.clientName })
+      }
+    }
+    const clientOptions: FilterOption[] = Array.from(clientMap.values()).map((c) => ({
+      id: c.id,
+      name: c.name,
+      icon: <Building2 className="size-3.5 text-muted-foreground" />,
+    }))
+
+    const configs: FilterTypeConfig[] = [
       {
         key: "status",
         label: "Status",
@@ -97,8 +112,26 @@ function useFilterTypeConfigs(): FilterTypeConfig[] {
         icon: <UserCircle className="size-3.5" />,
         options: assigneeOptions,
       },
+      {
+        key: "client",
+        label: "Client",
+        icon: <Building2 className="size-3.5" />,
+        options: clientOptions,
+        adminOnly: true,
+      },
+      {
+        key: "dueDate",
+        label: "Due Date",
+        icon: <CalendarDays className="size-3.5" />,
+        options: [],
+        isDateRange: true,
+        operators: () => [FilterOperator.IS],
+      },
     ]
-  }, [statuses, categories, projects, orgMembers])
+
+    // Filter out admin-only configs when user is not admin
+    return isAdmin === false ? configs.filter((c) => !c.adminOnly) : configs
+  }, [statuses, categories, projects, orgMembers, isAdmin])
 }
 
 // ─── Options list (supports grouped rendering) ──────────────────────────────
@@ -152,35 +185,26 @@ function OptionsList({
   )
 }
 
-// ─── Exported filter bar ─────────────────────────────────────────────────────
+// ─── Filter trigger (popover to add filters) — lives in tab bar row 1 ────────
 
 export function TasksFilterBar({
   filters,
   setFilters,
+  isAdmin,
 }: {
   filters: Filter[]
   setFilters: React.Dispatch<React.SetStateAction<Filter[]>>
+  isAdmin?: boolean
 }) {
-  const configs = useFilterTypeConfigs()
+  const configs = useFilterTypeConfigs(isAdmin)
   const [open, setOpen] = useState(false)
   const [selectedType, setSelectedType] = useState<string | null>(null)
   const [commandInput, setCommandInput] = useState("")
 
+  const hasActiveFilters = filters.some((f) => f.value?.length > 0)
+
   return (
-    <div className="flex gap-2 flex-wrap items-center">
-      <Filters filters={filters} setFilters={setFilters} typeConfigs={configs} />
-
-      {filters.filter((f) => f.value?.length > 0).length > 0 && (
-        <Button
-          variant="outline"
-          size="sm"
-          className="transition group h-6 text-xs items-center rounded-sm"
-          onClick={() => setFilters([])}
-        >
-          Clear
-        </Button>
-      )}
-
+    <div className="flex gap-2 items-center">
       <Popover
         open={open}
         onOpenChange={(open) => {
@@ -200,12 +224,21 @@ export function TasksFilterBar({
             aria-expanded={open}
             size="sm"
             className={cn(
-              "transition group h-6 text-xs items-center rounded-sm flex gap-1.5",
-              filters.length > 0 && "w-6"
+              "transition group h-8 text-xs items-center rounded-sm flex gap-1.5",
+              hasActiveFilters
+                ? "bg-blue-500/10 text-blue-600 hover:bg-blue-500/15 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-400"
+                : "text-muted-foreground",
             )}
           >
-            <ListFilter className="size-3 shrink-0 transition-all text-muted-foreground group-hover:text-primary" />
-            {!filters.length && "Filter"}
+            <ListFilter className={cn(
+              "size-3 shrink-0 transition-all",
+              !hasActiveFilters && "group-hover:text-primary",
+            )} />
+            {hasActiveFilters ? (
+              <span>{filters.filter((f) => f.value?.length > 0).length}</span>
+            ) : (
+              "Filter"
+            )}
           </Button>
         </PopoverTrigger>
         <PopoverContent className="p-0" style={{ width: selectedType ? (configs.find((t) => t.key === selectedType)?.popoverWidth ?? "200px") : "200px" }}>
@@ -244,12 +277,38 @@ export function TasksFilterBar({
                   />
                 ) : (
                   <CommandGroup>
-                    {configs.map((config) => (
+                    {configs
+                      .filter((config) => {
+                        // Hide date range filter if already active (only one allowed)
+                        if (config.isDateRange) {
+                          return !filters.some((f) => f.type === config.key)
+                        }
+                        return true
+                      })
+                      .map((config) => (
                       <CommandItem
                         className="group text-muted-foreground flex gap-2 items-center"
                         key={config.key}
                         value={config.label}
                         onSelect={() => {
+                          if (config.isDateRange) {
+                            // Date range filters are added immediately with empty placeholder values
+                            setFilters((prev) => [
+                              ...prev,
+                              {
+                                id: nanoid(),
+                                type: config.key,
+                                operator: FilterOperator.IS,
+                                value: ["", ""], // [from, to] — empty strings until user picks dates
+                              },
+                            ])
+                            setOpen(false)
+                            setTimeout(() => {
+                              setSelectedType(null)
+                              setCommandInput("")
+                            }, 200)
+                            return
+                          }
                           setSelectedType(config.key)
                           setCommandInput("")
                         }}
@@ -268,5 +327,34 @@ export function TasksFilterBar({
         </PopoverContent>
       </Popover>
     </div>
+  )
+}
+
+// ─── Active filter pills — lives in tab bar row 2 ───────────────────────────
+
+export function TasksActiveFilters({
+  filters,
+  setFilters,
+  isAdmin,
+}: {
+  filters: Filter[]
+  setFilters: React.Dispatch<React.SetStateAction<Filter[]>>
+  isAdmin?: boolean
+}) {
+  const configs = useFilterTypeConfigs(isAdmin)
+
+  return (
+    <>
+      <Filters filters={filters} setFilters={setFilters} typeConfigs={configs} />
+
+      <Button
+        variant="outline"
+        size="sm"
+        className="transition group h-6 text-xs items-center rounded-sm"
+        onClick={() => setFilters([])}
+      >
+        Clear
+      </Button>
+    </>
   )
 }

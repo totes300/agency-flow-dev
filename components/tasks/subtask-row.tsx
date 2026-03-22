@@ -1,5 +1,6 @@
 "use client"
 
+import { memo } from "react"
 import { useSortable } from "@dnd-kit/react/sortable"
 import { cn } from "@/lib/utils"
 import { InlineStatusCell } from "@/components/tasks/inline-status-cell"
@@ -27,7 +28,7 @@ export type SubtaskData = {
   totalMinutes: number
 }
 
-export function SubtaskRow({
+export const SubtaskRow = memo(function SubtaskRow({
   subtask,
   index,
   isAdmin,
@@ -111,4 +112,4 @@ export function SubtaskRow({
       </RowActionMenu>
     </div>
   )
-}
+})

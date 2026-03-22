@@ -96,6 +96,7 @@ export type CommentEvent = {
   parentUserName?: string
   parentPreview?: string
   createdAt: number
+  updatedAt?: number
 }
 
 export type FeedItem = ActivityEvent | CommentEvent

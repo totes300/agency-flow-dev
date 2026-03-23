@@ -7,6 +7,7 @@ import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
 import { MetricCard } from "@/components/metric-card"
 import { CategoryBadge } from "@/components/category-badge"
 import { BudgetProgress } from "@/components/budget-progress"
@@ -197,28 +198,43 @@ export function FixedOverview({
 
           {/* Unestimated category warning */}
           {unestimatedCategories.length > 0 && (
-            <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-950">
+            <div className="rounded-lg border border-red-200/60 bg-red-50/50 px-4 py-3.5 dark:border-red-900/40 dark:bg-red-950/30">
               <div className="flex items-start gap-3">
-                <AlertTriangleIcon className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400" />
-                <div className="min-w-0 space-y-2">
-                  <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
-                    Time logged under categories without budget estimates
-                  </p>
-                  <div className="flex flex-wrap gap-x-4 gap-y-1">
+                <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-red-100 dark:bg-red-900/40">
+                  <AlertTriangleIcon className="size-4.5 text-red-500 dark:text-red-400" />
+                </div>
+                <div className="min-w-0 flex-1 space-y-3">
+                  <div>
+                    <p className="text-sm font-medium text-foreground">
+                      Incomplete budget tracking
+                    </p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      {unestimatedCategories.length === 1
+                        ? `${formatMinutes(unestimatedCategories[0].minutes)} logged under a category that has no budget estimate.`
+                        : `${formatMinutes(unestimatedCategories.reduce((s, c) => s + c.minutes, 0))} logged across ${unestimatedCategories.length} categories without budget estimates.`
+                      }
+                    </p>
+                  </div>
+                  <div className="space-y-1.5">
                     {unestimatedCategories.map((cat) => (
-                      <span key={cat.catId} className="flex items-center gap-1.5 text-sm text-amber-700 dark:text-amber-300">
+                      <div key={cat.catId} className="flex items-center gap-2.5">
                         <CategoryBadge name={cat.name} color={cat.color} />
-                        <span className="font-mono text-xs tabular-nums">{formatMinutes(cat.minutes)}</span>
-                      </span>
+                        <span className="font-mono text-xs text-muted-foreground tabular-nums">
+                          {formatMinutes(cat.minutes)} logged
+                        </span>
+                      </div>
                     ))}
                   </div>
-                  <button
-                    type="button"
-                    className="text-sm font-medium text-amber-700 underline underline-offset-2 hover:text-amber-900 dark:text-amber-300 dark:hover:text-amber-100"
-                    onClick={onNavigateToEstimates}
-                  >
-                    Add estimates →
-                  </button>
+                  {onNavigateToEstimates && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={onNavigateToEstimates}
+                      className="h-7 text-xs"
+                    >
+                      Add estimates
+                    </Button>
+                  )}
                 </div>
               </div>
             </div>

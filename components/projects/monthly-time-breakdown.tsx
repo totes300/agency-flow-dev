@@ -242,7 +242,7 @@ function CategorySection({
             <button
               type="button"
               onClick={() => onTaskClick(task.taskId)}
-              className="min-w-0 truncate rounded-sm text-sm text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-offset-1"
+              className="min-w-0 cursor-pointer truncate rounded-sm text-sm font-medium text-foreground transition-colors hover:text-foreground/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-offset-1"
             >
               {task.taskTitle}
             </button>

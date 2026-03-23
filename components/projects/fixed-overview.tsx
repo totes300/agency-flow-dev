@@ -110,26 +110,21 @@ export function FixedOverview({
 
       {/* Budget */}
       <div className="overflow-hidden rounded-xl border border-border">
-        {/* Header — same pattern as time log month headers */}
-        <div className="flex items-center justify-between bg-muted/50 px-5 py-3">
-          <span className="text-sm font-semibold tracking-tight">Budget</span>
+        {/* Header — title + inline progress bar + summary */}
+        <div className="flex items-center gap-4 bg-muted/50 px-5 py-3">
+          <span className="shrink-0 text-sm font-semibold tracking-tight">Budget</span>
           {budgetPercent !== null ? (
-            <p className="tabular-nums text-muted-foreground">
-              <span className="text-sm">{formatMinutes(totalActualMinutes)} of {formatMinutes(totalEstimatedMinutes)}</span>
-              {" "}
-              <span className="text-lg font-bold text-foreground">{Math.round(budgetPercent)}%</span>
-            </p>
+            <>
+              <BudgetProgress used={totalActualMinutes} budget={totalEstimatedMinutes} className="flex-1" />
+              <p className="shrink-0 tabular-nums text-sm text-muted-foreground">
+                {formatMinutes(totalActualMinutes)} / {formatMinutes(totalEstimatedMinutes)}
+                <span className="ml-1.5 font-semibold text-foreground">{Math.round(budgetPercent)}%</span>
+              </p>
+            </>
           ) : (
-            <p className="text-sm text-muted-foreground">No estimate set</p>
+            <p className="flex-1 text-right text-sm text-muted-foreground">No estimate set</p>
           )}
         </div>
-
-        {/* Progress bar */}
-        {budgetPercent !== null && (
-          <div className="border-t px-5 py-3">
-            <BudgetProgress used={totalActualMinutes} budget={totalEstimatedMinutes} />
-          </div>
-        )}
 
         {/* Category table */}
         {estimates.length > 0 && (

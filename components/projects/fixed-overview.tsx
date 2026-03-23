@@ -238,9 +238,9 @@ function BudgetSection({
               <td className="px-6 py-3.5">
                 {budgetPercent !== null && (
                   <div className="flex items-center gap-2.5">
-                    <div className="h-1.5 flex-1 max-w-28 overflow-hidden rounded-full bg-muted">
+                    <div className="h-2 flex-1 max-w-28 overflow-hidden rounded-sm bg-muted">
                       <div
-                        className="h-full rounded-full bg-primary transition-[width] duration-300"
+                        className="h-full bg-primary transition-[width] duration-300"
                         style={{ width: `${Math.min(budgetPercent, 100)}%` }}
                       />
                     </div>
@@ -301,9 +301,9 @@ function BudgetRow({
       <td className="px-6 py-3.5">
         {row.pct !== null ? (
           <div className="flex items-center gap-2.5">
-            <div className={cn("h-1.5 flex-1 max-w-28 overflow-hidden rounded-full", muted ? "bg-muted/50" : "bg-muted")}>
+            <div className={cn("h-2 flex-1 max-w-28 overflow-hidden rounded-sm", muted ? "bg-muted/50" : "bg-muted")}>
               <div
-                className={cn("h-full rounded-full transition-[width] duration-300", muted ? "bg-muted-foreground/20" : "bg-primary")}
+                className={cn("h-full transition-[width] duration-300", muted ? "bg-muted-foreground/20" : "bg-primary")}
                 style={{ width: `${Math.min(row.pct, 100)}%` }}
               />
             </div>

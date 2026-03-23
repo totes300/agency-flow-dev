@@ -125,7 +125,7 @@ export function SettingsBudgetEstimates({
   const gridCols = "grid-cols-[minmax(140px,2fr)_minmax(100px,1fr)_minmax(100px,1fr)_minmax(100px,1fr)_32px]"
 
   return (
-    <Card>
+    <Card id="budget-estimates-section">
       <CardHeader>
         <CardTitle>Budget Estimates</CardTitle>
       </CardHeader>

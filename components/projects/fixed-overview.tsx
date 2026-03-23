@@ -18,13 +18,16 @@ import { formatMinutes, formatCurrencyPrecise } from "@/lib/format"
 export function FixedOverview({
   projectId,
   project,
+  onNavigateToEstimates,
 }: {
   projectId: Id<"projects">
   project: { currency: string; fixedPrice?: number }
+  onNavigateToEstimates?: () => void
 }) {
   const router = useRouter()
   const pathname = usePathname()
   const estimates = useQuery(api.projectCategoryEstimates.list, { projectId })
+  const categories = useQuery(api.workCategories.list, { includeArchived: false })
   const overview = useQuery(api.timeEntries.projectOverview, { projectId })
   const monthlyData = useQuery(api.timeEntries.projectMonthlyBreakdown, { projectId })
 
@@ -50,14 +53,18 @@ export function FixedOverview({
   // Per-category actuals
   const minutesByCategory = overview?.minutesByCategory ?? {}
 
-  // Unestimated categories with logged time
+  // Unestimated categories with logged time — enriched with name/color
   const unestimatedCategories = useMemo(() => {
-    if (!estimates || !overview) return []
+    if (!estimates || !overview || !categories) return []
     const estimatedIds = new Set(estimates.map((e) => e.workCategoryId?.toString()))
+    const catMap = new Map(categories.map((c) => [c._id.toString(), c]))
     return Object.entries(minutesByCategory)
       .filter(([catId]) => catId !== "uncategorized" && !estimatedIds.has(catId))
-      .map(([catId, minutes]) => ({ catId, minutes }))
-  }, [estimates, overview, minutesByCategory])
+      .map(([catId, minutes]) => {
+        const cat = catMap.get(catId)
+        return { catId, minutes, name: cat?.name ?? "Unknown", color: cat?.color ?? "gray" }
+      })
+  }, [estimates, overview, categories, minutesByCategory])
 
   function handleTaskClick(taskId: string) {
     router.push(`${pathname}?detail=${taskId}`, { scroll: false })
@@ -190,20 +197,31 @@ export function FixedOverview({
 
           {/* Unestimated category warning */}
           {unestimatedCategories.length > 0 && (
-            <Alert variant="default" className="border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
-              <AlertTriangleIcon className="size-4" />
-              <AlertDescription>
-                {formatMinutes(unestimatedCategories.reduce((s, c) => s + c.minutes, 0))} logged under
-                categories with no budget estimate — budget tracking is incomplete.{" "}
-                <button
-                  type="button"
-                  className="font-medium underline underline-offset-2"
-                  onClick={() => router.push(`${pathname}?tab=settings`)}
-                >
-                  Add estimate →
-                </button>
-              </AlertDescription>
-            </Alert>
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-950">
+              <div className="flex items-start gap-3">
+                <AlertTriangleIcon className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                <div className="min-w-0 space-y-2">
+                  <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
+                    Time logged under categories without budget estimates
+                  </p>
+                  <div className="flex flex-wrap gap-x-4 gap-y-1">
+                    {unestimatedCategories.map((cat) => (
+                      <span key={cat.catId} className="flex items-center gap-1.5 text-sm text-amber-700 dark:text-amber-300">
+                        <CategoryBadge name={cat.name} color={cat.color} />
+                        <span className="font-mono text-xs tabular-nums">{formatMinutes(cat.minutes)}</span>
+                      </span>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    className="text-sm font-medium text-amber-700 underline underline-offset-2 hover:text-amber-900 dark:text-amber-300 dark:hover:text-amber-100"
+                    onClick={onNavigateToEstimates}
+                  >
+                    Add estimates →
+                  </button>
+                </div>
+              </div>
+            </div>
           )}
         </CardContent>
       </Card>

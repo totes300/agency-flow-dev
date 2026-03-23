@@ -183,7 +183,16 @@ export default function ProjectDetailPage() {
 
         <TabsContent value="overview" className="mt-6">
           {project.billingType === "fixed" && (
-            <FixedOverview projectId={projectId} project={project} />
+            <FixedOverview
+              projectId={projectId}
+              project={project}
+              onNavigateToEstimates={() => {
+                setTab("settings")
+                setTimeout(() => {
+                  document.getElementById("budget-estimates-section")?.scrollIntoView({ behavior: "smooth", block: "start" })
+                }, 100)
+              }}
+            />
           )}
           {project.billingType === "t_and_m" && (
             <TmOverview projectId={projectId} project={project} />

@@ -29,8 +29,9 @@ const SettingsRates = dynamic(() => import("@/components/projects/settings-rates
 const SettingsRetainer = dynamic(() => import("@/components/projects/settings-retainer").then(m => ({ default: m.SettingsRetainer })))
 import { ProjectDetailSkeleton } from "@/components/projects/project-detail-skeleton"
 import { DefaultAssigneesPlaceholder } from "@/components/projects/default-assignees-placeholder"
-import { TimeLogPlaceholder } from "@/components/projects/time-log-placeholder"
+import { TaskDetailModal } from "@/components/tasks/task-detail-modal"
 import { toast } from "sonner"
+import { formatShortDate } from "@/lib/format"
 import {
   ArrowLeftIcon,
   MoreHorizontalIcon,
@@ -45,13 +46,15 @@ export default function ProjectDetailPage() {
   const router = useRouter()
   const projectId = params.id as Id<"projects">
   const project = useQuery(api.projects.get, { id: projectId })
+  const overview = useQuery(api.timeEntries.projectOverview, { projectId })
 
   const archiveProject = useMutation(api.projects.archive)
   const restoreProject = useMutation(api.projects.restore)
   const removeProject = useMutation(api.projects.remove)
 
   const [deleteOpen, setDeleteOpen] = useState(false)
-  const defaultTab = searchParams.get("tab") === "settings" ? "settings" : "overview"
+  const tabParam = searchParams.get("tab")
+  const defaultTab = tabParam === "settings" ? "settings" : tabParam === "invoices" ? "invoices" : "overview"
   const [tab, setTab] = useState(defaultTab)
 
   useEffect(() => {
@@ -135,7 +138,9 @@ export default function ProjectDetailPage() {
           </div>
 
           <div className="flex items-center gap-2">
-            <span className="text-xs text-muted-foreground">Last logged: &mdash;</span>
+            <span className="text-xs text-muted-foreground">
+              Last logged: {overview?.lastLoggedDate ? formatShortDate(overview.lastLoggedDate) : "—"}
+            </span>
             <Button variant="outline" size="sm" onClick={() => setTab("settings")}>
               Edit
             </Button>
@@ -172,22 +177,30 @@ export default function ProjectDetailPage() {
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="invoices">Invoices</TabsTrigger>
           <TabsTrigger value="settings">Settings</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="mt-6">
           {project.billingType === "fixed" && (
-            <FixedOverview projectId={projectId} currency={project.currency} />
+            <FixedOverview projectId={projectId} project={project} />
           )}
-          {project.billingType === "t_and_m" && <TmOverview />}
+          {project.billingType === "t_and_m" && (
+            <TmOverview projectId={projectId} project={project} />
+          )}
           {project.billingType === "retainer" && (
             <RetainerOverview projectId={projectId} />
           )}
+        </TabsContent>
 
-          {/* Time Log — shared across all billing types */}
-          <div className="mt-6">
-            <h3 className="mb-3 text-sm font-semibold">Time Log</h3>
-            <TimeLogPlaceholder />
+        <TabsContent value="invoices" className="mt-6">
+          <div className="rounded-lg border bg-muted/30 p-8">
+            <div className="flex flex-col items-center justify-center gap-2 text-center">
+              <p className="text-sm font-medium">Invoices coming soon</p>
+              <p className="text-xs text-muted-foreground">
+                Invoice creation and tracking will be available in a future update.
+              </p>
+            </div>
           </div>
         </TabsContent>
 
@@ -207,6 +220,12 @@ export default function ProjectDetailPage() {
           </div>
         </TabsContent>
       </Tabs>
+
+      {/* Task detail modal — route-driven via ?detail=taskId */}
+      <TaskDetailModal
+        taskIds={[]}
+        isAdmin={true}
+      />
 
       {/* Delete confirmation */}
       <ConfirmDialog

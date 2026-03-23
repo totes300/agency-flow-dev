@@ -165,6 +165,8 @@ export default defineSchema({
     startDate: v.optional(v.string()),              // YYYY-MM-DD
     rolloverEnabled: v.optional(v.boolean()),
     cycleLength: v.optional(v.number()),            // 1-12 months
+    // Fixed fields
+    fixedPrice: v.optional(v.number()),           // sold fixed fee (required for fixed projects)
     // T&M fields
     hourlyRate: v.optional(v.number()),
     tmCategoryRates: v.optional(v.array(v.object({

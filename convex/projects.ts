@@ -74,6 +74,8 @@ export const create = mutation({
     billingType: billingTypeValidator,
     currency: currencyValidator,
     code: v.optional(v.string()),
+    // Fixed fields
+    fixedPrice: v.optional(v.number()),
     // T&M fields
     tmRateMode: v.optional(tmRateModeValidator),
     hourlyRate: v.optional(v.number()),
@@ -102,6 +104,13 @@ export const create = mutation({
     // Validate currency
     if (!CURRENCIES.includes(args.currency as typeof CURRENCIES[number])) {
       throw new Error("Invalid currency");
+    }
+
+    // Fixed validation
+    if (args.billingType === "fixed") {
+      if (args.fixedPrice === undefined || args.fixedPrice <= 0) {
+        throw new Error("Fixed fee is required and must be greater than zero");
+      }
     }
 
     // T&M validation
@@ -175,6 +184,10 @@ export const create = mutation({
       code,
       billingType: args.billingType,
       currency: args.currency,
+      // Fixed fields
+      ...(args.billingType === "fixed" ? {
+        fixedPrice: args.fixedPrice,
+      } : {}),
       // T&M fields
       ...(args.billingType === "t_and_m" ? {
         tmRateMode: args.tmRateMode,
@@ -203,6 +216,7 @@ export const update = mutation({
     name: v.optional(v.string()),
     code: v.optional(v.string()),
     currency: v.optional(currencyValidator),
+    fixedPrice: v.optional(v.number()),
     defaultAssignees: v.optional(v.array(v.object({
       workCategoryId: v.id("workCategories"),
       userId: v.id("users"),
@@ -241,6 +255,17 @@ export const update = mutation({
 
     if (args.defaultAssignees !== undefined) {
       updates.defaultAssignees = args.defaultAssignees;
+    }
+
+    // Fixed price update
+    if (args.fixedPrice !== undefined) {
+      if (project.billingType !== "fixed") {
+        throw new Error("Fixed fee can only be set on fixed projects");
+      }
+      if (args.fixedPrice <= 0) {
+        throw new Error("Fixed fee must be greater than zero");
+      }
+      updates.fixedPrice = args.fixedPrice;
     }
 
     // T&M rate updates

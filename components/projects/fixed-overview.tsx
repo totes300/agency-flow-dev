@@ -6,10 +6,8 @@ import { useRouter, usePathname } from "next/navigation"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { MetricCard } from "@/components/metric-card"
-import { CategoryBadge } from "@/components/category-badge"
 import { BudgetProgress } from "@/components/budget-progress"
 import { MonthlyTimeBreakdown } from "./monthly-time-breakdown"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -110,123 +108,126 @@ export function FixedOverview({
         </AlertDescription>
       </Alert>
 
-      {/* Budget & Category Breakdown */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Budget & Category Breakdown</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {/* Overall budget bar */}
+      {/* Budget */}
+      <div className="overflow-hidden rounded-xl border border-border">
+        {/* Header row — title with accent underline + summary */}
+        <div className="flex items-end justify-between px-5 pt-5 pb-3">
+          <div>
+            <h3 className="text-lg font-semibold tracking-tight">Budget</h3>
+            <div className="mt-1 h-0.5 w-10 rounded-full bg-primary" />
+          </div>
           {budgetPercent !== null ? (
-            <div className="space-y-1.5">
-              <div className="flex items-center gap-3">
-                <BudgetProgress
-                  used={totalActualMinutes}
-                  budget={totalEstimatedMinutes}
-                  className="flex-1"
-                />
-                <span className="shrink-0 text-sm font-medium tabular-nums">
-                  {Math.round(budgetPercent)}%
-                </span>
-              </div>
-              <p className="text-xs text-muted-foreground tabular-nums">
-                {formatMinutes(totalActualMinutes)} / {formatMinutes(totalEstimatedMinutes)}
-              </p>
-            </div>
+            <p className="text-sm tabular-nums text-muted-foreground">
+              {formatMinutes(totalActualMinutes)} of {formatMinutes(totalEstimatedMinutes)}{" "}
+              <span className="font-semibold text-foreground">{Math.round(budgetPercent)}%</span>
+            </p>
           ) : (
             <p className="text-sm text-muted-foreground">No estimate set</p>
           )}
+        </div>
 
-          {/* Per-category table */}
-          {estimates.length > 0 && (
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-t text-left text-xs text-muted-foreground">
-                  <th className="px-4 py-2 font-medium">Category</th>
-                  <th className="px-4 py-2 font-medium">Estimated</th>
-                  <th className="px-4 py-2 font-medium">Actual</th>
-                  <th className="px-4 py-2 font-medium">Remaining</th>
-                  <th className="px-4 py-2 font-medium">Progress</th>
-                </tr>
-              </thead>
-              <tbody>
-                {estimates.map((est) => {
-                  const actual = minutesByCategory[est.workCategoryId?.toString() ?? ""] ?? 0
-                  const remaining = est.estimatedMinutes - actual
-                  const pct = est.estimatedMinutes > 0
-                    ? Math.round((actual / est.estimatedMinutes) * 100)
-                    : null
-                  return (
-                    <tr key={est._id} className="border-t">
-                      <td className="px-4 py-2.5">
-                        <CategoryBadge name={est.categoryName} color={est.categoryColor} />
-                      </td>
-                      <td className="px-4 py-2.5 tabular-nums">{formatMinutes(est.estimatedMinutes)}</td>
-                      <td className="px-4 py-2.5 font-medium tabular-nums">{formatMinutes(actual)}</td>
-                      <td className="px-4 py-2.5 tabular-nums">{formatMinutes(remaining)}</td>
-                      <td className="px-4 py-2.5">
-                        {pct !== null ? (
-                          <div className="flex items-center gap-2">
-                            <div className="h-1.5 w-16 overflow-hidden rounded-full bg-muted">
-                              <div
-                                className="h-full rounded-full bg-blue-500 transition-[width] duration-300"
-                                style={{ width: `${Math.min(pct, 100)}%` }}
-                              />
-                            </div>
-                            <span className="text-xs text-muted-foreground tabular-nums">{pct}%</span>
+        {/* Progress bar */}
+        {budgetPercent !== null && (
+          <div className="px-5 pb-4">
+            <BudgetProgress used={totalActualMinutes} budget={totalEstimatedMinutes} />
+          </div>
+        )}
+
+        {/* Category table */}
+        {estimates.length > 0 && (
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-t text-left">
+                <th className="px-5 py-2.5 text-xs font-medium tracking-wide text-muted-foreground">CATEGORY</th>
+                <th className="px-5 py-2.5 text-xs font-medium tracking-wide text-muted-foreground">ESTIMATED</th>
+                <th className="px-5 py-2.5 text-xs font-medium tracking-wide text-muted-foreground">ACTUAL</th>
+                <th className="px-5 py-2.5 text-xs font-medium tracking-wide text-muted-foreground">REMAINING</th>
+                <th className="px-5 py-2.5 text-xs font-medium tracking-wide text-muted-foreground">PROGRESS</th>
+              </tr>
+            </thead>
+            <tbody>
+              {estimates.map((est) => {
+                const actual = minutesByCategory[est.workCategoryId?.toString() ?? ""] ?? 0
+                const remaining = est.estimatedMinutes - actual
+                const pct = est.estimatedMinutes > 0
+                  ? Math.round((actual / est.estimatedMinutes) * 100)
+                  : null
+                return (
+                  <tr key={est._id} className="border-t transition-colors hover:bg-muted/30">
+                    <td className="px-5 py-3 font-medium">{est.categoryName}</td>
+                    <td className="px-5 py-3 tabular-nums text-muted-foreground">{formatMinutes(est.estimatedMinutes)}</td>
+                    <td className="px-5 py-3 font-semibold tabular-nums">{formatMinutes(actual)}</td>
+                    <td className="px-5 py-3 tabular-nums text-muted-foreground">{formatMinutes(remaining)}</td>
+                    <td className="px-5 py-3">
+                      {pct !== null ? (
+                        <div className="flex items-center gap-2.5">
+                          <div className="h-1.5 w-24 overflow-hidden rounded-full bg-muted">
+                            <div
+                              className="h-full rounded-full bg-primary transition-[width] duration-300"
+                              style={{ width: `${Math.min(pct, 100)}%` }}
+                            />
                           </div>
-                        ) : (
-                          <span className="text-xs text-muted-foreground">—</span>
-                        )}
-                      </td>
-                    </tr>
-                  )
-                })}
-                <tr className="border-t bg-muted/30 font-medium">
-                  <td className="px-4 py-2.5">Total</td>
-                  <td className="px-4 py-2.5 tabular-nums">{formatMinutes(totalEstimatedMinutes)}</td>
-                  <td className="px-4 py-2.5 tabular-nums">{formatMinutes(totalActualMinutes)}</td>
-                  <td className="px-4 py-2.5 tabular-nums">{formatMinutes(totalEstimatedMinutes - totalActualMinutes)}</td>
-                  <td className="px-4 py-2.5">
-                    {budgetPercent !== null && (
-                      <span className="text-xs text-muted-foreground tabular-nums">{Math.round(budgetPercent)}%</span>
-                    )}
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          )}
+                          <span className="text-sm tabular-nums text-muted-foreground">{pct}%</span>
+                        </div>
+                      ) : (
+                        <span className="text-sm text-muted-foreground">—</span>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
+              <tr className="border-t font-semibold">
+                <td className="px-5 py-3">Total</td>
+                <td className="px-5 py-3 tabular-nums">{formatMinutes(totalEstimatedMinutes)}</td>
+                <td className="px-5 py-3 tabular-nums">{formatMinutes(totalActualMinutes)}</td>
+                <td className="px-5 py-3 tabular-nums">{formatMinutes(totalEstimatedMinutes - totalActualMinutes)}</td>
+                <td className="px-5 py-3">
+                  {budgetPercent !== null && (
+                    <div className="flex items-center gap-2.5">
+                      <div className="h-1.5 w-24 overflow-hidden rounded-full bg-muted">
+                        <div
+                          className="h-full rounded-full bg-primary transition-[width] duration-300"
+                          style={{ width: `${Math.min(budgetPercent, 100)}%` }}
+                        />
+                      </div>
+                      <span className="text-sm tabular-nums">{Math.round(budgetPercent)}%</span>
+                    </div>
+                  )}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        )}
 
-          {/* Unestimated category warning */}
-          {unestimatedCategories.length > 0 && (
-            <div className="flex items-center gap-3 rounded-md border border-red-200/50 bg-red-50/40 px-3 py-2 dark:border-red-900/30 dark:bg-red-950/20">
-              <AlertTriangleIcon className="size-4 shrink-0 text-red-400 dark:text-red-500" />
-              <p className="min-w-0 flex-1 text-xs text-muted-foreground">
-                <span className="font-medium text-foreground">No estimate</span>
-                {" — "}
-                {unestimatedCategories.map((cat, i) => (
-                  <span key={cat.catId}>
-                    {i > 0 && ", "}
-                    <span className="font-medium">{cat.name}</span>
-                    {" "}
-                    <span className="font-mono tabular-nums">{formatMinutes(cat.minutes)}</span>
-                  </span>
-                ))}
-              </p>
-              {onNavigateToEstimates && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={onNavigateToEstimates}
-                  className="h-6 shrink-0 rounded px-2 text-[11px]"
-                >
-                  Add estimates
-                </Button>
-              )}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+        {/* Unestimated category warning */}
+        {unestimatedCategories.length > 0 && (
+          <div className="flex items-center gap-3 border-t px-5 py-3">
+            <AlertTriangleIcon className="size-4 shrink-0 text-red-400 dark:text-red-500" />
+            <p className="min-w-0 flex-1 text-sm text-muted-foreground">
+              <span className="font-medium text-foreground">No estimate</span>
+              {" — "}
+              {unestimatedCategories.map((cat, i) => (
+                <span key={cat.catId}>
+                  {i > 0 && ", "}
+                  <span className="font-medium">{cat.name}</span>
+                  {" "}
+                  <span className="font-mono tabular-nums">{formatMinutes(cat.minutes)}</span>
+                </span>
+              ))}
+            </p>
+            {onNavigateToEstimates && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={onNavigateToEstimates}
+                className="h-7 shrink-0 text-xs"
+              >
+                Add estimates
+              </Button>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Monthly Time Log */}
       <div>

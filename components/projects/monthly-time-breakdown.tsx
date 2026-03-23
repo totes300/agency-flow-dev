@@ -13,8 +13,8 @@ import { TimeLogPlaceholder } from "./time-log-placeholder"
 import { formatMinutes, formatCurrencyPrecise, formatShortDate } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import {
-  CELL_KEY, CELL_PRIMARY, CELL_SECONDARY, V5_HEAD, V5_HEAD_ROW, V5_CELL,
-  V5_ROW, V5_FOOTER,
+  CELL_KEY, CELL_PRIMARY, CELL_SECONDARY,
+  TABLE_HEAD, TABLE_HEAD_ROW, TABLE_CELL, TABLE_ROW, TABLE_FOOTER,
 } from "@/lib/table-tokens"
 
 // ─── Types ──────────────────────────────────────────────────────────────────────
@@ -151,7 +151,7 @@ function MonthCard({
           <div
             role="row"
             aria-hidden="true"
-            className={cn("flex items-center", V5_HEAD_ROW, V5_HEAD)}
+            className={cn("flex items-center", TABLE_HEAD_ROW, TABLE_HEAD)}
           >
             <span className="flex-1">Task</span>
             <span className={cn(COL.status, "hidden text-center sm:block")}>Status</span>
@@ -172,7 +172,7 @@ function MonthCard({
           </div>
 
           {/* Footer */}
-          <div className={cn("flex items-start", V5_FOOTER, V5_CELL)}>
+          <div className={cn("flex items-start", TABLE_FOOTER, TABLE_CELL)}>
             <div className="ml-auto flex flex-col items-end gap-0.5">
               <div className="flex items-center gap-2">
                 <span className={CELL_PRIMARY}>Billable</span>
@@ -215,7 +215,7 @@ function CategorySection({
   return (
     <div role="rowgroup">
       {/* Category header row */}
-      <div role="row" className={cn("flex items-center border-t border-border/50", V5_CELL)}>
+      <div role="row" className={cn("flex items-center border-t border-border/50", TABLE_CELL)}>
         <div role="cell" className="flex flex-1 items-center gap-2">
           <span
             className="size-2 shrink-0 rounded-full"
@@ -238,7 +238,7 @@ function CategorySection({
         <div
           key={task.taskId}
           role="row"
-          className={cn("flex items-center pl-9", V5_ROW, V5_CELL)}
+          className={cn("flex items-center pl-9", TABLE_ROW, TABLE_CELL)}
         >
           <div role="cell" className="flex flex-1 items-center gap-2 overflow-hidden">
             <button

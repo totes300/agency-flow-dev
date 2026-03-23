@@ -7,7 +7,7 @@ import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
-import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table"
+import { Table, TableHeader, TableBody, TableFooter, TableRow, TableHead, TableCell } from "@/components/ui/table"
 import { SectionCard } from "@/components/ui/section-card"
 import { SectionHeader } from "@/components/ui/section-header"
 import { ProgressCell } from "@/components/ui/progress-cell"
@@ -19,7 +19,7 @@ import { cn } from "@/lib/utils"
 import { formatMinutes, formatCurrencyPrecise } from "@/lib/format"
 import {
   CELL_KEY, CELL_PRIMARY, CELL_SECONDARY, ROW_MUTED,
-  V5_HEAD, V5_HEAD_ROW, V5_CELL, V5_ROW, V5_FOOTER,
+  TABLE_HEAD, TABLE_HEAD_ROW, TABLE_CELL, TABLE_ROW, TABLE_FOOTER,
 } from "@/lib/table-tokens"
 
 export function FixedOverview({
@@ -209,12 +209,12 @@ function BudgetSection({
       {estimates.length > 0 && (
         <Table>
           <TableHeader>
-            <TableRow className={V5_HEAD_ROW}>
-              <TableHead className={V5_HEAD}>Category</TableHead>
-              <TableHead className={V5_HEAD}>Estimated</TableHead>
-              <TableHead className={V5_HEAD}>Actual</TableHead>
-              <TableHead className={V5_HEAD}>Remaining</TableHead>
-              <TableHead className={V5_HEAD}>Progress</TableHead>
+            <TableRow className={TABLE_HEAD_ROW}>
+              <TableHead className={TABLE_HEAD}>Category</TableHead>
+              <TableHead className={TABLE_HEAD}>Estimated</TableHead>
+              <TableHead className={TABLE_HEAD}>Actual</TableHead>
+              <TableHead className={TABLE_HEAD}>Remaining</TableHead>
+              <TableHead className={TABLE_HEAD}>Progress</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -237,22 +237,24 @@ function BudgetSection({
               </>
             )}
 
-            <TableRow className={V5_FOOTER}>
-              <TableCell className={cn(V5_CELL, "font-semibold")}>Total</TableCell>
-              <TableCell className={cn(V5_CELL, CELL_KEY)}>{formatMinutes(totalEstimatedMinutes)}</TableCell>
-              <TableCell className={cn(V5_CELL, CELL_KEY)}>{formatMinutes(totalActualMinutes)}</TableCell>
-              <TableCell className={cn(V5_CELL, CELL_KEY)}>{formatMinutes(totalEstimatedMinutes - totalActualMinutes)}</TableCell>
-              <TableCell className={V5_CELL}>
+          </TableBody>
+          <TableFooter className={TABLE_FOOTER}>
+            <TableRow className="hover:bg-transparent">
+              <TableCell className={cn(TABLE_CELL, "font-semibold")}>Total</TableCell>
+              <TableCell className={cn(TABLE_CELL, CELL_KEY)}>{formatMinutes(totalEstimatedMinutes)}</TableCell>
+              <TableCell className={cn(TABLE_CELL, CELL_KEY)}>{formatMinutes(totalActualMinutes)}</TableCell>
+              <TableCell className={cn(TABLE_CELL, CELL_KEY)}>{formatMinutes(totalEstimatedMinutes - totalActualMinutes)}</TableCell>
+              <TableCell className={TABLE_CELL}>
                 <ProgressCell percent={budgetPercent !== null ? Math.round(budgetPercent) : null} />
               </TableCell>
             </TableRow>
-          </TableBody>
+          </TableFooter>
         </Table>
       )}
 
       {/* Unestimated category warning */}
       {unestimatedCategories.length > 0 && (
-        <div className={cn("flex items-center gap-3", V5_FOOTER, "px-5 py-3")}>
+        <div className={cn("flex items-center gap-3", TABLE_FOOTER, "px-5 py-3")}>
           <AlertTriangleIcon className="size-4 shrink-0 text-red-400 dark:text-red-500" />
           <p className="min-w-0 flex-1 text-sm text-muted-foreground">
             <span className="font-medium text-foreground">No estimate</span>
@@ -290,12 +292,12 @@ function BudgetRow({
   muted?: boolean
 }) {
   return (
-    <TableRow className={cn(V5_ROW, muted && ROW_MUTED)}>
-      <TableCell className={cn(V5_CELL, muted ? "font-normal" : CELL_PRIMARY)}>{row.categoryName}</TableCell>
-      <TableCell className={cn(V5_CELL, CELL_SECONDARY)}>{formatMinutes(row.estimatedMinutes)}</TableCell>
-      <TableCell className={cn(V5_CELL, muted ? CELL_SECONDARY : CELL_KEY)}>{formatMinutes(row.actual)}</TableCell>
-      <TableCell className={cn(V5_CELL, CELL_SECONDARY)}>{formatMinutes(row.remaining)}</TableCell>
-      <TableCell className={V5_CELL}>
+    <TableRow className={cn(TABLE_ROW, muted && ROW_MUTED)}>
+      <TableCell className={cn(TABLE_CELL, muted ? "font-normal" : CELL_PRIMARY)}>{row.categoryName}</TableCell>
+      <TableCell className={cn(TABLE_CELL, CELL_SECONDARY)}>{formatMinutes(row.estimatedMinutes)}</TableCell>
+      <TableCell className={cn(TABLE_CELL, muted ? CELL_SECONDARY : CELL_KEY)}>{formatMinutes(row.actual)}</TableCell>
+      <TableCell className={cn(TABLE_CELL, CELL_SECONDARY)}>{formatMinutes(row.remaining)}</TableCell>
+      <TableCell className={TABLE_CELL}>
         <ProgressCell percent={row.pct} muted={muted} />
       </TableCell>
     </TableRow>

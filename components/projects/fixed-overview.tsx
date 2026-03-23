@@ -8,7 +8,6 @@ import type { Id } from "@/convex/_generated/dataModel"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { MetricCard } from "@/components/metric-card"
-import { BudgetProgress } from "@/components/budget-progress"
 import { MonthlyTimeBreakdown } from "./monthly-time-breakdown"
 import { Skeleton } from "@/components/ui/skeleton"
 import { InfoIcon, AlertTriangleIcon } from "lucide-react"
@@ -195,11 +194,6 @@ function BudgetSection({
           <p className="text-sm text-muted-foreground">No estimate set</p>
         )}
       </div>
-
-      {/* Full-width progress bar as structural divider */}
-      {budgetPercent !== null && (
-        <BudgetProgress used={totalActualMinutes} budget={totalEstimatedMinutes} className="h-1.5" />
-      )}
 
       {/* Column headers */}
       {estimates.length > 0 && (

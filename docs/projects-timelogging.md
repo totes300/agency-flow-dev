@@ -2,7 +2,7 @@
 
 > **Goal**: Wire real time entry data into all 3 project overview types (Fixed, T&M, Retainer) and build the shared monthly time log breakdown.
 > **Depends on**: Phase 7 (Time Tracking) — timer + manual entry already implemented.
-> **Breaks into 7 committable phases** (0, A0, A, B, C, D, E) — each testable independently.
+> **Breaks into 8 committable phases** (0, A0a, A0b, A, B, C, D, E) — each testable independently. A0b does not block any other phase.
 
 ---
 
@@ -272,44 +272,31 @@ TIME LOG (shared monthly breakdown — with separate Billable Work and Non-billa
 
 4. **Backfill consideration:** Existing Fixed projects will have `fixedPrice === undefined`. The Fixed overview must handle this gracefully — show `"Set fixed fee →"` warning instead of computing profit.
 
-### Phase A0: Time logging guardrails — Prevent incomplete rate snapshots
+### Phase A0a: Data integrity — Enforce rate snapshots for billable entries
 
-**Commit message:** `feat: enforce complete rate snapshots for billable time entries`
+**Commit message:** `feat: enforce rate snapshots for billable entries, allow non-billable without rates`
 
-**Why:** The better solution is to prevent incomplete commercial data from entering the database instead of showing downstream warning banners in overview UI. If a billable entry cannot resolve its required rates, the write should fail with a clear setup error.
+**Why:** Phase A reporting assumes billable entries always have complete rate snapshots. The current code enforces rate resolution for ALL entries (including non-billable), which is too strict. This phase fixes the enforcement boundary so billable entries are guaranteed clean while non-billable entries remain fast and unblocked.
 
-**Rules:**
-1. **Tasks may be created without a category, but billable time logging requires one.**
-   - Do not block fast task capture on missing `workCategoryId`.
-   - If the user tries to log billable time against a task with no category, block the action and prompt them to set the category first.
+**Changes:**
+
+1. **Code reorder in `timeEntries.create`:**
+   The current code resolves rates (line 206) **before** determining `isBillable` (line 213). This means non-billable entries are also rejected when rate resolution fails. Fix:
+   - Move `isBillable` determination (`args.isBillable ?? task.billable`) **before** the rate resolution block.
+   - Only call `resolveRate` and enforce its result when `isBillable === true`.
+   - For non-billable entries, skip rate resolution entirely (or attempt it without throwing on failure).
+
+2. **Category check for billable entries:**
+   - If a task has no `workCategoryId` and the entry is billable, reject with: `"Set a category on this task before logging billable time."`
+   - Tasks may still be created without a category — do not block fast task capture.
    - Treat the "No category" bucket as a reporting fallback, not a valid prerequisite state for billable logging.
-2. **Org-level default category rate library should exist.**
-   - Maintain default category cost/bill rates at the org level.
-   - New projects prefill their rate setup from these defaults.
-3. **Project-level rate setup should be prefilled on creation.**
-   - Fixed: prefill category estimate rows for active work categories.
-   - T&M flat: require project hourly rate.
-   - T&M per-category: prefill category bill rates.
-   - Retainer: require included minutes + overage rate.
-4. **Billable time entries must be rejected if rate resolution fails.**
-   - Apply this to:
-     - `timeEntries.create`
-     - `timeEntries.update` when edited fields affect rate resolution
-     - timer-derived entry creation/finalization flows
-   - If the task has no category, reject the billable write with a clear setup message such as: `"Set a category on this task before logging billable time."`
-   - If `resolveRate` returns an error for a billable entry, reject the write with the resolver's error message.
-5. **Non-billable entries may still be saved without commercial rate snapshots.**
-   - They remain valid for internal tracking and should not be blocked on bill-rate setup.
 
-**Critical implementation detail — code reorder in `timeEntries.create`:**
-The current code resolves rates (line 206) **before** determining `isBillable` (line 213). This means non-billable entries are also rejected when rate resolution fails, violating rule 5. Fix:
-1. Move `isBillable` determination (`args.isBillable ?? task.billable`) **before** the rate resolution block.
-2. Only call `resolveRate` and enforce its result when `isBillable === true`.
-3. For non-billable entries, skip rate resolution entirely (or attempt it without throwing on failure).
-4. Apply the same reorder in `update` and timer finalization paths.
+3. **Apply the same logic to `timeEntries.update`** when edited fields affect rate resolution.
+
+4. **Apply the same logic to timer-derived entry creation/finalization** in `convex/timer.ts`.
 
 **UX contract:**
-- Errors from rules 1 and 4 surface as **toast notifications** via the existing `toastError` helper (`lib/toast-helpers.ts`), which extracts `ConvexError` messages into visible Sonner toasts.
+- Errors surface as **toast notifications** via the existing `toastError` helper (`lib/toast-helpers.ts`), which extracts `ConvexError` messages into visible Sonner toasts.
 - Error messages must be **actionable** — tell the user what to fix, not just what failed. Example: `"Set a category on this task before logging billable time"`, not `"Rate resolution failed"`.
 - No silent failures — every rejected write must produce a visible user-facing message.
 
@@ -317,6 +304,31 @@ The current code resolves rates (line 206) **before** determining `isBillable` (
 - Reporting can assume billable entries already have the required snapshots.
 - No downstream missing-rate warning banners are needed in overview UI.
 - Data quality is enforced at write time instead of being patched in reporting.
+
+### Phase A0b: UX — Rate setup defaults and project creation prefill
+
+**Commit message:** `feat: org-level rate defaults and project creation prefill`
+
+**Why:** Without prefilled rate setup, users must manually configure every category rate for each new project. This creates friction and increases the chance of hitting the Phase A0a guardrails on first use. This phase makes the happy path smooth by prefilling sensible defaults.
+
+**Does not block any other phase.** Can ship anytime — before or after Phase E.
+
+**Changes:**
+
+1. **Org-level default category rate library:**
+   - Maintain default cost/bill rates per work category at the org settings level.
+   - New projects prefill their rate setup from these defaults.
+
+2. **Project-level rate setup prefill on creation:**
+   - Fixed: prefill `projectCategoryEstimates` rows for all active work categories using org defaults.
+   - T&M flat: require project `hourlyRate` at creation.
+   - T&M per-category: prefill `tmCategoryRates` from org defaults.
+   - Retainer: require `includedMinutesPerMonth` + `overageRate` at creation.
+
+3. **Frontend project create/edit forms:**
+   - Show prefilled rate values from org defaults.
+   - Allow override per project.
+   - Make it clear which values are inherited vs customized.
 
 ### Phase A: Backend — Project time aggregation queries
 
@@ -867,14 +879,20 @@ const budgetPercent = totalEstimatedMinutes > 0
 - [ ] Months sort descending, categories alphabetically, tasks by lastDate descending
 - [ ] Historical grouping behavior is understood and documented when task title/category changes after time was logged
 
-### Phase A0
+### Phase A0a
 - [ ] Tasks can still be created without `workCategoryId`
-- [ ] Billable time logging is blocked when task category is missing, with a clear setup prompt
-- [ ] Project creation prefills rate setup from org-level category defaults
-- [ ] Billable `timeEntries.create` rejects writes when `resolveRate` fails
+- [ ] Billable time logging is blocked when task category is missing, with actionable toast message
+- [ ] Billable `timeEntries.create` rejects writes when `resolveRate` fails, with actionable toast message
 - [ ] Billable `timeEntries.update` rejects writes when edited fields invalidate rate resolution
 - [ ] Timer-derived billable entry creation/finalization rejects writes when `resolveRate` fails
 - [ ] Non-billable entries can still be created without commercial rate snapshots
+- [ ] Non-billable entries on tasks without a category can still be created
+
+### Phase A0b (does not block other phases)
+- [ ] Org-level default category rates exist and can be configured
+- [ ] Fixed project creation prefills category estimate rows from org defaults
+- [ ] T&M per-category project creation prefills category bill rates from org defaults
+- [ ] Project create/edit forms show prefilled values and allow override
 
 ### Phase B
 - [ ] `getRetainerData` returns real `workedMinutes` per month
@@ -1198,11 +1216,13 @@ That is enough to give high confidence without building a large testing framewor
 - `components/projects/category-group-header.tsx` — Shared category header component
 
 ### Modified files
-- `convex/schema.ts` — Add `fixedPrice` to projects schema
-- `convex/projects.ts` — Require `fixedPrice` for Fixed projects, prefill project-level setup where needed, and wire real retainer data into `getRetainerData`
-- `convex/timeEntries.ts` — Add `projectOverview` and `projectMonthlyBreakdown` queries
-- `convex/timer.ts` — Enforce billable rate resolution in timer-derived entry finalization
-- `components/tasks/*` or task create/edit flow — Support category assignment and block billable logging until category is set
+- `convex/schema.ts` — Add `fixedPrice` to projects schema (Phase 0)
+- `convex/projects.ts` — Require `fixedPrice` for Fixed projects (Phase 0), wire real retainer data into `getRetainerData` (Phase B)
+- `convex/timeEntries.ts` — Reorder isBillable/resolveRate (Phase A0a), add `projectOverview` and `projectMonthlyBreakdown` queries (Phase A)
+- `convex/timer.ts` — Enforce billable rate resolution in timer-derived entry finalization (Phase A0a)
+- `convex/lib/orgHelpers.ts` — Org-level default category rates (Phase A0b)
+- `components/tasks/*` or task create/edit flow — Block billable logging until category is set (Phase A0a)
+- Project create/edit forms — Prefill rate setup from org defaults (Phase A0b)
 - `components/projects/fixed-overview.tsx` — Full rewrite with real data + metrics
 - `components/projects/tm-overview.tsx` — Full rewrite with real data + metrics + chart
 - `components/projects/retainer-overview.tsx` — Inject task rows into accordion

@@ -1,5 +1,6 @@
 "use client"
 
+import { useCallback } from "react"
 import { useQuery } from "convex/react"
 import { useRouter, usePathname } from "next/navigation"
 import { api } from "@/convex/_generated/api"
@@ -33,9 +34,10 @@ export function TmOverview({
 
   const currency = project.currency
 
-  function handleTaskClick(taskId: string) {
-    router.push(`${pathname}?detail=${taskId}`, { scroll: false })
-  }
+  const handleTaskClick = useCallback(
+    (taskId: string) => router.push(`${pathname}?detail=${taskId}`, { scroll: false }),
+    [router, pathname],
+  )
 
   if (overview === undefined) {
     return <TmOverviewSkeleton />
@@ -72,8 +74,9 @@ export function TmOverview({
           <CardContent>
             <p className="text-xs text-muted-foreground">Last 3 Months</p>
             <div className="mt-2 flex items-end gap-2 h-14">
-              {overview.last3BillableMonths.map((m) => {
+              {(() => {
                 const maxMin = Math.max(...overview.last3BillableMonths.map((x) => x.minutes), 1)
+                return overview.last3BillableMonths.map((m) => {
                 const heightPct = (m.minutes / maxMin) * 100
                 const monthLabel = new Date(m.month + "-01T00:00:00").toLocaleDateString("en-US", { month: "short" })
                 return (
@@ -87,7 +90,8 @@ export function TmOverview({
                     <span className="text-[10px] text-muted-foreground">{monthLabel}</span>
                   </div>
                 )
-              })}
+              })
+              })()}
             </div>
           </CardContent>
         </Card>

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useMemo } from "react"
 import {
   Collapsible,
   CollapsibleContent,
@@ -8,9 +8,11 @@ import {
 } from "@/components/ui/collapsible"
 import { getCategoryColor } from "@/convex/lib/constants"
 import { TimeLogPlaceholder } from "./time-log-placeholder"
-import { formatMinutes, formatCurrencyPrecise } from "@/lib/format"
+import { formatMinutes, formatCurrencyPrecise, formatShortDate } from "@/lib/format"
 import { ChevronDownIcon, ChevronRightIcon, DollarSignIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
+
+// ─── Types ──────────────────────────────────────────────────────────────────────
 
 type TaskData = {
   taskId: string
@@ -19,7 +21,6 @@ type TaskData = {
   firstDate: string
   lastDate: string
   entryCount: number
-  isBillable?: boolean
 }
 
 type CategoryGroup = {
@@ -48,8 +49,9 @@ type Props = {
   showAmounts?: boolean
   currency?: string
   onTaskClick: (taskId: string) => void
-  emptyMessage?: string
 }
+
+// ─── Main Component ─────────────────────────────────────────────────────────────
 
 export function MonthlyTimeBreakdown({
   months,
@@ -77,6 +79,8 @@ export function MonthlyTimeBreakdown({
   )
 }
 
+// ─── Month Card ─────────────────────────────────────────────────────────────────
+
 function MonthCard({
   month: m,
   defaultOpen,
@@ -92,20 +96,25 @@ function MonthCard({
 }) {
   const [open, setOpen] = useState(defaultOpen)
 
-  // Merge billable + non-billable into unified category groups with isBillable on each task
-  const unifiedCategories = mergeCategories(
-    m.billableCategoryGroups,
-    m.nonBillableCategoryGroups,
+  const unifiedCategories = useMemo(
+    () => mergeCategories(m.billableCategoryGroups, m.nonBillableCategoryGroups),
+    [m.billableCategoryGroups, m.nonBillableCategoryGroups],
   )
 
-  const billableMinutes = m.billableCategoryGroups.reduce((s, c) => s + c.totalMinutes, 0)
-  const nonBillableMinutes = m.nonBillableCategoryGroups.reduce((s, c) => s + c.totalMinutes, 0)
+  const billableMinutes = useMemo(
+    () => m.billableCategoryGroups.reduce((s, c) => s + c.totalMinutes, 0),
+    [m.billableCategoryGroups],
+  )
+  const nonBillableMinutes = useMemo(
+    () => m.nonBillableCategoryGroups.reduce((s, c) => s + c.totalMinutes, 0),
+    [m.nonBillableCategoryGroups],
+  )
 
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
       <div className="overflow-hidden rounded-xl border border-border">
         {/* Month trigger */}
-        <CollapsibleTrigger className="flex w-full items-center justify-between bg-muted/50 px-4 py-2.5 text-left transition-colors hover:bg-muted/70">
+        <CollapsibleTrigger className="flex w-full cursor-pointer items-center justify-between bg-muted/50 px-4 py-2.5 text-left transition-colors hover:bg-muted/70">
           <div className="flex items-center gap-2.5">
             {open ? (
               <ChevronDownIcon className="size-3.5 text-muted-foreground" />
@@ -129,7 +138,11 @@ function MonthCard({
 
         <CollapsibleContent>
           {/* Column headers */}
-          <div className="flex items-center border-t bg-muted/50 px-4 py-1.5 text-[11px] font-medium text-muted-foreground">
+          <div
+            role="row"
+            aria-hidden="true"
+            className="flex items-center border-t bg-muted/50 px-4 py-1.5 text-[11px] font-medium text-muted-foreground"
+          >
             <span className="flex-1">Task</span>
             <span className="w-12 text-center">Billable</span>
             <span className="w-16 text-right">Date</span>
@@ -138,15 +151,15 @@ function MonthCard({
           </div>
 
           {/* Category groups with task rows */}
-          {unifiedCategories.map((cat) => (
-            <CategorySection
-              key={cat.categoryId ?? "uncategorized"}
-              category={cat}
-              showAmounts={showAmounts}
-              currency={currency}
-              onTaskClick={onTaskClick}
-            />
-          ))}
+          <div role="table" aria-label={`Time entries for ${m.monthLabel}`}>
+            {unifiedCategories.map((cat) => (
+              <CategorySection
+                key={cat.categoryId ?? "uncategorized"}
+                category={cat}
+                onTaskClick={onTaskClick}
+              />
+            ))}
+          </div>
 
           {/* Footer */}
           <div className="flex items-start border-t bg-muted/50 px-4 py-2.5">
@@ -178,24 +191,22 @@ function MonthCard({
   )
 }
 
+// ─── Category Section ───────────────────────────────────────────────────────────
+
 function CategorySection({
   category: cat,
-  showAmounts,
-  currency,
   onTaskClick,
 }: {
   category: UnifiedCategory
-  showAmounts?: boolean
-  currency?: string
   onTaskClick: (taskId: string) => void
 }) {
   const c = getCategoryColor(cat.categoryColor)
 
   return (
-    <div>
+    <div role="rowgroup">
       {/* Category header row */}
-      <div className="flex items-center border-t bg-muted/30 px-4 py-1.5">
-        <div className="flex flex-1 items-center gap-1.5">
+      <div role="row" className="flex items-center border-t bg-muted/30 px-4 py-1.5">
+        <div role="cell" className="flex flex-1 items-center gap-1.5">
           <span
             className="size-1.5 shrink-0 rounded-full"
             style={{ backgroundColor: c.text }}
@@ -207,7 +218,7 @@ function CategorySection({
             {cat.tasks.length}
           </span>
         </div>
-        <span className="w-[72px] text-right font-mono text-xs font-medium tabular-nums text-muted-foreground">
+        <span role="cell" className="w-[72px] text-right font-mono text-xs font-medium tabular-nums text-muted-foreground">
           {formatMinutes(cat.totalMinutes)}
         </span>
       </div>
@@ -216,32 +227,36 @@ function CategorySection({
       {cat.tasks.map((task) => (
         <div
           key={task.taskId}
+          role="row"
           className="flex items-center border-t border-border/40 px-4 py-1.5 pl-7"
         >
-          <div className="flex flex-1 items-center gap-2 overflow-hidden">
+          <div role="cell" className="flex flex-1 items-center gap-2 overflow-hidden">
             <button
               type="button"
               onClick={() => onTaskClick(task.taskId)}
-              className="min-w-0 truncate text-[13px] text-foreground hover:underline"
+              className="min-w-0 truncate rounded-sm text-[13px] text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-offset-1"
             >
               {task.taskTitle}
             </button>
           </div>
-          <div className="flex w-12 items-center justify-center">
+          <div role="cell" className="flex w-12 items-center justify-center">
             <DollarSignIcon
               className={cn(
                 "size-3.5",
-                task.isBillable ? "text-blue-500" : "text-muted-foreground/30"
+                task.isBillable
+                  ? "text-primary dark:text-blue-400"
+                  : "text-muted-foreground/30"
               )}
+              aria-label={task.isBillable ? "Billable" : "Non-billable"}
             />
           </div>
-          <span className="w-16 text-right text-xs tabular-nums text-muted-foreground">
-            {formatShortDateCompact(task.lastDate)}
+          <span role="cell" className="w-16 text-right text-xs tabular-nums text-muted-foreground">
+            {formatShortDate(task.lastDate)}
           </span>
-          <span className="w-12 text-right text-xs tabular-nums text-muted-foreground">
+          <span role="cell" className="w-12 text-right text-xs tabular-nums text-muted-foreground">
             {task.entryCount}
           </span>
-          <span className="w-[72px] text-right font-mono text-[13px] font-medium tabular-nums">
+          <span role="cell" className="w-[72px] text-right font-mono text-[13px] font-medium tabular-nums">
             {formatMinutes(task.totalMinutes)}
           </span>
         </div>
@@ -252,12 +267,14 @@ function CategorySection({
 
 // ─── Helpers ────────────────────────────────────────────────────────────────────
 
+type UnifiedTask = TaskData & { isBillable: boolean }
+
 type UnifiedCategory = {
   categoryId: string | null
   categoryName: string
   categoryColor: string
   totalMinutes: number
-  tasks: (TaskData & { isBillable: boolean })[]
+  tasks: UnifiedTask[]
 }
 
 /** Merge billable and non-billable category groups into a single unified list. */
@@ -295,17 +312,10 @@ function mergeCategories(
     }
   }
 
-  // Sort categories alphabetically, tasks by lastDate descending
   return Array.from(map.values())
     .sort((a, b) => a.categoryName.localeCompare(b.categoryName))
     .map((cat) => ({
       ...cat,
       tasks: cat.tasks.sort((a, b) => b.lastDate.localeCompare(a.lastDate)),
     }))
-}
-
-/** Format a date as short "Mar 23" for the compact table column. */
-function formatShortDateCompact(dateStr: string): string {
-  const date = new Date(dateStr + "T00:00:00")
-  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" })
 }

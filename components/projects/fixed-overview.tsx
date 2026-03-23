@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo } from "react"
+import { useMemo, useCallback } from "react"
 import { useQuery } from "convex/react"
 import { useRouter, usePathname } from "next/navigation"
 import { api } from "@/convex/_generated/api"
@@ -51,8 +51,8 @@ export function FixedOverview({
     ? (totalActualMinutes / totalEstimatedMinutes) * 100
     : null
 
-  // Per-category actuals
-  const minutesByCategory = overview?.minutesByCategory ?? {}
+  // Per-category actuals — stable empty fallback to avoid useMemo invalidation
+  const minutesByCategory = overview?.minutesByCategory ?? EMPTY_RECORD
 
   // Unestimated categories with logged time — enriched with name/color
   const unestimatedCategories = useMemo(() => {
@@ -67,9 +67,10 @@ export function FixedOverview({
       })
   }, [estimates, overview, categories, minutesByCategory])
 
-  function handleTaskClick(taskId: string) {
-    router.push(`${pathname}?detail=${taskId}`, { scroll: false })
-  }
+  const handleTaskClick = useCallback(
+    (taskId: string) => router.push(`${pathname}?detail=${taskId}`, { scroll: false }),
+    [router, pathname],
+  )
 
   // Loading skeleton
   if (overview === undefined || estimates === undefined) {
@@ -243,6 +244,8 @@ export function FixedOverview({
     </div>
   )
 }
+
+const EMPTY_RECORD: Record<string, number> = {}
 
 function FixedOverviewSkeleton() {
   return (

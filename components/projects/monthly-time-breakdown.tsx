@@ -9,7 +9,7 @@ import {
 import { getCategoryColor } from "@/convex/lib/constants"
 import { TimeLogPlaceholder } from "./time-log-placeholder"
 import { formatMinutes, formatCurrencyPrecise, formatShortDate } from "@/lib/format"
-import { ChevronDownIcon, ChevronRightIcon, DollarSignIcon } from "lucide-react"
+import { ChevronDownIcon, ChevronRightIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 // ─── Types ──────────────────────────────────────────────────────────────────────
@@ -50,6 +50,14 @@ type Props = {
   currency?: string
   onTaskClick: (taskId: string) => void
 }
+
+// Column widths — shared between header and data rows for perfect alignment
+const COL = {
+  status: "w-24",       // Billable / Non-billable tag
+  date: "w-20",         // "Mar 23"
+  entries: "w-16",      // "2"
+  duration: "w-20",     // "01:00"
+} as const
 
 // ─── Main Component ─────────────────────────────────────────────────────────────
 
@@ -114,12 +122,12 @@ function MonthCard({
     <Collapsible open={open} onOpenChange={setOpen}>
       <div className="overflow-hidden rounded-xl border border-border">
         {/* Month trigger */}
-        <CollapsibleTrigger className="flex w-full cursor-pointer items-center justify-between bg-muted/50 px-4 py-2.5 text-left transition-colors hover:bg-muted/70">
+        <CollapsibleTrigger className="flex w-full cursor-pointer items-center justify-between bg-muted/50 px-5 py-3 text-left transition-colors hover:bg-muted/70">
           <div className="flex items-center gap-2.5">
             {open ? (
-              <ChevronDownIcon className="size-3.5 text-muted-foreground" />
+              <ChevronDownIcon className="size-4 text-muted-foreground" />
             ) : (
-              <ChevronRightIcon className="size-3.5 text-muted-foreground" />
+              <ChevronRightIcon className="size-4 text-muted-foreground" />
             )}
             <span className="text-sm font-semibold tracking-tight">{m.monthLabel}</span>
             <span className="text-xs text-muted-foreground">
@@ -129,7 +137,7 @@ function MonthCard({
           <span className="font-mono text-sm font-semibold tabular-nums">
             {formatMinutes(m.totalMinutes)}
             {showAmounts && m.totalAmount != null && m.totalAmount > 0 && currency && (
-              <span className="ml-1 text-muted-foreground">
+              <span className="ml-1.5 text-muted-foreground">
                 · {formatCurrencyPrecise(m.totalAmount, currency)}
               </span>
             )}
@@ -141,13 +149,13 @@ function MonthCard({
           <div
             role="row"
             aria-hidden="true"
-            className="flex items-center border-t bg-muted/50 px-4 py-1.5 text-[11px] font-medium text-muted-foreground"
+            className="flex items-center border-t bg-muted/50 px-5 py-2 text-xs font-medium text-muted-foreground"
           >
             <span className="flex-1">Task</span>
-            <span className="w-12 text-center">Billable</span>
-            <span className="w-16 text-right">Date</span>
-            <span className="w-12 text-right">Entries</span>
-            <span className="w-[72px] text-right">Duration</span>
+            <span className={cn(COL.status, "text-center")}>Status</span>
+            <span className={cn(COL.date, "text-right")}>Date</span>
+            <span className={cn(COL.entries, "text-center")}>Entries</span>
+            <span className={cn(COL.duration, "text-right")}>Duration</span>
           </div>
 
           {/* Category groups with task rows */}
@@ -162,22 +170,22 @@ function MonthCard({
           </div>
 
           {/* Footer */}
-          <div className="flex items-start border-t bg-muted/50 px-4 py-2.5">
+          <div className="flex items-start border-t bg-muted/50 px-5 py-3">
             <div className="ml-auto flex flex-col items-end gap-0.5">
-              <div className="flex items-center gap-1.5">
-                <span className="text-xs font-medium">Billable</span>
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium">Billable</span>
                 <span className="font-mono text-sm font-bold tabular-nums">
                   {formatMinutes(billableMinutes)}
                   {showAmounts && m.totalAmount != null && m.totalAmount > 0 && currency && (
-                    <span className="ml-1 font-semibold text-muted-foreground">
+                    <span className="ml-1.5 font-semibold text-muted-foreground">
                       · {formatCurrencyPrecise(m.totalAmount, currency)}
                     </span>
                   )}
                 </span>
               </div>
               {nonBillableMinutes > 0 && (
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[11px] text-muted-foreground">Non-billable</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground">Non-billable</span>
                   <span className="font-mono text-xs tabular-nums text-muted-foreground">
                     {formatMinutes(nonBillableMinutes)}
                   </span>
@@ -205,20 +213,20 @@ function CategorySection({
   return (
     <div role="rowgroup">
       {/* Category header row */}
-      <div role="row" className="flex items-center border-t bg-muted/30 px-4 py-1.5">
-        <div role="cell" className="flex flex-1 items-center gap-1.5">
+      <div role="row" className="flex items-center border-t bg-muted/30 px-5 py-2">
+        <div role="cell" className="flex flex-1 items-center gap-2">
           <span
-            className="size-1.5 shrink-0 rounded-full"
+            className="size-2 shrink-0 rounded-full"
             style={{ backgroundColor: c.text }}
           />
-          <span className="text-xs font-medium text-muted-foreground">
+          <span className="text-sm font-medium text-muted-foreground">
             {cat.categoryName}
           </span>
-          <span className="text-[11px] text-muted-foreground/50">
+          <span className="text-xs text-muted-foreground/50">
             {cat.tasks.length}
           </span>
         </div>
-        <span role="cell" className="w-[72px] text-right font-mono text-xs font-medium tabular-nums text-muted-foreground">
+        <span role="cell" className={cn(COL.duration, "text-right font-mono text-sm font-medium tabular-nums text-muted-foreground")}>
           {formatMinutes(cat.totalMinutes)}
         </span>
       </div>
@@ -228,35 +236,33 @@ function CategorySection({
         <div
           key={task.taskId}
           role="row"
-          className="flex items-center border-t border-border/40 px-4 py-1.5 pl-7"
+          className="flex items-center border-t border-border/40 px-5 py-2.5 pl-9 transition-colors hover:bg-muted/40"
         >
           <div role="cell" className="flex flex-1 items-center gap-2 overflow-hidden">
             <button
               type="button"
               onClick={() => onTaskClick(task.taskId)}
-              className="min-w-0 truncate rounded-sm text-[13px] text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-offset-1"
+              className="min-w-0 truncate rounded-sm text-sm text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-offset-1"
             >
               {task.taskTitle}
             </button>
           </div>
-          <div role="cell" className="flex w-12 items-center justify-center">
-            <DollarSignIcon
-              className={cn(
-                "size-3.5",
-                task.isBillable
-                  ? "text-primary dark:text-blue-400"
-                  : "text-muted-foreground/30"
-              )}
-              aria-label={task.isBillable ? "Billable" : "Non-billable"}
-            />
+          <div role="cell" className={cn(COL.status, "flex items-center justify-center")}>
+            {task.isBillable ? (
+              <span className="text-xs text-muted-foreground/60">Billable</span>
+            ) : (
+              <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-medium text-muted-foreground">
+                Non-billable
+              </span>
+            )}
           </div>
-          <span role="cell" className="w-16 text-right text-xs tabular-nums text-muted-foreground">
+          <span role="cell" className={cn(COL.date, "text-right text-sm tabular-nums text-muted-foreground")}>
             {formatShortDate(task.lastDate)}
           </span>
-          <span role="cell" className="w-12 text-right text-xs tabular-nums text-muted-foreground">
+          <span role="cell" className={cn(COL.entries, "text-center text-sm tabular-nums text-muted-foreground")}>
             {task.entryCount}
           </span>
-          <span role="cell" className="w-[72px] text-right font-mono text-[13px] font-medium tabular-nums">
+          <span role="cell" className={cn(COL.duration, "text-right font-mono text-sm font-medium tabular-nums")}>
             {formatMinutes(task.totalMinutes)}
           </span>
         </div>

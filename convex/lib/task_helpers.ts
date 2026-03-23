@@ -18,6 +18,29 @@ export type TaskWithJoins = Doc<"tasks"> & {
   assignees: Array<Pick<Doc<"users">, "_id" | "name" | "email" | "imageUrl">>;
 };
 
+// ─── Base visibility filter ──────────────────────────────────────────────────────
+
+/**
+ * Shared predicate: is this task a top-level task visible to the given user?
+ * Used by both `counts` and `list` queries to guarantee identical filtering.
+ *
+ * Rules:
+ * - Subtasks (parentTaskId set) are always excluded
+ * - Members only see tasks assigned to them; admins see all
+ *
+ * Does NOT filter by archived state — callers handle that based on context
+ * (counts buckets archived separately, list filters by tab).
+ */
+export function isVisibleTopLevelTask(
+  task: Doc<"tasks">,
+  userId: Id<"users">,
+  isAdmin: boolean,
+): boolean {
+  if (task.parentTaskId) return false;
+  if (!isAdmin && !task.assigneeIds.includes(userId)) return false;
+  return true;
+}
+
 // ─── Constants ───────────────────────────────────────────────────────────────────
 
 /** 1:1 mapping — each tab filters by exactly one statusType. "all" = no filter. */
@@ -78,52 +101,6 @@ export async function getDefaultStatusId(
     .sort((a, b) => a.sortOrder - b.sortOrder);
   if (active.length === 0) throw new ConvexError("No backlog status found for org");
   return { statusId: active[0]._id, statusType: "backlog" };
-}
-
-// ─── Count management ────────────────────────────────────────────────────────────
-
-/**
- * Atomically update the denormalized taskCounts document for an org.
- * Called by every mutation that changes a task's statusType or archived state.
- * Creates the document if it doesn't exist (first task in org).
- */
-export async function adjustCounts(
-  ctx: MutationCtx,
-  orgId: string,
-  changes: Partial<Record<StatusType | "archived", number>>,
-) {
-  const existing = await ctx.db
-    .query("taskCounts")
-    .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
-    .unique();
-
-  if (existing) {
-    const patch: Record<string, number> = {};
-    for (const [type, delta] of Object.entries(changes)) {
-      if (delta) {
-        const current = (existing as unknown as Record<string, number>)[type] ?? 0;
-        const newVal = current + delta;
-        if (newVal < 0) {
-          console.warn(`taskCounts drift detected: ${type} would be ${newVal} for org ${orgId}. Clamping to 0.`);
-        }
-        patch[type] = Math.max(0, newVal);
-      }
-    }
-    if (Object.keys(patch).length > 0) {
-      await ctx.db.patch(existing._id, patch);
-    }
-  } else {
-    const counts = {
-      orgId,
-      backlog: 0, in_progress: 0, review: 0, blocked: 0, done: 0,
-    };
-    for (const [type, delta] of Object.entries(changes)) {
-      if (delta) {
-        (counts as Record<string, number | string>)[type] = Math.max(0, delta);
-      }
-    }
-    await ctx.db.insert("taskCounts", counts);
-  }
 }
 
 // ─── Cascade delete ──────────────────────────────────────────────────────────────

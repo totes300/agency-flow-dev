@@ -1,15 +1,16 @@
 import { v, ConvexError } from "convex/values";
-import { query, mutation, internalMutation } from "./_generated/server";
+import { query, mutation } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { getAuthContext, requireAdmin, validateStringLength } from "./lib/auth";
 import { logActivity } from "./activityLog";
+import { STATUS_TYPES } from "./lib/constants";
 import type { StatusType } from "./lib/constants";
 import {
   TAB_STATUS_TYPE,
+  isVisibleTopLevelTask,
   validateAssignees,
   validateWorkCategory,
   getDefaultStatusId,
-  adjustCounts,
   cascadeDeleteTaskData,
   createTaskEnricher,
 } from "./lib/task_helpers";
@@ -266,47 +267,21 @@ export const counts = query({
   handler: async (ctx) => {
     const { orgId, userId, isAdmin } = await getAuthContext(ctx);
 
-    // Admin path: O(1) via denormalized taskCounts + one scan for archived
-    if (isAdmin) {
-      const cached = await ctx.db
-        .query("taskCounts")
-        .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
-        .unique();
-
-      const typeCounts = {
-        backlog: cached?.backlog ?? 0,
-        in_progress: cached?.in_progress ?? 0,
-        review: cached?.review ?? 0,
-        blocked: cached?.blocked ?? 0,
-        done: cached?.done ?? 0,
-      };
-
-      return {
-        all: typeCounts.backlog + typeCounts.in_progress + typeCounts.review + typeCounts.blocked + typeCounts.done,
-        ...typeCounts,
-        archived: cached?.archived ?? 0,
-      };
-    }
-
-    // Member path: O(n) scan filtered by assignment
-    const typeKeys: StatusType[] = ["backlog", "in_progress", "review", "blocked", "done"];
-    const maxScan = 1000;
-
     const typeCounts: Record<StatusType, number> = {
       backlog: 0, in_progress: 0, review: 0, blocked: 0, done: 0,
     };
     let archivedCount = 0;
 
-    for (const type of typeKeys) {
+    // Collect all tasks per statusType bucket (no limit — counts must be exact)
+    for (const type of STATUS_TYPES) {
       const docs = await ctx.db
         .query("tasks")
         .withIndex("by_orgId_statusType", (q) =>
           q.eq("orgId", orgId).eq("statusType", type)
         )
-        .take(maxScan);
+        .collect();
       for (const t of docs) {
-        if (t.parentTaskId) continue;
-        if (!t.assigneeIds.includes(userId)) continue;
+        if (!isVisibleTopLevelTask(t, userId, isAdmin)) continue;
         if (t.archivedAt) {
           archivedCount++;
         } else {
@@ -375,10 +350,9 @@ export const list = query({
     let hitScanLimit = false;
 
     function passesBaseFilter(t: Doc<"tasks">): boolean {
-      if (t.parentTaskId) return false;
+      if (!isVisibleTopLevelTask(t, userId, isAdmin)) return false;
       if (isArchivedTab) { if (!t.archivedAt) return false; }
       else { if (t.archivedAt) return false; }
-      if (!isAdmin && !t.assigneeIds.includes(userId)) return false;
       return true;
     }
 
@@ -391,7 +365,7 @@ export const list = query({
         .collect();
       tasks = searchResults.filter(passesBaseFilter);
     } else if (tabType === null) {
-      const allTypes: StatusType[] = ["backlog", "in_progress", "review", "blocked", "done"];
+      const allTypes = STATUS_TYPES;
       const taskArrays = await Promise.all(
         allTypes.map(async (type) => {
           const docs = await ctx.db
@@ -757,7 +731,6 @@ export const create = mutation({
       createdAt: now, updatedAt: now, createdBy: userId,
     });
 
-    await adjustCounts(ctx, orgId, { [statusType]: 1 });
     await logActivity(ctx, { taskId, orgId, userId, type: "task_created", metadata: {} });
 
     return taskId;
@@ -828,13 +801,6 @@ export const update = mutation({
     if (args.dueDate !== undefined) updates.dueDate = args.dueDate === null ? undefined : args.dueDate;
 
     await ctx.db.patch(args.id, updates);
-
-    // Adjust counts if statusType changed on a non-archived, top-level task
-    if (updates.statusType && !task.archivedAt && !task.parentTaskId) {
-      const oldType = task.statusType;
-      const newType = updates.statusType as StatusType;
-      if (oldType !== newType) await adjustCounts(ctx, orgId, { [oldType]: -1, [newType]: 1 });
-    }
 
     // ── Activity logging ─────────────────────────────────────────────────
     const logCtx = { taskId: args.id, orgId, userId };
@@ -908,7 +874,6 @@ export const archive = mutation({
       }
     }
 
-    if (!task.archivedAt && !task.parentTaskId) await adjustCounts(ctx, orgId, { [task.statusType]: -1, archived: 1 });
   },
 });
 
@@ -923,7 +888,6 @@ export const restore = mutation({
 
     const now = Date.now();
     await ctx.db.patch(args.id, { archivedAt: undefined, updatedAt: now });
-    if (!task.parentTaskId) await adjustCounts(ctx, orgId, { [task.statusType]: 1, archived: -1 });
 
     const subtasks = await ctx.db.query("tasks")
       .withIndex("by_orgId_parentTaskId", (q) => q.eq("orgId", orgId).eq("parentTaskId", args.id))
@@ -960,13 +924,6 @@ export const remove = mutation({
       }
     }
 
-    if (!task.parentTaskId) {
-      if (task.archivedAt) {
-        await adjustCounts(ctx, orgId, { archived: -1 });
-      } else {
-        await adjustCounts(ctx, orgId, { [task.statusType]: -1 });
-      }
-    }
     await ctx.db.delete(args.id);
   },
 });
@@ -987,7 +944,6 @@ export const duplicate = mutation({
       createdAt: now, updatedAt: now, createdBy: userId,
     });
 
-    await adjustCounts(ctx, orgId, { [task.statusType]: 1 });
     return newId;
   },
 });
@@ -1036,9 +992,6 @@ export const bulkUpdate = mutation({
       switch (args.action.type) {
         case "status": {
           await ctx.db.patch(taskId, { statusId: args.action.statusId, statusType: newStatusType!, updatedAt: now });
-          if (!task.archivedAt && !task.parentTaskId && task.statusType !== newStatusType!) {
-            await adjustCounts(ctx, orgId, { [task.statusType]: -1, [newStatusType!]: 1 });
-          }
           if (args.action.statusId !== task.statusId) {
             const newStatus = await ctx.db.get(args.action.statusId);
             const oldStatus = task.statusId ? await ctx.db.get(task.statusId) : null;
@@ -1089,7 +1042,6 @@ export const bulkUpdate = mutation({
         case "archive": {
           if (!task.archivedAt) {
             await ctx.db.patch(taskId, { archivedAt: now, updatedAt: now });
-            if (!task.parentTaskId) await adjustCounts(ctx, orgId, { [task.statusType]: -1, archived: 1 });
             const subs = await ctx.db.query("tasks").withIndex("by_orgId_parentTaskId", (q) => q.eq("orgId", orgId).eq("parentTaskId", taskId)).collect();
             for (const sub of subs) { if (!sub.archivedAt) await ctx.db.patch(sub._id, { archivedAt: now, updatedAt: now }); }
             // Stop active timers on affected tasks
@@ -1121,13 +1073,6 @@ export const bulkUpdate = mutation({
           }
           for (const sub of delSubs) { await cascadeDeleteTaskData(ctx, sub._id); await ctx.db.delete(sub._id); }
           await cascadeDeleteTaskData(ctx, taskId);
-          if (!task.parentTaskId) {
-            if (task.archivedAt) {
-              await adjustCounts(ctx, orgId, { archived: -1 });
-            } else {
-              await adjustCounts(ctx, orgId, { [task.statusType]: -1 });
-            }
-          }
           await ctx.db.delete(taskId);
           updated++;
           break;
@@ -1135,7 +1080,6 @@ export const bulkUpdate = mutation({
         case "restore": {
           if (!task.archivedAt) { skipped.push({ taskId, title: task.title, reason: "Task is not archived" }); continue; }
           await ctx.db.patch(taskId, { archivedAt: undefined, updatedAt: now });
-          if (!task.parentTaskId) await adjustCounts(ctx, orgId, { [task.statusType]: 1, archived: -1 });
           const restSubs = await ctx.db.query("tasks").withIndex("by_orgId_parentTaskId", (q) => q.eq("orgId", orgId).eq("parentTaskId", taskId)).collect();
           for (const sub of restSubs) { if (sub.archivedAt) await ctx.db.patch(sub._id, { archivedAt: undefined, updatedAt: now }); }
           updated++;
@@ -1148,64 +1092,3 @@ export const bulkUpdate = mutation({
   },
 });
 
-// ─── Internal Mutations ──────────────────────────────────────────────────────────
-
-export const backfillCounts = internalMutation({
-  args: { orgId: v.string() },
-  handler: async (ctx, args) => {
-    const tasks = await ctx.db.query("tasks")
-      .withIndex("by_orgId", (q) => q.eq("orgId", args.orgId))
-      .collect();
-
-    const counts: Record<StatusType | "archived", number> = { backlog: 0, in_progress: 0, review: 0, blocked: 0, done: 0, archived: 0 };
-    for (const t of tasks) {
-      if (t.parentTaskId) continue;
-      if (t.archivedAt) {
-        counts.archived++;
-      } else {
-        counts[t.statusType]++;
-      }
-    }
-
-    const existing = await ctx.db.query("taskCounts").withIndex("by_orgId", (q) => q.eq("orgId", args.orgId)).unique();
-    if (existing) {
-      await ctx.db.patch(existing._id, counts);
-    } else {
-      await ctx.db.insert("taskCounts", { orgId: args.orgId, ...counts });
-    }
-  },
-});
-
-export const verifyTaskCounts = internalMutation({
-  args: { orgId: v.string() },
-  handler: async (ctx, args) => {
-    const tasks = await ctx.db.query("tasks")
-      .withIndex("by_orgId", (q) => q.eq("orgId", args.orgId))
-      .collect();
-
-    const live: Record<StatusType, number> = { backlog: 0, in_progress: 0, review: 0, blocked: 0, done: 0 };
-    for (const t of tasks) {
-      if (!t.archivedAt && !t.parentTaskId) live[t.statusType]++;
-    }
-
-    const cached = await ctx.db.query("taskCounts").withIndex("by_orgId", (q) => q.eq("orgId", args.orgId)).unique();
-    const cachedCounts: Record<StatusType, number> = {
-      backlog: cached?.backlog ?? 0, in_progress: cached?.in_progress ?? 0,
-      review: cached?.review ?? 0, blocked: cached?.blocked ?? 0, done: cached?.done ?? 0,
-    };
-
-    const drifts: Array<{ type: string; cached: number; live: number }> = [];
-    for (const type of Object.keys(live) as StatusType[]) {
-      if (cachedCounts[type] !== live[type]) drifts.push({ type, cached: cachedCounts[type], live: live[type] });
-    }
-
-    if (drifts.length > 0) {
-      console.warn(`taskCounts drift for org ${args.orgId}:`, drifts);
-      if (cached) { await ctx.db.patch(cached._id, live); }
-      else { await ctx.db.insert("taskCounts", { orgId: args.orgId, ...live }); }
-      return { status: "repaired", drifts };
-    }
-
-    return { status: "ok", drifts: [] };
-  },
-});

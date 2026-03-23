@@ -51,6 +51,8 @@ export function ProjectFormModal({ open, onOpenChange }: ProjectFormModalProps) 
   const [code, setCode] = useState("")
   const [billingType, setBillingType] = useState<BillingType>("fixed")
   const [currency, setCurrency] = useState("USD")
+  // Fixed state
+  const [fixedPrice, setFixedPrice] = useState("")
   // T&M state
   const [tmRateMode, setTmRateMode] = useState<TmRateMode>("flat")
   const [hourlyRate, setHourlyRate] = useState("")
@@ -73,6 +75,7 @@ export function ProjectFormModal({ open, onOpenChange }: ProjectFormModalProps) 
       setCode("")
       setBillingType("fixed")
       setCurrency("USD")
+      setFixedPrice("")
       setTmRateMode("flat")
       setHourlyRate("")
       setCategoryRates([])
@@ -143,6 +146,9 @@ export function ProjectFormModal({ open, onOpenChange }: ProjectFormModalProps) 
         billingType,
         currency: currency as typeof CURRENCIES[number],
         code: code.trim() || undefined,
+        ...(billingType === "fixed" ? {
+          fixedPrice: parseFloat(fixedPrice) || 0,
+        } : {}),
         ...(billingType === "t_and_m" ? {
           tmRateMode,
           ...(tmRateMode === "flat" ? {
@@ -258,6 +264,31 @@ export function ProjectFormModal({ open, onOpenChange }: ProjectFormModalProps) 
               </div>
             </RadioGroup>
           </div>
+
+          {/* Fixed fields */}
+          {billingType === "fixed" && (
+            <div className="space-y-4 rounded-lg border bg-muted/20 p-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="fixed-price">Fixed Fee</Label>
+                <div className="flex items-center gap-2">
+                  <Input
+                    id="fixed-price"
+                    type="number"
+                    min="0.01"
+                    step="0.01"
+                    value={fixedPrice}
+                    onChange={(e) => setFixedPrice(e.target.value)}
+                    placeholder="10000"
+                    className="w-40"
+                  />
+                  <span className="text-sm text-muted-foreground">{currency}</span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  The sold project price. Used to calculate profit and effective rate.
+                </p>
+              </div>
+            </div>
+          )}
 
           {/* T&M fields */}
           {billingType === "t_and_m" && (

@@ -26,6 +26,7 @@ type ProjectData = {
   code: string
   currency: string
   billingType: BillingType
+  fixedPrice?: number
 }
 
 export function SettingsGeneral({
@@ -39,13 +40,15 @@ export function SettingsGeneral({
   const [name, setName] = useState(project.name)
   const [code, setCode] = useState(project.code)
   const [currency, setCurrency] = useState(project.currency)
+  const [fixedPrice, setFixedPrice] = useState(project.fixedPrice?.toString() ?? "")
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     setName(project.name)
     setCode(project.code)
     setCurrency(project.currency)
-  }, [project.name, project.code, project.currency])
+    setFixedPrice(project.fixedPrice?.toString() ?? "")
+  }, [project.name, project.code, project.currency, project.fixedPrice])
 
   async function handleSave() {
     setSaving(true)
@@ -55,6 +58,9 @@ export function SettingsGeneral({
         name: name.trim(),
         code: code.trim(),
         currency: currency as Currency,
+        ...(project.billingType === "fixed" && fixedPrice
+          ? { fixedPrice: parseFloat(fixedPrice) }
+          : {}),
       })
       toast.success("Project updated")
     } catch (err) {
@@ -92,6 +98,27 @@ export function SettingsGeneral({
               </SelectContent>
             </Select>
           </div>
+          {project.billingType === "fixed" && (
+            <div className="space-y-1.5">
+              <Label htmlFor="s-fixed-price">Fixed Fee</Label>
+              <div className="flex items-center gap-2">
+                <Input
+                  id="s-fixed-price"
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  value={fixedPrice}
+                  onChange={(e) => setFixedPrice(e.target.value)}
+                  placeholder="10000"
+                  className="w-40"
+                />
+                <span className="text-sm text-muted-foreground">{currency}</span>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                The sold project price. Used to calculate profit and effective rate.
+              </p>
+            </div>
+          )}
         </div>
         <div className="mt-3 flex items-center gap-2 text-sm">
           <span className="text-muted-foreground">Billing type:</span>

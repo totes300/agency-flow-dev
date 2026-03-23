@@ -181,16 +181,9 @@ function BudgetSection({
 
   return (
     <div className="overflow-hidden rounded-xl border border-border">
-      {/* Header — 2 lines: title + progress accent left, summary right */}
-      <div className="flex items-start justify-between px-6 pt-5 pb-4">
-        <div>
-          <h3 className="text-base font-semibold tracking-tight">Budget</h3>
-          {budgetPercent !== null && (
-            <div className="mt-2">
-              <BudgetProgress used={totalActualMinutes} budget={totalEstimatedMinutes} className="h-1.5 w-28" />
-            </div>
-          )}
-        </div>
+      {/* Header */}
+      <div className="flex items-center justify-between px-6 pt-5 pb-4">
+        <h3 className="text-base font-semibold tracking-tight">Budget</h3>
         {budgetPercent !== null ? (
           <p className="text-right font-mono tabular-nums text-muted-foreground">
             <span className="text-sm">{formatMinutes(totalActualMinutes)}</span>
@@ -202,6 +195,11 @@ function BudgetSection({
           <p className="text-sm text-muted-foreground">No estimate set</p>
         )}
       </div>
+
+      {/* Full-width progress bar as structural divider */}
+      {budgetPercent !== null && (
+        <BudgetProgress used={totalActualMinutes} budget={totalEstimatedMinutes} className="h-1.5" />
+      )}
 
       {/* Column headers */}
       {estimates.length > 0 && (

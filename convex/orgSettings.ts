@@ -115,6 +115,7 @@ export const update = mutation({
     defaultCurrency: v.optional(currencyValidator),
     timezone: v.optional(v.string()),
     roundingMinutes: v.optional(roundingValidator),
+    defaultTmFlatRate: v.optional(v.number()),
     brandName: v.optional(v.string()),
     brandAddress: v.optional(v.string()),
     brandTaxId: v.optional(v.string()),
@@ -153,10 +154,16 @@ export const update = mutation({
     }
 
     // Build typed patch object with only provided fields
+    // Validate rate
+    if (args.defaultTmFlatRate !== undefined && args.defaultTmFlatRate < 0) {
+      throw new Error("Default flat rate cannot be negative");
+    }
+
     const patch: Partial<{
       defaultCurrency: typeof args.defaultCurrency;
       timezone: string;
       roundingMinutes: typeof args.roundingMinutes;
+      defaultTmFlatRate: number;
       brandName: string;
       brandAddress: string;
       brandTaxId: string;
@@ -168,6 +175,7 @@ export const update = mutation({
     if (args.defaultCurrency !== undefined) patch.defaultCurrency = args.defaultCurrency;
     if (args.timezone !== undefined) patch.timezone = args.timezone;
     if (args.roundingMinutes !== undefined) patch.roundingMinutes = args.roundingMinutes;
+    if (args.defaultTmFlatRate !== undefined) patch.defaultTmFlatRate = args.defaultTmFlatRate;
     if (args.brandName !== undefined) patch.brandName = args.brandName;
     if (args.brandAddress !== undefined) patch.brandAddress = args.brandAddress;
     if (args.brandTaxId !== undefined) patch.brandTaxId = args.brandTaxId;

@@ -38,6 +38,8 @@ export default defineSchema({
     timezone: v.string(),
     roundingMinutes: v.number(),
     defaultStatusId: v.optional(v.id("statuses")),
+    // Rate defaults
+    defaultTmFlatRate: v.optional(v.number()),   // org-level default for T&M flat-rate projects
     // Branding (used in later phases, define fields now)
     brandName: v.optional(v.string()),
     brandLogoStorageId: v.optional(v.id("_storage")),

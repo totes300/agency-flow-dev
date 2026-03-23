@@ -177,7 +177,7 @@ export const create = mutation({
     }
 
     const now = Date.now();
-    return await ctx.db.insert("projects", {
+    const projectId = await ctx.db.insert("projects", {
       orgId,
       clientId: args.clientId,
       name,
@@ -207,6 +207,30 @@ export const create = mutation({
       updatedAt: now,
       createdBy: userId,
     });
+
+    // Seed category estimate rows for Fixed projects from org defaults
+    if (args.billingType === "fixed") {
+      const categories = await ctx.db
+        .query("workCategories")
+        .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+        .collect();
+      const activeCategories = categories.filter((c) => !c.archivedAt);
+      for (const cat of activeCategories) {
+        await ctx.db.insert("projectCategoryEstimates", {
+          orgId,
+          projectId,
+          workCategoryId: cat._id,
+          estimatedMinutes: 0,
+          internalCostRate: cat.defaultCostRate,
+          clientBillingRate: cat.defaultBillRate,
+          createdAt: now,
+          updatedAt: now,
+          createdBy: userId,
+        });
+      }
+    }
+
+    return projectId;
   },
 });
 

@@ -383,3 +383,338 @@ export const remove = mutation({
     await ctx.db.delete(args.id);
   },
 });
+
+// ─── Project Reporting Queries ──────────────────────────────────────────────────
+
+/**
+ * Aggregate overview metrics for a project — used by Fixed and T&M overviews
+ * and the project header "Last activity" date.
+ */
+export const projectOverview = query({
+  args: { projectId: v.id("projects") },
+  handler: async (ctx, args) => {
+    const { orgId } = await getAuthContext(ctx);
+
+    const project = await ctx.db.get(args.projectId);
+    if (!project || project.orgId !== orgId) return null;
+
+    // Fetch all tasks for this project (including archived — historical reporting)
+    const tasks = await ctx.db
+      .query("tasks")
+      .withIndex("by_orgId_projectId", (q) =>
+        q.eq("orgId", orgId).eq("projectId", args.projectId),
+      )
+      .collect();
+
+    // Fetch all time entries per task in parallel
+    const allEntries = (
+      await Promise.all(
+        tasks.map(async (task) => {
+          const entries = await ctx.db
+            .query("timeEntries")
+            .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
+            .collect();
+          return entries.map((e) => ({
+            ...e,
+            workCategoryId: task.workCategoryId,
+          }));
+        }),
+      )
+    ).flat();
+
+    // Get org timezone for "this month" computation
+    const orgSettings = await getOrgSettings(ctx, orgId);
+    const timezone = orgSettings?.timezone ?? "America/New_York";
+    const nowDate = getDateInTimezone(Date.now(), timezone);
+    const currentMonth = nowDate.slice(0, 7); // "YYYY-MM"
+
+    // Compute aggregates
+    let totalMinutes = 0;
+    let totalBillableMinutes = 0;
+    let totalNonBillableMinutes = 0;
+    let thisMonthMinutes = 0;
+    let totalActualCost = 0;
+    let uninvoicedMinutes = 0;
+    let uninvoicedAmount = 0;
+    let lastLoggedDate: string | null = null;
+    const minutesByCategory: Record<string, number> = {};
+    const billableMinutesByCategory: Record<string, number> = {};
+    const billableByMonth: Record<string, number> = {};
+
+    for (const e of allEntries) {
+      totalMinutes += e.durationMinutes;
+
+      if (e.isBillable) {
+        totalBillableMinutes += e.durationMinutes;
+      } else {
+        totalNonBillableMinutes += e.durationMinutes;
+      }
+
+      // This month (billable only for T&M metric)
+      if (e.date.startsWith(currentMonth)) {
+        thisMonthMinutes += e.durationMinutes;
+      }
+
+      // Category breakdowns
+      const catKey = e.workCategoryId?.toString() ?? "uncategorized";
+      minutesByCategory[catKey] = (minutesByCategory[catKey] ?? 0) + e.durationMinutes;
+      if (e.isBillable) {
+        billableMinutesByCategory[catKey] =
+          (billableMinutesByCategory[catKey] ?? 0) + e.durationMinutes;
+      }
+
+      // Fixed: totalActualCost from appliedCostRate
+      if (project.billingType === "fixed") {
+        totalActualCost += (e.durationMinutes / 60) * (e.appliedCostRate ?? 0);
+      }
+
+      // T&M: uninvoiced from billable entries using appliedRate
+      // NOTE: Pre-invoicing phase — all billable entries treated as uninvoiced.
+      // Replace with invoice-aware filtering when invoicedInReportId ships.
+      if (project.billingType === "t_and_m" && e.isBillable) {
+        uninvoicedMinutes += e.durationMinutes;
+        uninvoicedAmount += (e.durationMinutes / 60) * (e.appliedRate ?? 0);
+      }
+
+      // Last logged date
+      if (!lastLoggedDate || e.date > lastLoggedDate) {
+        lastLoggedDate = e.date;
+      }
+
+      // Billable by month (for 3-month trend)
+      if (e.isBillable) {
+        const monthKey = e.date.slice(0, 7);
+        billableByMonth[monthKey] = (billableByMonth[monthKey] ?? 0) + e.durationMinutes;
+      }
+    }
+
+    // Last 3 billable months: compute the 3 calendar months ending with current month
+    const last3BillableMonths = computeLast3Months(currentMonth).map((month) => ({
+      month,
+      minutes: billableByMonth[month] ?? 0,
+    }));
+
+    return {
+      totalMinutes,
+      totalBillableMinutes,
+      totalNonBillableMinutes,
+      lastLoggedDate,
+      thisMonthMinutes,
+      last3BillableMonths,
+      minutesByCategory,
+      billableMinutesByCategory,
+      totalActualCost,
+      uninvoicedMinutes,
+      uninvoicedAmount,
+    };
+  },
+});
+
+/**
+ * Monthly breakdown of time entries for a project — grouped by month, then
+ * billable/non-billable, then category, then task. Used by Fixed and T&M overviews.
+ */
+export const projectMonthlyBreakdown = query({
+  args: { projectId: v.id("projects") },
+  handler: async (ctx, args) => {
+    const { orgId } = await getAuthContext(ctx);
+
+    const project = await ctx.db.get(args.projectId);
+    if (!project || project.orgId !== orgId) return [];
+
+    // Fetch all tasks (including archived)
+    const tasks = await ctx.db
+      .query("tasks")
+      .withIndex("by_orgId_projectId", (q) =>
+        q.eq("orgId", orgId).eq("projectId", args.projectId),
+      )
+      .collect();
+
+    const taskMap = new Map(tasks.map((t) => [t._id.toString(), t]));
+
+    // Fetch work categories for enrichment
+    const categories = await ctx.db
+      .query("workCategories")
+      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+      .collect();
+    const catMap = new Map(categories.map((c) => [c._id.toString(), c]));
+
+    // Fetch all time entries per task
+    const allEntries = (
+      await Promise.all(
+        tasks.map(async (task) => {
+          const entries = await ctx.db
+            .query("timeEntries")
+            .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
+            .collect();
+          return entries.map((e) => ({
+            ...e,
+            taskId: task._id.toString(),
+            taskTitle: task.title,
+            workCategoryId: task.workCategoryId?.toString() ?? null,
+          }));
+        }),
+      )
+    ).flat();
+
+    // Group entries by month
+    const entriesByMonth: Record<string, typeof allEntries> = {};
+    for (const e of allEntries) {
+      const monthKey = e.date.slice(0, 7);
+      (entriesByMonth[monthKey] ??= []).push(e);
+    }
+
+    // Build month data
+    const months = Object.keys(entriesByMonth)
+      .sort((a, b) => b.localeCompare(a)) // descending
+      .map((monthKey) => {
+        const monthEntries = entriesByMonth[monthKey];
+        const billableEntries = monthEntries.filter((e) => e.isBillable);
+        const nonBillableEntries = monthEntries.filter((e) => !e.isBillable);
+
+        const totalMinutes = monthEntries.reduce((s, e) => s + e.durationMinutes, 0);
+        // totalAmount: only for T&M billable
+        const totalAmount =
+          project.billingType === "t_and_m"
+            ? billableEntries.reduce(
+                (s, e) => s + (e.durationMinutes / 60) * (e.appliedRate ?? 0),
+                0,
+              )
+            : 0;
+
+        const billableCategoryGroups = buildCategoryGroups(
+          billableEntries,
+          catMap,
+          project.billingType === "t_and_m",
+        );
+        const nonBillableCategoryGroups = buildCategoryGroups(
+          nonBillableEntries,
+          catMap,
+          false, // non-billable never shows amounts
+        );
+
+        // Unique tasks and categories
+        const uniqueTaskIds = new Set(monthEntries.map((e) => e.taskId));
+        const uniqueCatIds = new Set(monthEntries.map((e) => e.workCategoryId ?? "uncategorized"));
+
+        // Month label: "March 2026"
+        const [y, m] = monthKey.split("-").map(Number);
+        const monthLabel = new Date(y, m - 1, 1).toLocaleDateString("en-US", {
+          month: "long",
+          year: "numeric",
+        });
+
+        return {
+          month: monthKey,
+          monthLabel,
+          totalMinutes,
+          totalAmount,
+          entryCount: monthEntries.length,
+          billableCategoryGroups,
+          nonBillableCategoryGroups,
+          taskCount: uniqueTaskIds.size,
+          categoryCount: uniqueCatIds.size,
+        };
+      });
+
+    return months;
+  },
+});
+
+// ─── Helpers ────────────────────────────────────────────────────────────────────
+
+/** Compute the last 3 calendar months ending with the given month. */
+export function computeLast3Months(currentMonth: string): string[] {
+  const [y, m] = currentMonth.split("-").map(Number);
+  const months: string[] = [];
+  for (let i = 2; i >= 0; i--) {
+    const d = new Date(y, m - 1 - i, 1);
+    months.push(
+      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
+    );
+  }
+  return months;
+}
+
+type EntryWithTask = {
+  durationMinutes: number;
+  date: string;
+  taskId: string;
+  taskTitle: string;
+  workCategoryId: string | null;
+  appliedRate?: number;
+};
+
+type CategoryDoc = { _id: { toString(): string }; name: string; color: string };
+
+/** Group entries by category then task. Used by both Fixed/T&M monthly breakdown. */
+function buildCategoryGroups(
+  entries: EntryWithTask[],
+  catMap: Map<string, CategoryDoc>,
+  includeAmounts: boolean,
+) {
+  // Group by category
+  const byCat: Record<
+    string,
+    { catId: string | null; entries: EntryWithTask[] }
+  > = {};
+  for (const e of entries) {
+    const key = e.workCategoryId ?? "uncategorized";
+    if (!byCat[key]) byCat[key] = { catId: e.workCategoryId, entries: [] };
+    byCat[key].entries.push(e);
+  }
+
+  // Build category groups sorted by name
+  return Object.values(byCat)
+    .map(({ catId, entries: catEntries }) => {
+      const cat = catId ? catMap.get(catId) : null;
+      const categoryName = cat?.name ?? "No category";
+      const categoryColor = cat?.color ?? "gray";
+
+      // Group by task
+      const byTask: Record<string, EntryWithTask[]> = {};
+      for (const e of catEntries) {
+        (byTask[e.taskId] ??= []).push(e);
+      }
+
+      const tasks = Object.entries(byTask)
+        .map(([taskId, taskEntries]) => {
+          const totalMinutes = taskEntries.reduce(
+            (s, e) => s + e.durationMinutes,
+            0,
+          );
+          const dates = taskEntries.map((e) => e.date).sort();
+          return {
+            taskId,
+            taskTitle: taskEntries[0].taskTitle,
+            totalMinutes,
+            firstDate: dates[0],
+            lastDate: dates[dates.length - 1],
+            entryCount: taskEntries.length,
+          };
+        })
+        // Sort by lastDate descending
+        .sort((a, b) => b.lastDate.localeCompare(a.lastDate));
+
+      const totalMinutes = catEntries.reduce(
+        (s, e) => s + e.durationMinutes,
+        0,
+      );
+      const totalAmount = includeAmounts
+        ? catEntries.reduce(
+            (s, e) => s + (e.durationMinutes / 60) * (e.appliedRate ?? 0),
+            0,
+          )
+        : 0;
+
+      return {
+        workCategoryId: catId,
+        categoryName,
+        categoryColor,
+        totalMinutes,
+        totalAmount,
+        tasks,
+      };
+    })
+    .sort((a, b) => a.categoryName.localeCompare(b.categoryName));
+}

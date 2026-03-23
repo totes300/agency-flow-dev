@@ -159,7 +159,9 @@ describe("T&M overview calculations", () => {
     { durationMinutes: 300, appliedRate: 0, isBillable: false, date: "2026-03-20" },
   ];
 
-  function computeTmMetrics(entries: typeof entries, currentMonth: string) {
+  type TmEntry = { durationMinutes: number; appliedRate: number; isBillable: boolean; date: string };
+
+  function computeTmMetrics(entries: TmEntry[], currentMonth: string) {
     let totalBillableMinutes = 0;
     let totalNonBillableMinutes = 0;
     let thisMonthMinutes = 0;

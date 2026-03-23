@@ -123,13 +123,22 @@ export const stop = mutation({
     const project = task?.projectId ? await ctx.db.get(task.projectId) : null;
     const client = project ? await ctx.db.get(project.clientId) : null;
 
-    // Compute rate snapshot
+    // Compute rate snapshot — only attempt for billable tasks
     let rateSnapshot = {};
+    const isBillable = task?.billable ?? false;
     if (task && project) {
-      const rateCtx = await buildRateContext(ctx, task, project);
-      const rateResult = resolveRate(rateCtx);
-      if (rateResult.ok) {
-        rateSnapshot = rateResult.snapshot;
+      if (isBillable && !task.workCategoryId) {
+        // Will warn user at commit time — preview still works
+      } else {
+        try {
+          const rateCtx = await buildRateContext(ctx, task, project);
+          const rateResult = resolveRate(rateCtx);
+          if (rateResult.ok) {
+            rateSnapshot = rateResult.snapshot;
+          }
+        } catch {
+          // Rate preview failure is non-blocking
+        }
       }
     }
 
@@ -143,7 +152,7 @@ export const stop = mutation({
       taskName: task?.title ?? "Unknown",
       projectName: project?.name ?? null,
       clientName: client?.name ?? null,
-      isBillable: task?.billable ?? false,
+      isBillable,
       isStale,
       rateSnapshot,
     };
@@ -241,11 +250,29 @@ export const commitEntry = mutation({
     // Resolve date
     const date = args.date ?? getDateInTimezone(Date.now(), timezone);
 
-    // Rate snapshot
-    const rateCtx = await buildRateContext(ctx, task, project);
-    const rateResult = resolveRate(rateCtx);
-    if (!rateResult.ok) {
-      throw new ConvexError(rateResult.error);
+    // Rate snapshot — only enforce for billable entries
+    let rateSnapshot: Record<string, number | undefined> = {};
+    if (args.isBillable) {
+      if (!task.workCategoryId) {
+        throw new ConvexError("Set a category on this task before logging billable time");
+      }
+      const rateCtx = await buildRateContext(ctx, task, project);
+      const rateResult = resolveRate(rateCtx);
+      if (!rateResult.ok) {
+        throw new ConvexError(rateResult.error);
+      }
+      rateSnapshot = rateResult.snapshot;
+    } else {
+      // Attempt rate resolution for non-billable but don't throw on failure
+      try {
+        const rateCtx = await buildRateContext(ctx, task, project);
+        const rateResult = resolveRate(rateCtx);
+        if (rateResult.ok) {
+          rateSnapshot = rateResult.snapshot;
+        }
+      } catch {
+        // Non-billable entries are allowed without rates
+      }
     }
 
     const now = Date.now();
@@ -258,7 +285,7 @@ export const commitEntry = mutation({
       note: args.note?.trim() || undefined,
       isBillable: args.isBillable,
       method: "timer",
-      ...rateResult.snapshot,
+      ...rateSnapshot,
       createdAt: now,
       updatedAt: now,
       createdBy: userId,

@@ -202,15 +202,33 @@ export const create = mutation({
     // Resolve date
     const date = args.date ?? getDateInTimezone(Date.now(), timezone);
 
-    // Rate snapshot
-    const rateCtx = await buildRateContext(ctx, task, project);
-    const rateResult = resolveRate(rateCtx);
-    if (!rateResult.ok) {
-      throw new ConvexError(rateResult.error);
-    }
-
-    // Billable default from task
+    // Determine billable before rate resolution — non-billable entries skip rate enforcement
     const isBillable = args.isBillable ?? task.billable;
+
+    // Rate snapshot — only enforce for billable entries
+    let rateSnapshot: Record<string, number | undefined> = {};
+    if (isBillable) {
+      if (!task.workCategoryId) {
+        throw new ConvexError("Set a category on this task before logging billable time");
+      }
+      const rateCtx = await buildRateContext(ctx, task, project);
+      const rateResult = resolveRate(rateCtx);
+      if (!rateResult.ok) {
+        throw new ConvexError(rateResult.error);
+      }
+      rateSnapshot = rateResult.snapshot;
+    } else {
+      // Attempt rate resolution for non-billable but don't throw on failure
+      try {
+        const rateCtx = await buildRateContext(ctx, task, project);
+        const rateResult = resolveRate(rateCtx);
+        if (rateResult.ok) {
+          rateSnapshot = rateResult.snapshot;
+        }
+      } catch {
+        // Non-billable entries are allowed without rates
+      }
+    }
 
     const now = Date.now();
     const entryId = await ctx.db.insert("timeEntries", {
@@ -222,7 +240,7 @@ export const create = mutation({
       note: args.note?.trim() || undefined,
       isBillable,
       method: "manual",
-      ...rateResult.snapshot,
+      ...rateSnapshot,
       createdAt: now,
       updatedAt: now,
       createdBy: auth.userId,
@@ -289,6 +307,19 @@ export const update = mutation({
     }
 
     if (args.isBillable !== undefined) {
+      // When switching to billable, validate rate snapshots exist and task has category
+      if (args.isBillable && !entry.isBillable) {
+        const task = await ctx.db.get(entry.taskId);
+        if (task && !task.workCategoryId) {
+          throw new ConvexError("Set a category on this task before marking time as billable");
+        }
+        // Check that rate snapshots were captured at creation time
+        if (!entry.appliedRate && !entry.appliedCostRate && !entry.appliedBillRate) {
+          throw new ConvexError(
+            "This entry has no rate snapshot — re-create it after configuring rates on the project"
+          );
+        }
+      }
       updates.isBillable = args.isBillable;
     }
 

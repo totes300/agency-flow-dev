@@ -213,7 +213,7 @@ function CategorySection({
   return (
     <div role="rowgroup">
       {/* Category header row */}
-      <div role="row" className="flex items-center border-t bg-muted/30 px-5 py-2">
+      <div role="row" className="flex items-center border-t bg-muted/30 px-5 py-2.5">
         <div role="cell" className="flex flex-1 items-center gap-2">
           <span
             className="size-2 shrink-0 rounded-full"
@@ -236,7 +236,7 @@ function CategorySection({
         <div
           key={task.taskId}
           role="row"
-          className="flex items-center border-t border-border/40 px-5 py-2.5 pl-9 transition-colors hover:bg-muted/40"
+          className="flex items-center border-t border-border/40 px-5 py-3 pl-9 transition-colors hover:bg-muted/30"
         >
           <div role="cell" className="flex flex-1 items-center gap-2 overflow-hidden">
             <button
@@ -262,7 +262,7 @@ function CategorySection({
           <span role="cell" className={cn(COL.entries, "text-center text-sm tabular-nums text-muted-foreground")}>
             {task.entryCount}
           </span>
-          <span role="cell" className={cn(COL.duration, "text-right font-mono text-sm font-medium tabular-nums")}>
+          <span role="cell" className={cn(COL.duration, "text-right font-mono text-sm font-semibold tabular-nums")}>
             {formatMinutes(task.totalMinutes)}
           </span>
         </div>

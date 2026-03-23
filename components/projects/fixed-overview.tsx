@@ -110,16 +110,14 @@ export function FixedOverview({
 
       {/* Budget */}
       <div className="overflow-hidden rounded-xl border border-border">
-        {/* Header row — title with accent underline + summary */}
-        <div className="flex items-end justify-between px-5 pt-5 pb-3">
-          <div>
-            <h3 className="text-lg font-semibold tracking-tight">Budget</h3>
-            <div className="mt-1 h-0.5 w-10 rounded-full bg-primary" />
-          </div>
+        {/* Header — same pattern as time log month headers */}
+        <div className="flex items-center justify-between bg-muted/50 px-5 py-3">
+          <span className="text-sm font-semibold tracking-tight">Budget</span>
           {budgetPercent !== null ? (
-            <p className="text-sm tabular-nums text-muted-foreground">
-              {formatMinutes(totalActualMinutes)} of {formatMinutes(totalEstimatedMinutes)}{" "}
-              <span className="font-semibold text-foreground">{Math.round(budgetPercent)}%</span>
+            <p className="tabular-nums text-muted-foreground">
+              <span className="text-sm">{formatMinutes(totalActualMinutes)} of {formatMinutes(totalEstimatedMinutes)}</span>
+              {" "}
+              <span className="text-lg font-bold text-foreground">{Math.round(budgetPercent)}%</span>
             </p>
           ) : (
             <p className="text-sm text-muted-foreground">No estimate set</p>
@@ -128,7 +126,7 @@ export function FixedOverview({
 
         {/* Progress bar */}
         {budgetPercent !== null && (
-          <div className="px-5 pb-4">
+          <div className="border-t px-5 py-3">
             <BudgetProgress used={totalActualMinutes} budget={totalEstimatedMinutes} />
           </div>
         )}
@@ -137,12 +135,12 @@ export function FixedOverview({
         {estimates.length > 0 && (
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-t text-left">
-                <th className="px-5 py-2.5 text-xs font-medium tracking-wide text-muted-foreground">CATEGORY</th>
-                <th className="px-5 py-2.5 text-xs font-medium tracking-wide text-muted-foreground">ESTIMATED</th>
-                <th className="px-5 py-2.5 text-xs font-medium tracking-wide text-muted-foreground">ACTUAL</th>
-                <th className="px-5 py-2.5 text-xs font-medium tracking-wide text-muted-foreground">REMAINING</th>
-                <th className="px-5 py-2.5 text-xs font-medium tracking-wide text-muted-foreground">PROGRESS</th>
+              <tr className="border-t bg-muted/50 text-left">
+                <th className="px-5 py-2 text-xs font-medium text-muted-foreground">Task</th>
+                <th className="px-5 py-2 text-xs font-medium text-muted-foreground">Estimated</th>
+                <th className="px-5 py-2 text-xs font-medium text-muted-foreground">Actual</th>
+                <th className="px-5 py-2 text-xs font-medium text-muted-foreground">Remaining</th>
+                <th className="px-5 py-2 text-xs font-medium text-muted-foreground">Progress</th>
               </tr>
             </thead>
             <tbody>
@@ -160,8 +158,8 @@ export function FixedOverview({
                     <td className="px-5 py-3 tabular-nums text-muted-foreground">{formatMinutes(remaining)}</td>
                     <td className="px-5 py-3">
                       {pct !== null ? (
-                        <div className="flex items-center gap-2.5">
-                          <div className="h-1.5 w-24 overflow-hidden rounded-full bg-muted">
+                        <div className="flex items-center gap-2">
+                          <div className="h-2 w-24 overflow-hidden rounded-full bg-muted">
                             <div
                               className="h-full rounded-full bg-primary transition-[width] duration-300"
                               style={{ width: `${Math.min(pct, 100)}%` }}
@@ -183,8 +181,8 @@ export function FixedOverview({
                 <td className="px-5 py-3 tabular-nums">{formatMinutes(totalEstimatedMinutes - totalActualMinutes)}</td>
                 <td className="px-5 py-3">
                   {budgetPercent !== null && (
-                    <div className="flex items-center gap-2.5">
-                      <div className="h-1.5 w-24 overflow-hidden rounded-full bg-muted">
+                    <div className="flex items-center gap-2">
+                      <div className="h-2 w-24 overflow-hidden rounded-full bg-muted">
                         <div
                           className="h-full rounded-full bg-primary transition-[width] duration-300"
                           style={{ width: `${Math.min(budgetPercent, 100)}%` }}
@@ -229,9 +227,8 @@ export function FixedOverview({
         )}
       </div>
 
-      {/* Monthly Time Log */}
+      {/* Time Log */}
       <div>
-        <h3 className="mb-3 text-sm font-semibold">Time Log</h3>
         {monthlyData === undefined ? (
           <TimeLogSkeleton />
         ) : (

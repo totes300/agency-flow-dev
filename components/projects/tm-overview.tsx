@@ -113,9 +113,8 @@ export function TmOverview({
         </Alert>
       )}
 
-      {/* Monthly Time Log */}
+      {/* Time Log */}
       <div>
-        <h3 className="mb-3 text-sm font-semibold">Time Log</h3>
         {monthlyData === undefined ? (
           <TmTimeLogSkeleton />
         ) : (

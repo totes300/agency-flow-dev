@@ -7,12 +7,20 @@ import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table"
+import { SectionCard } from "@/components/ui/section-card"
+import { SectionHeader } from "@/components/ui/section-header"
+import { ProgressCell } from "@/components/ui/progress-cell"
 import { MetricCard } from "@/components/metric-card"
 import { MonthlyTimeBreakdown } from "./monthly-time-breakdown"
 import { Skeleton } from "@/components/ui/skeleton"
 import { InfoIcon, AlertTriangleIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { formatMinutes, formatCurrencyPrecise } from "@/lib/format"
+import {
+  CELL_KEY, CELL_PRIMARY, CELL_SECONDARY, ROW_MUTED,
+  V5_HEAD, V5_HEAD_ROW, V5_CELL, V5_ROW, V5_FOOTER,
+} from "@/lib/table-tokens"
 
 export function FixedOverview({
   projectId,
@@ -179,83 +187,72 @@ function BudgetSection({
   }
 
   return (
-    <div className="overflow-hidden rounded-xl border border-border">
+    <SectionCard>
       {/* Header */}
-      <div className="flex items-center justify-between px-6 pt-5 pb-4">
-        <h3 className="text-base font-semibold tracking-tight">Budget</h3>
-        {budgetPercent !== null ? (
-          <p className="text-right font-mono tabular-nums text-muted-foreground">
-            <span className="text-sm">{formatMinutes(totalActualMinutes)}</span>
-            <span className="mx-1.5 text-muted-foreground/40">/</span>
-            <span className="text-sm">{formatMinutes(totalEstimatedMinutes)}</span>
-            <span className="ml-2.5 text-base font-semibold text-foreground">{Math.round(budgetPercent)}%</span>
-          </p>
-        ) : (
-          <p className="text-sm text-muted-foreground">No estimate set</p>
-        )}
-      </div>
+      <SectionHeader
+        title="Budget"
+        trailing={
+          budgetPercent !== null ? (
+            <span className={CELL_SECONDARY}>
+              {formatMinutes(totalActualMinutes)}
+              <span className="mx-1.5 text-muted-foreground/40">/</span>
+              {formatMinutes(totalEstimatedMinutes)}
+              <span className="ml-2 font-semibold text-foreground">{Math.round(budgetPercent)}%</span>
+            </span>
+          ) : (
+            <span className="text-sm text-muted-foreground">No estimate set</span>
+          )
+        }
+      />
 
-      {/* Column headers */}
+      {/* Table */}
       {estimates.length > 0 && (
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-t text-left">
-              <th className="px-6 py-2.5 text-xs font-medium uppercase tracking-wider text-muted-foreground/70">Category</th>
-              <th className="px-6 py-2.5 text-xs font-medium uppercase tracking-wider text-muted-foreground/70">Estimated</th>
-              <th className="px-6 py-2.5 text-xs font-medium uppercase tracking-wider text-muted-foreground/70">Actual</th>
-              <th className="px-6 py-2.5 text-xs font-medium uppercase tracking-wider text-muted-foreground/70">Remaining</th>
-              <th className="px-6 py-2.5 text-xs font-medium uppercase tracking-wider text-muted-foreground/70">Progress</th>
-            </tr>
-          </thead>
-          <tbody>
-            {/* Active categories */}
+        <Table>
+          <TableHeader>
+            <TableRow className={V5_HEAD_ROW}>
+              <TableHead className={V5_HEAD}>Category</TableHead>
+              <TableHead className={V5_HEAD}>Estimated</TableHead>
+              <TableHead className={V5_HEAD}>Actual</TableHead>
+              <TableHead className={V5_HEAD}>Remaining</TableHead>
+              <TableHead className={V5_HEAD}>Progress</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {activeEstimates.map((row) => (
               <BudgetRow key={row._id} row={row} />
             ))}
 
-            {/* Not started separator + rows */}
             {notStartedEstimates.length > 0 && (
               <>
-                <tr>
-                  <td colSpan={5} className="px-6 pt-4 pb-1">
+                <TableRow className="hover:bg-transparent">
+                  <TableCell colSpan={5} className="px-5 pt-4 pb-1">
                     <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground/50">
                       Not started
                     </span>
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
                 {notStartedEstimates.map((row) => (
                   <BudgetRow key={row._id} row={row} muted />
                 ))}
               </>
             )}
 
-            {/* Total row */}
-            <tr className="border-t">
-              <td className="px-6 py-3.5 font-semibold">Total</td>
-              <td className="px-6 py-3.5 font-semibold tabular-nums">{formatMinutes(totalEstimatedMinutes)}</td>
-              <td className="px-6 py-3.5 font-semibold tabular-nums">{formatMinutes(totalActualMinutes)}</td>
-              <td className="px-6 py-3.5 font-semibold tabular-nums">{formatMinutes(totalEstimatedMinutes - totalActualMinutes)}</td>
-              <td className="px-6 py-3.5">
-                {budgetPercent !== null && (
-                  <div className="flex items-center gap-2.5">
-                    <div className="h-2 flex-1 max-w-28 overflow-hidden rounded-sm bg-muted">
-                      <div
-                        className="h-full bg-primary transition-[width] duration-300"
-                        style={{ width: `${Math.min(budgetPercent, 100)}%` }}
-                      />
-                    </div>
-                    <span className="text-sm font-semibold tabular-nums">{Math.round(budgetPercent)}%</span>
-                  </div>
-                )}
-              </td>
-            </tr>
-          </tbody>
-        </table>
+            <TableRow className={V5_FOOTER}>
+              <TableCell className={cn(V5_CELL, "font-semibold")}>Total</TableCell>
+              <TableCell className={cn(V5_CELL, CELL_KEY)}>{formatMinutes(totalEstimatedMinutes)}</TableCell>
+              <TableCell className={cn(V5_CELL, CELL_KEY)}>{formatMinutes(totalActualMinutes)}</TableCell>
+              <TableCell className={cn(V5_CELL, CELL_KEY)}>{formatMinutes(totalEstimatedMinutes - totalActualMinutes)}</TableCell>
+              <TableCell className={V5_CELL}>
+                <ProgressCell percent={budgetPercent !== null ? Math.round(budgetPercent) : null} />
+              </TableCell>
+            </TableRow>
+          </TableBody>
+        </Table>
       )}
 
       {/* Unestimated category warning */}
       {unestimatedCategories.length > 0 && (
-        <div className="flex items-center gap-3 border-t px-6 py-3">
+        <div className={cn("flex items-center gap-3", V5_FOOTER, "px-5 py-3")}>
           <AlertTriangleIcon className="size-4 shrink-0 text-red-400 dark:text-red-500" />
           <p className="min-w-0 flex-1 text-sm text-muted-foreground">
             <span className="font-medium text-foreground">No estimate</span>
@@ -281,7 +278,7 @@ function BudgetSection({
           )}
         </div>
       )}
-    </div>
+    </SectionCard>
   )
 }
 
@@ -293,27 +290,15 @@ function BudgetRow({
   muted?: boolean
 }) {
   return (
-    <tr className={cn("border-t transition-colors hover:bg-muted/30", muted && "text-muted-foreground/60")}>
-      <td className={cn("px-6 py-3.5", muted ? "font-normal" : "font-medium")}>{row.categoryName}</td>
-      <td className="px-6 py-3.5 tabular-nums">{formatMinutes(row.estimatedMinutes)}</td>
-      <td className={cn("px-6 py-3.5 tabular-nums", !muted && "font-semibold")}>{formatMinutes(row.actual)}</td>
-      <td className="px-6 py-3.5 tabular-nums">{formatMinutes(row.remaining)}</td>
-      <td className="px-6 py-3.5">
-        {row.pct !== null ? (
-          <div className="flex items-center gap-2.5">
-            <div className={cn("h-2 flex-1 max-w-28 overflow-hidden rounded-sm", muted ? "bg-muted/50" : "bg-muted")}>
-              <div
-                className={cn("h-full transition-[width] duration-300", muted ? "bg-muted-foreground/20" : "bg-primary")}
-                style={{ width: `${Math.min(row.pct, 100)}%` }}
-              />
-            </div>
-            <span className="text-sm tabular-nums">{row.pct}%</span>
-          </div>
-        ) : (
-          <span className="text-sm">—</span>
-        )}
-      </td>
-    </tr>
+    <TableRow className={cn(V5_ROW, muted && ROW_MUTED)}>
+      <TableCell className={cn(V5_CELL, muted ? "font-normal" : CELL_PRIMARY)}>{row.categoryName}</TableCell>
+      <TableCell className={cn(V5_CELL, CELL_SECONDARY)}>{formatMinutes(row.estimatedMinutes)}</TableCell>
+      <TableCell className={cn(V5_CELL, muted ? CELL_SECONDARY : CELL_KEY)}>{formatMinutes(row.actual)}</TableCell>
+      <TableCell className={cn(V5_CELL, CELL_SECONDARY)}>{formatMinutes(row.remaining)}</TableCell>
+      <TableCell className={V5_CELL}>
+        <ProgressCell percent={row.pct} muted={muted} />
+      </TableCell>
+    </TableRow>
   )
 }
 

@@ -198,45 +198,30 @@ export function FixedOverview({
 
           {/* Unestimated category warning */}
           {unestimatedCategories.length > 0 && (
-            <div className="rounded-lg border border-red-200/60 bg-red-50/50 px-4 py-3.5 dark:border-red-900/40 dark:bg-red-950/30">
-              <div className="flex items-start gap-3">
-                <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-red-100 dark:bg-red-900/40">
-                  <AlertTriangleIcon className="size-4.5 text-red-500 dark:text-red-400" />
-                </div>
-                <div className="min-w-0 flex-1 space-y-3">
-                  <div>
-                    <p className="text-sm font-medium text-foreground">
-                      Incomplete budget tracking
-                    </p>
-                    <p className="mt-0.5 text-xs text-muted-foreground">
-                      {unestimatedCategories.length === 1
-                        ? `${formatMinutes(unestimatedCategories[0].minutes)} logged under a category that has no budget estimate.`
-                        : `${formatMinutes(unestimatedCategories.reduce((s, c) => s + c.minutes, 0))} logged across ${unestimatedCategories.length} categories without budget estimates.`
-                      }
-                    </p>
-                  </div>
-                  <div className="space-y-1.5">
-                    {unestimatedCategories.map((cat) => (
-                      <div key={cat.catId} className="flex items-center gap-2.5">
-                        <CategoryBadge name={cat.name} color={cat.color} />
-                        <span className="font-mono text-xs text-muted-foreground tabular-nums">
-                          {formatMinutes(cat.minutes)} logged
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                  {onNavigateToEstimates && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={onNavigateToEstimates}
-                      className="h-7 text-xs"
-                    >
-                      Add estimates
-                    </Button>
-                  )}
-                </div>
-              </div>
+            <div className="flex items-center gap-3 rounded-md border border-red-200/50 bg-red-50/40 px-3 py-2 dark:border-red-900/30 dark:bg-red-950/20">
+              <AlertTriangleIcon className="size-4 shrink-0 text-red-400 dark:text-red-500" />
+              <p className="min-w-0 flex-1 text-xs text-muted-foreground">
+                <span className="font-medium text-foreground">No estimate</span>
+                {" — "}
+                {unestimatedCategories.map((cat, i) => (
+                  <span key={cat.catId}>
+                    {i > 0 && ", "}
+                    <span className="font-medium">{cat.name}</span>
+                    {" "}
+                    <span className="font-mono tabular-nums">{formatMinutes(cat.minutes)}</span>
+                  </span>
+                ))}
+              </p>
+              {onNavigateToEstimates && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={onNavigateToEstimates}
+                  className="h-6 shrink-0 rounded px-2 text-[11px]"
+                >
+                  Add estimates
+                </Button>
+              )}
             </div>
           )}
         </CardContent>

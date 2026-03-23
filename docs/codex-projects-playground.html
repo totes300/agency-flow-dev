@@ -1,0 +1,934 @@
+<!DOCTYPE html>
+<html lang="hu">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Codex Projects Playground</title>
+    <style>
+      :root {
+        --bg: #f6f2ea;
+        --panel: #fffdf9;
+        --line: #ddd3c4;
+        --text: #191612;
+        --muted: #645b51;
+        --accent: #8b4d20;
+        --accent-soft: #f4e5d8;
+        --green: #1f6a46;
+        --green-soft: #e6f3ec;
+        --amber: #8a6508;
+        --amber-soft: #fbf2da;
+        --red: #892424;
+        --red-soft: #f9e5e5;
+        --radius: 18px;
+        --mono: "SFMono-Regular", Menlo, Consolas, monospace;
+        --sans: "Segoe UI", Arial, sans-serif;
+        --serif: Georgia, "Times New Roman", serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--sans);
+      }
+
+      .page {
+        width: min(1280px, calc(100vw - 24px));
+        margin: 16px auto 32px;
+      }
+
+      .hero,
+      .tabs,
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+      }
+
+      .hero,
+      .tabs,
+      .panel {
+        padding: 18px;
+      }
+
+      h1,
+      h2,
+      h3 {
+        margin: 0;
+        font-family: var(--serif);
+        letter-spacing: -0.03em;
+      }
+
+      h1 {
+        font-size: clamp(2rem, 4vw, 3.2rem);
+      }
+
+      h2 {
+        font-size: 1.5rem;
+      }
+
+      h3 {
+        font-size: 1.1rem;
+      }
+
+      .muted {
+        color: var(--muted);
+      }
+
+      .hero p {
+        margin: 10px 0 0;
+        max-width: 80ch;
+        line-height: 1.55;
+      }
+
+      .tabs {
+        margin-top: 14px;
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+
+      .tab-button {
+        border: 1px solid var(--line);
+        background: #fff;
+        color: var(--text);
+        border-radius: 999px;
+        padding: 10px 16px;
+        cursor: pointer;
+        font-weight: 700;
+      }
+
+      .tab-button.active {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+      }
+
+      .tab-panel {
+        display: none;
+        margin-top: 14px;
+      }
+
+      .tab-panel.active {
+        display: block;
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: 420px minmax(0, 1fr);
+        gap: 14px;
+      }
+
+      .stack {
+        display: grid;
+        gap: 14px;
+      }
+
+      .field-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .field {
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 12px;
+        background: #fff;
+      }
+
+      label {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 0.78rem;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+
+      input,
+      select,
+      button {
+        font: inherit;
+      }
+
+      input,
+      select {
+        width: 100%;
+        padding: 10px 12px;
+        border-radius: 10px;
+        border: 1px solid #cfc2b1;
+        background: #fff;
+      }
+
+      button {
+        border-radius: 10px;
+        border: 1px solid var(--line);
+        padding: 10px 12px;
+        background: #fff;
+      }
+
+      .preset {
+        background: var(--accent-soft);
+      }
+
+      .section-title {
+        margin-bottom: 10px;
+      }
+
+      .eyebrow {
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        color: var(--muted);
+        margin-bottom: 4px;
+      }
+
+      .table-wrap {
+        overflow-x: auto;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        min-width: 720px;
+        background: #fff;
+      }
+
+      th,
+      td {
+        padding: 10px 12px;
+        border-bottom: 1px solid #ece3d7;
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+        background: #fbf8f2;
+      }
+
+      .metric-list {
+        display: grid;
+        gap: 10px;
+      }
+
+      .metric-row,
+      .formula-row {
+        display: grid;
+        grid-template-columns: 180px 180px minmax(0, 1fr);
+        gap: 12px;
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: #fff;
+      }
+
+      .metric-name {
+        font-weight: 700;
+      }
+
+      .metric-value {
+        font-family: var(--serif);
+        font-size: 1.18rem;
+        letter-spacing: -0.03em;
+      }
+
+      .formula {
+        font-family: var(--mono);
+        font-size: 0.86rem;
+        line-height: 1.55;
+        white-space: pre-wrap;
+      }
+
+      .note,
+      .warn,
+      .ok {
+        border-radius: 14px;
+        padding: 12px 14px;
+        line-height: 1.5;
+      }
+
+      .note {
+        background: #f6f0e7;
+        border: 1px solid var(--line);
+      }
+
+      .warn {
+        background: var(--amber-soft);
+        border: 1px solid #ead7a2;
+        color: #6f540b;
+      }
+
+      .ok {
+        background: var(--green-soft);
+        border: 1px solid #beddc9;
+        color: #1c5a3c;
+      }
+
+      .danger {
+        background: var(--red-soft);
+        border: 1px solid #e8c3c3;
+        color: var(--red);
+      }
+
+      .mono {
+        font-family: var(--mono);
+      }
+
+      @media (max-width: 980px) {
+        .layout {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 760px) {
+        .page {
+          width: min(100vw - 12px, 100%);
+        }
+
+        .field-grid,
+        .metric-row,
+        .formula-row {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <section class="hero">
+        <div class="eyebrow">Egyszerű audit nézet</div>
+        <h1>Codex Projects Playground</h1>
+        <p class="muted">
+          A 3 projekt típus külön fülön van. Mindegyik fülön külön állíthatóak a változók, külön látszanak a bejövő adatok,
+          és minden eredmény mellett rögtön ott van a képlet és a behelyettesített számolás. Szándékosan kerek órákkal és
+          egyszerű óradíjakkal indul, hogy fejben is könnyen ellenőrizhető legyen.
+        </p>
+      </section>
+
+      <nav class="tabs">
+        <button class="tab-button active" data-tab="fixed">Fixed</button>
+        <button class="tab-button" data-tab="tm">T&amp;M</button>
+        <button class="tab-button" data-tab="retainer">Retainer</button>
+      </nav>
+
+      <section class="tab-panel active" id="tab-fixed">
+        <div class="layout">
+          <div class="stack">
+            <section class="panel">
+              <div class="section-title">
+                <div class="eyebrow">Fixed Inputs</div>
+                <h2>Állítható változók</h2>
+              </div>
+              <div class="field-grid">
+                <div class="field">
+                  <label for="fixedCurrency">Currency</label>
+                  <select id="fixedCurrency">
+                    <option value="USD" selected>USD</option>
+                    <option value="EUR">EUR</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="fixedPrice">Fixed Price</label>
+                  <input id="fixedPrice" type="number" step="100" value="10000" />
+                </div>
+              </div>
+              <p class="note" style="margin-top:10px">
+                Egyszerű tesztadat: 10 óra stratégia, 20 óra design, 30 óra development.
+              </p>
+            </section>
+
+            <section class="panel">
+              <div class="section-title">
+                <div class="eyebrow">Fixed Estimates</div>
+                <h3>Tervezett kategóriák</h3>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Kategória</th>
+                      <th>Becsült órák</th>
+                      <th>Megjegyzés</th>
+                    </tr>
+                  </thead>
+                  <tbody id="fixedEstimateTable"></tbody>
+                </table>
+              </div>
+            </section>
+
+            <section class="panel">
+              <div class="section-title">
+                <div class="eyebrow">Fixed Entries</div>
+                <h3>Bejövő időadatok</h3>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Task</th>
+                      <th>Kategória</th>
+                      <th>Óra</th>
+                      <th>Billable</th>
+                      <th>Applied Cost Rate</th>
+                      <th>Archived Task</th>
+                    </tr>
+                  </thead>
+                  <tbody id="fixedEntryTable"></tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+
+          <div class="stack">
+            <section class="panel">
+              <div class="section-title">
+                <div class="eyebrow">Fixed Results</div>
+                <h2>Eredmények és képletek</h2>
+              </div>
+              <div id="fixedWarnings" class="stack"></div>
+              <div id="fixedResults" class="metric-list"></div>
+            </section>
+          </div>
+        </div>
+      </section>
+
+      <section class="tab-panel" id="tab-tm">
+        <div class="layout">
+          <div class="stack">
+            <section class="panel">
+              <div class="section-title">
+                <div class="eyebrow">T&amp;M Inputs</div>
+                <h2>Állítható változók</h2>
+              </div>
+              <div class="field-grid">
+                <div class="field">
+                  <label for="tmCurrency">Currency</label>
+                  <select id="tmCurrency">
+                    <option value="USD" selected>USD</option>
+                    <option value="EUR">EUR</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="tmCurrentMonth">Aktív hónap</label>
+                  <input id="tmCurrentMonth" type="month" value="2026-03" />
+                </div>
+                <div class="field">
+                  <label for="tmFilter">Breakdown filter</label>
+                  <select id="tmFilter">
+                    <option value="billable" selected>Billable only</option>
+                    <option value="all">All incl. non-billable</option>
+                  </select>
+                </div>
+              </div>
+              <p class="note" style="margin-top:10px">
+                Egyszerű tesztadat: 10 billable óra januárban, 20 billable februárban, 30 billable márciusban, plusz 5 non-billable óra.
+              </p>
+            </section>
+
+            <section class="panel">
+              <div class="section-title">
+                <div class="eyebrow">T&amp;M Entries</div>
+                <h3>Bejövő időadatok</h3>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Dátum</th>
+                      <th>Task</th>
+                      <th>Óra</th>
+                      <th>Billable</th>
+                      <th>Applied Rate</th>
+                      <th>Archived Task</th>
+                    </tr>
+                  </thead>
+                  <tbody id="tmEntryTable"></tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+
+          <div class="stack">
+            <section class="panel">
+              <div class="section-title">
+                <div class="eyebrow">T&amp;M Results</div>
+                <h2>Eredmények és képletek</h2>
+              </div>
+              <div id="tmWarnings" class="stack"></div>
+              <div id="tmResults" class="metric-list"></div>
+            </section>
+          </div>
+        </div>
+      </section>
+
+      <section class="tab-panel" id="tab-retainer">
+        <div class="layout">
+          <div class="stack">
+            <section class="panel">
+              <div class="section-title">
+                <div class="eyebrow">Retainer Inputs</div>
+                <h2>Állítható változók</h2>
+              </div>
+              <div class="field-grid">
+                <div class="field">
+                  <label for="retainerCurrency">Currency</label>
+                  <select id="retainerCurrency">
+                    <option value="USD" selected>USD</option>
+                    <option value="EUR">EUR</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="retainerCurrentMonth">Aktív hónap</label>
+                  <input id="retainerCurrentMonth" type="month" value="2026-03" />
+                </div>
+                <div class="field">
+                  <label for="retainerIncludedHours">Included Hours / Month</label>
+                  <input id="retainerIncludedHours" type="number" step="1" value="20" />
+                </div>
+                <div class="field">
+                  <label for="retainerOverageRate">Overage Rate / Hour</label>
+                  <input id="retainerOverageRate" type="number" step="10" value="100" />
+                </div>
+                <div class="field">
+                  <label for="retainerRollover">Rollover</label>
+                  <select id="retainerRollover">
+                    <option value="true" selected>On</option>
+                    <option value="false">Off</option>
+                  </select>
+                </div>
+              </div>
+              <p class="note" style="margin-top:10px">
+                Egyszerű tesztadat: január 10 billable óra, február 15 billable óra, március 30 billable óra, és márciusban 5 non-billable óra.
+              </p>
+            </section>
+
+            <section class="panel">
+              <div class="section-title">
+                <div class="eyebrow">Retainer Entries</div>
+                <h3>Bejövő időadatok</h3>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Dátum</th>
+                      <th>Task</th>
+                      <th>Óra</th>
+                      <th>Billable</th>
+                      <th>Archived Task</th>
+                    </tr>
+                  </thead>
+                  <tbody id="retainerEntryTable"></tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+
+          <div class="stack">
+            <section class="panel">
+              <div class="section-title">
+                <div class="eyebrow">Retainer Results</div>
+                <h2>Eredmények és képletek</h2>
+              </div>
+              <div id="retainerWarnings" class="stack"></div>
+              <div id="retainerResults" class="metric-list"></div>
+            </section>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <script>
+      const state = {
+        fixed: {
+          currency: "USD",
+          fixedPrice: 10000,
+          estimates: [
+            { category: "Strategy", hours: 10 },
+            { category: "Design", hours: 20 },
+            { category: "Development", hours: 30 }
+          ],
+          entries: [
+            { task: "Workshop", category: "Strategy", hours: 10, billable: true, appliedCostRate: 50, archived: false },
+            { task: "UI concepts", category: "Design", hours: 20, billable: false, appliedCostRate: 50, archived: false },
+            { task: "Build", category: "Development", hours: 30, billable: true, appliedCostRate: 50, archived: true }
+          ]
+        },
+        tm: {
+          currency: "USD",
+          currentMonth: "2026-03",
+          filter: "billable",
+          entries: [
+            { date: "2026-01-10", task: "January work", hours: 10, billable: true, appliedRate: 100, archived: false },
+            { date: "2026-02-10", task: "February work", hours: 20, billable: true, appliedRate: 100, archived: true },
+            { date: "2026-03-10", task: "March work", hours: 30, billable: true, appliedRate: 100, archived: false },
+            { date: "2026-03-15", task: "Internal sync", hours: 5, billable: false, appliedRate: 0, archived: false }
+          ]
+        },
+        retainer: {
+          currency: "USD",
+          currentMonth: "2026-03",
+          includedHours: 20,
+          overageRate: 100,
+          rollover: true,
+          entries: [
+            { date: "2026-01-10", task: "January work", hours: 10, billable: true, archived: false },
+            { date: "2026-02-12", task: "February work", hours: 15, billable: true, archived: true },
+            { date: "2026-03-08", task: "March work", hours: 30, billable: true, archived: false },
+            { date: "2026-03-12", task: "Internal QA", hours: 5, billable: false, archived: false }
+          ]
+        }
+      };
+
+      const els = {
+        tabs: [...document.querySelectorAll(".tab-button")],
+        panels: [...document.querySelectorAll(".tab-panel")],
+        fixedCurrency: document.getElementById("fixedCurrency"),
+        fixedPrice: document.getElementById("fixedPrice"),
+        fixedEstimateTable: document.getElementById("fixedEstimateTable"),
+        fixedEntryTable: document.getElementById("fixedEntryTable"),
+        fixedWarnings: document.getElementById("fixedWarnings"),
+        fixedResults: document.getElementById("fixedResults"),
+        tmCurrency: document.getElementById("tmCurrency"),
+        tmCurrentMonth: document.getElementById("tmCurrentMonth"),
+        tmFilter: document.getElementById("tmFilter"),
+        tmEntryTable: document.getElementById("tmEntryTable"),
+        tmWarnings: document.getElementById("tmWarnings"),
+        tmResults: document.getElementById("tmResults"),
+        retainerCurrency: document.getElementById("retainerCurrency"),
+        retainerCurrentMonth: document.getElementById("retainerCurrentMonth"),
+        retainerIncludedHours: document.getElementById("retainerIncludedHours"),
+        retainerOverageRate: document.getElementById("retainerOverageRate"),
+        retainerRollover: document.getElementById("retainerRollover"),
+        retainerEntryTable: document.getElementById("retainerEntryTable"),
+        retainerWarnings: document.getElementById("retainerWarnings"),
+        retainerResults: document.getElementById("retainerResults")
+      };
+
+      function formatCurrency(value, currency) {
+        return new Intl.NumberFormat("en-US", {
+          style: "currency",
+          currency,
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2
+        }).format(Number(value || 0));
+      }
+
+      function formatHours(value) {
+        return `${Number(value || 0)} óra`;
+      }
+
+      function monthKey(date) {
+        return String(date).slice(0, 7);
+      }
+
+      function row(label, value, formula) {
+        return `
+          <div class="metric-row">
+            <div class="metric-name">${label}</div>
+            <div class="metric-value">${value}</div>
+            <div class="formula">${formula}</div>
+          </div>
+        `;
+      }
+
+      function renderFixed() {
+        const data = state.fixed;
+        data.currency = els.fixedCurrency.value;
+        data.fixedPrice = Number(els.fixedPrice.value || 0);
+
+        els.fixedEstimateTable.innerHTML = data.estimates
+          .map(
+            (item) => `
+              <tr>
+                <td>${item.category}</td>
+                <td>${formatHours(item.hours)}</td>
+                <td class="mono">${item.hours} × 1h</td>
+              </tr>
+            `
+          )
+          .join("");
+
+        els.fixedEntryTable.innerHTML = data.entries
+          .map(
+            (item) => `
+              <tr>
+                <td>${item.task}</td>
+                <td>${item.category}</td>
+                <td>${formatHours(item.hours)}</td>
+                <td>${item.billable ? "Igen" : "Nem"}</td>
+                <td>${formatCurrency(item.appliedCostRate, data.currency)}/h</td>
+                <td>${item.archived ? "Igen" : "Nem"}</td>
+              </tr>
+            `
+          )
+          .join("");
+
+        const totalHours = data.entries.reduce((sum, item) => sum + item.hours, 0);
+        const totalActualCost = data.entries.reduce((sum, item) => sum + item.hours * item.appliedCostRate, 0);
+        const totalEstimatedHours = data.estimates.reduce((sum, item) => sum + item.hours, 0);
+        const profit = data.fixedPrice - totalActualCost;
+        const effectiveRate = totalHours > 0 ? data.fixedPrice / totalHours : 0;
+        const budgetUsed = totalEstimatedHours > 0 ? (totalHours / totalEstimatedHours) * 100 : null;
+
+        els.fixedWarnings.innerHTML = `
+          <div class="ok">Az archived task is benne marad a számításban. A 30 óra development emiatt továbbra is számít.</div>
+        `;
+
+        els.fixedResults.innerHTML = [
+          row(
+            "Fixed Fee",
+            formatCurrency(data.fixedPrice, data.currency),
+            `fixedPrice = ${formatCurrency(data.fixedPrice, data.currency)}`
+          ),
+          row(
+            "Actual",
+            formatHours(totalHours),
+            `összes óra = 10 + 20 + 30 = ${totalHours}`
+          ),
+          row(
+            "Actual Cost",
+            formatCurrency(totalActualCost, data.currency),
+            `10 × 50 + 20 × 50 + 30 × 50 = ${formatCurrency(totalActualCost, data.currency)}`
+          ),
+          row(
+            "Profit",
+            formatCurrency(profit, data.currency),
+            `${formatCurrency(data.fixedPrice, data.currency)} - ${formatCurrency(totalActualCost, data.currency)} = ${formatCurrency(profit, data.currency)}`
+          ),
+          row(
+            "Effective Rate",
+            `${formatCurrency(effectiveRate, data.currency)}/h`,
+            `${formatCurrency(data.fixedPrice, data.currency)} / ${totalHours} óra = ${formatCurrency(effectiveRate, data.currency)}/h`
+          ),
+          row(
+            "Budget Used",
+            budgetUsed === null ? "No estimate set" : `${budgetUsed.toFixed(2)}%`,
+            budgetUsed === null
+              ? `nincs estimate`
+              : `${totalHours} / ${totalEstimatedHours} × 100 = ${budgetUsed.toFixed(2)}%`
+          )
+        ].join("");
+      }
+
+      function renderTM() {
+        const data = state.tm;
+        data.currency = els.tmCurrency.value;
+        data.currentMonth = els.tmCurrentMonth.value;
+        data.filter = els.tmFilter.value;
+
+        els.tmEntryTable.innerHTML = data.entries
+          .map(
+            (item) => `
+              <tr>
+                <td class="mono">${item.date}</td>
+                <td>${item.task}</td>
+                <td>${formatHours(item.hours)}</td>
+                <td>${item.billable ? "Igen" : "Nem"}</td>
+                <td>${item.billable ? `${formatCurrency(item.appliedRate, data.currency)}/h` : "—"}</td>
+                <td>${item.archived ? "Igen" : "Nem"}</td>
+              </tr>
+            `
+          )
+          .join("");
+
+        const billableEntries = data.entries.filter((item) => item.billable);
+        const nonBillableEntries = data.entries.filter((item) => !item.billable);
+        const totalBillableHours = billableEntries.reduce((sum, item) => sum + item.hours, 0);
+        const totalNonBillableHours = nonBillableEntries.reduce((sum, item) => sum + item.hours, 0);
+        const thisMonthHours = billableEntries
+          .filter((item) => monthKey(item.date) === data.currentMonth)
+          .reduce((sum, item) => sum + item.hours, 0);
+        const uninvoiced = billableEntries.reduce((sum, item) => sum + item.hours * item.appliedRate, 0);
+        const months = [
+          "2026-01",
+          "2026-02",
+          "2026-03"
+        ].map((month) => ({
+          month,
+          hours: billableEntries.filter((item) => monthKey(item.date) === month).reduce((sum, item) => sum + item.hours, 0)
+        }));
+        const breakdownHours = (data.filter === "all" ? data.entries : billableEntries).reduce((sum, item) => sum + item.hours, 0);
+
+        els.tmWarnings.innerHTML = `
+          <div class="ok">A top metric-ek nem változnak, ha a breakdown filtert átváltod. Csak a breakdown összesítés változik.</div>
+          <div class="note">Breakdown most: ${data.filter === "all" ? "billable + non-billable" : "csak billable"} = ${breakdownHours} óra</div>
+        `;
+
+        els.tmResults.innerHTML = [
+          row(
+            "Billable Logged",
+            formatHours(totalBillableHours),
+            `10 + 20 + 30 = ${totalBillableHours}`
+          ),
+          row(
+            "Non-billable",
+            formatHours(totalNonBillableHours),
+            `5 = ${totalNonBillableHours}`
+          ),
+          row(
+            "This Month Billable",
+            formatHours(thisMonthHours),
+            `március billable = 30 = ${thisMonthHours}`
+          ),
+          row(
+            "Uninvoiced",
+            formatCurrency(uninvoiced, data.currency),
+            `10 × 100 + 20 × 100 + 30 × 100 = ${formatCurrency(uninvoiced, data.currency)}`
+          ),
+          row(
+            "Last 3 Months",
+            `${months[0].hours}h / ${months[1].hours}h / ${months[2].hours}h`,
+            `jan = 10h\nfeb = 20h\nmar = 30h`
+          ),
+          row(
+            "Breakdown Total",
+            formatHours(breakdownHours),
+            data.filter === "all"
+              ? `billable + non-billable = 60 + 5 = ${breakdownHours}`
+              : `csak billable = ${totalBillableHours}`
+          )
+        ].join("");
+      }
+
+      function renderRetainer() {
+        const data = state.retainer;
+        data.currency = els.retainerCurrency.value;
+        data.currentMonth = els.retainerCurrentMonth.value;
+        data.includedHours = Number(els.retainerIncludedHours.value || 0);
+        data.overageRate = Number(els.retainerOverageRate.value || 0);
+        data.rollover = els.retainerRollover.value === "true";
+
+        els.retainerEntryTable.innerHTML = data.entries
+          .map(
+            (item) => `
+              <tr>
+                <td class="mono">${item.date}</td>
+                <td>${item.task}</td>
+                <td>${formatHours(item.hours)}</td>
+                <td>${item.billable ? "Igen" : "Nem"}</td>
+                <td>${item.archived ? "Igen" : "Nem"}</td>
+              </tr>
+            `
+          )
+          .join("");
+
+        const months = ["2026-01", "2026-02", "2026-03"];
+        let previousEnd = 0;
+        const monthData = months.map((month) => {
+          const monthEntries = data.entries.filter((item) => monthKey(item.date) === month);
+          const billable = monthEntries.filter((item) => item.billable).reduce((sum, item) => sum + item.hours, 0);
+          const nonBillable = monthEntries.filter((item) => !item.billable).reduce((sum, item) => sum + item.hours, 0);
+          const startBalance = data.rollover ? previousEnd : 0;
+          const available = data.includedHours + startBalance;
+          const overBudget = Math.max(billable - available, 0);
+          const endBalance = data.rollover ? Math.max(available - billable, 0) : 0;
+          previousEnd = endBalance;
+          return { month, billable, nonBillable, startBalance, available, overBudget, endBalance };
+        });
+
+        const active = monthData.find((item) => item.month === data.currentMonth) || monthData[monthData.length - 1];
+        const overageDue = active.overBudget * data.overageRate;
+
+        els.retainerWarnings.innerHTML = `
+          <div class="ok">A retainer consumption csak a billable órákat fogyasztja. A non-billable külön látszik.</div>
+          <div class="note">Ha rollover be van kapcsolva, az előző hónap maradéka átjön a következő hónapra.</div>
+        `;
+
+        els.retainerResults.innerHTML = [
+          row(
+            "Included Hours",
+            formatHours(data.includedHours),
+            `havi keret = ${data.includedHours} óra`
+          ),
+          row(
+            "Start Balance",
+            formatHours(active.startBalance),
+            data.rollover
+              ? `előző hónap maradéka = ${active.startBalance} óra`
+              : `rollover off -> 0 óra`
+          ),
+          row(
+            "Available",
+            formatHours(active.available),
+            `${data.includedHours} + ${active.startBalance} = ${active.available}`
+          ),
+          row(
+            "Billable Used",
+            formatHours(active.billable),
+            `aktív hónap billable órái = ${active.billable}`
+          ),
+          row(
+            "Non-billable",
+            formatHours(active.nonBillable),
+            `aktív hónap non-billable órái = ${active.nonBillable}`
+          ),
+          row(
+            "Over Budget",
+            formatHours(active.overBudget),
+            `MAX(${active.billable} - ${active.available}, 0) = ${active.overBudget}`
+          ),
+          row(
+            "Overage Due",
+            formatCurrency(overageDue, data.currency),
+            `${active.overBudget} × ${formatCurrency(data.overageRate, data.currency)} = ${formatCurrency(overageDue, data.currency)}`
+          ),
+          row(
+            "End Balance",
+            formatHours(active.endBalance),
+            data.rollover
+              ? `MAX(${active.available} - ${active.billable}, 0) = ${active.endBalance}`
+              : `rollover off -> 0`
+          ),
+          row(
+            "Month Chain",
+            monthData.map((item) => `${item.month.slice(5)}: ${item.billable}h`).join(" | "),
+            monthData
+              .map((item) => `${item.month}: start ${item.startBalance}h, available ${item.available}h, used ${item.billable}h, end ${item.endBalance}h`)
+              .join("\n")
+          )
+        ].join("");
+      }
+
+      function renderAll() {
+        renderFixed();
+        renderTM();
+        renderRetainer();
+      }
+
+      els.tabs.forEach((button) => {
+        button.addEventListener("click", () => {
+          const tab = button.dataset.tab;
+          els.tabs.forEach((item) => item.classList.toggle("active", item === button));
+          els.panels.forEach((panel) => panel.classList.toggle("active", panel.id === `tab-${tab}`));
+        });
+      });
+
+      [
+        els.fixedCurrency,
+        els.fixedPrice,
+        els.tmCurrency,
+        els.tmCurrentMonth,
+        els.tmFilter,
+        els.retainerCurrency,
+        els.retainerCurrentMonth,
+        els.retainerIncludedHours,
+        els.retainerOverageRate,
+        els.retainerRollover
+      ].forEach((input) => input.addEventListener("input", renderAll));
+
+      renderAll();
+    </script>
+  </body>
+</html>

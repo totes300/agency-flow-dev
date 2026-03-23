@@ -110,17 +110,6 @@ export default defineSchema({
       filterFields: ["orgId"],
     }),
 
-  // ─── Task Counts (denormalized, one per org, O(1) tab badge reads) ─────────
-  taskCounts: defineTable({
-    orgId: v.string(),
-    backlog: v.number(),
-    in_progress: v.number(),
-    review: v.number(),
-    blocked: v.number(),
-    done: v.number(),
-    archived: v.optional(v.number()),
-  }).index("by_orgId", ["orgId"]),
-
   // ─── Clients ──────────────────────────────────────────────────────────────────
   clients: defineTable({
     orgId: v.string(),

@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Formula Checker</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f8f8f8; color: #1a1a1a; padding: 2rem; max-width: 960px; margin: 0 auto; font-size: 14px; }
+  h1 { font-size: 1.25rem; margin-bottom: 0.25rem; }
+  .sub { color: #888; font-size: 0.8rem; margin-bottom: 2rem; }
+  .tabs { display: flex; gap: 0; margin-bottom: 0; }
+  .tab { padding: 0.5rem 1.5rem; cursor: pointer; font-weight: 600; font-size: 0.8rem; background: #eee; border: 1px solid #ddd; border-bottom: none; border-radius: 6px 6px 0 0; color: #888; }
+  .tab.active { background: #fff; color: #111; border-bottom: 1px solid #fff; position: relative; z-index: 1; }
+  .panel { display: none; background: #fff; border: 1px solid #ddd; border-radius: 0 6px 6px 6px; padding: 1.5rem; }
+  .panel.active { display: block; }
+  h2 { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; color: #999; margin: 1.5rem 0 0.5rem; }
+  h2:first-child { margin-top: 0; }
+  .row { display: grid; grid-template-columns: 180px 1fr auto; gap: 0 1rem; align-items: baseline; padding: 7px 0; border-bottom: 1px solid #f0f0f0; }
+  .row:last-child { border-bottom: none; }
+  .row .name { font-weight: 600; font-size: 0.82rem; }
+  .row .calc { font-family: 'SF Mono', 'Consolas', monospace; font-size: 0.82rem; color: #555; }
+  .row .val { font-family: 'SF Mono', 'Consolas', monospace; font-size: 0.9rem; font-weight: 700; text-align: right; white-space: nowrap; }
+  .green { color: #16a34a; } .red { color: #dc2626; } .amber { color: #d97706; } .blue { color: #2563eb; }
+  .note { font-size: 0.72rem; color: #aaa; padding: 0 0 2px 180px; margin-top: -2px; }
+  .inputs { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.4rem 1.5rem; margin-bottom: 0.5rem; }
+  .inputs label { font-size: 0.7rem; font-weight: 600; color: #888; }
+  .inputs input, .inputs select { width: 100%; padding: 4px 8px; border: 1px solid #ddd; border-radius: 4px; font-family: 'SF Mono', 'Consolas', monospace; font-size: 0.82rem; }
+  table.e { width: 100%; border-collapse: collapse; font-size: 0.8rem; margin: 0.25rem 0 0.5rem; }
+  table.e th { text-align: left; font-size: 0.65rem; text-transform: uppercase; color: #aaa; padding: 4px 6px; border-bottom: 1px solid #eee; }
+  table.e td { padding: 3px 6px; border-bottom: 1px solid #f5f5f5; }
+  table.e input, table.e select { padding: 2px 4px; border: 1px solid #e5e5e5; border-radius: 3px; font-family: 'SF Mono', 'Consolas', monospace; font-size: 0.8rem; }
+  .btn { padding: 2px 8px; font-size: 0.7rem; border: 1px solid #93c5fd; border-radius: 3px; background: #fff; cursor: pointer; color: #2563eb; }
+  .btn:hover { background: #f0f7ff; }
+  .bdel { color: #dc2626; border-color: #fca5a5; }
+  .sep { height: 1px; background: #e5e5e5; margin: 1rem 0; }
+  .progress { height: 6px; background: #eee; border-radius: 3px; overflow: hidden; width: 100px; display: inline-block; vertical-align: middle; margin-left: 6px; }
+  .progress-fill { height: 100%; border-radius: 3px; }
+  .warn { font-size: 0.75rem; color: #92400e; background: #fffbeb; border: 1px solid #fde68a; border-radius: 4px; padding: 4px 8px; margin: 4px 0; }
+  table.chain { width: 100%; border-collapse: collapse; font-size: 0.78rem; margin: 0.5rem 0; }
+  table.chain th { font-size: 0.65rem; text-transform: uppercase; color: #aaa; padding: 5px 8px; border-bottom: 2px solid #eee; text-align: right; }
+  table.chain th:first-child, table.chain th:last-child { text-align: left; }
+  table.chain td { padding: 5px 8px; border-bottom: 1px solid #f0f0f0; text-align: right; font-family: 'SF Mono', 'Consolas', monospace; }
+  table.chain td:first-child { text-align: left; font-weight: 600; }
+  .group-box { background: #fafafa; border: 1px solid #eee; border-radius: 6px; padding: 1rem; margin: 0.5rem 0; }
+  .group-title { font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: #666; margin-bottom: 0.5rem; }
+  .badge { display: inline-block; font-size: 0.65rem; font-weight: 700; padding: 1px 6px; border-radius: 3px; margin-left: 6px; }
+  .badge-due { background: #fef2f2; color: #dc2626; }
+  .badge-deficit { background: #fff7ed; color: #d97706; }
+  .badge-rollover { background: #eff6ff; color: #2563eb; }
+  .badge-unused { background: #f0fdf4; color: #16a34a; }
+  .badge-on_track { background: #f0fdf4; color: #16a34a; }
+  .cycle-sep td { background: #e5e5e5; padding: 2px 8px; font-size: 0.7rem; font-weight: 700; color: #666; text-align: left !important; font-family: -apple-system, sans-serif; }
+</style>
+</head>
+<body>
+
+<h1>Formula Checker</h1>
+<p class="sub">Egyszerű kerek számok, minden képlet közvetlenül az érték mellett. Módosíts bármit, azonnal frissül.</p>
+
+<div class="tabs">
+  <div class="tab active" onclick="go('fixed')">Fixed</div>
+  <div class="tab" onclick="go('tm')">T&M</div>
+  <div class="tab" onclick="go('ret')">Retainer</div>
+</div>
+
+<!-- ====== FIXED ====== -->
+<div id="p-fixed" class="panel active">
+  <h2>Projekt beállítások</h2>
+  <div class="inputs">
+    <div><label>Fixed Price</label><input type="number" id="f-price" value="10000" step="1000" oninput="cF()"></div>
+    <div><label>Currency</label><input id="f-cur" value="EUR" maxlength="3" oninput="cF()"></div>
+  </div>
+
+  <h2>Time entries</h2>
+  <table class="e"><thead><tr><th>Date</th><th>Óra</th><th>Billable</th><th>Cost Rate/h</th><th>Category</th><th></th></tr></thead><tbody id="f-tb"></tbody></table>
+  <button class="btn" onclick="fAdd()">+ entry</button>
+
+  <h2>Category Estimates</h2>
+  <table class="e"><thead><tr><th>Category</th><th>Becsült óra</th></tr></thead><tbody id="f-est"></tbody></table>
+  <button class="btn" onclick="fAddEst()">+ estimate</button>
+
+  <div class="sep"></div>
+  <h2>Eredmények — Top Metrics</h2>
+  <div id="f-out"></div>
+
+  <div id="f-budget-group"></div>
+  <div id="f-warn"></div>
+</div>
+
+<!-- ====== T&M ====== -->
+<div id="p-tm" class="panel">
+  <h2>Projekt beállítások</h2>
+  <div class="inputs">
+    <div><label>Rate Mode</label><select id="t-mode" onchange="cT()"><option value="flat">Flat</option><option value="per_category">Per-category</option></select></div>
+    <div><label>Flat Rate/h</label><input type="number" id="t-rate" value="100" oninput="cT()"></div>
+    <div><label>Currency</label><input id="t-cur" value="USD" maxlength="3" oninput="cT()"></div>
+  </div>
+
+  <h2>Time entries</h2>
+  <table class="e"><thead><tr><th>Date</th><th>Óra</th><th>Billable</th><th>Applied Rate/h</th><th></th></tr></thead><tbody id="t-tb"></tbody></table>
+  <button class="btn" onclick="tAdd()">+ entry</button>
+
+  <div class="sep"></div>
+  <h2>Eredmények</h2>
+  <div id="t-out"></div>
+</div>
+
+<!-- ====== RETAINER ====== -->
+<div id="p-ret" class="panel">
+  <h2>Retainer beállítások</h2>
+  <div class="inputs">
+    <div><label>Keret óra/hó</label><input type="number" id="r-inc" value="40" oninput="cR()"></div>
+    <div><label>Cycle Length (hónap)</label><input type="number" id="r-cyc" value="3" min="1" max="12" oninput="cR()"></div>
+    <div><label>Overage Rate/h</label><input type="number" id="r-rate" value="150" oninput="cR()"></div>
+    <div><label>Rollover</label><select id="r-roll" onchange="cR()"><option value="1">Yes</option><option value="0">No</option></select></div>
+    <div><label>Start Date</label><input type="month" id="r-start" value="2026-01" oninput="cR()"></div>
+    <div><label>Currency</label><input id="r-cur" value="EUR" maxlength="3" oninput="cR()"></div>
+    <div><label>Simulated "today"</label><input type="date" id="r-today" value="2026-04-15" oninput="cR()"></div>
+  </div>
+
+  <h2>Havi adatok</h2>
+  <table class="e"><thead><tr><th>Month</th><th>Billable óra</th><th>Non-bill óra</th><th></th></tr></thead><tbody id="r-tb"></tbody></table>
+  <button class="btn" onclick="rAdd()">+ month</button>
+
+  <div class="sep"></div>
+  <h2>Cycle összesítés</h2>
+  <div id="r-out"></div>
+  <h2>Balance chain — hónapról hónapra</h2>
+  <div id="r-chain"></div>
+  <h2>Overage logika</h2>
+  <div id="r-overage"></div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const C = (n,c) => `${c==='EUR'?'\u20AC':c==='GBP'?'\u00A3':'$'}${n.toLocaleString('en',{minimumFractionDigits:0,maximumFractionDigits:2})}`;
+
+function R(name, calc, val, cls='') {
+  return `<div class="row"><div class="name">${name}</div><div class="calc">${calc}</div><div class="val ${cls}">${val}</div></div>`;
+}
+function N(text) { return `<div class="note">${text}</div>`; }
+
+function go(id) {
+  document.querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('active',['fixed','tm','ret'][i]===id));
+  document.querySelectorAll('.panel').forEach((p,i)=>p.classList.toggle('active',['fixed','tm','ret'][i]===id));
+}
+
+// ===== FIXED =====
+let FE = [
+  {d:'2026-03-05', h:8,  b:true,  cr:50, cat:'Design'},
+  {d:'2026-03-10', h:10, b:true,  cr:50, cat:'Design'},
+  {d:'2026-03-12', h:20, b:true,  cr:40, cat:'Dev'},
+  {d:'2026-03-15', h:10, b:true,  cr:40, cat:'Dev'},
+  {d:'2026-03-18', h:2,  b:false, cr:40, cat:'Dev'},
+  {d:'2026-03-20', h:5,  b:true,  cr:0,  cat:'QA'},
+];
+let FC = [{cat:'Design',h:20},{cat:'Dev',h:40}];
+
+function fRender() {
+  $('#f-tb').innerHTML = FE.map((e,i)=>`<tr>
+    <td><input type="date" value="${e.d}" oninput="FE[${i}].d=this.value;cF()"></td>
+    <td><input type="number" value="${e.h}" style="width:50px" oninput="FE[${i}].h=+this.value;cF()"></td>
+    <td><select onchange="FE[${i}].b=this.value==='1';cF()"><option value="1" ${e.b?'selected':''}>Y</option><option value="0" ${!e.b?'selected':''}>N</option></select></td>
+    <td><input type="number" value="${e.cr}" style="width:55px" oninput="FE[${i}].cr=+this.value;cF()"></td>
+    <td><input value="${e.cat}" style="width:65px" oninput="FE[${i}].cat=this.value;cF()"></td>
+    <td><button class="btn bdel" onclick="FE.splice(${i},1);fRender();cF()">x</button></td>
+  </tr>`).join('');
+  $('#f-est').innerHTML = FC.map((e,i)=>`<tr>
+    <td><input value="${e.cat}" style="width:90px" oninput="FC[${i}].cat=this.value;cF()"></td>
+    <td><input type="number" value="${e.h}" style="width:60px" oninput="FC[${i}].h=+this.value;cF()"></td>
+  </tr>`).join('');
+}
+function fAdd() { FE.push({d:'2026-03-22',h:5,b:true,cr:50,cat:'Design'}); fRender(); cF(); }
+function fAddEst() { FC.push({cat:'New',h:0}); fRender(); cF(); }
+
+function cF() {
+  const price = +$('#f-price').value, cur = $('#f-cur').value;
+
+  const totalH = FE.reduce((s,e)=>s+e.h, 0);
+  const totalCost = FE.reduce((s,e)=>s + e.h * e.cr, 0);
+  const missH = FE.filter(e=>!e.cr).reduce((s,e)=>s+e.h, 0);
+  const profit = price - totalCost;
+  const effRate = totalH > 0 ? price / totalH : 0;
+  const totalEstH = FC.reduce((s,e)=>s+e.h, 0);
+  const budgetPct = totalEstH > 0 ? (totalH/totalEstH)*100 : null;
+
+  // Top metrics (without budget - that goes in the group below)
+  let o = '';
+  o += R('Fixed Fee', '= projekt ár (input)', `<b>${C(price,cur)}</b>`);
+  o += R('Actual', `= ${FE.map(e=>e.h).join(' + ')}`, `<b>${totalH}h</b>`);
+  o += N('Minden entry (billable + non-billable együtt)');
+  o += R('Labor Cost', `= ${FE.map(e=>`${e.h}\u00D7${e.cr}`).join(' + ')}`, `<b>${C(totalCost,cur)}</b>`);
+  o += N('Valós költség az entry snapshotokból, NEM az estimate-ből');
+  o += R('Profit', `= ${C(price,cur)} \u2212 ${C(totalCost,cur)}`, `<b>${C(profit,cur)}</b>`, profit>=0?'green':'red');
+  o += R('Effective Rate', totalH>0 ? `= ${price} / ${totalH}h` : 'nincs idő', totalH>0 ? `<b>${C(effRate,cur)}/h</b>` : '\u2014');
+
+  if (missH > 0) {
+    o += R('Missing Cost Rate', `${missH}h cost rate nélkül`, `<b>${missH}h !</b>`, 'amber');
+  }
+
+  $('#f-out').innerHTML = o;
+
+  // ---- Budget + Category group ----
+  const catAct = {};
+  FE.forEach(e => { if(e.cat) catAct[e.cat] = (catAct[e.cat]||0) + e.h; });
+  const estCats = new Set(FC.map(e=>e.cat));
+
+  let g = '<div class="group-box"><div class="group-title">Budget &amp; Category Breakdown</div>';
+
+  // Overall budget
+  if (budgetPct !== null) {
+    const col = budgetPct>100?'red':budgetPct>80?'amber':'green';
+    g += R('Overall Budget', `= ${totalH}h / ${totalEstH}h \u00D7 100`, `<b>${budgetPct.toFixed(0)}%</b>`, col);
+    g += `<div class="row"><div class="name"></div><div class="calc">${totalH}h used / ${totalEstH}h estimated</div><div class="val"><span class="progress"><span class="progress-fill" style="width:${Math.min(budgetPct,100)}%;background:${budgetPct>100?'#dc2626':budgetPct>80?'#d97706':'#16a34a'}"></span></span></div></div>`;
+  } else {
+    g += R('Overall Budget', 'nincs estimate beállítva', 'N/A', 'amber');
+  }
+
+  g += '<div class="sep"></div>';
+
+  // Per category
+  FC.forEach(e => {
+    const act = catAct[e.cat] || 0;
+    const rem = e.h - act;
+    const pct = e.h > 0 ? (act/e.h)*100 : null;
+    const col = pct!==null && pct>100?'red':'';
+    g += R(e.cat, `actual ${act}h / est ${e.h}h \u2192 remaining ${rem}h`, pct!==null ? `<b>${pct.toFixed(0)}%</b>` : 'N/A', col);
+    if (e.h > 0) {
+      const pcClamped = Math.min(pct||0, 100);
+      g += `<div class="row"><div class="name"></div><div class="calc"></div><div class="val"><span class="progress"><span class="progress-fill" style="width:${pcClamped}%;background:${(pct||0)>100?'#dc2626':(pct||0)>80?'#d97706':'#16a34a'}"></span></span></div></div>`;
+    }
+  });
+
+  // Unestimated
+  Object.keys(catAct).filter(c=>c && !estCats.has(c)).forEach(c => {
+    g += R(c+' (no est!)', `${catAct[c]}h logged, nincs estimate`, `<b>${catAct[c]}h !</b>`, 'amber');
+  });
+
+  g += '</div>';
+  $('#f-budget-group').innerHTML = g;
+
+  // Warnings
+  let w = '';
+  if (missH > 0) w += `<div class="warn">${missH}h cost rate nélkül \u2014 profit nem pontos</div>`;
+  const ue = Object.keys(catAct).filter(c=>c&&!estCats.has(c));
+  if (ue.length) w += `<div class="warn">${ue.join(', ')}: logged idő estimate nélkül \u2014 budget tracking hiányos</div>`;
+  $('#f-warn').innerHTML = w;
+}
+
+// ===== T&M =====
+let TE = [
+  {d:'2026-01-10', h:5,  b:true,  r:100},
+  {d:'2026-01-20', h:10, b:true,  r:100},
+  {d:'2026-01-25', h:2,  b:false, r:0},
+  {d:'2026-02-05', h:8,  b:true,  r:100},
+  {d:'2026-02-15', h:12, b:true,  r:100},
+  {d:'2026-02-20', h:3,  b:false, r:0},
+  {d:'2026-03-03', h:10, b:true,  r:100},
+  {d:'2026-03-10', h:5,  b:true,  r:100},
+  {d:'2026-03-15', h:5,  b:true,  r:0},
+  {d:'2026-03-20', h:2,  b:false, r:0},
+];
+
+function tRender() {
+  $('#t-tb').innerHTML = TE.map((e,i)=>`<tr>
+    <td><input type="date" value="${e.d}" oninput="TE[${i}].d=this.value;cT()"></td>
+    <td><input type="number" value="${e.h}" style="width:50px" oninput="TE[${i}].h=+this.value;cT()"></td>
+    <td><select onchange="TE[${i}].b=this.value==='1';cT()"><option value="1" ${e.b?'selected':''}>Y</option><option value="0" ${!e.b?'selected':''}>N</option></select></td>
+    <td><input type="number" value="${e.r}" style="width:60px" oninput="TE[${i}].r=+this.value;cT()"></td>
+    <td><button class="btn bdel" onclick="TE.splice(${i},1);tRender();cT()">x</button></td>
+  </tr>`).join('');
+}
+function tAdd() { TE.push({d:'2026-03-22',h:5,b:true,r:+$('#t-rate').value}); tRender(); cT(); }
+
+function cT() {
+  const cur = $('#t-cur').value, mode = $('#t-mode').value, flatRate = +$('#t-rate').value;
+  const bill = TE.filter(e=>e.b), nonb = TE.filter(e=>!e.b);
+
+  const billH = bill.reduce((s,e)=>s+e.h, 0);
+  const nonbH = nonb.reduce((s,e)=>s+e.h, 0);
+  const thisMonth = bill.filter(e=>e.d.startsWith('2026-03')).reduce((s,e)=>s+e.h, 0);
+  const uninvAmt = bill.reduce((s,e)=>s + e.h * (e.r||0), 0);
+  const missH = bill.filter(e=>!e.r).reduce((s,e)=>s+e.h, 0);
+
+  const months = ['2026-01','2026-02','2026-03'];
+  const m3 = months.map(m => ({ m, h: bill.filter(e=>e.d.startsWith(m)).reduce((s,e)=>s+e.h,0) }));
+
+  let o = '';
+  o += R('Billable Logged', `= ${bill.map(e=>e.h).join(' + ')}`, `<b>${billH}h</b>`);
+  o += N('Csak billable=Y entryk');
+  o += R('This Month', `= billable 2026-03: ${bill.filter(e=>e.d.startsWith('2026-03')).map(e=>e.h).join(' + ')||'0'}`, `<b>${thisMonth}h</b>`);
+  o += R('Non-billable', `= ${nonb.map(e=>e.h).join(' + ')||'0'}`, `<b>${nonbH}h</b>`);
+  o += N('Margin leakage \u2014 nem számlázódik');
+  o += R('Uninvoiced', `= ${bill.map(e=>`${e.h}\u00D7${e.r}`).join(' + ')}`, `<b>${C(uninvAmt,cur)}</b>`);
+  o += N('SUM(óra \u00D7 appliedRate) minden billable entry-re');
+  o += R('Rate Info', `mode = ${mode}`, mode==='flat' ? `${C(flatRate,cur)}/h flat` : 'per-category');
+
+  if (missH > 0) {
+    o += R('Missing Bill Rate', `${missH}h billable, rate = 0`, `<b>${missH}h !</b>`, 'amber');
+    o += N('Az uninvoiced összeg emiatt nem teljes');
+  }
+
+  o += '<div class="sep"></div>';
+  const maxH = Math.max(...m3.map(x=>x.h),1);
+  m3.forEach(x => {
+    const lbl = new Date(x.m+'-01').toLocaleString('en',{month:'short'});
+    const bar = `<span style="display:inline-block;height:10px;width:${Math.round((x.h/maxH)*100)}px;background:#2563eb;border-radius:2px;vertical-align:middle;margin-right:6px"></span>`;
+    o += R(`3-Month: ${lbl}`, `billable ${x.m}`, `${bar} <b>${x.h}h</b>`);
+  });
+
+  o += '<div class="sep"></div>';
+  o += N('<b>Szabály:</b> A top metrikák NEM változnak a billable toggle-tól. A toggle csak a monthly breakdown-t szűri.');
+
+  $('#t-out').innerHTML = o;
+}
+
+// ===== RETAINER =====
+let RE = [
+  {m:'2026-01', bh:30, nh:5},
+  {m:'2026-02', bh:50, nh:3},
+  {m:'2026-03', bh:35, nh:8},
+  {m:'2026-04', bh:20, nh:2},
+  {m:'2026-05', bh:45, nh:4},
+  {m:'2026-06', bh:10, nh:1},
+];
+
+function rRender() {
+  $('#r-tb').innerHTML = RE.map((e,i)=>`<tr>
+    <td><input type="month" value="${e.m}" oninput="RE[${i}].m=this.value;cR()"></td>
+    <td><input type="number" value="${e.bh}" style="width:55px" oninput="RE[${i}].bh=+this.value;cR()"></td>
+    <td><input type="number" value="${e.nh}" style="width:55px" oninput="RE[${i}].nh=+this.value;cR()"></td>
+    <td><button class="btn bdel" onclick="RE.splice(${i},1);rRender();cR()">x</button></td>
+  </tr>`).join('');
+}
+function rAdd() {
+  const last = RE[RE.length-1];
+  const d = new Date(last ? last.m+'-01' : '2026-01-01');
+  d.setMonth(d.getMonth()+1);
+  RE.push({m:d.toISOString().slice(0,7), bh:0, nh:0});
+  rRender(); cR();
+}
+
+function cR() {
+  const inc = +$('#r-inc').value, oRate = +$('#r-rate').value;
+  const cycLen = Math.max(1, Math.min(12, +$('#r-cyc').value || 1));
+  const roll = $('#r-roll').value==='1', cur = $('#r-cur').value;
+  const startMonth = $('#r-start').value; // "2026-01"
+  const sorted = [...RE].sort((a,b)=>a.m.localeCompare(b.m));
+
+  // Compute month index relative to start
+  const startY = +startMonth.slice(0,4), startM = +startMonth.slice(5,7) - 1;
+  function monthIdx(m) {
+    const y = +m.slice(0,4), mo = +m.slice(5,7) - 1;
+    return (y - startY) * 12 + (mo - startM);
+  }
+  function cycleOf(m) { return Math.floor(monthIdx(m) / cycLen); }
+  function posInCycle(m) { return monthIdx(m) % cycLen; }
+
+  // "Today" from input — move this forward to close months/cycles
+  const todayStr = $('#r-today').value; // e.g. "2026-04-15"
+  function isMonthClosed(m) {
+    // month is closed if its last day < today
+    const y = +m.slice(0,4), mo = +m.slice(5,7);
+    const lastDay = new Date(y, mo, 0).getDate();
+    const endStr = `${m}-${String(lastDay).padStart(2,'0')}`;
+    return endStr < todayStr;
+  }
+
+  // Group months into cycles
+  const cycleMap = new Map(); // cycleIndex -> [{month data}]
+  sorted.forEach(e => {
+    const ci = cycleOf(e.m);
+    if (!cycleMap.has(ci)) cycleMap.set(ci, []);
+    cycleMap.get(ci).push(e);
+  });
+
+  // Build chain with proper balance logic
+  const chain = [];
+  let prevEnd = 0;
+
+  sorted.forEach((e, i) => {
+    const ci = cycleOf(e.m);
+    const pos = posInCycle(e.m);
+    const closed = isMonthClosed(e.m);
+
+    let startBal;
+    if (roll) {
+      // Within cycle: carry from previous month
+      // At cycle start (pos=0): start fresh at 0
+      startBal = pos === 0 ? 0 : prevEnd;
+    } else {
+      startBal = 0;
+    }
+
+    const avail = startBal + inc;
+    const end = avail - e.bh;
+    prevEnd = end;
+
+    // Is this the last month of its cycle?
+    const isLastInCycle = pos === cycLen - 1;
+    // Is the whole cycle closed?
+    const lastMonthOfCycle = new Date(startY, startM + ci * cycLen + cycLen - 1, 1);
+    const lastMonthStr = `${lastMonthOfCycle.getFullYear()}-${String(lastMonthOfCycle.getMonth()+1).padStart(2,'0')}`;
+    const isCycClosed = isMonthClosed(lastMonthStr);
+
+    // Badge status (matches convex/projects.ts logic exactly)
+    let status;
+    if (end < 0) {
+      if (roll) {
+        status = (isLastInCycle && isCycClosed) ? 'due' : 'deficit';
+      } else {
+        status = closed ? 'due' : 'deficit';
+      }
+    } else if (end > 0) {
+      if (roll) {
+        status = (isLastInCycle && isCycClosed) ? 'unused' : 'rollover';
+      } else {
+        status = closed ? 'unused' : 'on_track';
+      }
+    } else {
+      status = 'on_track';
+    }
+
+    chain.push({ ...e, startBal, avail, end, closed, pos, ci, isLastInCycle, isCycClosed, status });
+  });
+
+  // Overage (matches convex/projects.ts logic exactly)
+  // Group by cycle for totals
+  const cycleTotals = new Map();
+  chain.forEach(c => {
+    if (!cycleTotals.has(c.ci)) cycleTotals.set(c.ci, { budget: 0, worked: 0, months: [], isClosed: c.isCycClosed });
+    const ct = cycleTotals.get(c.ci);
+    ct.budget += inc;
+    ct.worked += c.bh;
+    ct.months.push(c);
+    ct.isClosed = c.isCycClosed; // last one wins
+  });
+
+  let totalOverageH = 0;
+  if (roll) {
+    // Rollover ON: overage only at cycle end when cycle is closed
+    cycleTotals.forEach(ct => {
+      if (ct.isClosed) {
+        const balance = ct.budget - ct.worked;
+        if (balance < 0) totalOverageH += Math.abs(balance);
+      }
+    });
+  } else {
+    // Rollover OFF: per closed month
+    chain.forEach(c => {
+      if (c.closed && c.end < 0) totalOverageH += Math.abs(c.end);
+    });
+  }
+  const totalOverageDue = totalOverageH * oRate;
+
+  const totBill = sorted.reduce((s,e)=>s+e.bh, 0);
+  const totNon = sorted.reduce((s,e)=>s+e.nh, 0);
+
+  // Top metrics
+  let o = '';
+  o += R('Billable Used', `= ${sorted.map(e=>e.bh).join(' + ')}`, `<b>${totBill}h</b>`);
+  o += N('Csak billable órák fogyasztják a retainert');
+  o += R('Non-billable', `= ${sorted.map(e=>e.nh).join(' + ')}`, `<b>${totNon}h</b>`);
+  o += N('Külön metrika, NEM fogyasztja a keretet');
+  o += R('Over Budget', roll
+    ? `rollover ON \u2192 csak lezárt cycle végén`
+    : `rollover OFF \u2192 minden lezárt hónapban`,
+    `<b>${totalOverageH}h</b>`, totalOverageH>0?'red':'');
+  o += R('Overage Due', `= ${totalOverageH}h \u00D7 ${C(oRate,cur)}/h`, `<b>${C(totalOverageDue,cur)}</b>`, totalOverageDue>0?'red':'');
+  $('#r-out').innerHTML = o;
+
+  // Chain table
+  let t = `<table class="chain"><thead><tr><th>Month</th><th>Cycle</th><th>Pos</th><th>Keret</th><th>Start</th><th>Available</th><th>Worked</th><th>End</th><th>Status</th><th>Számítás</th></tr></thead><tbody>`;
+
+  let prevCi = -1;
+  chain.forEach(c => {
+    if (c.ci !== prevCi && prevCi !== -1) {
+      // Cycle separator
+      const pct = cycleTotals.get(prevCi);
+      const cb = pct.budget, cw = pct.worked, cbal = cb - cw;
+      t += `<tr class="cycle-sep"><td colspan="10">Cycle ${prevCi+1} total: keret ${cb}h, worked ${cw}h, balance ${cbal}h${pct.isClosed && cbal<0 ? ` \u2192 OVERAGE ${Math.abs(cbal)}h` : pct.isClosed ? ' \u2192 closed' : ' \u2192 open'}</td></tr>`;
+    }
+    prevCi = c.ci;
+
+    const neg = c.end<0;
+    const statusBadge = `<span class="badge badge-${c.status}">${c.status}</span>`;
+    t += `<tr>
+      <td>${c.m}${c.closed?'':' \u{1F7E2}'}</td>
+      <td style="text-align:center">#${c.ci+1}</td>
+      <td style="text-align:center">${c.pos+1}/${cycLen}</td>
+      <td>${inc}h</td>
+      <td>${c.startBal}h</td>
+      <td>${c.avail}h</td>
+      <td>${c.bh}h</td>
+      <td style="font-weight:700;${neg?'color:#dc2626':''}">${c.end}h</td>
+      <td style="text-align:left">${statusBadge}</td>
+      <td style="font-size:0.72rem;color:#888;text-align:left">
+        ${c.startBal>0?c.startBal+'+':''}${inc}=${c.avail}, ${c.avail}\u2212${c.bh}=${c.end}
+      </td>
+    </tr>`;
+  });
+  // Final cycle summary
+  if (prevCi >= 0) {
+    const pct = cycleTotals.get(prevCi);
+    const cb = pct.budget, cw = pct.worked, cbal = cb - cw;
+    t += `<tr class="cycle-sep"><td colspan="10">Cycle ${prevCi+1} total: keret ${cb}h, worked ${cw}h, balance ${cbal}h${pct.isClosed && cbal<0 ? ` \u2192 OVERAGE ${Math.abs(cbal)}h` : pct.isClosed ? ' \u2192 closed' : ' \u2192 open'}</td></tr>`;
+  }
+  t += '</tbody></table>';
+  $('#r-chain').innerHTML = t;
+
+  // Overage explanation
+  let ov = '';
+  if (roll) {
+    ov += R('Mode', 'Rollover ON', `cycle-end settlement`);
+    ov += N('Hónapok között gördül az egyenleg. Elszámolás csak a CYCLE VÉGÉN.');
+    cycleTotals.forEach((ct, ci) => {
+      const bal = ct.budget - ct.worked;
+      const over = ct.isClosed && bal < 0 ? Math.abs(bal) : 0;
+      ov += R(`Cycle #${ci+1}`, `budget ${ct.budget}h \u2212 worked ${ct.worked}h = ${bal}h${ct.isClosed?'':' (open)'}`, over>0 ? `<b>${over}h overage</b>` : ct.isClosed ? (bal>=0?'OK':'open') : 'n/a', over>0?'red':'green');
+      if (over > 0) {
+        ov += N(`${over}h \u00D7 ${C(oRate,cur)}/h = ${C(over*oRate,cur)}`);
+      }
+    });
+  } else {
+    ov += R('Mode', 'Rollover OFF', `per-month settlement`);
+    ov += N('Minden hónap nulláról indul. Lezárt hónap túllépése = overage.');
+    chain.forEach(c => {
+      if (c.closed && c.end < 0) {
+        const over = Math.abs(c.end);
+        ov += R(c.m, `end = ${c.end}h \u2192 overage ${over}h`, `<b>${C(over*oRate,cur)}</b>`, 'red');
+      }
+    });
+    if (!chain.some(c=>c.closed && c.end<0)) {
+      ov += R('Nincs overage', 'egyetlen lezárt hónapban sincs túllépés', 'OK', 'green');
+    }
+  }
+  ov += '<div class="sep"></div>';
+  ov += R('Total Overage', `${totalOverageH}h \u00D7 ${C(oRate,cur)}/h`, `<b>${C(totalOverageDue,cur)}</b>`, totalOverageDue>0?'red':'');
+  $('#r-overage').innerHTML = ov;
+}
+
+// Init
+fRender(); cF();
+tRender(); cT();
+rRender(); cR();
+</script>
+</body>
+</html>

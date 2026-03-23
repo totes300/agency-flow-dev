@@ -103,7 +103,6 @@ export const update = mutation({
 
     // If type changes, cascade to all tasks with this statusId
     if (args.type !== undefined && args.type !== status.type) {
-      const oldType = status.type as StatusType;
       const newType = args.type as StatusType;
 
       const affectedTasks = await ctx.db
@@ -113,27 +112,9 @@ export const update = mutation({
         )
         .collect();
 
-      let nonArchivedCount = 0;
       const now = Date.now();
       for (const task of affectedTasks) {
         await ctx.db.patch(task._id, { statusType: newType, updatedAt: now });
-        if (!task.archivedAt) nonArchivedCount++;
-      }
-
-      // Adjust taskCounts: move non-archived tasks from old type to new type
-      if (nonArchivedCount > 0) {
-        const countsDoc = await ctx.db
-          .query("taskCounts")
-          .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
-          .unique();
-        if (countsDoc) {
-          const oldCount = (countsDoc as unknown as Record<string, number>)[oldType] ?? 0;
-          const newCount = (countsDoc as unknown as Record<string, number>)[newType] ?? 0;
-          await ctx.db.patch(countsDoc._id, {
-            [oldType]: Math.max(0, oldCount - nonArchivedCount),
-            [newType]: newCount + nonArchivedCount,
-          });
-        }
       }
 
       patch.type = args.type;

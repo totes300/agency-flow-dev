@@ -4,10 +4,12 @@ import { useState, useRef, useEffect } from "react"
 import { useQuery, useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { Button } from "@/components/ui/button"
-import { Label } from "@/components/ui/label"
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
+import { Input } from "@/components/ui/input"
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
@@ -20,23 +22,23 @@ import { COMMON_TIMEZONES, ROUNDING_LABELS } from "@/lib/display-constants"
 
 function SettingsGeneralSkeleton() {
   return (
-    <div className="space-y-8">
-      <div className="space-y-1">
+    <div className="flex flex-col gap-8">
+      <div className="flex flex-col gap-1">
         <Skeleton className="h-5 w-20" />
         <Skeleton className="h-4 w-64" />
       </div>
-      <div className="space-y-6">
-        <div className="space-y-2">
+      <div className="flex flex-col gap-6">
+        <div className="flex flex-col gap-2">
           <Skeleton className="h-4 w-16" />
           <Skeleton className="h-9 w-full max-w-xs" />
         </div>
-        <div className="space-y-2">
+        <div className="flex flex-col gap-2">
           <Skeleton className="h-4 w-28" />
           <Skeleton className="h-9 w-24" />
         </div>
-        <div className="space-y-2">
+        <div className="flex flex-col gap-2">
           <Skeleton className="h-4 w-24" />
-          <div className="space-y-2">
+          <div className="flex flex-col gap-2">
             <Skeleton className="h-5 w-40" />
             <Skeleton className="h-5 w-32" />
             <Skeleton className="h-5 w-48" />
@@ -52,16 +54,19 @@ function SettingsGeneralForm({
   initialCurrency,
   initialTimezone,
   initialRounding,
+  initialDefaultTmFlatRate,
 }: {
   initialCurrency: Currency
   initialTimezone: string
   initialRounding: RoundingMinutes
+  initialDefaultTmFlatRate: string
 }) {
   const updateSettings = useMutation(api.orgSettings.update)
 
   const [currency, setCurrency] = useState<Currency>(initialCurrency)
   const [timezone, setTimezone] = useState(initialTimezone)
   const [rounding, setRounding] = useState<RoundingMinutes>(initialRounding)
+  const [defaultTmFlatRate, setDefaultTmFlatRate] = useState(initialDefaultTmFlatRate)
   const [isSaving, setIsSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState("")
@@ -78,17 +83,20 @@ function SettingsGeneralForm({
   const hasChanges =
     currency !== initialCurrency ||
     timezone !== initialTimezone ||
-    rounding !== initialRounding
+    rounding !== initialRounding ||
+    defaultTmFlatRate !== initialDefaultTmFlatRate
 
   async function handleSave() {
     setIsSaving(true)
     setSaved(false)
     setError("")
     try {
+      const parsedRate = parseFloat(defaultTmFlatRate)
       await updateSettings({
         defaultCurrency: currency,
         timezone,
         roundingMinutes: rounding,
+        ...(defaultTmFlatRate ? { defaultTmFlatRate: parsedRate } : {}),
       })
       setSaved(true)
       savedTimerRef.current = setTimeout(() => setSaved(false), 2000)
@@ -100,7 +108,7 @@ function SettingsGeneralForm({
   }
 
   return (
-    <div className="space-y-8">
+    <div className="flex flex-col gap-8">
       <div>
         <h2 className="text-sm font-semibold">General</h2>
         <p className="text-[13px] text-muted-foreground">
@@ -109,57 +117,78 @@ function SettingsGeneralForm({
         </p>
       </div>
 
-      <div className="space-y-6">
-        <div className="grid gap-2 sm:grid-cols-[200px_1fr] sm:items-center">
-          <Label htmlFor="settings-timezone">Timezone</Label>
+      <FieldGroup className="gap-6">
+        <Field orientation="horizontal">
+          <FieldLabel htmlFor="settings-timezone">Timezone</FieldLabel>
           <Select value={timezone} onValueChange={setTimezone}>
             <SelectTrigger id="settings-timezone" className="max-w-xs">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {COMMON_TIMEZONES.map((tz) => (
-                <SelectItem key={tz} value={tz}>
-                  {tz.replace(/_/g, " ")}
-                </SelectItem>
-              ))}
+              <SelectGroup>
+                {COMMON_TIMEZONES.map((tz) => (
+                  <SelectItem key={tz} value={tz}>
+                    {tz.replace(/_/g, " ")}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
             </SelectContent>
           </Select>
-        </div>
+        </Field>
 
-        <div className="grid gap-2 sm:grid-cols-[200px_1fr] sm:items-center">
-          <Label htmlFor="settings-currency">Default currency</Label>
+        <Field orientation="horizontal">
+          <FieldLabel htmlFor="settings-currency">Default currency</FieldLabel>
           <Select value={currency} onValueChange={(v) => setCurrency(v as Currency)}>
             <SelectTrigger id="settings-currency" className="w-24">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {CURRENCIES.map((c) => (
-                <SelectItem key={c} value={c}>
-                  {c}
-                </SelectItem>
-              ))}
+              <SelectGroup>
+                {CURRENCIES.map((c) => (
+                  <SelectItem key={c} value={c}>
+                    {c}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
             </SelectContent>
           </Select>
-        </div>
+        </Field>
 
-        <div className="grid gap-2 sm:grid-cols-[200px_1fr] sm:items-start">
-          <Label className="pt-0.5">Time rounding</Label>
+        <Field orientation="horizontal">
+          <FieldLabel className="pt-0.5">Time rounding</FieldLabel>
           <RadioGroup
             value={String(rounding)}
             onValueChange={(v) => setRounding(Number(v) as RoundingMinutes)}
-            className="space-y-1"
+            className="flex flex-col gap-1"
           >
             {ROUNDING_OPTIONS.map((opt) => (
               <div key={opt} className="flex items-center gap-2">
                 <RadioGroupItem value={String(opt)} id={`settings-rounding-${opt}`} />
-                <Label htmlFor={`settings-rounding-${opt}`} className="font-normal">
+                <FieldLabel htmlFor={`settings-rounding-${opt}`} className="font-normal">
                   {ROUNDING_LABELS[opt]}
-                </Label>
+                </FieldLabel>
               </div>
             ))}
           </RadioGroup>
-        </div>
-      </div>
+        </Field>
+
+        <Field orientation="horizontal">
+          <FieldLabel htmlFor="settings-tm-rate">Default T&M flat rate</FieldLabel>
+          <div className="flex items-center gap-2">
+            <Input
+              id="settings-tm-rate"
+              type="number"
+              min="0"
+              step="0.01"
+              value={defaultTmFlatRate}
+              onChange={(e) => setDefaultTmFlatRate(e.target.value)}
+              placeholder="0"
+              className="w-24"
+            />
+            <span className="text-sm text-muted-foreground">{currency}/h</span>
+          </div>
+        </Field>
+      </FieldGroup>
 
       {error && (
         <p className="text-sm text-destructive">{error}</p>
@@ -188,6 +217,7 @@ export function SettingsGeneral() {
       initialCurrency={settings.defaultCurrency as Currency}
       initialTimezone={settings.timezone}
       initialRounding={settings.roundingMinutes as RoundingMinutes}
+      initialDefaultTmFlatRate={settings.defaultTmFlatRate?.toString() ?? ""}
     />
   )
 }

@@ -26,8 +26,10 @@ import { MetricCard } from "@/components/metric-card"
 import { BudgetProgress } from "@/components/budget-progress"
 import { RetainerBalanceBadge } from "@/components/retainer-balance-badge"
 import { CycleDots } from "@/components/cycle-dots"
+import { MonthTaskTable } from "./month-task-table"
 import { cn } from "@/lib/utils"
-import { formatMinutes, formatCurrencyPrecise } from "@/lib/format"
+import { formatMinutes, formatCurrencyPrecise, pluralize } from "@/lib/format"
+import { useTaskDetailNav } from "@/lib/hooks/use-task-detail-nav"
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -37,6 +39,7 @@ import {
 
 export function RetainerOverview({ projectId }: { projectId: Id<"projects"> }) {
   const [cycleOffset, setCycleOffset] = useState(0)
+  const handleTaskClick = useTaskDetailNav()
   const data = useQuery(api.projects.getRetainerData, { id: projectId, cycleOffset })
 
   if (data === undefined) {
@@ -67,6 +70,7 @@ export function RetainerOverview({ projectId }: { projectId: Id<"projects"> }) {
     overageDue,
     overageRate,
     rolloverEnabled,
+    totalNonBillableMinutes,
     currency,
   } = data
 
@@ -82,7 +86,7 @@ export function RetainerOverview({ projectId }: { projectId: Id<"projects"> }) {
     : undefined
 
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col gap-6">
       {/* Cycle Overview Card */}
       <Card>
         <CardHeader>
@@ -100,7 +104,7 @@ export function RetainerOverview({ projectId }: { projectId: Id<"projects"> }) {
                 disabled={!hasPreviousCycle}
                 aria-label="Previous cycle"
               >
-                <ChevronLeftIcon className="size-4" />
+                <ChevronLeftIcon />
               </Button>
               <span className="min-w-[60px] text-center text-xs text-muted-foreground tabular-nums">
                 Cycle {cycleNumber}
@@ -112,15 +116,15 @@ export function RetainerOverview({ projectId }: { projectId: Id<"projects"> }) {
                 disabled={!hasNextCycle}
                 aria-label="Next cycle"
               >
-                <ChevronRightIcon className="size-4" />
+                <ChevronRightIcon />
               </Button>
             </div>
           </CardAction>
         </CardHeader>
 
-        <CardContent className="space-y-4">
+        <CardContent className="flex flex-col gap-4">
           {/* Progress Bar */}
-          <div className="space-y-2">
+          <div className="flex flex-col gap-2">
             <BudgetProgress used={cycleWorked} budget={cycleBudget} />
             <div className="flex justify-between text-xs text-muted-foreground tabular-nums">
               <span>{formatMinutes(cycleBudget)} budget</span>
@@ -131,11 +135,16 @@ export function RetainerOverview({ projectId }: { projectId: Id<"projects"> }) {
           </div>
 
           {/* Metric Cards */}
-          <div className="grid gap-4 sm:grid-cols-3">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <MetricCard
               label="Hours Used"
               value={formatMinutes(cycleWorked)}
               detail={`of ${formatMinutes(cycleBudget)}`}
+            />
+            <MetricCard
+              label="Non-billable"
+              value={totalNonBillableMinutes > 0 ? formatMinutes(totalNonBillableMinutes) : "—"}
+              detail="Not counted toward retainer"
             />
             <MetricCard
               label="Over Budget"
@@ -156,14 +165,14 @@ export function RetainerOverview({ projectId }: { projectId: Id<"projects"> }) {
         </CardContent>
 
         <CardFooter className="text-xs text-muted-foreground tabular-nums">
-          {cycleLength} {cycleLength === 1 ? "month" : "months"} &middot; {formatMinutes(cycleBudget)} budget &middot; {formatMinutes(cycleWorked)} used
+          {cycleLength} {pluralize(cycleLength, "month", "months")} &middot; {formatMinutes(cycleBudget)} budget &middot; {formatMinutes(cycleWorked)} used
         </CardFooter>
       </Card>
 
       {/* Overage Invoice Banner */}
       {isCycleClosed && overageDue > 0 && (
         <Alert variant="destructive">
-          <AlertTriangleIcon className="size-4" />
+          <AlertTriangleIcon />
           <AlertTitle>Overage invoice — {formatCurrencyPrecise(overageDue, currency)} due</AlertTitle>
           <AlertDescription className="flex items-center justify-between">
             <span>
@@ -208,7 +217,7 @@ export function RetainerOverview({ projectId }: { projectId: Id<"projects"> }) {
                     </div>
                   </AccordionTrigger>
                   <AccordionContent>
-                    <div className="space-y-3 pl-1">
+                    <div className="flex flex-col gap-3 pl-1">
                       {/* Balance details */}
                       <div className="grid grid-cols-3 gap-4 rounded-md bg-muted/50 p-3 text-xs">
                         <div>
@@ -225,18 +234,18 @@ export function RetainerOverview({ projectId }: { projectId: Id<"projects"> }) {
                         </div>
                       </div>
 
-                      {/* Time entries placeholder */}
+                      {/* Time entries */}
                       {month.entryCount === 0 ? (
                         <p className="py-3 text-center text-sm text-muted-foreground">
                           No time entries for this month yet.
                         </p>
                       ) : (
-                        <div className="text-sm">
-                          {/* Phase 7: render grouped entries here */}
-                          <p className="py-2 text-muted-foreground">
-                            {month.entryCount} entries &middot; {month.taskCount} tasks &middot; Total: {formatMinutes(month.workedMinutes)}
-                          </p>
-                        </div>
+                        <MonthTaskTable
+                          billableCategoryGroups={month.billableCategoryGroups}
+                          nonBillableCategoryGroups={month.nonBillableCategoryGroups}
+                          onTaskClick={handleTaskClick}
+                          ariaLabel={`Time entries for ${month.label}`}
+                        />
                       )}
                     </div>
                   </AccordionContent>
@@ -254,7 +263,7 @@ export function RetainerOverview({ projectId }: { projectId: Id<"projects"> }) {
           {overageMinutes > 0 ? (
             <Card size="sm" className="border-destructive/20 bg-destructive/5">
               <CardContent className="flex items-center gap-2">
-                <ZapIcon className="size-4 text-destructive" />
+                <ZapIcon className="text-destructive" />
                 <div className="flex-1">
                   <p className="text-sm font-medium">Extra hours invoice</p>
                   <p className="text-xs text-muted-foreground tabular-nums">
@@ -290,12 +299,12 @@ export function RetainerOverview({ projectId }: { projectId: Id<"projects"> }) {
 
 function RetainerOverviewSkeleton() {
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col gap-6">
       {/* Cycle Overview card */}
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
-            <div className="space-y-1">
+            <div className="flex flex-col gap-1">
               <Skeleton className="h-5 w-32" />
               <Skeleton className="h-4 w-56" />
             </div>
@@ -307,9 +316,9 @@ function RetainerOverviewSkeleton() {
             </div>
           </div>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className="flex flex-col gap-4">
           {/* Progress bar */}
-          <div className="space-y-2">
+          <div className="flex flex-col gap-2">
             <Skeleton className="h-2.5 w-full rounded-full" />
             <div className="flex justify-between">
               <Skeleton className="h-3 w-24" />
@@ -319,7 +328,7 @@ function RetainerOverviewSkeleton() {
           {/* 3 metric cards */}
           <div className="grid gap-4 sm:grid-cols-3">
             {Array.from({ length: 3 }).map((_, i) => (
-              <div key={i} className="space-y-2 rounded-xl p-4 ring-1 ring-foreground/10">
+              <div key={i} className="flex flex-col gap-2 rounded-xl p-4 ring-1 ring-foreground/10">
                 <Skeleton className="h-3 w-16" />
                 <Skeleton className="h-7 w-20" />
                 <Skeleton className="h-3 w-24" />
@@ -337,7 +346,7 @@ function RetainerOverviewSkeleton() {
         <CardHeader>
           <Skeleton className="h-5 w-40" />
         </CardHeader>
-        <CardContent className="space-y-2">
+        <CardContent className="flex flex-col gap-2">
           {/* Accordion rows */}
           {Array.from({ length: 3 }).map((_, i) => (
             <div key={i} className="flex items-center justify-between border-b py-3 last:border-0">

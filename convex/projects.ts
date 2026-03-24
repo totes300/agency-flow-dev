@@ -74,6 +74,8 @@ export const create = mutation({
     billingType: billingTypeValidator,
     currency: currencyValidator,
     code: v.optional(v.string()),
+    // Fixed fields
+    fixedPrice: v.optional(v.number()),
     // T&M fields
     tmRateMode: v.optional(tmRateModeValidator),
     hourlyRate: v.optional(v.number()),
@@ -102,6 +104,13 @@ export const create = mutation({
     // Validate currency
     if (!CURRENCIES.includes(args.currency as typeof CURRENCIES[number])) {
       throw new Error("Invalid currency");
+    }
+
+    // Fixed validation
+    if (args.billingType === "fixed") {
+      if (args.fixedPrice === undefined || args.fixedPrice <= 0) {
+        throw new Error("Fixed fee is required and must be greater than zero");
+      }
     }
 
     // T&M validation
@@ -168,13 +177,17 @@ export const create = mutation({
     }
 
     const now = Date.now();
-    return await ctx.db.insert("projects", {
+    const projectId = await ctx.db.insert("projects", {
       orgId,
       clientId: args.clientId,
       name,
       code,
       billingType: args.billingType,
       currency: args.currency,
+      // Fixed fields
+      ...(args.billingType === "fixed" ? {
+        fixedPrice: args.fixedPrice,
+      } : {}),
       // T&M fields
       ...(args.billingType === "t_and_m" ? {
         tmRateMode: args.tmRateMode,
@@ -194,6 +207,30 @@ export const create = mutation({
       updatedAt: now,
       createdBy: userId,
     });
+
+    // Seed category estimate rows for Fixed projects from org defaults
+    if (args.billingType === "fixed") {
+      const categories = await ctx.db
+        .query("workCategories")
+        .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+        .collect();
+      const activeCategories = categories.filter((c) => !c.archivedAt);
+      for (const cat of activeCategories) {
+        await ctx.db.insert("projectCategoryEstimates", {
+          orgId,
+          projectId,
+          workCategoryId: cat._id,
+          estimatedMinutes: 0,
+          internalCostRate: cat.defaultCostRate,
+          clientBillingRate: cat.defaultBillRate,
+          createdAt: now,
+          updatedAt: now,
+          createdBy: userId,
+        });
+      }
+    }
+
+    return projectId;
   },
 });
 
@@ -203,6 +240,7 @@ export const update = mutation({
     name: v.optional(v.string()),
     code: v.optional(v.string()),
     currency: v.optional(currencyValidator),
+    fixedPrice: v.optional(v.number()),
     defaultAssignees: v.optional(v.array(v.object({
       workCategoryId: v.id("workCategories"),
       userId: v.id("users"),
@@ -241,6 +279,17 @@ export const update = mutation({
 
     if (args.defaultAssignees !== undefined) {
       updates.defaultAssignees = args.defaultAssignees;
+    }
+
+    // Fixed price update
+    if (args.fixedPrice !== undefined) {
+      if (project.billingType !== "fixed") {
+        throw new Error("Fixed fee can only be set on fixed projects");
+      }
+      if (args.fixedPrice <= 0) {
+        throw new Error("Fixed fee must be greater than zero");
+      }
+      updates.fixedPrice = args.fixedPrice;
     }
 
     // T&M rate updates
@@ -466,31 +515,96 @@ export const getRetainerData = query({
     const isCycleClosed = cycleEndStr < todayStr;
     const isCurrentCycle = targetCycleIndex === currentCycleIndex;
 
-    // TODO Phase 7: Query real time entries. For now, return 0 minutes per month.
-    // When time entries exist, group by month using org timezone:
-    // const tasks = await ctx.db.query("tasks").withIndex("by_projectId", q => q.eq("projectId", args.id)).collect()
-    // const taskIds = new Set(tasks.map(t => t._id.toString()))
-    // const entries = ... filter by taskIds, billable, not archived ...
-    // const minutesByMonth = groupByMonth(entries, orgTimezone)
+    // Fetch all tasks for the project (including archived — historical reporting)
+    const tasks = await ctx.db
+      .query("tasks")
+      .withIndex("by_orgId_projectId", (q) =>
+        q.eq("orgId", orgId).eq("projectId", args.id),
+      )
+      .collect();
+
+    // Fetch all time entries for those tasks
+    const allEntries = (
+      await Promise.all(
+        tasks.map(async (task) => {
+          const entries = await ctx.db
+            .query("timeEntries")
+            .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
+            .collect();
+          return entries.map((e) => ({
+            ...e,
+            taskTitle: task.title,
+            workCategoryId: task.workCategoryId,
+          }));
+        }),
+      )
+    ).flat();
+
+    // Split billable and non-billable
+    const billableEntries = allEntries.filter((e) => e.isBillable);
+    const nonBillableEntries = allEntries.filter((e) => !e.isBillable);
+
+    // Group billable entries by month
+    const billableByMonth: Record<string, typeof billableEntries> = {};
+    for (const e of billableEntries) {
+      const monthKey = e.date.slice(0, 7);
+      (billableByMonth[monthKey] ??= []).push(e);
+    }
+
+    // Group non-billable entries by month
+    const nonBillableByMonth: Record<string, typeof nonBillableEntries> = {};
+    for (const e of nonBillableEntries) {
+      const monthKey = e.date.slice(0, 7);
+      (nonBillableByMonth[monthKey] ??= []).push(e);
+    }
+
+    // Fetch work categories for enrichment
+    const categories = await ctx.db
+      .query("workCategories")
+      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+      .collect();
+    const catMap = new Map(categories.map((c) => [c._id.toString(), c]));
 
     // Compute balances (sequential — each month depends on the previous)
+    type CategoryGroupTask = {
+      taskId: string;
+      taskTitle: string;
+      totalMinutes: number;
+      firstDate: string;
+      lastDate: string;
+      entryCount: number;
+    };
+    type CategoryGroup = {
+      workCategoryId: string | null;
+      categoryName: string;
+      categoryColor: string;
+      totalMinutes: number;
+      tasks: CategoryGroupTask[];
+    };
     type MonthData = typeof months[number] & {
       workedMinutes: number;
       startBalance: number;
       available: number;
       endBalance: number;
+      totalNonBillableMinutes: number;
       isMonthClosed: boolean;
       balanceStatus: "due" | "deficit" | "rollover" | "unused" | "on_track";
       cyclePosition: number;
-      entries: Array<{ taskName: string; categoryName: string; minutes: number }>;
+      billableCategoryGroups: CategoryGroup[];
+      nonBillableCategoryGroups: CategoryGroup[];
       entryCount: number;
       taskCount: number;
+      categoryCount: number;
     };
     const monthlyData: MonthData[] = [];
 
     for (let i = 0; i < months.length; i++) {
       const m = months[i];
-      const workedMinutes = 0; // Phase 7: real data
+      const monthKey = `${m.year}-${String(m.month + 1).padStart(2, "0")}`;
+      const monthBillable = billableByMonth[monthKey] ?? [];
+      const monthNonBillable = nonBillableByMonth[monthKey] ?? [];
+      const workedMinutes = monthBillable.reduce((s, e) => s + e.durationMinutes, 0);
+      const totalNonBillableMinutes = monthNonBillable.reduce((s, e) => s + e.durationMinutes, 0);
       const isMonthClosed = m.endDate < todayStr;
 
       let startBalance: number;
@@ -521,18 +635,32 @@ export const getRetainerData = query({
         balanceStatus = "on_track";
       }
 
+      // Build category groups for this month
+      const billableCategoryGroups = buildRetainerCategoryGroups(monthBillable, catMap);
+      const nonBillableCategoryGroups = buildRetainerCategoryGroups(monthNonBillable, catMap);
+
+      // Count unique tasks and categories
+      const allMonthEntries = [...monthBillable, ...monthNonBillable];
+      const uniqueTaskIds = new Set(allMonthEntries.map((e) => e.taskId.toString()));
+      const uniqueCatIds = new Set(
+        allMonthEntries.map((e) => e.workCategoryId?.toString() ?? "uncategorized"),
+      );
+
       monthlyData.push({
         ...m,
         workedMinutes,
         startBalance,
         available,
         endBalance,
+        totalNonBillableMinutes,
         isMonthClosed,
         balanceStatus,
         cyclePosition: i + 1,
-        entries: [], // Phase 7
-        entryCount: 0,
-        taskCount: 0,
+        billableCategoryGroups,
+        nonBillableCategoryGroups,
+        entryCount: allMonthEntries.length,
+        taskCount: uniqueTaskIds.size,
+        categoryCount: uniqueCatIds.size,
       });
     }
 
@@ -559,6 +687,12 @@ export const getRetainerData = query({
     }
     const overageDue = (overageMinutes / 60) * overageRate;
 
+    // totalNonBillableMinutes scoped to current cycle months only
+    const totalNonBillableMinutes = monthlyData.reduce(
+      (s, m) => s + m.totalNonBillableMinutes,
+      0,
+    );
+
     return {
       cycleIndex: targetCycleIndex,
       cycleNumber: targetCycleIndex + 1,
@@ -579,6 +713,7 @@ export const getRetainerData = query({
       overageRate,
       includedMinutesPerMonth,
       rolloverEnabled,
+      totalNonBillableMinutes,
       currency: project.currency,
     };
   },
@@ -621,3 +756,69 @@ export const remove = mutation({
     await ctx.db.delete(args.id);
   },
 });
+
+// ─── Retainer Helpers ─────────────────────────────────────────────────────────
+
+type EntryWithTask = {
+  taskId: { toString(): string };
+  taskTitle: string;
+  workCategoryId?: { toString(): string } | null;
+  durationMinutes: number;
+  date: string;
+};
+
+type CategoryDoc = { name: string; color: string };
+
+/** Build category groups with task breakdown for retainer month view. */
+function buildRetainerCategoryGroups(
+  entries: EntryWithTask[],
+  catMap: Map<string, CategoryDoc>,
+) {
+  // Group by category
+  const byCat: Record<string, { catId: string | null; entries: EntryWithTask[] }> = {};
+  for (const e of entries) {
+    const key = e.workCategoryId?.toString() ?? "uncategorized";
+    if (!byCat[key]) byCat[key] = { catId: e.workCategoryId?.toString() ?? null, entries: [] };
+    byCat[key].entries.push(e);
+  }
+
+  return Object.values(byCat)
+    .map(({ catId, entries: catEntries }) => {
+      const cat = catId ? catMap.get(catId) : null;
+      const categoryName = cat?.name ?? "No category";
+      const categoryColor = cat?.color ?? "gray";
+
+      // Group by task
+      const byTask: Record<string, EntryWithTask[]> = {};
+      for (const e of catEntries) {
+        const tid = e.taskId.toString();
+        (byTask[tid] ??= []).push(e);
+      }
+
+      const tasks = Object.entries(byTask)
+        .map(([taskId, taskEntries]) => {
+          const totalMinutes = taskEntries.reduce((s, e) => s + e.durationMinutes, 0);
+          const dates = taskEntries.map((e) => e.date).sort();
+          return {
+            taskId,
+            taskTitle: taskEntries[0].taskTitle,
+            totalMinutes,
+            firstDate: dates[0],
+            lastDate: dates[dates.length - 1],
+            entryCount: taskEntries.length,
+          };
+        })
+        .sort((a, b) => b.lastDate.localeCompare(a.lastDate));
+
+      const totalMinutes = catEntries.reduce((s, e) => s + e.durationMinutes, 0);
+
+      return {
+        workCategoryId: catId,
+        categoryName,
+        categoryColor,
+        totalMinutes,
+        tasks,
+      };
+    })
+    .sort((a, b) => a.categoryName.localeCompare(b.categoryName));
+}

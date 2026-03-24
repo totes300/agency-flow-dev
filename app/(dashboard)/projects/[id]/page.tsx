@@ -1,8 +1,9 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import { useParams, useSearchParams, useRouter } from "next/navigation"
 import { useQuery, useMutation } from "convex/react"
+import { useConvexAuth } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { Button } from "@/components/ui/button"
@@ -29,8 +30,11 @@ const SettingsRates = dynamic(() => import("@/components/projects/settings-rates
 const SettingsRetainer = dynamic(() => import("@/components/projects/settings-retainer").then(m => ({ default: m.SettingsRetainer })))
 import { ProjectDetailSkeleton } from "@/components/projects/project-detail-skeleton"
 import { DefaultAssigneesPlaceholder } from "@/components/projects/default-assignees-placeholder"
-import { TimeLogPlaceholder } from "@/components/projects/time-log-placeholder"
+import { TaskDetailModal } from "@/components/tasks/task-detail-modal"
+import { TaskReferenceDataProvider } from "@/components/tasks/task-reference-data"
 import { toast } from "sonner"
+import { formatShortDate } from "@/lib/format"
+import { useIsAdmin } from "@/lib/hooks/use-is-admin"
 import {
   ArrowLeftIcon,
   MoreHorizontalIcon,
@@ -40,19 +44,69 @@ import {
 } from "lucide-react"
 
 export default function ProjectDetailPage() {
+  const { isAuthenticated } = useConvexAuth()
+  const isAdmin = useIsAdmin()
   const params = useParams()
   const searchParams = useSearchParams()
   const router = useRouter()
   const projectId = params.id as Id<"projects">
   const project = useQuery(api.projects.get, { id: projectId })
+  const overview = useQuery(api.timeEntries.projectOverview, { projectId })
+  const monthlyData = useQuery(api.timeEntries.projectMonthlyBreakdown, { projectId })
+
+  const statuses = useQuery(api.statuses.list, isAuthenticated ? {} : "skip")
+  const categories = useQuery(api.workCategories.list, isAuthenticated ? {} : "skip")
+  const projects = useQuery(api.projects.list, isAuthenticated ? {} : "skip")
+  const orgMembersData = useQuery(
+    api.orgMembers.listOrgMembers,
+    isAuthenticated ? {} : "skip",
+  )
 
   const archiveProject = useMutation(api.projects.archive)
   const restoreProject = useMutation(api.projects.restore)
   const removeProject = useMutation(api.projects.remove)
 
   const [deleteOpen, setDeleteOpen] = useState(false)
-  const defaultTab = searchParams.get("tab") === "settings" ? "settings" : "overview"
+  const [scrollTarget, setScrollTarget] = useState<string | null>(null)
+  const tabParam = searchParams.get("tab")
+  const defaultTab = tabParam === "settings" ? "settings" : tabParam === "invoices" ? "invoices" : "overview"
   const [tab, setTab] = useState(defaultTab)
+
+  const referenceData = useMemo(
+    () => ({
+      statuses,
+      categories,
+      projects,
+      orgMembers: orgMembersData,
+    }),
+    [statuses, categories, projects, orgMembersData],
+  )
+
+  const projectTaskIds = useMemo(() => {
+    if (!monthlyData) return []
+    return Array.from(
+      new Set(
+        monthlyData.flatMap((month) => [
+          ...month.billableCategoryGroups.flatMap((group) =>
+            group.tasks.map((task) => task.taskId),
+          ),
+          ...month.nonBillableCategoryGroups.flatMap((group) =>
+            group.tasks.map((task) => task.taskId),
+          ),
+        ]),
+      ),
+    )
+  }, [monthlyData])
+
+  // Scroll to target element after tab switch
+  useEffect(() => {
+    if (!scrollTarget || tab !== "settings") return
+    const id = requestAnimationFrame(() => {
+      document.getElementById(scrollTarget)?.scrollIntoView({ behavior: "smooth", block: "start" })
+      setScrollTarget(null)
+    })
+    return () => cancelAnimationFrame(id)
+  }, [scrollTarget, tab])
 
   useEffect(() => {
     if (project === null) {
@@ -91,7 +145,8 @@ export default function ProjectDetailPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <TaskReferenceDataProvider value={referenceData}>
+    <div className="mx-auto w-full max-w-5xl flex flex-col gap-6">
       {/* Header */}
       <div>
         <Button
@@ -100,7 +155,7 @@ export default function ProjectDetailPage() {
           className="mb-2 -ml-2 text-muted-foreground"
           onClick={() => router.push("/projects")}
         >
-          <ArrowLeftIcon className="size-3.5" />
+          <ArrowLeftIcon data-icon="inline-start" />
           Projects
         </Button>
 
@@ -135,24 +190,26 @@ export default function ProjectDetailPage() {
           </div>
 
           <div className="flex items-center gap-2">
-            <span className="text-xs text-muted-foreground">Last logged: &mdash;</span>
+            <span className="text-xs text-muted-foreground">
+              Last logged: {overview?.lastLoggedDate ? formatShortDate(overview.lastLoggedDate) : "—"}
+            </span>
             <Button variant="outline" size="sm" onClick={() => setTab("settings")}>
               Edit
             </Button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="icon-sm">
-                  <MoreHorizontalIcon className="size-4" />
+                  <MoreHorizontalIcon />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
                 {project.archivedAt ? (
                   <DropdownMenuItem onClick={handleRestore}>
-                    <ArchiveRestoreIcon className="size-4" /> Restore
+                    <ArchiveRestoreIcon /> Restore
                   </DropdownMenuItem>
                 ) : (
                   <DropdownMenuItem onClick={handleArchive}>
-                    <ArchiveIcon className="size-4" /> Archive
+                    <ArchiveIcon /> Archive
                   </DropdownMenuItem>
                 )}
                 <DropdownMenuSeparator />
@@ -160,7 +217,7 @@ export default function ProjectDetailPage() {
                   className="text-destructive focus:text-destructive"
                   onClick={() => setDeleteOpen(true)}
                 >
-                  <Trash2Icon className="size-4" /> Delete
+                  <Trash2Icon /> Delete
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -172,27 +229,42 @@ export default function ProjectDetailPage() {
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="invoices">Invoices</TabsTrigger>
           <TabsTrigger value="settings">Settings</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="mt-6">
           {project.billingType === "fixed" && (
-            <FixedOverview projectId={projectId} currency={project.currency} />
+            <FixedOverview
+              projectId={projectId}
+              project={project}
+              onNavigateToEstimates={() => {
+                setTab("settings")
+                setScrollTarget("budget-estimates-section")
+              }}
+            />
           )}
-          {project.billingType === "t_and_m" && <TmOverview />}
+          {project.billingType === "t_and_m" && (
+            <TmOverview projectId={projectId} project={project} />
+          )}
           {project.billingType === "retainer" && (
             <RetainerOverview projectId={projectId} />
           )}
+        </TabsContent>
 
-          {/* Time Log — shared across all billing types */}
-          <div className="mt-6">
-            <h3 className="mb-3 text-sm font-semibold">Time Log</h3>
-            <TimeLogPlaceholder />
+        <TabsContent value="invoices" className="mt-6">
+          <div className="rounded-lg border bg-muted/30 p-8">
+            <div className="flex flex-col items-center justify-center gap-2 text-center">
+              <p className="text-sm font-medium">Invoices coming soon</p>
+              <p className="text-xs text-muted-foreground">
+                Invoice creation and tracking will be available in a future update.
+              </p>
+            </div>
           </div>
         </TabsContent>
 
         <TabsContent value="settings" className="mt-6">
-          <div className="space-y-6">
+          <div className="flex flex-col gap-6">
             <SettingsGeneral projectId={projectId} project={project} />
             {project.billingType === "fixed" && (
               <SettingsBudgetEstimates projectId={projectId} currency={project.currency} />
@@ -208,6 +280,12 @@ export default function ProjectDetailPage() {
         </TabsContent>
       </Tabs>
 
+      {/* Task detail modal — route-driven via ?detail=taskId */}
+      <TaskDetailModal
+        taskIds={projectTaskIds}
+        isAdmin={isAdmin ?? false}
+      />
+
       {/* Delete confirmation */}
       <ConfirmDialog
         open={deleteOpen}
@@ -219,5 +297,6 @@ export default function ProjectDetailPage() {
         onConfirm={handleDelete}
       />
     </div>
+    </TaskReferenceDataProvider>
   )
 }

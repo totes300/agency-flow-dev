@@ -1,6 +1,7 @@
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import type { Doc } from "../_generated/dataModel";
-import type { RateContext } from "./rates";
+import type { RateContext, RateSnapshot } from "./rates";
+import { resolveRate } from "./rates";
 
 export async function getOrgSettings(ctx: QueryCtx | MutationCtx, orgId: string) {
   return await ctx.db
@@ -40,4 +41,38 @@ export async function buildRateContext(
   }
 
   return rateCtx;
+}
+
+/**
+ * Resolve a rate snapshot for a time entry.
+ * Billable: enforces category + rate resolution (throws on failure).
+ * Non-billable: best-effort, returns empty snapshot on failure.
+ */
+export async function resolveSnapshot(
+  ctx: MutationCtx,
+  task: Doc<"tasks">,
+  project: Doc<"projects">,
+  isBillable: boolean,
+): Promise<RateSnapshot> {
+  if (isBillable) {
+    if (!task.workCategoryId) {
+      throw new Error("Set a category on this task before logging billable time");
+    }
+    const rateCtx = await buildRateContext(ctx, task, project);
+    const rateResult = resolveRate(rateCtx);
+    if (!rateResult.ok) {
+      throw new Error(rateResult.error);
+    }
+    return rateResult.snapshot;
+  }
+
+  // Non-billable: attempt resolution but don't throw on failure
+  try {
+    const rateCtx = await buildRateContext(ctx, task, project);
+    const rateResult = resolveRate(rateCtx);
+    if (rateResult.ok) {
+      return rateResult.snapshot;
+    }
+  } catch {}
+  return {};
 }

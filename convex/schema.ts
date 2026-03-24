@@ -38,6 +38,8 @@ export default defineSchema({
     timezone: v.string(),
     roundingMinutes: v.number(),
     defaultStatusId: v.optional(v.id("statuses")),
+    // Rate defaults
+    defaultTmFlatRate: v.optional(v.number()),   // org-level default for T&M flat-rate projects
     // Branding (used in later phases, define fields now)
     brandName: v.optional(v.string()),
     brandLogoStorageId: v.optional(v.id("_storage")),
@@ -165,6 +167,8 @@ export default defineSchema({
     startDate: v.optional(v.string()),              // YYYY-MM-DD
     rolloverEnabled: v.optional(v.boolean()),
     cycleLength: v.optional(v.number()),            // 1-12 months
+    // Fixed fields
+    fixedPrice: v.optional(v.number()),           // sold fixed fee (required for fixed projects)
     // T&M fields
     hourlyRate: v.optional(v.number()),
     tmCategoryRates: v.optional(v.array(v.object({

@@ -10,12 +10,14 @@ import { Input } from "@/components/ui/input"
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
 import { toast } from "sonner"
-import { PlusIcon, XIcon, Loader2Icon } from "lucide-react"
+import { PlusIcon, XIcon } from "lucide-react"
+import { Spinner } from "@/components/ui/spinner"
 import { cn, NUMBER_INPUT_CLASS } from "@/lib/utils"
 
 type Row = {
@@ -125,20 +127,20 @@ export function SettingsBudgetEstimates({
   const gridCols = "grid-cols-[minmax(140px,2fr)_minmax(100px,1fr)_minmax(100px,1fr)_minmax(100px,1fr)_32px]"
 
   return (
-    <Card>
+    <Card id="budget-estimates-section">
       <CardHeader>
         <CardTitle>Budget Estimates</CardTitle>
       </CardHeader>
       <CardContent>
       {rows.length === 0 ? (
-        <div className="space-y-3">
+        <div className="flex flex-col gap-3">
           <p className="text-sm text-muted-foreground">Add budget estimates per category.</p>
           <Button variant="outline" size="sm" onClick={addRow}>
-            <PlusIcon className="size-3.5" /> Add category
+            <PlusIcon data-icon="inline-start" /> Add category
           </Button>
         </div>
       ) : (
-        <div className="space-y-3">
+        <div className="flex flex-col gap-3">
           <div className={`grid ${gridCols} gap-2 text-xs font-medium text-muted-foreground`}>
             <span>Category</span>
             <span>Est. hours</span>
@@ -156,11 +158,13 @@ export function SettingsBudgetEstimates({
                   <SelectValue placeholder="Category..." />
                 </SelectTrigger>
                 <SelectContent>
-                  {categories
-                    ?.filter((c) => !usedCategoryIds.has(c._id) || c._id === row.workCategoryId)
-                    .map((c) => (
-                      <SelectItem key={c._id} value={c._id}>{c.name}</SelectItem>
-                    ))}
+                  <SelectGroup>
+                    {categories
+                      ?.filter((c) => !usedCategoryIds.has(c._id) || c._id === row.workCategoryId)
+                      .map((c) => (
+                        <SelectItem key={c._id} value={c._id}>{c.name}</SelectItem>
+                      ))}
+                  </SelectGroup>
                 </SelectContent>
               </Select>
               <Input
@@ -185,13 +189,13 @@ export function SettingsBudgetEstimates({
                 <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">/h</span>
               </div>
               <Button variant="ghost" size="icon-sm" onClick={() => removeRow(i)}>
-                <XIcon className="size-3.5" />
+                <XIcon />
               </Button>
             </div>
           ))}
           <div className="flex items-center justify-between pt-1">
             <Button variant="outline" size="sm" onClick={addRow}>
-              <PlusIcon className="size-3.5" /> Add category
+              <PlusIcon data-icon="inline-start" /> Add category
             </Button>
           </div>
         </div>
@@ -199,7 +203,7 @@ export function SettingsBudgetEstimates({
       </CardContent>
       <CardFooter className="justify-end">
         <Button onClick={handleSave} disabled={saving} size="sm">
-          {saving ? <><Loader2Icon className="size-3.5 animate-spin" /> Saving...</> : "Save"}
+          {saving ? <><Spinner data-icon="inline-start" /> Saving...</> : "Save"}
         </Button>
       </CardFooter>
     </Card>

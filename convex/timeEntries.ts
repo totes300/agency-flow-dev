@@ -5,7 +5,7 @@ import { getAuthContext } from "./lib/auth";
 import { roundMinutes } from "./lib/rounding";
 import { getDateInTimezone } from "./lib/timer";
 import { resolveRate } from "./lib/rates";
-import { getOrgSettings, buildRateContext } from "./lib/orgHelpers";
+import { getOrgSettings, buildRateContext, resolveSnapshot } from "./lib/orgHelpers";
 import { logActivity } from "./activityLog";
 
 // ─── Queries ────────────────────────────────────────────────────────────────────
@@ -202,15 +202,11 @@ export const create = mutation({
     // Resolve date
     const date = args.date ?? getDateInTimezone(Date.now(), timezone);
 
-    // Rate snapshot
-    const rateCtx = await buildRateContext(ctx, task, project);
-    const rateResult = resolveRate(rateCtx);
-    if (!rateResult.ok) {
-      throw new ConvexError(rateResult.error);
-    }
-
-    // Billable default from task
+    // Determine billable before rate resolution — non-billable entries skip rate enforcement
     const isBillable = args.isBillable ?? task.billable;
+
+    // Rate snapshot — only enforce for billable entries
+    const rateSnapshot = await resolveSnapshot(ctx, task, project, isBillable);
 
     const now = Date.now();
     const entryId = await ctx.db.insert("timeEntries", {
@@ -222,7 +218,7 @@ export const create = mutation({
       note: args.note?.trim() || undefined,
       isBillable,
       method: "manual",
-      ...rateResult.snapshot,
+      ...rateSnapshot,
       createdAt: now,
       updatedAt: now,
       createdBy: auth.userId,
@@ -289,10 +285,24 @@ export const update = mutation({
     }
 
     if (args.isBillable !== undefined) {
+      // When switching to billable, resolve a fresh snapshot if one is missing
+      if (args.isBillable && !entry.isBillable) {
+        const task = await ctx.db.get(entry.taskId);
+        if (!task) throw new ConvexError("Task not found");
+        if (!task.projectId) throw new ConvexError("Task has no project");
+        const project = await ctx.db.get(task.projectId);
+        if (!project) throw new ConvexError("Project not found");
+
+        // Only fill missing snapshot fields — never overwrite existing snapshots
+        const hasSnapshot =
+          entry.appliedRate != null || entry.appliedCostRate != null || entry.appliedBillRate != null;
+        if (!hasSnapshot) {
+          const snapshot = await resolveSnapshot(ctx, task, project, true);
+          Object.assign(updates, snapshot);
+        }
+      }
       updates.isBillable = args.isBillable;
     }
-
-    // Rate snapshot does NOT update on edit (stays from creation time)
 
     await ctx.db.patch(args.id, updates);
 
@@ -352,3 +362,499 @@ export const remove = mutation({
     await ctx.db.delete(args.id);
   },
 });
+
+/** Count time entries for a task where isBillable differs from a target value. */
+export const countMismatchedBillable = query({
+  args: {
+    taskId: v.id("tasks"),
+    targetBillable: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const { orgId } = await getAuthContext(ctx);
+
+    const task = await ctx.db.get(args.taskId);
+    if (!task || task.orgId !== orgId) return 0;
+
+    const entries = await ctx.db
+      .query("timeEntries")
+      .withIndex("by_taskId", (q) => q.eq("taskId", args.taskId))
+      .collect();
+
+    return entries.filter((e) => e.isBillable !== args.targetBillable).length;
+  },
+});
+
+/** Bulk-update isBillable on all time entries for a task. */
+export const bulkUpdateBillable = mutation({
+  args: {
+    taskId: v.id("tasks"),
+    isBillable: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const { orgId, isAdmin } = await getAuthContext(ctx);
+
+    const task = await ctx.db.get(args.taskId);
+    if (!task || task.orgId !== orgId) throw new ConvexError("Task not found");
+    if (!isAdmin) throw new ConvexError("Only admins can bulk-update billability");
+
+    // When switching to billable, resolve a rate snapshot (all-or-nothing)
+    let snapshot: Record<string, number | undefined> = {};
+    if (args.isBillable) {
+      if (!task.projectId) throw new ConvexError("Task has no project");
+      const project = await ctx.db.get(task.projectId);
+      if (!project) throw new ConvexError("Project not found");
+      snapshot = await resolveSnapshot(ctx, task, project, true);
+    }
+
+    const entries = await ctx.db
+      .query("timeEntries")
+      .withIndex("by_taskId", (q) => q.eq("taskId", args.taskId))
+      .collect();
+
+    const now = Date.now();
+    let updated = 0;
+    for (const entry of entries) {
+      if (entry.isBillable === args.isBillable) continue;
+      // Skip invoiced entries (future-proofing)
+      if ("invoicedInReportId" in entry && entry.invoicedInReportId) continue;
+
+      const patch: Record<string, unknown> = { isBillable: args.isBillable, updatedAt: now };
+      // Only fill missing snapshot fields when flipping to billable
+      if (args.isBillable) {
+        const hasSnapshot =
+          entry.appliedRate != null || entry.appliedCostRate != null || entry.appliedBillRate != null;
+        if (!hasSnapshot) {
+          Object.assign(patch, snapshot);
+        }
+      }
+      await ctx.db.patch(entry._id, patch);
+      updated++;
+    }
+
+    return { updated };
+  },
+});
+
+// ─── Cost Rate Health ────────────────────────────────────────────────────────────
+
+/** Count time entries for a project that are missing an appliedCostRate snapshot. */
+export const countMissingCostRates = query({
+  args: { projectId: v.id("projects") },
+  handler: async (ctx, args) => {
+    const { orgId } = await getAuthContext(ctx);
+
+    const project = await ctx.db.get(args.projectId);
+    if (!project || project.orgId !== orgId) return 0;
+
+    const tasks = await ctx.db
+      .query("tasks")
+      .withIndex("by_orgId_projectId", (q) =>
+        q.eq("orgId", orgId).eq("projectId", args.projectId),
+      )
+      .collect();
+
+    const counts = await Promise.all(
+      tasks.map(async (task) => {
+        const entries = await ctx.db
+          .query("timeEntries")
+          .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
+          .collect();
+        return entries.filter((e) => e.appliedCostRate == null).length;
+      }),
+    );
+    return counts.reduce((sum, c) => sum + c, 0);
+  },
+});
+
+/**
+ * Backfill missing appliedCostRate snapshots for a project.
+ * Only patches entries where appliedCostRate is undefined — never overwrites existing snapshots.
+ */
+export const backfillMissingCostRates = mutation({
+  args: { projectId: v.id("projects") },
+  handler: async (ctx, args) => {
+    const { orgId, isAdmin } = await getAuthContext(ctx);
+    if (!isAdmin) throw new ConvexError("Only admins can backfill cost rates");
+
+    const project = await ctx.db.get(args.projectId);
+    if (!project || project.orgId !== orgId) throw new ConvexError("Project not found");
+
+    // Load category estimates for rate lookup
+    const estimates = await ctx.db
+      .query("projectCategoryEstimates")
+      .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
+      .collect();
+    const estimateByCategory = new Map(
+      estimates.map((e) => [e.workCategoryId.toString(), e]),
+    );
+
+    const tasks = await ctx.db
+      .query("tasks")
+      .withIndex("by_orgId_projectId", (q) =>
+        q.eq("orgId", orgId).eq("projectId", args.projectId),
+      )
+      .collect();
+
+    const now = Date.now();
+    let updated = 0;
+
+    for (const task of tasks) {
+      const entries = await ctx.db
+        .query("timeEntries")
+        .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
+        .collect();
+
+      const catEstimate = task.workCategoryId
+        ? estimateByCategory.get(task.workCategoryId.toString())
+        : null;
+
+      for (const entry of entries) {
+        if (entry.appliedCostRate != null) continue; // already has a snapshot
+        if (catEstimate?.internalCostRate == null) continue; // no rate to apply
+
+        await ctx.db.patch(entry._id, {
+          appliedCostRate: catEstimate.internalCostRate,
+          updatedAt: now,
+        });
+        updated++;
+      }
+    }
+
+    return { updated };
+  },
+});
+
+// ─── Project Reporting Queries ──────────────────────────────────────────────────
+
+/**
+ * Aggregate overview metrics for a project — used by Fixed and T&M overviews
+ * and the project header "Last activity" date.
+ */
+export const projectOverview = query({
+  args: { projectId: v.id("projects") },
+  handler: async (ctx, args) => {
+    const { orgId } = await getAuthContext(ctx);
+
+    const project = await ctx.db.get(args.projectId);
+    if (!project || project.orgId !== orgId) return null;
+
+    // Fetch all tasks for this project (including archived — historical reporting)
+    const tasks = await ctx.db
+      .query("tasks")
+      .withIndex("by_orgId_projectId", (q) =>
+        q.eq("orgId", orgId).eq("projectId", args.projectId),
+      )
+      .collect();
+
+    // Fetch all time entries per task in parallel
+    const allEntries = (
+      await Promise.all(
+        tasks.map(async (task) => {
+          const entries = await ctx.db
+            .query("timeEntries")
+            .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
+            .collect();
+          return entries.map((e) => ({
+            ...e,
+            workCategoryId: task.workCategoryId,
+          }));
+        }),
+      )
+    ).flat();
+
+    // Get org timezone for "this month" computation
+    const orgSettings = await getOrgSettings(ctx, orgId);
+    const timezone = orgSettings?.timezone ?? "America/New_York";
+    const nowDate = getDateInTimezone(Date.now(), timezone);
+    const currentMonth = nowDate.slice(0, 7); // "YYYY-MM"
+
+    // Compute aggregates
+    let totalMinutes = 0;
+    let totalBillableMinutes = 0;
+    let totalNonBillableMinutes = 0;
+    let thisMonthBillableMinutes = 0;
+    let totalActualCost = 0;
+    let uninvoicedMinutes = 0;
+    let uninvoicedAmount = 0;
+    let lastLoggedDate: string | null = null;
+    const minutesByCategory: Record<string, number> = {};
+    const billableMinutesByCategory: Record<string, number> = {};
+    const billableByMonth: Record<string, number> = {};
+
+    for (const e of allEntries) {
+      totalMinutes += e.durationMinutes;
+
+      if (e.isBillable) {
+        totalBillableMinutes += e.durationMinutes;
+      } else {
+        totalNonBillableMinutes += e.durationMinutes;
+      }
+
+      // This month — billable only (displayed under T&M "Billable Time" card)
+      if (e.isBillable && e.date.startsWith(currentMonth)) {
+        thisMonthBillableMinutes += e.durationMinutes;
+      }
+
+      // Category breakdowns
+      const catKey = e.workCategoryId?.toString() ?? "uncategorized";
+      minutesByCategory[catKey] = (minutesByCategory[catKey] ?? 0) + e.durationMinutes;
+      if (e.isBillable) {
+        billableMinutesByCategory[catKey] =
+          (billableMinutesByCategory[catKey] ?? 0) + e.durationMinutes;
+      }
+
+      // Fixed: totalActualCost from appliedCostRate
+      if (project.billingType === "fixed") {
+        totalActualCost += (e.durationMinutes / 60) * (e.appliedCostRate ?? 0);
+      }
+
+      // T&M: uninvoiced from billable entries using appliedRate
+      // NOTE: Pre-invoicing phase — all billable entries treated as uninvoiced.
+      // Replace with invoice-aware filtering when invoicedInReportId ships.
+      if (project.billingType === "t_and_m" && e.isBillable) {
+        uninvoicedMinutes += e.durationMinutes;
+        uninvoicedAmount += (e.durationMinutes / 60) * (e.appliedRate ?? 0);
+      }
+
+      // Last logged date
+      if (!lastLoggedDate || e.date > lastLoggedDate) {
+        lastLoggedDate = e.date;
+      }
+
+      // Billable by month (for 3-month trend)
+      if (e.isBillable) {
+        const monthKey = e.date.slice(0, 7);
+        billableByMonth[monthKey] = (billableByMonth[monthKey] ?? 0) + e.durationMinutes;
+      }
+    }
+
+    // Last 3 billable months: compute the 3 calendar months ending with current month
+    const last3BillableMonths = computeLast3Months(currentMonth).map((month) => ({
+      month,
+      minutes: billableByMonth[month] ?? 0,
+    }));
+
+    return {
+      totalMinutes,
+      totalBillableMinutes,
+      totalNonBillableMinutes,
+      lastLoggedDate,
+      thisMonthBillableMinutes,
+      last3BillableMonths,
+      minutesByCategory,
+      billableMinutesByCategory,
+      totalActualCost,
+      uninvoicedMinutes,
+      uninvoicedAmount,
+    };
+  },
+});
+
+/**
+ * Monthly breakdown of time entries for a project — grouped by month, then
+ * billable/non-billable, then category, then task. Used by Fixed and T&M overviews.
+ */
+export const projectMonthlyBreakdown = query({
+  args: { projectId: v.id("projects") },
+  handler: async (ctx, args) => {
+    const { orgId } = await getAuthContext(ctx);
+
+    const project = await ctx.db.get(args.projectId);
+    if (!project || project.orgId !== orgId) return [];
+
+    // Fetch all tasks (including archived)
+    const tasks = await ctx.db
+      .query("tasks")
+      .withIndex("by_orgId_projectId", (q) =>
+        q.eq("orgId", orgId).eq("projectId", args.projectId),
+      )
+      .collect();
+
+    const taskMap = new Map(tasks.map((t) => [t._id.toString(), t]));
+
+    // Fetch work categories for enrichment
+    const categories = await ctx.db
+      .query("workCategories")
+      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+      .collect();
+    const catMap = new Map(categories.map((c) => [c._id.toString(), c]));
+
+    // Fetch all time entries per task
+    const allEntries = (
+      await Promise.all(
+        tasks.map(async (task) => {
+          const entries = await ctx.db
+            .query("timeEntries")
+            .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
+            .collect();
+          return entries.map((e) => ({
+            ...e,
+            taskId: task._id.toString(),
+            taskTitle: task.title,
+            workCategoryId: task.workCategoryId?.toString() ?? null,
+          }));
+        }),
+      )
+    ).flat();
+
+    // Group entries by month
+    const entriesByMonth: Record<string, typeof allEntries> = {};
+    for (const e of allEntries) {
+      const monthKey = e.date.slice(0, 7);
+      (entriesByMonth[monthKey] ??= []).push(e);
+    }
+
+    // Build month data
+    const months = Object.keys(entriesByMonth)
+      .sort((a, b) => b.localeCompare(a)) // descending
+      .map((monthKey) => {
+        const monthEntries = entriesByMonth[monthKey];
+        const billableEntries = monthEntries.filter((e) => e.isBillable);
+        const nonBillableEntries = monthEntries.filter((e) => !e.isBillable);
+
+        const totalMinutes = monthEntries.reduce((s, e) => s + e.durationMinutes, 0);
+        // totalAmount: only for T&M billable
+        const totalAmount =
+          project.billingType === "t_and_m"
+            ? billableEntries.reduce(
+                (s, e) => s + (e.durationMinutes / 60) * (e.appliedRate ?? 0),
+                0,
+              )
+            : 0;
+
+        const billableCategoryGroups = buildCategoryGroups(
+          billableEntries,
+          catMap,
+          project.billingType === "t_and_m",
+        );
+        const nonBillableCategoryGroups = buildCategoryGroups(
+          nonBillableEntries,
+          catMap,
+          false, // non-billable never shows amounts
+        );
+
+        // Unique tasks and categories
+        const uniqueTaskIds = new Set(monthEntries.map((e) => e.taskId));
+        const uniqueCatIds = new Set(monthEntries.map((e) => e.workCategoryId ?? "uncategorized"));
+
+        // Month label: "March 2026"
+        const [y, m] = monthKey.split("-").map(Number);
+        const monthLabel = new Date(y, m - 1, 1).toLocaleDateString("en-US", {
+          month: "long",
+          year: "numeric",
+        });
+
+        return {
+          month: monthKey,
+          monthLabel,
+          totalMinutes,
+          totalAmount,
+          entryCount: monthEntries.length,
+          billableCategoryGroups,
+          nonBillableCategoryGroups,
+          taskCount: uniqueTaskIds.size,
+          categoryCount: uniqueCatIds.size,
+        };
+      });
+
+    return months;
+  },
+});
+
+// ─── Helpers ────────────────────────────────────────────────────────────────────
+
+/** Compute the last 3 calendar months ending with the given month. */
+export function computeLast3Months(currentMonth: string): string[] {
+  const [y, m] = currentMonth.split("-").map(Number);
+  const months: string[] = [];
+  for (let i = 2; i >= 0; i--) {
+    const d = new Date(y, m - 1 - i, 1);
+    months.push(
+      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
+    );
+  }
+  return months;
+}
+
+type EntryWithTask = {
+  durationMinutes: number;
+  date: string;
+  taskId: string;
+  taskTitle: string;
+  workCategoryId: string | null;
+  appliedRate?: number;
+};
+
+type CategoryDoc = { _id: { toString(): string }; name: string; color: string };
+
+/** Group entries by category then task. Used by both Fixed/T&M monthly breakdown. */
+function buildCategoryGroups(
+  entries: EntryWithTask[],
+  catMap: Map<string, CategoryDoc>,
+  includeAmounts: boolean,
+) {
+  // Group by category
+  const byCat: Record<
+    string,
+    { catId: string | null; entries: EntryWithTask[] }
+  > = {};
+  for (const e of entries) {
+    const key = e.workCategoryId ?? "uncategorized";
+    if (!byCat[key]) byCat[key] = { catId: e.workCategoryId, entries: [] };
+    byCat[key].entries.push(e);
+  }
+
+  // Build category groups sorted by name
+  return Object.values(byCat)
+    .map(({ catId, entries: catEntries }) => {
+      const cat = catId ? catMap.get(catId) : null;
+      const categoryName = cat?.name ?? "No category";
+      const categoryColor = cat?.color ?? "gray";
+
+      // Group by task
+      const byTask: Record<string, EntryWithTask[]> = {};
+      for (const e of catEntries) {
+        (byTask[e.taskId] ??= []).push(e);
+      }
+
+      const tasks = Object.entries(byTask)
+        .map(([taskId, taskEntries]) => {
+          const totalMinutes = taskEntries.reduce(
+            (s, e) => s + e.durationMinutes,
+            0,
+          );
+          const dates = taskEntries.map((e) => e.date).sort();
+          return {
+            taskId,
+            taskTitle: taskEntries[0].taskTitle,
+            totalMinutes,
+            firstDate: dates[0],
+            lastDate: dates[dates.length - 1],
+            entryCount: taskEntries.length,
+          };
+        })
+        // Sort by lastDate descending
+        .sort((a, b) => b.lastDate.localeCompare(a.lastDate));
+
+      const totalMinutes = catEntries.reduce(
+        (s, e) => s + e.durationMinutes,
+        0,
+      );
+      const totalAmount = includeAmounts
+        ? catEntries.reduce(
+            (s, e) => s + (e.durationMinutes / 60) * (e.appliedRate ?? 0),
+            0,
+          )
+        : 0;
+
+      return {
+        workCategoryId: catId,
+        categoryName,
+        categoryColor,
+        totalMinutes,
+        totalAmount,
+        tasks,
+      };
+    })
+    .sort((a, b) => a.categoryName.localeCompare(b.categoryName));
+}

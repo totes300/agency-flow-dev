@@ -84,6 +84,26 @@ export function formatShortDate(dateStr: string, locale = "en-US"): string {
   return date.toLocaleDateString(locale, { month: "short", day: "numeric" })
 }
 
+/**
+ * Format a date range for time log task rows.
+ * Same day: "Mar 15". Same month: "Mar 8–15". Cross-month: "Feb 28 – Mar 5".
+ */
+export function formatDateRange(firstDate: string, lastDate: string, locale = "en-US"): string {
+  if (firstDate === lastDate) return formatShortDate(firstDate, locale)
+
+  const f = new Date(firstDate + "T00:00:00")
+  const l = new Date(lastDate + "T00:00:00")
+
+  if (f.getMonth() === l.getMonth() && f.getFullYear() === l.getFullYear()) {
+    // Same month: "Mar 8–15"
+    const month = f.toLocaleDateString(locale, { month: "short" })
+    return `${month} ${f.getDate()}–${l.getDate()}`
+  }
+
+  // Cross-month: "Feb 28 – Mar 5"
+  return `${formatShortDate(firstDate, locale)} – ${formatShortDate(lastDate, locale)}`
+}
+
 /** Extract up to 2 initials from a name string. Returns "?" for empty/missing names. */
 export function getInitials(name: string | undefined | null): string {
   if (!name) return "?"
@@ -154,6 +174,11 @@ export function getWeekBounds(offset: number, now: Date = new Date()): { start: 
   const sunday = new Date(monday)
   sunday.setDate(monday.getDate() + 6)
   return { start: formatDateToYMD(monday), end: formatDateToYMD(sunday) }
+}
+
+/** Simple pluralization: returns singular when n===1, plural otherwise. */
+export function pluralize(n: number, singular: string, plural: string): string {
+  return n === 1 ? singular : plural
 }
 
 // Re-export duration formatters for discoverability

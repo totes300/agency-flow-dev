@@ -1,13 +1,23 @@
 "use client"
 
-import { useState, useRef, useEffect } from "react"
+import { useState, useRef, useEffect, useCallback } from "react"
 import { InlineStatusCell } from "@/components/tasks/inline-status-cell"
 import { InlineAssigneeCell } from "@/components/tasks/inline-assignee-cell"
 import { InlineProjectCell } from "@/components/tasks/inline-project-cell"
 import { InlineCategoryCell } from "@/components/tasks/inline-category-cell"
 import { InlineDueDateCell } from "@/components/tasks/inline-due-date-cell"
 import { Switch } from "@/components/ui/switch"
-import { useMutation } from "convex/react"
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogCancel,
+  AlertDialogAction,
+} from "@/components/ui/alert-dialog"
+import { useMutation, useQuery } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { InlineTimeCell } from "@/components/tasks/inline-time-cell"
 import { formatDuration, parseDuration } from "@/lib/duration"
@@ -67,14 +77,45 @@ export function TaskDetailMetadata({
   isAdmin: boolean
 }) {
   const updateTask = useMutation(api.tasks.update)
+  const bulkUpdateBillable = useMutation(api.timeEntries.bulkUpdateBillable)
   const overdue = isOverdue(task.dueDate)
 
-  async function handleBillableChange(checked: boolean) {
+  // Billable toggle with confirmation dialog
+  const [billableDialog, setBillableDialog] = useState<{ open: boolean; target: boolean }>({
+    open: false, target: false,
+  })
+
+  // Count mismatched entries (only query when we need it — after toggle)
+  const mismatchedCount = useQuery(api.timeEntries.countMismatchedBillable, {
+    taskId: task._id,
+    targetBillable: !task.billable,
+  })
+
+  const handleBillableChange = useCallback(async (checked: boolean) => {
+    const count = mismatchedCount ?? 0
+    if (count > 0) {
+      setBillableDialog({ open: true, target: checked })
+      return
+    }
+    // No mismatched entries — just toggle
     try {
       await updateTask({ id: task._id, billable: checked })
     } catch (err) {
       toastError(err, "Failed to update")
     }
+  }, [mismatchedCount, task._id, updateTask])
+
+  async function handleBillableConfirm(updateEntries: boolean) {
+    const { target } = billableDialog
+    try {
+      await updateTask({ id: task._id, billable: target })
+      if (updateEntries) {
+        await bulkUpdateBillable({ taskId: task._id, isBillable: target })
+      }
+    } catch (err) {
+      toastError(err, "Failed to update")
+    }
+    setBillableDialog({ open: false, target: false })
   }
 
   return (
@@ -130,6 +171,36 @@ export function TaskDetailMetadata({
           </MetadataRow>
         </div>
       </div>
+
+      {/* Billable cascade confirmation */}
+      <AlertDialog
+        open={billableDialog.open}
+        onOpenChange={(open) => { if (!open) setBillableDialog((s) => ({ ...s, open: false })) }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Update existing time entries?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This task has {mismatchedCount ?? 0} time{" "}
+              {(mismatchedCount ?? 0) === 1 ? "entry" : "entries"} marked as{" "}
+              {billableDialog.target ? "non-billable" : "billable"}.
+              Would you like to update them too?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="outline"
+              onClick={() => handleBillableConfirm(false)}
+            >
+              Only future entries
+            </AlertDialogAction>
+            <AlertDialogAction onClick={() => handleBillableConfirm(true)}>
+              Update all
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

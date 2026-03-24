@@ -168,12 +168,15 @@ function CategorySection({
       >
         <ChevronRightIcon
           className={cn(
-            "size-3.5 shrink-0 text-muted-foreground/40 transition-transform duration-150",
+            "size-3.5 shrink-0 text-muted-foreground transition-transform duration-150",
             open && "rotate-90",
           )}
         />
-        <span className="text-[13px] font-semibold text-muted-foreground">
+        <span className="text-[13px] font-medium text-foreground">
           {cat.categoryName}
+        </span>
+        <span className="text-[11px] text-muted-foreground/60">
+          · {cat.tasks.length}
         </span>
         <span className={cn("ml-auto", CELL_KEY, "text-sm")}>
           {formatMinutes(cat.totalMinutes)}

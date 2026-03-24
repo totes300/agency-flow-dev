@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils"
 type MetricCardProps = {
   label: string
   value: string
-  detail?: string
+  detail?: React.ReactNode
   variant?: "default" | "destructive" | "warning"
   className?: string
 }

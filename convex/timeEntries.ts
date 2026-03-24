@@ -384,6 +384,154 @@ export const remove = mutation({
   },
 });
 
+/** Count time entries for a task where isBillable differs from a target value. */
+export const countMismatchedBillable = query({
+  args: {
+    taskId: v.id("tasks"),
+    targetBillable: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const { orgId } = await getAuthContext(ctx);
+
+    const task = await ctx.db.get(args.taskId);
+    if (!task || task.orgId !== orgId) return 0;
+
+    const entries = await ctx.db
+      .query("timeEntries")
+      .withIndex("by_taskId", (q) => q.eq("taskId", args.taskId))
+      .collect();
+
+    return entries.filter((e) => e.isBillable !== args.targetBillable).length;
+  },
+});
+
+/** Bulk-update isBillable on all time entries for a task. */
+export const bulkUpdateBillable = mutation({
+  args: {
+    taskId: v.id("tasks"),
+    isBillable: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const { orgId, isAdmin } = await getAuthContext(ctx);
+
+    const task = await ctx.db.get(args.taskId);
+    if (!task || task.orgId !== orgId) throw new ConvexError("Task not found");
+    if (!isAdmin) throw new ConvexError("Only admins can bulk-update billability");
+
+    // When switching to billable, require a category on the task
+    if (args.isBillable && !task.workCategoryId) {
+      throw new ConvexError("Set a category on this task before marking time as billable");
+    }
+
+    const entries = await ctx.db
+      .query("timeEntries")
+      .withIndex("by_taskId", (q) => q.eq("taskId", args.taskId))
+      .collect();
+
+    const now = Date.now();
+    let updated = 0;
+    for (const entry of entries) {
+      if (entry.isBillable === args.isBillable) continue;
+      // Skip invoiced entries (future-proofing)
+      if ("invoicedInReportId" in entry && entry.invoicedInReportId) continue;
+      await ctx.db.patch(entry._id, { isBillable: args.isBillable, updatedAt: now });
+      updated++;
+    }
+
+    return { updated };
+  },
+});
+
+// ─── Cost Rate Health ────────────────────────────────────────────────────────────
+
+/** Count time entries for a project that are missing an appliedCostRate snapshot. */
+export const countMissingCostRates = query({
+  args: { projectId: v.id("projects") },
+  handler: async (ctx, args) => {
+    const { orgId } = await getAuthContext(ctx);
+
+    const project = await ctx.db.get(args.projectId);
+    if (!project || project.orgId !== orgId) return 0;
+
+    const tasks = await ctx.db
+      .query("tasks")
+      .withIndex("by_orgId_projectId", (q) =>
+        q.eq("orgId", orgId).eq("projectId", args.projectId),
+      )
+      .collect();
+
+    let count = 0;
+    for (const task of tasks) {
+      const entries = await ctx.db
+        .query("timeEntries")
+        .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
+        .collect();
+      for (const e of entries) {
+        if (e.appliedCostRate == null) count++;
+      }
+    }
+    return count;
+  },
+});
+
+/**
+ * Backfill missing appliedCostRate snapshots for a project.
+ * Only patches entries where appliedCostRate is undefined — never overwrites existing snapshots.
+ */
+export const backfillMissingCostRates = mutation({
+  args: { projectId: v.id("projects") },
+  handler: async (ctx, args) => {
+    const { orgId, isAdmin } = await getAuthContext(ctx);
+    if (!isAdmin) throw new ConvexError("Only admins can backfill cost rates");
+
+    const project = await ctx.db.get(args.projectId);
+    if (!project || project.orgId !== orgId) throw new ConvexError("Project not found");
+
+    // Load category estimates for rate lookup
+    const estimates = await ctx.db
+      .query("projectCategoryEstimates")
+      .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
+      .collect();
+    const estimateByCategory = new Map(
+      estimates.map((e) => [e.workCategoryId.toString(), e]),
+    );
+
+    const tasks = await ctx.db
+      .query("tasks")
+      .withIndex("by_orgId_projectId", (q) =>
+        q.eq("orgId", orgId).eq("projectId", args.projectId),
+      )
+      .collect();
+
+    const now = Date.now();
+    let updated = 0;
+
+    for (const task of tasks) {
+      const entries = await ctx.db
+        .query("timeEntries")
+        .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
+        .collect();
+
+      const catEstimate = task.workCategoryId
+        ? estimateByCategory.get(task.workCategoryId.toString())
+        : null;
+
+      for (const entry of entries) {
+        if (entry.appliedCostRate != null) continue; // already has a snapshot
+        if (!catEstimate?.internalCostRate) continue; // no rate to apply
+
+        await ctx.db.patch(entry._id, {
+          appliedCostRate: catEstimate.internalCostRate,
+          updatedAt: now,
+        });
+        updated++;
+      }
+    }
+
+    return { updated };
+  },
+});
+
 // ─── Project Reporting Queries ──────────────────────────────────────────────────
 
 /**

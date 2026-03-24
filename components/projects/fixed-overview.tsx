@@ -1,7 +1,7 @@
 "use client"
 
-import { useMemo, useCallback } from "react"
-import { useQuery } from "convex/react"
+import { useMemo, useCallback, useState } from "react"
+import { useQuery, useMutation } from "convex/react"
 import { useRouter, usePathname } from "next/navigation"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
@@ -14,11 +14,22 @@ import { ProgressCell } from "@/components/ui/progress-cell"
 import { MetricCard } from "@/components/metric-card"
 import { MonthlyTimeBreakdown } from "./monthly-time-breakdown"
 import { Skeleton } from "@/components/ui/skeleton"
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogCancel,
+  AlertDialogAction,
+} from "@/components/ui/alert-dialog"
+import { toastError } from "@/lib/toast-helpers"
 import { InfoIcon, AlertTriangleIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { formatMinutes, formatCurrencyPrecise } from "@/lib/format"
 import {
-  CELL_KEY, CELL_PRIMARY, CELL_SECONDARY, ROW_MUTED,
+  CELL_KEY, CELL_PRIMARY, CELL_SECONDARY,
   TABLE_HEAD, TABLE_HEAD_ROW, TABLE_CELL, TABLE_ROW, TABLE_FOOTER,
 } from "@/lib/table-tokens"
 
@@ -37,6 +48,9 @@ export function FixedOverview({
   const categories = useQuery(api.workCategories.list, { includeArchived: false })
   const overview = useQuery(api.timeEntries.projectOverview, { projectId })
   const monthlyData = useQuery(api.timeEntries.projectMonthlyBreakdown, { projectId })
+  const missingCostRateCount = useQuery(api.timeEntries.countMissingCostRates, { projectId })
+  const backfillMissingCostRates = useMutation(api.timeEntries.backfillMissingCostRates)
+  const [backfillDialogOpen, setBackfillDialogOpen] = useState(false)
 
   const currency = project.currency
   const fixedPrice = project.fixedPrice
@@ -46,10 +60,21 @@ export function FixedOverview({
     return estimates.reduce((sum, e) => sum + e.estimatedMinutes, 0)
   }, [estimates])
 
+  // Estimated cost = sum of (estimatedMinutes / 60) × internalCostRate per category
+  const totalEstimatedCost = useMemo(() => {
+    if (!estimates) return 0
+    return estimates.reduce(
+      (sum, e) => sum + (e.estimatedMinutes / 60) * (e.internalCostRate ?? 0),
+      0,
+    )
+  }, [estimates])
+
   // Fixed economics from real data
   const totalActualMinutes = overview?.totalMinutes ?? 0
+  const totalNonBillableMinutes = overview?.totalNonBillableMinutes ?? 0
   const totalActualCost = overview?.totalActualCost ?? 0
-  const profit = (fixedPrice ?? 0) - totalActualCost
+  const estimatedProfit = (fixedPrice ?? 0) - totalEstimatedCost
+  const actualProfit = (fixedPrice ?? 0) - totalActualCost
   const effectiveRate = totalActualMinutes > 0
     ? (fixedPrice ?? 0) / (totalActualMinutes / 60)
     : 0
@@ -90,31 +115,73 @@ export function FixedOverview({
         <MetricCard
           label="Fixed Fee"
           value={fixedPrice ? formatCurrencyPrecise(fixedPrice, currency) : "Not set"}
+          detail={
+            totalEstimatedCost > 0
+              ? `Est. cost ${formatCurrencyPrecise(totalEstimatedCost, currency)}`
+              : undefined
+          }
         />
         <MetricCard
           label="Actual"
           value={formatMinutes(totalActualMinutes)}
-          detail={`Labor cost ${formatCurrencyPrecise(totalActualCost, currency)}`}
+          detail={
+            totalActualMinutes > 0 ? (
+              <span className="flex flex-col gap-0.5 text-xs tabular-nums text-muted-foreground">
+                {totalNonBillableMinutes > 0 && (
+                  <span>{formatMinutes(totalNonBillableMinutes)} non-billable</span>
+                )}
+                <span>
+                  Labor cost {formatCurrencyPrecise(totalActualCost, currency)}
+                  {" · "}
+                  {formatCurrencyPrecise(effectiveRate, currency)}/h
+                </span>
+              </span>
+            ) : undefined
+          }
         />
         <MetricCard
           label="Profit"
-          value={fixedPrice ? formatCurrencyPrecise(profit, currency) : "—"}
+          value={fixedPrice ? formatCurrencyPrecise(actualProfit, currency) : "—"}
           detail={
-            fixedPrice && totalActualMinutes > 0
-              ? `Effective rate ${formatCurrencyPrecise(effectiveRate, currency)}/h`
-              : "—"
+            fixedPrice ? (
+              <ProfitDetail
+                estimatedProfit={estimatedProfit}
+                actualProfit={actualProfit}
+                currency={currency}
+              />
+            ) : undefined
           }
-          variant={fixedPrice && profit < 0 ? "destructive" : "default"}
+          variant={fixedPrice && actualProfit < 0 ? "destructive" : "default"}
         />
       </div>
 
-      {/* Info banner */}
-      <Alert>
-        <InfoIcon className="size-4" />
-        <AlertDescription>
-          Fixed-fee projects track delivery against estimated effort and labor cost.
-        </AlertDescription>
-      </Alert>
+      {/* Info / warning banner */}
+      {(missingCostRateCount ?? 0) > 0 ? (
+        <Alert variant="destructive">
+          <AlertTriangleIcon className="size-4" />
+          <AlertDescription className="flex items-center justify-between gap-4">
+            <span>
+              Labor cost incomplete — {missingCostRateCount}{" "}
+              {missingCostRateCount === 1 ? "entry" : "entries"} missing cost rate
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 shrink-0 text-xs"
+              onClick={() => setBackfillDialogOpen(true)}
+            >
+              Fix
+            </Button>
+          </AlertDescription>
+        </Alert>
+      ) : (
+        <Alert>
+          <InfoIcon className="size-4" />
+          <AlertDescription>
+            Fixed-fee projects track delivery against estimated effort and labor cost.
+          </AlertDescription>
+        </Alert>
+      )}
 
       {/* Budget */}
       <BudgetSection
@@ -139,7 +206,68 @@ export function FixedOverview({
           />
         )}
       </div>
+
+      {/* Backfill missing cost rates dialog */}
+      <AlertDialog open={backfillDialogOpen} onOpenChange={setBackfillDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Fill missing cost rates?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {missingCostRateCount ?? 0} past time{" "}
+              {(missingCostRateCount ?? 0) === 1 ? "entry has" : "entries have"} no
+              internal cost rate snapshot. This will fill only missing snapshots
+              using the current cost rate setup. Existing snapshots will not be changed.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={async () => {
+                try {
+                  const result = await backfillMissingCostRates({ projectId })
+                  setBackfillDialogOpen(false)
+                  // Toast would be nice but the count auto-updates via reactivity
+                } catch (err) {
+                  toastError(err, "Failed to backfill cost rates")
+                }
+              }}
+            >
+              Fill missing rates
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
+  )
+}
+
+// ─── Profit Detail ──────────────────────────────────────────────────────────────
+
+function ProfitDetail({
+  estimatedProfit,
+  actualProfit,
+  currency,
+}: {
+  estimatedProfit: number
+  actualProfit: number
+  currency: string
+}) {
+  const diff = estimatedProfit !== 0
+    ? Math.round(((actualProfit - estimatedProfit) / Math.abs(estimatedProfit)) * 100)
+    : null
+
+  return (
+    <span className="flex items-center gap-1.5 text-xs tabular-nums text-muted-foreground">
+      <span>Est. {formatCurrencyPrecise(estimatedProfit, currency)}</span>
+      {diff !== null && (
+        <span className={cn(
+          "font-medium",
+          diff >= 0 ? "text-green-600 dark:text-green-500" : "text-destructive",
+        )}>
+          {diff >= 0 ? "+" : ""}{diff}%
+        </span>
+      )}
+    </span>
   )
 }
 
@@ -170,21 +298,12 @@ function BudgetSection({
   unestimatedCategories: Array<{ catId: string; minutes: number; name: string; color: string }>
   onNavigateToEstimates?: () => void
 }) {
-  // Split categories: active (actual > 0) vs not started (actual === 0)
-  const activeEstimates: (EstimateRow & { actual: number; remaining: number; pct: number | null })[] = []
-  const notStartedEstimates: (EstimateRow & { actual: number; remaining: number; pct: number | null })[] = []
-
-  for (const est of estimates) {
+  const enrichedEstimates = estimates.map((est) => {
     const actual = minutesByCategory[est.workCategoryId?.toString() ?? ""] ?? 0
     const remaining = est.estimatedMinutes - actual
     const pct = est.estimatedMinutes > 0 ? Math.round((actual / est.estimatedMinutes) * 100) : null
-    const row = { ...est, actual, remaining, pct }
-    if (actual > 0) {
-      activeEstimates.push(row)
-    } else {
-      notStartedEstimates.push(row)
-    }
-  }
+    return { ...est, actual, remaining, pct }
+  })
 
   return (
     <SectionCard>
@@ -218,25 +337,9 @@ function BudgetSection({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {activeEstimates.map((row) => (
+            {enrichedEstimates.map((row) => (
               <BudgetRow key={row._id} row={row} />
             ))}
-
-            {notStartedEstimates.length > 0 && (
-              <>
-                <TableRow className="hover:bg-transparent">
-                  <TableCell colSpan={5} className="px-5 pt-4 pb-1">
-                    <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground/50">
-                      Not started
-                    </span>
-                  </TableCell>
-                </TableRow>
-                {notStartedEstimates.map((row) => (
-                  <BudgetRow key={row._id} row={row} muted />
-                ))}
-              </>
-            )}
-
           </TableBody>
           <TableFooter className={TABLE_FOOTER}>
             <TableRow className="hover:bg-transparent">
@@ -286,19 +389,17 @@ function BudgetSection({
 
 function BudgetRow({
   row,
-  muted,
 }: {
   row: { _id: string; categoryName: string; estimatedMinutes: number; actual: number; remaining: number; pct: number | null }
-  muted?: boolean
 }) {
   return (
-    <TableRow className={cn(TABLE_ROW, muted && ROW_MUTED)}>
-      <TableCell className={cn(TABLE_CELL, muted ? "font-normal" : CELL_PRIMARY)}>{row.categoryName}</TableCell>
+    <TableRow className={TABLE_ROW}>
+      <TableCell className={cn(TABLE_CELL, CELL_PRIMARY)}>{row.categoryName}</TableCell>
       <TableCell className={cn(TABLE_CELL, CELL_SECONDARY)}>{formatMinutes(row.estimatedMinutes)}</TableCell>
-      <TableCell className={cn(TABLE_CELL, muted ? CELL_SECONDARY : CELL_KEY)}>{formatMinutes(row.actual)}</TableCell>
+      <TableCell className={cn(TABLE_CELL, CELL_KEY)}>{formatMinutes(row.actual)}</TableCell>
       <TableCell className={cn(TABLE_CELL, CELL_SECONDARY)}>{formatMinutes(row.remaining)}</TableCell>
       <TableCell className={TABLE_CELL}>
-        <ProgressCell percent={row.pct} muted={muted} />
+        <ProgressCell percent={row.pct} />
       </TableCell>
     </TableRow>
   )

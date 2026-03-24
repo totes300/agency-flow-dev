@@ -1,8 +1,10 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import { useParams, useSearchParams, useRouter } from "next/navigation"
 import { useQuery, useMutation } from "convex/react"
+import { useConvexAuth } from "convex/react"
+import { useOrganization } from "@clerk/nextjs"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { Button } from "@/components/ui/button"
@@ -30,6 +32,7 @@ const SettingsRetainer = dynamic(() => import("@/components/projects/settings-re
 import { ProjectDetailSkeleton } from "@/components/projects/project-detail-skeleton"
 import { DefaultAssigneesPlaceholder } from "@/components/projects/default-assignees-placeholder"
 import { TaskDetailModal } from "@/components/tasks/task-detail-modal"
+import { TaskReferenceDataProvider } from "@/components/tasks/task-reference-data"
 import { toast } from "sonner"
 import { formatShortDate } from "@/lib/format"
 import {
@@ -41,12 +44,24 @@ import {
 } from "lucide-react"
 
 export default function ProjectDetailPage() {
+  const { isAuthenticated } = useConvexAuth()
+  const { membership } = useOrganization()
+  const isAdmin = membership?.role === "org:admin"
   const params = useParams()
   const searchParams = useSearchParams()
   const router = useRouter()
   const projectId = params.id as Id<"projects">
   const project = useQuery(api.projects.get, { id: projectId })
   const overview = useQuery(api.timeEntries.projectOverview, { projectId })
+  const monthlyData = useQuery(api.timeEntries.projectMonthlyBreakdown, { projectId })
+
+  const statuses = useQuery(api.statuses.list, isAuthenticated ? {} : "skip")
+  const categories = useQuery(api.workCategories.list, isAuthenticated ? {} : "skip")
+  const projects = useQuery(api.projects.list, isAuthenticated ? {} : "skip")
+  const orgMembersData = useQuery(
+    api.orgMembers.listOrgMembers,
+    isAuthenticated ? {} : "skip",
+  )
 
   const archiveProject = useMutation(api.projects.archive)
   const restoreProject = useMutation(api.projects.restore)
@@ -56,6 +71,32 @@ export default function ProjectDetailPage() {
   const tabParam = searchParams.get("tab")
   const defaultTab = tabParam === "settings" ? "settings" : tabParam === "invoices" ? "invoices" : "overview"
   const [tab, setTab] = useState(defaultTab)
+
+  const referenceData = useMemo(
+    () => ({
+      statuses,
+      categories,
+      projects,
+      orgMembers: orgMembersData,
+    }),
+    [statuses, categories, projects, orgMembersData],
+  )
+
+  const projectTaskIds = useMemo(() => {
+    if (!monthlyData) return []
+    return Array.from(
+      new Set(
+        monthlyData.flatMap((month) => [
+          ...month.billableCategoryGroups.flatMap((group) =>
+            group.tasks.map((task) => task.taskId),
+          ),
+          ...month.nonBillableCategoryGroups.flatMap((group) =>
+            group.tasks.map((task) => task.taskId),
+          ),
+        ]),
+      ),
+    )
+  }, [monthlyData])
 
   useEffect(() => {
     if (project === null) {
@@ -94,6 +135,7 @@ export default function ProjectDetailPage() {
   }
 
   return (
+    <TaskReferenceDataProvider value={referenceData}>
     <div className="mx-auto w-full max-w-5xl space-y-6">
       {/* Header */}
       <div>
@@ -232,8 +274,8 @@ export default function ProjectDetailPage() {
 
       {/* Task detail modal — route-driven via ?detail=taskId */}
       <TaskDetailModal
-        taskIds={[]}
-        isAdmin={true}
+        taskIds={projectTaskIds}
+        isAdmin={isAdmin ?? false}
       />
 
       {/* Delete confirmation */}
@@ -247,5 +289,6 @@ export default function ProjectDetailPage() {
         onConfirm={handleDelete}
       />
     </div>
+    </TaskReferenceDataProvider>
   )
 }

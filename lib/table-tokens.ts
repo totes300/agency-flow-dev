@@ -14,19 +14,19 @@
 export const SECTION_TITLE = "text-base font-semibold tracking-tight"
 
 /** Level 2 — The primary number. Actual hours, duration, total amount. */
-export const CELL_KEY = "font-semibold font-mono tabular-nums"
+export const CELL_KEY = "font-semibold tabular-nums"
 
 /** Level 2b — Currency/amount values (slightly smaller key metric). */
-export const CELL_AMOUNT = "text-sm font-semibold font-mono tabular-nums"
+export const CELL_AMOUNT = "text-sm font-semibold tabular-nums"
 
 /** Level 2c — Destructive number. Over-budget, negative profit, overtime. */
-export const CELL_DANGER = "text-sm font-semibold font-mono tabular-nums text-destructive"
+export const CELL_DANGER = "text-sm font-semibold tabular-nums text-destructive"
 
 /** Level 3 — Row identifier. Category name, task name. */
 export const CELL_PRIMARY = "text-sm font-medium"
 
 /** Level 4 — Context. Estimated hours, remaining, date, entry count. */
-export const CELL_SECONDARY = "text-sm font-mono tabular-nums text-muted-foreground"
+export const CELL_SECONDARY = "text-sm tabular-nums text-muted-foreground"
 
 /** Level 5 — Column header. Structural, quiet. */
 export const TABLE_HEAD = "px-5 py-2.5 h-auto text-xs font-normal text-muted-foreground"

@@ -1,17 +1,21 @@
 import { cn } from "@/lib/utils"
 
-type StatusTagVariant = "billable" | "non-billable" | "invoiced" | "overtime"
+type StatusTagVariant = "billable" | "non-billable" | "mixed" | "invoiced" | "overtime"
+
+const BADGE_BASE = "inline-flex h-5 items-center justify-center rounded-4xl border px-2 text-[10px] font-medium"
 
 const variantStyles: Record<StatusTagVariant, string> = {
-  billable: "text-xs text-muted-foreground",
-  "non-billable": "bg-muted rounded px-2 py-0.5 text-xs font-medium text-muted-foreground",
-  invoiced: "bg-green-50 border border-green-200 rounded px-1.5 py-0.5 text-[10px] font-medium text-green-700 dark:bg-green-950 dark:border-green-800 dark:text-green-400",
-  overtime: "bg-red-50 border border-red-200 rounded px-1.5 py-0.5 text-[10px] font-medium text-red-700 dark:bg-red-950 dark:border-red-800 dark:text-red-400",
+  billable: `${BADGE_BASE} min-w-16 border-border text-muted-foreground`,
+  "non-billable": `${BADGE_BASE} border-border text-muted-foreground`,
+  mixed: `${BADGE_BASE} min-w-16 border-destructive/20 bg-destructive/10 text-destructive/70 dark:bg-destructive/15 dark:text-destructive/60`,
+  invoiced: `${BADGE_BASE} border-green-200 text-green-700 dark:border-green-800 dark:text-green-400`,
+  overtime: `${BADGE_BASE} border-destructive/20 bg-destructive/10 text-destructive/70 dark:bg-destructive/15 dark:text-destructive/60`,
 }
 
 const variantLabels: Record<StatusTagVariant, string> = {
   billable: "Billable",
   "non-billable": "Non-billable",
+  mixed: "Mixed",
   invoiced: "Invoiced",
   overtime: "Overtime",
 }

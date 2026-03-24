@@ -1,7 +1,8 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useCallback } from "react"
 import { useQuery } from "convex/react"
+import { useRouter, usePathname } from "next/navigation"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import {
@@ -26,6 +27,7 @@ import { MetricCard } from "@/components/metric-card"
 import { BudgetProgress } from "@/components/budget-progress"
 import { RetainerBalanceBadge } from "@/components/retainer-balance-badge"
 import { CycleDots } from "@/components/cycle-dots"
+import { MonthTaskTable } from "./month-task-table"
 import { cn } from "@/lib/utils"
 import { formatMinutes, formatCurrencyPrecise } from "@/lib/format"
 import {
@@ -37,7 +39,14 @@ import {
 
 export function RetainerOverview({ projectId }: { projectId: Id<"projects"> }) {
   const [cycleOffset, setCycleOffset] = useState(0)
+  const router = useRouter()
+  const pathname = usePathname()
   const data = useQuery(api.projects.getRetainerData, { id: projectId, cycleOffset })
+
+  const handleTaskClick = useCallback(
+    (taskId: string) => router.push(`${pathname}?detail=${taskId}`, { scroll: false }),
+    [router, pathname],
+  )
 
   if (data === undefined) {
     return <RetainerOverviewSkeleton />
@@ -67,6 +76,7 @@ export function RetainerOverview({ projectId }: { projectId: Id<"projects"> }) {
     overageDue,
     overageRate,
     rolloverEnabled,
+    totalNonBillableMinutes,
     currency,
   } = data
 
@@ -131,11 +141,16 @@ export function RetainerOverview({ projectId }: { projectId: Id<"projects"> }) {
           </div>
 
           {/* Metric Cards */}
-          <div className="grid gap-4 sm:grid-cols-3">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <MetricCard
               label="Hours Used"
               value={formatMinutes(cycleWorked)}
               detail={`of ${formatMinutes(cycleBudget)}`}
+            />
+            <MetricCard
+              label="Non-billable"
+              value={totalNonBillableMinutes > 0 ? formatMinutes(totalNonBillableMinutes) : "—"}
+              detail="Not counted toward retainer"
             />
             <MetricCard
               label="Over Budget"
@@ -225,18 +240,18 @@ export function RetainerOverview({ projectId }: { projectId: Id<"projects"> }) {
                         </div>
                       </div>
 
-                      {/* Time entries placeholder */}
+                      {/* Time entries */}
                       {month.entryCount === 0 ? (
                         <p className="py-3 text-center text-sm text-muted-foreground">
                           No time entries for this month yet.
                         </p>
                       ) : (
-                        <div className="text-sm">
-                          {/* Phase 7: render grouped entries here */}
-                          <p className="py-2 text-muted-foreground">
-                            {month.entryCount} entries &middot; {month.taskCount} tasks &middot; Total: {formatMinutes(month.workedMinutes)}
-                          </p>
-                        </div>
+                        <MonthTaskTable
+                          billableCategoryGroups={month.billableCategoryGroups}
+                          nonBillableCategoryGroups={month.nonBillableCategoryGroups}
+                          onTaskClick={handleTaskClick}
+                          ariaLabel={`Time entries for ${month.label}`}
+                        />
                       )}
                     </div>
                   </AccordionContent>

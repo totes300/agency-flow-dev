@@ -50,9 +50,9 @@ export default function ProjectDetailPage() {
   const searchParams = useSearchParams()
   const router = useRouter()
   const projectId = params.id as Id<"projects">
-  const project = useQuery(api.projects.get, { id: projectId })
-  const overview = useQuery(api.timeEntries.projectOverview, { projectId })
-  const monthlyData = useQuery(api.timeEntries.projectMonthlyBreakdown, { projectId })
+  const project = useQuery(api.projects.get, isAuthenticated ? { id: projectId } : "skip")
+  const overview = useQuery(api.timeEntries.projectOverview, isAuthenticated ? { projectId } : "skip")
+  const monthlyData = useQuery(api.timeEntries.projectMonthlyBreakdown, isAuthenticated ? { projectId } : "skip")
 
   const statuses = useQuery(api.statuses.list, isAuthenticated ? {} : "skip")
   const categories = useQuery(api.workCategories.list, isAuthenticated ? {} : "skip")

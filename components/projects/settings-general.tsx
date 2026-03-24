@@ -6,11 +6,12 @@ import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { Button } from "@/components/ui/button"
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card"
+import { Field, FieldLabel, FieldDescription } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
@@ -19,7 +20,7 @@ import { BillingTypeBadge, type BillingType } from "@/components/billing-type-ba
 import { CURRENCIES } from "@/convex/lib/constants"
 import type { Currency } from "@/convex/lib/constants"
 import { toast } from "sonner"
-import { Loader2Icon } from "lucide-react"
+import { Spinner } from "@/components/ui/spinner"
 
 type ProjectData = {
   name: string
@@ -77,30 +78,32 @@ export function SettingsGeneral({
       </CardHeader>
       <CardContent>
         <div className="grid gap-4 sm:grid-cols-2">
-          <div className="space-y-1.5 sm:col-span-2">
-            <Label htmlFor="s-name">Project name</Label>
+          <Field className="sm:col-span-2">
+            <FieldLabel htmlFor="s-name">Project name</FieldLabel>
             <Input id="s-name" value={name} onChange={(e) => setName(e.target.value)} maxLength={100} />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="s-code">Project code</Label>
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="s-code">Project code</FieldLabel>
             <Input id="s-code" value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} className="font-mono" />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="s-currency">Currency</Label>
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="s-currency">Currency</FieldLabel>
             <Select value={currency} onValueChange={setCurrency}>
               <SelectTrigger id="s-currency">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {CURRENCIES.map((c) => (
-                  <SelectItem key={c} value={c}>{c}</SelectItem>
-                ))}
+                <SelectGroup>
+                  {CURRENCIES.map((c) => (
+                    <SelectItem key={c} value={c}>{c}</SelectItem>
+                  ))}
+                </SelectGroup>
               </SelectContent>
             </Select>
-          </div>
+          </Field>
           {project.billingType === "fixed" && (
-            <div className="space-y-1.5">
-              <Label htmlFor="s-fixed-price">Fixed Fee</Label>
+            <Field>
+              <FieldLabel htmlFor="s-fixed-price">Fixed Fee</FieldLabel>
               <div className="flex items-center gap-2">
                 <Input
                   id="s-fixed-price"
@@ -114,10 +117,10 @@ export function SettingsGeneral({
                 />
                 <span className="text-sm text-muted-foreground">{currency}</span>
               </div>
-              <p className="text-xs text-muted-foreground">
+              <FieldDescription>
                 The sold project price. Used to calculate profit and effective rate.
-              </p>
-            </div>
+              </FieldDescription>
+            </Field>
           )}
         </div>
         <div className="mt-3 flex items-center gap-2 text-sm">
@@ -128,7 +131,7 @@ export function SettingsGeneral({
       </CardContent>
       <CardFooter className="justify-end">
         <Button onClick={handleSave} disabled={saving || !name.trim() || !code.trim()} size="sm">
-          {saving ? <><Loader2Icon className="size-3.5 animate-spin" /> Saving...</> : "Save"}
+          {saving ? <><Spinner data-icon="inline-start" /> Saving...</> : "Save"}
         </Button>
       </CardFooter>
     </Card>

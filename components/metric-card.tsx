@@ -17,7 +17,7 @@ export function MetricCard({ label, value, detail, variant = "default", classNam
         <p className={cn(
           "mt-1 text-2xl font-semibold tabular-nums tracking-tight",
           variant === "destructive" && "text-destructive",
-          variant === "warning" && "text-amber-600",
+          variant === "warning" && "text-warning",
         )}>{value}</p>
         {detail && (
           <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">{detail}</p>

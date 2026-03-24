@@ -51,7 +51,7 @@ export function TmOverview({
     : "per-category rates"
 
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col gap-6">
       {/* Top metric cards */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         <MetricCard
@@ -99,8 +99,8 @@ export function TmOverview({
 
       {/* Unbilled banner */}
       {overview.uninvoicedAmount > 0 && (
-        <Alert variant="default" className="border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
-          <AlertTriangleIcon className="size-4" />
+        <Alert variant="default" className="border-warning/30 bg-warning/10 text-warning">
+          <AlertTriangleIcon />
           <AlertDescription className="flex items-center gap-3">
             <span>
               Uninvoiced balance: {formatCurrencyPrecise(overview.uninvoicedAmount, currency)} across{" "}
@@ -132,10 +132,10 @@ export function TmOverview({
 
 function TmOverviewSkeleton() {
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col gap-6">
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         {Array.from({ length: 4 }).map((_, i) => (
-          <div key={i} className="rounded-xl border p-4 space-y-2">
+          <div key={i} className="rounded-xl border p-4 flex flex-col gap-2">
             <Skeleton className="h-3 w-16" />
             <Skeleton className="h-7 w-24" />
             <Skeleton className="h-3 w-32" />
@@ -149,7 +149,7 @@ function TmOverviewSkeleton() {
 
 function TmTimeLogSkeleton() {
   return (
-    <div className="space-y-2">
+    <div className="flex flex-col gap-2">
       {Array.from({ length: 3 }).map((_, i) => (
         <Skeleton key={i} className="h-10 w-full rounded-lg" />
       ))}

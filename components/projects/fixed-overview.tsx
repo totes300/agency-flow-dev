@@ -109,7 +109,7 @@ export function FixedOverview({
   }
 
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col gap-6">
       {/* Top metric cards */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
         <MetricCard
@@ -158,7 +158,7 @@ export function FixedOverview({
       {/* Info / warning banner */}
       {(missingCostRateCount ?? 0) > 0 ? (
         <Alert variant="destructive">
-          <AlertTriangleIcon className="size-4" />
+          <AlertTriangleIcon />
           <AlertDescription className="flex items-center justify-between gap-4">
             <span>
               Labor cost incomplete — {missingCostRateCount}{" "}
@@ -176,7 +176,7 @@ export function FixedOverview({
         </Alert>
       ) : (
         <Alert>
-          <InfoIcon className="size-4" />
+          <InfoIcon />
           <AlertDescription>
             Fixed-fee projects track delivery against estimated effort and labor cost.
           </AlertDescription>
@@ -262,7 +262,7 @@ function ProfitDetail({
       {diff !== null && (
         <span className={cn(
           "font-medium",
-          diff >= 0 ? "text-green-600 dark:text-green-500" : "text-destructive",
+          diff >= 0 ? "text-success" : "text-destructive",
         )}>
           {diff >= 0 ? "+" : ""}{diff}%
         </span>
@@ -358,7 +358,7 @@ function BudgetSection({
       {/* Unestimated category warning */}
       {unestimatedCategories.length > 0 && (
         <div className={cn("flex items-center gap-3", TABLE_FOOTER, "px-5 py-3")}>
-          <AlertTriangleIcon className="size-4 shrink-0 text-red-400 dark:text-red-500" />
+          <AlertTriangleIcon className="size-4 shrink-0 text-destructive" />
           <p className="min-w-0 flex-1 text-sm text-muted-foreground">
             <span className="font-medium text-foreground">No estimate</span>
             {" — "}
@@ -409,10 +409,10 @@ const EMPTY_RECORD: Record<string, number> = {}
 
 function FixedOverviewSkeleton() {
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col gap-6">
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
         {Array.from({ length: 3 }).map((_, i) => (
-          <div key={i} className="rounded-xl border p-4 space-y-2">
+          <div key={i} className="rounded-xl border p-4 flex flex-col gap-2">
             <Skeleton className="h-3 w-16" />
             <Skeleton className="h-7 w-24" />
             <Skeleton className="h-3 w-32" />
@@ -420,7 +420,7 @@ function FixedOverviewSkeleton() {
         ))}
       </div>
       <Skeleton className="h-12 w-full rounded-lg" />
-      <div className="rounded-xl border p-4 space-y-3">
+      <div className="rounded-xl border p-4 flex flex-col gap-3">
         <Skeleton className="h-5 w-48" />
         <Skeleton className="h-2.5 w-full rounded-full" />
         <Skeleton className="h-32 w-full" />
@@ -431,7 +431,7 @@ function FixedOverviewSkeleton() {
 
 function TimeLogSkeleton() {
   return (
-    <div className="space-y-2">
+    <div className="flex flex-col gap-2">
       {Array.from({ length: 3 }).map((_, i) => (
         <Skeleton key={i} className="h-10 w-full rounded-lg" />
       ))}

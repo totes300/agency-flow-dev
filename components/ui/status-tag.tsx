@@ -8,7 +8,7 @@ const variantStyles: Record<StatusTagVariant, string> = {
   billable: `${BADGE_BASE} min-w-16 border-border text-muted-foreground`,
   "non-billable": `${BADGE_BASE} border-border text-muted-foreground`,
   mixed: `${BADGE_BASE} min-w-16 border-destructive/20 bg-destructive/10 text-destructive/70 dark:bg-destructive/15 dark:text-destructive/60`,
-  invoiced: `${BADGE_BASE} border-green-200 text-green-700 dark:border-green-800 dark:text-green-400`,
+  invoiced: `${BADGE_BASE} border-success/30 text-success`,
   overtime: `${BADGE_BASE} border-destructive/20 bg-destructive/10 text-destructive/70 dark:bg-destructive/15 dark:text-destructive/60`,
 }
 

@@ -5,8 +5,8 @@ import { useQuery, useMutation } from "convex/react"
 import { useRouter } from "next/navigation"
 import { api } from "@/convex/_generated/api"
 import { Button } from "@/components/ui/button"
+import { Field, FieldGroup, FieldLabel, FieldDescription } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import {
   Dialog,
@@ -19,6 +19,7 @@ import {
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
@@ -192,10 +193,11 @@ export function ProjectFormModal({ open, onOpenChange }: ProjectFormModalProps) 
           </DialogDescription>
         </DialogHeader>
 
-        <form onSubmit={handleSubmit} className="space-y-5">
+        <form onSubmit={handleSubmit}>
+          <FieldGroup>
           {/* Client */}
-          <div className="space-y-1.5">
-            <Label htmlFor="project-client">Client</Label>
+          <Field>
+            <FieldLabel htmlFor="project-client">Client</FieldLabel>
             {hasNoClients ? (
               <p className="text-sm text-muted-foreground">
                 No clients available. Create a client first.
@@ -206,17 +208,19 @@ export function ProjectFormModal({ open, onOpenChange }: ProjectFormModalProps) 
                   <SelectValue placeholder="Select a client..." />
                 </SelectTrigger>
                 <SelectContent>
-                  {clients?.map((c) => (
-                    <SelectItem key={c._id} value={c._id}>{c.name}</SelectItem>
-                  ))}
+                  <SelectGroup>
+                    {clients?.map((c) => (
+                      <SelectItem key={c._id} value={c._id}>{c.name}</SelectItem>
+                    ))}
+                  </SelectGroup>
                 </SelectContent>
               </Select>
             )}
-          </div>
+          </Field>
 
           {/* Project name */}
-          <div className="space-y-1.5">
-            <Label htmlFor="project-name">Project name</Label>
+          <Field>
+            <FieldLabel htmlFor="project-name">Project name</FieldLabel>
             <Input
               id="project-name"
               value={name}
@@ -225,11 +229,11 @@ export function ProjectFormModal({ open, onOpenChange }: ProjectFormModalProps) 
               maxLength={100}
               autoFocus
             />
-          </div>
+          </Field>
 
           {/* Project code */}
-          <div className="space-y-1.5">
-            <Label htmlFor="project-code">Project code</Label>
+          <Field>
+            <FieldLabel htmlFor="project-code">Project code</FieldLabel>
             <Input
               id="project-code"
               value={code}
@@ -237,15 +241,15 @@ export function ProjectFormModal({ open, onOpenChange }: ProjectFormModalProps) 
               placeholder="PRJ-001"
               className="font-mono"
             />
-          </div>
+          </Field>
 
           {/* Billing type */}
-          <div className="space-y-2">
-            <Label>Billing type</Label>
-            <div className="flex items-center gap-1.5 text-xs text-amber-600">
+          <Field>
+            <FieldLabel>Billing type</FieldLabel>
+            <FieldDescription className="flex items-center gap-1.5 text-xs text-warning">
               <AlertTriangleIcon className="size-3.5 shrink-0" />
               Cannot be changed after creation.
-            </div>
+            </FieldDescription>
             <RadioGroup
               value={billingType}
               onValueChange={(v) => setBillingType(v as BillingType)}
@@ -253,24 +257,24 @@ export function ProjectFormModal({ open, onOpenChange }: ProjectFormModalProps) 
             >
               <div className="flex items-center gap-2">
                 <RadioGroupItem value="fixed" id="bt-fixed" />
-                <Label htmlFor="bt-fixed" className="font-normal">Fixed</Label>
+                <FieldLabel htmlFor="bt-fixed" className="font-normal">Fixed</FieldLabel>
               </div>
               <div className="flex items-center gap-2">
                 <RadioGroupItem value="t_and_m" id="bt-tm" />
-                <Label htmlFor="bt-tm" className="font-normal">T&M</Label>
+                <FieldLabel htmlFor="bt-tm" className="font-normal">T&M</FieldLabel>
               </div>
               <div className="flex items-center gap-2">
                 <RadioGroupItem value="retainer" id="bt-retainer" />
-                <Label htmlFor="bt-retainer" className="font-normal">Retainer</Label>
+                <FieldLabel htmlFor="bt-retainer" className="font-normal">Retainer</FieldLabel>
               </div>
             </RadioGroup>
-          </div>
+          </Field>
 
           {/* Fixed fields */}
           {billingType === "fixed" && (
-            <div className="space-y-4 rounded-lg border bg-muted/20 p-4">
-              <div className="space-y-1.5">
-                <Label htmlFor="fixed-price">Fixed Fee</Label>
+            <div className="flex flex-col gap-4 rounded-lg border bg-muted/20 p-4">
+              <Field>
+                <FieldLabel htmlFor="fixed-price">Fixed Fee</FieldLabel>
                 <div className="flex items-center gap-2">
                   <Input
                     id="fixed-price"
@@ -284,22 +288,22 @@ export function ProjectFormModal({ open, onOpenChange }: ProjectFormModalProps) 
                   />
                   <span className="text-sm text-muted-foreground">{currency}</span>
                 </div>
-                <p className="text-xs text-muted-foreground">
+                <FieldDescription>
                   The sold project price. Used to calculate profit and effective rate.
-                </p>
-              </div>
+                </FieldDescription>
+              </Field>
             </div>
           )}
 
           {/* T&M fields */}
           {billingType === "t_and_m" && (
-            <div className="space-y-4 rounded-lg border bg-muted/20 p-4">
-              <div className="space-y-2">
-                <Label>Rate mode</Label>
-                <div className="flex items-center gap-1.5 text-xs text-amber-600">
+            <div className="flex flex-col gap-4 rounded-lg border bg-muted/20 p-4">
+              <Field>
+                <FieldLabel>Rate mode</FieldLabel>
+                <FieldDescription className="flex items-center gap-1.5 text-xs text-warning">
                   <AlertTriangleIcon className="size-3.5 shrink-0" />
                   Cannot be changed.
-                </div>
+                </FieldDescription>
                 <RadioGroup
                   value={tmRateMode}
                   onValueChange={(v) => setTmRateMode(v as TmRateMode)}
@@ -307,18 +311,18 @@ export function ProjectFormModal({ open, onOpenChange }: ProjectFormModalProps) 
                 >
                   <div className="flex items-center gap-2">
                     <RadioGroupItem value="flat" id="rm-flat" />
-                    <Label htmlFor="rm-flat" className="font-normal">Flat rate</Label>
+                    <FieldLabel htmlFor="rm-flat" className="font-normal">Flat rate</FieldLabel>
                   </div>
                   <div className="flex items-center gap-2">
                     <RadioGroupItem value="per_category" id="rm-percat" />
-                    <Label htmlFor="rm-percat" className="font-normal">Per-category</Label>
+                    <FieldLabel htmlFor="rm-percat" className="font-normal">Per-category</FieldLabel>
                   </div>
                 </RadioGroup>
-              </div>
+              </Field>
 
               {tmRateMode === "flat" ? (
-                <div className="space-y-1.5">
-                  <Label htmlFor="hourly-rate">Hourly rate</Label>
+                <Field>
+                  <FieldLabel htmlFor="hourly-rate">Hourly rate</FieldLabel>
                   <div className="flex items-center gap-2">
                     <Input
                       id="hourly-rate"
@@ -332,10 +336,10 @@ export function ProjectFormModal({ open, onOpenChange }: ProjectFormModalProps) 
                     />
                     <span className="text-sm text-muted-foreground">{currency}/h</span>
                   </div>
-                </div>
+                </Field>
               ) : (
-                <div className="space-y-3">
-                  <Label>Category rates</Label>
+                <div className="flex flex-col gap-3">
+                  <FieldLabel>Category rates</FieldLabel>
                   {categoryRates.map((cr, i) => (
                     <div key={i} className="flex items-center gap-2">
                       <Select
@@ -346,11 +350,13 @@ export function ProjectFormModal({ open, onOpenChange }: ProjectFormModalProps) 
                           <SelectValue placeholder="Category..." />
                         </SelectTrigger>
                         <SelectContent>
-                          {categories
-                            ?.filter((c) => !usedCategoryIds.has(c._id) || c._id === cr.workCategoryId)
-                            .map((c) => (
-                              <SelectItem key={c._id} value={c._id}>{c.name}</SelectItem>
-                            ))}
+                          <SelectGroup>
+                            {categories
+                              ?.filter((c) => !usedCategoryIds.has(c._id) || c._id === cr.workCategoryId)
+                              .map((c) => (
+                                <SelectItem key={c._id} value={c._id}>{c.name}</SelectItem>
+                              ))}
+                          </SelectGroup>
                         </SelectContent>
                       </Select>
                       <Input
@@ -369,7 +375,7 @@ export function ProjectFormModal({ open, onOpenChange }: ProjectFormModalProps) 
                         size="icon-sm"
                         onClick={() => removeCategoryRate(i)}
                       >
-                        <XIcon className="size-3.5" />
+                        <XIcon />
                       </Button>
                     </div>
                   ))}
@@ -380,7 +386,7 @@ export function ProjectFormModal({ open, onOpenChange }: ProjectFormModalProps) 
                     onClick={addCategoryRate}
                     className="w-full"
                   >
-                    <PlusIcon className="size-3.5" />
+                    <PlusIcon data-icon="inline-start" />
                     Add category rate
                   </Button>
                 </div>
@@ -390,10 +396,10 @@ export function ProjectFormModal({ open, onOpenChange }: ProjectFormModalProps) 
 
           {/* Retainer fields */}
           {billingType === "retainer" && (
-            <div className="space-y-4 rounded-lg border bg-muted/20 p-4">
+            <div className="flex flex-col gap-4 rounded-lg border bg-muted/20 p-4">
               <div className="grid gap-4 sm:grid-cols-2">
-                <div className="space-y-1.5">
-                  <Label htmlFor="monthly-hours">Monthly hours</Label>
+                <Field>
+                  <FieldLabel htmlFor="monthly-hours">Monthly hours</FieldLabel>
                   <div className="flex items-center gap-2">
                     <Input
                       id="monthly-hours"
@@ -406,9 +412,9 @@ export function ProjectFormModal({ open, onOpenChange }: ProjectFormModalProps) 
                     />
                     <span className="shrink-0 text-sm text-muted-foreground">h/mo</span>
                   </div>
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="overage-rate">Overage rate</Label>
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="overage-rate">Overage rate</FieldLabel>
                   <div className="flex items-center gap-2">
                     <Input
                       id="overage-rate"
@@ -421,72 +427,75 @@ export function ProjectFormModal({ open, onOpenChange }: ProjectFormModalProps) 
                     />
                     <span className="shrink-0 text-sm text-muted-foreground">{currency}/h</span>
                   </div>
-                </div>
+                </Field>
               </div>
 
               <div className="grid gap-4 sm:grid-cols-2">
-                <div className="space-y-1.5">
-                  <Label htmlFor="ret-start-date">Start date</Label>
+                <Field>
+                  <FieldLabel htmlFor="ret-start-date">Start date</FieldLabel>
                   <DatePicker
                     id="ret-start-date"
                     value={retainerStartDate}
                     onChange={setRetainerStartDate}
                     placeholder="Pick start date"
                   />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="cycle-length">Cycle length</Label>
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="cycle-length">Cycle length</FieldLabel>
                   <Select value={cycleLength} onValueChange={setCycleLength}>
                     <SelectTrigger id="cycle-length">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {Array.from({ length: 12 }, (_, i) => i + 1).map((n) => (
-                        <SelectItem key={n} value={String(n)}>
-                          {n} {n === 1 ? "month" : "months"}
-                        </SelectItem>
-                      ))}
+                      <SelectGroup>
+                        {Array.from({ length: 12 }, (_, i) => i + 1).map((n) => (
+                          <SelectItem key={n} value={String(n)}>
+                            {n} {n === 1 ? "month" : "months"}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
                     </SelectContent>
                   </Select>
-                </div>
+                </Field>
               </div>
 
-              <div className="space-y-2 rounded-md border bg-background/50 p-3">
-                <div className="flex items-center justify-between">
-                  <Label htmlFor="rollover-toggle" className="font-normal">Rollover</Label>
+              <Field orientation="horizontal" className="rounded-md border bg-background/50 p-3">
+                <FieldLabel htmlFor="rollover-toggle" className="font-normal">Rollover</FieldLabel>
                   <Switch
                     id="rollover-toggle"
                     checked={rolloverEnabled}
                     onCheckedChange={setRolloverEnabled}
                   />
-                </div>
-                <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
+                <FieldDescription className="flex items-start gap-1.5">
                   <InfoIcon className="mt-0.5 size-3 shrink-0" />
                   {rolloverEnabled
                     ? "Unused hours carry forward within each cycle. Forfeited at cycle end."
                     : "Each month is independent. Overage billed monthly."
                   }
-                </p>
-              </div>
+                </FieldDescription>
+              </Field>
             </div>
           )}
 
           {/* Currency */}
-          <div className="space-y-1.5">
-            <Label htmlFor="project-currency">Currency</Label>
+          <Field>
+            <FieldLabel htmlFor="project-currency">Currency</FieldLabel>
             <Select value={currency} onValueChange={setCurrency}>
               <SelectTrigger id="project-currency">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {CURRENCIES.map((c) => (
-                  <SelectItem key={c} value={c}>{c}</SelectItem>
-                ))}
+                <SelectGroup>
+                  {CURRENCIES.map((c) => (
+                    <SelectItem key={c} value={c}>{c}</SelectItem>
+                  ))}
+                </SelectGroup>
               </SelectContent>
             </Select>
-          </div>
+          </Field>
 
           {error && <p className="text-sm text-destructive">{error}</p>}
+          </FieldGroup>
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>

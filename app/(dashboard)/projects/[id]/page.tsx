@@ -136,7 +136,7 @@ export default function ProjectDetailPage() {
 
   return (
     <TaskReferenceDataProvider value={referenceData}>
-    <div className="mx-auto w-full max-w-5xl space-y-6">
+    <div className="mx-auto w-full max-w-5xl flex flex-col gap-6">
       {/* Header */}
       <div>
         <Button
@@ -145,7 +145,7 @@ export default function ProjectDetailPage() {
           className="mb-2 -ml-2 text-muted-foreground"
           onClick={() => router.push("/projects")}
         >
-          <ArrowLeftIcon className="size-3.5" />
+          <ArrowLeftIcon data-icon="inline-start" />
           Projects
         </Button>
 
@@ -189,17 +189,17 @@ export default function ProjectDetailPage() {
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="icon-sm">
-                  <MoreHorizontalIcon className="size-4" />
+                  <MoreHorizontalIcon />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
                 {project.archivedAt ? (
                   <DropdownMenuItem onClick={handleRestore}>
-                    <ArchiveRestoreIcon className="size-4" /> Restore
+                    <ArchiveRestoreIcon /> Restore
                   </DropdownMenuItem>
                 ) : (
                   <DropdownMenuItem onClick={handleArchive}>
-                    <ArchiveIcon className="size-4" /> Archive
+                    <ArchiveIcon /> Archive
                   </DropdownMenuItem>
                 )}
                 <DropdownMenuSeparator />
@@ -207,7 +207,7 @@ export default function ProjectDetailPage() {
                   className="text-destructive focus:text-destructive"
                   onClick={() => setDeleteOpen(true)}
                 >
-                  <Trash2Icon className="size-4" /> Delete
+                  <Trash2Icon /> Delete
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -256,7 +256,7 @@ export default function ProjectDetailPage() {
         </TabsContent>
 
         <TabsContent value="settings" className="mt-6">
-          <div className="space-y-6">
+          <div className="flex flex-col gap-6">
             <SettingsGeneral projectId={projectId} project={project} />
             {project.billingType === "fixed" && (
               <SettingsBudgetEstimates projectId={projectId} currency={project.currency} />

@@ -9,7 +9,8 @@ import { SectionCard } from "@/components/ui/section-card"
 import { SectionHeader } from "@/components/ui/section-header"
 import { MonthTaskTable } from "./month-task-table"
 import { TimeLogPlaceholder } from "./time-log-placeholder"
-import { formatMinutes, formatCurrencyPrecise } from "@/lib/format"
+import { Skeleton } from "@/components/ui/skeleton"
+import { formatMinutes, formatCurrencyPrecise, pluralize } from "@/lib/format"
 import { CELL_KEY } from "@/lib/table-tokens"
 
 // ─── Types ──────────────────────────────────────────────────────────────────────
@@ -49,6 +50,16 @@ type Props = {
   showAmounts?: boolean
   currency?: string
   onTaskClick: (taskId: string) => void
+}
+
+export function TimeLogSkeleton() {
+  return (
+    <div className="flex flex-col gap-2">
+      {Array.from({ length: 3 }).map((_, i) => (
+        <Skeleton key={i} className="h-10 w-full rounded-lg" />
+      ))}
+    </div>
+  )
 }
 
 // ─── Main Component ─────────────────────────────────────────────────────────────
@@ -112,7 +123,7 @@ function MonthCard({
       <SectionCard>
         <SectionHeader
           title={m.monthLabel}
-          subtitle={`${m.entryCount} ${m.entryCount === 1 ? "entry" : "entries"} · ${m.taskCount} ${m.taskCount === 1 ? "task" : "tasks"}`}
+          subtitle={`${m.entryCount} ${pluralize(m.entryCount, "entry", "entries")} · ${m.taskCount} ${pluralize(m.taskCount, "task", "tasks")}`}
           trailing={trailingContent}
           collapsible
           open={open}

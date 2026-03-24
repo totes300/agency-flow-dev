@@ -4,7 +4,6 @@ import { useState, useEffect, useMemo } from "react"
 import { useParams, useSearchParams, useRouter } from "next/navigation"
 import { useQuery, useMutation } from "convex/react"
 import { useConvexAuth } from "convex/react"
-import { useOrganization } from "@clerk/nextjs"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { Button } from "@/components/ui/button"
@@ -35,6 +34,7 @@ import { TaskDetailModal } from "@/components/tasks/task-detail-modal"
 import { TaskReferenceDataProvider } from "@/components/tasks/task-reference-data"
 import { toast } from "sonner"
 import { formatShortDate } from "@/lib/format"
+import { useIsAdmin } from "@/lib/hooks/use-is-admin"
 import {
   ArrowLeftIcon,
   MoreHorizontalIcon,
@@ -45,8 +45,7 @@ import {
 
 export default function ProjectDetailPage() {
   const { isAuthenticated } = useConvexAuth()
-  const { membership } = useOrganization()
-  const isAdmin = membership?.role === "org:admin"
+  const isAdmin = useIsAdmin()
   const params = useParams()
   const searchParams = useSearchParams()
   const router = useRouter()
@@ -68,6 +67,7 @@ export default function ProjectDetailPage() {
   const removeProject = useMutation(api.projects.remove)
 
   const [deleteOpen, setDeleteOpen] = useState(false)
+  const [scrollTarget, setScrollTarget] = useState<string | null>(null)
   const tabParam = searchParams.get("tab")
   const defaultTab = tabParam === "settings" ? "settings" : tabParam === "invoices" ? "invoices" : "overview"
   const [tab, setTab] = useState(defaultTab)
@@ -97,6 +97,16 @@ export default function ProjectDetailPage() {
       ),
     )
   }, [monthlyData])
+
+  // Scroll to target element after tab switch
+  useEffect(() => {
+    if (!scrollTarget || tab !== "settings") return
+    const id = requestAnimationFrame(() => {
+      document.getElementById(scrollTarget)?.scrollIntoView({ behavior: "smooth", block: "start" })
+      setScrollTarget(null)
+    })
+    return () => cancelAnimationFrame(id)
+  }, [scrollTarget, tab])
 
   useEffect(() => {
     if (project === null) {
@@ -230,9 +240,7 @@ export default function ProjectDetailPage() {
               project={project}
               onNavigateToEstimates={() => {
                 setTab("settings")
-                setTimeout(() => {
-                  document.getElementById("budget-estimates-section")?.scrollIntoView({ behavior: "smooth", block: "start" })
-                }, 100)
+                setScrollTarget("budget-estimates-section")
               }}
             />
           )}

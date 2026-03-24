@@ -1,8 +1,7 @@
 "use client"
 
-import { useMemo, useCallback, useState } from "react"
+import { useMemo, useState } from "react"
 import { useQuery, useMutation } from "convex/react"
-import { useRouter, usePathname } from "next/navigation"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -12,7 +11,7 @@ import { SectionCard } from "@/components/ui/section-card"
 import { SectionHeader } from "@/components/ui/section-header"
 import { ProgressCell } from "@/components/ui/progress-cell"
 import { MetricCard } from "@/components/metric-card"
-import { MonthlyTimeBreakdown } from "./monthly-time-breakdown"
+import { MonthlyTimeBreakdown, TimeLogSkeleton } from "./monthly-time-breakdown"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   AlertDialog,
@@ -27,7 +26,8 @@ import {
 import { toastError } from "@/lib/toast-helpers"
 import { InfoIcon, AlertTriangleIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { formatMinutes, formatCurrencyPrecise } from "@/lib/format"
+import { formatMinutes, formatCurrencyPrecise, pluralize } from "@/lib/format"
+import { useTaskDetailNav } from "@/lib/hooks/use-task-detail-nav"
 import {
   CELL_KEY, CELL_PRIMARY, CELL_SECONDARY,
   TABLE_HEAD, TABLE_HEAD_ROW, TABLE_CELL, TABLE_ROW, TABLE_FOOTER,
@@ -42,8 +42,7 @@ export function FixedOverview({
   project: { currency: string; fixedPrice?: number }
   onNavigateToEstimates?: () => void
 }) {
-  const router = useRouter()
-  const pathname = usePathname()
+  const handleTaskClick = useTaskDetailNav()
   const estimates = useQuery(api.projectCategoryEstimates.list, { projectId })
   const categories = useQuery(api.workCategories.list, { includeArchived: false })
   const overview = useQuery(api.timeEntries.projectOverview, { projectId })
@@ -97,11 +96,6 @@ export function FixedOverview({
         return { catId, minutes, name: cat?.name ?? "Unknown", color: cat?.color ?? "gray" }
       })
   }, [estimates, overview, categories, minutesByCategory])
-
-  const handleTaskClick = useCallback(
-    (taskId: string) => router.push(`${pathname}?detail=${taskId}`, { scroll: false }),
-    [router, pathname],
-  )
 
   // Loading skeleton
   if (overview === undefined || estimates === undefined) {
@@ -161,8 +155,8 @@ export function FixedOverview({
           <AlertTriangleIcon />
           <AlertDescription className="flex items-center justify-between gap-4">
             <span>
-              Labor cost incomplete — {missingCostRateCount}{" "}
-              {missingCostRateCount === 1 ? "entry" : "entries"} missing cost rate
+              Labor cost incomplete — {missingCostRateCount ?? 0}{" "}
+              {pluralize(missingCostRateCount ?? 0, "entry", "entries")} missing cost rate
             </span>
             <Button
               variant="outline"
@@ -195,17 +189,15 @@ export function FixedOverview({
       />
 
       {/* Time Log */}
-      <div>
-        {monthlyData === undefined ? (
-          <TimeLogSkeleton />
-        ) : (
-          <MonthlyTimeBreakdown
-            months={monthlyData}
-            showAmounts={false}
-            onTaskClick={handleTaskClick}
-          />
-        )}
-      </div>
+      {monthlyData === undefined ? (
+        <TimeLogSkeleton />
+      ) : (
+        <MonthlyTimeBreakdown
+          months={monthlyData}
+          showAmounts={false}
+          onTaskClick={handleTaskClick}
+        />
+      )}
 
       {/* Backfill missing cost rates dialog */}
       <AlertDialog open={backfillDialogOpen} onOpenChange={setBackfillDialogOpen}>
@@ -214,7 +206,7 @@ export function FixedOverview({
             <AlertDialogTitle>Fill missing cost rates?</AlertDialogTitle>
             <AlertDialogDescription>
               {missingCostRateCount ?? 0} past time{" "}
-              {(missingCostRateCount ?? 0) === 1 ? "entry has" : "entries have"} no
+              {pluralize(missingCostRateCount ?? 0, "entry has", "entries have")} no
               internal cost rate snapshot. This will fill only missing snapshots
               using the current cost rate setup. Existing snapshots will not be changed.
             </AlertDialogDescription>
@@ -429,12 +421,3 @@ function FixedOverviewSkeleton() {
   )
 }
 
-function TimeLogSkeleton() {
-  return (
-    <div className="flex flex-col gap-2">
-      {Array.from({ length: 3 }).map((_, i) => (
-        <Skeleton key={i} className="h-10 w-full rounded-lg" />
-      ))}
-    </div>
-  )
-}

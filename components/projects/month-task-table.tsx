@@ -189,7 +189,7 @@ function CategorySection({
             key={task.taskId}
             role="row"
             className={cn(
-              "mx-5 flex items-center border-b border-border/70 pl-[0.625rem] transition-colors hover:bg-muted/50",
+              "flex items-center border-b border-border/70 pl-10 pr-5 transition-colors hover:bg-muted/30",
               "py-2.5",
             )}
           >

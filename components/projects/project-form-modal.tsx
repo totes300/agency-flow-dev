@@ -92,6 +92,13 @@ export function ProjectFormModal({ open, onOpenChange }: ProjectFormModalProps) 
     }
   }, [open])
 
+  // Pre-fill hourly rate when orgSettings loads after modal is already open
+  useEffect(() => {
+    if (open && orgSettings?.defaultTmFlatRate != null && !hourlyRate) {
+      setHourlyRate(orgSettings.defaultTmFlatRate.toString())
+    }
+  }, [open, orgSettings?.defaultTmFlatRate, hourlyRate])
+
   // Pre-fill code when nextCode loads
   useEffect(() => {
     if (nextCode && !code) {

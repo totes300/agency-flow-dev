@@ -1,8 +1,7 @@
 "use client"
 
-import { useState, useCallback } from "react"
+import { useState } from "react"
 import { useQuery } from "convex/react"
-import { useRouter, usePathname } from "next/navigation"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import {
@@ -29,7 +28,8 @@ import { RetainerBalanceBadge } from "@/components/retainer-balance-badge"
 import { CycleDots } from "@/components/cycle-dots"
 import { MonthTaskTable } from "./month-task-table"
 import { cn } from "@/lib/utils"
-import { formatMinutes, formatCurrencyPrecise } from "@/lib/format"
+import { formatMinutes, formatCurrencyPrecise, pluralize } from "@/lib/format"
+import { useTaskDetailNav } from "@/lib/hooks/use-task-detail-nav"
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -39,14 +39,8 @@ import {
 
 export function RetainerOverview({ projectId }: { projectId: Id<"projects"> }) {
   const [cycleOffset, setCycleOffset] = useState(0)
-  const router = useRouter()
-  const pathname = usePathname()
+  const handleTaskClick = useTaskDetailNav()
   const data = useQuery(api.projects.getRetainerData, { id: projectId, cycleOffset })
-
-  const handleTaskClick = useCallback(
-    (taskId: string) => router.push(`${pathname}?detail=${taskId}`, { scroll: false }),
-    [router, pathname],
-  )
 
   if (data === undefined) {
     return <RetainerOverviewSkeleton />
@@ -171,7 +165,7 @@ export function RetainerOverview({ projectId }: { projectId: Id<"projects"> }) {
         </CardContent>
 
         <CardFooter className="text-xs text-muted-foreground tabular-nums">
-          {cycleLength} {cycleLength === 1 ? "month" : "months"} &middot; {formatMinutes(cycleBudget)} budget &middot; {formatMinutes(cycleWorked)} used
+          {cycleLength} {pluralize(cycleLength, "month", "months")} &middot; {formatMinutes(cycleBudget)} budget &middot; {formatMinutes(cycleWorked)} used
         </CardFooter>
       </Card>
 

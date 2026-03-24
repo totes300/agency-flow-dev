@@ -176,6 +176,11 @@ export function getWeekBounds(offset: number, now: Date = new Date()): { start: 
   return { start: formatDateToYMD(monday), end: formatDateToYMD(sunday) }
 }
 
+/** Simple pluralization: returns singular when n===1, plural otherwise. */
+export function pluralize(n: number, singular: string, plural: string): string {
+  return n === 1 ? singular : plural
+}
+
 // Re-export duration formatters for discoverability
 export { formatDuration, formatTimerDisplay } from "@/lib/duration"
 

@@ -270,9 +270,7 @@ export const commitEntry = mutation({
         if (rateResult.ok) {
           rateSnapshot = rateResult.snapshot;
         }
-      } catch {
-        // Non-billable entries are allowed without rates
-      }
+      } catch {}
     }
 
     const now = Date.now();

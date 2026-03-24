@@ -5,7 +5,7 @@ import { getAuthContext } from "./lib/auth";
 import { roundMinutes } from "./lib/rounding";
 import { getDateInTimezone } from "./lib/timer";
 import { resolveRate } from "./lib/rates";
-import { getOrgSettings, buildRateContext } from "./lib/orgHelpers";
+import { getOrgSettings, buildRateContext, resolveSnapshot } from "./lib/orgHelpers";
 import { logActivity } from "./activityLog";
 
 // ─── Queries ────────────────────────────────────────────────────────────────────
@@ -206,29 +206,7 @@ export const create = mutation({
     const isBillable = args.isBillable ?? task.billable;
 
     // Rate snapshot — only enforce for billable entries
-    let rateSnapshot: Record<string, number | undefined> = {};
-    if (isBillable) {
-      if (!task.workCategoryId) {
-        throw new ConvexError("Set a category on this task before logging billable time");
-      }
-      const rateCtx = await buildRateContext(ctx, task, project);
-      const rateResult = resolveRate(rateCtx);
-      if (!rateResult.ok) {
-        throw new ConvexError(rateResult.error);
-      }
-      rateSnapshot = rateResult.snapshot;
-    } else {
-      // Attempt rate resolution for non-billable but don't throw on failure
-      try {
-        const rateCtx = await buildRateContext(ctx, task, project);
-        const rateResult = resolveRate(rateCtx);
-        if (rateResult.ok) {
-          rateSnapshot = rateResult.snapshot;
-        }
-      } catch {
-        // Non-billable entries are allowed without rates
-      }
-    }
+    const rateSnapshot = await resolveSnapshot(ctx, task, project, isBillable);
 
     const now = Date.now();
     const entryId = await ctx.db.insert("timeEntries", {
@@ -307,23 +285,24 @@ export const update = mutation({
     }
 
     if (args.isBillable !== undefined) {
-      // When switching to billable, validate rate snapshots exist and task has category
+      // When switching to billable, resolve a fresh snapshot if one is missing
       if (args.isBillable && !entry.isBillable) {
         const task = await ctx.db.get(entry.taskId);
-        if (task && !task.workCategoryId) {
-          throw new ConvexError("Set a category on this task before marking time as billable");
-        }
-        // Check that rate snapshots were captured at creation time
-        if (!entry.appliedRate && !entry.appliedCostRate && !entry.appliedBillRate) {
-          throw new ConvexError(
-            "This entry has no rate snapshot — re-create it after configuring rates on the project"
-          );
+        if (!task) throw new ConvexError("Task not found");
+        if (!task.projectId) throw new ConvexError("Task has no project");
+        const project = await ctx.db.get(task.projectId);
+        if (!project) throw new ConvexError("Project not found");
+
+        // Only fill missing snapshot fields — never overwrite existing snapshots
+        const hasSnapshot =
+          entry.appliedRate != null || entry.appliedCostRate != null || entry.appliedBillRate != null;
+        if (!hasSnapshot) {
+          const snapshot = await resolveSnapshot(ctx, task, project, true);
+          Object.assign(updates, snapshot);
         }
       }
       updates.isBillable = args.isBillable;
     }
-
-    // Rate snapshot does NOT update on edit (stays from creation time)
 
     await ctx.db.patch(args.id, updates);
 
@@ -418,9 +397,13 @@ export const bulkUpdateBillable = mutation({
     if (!task || task.orgId !== orgId) throw new ConvexError("Task not found");
     if (!isAdmin) throw new ConvexError("Only admins can bulk-update billability");
 
-    // When switching to billable, require a category on the task
-    if (args.isBillable && !task.workCategoryId) {
-      throw new ConvexError("Set a category on this task before marking time as billable");
+    // When switching to billable, resolve a rate snapshot (all-or-nothing)
+    let snapshot: Record<string, number | undefined> = {};
+    if (args.isBillable) {
+      if (!task.projectId) throw new ConvexError("Task has no project");
+      const project = await ctx.db.get(task.projectId);
+      if (!project) throw new ConvexError("Project not found");
+      snapshot = await resolveSnapshot(ctx, task, project, true);
     }
 
     const entries = await ctx.db
@@ -434,7 +417,17 @@ export const bulkUpdateBillable = mutation({
       if (entry.isBillable === args.isBillable) continue;
       // Skip invoiced entries (future-proofing)
       if ("invoicedInReportId" in entry && entry.invoicedInReportId) continue;
-      await ctx.db.patch(entry._id, { isBillable: args.isBillable, updatedAt: now });
+
+      const patch: Record<string, unknown> = { isBillable: args.isBillable, updatedAt: now };
+      // Only fill missing snapshot fields when flipping to billable
+      if (args.isBillable) {
+        const hasSnapshot =
+          entry.appliedRate != null || entry.appliedCostRate != null || entry.appliedBillRate != null;
+        if (!hasSnapshot) {
+          Object.assign(patch, snapshot);
+        }
+      }
+      await ctx.db.patch(entry._id, patch);
       updated++;
     }
 
@@ -460,17 +453,16 @@ export const countMissingCostRates = query({
       )
       .collect();
 
-    let count = 0;
-    for (const task of tasks) {
-      const entries = await ctx.db
-        .query("timeEntries")
-        .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
-        .collect();
-      for (const e of entries) {
-        if (e.appliedCostRate == null) count++;
-      }
-    }
-    return count;
+    const counts = await Promise.all(
+      tasks.map(async (task) => {
+        const entries = await ctx.db
+          .query("timeEntries")
+          .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
+          .collect();
+        return entries.filter((e) => e.appliedCostRate == null).length;
+      }),
+    );
+    return counts.reduce((sum, c) => sum + c, 0);
   },
 });
 
@@ -518,7 +510,7 @@ export const backfillMissingCostRates = mutation({
 
       for (const entry of entries) {
         if (entry.appliedCostRate != null) continue; // already has a snapshot
-        if (!catEstimate?.internalCostRate) continue; // no rate to apply
+        if (catEstimate?.internalCostRate == null) continue; // no rate to apply
 
         await ctx.db.patch(entry._id, {
           appliedCostRate: catEstimate.internalCostRate,
@@ -580,7 +572,7 @@ export const projectOverview = query({
     let totalMinutes = 0;
     let totalBillableMinutes = 0;
     let totalNonBillableMinutes = 0;
-    let thisMonthMinutes = 0;
+    let thisMonthBillableMinutes = 0;
     let totalActualCost = 0;
     let uninvoicedMinutes = 0;
     let uninvoicedAmount = 0;
@@ -598,9 +590,9 @@ export const projectOverview = query({
         totalNonBillableMinutes += e.durationMinutes;
       }
 
-      // This month (billable only for T&M metric)
-      if (e.date.startsWith(currentMonth)) {
-        thisMonthMinutes += e.durationMinutes;
+      // This month — billable only (displayed under T&M "Billable Time" card)
+      if (e.isBillable && e.date.startsWith(currentMonth)) {
+        thisMonthBillableMinutes += e.durationMinutes;
       }
 
       // Category breakdowns
@@ -647,7 +639,7 @@ export const projectOverview = query({
       totalBillableMinutes,
       totalNonBillableMinutes,
       lastLoggedDate,
-      thisMonthMinutes,
+      thisMonthBillableMinutes,
       last3BillableMonths,
       minutesByCategory,
       billableMinutesByCategory,

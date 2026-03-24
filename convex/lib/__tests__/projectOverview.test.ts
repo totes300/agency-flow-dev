@@ -164,7 +164,7 @@ describe("T&M overview calculations", () => {
   function computeTmMetrics(entries: TmEntry[], currentMonth: string) {
     let totalBillableMinutes = 0;
     let totalNonBillableMinutes = 0;
-    let thisMonthMinutes = 0;
+    let thisMonthBillableMinutes = 0;
     let uninvoicedMinutes = 0;
     let uninvoicedAmount = 0;
     const billableByMonth: Record<string, number> = {};
@@ -180,8 +180,8 @@ describe("T&M overview calculations", () => {
         totalNonBillableMinutes += e.durationMinutes;
       }
 
-      if (e.date.startsWith(currentMonth)) {
-        thisMonthMinutes += e.durationMinutes;
+      if (e.isBillable && e.date.startsWith(currentMonth)) {
+        thisMonthBillableMinutes += e.durationMinutes;
       }
     }
 
@@ -193,7 +193,7 @@ describe("T&M overview calculations", () => {
     return {
       totalBillableMinutes,
       totalNonBillableMinutes,
-      thisMonthMinutes,
+      thisMonthBillableMinutes,
       uninvoicedMinutes,
       uninvoicedAmount,
       last3BillableMonths: last3,
@@ -217,10 +217,10 @@ describe("T&M overview calculations", () => {
     expect(m.uninvoicedMinutes).toBe(3600);
   });
 
-  it("computes thisMonthMinutes for current month only", () => {
+  it("computes thisMonthBillableMinutes for current month billable only", () => {
     const m = computeTmMetrics(entries, currentMonth);
-    // March: 30h billable + 5h non-billable = 35h = 2100min
-    expect(m.thisMonthMinutes).toBe(2100);
+    // March: 30h billable only (5h non-billable excluded) = 1800min
+    expect(m.thisMonthBillableMinutes).toBe(1800);
   });
 
   it("computes last 3 billable months", () => {

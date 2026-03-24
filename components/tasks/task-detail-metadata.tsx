@@ -81,8 +81,8 @@ export function TaskDetailMetadata({
   const overdue = isOverdue(task.dueDate)
 
   // Billable toggle with confirmation dialog
-  const [billableDialog, setBillableDialog] = useState<{ open: boolean; target: boolean; count: number }>({
-    open: false, target: false, count: 0,
+  const [billableDialog, setBillableDialog] = useState<{ open: boolean; target: boolean }>({
+    open: false, target: false,
   })
 
   // Count mismatched entries (only query when we need it — after toggle)
@@ -94,8 +94,7 @@ export function TaskDetailMetadata({
   const handleBillableChange = useCallback(async (checked: boolean) => {
     const count = mismatchedCount ?? 0
     if (count > 0) {
-      // Show confirmation dialog
-      setBillableDialog({ open: true, target: checked, count })
+      setBillableDialog({ open: true, target: checked })
       return
     }
     // No mismatched entries — just toggle
@@ -116,7 +115,7 @@ export function TaskDetailMetadata({
     } catch (err) {
       toastError(err, "Failed to update")
     }
-    setBillableDialog({ open: false, target: false, count: 0 })
+    setBillableDialog({ open: false, target: false })
   }
 
   return (
@@ -182,8 +181,8 @@ export function TaskDetailMetadata({
           <AlertDialogHeader>
             <AlertDialogTitle>Update existing time entries?</AlertDialogTitle>
             <AlertDialogDescription>
-              This task has {billableDialog.count} time{" "}
-              {billableDialog.count === 1 ? "entry" : "entries"} marked as{" "}
+              This task has {mismatchedCount ?? 0} time{" "}
+              {(mismatchedCount ?? 0) === 1 ? "entry" : "entries"} marked as{" "}
               {billableDialog.target ? "non-billable" : "billable"}.
               Would you like to update them too?
             </AlertDialogDescription>

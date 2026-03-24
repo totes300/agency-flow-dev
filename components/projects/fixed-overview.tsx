@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react"
 import { useQuery, useMutation } from "convex/react"
+import { Show } from "@clerk/nextjs"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -151,23 +152,33 @@ export function FixedOverview({
 
       {/* Info / warning banner */}
       {(missingCostRateCount ?? 0) > 0 ? (
-        <Alert variant="destructive">
-          <AlertTriangleIcon />
-          <AlertDescription className="flex items-center justify-between gap-4">
-            <span>
+        <Show when={{ role: "org:admin" }} fallback={
+          <Alert variant="destructive">
+            <AlertTriangleIcon />
+            <AlertDescription>
               Labor cost incomplete — {missingCostRateCount ?? 0}{" "}
               {pluralize(missingCostRateCount ?? 0, "entry", "entries")} missing cost rate
-            </span>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-7 shrink-0 text-xs"
-              onClick={() => setBackfillDialogOpen(true)}
-            >
-              Fix
-            </Button>
-          </AlertDescription>
-        </Alert>
+            </AlertDescription>
+          </Alert>
+        }>
+          <Alert variant="destructive">
+            <AlertTriangleIcon />
+            <AlertDescription className="flex items-center justify-between gap-4">
+              <span>
+                Labor cost incomplete — {missingCostRateCount ?? 0}{" "}
+                {pluralize(missingCostRateCount ?? 0, "entry", "entries")} missing cost rate
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 shrink-0 text-xs"
+                onClick={() => setBackfillDialogOpen(true)}
+              >
+                Fix
+              </Button>
+            </AlertDescription>
+          </Alert>
+        </Show>
       ) : (
         <Alert>
           <InfoIcon />
@@ -200,35 +211,37 @@ export function FixedOverview({
       )}
 
       {/* Backfill missing cost rates dialog */}
-      <AlertDialog open={backfillDialogOpen} onOpenChange={setBackfillDialogOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Fill missing cost rates?</AlertDialogTitle>
-            <AlertDialogDescription>
-              {missingCostRateCount ?? 0} past time{" "}
-              {pluralize(missingCostRateCount ?? 0, "entry has", "entries have")} no
-              internal cost rate snapshot. This will fill only missing snapshots
-              using the current cost rate setup. Existing snapshots will not be changed.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={async () => {
-                try {
-                  const result = await backfillMissingCostRates({ projectId })
-                  setBackfillDialogOpen(false)
-                  // Toast would be nice but the count auto-updates via reactivity
-                } catch (err) {
-                  toastError(err, "Failed to backfill cost rates")
-                }
-              }}
-            >
-              Fill missing rates
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <Show when={{ role: "org:admin" }}>
+        <AlertDialog open={backfillDialogOpen} onOpenChange={setBackfillDialogOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Fill missing cost rates?</AlertDialogTitle>
+              <AlertDialogDescription>
+                {missingCostRateCount ?? 0} past time{" "}
+                {pluralize(missingCostRateCount ?? 0, "entry has", "entries have")} no
+                internal cost rate snapshot. This will fill only missing snapshots
+                using the current cost rate setup. Existing snapshots will not be changed.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={async () => {
+                  try {
+                    const result = await backfillMissingCostRates({ projectId })
+                    setBackfillDialogOpen(false)
+                    // Toast would be nice but the count auto-updates via reactivity
+                  } catch (err) {
+                    toastError(err, "Failed to backfill cost rates")
+                  }
+                }}
+              >
+                Fill missing rates
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </Show>
     </div>
   )
 }

@@ -92,8 +92,9 @@ export function TaskDetailMetadata({
   })
 
   const handleBillableChange = useCallback(async (checked: boolean) => {
-    const count = mismatchedCount ?? 0
-    if (count > 0) {
+    // Query still loading — don't act yet
+    if (mismatchedCount === undefined) return
+    if (mismatchedCount > 0) {
       setBillableDialog({ open: true, target: checked })
       return
     }
@@ -160,7 +161,7 @@ export function TaskDetailMetadata({
               <Switch
                 checked={task.billable}
                 onCheckedChange={handleBillableChange}
-                disabled={!isAdmin}
+                disabled={!isAdmin || mismatchedCount === undefined}
                 aria-label="Billable"
                 className="scale-[0.8] origin-left"
               />

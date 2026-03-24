@@ -20,7 +20,7 @@ export function MetricCard({ label, value, detail, variant = "default", classNam
           variant === "warning" && "text-warning",
         )}>{value}</p>
         {detail && (
-          <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">{detail}</p>
+          <div className="mt-0.5 text-xs text-muted-foreground tabular-nums">{detail}</div>
         )}
       </CardContent>
     </Card>

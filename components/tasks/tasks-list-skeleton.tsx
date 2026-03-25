@@ -59,7 +59,10 @@ export function TasksListSkeleton() {
                 <Skeleton className="h-4 w-48" />
                 <Skeleton className="h-3 w-32" />
               </div>
-              <Skeleton className="mx-1 h-3 w-8" />
+              <div className="flex items-center gap-2.5 px-1">
+                <Skeleton className="size-3.5 rounded-full" />
+                <Skeleton className="h-3 w-8 rounded" />
+              </div>
               <Skeleton className="mx-1 h-6 w-20 rounded" />
               <Skeleton className="mx-1 h-6 w-14 rounded" />
               <div className="space-y-1 px-1">

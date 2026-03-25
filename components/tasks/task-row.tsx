@@ -5,6 +5,7 @@ import { useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { cn } from "@/lib/utils"
 import { formatRelativeTime, formatShortDate, isOverdue } from "@/lib/format"
+import { formatActivitySubtitle } from "@/lib/format-activity-subtitle"
 import { Checkbox } from "@/components/ui/checkbox"
 import { TASK_GRID_COLS } from "@/components/tasks/tasks-table"
 import { InlineStatusCell } from "@/components/tasks/inline-status-cell"
@@ -20,8 +21,7 @@ import {
   ArchiveIcon,
   ArchiveRestoreIcon,
   Trash2Icon,
-  ListChecksIcon,
-  MessageSquareIcon,
+  MessageCircleIcon,
   FileTextIcon,
 } from "lucide-react"
 import { InlineTimeCell } from "@/components/tasks/inline-time-cell"
@@ -31,7 +31,19 @@ export type ActivityIndicator = {
   subtaskTotal: number
   subtaskDone: number
   commentCount: number
-  hasAttachments: boolean
+  hasDescription: boolean
+  hasUnseenNonComment: boolean
+  hasUnseenSubtasks: boolean
+  hasUnseenComments: boolean
+  hasUnseenDescription: boolean
+  hasUnseen: boolean
+  unreadCommentCount: number
+  lastActivity: {
+    userName: string
+    type: string
+    metadata: Record<string, unknown>
+    createdAt: number
+  } | null
 }
 
 export const TaskRow = memo(function TaskRow({
@@ -63,8 +75,15 @@ export const TaskRow = memo(function TaskRow({
 }) {
   const duplicateTask = useMutation(api.tasks.duplicate)
   const isDone = task.statusType === "done"
-
   const overdue = isOverdue(task.dueDate)
+
+  const hasUnseen = activity?.hasUnseen ?? false
+  const hasDescription = activity?.hasDescription ?? false
+
+  // Subtitle: last activity or "Created . Xm ago" fallback
+  const subtitle = activity?.lastActivity
+    ? formatActivitySubtitle(activity.lastActivity)
+    : `Created \u00b7 ${formatRelativeTime(task.createdAt)}`
 
   return (
     <div
@@ -94,16 +113,51 @@ export const TaskRow = memo(function TaskRow({
         className="cursor-pointer"
         onClick={() => onOpenDetail?.(task._id)}
       >
-        <div className={cn("truncate text-sm font-medium hover:text-primary transition-colors", isDone && "line-through")}>
-          {task.title}
+        <div className="flex items-center gap-1.5">
+          {hasUnseen && (
+            <span className="size-1.5 shrink-0 rounded-full bg-primary" />
+          )}
+          <span className={cn(
+            "truncate text-sm transition-colors hover:text-primary",
+            isDone && "line-through",
+            hasUnseen ? "font-semibold" : "font-normal",
+          )}>
+            {task.title}
+          </span>
+          {hasDescription && (
+            <FileTextIcon
+              className={cn(
+                "size-3 shrink-0",
+                hasUnseen ? "opacity-45" : "opacity-30",
+              )}
+            />
+          )}
         </div>
         <div className="truncate text-[11px] text-muted-foreground">
-          {task.updatedAt !== task.createdAt ? "Updated · " : "Created · "}{formatRelativeTime(task.updatedAt)}
+          {subtitle}
         </div>
       </div>
 
       {/* 3. Activity indicators */}
-      <ActivityIcons activity={activity} hasDescription={!!task.description} />
+      {activity ? (
+        <div className="flex items-center gap-2.5 text-muted-foreground/80">
+          <SubtaskRing
+            done={activity.subtaskDone}
+            total={activity.subtaskTotal}
+            isUnseen={activity.hasUnseenSubtasks}
+          />
+          <CommentIndicator
+            count={activity.commentCount}
+            unreadCount={activity.unreadCommentCount}
+            isUnseen={activity.hasUnseenComments}
+          />
+        </div>
+      ) : (
+        <div className="flex w-[96px] items-center gap-2.5">
+          <div className="size-3.5 rounded-full bg-muted/30" />
+          <div className="h-3 w-8 rounded bg-muted/30" />
+        </div>
+      )}
 
       {/* 4. Status (inline edit) */}
       <InlineStatusCell taskId={task._id} status={task.status} isAdmin={isAdmin} />
@@ -181,35 +235,61 @@ export const TaskRow = memo(function TaskRow({
   )
 })
 
-function ActivityIcons({ activity, hasDescription }: { activity?: ActivityIndicator; hasDescription: boolean }) {
-  const subtaskTotal = activity?.subtaskTotal ?? 0
-  const subtaskDone = activity?.subtaskDone ?? 0
-  const commentCount = activity?.commentCount ?? 0
-  const hasAttachments = activity?.hasAttachments ?? false
+function SubtaskRing({ done, total, isUnseen }: { done: number; total: number; isUnseen: boolean }) {
+  if (total === 0) return null
+  const circumference = 2 * Math.PI * 6.5
+  const progress = done / total
+  const offset = circumference * (1 - progress)
 
   return (
-    <div className="flex items-center gap-2 text-muted-foreground/70">
-      {/* Subtask progress */}
-      {subtaskTotal > 0 && (
-        <span className="flex items-center gap-0.5 text-[11px]" title={`${subtaskDone}/${subtaskTotal} subtasks`}>
-          <ListChecksIcon className="size-3 shrink-0" />
-          <span>{subtaskDone}/{subtaskTotal}</span>
-        </span>
-      )}
-      {/* Comment count */}
-      {commentCount > 0 && (
-        <span className="flex items-center gap-0.5 text-[11px]" title={`${commentCount} comments`}>
-          <MessageSquareIcon className="size-3 shrink-0" />
-          <span>{commentCount}</span>
-        </span>
-      )}
-      {/* Description/attachment icon */}
-      {(hasDescription || hasAttachments) && (
-        <span title={hasAttachments ? "Has attachments" : "Has description"}>
-          <FileTextIcon className="size-3 shrink-0" />
-        </span>
-      )}
+    <div className="flex items-center gap-1">
+      <svg width={14} height={14} viewBox="0 0 16 16">
+        <circle
+          cx={8} cy={8} r={6.5}
+          fill="none"
+          stroke={isUnseen ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "var(--border)"}
+          strokeWidth={1.75}
+        />
+        <circle
+          cx={8} cy={8} r={6.5}
+          fill="none"
+          className={isUnseen ? "stroke-primary opacity-60" : "stroke-muted-foreground"}
+          strokeWidth={1.75}
+          strokeDasharray={circumference}
+          strokeDashoffset={offset}
+          strokeLinecap="round"
+          transform="rotate(-90 8 8)"
+        />
+      </svg>
+      <span className={cn(
+        "text-[10px] tabular-nums",
+        isUnseen ? "font-semibold text-primary" : "text-muted-foreground/80",
+      )}>
+        {done}<span className="opacity-40">/{total}</span>
+      </span>
     </div>
   )
 }
 
+function CommentIndicator({ count, unreadCount, isUnseen }: { count: number; unreadCount: number; isUnseen: boolean }) {
+  if (count === 0) return null
+
+  return (
+    <div className="flex items-center gap-1">
+      <MessageCircleIcon
+        className={cn(
+          "size-[13px] shrink-0",
+          isUnseen ? "stroke-primary opacity-70" : "stroke-muted-foreground/80",
+        )}
+        strokeWidth={isUnseen ? 2.25 : 1.75}
+      />
+      {isUnseen ? (
+        <span className="inline-flex items-center h-3.5 px-1 rounded-full bg-primary/[0.06] text-[9px] font-semibold text-primary">
+          {unreadCount}
+        </span>
+      ) : (
+        <span className="text-[10px] text-muted-foreground/80">{count}</span>
+      )}
+    </div>
+  )
+}

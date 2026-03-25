@@ -7,21 +7,30 @@ import { CategoryBadge } from "@/components/category-badge"
 import { UserAvatar } from "@/components/user-avatar"
 import { CalendarIcon } from "lucide-react"
 import { formatRelativeTime, formatShortDate, isOverdue, firstName } from "@/lib/format"
+import { formatActivitySubtitle } from "@/lib/format-activity-subtitle"
 import type { TaskWithJoins } from "@/components/tasks/tasks-table"
+import type { ActivityIndicator } from "@/components/tasks/task-row"
 
 export function TaskCard({
   task,
   isSelected,
   hasSelection,
   onSelect,
+  activity,
 }: {
   task: TaskWithJoins
   isSelected: boolean
   hasSelection: boolean
   onSelect: (taskId: string, selected: boolean) => void
+  activity?: ActivityIndicator
 }) {
   const isDone = task.statusType === "done"
   const overdue = isOverdue(task.dueDate)
+  const hasUnseen = activity?.hasUnseen ?? false
+
+  const subtitle = activity?.lastActivity
+    ? formatActivitySubtitle(activity.lastActivity)
+    : `Created \u00b7 ${formatRelativeTime(task.createdAt)}`
 
   return (
     <div
@@ -47,8 +56,17 @@ export function TaskCard({
       {/* Content */}
       <div className="flex min-w-0 flex-1 flex-col gap-1.5">
         {/* Title */}
-        <div className={cn("text-sm font-medium", isDone && "line-through")}>
-          {task.title}
+        <div className="flex items-center gap-1.5">
+          {hasUnseen && (
+            <span className="size-1.5 shrink-0 rounded-full bg-primary" />
+          )}
+          <span className={cn(
+            "text-sm",
+            isDone && "line-through",
+            hasUnseen ? "font-semibold" : "font-normal",
+          )}>
+            {task.title}
+          </span>
         </div>
 
         {/* Metadata row */}
@@ -89,7 +107,7 @@ export function TaskCard({
 
         {/* Subtitle */}
         <div className="text-[11px] text-muted-foreground/60">
-          {formatRelativeTime(task.updatedAt)}
+          {subtitle}
         </div>
       </div>
     </div>

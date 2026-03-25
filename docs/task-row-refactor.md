@@ -569,17 +569,17 @@ Each phase is a testable, committable unit. Run verification at the end of each 
 - `components/tasks/task-card.tsx`
 
 **Verification:**
-- [ ] `npx tsc --noEmit` passes
-- [ ] Task list renders with new layout: SubtaskRing + CommentIndicator in activity cell
-- [ ] Subtitle shows "Nora changed status to Review . 12m ago" format (or "Created . X ago" fallback)
-- [ ] Tasks with subtasks show ring with correct progress arc
-- [ ] Tasks with comments show MessageCircle icon + count
-- [ ] Tasks with description show FileText doc icon after title
-- [ ] Tasks with empty tiptap description do NOT show doc icon
-- [ ] Loading state: no dot, font-normal, fallback subtitle, placeholder shapes in activity cell — no reflow when data arrives
-- [ ] Skeleton matches new layout shapes
-- [ ] Mobile task cards show updated subtitle
-- [ ] All seen styling: muted colors, normal font weight, no dots or pills
+- [x] `npx tsc --noEmit` passes
+- [x] Task list renders with new layout: SubtaskRing + CommentIndicator in activity cell
+- [x] Subtitle shows "Nora changed status to Review . 12m ago" format (or "Created . X ago" fallback)
+- [x] Tasks with subtasks show ring with correct progress arc
+- [x] Tasks with comments show MessageCircle icon + count
+- [x] Tasks with description show FileText doc icon after title
+- [x] Tasks with empty tiptap description do NOT show doc icon — uses isTiptapEmpty from backend
+- [x] Loading state: no dot, font-normal, fallback subtitle, placeholder shapes in activity cell — no reflow when data arrives
+- [x] Skeleton matches new layout shapes
+- [x] Mobile task cards show updated subtitle
+- [x] All seen styling: muted colors, normal font weight, no dots or pills — manual verification needed
 
 ---
 

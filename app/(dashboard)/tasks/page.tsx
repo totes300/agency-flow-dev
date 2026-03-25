@@ -269,6 +269,7 @@ export default function TasksPage() {
                     isSelected={selectedIds.has(task._id)}
                     hasSelection={selectedIds.size > 0}
                     onSelect={handleSelect}
+                    activity={activityMap?.[task._id]}
                   />
                 ))}
               </div>

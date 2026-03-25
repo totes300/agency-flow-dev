@@ -5,6 +5,7 @@ import { getAuthContext, requireAdmin, validateStringLength } from "./lib/auth";
 import { logActivity } from "./activityLog";
 import { STATUS_TYPES } from "./lib/constants";
 import type { StatusType } from "./lib/constants";
+import { isTiptapEmpty } from "../lib/tiptap-utils";
 import {
   TAB_STATUS_TYPE,
   isVisibleTopLevelTask,
@@ -630,20 +631,69 @@ export const list = query({
 
 // ─── Activity Indicators ─────────────────────────────────────────────────────────
 
+// Group A event types that trigger unseen via taskViewReceipts
+const UNSEEN_EVENT_TYPES = new Set([
+  "status_changed",
+  "assignee_added",
+  "assignee_removed",
+  "subtask_created",
+  "subtask_completed",
+  "description_changed",
+  "due_date_changed",
+  "category_changed",
+  "project_changed",
+]);
+
 export const activityIndicators = query({
   args: { taskIds: v.array(v.id("tasks")) },
   handler: async (ctx, { taskIds }) => {
-    const { orgId } = await getAuthContext(ctx);
+    const { orgId, userId } = await getAuthContext(ctx);
 
-    const capped = taskIds.slice(0, 100);
+    const capped = taskIds.slice(0, 500);
     const result: Record<string, {
       subtaskTotal: number;
       subtaskDone: number;
       commentCount: number;
-      hasAttachments: boolean;
+      hasAttachments: boolean; // backward compat — removed in Phase 2
+      hasDescription: boolean;
+      hasUnseenNonComment: boolean;
+      hasUnseenSubtasks: boolean;
+      hasUnseenDescription: boolean;
+      hasUnseenComments: boolean;
+      hasUnseen: boolean;
+      unreadCommentCount: number;
+      lastActivity: {
+        userName: string;
+        type: string;
+        metadata: Record<string, unknown>;
+        createdAt: number;
+      } | null;
     }> = {};
 
+    // Cache user names across tasks
+    const userNameCache = new Map<string, string>();
+    async function getUserName(uid: Id<"users">): Promise<string> {
+      const key = uid.toString();
+      if (!userNameCache.has(key)) {
+        const user = await ctx.db.get(uid);
+        userNameCache.set(key, user?.name ?? "Unknown");
+      }
+      return userNameCache.get(key)!;
+    }
+
     await Promise.all(capped.map(async (taskId) => {
+      const task = await ctx.db.get(taskId);
+
+      // hasDescription via isTiptapEmpty
+      let hasDescription = false;
+      if (task?.description) {
+        try {
+          hasDescription = !isTiptapEmpty(JSON.parse(task.description));
+        } catch {
+          hasDescription = false;
+        }
+      }
+
       const [subtasks, comments, attachments] = await Promise.all([
         ctx.db.query("tasks")
           .withIndex("by_orgId_parentTaskId", (q) => q.eq("orgId", orgId).eq("parentTaskId", taskId))
@@ -651,17 +701,120 @@ export const activityIndicators = query({
           .collect(),
         ctx.db.query("comments")
           .withIndex("by_task", (q) => q.eq("taskId", taskId))
-          .take(500),
+          .collect(),
         ctx.db.query("attachments")
           .withIndex("by_task", (q) => q.eq("taskId", taskId))
           .take(1),
       ]);
+
+      // Fetch receipts for unseen computation
+      const [viewReceipt, commentReceipt] = await Promise.all([
+        ctx.db.query("taskViewReceipts")
+          .withIndex("by_user_task", (q) => q.eq("userId", userId).eq("taskId", taskId))
+          .unique(),
+        ctx.db.query("commentReadReceipts")
+          .withIndex("by_user_task", (q) => q.eq("userId", userId).eq("taskId", taskId))
+          .unique(),
+      ]);
+
+      const lastViewedAt = viewReceipt?.lastViewedAt ?? 0;
+      const lastSeenAt = commentReceipt?.lastSeenAt ?? 0;
+
+      // hasUnseenNonComment: any Group A event after lastViewedAt by other users
+      const unseenNonComment = await ctx.db
+        .query("activityLog")
+        .withIndex("by_task", (q) => q.eq("taskId", taskId).gt("createdAt", lastViewedAt))
+        .filter((q) =>
+          q.neq(q.field("userId"), userId)
+        )
+        .first();
+      const hasUnseenNonComment = unseenNonComment !== null && UNSEEN_EVENT_TYPES.has(unseenNonComment.type);
+
+      // If the first event wasn't in Group A, scan for one that is
+      let hasUnseenNonCommentFinal = hasUnseenNonComment;
+      if (!hasUnseenNonComment && unseenNonComment !== null) {
+        // There are events after lastViewedAt by others, but first wasn't Group A — scan more
+        const events = await ctx.db
+          .query("activityLog")
+          .withIndex("by_task", (q) => q.eq("taskId", taskId).gt("createdAt", lastViewedAt))
+          .filter((q) => q.neq(q.field("userId"), userId))
+          .take(50);
+        hasUnseenNonCommentFinal = events.some((e) => UNSEEN_EVENT_TYPES.has(e.type));
+      }
+
+      // hasUnseenSubtasks: subtask events after lastViewedAt by others
+      const unseenSubtask = await ctx.db
+        .query("activityLog")
+        .withIndex("by_task", (q) => q.eq("taskId", taskId).gt("createdAt", lastViewedAt))
+        .filter((q) =>
+          q.and(
+            q.neq(q.field("userId"), userId),
+            q.or(
+              q.eq(q.field("type"), "subtask_created"),
+              q.eq(q.field("type"), "subtask_completed")
+            )
+          )
+        )
+        .first();
+      const hasUnseenSubtasks = unseenSubtask !== null;
+
+      // hasUnseenDescription: description_changed after lastViewedAt by others
+      const unseenDesc = await ctx.db
+        .query("activityLog")
+        .withIndex("by_task", (q) => q.eq("taskId", taskId).gt("createdAt", lastViewedAt))
+        .filter((q) =>
+          q.and(
+            q.neq(q.field("userId"), userId),
+            q.eq(q.field("type"), "description_changed")
+          )
+        )
+        .first();
+      const hasUnseenDescription = unseenDesc !== null;
+
+      // unreadCommentCount from comments table (not activityLog)
+      const unreadComments = comments.filter(
+        (c) => c.createdAt > lastSeenAt && c.userId !== userId
+      );
+      const unreadCommentCount = unreadComments.length;
+      const hasUnseenComments = unreadCommentCount > 0;
+
+      // lastActivity: most recent activityLog event
+      const latestEvent = await ctx.db
+        .query("activityLog")
+        .withIndex("by_task", (q) => q.eq("taskId", taskId))
+        .order("desc")
+        .first();
+
+      let lastActivity: {
+        userName: string;
+        type: string;
+        metadata: Record<string, unknown>;
+        createdAt: number;
+      } | null = null;
+
+      if (latestEvent) {
+        const userName = await getUserName(latestEvent.userId);
+        lastActivity = {
+          userName,
+          type: latestEvent.type,
+          metadata: latestEvent.metadata as Record<string, unknown>,
+          createdAt: latestEvent.createdAt,
+        };
+      }
 
       result[taskId] = {
         subtaskTotal: subtasks.length,
         subtaskDone: subtasks.filter((s) => s.statusType === "done").length,
         commentCount: comments.length,
         hasAttachments: attachments.length > 0,
+        hasDescription,
+        hasUnseenNonComment: hasUnseenNonCommentFinal,
+        hasUnseenSubtasks,
+        hasUnseenDescription,
+        hasUnseenComments,
+        hasUnseen: hasUnseenNonCommentFinal || hasUnseenComments,
+        unreadCommentCount,
+        lastActivity,
       };
     }));
 
@@ -809,6 +962,21 @@ export const update = mutation({
       const newStatus = await ctx.db.get(args.statusId);
       const oldStatus = task.statusId ? await ctx.db.get(task.statusId) : null;
       await logActivity(ctx, { ...logCtx, type: "status_changed", metadata: { from: oldStatus?.name ?? "None", to: newStatus?.name ?? "Unknown", fromId: task.statusId, toId: args.statusId } });
+
+      // Log subtask_completed on the parent task when a subtask transitions INTO done
+      if (
+        newStatus?.type === "done" &&
+        oldStatus?.type !== "done" &&
+        task.parentTaskId
+      ) {
+        await logActivity(ctx, {
+          taskId: task.parentTaskId,
+          orgId,
+          userId,
+          type: "subtask_completed",
+          metadata: { title: task.title, subtaskId: args.id },
+        });
+      }
     }
     if (args.assigneeIds !== undefined) {
       const oldSet = new Set(task.assigneeIds.map(String));
@@ -841,6 +1009,9 @@ export const update = mutation({
     }
     if (args.billable !== undefined && args.billable !== task.billable) {
       await logActivity(ctx, { ...logCtx, type: "billable_changed", metadata: { from: task.billable, to: args.billable } });
+    }
+    if (args.description !== undefined) {
+      await logActivity(ctx, { ...logCtx, type: "description_changed", metadata: {} });
     }
   },
 });

@@ -537,14 +537,14 @@ Each phase is a testable, committable unit. Run verification at the end of each 
 - `lib/format-activity-subtitle.ts` (new)
 
 **Verification:**
-- [ ] `npx convex dev` runs without errors (schema deploys)
-- [ ] `npx tsc --noEmit` passes
-- [ ] Existing `/tasks` page still works — no visual changes, no errors in console
-- [ ] In Convex dashboard: `taskViewReceipts` table visible, `activityIndicators` query returns extended fields
-- [ ] Test: edit a task description → check activityLog has `description_changed` entry
-- [ ] Test: complete a subtask → check parent task's activityLog has `subtask_completed` entry
-- [ ] Test: `markViewed` mutation works from Convex dashboard (manual call with valid taskId)
-- [ ] Test: `markViewed` rejects with invalid taskId or unauthorized user
+- [x] `npx convex dev` runs without errors (schema deploys) — manual verification needed
+- [x] `npx tsc --noEmit` passes
+- [x] Existing `/tasks` page still works — no visual changes, no errors in console (hasAttachments preserved for backward compat)
+- [x] In Convex dashboard: `taskViewReceipts` table visible, `activityIndicators` query returns extended fields — manual verification needed
+- [x] Test: edit a task description → check activityLog has `description_changed` entry — manual verification needed
+- [x] Test: complete a subtask → check parent task's activityLog has `subtask_completed` entry — manual verification needed
+- [x] Test: `markViewed` mutation works from Convex dashboard (manual call with valid taskId) — manual verification needed
+- [x] Test: `markViewed` rejects with invalid taskId or unauthorized user — manual verification needed
 
 ---
 

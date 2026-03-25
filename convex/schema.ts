@@ -335,6 +335,16 @@ export default defineSchema({
     .index("by_comment", ["commentId"])
     .index("by_orgId", ["orgId"]),
 
+  // ─── Task View Receipts (per user per task — non-comment "seen" state) ───
+  taskViewReceipts: defineTable({
+    taskId: v.id("tasks"),
+    orgId: v.string(),
+    userId: v.id("users"),
+    lastViewedAt: v.number(),
+  })
+    .index("by_user_task", ["userId", "taskId"])
+    .index("by_orgId", ["orgId"]),
+
   // ─── Typing indicators (ephemeral presence) ──────────────────────────────
   typingIndicators: defineTable({
     taskId: v.id("tasks"),

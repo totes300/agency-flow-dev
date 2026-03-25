@@ -27,6 +27,8 @@ import {
 import { InlineTimeCell } from "@/components/tasks/inline-time-cell"
 import { ActivityHoverPopover } from "@/components/tasks/activity-hover-popover"
 import { DescriptionHoverPopover } from "@/components/tasks/description-hover-popover"
+import { SubtaskHoverPopover } from "@/components/tasks/subtask-hover-popover"
+import { CommentHoverPopover } from "@/components/tasks/comment-hover-popover"
 import type { TaskWithJoins } from "@/components/tasks/tasks-table"
 import type { Id } from "@/convex/_generated/dataModel"
 
@@ -154,16 +156,48 @@ export const TaskRow = memo(function TaskRow({
       {/* 3. Activity indicators */}
       {activity ? (
         <div className="flex items-center gap-2.5 text-muted-foreground/80">
-          <SubtaskRing
-            done={activity.subtaskDone}
-            total={activity.subtaskTotal}
-            isUnseen={activity.hasUnseenSubtasks}
-          />
-          <CommentIndicator
-            count={activity.commentCount}
-            unreadCount={activity.unreadCommentCount}
-            isUnseen={activity.hasUnseenComments}
-          />
+          {activity.subtaskTotal > 0 ? (
+            <SubtaskHoverPopover
+              taskId={task._id as Id<"tasks">}
+              done={activity.subtaskDone}
+              total={activity.subtaskTotal}
+              onOpenDetail={onOpenDetail}
+            >
+              <div>
+                <SubtaskRing
+                  done={activity.subtaskDone}
+                  total={activity.subtaskTotal}
+                  isUnseen={activity.hasUnseenSubtasks}
+                />
+              </div>
+            </SubtaskHoverPopover>
+          ) : (
+            <SubtaskRing
+              done={activity.subtaskDone}
+              total={activity.subtaskTotal}
+              isUnseen={activity.hasUnseenSubtasks}
+            />
+          )}
+          {activity.commentCount > 0 ? (
+            <CommentHoverPopover
+              taskId={task._id as Id<"tasks">}
+              onOpenDetail={onOpenDetail}
+            >
+              <div>
+                <CommentIndicator
+                  count={activity.commentCount}
+                  unreadCount={activity.unreadCommentCount}
+                  isUnseen={activity.hasUnseenComments}
+                />
+              </div>
+            </CommentHoverPopover>
+          ) : (
+            <CommentIndicator
+              count={activity.commentCount}
+              unreadCount={activity.unreadCommentCount}
+              isUnseen={activity.hasUnseenComments}
+            />
+          )}
         </div>
       ) : (
         <div className="flex w-[96px] items-center gap-2.5">

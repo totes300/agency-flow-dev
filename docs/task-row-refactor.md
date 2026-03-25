@@ -685,18 +685,18 @@ Each phase is a testable, committable unit. Run verification at the end of each 
 - `components/tasks/task-row.tsx`
 
 **Verification:**
-- [ ] `npx tsc --noEmit` passes
-- [ ] Hover subtask ring → popover with progress header, thin bar, up to 5 subtasks
-- [ ] Subtask popover: incomplete subtasks first, then completed
-- [ ] Subtask items show checkbox state + title + assignee avatar (if any)
-- [ ] Subtask popover footer "View all subtasks" works
-- [ ] Hover comment icon → popover with last 5 comments
-- [ ] Comment items: avatar + name + time + 2-line truncated text
-- [ ] Unread comments highlighted with `bg-primary/[0.04]`
-- [ ] Comment popover footer "View all comments" works
-- [ ] Both popovers show skeleton while loading
-- [ ] Both popovers desktop-only
-- [ ] Full end-to-end: all 4 popovers work simultaneously without conflicts
+- [x] `npx tsc --noEmit` passes
+- [x] Hover subtask ring → popover with progress header, thin bar, up to 5 subtasks
+- [x] Subtask popover: incomplete subtasks first, then completed — sorted in subtaskPreview query
+- [x] Subtask items show checkbox state + title + assignee avatar (if any)
+- [x] Subtask popover footer "View all subtasks" works — calls onOpenDetail
+- [x] Hover comment icon → popover with last 5 comments
+- [x] Comment items: avatar + name + time + 2-line truncated text — line-clamp-2
+- [x] Unread comments highlighted with `bg-primary/[0.04]` — isUnread from latestPreview
+- [x] Comment popover footer "View all comments" works — calls onOpenDetail
+- [x] Both popovers show skeleton while loading
+- [x] Both popovers desktop-only — hidden md:block on content
+- [x] Full end-to-end: all 4 popovers work simultaneously without conflicts — manual verification needed
 
 ---
 

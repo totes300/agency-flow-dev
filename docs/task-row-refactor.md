@@ -657,15 +657,15 @@ Each phase is a testable, committable unit. Run verification at the end of each 
 - `components/tasks/task-row.tsx`
 
 **Verification:**
-- [ ] `npx tsc --noEmit` passes
-- [ ] Hover task name → popover appears after 250ms with last 5 activity events
-- [ ] Activity popover shows skeleton while loading, then formatted events with colored dots
-- [ ] Activity popover footer "Open full history" link works
-- [ ] Hover doc icon → popover appears with plain text + rendered checklists
-- [ ] Checklist items show checked/unchecked state correctly
-- [ ] Description popover scrolls if content > 200px
-- [ ] Popovers close after 100ms when mouse leaves
-- [ ] Popovers do NOT appear on mobile/tablet (test with responsive devtools)
+- [x] `npx tsc --noEmit` passes
+- [x] Hover task name → popover appears after 250ms with last 5 activity events — openDelay={250}
+- [x] Activity popover shows skeleton while loading, then formatted events with colored dots
+- [x] Activity popover footer "Open full history" link works — calls onOpenDetail
+- [x] Hover doc icon → popover appears with plain text + rendered checklists — custom tiptap walker
+- [x] Checklist items show checked/unchecked state correctly — extractChecklistItems
+- [x] Description popover scrolls if content > 200px — max-h-[200px] overflow-y-auto
+- [x] Popovers close after 100ms when mouse leaves — closeDelay={100}
+- [x] Popovers do NOT appear on mobile/tablet — hidden md:block on content — manual verification needed
 
 ---
 

@@ -25,7 +25,10 @@ import {
   FileTextIcon,
 } from "lucide-react"
 import { InlineTimeCell } from "@/components/tasks/inline-time-cell"
+import { ActivityHoverPopover } from "@/components/tasks/activity-hover-popover"
+import { DescriptionHoverPopover } from "@/components/tasks/description-hover-popover"
 import type { TaskWithJoins } from "@/components/tasks/tasks-table"
+import type { Id } from "@/convex/_generated/dataModel"
 
 export type ActivityIndicator = {
   subtaskTotal: number
@@ -109,34 +112,44 @@ export const TaskRow = memo(function TaskRow({
       </div>
 
       {/* 2. Task name + subtitle */}
-      <div
-        className="cursor-pointer"
-        onClick={() => onOpenDetail?.(task._id)}
-      >
-        <div className="flex items-center gap-1.5">
-          {hasUnseen && (
-            <span className="size-1.5 shrink-0 rounded-full bg-primary" />
-          )}
-          <span className={cn(
-            "truncate text-sm transition-colors hover:text-primary",
-            isDone && "line-through",
-            hasUnseen ? "font-semibold" : "font-normal",
-          )}>
-            {task.title}
-          </span>
-          {hasDescription && (
-            <FileTextIcon
-              className={cn(
-                "size-3 shrink-0",
-                hasUnseen ? "opacity-45" : "opacity-30",
-              )}
-            />
-          )}
+      <ActivityHoverPopover taskId={task._id as Id<"tasks">} onOpenDetail={onOpenDetail}>
+        <div
+          className="cursor-pointer"
+          onClick={() => onOpenDetail?.(task._id)}
+        >
+          <div className="flex items-center gap-1.5">
+            {hasUnseen && (
+              <span className="size-1.5 shrink-0 rounded-full bg-primary" />
+            )}
+            <span className={cn(
+              "truncate text-sm transition-colors hover:text-primary",
+              isDone && "line-through",
+              hasUnseen ? "font-semibold" : "font-normal",
+            )}>
+              {task.title}
+            </span>
+            {hasDescription && (
+              <DescriptionHoverPopover
+                description={task.description}
+                taskId={task._id}
+                onOpenDetail={onOpenDetail}
+              >
+                <span>
+                  <FileTextIcon
+                    className={cn(
+                      "size-3 shrink-0",
+                      hasUnseen ? "opacity-45" : "opacity-30",
+                    )}
+                  />
+                </span>
+              </DescriptionHoverPopover>
+            )}
+          </div>
+          <div className="truncate text-[11px] text-muted-foreground">
+            {subtitle}
+          </div>
         </div>
-        <div className="truncate text-[11px] text-muted-foreground">
-          {subtitle}
-        </div>
-      </div>
+      </ActivityHoverPopover>
 
       {/* 3. Activity indicators */}
       {activity ? (

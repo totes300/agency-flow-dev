@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useMemo } from "react"
-import { useQuery } from "convex/react"
+import { useQuery, useMutation } from "convex/react"
 import { useConvexAuth } from "convex/react"
 import { useSearchParams, useRouter, usePathname } from "next/navigation"
 import { api } from "@/convex/_generated/api"
@@ -86,6 +86,16 @@ export function TaskDetailModal({
     document.addEventListener("keydown", handleKeyDown)
     return () => document.removeEventListener("keydown", handleKeyDown)
   }, [isOpen, handleNavigate])
+
+  // ─── Mark task as viewed after 500ms (only after data loads) ─────────────
+  const markViewed = useMutation(api.taskViewReceipts.markViewed)
+  useEffect(() => {
+    if (!task) return
+    const timer = setTimeout(() => {
+      void markViewed({ taskId: task._id })
+    }, 500)
+    return () => clearTimeout(timer)
+  }, [task?._id, task, markViewed])
 
   if (!isOpen) return null
 

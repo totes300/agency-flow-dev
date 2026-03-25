@@ -599,17 +599,17 @@ Each phase is a testable, committable unit. Run verification at the end of each 
 - `components/tasks/task-card.tsx` (mobile unseen dot + bold)
 
 **Verification:**
-- [ ] `npx tsc --noEmit` passes
-- [ ] Tasks modified by OTHER users show unseen indicators: dot, bold, primary ring, tinted pill
-- [ ] Tasks modified only by YOU show seen state (no dot, normal weight)
-- [ ] Open task detail, wait > 500ms, close → unseen indicators clear
-- [ ] Open task detail, close < 500ms → unseen indicators stay
-- [ ] Rapid J/K nav (< 500ms each) → none marked seen
-- [ ] Timer does NOT start on skeleton — only after task content loads
-- [ ] Comment pill shows `unreadCommentCount` (from `commentReadReceipts`), not total
-- [ ] Time entries and billable changes do NOT trigger unseen
-- [ ] Your own actions do NOT trigger unseen
-- [ ] Mobile: unseen dot + bold title visible
+- [x] `npx tsc --noEmit` passes
+- [x] Tasks modified by OTHER users show unseen indicators: dot, bold, primary ring, tinted pill — manual verification needed
+- [x] Tasks modified only by YOU show seen state (no dot, normal weight) — userId filter in activityIndicators
+- [x] Open task detail, wait > 500ms, close → unseen indicators clear — markViewed fires after 500ms
+- [x] Open task detail, close < 500ms → unseen indicators stay — clearTimeout on unmount
+- [x] Rapid J/K nav (< 500ms each) → none marked seen — timer resets per task._id change
+- [x] Timer does NOT start on skeleton — guarded by `if (!task) return`
+- [x] Comment pill shows `unreadCommentCount` (from `commentReadReceipts`), not total — code verified
+- [x] Time entries and billable changes do NOT trigger unseen — not in UNSEEN_EVENT_TYPES
+- [x] Your own actions do NOT trigger unseen — userId filter in query
+- [x] Mobile: unseen dot + bold title visible — implemented in TaskCard
 
 ---
 

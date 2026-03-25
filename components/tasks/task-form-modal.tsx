@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from "react"
 import { useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { useTaskReferenceData } from "@/components/tasks/task-reference-data"
+import type { StatusType } from "@/convex/lib/constants"
 import {
   Dialog,
   DialogContent,
@@ -279,7 +280,7 @@ function StatusPicker({
   statuses: Array<{ _id: Id<"statuses">; name: string; color: string; type: string }>
   value: Id<"statuses"> | undefined
   onChange: (id: Id<"statuses">) => void
-  selected: { name: string; color: string } | undefined
+  selected: { name: string; color: string; type: string } | undefined
 }) {
   const [open, setOpen] = useState(false)
 
@@ -288,7 +289,7 @@ function StatusPicker({
       <PopoverTrigger asChild>
         <button className="flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[11px] font-medium transition-colors hover:bg-muted/30">
           {selected ? (
-            <StatusBadge name={selected.name} color={selected.color} className="text-[11px]" />
+            <StatusBadge name={selected.name} color={selected.color} type={selected.type as StatusType} className="text-[11px]" />
           ) : (
             <>
               <div className="size-1.5 rounded-full bg-muted-foreground/40" />
@@ -303,7 +304,7 @@ function StatusPicker({
             <CommandGroup>
               {statuses.map((s) => (
                   <CommandItem key={s._id} onSelect={() => { onChange(s._id); setOpen(false) }} className="px-2 py-1.5">
-                    <StatusBadge name={s.name} color={s.color} />
+                    <StatusBadge name={s.name} color={s.color} type={s.type as StatusType} />
                     {value === s._id && <CheckIcon className="ml-auto size-3.5 text-muted-foreground" />}
                   </CommandItem>
               ))}

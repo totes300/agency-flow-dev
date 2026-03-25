@@ -54,7 +54,7 @@ export function TaskCard({
         {/* Metadata row */}
         <div className="flex flex-wrap items-center gap-1.5">
           {task.status && (
-            <StatusBadge name={task.status.name} color={task.status.color} />
+            <StatusBadge name={task.status.name} color={task.status.color} type={task.status.type} />
           )}
           {task.category && (
             <CategoryBadge name={task.category.name} color={task.category.color} />

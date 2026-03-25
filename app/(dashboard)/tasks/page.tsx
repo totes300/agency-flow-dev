@@ -195,7 +195,7 @@ export default function TasksPage() {
         totalCount={counts.all}
       />
 
-      <div className="mt-4">
+      <div className="mt-8">
         <TasksTabs
           activeTab={filters.tab}
           onTabChange={filters.setTab}

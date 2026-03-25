@@ -61,7 +61,7 @@ export function InlineStatusCell({
           onClick={(e) => e.stopPropagation()}
         >
           {status ? (
-            <StatusBadge name={status.name} color={status.color} />
+            <StatusBadge name={status.name} color={status.color} type={status.type} />
           ) : (
             <span className="flex items-center gap-1.5 text-muted-foreground/20 transition-colors group-hover/row:text-muted-foreground/50">
               <LoaderIcon className="size-3.5" />
@@ -89,7 +89,7 @@ export function InlineStatusCell({
                         disabled={disabled}
                         className={cn("px-2 py-1.5", disabled && "opacity-50")}
                       >
-                        <StatusBadge name={s.name} color={s.color} />
+                        <StatusBadge name={s.name} color={s.color} type={s.type} />
                       </CommandItem>
                     )
                   })}

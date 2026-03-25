@@ -69,7 +69,7 @@ export const TaskRow = memo(function TaskRow({
   return (
     <div
       className={cn(
-        `group/row grid ${TASK_GRID_COLS} items-center gap-x-4 border-b border-border/40 px-3 py-2 transition-colors hover:bg-muted/30 [&>*]:min-w-0 [&>*]:overflow-hidden`,
+        `group/row grid ${TASK_GRID_COLS} items-center gap-x-4 border-b border-border/40 px-3 py-2.5 transition-colors hover:bg-muted/30 [&>*]:min-w-0 [&>*]:overflow-hidden`,
         isSelected && "bg-primary/5",
         isDone && "opacity-50",
       )}

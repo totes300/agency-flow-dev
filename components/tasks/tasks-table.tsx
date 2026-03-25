@@ -86,7 +86,7 @@ export function TasksTable({
       <div className={TASK_TABLE_MIN_W}>
         {/* Column headers */}
         <div
-          className={`group/header grid ${TASK_GRID_COLS} items-center gap-x-4 border-b border-border/60 px-3 py-2 text-xs text-muted-foreground/70 [&>*]:min-w-0 [&>*]:overflow-hidden`}
+          className={`group/header grid ${TASK_GRID_COLS} items-center gap-x-4 border-b border-border/60 px-3 py-4 text-xs text-muted-foreground/70 [&>*]:min-w-0 [&>*]:overflow-hidden`}
         >
           {COLUMN_HEADERS.map((col, i) => (
             <div key={i} className="flex items-center gap-1.5 truncate">

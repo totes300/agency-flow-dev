@@ -1,5 +1,6 @@
 "use client"
 
+import { useRef, useLayoutEffect, useState, useCallback } from "react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import {
@@ -86,45 +87,76 @@ export function TasksTabs({
 
   const hasActiveFilters = filters.some((f) => f.value?.length > 0)
 
+  const tabsRef = useRef<HTMLDivElement>(null)
+  const tabRefs = useRef<Map<string, HTMLButtonElement>>(new Map())
+  const [indicator, setIndicator] = useState({ left: 0, width: 0 })
+  const hasRendered = useRef(false)
+
+  const updateIndicator = useCallback(() => {
+    const container = tabsRef.current
+    const activeEl = tabRefs.current.get(activeTab)
+    if (!container || !activeEl) return
+    const containerRect = container.getBoundingClientRect()
+    const tabRect = activeEl.getBoundingClientRect()
+    setIndicator({
+      left: tabRect.left - containerRect.left + 12,
+      width: tabRect.width - 24,
+    })
+    hasRendered.current = true
+  }, [activeTab])
+
+  useLayoutEffect(() => {
+    updateIndicator()
+  }, [updateIndicator])
+
   return (
     <div>
       {/* Row 1: Tabs + controls — always single row */}
       <div className="flex items-center justify-between gap-2 border-b">
         {/* Tabs */}
-        <div className="flex items-center overflow-x-auto scrollbar-none">
+        <div ref={tabsRef} className="relative flex items-center overflow-x-auto scrollbar-none">
           {TABS.map((tab) => {
             const count = getCount(tab.key)
             const isActive = !isSearching && activeTab === tab.key
             return (
               <button
                 key={tab.key}
+                ref={(el) => { if (el) tabRefs.current.set(tab.key, el); }}
                 onClick={() => onTabChange(tab.key)}
                 className={cn(
-                  "relative flex shrink-0 items-center gap-1.5 px-3 py-2 text-[13px] whitespace-nowrap transition-colors",
+                  "relative flex shrink-0 items-center gap-1.5 px-3 py-2 text-sm whitespace-nowrap transition-colors duration-200",
                   isSearching
                     ? "text-muted-foreground/40"
                     : isActive
                       ? "font-medium text-foreground"
-                      : "text-muted-foreground hover:text-foreground",
+                      : "text-muted-foreground hover:text-foreground hover:bg-muted/50 rounded-md",
                 )}
               >
                 {tab.label}
                 {count !== undefined && count > 0 && (
                   <span className={cn(
-                    "inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] tabular-nums leading-none",
+                    "text-[11px] tabular-nums transition-colors duration-200",
                     isActive
-                      ? "bg-foreground/8 text-foreground/45"
-                      : "bg-foreground/5 text-muted-foreground/45",
+                      ? "text-foreground/40"
+                      : "text-muted-foreground/40",
                   )}>
                     {count}
                   </span>
                 )}
-                {isActive && (
-                  <span className="absolute inset-x-3 bottom-0 h-px bg-foreground/80" />
-                )}
               </button>
             )
           })}
+          {/* Sliding underline */}
+          {!isSearching && (
+            <span
+              className="pointer-events-none absolute bottom-0 h-px bg-foreground"
+              style={{
+                left: indicator.left,
+                width: indicator.width,
+                transition: hasRendered.current ? "left 250ms cubic-bezier(.4,0,.2,1), width 250ms cubic-bezier(.4,0,.2,1)" : "none",
+              }}
+            />
+          )}
         </div>
 
         {/* Right side: Filter trigger + Group by */}
@@ -139,7 +171,7 @@ export function TasksTabs({
                 className={cn(
                   "h-8 gap-1.5 transition-colors",
                   isGrouped
-                    ? "bg-blue-500/10 text-blue-600 hover:bg-blue-500/15 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-400"
+                    ? "bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary"
                     : "text-muted-foreground",
                 )}
               >

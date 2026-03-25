@@ -328,6 +328,55 @@ export const markSeen = mutation({
   },
 });
 
+// ─── Hover Popover Query ────────────────────────────────────────────────────────
+
+/**
+ * Last 5 comments for a single task — used by comment hover popover.
+ * Returns author info and plain-text preview. Access-controlled.
+ */
+export const latestPreview = query({
+  args: { taskId: v.id("tasks") },
+  handler: async (ctx, { taskId }) => {
+    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
+    const task = await ctx.db.get(taskId);
+    if (!task || task.orgId !== orgId) return [];
+    if (!isAdmin && !task.assigneeIds.includes(userId)) return [];
+
+    const comments = await ctx.db
+      .query("comments")
+      .withIndex("by_task", (q) => q.eq("taskId", taskId))
+      .order("desc")
+      .take(5);
+
+    // Get user's last seen timestamp for unread highlighting
+    const receipt = await ctx.db
+      .query("commentReadReceipts")
+      .withIndex("by_user_task", (q) => q.eq("userId", userId).eq("taskId", taskId))
+      .unique();
+    const lastSeenAt = receipt?.lastSeenAt ?? 0;
+
+    const userCache = new Map<string, { name: string; imageUrl?: string }>();
+    for (const c of comments) {
+      if (!userCache.has(c.userId)) {
+        const user = await ctx.db.get(c.userId);
+        userCache.set(c.userId, { name: user?.name ?? "Unknown", imageUrl: user?.imageUrl });
+      }
+    }
+
+    return comments.map((c) => {
+      const user = userCache.get(c.userId) ?? { name: "Unknown" };
+      return {
+        _id: c._id,
+        userName: user.name,
+        userImageUrl: user.imageUrl,
+        preview: extractContentPreview(c.content, 100),
+        createdAt: c.createdAt,
+        isUnread: c.createdAt > lastSeenAt && c.userId !== userId,
+      };
+    });
+  },
+});
+
 // ─── Validators ──────────────────────────────────────────────────────────────────
 
 import { validateTiptapContent as _validateTiptap } from "./lib/content_validation";

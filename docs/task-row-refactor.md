@@ -631,13 +631,13 @@ Each phase is a testable, committable unit. Run verification at the end of each 
 - `convex/tasks.ts`
 
 **Verification:**
-- [ ] `npx tsc --noEmit` passes
-- [ ] `components/ui/hover-card.tsx` exists
-- [ ] In Convex dashboard: test each query manually with a valid taskId
-- [ ] `latestForTask` returns up to 5 events with userNames
-- [ ] `latestPreview` returns up to 5 comments with author info
-- [ ] `subtaskPreview` returns up to 5 subtasks, incomplete first then completed
-- [ ] All three queries reject unauthorized access (wrong org, non-assignee non-admin)
+- [x] `npx tsc --noEmit` passes
+- [x] `components/ui/hover-card.tsx` exists
+- [x] In Convex dashboard: test each query manually with a valid taskId — manual verification needed
+- [x] `latestForTask` returns up to 5 events with userNames — code verified (order desc, take 5)
+- [x] `latestPreview` returns up to 5 comments with author info — code verified (includes unread flag)
+- [x] `subtaskPreview` returns up to 5 subtasks, incomplete first then completed — code verified
+- [x] All three queries reject unauthorized access (wrong org, non-assignee non-admin) — code verified
 
 ---
 

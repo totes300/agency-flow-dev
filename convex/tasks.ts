@@ -822,6 +822,50 @@ export const activityIndicators = query({
   },
 });
 
+/**
+ * Up to 5 subtasks for a single task — used by subtask hover popover.
+ * Sort: incomplete first (by creation order), then completed (by creation order).
+ */
+export const subtaskPreview = query({
+  args: { taskId: v.id("tasks") },
+  handler: async (ctx, { taskId }) => {
+    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
+    const task = await ctx.db.get(taskId);
+    if (!task || task.orgId !== orgId) return [];
+    if (!isAdmin && !task.assigneeIds.includes(userId)) return [];
+
+    const subtasks = await ctx.db
+      .query("tasks")
+      .withIndex("by_orgId_parentTaskId", (q) => q.eq("orgId", orgId).eq("parentTaskId", taskId))
+      .filter((q) => q.eq(q.field("archivedAt"), undefined))
+      .collect();
+
+    // Sort: incomplete first, then completed, both by creation order
+    const incomplete = subtasks.filter((s) => s.statusType !== "done");
+    const completed = subtasks.filter((s) => s.statusType === "done");
+    const sorted = [...incomplete, ...completed].slice(0, 5);
+
+    // Resolve first assignee avatar for each subtask
+    const userCache = new Map<string, { name: string; imageUrl?: string }>();
+    for (const s of sorted) {
+      if (s.assigneeIds.length > 0 && !userCache.has(s.assigneeIds[0].toString())) {
+        const user = await ctx.db.get(s.assigneeIds[0]);
+        if (user) userCache.set(s.assigneeIds[0].toString(), { name: user.name, imageUrl: user.imageUrl });
+      }
+    }
+
+    return sorted.map((s) => {
+      const assignee = s.assigneeIds.length > 0 ? userCache.get(s.assigneeIds[0].toString()) : undefined;
+      return {
+        _id: s._id,
+        title: s.title,
+        statusType: s.statusType,
+        assignee: assignee ? { name: assignee.name, imageUrl: assignee.imageUrl } : null,
+      };
+    });
+  },
+});
+
 // ─── Mutations ───────────────────────────────────────────────────────────────────
 
 export const create = mutation({

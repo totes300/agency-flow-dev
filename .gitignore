@@ -34,7 +34,7 @@ yarn-error.log*
 .env*
 
 # convex
-convex/_generated/
+
 
 # vercel
 .vercel

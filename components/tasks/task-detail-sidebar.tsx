@@ -8,8 +8,11 @@ import { TaskDetailCommentInput } from "@/components/tasks/task-detail-comment-i
 import { CommentCard } from "@/components/tasks/comment-card"
 import { formatActivityText, type ActivityEventType } from "@/lib/activity"
 import { mergeActivityFeed, type FeedItem } from "@/lib/task-detail"
+import { groupFeedForCommentsView, type GroupedFeedItem, type AuditBatch } from "@/lib/activity-grouping"
 import { formatActivityTimestamp, firstName } from "@/lib/format"
+import { ActivityBatch } from "@/components/tasks/activity-batch"
 import type { Id } from "@/convex/_generated/dataModel"
+import { cn } from "@/lib/utils"
 import { TypingIndicator } from "@/components/typing-indicator"
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip"
 
@@ -88,10 +91,17 @@ export function TaskDetailSidebar({ taskId, isAdmin }: { taskId: Id<"tasks">; is
   const stableReactionsMap = useMemo(() => reactionsMap, [JSON.stringify(reactionsMap)])
   const stableAttachmentsMap = useMemo(() => attachmentsMap, [JSON.stringify(attachmentsMap)])
 
+  // View toggle: "comments" (default) batches audits, "all" shows flat timeline
+  const [view, setView] = useState<"comments" | "all">("comments")
+
   // Build unified timeline — memoized to avoid re-sorting on unrelated re-renders
   const feed = useMemo(() => buildFeed(activities, comments), [activities, comments])
+  const groupedFeed = useMemo(
+    () => (feed ? groupFeedForCommentsView(feed) : null),
+    [feed],
+  )
 
-  // Scroll to bottom when feed or read receipts change
+  // Scroll to bottom when feed or read receipts change, or view switches
   const scrollRef = useRef<HTMLDivElement>(null)
   const feedLength = feed?.length ?? 0
   const receiptKey = readReceipts?.map((r) => r.lastSeenAt).join() ?? ""
@@ -100,16 +110,40 @@ export function TaskDetailSidebar({ taskId, isAdmin }: { taskId: Id<"tasks">; is
     const el = scrollRef.current
     if (!el || feedLength === 0) return
     el.scrollTop = el.scrollHeight
-  }, [feedLength, receiptKey])
+  }, [feedLength, receiptKey, view])
 
   return (
     <div className="hidden w-[460px] shrink-0 flex-col overflow-hidden border-l border-border/60 bg-muted/60 md:flex">
-      {/* Header */}
-      <div className="flex items-center border-b border-border/60 px-4 py-3">
+      {/* Header with view toggle */}
+      <div className="flex items-center justify-between border-b border-border/60 px-4 py-3">
         <span className="text-sm font-semibold">Activity</span>
+        <div className="flex items-center gap-0.5 rounded-md bg-muted p-0.5">
+          <button
+            className={cn(
+              "rounded px-2.5 py-1 text-xs font-medium transition-colors",
+              view === "comments"
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+            onClick={() => setView("comments")}
+          >
+            Comments
+          </button>
+          <button
+            className={cn(
+              "rounded px-2.5 py-1 text-xs font-medium transition-colors",
+              view === "all"
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+            onClick={() => setView("all")}
+          >
+            All
+          </button>
+        </div>
       </div>
 
-      {/* Unified timeline */}
+      {/* Timeline */}
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto p-3 pb-2.5">
         {feed === null ? (
           <FeedSkeleton />
@@ -117,43 +151,35 @@ export function TaskDetailSidebar({ taskId, isAdmin }: { taskId: Id<"tasks">; is
           <div className="flex items-center justify-center p-8 text-xs text-muted-foreground/50">
             No activity yet
           </div>
+        ) : view === "all" ? (
+          <AllView
+            feed={feed}
+            currentUserId={currentUserId}
+            isAdmin={isAdmin}
+            newDividerAt={newDividerAt}
+            reactionsMap={stableReactionsMap}
+            attachmentsMap={stableAttachmentsMap}
+            readReceipts={readReceipts}
+            onReply={handleReply}
+            onToggleReaction={handleToggleReaction}
+            onEdit={handleEditComment}
+            onDelete={handleDeleteComment}
+          />
         ) : (
-          <div className="flex flex-col">
-            {(() => {
-              const lastCommentIndex = feed.findLastIndex((item) => item.kind === "comment")
-              // Pre-compute the first "new" item index (O(n) instead of O(n²))
-              const firstNewIndex = newDividerAt !== null && newDividerAt > 0
-                ? feed.findIndex((item) => item.createdAt > newDividerAt && item.userId !== currentUserId)
-                : -1
-              return feed.map((item, i) => {
-                const showNewDivider = i === firstNewIndex
-
-                return (
-                  <Fragment key={item.id}>
-                    {showNewDivider && <NewDivider />}
-                    {item.kind === "comment" ? (
-                      <CommentCard
-                        item={item}
-                        currentUserId={currentUserId}
-                        isAdmin={isAdmin}
-                        reactions={stableReactionsMap?.[item.id]}
-                        attachments={stableAttachmentsMap?.[item.id]}
-                        onReply={handleReply}
-                        onToggleReaction={handleToggleReaction}
-                        onEdit={handleEditComment}
-                        onDelete={handleDeleteComment}
-                      />
-                    ) : (
-                      <AuditLine item={item} currentUserId={currentUserId} />
-                    )}
-                    {i === lastCommentIndex && (
-                      <SeenBy feed={feed} readReceipts={readReceipts} currentUserId={currentUserId} />
-                    )}
-                  </Fragment>
-                )
-              })
-            })()}
-          </div>
+          <CommentsView
+            feed={feed}
+            groupedFeed={groupedFeed!}
+            currentUserId={currentUserId}
+            isAdmin={isAdmin}
+            newDividerAt={newDividerAt}
+            reactionsMap={stableReactionsMap}
+            attachmentsMap={stableAttachmentsMap}
+            readReceipts={readReceipts}
+            onReply={handleReply}
+            onToggleReaction={handleToggleReaction}
+            onEdit={handleEditComment}
+            onDelete={handleDeleteComment}
+          />
         )}
       </div>
 
@@ -170,6 +196,207 @@ export function TaskDetailSidebar({ taskId, isAdmin }: { taskId: Id<"tasks">; is
       />
     </div>
   )
+}
+
+// ─── Shared props for view components ────────────────────────────────────────────
+
+type ReactionEntry = { emoji: string; count: number; userNames: string[]; hasReacted: boolean }
+type AttachmentEntry = { _id: string; fileName: string; fileSize: number; mimeType: string; url: string | null }
+
+type ViewProps = {
+  feed: FeedItem[]
+  currentUserId?: Id<"users">
+  isAdmin?: boolean
+  newDividerAt: number | null
+  reactionsMap: Record<string, ReactionEntry[]> | undefined
+  attachmentsMap: Record<string, AttachmentEntry[]> | undefined
+  readReceipts: ReadReceipt[] | undefined
+  onReply: (commentId: string, userName: string) => void
+  onToggleReaction: (commentId: string, emoji: string) => void
+  onEdit: (commentId: string, content: unknown) => void
+  onDelete: (commentId: string) => void
+}
+
+// ─── All View — flat timeline (original behavior) ───────────────────────────────
+
+function AllView({
+  feed,
+  currentUserId,
+  isAdmin,
+  newDividerAt,
+  reactionsMap,
+  attachmentsMap,
+  readReceipts,
+  onReply,
+  onToggleReaction,
+  onEdit,
+  onDelete,
+}: ViewProps) {
+  const lastCommentIndex = feed.findLastIndex((item) => item.kind === "comment")
+  const firstNewIndex =
+    newDividerAt !== null && newDividerAt > 0
+      ? feed.findIndex((item) => item.createdAt > newDividerAt && item.userId !== currentUserId)
+      : -1
+
+  return (
+    <div className="flex flex-col">
+      {feed.map((item, i) => (
+        <Fragment key={item.id}>
+          {i === firstNewIndex && <NewDivider />}
+          {item.kind === "comment" ? (
+            <CommentCard
+              item={item}
+              currentUserId={currentUserId}
+              isAdmin={isAdmin}
+              reactions={reactionsMap?.[item.id]}
+              attachments={attachmentsMap?.[item.id]}
+              onReply={onReply}
+              onToggleReaction={onToggleReaction}
+              onEdit={onEdit}
+              onDelete={onDelete}
+            />
+          ) : (
+            <AuditLine item={item} currentUserId={currentUserId} />
+          )}
+          {i === lastCommentIndex && (
+            <SeenBy feed={feed} readReceipts={readReceipts} currentUserId={currentUserId} />
+          )}
+        </Fragment>
+      ))}
+    </div>
+  )
+}
+
+// ─── Comments View — batched audits ─────────────────────────────────────────────
+
+function CommentsView({
+  feed,
+  groupedFeed,
+  currentUserId,
+  isAdmin,
+  newDividerAt,
+  reactionsMap,
+  attachmentsMap,
+  readReceipts,
+  onReply,
+  onToggleReaction,
+  onEdit,
+  onDelete,
+}: ViewProps & { groupedFeed: GroupedFeedItem[] }) {
+  // Find the last comment index in the grouped feed for SeenBy placement
+  const lastGroupedCommentIndex = groupedFeed.findLastIndex((item) => item.kind === "comment")
+
+  // Track whether NewDivider has been rendered (only show once)
+  let newDividerRendered = false
+
+  return (
+    <div className="flex flex-col">
+      {groupedFeed.map((item, i) => {
+        const elements: React.ReactNode[] = []
+
+        if (item.kind === "batch") {
+          // Check if this batch straddles the read boundary
+          if (
+            !newDividerRendered &&
+            newDividerAt !== null &&
+            newDividerAt > 0 &&
+            item.startTime <= newDividerAt &&
+            item.endTime > newDividerAt
+          ) {
+            // Split: read items before boundary, unread after
+            const readItems = item.items.filter(
+              (a) => a.createdAt <= newDividerAt || a.userId === currentUserId,
+            )
+            const unreadItems = item.items.filter(
+              (a) => a.createdAt > newDividerAt && a.userId !== currentUserId,
+            )
+
+            if (readItems.length > 0) {
+              elements.push(
+                <ActivityBatch
+                  key={`${item.id}-read`}
+                  batch={makeBatch(item.id + "-read", readItems)}
+                  currentUserId={currentUserId}
+                />,
+              )
+            }
+            elements.push(<NewDivider key="new-divider" />)
+            newDividerRendered = true
+            if (unreadItems.length > 0) {
+              elements.push(
+                <ActivityBatch
+                  key={`${item.id}-new`}
+                  batch={makeBatch(item.id + "-new", unreadItems)}
+                  currentUserId={currentUserId}
+                />,
+              )
+            }
+          } else {
+            // Entire batch is before or after the boundary
+            if (
+              !newDividerRendered &&
+              newDividerAt !== null &&
+              newDividerAt > 0 &&
+              item.startTime > newDividerAt &&
+              item.items.some((a) => a.userId !== currentUserId)
+            ) {
+              elements.push(<NewDivider key="new-divider" />)
+              newDividerRendered = true
+            }
+            elements.push(
+              <ActivityBatch key={item.id} batch={item} currentUserId={currentUserId} />,
+            )
+          }
+        } else {
+          // Comment
+          if (
+            !newDividerRendered &&
+            newDividerAt !== null &&
+            newDividerAt > 0 &&
+            item.createdAt > newDividerAt &&
+            item.userId !== currentUserId
+          ) {
+            elements.push(<NewDivider key="new-divider" />)
+            newDividerRendered = true
+          }
+          elements.push(
+            <CommentCard
+              key={item.id}
+              item={item}
+              currentUserId={currentUserId}
+              isAdmin={isAdmin}
+              reactions={reactionsMap?.[item.id]}
+              attachments={attachmentsMap?.[item.id]}
+              onReply={onReply}
+              onToggleReaction={onToggleReaction}
+              onEdit={onEdit}
+              onDelete={onDelete}
+            />,
+          )
+          if (i === lastGroupedCommentIndex) {
+            elements.push(
+              <SeenBy key="seen-by" feed={feed} readReceipts={readReceipts} currentUserId={currentUserId} />,
+            )
+          }
+        }
+
+        return <Fragment key={item.id}>{elements}</Fragment>
+      })}
+    </div>
+  )
+}
+
+/** Create an AuditBatch from a subset of items. */
+function makeBatch(id: string, items: FeedItem[]): AuditBatch {
+  const auditItems = items as (FeedItem & { kind: "audit" })[]
+  return {
+    kind: "batch",
+    id,
+    items: auditItems,
+    count: auditItems.length,
+    startTime: auditItems[0].createdAt,
+    endTime: auditItems[auditItems.length - 1].createdAt,
+  }
 }
 
 // ─── Feed builder ───────────────────────────────────────────────────────────────

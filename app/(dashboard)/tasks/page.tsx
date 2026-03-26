@@ -146,7 +146,7 @@ export default function TasksPage() {
 
       return {
         ...group,
-        items: [...draftItems, ...persistedItems],
+        items: [...persistedItems, ...draftItems],
       }
     })
   }, [displayGroups, inlineCreatedTasks])
@@ -383,6 +383,10 @@ export default function TasksPage() {
               selectedIds={selectedIds}
               onLoadMore={filters.loadMore}
               onSelectAll={handleSelectAll}
+              sortBy={filters.sort.field}
+              sortOrder={filters.sort.order}
+              onSort={filters.setSort}
+              onResetSort={filters.resetSort}
               renderItem={(item) => {
                 if (item.kind === "draft") {
                   return (

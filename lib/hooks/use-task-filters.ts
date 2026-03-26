@@ -10,6 +10,9 @@ import type { Id } from "@/convex/_generated/dataModel"
 export type TaskTab = "all" | "backlog" | "in_progress" | "review" | "blocked" | "done" | "archived"
 export type GroupByOption = "project" | "client" | "category" | "assignee" | "status" | null
 export type FilterOp = "is" | "isNot" | "anyOf" | "noneOf"
+export type SortField = "title" | "status" | "category" | "dueDate" | "createdAt" | "updatedAt"
+export type SortOrder = "asc" | "desc"
+export type TaskSort = { field: SortField; order: SortOrder }
 
 // ─── State shape ────────────────────────────────────────────────────────────────
 
@@ -18,13 +21,17 @@ type TaskViewState = {
   search: string
   groupBy: GroupByOption
   filters: Filter[]
+  sort: TaskSort
 }
+
+const DEFAULT_SORT: TaskSort = { field: "createdAt", order: "asc" }
 
 const INITIAL_STATE: TaskViewState = {
   tab: "backlog",
   search: "",
   groupBy: null,
   filters: [],
+  sort: DEFAULT_SORT,
 }
 
 // ─── Helpers: map new filter model → Convex args ─────────────────────────────
@@ -95,6 +102,14 @@ export function useTaskFilters() {
   const clearAllFilters = useCallback(() => {
     setState((s) => ({ ...s, filters: [] }))
     setLimit(DEFAULT_LIMIT)
+  }, [])
+
+  const setSort = useCallback((field: SortField, order: SortOrder) => {
+    setState((s) => ({ ...s, sort: { field, order } }))
+  }, [])
+
+  const resetSort = useCallback(() => {
+    setState((s) => ({ ...s, sort: DEFAULT_SORT }))
   }, [])
 
   const loadMore = useCallback(() => {
@@ -176,6 +191,8 @@ export function useTaskFilters() {
       filters: hasFilters ? (convexFilters as typeof convexFilters) : undefined,
       groupBy: state.groupBy,
       search: state.search || undefined,
+      sortBy: state.sort.field,
+      sortOrder: state.sort.order,
       limit,
     }
   }, [state, limit])
@@ -189,12 +206,15 @@ export function useTaskFilters() {
     hasActiveFilters,
     isSearching,
     filtersKey,
+    sort: state.sort,
 
     // Setters
     setTab,
     setGroupBy,
     setSearch,
     setFilters,
+    setSort,
+    resetSort,
     clearAllFilters,
     loadMore,
 

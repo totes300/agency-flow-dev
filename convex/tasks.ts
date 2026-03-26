@@ -338,6 +338,11 @@ export const list = query({
       v.literal("assignee"), v.literal("status"), v.null()
     )),
     search: v.optional(v.string()),
+    sortBy: v.optional(v.union(
+      v.literal("title"), v.literal("status"), v.literal("category"),
+      v.literal("dueDate"), v.literal("createdAt"), v.literal("updatedAt"),
+    )),
+    sortOrder: v.optional(v.union(v.literal("asc"), v.literal("desc"))),
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
@@ -462,7 +467,77 @@ export const list = query({
     }
 
     // ── Step 3: Sort ─────────────────────────────────────────────────────
-    tasks.sort((a, b) => b.createdAt - a.createdAt);
+    const sortBy = args.sortBy ?? "createdAt";
+    const sortOrder = args.sortOrder ?? "asc";
+    const mul = sortOrder === "asc" ? 1 : -1;
+
+    // Pre-fetch lookup maps for relation-based sorts
+    let statusSortMap: Map<string, { typeOrder: number; sortOrder: number; name: string }> | undefined;
+    let categorySortMap: Map<string, string> | undefined;
+
+    if (sortBy === "status") {
+      const TYPE_ORDER: Record<string, number> = { backlog: 0, in_progress: 1, review: 2, blocked: 3, done: 4 };
+      const allStatuses = await ctx.db.query("statuses")
+        .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+        .collect();
+      statusSortMap = new Map();
+      for (const s of allStatuses) {
+        statusSortMap.set(s._id, { typeOrder: TYPE_ORDER[s.type] ?? 99, sortOrder: s.sortOrder ?? 0, name: s.name });
+      }
+    }
+
+    if (sortBy === "category") {
+      const allCategories = await ctx.db.query("workCategories")
+        .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+        .collect();
+      categorySortMap = new Map();
+      for (const c of allCategories) {
+        categorySortMap.set(c._id, c.name);
+      }
+    }
+
+    tasks.sort((a, b) => {
+      let cmp = 0;
+      switch (sortBy) {
+        case "title":
+          cmp = a.title.localeCompare(b.title) * mul;
+          break;
+        case "createdAt":
+          cmp = (a.createdAt - b.createdAt) * mul;
+          break;
+        case "updatedAt":
+          cmp = (a.updatedAt - b.updatedAt) * mul;
+          break;
+        case "dueDate": {
+          const ad = a.dueDate;
+          const bd = b.dueDate;
+          // Nulls always last regardless of direction
+          if (!ad && !bd) { cmp = 0; break; }
+          if (!ad) return 1;
+          if (!bd) return -1;
+          cmp = ad.localeCompare(bd) * mul;
+          break;
+        }
+        case "status": {
+          const sa = statusSortMap?.get(a.statusId) ?? { typeOrder: 99, sortOrder: 0, name: "" };
+          const sb = statusSortMap?.get(b.statusId) ?? { typeOrder: 99, sortOrder: 0, name: "" };
+          cmp = ((sa.typeOrder - sb.typeOrder) || (sa.sortOrder - sb.sortOrder) || sa.name.localeCompare(sb.name)) * mul;
+          break;
+        }
+        case "category": {
+          const ca = a.workCategoryId ? categorySortMap?.get(a.workCategoryId) : undefined;
+          const cb = b.workCategoryId ? categorySortMap?.get(b.workCategoryId) : undefined;
+          // Nulls always last regardless of direction
+          if (!ca && !cb) { cmp = 0; break; }
+          if (!ca) return 1;
+          if (!cb) return -1;
+          cmp = ca.localeCompare(cb) * mul;
+          break;
+        }
+      }
+      // Tie-breaker: createdAt asc (insertion order)
+      return cmp || (a.createdAt - b.createdAt);
+    });
     const totalCount = tasks.length;
 
     // ── Step 4: Group ────────────────────────────────────────────────────

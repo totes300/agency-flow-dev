@@ -181,6 +181,46 @@ export function pluralize(n: number, singular: string, plural: string): string {
   return n === 1 ? singular : plural
 }
 
+/**
+ * Format a time range for activity batches.
+ * Same minute: "Mar 22 at 8:30 am"
+ * Same day:    "Mar 22, 8:30–9:21 am" (or "8:30 am–12:08 pm" if am/pm differs)
+ * Cross-day:   "Mar 22, 8:30 am – Mar 23, 2:15 pm"
+ */
+export function formatBatchTimeRange(startMs: number, endMs: number): string {
+  const timeFmt: Intl.DateTimeFormatOptions = { hour: "numeric", minute: "2-digit", hour12: true }
+  const dateFmt: Intl.DateTimeFormatOptions = { month: "short", day: "numeric" }
+
+  const s = new Date(startMs)
+  const e = new Date(endMs)
+
+  const sTime = s.toLocaleTimeString("en-US", timeFmt).toLowerCase()
+  const eTime = e.toLocaleTimeString("en-US", timeFmt).toLowerCase()
+  const sDate = s.toLocaleDateString("en-US", dateFmt)
+  const eDate = e.toLocaleDateString("en-US", dateFmt)
+
+  // Same minute → single timestamp
+  if (Math.abs(endMs - startMs) < 60_000) {
+    return `${sDate} at ${sTime}`
+  }
+
+  // Different days
+  if (!isSameDay(s, e)) {
+    return `${sDate}, ${sTime} – ${eDate}, ${eTime}`
+  }
+
+  // Same day — check if am/pm matches to omit the first one
+  const sPeriod = sTime.slice(-2) // "am" or "pm"
+  const ePeriod = eTime.slice(-2)
+  if (sPeriod === ePeriod) {
+    // Strip period from start: "8:30 am" → "8:30"
+    const sTimeShort = sTime.slice(0, -3)
+    return `${sDate}, ${sTimeShort}–${eTime}`
+  }
+
+  return `${sDate}, ${sTime}–${eTime}`
+}
+
 // Re-export duration formatters for discoverability
 export { formatDuration, formatTimerDisplay } from "@/lib/duration"
 

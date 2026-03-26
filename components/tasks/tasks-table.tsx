@@ -9,11 +9,21 @@ import {
   UserIcon,
   CalendarIcon,
   ClockIcon,
+  ChevronUpIcon,
+  ChevronDownIcon,
+  RotateCcwIcon,
 } from "lucide-react"
 import type { Doc } from "@/convex/_generated/dataModel"
-import type { GroupByOption } from "@/lib/hooks/use-task-filters"
+import type { GroupByOption, SortField, SortOrder } from "@/lib/hooks/use-task-filters"
 import { cn } from "@/lib/utils"
 import { Checkbox } from "@/components/ui/checkbox"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { TaskGroup } from "@/components/tasks/task-group"
 import type { InlineCreatedTask } from "@/components/tasks/inline-created-task-row"
 
@@ -47,17 +57,25 @@ type TaskListItem =
   | { kind: "task"; key: string; task: TaskWithJoins }
   | { kind: "draft"; key: string; draft: InlineCreatedTask }
 
-const COLUMN_HEADERS = [
-  { label: "", width: null }, // checkbox
-  { label: "Task", icon: ListChecksIcon },
-  { label: "Comments", icon: MessageCircleIcon },
-  { label: "Status", icon: CircleDashedIcon },
-  { label: "Category", icon: HashIcon },
+type ColumnDef = {
+  label: string
+  icon?: React.ComponentType<{ className?: string }>
+  sortField?: SortField
+  ascLabel?: string
+  descLabel?: string
+}
+
+const COLUMN_HEADERS: ColumnDef[] = [
+  { label: "" }, // checkbox
+  { label: "Task", icon: ListChecksIcon, sortField: "title", ascLabel: "Ascending (A→Z)", descLabel: "Descending (Z→A)" },
+  { label: "" },
+  { label: "Status", icon: CircleDashedIcon, sortField: "status", ascLabel: "Ascending", descLabel: "Descending" },
+  { label: "Category", icon: HashIcon, sortField: "category", ascLabel: "Ascending (A→Z)", descLabel: "Descending (Z→A)" },
   { label: "Client / Project", icon: FolderIcon },
   { label: "Assignee", icon: UserIcon },
-  { label: "Due date", icon: CalendarIcon },
+  { label: "Due date", icon: CalendarIcon, sortField: "dueDate", ascLabel: "Earliest first", descLabel: "Latest first" },
   { label: "Time", icon: ClockIcon },
-  { label: "", width: null }, // menu
+  { label: "" }, // menu
 ]
 
 export function TasksTable({
@@ -68,6 +86,10 @@ export function TasksTable({
   selectedIds,
   onSelectAll,
   onLoadMore,
+  sortBy,
+  sortOrder,
+  onSort,
+  onResetSort,
   renderItem,
   renderAddTask,
 }: {
@@ -78,6 +100,10 @@ export function TasksTable({
   selectedIds: Set<string>
   onSelectAll: (taskIds: string[], selected: boolean) => void
   onLoadMore?: () => void
+  sortBy?: SortField
+  sortOrder?: SortOrder
+  onSort?: (field: SortField, order: SortOrder) => void
+  onResetSort?: () => void
   renderItem: (item: TaskListItem) => React.ReactNode
   renderAddTask?: (groupKey: string) => React.ReactNode
 }) {
@@ -92,7 +118,8 @@ export function TasksTable({
       <div className={TASK_TABLE_MIN_W}>
         {/* Column headers */}
         <div
-          className={`group/header grid ${TASK_GRID_COLS} items-center gap-x-4 border-b border-border/60 px-3 py-4 text-xs text-muted-foreground/70 [&>*]:min-w-0 [&>*]:overflow-hidden`}
+          className={`group/header grid ${TASK_GRID_COLS} items-center gap-x-4 border-b border-border/60 px-3 text-xs text-muted-foreground/70 [&>*]:min-w-0 [&>*]:overflow-hidden`}
+          style={{ height: 40 }}
         >
           {COLUMN_HEADERS.map((col, i) => (
             <div key={i} className="flex items-center gap-1.5 truncate">
@@ -108,11 +135,19 @@ export function TasksTable({
                     label="Select all"
                   />
                 </div>
+              ) : col.sortField && onSort ? (
+                <SortableHeader
+                  col={col}
+                  isActive={sortBy === col.sortField}
+                  sortOrder={sortBy === col.sortField ? sortOrder : undefined}
+                  onSort={(order) => onSort(col.sortField!, order)}
+                  onResetSort={onResetSort}
+                />
               ) : (
-                <>
+                <span className={cn("flex items-center gap-1.5", !col.sortField && col.label && "opacity-65")}>
                   {col.icon && <col.icon className="size-3 shrink-0" />}
                   {col.label && <span>{col.label}</span>}
-                </>
+                </span>
               )}
             </div>
           ))}
@@ -169,6 +204,67 @@ export function TasksTable({
         </div>
       </div>
     </div>
+  )
+}
+
+/** Sortable column header with dropdown menu. */
+function SortableHeader({
+  col,
+  isActive,
+  sortOrder: order,
+  onSort,
+  onResetSort,
+}: {
+  col: ColumnDef
+  isActive: boolean
+  sortOrder?: SortOrder
+  onSort: (order: SortOrder) => void
+  onResetSort?: () => void
+}) {
+  const Icon = col.icon
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          className={cn(
+            "inline-flex items-center gap-1.5 rounded-[5px] px-1.5 py-1 -mx-1.5 transition-colors hover:bg-black/[0.04] hover:text-muted-foreground",
+            isActive && "text-foreground",
+          )}
+        >
+          {Icon && <Icon className="size-3 shrink-0" />}
+          <span>{col.label}</span>
+          {isActive && order === "asc" && <ChevronUpIcon className="size-3 shrink-0 opacity-50" />}
+          {isActive && order === "desc" && <ChevronDownIcon className="size-3 shrink-0 opacity-50" />}
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="min-w-[180px]">
+        <DropdownMenuItem
+          onClick={() => onSort("asc")}
+          className={cn(isActive && order === "asc" && "font-medium")}
+        >
+          <ChevronUpIcon className="size-3.5 opacity-45" />
+          {col.ascLabel ?? "Ascending"}
+          {isActive && order === "asc" && <span className="ml-auto text-muted-foreground">✓</span>}
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          onClick={() => onSort("desc")}
+          className={cn(isActive && order === "desc" && "font-medium")}
+        >
+          <ChevronDownIcon className="size-3.5 opacity-45" />
+          {col.descLabel ?? "Descending"}
+          {isActive && order === "desc" && <span className="ml-auto text-muted-foreground">✓</span>}
+        </DropdownMenuItem>
+        {onResetSort && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={onResetSort}>
+              <RotateCcwIcon className="size-3.5 opacity-45" />
+              Reset to default
+            </DropdownMenuItem>
+          </>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 

@@ -3,6 +3,7 @@
  */
 
 import { isSameDay } from "@/lib/format"
+import type { FeedItem, ActivityEvent, CommentEvent } from "@/lib/task-detail"
 
 // ─── Types ──────────────────────────────────────────────────────────────────────
 
@@ -120,4 +121,56 @@ export function groupActivityByDay(events: RawEvent[], now?: number): DayGroup[]
       events: collapseConsecutive(dayEvents),
     }
   })
+}
+
+// ─── Comments-first feed grouping ────────────────────────────────────────────
+
+export type AuditBatch = {
+  kind: "batch"
+  id: string           // first audit item's id (React key)
+  items: ActivityEvent[]
+  count: number
+  startTime: number    // first item's createdAt
+  endTime: number      // last item's createdAt
+}
+
+export type GroupedFeedItem = CommentEvent | AuditBatch
+
+/**
+ * Group a merged feed for comments-first display.
+ * Consecutive audit events between comments become a single collapsible AuditBatch.
+ * Comments pass through unchanged.
+ *
+ * Input must be sorted by createdAt ascending (as returned by mergeActivityFeed).
+ */
+export function groupFeedForCommentsView(feed: FeedItem[]): GroupedFeedItem[] {
+  if (feed.length === 0) return []
+
+  const result: GroupedFeedItem[] = []
+  let auditBuffer: ActivityEvent[] = []
+
+  function flushBuffer() {
+    if (auditBuffer.length === 0) return
+    result.push({
+      kind: "batch",
+      id: auditBuffer[0].id,
+      items: auditBuffer,
+      count: auditBuffer.length,
+      startTime: auditBuffer[0].createdAt,
+      endTime: auditBuffer[auditBuffer.length - 1].createdAt,
+    })
+    auditBuffer = []
+  }
+
+  for (const item of feed) {
+    if (item.kind === "audit") {
+      auditBuffer.push(item)
+    } else {
+      flushBuffer()
+      result.push(item)
+    }
+  }
+
+  flushBuffer()
+  return result
 }

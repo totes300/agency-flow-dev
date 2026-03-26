@@ -64,6 +64,12 @@ export function useTaskFilters() {
   const hasActiveFilters = state.filters.some((f) => f.value.length > 0)
   const isSearching = state.search.length > 0
 
+  // Stable key for filter identity — avoids JSON.stringify in effect deps
+  const filtersKey = useMemo(
+    () => state.filters.map((f) => `${f.type}:${f.operator}:${f.value.join(",")}`).join("|"),
+    [state.filters],
+  )
+
   // ── Setters ─────────────────────────────────────────────────────────────
 
   const setTab = useCallback((tab: TaskTab) => {
@@ -182,6 +188,7 @@ export function useTaskFilters() {
     filters: state.filters,
     hasActiveFilters,
     isSearching,
+    filtersKey,
 
     // Setters
     setTab,

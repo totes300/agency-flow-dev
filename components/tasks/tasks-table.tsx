@@ -15,6 +15,7 @@ import type { GroupByOption } from "@/lib/hooks/use-task-filters"
 import { cn } from "@/lib/utils"
 import { Checkbox } from "@/components/ui/checkbox"
 import { TaskGroup } from "@/components/tasks/task-group"
+import type { InlineCreatedTask } from "@/components/tasks/inline-created-task-row"
 
 // Grid column template — shared between header and rows
 // Only Task is flexible (1fr). Everything else is fixed width.
@@ -38,8 +39,13 @@ type TaskGroupData = {
   color?: string
   count: number
   tasks: TaskWithJoins[]
+  items?: TaskListItem[]
   hasMore: boolean
 }
+
+type TaskListItem =
+  | { kind: "task"; key: string; task: TaskWithJoins }
+  | { kind: "draft"; key: string; draft: InlineCreatedTask }
 
 const COLUMN_HEADERS = [
   { label: "", width: null }, // checkbox
@@ -62,7 +68,7 @@ export function TasksTable({
   selectedIds,
   onSelectAll,
   onLoadMore,
-  renderRow,
+  renderItem,
   renderAddTask,
 }: {
   groups: TaskGroupData[]
@@ -72,7 +78,7 @@ export function TasksTable({
   selectedIds: Set<string>
   onSelectAll: (taskIds: string[], selected: boolean) => void
   onLoadMore?: () => void
-  renderRow: (task: TaskWithJoins) => React.ReactNode
+  renderItem: (item: TaskListItem) => React.ReactNode
   renderAddTask?: (groupKey: string) => React.ReactNode
 }) {
   // Selectable task IDs — capped at 50 to match the bulk operation limit
@@ -115,9 +121,14 @@ export function TasksTable({
         {/* Groups + rows */}
         <div className={cn(isGrouped && "flex flex-col gap-6")}>
         {groups.map((group) => {
+          const items = group.items ?? group.tasks.map((task) => ({
+            kind: "task" as const,
+            key: task._id as string,
+            task,
+          }))
           const rows = (
             <>
-              {group.tasks.map((task) => renderRow(task))}
+              {items.map((item) => renderItem(item))}
               {renderAddTask?.(group.key)}
               {group.hasMore && onLoadMore && (
                 <div className="px-3 py-2">
@@ -184,3 +195,4 @@ export function SelectCheckbox({
 }
 
 export type { TaskWithJoins, TaskGroupData }
+export type { TaskListItem }

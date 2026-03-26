@@ -4,9 +4,8 @@ import { useState } from "react"
 import { useQuery } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { HoverCard, HoverCardTrigger, HoverCardContent } from "@/components/ui/hover-card"
-import { UserAvatar } from "@/components/user-avatar"
-import { CheckIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { Checkbox } from "@/components/ui/checkbox"
 import type { Id } from "@/convex/_generated/dataModel"
 
 export function SubtaskHoverPopover({
@@ -28,67 +27,49 @@ export function SubtaskHoverPopover({
     isOpen ? { taskId } : "skip",
   )
 
-  const progress = total > 0 ? (done / total) * 100 : 0
-
   return (
     <HoverCard openDelay={250} closeDelay={100} open={isOpen} onOpenChange={setIsOpen}>
       <HoverCardTrigger asChild>
         {children}
       </HoverCardTrigger>
-      <HoverCardContent align="start" className="w-72 p-0 hidden md:block">
-        <div className="p-3 space-y-2.5">
-          {/* Progress header */}
-          <div className="space-y-1.5">
-            <p className="text-xs font-medium text-muted-foreground">
-              {done} of {total} completed
-            </p>
-            <div className="h-1 w-full overflow-hidden rounded-full bg-muted">
-              <div
-                className="h-full rounded-full bg-primary/60 transition-all"
-                style={{ width: `${progress}%` }}
-              />
-            </div>
-          </div>
+      <HoverCardContent align="start" className="w-[280px] p-0 hidden md:block">
+        {/* Header */}
+        <div className="flex items-baseline justify-between px-4 pt-3.5 pb-2">
+          <p className="text-xs font-medium text-muted-foreground">Subtasks</p>
+          <p className="text-[11px] tabular-nums text-muted-foreground/60">
+            {done}<span className="opacity-50">/{total}</span>
+          </p>
+        </div>
 
-          {/* Subtask list */}
+        {/* Subtask list */}
+        <div className="max-h-[240px] overflow-y-auto">
           {!data ? (
-            <div className="space-y-2">
+            <div className="px-4 pb-3 space-y-2.5">
               {Array.from({ length: 3 }).map((_, i) => (
-                <div key={i} className="flex items-center gap-2">
-                  <div className="size-3.5 rounded-sm bg-muted animate-pulse" />
+                <div key={i} className="flex items-center gap-2.5">
+                  <div className="size-3.5 rounded bg-muted animate-pulse shrink-0" />
                   <div className="h-3 flex-1 rounded bg-muted animate-pulse" />
                 </div>
               ))}
             </div>
           ) : data.length === 0 ? (
-            <p className="text-xs text-muted-foreground/60">No subtasks</p>
+            <p className="px-4 pb-3 text-xs text-muted-foreground/60">No subtasks</p>
           ) : (
-            <div className="space-y-1.5">
+            <div className="divide-y divide-border/30">
               {data.map((subtask) => {
                 const isDone = subtask.statusType === "done"
                 return (
-                  <div key={subtask._id} className="flex items-center gap-2">
+                  <div key={subtask._id} className="flex items-center gap-2.5 px-4 py-2">
+                    <Checkbox
+                      checked={isDone}
+                      className="pointer-events-none"
+                    />
                     <span className={cn(
-                      "flex size-3.5 shrink-0 items-center justify-center rounded-sm border",
-                      isDone
-                        ? "border-emerald-600 bg-emerald-600 text-white"
-                        : "border-muted-foreground/30",
-                    )}>
-                      {isDone && <CheckIcon className="size-2.5" />}
-                    </span>
-                    <span className={cn(
-                      "flex-1 truncate text-xs",
-                      isDone && "line-through text-muted-foreground/60",
+                      "flex-1 truncate text-[13px]",
+                      isDone ? "line-through text-muted-foreground/50" : "text-foreground/80",
                     )}>
                       {subtask.title}
                     </span>
-                    {subtask.assignee && (
-                      <UserAvatar
-                        name={subtask.assignee.name}
-                        imageUrl={subtask.assignee.imageUrl}
-                        className="size-4 text-[7px]"
-                      />
-                    )}
                   </div>
                 )
               })}
@@ -97,7 +78,7 @@ export function SubtaskHoverPopover({
         </div>
         {onOpenDetail && (
           <button
-            className="w-full border-t border-border/40 px-3 py-2 text-left text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted/30 transition-colors"
+            className="w-full border-t border-border/40 px-4 py-2.5 text-left text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted/30 transition-colors"
             onClick={() => onOpenDetail(taskId)}
           >
             View all subtasks

@@ -25,8 +25,7 @@ import {
   FileTextIcon,
 } from "lucide-react"
 import { InlineTimeCell } from "@/components/tasks/inline-time-cell"
-import { ActivityHoverPopover } from "@/components/tasks/activity-hover-popover"
-import { DescriptionHoverPopover } from "@/components/tasks/description-hover-popover"
+import { TaskPreviewPopover } from "@/components/tasks/task-preview-popover"
 import { SubtaskHoverPopover } from "@/components/tasks/subtask-hover-popover"
 import { CommentHoverPopover } from "@/components/tasks/comment-hover-popover"
 import type { TaskWithJoins } from "@/components/tasks/tasks-table"
@@ -113,16 +112,21 @@ export const TaskRow = memo(function TaskRow({
         />
       </div>
 
-      {/* 2. Task name + subtitle */}
-      <ActivityHoverPopover taskId={task._id as Id<"tasks">} onOpenDetail={onOpenDetail}>
-        <div
-          className="cursor-pointer"
-          onClick={() => onOpenDetail?.(task._id)}
-        >
-          <div className="flex items-center gap-1.5">
-            {hasUnseen && (
-              <span className="size-1.5 shrink-0 rounded-full bg-primary" />
-            )}
+      {/* 2. Task name + subtitle + inline icons */}
+      <div
+        className="cursor-pointer"
+        onClick={() => onOpenDetail?.(task._id)}
+      >
+        <div className="flex items-center gap-1.5">
+          {hasUnseen && (
+            <span className="size-1.5 shrink-0 rounded-full bg-primary" />
+          )}
+          <TaskPreviewPopover
+            taskId={task._id as Id<"tasks">}
+            description={task.description}
+            updatedAt={task.updatedAt}
+            onOpenDetail={onOpenDetail}
+          >
             <span className={cn(
               "truncate text-sm transition-colors hover:text-primary",
               isDone && "line-through",
@@ -130,79 +134,68 @@ export const TaskRow = memo(function TaskRow({
             )}>
               {task.title}
             </span>
-            {hasDescription && (
-              <DescriptionHoverPopover
-                description={task.description}
-                taskId={task._id}
-                onOpenDetail={onOpenDetail}
-              >
-                <span>
-                  <FileTextIcon
-                    className={cn(
-                      "size-3 shrink-0",
-                      hasUnseen ? "opacity-45" : "opacity-30",
-                    )}
-                  />
-                </span>
-              </DescriptionHoverPopover>
-            )}
-          </div>
-          <div className="truncate text-[11px] text-muted-foreground">
-            {subtitle}
-          </div>
-        </div>
-      </ActivityHoverPopover>
-
-      {/* 3. Activity indicators */}
-      {activity ? (
-        <div className="flex items-center gap-2.5 text-muted-foreground/80">
-          {activity.subtaskTotal > 0 ? (
+          </TaskPreviewPopover>
+          {hasDescription && (
+            <TaskPreviewPopover
+              taskId={task._id as Id<"tasks">}
+              description={task.description}
+              updatedAt={task.updatedAt}
+              onOpenDetail={onOpenDetail}
+            >
+              <span className="shrink-0 rounded p-0.5 transition-colors hover:bg-muted" onClick={(e) => e.stopPropagation()}>
+                <FileTextIcon
+                  className={cn(
+                    "size-[13px]",
+                    hasUnseen ? "opacity-45" : "opacity-30",
+                  )}
+                />
+              </span>
+            </TaskPreviewPopover>
+          )}
+          {activity && activity.subtaskTotal > 0 && (
             <SubtaskHoverPopover
               taskId={task._id as Id<"tasks">}
               done={activity.subtaskDone}
               total={activity.subtaskTotal}
               onOpenDetail={onOpenDetail}
             >
-              <div>
-                <SubtaskRing
+              <span className="shrink-0 rounded p-0.5 transition-colors hover:bg-muted" onClick={(e) => e.stopPropagation()}>
+                <InlineSubtaskRing
                   done={activity.subtaskDone}
                   total={activity.subtaskTotal}
                   isUnseen={activity.hasUnseenSubtasks}
                 />
-              </div>
+              </span>
             </SubtaskHoverPopover>
-          ) : (
-            <SubtaskRing
-              done={activity.subtaskDone}
-              total={activity.subtaskTotal}
-              isUnseen={activity.hasUnseenSubtasks}
-            />
-          )}
-          {activity.commentCount > 0 ? (
-            <CommentHoverPopover
-              taskId={task._id as Id<"tasks">}
-              onOpenDetail={onOpenDetail}
-            >
-              <div>
-                <CommentIndicator
-                  count={activity.commentCount}
-                  unreadCount={activity.unreadCommentCount}
-                  isUnseen={activity.hasUnseenComments}
-                />
-              </div>
-            </CommentHoverPopover>
-          ) : (
-            <CommentIndicator
-              count={activity.commentCount}
-              unreadCount={activity.unreadCommentCount}
-              isUnseen={activity.hasUnseenComments}
-            />
           )}
         </div>
+        <div className="truncate text-[11px] text-muted-foreground">
+          {subtitle}
+        </div>
+      </div>
+
+      {/* 3. Comments */}
+      {activity ? (
+        activity.commentCount > 0 ? (
+          <CommentHoverPopover
+            taskId={task._id as Id<"tasks">}
+            totalCount={activity.commentCount}
+            onOpenDetail={onOpenDetail}
+          >
+            <div className="flex items-center justify-center">
+              <CommentPill
+                count={activity.commentCount}
+                unreadCount={activity.unreadCommentCount}
+                hasUnseen={activity.hasUnseenComments}
+              />
+            </div>
+          </CommentHoverPopover>
+        ) : (
+          <div />
+        )
       ) : (
-        <div className="flex w-[96px] items-center gap-2.5">
-          <div className="size-3.5 rounded-full bg-muted/30" />
-          <div className="h-3 w-8 rounded bg-muted/30" />
+        <div className="flex items-center justify-center">
+          <div className="h-[22px] w-10 rounded-full bg-muted/30 animate-pulse" />
         </div>
       )}
 
@@ -282,61 +275,51 @@ export const TaskRow = memo(function TaskRow({
   )
 })
 
-function SubtaskRing({ done, total, isUnseen }: { done: number; total: number; isUnseen: boolean }) {
-  if (total === 0) return null
-  const circumference = 2 * Math.PI * 6.5
+/** Inline 13px progress ring — sits next to the task title, same visual weight as FileTextIcon. */
+function InlineSubtaskRing({ done, total, isUnseen }: { done: number; total: number; isUnseen: boolean }) {
+  const circumference = 2 * Math.PI * 6
   const progress = done / total
   const offset = circumference * (1 - progress)
+  const isComplete = done === total
 
   return (
-    <div className="flex items-center gap-1">
-      <svg width={14} height={14} viewBox="0 0 16 16">
+    <svg width={13} height={13} viewBox="0 0 16 16" className="block">
+      <circle
+        cx={8} cy={8} r={6}
+        fill="none"
+        stroke={isComplete && isUnseen ? "none" : "var(--border)"}
+        strokeWidth={1.75}
+      />
+      {progress > 0 && (
         <circle
-          cx={8} cy={8} r={6.5}
+          cx={8} cy={8} r={6}
           fill="none"
-          stroke={isUnseen ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "var(--border)"}
-          strokeWidth={1.75}
-        />
-        <circle
-          cx={8} cy={8} r={6.5}
-          fill="none"
-          className={isUnseen ? "stroke-primary opacity-60" : "stroke-muted-foreground"}
-          strokeWidth={1.75}
+          className={isComplete && isUnseen ? "stroke-emerald-500" : isUnseen ? "stroke-foreground" : "stroke-muted-foreground"}
+          strokeWidth={isUnseen ? 2 : 1.75}
           strokeDasharray={circumference}
           strokeDashoffset={offset}
           strokeLinecap="round"
           transform="rotate(-90 8 8)"
+          style={isComplete && isUnseen ? { opacity: 1 } : isUnseen ? { opacity: 0.7 } : { opacity: 0.45 }}
         />
-      </svg>
-      <span className={cn(
-        "text-[10px] tabular-nums",
-        isUnseen ? "font-semibold text-primary" : "text-muted-foreground/80",
-      )}>
-        {done}<span className="opacity-40">/{total}</span>
-      </span>
-    </div>
+      )}
+    </svg>
   )
 }
 
-function CommentIndicator({ count, unreadCount, isUnseen }: { count: number; unreadCount: number; isUnseen: boolean }) {
-  if (count === 0) return null
+/** Comment pill — gray when seen, red when unseen. */
+function CommentPill({ count, unreadCount, hasUnseen }: { count: number; unreadCount: number; hasUnseen: boolean }) {
+  const displayCount = hasUnseen ? unreadCount : count
 
   return (
-    <div className="flex items-center gap-1">
-      <MessageCircleIcon
-        className={cn(
-          "size-[13px] shrink-0",
-          isUnseen ? "stroke-primary opacity-70" : "stroke-muted-foreground/80",
-        )}
-        strokeWidth={isUnseen ? 2.25 : 1.75}
-      />
-      {isUnseen ? (
-        <span className="inline-flex items-center h-3.5 px-1 rounded-full bg-primary/[0.06] text-[9px] font-semibold text-primary">
-          {unreadCount}
-        </span>
-      ) : (
-        <span className="text-[10px] text-muted-foreground/80">{count}</span>
-      )}
-    </div>
+    <span className={cn(
+      "inline-flex items-center gap-1 rounded-full px-2 h-[22px] text-[11px] tabular-nums font-medium",
+      hasUnseen
+        ? "bg-red-500 text-white dark:bg-red-600"
+        : "bg-muted text-muted-foreground",
+    )}>
+      <MessageCircleIcon className="size-3" strokeWidth={hasUnseen ? 2.5 : 2.25} />
+      {displayCount}
+    </span>
   )
 }

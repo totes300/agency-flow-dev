@@ -59,16 +59,18 @@ export function TaskDetailSidebar({ taskId, isAdmin }: { taskId: Id<"tasks">; is
   )
 
   // Mark comments as seen — debounced to avoid firing on rapid J/K navigation.
-  // Skips if the latest comment is by the current user (no redundant server write).
+  // Do not skip when the latest comment is mine: older comments by others may
+  // still be unread, which can keep the task in an unseen state indefinitely.
   const markSeen = useMutation(api.comments.markSeen)
   const commentCount = comments?.length ?? 0
-  const latestCommentUserId = comments && comments.length > 0 ? comments[comments.length - 1].userId : null
+  const currentUserId = currentUser?._id
   useEffect(() => {
     if (!isAuthenticated) return
-    if (latestCommentUserId && currentUser && latestCommentUserId === currentUser._id) return
-    const timeout = setTimeout(() => markSeen({ taskId }), 500)
+    const timeout = setTimeout(() => {
+      void markSeen({ taskId })
+    }, 500)
     return () => clearTimeout(timeout)
-  }, [isAuthenticated, taskId, markSeen, commentCount, latestCommentUserId, currentUser])
+  }, [isAuthenticated, taskId, markSeen, commentCount, currentUserId])
 
   // Freeze lastSeenAt on first load so the "New" divider survives the markSeen update.
   // Once captured, it stays constant for the lifetime of this dialog mount.
@@ -88,7 +90,6 @@ export function TaskDetailSidebar({ taskId, isAdmin }: { taskId: Id<"tasks">; is
 
   // Build unified timeline — memoized to avoid re-sorting on unrelated re-renders
   const feed = useMemo(() => buildFeed(activities, comments), [activities, comments])
-  const currentUserId = currentUser?._id
 
   // Scroll to bottom when feed or read receipts change
   const scrollRef = useRef<HTMLDivElement>(null)

@@ -89,13 +89,14 @@ export function TaskDetailModal({
 
   // ─── Mark task as viewed after 500ms (only after data loads) ─────────────
   const markViewed = useMutation(api.taskViewReceipts.markViewed)
+  const loadedTaskId = task?._id
   useEffect(() => {
-    if (!task) return
+    if (!loadedTaskId) return
     const timer = setTimeout(() => {
-      void markViewed({ taskId: task._id })
+      void markViewed({ taskId: loadedTaskId })
     }, 500)
     return () => clearTimeout(timer)
-  }, [task?._id, task, markViewed])
+  }, [loadedTaskId, markViewed])
 
   if (!isOpen) return null
 

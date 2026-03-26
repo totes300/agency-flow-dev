@@ -122,6 +122,16 @@ describe("computeUnreadCount", () => {
     ]
     expect(computeUnreadCount(comments, USER_ME, T.t3)).toEqual({ total: 5, unread: 2 })
   })
+
+  it("keeps older other-user comments unread even if the latest comment is mine", () => {
+    const comments = [
+      comment("c1", USER_ADAM, T.t2),
+      comment("c2", USER_EMMA, T.t3),
+      comment("c3", USER_ME, T.t4),
+    ]
+
+    expect(computeUnreadCount(comments, USER_ME, null)).toEqual({ total: 3, unread: 2 })
+  })
 })
 
 // ─── isCommentUnread ────────────────────────────────────────────────────────────

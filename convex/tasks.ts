@@ -6,6 +6,7 @@ import { logActivity } from "./activityLog";
 import { STATUS_TYPES } from "./lib/constants";
 import type { StatusType } from "./lib/constants";
 import { isTiptapEmpty } from "../lib/tiptap-utils";
+import { computeTaskIndicatorState } from "./lib/taskActivityIndicators";
 import {
   TAB_STATUS_TYPE,
   isVisibleTopLevelTask,
@@ -631,19 +632,6 @@ export const list = query({
 
 // ─── Activity Indicators ─────────────────────────────────────────────────────────
 
-// Group A event types that trigger unseen via taskViewReceipts
-const UNSEEN_EVENT_TYPES = new Set([
-  "status_changed",
-  "assignee_added",
-  "assignee_removed",
-  "subtask_created",
-  "subtask_completed",
-  "description_changed",
-  "due_date_changed",
-  "category_changed",
-  "project_changed",
-]);
-
 export const activityIndicators = query({
   args: { taskIds: v.array(v.id("tasks")) },
   handler: async (ctx, { taskIds }) => {
@@ -720,63 +708,25 @@ export const activityIndicators = query({
       const lastViewedAt = viewReceipt?.lastViewedAt ?? 0;
       const lastSeenAt = commentReceipt?.lastSeenAt ?? 0;
 
-      // hasUnseenNonComment: any Group A event after lastViewedAt by other users
-      const unseenNonComment = await ctx.db
+      const events = await ctx.db
         .query("activityLog")
         .withIndex("by_task", (q) => q.eq("taskId", taskId).gt("createdAt", lastViewedAt))
-        .filter((q) =>
-          q.neq(q.field("userId"), userId)
-        )
-        .first();
-      const hasUnseenNonComment = unseenNonComment !== null && UNSEEN_EVENT_TYPES.has(unseenNonComment.type);
+        .collect();
 
-      // If the first event wasn't in Group A, scan for one that is
-      let hasUnseenNonCommentFinal = hasUnseenNonComment;
-      if (!hasUnseenNonComment && unseenNonComment !== null) {
-        // There are events after lastViewedAt by others, but first wasn't Group A — scan more
-        const events = await ctx.db
-          .query("activityLog")
-          .withIndex("by_task", (q) => q.eq("taskId", taskId).gt("createdAt", lastViewedAt))
-          .filter((q) => q.neq(q.field("userId"), userId))
-          .take(50);
-        hasUnseenNonCommentFinal = events.some((e) => UNSEEN_EVENT_TYPES.has(e.type));
-      }
-
-      // hasUnseenSubtasks: subtask events after lastViewedAt by others
-      const unseenSubtask = await ctx.db
-        .query("activityLog")
-        .withIndex("by_task", (q) => q.eq("taskId", taskId).gt("createdAt", lastViewedAt))
-        .filter((q) =>
-          q.and(
-            q.neq(q.field("userId"), userId),
-            q.or(
-              q.eq(q.field("type"), "subtask_created"),
-              q.eq(q.field("type"), "subtask_completed")
-            )
-          )
-        )
-        .first();
-      const hasUnseenSubtasks = unseenSubtask !== null;
-
-      // hasUnseenDescription: description_changed after lastViewedAt by others
-      const unseenDesc = await ctx.db
-        .query("activityLog")
-        .withIndex("by_task", (q) => q.eq("taskId", taskId).gt("createdAt", lastViewedAt))
-        .filter((q) =>
-          q.and(
-            q.neq(q.field("userId"), userId),
-            q.eq(q.field("type"), "description_changed")
-          )
-        )
-        .first();
-      const hasUnseenDescription = unseenDesc !== null;
-
-      // unreadCommentCount from comments table (not activityLog)
-      const unreadComments = comments.filter(
-        (c) => c.createdAt > lastSeenAt && c.userId !== userId
-      );
-      const unreadCommentCount = unreadComments.length;
-      const hasUnseenComments = unreadCommentCount > 0;
+      const indicatorState = computeTaskIndicatorState({
+        events: events.map((event) => ({
+          createdAt: event.createdAt,
+          type: event.type,
+          userId: event.userId,
+        })),
+        comments: comments.map((comment) => ({
+          createdAt: comment.createdAt,
+          userId: comment.userId,
+        })),
+        currentUserId: userId,
+        lastViewedAt,
+        lastSeenAt,
+      });
 
       // lastActivity: most recent activityLog event
       const latestEvent = await ctx.db
@@ -808,12 +758,12 @@ export const activityIndicators = query({
         commentCount: comments.length,
         hasAttachments: attachments.length > 0,
         hasDescription,
-        hasUnseenNonComment: hasUnseenNonCommentFinal,
-        hasUnseenSubtasks,
-        hasUnseenDescription,
-        hasUnseenComments,
-        hasUnseen: hasUnseenNonCommentFinal || hasUnseenComments,
-        unreadCommentCount,
+        hasUnseenNonComment: indicatorState.hasUnseenNonComment,
+        hasUnseenSubtasks: indicatorState.hasUnseenSubtasks,
+        hasUnseenDescription: indicatorState.hasUnseenDescription,
+        hasUnseenComments: indicatorState.hasUnseenComments,
+        hasUnseen: indicatorState.hasUnseen,
+        unreadCommentCount: indicatorState.unreadCommentCount,
         lastActivity,
       };
     }));
@@ -964,8 +914,11 @@ export const update = mutation({
       validateStringLength(title, 500, "Task title");
       updates.title = title;
     }
+    const nextDescription = args.description !== undefined
+      ? (args.description.trim() || undefined)
+      : undefined;
     if (args.description !== undefined) {
-      updates.description = args.description.trim() || undefined;
+      updates.description = nextDescription;
     }
     if (args.statusId !== undefined) {
       const status = await ctx.db.get(args.statusId);
@@ -1054,7 +1007,7 @@ export const update = mutation({
     if (args.billable !== undefined && args.billable !== task.billable) {
       await logActivity(ctx, { ...logCtx, type: "billable_changed", metadata: { from: task.billable, to: args.billable } });
     }
-    if (args.description !== undefined) {
+    if (args.description !== undefined && nextDescription !== task.description) {
       await logActivity(ctx, { ...logCtx, type: "description_changed", metadata: {} });
     }
   },
@@ -1306,4 +1259,3 @@ export const bulkUpdate = mutation({
     return { updated, skipped };
   },
 });
-

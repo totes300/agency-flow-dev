@@ -155,6 +155,17 @@ export const clearDefaultAvatars = internalMutation({
   },
 });
 
+export const updateTaskDetailView = mutation({
+  args: { view: v.union(v.literal("modal"), v.literal("drawer")) },
+  handler: async (ctx, { view }) => {
+    const user = await getCurrentUserOrThrow(ctx);
+    await ctx.db.patch(user._id, {
+      taskDetailView: view,
+      updatedAt: Date.now(),
+    });
+  },
+});
+
 export const deleteFromClerk = internalMutation({
   args: { clerkUserId: v.string() },
   async handler(ctx, { clerkUserId }) {

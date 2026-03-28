@@ -1,11 +1,10 @@
 "use client"
 
 import { useState } from "react"
+import { useTiptap } from "@tiptap/react"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { ToolbarButton } from "@/components/toolbar-button"
 import { CheckIcon, ChevronDownIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
-import type { Editor } from "@tiptap/react"
 
 const HEADING_OPTIONS = [
   { level: 0, label: "Paragraph" },
@@ -14,20 +13,19 @@ const HEADING_OPTIONS = [
   { level: 3, label: "Heading 3" },
 ] as const
 
-function getActiveLevel(editor: Editor): number {
-  for (const { level } of HEADING_OPTIONS) {
-    if (level > 0 && editor.isActive("heading", { level })) return level
-  }
-  return 0
-}
-
-function getLabel(level: number): string {
-  return HEADING_OPTIONS.find((o) => o.level === level)?.label ?? "Paragraph"
-}
-
-export function HeadingPopover({ editor }: { editor: Editor }) {
+export function HeadingPopover() {
+  const { editor } = useTiptap()
   const [open, setOpen] = useState(false)
-  const activeLevel = getActiveLevel(editor)
+
+  let activeLevel = 0
+  for (const { level } of HEADING_OPTIONS) {
+    if (level > 0 && editor.isActive("heading", { level })) {
+      activeLevel = level
+      break
+    }
+  }
+
+  const label = HEADING_OPTIONS.find((o) => o.level === activeLevel)?.label ?? "Paragraph"
 
   function applyHeading(level: number) {
     if (level === 0) {
@@ -48,7 +46,7 @@ export function HeadingPopover({ editor }: { editor: Editor }) {
             open && "bg-muted text-foreground",
           )}
         >
-          <span className="min-w-[4.5rem]">{getLabel(activeLevel)}</span>
+          <span className="min-w-[4.5rem]">{label}</span>
           <ChevronDownIcon className="size-3 opacity-50" />
         </button>
       </PopoverTrigger>
@@ -57,7 +55,7 @@ export function HeadingPopover({ editor }: { editor: Editor }) {
         className="w-40 p-1"
         onOpenAutoFocus={(e) => e.preventDefault()}
       >
-        {HEADING_OPTIONS.map(({ level, label }) => (
+        {HEADING_OPTIONS.map(({ level, label: optLabel }) => (
           <button
             key={level}
             type="button"
@@ -69,7 +67,7 @@ export function HeadingPopover({ editor }: { editor: Editor }) {
                 : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
             )}
           >
-            {label}
+            {optLabel}
             {activeLevel === level && <CheckIcon className="size-3.5" />}
           </button>
         ))}

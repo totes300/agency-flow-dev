@@ -1,11 +1,11 @@
 "use client"
 
 import { useState } from "react"
+import { useTiptap } from "@tiptap/react"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { ToolbarButton } from "@/components/toolbar-button"
 import { HighlighterIcon, XIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
-import type { Editor } from "@tiptap/react"
 
 const HIGHLIGHT_COLORS = [
   { name: "Yellow", color: "#fef08a" },
@@ -18,7 +18,8 @@ const HIGHLIGHT_COLORS = [
   { name: "Cyan", color: "#a5f3fc" },
 ] as const
 
-export function HighlightPopover({ editor }: { editor: Editor }) {
+export function HighlightPopover() {
+  const { editor } = useTiptap()
   const [open, setOpen] = useState(false)
 
   const isActive = editor.isActive("highlight")

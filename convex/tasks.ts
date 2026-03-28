@@ -783,10 +783,11 @@ export const activityIndicators = query({
       const lastViewedAt = viewReceipt?.lastViewedAt ?? 0;
       const lastSeenAt = commentReceipt?.lastSeenAt ?? 0;
 
-      const events = await ctx.db
+      const events = (await ctx.db
         .query("activityLog")
         .withIndex("by_task", (q) => q.eq("taskId", taskId).gt("createdAt", lastViewedAt))
-        .collect();
+        .collect())
+        .filter((event) => event.type !== "description_changed");
 
       const indicatorState = computeTaskIndicatorState({
         events: events.map((event) => ({
@@ -804,11 +805,12 @@ export const activityIndicators = query({
       });
 
       // lastActivity: most recent activityLog event
-      const latestEvent = await ctx.db
+      const latestEvent = (await ctx.db
         .query("activityLog")
         .withIndex("by_task", (q) => q.eq("taskId", taskId))
         .order("desc")
-        .first();
+        .take(20))
+        .find((event) => event.type !== "description_changed");
 
       let lastActivity: {
         userName: string;
@@ -1082,9 +1084,33 @@ export const update = mutation({
     if (args.billable !== undefined && args.billable !== task.billable) {
       await logActivity(ctx, { ...logCtx, type: "billable_changed", metadata: { from: task.billable, to: args.billable } });
     }
-    if (args.description !== undefined && nextDescription !== task.description) {
-      await logActivity(ctx, { ...logCtx, type: "description_changed", metadata: {} });
+  },
+});
+
+export const updateDescription = mutation({
+  args: {
+    id: v.id("tasks"),
+    description: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
+
+    const task = await ctx.db.get(args.id);
+    if (!task || task.orgId !== orgId) throw new ConvexError("Task not found");
+    if (!isAdmin && !task.assigneeIds.includes(userId)) {
+      throw new ConvexError("You can only edit tasks assigned to you");
     }
+
+    const nextDescription = args.description !== undefined
+      ? (args.description.trim() || undefined)
+      : undefined;
+
+    if (nextDescription === task.description) return;
+
+    await ctx.db.patch(args.id, {
+      description: nextDescription,
+      updatedAt: Date.now(),
+    });
   },
 });
 

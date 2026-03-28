@@ -14,6 +14,7 @@ export default defineSchema({
     timerStartedAt: v.optional(v.number()),
     timerAccumulatedMs: v.optional(v.number()),
     timerStatus: v.optional(v.union(v.literal("running"), v.literal("paused"))),
+    taskDetailView: v.optional(v.union(v.literal("modal"), v.literal("drawer"))),
     createdAt: v.number(),
     updatedAt: v.number(),
   }).index("byExternalId", ["externalId"]),

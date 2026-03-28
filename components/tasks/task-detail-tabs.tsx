@@ -1,11 +1,17 @@
 "use client"
 
+import dynamic from "next/dynamic"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { TaskDetailOverview } from "@/components/tasks/task-detail-overview"
 import { TaskDetailTime } from "@/components/tasks/task-detail-time"
 import { TaskDetailAttachments } from "@/components/tasks/task-detail-attachments"
 import { MailIcon } from "lucide-react"
 import type { Id } from "@/convex/_generated/dataModel"
+
+const SubtaskList = dynamic(
+  () => import("@/components/tasks/subtask-list").then((m) => ({ default: m.SubtaskList })),
+  { ssr: false, loading: () => null },
+)
 
 type TaskData = {
   _id: Id<"tasks">
@@ -30,9 +36,10 @@ export function TaskDetailTabs({
 }) {
   return (
     <Tabs defaultValue="overview" className="flex flex-1 flex-col overflow-hidden gap-0">
-      <div className="shrink-0 px-7">
-        <TabsList variant="line" className="w-auto">
+      <div className="shrink-0 border-b px-7">
+        <TabsList variant="line" className="w-auto border-b-0">
           <TabsTrigger value="overview" className="text-[13px]">Overview</TabsTrigger>
+          <TabsTrigger value="subtasks" className="text-[13px]">Subtasks</TabsTrigger>
           <TabsTrigger value="time" className="text-[13px]">Time</TabsTrigger>
           <TabsTrigger value="attachments" className="text-[13px]">Attachments</TabsTrigger>
           <TabsTrigger value="emails" className="text-[13px]">Emails</TabsTrigger>
@@ -40,7 +47,19 @@ export function TaskDetailTabs({
       </div>
 
       <TabsContent value="overview" className="flex-1 overflow-y-auto px-7 py-5">
-        <TaskDetailOverview task={task} isAdmin={isAdmin} onOpenDetail={onOpenDetail} />
+        <TaskDetailOverview task={task} />
+      </TabsContent>
+
+      <TabsContent value="subtasks" className="flex-1 overflow-y-auto px-7 py-5">
+        <SubtaskList
+          parentTaskId={task._id}
+          parentProjectId={task.projectId}
+          parentBillable={task.billable}
+          parentCategoryId={task.workCategoryId}
+          parentAssigneeIds={task.assigneeIds}
+          isAdmin={isAdmin}
+          onOpenDetail={onOpenDetail}
+        />
       </TabsContent>
 
       <TabsContent value="time" className="flex-1 overflow-y-auto px-7 py-5">

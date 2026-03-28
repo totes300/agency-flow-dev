@@ -7,7 +7,7 @@ import { useConvexAuth } from "convex/react"
 import { useOrganization } from "@clerk/nextjs"
 import { useSearchParams, useRouter, usePathname } from "next/navigation"
 import { useTaskFilters } from "@/lib/hooks/use-task-filters"
-import { buildDetailUrl } from "@/lib/task-detail"
+import { buildDetailUrl, parseDetailParam } from "@/lib/task-detail"
 import { useUndoAction } from "@/lib/hooks/use-undo-action"
 import { TaskReferenceDataProvider } from "@/components/tasks/task-reference-data"
 import { TasksHeader } from "@/components/tasks/tasks-header"
@@ -18,6 +18,7 @@ import { InlineAddTask } from "@/components/tasks/inline-add-task"
 import { InlineCreatedTaskRow, type InlineCreatedTask } from "@/components/tasks/inline-created-task-row"
 import { TaskFormModal } from "@/components/tasks/task-form-modal"
 import { TaskDetailModal } from "@/components/tasks/task-detail-modal"
+import { TaskDetailDrawer } from "@/components/tasks/task-detail-drawer"
 import { BulkToolbar } from "@/components/tasks/bulk-toolbar"
 import { TasksEmptyState } from "@/components/tasks/tasks-empty-state"
 import { TaskCard } from "@/components/tasks/task-card"
@@ -40,6 +41,7 @@ export default function TasksPage() {
   const router = useRouter()
   const pathname = usePathname()
 
+  const detailId = parseDetailParam(searchParams)
   const filters = useTaskFilters()
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null)
@@ -72,6 +74,21 @@ export default function TasksPage() {
   const { trigger: triggerUndo } = useUndoAction()
 
   // Queries
+  const currentUser = useQuery(api.users.current, isAuthenticated ? {} : "skip")
+  const rawViewPref = currentUser?.taskDetailView ?? "modal"
+
+  // Responsive: force modal on mobile (<768px)
+  const [isMobile, setIsMobile] = useState(false)
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 767px)")
+    setIsMobile(mq.matches)
+    function handleChange(e: MediaQueryListEvent) {
+      setIsMobile(e.matches)
+    }
+    mq.addEventListener("change", handleChange)
+    return () => mq.removeEventListener("change", handleChange)
+  }, [])
+  const viewPref = isMobile ? "modal" : rawViewPref
   const counts = useQuery(api.tasks.counts, isAuthenticated ? {} : "skip")
   const listResult = useQuery(api.tasks.list, isAuthenticated ? filters.listArgs : "skip")
 
@@ -414,6 +431,7 @@ export default function TasksPage() {
                     totalMinutes={timeMap?.[task._id] ?? 0}
                     activity={activityMap?.[task._id]}
                     isArchivedView={isArchivedView}
+                    isDetailOpen={viewPref === "drawer" && detailId === task._id}
                   />
                 )
               }}
@@ -479,10 +497,17 @@ export default function TasksPage() {
         onConfirm={handleDelete}
       />
 
-      <TaskDetailModal
-        taskIds={allVisibleTaskIds}
-        isAdmin={isAdmin ?? false}
-      />
+      {viewPref === "drawer" ? (
+        <TaskDetailDrawer
+          taskIds={allVisibleTaskIds}
+          isAdmin={isAdmin ?? false}
+        />
+      ) : (
+        <TaskDetailModal
+          taskIds={allVisibleTaskIds}
+          isAdmin={isAdmin ?? false}
+        />
+      )}
     </div>
     </TaskReferenceDataProvider>
   )

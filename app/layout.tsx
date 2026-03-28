@@ -5,6 +5,7 @@ import { ClerkProvider } from "@clerk/nextjs";
 import ConvexClientProvider from "@/components/convex-client-provider";
 import { NuqsAdapter } from "nuqs/adapters/next/app";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { Agentation } from "agentation";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -40,6 +41,7 @@ export default function RootLayout({
             </NuqsAdapter>
           </ConvexClientProvider>
         </ClerkProvider>
+        {process.env.NODE_ENV === "development" && <Agentation endpoint="http://localhost:4747" />}
       </body>
     </html>
   );

@@ -140,7 +140,7 @@ export function formatActivityTimestamp(timestamp: number, now: number = Date.no
   const minutes = Math.floor(diff / 60000)
 
   if (minutes < 1) return "Just now"
-  if (minutes < 60) return `${minutes} min${minutes === 1 ? "" : "s"}`
+  if (minutes < 60) return `${minutes} min${minutes === 1 ? "" : "s"} ago`
 
   const eventDate = new Date(timestamp)
   const today = new Date(now)
@@ -223,4 +223,3 @@ export function formatBatchTimeRange(startMs: number, endMs: number): string {
 
 // Re-export duration formatters for discoverability
 export { formatDuration, formatTimerDisplay } from "@/lib/duration"
-

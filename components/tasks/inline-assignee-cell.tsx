@@ -60,13 +60,13 @@ export function InlineAssigneeCell({
       <PopoverTrigger asChild>
         <button
           type="button"
-          className={`flex w-full items-center rounded-sm py-0.5 transition-colors ${assignees.length > 0 ? "hover:bg-muted/50" : ""}`}
+          className={`flex w-full items-center rounded-sm py-0.5 transition-colors ${assignees.length > 0 ? "hover:bg-accent" : ""}`}
           onClick={(e) => e.stopPropagation()}
         >
           {assignees.length === 0 ? (
-            <span className="flex items-center gap-1.5 text-muted-foreground/20 transition-colors group-hover/row:text-muted-foreground/50">
-              <UserIcon className="size-3.5" />
-              <span className="text-xs">Assign</span>
+            <span className="flex items-center gap-1.5 text-foreground/50 transition-colors group-hover/row:text-foreground/70">
+              <UserIcon className="size-[17px]" strokeWidth={2} />
+              <span className="text-[13px]">Add assignee</span>
             </span>
           ) : assignees.length === 1 ? (
             <span className="flex items-center gap-1.5">
@@ -78,7 +78,7 @@ export function InlineAssigneeCell({
                 </TooltipTrigger>
                 <TooltipContent side="top" className="text-xs">{assignees[0].name}</TooltipContent>
               </Tooltip>
-              <span className="truncate text-[11px] text-muted-foreground">{firstName(assignees[0].name)}</span>
+              <span className="truncate text-[13px] text-muted-foreground">{firstName(assignees[0].name)}</span>
             </span>
           ) : (
             <AvatarGroup className="[&_[data-slot=avatar]]:relative [&_[data-slot=avatar]]:z-0 [&_[data-slot=avatar]]:transition-transform [&_[data-slot=avatar]]:duration-200 [&_[data-slot=avatar]]:ease-out [&_[data-slot=avatar]:hover]:z-10 [&_[data-slot=avatar]:hover]:-translate-y-0.5">
@@ -136,4 +136,3 @@ export function InlineAssigneeCell({
     </Popover>
   )
 }
-

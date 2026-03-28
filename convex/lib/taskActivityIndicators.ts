@@ -15,7 +15,6 @@ export const UNSEEN_EVENT_TYPES = new Set([
   "assignee_removed",
   "subtask_created",
   "subtask_completed",
-  "description_changed",
   "due_date_changed",
   "category_changed",
   "project_changed",
@@ -47,14 +46,10 @@ export function computeTaskIndicatorState(args: {
       event.type === "subtask_created" || event.type === "subtask_completed",
   );
 
-  const hasUnseenDescription = unseenEvents.some(
-    (event) => event.type === "description_changed",
-  );
-
   return {
     hasUnseenNonComment,
     hasUnseenSubtasks,
-    hasUnseenDescription,
+    hasUnseenDescription: false,
     hasUnseenComments: unreadCommentCount > 0,
     hasUnseen: hasUnseenNonComment || unreadCommentCount > 0,
     unreadCommentCount,

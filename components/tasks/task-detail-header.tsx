@@ -24,6 +24,7 @@ import {
   ArchiveIcon,
   Trash2Icon,
   LinkIcon,
+  PanelRightCloseIcon,
 } from "lucide-react"
 import type { Id } from "@/convex/_generated/dataModel"
 
@@ -58,6 +59,7 @@ export function TaskDetailHeader({
   hasNext: boolean
   hasPrev: boolean
 }) {
+  const updateView = useMutation(api.users.updateTaskDetailView)
   const duplicateTask = useMutation(api.tasks.duplicate)
   const archiveTask = useMutation(api.tasks.archive)
   const removeTask = useMutation(api.tasks.remove)
@@ -154,8 +156,21 @@ export function TaskDetailHeader({
         )}
       </div>
 
-      {/* Right: timer + meta + actions */}
+      {/* Right: view toggle + timer + meta + actions */}
       <div className="flex items-center gap-1">
+        {/* View toggle: switch to drawer (hidden on mobile) */}
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          onClick={() => { void updateView({ view: "drawer" }) }}
+          aria-label="Switch to drawer view"
+          className="hidden md:flex"
+        >
+          <PanelRightCloseIcon className="size-4" />
+        </Button>
+
+        <div className="hidden md:block h-4 w-px bg-border/40 mx-0.5" />
+
         {/* Timer — same InlineTimeCell as task rows, wrapped in group/row so play button shows */}
         {task && (
           <div className="group/row">

@@ -1,13 +1,46 @@
 "use client"
 
-import { ReactNode, useState } from "react"
-import dynamic from "next/dynamic"
+import { ReactNode, useEffect, useRef, useState } from "react"
 import data from "@emoji-mart/data"
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover"
 
-const Picker = dynamic(() => import("@emoji-mart/react").then(m => m.default), {
-  ssr: false,
-})
+interface EmojiMartEmoji {
+  native: string
+}
+
+function EmojiPicker({
+  onEmojiSelect,
+}: {
+  onEmojiSelect: (emoji: EmojiMartEmoji) => void
+}) {
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    let active = true
+    let pickerElement: HTMLElement | null = null
+
+    void import("emoji-mart").then(({ Picker }) => {
+      if (!active || !containerRef.current) return
+
+      pickerElement = new Picker({
+        data,
+        perLine: 8,
+        theme: "auto",
+        skinTonePosition: "none",
+        onEmojiSelect,
+      }) as unknown as HTMLElement
+
+      containerRef.current.replaceChildren(pickerElement)
+    })
+
+    return () => {
+      active = false
+      pickerElement?.remove()
+    }
+  }, [onEmojiSelect])
+
+  return <div ref={containerRef} />
+}
 
 interface EmojiPickerPopoverProps {
   onSelect: (emoji: string) => void
@@ -32,11 +65,7 @@ export function EmojiPickerPopover({
         sideOffset={8}
         className="w-auto p-0 border-0 shadow-lg"
       >
-        <Picker
-          data={data}
-          perLine={8}
-          theme="auto"
-          skinTonePosition="none"
+        <EmojiPicker
           onEmojiSelect={(emoji: { native: string }) => {
             onSelect(emoji.native)
             setOpen(false)

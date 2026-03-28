@@ -8,9 +8,11 @@ import type { Id } from "@/convex/_generated/dataModel"
 export function TaskDetailTitle({
   taskId,
   title,
+  projectCode,
 }: {
   taskId: Id<"tasks">
   title: string
+  projectCode?: string
 }) {
   const [editing, setEditing] = useState(false)
   const [value, setValue] = useState(title)
@@ -42,7 +44,10 @@ export function TaskDetailTitle({
   }
 
   return (
-    <div className="shrink-0 px-7 pt-6 pb-2">
+    <div className="shrink-0 pb-2">
+      {projectCode && (
+        <span className="mb-1.5 block text-[13px] font-medium text-muted-foreground/60">{projectCode}</span>
+      )}
       {editing ? (
         <input
           ref={inputRef}
@@ -54,7 +59,7 @@ export function TaskDetailTitle({
             if (e.key === "Enter" && !e.nativeEvent.isComposing) handleSave()
             if (e.key === "Escape") { setValue(title); setEditing(false) }
           }}
-          className="w-full text-[22px] font-semibold tracking-tight text-foreground outline-none"
+          className="w-full text-[22px] font-medium tracking-tight text-foreground outline-none"
           autoFocus
         />
       ) : (
@@ -72,7 +77,7 @@ export function TaskDetailTitle({
               setTimeout(() => inputRef.current?.focus(), 0)
             }
           }}
-          className="-mx-2 cursor-text rounded-md px-2 text-[22px] font-semibold tracking-tight text-foreground outline-none transition-colors hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring"
+          className="-mx-2 cursor-text rounded-md px-2 text-[22px] font-medium tracking-tight text-foreground outline-none transition-colors hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring"
         >
           {title}
         </h1>

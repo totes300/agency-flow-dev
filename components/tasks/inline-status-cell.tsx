@@ -63,9 +63,9 @@ export function InlineStatusCell({
           {status ? (
             <StatusBadge name={status.name} color={status.color} type={status.type} />
           ) : (
-            <span className="flex items-center gap-1.5 text-muted-foreground/20 transition-colors group-hover/row:text-muted-foreground/50">
+            <span className="flex items-center gap-1.5 text-foreground/50 transition-colors group-hover/row:text-foreground/70">
               <LoaderIcon className="size-3.5" />
-              <span className="text-xs">Status</span>
+              <span className="text-sm">Set status</span>
             </span>
           )}
         </button>

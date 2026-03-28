@@ -73,22 +73,22 @@ export function InlineProjectCell({
       <PopoverTrigger asChild>
         <button
           type="button"
-          className={`flex w-full items-center gap-1 rounded-sm py-0.5 text-left transition-colors ${project ? "hover:bg-muted/50" : ""}`}
+          className={`flex w-full items-center gap-1 rounded-sm py-0.5 text-left transition-colors ${project ? "hover:bg-accent" : ""}`}
           onClick={(e) => e.stopPropagation()}
           title={locked ? "Has time entries — project cannot be changed" : undefined}
         >
           {project ? (
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-1">
-                <span className="truncate text-xs font-medium">{client?.name}</span>
+                <span className="truncate text-[13px] font-medium text-foreground">{client?.name}</span>
                 {locked && <LockIcon className="size-3 shrink-0 text-muted-foreground" />}
               </div>
-              <div className="truncate text-[11px] leading-tight text-muted-foreground/60">{project.name}</div>
+              <div className="truncate text-xs leading-tight text-muted-foreground">{project.name}</div>
             </div>
           ) : (
-            <span className="flex items-center gap-1.5 text-muted-foreground/20 transition-colors group-hover/row:text-muted-foreground/50">
-              <FolderIcon className="size-3.5" />
-              <span className="text-xs">Project</span>
+            <span className="flex items-center gap-1.5 text-foreground/50 transition-colors group-hover/row:text-foreground/70">
+              <FolderIcon className="size-[17px]" strokeWidth={2} />
+              <span className="text-[13px]">Add project</span>
             </span>
           )}
         </button>
@@ -100,7 +100,7 @@ export function InlineProjectCell({
             <CommandEmpty>No projects found.</CommandEmpty>
             <CommandGroup>
               <CommandItem onSelect={() => handleSelect(null)}>
-                <span className="text-muted-foreground">None</span>
+                <span className="text-[13px] text-muted-foreground">None</span>
               </CommandItem>
             </CommandGroup>
             {[...groupedProjects.entries()].map(([clientName, clientProjects]) => (

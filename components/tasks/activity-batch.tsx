@@ -18,15 +18,17 @@ export function ActivityBatch({
   const timeRange = formatBatchTimeRange(batch.startTime, batch.endTime)
 
   return (
-    <Collapsible>
-      <CollapsibleTrigger className="flex w-full cursor-pointer items-center gap-2 rounded-md px-1 py-1.5 hover:bg-muted/50">
-        <Activity className="size-3.5 shrink-0 text-muted-foreground/40" />
-        <span className="text-xs text-muted-foreground/50">
-          {label}
-          <span className="mx-1.5 text-muted-foreground/30">&middot;</span>
-          {timeRange}
-        </span>
-        <ChevronRight className="ml-auto size-3 shrink-0 text-muted-foreground/30 transition-transform duration-200 data-[state=open]:rotate-90" />
+    <Collapsible className="my-3">
+      <CollapsibleTrigger className="flex w-full cursor-pointer items-center gap-3 py-0.5 hover:opacity-80">
+        <div className="h-px flex-1 bg-border/30" />
+        <div className="flex shrink-0 items-center gap-1.5 text-muted-foreground/40">
+          <Activity className="size-3 shrink-0" />
+          <span className="text-[11px]">{label}</span>
+          <span className="text-[10px]">&middot;</span>
+          <span className="text-[10px]">{timeRange}</span>
+          <ChevronRight className="size-2.5 shrink-0 transition-transform duration-200 data-[state=open]:rotate-90" />
+        </div>
+        <div className="h-px flex-1 bg-border/30" />
       </CollapsibleTrigger>
       <CollapsibleContent>
         <div className="pb-1 pt-0.5">

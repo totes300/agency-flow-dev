@@ -46,10 +46,11 @@ export const byTask = query({
     // Member access check — non-admin can only see activity on assigned tasks
     if (!isAdmin && !task.assigneeIds.includes(userId)) return [];
 
-    const events = await ctx.db
+    const events = (await ctx.db
       .query("activityLog")
       .withIndex("by_task", (q) => q.eq("taskId", taskId))
-      .take(500);
+      .take(500))
+      .filter((event) => event.type !== "description_changed");
 
     // Join user names with dedup cache
     const userCache = new Map<string, string>();
@@ -83,11 +84,13 @@ export const latestForTask = query({
     if (!task || task.orgId !== orgId) return [];
     if (!isAdmin && !task.assigneeIds.includes(userId)) return [];
 
-    const events = await ctx.db
+    const events = (await ctx.db
       .query("activityLog")
       .withIndex("by_task", (q) => q.eq("taskId", taskId))
       .order("desc")
-      .take(5);
+      .take(20))
+      .filter((event) => event.type !== "description_changed")
+      .slice(0, 5);
 
     const userCache = new Map<string, string>();
     for (const event of events) {

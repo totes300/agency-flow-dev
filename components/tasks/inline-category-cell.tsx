@@ -51,15 +51,15 @@ export function InlineCategoryCell({
       <PopoverTrigger asChild>
         <button
           type="button"
-          className={cn("flex w-full items-center rounded-sm py-0.5 transition-colors", category && "hover:bg-muted/50")}
+          className={cn("flex w-full items-center rounded-sm py-0.5 transition-colors", category && "hover:bg-accent")}
           onClick={(e) => e.stopPropagation()}
         >
           {category ? (
             <CategoryBadge name={category.name} color={category.color} />
           ) : (
-            <span className="flex items-center gap-1.5 text-muted-foreground/20 transition-colors group-hover/row:text-muted-foreground/50">
-              <TagIcon className="size-3.5" />
-              <span className="text-xs">Category</span>
+            <span className="flex items-center gap-1.5 text-foreground/50 transition-colors group-hover/row:text-foreground/70">
+              <TagIcon className="size-[17px]" strokeWidth={2} />
+              <span className="text-[13px]">Add category</span>
             </span>
           )}
         </button>
@@ -70,7 +70,7 @@ export function InlineCategoryCell({
           <CommandList>
             <CommandGroup>
               <CommandItem onSelect={() => handleSelect(null)} className="px-2 py-1.5">
-                <span className="text-muted-foreground text-xs">None</span>
+                <span className="text-[13px] text-muted-foreground">None</span>
               </CommandItem>
               {categories?.map((c) => (
                   <CommandItem key={c._id} onSelect={() => handleSelect(c._id)} className="px-2 py-1.5">

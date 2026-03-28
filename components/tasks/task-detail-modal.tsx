@@ -1,10 +1,5 @@
 "use client"
 
-import { useCallback, useEffect, useMemo } from "react"
-import { useQuery, useMutation } from "convex/react"
-import { useConvexAuth } from "convex/react"
-import { useSearchParams, useRouter, usePathname } from "next/navigation"
-import { api } from "@/convex/_generated/api"
 import { Dialog, DialogFullscreenContent, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 import { ErrorBoundary } from "@/components/error-boundary"
 import { TaskDetailHeader } from "@/components/tasks/task-detail-header"
@@ -12,7 +7,7 @@ import { TaskDetailTitle } from "@/components/tasks/task-detail-title"
 import { TaskDetailMetadata } from "@/components/tasks/task-detail-metadata"
 import { TaskDetailTabs } from "@/components/tasks/task-detail-tabs"
 import { TaskDetailSidebar } from "@/components/tasks/task-detail-sidebar"
-import { parseDetailParam, buildDetailUrl, getAdjacentTaskId } from "@/lib/task-detail"
+import { useTaskDetail } from "@/components/tasks/use-task-detail"
 import type { Id } from "@/convex/_generated/dataModel"
 
 export function TaskDetailModal({
@@ -22,81 +17,16 @@ export function TaskDetailModal({
   taskIds: string[]
   isAdmin: boolean
 }) {
-  const searchParams = useSearchParams()
-  const router = useRouter()
-  const pathname = usePathname()
-  const { isAuthenticated } = useConvexAuth()
-
-  const detailId = parseDetailParam(searchParams)
-  const isOpen = !!detailId
-
-  // ─── Query task detail ──────────────────────────────────────────────────────
-  const task = useQuery(
-    api.tasks.getDetail,
-    isAuthenticated && detailId
-      ? { id: detailId as Id<"tasks"> }
-      : "skip",
-  )
-
-  // ─── Navigation helpers ─────────────────────────────────────────────────────
-  const navigateToTask = useCallback(
-    (taskId: string | null) => {
-      const url = buildDetailUrl(searchParams, taskId as Id<"tasks"> | null)
-      router.replace(`${pathname}${url}`, { scroll: false })
-    },
-    [searchParams, router, pathname],
-  )
-
-  const handleClose = useCallback(() => {
-    navigateToTask(null)
-  }, [navigateToTask])
-
-  const handleNavigate = useCallback(
-    (direction: "next" | "prev") => {
-      if (!detailId) return
-      const adjacent = getAdjacentTaskId(detailId, taskIds, direction)
-      if (adjacent) navigateToTask(adjacent)
-    },
-    [detailId, taskIds, navigateToTask],
-  )
-
-  // Memoize nav state to avoid O(n) indexOf on every render
-  const { hasNext, hasPrev } = useMemo(() => ({
-    hasNext: !!detailId && !!getAdjacentTaskId(detailId, taskIds, "next"),
-    hasPrev: !!detailId && !!getAdjacentTaskId(detailId, taskIds, "prev"),
-  }), [detailId, taskIds])
-
-  // ─── Keyboard: J/K navigation ──────────────────────────────────────────────
-  useEffect(() => {
-    if (!isOpen) return
-
-    function handleKeyDown(e: KeyboardEvent) {
-      const tag = (e.target as HTMLElement)?.tagName
-      if (tag === "INPUT" || tag === "TEXTAREA" || (e.target as HTMLElement)?.isContentEditable) return
-
-      if (e.key === "j" || e.key === "J") {
-        e.preventDefault()
-        handleNavigate("next")
-      } else if (e.key === "k" || e.key === "K") {
-        e.preventDefault()
-        handleNavigate("prev")
-      }
-    }
-
-    document.addEventListener("keydown", handleKeyDown)
-    return () => document.removeEventListener("keydown", handleKeyDown)
-  }, [isOpen, handleNavigate])
-
-  // ─── Mark task as viewed after 500ms (only after data loads) ─────────────
-  const markViewed = useMutation(api.taskViewReceipts.markViewed)
-  const loadedTaskId = task?._id
-  useEffect(() => {
-    if (!loadedTaskId) return
-    const timer = setTimeout(() => {
-      void markViewed({ taskId: loadedTaskId })
-    }, 500)
-    return () => clearTimeout(timer)
-  }, [loadedTaskId, markViewed])
+  const {
+    task,
+    detailId,
+    isOpen,
+    handleClose,
+    handleNavigate,
+    navigateToTask,
+    hasNext,
+    hasPrev,
+  } = useTaskDetail(taskIds)
 
   if (!isOpen) return null
 
@@ -126,16 +56,20 @@ export function TaskDetailModal({
           {/* Body: left content + right sidebar */}
           <div className="flex flex-1 overflow-hidden">
             {/* Left: main content */}
-            <div className="flex flex-1 flex-col overflow-hidden">
-              {task ? (
-                <>
-                  <TaskDetailTitle taskId={task._id} title={task.title} />
-                  <TaskDetailMetadata task={task} isAdmin={isAdmin} />
-                  <TaskDetailTabs task={task} isAdmin={isAdmin} onOpenDetail={navigateToTask} />
-                </>
-              ) : (
-                <TaskDetailSkeleton />
-              )}
+            <div className="flex min-w-0 flex-1 justify-center overflow-hidden">
+              <div className="flex min-w-0 w-full max-w-[900px] flex-1 flex-col overflow-hidden">
+                {task ? (
+                  <>
+                    <div className="px-7 pt-6">
+                      <TaskDetailTitle taskId={task._id} title={task.title} />
+                    </div>
+                    <TaskDetailMetadata task={task} isAdmin={isAdmin} />
+                    <TaskDetailTabs task={task} isAdmin={isAdmin} onOpenDetail={navigateToTask} />
+                  </>
+                ) : (
+                  <TaskDetailSkeleton />
+                )}
+              </div>
             </div>
 
             {/* Right: activity sidebar */}
@@ -157,7 +91,7 @@ function TaskDetailSkeleton() {
     <div className="flex flex-1 flex-col p-7 gap-5">
       {/* Title */}
       <div className="h-7 w-2/3 animate-pulse rounded-md bg-muted" />
-      {/* Metadata grid — 2 columns × 4 rows */}
+      {/* Metadata grid */}
       <div className="grid grid-cols-2 gap-x-8 gap-y-2">
         {Array.from({ length: 8 }).map((_, i) => (
           <div key={i} className="flex items-center gap-2 h-9">

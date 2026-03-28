@@ -63,6 +63,7 @@ export const TaskRow = memo(function TaskRow({
   totalMinutes = 0,
   activity,
   isArchivedView = false,
+  isDetailOpen = false,
 }: {
   task: TaskWithJoins
   isAdmin: boolean
@@ -76,6 +77,7 @@ export const TaskRow = memo(function TaskRow({
   totalMinutes?: number
   activity?: ActivityIndicator
   isArchivedView?: boolean
+  isDetailOpen?: boolean
 }) {
   const duplicateTask = useMutation(api.tasks.duplicate)
   const isDone = task.statusType === "done"
@@ -91,9 +93,11 @@ export const TaskRow = memo(function TaskRow({
 
   return (
     <div
+      data-task-id={task._id}
       className={cn(
         `group/row grid ${TASK_GRID_COLS} items-center gap-x-4 border-b border-border/40 px-3 py-2.5 transition-colors hover:bg-muted/30 [&>*]:min-w-0 [&>*]:overflow-hidden`,
         isSelected && "bg-primary/5",
+        isDetailOpen && "bg-accent/50 border-l-2 border-l-primary",
         isDone && "opacity-50",
       )}
     >

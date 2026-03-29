@@ -3,15 +3,22 @@ import type { StatusType } from "@/convex/lib/constants"
 /**
  * Linear-style SVG status icons.
  * Each status type has a unique shape; color comes from the status color config.
+ *
+ * `contrastColor` overrides the inner detail color for `done` (checkmark)
+ * and `blocked` (X). Defaults to `"white"`. Pass the badge background color
+ * when rendering white icons on a solid-fill badge so the inner details
+ * remain visible.
  */
 export function StatusIcon({
   type,
   color,
+  contrastColor = "white",
   className,
   size = 14,
 }: {
   type: StatusType | "backlog"
   color: string
+  contrastColor?: string
   className?: string
   size?: number
 }) {
@@ -57,28 +64,28 @@ export function StatusIcon({
         </svg>
       )
 
-    // Filled red circle + white X — stopped
+    // Filled circle + X — stopped
     case "blocked":
       return (
         <svg {...props}>
           <circle cx="8" cy="8" r="7" fill={color} />
           <path
             d="M5.5 5.5 L10.5 10.5 M10.5 5.5 L5.5 10.5"
-            stroke="white"
+            stroke={contrastColor}
             strokeWidth="1.5"
             strokeLinecap="round"
           />
         </svg>
       )
 
-    // Filled circle + white checkmark — complete
+    // Filled circle + checkmark — complete
     case "done":
       return (
         <svg {...props}>
           <circle cx="8" cy="8" r="7" fill={color} />
           <path
             d="M5.5 8.2 L7.2 9.9 L10.8 6.3"
-            stroke="white"
+            stroke={contrastColor}
             strokeWidth="1.5"
             strokeLinecap="round"
             strokeLinejoin="round"

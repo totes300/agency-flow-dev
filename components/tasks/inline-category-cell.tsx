@@ -22,10 +22,12 @@ export function InlineCategoryCell({
   taskId,
   category,
   onSelect: onSelectProp,
+  emptyLabel,
 }: {
   taskId?: Id<"tasks">
   category: Pick<Doc<"workCategories">, "_id" | "name" | "color"> | null
   onSelect?: (categoryId: Id<"workCategories"> | null, category: Pick<Doc<"workCategories">, "_id" | "name" | "color"> | null) => void
+  emptyLabel?: string
 }) {
   const [open, setOpen] = useState(false)
   const { categories } = useTaskReferenceData()
@@ -57,9 +59,9 @@ export function InlineCategoryCell({
           {category ? (
             <CategoryBadge name={category.name} color={category.color} />
           ) : (
-            <span className="flex items-center gap-1.5 text-foreground/50 transition-colors group-hover/row:text-foreground/70">
-              <TagIcon className="size-[17px]" strokeWidth={2} />
-              <span className="text-[13px]">Add category</span>
+            <span className="flex items-center gap-1.5 text-muted-foreground/40 transition-colors group-hover/row:text-muted-foreground/60">
+              <TagIcon className="size-4 shrink-0" strokeWidth={1.75} />
+              {emptyLabel && <span className="text-[13px]">{emptyLabel}</span>}
             </span>
           )}
         </button>

@@ -151,7 +151,7 @@ function StatusAction({ taskIds, isAdmin }: { taskIds: Id<"tasks">[]; isAdmin: b
                     onSelect={() => !disabled && handleSelect(s._id)}
                     className={cn("px-2 py-1.5", disabled && "opacity-50")}
                   >
-                    <StatusBadge name={s.name} color={s.color} type={s.type} />
+                    <StatusBadge name={s.name} color={s.color} type={s.type} variant="inline" />
                   </CommandItem>
                 )
               })}

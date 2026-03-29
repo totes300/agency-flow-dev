@@ -132,9 +132,8 @@ export const TaskRow = memo(function TaskRow({
             onOpenDetail={onOpenDetail}
           >
             <span className={cn(
-              "truncate text-sm transition-colors hover:text-primary",
+              "truncate text-sm font-medium",
               isDone && "line-through",
-              hasUnseen ? "font-semibold" : "font-normal",
             )}>
               {task.title}
             </span>
@@ -207,20 +206,21 @@ export const TaskRow = memo(function TaskRow({
       <InlineStatusCell taskId={task._id} status={task.status} isAdmin={isAdmin} />
 
       {/* 5. Category (inline edit) */}
-      <InlineCategoryCell taskId={task._id} category={task.category} />
+      <InlineCategoryCell taskId={task._id} category={task.category} emptyLabel="Add" />
 
       {/* 6. Client / Project (inline edit) */}
       <InlineProjectCell
         taskId={task._id}
         project={task.project}
         client={task.client}
+        emptyLabel="Add"
       />
 
       {/* 7. Assignee (inline edit) */}
-      <InlineAssigneeCell taskId={task._id} assignees={task.assignees} />
+      <InlineAssigneeCell taskId={task._id} assignees={task.assignees} emptyLabel="Add" />
 
       {/* 8. Due date (inline edit) */}
-      <InlineDueDateCell taskId={task._id} dueDate={task.dueDate ?? null} isOverdue={overdue} />
+      <InlineDueDateCell taskId={task._id} dueDate={task.dueDate ?? null} isOverdue={overdue} emptyLabel="Add" />
 
       {/* 9. Time */}
       <InlineTimeCell taskId={task._id} totalMinutes={totalMinutes} isDone={isDone} isBillable={task.billable} />

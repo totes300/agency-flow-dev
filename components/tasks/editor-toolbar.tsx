@@ -128,7 +128,7 @@ export function CommentToolbar() {
   const { editor } = useTiptap()
 
   return (
-    <div className="flex items-center gap-0.5 border-b border-border/60 bg-muted/80 px-2 py-1">
+    <div className="flex items-center gap-0.5 bg-black/[0.06] dark:bg-white/[0.08] px-2.5 py-1.5">
       <ToolbarButton active={editor.isActive("bold")} onClick={() => editor.chain().focus().toggleBold().run()} aria-label="Bold">
         <BoldIcon className="size-3.5" />
       </ToolbarButton>

@@ -42,11 +42,13 @@ export function InlineDueDateCell({
   dueDate,
   isOverdue,
   onSelect: onSelectProp,
+  emptyLabel,
 }: {
   taskId?: Id<"tasks">
   dueDate: string | null // YYYY-MM-DD
   isOverdue?: boolean
   onSelect?: (date: string | null) => void
+  emptyLabel?: string
 }) {
   const [open, setOpen] = useState(false)
   const updateTask = useMutation(api.tasks.update)
@@ -86,15 +88,15 @@ export function InlineDueDateCell({
               )}
             >
               <CalendarIcon
-                className={cn("size-[17px] shrink-0", isOverdue ? "opacity-70" : "opacity-50")}
-                strokeWidth={2}
+                className={cn("size-4 shrink-0", isOverdue ? "opacity-70" : "opacity-40")}
+                strokeWidth={1.75}
               />
               {formatShortDate(dueDate)}
             </span>
           ) : (
-            <span className="flex items-center gap-1.5 text-foreground/50 transition-colors group-hover/row:text-foreground/70">
-              <CalendarIcon className="size-[17px]" strokeWidth={2} />
-              <span className="text-[13px]">Set due date</span>
+            <span className="flex items-center gap-1.5 text-muted-foreground/40 transition-colors group-hover/row:text-muted-foreground/60">
+              <CalendarIcon className="size-4 shrink-0" strokeWidth={1.75} />
+              {emptyLabel && <span className="text-[13px]">{emptyLabel}</span>}
             </span>
           )}
         </button>

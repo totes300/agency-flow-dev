@@ -725,6 +725,7 @@ export const activityIndicators = query({
       hasUnseenComments: boolean;
       hasUnseen: boolean;
       unreadCommentCount: number;
+      unseenActivityCount: number;
       lastActivity: {
         userName: string;
         type: string;
@@ -841,6 +842,7 @@ export const activityIndicators = query({
         hasUnseenComments: indicatorState.hasUnseenComments,
         hasUnseen: indicatorState.hasUnseen,
         unreadCommentCount: indicatorState.unreadCommentCount,
+        unseenActivityCount: indicatorState.unseenActivityCount,
         lastActivity,
       };
     }));

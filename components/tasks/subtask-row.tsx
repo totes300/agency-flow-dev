@@ -71,7 +71,7 @@ export const SubtaskRow = memo(function SubtaskRow({
         className="cursor-pointer text-left"
         onClick={() => onOpenDetail(subtask._id)}
       >
-        <span className={cn("block truncate text-sm font-medium hover:text-primary transition-colors", isDone && "line-through")}>
+        <span className={cn("block truncate text-sm font-medium", isDone && "line-through")}>
           {subtask.title}
         </span>
       </button>

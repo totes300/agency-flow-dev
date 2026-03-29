@@ -289,7 +289,7 @@ function StatusPicker({
       <PopoverTrigger asChild>
         <button className="flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[11px] font-medium transition-colors hover:bg-muted/30">
           {selected ? (
-            <StatusBadge name={selected.name} color={selected.color} type={selected.type as StatusType} className="text-[11px]" />
+            <StatusBadge name={selected.name} color={selected.color} type={selected.type as StatusType} />
           ) : (
             <>
               <div className="size-1.5 rounded-full bg-muted-foreground/40" />
@@ -304,7 +304,7 @@ function StatusPicker({
             <CommandGroup>
               {statuses.map((s) => (
                   <CommandItem key={s._id} onSelect={() => { onChange(s._id); setOpen(false) }} className="px-2 py-1.5">
-                    <StatusBadge name={s.name} color={s.color} type={s.type as StatusType} />
+                    <StatusBadge name={s.name} color={s.color} type={s.type as StatusType} variant="inline" />
                     {value === s._id && <CheckIcon className="ml-auto size-3.5 text-muted-foreground" />}
                   </CommandItem>
               ))}

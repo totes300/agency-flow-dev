@@ -30,10 +30,10 @@ import type { InlineCreatedTask } from "@/components/tasks/inline-created-task-r
 // Grid column template — shared between header and rows
 // Only Task is flexible (1fr). Everything else is fixed width.
 // The table container sets min-width and scrolls horizontally if needed.
-// Checkbox 36 | Task 1fr | Comments 56 | Status 116 | Category 108 | Project 176 | Assignee 80 | Due 96 | Time 76 | Menu 36
-export const TASK_GRID_COLS = "grid-cols-[36px_1fr_56px_116px_108px_176px_80px_96px_76px_36px]"
-// Fixed columns total = 860px + 9 gaps × 16px = 1004px. With 1fr min ~200px → ~1204px.
-export const TASK_TABLE_MIN_W = "min-w-[1200px]"
+// Checkbox 36 | Task 1fr | Comments 56 | Status 120 | Category 108 | Project 176 | Assignee 80 | Due 96 | Time 76 | Menu 36
+export const TASK_GRID_COLS = "grid-cols-[36px_1fr_56px_120px_108px_176px_80px_96px_76px_36px]"
+// Fixed columns total = 864px + 9 gaps × 16px = 1008px. With 1fr min ~200px → ~1208px.
+export const TASK_TABLE_MIN_W = "min-w-[1208px]"
 
 type TaskWithJoins = Doc<"tasks"> & {
   status: Pick<Doc<"statuses">, "_id" | "name" | "color" | "type" | "icon"> | null

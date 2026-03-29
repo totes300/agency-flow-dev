@@ -1,5 +1,6 @@
 "use client"
 
+import React from "react"
 import { useTimerActions, useTimerTick } from "@/lib/hooks/use-timer"
 import { formatDuration, formatTimerDisplay, formatMinutesDisplay } from "@/lib/duration"
 import { cn } from "@/lib/utils"
@@ -58,6 +59,79 @@ export function InlineTimeCell({
   )
 }
 
+/**
+ * Timer circle — one single circle shape.
+ * Idle: gray stroke, play icon.
+ * Running: muted red stroke + bright red arc orbiting on it, stop icon.
+ */
+const TimerCircle = React.forwardRef<
+  HTMLButtonElement,
+  {
+    size: number
+    running: boolean
+    children: React.ReactNode
+    onClick: (e: React.MouseEvent) => void
+    className?: string
+    label: string
+  } & React.ButtonHTMLAttributes<HTMLButtonElement>
+>(function TimerCircle({ size, running, children, onClick, className, label, ...rest }, ref) {
+  const sw = size >= 28 ? 1.5 : 1.25
+  const r = (size - sw) / 2
+  const circumference = 2 * Math.PI * r
+  const arcLen = circumference * 0.28
+  const gapLen = circumference - arcLen
+
+  return (
+    <button
+      ref={ref}
+      onClick={onClick}
+      className={cn("relative flex shrink-0 items-center justify-center", className)}
+      style={{ width: size, height: size }}
+      aria-label={label}
+      {...rest}
+    >
+      <svg
+        className="absolute inset-0"
+        width={size}
+        height={size}
+        viewBox={`0 0 ${size} ${size}`}
+      >
+        {/* Base circle — gray idle, muted red running */}
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={r}
+          fill="none"
+          className={cn(
+            "transition-[stroke] duration-300",
+            running ? "stroke-red-500/20" : "stroke-border",
+          )}
+          strokeWidth={sw}
+        />
+        {/* Bright red arc — same circle, same radius, rotates via group */}
+        {running && (
+          <g className="origin-center animate-[timer-spin_2.8s_linear_infinite]" style={{ transformOrigin: `${size / 2}px ${size / 2}px` }}>
+            <circle
+              cx={size / 2}
+              cy={size / 2}
+              r={r}
+              fill="none"
+              className="stroke-red-500"
+              strokeWidth={sw}
+              strokeLinecap="round"
+              strokeDasharray={`${arcLen} ${gapLen}`}
+            />
+          </g>
+        )}
+      </svg>
+      {/* Icon content */}
+      <span className="relative z-[1] flex items-center justify-center">
+        {children}
+      </span>
+    </button>
+  )
+})
+
 /** Only this component subscribes to the tick context (re-renders every second) */
 function RunningTimeCell({ variant = "inline" }: { variant?: "inline" | "sidebar" }) {
   const { stopTimer } = useTimerActions()
@@ -82,24 +156,21 @@ function RunningTimeCell({ variant = "inline" }: { variant?: "inline" | "sidebar
       {variant === "sidebar" ? (
         <Tooltip>
           <TooltipTrigger asChild>
-            <button
-              onClick={handleStopClick}
-              className="flex size-7 shrink-0 items-center justify-center rounded-md border border-border/60 bg-background text-red-500 hover:bg-accent"
-              aria-label="Stop timer"
-            >
+            <TimerCircle size={30} running onClick={handleStopClick} label="Stop timer">
               <span className="block size-2.5 rounded-[2px] bg-red-500" />
-            </button>
+            </TimerCircle>
           </TooltipTrigger>
           <TooltipContent side="top" sideOffset={4}>Stop timer</TooltipContent>
         </Tooltip>
       ) : (
-        <button
-          onClick={handleStopClick}
-          className="flex size-3.5 shrink-0 items-center justify-center"
-          aria-label="Stop timer"
-        >
-          <span className="block size-[10px] rounded-[2px] bg-red-500" />
-        </button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <TimerCircle size={16} running onClick={handleStopClick} label="Stop timer">
+              <span className="block size-[7px] rounded-[1.5px] bg-red-500" />
+            </TimerCircle>
+          </TooltipTrigger>
+          <TooltipContent side="top" sideOffset={4}>Stop timer</TooltipContent>
+        </Tooltip>
       )}
       <span
         className={cn(
@@ -166,9 +237,18 @@ function IdleTimeCell({
       {variant === "sidebar" ? (
         <Tooltip>
           <TooltipTrigger asChild>
+            <TimerCircle size={30} running={false} onClick={handlePlayClick} label="Start timer">
+              <PlayIcon className="ml-0.5 size-3.5 fill-current text-emerald-600" strokeWidth={2.2} />
+            </TimerCircle>
+          </TooltipTrigger>
+          <TooltipContent side="top" sideOffset={4}>Start timer</TooltipContent>
+        </Tooltip>
+      ) : (
+        <Tooltip>
+          <TooltipTrigger asChild>
             <button
               onClick={handlePlayClick}
-              className="flex size-7 shrink-0 items-center justify-center rounded-md border border-border/60 bg-background text-emerald-600 hover:bg-accent"
+              className="flex size-4 shrink-0 items-center justify-center opacity-40 transition-opacity duration-150 hover:opacity-70"
               aria-label="Start timer"
             >
               <PlayIcon className="size-3.5 fill-current" strokeWidth={2.2} />
@@ -176,18 +256,10 @@ function IdleTimeCell({
           </TooltipTrigger>
           <TooltipContent side="top" sideOffset={4}>Start timer</TooltipContent>
         </Tooltip>
-      ) : (
-        <button
-          onClick={handlePlayClick}
-          className="flex size-4 shrink-0 items-center justify-center opacity-40 transition-opacity duration-150 hover:opacity-70"
-          aria-label="Start timer"
-        >
-          <PlayIcon className="size-3.5 fill-current" strokeWidth={2.2} />
-        </button>
       )}
-      <TimeLogPopover taskId={taskId} isBillable={isBillable}>
-        {variant === "sidebar" ? (
-          <Tooltip>
+      <Tooltip>
+        <TimeLogPopover taskId={taskId} isBillable={isBillable}>
+          {variant === "sidebar" ? (
             <TooltipTrigger asChild>
               <button
                 onClick={(e) => e.stopPropagation()}
@@ -202,22 +274,24 @@ function IdleTimeCell({
                 {hasTime ? minutesToDisplay(totalMinutes) : "Add time"}
               </button>
             </TooltipTrigger>
-            <TooltipContent side="top" sideOffset={4}>Add time</TooltipContent>
-          </Tooltip>
-        ) : (
-          <button
-            onClick={(e) => e.stopPropagation()}
-            className={cn(
-              "cursor-pointer text-sm transition-colors duration-150",
-              hasTime
-                ? "text-muted-foreground hover:text-foreground"
-                : "font-sans text-muted-foreground/50 group-hover/row:text-muted-foreground",
-            )}
-          >
-            {hasTime ? minutesToDisplay(totalMinutes) : "Add time"}
-          </button>
+          ) : (
+          <TooltipTrigger asChild>
+            <button
+              onClick={(e) => e.stopPropagation()}
+              className={cn(
+                "cursor-pointer text-[13px] transition-colors duration-150",
+                hasTime
+                  ? "text-muted-foreground hover:text-foreground"
+                  : "text-muted-foreground/40 group-hover/row:text-muted-foreground/60",
+              )}
+            >
+              {hasTime ? minutesToDisplay(totalMinutes) : ""}
+            </button>
+          </TooltipTrigger>
         )}
       </TimeLogPopover>
+      <TooltipContent side="top" sideOffset={4}>Log time</TooltipContent>
+      </Tooltip>
     </div>
   )
 }

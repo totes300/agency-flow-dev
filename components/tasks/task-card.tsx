@@ -61,9 +61,8 @@ export function TaskCard({
             <span className="size-1.5 shrink-0 rounded-full bg-primary" />
           )}
           <span className={cn(
-            "text-sm",
+            "text-sm font-medium",
             isDone && "line-through",
-            hasUnseen ? "font-semibold" : "font-normal",
           )}>
             {task.title}
           </span>

@@ -23,12 +23,14 @@ export function InlineProjectCell({
   client,
   hasTimeEntries,
   onSelect: onSelectProp,
+  emptyLabel,
 }: {
   taskId?: Id<"tasks">
   project: Pick<Doc<"projects">, "_id" | "name" | "code"> | null
   client: Pick<Doc<"clients">, "_id" | "name"> | null
   hasTimeEntries?: boolean
   onSelect?: (projectId: Id<"projects"> | null, project: Pick<Doc<"projects">, "_id" | "name" | "code"> | null, client: Pick<Doc<"clients">, "_id" | "name"> | null) => void
+  emptyLabel?: string
 }) {
   const [open, setOpen] = useState(false)
   const { projects } = useTaskReferenceData()
@@ -80,15 +82,15 @@ export function InlineProjectCell({
           {project ? (
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-1">
-                <span className="truncate text-[13px] font-medium text-foreground">{client?.name}</span>
+                <span className="truncate text-xs text-muted-foreground">{client?.name}</span>
                 {locked && <LockIcon className="size-3 shrink-0 text-muted-foreground" />}
               </div>
-              <div className="truncate text-xs leading-tight text-muted-foreground">{project.name}</div>
+              <div className="truncate text-xs leading-tight text-muted-foreground/60">{project.name}</div>
             </div>
           ) : (
-            <span className="flex items-center gap-1.5 text-foreground/50 transition-colors group-hover/row:text-foreground/70">
-              <FolderIcon className="size-[17px]" strokeWidth={2} />
-              <span className="text-[13px]">Add project</span>
+            <span className="flex items-center gap-1.5 text-muted-foreground/40 transition-colors group-hover/row:text-muted-foreground/60">
+              <FolderIcon className="size-4 shrink-0" strokeWidth={1.75} />
+              {emptyLabel && <span className="text-[13px]">{emptyLabel}</span>}
             </span>
           )}
         </button>

@@ -25,10 +25,12 @@ export function InlineAssigneeCell({
   taskId,
   assignees,
   onToggle: onToggleProp,
+  emptyLabel,
 }: {
   taskId?: Id<"tasks">
   assignees: Array<Pick<Doc<"users">, "_id" | "name" | "email" | "imageUrl">>
   onToggle?: (userId: Id<"users">, member: Pick<Doc<"users">, "_id" | "name" | "email" | "imageUrl">) => void
+  emptyLabel?: string
 }) {
   const [open, setOpen] = useState(false)
   const updateTask = useMutation(api.tasks.update)
@@ -64,9 +66,9 @@ export function InlineAssigneeCell({
           onClick={(e) => e.stopPropagation()}
         >
           {assignees.length === 0 ? (
-            <span className="flex items-center gap-1.5 text-foreground/50 transition-colors group-hover/row:text-foreground/70">
-              <UserIcon className="size-[17px]" strokeWidth={2} />
-              <span className="text-[13px]">Add assignee</span>
+            <span className="flex items-center gap-1.5 text-muted-foreground/40 transition-colors group-hover/row:text-muted-foreground/60">
+              <UserIcon className="size-4 shrink-0" strokeWidth={1.75} />
+              {emptyLabel && <span className="text-[13px]">{emptyLabel}</span>}
             </span>
           ) : assignees.length === 1 ? (
             <span className="flex items-center gap-1.5">

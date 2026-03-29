@@ -1,0 +1,461 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Activity Feed Prototype</title>
+    <style>
+      :root {
+        --bg: #fcfcfb;
+        --panel: #ffffff;
+        --muted: #f4f3f0;
+        --muted-2: #efede8;
+        --line: #e8e5df;
+        --text: #2f2d29;
+        --text-soft: #6f6a62;
+        --text-faint: #9f988e;
+        --accent: #6ea34b;
+        --blue: #5865f2;
+        --shadow: 0 10px 30px rgba(32, 26, 14, 0.06);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background:
+          radial-gradient(circle at top left, rgba(110, 163, 75, 0.08), transparent 28%),
+          linear-gradient(180deg, #f7f5f1 0%, var(--bg) 24%);
+        color: var(--text);
+        font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      .page {
+        max-width: 980px;
+        margin: 40px auto;
+        padding: 0 24px 48px;
+      }
+
+      .frame {
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 28px;
+        background: rgba(255, 255, 255, 0.84);
+        box-shadow: var(--shadow);
+        backdrop-filter: blur(16px);
+      }
+
+      .header {
+        padding: 28px 32px 16px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .eyebrow {
+        margin: 0 0 8px;
+        font-size: 12px;
+        letter-spacing: 0.02em;
+        color: var(--text-faint);
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 34px;
+        line-height: 1.1;
+        letter-spacing: -0.04em;
+        font-weight: 650;
+      }
+
+      .sub {
+        margin-top: 10px;
+        color: var(--text-soft);
+        font-size: 14px;
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 280px;
+        min-height: 760px;
+      }
+
+      .main {
+        padding: 28px 32px 40px;
+      }
+
+      .sidebar {
+        border-left: 1px solid var(--line);
+        background: rgba(250, 249, 246, 0.78);
+      }
+
+      .section-title {
+        margin: 0 0 20px;
+        font-size: 14px;
+        font-weight: 650;
+        color: var(--text);
+      }
+
+      .composer {
+        display: flex;
+        gap: 14px;
+        align-items: flex-start;
+        margin-bottom: 22px;
+        padding: 16px 18px;
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(250,249,246,0.92));
+      }
+
+      .avatar {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 30px;
+        height: 30px;
+        border-radius: 999px;
+        background: var(--accent);
+        color: white;
+        font-size: 14px;
+        font-weight: 700;
+      }
+
+      .avatar.small {
+        width: 24px;
+        height: 24px;
+        font-size: 11px;
+      }
+
+      .composer-box {
+        flex: 1;
+      }
+
+      .composer-input {
+        display: block;
+        width: 100%;
+        min-height: 72px;
+        color: var(--text-faint);
+        font-size: 16px;
+      }
+
+      .composer-actions {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-top: 10px;
+        color: var(--text-faint);
+        font-size: 13px;
+      }
+
+      .post-btn {
+        margin-left: auto;
+        padding: 9px 14px;
+        border-radius: 12px;
+        border: 1px solid var(--line);
+        background: white;
+        color: var(--text);
+        font-weight: 600;
+      }
+
+      .timeline {
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+      }
+
+      .batch {
+        padding: 6px 0 0;
+        border-top: 1px solid var(--line);
+      }
+
+      .batch:first-child {
+        border-top: 0;
+        padding-top: 0;
+      }
+
+      .batch-summary {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 0;
+        color: var(--text-soft);
+        font-size: 15px;
+      }
+
+      .pulse {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 28px;
+        height: 28px;
+        border-radius: 999px;
+        background: var(--muted);
+        color: var(--text-faint);
+        font-weight: 700;
+      }
+
+      .batch-label {
+        font-weight: 600;
+        color: var(--text-soft);
+      }
+
+      .batch-time {
+        margin-left: auto;
+        color: var(--text-faint);
+      }
+
+      .batch-items {
+        margin-left: 14px;
+        padding-left: 18px;
+        border-left: 2px solid var(--muted-2);
+      }
+
+      .audit-row {
+        display: grid;
+        grid-template-columns: 26px minmax(0, 1fr) auto;
+        gap: 12px;
+        align-items: start;
+        padding: 10px 0;
+      }
+
+      .audit-icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 26px;
+        height: 26px;
+        border-radius: 999px;
+        background: #eef5e8;
+        color: var(--accent);
+        font-size: 11px;
+        font-weight: 700;
+      }
+
+      .audit-copy {
+        font-size: 15px;
+        line-height: 1.45;
+        color: #575148;
+      }
+
+      .audit-copy strong {
+        color: var(--text);
+        font-weight: 600;
+      }
+
+      .audit-stamp {
+        padding-top: 1px;
+        font-size: 13px;
+        color: var(--text-faint);
+        white-space: nowrap;
+      }
+
+      .comment {
+        display: grid;
+        grid-template-columns: 34px minmax(0, 1fr);
+        gap: 14px;
+        padding: 6px 0 16px;
+      }
+
+      .comment-main {
+        min-width: 0;
+      }
+
+      .comment-head {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 6px;
+      }
+
+      .comment-author {
+        font-size: 16px;
+        font-weight: 650;
+      }
+
+      .comment-stamp {
+        margin-left: auto;
+        font-size: 13px;
+        color: var(--text-faint);
+      }
+
+      .comment-body {
+        max-width: 560px;
+        font-size: 16px;
+        line-height: 1.6;
+        color: #45413b;
+      }
+
+      .comment-actions {
+        display: flex;
+        gap: 16px;
+        margin-top: 10px;
+        color: var(--text-faint);
+        font-size: 13px;
+      }
+
+      .comment-sep {
+        height: 1px;
+        background: linear-gradient(90deg, transparent, var(--line) 8%, var(--line) 92%, transparent);
+      }
+
+      .meta {
+        padding: 28px 22px;
+      }
+
+      .meta h3 {
+        margin: 0 0 18px;
+        font-size: 13px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--text-faint);
+      }
+
+      .meta-list {
+        display: grid;
+        gap: 18px;
+      }
+
+      .meta-row {
+        display: grid;
+        gap: 4px;
+      }
+
+      .meta-label {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text-soft);
+      }
+
+      .meta-value {
+        font-size: 15px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <div class="frame">
+        <div class="header">
+          <p class="eyebrow">Konverted Web Agency Kft / Monthly Support</p>
+          <h1>Activity feed redesign prototype</h1>
+          <div class="sub">Goal: clearer grouping, stronger contrast, easier timeline scanning.</div>
+        </div>
+
+        <div class="layout">
+          <main class="main">
+            <h2 class="section-title">Updates</h2>
+
+            <div class="composer">
+              <span class="avatar">A</span>
+              <div class="composer-box">
+                <div class="composer-input">Post an update...</div>
+                <div class="composer-actions">
+                  <span>Attach</span>
+                  <span>Link</span>
+                  <button class="post-btn">Post</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="timeline">
+              <section class="batch">
+                <div class="batch-summary">
+                  <span class="pulse">~</span>
+                  <span class="batch-label">3 properties updated</span>
+                  <span class="batch-time">2d</span>
+                </div>
+                <div class="batch-items">
+                  <div class="audit-row">
+                    <span class="audit-icon">A</span>
+                    <div class="audit-copy"><strong>You</strong> changed the status to <strong>Done</strong></div>
+                    <div class="audit-stamp">2d</div>
+                  </div>
+                  <div class="audit-row">
+                    <span class="audit-icon">A</span>
+                    <div class="audit-copy"><strong>You</strong> assigned <strong>yourself</strong></div>
+                    <div class="audit-stamp">2d</div>
+                  </div>
+                  <div class="audit-row">
+                    <span class="audit-icon">A</span>
+                    <div class="audit-copy"><strong>You</strong> created this task</div>
+                    <div class="audit-stamp">2d</div>
+                  </div>
+                </div>
+              </section>
+
+              <section class="comment">
+                <span class="avatar small">A</span>
+                <div class="comment-main">
+                  <div class="comment-head">
+                    <span class="comment-author">adam (you)</span>
+                    <span class="comment-stamp">9h</span>
+                  </div>
+                  <div class="comment-body">Hello ez egy masik update. A comment a fő tartalmi egység, ezért nem full bordered card, hanem levegősebb blokk.</div>
+                  <div class="comment-actions">
+                    <span>Reply</span>
+                    <span>React</span>
+                  </div>
+                </div>
+              </section>
+
+              <div class="comment-sep"></div>
+
+              <section class="batch">
+                <div class="batch-summary">
+                  <span class="pulse">~</span>
+                  <span class="batch-label">2 properties updated</span>
+                  <span class="batch-time">9h</span>
+                </div>
+                <div class="batch-items">
+                  <div class="audit-row">
+                    <span class="audit-icon">A</span>
+                    <div class="audit-copy"><strong>Adam</strong> changed due date to <strong>Mar 21</strong></div>
+                    <div class="audit-stamp">9h</div>
+                  </div>
+                  <div class="audit-row">
+                    <span class="audit-icon">A</span>
+                    <div class="audit-copy"><strong>Adam</strong> updated estimate to <strong>10h 0m</strong></div>
+                    <div class="audit-stamp">9h</div>
+                  </div>
+                </div>
+              </section>
+
+              <section class="comment">
+                <span class="avatar small">A</span>
+                <div class="comment-main">
+                  <div class="comment-head">
+                    <span class="comment-author">adam (you)</span>
+                    <span class="comment-stamp">9h</span>
+                  </div>
+                  <div class="comment-body">Most itt egy sima hozzászólás van. A szem gyorsan külön tudja választani a beszélgetést a háttérben történő property változásoktól.</div>
+                  <div class="comment-actions">
+                    <span>Reply</span>
+                    <span>React</span>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </main>
+
+          <aside class="sidebar">
+            <div class="meta">
+              <h3>Why this works</h3>
+              <div class="meta-list">
+                <div class="meta-row">
+                  <div class="meta-label">1. Strong hierarchy</div>
+                  <div class="meta-value">Comments are the primary content blocks. Property changes are secondary timeline rows.</div>
+                </div>
+                <div class="meta-row">
+                  <div class="meta-label">2. Batch clarity</div>
+                  <div class="meta-value">Grouped edits read like a single event first, details second.</div>
+                </div>
+                <div class="meta-row">
+                  <div class="meta-label">3. Easier scanning</div>
+                  <div class="meta-value">Right-aligned timestamps and consistent icon rhythm make the feed easier to follow.</div>
+                </div>
+              </div>
+            </div>
+          </aside>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

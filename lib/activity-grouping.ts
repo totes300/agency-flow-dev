@@ -145,7 +145,7 @@ export type GroupedFeedItem = CommentEvent | AuditBatch
  */
 // ─── Message grouping for Slack-style display ───────────────────────────────
 
-/** Threshold for grouping consecutive messages from the same user (5 minutes). */
+/** Threshold for compacting consecutive messages from the same user (5 minutes). */
 const GROUP_THRESHOLD_MS = 5 * 60 * 1000
 
 /**

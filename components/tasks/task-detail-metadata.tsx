@@ -67,9 +67,9 @@ export function MetadataRow({
 }) {
   if (variant === "stacked") {
     return (
-      <div className="group/metadata flex flex-col gap-1.5 py-2.5">
-        <span className="text-xs font-semibold text-foreground/70">{label}</span>
-        <div className="-mx-2 min-w-0 rounded-md px-2 py-1 text-[13px] transition-colors hover:bg-accent cursor-default">{children}</div>
+      <div className="group/metadata border-b border-border/40 py-2 last:border-b-0">
+        <span className="text-[11px] font-medium text-foreground/45">{label}</span>
+        <div className="mt-0.5 min-w-0 rounded-md py-0.5 text-[13px] transition-colors hover:bg-accent -mx-2 px-2 cursor-default">{children}</div>
       </div>
     )
   }
@@ -142,25 +142,29 @@ export function TaskDetailMetadata({
   const stackedRows = (
     <>
       <MetadataRow icon={UsersIcon} label="Assignees" variant="stacked">
-        <InlineAssigneeCell taskId={task._id} assignees={task.assignees} />
+        <InlineAssigneeCell taskId={task._id} assignees={task.assignees} emptyLabel="Add assignee" />
       </MetadataRow>
       <MetadataRow icon={TagIcon} label="Category" variant="stacked">
-        <InlineCategoryCell taskId={task._id} category={task.category} />
+        <InlineCategoryCell taskId={task._id} category={task.category} emptyLabel="Add category" />
       </MetadataRow>
       <MetadataRow icon={CalendarIcon} label="Due date" variant="stacked">
-        <InlineDueDateCell taskId={task._id} dueDate={task.dueDate ?? null} isOverdue={overdue} />
+        <InlineDueDateCell taskId={task._id} dueDate={task.dueDate ?? null} isOverdue={overdue} emptyLabel="Add due date" />
       </MetadataRow>
       <MetadataRow icon={FolderIcon} label="Project" variant="stacked">
-        <InlineProjectCell taskId={task._id} project={task.project} client={task.client} />
+        <InlineProjectCell taskId={task._id} project={task.project} client={task.client} emptyLabel="Add project" />
       </MetadataRow>
       <MetadataRow icon={ClockIcon} label="Estimate" variant="stacked">
         <InlineEstimateCell taskId={task._id} estimate={task.estimate} />
       </MetadataRow>
       <MetadataRow icon={TimerIcon} label="Tracked" variant="stacked">
-        <span className="text-[13px] text-muted-foreground">{formatDuration(task.totalMinutes ?? 0)}</span>
+        <span className="flex items-center gap-1.5 text-[13px] text-muted-foreground">
+          <TimerIcon className="size-4 shrink-0 text-foreground/35" strokeWidth={1.75} />
+          {formatDuration(task.totalMinutes ?? 0)}
+        </span>
       </MetadataRow>
       <MetadataRow icon={DollarSignIcon} label="Billable" variant="stacked">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5">
+          <DollarSignIcon className="size-4 shrink-0 text-foreground/35" strokeWidth={1.75} />
           <Switch
             checked={task.billable}
             onCheckedChange={handleBillableChange}
@@ -175,7 +179,10 @@ export function TaskDetailMetadata({
       </MetadataRow>
       {task.createdByUser && (
         <MetadataRow icon={UserIcon} label="Created by" variant="stacked">
-          <span className="text-[13px] text-foreground">{task.createdByUser.name}</span>
+          <span className="flex items-center gap-1.5 text-[13px] text-foreground">
+            <UserIcon className="size-4 shrink-0 text-foreground/35" strokeWidth={1.75} />
+            {task.createdByUser.name}
+          </span>
         </MetadataRow>
       )}
     </>
@@ -191,20 +198,20 @@ export function TaskDetailMetadata({
               <InlineStatusCell taskId={task._id} status={task.status} isAdmin={isAdmin} />
             </MetadataRow>
             <MetadataRow icon={UsersIcon} label="Assignees">
-              <InlineAssigneeCell taskId={task._id} assignees={task.assignees} />
+              <InlineAssigneeCell taskId={task._id} assignees={task.assignees} emptyLabel="Add assignee" />
             </MetadataRow>
             <MetadataRow icon={TagIcon} label="Category">
-              <InlineCategoryCell taskId={task._id} category={task.category} />
+              <InlineCategoryCell taskId={task._id} category={task.category} emptyLabel="Add category" />
             </MetadataRow>
             <MetadataRow icon={CalendarIcon} label="Due date">
-              <InlineDueDateCell taskId={task._id} dueDate={task.dueDate ?? null} isOverdue={overdue} />
+              <InlineDueDateCell taskId={task._id} dueDate={task.dueDate ?? null} isOverdue={overdue} emptyLabel="Add due date" />
             </MetadataRow>
           </div>
 
           {/* Right column */}
           <div className="flex flex-col pl-6">
             <MetadataRow icon={FolderIcon} label="Project">
-              <InlineProjectCell taskId={task._id} project={task.project} client={task.client} />
+              <InlineProjectCell taskId={task._id} project={task.project} client={task.client} emptyLabel="Add project" />
             </MetadataRow>
             <MetadataRow icon={ClockIcon} label="Estimate">
               <InlineEstimateCell taskId={task._id} estimate={task.estimate} />
@@ -237,22 +244,21 @@ export function TaskDetailMetadata({
         </div>
       ) : (
         <div className="flex flex-col">
+          <span className="mb-1 text-xs font-semibold uppercase tracking-widest text-foreground/40">Properties</span>
           <MetadataRow icon={CircleCheckIcon} label="Status" variant="stacked">
             <InlineStatusCell taskId={task._id} status={task.status} isAdmin={isAdmin} />
           </MetadataRow>
           {stackedRows}
-        </div>
-      )}
-
-      {layout === "stack" && task.createdAt && (
-        <div className="mt-auto pt-6">
-          <MetadataRow icon={CalendarPlusIcon} label="Created on" variant="stacked">
-            <span className="text-[13px] text-muted-foreground">
-              {new Date(task.createdAt).toLocaleDateString(undefined, {
-                month: "short", day: "numeric", year: "numeric",
-              })}
-            </span>
-          </MetadataRow>
+          {task.createdAt && (
+            <MetadataRow icon={CalendarPlusIcon} label="Created on" variant="stacked">
+              <span className="flex items-center gap-1.5 text-[13px] text-muted-foreground">
+                <CalendarPlusIcon className="size-4 shrink-0 text-foreground/35" strokeWidth={1.75} />
+                {new Date(task.createdAt).toLocaleDateString(undefined, {
+                  month: "short", day: "numeric", year: "numeric",
+                })}
+              </span>
+            </MetadataRow>
+          )}
         </div>
       )}
 

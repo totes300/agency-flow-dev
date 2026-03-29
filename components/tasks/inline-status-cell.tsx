@@ -63,9 +63,9 @@ export function InlineStatusCell({
           {status ? (
             <StatusBadge name={status.name} color={status.color} type={status.type} />
           ) : (
-            <span className="flex items-center gap-1.5 text-foreground/50 transition-colors group-hover/row:text-foreground/70">
-              <LoaderIcon className="size-3.5" />
-              <span className="text-sm">Set status</span>
+            <span className="flex items-center gap-1.5 text-muted-foreground/40 transition-colors group-hover/row:text-muted-foreground/60">
+              <LoaderIcon className="size-4" strokeWidth={1.75} />
+              <span className="text-[13px]">Set status</span>
             </span>
           )}
         </button>
@@ -89,7 +89,7 @@ export function InlineStatusCell({
                         disabled={disabled}
                         className={cn("px-2 py-1.5", disabled && "opacity-50")}
                       >
-                        <StatusBadge name={s.name} color={s.color} type={s.type} />
+                        <StatusBadge name={s.name} color={s.color} type={s.type} variant="inline" />
                       </CommandItem>
                     )
                   })}

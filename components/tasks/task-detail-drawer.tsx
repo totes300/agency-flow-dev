@@ -92,7 +92,7 @@ export function TaskDetailDrawer({
 
             {/* Properties sidebar — collapsible */}
             {task && showProperties && (
-              <div className="w-[280px] shrink-0 overflow-y-auto border-l border-border/60 bg-white pt-12 dark:bg-background">
+              <div className="w-[280px] shrink-0 overflow-y-auto border-l border-border/60 bg-muted/60 pt-15 dark:bg-muted/30">
                 <TaskDetailMetadata task={task} isAdmin={isAdmin} layout="stack" />
               </div>
             )}

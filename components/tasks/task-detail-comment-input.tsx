@@ -23,6 +23,7 @@ import {
   PaperclipIcon,
   XIcon,
   SendHorizonalIcon,
+  PaintbrushIcon,
 } from "lucide-react"
 import type { Id } from "@/convex/_generated/dataModel"
 import "./tiptap-editor.css"
@@ -54,6 +55,7 @@ export function TaskDetailCommentInput({
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([])
   const [hasContent, setHasContent] = useState(false)
+  const [showToolbar, setShowToolbar] = useState(false)
 
   const { mentionExtension, renderMentionDropdown } = useMentionSuggestion()
 
@@ -95,7 +97,7 @@ export function TaskDetailCommentInput({
     },
     editorProps: {
       attributes: {
-        class: "comment-editor tiptap-content focus:outline-none min-h-[60px] max-h-[min(300px,50vh)] overflow-y-auto px-3 py-2",
+        class: "comment-editor tiptap-content focus:outline-none min-h-[72px] max-h-[min(300px,50vh)] overflow-y-auto px-4 pt-5 pb-3",
       },
       handleKeyDown: (_view, event) => {
         if (event.key === "Enter" && !event.shiftKey && !event.metaKey && !event.ctrlKey) {
@@ -227,7 +229,7 @@ export function TaskDetailCommentInput({
 
   return (
     <Tiptap editor={editor}>
-      <div className="bg-background/80 p-3">
+      <div className="px-6 pb-4 pt-2">
         {replyContext && (
           <div className="mb-2 flex items-center justify-between rounded-lg bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground">
             <span>&#x21A9; Replying to {replyContext.userName}</span>
@@ -241,8 +243,8 @@ export function TaskDetailCommentInput({
           </div>
         )}
 
-        <div className="overflow-hidden rounded-lg border border-border/100 bg-background transition-colors focus-within:border-ring focus-within:ring-1 focus-within:ring-ring/30">
-          <CommentToolbar />
+        <div className="overflow-hidden rounded-xl border border-border/40 bg-muted/60 shadow-sm transition-colors focus-within:border-border/60 focus-within:bg-muted/70">
+          {showToolbar && <CommentToolbar />}
           <Tiptap.Content />
 
           {pendingFiles.length > 0 && (
@@ -268,6 +270,8 @@ export function TaskDetailCommentInput({
             pendingFileCount={pendingFiles.length}
             isSubmitting={isSubmitting}
             hasPendingUploads={hasPendingUploads}
+            showToolbar={showToolbar}
+            onToggleToolbar={() => setShowToolbar((v) => !v)}
           />
         </div>
 
@@ -295,6 +299,8 @@ function CommentBottomBar({
   pendingFileCount,
   isSubmitting,
   hasPendingUploads,
+  showToolbar,
+  onToggleToolbar,
 }: {
   editor: ReturnType<typeof useEditor>
   onSubmit: () => void
@@ -303,12 +309,20 @@ function CommentBottomBar({
   pendingFileCount: number
   isSubmitting: boolean
   hasPendingUploads: boolean
+  showToolbar: boolean
+  onToggleToolbar: () => void
 }) {
   if (!editor) return null
 
   return (
-    <div className="flex items-center justify-between px-1.5 py-1">
+    <div className="flex items-center justify-between px-2.5 py-2">
       <div className="flex items-center gap-0.5">
+        <ToolbarButton active={showToolbar} onClick={onToggleToolbar} aria-label="Toggle formatting">
+          <PaintbrushIcon className="size-4" />
+        </ToolbarButton>
+
+        <div className="mx-0.5 h-4 w-px bg-border/50" />
+
         <EmojiPickerPopover onSelect={(emoji) => editor.chain().focus().insertContent(emoji).run()}>
           <ToolbarButton active={false} onClick={() => {}} aria-label="Add emoji">
             <SmileIcon className="size-4" />

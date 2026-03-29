@@ -46,6 +46,10 @@ export function computeTaskIndicatorState(args: {
       event.type === "subtask_created" || event.type === "subtask_completed",
   );
 
+  const unseenEventCount = unseenEvents.filter((event) =>
+    UNSEEN_EVENT_TYPES.has(event.type),
+  ).length;
+
   return {
     hasUnseenNonComment,
     hasUnseenSubtasks,
@@ -53,5 +57,6 @@ export function computeTaskIndicatorState(args: {
     hasUnseenComments: unreadCommentCount > 0,
     hasUnseen: hasUnseenNonComment || unreadCommentCount > 0,
     unreadCommentCount,
+    unseenActivityCount: unseenEventCount + unreadCommentCount,
   };
 }

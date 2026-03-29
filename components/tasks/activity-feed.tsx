@@ -18,6 +18,11 @@ export type ReplyContext = { commentId: string; userName: string }
 
 export type ActivityView = "comments" | "all"
 
+export type CommentCounts = {
+  total: number
+  unread: number
+}
+
 interface ActivityFeedProps {
   taskId: Id<"tasks">
   isAdmin?: boolean
@@ -26,9 +31,10 @@ interface ActivityFeedProps {
   onReplyContextChange?: (ctx: ReplyContext | null) => void
   view?: ActivityView
   onViewChange?: (view: ActivityView) => void
+  onCommentCounts?: (counts: CommentCounts) => void
 }
 
-export function ActivityFeed({ taskId, isAdmin, scrollRef, replyContext, onReplyContextChange, view: viewProp, onViewChange }: ActivityFeedProps) {
+export function ActivityFeed({ taskId, isAdmin, scrollRef, replyContext, onReplyContextChange, view: viewProp, onViewChange, onCommentCounts }: ActivityFeedProps) {
   const { isAuthenticated } = useConvexAuth()
 
   const currentUser = useQuery(api.users.current, isAuthenticated ? {} : "skip")
@@ -68,17 +74,33 @@ export function ActivityFeed({ taskId, isAdmin, scrollRef, replyContext, onReply
     [removeComment],
   )
 
-  // Mark comments as seen
+  // Mark comments as seen — only when the activity section scrolls into view
   const markSeen = useMutation(api.comments.markSeen)
   const commentCount = comments?.length ?? 0
   const currentUserId = currentUser?._id
+  const sentinelRef = useRef<HTMLDivElement>(null)
+  const markSeenFiredRef = useRef(false)
+
+  // Reset when task changes
+  useEffect(() => { markSeenFiredRef.current = false }, [taskId])
+
   useEffect(() => {
-    if (!isAuthenticated) return
-    const timeout = setTimeout(() => {
-      void markSeen({ taskId })
-    }, 500)
-    return () => clearTimeout(timeout)
-  }, [isAuthenticated, taskId, markSeen, commentCount, currentUserId])
+    const sentinel = sentinelRef.current
+    const scrollContainer = scrollRef.current
+    if (!sentinel || !scrollContainer || !isAuthenticated) return
+
+    const io = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting && !markSeenFiredRef.current) {
+          markSeenFiredRef.current = true
+          void markSeen({ taskId })
+        }
+      },
+      { root: scrollContainer, threshold: 0 },
+    )
+    io.observe(sentinel)
+    return () => io.disconnect()
+  }, [isAuthenticated, taskId, markSeen, scrollRef, commentCount])
 
   // Freeze lastSeenAt on first load so the "New" divider survives the markSeen update.
   const [newDividerAt, setNewDividerAt] = useState<number | null>(null)
@@ -89,6 +111,23 @@ export function ActivityFeed({ taskId, isAdmin, scrollRef, replyContext, onReply
       setNewDividerAt(myLastSeen)
     }
   }, [myLastSeen])
+
+  // Report comment counts to parent for badge display
+  const unreadCommentCount = useMemo(() => {
+    if (!comments || myLastSeen === undefined || !currentUserId) return 0
+    return comments.filter(
+      (c) => c.createdAt > myLastSeen && c.userId !== currentUserId,
+    ).length
+  }, [comments, myLastSeen, currentUserId])
+
+  const prevCountsRef = useRef<string>("")
+  useEffect(() => {
+    const key = `${commentCount}:${unreadCommentCount}`
+    if (key !== prevCountsRef.current) {
+      prevCountsRef.current = key
+      onCommentCounts?.({ total: commentCount, unread: unreadCommentCount })
+    }
+  }, [commentCount, unreadCommentCount, onCommentCounts])
 
   // Stabilize reaction/attachment maps
   const stableReactionsMap = useMemo(() => reactionsMap, [JSON.stringify(reactionsMap)])
@@ -158,14 +197,17 @@ export function ActivityFeed({ taskId, isAdmin, scrollRef, replyContext, onReply
 
   return (
     <>
+      {/* Sentinel for IntersectionObserver — marks comments as seen when scrolled into view */}
+      <div ref={sentinelRef} className="h-0 w-0" aria-hidden />
+
       {feed === null ? (
         <FeedSkeleton />
       ) : feed.length === 0 ? (
         <div className="flex items-center justify-center p-8 text-xs text-muted-foreground/50">
           No activity yet
         </div>
-      ) : view === "all" ? (
-        <AllView
+      ) : view === "comments" ? (
+        <CommentsOnlyView
           feed={feed}
           currentUserId={currentUserId}
           isAdmin={isAdmin}
@@ -235,9 +277,9 @@ type ViewProps = {
   onDelete: (commentId: string) => void
 }
 
-// ─── All View — flat timeline ───────────────────────────────────────────────────
+// ─── Comments Only View — no activity entries ──────────────────────────────────
 
-function AllView({
+function CommentsOnlyView({
   feed,
   currentUserId,
   isAdmin,
@@ -252,42 +294,49 @@ function AllView({
   onEdit,
   onDelete,
 }: ViewProps) {
-  const lastCommentIndex = feed.findLastIndex((item) => item.kind === "comment")
+  const commentsOnly = useMemo(() => feed.filter((item) => item.kind === "comment"), [feed])
+
+  // Recompute day dividers and message grouping for comments-only list
+  const commentDayDividers = useMemo(() => computeDayDividers(commentsOnly), [commentsOnly])
+  const commentGrouping = useMemo(() => computeMessageGrouping(commentsOnly), [commentsOnly])
+
+  const lastIndex = commentsOnly.length - 1
   const firstNewIndex =
     newDividerAt !== null && newDividerAt > 0
-      ? feed.findIndex(
-          (item) =>
-            item.kind === "comment" &&
-            item.createdAt > newDividerAt &&
-            item.userId !== currentUserId,
+      ? commentsOnly.findIndex(
+          (item) => item.createdAt > newDividerAt && item.userId !== currentUserId,
         )
       : -1
 
+  if (commentsOnly.length === 0) {
+    return (
+      <div className="flex items-center justify-center p-8 text-xs text-muted-foreground/50">
+        No comments yet
+      </div>
+    )
+  }
+
   return (
     <div className="flex flex-col">
-      {feed.map((item, i) => {
-        const dayLabel = dayDividers.get(item.id)
+      {commentsOnly.map((item, i) => {
+        const dayLabel = commentDayDividers.get(item.id)
         return (
           <Fragment key={item.id}>
             {dayLabel && <DayDivider label={dayLabel} />}
             {i === firstNewIndex && <NewDivider />}
-            {item.kind === "comment" ? (
-              <ChatMessage
-                item={item}
-                currentUserId={currentUserId}
-                isAdmin={isAdmin}
-                isGrouped={messageGrouping.get(item.id) ?? false}
-                reactions={reactionsMap?.[item.id]}
-                attachments={attachmentsMap?.[item.id]}
-                onReply={onReply}
-                onToggleReaction={onToggleReaction}
-                onEdit={onEdit}
-                onDelete={onDelete}
-              />
-            ) : (
-              <AuditLine item={item} currentUserId={currentUserId} />
-            )}
-            {i === lastCommentIndex && (
+            <ChatMessage
+              item={item}
+              currentUserId={currentUserId}
+              isAdmin={isAdmin}
+              isGrouped={commentGrouping.get(item.id) ?? false}
+              reactions={reactionsMap?.[item.id]}
+              attachments={attachmentsMap?.[item.id]}
+              onReply={onReply}
+              onToggleReaction={onToggleReaction}
+              onEdit={onEdit}
+              onDelete={onDelete}
+            />
+            {i === lastIndex && (
               <SeenBy feed={feed} readReceipts={readReceipts} currentUserId={currentUserId} />
             )}
           </Fragment>
@@ -315,64 +364,103 @@ function CommentsView({
   onEdit,
   onDelete,
 }: ViewProps & { groupedFeed: GroupedFeedItem[] }) {
+  // Compute lane line positions based on same-user continuity.
+  // The lane connects ALL consecutive same-user comments, broken by batches, dividers, or user change.
+  // Independent of the 5-min compact grouping threshold.
+  //
+  // newDividerBreakId: if a "New" divider will be inserted before a comment, that breaks the lane.
+  const laneInfo = useMemo(() => {
+    let newDividerBreakId: string | null = null
+    if (newDividerAt !== null && newDividerAt > 0) {
+      for (const item of groupedFeed) {
+        if (item.kind === "comment" && item.createdAt > newDividerAt && item.userId !== currentUserId) {
+          newDividerBreakId = item.id
+          break
+        }
+      }
+    }
+
+    const hasLaneAbove = new Map<string, boolean>()
+    const hasLaneBelow = new Map<string, boolean>()
+
+    for (let i = 0; i < groupedFeed.length; i++) {
+      const item = groupedFeed[i]
+      if (item.kind !== "comment") continue
+
+      const prev = groupedFeed[i - 1]
+      const prevSameUser = prev?.kind === "comment" && prev.userId === item.userId
+      const hasDayDivider = dayDividers.has(item.id)
+      const isNewBreak = item.id === newDividerBreakId
+      hasLaneAbove.set(item.id, prevSameUser && !hasDayDivider && !isNewBreak)
+
+      const next = groupedFeed[i + 1]
+      const nextSameUser = next?.kind === "comment" && next.userId === item.userId
+      const nextHasDayDivider = next?.kind === "comment" && dayDividers.has(next.id)
+      const nextIsNewBreak = next?.kind === "comment" && next.id === newDividerBreakId
+      hasLaneBelow.set(item.id, nextSameUser && !nextHasDayDivider && !nextIsNewBreak)
+    }
+
+    return { hasLaneAbove, hasLaneBelow }
+  }, [groupedFeed, dayDividers, newDividerAt, currentUserId])
+
   const lastGroupedCommentIndex = groupedFeed.findLastIndex((item) => item.kind === "comment")
-
   let newDividerRendered = false
+  const rendered: React.ReactNode[] = []
 
-  return (
-    <div className="flex flex-col">
-      {groupedFeed.map((item, i) => {
-        const elements: React.ReactNode[] = []
+  groupedFeed.forEach((item, i) => {
+    if (item.kind === "comment") {
+      const dayLabel = dayDividers.get(item.id)
+      if (dayLabel) {
+        rendered.push(<DayDivider key={`day-${dayLabel}`} label={dayLabel} />)
+      }
+    }
 
-        if (item.kind === "comment") {
-          const dayLabel = dayDividers.get(item.id)
-          if (dayLabel) {
-            elements.push(<DayDivider key={`day-${dayLabel}`} label={dayLabel} />)
-          }
-        }
+    if (
+      item.kind === "comment" &&
+      !newDividerRendered &&
+      newDividerAt !== null &&
+      newDividerAt > 0 &&
+      item.createdAt > newDividerAt &&
+      item.userId !== currentUserId
+    ) {
+      rendered.push(<NewDivider key="new-divider" />)
+      newDividerRendered = true
+    }
 
-        if (item.kind === "batch") {
-          elements.push(
-            <ActivityBatch key={item.id} batch={item} currentUserId={currentUserId} />,
-          )
-        } else {
-          if (
-            !newDividerRendered &&
-            newDividerAt !== null &&
-            newDividerAt > 0 &&
-            item.createdAt > newDividerAt &&
-            item.userId !== currentUserId
-          ) {
-            elements.push(<NewDivider key="new-divider" />)
-            newDividerRendered = true
-          }
-          elements.push(
-            <ChatMessage
-              key={item.id}
-              item={item}
-              currentUserId={currentUserId}
-              isAdmin={isAdmin}
-              isGrouped={messageGrouping.get(item.id) ?? false}
-              reactions={reactionsMap?.[item.id]}
-              attachments={attachmentsMap?.[item.id]}
-              onReply={onReply}
-              onToggleReaction={onToggleReaction}
-              onEdit={onEdit}
-              onDelete={onDelete}
-            />,
-          )
-          if (i === lastGroupedCommentIndex) {
-            elements.push(
-              <SeenBy key="seen-by" feed={feed} readReceipts={readReceipts} currentUserId={currentUserId} />,
-            )
-          }
-        }
+    if (item.kind === "batch") {
+      rendered.push(
+        <ActivityBatch key={item.id} batch={item} currentUserId={currentUserId} />,
+      )
+    } else {
+      const isGrouped = messageGrouping.get(item.id) ?? false
+      rendered.push(
+        <ChatMessage
+          key={item.id}
+          item={item}
+          currentUserId={currentUserId}
+          isAdmin={isAdmin}
+          isGrouped={isGrouped}
+          laneAbove={laneInfo.hasLaneAbove.get(item.id) ?? false}
+          laneBelow={laneInfo.hasLaneBelow.get(item.id) ?? false}
+          reactions={reactionsMap?.[item.id]}
+          attachments={attachmentsMap?.[item.id]}
+          onReply={onReply}
+          onToggleReaction={onToggleReaction}
+          onEdit={onEdit}
+          onDelete={onDelete}
+        />,
+      )
+      if (i === lastGroupedCommentIndex) {
+        rendered.push(
+          <SeenBy key="seen-by" feed={feed} readReceipts={readReceipts} currentUserId={currentUserId} />,
+        )
+      }
+    }
+  })
 
-        return <Fragment key={item.id}>{elements}</Fragment>
-      })}
-    </div>
-  )
+  return <div className="flex flex-col">{rendered}</div>
 }
+
 
 // ─── Feed builder ───────────────────────────────────────────────────────────────
 
@@ -520,17 +608,6 @@ export function ActivityViewToggle({
       <button
         className={cn(
           "rounded px-2.5 py-1 text-xs font-medium transition-colors",
-          view === "comments"
-            ? "bg-background text-foreground shadow-sm"
-            : "text-muted-foreground hover:text-foreground",
-        )}
-        onClick={() => onViewChange("comments")}
-      >
-        Comments
-      </button>
-      <button
-        className={cn(
-          "rounded px-2.5 py-1 text-xs font-medium transition-colors",
           view === "all"
             ? "bg-background text-foreground shadow-sm"
             : "text-muted-foreground hover:text-foreground",
@@ -538,6 +615,17 @@ export function ActivityViewToggle({
         onClick={() => onViewChange("all")}
       >
         All
+      </button>
+      <button
+        className={cn(
+          "rounded px-2.5 py-1 text-xs font-medium transition-colors",
+          view === "comments"
+            ? "bg-background text-foreground shadow-sm"
+            : "text-muted-foreground hover:text-foreground",
+        )}
+        onClick={() => onViewChange("comments")}
+      >
+        Comments
       </button>
     </div>
   )

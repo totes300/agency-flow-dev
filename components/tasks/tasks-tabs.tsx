@@ -1,6 +1,6 @@
 "use client"
 
-import { useRef, useLayoutEffect, useState, useCallback } from "react"
+import { useRef, useState, useCallback, useLayoutEffect } from "react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import {
@@ -17,6 +17,7 @@ import {
   Building2,
   Tag,
   UserCircle,
+  PlusIcon,
 } from "lucide-react"
 import type { TaskTab, GroupByOption } from "@/lib/hooks/use-task-filters"
 import type { Filter } from "@/components/ui/filters"
@@ -63,6 +64,9 @@ export function TasksTabs({
   isSearching,
   groupBy,
   onGroupByChange,
+  search,
+  onSearchChange,
+  onNewTask,
   filters,
   setFilters,
   isAdmin,
@@ -73,6 +77,9 @@ export function TasksTabs({
   isSearching: boolean
   groupBy: GroupByOption
   onGroupByChange: (option: GroupByOption) => void
+  search: string
+  onSearchChange: (value: string) => void
+  onNewTask: () => void
   filters: Filter[]
   setFilters: React.Dispatch<React.SetStateAction<Filter[]>>
   isAdmin: boolean
@@ -90,7 +97,7 @@ export function TasksTabs({
   const tabsRef = useRef<HTMLDivElement>(null)
   const tabRefs = useRef<Map<string, HTMLButtonElement>>(new Map())
   const [indicator, setIndicator] = useState({ left: 0, width: 0 })
-  const hasRendered = useRef(false)
+  const [isIndicatorReady, setIsIndicatorReady] = useState(false)
 
   const updateIndicator = useCallback(() => {
     const container = tabsRef.current
@@ -102,7 +109,7 @@ export function TasksTabs({
       left: tabRect.left - containerRect.left + 12,
       width: tabRect.width - 24,
     })
-    hasRendered.current = true
+    setIsIndicatorReady(true)
   }, [activeTab])
 
   useLayoutEffect(() => {
@@ -111,103 +118,108 @@ export function TasksTabs({
 
   return (
     <div>
-      {/* Row 1: Tabs + controls — always single row */}
-      <div className="flex items-center justify-between gap-2 border-b">
-        {/* Tabs */}
-        <div ref={tabsRef} className="relative flex items-center overflow-x-auto scrollbar-none">
-          {TABS.map((tab) => {
-            const count = getCount(tab.key)
-            const isActive = !isSearching && activeTab === tab.key
-            return (
-              <button
-                key={tab.key}
-                ref={(el) => { if (el) tabRefs.current.set(tab.key, el); }}
-                onClick={() => onTabChange(tab.key)}
-                className={cn(
-                  "relative flex shrink-0 items-center gap-1.5 px-3 py-2 text-sm whitespace-nowrap transition-colors duration-200",
-                  isSearching
-                    ? "text-muted-foreground/40"
-                    : isActive
-                      ? "font-medium text-foreground"
-                      : "text-muted-foreground hover:text-foreground hover:bg-muted/50 rounded-md",
-                )}
-              >
-                {tab.label}
-                {count !== undefined && count > 0 && (
-                  <span className={cn(
-                    "text-[11px] tabular-nums transition-colors duration-200",
-                    isActive
-                      ? "text-foreground/40"
-                      : "text-muted-foreground/40",
-                  )}>
-                    {count}
-                  </span>
-                )}
-              </button>
-            )
-          })}
-          {/* Sliding underline */}
-          {!isSearching && (
-            <span
-              className="pointer-events-none absolute bottom-0 h-px bg-foreground"
-              style={{
-                left: indicator.left,
-                width: indicator.width,
-                transition: hasRendered.current ? "left 250ms cubic-bezier(.4,0,.2,1), width 250ms cubic-bezier(.4,0,.2,1)" : "none",
-              }}
-            />
-          )}
-        </div>
-
-        {/* Right side: Filter trigger + Group by */}
-        <div className="flex items-center gap-2 pb-1">
-          <TasksFilterBar filters={filters} setFilters={setFilters} isAdmin={isAdmin} />
-
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="sm"
-                className={cn(
-                  "h-8 gap-1.5 transition-colors",
-                  isGrouped
-                    ? "bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary"
-                    : "text-muted-foreground",
-                )}
-              >
-                <LayoutListIcon className="size-3.5" />
-                <span>Group: {groupByLabel}</span>
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              {GROUP_BY_OPTIONS.filter((o) => !o.adminOnly || isAdmin).map((option) => (
-                <DropdownMenuItem
-                  key={option.key ?? "none"}
-                  onClick={() => onGroupByChange(option.key)}
+      <div className="border-b border-border/50">
+        <div className="flex items-end justify-between">
+          {/* Tabs — left side */}
+          <div ref={tabsRef} className="relative flex items-center overflow-x-auto scrollbar-none">
+            {TABS.map((tab) => {
+              const count = getCount(tab.key)
+              const isActive = !isSearching && activeTab === tab.key
+              return (
+                <button
+                  key={tab.key}
+                  ref={(el) => { if (el) tabRefs.current.set(tab.key, el); }}
+                  onClick={() => onTabChange(tab.key)}
+                  className={cn(
+                    "relative flex shrink-0 items-center gap-1.5 rounded-t-md px-3 pb-3 pt-1.5 text-sm whitespace-nowrap transition-colors duration-200",
+                    isSearching
+                      ? "text-muted-foreground/40"
+                      : isActive
+                        ? "font-medium text-foreground"
+                        : "text-muted-foreground/80 hover:bg-muted/60 hover:text-foreground",
+                  )}
                 >
-                  <span className="flex items-center gap-2">
-                    <span className="w-3.5 shrink-0 text-muted-foreground">
-                      {groupBy === option.key ? <CheckIcon className="size-3.5 text-primary" /> : option.icon}
+                  {tab.label}
+                  {count !== undefined && count > 0 && (
+                    <span className={cn(
+                      "text-[11px] tabular-nums transition-colors duration-200",
+                      isActive
+                        ? "text-foreground/45"
+                        : "text-muted-foreground/45",
+                    )}>
+                      {count}
                     </span>
-                    {option.label}
-                  </span>
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
+                  )}
+                </button>
+              )
+            })}
+            {/* Sliding underline */}
+            {!isSearching && (
+              <span
+                className="pointer-events-none absolute bottom-0 h-0.5 rounded-full bg-foreground/90"
+                style={{
+                  left: indicator.left,
+                  width: indicator.width,
+                  transition: isIndicatorReady ? "left 250ms cubic-bezier(.4,0,.2,1), width 250ms cubic-bezier(.4,0,.2,1)" : "none",
+                }}
+              />
+            )}
+          </div>
+
+          {/* Controls — right side, same row as tabs */}
+          <div className="flex shrink-0 items-center gap-2 pb-2.5 pl-4">
+            <TasksFilterBar filters={filters} setFilters={setFilters} isAdmin={isAdmin} />
+
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className={cn(
+                    "h-8 gap-1.5 rounded-lg border px-2.5 text-[13px] transition-colors",
+                    isGrouped
+                      ? "border-border/80 bg-muted/40 text-foreground hover:bg-muted/55"
+                      : "border-border/70 text-foreground/80 hover:bg-muted/55 hover:text-foreground",
+                  )}
+                >
+                  <LayoutListIcon className="size-3.5" />
+                  <span>Group: {groupByLabel}</span>
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {GROUP_BY_OPTIONS.filter((o) => !o.adminOnly || isAdmin).map((option) => (
+                  <DropdownMenuItem
+                    key={option.key ?? "none"}
+                    onClick={() => onGroupByChange(option.key)}
+                  >
+                    <span className="flex items-center gap-2">
+                      <span className="w-3.5 shrink-0 text-muted-foreground">
+                        {groupBy === option.key ? <CheckIcon className="size-3.5 text-primary" /> : option.icon}
+                      </span>
+                      {option.label}
+                    </span>
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            <Button size="sm" className="h-8 rounded-lg px-3 text-[13px]" onClick={onNewTask}>
+              <PlusIcon className="size-4" />
+              New task
+            </Button>
+          </div>
         </div>
       </div>
 
-      {/* Row 2: Active filter pills — slides down when filters exist */}
       <div
-        className="grid transition-all duration-150 ease-out"
+        className="grid pt-2 transition-all duration-150 ease-out"
         style={{
           gridTemplateRows: hasActiveFilters ? "1fr" : "0fr",
         }}
       >
         <div className="overflow-hidden">
           <div
-            className="flex flex-wrap items-center gap-2 px-1 py-2 transition-opacity duration-150"
+            className="flex flex-wrap items-center gap-2 py-1 transition-opacity duration-150"
             style={{ opacity: hasActiveFilters ? 1 : 0 }}
           >
             <TasksActiveFilters filters={filters} setFilters={setFilters} isAdmin={isAdmin} />

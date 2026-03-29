@@ -57,7 +57,7 @@ export function TaskDetailCommentInput({
   const [hasContent, setHasContent] = useState(false)
   const [showToolbar, setShowToolbar] = useState(false)
 
-  const { mentionExtension, renderMentionDropdown } = useMentionSuggestion()
+  const { mentionExtension, mentionOpenRef, renderMentionDropdown } = useMentionSuggestion()
 
   const createComment = useMutation(api.comments.create)
   const generateUploadUrl = useMutation(api.commentAttachments.generateUploadUrl)
@@ -102,6 +102,8 @@ export function TaskDetailCommentInput({
       handleKeyDown: (_view, event) => {
         if (event.key === "Enter" && !event.shiftKey && !event.metaKey && !event.ctrlKey) {
           if (!editor) return false
+          // Let mention/suggestion plugins handle Enter when their dropdown is open
+          if (mentionOpenRef.current) return false
           if (editor.isActive("listItem") || editor.isActive("taskItem") || editor.isActive("codeBlock")) {
             return false
           }

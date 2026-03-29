@@ -97,7 +97,8 @@ export default defineSchema({
     billable: v.boolean(),
     dueDate: v.optional(v.string()),
     parentTaskId: v.optional(v.id("tasks")),
-    sortOrder: v.optional(v.number()),
+    sortOrder: v.optional(v.number()),          // subtask order within parent
+    manualSortKey: v.optional(v.string()),       // fractional-indexing key for top-level drag order
     archivedAt: v.optional(v.number()),
     createdAt: v.number(),
     updatedAt: v.number(),

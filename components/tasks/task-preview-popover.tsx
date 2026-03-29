@@ -122,6 +122,8 @@ export function TaskPreviewPopover({
 
   // Reset activity expanded state when popover closes
   const handleOpenChange = (open: boolean) => {
+    // Don't open on mobile — prevents hidden popover from firing queries
+    if (open && typeof window !== "undefined" && window.innerWidth < 768) return
     setIsOpen(open)
     if (!open) setActivityExpanded(false)
   }
@@ -143,14 +145,14 @@ export function TaskPreviewPopover({
 
         {/* Description section (primary) */}
         {hasDescription && (
-          <div className="max-h-[200px] overflow-y-auto p-3 pt-1.5 space-y-2">
+          <div className="max-h-[200px] overflow-y-auto p-3 pt-1.5 flex flex-col gap-2">
             {plainText && (
               <p className="text-xs text-foreground/80 leading-relaxed">
                 {plainText}{plainText.length >= 150 && "..."}
               </p>
             )}
             {checklistItems.length > 0 && (
-              <div className="space-y-1">
+              <div className="flex flex-col gap-1">
                 {checklistItems.map((item, i) => (
                   <div key={i} className="flex items-start gap-1.5">
                     <span className={cn(
@@ -194,13 +196,13 @@ export function TaskPreviewPopover({
           )}
 
           {showActivityExpanded && (
-            <div className="px-3 pb-2 space-y-1.5">
+            <div className="px-3 pb-2 flex flex-col gap-1.5">
               {!activityData ? (
-                <div className="space-y-2">
+                <div className="flex flex-col gap-2">
                   {Array.from({ length: 3 }).map((_, i) => (
                     <div key={i} className="flex items-start gap-2">
                       <div className="mt-1.5 size-1.5 rounded-full bg-muted animate-pulse" />
-                      <div className="flex-1 space-y-1">
+                      <div className="flex-1 flex flex-col gap-1">
                         <div className="h-3 w-3/4 rounded bg-muted animate-pulse" />
                         <div className="h-2.5 w-1/3 rounded bg-muted animate-pulse" />
                       </div>

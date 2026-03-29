@@ -18,6 +18,7 @@ export function useMentionSuggestion() {
   const { orgMembers } = useTaskReferenceData()
   const [state, setState] = useState<MentionSuggestionState | null>(null)
   const keyDownRef = useRef<((e: SuggestionKeyDownProps) => boolean) | null>(null)
+  const isOpenRef = useRef(false)
 
   const items = useMemo<MentionItem[]>(
     () => (orgMembers ?? []).map((m) => ({ id: m._id, label: m.name })),
@@ -37,13 +38,14 @@ export function useMentionSuggestion() {
               .slice(0, 5),
           render: () => ({
             onStart: (props: { items: MentionItem[]; command: (item: MentionItem) => void; clientRect?: (() => DOMRect | null) | null }) => {
+              isOpenRef.current = true
               setState({ items: props.items, command: props.command, clientRect: props.clientRect ?? null })
             },
             onUpdate: (props: { items: MentionItem[]; command: (item: MentionItem) => void; clientRect?: (() => DOMRect | null) | null }) => {
               setState({ items: props.items, command: props.command, clientRect: props.clientRect ?? null })
             },
             onKeyDown: (props: SuggestionKeyDownProps) => keyDownRef.current?.(props) ?? false,
-            onExit: () => setState(null),
+            onExit: () => { isOpenRef.current = false; setState(null) },
           }),
         },
       }),
@@ -67,5 +69,5 @@ export function useMentionSuggestion() {
     )
   }, [state])
 
-  return { mentionExtension: extension, renderMentionDropdown }
+  return { mentionExtension: extension, mentionOpenRef: isOpenRef, renderMentionDropdown }
 }

@@ -1,6 +1,6 @@
 "use client"
 
-import { AlertCircleIcon, CheckCircle2Icon, LoaderIcon, PlusIcon, RotateCcwIcon, XIcon } from "lucide-react"
+import { AlertCircleIcon, CheckCircle2Icon, LoaderIcon, PlusIcon, XIcon } from "lucide-react"
 import { StatusBadge } from "@/components/status-badge"
 import { CategoryBadge } from "@/components/category-badge"
 import { UserAvatar } from "@/components/user-avatar"
@@ -43,7 +43,7 @@ export function InlineCreatedTaskRow({
   return (
     <div
       className={cn(
-        `group/row grid ${TASK_GRID_COLS} items-center gap-x-4 border-b border-border/40 px-3 py-2.5 [&>*]:min-w-0 [&>*]:overflow-hidden`,
+        `group/row grid ${TASK_GRID_COLS} items-center gap-x-6 border-b border-border/40 px-3 py-2.5 [&>*]:min-w-0 [&>*]:overflow-hidden`,
         task.saveState === "error" && "bg-red-500/5",
       )}
     >
@@ -139,7 +139,7 @@ export function InlineCreatedTaskRow({
         {task.dueDate ? formatShortDate(task.dueDate) : null}
       </div>
 
-      <div />
+      <div className="text-right" />
       <div className="flex items-center justify-center">
         {task.saveState === "error" && onDismiss && (
           <button

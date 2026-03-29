@@ -59,7 +59,7 @@ export function InlineCategoryCell({
           {category ? (
             <CategoryBadge name={category.name} color={category.color} />
           ) : (
-            <span className="flex items-center gap-1.5 text-muted-foreground/40 transition-colors group-hover/row:text-muted-foreground/60">
+            <span className="flex items-center gap-1.5 rounded-md border border-dashed border-border/55 bg-muted/[0.12] px-2 py-1 text-muted-foreground/60 transition-colors group-hover/row:border-border/80 group-hover/row:bg-muted/[0.22] group-hover/row:text-muted-foreground">
               <TagIcon className="size-4 shrink-0" strokeWidth={1.75} />
               {emptyLabel && <span className="text-[13px]">{emptyLabel}</span>}
             </span>

@@ -139,6 +139,7 @@ function renderNode(node: TiptapNode, key: number): ReactNode {
   }
 
   if (node.type === "hardBreak") return <br key={key} />
+  if (node.type === "horizontalRule") return <hr key={key} />
 
   if (node.type === "image") {
     const src = node.attrs?.src as string | undefined
@@ -178,10 +179,6 @@ function renderNode(node: TiptapNode, key: number): ReactNode {
         {node.content?.map((child, i) => renderNode(child, i))}
       </td>
     )
-  }
-
-  if (node.type === "highlight") {
-    return <mark key={key}>{node.content?.map((child, i) => renderNode(child, i))}</mark>
   }
 
   if (node.content) {

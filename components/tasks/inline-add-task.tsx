@@ -205,12 +205,16 @@ export function InlineAddTask({
   submitRef.current = handleSubmit
   resetRef.current = resetFields
 
-  // Global Enter/Escape when the add row is active
+  // Enter/Escape when the add row is active — scoped to this row
+  const rowRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!active) return
     function handleKeyDown(e: KeyboardEvent) {
-      const insidePopover = (e.target as HTMLElement)?.closest?.("[role='dialog'], [cmdk-list], [cmdk-input]")
+      const target = e.target as HTMLElement
+      // Only handle keys from within this row or its popovers
+      const insidePopover = target.closest?.("[role='dialog'], [cmdk-list], [cmdk-input]")
       if (insidePopover) return
+      if (rowRef.current && !rowRef.current.contains(target)) return
 
       if (e.key === "Enter") {
         e.preventDefault()
@@ -246,7 +250,8 @@ export function InlineAddTask({
 
   return (
     <div
-      className={`group/row grid ${TASK_GRID_COLS} items-center gap-x-4 border-b border-border/40 px-3 py-2.5 [&>*]:min-w-0 [&>*]:overflow-hidden`}
+      ref={rowRef}
+      className={`group/row grid ${TASK_GRID_COLS} items-center gap-x-6 border-b border-border/40 px-3 py-2.5 [&>*]:min-w-0 [&>*]:overflow-hidden`}
     >
       {/* Checkbox — empty */}
       <div />

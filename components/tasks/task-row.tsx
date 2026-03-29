@@ -4,7 +4,7 @@ import { memo } from "react"
 import { useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { cn } from "@/lib/utils"
-import { formatRelativeTime, formatShortDate, isOverdue } from "@/lib/format"
+import { formatRelativeTime, isOverdue } from "@/lib/format"
 import { formatActivitySubtitle } from "@/lib/format-activity-subtitle"
 import { Checkbox } from "@/components/ui/checkbox"
 import { TASK_GRID_COLS } from "@/components/tasks/tasks-table"
@@ -95,7 +95,7 @@ export const TaskRow = memo(function TaskRow({
     <div
       data-task-id={task._id}
       className={cn(
-        `group/row grid ${TASK_GRID_COLS} items-center gap-x-4 border-b border-border/40 px-3 py-2.5 transition-colors hover:bg-muted/30 [&>*]:min-w-0 [&>*]:overflow-hidden`,
+        `group/row grid ${TASK_GRID_COLS} items-center gap-x-6 border-b border-border/55 px-3 py-2.5 transition-colors hover:bg-muted/[0.38] [&>*]:min-w-0 [&>*]:overflow-hidden`,
         isSelected && "bg-primary/5",
         isDetailOpen && "bg-accent/50 border-l-2 border-l-primary",
         isDone && "opacity-50",
@@ -172,7 +172,7 @@ export const TaskRow = memo(function TaskRow({
             </SubtaskHoverPopover>
           )}
         </div>
-        <div className="truncate text-[11px] text-muted-foreground">
+        <div className="truncate text-[11px] text-muted-foreground/85">
           {subtitle}
         </div>
       </div>
@@ -217,64 +217,75 @@ export const TaskRow = memo(function TaskRow({
       />
 
       {/* 7. Assignee (inline edit) */}
-      <InlineAssigneeCell taskId={task._id} assignees={task.assignees} emptyLabel="Add" />
+      <div className="min-w-0">
+        <InlineAssigneeCell taskId={task._id} assignees={task.assignees} emptyLabel="Add" />
+      </div>
 
       {/* 8. Due date (inline edit) */}
-      <InlineDueDateCell taskId={task._id} dueDate={task.dueDate ?? null} isOverdue={overdue} emptyLabel="Add" />
+      <div className="min-w-0">
+        <InlineDueDateCell taskId={task._id} dueDate={task.dueDate ?? null} isOverdue={overdue} emptyLabel="Add" />
+      </div>
 
       {/* 9. Time */}
-      <InlineTimeCell taskId={task._id} totalMinutes={totalMinutes} isDone={isDone} isBillable={task.billable} />
+      <div className="min-w-0">
+        <InlineTimeCell taskId={task._id} totalMinutes={totalMinutes} isDone={isDone} isBillable={task.billable} />
+      </div>
 
       {/* 10. Action menu */}
-      <RowActionMenu>
-        {isArchivedView ? (
-          <>
-            <DropdownMenuItem onClick={() => onRestore?.(task._id)}>
-              <ArchiveRestoreIcon className="size-4" />
-              Restore
-            </DropdownMenuItem>
-            {isAdmin && (
-              <>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  className="text-destructive focus:text-destructive"
-                  onClick={() => onDelete(task._id)}
-                >
-                  <Trash2Icon className="size-4" />
-                  Delete permanently
-                </DropdownMenuItem>
-              </>
-            )}
-          </>
-        ) : (
-          <>
-            <DropdownMenuItem
-              onClick={async () => {
-                try { await duplicateTask({ id: task._id }) } catch (err) { toastError(err, "Failed to duplicate task") }
-              }}
-            >
-              <CopyIcon className="size-4" />
-              Duplicate
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => onArchive(task._id)}>
-              <ArchiveIcon className="size-4" />
-              Archive
-            </DropdownMenuItem>
-            {isAdmin && (
-              <>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  className="text-destructive focus:text-destructive"
-                  onClick={() => onDelete(task._id)}
-                >
-                  <Trash2Icon className="size-4" />
-                  Delete
-                </DropdownMenuItem>
-              </>
-            )}
-          </>
-        )}
-      </RowActionMenu>
+      <div className={cn(
+        "flex justify-end transition-opacity",
+        hasSelection || isSelected ? "opacity-100" : "opacity-0 group-hover/row:opacity-100",
+      )}>
+        <RowActionMenu>
+          {isArchivedView ? (
+            <>
+              <DropdownMenuItem onClick={() => onRestore?.(task._id)}>
+                <ArchiveRestoreIcon className="size-4" />
+                Restore
+              </DropdownMenuItem>
+              {isAdmin && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    className="text-destructive focus:text-destructive"
+                    onClick={() => onDelete(task._id)}
+                  >
+                    <Trash2Icon className="size-4" />
+                    Delete permanently
+                  </DropdownMenuItem>
+                </>
+              )}
+            </>
+          ) : (
+            <>
+              <DropdownMenuItem
+                onClick={async () => {
+                  try { await duplicateTask({ id: task._id }) } catch (err) { toastError(err, "Failed to duplicate task") }
+                }}
+              >
+                <CopyIcon className="size-4" />
+                Duplicate
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => onArchive(task._id)}>
+                <ArchiveIcon className="size-4" />
+                Archive
+              </DropdownMenuItem>
+              {isAdmin && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    className="text-destructive focus:text-destructive"
+                    onClick={() => onDelete(task._id)}
+                  >
+                    <Trash2Icon className="size-4" />
+                    Delete
+                  </DropdownMenuItem>
+                </>
+              )}
+            </>
+          )}
+        </RowActionMenu>
+      </div>
     </div>
   )
 })

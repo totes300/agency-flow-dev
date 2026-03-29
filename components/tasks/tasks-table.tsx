@@ -1,9 +1,9 @@
 "use client"
 
+import { useMemo } from "react"
 import {
   ListChecksIcon,
   CircleDashedIcon,
-  MessageCircleIcon,
   HashIcon,
   FolderIcon,
   UserIcon,
@@ -11,8 +11,12 @@ import {
   ClockIcon,
   ChevronUpIcon,
   ChevronDownIcon,
+  ChevronsUpDownIcon,
   RotateCcwIcon,
 } from "lucide-react"
+import { DragDropProvider } from "@dnd-kit/react"
+import { isSortable } from "@dnd-kit/react/sortable"
+import { PointerSensor, PointerActivationConstraints } from "@dnd-kit/dom"
 import type { Doc } from "@/convex/_generated/dataModel"
 import type { GroupByOption, SortField, SortOrder } from "@/lib/hooks/use-task-filters"
 import { cn } from "@/lib/utils"
@@ -25,15 +29,16 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { TaskGroup } from "@/components/tasks/task-group"
+import { SortableTaskRow } from "@/components/tasks/sortable-task-row"
 import type { InlineCreatedTask } from "@/components/tasks/inline-created-task-row"
 
 // Grid column template — shared between header and rows
 // Only Task is flexible (1fr). Everything else is fixed width.
 // The table container sets min-width and scrolls horizontally if needed.
-// Checkbox 36 | Task 1fr | Comments 56 | Status 120 | Category 108 | Project 176 | Assignee 80 | Due 96 | Time 76 | Menu 36
-export const TASK_GRID_COLS = "grid-cols-[36px_1fr_56px_120px_108px_176px_80px_96px_76px_36px]"
-// Fixed columns total = 864px + 9 gaps × 16px = 1008px. With 1fr min ~200px → ~1208px.
-export const TASK_TABLE_MIN_W = "min-w-[1208px]"
+// Checkbox 36 | Task 1fr | Comments 52 | Status 112 | Category 104 | Project 160 | Assignee 88 | Due 92 | Time 96 | Menu 32
+export const TASK_GRID_COLS = "grid-cols-[36px_1fr_52px_112px_104px_160px_88px_92px_96px_32px]"
+// Fixed columns total = 772px + 9 gaps × 16px = 916px. With 1fr min ~240px → ~1156px.
+export const TASK_TABLE_MIN_W = "min-w-[1156px]"
 
 type TaskWithJoins = Doc<"tasks"> & {
   status: Pick<Doc<"statuses">, "_id" | "name" | "color" | "type" | "icon"> | null
@@ -47,6 +52,7 @@ type TaskGroupData = {
   key: string
   label: string
   color?: string
+  statusType?: string
   count: number
   tasks: TaskWithJoins[]
   items?: TaskListItem[]
@@ -63,19 +69,20 @@ type ColumnDef = {
   sortField?: SortField
   ascLabel?: string
   descLabel?: string
+  align?: "start" | "center" | "end"
 }
 
 const COLUMN_HEADERS: ColumnDef[] = [
   { label: "" }, // checkbox
   { label: "Task", icon: ListChecksIcon, sortField: "title", ascLabel: "Ascending (A→Z)", descLabel: "Descending (Z→A)" },
-  { label: "" },
+  { label: "", align: "center" },
   { label: "Status", icon: CircleDashedIcon, sortField: "status", ascLabel: "Ascending", descLabel: "Descending" },
   { label: "Category", icon: HashIcon, sortField: "category", ascLabel: "Ascending (A→Z)", descLabel: "Descending (Z→A)" },
   { label: "Client / Project", icon: FolderIcon },
   { label: "Assignee", icon: UserIcon },
   { label: "Due date", icon: CalendarIcon, sortField: "dueDate", ascLabel: "Earliest first", descLabel: "Latest first" },
   { label: "Time", icon: ClockIcon },
-  { label: "" }, // menu
+  { label: "", align: "end" }, // menu
 ]
 
 export function TasksTable({
@@ -92,6 +99,8 @@ export function TasksTable({
   onResetSort,
   renderItem,
   renderAddTask,
+  onReorder,
+  isDragEnabled = false,
 }: {
   groups: TaskGroupData[]
   isGrouped: boolean
@@ -106,9 +115,11 @@ export function TasksTable({
   onResetSort?: () => void
   renderItem: (item: TaskListItem) => React.ReactNode
   renderAddTask?: (groupKey: string) => React.ReactNode
+  onReorder?: (taskId: string, fromIndex: number, toIndex: number) => void
+  isDragEnabled?: boolean
 }) {
   // Selectable task IDs — capped at 50 to match the bulk operation limit
-  const allTaskIds = groups.flatMap((g) => g.tasks.map((t) => t._id as string))
+  const allTaskIds = useMemo(() => groups.flatMap((g) => g.tasks.map((t) => t._id as string)), [groups])
   const selectableIds = allTaskIds.slice(0, 50)
   const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selectedIds.has(id))
   const someSelected = selectableIds.some((id) => selectedIds.has(id))
@@ -118,11 +129,10 @@ export function TasksTable({
       <div className={TASK_TABLE_MIN_W}>
         {/* Column headers */}
         <div
-          className={`group/header grid ${TASK_GRID_COLS} items-center gap-x-4 border-b border-border/60 px-3 text-xs text-muted-foreground/70 [&>*]:min-w-0 [&>*]:overflow-hidden`}
-          style={{ height: 40 }}
+          className={`group/header grid ${TASK_GRID_COLS} items-center gap-x-6 border-b border-border/50 px-3 py-2 text-xs font-medium text-muted-foreground/60 [&>*]:min-w-0 [&>*]:overflow-hidden`}
         >
           {COLUMN_HEADERS.map((col, i) => (
-            <div key={i} className="flex items-center gap-1.5 truncate">
+            <div key={i} className={cn("flex items-center gap-1.5 truncate", getHeaderAlignmentClass(col.align))}>
               {i === 0 ? (
                 <div className={cn(
                   "transition-opacity",
@@ -144,7 +154,7 @@ export function TasksTable({
                   onResetSort={onResetSort}
                 />
               ) : (
-                <span className={cn("flex items-center gap-1.5", !col.sortField && col.label && "opacity-65")}>
+                <span className="flex items-center gap-1.5">
                   {col.icon && <col.icon className="size-3 shrink-0" />}
                   {col.label && <span>{col.label}</span>}
                 </span>
@@ -154,7 +164,27 @@ export function TasksTable({
         </div>
 
         {/* Groups + rows */}
-        <div className={cn(isGrouped && "flex flex-col gap-6")}>
+        <DragDropProvider
+          sensors={[
+            PointerSensor.configure({
+              activationConstraints: [
+                new PointerActivationConstraints.Distance({ value: 5 }),
+              ],
+            }),
+          ]}
+          onDragEnd={(event) => {
+            if (!isDragEnabled || !onReorder || event.canceled) return
+
+            const { source } = event.operation
+            if (!isSortable(source)) return
+
+            const { initialIndex, index } = source
+            if (initialIndex === index) return
+
+            onReorder(String(source.id), initialIndex, index)
+          }}
+        >
+        <div className={cn(isGrouped && "flex flex-col gap-5")}>
         {groups.map((group) => {
           const items = group.items ?? group.tasks.map((task) => ({
             kind: "task" as const,
@@ -163,14 +193,23 @@ export function TasksTable({
           }))
           const rows = (
             <>
-              {items.map((item) => renderItem(item))}
+              {items.map((item, idx) => {
+                if (isDragEnabled && item.kind === "task") {
+                  return (
+                    <SortableTaskRow key={item.key} id={item.key} index={idx}>
+                      {renderItem(item)}
+                    </SortableTaskRow>
+                  )
+                }
+                return renderItem(item)
+              })}
               {renderAddTask?.(group.key)}
               {group.hasMore && onLoadMore && (
                 <div className="px-3 py-2">
                   <button
                     type="button"
                     onClick={onLoadMore}
-                    className="text-xs font-medium text-muted-foreground hover:text-foreground"
+                    className="text-xs font-medium text-muted-foreground/85 underline-offset-4 transition-colors hover:text-foreground hover:underline"
                   >
                     Load more ({group.count - group.tasks.length} remaining)
                   </button>
@@ -190,6 +229,7 @@ export function TasksTable({
               groupKey={group.key}
               label={group.label}
               color={group.color}
+              statusType={group.statusType}
               count={group.count}
               groupBy={groupBy}
               orgId={orgId}
@@ -202,6 +242,7 @@ export function TasksTable({
           )
         })}
         </div>
+        </DragDropProvider>
       </div>
     </div>
   )
@@ -227,14 +268,17 @@ function SortableHeader({
       <DropdownMenuTrigger asChild>
         <button
           className={cn(
-            "inline-flex items-center gap-1.5 rounded-[5px] px-1.5 py-1 -mx-1.5 transition-colors hover:bg-black/[0.04] hover:text-muted-foreground",
-            isActive && "text-foreground",
+            "-mx-1.5 inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 transition-colors hover:bg-background/80 focus-visible:outline-none",
+            isActive ? "text-foreground" : "",
+            col.align === "end" && "ml-auto",
+            col.align === "center" && "mx-auto",
           )}
         >
           {Icon && <Icon className="size-3 shrink-0" />}
           <span>{col.label}</span>
-          {isActive && order === "asc" && <ChevronUpIcon className="size-3 shrink-0 opacity-50" />}
-          {isActive && order === "desc" && <ChevronDownIcon className="size-3 shrink-0 opacity-50" />}
+          {isActive && order === "asc" && <ChevronUpIcon className="size-3 shrink-0" />}
+          {isActive && order === "desc" && <ChevronDownIcon className="size-3 shrink-0" />}
+          {!isActive && <ChevronsUpDownIcon className="size-3 shrink-0" />}
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="min-w-[180px]">
@@ -266,6 +310,12 @@ function SortableHeader({
       </DropdownMenuContent>
     </DropdownMenu>
   )
+}
+
+function getHeaderAlignmentClass(align?: ColumnDef["align"]) {
+  if (align === "end") return "justify-end text-right"
+  if (align === "center") return "justify-center text-center"
+  return ""
 }
 
 /** Checkbox with indeterminate support for select-all patterns. */

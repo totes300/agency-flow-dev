@@ -3,9 +3,10 @@
 import { useState, useEffect } from "react"
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react"
 import { Checkbox } from "@/components/ui/checkbox"
+import { StatusBadge } from "@/components/status-badge"
+import { CategoryBadge } from "@/components/category-badge"
 import { cn } from "@/lib/utils"
-import { getStatusColor } from "@/lib/status-colors"
-import { getCategoryColor } from "@/convex/lib/constants"
+import type { StatusType } from "@/convex/lib/constants"
 import type { GroupByOption } from "@/lib/hooks/use-task-filters"
 
 const STORAGE_PREFIX = "task-group-collapse:"
@@ -18,6 +19,7 @@ export function TaskGroup({
   groupKey,
   label,
   color,
+  statusType,
   count,
   groupBy,
   orgId,
@@ -29,6 +31,7 @@ export function TaskGroup({
   groupKey: string
   label: string
   color?: string
+  statusType?: string
   count: number
   groupBy: GroupByOption | ""
   orgId: string
@@ -65,7 +68,7 @@ export function TaskGroup({
 
   return (
     <div>
-      <div className="group/group flex w-full items-center gap-2 border-b border-border/60 px-3 py-2 transition-colors hover:bg-muted/30">
+      <div className="group/group flex w-full items-center gap-2 border-b border-border/70 bg-muted/[0.16] px-3 py-2.5 transition-colors hover:bg-muted/[0.3]">
         {/* Group checkbox — hidden until hover or selection active */}
         {taskIds && selectedIds && onSelectGroup && (
           <div className={cn(
@@ -91,16 +94,16 @@ export function TaskGroup({
         ) : (
           <ChevronDownIcon className="size-3.5 shrink-0 text-muted-foreground" />
         )}
-        {color && (
-          <span
-            className="size-2 shrink-0 rounded-full"
-            style={{ backgroundColor: resolveGroupColor(color) }}
-          />
+        {groupBy === "status" && color ? (
+          <StatusBadge name={label} color={color} type={statusType as StatusType | "backlog" | undefined} />
+        ) : groupBy === "category" && color ? (
+          <CategoryBadge name={label} color={color} />
+        ) : (
+          <span className="text-[13px] font-medium text-foreground">
+            {label}
+          </span>
         )}
-        <span className="text-[13px] font-medium text-foreground">
-          {label}
-        </span>
-        <span className="text-[11px] text-muted-foreground/60">
+        <span className="text-[11px] text-muted-foreground/75">
           {count}
         </span>
         </button>
@@ -112,16 +115,3 @@ export function TaskGroup({
   )
 }
 
-/** Resolve a group color string to a CSS color value.
- *  Status groups use status color names, category groups use category color names. */
-function resolveGroupColor(color: string): string {
-  // Try status color first (returns dot color)
-  const statusCfg = getStatusColor(color)
-  if (statusCfg.dot !== "#9ca3af") return statusCfg.dot // not the default gray fallback
-
-  // Try category color
-  const catCfg = getCategoryColor(color)
-  if (catCfg.text !== "#4b5563") return catCfg.text // not the default gray fallback
-
-  return color // pass through if it's already a CSS color
-}

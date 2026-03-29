@@ -1,6 +1,6 @@
 "use client"
 
-import { ClipboardListIcon, PlusIcon } from "lucide-react"
+import { ClipboardListIcon, SearchIcon, FilterIcon, PlusIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import type { TaskTab } from "@/lib/hooks/use-task-filters"
 
@@ -139,9 +139,9 @@ function EmptyVisual({ variant }: { variant: "tasks" | "search" | "filter" }) {
       <div className="absolute inset-0 flex items-center justify-center">
         <div className="flex size-11 items-center justify-center rounded-xl border border-border/80 bg-background shadow-sm">
           {variant === "search" ? (
-            <ClipboardListIcon className="size-5 text-muted-foreground/70" strokeWidth={1.5} />
+            <SearchIcon className="size-5 text-muted-foreground/70" strokeWidth={1.5} />
           ) : variant === "filter" ? (
-            <ClipboardListIcon className="size-5 text-muted-foreground/70" strokeWidth={1.5} />
+            <FilterIcon className="size-5 text-muted-foreground/70" strokeWidth={1.5} />
           ) : (
             <ClipboardListIcon className="size-5 text-muted-foreground/70" strokeWidth={1.5} />
           )}

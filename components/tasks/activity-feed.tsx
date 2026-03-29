@@ -129,9 +129,25 @@ export function ActivityFeed({ taskId, isAdmin, scrollRef, replyContext, onReply
     }
   }, [commentCount, unreadCommentCount, onCommentCounts])
 
-  // Stabilize reaction/attachment maps
-  const stableReactionsMap = useMemo(() => reactionsMap, [JSON.stringify(reactionsMap)])
-  const stableAttachmentsMap = useMemo(() => attachmentsMap, [JSON.stringify(attachmentsMap)])
+  // Stabilize reaction/attachment maps — use a ref to compare serialized snapshots
+  // without running JSON.stringify on every render
+  const prevReactionsKeyRef = useRef("")
+  const stableReactionsRef = useRef(reactionsMap)
+  const reactionsKey = reactionsMap ? JSON.stringify(reactionsMap) : ""
+  if (reactionsKey !== prevReactionsKeyRef.current) {
+    prevReactionsKeyRef.current = reactionsKey
+    stableReactionsRef.current = reactionsMap
+  }
+  const stableReactionsMap = stableReactionsRef.current
+
+  const prevAttachmentsKeyRef = useRef("")
+  const stableAttachmentsRef = useRef(attachmentsMap)
+  const attachmentsKey = attachmentsMap ? JSON.stringify(attachmentsMap) : ""
+  if (attachmentsKey !== prevAttachmentsKeyRef.current) {
+    prevAttachmentsKeyRef.current = attachmentsKey
+    stableAttachmentsRef.current = attachmentsMap
+  }
+  const stableAttachmentsMap = stableAttachmentsRef.current
 
   // View toggle: controlled via props, or internal fallback
   const [internalView, setInternalView] = useState<ActivityView>("comments")
@@ -565,7 +581,7 @@ function SeenBy({
 }) {
   if (!readReceipts || readReceipts.length === 0) return null
 
-  const lastComment = [...feed].reverse().find((item) => item.kind === "comment")
+  const lastComment = feed.findLast((item) => item.kind === "comment")
   if (!lastComment) return null
 
   if (lastComment.userId !== currentUserId) return null

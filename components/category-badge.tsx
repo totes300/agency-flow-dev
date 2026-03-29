@@ -24,7 +24,7 @@ export function CategoryBadge({
       )}
       style={{
         backgroundColor: `color-mix(in srgb, ${c.dot} 13%, transparent)`,
-        color: `color-mix(in srgb, ${c.dot} 72%, #1a1a1a)`,
+        color: `color-mix(in srgb, ${c.dot} 72%, var(--color-foreground))`,
       }}
     >
       <span

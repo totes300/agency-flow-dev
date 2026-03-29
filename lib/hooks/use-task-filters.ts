@@ -10,7 +10,7 @@ import type { Id } from "@/convex/_generated/dataModel"
 export type TaskTab = "all" | "backlog" | "in_progress" | "review" | "blocked" | "done" | "archived"
 export type GroupByOption = "project" | "client" | "category" | "assignee" | "status" | null
 export type FilterOp = "is" | "isNot" | "anyOf" | "noneOf"
-export type SortField = "title" | "status" | "category" | "dueDate" | "createdAt" | "updatedAt"
+export type SortField = "manual" | "title" | "status" | "category" | "dueDate" | "createdAt" | "updatedAt"
 export type SortOrder = "asc" | "desc"
 export type TaskSort = { field: SortField; order: SortOrder }
 
@@ -24,7 +24,7 @@ type TaskViewState = {
   sort: TaskSort
 }
 
-const DEFAULT_SORT: TaskSort = { field: "createdAt", order: "asc" }
+const DEFAULT_SORT: TaskSort = { field: "manual", order: "asc" }
 
 const INITIAL_STATE: TaskViewState = {
   tab: "backlog",
@@ -191,11 +191,11 @@ export function useTaskFilters() {
       filters: hasFilters ? (convexFilters as typeof convexFilters) : undefined,
       groupBy: state.groupBy,
       search: state.search || undefined,
-      sortBy: state.sort.field,
-      sortOrder: state.sort.order,
+      sortBy: state.sort.field === "manual" ? undefined : state.sort.field,
+      sortOrder: state.sort.field === "manual" ? undefined : state.sort.order,
       limit,
     }
-  }, [state, limit])
+  }, [state.tab, state.search, state.groupBy, state.filters, state.sort, limit])
 
   return {
     // State

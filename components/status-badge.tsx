@@ -58,7 +58,7 @@ export function StatusBadge({
       )}
       style={!isGray ? {
         backgroundColor: `color-mix(in srgb, ${cfg.dot} 13%, transparent)`,
-        color: `color-mix(in srgb, ${cfg.dot} 72%, #1a1a1a)`,
+        color: `color-mix(in srgb, ${cfg.dot} 72%, var(--color-foreground))`,
       } : undefined}
     >
       {type ? (

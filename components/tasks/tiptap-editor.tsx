@@ -37,6 +37,7 @@ type TiptapEditorProps = {
   onUpdate: (content: unknown) => void
   placeholder?: string
   editable?: boolean
+  autoFocus?: boolean
   variant?: "default" | "document"
 }
 
@@ -45,6 +46,7 @@ export function TiptapEditor({
   onUpdate,
   placeholder = "Add a description...",
   editable = true,
+  autoFocus = false,
   variant = "default",
 }: TiptapEditorProps) {
   const { slashExtension, renderSlashDropdown } = useSlashCommand()
@@ -168,7 +170,7 @@ export function TiptapEditor({
       }),
       Image.configure({ allowBase64: true }),
       TextAlign.configure({ types: ["heading", "paragraph"] }),
-      Table.configure({ resizable: true, renderWrapper: true }),
+      Table.configure({ resizable: true }),
       TableRow,
       TableHeader,
       TableCell,
@@ -213,6 +215,9 @@ export function TiptapEditor({
     [],
   )
 
+  const onUpdateRef = useRef(onUpdate)
+  onUpdateRef.current = onUpdate
+
   const editor = useEditor({
     immediatelyRender: false,
     extensions,
@@ -227,24 +232,39 @@ export function TiptapEditor({
       },
     },
     onUpdate: ({ editor: ed }) => {
-      onUpdate(ed.getJSON())
+      onUpdateRef.current(ed.getJSON())
     },
   })
 
   // Sync external content changes (e.g., real-time updates from other users).
+  // Uses a stringified ref to avoid re-running on every parent render when
+  // the content object reference changes but the data is identical.
   // emitUpdate: false prevents our onUpdate from firing and creating a loop.
-  // setTimeout defers the transaction outside React's render cycle.
+  const contentKeyRef = useRef<string>("")
   useEffect(() => {
     if (!editor || !content) return
     const incoming = JSON.stringify(content)
+    if (incoming === contentKeyRef.current) return
     const current = JSON.stringify(editor.getJSON())
     if (current !== incoming) {
+      contentKeyRef.current = incoming
       const handle = setTimeout(() => {
         editor.commands.setContent(content as Record<string, unknown>, { emitUpdate: false })
       }, 0)
       return () => clearTimeout(handle)
     }
+    contentKeyRef.current = incoming
   }, [content, editor])
+
+  // Keep editable state in sync when prop changes after creation
+  useEffect(() => {
+    if (editor) editor.setEditable(editable)
+  }, [editor, editable])
+
+  // Auto-focus when requested
+  useEffect(() => {
+    if (autoFocus && editor) editor.commands.focus()
+  }, [autoFocus, editor])
 
   if (!editor) return null
 

@@ -1,4 +1,5 @@
 import { v, ConvexError } from "convex/values";
+import { generateKeyBetween } from "fractional-indexing";
 import { query, mutation } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { getAuthContext, requireAdmin, validateStringLength } from "./lib/auth";
@@ -467,7 +468,8 @@ export const list = query({
     }
 
     // ── Step 3: Sort ─────────────────────────────────────────────────────
-    const sortBy = args.sortBy ?? "createdAt";
+    // When sortBy is omitted → "manual" mode: order by manualSortKey → createdAt
+    const sortBy = args.sortBy ?? "manual";
     const sortOrder = args.sortOrder ?? "asc";
     const mul = sortOrder === "asc" ? 1 : -1;
 
@@ -499,6 +501,16 @@ export const list = query({
     tasks.sort((a, b) => {
       let cmp = 0;
       switch (sortBy) {
+        case "manual": {
+          // Fractional key sort: tasks with keys before tasks without, then createdAt
+          const ak = a.manualSortKey;
+          const bk = b.manualSortKey;
+          if (ak && bk) { cmp = ak.localeCompare(bk); }
+          else if (ak) { cmp = -1; }
+          else if (bk) { cmp = 1; }
+          else { cmp = 0; }
+          break;
+        }
         case "title":
           cmp = a.title.localeCompare(b.title) * mul;
           break;
@@ -535,19 +547,19 @@ export const list = query({
           break;
         }
       }
-      // Tie-breaker: createdAt asc (insertion order)
+      // Tie-breaker: createdAt asc (insertion order for tasks without manual keys)
       return cmp || (a.createdAt - b.createdAt);
     });
     const totalCount = tasks.length;
 
     // ── Step 4: Group ────────────────────────────────────────────────────
-    type GroupBucket = { key: string; label: string; color?: string; sortKey: string; tasks: Doc<"tasks">[] };
+    type GroupBucket = { key: string; label: string; color?: string; statusType?: string; sortKey: string; tasks: Doc<"tasks">[] };
     const buckets = new Map<string, GroupBucket>();
 
-    function assignToBucket(task: Doc<"tasks">, key: string, label: string, sortKey: string, color?: string) {
+    function assignToBucket(task: Doc<"tasks">, key: string, label: string, sortKey: string, color?: string, statusType?: string) {
       let bucket = buckets.get(key);
       if (!bucket) {
-        bucket = { key, label, color, sortKey, tasks: [] };
+        bucket = { key, label, color, statusType, sortKey, tasks: [] };
         buckets.set(key, bucket);
       }
       bucket.tasks.push(task);
@@ -635,7 +647,7 @@ export const list = query({
             const typeOrder: Record<StatusType, number> = { backlog: 0, in_progress: 1, review: 2, blocked: 3, done: 4 };
             const order = st ? typeOrder[st.type] : 99;
             const sortKey = `${order}-${String(st?.sortOrder ?? 999).padStart(3, "0")}`;
-            assignToBucket(task, task.statusId.toString(), st?.name ?? "Unknown", sortKey, st?.color);
+            assignToBucket(task, task.statusId.toString(), st?.name ?? "Unknown", sortKey, st?.color, st?.type);
             break;
           }
         }
@@ -696,6 +708,7 @@ export const list = query({
       key: bucket.key,
       label: bucket.label,
       color: bucket.color,
+      statusType: bucket.statusType,
       count: bucket.tasks.length,
       tasks: paginatedTasksByGroup[i].map(enrichTask),
       hasMore: bucket.tasks.length > limit,
@@ -943,6 +956,17 @@ export const create = mutation({
     }
     await validateAssignees(ctx, orgId, assigneeIds);
 
+    // Generate manualSortKey — append after the last task in this org.
+    // Convex OCC ensures concurrent creates on the same index range will
+    // serialize (second transaction retries), so duplicate keys cannot occur.
+    const lastTask = await ctx.db
+      .query("tasks")
+      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+      .order("desc")
+      .first();
+    const lastKey = lastTask?.manualSortKey ?? null;
+    const manualSortKey = generateKeyBetween(lastKey, null);
+
     const now = Date.now();
     const taskId = await ctx.db.insert("tasks", {
       orgId, title,
@@ -954,6 +978,7 @@ export const create = mutation({
       estimate: args.estimate,
       billable: args.billable ?? true,
       dueDate: args.dueDate,
+      manualSortKey,
       createdAt: now, updatedAt: now, createdBy: userId,
     });
 
@@ -1202,9 +1227,15 @@ export const remove = mutation({
 export const duplicate = mutation({
   args: { id: v.id("tasks") },
   handler: async (ctx, args) => {
-    const { orgId, userId } = await getAuthContext(ctx);
+    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
     const task = await ctx.db.get(args.id);
     if (!task || task.orgId !== orgId) throw new ConvexError("Task not found");
+    if (!isAdmin && !task.assigneeIds.includes(userId)) {
+      throw new ConvexError("You can only duplicate tasks assigned to you");
+    }
+
+    // Place duplicate right after the original in manual sort order
+    const manualSortKey = generateKeyBetween(task.manualSortKey ?? null, null);
 
     const now = Date.now();
     const newId = await ctx.db.insert("tasks", {
@@ -1212,6 +1243,7 @@ export const duplicate = mutation({
       description: task.description, statusId: task.statusId, statusType: task.statusType,
       projectId: task.projectId, assigneeIds: task.assigneeIds, workCategoryId: task.workCategoryId,
       estimate: task.estimate, billable: task.billable,
+      manualSortKey,
       createdAt: now, updatedAt: now, createdBy: userId,
     });
 
@@ -1360,5 +1392,32 @@ export const bulkUpdate = mutation({
     }
 
     return { updated, skipped };
+  },
+});
+
+// ─── Reorder task (drag & drop, fractional indexing) ────────────────────────
+
+
+export const reorderTask = mutation({
+  args: {
+    taskId: v.id("tasks"),
+    beforeKey: v.optional(v.string()),   // manualSortKey of the item above (null = first)
+    afterKey: v.optional(v.string()),    // manualSortKey of the item below (null = last)
+  },
+  handler: async (ctx, { taskId, beforeKey, afterKey }) => {
+    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
+
+    const task = await ctx.db.get(taskId);
+    if (!task || task.orgId !== orgId) {
+      throw new ConvexError("Task not found");
+    }
+    if (!isAdmin && !task.assigneeIds.includes(userId)) {
+      throw new ConvexError("You can only reorder tasks assigned to you");
+    }
+
+    // Generate fractional key between neighbors
+    const newKey = generateKeyBetween(beforeKey ?? null, afterKey ?? null);
+
+    await ctx.db.patch(taskId, { manualSortKey: newKey });
   },
 });

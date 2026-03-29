@@ -2,13 +2,13 @@
 
 import React from "react"
 import { useTimerActions, useTimerTick } from "@/lib/hooks/use-timer"
-import { formatDuration, formatTimerDisplay, formatMinutesDisplay } from "@/lib/duration"
+import { formatDuration, formatMinutesDisplay } from "@/lib/duration"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 import { toastError } from "@/lib/toast-helpers"
 import { TimeLogPopover } from "@/components/tasks/time-log-popover"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import { PlayIcon, SquareIcon } from "lucide-react"
+import { PlayIcon } from "lucide-react"
 import type { Id } from "@/convex/_generated/dataModel"
 
 /** Convert minutes to HH:MM display */
@@ -22,19 +22,21 @@ export function InlineTimeCell({
   isDone,
   isBillable = true,
   variant = "inline",
+  align = "start",
 }: {
   taskId: Id<"tasks">
   totalMinutes: number
   isDone: boolean
   isBillable?: boolean
   variant?: "inline" | "sidebar"
+  align?: "start" | "end"
 }) {
   const { timerState, isRunningOn } = useTimerActions()
   const isRunning = isRunningOn(taskId)
 
   if (isDone) {
     return (
-      <div className={cn("flex items-center gap-[5px] opacity-35", variant === "sidebar" && "gap-2 opacity-60")}>
+      <div className={cn("flex items-center gap-[5px] opacity-35", variant === "sidebar" && "gap-2 opacity-60", align === "end" && "justify-end")}>
         {totalMinutes > 0 && (
           <span className={cn("text-xs text-muted-foreground", variant === "sidebar" && "text-sm font-medium text-foreground/70")}>
             {minutesToDisplay(totalMinutes)}
@@ -45,7 +47,7 @@ export function InlineTimeCell({
   }
 
   if (isRunning) {
-    return <RunningTimeCell variant={variant} />
+    return <RunningTimeCell variant={variant} align={align} />
   }
 
   return (
@@ -55,6 +57,7 @@ export function InlineTimeCell({
       isBillable={isBillable}
       isTimerOnAnotherTask={timerState !== null}
       variant={variant}
+      align={align}
     />
   )
 }
@@ -133,7 +136,7 @@ const TimerCircle = React.forwardRef<
 })
 
 /** Only this component subscribes to the tick context (re-renders every second) */
-function RunningTimeCell({ variant = "inline" }: { variant?: "inline" | "sidebar" }) {
+function RunningTimeCell({ variant = "inline", align = "start" }: { variant?: "inline" | "sidebar"; align?: "start" | "end" }) {
   const { stopTimer } = useTimerActions()
   const { formattedTime } = useTimerTick()
 
@@ -151,6 +154,7 @@ function RunningTimeCell({ variant = "inline" }: { variant?: "inline" | "sidebar
       className={cn(
         "flex items-center gap-[5px]",
         variant === "sidebar" && "gap-2",
+        align === "end" && "justify-end",
       )}
     >
       {variant === "sidebar" ? (
@@ -174,8 +178,8 @@ function RunningTimeCell({ variant = "inline" }: { variant?: "inline" | "sidebar
       )}
       <span
         className={cn(
-          "text-xs text-red-500",
-          variant === "sidebar" && "px-0 text-[13px] font-medium text-red-500",
+          "text-xs font-semibold text-red-500",
+          variant === "sidebar" && "px-0 text-[13px] font-semibold text-red-500",
         )}
       >
         {formattedTime}
@@ -191,12 +195,14 @@ function IdleTimeCell({
   isBillable,
   isTimerOnAnotherTask,
   variant = "inline",
+  align = "start",
 }: {
   taskId: Id<"tasks">
   totalMinutes: number
   isBillable: boolean
   isTimerOnAnotherTask: boolean
   variant?: "inline" | "sidebar"
+  align?: "start" | "end"
 }) {
   const { startTimer, stopTimer, setPendingStopResult } = useTimerActions()
   const hasTime = totalMinutes > 0
@@ -232,6 +238,7 @@ function IdleTimeCell({
       className={cn(
         "flex items-center gap-[5px]",
         variant === "sidebar" && "gap-2",
+        align === "end" && "justify-end",
       )}
     >
       {variant === "sidebar" ? (

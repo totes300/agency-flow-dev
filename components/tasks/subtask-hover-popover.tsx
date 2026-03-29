@@ -28,7 +28,10 @@ export function SubtaskHoverPopover({
   )
 
   return (
-    <HoverCard openDelay={250} closeDelay={100} open={isOpen} onOpenChange={setIsOpen}>
+    <HoverCard openDelay={250} closeDelay={100} open={isOpen} onOpenChange={(open) => {
+      if (open && typeof window !== "undefined" && window.innerWidth < 768) return
+      setIsOpen(open)
+    }}>
       <HoverCardTrigger asChild>
         {children}
       </HoverCardTrigger>
@@ -44,7 +47,7 @@ export function SubtaskHoverPopover({
         {/* Subtask list */}
         <div className="max-h-[240px] overflow-y-auto">
           {!data ? (
-            <div className="px-4 pb-3 space-y-2.5">
+            <div className="px-4 pb-3 flex flex-col gap-2.5">
               {Array.from({ length: 3 }).map((_, i) => (
                 <div key={i} className="flex items-center gap-2.5">
                   <div className="size-3.5 rounded bg-muted animate-pulse shrink-0" />

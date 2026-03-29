@@ -27,6 +27,7 @@ import {
   LinkIcon,
   Maximize2Icon,
   PanelRightCloseIcon,
+  PanelRightOpenIcon,
 } from "lucide-react"
 import type { Id } from "@/convex/_generated/dataModel"
 
@@ -205,7 +206,11 @@ export function TaskDetailDrawerHeader({
             onClick={onToggleProperties}
             aria-label={showProperties ? "Hide properties" : "Show properties"}
           >
-            <PanelRightCloseIcon className="size-4" />
+            {showProperties ? (
+              <PanelRightCloseIcon className="size-4" />
+            ) : (
+              <PanelRightOpenIcon className="size-4" />
+            )}
           </Button>
         )}
 

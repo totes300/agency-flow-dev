@@ -43,12 +43,14 @@ export function InlineDueDateCell({
   isOverdue,
   onSelect: onSelectProp,
   emptyLabel,
+  align = "start",
 }: {
   taskId?: Id<"tasks">
   dueDate: string | null // YYYY-MM-DD
   isOverdue?: boolean
   onSelect?: (date: string | null) => void
   emptyLabel?: string
+  align?: "start" | "end"
 }) {
   const [open, setOpen] = useState(false)
   const updateTask = useMutation(api.tasks.update)
@@ -77,7 +79,7 @@ export function InlineDueDateCell({
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="flex w-full items-center py-0.5"
+          className={cn("flex w-full items-center py-0.5", align === "end" && "justify-end text-right")}
           onClick={(e) => e.stopPropagation()}
         >
           {dueDate ? (
@@ -94,7 +96,7 @@ export function InlineDueDateCell({
               {formatShortDate(dueDate)}
             </span>
           ) : (
-            <span className="flex items-center gap-1.5 text-muted-foreground/40 transition-colors group-hover/row:text-muted-foreground/60">
+            <span className="flex items-center gap-1.5 rounded-md border border-dashed border-border/55 bg-muted/[0.12] px-2 py-1 text-muted-foreground/60 transition-colors group-hover/row:border-border/80 group-hover/row:bg-muted/[0.22] group-hover/row:text-muted-foreground">
               <CalendarIcon className="size-4 shrink-0" strokeWidth={1.75} />
               {emptyLabel && <span className="text-[13px]">{emptyLabel}</span>}
             </span>

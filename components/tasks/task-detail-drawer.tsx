@@ -75,7 +75,7 @@ export function TaskDetailDrawer({
       )}
     >
       {isOpen && (
-        <FocusScope trapped>
+        <FocusScope trapped className="flex flex-1 flex-col min-h-0 overflow-hidden">
           <ErrorBoundary>
             <TaskDetailDrawerHeader
               task={task ?? null}

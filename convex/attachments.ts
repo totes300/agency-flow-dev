@@ -107,24 +107,26 @@ export const reuploadFromUrl = action({
       throw new ConvexError("URL points to a private network");
     }
 
-    const response = await fetch(url);
-    if (!response.ok) throw new ConvexError("Failed to fetch external image");
-
-    // Validate content-type is an image
-    const contentType = response.headers.get("content-type") ?? "";
-    if (!contentType.startsWith("image/")) {
-      throw new ConvexError("URL does not point to an image");
+    let response: Response;
+    try {
+      response = await fetch(url);
+    } catch {
+      return null; // Network error, DNS failure, etc.
     }
+    if (!response.ok) return null;
 
-    // Enforce size limit
     const contentLength = response.headers.get("content-length");
     if (contentLength && parseInt(contentLength, 10) > MAX_REUPLOAD_SIZE) {
-      throw new ConvexError("Image exceeds 10MB limit");
+      return null;
     }
 
     const blob = await response.blob();
-    if (blob.size > MAX_REUPLOAD_SIZE) {
-      throw new ConvexError("Image exceeds 10MB limit");
+    if (blob.size > MAX_REUPLOAD_SIZE) return null;
+
+    const contentType = response.headers.get("content-type") ?? "";
+    const blobType = blob.type ?? "";
+    if (!contentType.startsWith("image/") && !blobType.startsWith("image/")) {
+      return null; // Not an image (auth wall, HTML page, etc.)
     }
 
     const storageId = await ctx.storage.store(blob);

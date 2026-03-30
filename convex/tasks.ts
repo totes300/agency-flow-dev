@@ -760,6 +760,7 @@ export const activityIndicators = query({
 
     await Promise.all(capped.map(async (taskId) => {
       const task = await ctx.db.get(taskId);
+      if (!task || task.orgId !== orgId) return;
 
       // hasDescription via isTiptapEmpty
       let hasDescription = false;
@@ -1299,6 +1300,21 @@ export const bulkUpdate = mutation({
             const newStatus = await ctx.db.get(args.action.statusId);
             const oldStatus = task.statusId ? await ctx.db.get(task.statusId) : null;
             await logActivity(ctx, { taskId, orgId, userId, type: "status_changed", metadata: { from: oldStatus?.name ?? "None", to: newStatus?.name ?? "Unknown" } });
+
+            // Log subtask_completed on the parent when a subtask transitions INTO done
+            if (
+              newStatus?.type === "done" &&
+              oldStatus?.type !== "done" &&
+              task.parentTaskId
+            ) {
+              await logActivity(ctx, {
+                taskId: task.parentTaskId,
+                orgId,
+                userId,
+                type: "subtask_completed",
+                metadata: { title: task.title, subtaskId: taskId },
+              });
+            }
           }
           updated++;
           break;

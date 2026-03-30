@@ -16,6 +16,7 @@ import {
 import { UserAvatar } from "@/components/user-avatar"
 import { AvatarGroup, AvatarGroupCount } from "@/components/ui/avatar"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { cn } from "@/lib/utils"
 import { CheckIcon, UserIcon } from "lucide-react"
 import { firstName } from "@/lib/format"
 import { toastError } from "@/lib/toast-helpers"
@@ -62,7 +63,10 @@ export function InlineAssigneeCell({
       <PopoverTrigger asChild>
         <button
           type="button"
-          className={`flex w-full items-center rounded-sm py-0.5 transition-colors ${assignees.length > 0 ? "hover:bg-accent" : ""}`}
+          className={cn(
+            "flex w-full items-center rounded-sm py-0.5 transition-colors",
+            assignees.length > 0 && "hover:bg-accent",
+          )}
           onClick={(e) => e.stopPropagation()}
         >
           {assignees.length === 0 ? (

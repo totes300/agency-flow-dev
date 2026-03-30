@@ -12,6 +12,7 @@ import { formatActivityTimestamp, firstName } from "@/lib/format"
 import { ActivityBatch } from "@/components/tasks/activity-batch"
 import type { Id } from "@/convex/_generated/dataModel"
 import { cn } from "@/lib/utils"
+import { toastError } from "@/lib/toast-helpers"
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip"
 
 export type ReplyContext = { commentId: string; userName: string }
@@ -54,22 +55,34 @@ export function ActivityFeed({ taskId, isAdmin, scrollRef, replyContext, onReply
   }, [onReplyContextChange])
 
   const handleToggleReaction = useCallback(
-    (commentId: string, emoji: string) => {
-      void toggleReaction({ commentId: commentId as Id<"comments">, emoji })
+    async (commentId: string, emoji: string) => {
+      try {
+        await toggleReaction({ commentId: commentId as Id<"comments">, emoji })
+      } catch (err) {
+        toastError(err, "Failed to update reaction")
+      }
     },
     [toggleReaction],
   )
 
   const handleEditComment = useCallback(
-    (commentId: string, content: unknown) => {
-      void updateComment({ id: commentId as Id<"comments">, content })
+    async (commentId: string, content: unknown) => {
+      try {
+        await updateComment({ id: commentId as Id<"comments">, content })
+      } catch (err) {
+        toastError(err, "Failed to update comment")
+      }
     },
     [updateComment],
   )
 
   const handleDeleteComment = useCallback(
-    (commentId: string) => {
-      void removeComment({ id: commentId as Id<"comments"> })
+    async (commentId: string) => {
+      try {
+        await removeComment({ id: commentId as Id<"comments"> })
+      } catch (err) {
+        toastError(err, "Failed to delete comment")
+      }
     },
     [removeComment],
   )
@@ -81,8 +94,10 @@ export function ActivityFeed({ taskId, isAdmin, scrollRef, replyContext, onReply
   const sentinelRef = useRef<HTMLDivElement>(null)
   const markSeenFiredRef = useRef(false)
 
-  // Reset when task changes
-  useEffect(() => { markSeenFiredRef.current = false }, [taskId])
+  // Reset markSeen flag when task changes (newDivider reset is below with its declaration)
+  useEffect(() => {
+    markSeenFiredRef.current = false
+  }, [taskId])
 
   useEffect(() => {
     const sentinel = sentinelRef.current
@@ -105,6 +120,13 @@ export function ActivityFeed({ taskId, isAdmin, scrollRef, replyContext, onReply
   // Freeze lastSeenAt on first load so the "New" divider survives the markSeen update.
   const [newDividerAt, setNewDividerAt] = useState<number | null>(null)
   const newDividerCaptured = useRef(false)
+
+  // Reset newDivider state when switching tasks
+  useEffect(() => {
+    newDividerCaptured.current = false
+    setNewDividerAt(null)
+  }, [taskId])
+
   useEffect(() => {
     if (!newDividerCaptured.current && myLastSeen !== undefined) {
       newDividerCaptured.current = true

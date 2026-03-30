@@ -264,9 +264,9 @@ function IdleTimeCell({
           <TooltipContent side="top" sideOffset={4}>Start timer</TooltipContent>
         </Tooltip>
       )}
-      <Tooltip>
-        <TimeLogPopover taskId={taskId} isBillable={isBillable}>
-          {variant === "sidebar" ? (
+      <TimeLogPopover taskId={taskId} isBillable={isBillable}>
+        {variant === "sidebar" ? (
+          <Tooltip>
             <TooltipTrigger asChild>
               <button
                 onClick={(e) => e.stopPropagation()}
@@ -281,24 +281,27 @@ function IdleTimeCell({
                 {hasTime ? minutesToDisplay(totalMinutes) : "Add time"}
               </button>
             </TooltipTrigger>
-          ) : (
-          <TooltipTrigger asChild>
-            <button
-              onClick={(e) => e.stopPropagation()}
-              className={cn(
-                "cursor-pointer text-[13px] transition-colors duration-150",
-                hasTime
-                  ? "text-muted-foreground hover:text-foreground"
-                  : "text-muted-foreground/40 group-hover/row:text-muted-foreground/60",
-              )}
-            >
-              {hasTime ? minutesToDisplay(totalMinutes) : ""}
-            </button>
-          </TooltipTrigger>
+            <TooltipContent side="top" sideOffset={4}>Log time</TooltipContent>
+          </Tooltip>
+        ) : (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={(e) => e.stopPropagation()}
+                className={cn(
+                  "cursor-pointer text-[13px] transition-colors duration-150",
+                  hasTime
+                    ? "text-muted-foreground hover:text-foreground"
+                    : "text-muted-foreground/40 group-hover/row:text-muted-foreground/60",
+                )}
+              >
+                {hasTime ? minutesToDisplay(totalMinutes) : ""}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top" sideOffset={4}>Log time</TooltipContent>
+          </Tooltip>
         )}
       </TimeLogPopover>
-      <TooltipContent side="top" sideOffset={4}>Log time</TooltipContent>
-      </Tooltip>
     </div>
   )
 }

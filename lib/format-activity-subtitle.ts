@@ -15,19 +15,19 @@ export function formatActivitySubtitle(
 
   switch (type) {
     case "status_changed":
-      return `${first} changed status to ${metadata.to} \u00b7 ${time}`;
+      return `${first} changed status to ${metadata.to ?? "unknown"} \u00b7 ${time}`;
     case "comment_added":
       return `${first} commented \u00b7 ${time}`;
     case "time_entry_logged":
-      return `${first} logged ${metadata.duration} \u00b7 ${time}`;
+      return `${first} logged ${metadata.duration ?? "time"} \u00b7 ${time}`;
     case "subtask_completed":
-      return `${first} completed ${metadata.title} \u00b7 ${time}`;
+      return `${first} completed ${metadata.title ?? "subtask"} \u00b7 ${time}`;
     case "subtask_created":
       return `${first} created subtask \u00b7 ${time}`;
     case "assignee_added":
-      return `${first} assigned ${metadata.userName} \u00b7 ${time}`;
+      return `${first} assigned ${metadata.userName ?? "someone"} \u00b7 ${time}`;
     case "assignee_removed":
-      return `${first} unassigned ${metadata.userName} \u00b7 ${time}`;
+      return `${first} unassigned ${metadata.userName ?? "someone"} \u00b7 ${time}`;
     case "due_date_changed":
       return metadata.to
         ? `${first} set due date \u00b7 ${time}`

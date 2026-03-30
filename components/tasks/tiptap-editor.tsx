@@ -101,46 +101,89 @@ export function TiptapEditor({
           new Plugin({
             key: reuploadKey,
             props: {
-              handlePaste() {
+              handlePaste(_view, event) {
+                // Collect clipboard image files (available when pasting from Gmail, etc.)
+                const clipboardFiles: File[] = []
+                if (event.clipboardData) {
+                  for (let i = 0; i < event.clipboardData.files.length; i++) {
+                    const file = event.clipboardData.files[i]
+                    if (file.type.startsWith("image/")) {
+                      clipboardFiles.push(file)
+                    }
+                  }
+                }
+
                 setTimeout(async () => {
                   const { doc } = editorInstance.state
-                  const externalImages: string[] = []
+                  const externalImages: { src: string; pos: number }[] = []
 
-                  doc.descendants((node) => {
+                  doc.descendants((node, pos) => {
                     if (
                       node.type.name === "image" &&
                       node.attrs.src &&
                       !node.attrs.src.startsWith(convexSiteUrlRef.current) &&
-                      !node.attrs.src.startsWith("data:")
+                      !node.attrs.src.startsWith("data:") &&
+                      !node.attrs.src.startsWith("blob:")
                     ) {
-                      externalImages.push(node.attrs.src)
+                      externalImages.push({ src: node.attrs.src, pos })
                     }
                   })
 
-                  // Process sequentially to avoid transaction conflicts
-                  for (const src of externalImages) {
-                    try {
-                      const storageId = await reuploadFromUrlRef.current({ url: src })
-                      const permanentUrl = `${convexSiteUrlRef.current}/image?id=${encodeURIComponent(storageId)}`
+                  if (externalImages.length === 0) return
 
-                      let targetPos: number | null = null
-                      editorInstance.state.doc.descendants((n, p) => {
-                        if (n.type.name === "image" && n.attrs.src === src && targetPos === null) {
-                          targetPos = p
-                          return false
+                  // If we have clipboard image files, upload them directly.
+                  if (clipboardFiles.length > 0) {
+                    for (let i = 0; i < externalImages.length && i < clipboardFiles.length; i++) {
+                      try {
+                        const permanentUrl = await uploadHandlerRef.current(clipboardFiles[i])
+                        const srcToFind = externalImages[i].src
+
+                        let targetPos: number | null = null
+                        editorInstance.state.doc.descendants((n, p) => {
+                          if (n.type.name === "image" && n.attrs.src === srcToFind && targetPos === null) {
+                            targetPos = p
+                            return false
+                          }
+                        })
+
+                        if (targetPos !== null) {
+                          editorInstance.view.dispatch(
+                            editorInstance.state.tr.setNodeMarkup(targetPos, undefined, {
+                              ...editorInstance.state.doc.nodeAt(targetPos)?.attrs,
+                              src: permanentUrl,
+                            }),
+                          )
                         }
-                      })
-
-                      if (targetPos !== null) {
-                        editorInstance.view.dispatch(
-                          editorInstance.state.tr.setNodeMarkup(targetPos, undefined, {
-                            ...editorInstance.state.doc.nodeAt(targetPos)?.attrs,
-                            src: permanentUrl,
-                          }),
-                        )
+                      } catch {
+                        // Keep the original URL
                       }
-                    } catch {
-                      // Keep the original external URL
+                    }
+                    return
+                  }
+
+                  // No clipboard files — try server-side re-upload.
+                  // Returns null for auth-walled / non-image URLs instead of throwing.
+                  for (const { src } of externalImages) {
+                    const storageId = await reuploadFromUrlRef.current({ url: src })
+                    if (!storageId) continue // Could not fetch — keep original URL
+
+                    const permanentUrl = `${convexSiteUrlRef.current}/image?id=${encodeURIComponent(storageId)}`
+
+                    let targetPos: number | null = null
+                    editorInstance.state.doc.descendants((n, p) => {
+                      if (n.type.name === "image" && n.attrs.src === src && targetPos === null) {
+                        targetPos = p
+                        return false
+                      }
+                    })
+
+                    if (targetPos !== null) {
+                      editorInstance.view.dispatch(
+                        editorInstance.state.tr.setNodeMarkup(targetPos, undefined, {
+                          ...editorInstance.state.doc.nodeAt(targetPos)?.attrs,
+                          src: permanentUrl,
+                        }),
+                      )
                     }
                   }
                 }, 0)
@@ -269,7 +312,7 @@ export function TiptapEditor({
   if (!editor) return null
 
   return (
-    <Tiptap editor={editor}>
+    <Tiptap instance={editor}>
       <div
         data-variant={variant}
         className={cn(

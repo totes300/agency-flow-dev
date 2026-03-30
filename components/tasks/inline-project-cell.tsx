@@ -81,10 +81,17 @@ export function InlineProjectCell({
         >
           {project ? (
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-1">
-                <span className="truncate text-xs text-muted-foreground">{client?.name}</span>
-                {locked && <LockIcon className="size-3 shrink-0 text-muted-foreground" />}
-              </div>
+              {client && (
+                <div className="flex items-center gap-1">
+                  <span className="truncate text-xs text-muted-foreground">{client.name}</span>
+                  {locked && <LockIcon className="size-3 shrink-0 text-muted-foreground" />}
+                </div>
+              )}
+              {!client && locked && (
+                <div className="flex items-center gap-1">
+                  <LockIcon className="size-3 shrink-0 text-muted-foreground" />
+                </div>
+              )}
               <div className="truncate text-xs leading-tight text-muted-foreground/60">{project.name}</div>
             </div>
           ) : (

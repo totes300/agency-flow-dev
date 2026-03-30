@@ -117,8 +117,9 @@ export const TaskRow = memo(function TaskRow({
       </div>
 
       {/* 2. Task name + subtitle + inline icons */}
-      <div
-        className="cursor-pointer"
+      <button
+        type="button"
+        className="cursor-pointer text-left"
         onClick={() => onOpenDetail?.(task._id)}
       >
         <div className="flex items-center gap-1.5">
@@ -175,7 +176,7 @@ export const TaskRow = memo(function TaskRow({
         <div className="truncate text-[11px] text-muted-foreground/85">
           {subtitle}
         </div>
-      </div>
+      </button>
 
       {/* 3. Comments */}
       {activity ? (

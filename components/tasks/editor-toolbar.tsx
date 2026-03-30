@@ -29,6 +29,8 @@ function ToolbarDivider() {
 export function DescriptionToolbar() {
   const { editor } = useTiptap()
 
+  if (!editor) return null
+
   return (
     <div className="flex flex-wrap items-center gap-0.5 border-b border-border/40 bg-muted/80 px-2 py-1">
       <ToolbarButton active={editor.isActive("bold")} onClick={() => editor.chain().focus().toggleBold().run()} aria-label="Bold">
@@ -92,6 +94,8 @@ export function DescriptionToolbar() {
 export function BubbleToolbar() {
   const { editor } = useTiptap()
 
+  if (!editor) return null
+
   return (
     <div className="flex items-center gap-0.5 rounded-lg border border-border bg-popover px-1.5 py-1 shadow-md">
       <HeadingPopover />
@@ -126,6 +130,8 @@ export function BubbleToolbar() {
 
 export function CommentToolbar() {
   const { editor } = useTiptap()
+
+  if (!editor) return null
 
   return (
     <div className="flex items-center gap-0.5 bg-black/[0.06] dark:bg-white/[0.08] px-2.5 py-1.5">

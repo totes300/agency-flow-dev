@@ -28,14 +28,14 @@ export const DEFAULT_ROUNDING: RoundingMinutes = 1;
 // ─── Work Category color palette (Tailwind badge style) ─────────────────────
 
 export const CATEGORY_COLORS = {
-  gray:    { bg: "#f9fafb", text: "#4b5563", ring: "rgba(107,114,128,0.1)" },
-  red:     { bg: "#fef2f2", text: "#b91c1c", ring: "rgba(220,38,38,0.1)" },
-  yellow:  { bg: "#fefce8", text: "#854d0e", ring: "rgba(202,138,4,0.2)" },
-  green:   { bg: "#f0fdf4", text: "#15803d", ring: "rgba(22,163,74,0.2)" },
-  blue:    { bg: "#eff6ff", text: "#1d4ed8", ring: "rgba(29,78,216,0.1)" },
-  indigo:  { bg: "#eef2ff", text: "#4338ca", ring: "rgba(67,56,202,0.1)" },
-  purple:  { bg: "#faf5ff", text: "#7e22ce", ring: "rgba(126,34,206,0.1)" },
-  pink:    { bg: "#fdf2f8", text: "#be185d", ring: "rgba(190,24,93,0.1)" },
+  gray:    { bg: "#f9fafb", text: "#4b5563", ring: "rgba(107,114,128,0.1)", dot: "#9CA3AF" },
+  red:     { bg: "#fef2f2", text: "#b91c1c", ring: "rgba(220,38,38,0.1)", dot: "#d44a4a" },
+  yellow:  { bg: "#fefce8", text: "#854d0e", ring: "rgba(202,138,4,0.2)", dot: "#e07030" },
+  green:   { bg: "#f0fdf4", text: "#15803d", ring: "rgba(22,163,74,0.2)", dot: "#2d9d5e" },
+  blue:    { bg: "#eff6ff", text: "#1d4ed8", ring: "rgba(29,78,216,0.1)", dot: "#4a80e0" },
+  indigo:  { bg: "#eef2ff", text: "#4338ca", ring: "rgba(67,56,202,0.1)", dot: "#6366F1" },
+  purple:  { bg: "#faf5ff", text: "#7e22ce", ring: "rgba(126,34,206,0.1)", dot: "#7c5cbf" },
+  pink:    { bg: "#fdf2f8", text: "#be185d", ring: "rgba(190,24,93,0.1)", dot: "#d44a80" },
 } as const;
 
 export const CATEGORY_COLOR_NAMES = Object.keys(CATEGORY_COLORS) as (keyof typeof CATEGORY_COLORS)[];

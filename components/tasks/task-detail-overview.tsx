@@ -6,17 +6,12 @@ import dynamic from "next/dynamic"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 
-const SubtaskList = dynamic(
-  () => import("@/components/tasks/subtask-list").then((m) => ({ default: m.SubtaskList })),
-  { ssr: false, loading: () => null },
-)
-
 const TiptapEditor = dynamic(
   () => import("@/components/tasks/tiptap-editor").then((mod) => ({ default: mod.TiptapEditor })),
   {
     ssr: false,
     loading: () => (
-      <div className="rounded-lg border border-border/40 p-4">
+      <div className="py-3">
         <div className="h-5 w-2/3 animate-pulse rounded bg-muted" />
         <div className="mt-2 h-5 w-1/2 animate-pulse rounded bg-muted" />
       </div>
@@ -27,22 +22,14 @@ const TiptapEditor = dynamic(
 type TaskOverviewData = {
   _id: Id<"tasks">
   description?: unknown
-  projectId?: Id<"projects">
-  billable: boolean
-  workCategoryId?: Id<"workCategories">
-  assigneeIds: Id<"users">[]
 }
 
 export function TaskDetailOverview({
   task,
-  isAdmin,
-  onOpenDetail,
 }: {
   task: TaskOverviewData
-  isAdmin: boolean
-  onOpenDetail: (taskId: string) => void
 }) {
-  const updateTask = useMutation(api.tasks.update)
+  const updateDescription = useMutation(api.tasks.updateDescription)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const taskIdRef = useRef(task._id)
 
@@ -69,7 +56,7 @@ export function TaskDetailOverview({
       if (debounceRef.current) clearTimeout(debounceRef.current)
       const doSave = () => {
         pendingSaveRef.current = null
-        void updateTask({
+        void updateDescription({
           id: taskIdRef.current,
           description: JSON.stringify(content),
         }).catch(() => {
@@ -79,7 +66,7 @@ export function TaskDetailOverview({
       pendingSaveRef.current = doSave
       debounceRef.current = setTimeout(doSave, 1000)
     },
-    [updateTask],
+    [updateDescription],
   )
 
   // Parse description — could be JSON string or object
@@ -96,23 +83,12 @@ export function TaskDetailOverview({
   }, [task.description])
 
   return (
-    <div className="flex flex-col gap-6">
-      {/* Description (Tiptap editor) */}
+    <section>
       <TiptapEditor
         content={descriptionContent}
         onUpdate={handleDescriptionUpdate}
+        variant="document"
       />
-
-      {/* Subtasks */}
-      <SubtaskList
-        parentTaskId={task._id}
-        parentProjectId={task.projectId}
-        parentBillable={task.billable}
-        parentCategoryId={task.workCategoryId}
-        parentAssigneeIds={task.assigneeIds}
-        isAdmin={isAdmin}
-        onOpenDetail={onOpenDetail}
-      />
-    </div>
+    </section>
   )
 }

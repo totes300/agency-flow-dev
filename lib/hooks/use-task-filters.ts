@@ -10,6 +10,9 @@ import type { Id } from "@/convex/_generated/dataModel"
 export type TaskTab = "all" | "backlog" | "in_progress" | "review" | "blocked" | "done" | "archived"
 export type GroupByOption = "project" | "client" | "category" | "assignee" | "status" | null
 export type FilterOp = "is" | "isNot" | "anyOf" | "noneOf"
+export type SortField = "manual" | "title" | "status" | "category" | "dueDate" | "createdAt" | "updatedAt"
+export type SortOrder = "asc" | "desc"
+export type TaskSort = { field: SortField; order: SortOrder }
 
 // ─── State shape ────────────────────────────────────────────────────────────────
 
@@ -18,13 +21,17 @@ type TaskViewState = {
   search: string
   groupBy: GroupByOption
   filters: Filter[]
+  sort: TaskSort
 }
+
+const DEFAULT_SORT: TaskSort = { field: "manual", order: "asc" }
 
 const INITIAL_STATE: TaskViewState = {
   tab: "backlog",
   search: "",
   groupBy: null,
   filters: [],
+  sort: DEFAULT_SORT,
 }
 
 // ─── Helpers: map new filter model → Convex args ─────────────────────────────
@@ -64,6 +71,12 @@ export function useTaskFilters() {
   const hasActiveFilters = state.filters.some((f) => f.value.length > 0)
   const isSearching = state.search.length > 0
 
+  // Stable key for filter identity — avoids JSON.stringify in effect deps
+  const filtersKey = useMemo(
+    () => state.filters.map((f) => `${f.type}:${f.operator}:${f.value.join(",")}`).join("|"),
+    [state.filters],
+  )
+
   // ── Setters ─────────────────────────────────────────────────────────────
 
   const setTab = useCallback((tab: TaskTab) => {
@@ -89,6 +102,14 @@ export function useTaskFilters() {
   const clearAllFilters = useCallback(() => {
     setState((s) => ({ ...s, filters: [] }))
     setLimit(DEFAULT_LIMIT)
+  }, [])
+
+  const setSort = useCallback((field: SortField, order: SortOrder) => {
+    setState((s) => ({ ...s, sort: { field, order } }))
+  }, [])
+
+  const resetSort = useCallback(() => {
+    setState((s) => ({ ...s, sort: DEFAULT_SORT }))
   }, [])
 
   const loadMore = useCallback(() => {
@@ -170,9 +191,11 @@ export function useTaskFilters() {
       filters: hasFilters ? (convexFilters as typeof convexFilters) : undefined,
       groupBy: state.groupBy,
       search: state.search || undefined,
+      sortBy: state.sort.field === "manual" ? undefined : state.sort.field,
+      sortOrder: state.sort.field === "manual" ? undefined : state.sort.order,
       limit,
     }
-  }, [state, limit])
+  }, [state.tab, state.search, state.groupBy, state.filters, state.sort, limit])
 
   return {
     // State
@@ -182,12 +205,16 @@ export function useTaskFilters() {
     filters: state.filters,
     hasActiveFilters,
     isSearching,
+    filtersKey,
+    sort: state.sort,
 
     // Setters
     setTab,
     setGroupBy,
     setSearch,
     setFilters,
+    setSort,
+    resetSort,
     clearAllFilters,
     loadMore,
 

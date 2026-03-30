@@ -49,7 +49,9 @@ export const syncUser = mutation({
     const now = Date.now();
     const name = identity.name ?? identity.email ?? "Anonymous";
     const email = identity.email ?? undefined;
-    const imageUrl = identity.pictureUrl ?? undefined;
+    // Skip Clerk/Gravatar default avatars — only store real uploaded photos
+    const rawImageUrl = identity.pictureUrl ?? undefined;
+    const imageUrl = rawImageUrl && !rawImageUrl.includes("gravatar.com/avatar") ? rawImageUrl : undefined;
 
     if (existing) {
       // Compare before patching to avoid unnecessary writes
@@ -94,7 +96,8 @@ export const upsertFromClerk = internalMutation({
       primaryEmail ||
       "Anonymous";
     const email = primaryEmail ?? undefined;
-    const imageUrl = data.image_url ?? undefined;
+    // Only store imageUrl if the user uploaded a real profile photo
+    const imageUrl = data.has_image ? (data.image_url ?? undefined) : undefined;
 
     const existing = await userByExternalId(ctx, data.id);
     let userId;
@@ -128,6 +131,37 @@ export const upsertFromClerk = internalMutation({
     await ctx.scheduler.runAfter(0, internal.orgMembers.resolveUserMemberships, {
       clerkUserId: data.id,
       userId,
+    });
+  },
+});
+
+/** One-time migration: clear Clerk/Gravatar default avatar URLs from existing users. */
+export const clearDefaultAvatars = internalMutation({
+  args: {},
+  async handler(ctx) {
+    const users = await ctx.db.query("users").collect();
+    let cleaned = 0;
+    for (const user of users) {
+      if (
+        user.imageUrl &&
+        (user.imageUrl.includes("gravatar.com/avatar") ||
+         user.imageUrl.includes("img.clerk.com"))
+      ) {
+        await ctx.db.patch(user._id, { imageUrl: undefined });
+        cleaned++;
+      }
+    }
+    return { cleaned, total: users.length };
+  },
+});
+
+export const updateTaskDetailView = mutation({
+  args: { view: v.union(v.literal("modal"), v.literal("drawer")) },
+  handler: async (ctx, { view }) => {
+    const user = await getCurrentUserOrThrow(ctx);
+    await ctx.db.patch(user._id, {
+      taskDetailView: view,
+      updatedAt: Date.now(),
     });
   },
 });

@@ -22,10 +22,12 @@ export function InlineCategoryCell({
   taskId,
   category,
   onSelect: onSelectProp,
+  emptyLabel,
 }: {
   taskId?: Id<"tasks">
   category: Pick<Doc<"workCategories">, "_id" | "name" | "color"> | null
   onSelect?: (categoryId: Id<"workCategories"> | null, category: Pick<Doc<"workCategories">, "_id" | "name" | "color"> | null) => void
+  emptyLabel?: string
 }) {
   const [open, setOpen] = useState(false)
   const { categories } = useTaskReferenceData()
@@ -51,15 +53,15 @@ export function InlineCategoryCell({
       <PopoverTrigger asChild>
         <button
           type="button"
-          className={cn("flex w-full items-center rounded-sm py-0.5 transition-colors", category && "hover:bg-muted/50")}
+          className={cn("flex w-full items-center rounded-sm py-0.5 transition-colors", category && "hover:bg-accent")}
           onClick={(e) => e.stopPropagation()}
         >
           {category ? (
             <CategoryBadge name={category.name} color={category.color} />
           ) : (
-            <span className="flex items-center gap-1.5 text-muted-foreground/20 transition-colors group-hover/row:text-muted-foreground/50">
-              <TagIcon className="size-3.5" />
-              <span className="text-xs">Category</span>
+            <span className="flex items-center gap-1.5 rounded-md border border-dashed border-border/55 bg-muted/[0.12] px-2 py-1 text-muted-foreground/60 transition-colors group-hover/row:border-border/80 group-hover/row:bg-muted/[0.22] group-hover/row:text-muted-foreground">
+              <TagIcon className="size-4 shrink-0" strokeWidth={1.75} />
+              {emptyLabel && <span className="text-[13px]">{emptyLabel}</span>}
             </span>
           )}
         </button>
@@ -70,7 +72,7 @@ export function InlineCategoryCell({
           <CommandList>
             <CommandGroup>
               <CommandItem onSelect={() => handleSelect(null)} className="px-2 py-1.5">
-                <span className="text-muted-foreground text-xs">None</span>
+                <span className="text-[13px] text-muted-foreground">None</span>
               </CommandItem>
               {categories?.map((c) => (
                   <CommandItem key={c._id} onSelect={() => handleSelect(c._id)} className="px-2 py-1.5">

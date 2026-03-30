@@ -4,42 +4,46 @@ import { useState, useEffect, useRef } from "react"
 import { cn } from "@/lib/utils"
 import type { SuggestionKeyDownProps } from "@tiptap/suggestion"
 
-// ─── Types ──────────────────────────────────────────────────────────────────────
-
-export type MentionSuggestion = { id: string; label: string }
-
-export interface MentionDropdownState {
-  items: MentionSuggestion[]
-  command: (item: MentionSuggestion) => void
-  clientRect: (() => DOMRect | null) | null | undefined
-}
-
-// ─── Component ──────────────────────────────────────────────────────────────────
-
 const DROPDOWN_OFFSET = 4
 
-export function MentionDropdown({
-  state,
-  onKeyDownRef,
-}: {
-  state: MentionDropdownState
+export interface SuggestionDropdownProps<T> {
+  items: T[]
+  onSelect: (item: T) => void
+  clientRect: (() => DOMRect | null) | null | undefined
   onKeyDownRef: React.MutableRefObject<((e: SuggestionKeyDownProps) => boolean) | null>
-}) {
-  const [selectedIndex, setSelectedIndex] = useState(0)
-  const { items, command, clientRect } = state
+  renderItem: (item: T) => React.ReactNode
+  keyExtractor: (item: T) => string
+  itemClassName?: string
+}
 
-  // Refs for stable access in the keyboard handler — avoids stale closures
+export function SuggestionDropdown<T>({
+  items,
+  onSelect,
+  clientRect,
+  onKeyDownRef,
+  renderItem,
+  keyExtractor,
+  itemClassName,
+}: SuggestionDropdownProps<T>) {
+  const [selectedIndex, setSelectedIndex] = useState(0)
+  const listRef = useRef<HTMLDivElement>(null)
+
   const itemsRef = useRef(items)
   itemsRef.current = items
   const selectedIndexRef = useRef(selectedIndex)
   selectedIndexRef.current = selectedIndex
-  const commandRef = useRef(command)
-  commandRef.current = command
+  const onSelectRef = useRef(onSelect)
+  onSelectRef.current = onSelect
 
-  // Reset selection when items change
   useEffect(() => setSelectedIndex(0), [items])
 
-  // Expose keyboard handler — only depends on the ref, so registered once
+  useEffect(() => {
+    const list = listRef.current
+    if (!list) return
+    const selected = list.children[selectedIndex] as HTMLElement | undefined
+    selected?.scrollIntoView({ block: "nearest" })
+  }, [selectedIndex])
+
   useEffect(() => {
     onKeyDownRef.current = ({ event }: SuggestionKeyDownProps) => {
       const currentItems = itemsRef.current
@@ -53,7 +57,7 @@ export function MentionDropdown({
       }
       if (event.key === "Enter") {
         const item = currentItems[selectedIndexRef.current]
-        if (item) commandRef.current(item)
+        if (item) onSelectRef.current(item)
         return true
       }
       if (event.key === "Escape") {
@@ -71,28 +75,29 @@ export function MentionDropdown({
 
   return (
     <div
+      ref={listRef}
       role="listbox"
-      className="fixed z-50 overflow-hidden rounded-lg border border-border bg-popover p-1 shadow-md"
+      className="fixed z-50 max-h-72 overflow-y-auto rounded-lg border border-border bg-popover p-1 shadow-md"
       style={{ top: rect.bottom + DROPDOWN_OFFSET, left: rect.left }}
-      // Prevent any mouse events from reaching the editor and causing blur
       onMouseDown={(e) => e.preventDefault()}
     >
       {items.map((item, index) => (
         <button
-          key={item.id}
+          key={keyExtractor(item)}
           type="button"
           role="option"
           aria-selected={index === selectedIndex}
           tabIndex={-1}
-          onClick={() => commandRef.current(item)}
+          onClick={() => onSelectRef.current(item)}
           className={cn(
-            "flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-sm transition-colors",
+            "flex w-full items-center rounded-md text-left transition-colors",
             index === selectedIndex
               ? "bg-accent text-accent-foreground"
               : "text-popover-foreground hover:bg-accent/50",
+            itemClassName,
           )}
         >
-          {item.label}
+          {renderItem(item)}
         </button>
       ))}
     </div>

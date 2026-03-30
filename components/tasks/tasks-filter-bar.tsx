@@ -63,7 +63,7 @@ function useFilterTypeConfigs(isAdmin?: boolean): FilterTypeConfig[] {
       return {
         id: c._id,
         name: c.name,
-        icon: <span className="h-4 w-5 shrink-0 rounded" style={{ backgroundColor: color.bg, boxShadow: `inset 0 0 0 1px ${color.ring}` }} />,
+        icon: <span className="size-2.5 shrink-0 rounded-full" style={{ backgroundColor: color.dot }} />,
       }
     })
 
@@ -224,16 +224,13 @@ export function TasksFilterBar({
             aria-expanded={open}
             size="sm"
             className={cn(
-              "transition group h-8 text-xs items-center rounded-sm flex gap-1.5",
+              "group flex h-8 items-center gap-1.5 rounded-md border border-transparent px-2.5 text-xs transition-colors",
               hasActiveFilters
-                ? "bg-blue-500/10 text-blue-600 hover:bg-blue-500/15 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-400"
-                : "text-muted-foreground",
+                ? "border-primary/15 bg-primary/8 text-primary/70 hover:border-primary/20 hover:bg-primary/12 hover:text-primary/80"
+                : "text-muted-foreground/85 hover:border-border/80 hover:bg-muted/55 hover:text-foreground",
             )}
           >
-            <ListFilter className={cn(
-              "size-3 shrink-0 transition-all",
-              !hasActiveFilters && "group-hover:text-primary",
-            )} />
+            <ListFilter className="size-3 shrink-0" />
             {hasActiveFilters ? (
               <span>{filters.filter((f) => f.value?.length > 0).length}</span>
             ) : (
@@ -350,7 +347,7 @@ export function TasksActiveFilters({
       <Button
         variant="outline"
         size="sm"
-        className="transition group h-6 text-xs items-center rounded-sm"
+        className="h-6 rounded-md border-border bg-background text-xs text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
         onClick={() => setFilters([])}
       >
         Clear

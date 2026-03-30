@@ -1,9 +1,9 @@
 import { cn } from "@/lib/utils"
 
 const HEALTH_CONFIG = {
-  on_track: { label: "On track", dotColor: "bg-green-500", textColor: "text-green-700 dark:text-green-400" },
-  at_risk: { label: "At risk", dotColor: "bg-amber-500", textColor: "text-amber-700 dark:text-amber-400" },
-  over_budget: { label: "Over budget", dotColor: "bg-red-500", textColor: "text-red-700 dark:text-red-400" },
+  on_track: { label: "On track", dot: "#22c55e" },
+  at_risk: { label: "At risk", dot: "#f59e0b" },
+  over_budget: { label: "Over budget", dot: "#ef4444" },
 } as const
 
 type HealthStatus = keyof typeof HEALTH_CONFIG
@@ -23,8 +23,17 @@ export function HealthBadge({
 }) {
   const config = HEALTH_CONFIG[status]
   return (
-    <span className={cn("inline-flex items-center gap-1.5 text-xs font-medium", config.textColor, className)}>
-      <span className={cn("size-1.5 rounded-full", config.dotColor)} />
+    <span
+      data-slot="health-badge"
+      className={cn(
+        "inline-flex w-fit items-center gap-1.5 rounded-full border border-border/50 py-0.5 pl-1.5 pr-2.5 text-xs font-normal text-muted-foreground",
+        className,
+      )}
+    >
+      <span
+        className="size-1.5 shrink-0 rounded-full"
+        style={{ backgroundColor: config.dot }}
+      />
       {config.label}
     </span>
   )

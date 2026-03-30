@@ -4,7 +4,8 @@ import { memo } from "react"
 import { useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { cn } from "@/lib/utils"
-import { formatRelativeTime, formatShortDate, isOverdue } from "@/lib/format"
+import { formatRelativeTime, isOverdue } from "@/lib/format"
+import { formatActivitySubtitle } from "@/lib/format-activity-subtitle"
 import { Checkbox } from "@/components/ui/checkbox"
 import { TASK_GRID_COLS } from "@/components/tasks/tasks-table"
 import { InlineStatusCell } from "@/components/tasks/inline-status-cell"
@@ -20,18 +21,33 @@ import {
   ArchiveIcon,
   ArchiveRestoreIcon,
   Trash2Icon,
-  ListChecksIcon,
-  MessageSquareIcon,
+  MessageCircleIcon,
   FileTextIcon,
 } from "lucide-react"
 import { InlineTimeCell } from "@/components/tasks/inline-time-cell"
+import { TaskPreviewPopover } from "@/components/tasks/task-preview-popover"
+import { SubtaskHoverPopover } from "@/components/tasks/subtask-hover-popover"
+import { CommentHoverPopover } from "@/components/tasks/comment-hover-popover"
 import type { TaskWithJoins } from "@/components/tasks/tasks-table"
+import type { Id } from "@/convex/_generated/dataModel"
 
 export type ActivityIndicator = {
   subtaskTotal: number
   subtaskDone: number
   commentCount: number
-  hasAttachments: boolean
+  hasDescription: boolean
+  hasUnseenNonComment: boolean
+  hasUnseenSubtasks: boolean
+  hasUnseenComments: boolean
+  hasUnseenDescription: boolean
+  hasUnseen: boolean
+  unreadCommentCount: number
+  lastActivity: {
+    userName: string
+    type: string
+    metadata: Record<string, unknown>
+    createdAt: number
+  } | null
 }
 
 export const TaskRow = memo(function TaskRow({
@@ -47,6 +63,7 @@ export const TaskRow = memo(function TaskRow({
   totalMinutes = 0,
   activity,
   isArchivedView = false,
+  isDetailOpen = false,
 }: {
   task: TaskWithJoins
   isAdmin: boolean
@@ -60,17 +77,27 @@ export const TaskRow = memo(function TaskRow({
   totalMinutes?: number
   activity?: ActivityIndicator
   isArchivedView?: boolean
+  isDetailOpen?: boolean
 }) {
   const duplicateTask = useMutation(api.tasks.duplicate)
   const isDone = task.statusType === "done"
-
   const overdue = isOverdue(task.dueDate)
+
+  const hasUnseen = activity?.hasUnseen ?? false
+  const hasDescription = activity?.hasDescription ?? false
+
+  // Subtitle: last activity or "Created . Xm ago" fallback
+  const subtitle = activity?.lastActivity
+    ? formatActivitySubtitle(activity.lastActivity)
+    : `Created \u00b7 ${formatRelativeTime(task.createdAt)}`
 
   return (
     <div
+      data-task-id={task._id}
       className={cn(
-        `group/row grid ${TASK_GRID_COLS} items-center gap-x-4 border-b border-border/40 px-3 py-2 transition-colors hover:bg-muted/30 [&>*]:min-w-0 [&>*]:overflow-hidden`,
+        `group/row grid ${TASK_GRID_COLS} items-center gap-x-6 border-b border-border/55 px-3 py-2.5 transition-colors hover:bg-muted/[0.38] [&>*]:min-w-0 [&>*]:overflow-hidden`,
         isSelected && "bg-primary/5",
+        isDetailOpen && "bg-accent/50 border-l-2 border-l-primary",
         isDone && "opacity-50",
       )}
     >
@@ -89,127 +116,226 @@ export const TaskRow = memo(function TaskRow({
         />
       </div>
 
-      {/* 2. Task name + subtitle */}
-      <div
-        className="cursor-pointer"
+      {/* 2. Task name + subtitle + inline icons */}
+      <button
+        type="button"
+        className="cursor-pointer text-left"
         onClick={() => onOpenDetail?.(task._id)}
       >
-        <div className={cn("truncate text-sm font-medium hover:text-primary transition-colors", isDone && "line-through")}>
-          {task.title}
+        <div className="flex items-center gap-1.5">
+          {hasUnseen && (
+            <span className="size-1.5 shrink-0 rounded-full bg-primary" />
+          )}
+          <TaskPreviewPopover
+            taskId={task._id as Id<"tasks">}
+            description={task.description}
+            updatedAt={task.updatedAt}
+            onOpenDetail={onOpenDetail}
+          >
+            <span className={cn(
+              "truncate text-sm font-medium",
+              isDone && "line-through",
+            )}>
+              {task.title}
+            </span>
+          </TaskPreviewPopover>
+          {hasDescription && (
+            <TaskPreviewPopover
+              taskId={task._id as Id<"tasks">}
+              description={task.description}
+              updatedAt={task.updatedAt}
+              onOpenDetail={onOpenDetail}
+            >
+              <span className="shrink-0 rounded p-0.5 transition-colors hover:bg-muted" onClick={(e) => e.stopPropagation()}>
+                <FileTextIcon
+                  className={cn(
+                    "size-[13px]",
+                    hasUnseen ? "opacity-45" : "opacity-30",
+                  )}
+                />
+              </span>
+            </TaskPreviewPopover>
+          )}
+          {activity && activity.subtaskTotal > 0 && (
+            <SubtaskHoverPopover
+              taskId={task._id as Id<"tasks">}
+              done={activity.subtaskDone}
+              total={activity.subtaskTotal}
+              onOpenDetail={onOpenDetail}
+            >
+              <span className="shrink-0 rounded p-0.5 transition-colors hover:bg-muted" onClick={(e) => e.stopPropagation()}>
+                <InlineSubtaskRing
+                  done={activity.subtaskDone}
+                  total={activity.subtaskTotal}
+                  isUnseen={activity.hasUnseenSubtasks}
+                />
+              </span>
+            </SubtaskHoverPopover>
+          )}
         </div>
-        <div className="truncate text-[11px] text-muted-foreground">
-          {task.updatedAt !== task.createdAt ? "Updated · " : "Created · "}{formatRelativeTime(task.updatedAt)}
+        <div className="truncate text-[11px] text-muted-foreground/85">
+          {subtitle}
         </div>
-      </div>
+      </button>
 
-      {/* 3. Activity indicators */}
-      <ActivityIcons activity={activity} hasDescription={!!task.description} />
+      {/* 3. Comments */}
+      {activity ? (
+        activity.commentCount > 0 ? (
+          <CommentHoverPopover
+            taskId={task._id as Id<"tasks">}
+            totalCount={activity.commentCount}
+            onOpenDetail={onOpenDetail}
+          >
+            <div className="flex items-center justify-center">
+              <CommentPill
+                count={activity.commentCount}
+                unreadCount={activity.unreadCommentCount}
+                hasUnseen={activity.hasUnseenComments}
+              />
+            </div>
+          </CommentHoverPopover>
+        ) : (
+          <div />
+        )
+      ) : (
+        <div className="flex items-center justify-center">
+          <div className="h-[22px] w-10 rounded-full bg-muted/30 animate-pulse" />
+        </div>
+      )}
 
       {/* 4. Status (inline edit) */}
       <InlineStatusCell taskId={task._id} status={task.status} isAdmin={isAdmin} />
 
       {/* 5. Category (inline edit) */}
-      <InlineCategoryCell taskId={task._id} category={task.category} />
+      <InlineCategoryCell taskId={task._id} category={task.category} emptyLabel="Add" />
 
       {/* 6. Client / Project (inline edit) */}
       <InlineProjectCell
         taskId={task._id}
         project={task.project}
         client={task.client}
+        emptyLabel="Add"
       />
 
       {/* 7. Assignee (inline edit) */}
-      <InlineAssigneeCell taskId={task._id} assignees={task.assignees} />
+      <div className="min-w-0">
+        <InlineAssigneeCell taskId={task._id} assignees={task.assignees} emptyLabel="Add" />
+      </div>
 
       {/* 8. Due date (inline edit) */}
-      <InlineDueDateCell taskId={task._id} dueDate={task.dueDate ?? null} isOverdue={overdue} />
+      <div className="min-w-0">
+        <InlineDueDateCell taskId={task._id} dueDate={task.dueDate ?? null} isOverdue={overdue} emptyLabel="Add" />
+      </div>
 
       {/* 9. Time */}
-      <InlineTimeCell taskId={task._id} totalMinutes={totalMinutes} isDone={isDone} isBillable={task.billable} />
+      <div className="min-w-0">
+        <InlineTimeCell taskId={task._id} totalMinutes={totalMinutes} isDone={isDone} isBillable={task.billable} />
+      </div>
 
       {/* 10. Action menu */}
-      <RowActionMenu>
-        {isArchivedView ? (
-          <>
-            <DropdownMenuItem onClick={() => onRestore?.(task._id)}>
-              <ArchiveRestoreIcon className="size-4" />
-              Restore
-            </DropdownMenuItem>
-            {isAdmin && (
-              <>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  className="text-destructive focus:text-destructive"
-                  onClick={() => onDelete(task._id)}
-                >
-                  <Trash2Icon className="size-4" />
-                  Delete permanently
-                </DropdownMenuItem>
-              </>
-            )}
-          </>
-        ) : (
-          <>
-            <DropdownMenuItem
-              onClick={async () => {
-                try { await duplicateTask({ id: task._id }) } catch (err) { toastError(err, "Failed to duplicate task") }
-              }}
-            >
-              <CopyIcon className="size-4" />
-              Duplicate
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => onArchive(task._id)}>
-              <ArchiveIcon className="size-4" />
-              Archive
-            </DropdownMenuItem>
-            {isAdmin && (
-              <>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  className="text-destructive focus:text-destructive"
-                  onClick={() => onDelete(task._id)}
-                >
-                  <Trash2Icon className="size-4" />
-                  Delete
-                </DropdownMenuItem>
-              </>
-            )}
-          </>
-        )}
-      </RowActionMenu>
+      <div className={cn(
+        "flex justify-end transition-opacity",
+        hasSelection || isSelected ? "opacity-100" : "opacity-0 group-hover/row:opacity-100",
+      )}>
+        <RowActionMenu>
+          {isArchivedView ? (
+            <>
+              <DropdownMenuItem onClick={() => onRestore?.(task._id)}>
+                <ArchiveRestoreIcon className="size-4" />
+                Restore
+              </DropdownMenuItem>
+              {isAdmin && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    className="text-destructive focus:text-destructive"
+                    onClick={() => onDelete(task._id)}
+                  >
+                    <Trash2Icon className="size-4" />
+                    Delete permanently
+                  </DropdownMenuItem>
+                </>
+              )}
+            </>
+          ) : (
+            <>
+              <DropdownMenuItem
+                onClick={async () => {
+                  try { await duplicateTask({ id: task._id }) } catch (err) { toastError(err, "Failed to duplicate task") }
+                }}
+              >
+                <CopyIcon className="size-4" />
+                Duplicate
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => onArchive(task._id)}>
+                <ArchiveIcon className="size-4" />
+                Archive
+              </DropdownMenuItem>
+              {isAdmin && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    className="text-destructive focus:text-destructive"
+                    onClick={() => onDelete(task._id)}
+                  >
+                    <Trash2Icon className="size-4" />
+                    Delete
+                  </DropdownMenuItem>
+                </>
+              )}
+            </>
+          )}
+        </RowActionMenu>
+      </div>
     </div>
   )
 })
 
-function ActivityIcons({ activity, hasDescription }: { activity?: ActivityIndicator; hasDescription: boolean }) {
-  const subtaskTotal = activity?.subtaskTotal ?? 0
-  const subtaskDone = activity?.subtaskDone ?? 0
-  const commentCount = activity?.commentCount ?? 0
-  const hasAttachments = activity?.hasAttachments ?? false
+/** Inline 13px progress ring — sits next to the task title, same visual weight as FileTextIcon. */
+function InlineSubtaskRing({ done, total, isUnseen }: { done: number; total: number; isUnseen: boolean }) {
+  const circumference = 2 * Math.PI * 6
+  const progress = done / total
+  const offset = circumference * (1 - progress)
+  const isComplete = done === total
 
   return (
-    <div className="flex items-center gap-2 text-muted-foreground/70">
-      {/* Subtask progress */}
-      {subtaskTotal > 0 && (
-        <span className="flex items-center gap-0.5 text-[11px]" title={`${subtaskDone}/${subtaskTotal} subtasks`}>
-          <ListChecksIcon className="size-3 shrink-0" />
-          <span>{subtaskDone}/{subtaskTotal}</span>
-        </span>
+    <svg width={13} height={13} viewBox="0 0 16 16" className="block">
+      <circle
+        cx={8} cy={8} r={6}
+        fill="none"
+        stroke={isComplete && isUnseen ? "none" : "var(--border)"}
+        strokeWidth={1.75}
+      />
+      {progress > 0 && (
+        <circle
+          cx={8} cy={8} r={6}
+          fill="none"
+          className={isComplete && isUnseen ? "stroke-emerald-500" : isUnseen ? "stroke-foreground" : "stroke-muted-foreground"}
+          strokeWidth={isUnseen ? 2 : 1.75}
+          strokeDasharray={circumference}
+          strokeDashoffset={offset}
+          strokeLinecap="round"
+          transform="rotate(-90 8 8)"
+          style={isComplete && isUnseen ? { opacity: 1 } : isUnseen ? { opacity: 0.7 } : { opacity: 0.45 }}
+        />
       )}
-      {/* Comment count */}
-      {commentCount > 0 && (
-        <span className="flex items-center gap-0.5 text-[11px]" title={`${commentCount} comments`}>
-          <MessageSquareIcon className="size-3 shrink-0" />
-          <span>{commentCount}</span>
-        </span>
-      )}
-      {/* Description/attachment icon */}
-      {(hasDescription || hasAttachments) && (
-        <span title={hasAttachments ? "Has attachments" : "Has description"}>
-          <FileTextIcon className="size-3 shrink-0" />
-        </span>
-      )}
-    </div>
+    </svg>
   )
 }
 
+/** Comment pill — gray when seen, red when unseen. */
+function CommentPill({ count, unreadCount, hasUnseen }: { count: number; unreadCount: number; hasUnseen: boolean }) {
+  const displayCount = hasUnseen ? unreadCount : count
+
+  return (
+    <span className={cn(
+      "inline-flex items-center gap-1 rounded-full px-2 h-[22px] text-[11px] tabular-nums font-medium",
+      hasUnseen
+        ? "bg-red-500 text-white dark:bg-red-600"
+        : "bg-muted text-muted-foreground",
+    )}>
+      <MessageCircleIcon className="size-3" strokeWidth={hasUnseen ? 2.5 : 2.25} />
+      {displayCount}
+    </span>
+  )
+}

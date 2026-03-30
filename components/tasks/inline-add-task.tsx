@@ -4,6 +4,7 @@ import { useState, useRef, useCallback, useEffect } from "react"
 import { useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { useTaskReferenceData } from "@/components/tasks/task-reference-data"
+import type { InlineCreatedTask } from "@/components/tasks/inline-created-task-row"
 import { PlusIcon } from "lucide-react"
 import { toastError } from "@/lib/toast-helpers"
 import { TASK_GRID_COLS } from "@/components/tasks/tasks-table"
@@ -26,15 +27,22 @@ export function InlineAddTask({
   groupKey,
   isAdmin,
   tab,
+  onCreateInlineTask,
+  onInlineTaskSettled,
 }: {
   groupBy: GroupByOption
   groupKey: string
   isAdmin: boolean
   tab: TaskTab
+  onCreateInlineTask?: (task: InlineCreatedTask) => void
+  onInlineTaskSettled?: (
+    groupKey: string,
+    localId: string,
+    result: { serverId?: Id<"tasks">; error?: boolean },
+  ) => void
 }) {
   const [active, setActive] = useState(false)
   const [title, setTitle] = useState("")
-  const [isSubmitting, setIsSubmitting] = useState(false)
   const [status, setStatus] = useState<StatusPick | null>(null)
   const [category, setCategory] = useState<CategoryPick | null>(null)
   const [project, setProject] = useState<ProjectPick | null>(null)
@@ -42,6 +50,7 @@ export function InlineAddTask({
   const [assignees, setAssignees] = useState<UserPick[]>([])
   const [dueDate, setDueDate] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const lastSubmitRef = useRef(0)
   const createTask = useMutation(api.tasks.create)
 
   // Reference data from page-level context (no per-row subscriptions)
@@ -101,8 +110,9 @@ export function InlineAddTask({
 
   async function handleSubmit() {
     const trimmed = title.trim()
-    if (!trimmed || isSubmitting) return
-    setIsSubmitting(true)
+    const now = Date.now()
+    if (!trimmed || now - lastSubmitRef.current < 100) return
+    lastSubmitRef.current = now
 
     const args: {
       title: string
@@ -145,15 +155,48 @@ export function InlineAddTask({
       if (defaultStatus) args.statusId = defaultStatus._id
     }
 
-    try {
-      await createTask(args)
-      resetFields()
+    const resolvedStatus = status ?? (
+      args.statusId
+        ? (() => {
+            const match = statuses?.find((s) => s._id === args.statusId)
+            return match
+              ? { _id: match._id, name: match.name, color: match.color, type: match.type }
+              : null
+          })()
+        : null
+    )
+
+    const localId = typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `inline-${Date.now()}-${Math.random().toString(36).slice(2)}`
+
+    onCreateInlineTask?.({
+      localId,
+      groupKey,
+      title: trimmed,
+      createdAt: Date.now(),
+      status: resolvedStatus,
+      category,
+      project,
+      client,
+      assignees,
+      dueDate,
+      saveState: "saving",
+    })
+
+    resetFields()
+    requestAnimationFrame(() => {
       inputRef.current?.focus()
-    } catch (err) {
-      toastError(err, "Failed to create task")
-    } finally {
-      setIsSubmitting(false)
-    }
+    })
+
+    void createTask(args)
+      .then((taskId) => {
+        onInlineTaskSettled?.(groupKey, localId, { serverId: taskId })
+      })
+      .catch((err) => {
+        onInlineTaskSettled?.(groupKey, localId, { error: true })
+        toastError(err, "Failed to create task")
+      })
   }
 
   // Ref to always have latest submit/reset without re-registering listener
@@ -162,12 +205,16 @@ export function InlineAddTask({
   submitRef.current = handleSubmit
   resetRef.current = resetFields
 
-  // Global Enter/Escape when the add row is active
+  // Enter/Escape when the add row is active — scoped to this row
+  const rowRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!active) return
     function handleKeyDown(e: KeyboardEvent) {
-      const insidePopover = (e.target as HTMLElement)?.closest?.("[role='dialog'], [cmdk-list], [cmdk-input]")
+      const target = e.target as HTMLElement
+      // Only handle keys from within this row or its popovers
+      const insidePopover = target.closest?.("[role='dialog'], [cmdk-list], [cmdk-input]")
       if (insidePopover) return
+      if (rowRef.current && !rowRef.current.contains(target)) return
 
       if (e.key === "Enter") {
         e.preventDefault()
@@ -203,7 +250,8 @@ export function InlineAddTask({
 
   return (
     <div
-      className={`group/row grid ${TASK_GRID_COLS} items-center gap-x-4 border-b border-border/40 px-3 py-1.5 [&>*]:min-w-0 [&>*]:overflow-hidden`}
+      ref={rowRef}
+      className={`group/row grid ${TASK_GRID_COLS} items-center gap-x-6 border-b border-border/40 px-3 py-2.5 [&>*]:min-w-0 [&>*]:overflow-hidden`}
     >
       {/* Checkbox — empty */}
       <div />
@@ -218,8 +266,7 @@ export function InlineAddTask({
           onChange={(e) => setTitle(e.target.value)}
           placeholder="Task name..."
           aria-label="New task title"
-          disabled={isSubmitting}
-          className="h-8 flex-1 bg-transparent text-[13px] outline-none placeholder:text-muted-foreground/40"
+          className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/40"
         />
       </div>
 

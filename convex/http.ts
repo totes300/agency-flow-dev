@@ -8,6 +8,10 @@ import type { Id } from "./_generated/dataModel";
 const http = httpRouter();
 
 // ─── Public image serving (permanent URLs for editor content) ────────────────
+// NOTE: Intentionally unauthenticated — these URLs are embedded as `src` attributes
+// in Tiptap JSON stored in task descriptions and comments. Adding auth would break
+// all existing images. Storage IDs are UUIDs (unguessable), but consider adding
+// a signed-URL or token-based scheme in a future iteration for defense-in-depth.
 http.route({
   path: "/image",
   method: "GET",

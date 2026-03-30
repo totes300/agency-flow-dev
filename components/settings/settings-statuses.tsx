@@ -122,7 +122,7 @@ export function SettingsStatuses() {
                 className="group flex items-center gap-2 rounded-md px-1.5 py-2 transition-colors hover:bg-muted/40"
               >
                 <GripVerticalIcon className="size-3.5 shrink-0 text-muted-foreground/30 group-hover:text-muted-foreground/60" />
-                <StatusBadge name={status.name} color={status.color} />
+                <StatusBadge name={status.name} color={status.color} type={status.type} variant="solid" />
                 {isDefault && (
                   <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Default</span>
                 )}

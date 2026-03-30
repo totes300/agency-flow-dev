@@ -3,8 +3,10 @@ import {
   getDayLabel,
   collapseConsecutive,
   groupActivityByDay,
+  groupFeedForCommentsView,
   type RawEvent,
 } from "./activity-grouping"
+import type { FeedItem } from "./task-detail"
 
 // ─── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -211,5 +213,84 @@ describe("groupActivityByDay", () => {
     expect(groups[0].label).toBe("Today")
     expect(groups[1].label).toBe("Yesterday")
     // The other two are older dates
+  })
+})
+
+// ─── groupFeedForCommentsView ────────────────────────────────────────────────
+
+function audit(id: string, createdAt: number, type = "status_changed"): FeedItem {
+  return { kind: "audit", id, type, userId: "u1", userName: "Adam", metadata: {}, createdAt }
+}
+
+function comment(id: string, createdAt: number): FeedItem {
+  return { kind: "comment", id, userId: "u1", userName: "Adam", content: {}, createdAt }
+}
+
+describe("groupFeedForCommentsView", () => {
+  it("returns empty for empty feed", () => {
+    expect(groupFeedForCommentsView([])).toEqual([])
+  })
+
+  it("passes through only comments unchanged", () => {
+    const feed: FeedItem[] = [comment("c1", 1000), comment("c2", 2000)]
+    const result = groupFeedForCommentsView(feed)
+    expect(result).toHaveLength(2)
+    expect(result[0].kind).toBe("comment")
+    expect(result[1].kind).toBe("comment")
+  })
+
+  it("groups only audits into a single batch", () => {
+    const feed: FeedItem[] = [audit("a1", 1000), audit("a2", 2000), audit("a3", 3000)]
+    const result = groupFeedForCommentsView(feed)
+    expect(result).toHaveLength(1)
+    expect(result[0].kind).toBe("batch")
+    if (result[0].kind === "batch") {
+      expect(result[0].count).toBe(3)
+      expect(result[0].items).toHaveLength(3)
+    }
+  })
+
+  it("groups consecutive audits between comments into batches", () => {
+    const feed: FeedItem[] = [
+      audit("a1", 1000),
+      audit("a2", 2000),
+      comment("c1", 3000),
+      audit("a3", 4000),
+      comment("c2", 5000),
+    ]
+    const result = groupFeedForCommentsView(feed)
+    expect(result).toHaveLength(4)
+    expect(result[0].kind).toBe("batch")
+    expect(result[1].kind).toBe("comment")
+    expect(result[2].kind).toBe("batch")
+    expect(result[3].kind).toBe("comment")
+    if (result[0].kind === "batch") expect(result[0].count).toBe(2)
+    if (result[2].kind === "batch") expect(result[2].count).toBe(1)
+  })
+
+  it("batch startTime and endTime are correct", () => {
+    const feed: FeedItem[] = [audit("a1", 1000), audit("a2", 5000), audit("a3", 9000)]
+    const result = groupFeedForCommentsView(feed)
+    if (result[0].kind === "batch") {
+      expect(result[0].startTime).toBe(1000)
+      expect(result[0].endTime).toBe(9000)
+    }
+  })
+
+  it("batch id is the first audit item's id", () => {
+    const feed: FeedItem[] = [audit("first-id", 1000), audit("a2", 2000)]
+    const result = groupFeedForCommentsView(feed)
+    if (result[0].kind === "batch") {
+      expect(result[0].id).toBe("first-id")
+    }
+  })
+
+  it("handles trailing audits after last comment", () => {
+    const feed: FeedItem[] = [comment("c1", 1000), audit("a1", 2000), audit("a2", 3000)]
+    const result = groupFeedForCommentsView(feed)
+    expect(result).toHaveLength(2)
+    expect(result[0].kind).toBe("comment")
+    expect(result[1].kind).toBe("batch")
+    if (result[1].kind === "batch") expect(result[1].count).toBe(2)
   })
 })

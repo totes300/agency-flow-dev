@@ -107,7 +107,7 @@ const FilterOperatorDropdown = ({
   const operators = getOperators(filterValues)
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger className="bg-muted hover:bg-muted/50 px-1.5 py-1 text-muted-foreground hover:text-primary transition shrink-0">
+      <DropdownMenuTrigger className="bg-muted hover:bg-muted/70 px-2 py-1.5 text-muted-foreground hover:text-foreground transition shrink-0">
         {operator}
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-fit min-w-fit">
@@ -216,8 +216,8 @@ const FilterValueCombobox = ({
       }}
     >
       <PopoverTrigger
-        className="rounded-none px-1.5 py-1 bg-muted hover:bg-muted/50 transition
-  text-muted-foreground hover:text-primary shrink-0"
+        className="rounded-none px-2 py-1.5 bg-muted hover:bg-muted/70 transition
+  text-foreground/70 hover:text-foreground shrink-0"
       >
         <div className="flex gap-1.5 items-center">
           {findOpt(filterValues[0])?.icon}
@@ -300,15 +300,15 @@ const DateRangeFilterValue = ({
         type="date"
         value={from}
         onChange={(e) => setFilterValues([e.target.value, to])}
-        className="bg-muted hover:bg-muted/50 px-1.5 py-1 text-muted-foreground hover:text-primary transition shrink-0 outline-none text-xs h-6 w-[110px]"
+        className="bg-muted hover:bg-muted/70 px-2 py-1.5 text-foreground/70 hover:text-foreground transition shrink-0 outline-none text-xs w-[110px]"
         placeholder="From"
       />
-      <span className="bg-muted px-1 py-1 text-muted-foreground text-xs shrink-0 h-6 flex items-center">&ndash;</span>
+      <span className="bg-muted px-1 py-1.5 text-muted-foreground text-xs shrink-0 flex items-center">&ndash;</span>
       <input
         type="date"
         value={to}
         onChange={(e) => setFilterValues([from, e.target.value])}
-        className="bg-muted hover:bg-muted/50 px-1.5 py-1 text-muted-foreground hover:text-primary transition shrink-0 outline-none text-xs h-6 w-[110px]"
+        className="bg-muted hover:bg-muted/70 px-2 py-1.5 text-foreground/70 hover:text-foreground transition shrink-0 outline-none text-xs w-[110px]"
         placeholder="To"
       />
     </div>
@@ -343,7 +343,7 @@ export default function Filters({
               key={filter.id}
               className="flex gap-[1px] items-center text-xs"
             >
-              <div className="flex gap-1.5 shrink-0 rounded-l bg-muted px-1.5 py-1 items-center">
+              <div className="flex gap-1.5 shrink-0 rounded-l bg-muted px-2 py-1.5 items-center text-foreground/70">
                 {config?.icon}
                 {config?.label ?? filter.type}
               </div>
@@ -401,7 +401,7 @@ export default function Filters({
                 onClick={() => {
                   setFilters((prev) => prev.filter((f) => f.id !== filter.id))
                 }}
-                className="bg-muted rounded-l-none rounded-r-sm h-6 w-6 text-muted-foreground hover:text-primary hover:bg-muted/50 transition shrink-0"
+                className="bg-muted rounded-l-none rounded-r-sm h-full w-7 text-muted-foreground hover:text-foreground hover:bg-muted/70 transition shrink-0"
               >
                 <X className="size-3" />
               </Button>

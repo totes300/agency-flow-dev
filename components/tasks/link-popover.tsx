@@ -1,17 +1,13 @@
 "use client"
 
 import { useState, useRef, useEffect } from "react"
+import { useTiptap } from "@tiptap/react"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { ToolbarButton } from "@/components/toolbar-button"
 import { LinkIcon, CheckIcon, XIcon } from "lucide-react"
-import type { Editor } from "@tiptap/react"
 
-/**
- * Inline link popover for TipTap editors.
- * Replaces window.prompt with a styled inline URL input.
- * Used by both the description editor and the comment input.
- */
-export function LinkPopover({ editor }: { editor: Editor }) {
+export function LinkPopover() {
+  const { editor } = useTiptap()
   const [open, setOpen] = useState(false)
   const [url, setUrl] = useState("")
   const inputRef = useRef<HTMLInputElement>(null)
@@ -20,7 +16,6 @@ export function LinkPopover({ editor }: { editor: Editor }) {
 
   useEffect(() => {
     if (open && inputRef.current) {
-      // Pre-fill with existing link URL if editing
       const attrs = editor.getAttributes("link")
       setUrl(attrs.href ?? "")
       setTimeout(() => {
@@ -33,7 +28,6 @@ export function LinkPopover({ editor }: { editor: Editor }) {
   function handleApply() {
     const trimmed = url.trim()
     if (trimmed) {
-      // Ensure URL has a protocol
       const href = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`
       editor.chain().focus().setLink({ href }).run()
     }
@@ -53,10 +47,7 @@ export function LinkPopover({ editor }: { editor: Editor }) {
         <ToolbarButton
           active={isActive}
           onClick={() => {
-            if (isActive && !open) {
-              // If link is active and popover is closed, open to edit
-              setOpen(true)
-            }
+            if (isActive && !open) setOpen(true)
           }}
           aria-label="Link"
         >

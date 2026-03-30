@@ -23,12 +23,14 @@ export function InlineProjectCell({
   client,
   hasTimeEntries,
   onSelect: onSelectProp,
+  emptyLabel,
 }: {
   taskId?: Id<"tasks">
   project: Pick<Doc<"projects">, "_id" | "name" | "code"> | null
   client: Pick<Doc<"clients">, "_id" | "name"> | null
   hasTimeEntries?: boolean
   onSelect?: (projectId: Id<"projects"> | null, project: Pick<Doc<"projects">, "_id" | "name" | "code"> | null, client: Pick<Doc<"clients">, "_id" | "name"> | null) => void
+  emptyLabel?: string
 }) {
   const [open, setOpen] = useState(false)
   const { projects } = useTaskReferenceData()
@@ -73,21 +75,29 @@ export function InlineProjectCell({
       <PopoverTrigger asChild>
         <button
           type="button"
-          className={`flex w-full items-center gap-1 rounded-sm py-0.5 text-left transition-colors ${project ? "hover:bg-muted/50" : ""}`}
+          className={`flex w-full items-center gap-1 rounded-sm py-0.5 text-left transition-colors ${project ? "hover:bg-accent" : ""}`}
           onClick={(e) => e.stopPropagation()}
           title={locked ? "Has time entries — project cannot be changed" : undefined}
         >
           {project ? (
-            <div className="min-w-0 flex-1 flex items-center gap-1">
-              <span className="truncate text-xs font-medium">{client?.name}</span>
-              <span className="text-muted-foreground/40 text-xs">—</span>
-              <span className="truncate text-xs text-muted-foreground">{project.name}</span>
-              {locked && <LockIcon className="size-3 shrink-0 text-muted-foreground" />}
+            <div className="min-w-0 flex-1">
+              {client && (
+                <div className="flex items-center gap-1">
+                  <span className="truncate text-xs text-muted-foreground">{client.name}</span>
+                  {locked && <LockIcon className="size-3 shrink-0 text-muted-foreground" />}
+                </div>
+              )}
+              {!client && locked && (
+                <div className="flex items-center gap-1">
+                  <LockIcon className="size-3 shrink-0 text-muted-foreground" />
+                </div>
+              )}
+              <div className="truncate text-xs leading-tight text-muted-foreground/60">{project.name}</div>
             </div>
           ) : (
-            <span className="flex items-center gap-1.5 text-muted-foreground/20 transition-colors group-hover/row:text-muted-foreground/50">
-              <FolderIcon className="size-3.5" />
-              <span className="text-xs">Project</span>
+            <span className="flex items-center gap-1.5 rounded-md border border-dashed border-border/55 bg-muted/[0.12] px-2 py-1 text-muted-foreground/60 transition-colors group-hover/row:border-border/80 group-hover/row:bg-muted/[0.22] group-hover/row:text-muted-foreground">
+              <FolderIcon className="size-4 shrink-0" strokeWidth={1.75} />
+              {emptyLabel && <span className="text-[13px]">{emptyLabel}</span>}
             </span>
           )}
         </button>
@@ -99,7 +109,7 @@ export function InlineProjectCell({
             <CommandEmpty>No projects found.</CommandEmpty>
             <CommandGroup>
               <CommandItem onSelect={() => handleSelect(null)}>
-                <span className="text-muted-foreground">None</span>
+                <span className="text-[13px] text-muted-foreground">None</span>
               </CommandItem>
             </CommandGroup>
             {[...groupedProjects.entries()].map(([clientName, clientProjects]) => (

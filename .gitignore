@@ -47,3 +47,10 @@ next-env.d.ts
 
 # claude code
 .claude/worktrees/
+.reference
+
+# prototypes & design specs
+*.prototype.html
+prototype-*.html
+badge-preview.html
+design/*.html

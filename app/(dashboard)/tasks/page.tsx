@@ -1,13 +1,13 @@
 "use client"
 
-import { useState, useCallback, useEffect, useRef, useMemo } from "react"
+import { useState, useCallback, useEffect, useMemo, useRef } from "react"
 import { useQuery, useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { useConvexAuth } from "convex/react"
 import { useOrganization } from "@clerk/nextjs"
 import { useSearchParams, useRouter, usePathname } from "next/navigation"
 import { useTaskFilters } from "@/lib/hooks/use-task-filters"
-import { buildDetailUrl } from "@/lib/task-detail"
+import { buildDetailUrl, parseDetailParam } from "@/lib/task-detail"
 import { useUndoAction } from "@/lib/hooks/use-undo-action"
 import { TaskReferenceDataProvider } from "@/components/tasks/task-reference-data"
 import { TasksHeader } from "@/components/tasks/tasks-header"
@@ -15,8 +15,10 @@ import { TasksTabs } from "@/components/tasks/tasks-tabs"
 import { TasksTable } from "@/components/tasks/tasks-table"
 import { TaskRow } from "@/components/tasks/task-row"
 import { InlineAddTask } from "@/components/tasks/inline-add-task"
+import { InlineCreatedTaskRow, type InlineCreatedTask } from "@/components/tasks/inline-created-task-row"
 import { TaskFormModal } from "@/components/tasks/task-form-modal"
 import { TaskDetailModal } from "@/components/tasks/task-detail-modal"
+import { TaskDetailDrawer } from "@/components/tasks/task-detail-drawer"
 import { BulkToolbar } from "@/components/tasks/bulk-toolbar"
 import { TasksEmptyState } from "@/components/tasks/tasks-empty-state"
 import { TaskCard } from "@/components/tasks/task-card"
@@ -27,6 +29,7 @@ import { PlusIcon } from "lucide-react"
 import { toast } from "sonner"
 import { toastError } from "@/lib/toast-helpers"
 import type { Id } from "@/convex/_generated/dataModel"
+import type { TaskListItem } from "@/components/tasks/tasks-table"
 
 export default function TasksPage() {
   const { isAuthenticated } = useConvexAuth()
@@ -38,15 +41,22 @@ export default function TasksPage() {
   const router = useRouter()
   const pathname = usePathname()
 
+  const detailId = parseDetailParam(searchParams)
   const filters = useTaskFilters()
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null)
   const [createModalOpen, setCreateModalOpen] = useState(false)
+  const [inlineCreatedTasks, setInlineCreatedTasks] = useState<Record<string, InlineCreatedTask[]>>({})
+  const staleListRef = useRef<typeof listResult>(undefined)
 
   // Clear selection when tab changes
   useEffect(() => {
     setSelectedIds(new Set())
   }, [filters.tab])
+
+  useEffect(() => {
+    setInlineCreatedTasks({})
+  }, [filters.tab, filters.groupBy, filters.search, filters.filtersKey])
 
   // Escape to deselect all
   useEffect(() => {
@@ -62,9 +72,25 @@ export default function TasksPage() {
   const archiveTask = useMutation(api.tasks.archive)
   const restoreTask = useMutation(api.tasks.restore)
   const removeTask = useMutation(api.tasks.remove)
+  const reorderTask = useMutation(api.tasks.reorderTask)
   const { trigger: triggerUndo } = useUndoAction()
 
   // Queries
+  const currentUser = useQuery(api.users.current, isAuthenticated ? {} : "skip")
+  const rawViewPref = currentUser?.taskDetailView ?? "modal"
+
+  // Responsive: force modal on mobile (<768px)
+  const [isMobile, setIsMobile] = useState(false)
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 767px)")
+    setIsMobile(mq.matches)
+    function handleChange(e: MediaQueryListEvent) {
+      setIsMobile(e.matches)
+    }
+    mq.addEventListener("change", handleChange)
+    return () => mq.removeEventListener("change", handleChange)
+  }, [])
+  const viewPref = isMobile ? "modal" : rawViewPref
   const counts = useQuery(api.tasks.counts, isAuthenticated ? {} : "skip")
   const listResult = useQuery(api.tasks.list, isAuthenticated ? filters.listArgs : "skip")
 
@@ -81,19 +107,101 @@ export default function TasksPage() {
   }), [statuses, categories, projects, orgMembersData])
 
   // Stale-while-revalidate: keep last result visible during tab switches
-  const lastResultRef = useRef(listResult)
+  if (listResult !== undefined) {
+    staleListRef.current = listResult
+  }
+  const displayResult = listResult ?? staleListRef.current
+
+  const displayGroups = displayResult
+
   useEffect(() => {
-    if (listResult !== undefined) {
-      lastResultRef.current = listResult
+    if (!displayResult) return
+
+    const visibleTaskIds = new Set(
+      displayResult.groups.flatMap((group) => group.tasks.map((task) => task._id))
+    )
+
+    setInlineCreatedTasks((prev) => {
+      let changed = false
+      const next: Record<string, InlineCreatedTask[]> = {}
+
+      for (const [groupKey, drafts] of Object.entries(prev)) {
+        const remaining = drafts.filter((draft) => {
+          const shouldKeep = !draft.serverId || !visibleTaskIds.has(draft.serverId)
+          if (!shouldKeep) changed = true
+          return shouldKeep
+        })
+
+        if (remaining.length > 0) {
+          next[groupKey] = remaining
+        } else if (drafts.length > 0) {
+          changed = true
+        }
+      }
+
+      return changed ? next : prev
+    })
+  }, [displayResult])
+
+  // Optimistic reorder: hold spliced task order until server catches up
+  const [optimisticOrder, setOptimisticOrder] = useState<string[] | null>(null)
+  const pendingReorderRef = useRef<string | null>(null)
+
+  // Clear optimistic state when server data catches up
+  useEffect(() => {
+    if (!pendingReorderRef.current || !displayGroups) return
+    const serverIds = displayGroups.groups[0]?.tasks.map((t) => t._id) ?? []
+    if (optimisticOrder && serverIds.join(",") === optimisticOrder.join(",")) {
+      setOptimisticOrder(null)
+      pendingReorderRef.current = null
     }
-  }, [listResult])
-  const displayResult = listResult ?? lastResultRef.current
+  }, [displayGroups, optimisticOrder])
+
+  const desktopGroups = useMemo(() => {
+    if (!displayGroups) return displayGroups
+    return displayGroups.groups.map((group) => {
+      let tasks = group.tasks
+
+      // Apply optimistic reorder if active (only for ungrouped single-group view)
+      if (optimisticOrder && displayGroups.groups.length === 1) {
+        const taskMap = new Map(tasks.map((t) => [t._id, t]))
+        const reordered = optimisticOrder
+          .map((id) => taskMap.get(id as Id<"tasks">))
+          .filter(Boolean) as typeof tasks
+        // Include any tasks not in optimisticOrder (e.g. newly created)
+        const seen = new Set(optimisticOrder)
+        const extras = tasks.filter((t) => !seen.has(t._id))
+        tasks = [...reordered, ...extras]
+      }
+
+      const persistedIds = new Set(tasks.map((task) => task._id))
+      const persistedItems: TaskListItem[] = tasks.map((task) => ({
+        kind: "task",
+        key: task._id,
+        task,
+      }))
+      const draftItems: TaskListItem[] = (inlineCreatedTasks[group.key] ?? [])
+        .filter((draft) => !draft.serverId || !persistedIds.has(draft.serverId))
+        .map((draft) => ({
+          kind: "draft",
+          key: draft.localId,
+          draft,
+        }))
+
+      return {
+        ...group,
+        tasks,
+        items: [...persistedItems, ...draftItems],
+      }
+    })
+  }, [displayGroups, inlineCreatedTasks, optimisticOrder])
 
   // Batch time query — all visible task IDs in one call (N+1 prevention)
+  // Sort IDs so reorder doesn't change the array → avoids Convex re-subscribing
   const allVisibleTaskIds = useMemo(() => {
-    if (!displayResult) return []
-    return displayResult.groups.flatMap((g) => g.tasks.map((t) => t._id))
-  }, [displayResult])
+    if (!displayGroups) return []
+    return displayGroups.groups.flatMap((g) => g.tasks.map((t) => t._id)).sort()
+  }, [displayGroups])
   const timeMap = useQuery(
     api.timeEntries.sumByTasks,
     isAuthenticated && allVisibleTaskIds.length > 0
@@ -142,6 +250,36 @@ export default function TasksPage() {
 
   const isArchivedView = filters.tab === "archived"
 
+  // Drag reorder — only enabled in manual sort mode, no grouping/search/filters, not archived
+  const isDragEnabled = !filters.groupBy && !filters.search && !filters.hasActiveFilters
+    && filters.sort.field === "manual" && !isArchivedView
+
+  const handleReorder = useCallback((taskId: string, fromIndex: number, toIndex: number) => {
+    const group = desktopGroups?.[0]
+    if (!group) return
+
+    const tasks = group.tasks
+    // Splice to compute new order
+    const reordered = [...tasks]
+    const [moved] = reordered.splice(fromIndex, 1)
+    reordered.splice(toIndex, 0, moved)
+
+    // Set optimistic order immediately
+    const newOrder = reordered.map((t) => t._id as string)
+    setOptimisticOrder(newOrder)
+    pendingReorderRef.current = taskId
+
+    // Compute neighbor keys for fractional indexing
+    const prevTask = toIndex > 0 ? reordered[toIndex - 1] : null
+    const nextTask = toIndex < reordered.length - 1 ? reordered[toIndex + 1] : null
+
+    void reorderTask({
+      taskId: taskId as Id<"tasks">,
+      beforeKey: prevTask?.manualSortKey ?? undefined,
+      afterKey: nextTask?.manualSortKey ?? undefined,
+    })
+  }, [desktopGroups, reorderTask])
+
   // Archive with undo
   const handleArchive = useCallback((taskId: string) => {
     triggerUndo({
@@ -178,24 +316,143 @@ export default function TasksPage() {
     }
   }
 
+  const createTask = useMutation(api.tasks.create)
+
+  const handleInlineTaskCreated = useCallback((task: InlineCreatedTask) => {
+    setInlineCreatedTasks((prev) => ({
+      ...prev,
+      [task.groupKey]: [...(prev[task.groupKey] ?? []), task],
+    }))
+  }, [])
+
+  const handleInlineTaskSettled = useCallback((
+    groupKey: string,
+    localId: string,
+    result: { serverId?: Id<"tasks">; error?: boolean },
+  ) => {
+    setInlineCreatedTasks((prev) => {
+      const groupTasks = prev[groupKey]
+      if (!groupTasks) return prev
+
+      const nextGroupTasks = groupTasks.map((task) => {
+        if (task.localId !== localId) return task
+        return {
+          ...task,
+          serverId: result.serverId ?? task.serverId,
+          saveState: result.error ? "error" as const : "saved" as const,
+        }
+      })
+
+      return {
+        ...prev,
+        [groupKey]: nextGroupTasks,
+      }
+    })
+  }, [])
+
+  const handleDismissDraft = useCallback((localId: string) => {
+    setInlineCreatedTasks((prev) => {
+      const next: Record<string, InlineCreatedTask[]> = {}
+      let changed = false
+      for (const [groupKey, drafts] of Object.entries(prev)) {
+        const remaining = drafts.filter((d) => d.localId !== localId)
+        if (remaining.length !== drafts.length) changed = true
+        if (remaining.length > 0) next[groupKey] = remaining
+      }
+      return changed ? next : prev
+    })
+  }, [])
+
+  const handleRetryDraft = useCallback((draft: InlineCreatedTask) => {
+    const newLocalId = typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `inline-${Date.now()}-${Math.random().toString(36).slice(2)}`
+
+    // Replace old draft with new saving draft
+    setInlineCreatedTasks((prev) => {
+      const groupDrafts = prev[draft.groupKey]
+      if (!groupDrafts) return prev
+      return {
+        ...prev,
+        [draft.groupKey]: groupDrafts.map((d) =>
+          d.localId === draft.localId
+            ? { ...d, localId: newLocalId, saveState: "saving" as const, serverId: undefined }
+            : d,
+        ),
+      }
+    })
+
+    // Rebuild mutation args from draft data
+    const args: {
+      title: string
+      projectId?: Id<"projects">
+      workCategoryId?: Id<"workCategories">
+      statusId?: Id<"statuses">
+      assigneeIds?: Id<"users">[]
+      dueDate?: string
+    } = { title: draft.title }
+
+    if (draft.status) args.statusId = draft.status._id
+    if (draft.category) args.workCategoryId = draft.category._id
+    if (draft.project) args.projectId = draft.project._id
+    if (draft.assignees.length > 0) args.assigneeIds = draft.assignees.map((a) => a._id)
+    if (draft.dueDate) args.dueDate = draft.dueDate
+
+    void createTask(args)
+      .then((taskId) => {
+        handleInlineTaskSettled(draft.groupKey, newLocalId, { serverId: taskId })
+      })
+      .catch((err) => {
+        handleInlineTaskSettled(draft.groupKey, newLocalId, { error: true })
+        toastError(err, "Failed to create task")
+      })
+  }, [createTask, handleInlineTaskSettled])
+
+  const renderItem = useCallback((item: TaskListItem) => {
+    if (item.kind === "draft") {
+      return (
+        <InlineCreatedTaskRow
+          key={item.key}
+          task={item.draft}
+          onDismiss={handleDismissDraft}
+          onRetry={handleRetryDraft}
+        />
+      )
+    }
+    const task = item.task
+    return (
+      <TaskRow
+        key={task._id}
+        task={task}
+        isAdmin={isAdmin ?? false}
+        isSelected={selectedIds.has(task._id)}
+        hasSelection={selectedIds.size > 0}
+        onSelect={handleSelect}
+        onArchive={handleArchive}
+        onRestore={handleRestore}
+        onDelete={setDeleteTargetId}
+        onOpenDetail={handleOpenDetail}
+        totalMinutes={timeMap?.[task._id] ?? 0}
+        activity={activityMap?.[task._id]}
+        isArchivedView={isArchivedView}
+        isDetailOpen={viewPref === "drawer" && detailId === task._id}
+      />
+    )
+  }, [isAdmin, selectedIds, handleSelect, handleArchive, handleRestore, handleOpenDetail, handleDismissDraft, handleRetryDraft, timeMap, activityMap, isArchivedView, viewPref, detailId])
+
   // Initial load — skeleton only on first render, never on tab switch
-  if (!isAuthenticated || counts === undefined || displayResult === undefined) {
+  if (!isAuthenticated || counts === undefined || displayGroups === undefined) {
     return <TasksListSkeleton />
   }
 
-  const isEmpty = displayResult.totalCount === 0
+  const isEmpty = displayGroups.totalCount === 0 && Object.keys(inlineCreatedTasks).length === 0
 
   return (
     <TaskReferenceDataProvider value={referenceData}>
     <div>
-      <TasksHeader
-        search={filters.search}
-        onSearchChange={filters.setSearch}
-        onNewTask={() => setCreateModalOpen(true)}
-        totalCount={counts.all}
-      />
+      <div className="flex flex-col gap-4">
+        <TasksHeader />
 
-      <div className="mt-4">
         <TasksTabs
           activeTab={filters.tab}
           onTabChange={filters.setTab}
@@ -203,6 +460,9 @@ export default function TasksPage() {
           isSearching={filters.isSearching}
           groupBy={filters.groupBy}
           onGroupByChange={filters.setGroupBy}
+          search={filters.search}
+          onSearchChange={filters.setSearch}
+          onNewTask={() => setCreateModalOpen(true)}
           filters={filters.filters}
           setFilters={filters.setFilters}
           isAdmin={isAdmin ?? false}
@@ -220,32 +480,22 @@ export default function TasksPage() {
       ) : (
         <>
           {/* Desktop: table view */}
-          <div className="hidden md:block">
+          <div className="hidden pt-2 md:block">
             <TasksTable
-              groups={displayResult.groups}
+              groups={desktopGroups!}
               isGrouped={!!filters.groupBy}
               groupBy={filters.groupBy ?? ""}
               orgId={orgId}
               selectedIds={selectedIds}
               onLoadMore={filters.loadMore}
               onSelectAll={handleSelectAll}
-              renderRow={(task) => (
-                <TaskRow
-                  key={task._id}
-                  task={task}
-                  isAdmin={isAdmin ?? false}
-                  isSelected={selectedIds.has(task._id)}
-                  hasSelection={selectedIds.size > 0}
-                  onSelect={handleSelect}
-                  onArchive={handleArchive}
-                  onRestore={handleRestore}
-                  onDelete={setDeleteTargetId}
-                  onOpenDetail={handleOpenDetail}
-                  totalMinutes={timeMap?.[task._id] ?? 0}
-                  activity={activityMap?.[task._id]}
-                  isArchivedView={isArchivedView}
-                />
-              )}
+              sortBy={filters.sort.field}
+              sortOrder={filters.sort.order}
+              onSort={filters.setSort}
+              onResetSort={filters.resetSort}
+              renderItem={renderItem}
+              onReorder={handleReorder}
+              isDragEnabled={isDragEnabled}
               renderAddTask={isArchivedView ? undefined : (groupKey) => (
                 <InlineAddTask
                   key={`add-${groupKey}`}
@@ -253,6 +503,8 @@ export default function TasksPage() {
                   groupKey={groupKey}
                   isAdmin={isAdmin ?? false}
                   tab={filters.tab}
+                  onCreateInlineTask={handleInlineTaskCreated}
+                  onInlineTaskSettled={handleInlineTaskSettled}
                 />
               )}
             />
@@ -260,7 +512,7 @@ export default function TasksPage() {
 
           {/* Mobile: card view */}
           <div className="md:hidden">
-            {displayResult.groups.map((group) => (
+            {displayGroups.groups.map((group) => (
               <div key={group.key}>
                 {group.tasks.map((task) => (
                   <TaskCard
@@ -269,6 +521,7 @@ export default function TasksPage() {
                     isSelected={selectedIds.has(task._id)}
                     hasSelection={selectedIds.size > 0}
                     onSelect={handleSelect}
+                    activity={activityMap?.[task._id]}
                   />
                 ))}
               </div>
@@ -305,10 +558,17 @@ export default function TasksPage() {
         onConfirm={handleDelete}
       />
 
-      <TaskDetailModal
-        taskIds={allVisibleTaskIds}
-        isAdmin={isAdmin ?? false}
-      />
+      {viewPref === "drawer" ? (
+        <TaskDetailDrawer
+          taskIds={allVisibleTaskIds}
+          isAdmin={isAdmin ?? false}
+        />
+      ) : (
+        <TaskDetailModal
+          taskIds={allVisibleTaskIds}
+          isAdmin={isAdmin ?? false}
+        />
+      )}
     </div>
     </TaskReferenceDataProvider>
   )

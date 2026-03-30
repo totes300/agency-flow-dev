@@ -2,7 +2,7 @@ import { getCategoryColor } from "@/convex/lib/constants"
 import { cn } from "@/lib/utils"
 
 /**
- * Displays a work category as a colored badge (Tailwind style).
+ * Displays a work category as a tinted badge with colored dot.
  * Used in task lists, time entries, project views, and settings.
  */
 export function CategoryBadge({
@@ -17,16 +17,20 @@ export function CategoryBadge({
   const c = getCategoryColor(color)
   return (
     <span
+      data-slot="category-badge"
       className={cn(
-        "inline-flex items-center rounded-md px-2 py-1 text-xs font-medium",
+        "inline-flex w-fit items-center gap-[5px] rounded-[5px] py-[3px] pl-[7px] pr-[9px] text-xs font-normal leading-[18px]",
         className,
       )}
       style={{
-        backgroundColor: c.bg,
-        color: c.text,
-        boxShadow: `inset 0 0 0 1px ${c.ring}`,
+        backgroundColor: `color-mix(in srgb, ${c.dot} 13%, transparent)`,
+        color: `color-mix(in srgb, ${c.dot} 72%, var(--color-foreground))`,
       }}
     >
+      <span
+        className="size-1.5 shrink-0 rounded-full"
+        style={{ backgroundColor: c.dot }}
+      />
       {name}
     </span>
   )

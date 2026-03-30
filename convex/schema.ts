@@ -14,6 +14,7 @@ export default defineSchema({
     timerStartedAt: v.optional(v.number()),
     timerAccumulatedMs: v.optional(v.number()),
     timerStatus: v.optional(v.union(v.literal("running"), v.literal("paused"))),
+    taskDetailView: v.optional(v.union(v.literal("modal"), v.literal("drawer"))),
     createdAt: v.number(),
     updatedAt: v.number(),
   }).index("byExternalId", ["externalId"]),
@@ -96,7 +97,8 @@ export default defineSchema({
     billable: v.boolean(),
     dueDate: v.optional(v.string()),
     parentTaskId: v.optional(v.id("tasks")),
-    sortOrder: v.optional(v.number()),
+    sortOrder: v.optional(v.number()),          // subtask order within parent
+    manualSortKey: v.optional(v.string()),       // fractional-indexing key for top-level drag order
     archivedAt: v.optional(v.number()),
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -333,6 +335,16 @@ export default defineSchema({
   })
     .index("by_task", ["taskId"])
     .index("by_comment", ["commentId"])
+    .index("by_orgId", ["orgId"]),
+
+  // ─── Task View Receipts (per user per task — non-comment "seen" state) ───
+  taskViewReceipts: defineTable({
+    taskId: v.id("tasks"),
+    orgId: v.string(),
+    userId: v.id("users"),
+    lastViewedAt: v.number(),
+  })
+    .index("by_user_task", ["userId", "taskId"])
     .index("by_orgId", ["orgId"]),
 
   // ─── Typing indicators (ephemeral presence) ──────────────────────────────

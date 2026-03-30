@@ -1,10 +1,13 @@
 import { v, ConvexError } from "convex/values";
+import { generateKeyBetween } from "fractional-indexing";
 import { query, mutation } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { getAuthContext, requireAdmin, validateStringLength } from "./lib/auth";
 import { logActivity } from "./activityLog";
 import { STATUS_TYPES } from "./lib/constants";
 import type { StatusType } from "./lib/constants";
+import { isTiptapEmpty } from "../lib/tiptap-utils";
+import { computeTaskIndicatorState } from "./lib/taskActivityIndicators";
 import {
   TAB_STATUS_TYPE,
   isVisibleTopLevelTask,
@@ -336,6 +339,11 @@ export const list = query({
       v.literal("assignee"), v.literal("status"), v.null()
     )),
     search: v.optional(v.string()),
+    sortBy: v.optional(v.union(
+      v.literal("title"), v.literal("status"), v.literal("category"),
+      v.literal("dueDate"), v.literal("createdAt"), v.literal("updatedAt"),
+    )),
+    sortOrder: v.optional(v.union(v.literal("asc"), v.literal("desc"))),
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
@@ -460,17 +468,98 @@ export const list = query({
     }
 
     // ── Step 3: Sort ─────────────────────────────────────────────────────
-    tasks.sort((a, b) => b.createdAt - a.createdAt);
+    // When sortBy is omitted → "manual" mode: order by manualSortKey → createdAt
+    const sortBy = args.sortBy ?? "manual";
+    const sortOrder = args.sortOrder ?? "asc";
+    const mul = sortOrder === "asc" ? 1 : -1;
+
+    // Pre-fetch lookup maps for relation-based sorts
+    let statusSortMap: Map<string, { typeOrder: number; sortOrder: number; name: string }> | undefined;
+    let categorySortMap: Map<string, string> | undefined;
+
+    if (sortBy === "status") {
+      const TYPE_ORDER: Record<string, number> = { backlog: 0, in_progress: 1, review: 2, blocked: 3, done: 4 };
+      const allStatuses = await ctx.db.query("statuses")
+        .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+        .collect();
+      statusSortMap = new Map();
+      for (const s of allStatuses) {
+        statusSortMap.set(s._id, { typeOrder: TYPE_ORDER[s.type] ?? 99, sortOrder: s.sortOrder ?? 0, name: s.name });
+      }
+    }
+
+    if (sortBy === "category") {
+      const allCategories = await ctx.db.query("workCategories")
+        .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+        .collect();
+      categorySortMap = new Map();
+      for (const c of allCategories) {
+        categorySortMap.set(c._id, c.name);
+      }
+    }
+
+    tasks.sort((a, b) => {
+      let cmp = 0;
+      switch (sortBy) {
+        case "manual": {
+          // Fractional key sort: tasks with keys before tasks without, then createdAt
+          const ak = a.manualSortKey;
+          const bk = b.manualSortKey;
+          if (ak && bk) { cmp = ak.localeCompare(bk); }
+          else if (ak) { cmp = -1; }
+          else if (bk) { cmp = 1; }
+          else { cmp = 0; }
+          break;
+        }
+        case "title":
+          cmp = a.title.localeCompare(b.title) * mul;
+          break;
+        case "createdAt":
+          cmp = (a.createdAt - b.createdAt) * mul;
+          break;
+        case "updatedAt":
+          cmp = (a.updatedAt - b.updatedAt) * mul;
+          break;
+        case "dueDate": {
+          const ad = a.dueDate;
+          const bd = b.dueDate;
+          // Nulls always last regardless of direction
+          if (!ad && !bd) { cmp = 0; break; }
+          if (!ad) return 1;
+          if (!bd) return -1;
+          cmp = ad.localeCompare(bd) * mul;
+          break;
+        }
+        case "status": {
+          const sa = statusSortMap?.get(a.statusId) ?? { typeOrder: 99, sortOrder: 0, name: "" };
+          const sb = statusSortMap?.get(b.statusId) ?? { typeOrder: 99, sortOrder: 0, name: "" };
+          cmp = ((sa.typeOrder - sb.typeOrder) || (sa.sortOrder - sb.sortOrder) || sa.name.localeCompare(sb.name)) * mul;
+          break;
+        }
+        case "category": {
+          const ca = a.workCategoryId ? categorySortMap?.get(a.workCategoryId) : undefined;
+          const cb = b.workCategoryId ? categorySortMap?.get(b.workCategoryId) : undefined;
+          // Nulls always last regardless of direction
+          if (!ca && !cb) { cmp = 0; break; }
+          if (!ca) return 1;
+          if (!cb) return -1;
+          cmp = ca.localeCompare(cb) * mul;
+          break;
+        }
+      }
+      // Tie-breaker: createdAt asc (insertion order for tasks without manual keys)
+      return cmp || (a.createdAt - b.createdAt);
+    });
     const totalCount = tasks.length;
 
     // ── Step 4: Group ────────────────────────────────────────────────────
-    type GroupBucket = { key: string; label: string; color?: string; sortKey: string; tasks: Doc<"tasks">[] };
+    type GroupBucket = { key: string; label: string; color?: string; statusType?: string; sortKey: string; tasks: Doc<"tasks">[] };
     const buckets = new Map<string, GroupBucket>();
 
-    function assignToBucket(task: Doc<"tasks">, key: string, label: string, sortKey: string, color?: string) {
+    function assignToBucket(task: Doc<"tasks">, key: string, label: string, sortKey: string, color?: string, statusType?: string) {
       let bucket = buckets.get(key);
       if (!bucket) {
-        bucket = { key, label, color, sortKey, tasks: [] };
+        bucket = { key, label, color, statusType, sortKey, tasks: [] };
         buckets.set(key, bucket);
       }
       bucket.tasks.push(task);
@@ -558,7 +647,7 @@ export const list = query({
             const typeOrder: Record<StatusType, number> = { backlog: 0, in_progress: 1, review: 2, blocked: 3, done: 4 };
             const order = st ? typeOrder[st.type] : 99;
             const sortKey = `${order}-${String(st?.sortOrder ?? 999).padStart(3, "0")}`;
-            assignToBucket(task, task.statusId.toString(), st?.name ?? "Unknown", sortKey, st?.color);
+            assignToBucket(task, task.statusId.toString(), st?.name ?? "Unknown", sortKey, st?.color, st?.type);
             break;
           }
         }
@@ -619,6 +708,7 @@ export const list = query({
       key: bucket.key,
       label: bucket.label,
       color: bucket.color,
+      statusType: bucket.statusType,
       count: bucket.tasks.length,
       tasks: paginatedTasksByGroup[i].map(enrichTask),
       hasMore: bucket.tasks.length > limit,
@@ -633,17 +723,55 @@ export const list = query({
 export const activityIndicators = query({
   args: { taskIds: v.array(v.id("tasks")) },
   handler: async (ctx, { taskIds }) => {
-    const { orgId } = await getAuthContext(ctx);
+    const { orgId, userId } = await getAuthContext(ctx);
 
-    const capped = taskIds.slice(0, 100);
+    const capped = taskIds.slice(0, 500);
     const result: Record<string, {
       subtaskTotal: number;
       subtaskDone: number;
       commentCount: number;
-      hasAttachments: boolean;
+      hasAttachments: boolean; // backward compat — removed in Phase 2
+      hasDescription: boolean;
+      hasUnseenNonComment: boolean;
+      hasUnseenSubtasks: boolean;
+      hasUnseenDescription: boolean;
+      hasUnseenComments: boolean;
+      hasUnseen: boolean;
+      unreadCommentCount: number;
+      unseenActivityCount: number;
+      lastActivity: {
+        userName: string;
+        type: string;
+        metadata: Record<string, unknown>;
+        createdAt: number;
+      } | null;
     }> = {};
 
+    // Cache user names across tasks
+    const userNameCache = new Map<string, string>();
+    async function getUserName(uid: Id<"users">): Promise<string> {
+      const key = uid.toString();
+      if (!userNameCache.has(key)) {
+        const user = await ctx.db.get(uid);
+        userNameCache.set(key, user?.name ?? "Unknown");
+      }
+      return userNameCache.get(key)!;
+    }
+
     await Promise.all(capped.map(async (taskId) => {
+      const task = await ctx.db.get(taskId);
+      if (!task || task.orgId !== orgId) return;
+
+      // hasDescription via isTiptapEmpty
+      let hasDescription = false;
+      if (task?.description) {
+        try {
+          hasDescription = !isTiptapEmpty(JSON.parse(task.description));
+        } catch {
+          hasDescription = false;
+        }
+      }
+
       const [subtasks, comments, attachments] = await Promise.all([
         ctx.db.query("tasks")
           .withIndex("by_orgId_parentTaskId", (q) => q.eq("orgId", orgId).eq("parentTaskId", taskId))
@@ -651,21 +779,133 @@ export const activityIndicators = query({
           .collect(),
         ctx.db.query("comments")
           .withIndex("by_task", (q) => q.eq("taskId", taskId))
-          .take(500),
+          .collect(),
         ctx.db.query("attachments")
           .withIndex("by_task", (q) => q.eq("taskId", taskId))
           .take(1),
       ]);
+
+      // Fetch receipts for unseen computation
+      const [viewReceipt, commentReceipt] = await Promise.all([
+        ctx.db.query("taskViewReceipts")
+          .withIndex("by_user_task", (q) => q.eq("userId", userId).eq("taskId", taskId))
+          .unique(),
+        ctx.db.query("commentReadReceipts")
+          .withIndex("by_user_task", (q) => q.eq("userId", userId).eq("taskId", taskId))
+          .unique(),
+      ]);
+
+      const lastViewedAt = viewReceipt?.lastViewedAt ?? 0;
+      const lastSeenAt = commentReceipt?.lastSeenAt ?? 0;
+
+      const events = (await ctx.db
+        .query("activityLog")
+        .withIndex("by_task", (q) => q.eq("taskId", taskId).gt("createdAt", lastViewedAt))
+        .collect())
+        .filter((event) => event.type !== "description_changed");
+
+      const indicatorState = computeTaskIndicatorState({
+        events: events.map((event) => ({
+          createdAt: event.createdAt,
+          type: event.type,
+          userId: event.userId,
+        })),
+        comments: comments.map((comment) => ({
+          createdAt: comment.createdAt,
+          userId: comment.userId,
+        })),
+        currentUserId: userId,
+        lastViewedAt,
+        lastSeenAt,
+      });
+
+      // lastActivity: most recent activityLog event
+      const latestEvent = (await ctx.db
+        .query("activityLog")
+        .withIndex("by_task", (q) => q.eq("taskId", taskId))
+        .order("desc")
+        .take(20))
+        .find((event) => event.type !== "description_changed");
+
+      let lastActivity: {
+        userName: string;
+        type: string;
+        metadata: Record<string, unknown>;
+        createdAt: number;
+      } | null = null;
+
+      if (latestEvent) {
+        const userName = await getUserName(latestEvent.userId);
+        lastActivity = {
+          userName,
+          type: latestEvent.type,
+          metadata: latestEvent.metadata as Record<string, unknown>,
+          createdAt: latestEvent.createdAt,
+        };
+      }
 
       result[taskId] = {
         subtaskTotal: subtasks.length,
         subtaskDone: subtasks.filter((s) => s.statusType === "done").length,
         commentCount: comments.length,
         hasAttachments: attachments.length > 0,
+        hasDescription,
+        hasUnseenNonComment: indicatorState.hasUnseenNonComment,
+        hasUnseenSubtasks: indicatorState.hasUnseenSubtasks,
+        hasUnseenDescription: indicatorState.hasUnseenDescription,
+        hasUnseenComments: indicatorState.hasUnseenComments,
+        hasUnseen: indicatorState.hasUnseen,
+        unreadCommentCount: indicatorState.unreadCommentCount,
+        unseenActivityCount: indicatorState.unseenActivityCount,
+        lastActivity,
       };
     }));
 
     return result;
+  },
+});
+
+/**
+ * Up to 5 subtasks for a single task — used by subtask hover popover.
+ * Sort: incomplete first (by creation order), then completed (by creation order).
+ */
+export const subtaskPreview = query({
+  args: { taskId: v.id("tasks") },
+  handler: async (ctx, { taskId }) => {
+    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
+    const task = await ctx.db.get(taskId);
+    if (!task || task.orgId !== orgId) return [];
+    if (!isAdmin && !task.assigneeIds.includes(userId)) return [];
+
+    const subtasks = await ctx.db
+      .query("tasks")
+      .withIndex("by_orgId_parentTaskId", (q) => q.eq("orgId", orgId).eq("parentTaskId", taskId))
+      .filter((q) => q.eq(q.field("archivedAt"), undefined))
+      .collect();
+
+    // Sort: incomplete first, then completed, both by creation order
+    const incomplete = subtasks.filter((s) => s.statusType !== "done");
+    const completed = subtasks.filter((s) => s.statusType === "done");
+    const sorted = [...incomplete, ...completed].slice(0, 5);
+
+    // Resolve first assignee avatar for each subtask
+    const userCache = new Map<string, { name: string; imageUrl?: string }>();
+    for (const s of sorted) {
+      if (s.assigneeIds.length > 0 && !userCache.has(s.assigneeIds[0].toString())) {
+        const user = await ctx.db.get(s.assigneeIds[0]);
+        if (user) userCache.set(s.assigneeIds[0].toString(), { name: user.name, imageUrl: user.imageUrl });
+      }
+    }
+
+    return sorted.map((s) => {
+      const assignee = s.assigneeIds.length > 0 ? userCache.get(s.assigneeIds[0].toString()) : undefined;
+      return {
+        _id: s._id,
+        title: s.title,
+        statusType: s.statusType,
+        assignee: assignee ? { name: assignee.name, imageUrl: assignee.imageUrl } : null,
+      };
+    });
   },
 });
 
@@ -717,6 +957,17 @@ export const create = mutation({
     }
     await validateAssignees(ctx, orgId, assigneeIds);
 
+    // Generate manualSortKey — append after the last task in this org.
+    // Convex OCC ensures concurrent creates on the same index range will
+    // serialize (second transaction retries), so duplicate keys cannot occur.
+    const lastTask = await ctx.db
+      .query("tasks")
+      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+      .order("desc")
+      .first();
+    const lastKey = lastTask?.manualSortKey ?? null;
+    const manualSortKey = generateKeyBetween(lastKey, null);
+
     const now = Date.now();
     const taskId = await ctx.db.insert("tasks", {
       orgId, title,
@@ -728,6 +979,7 @@ export const create = mutation({
       estimate: args.estimate,
       billable: args.billable ?? true,
       dueDate: args.dueDate,
+      manualSortKey,
       createdAt: now, updatedAt: now, createdBy: userId,
     });
 
@@ -767,8 +1019,11 @@ export const update = mutation({
       validateStringLength(title, 500, "Task title");
       updates.title = title;
     }
+    const nextDescription = args.description !== undefined
+      ? (args.description.trim() || undefined)
+      : undefined;
     if (args.description !== undefined) {
-      updates.description = args.description.trim() || undefined;
+      updates.description = nextDescription;
     }
     if (args.statusId !== undefined) {
       const status = await ctx.db.get(args.statusId);
@@ -809,6 +1064,21 @@ export const update = mutation({
       const newStatus = await ctx.db.get(args.statusId);
       const oldStatus = task.statusId ? await ctx.db.get(task.statusId) : null;
       await logActivity(ctx, { ...logCtx, type: "status_changed", metadata: { from: oldStatus?.name ?? "None", to: newStatus?.name ?? "Unknown", fromId: task.statusId, toId: args.statusId } });
+
+      // Log subtask_completed on the parent task when a subtask transitions INTO done
+      if (
+        newStatus?.type === "done" &&
+        oldStatus?.type !== "done" &&
+        task.parentTaskId
+      ) {
+        await logActivity(ctx, {
+          taskId: task.parentTaskId,
+          orgId,
+          userId,
+          type: "subtask_completed",
+          metadata: { title: task.title, subtaskId: args.id },
+        });
+      }
     }
     if (args.assigneeIds !== undefined) {
       const oldSet = new Set(task.assigneeIds.map(String));
@@ -842,6 +1112,33 @@ export const update = mutation({
     if (args.billable !== undefined && args.billable !== task.billable) {
       await logActivity(ctx, { ...logCtx, type: "billable_changed", metadata: { from: task.billable, to: args.billable } });
     }
+  },
+});
+
+export const updateDescription = mutation({
+  args: {
+    id: v.id("tasks"),
+    description: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
+
+    const task = await ctx.db.get(args.id);
+    if (!task || task.orgId !== orgId) throw new ConvexError("Task not found");
+    if (!isAdmin && !task.assigneeIds.includes(userId)) {
+      throw new ConvexError("You can only edit tasks assigned to you");
+    }
+
+    const nextDescription = args.description !== undefined
+      ? (args.description.trim() || undefined)
+      : undefined;
+
+    if (nextDescription === task.description) return;
+
+    await ctx.db.patch(args.id, {
+      description: nextDescription,
+      updatedAt: Date.now(),
+    });
   },
 });
 
@@ -931,9 +1228,15 @@ export const remove = mutation({
 export const duplicate = mutation({
   args: { id: v.id("tasks") },
   handler: async (ctx, args) => {
-    const { orgId, userId } = await getAuthContext(ctx);
+    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
     const task = await ctx.db.get(args.id);
     if (!task || task.orgId !== orgId) throw new ConvexError("Task not found");
+    if (!isAdmin && !task.assigneeIds.includes(userId)) {
+      throw new ConvexError("You can only duplicate tasks assigned to you");
+    }
+
+    // Place duplicate right after the original in manual sort order
+    const manualSortKey = generateKeyBetween(task.manualSortKey ?? null, null);
 
     const now = Date.now();
     const newId = await ctx.db.insert("tasks", {
@@ -941,6 +1244,7 @@ export const duplicate = mutation({
       description: task.description, statusId: task.statusId, statusType: task.statusType,
       projectId: task.projectId, assigneeIds: task.assigneeIds, workCategoryId: task.workCategoryId,
       estimate: task.estimate, billable: task.billable,
+      manualSortKey,
       createdAt: now, updatedAt: now, createdBy: userId,
     });
 
@@ -996,6 +1300,21 @@ export const bulkUpdate = mutation({
             const newStatus = await ctx.db.get(args.action.statusId);
             const oldStatus = task.statusId ? await ctx.db.get(task.statusId) : null;
             await logActivity(ctx, { taskId, orgId, userId, type: "status_changed", metadata: { from: oldStatus?.name ?? "None", to: newStatus?.name ?? "Unknown" } });
+
+            // Log subtask_completed on the parent when a subtask transitions INTO done
+            if (
+              newStatus?.type === "done" &&
+              oldStatus?.type !== "done" &&
+              task.parentTaskId
+            ) {
+              await logActivity(ctx, {
+                taskId: task.parentTaskId,
+                orgId,
+                userId,
+                type: "subtask_completed",
+                metadata: { title: task.title, subtaskId: taskId },
+              });
+            }
           }
           updated++;
           break;
@@ -1092,3 +1411,29 @@ export const bulkUpdate = mutation({
   },
 });
 
+// ─── Reorder task (drag & drop, fractional indexing) ────────────────────────
+
+
+export const reorderTask = mutation({
+  args: {
+    taskId: v.id("tasks"),
+    beforeKey: v.optional(v.string()),   // manualSortKey of the item above (null = first)
+    afterKey: v.optional(v.string()),    // manualSortKey of the item below (null = last)
+  },
+  handler: async (ctx, { taskId, beforeKey, afterKey }) => {
+    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
+
+    const task = await ctx.db.get(taskId);
+    if (!task || task.orgId !== orgId) {
+      throw new ConvexError("Task not found");
+    }
+    if (!isAdmin && !task.assigneeIds.includes(userId)) {
+      throw new ConvexError("You can only reorder tasks assigned to you");
+    }
+
+    // Generate fractional key between neighbors
+    const newKey = generateKeyBetween(beforeKey ?? null, afterKey ?? null);
+
+    await ctx.db.patch(taskId, { manualSortKey: newKey });
+  },
+});

@@ -29,6 +29,11 @@ import type { FeedItem } from "@/lib/task-detail"
 import type { Id } from "@/convex/_generated/dataModel"
 import { cn } from "@/lib/utils"
 
+function formatShortTime(timestamp: number): string {
+  return new Date(timestamp)
+    .toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false })
+}
+
 /** Clerk default avatars contain "default" in the URL — show monogram instead */
 function isDefaultAvatar(url?: string | null): boolean {
   if (!url) return true
@@ -252,7 +257,10 @@ export const CommentCard = memo(function CommentCard({
   }, [])
 
   return (
-    <div id={`comment-${item.id}`} className="group/comment my-3 rounded-lg border border-border/60 bg-background">
+    <div
+      id={`comment-${item.id}`}
+      className="group/comment my-3 rounded-lg border border-border/60 bg-background"
+    >
       {/* Header: avatar + name + time + actions */}
       <div className="flex items-center gap-3 px-4 pt-3.5 pb-1.5">
         <UserAvatar
@@ -260,14 +268,21 @@ export const CommentCard = memo(function CommentCard({
           imageUrl={isDefaultAvatar(item.userImageUrl) ? null : item.userImageUrl}
           className="size-6 text-[9px]"
         />
-        <span className="text-sm font-medium text-foreground">
+        <span className="text-[15px] font-semibold text-foreground">
           {item.userName}
         </span>
-        <span className="text-[11px] text-muted-foreground/50">
-          {formatActivityTimestamp(item.createdAt)}
-        </span>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="text-xs font-normal text-muted-foreground/60">
+              {formatShortTime(item.createdAt)}
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="top">
+            <span className="text-xs">{formatActivityTimestamp(item.createdAt)}</span>
+          </TooltipContent>
+        </Tooltip>
         {item.updatedAt && item.updatedAt !== item.createdAt && (
-          <span className="text-[10px] text-muted-foreground/40">(edited)</span>
+          <span className="text-[10px] text-muted-foreground/55">(edited)</span>
         )}
 
         {/* Edit/Delete menu — hover-to-reveal */}
@@ -318,7 +333,7 @@ export const CommentCard = memo(function CommentCard({
               el.classList.add("comment-highlight")
             }
           }}
-          className="flex items-center gap-1 pl-4 pr-4 text-[11px] text-muted-foreground/60 transition-colors hover:text-muted-foreground"
+          className="flex items-center gap-1 pl-4 pr-4 text-[11px] font-normal text-muted-foreground/60 transition-colors hover:text-foreground/80"
         >
           <CornerDownRightIcon className="size-3 shrink-0" />
           <span className="truncate">

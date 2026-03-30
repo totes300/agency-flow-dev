@@ -94,57 +94,44 @@ export function ActivityBatch({
   const batchTime = formatRelativeTime(batch.endTime)
 
   return (
-    <Collapsible className="my-3.5 first:mt-0">
-      <CollapsibleTrigger className="group grid w-full grid-cols-[28px_minmax(0,1fr)_72px_16px] items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-muted/20">
-        <div className="relative flex self-stretch items-center justify-center">
-          <div className="relative z-10 flex size-8 items-center justify-center bg-background">
-            <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-muted-foreground/15 text-muted-foreground">
-              <Activity className="size-3.5 shrink-0" />
-            </div>
-          </div>
+    <Collapsible className="mt-6 first:mt-0">
+      <CollapsibleTrigger className="group flex w-full items-center gap-2 py-0 text-left">
+        <div className="flex size-6 shrink-0 items-center justify-center rounded-full bg-muted/80">
+          <Activity className="size-3 shrink-0 text-muted-foreground/60" />
         </div>
-        <div className="min-w-0 flex-1 text-[13px] font-medium leading-5 text-foreground/88">
+        <span className="text-[13.5px] font-semibold text-muted-foreground">
           {label}
-        </div>
-        <div className="w-[72px] shrink-0 text-right text-xs text-muted-foreground/78">{batchTime}</div>
-        <ChevronRight className="size-3.5 shrink-0 text-muted-foreground/70 transition-transform duration-200 data-[state=open]:rotate-90" />
+        </span>
+        <span className="text-xs text-muted-foreground/50">{batchTime}</span>
+        <ChevronRight className="ml-0.5 size-2.5 shrink-0 text-muted-foreground/50 transition-transform duration-150 group-data-[state=open]:rotate-90" />
       </CollapsibleTrigger>
-      <CollapsibleContent>
-        <div className="pb-1 pt-1">
-          <div className="ml-[26px] border-l border-border/50 pl-[21px]">
-            {batch.items.map((item) => {
-              const displayName =
-                currentUserId && item.userId === currentUserId
-                  ? "You"
-                  : firstName(item.userName ?? "Someone")
+      <CollapsibleContent className="overflow-hidden data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=open]:fade-in-0 data-[state=closed]:fade-out-0 data-[state=open]:slide-in-from-top-1 data-[state=closed]:slide-out-to-top-1 duration-150">
+        <div className="ml-8 pt-1.5">
+          {batch.items.map((item) => {
+            const displayName =
+              currentUserId && item.userId === currentUserId
+                ? "You"
+                : firstName(item.userName ?? "Someone")
 
-              const { text, highlight } = formatActivityText(
-                item.type as ActivityEventType,
-                displayName,
-                item.metadata,
-              )
-              const RowIcon = getRowIcon(item.type)
+            const { text, highlight } = formatActivityText(
+              item.type as ActivityEventType,
+              displayName,
+              item.metadata,
+            )
+            const RowIcon = getRowIcon(item.type)
 
-              return (
-                <div key={item.id} className="grid grid-cols-[20px_minmax(0,1fr)_72px] items-start gap-3 py-2">
-                  <div className="relative z-10 flex pt-[2px] text-muted-foreground/60">
-                    <div className="flex size-5 items-center justify-center rounded-full bg-muted/60 text-muted-foreground/85">
-                      <RowIcon className="size-2.5" strokeWidth={2} />
-                    </div>
-                  </div>
-                  <div className="min-w-0 pt-[2px] text-[13px] leading-5 text-foreground/72">
-                    {text}
-                    {highlight && (
-                      <span className="font-medium text-foreground/92"> {highlight}</span>
-                    )}
-                  </div>
-                  <div className="pt-0.5 text-right text-xs text-muted-foreground/62">
-                    {formatRelativeTime(item.createdAt)}
-                  </div>
-                </div>
-              )
-            })}
-          </div>
+            return (
+              <div key={item.id} className="flex items-center gap-2 py-[5px] text-[13px] text-muted-foreground/70">
+                <RowIcon className="size-3.5 shrink-0 text-muted-foreground/45" strokeWidth={1.5} />
+                <span>
+                  {text}
+                  {highlight && (
+                    <span className="font-medium text-foreground/85"> {highlight}</span>
+                  )}
+                </span>
+              </div>
+            )
+          })}
         </div>
       </CollapsibleContent>
     </Collapsible>

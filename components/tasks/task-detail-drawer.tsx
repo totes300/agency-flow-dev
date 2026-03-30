@@ -69,7 +69,7 @@ export function TaskDetailDrawer({
       aria-modal="true"
       aria-label="Task detail"
       className={cn(
-        "fixed top-0 right-0 bottom-0 z-40 w-[55vw] border-l border-border bg-background shadow-[-8px_0_24px_-12px_rgba(0,0,0,0.08)] flex flex-col",
+        "fixed top-0 right-0 bottom-0 z-40 w-[54vw] border-l border-border bg-background shadow-[-8px_0_24px_-12px_rgba(0,0,0,0.08)] flex flex-col",
         "transition-transform duration-200 ease-out",
         isOpen ? "translate-x-0" : "translate-x-full pointer-events-none",
       )}
@@ -106,7 +106,7 @@ export function TaskDetailDrawer({
 
               {/* Properties sidebar — collapsible */}
               {task && showProperties && (
-                <div className="w-[280px] shrink-0 overflow-y-auto border-l border-border/60 bg-muted/60 pt-16 dark:bg-muted/30">
+                <div className="w-[240px] shrink-0 overflow-y-auto border-l border-border/70">
                   <TaskDetailMetadata task={task} isAdmin={isAdmin} layout="stack" />
                 </div>
               )}

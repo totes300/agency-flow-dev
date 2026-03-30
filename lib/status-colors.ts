@@ -7,8 +7,8 @@ export const STATUS_COLOR_CONFIG: Record<
   { dot: string; swatch: string; label: string; isLight: boolean }
 > = {
   gray:   { dot: "#9CA3AF", swatch: "#F1F1EF", label: "Gray",   isLight: true },
-  blue:   { dot: "#3E63DD", swatch: "#D3E5EF", label: "Blue",   isLight: false },
-  amber:  { dot: "#FFC53D", swatch: "#FADEC9", label: "Orange", isLight: false },
+  blue:   { dot: "#2783de", swatch: "rgba(0,124,215,0.09)", label: "Blue",   isLight: false },
+  amber:  { dot: "#d5803b", swatch: "rgba(224,101,1,0.13)", label: "Orange", isLight: false },
   purple: { dot: "#8B5CF6", swatch: "#E8DEEE", label: "Purple", isLight: false },
   coral:  { dot: "#A1887F", swatch: "#F3EEEE", label: "Brown",  isLight: false },
   red:    { dot: "#EF4444", swatch: "#FFE2DD", label: "Red",    isLight: false },

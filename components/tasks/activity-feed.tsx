@@ -569,9 +569,9 @@ function AuditLine({ item, currentUserId }: { item: FeedItem & { kind: "audit" }
 function DayDivider({ label }: { label: string }) {
   return (
     <div className="my-3 flex items-center gap-3">
-      <div className="h-px flex-1 bg-border/55" />
+      <div className="h-px flex-1 bg-border/40" />
       <span className="text-[11px] font-medium text-muted-foreground/65">{label}</span>
-      <div className="h-px flex-1 bg-border/55" />
+      <div className="h-px flex-1 bg-border/40" />
     </div>
   )
 }
@@ -642,8 +642,10 @@ export function ActivityViewToggle({
   onViewChange: (v: ActivityView) => void
 }) {
   return (
-    <div className="flex items-center gap-0.5 rounded-md bg-muted p-0.5">
+    <div role="radiogroup" aria-label="Activity view" className="flex items-center gap-0.5 rounded-md bg-muted p-0.5">
       <button
+        role="radio"
+        aria-checked={view === "all"}
         className={cn(
           "rounded px-2.5 py-1 text-xs font-medium transition-colors",
           view === "all"
@@ -655,6 +657,8 @@ export function ActivityViewToggle({
         All
       </button>
       <button
+        role="radio"
+        aria-checked={view === "comments"}
         className={cn(
           "rounded px-2.5 py-1 text-xs font-medium transition-colors",
           view === "comments"

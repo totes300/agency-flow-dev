@@ -83,7 +83,7 @@ export function InlineProjectCell({
             <div className="min-w-0 flex-1">
               {client && (
                 <div className="flex items-center gap-1">
-                  <span className="truncate text-xs text-muted-foreground">{client.name}</span>
+                  <span className="truncate text-[13px] text-foreground">{client.name}</span>
                   {locked && <LockIcon className="size-3 shrink-0 text-muted-foreground" />}
                 </div>
               )}
@@ -92,7 +92,7 @@ export function InlineProjectCell({
                   <LockIcon className="size-3 shrink-0 text-muted-foreground" />
                 </div>
               )}
-              <div className="truncate text-xs leading-tight text-muted-foreground/60">{project.name}</div>
+              <div className="truncate text-xs leading-tight text-muted-foreground">{project.name}</div>
             </div>
           ) : (
             <span className="flex items-center gap-1.5 rounded-md border border-dashed border-border/55 bg-muted/[0.12] px-2 py-1 text-muted-foreground/60 transition-colors group-hover/row:border-border/80 group-hover/row:bg-muted/[0.22] group-hover/row:text-muted-foreground">

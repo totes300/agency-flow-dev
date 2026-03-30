@@ -347,6 +347,15 @@ export default defineSchema({
     .index("by_user_task", ["userId", "taskId"])
     .index("by_orgId", ["orgId"]),
 
+  // ─── Link previews (OG metadata cache, global) ────────────────────────────
+  linkPreviews: defineTable({
+    url: v.string(),
+    title: v.optional(v.string()),
+    domain: v.string(),
+    status: v.union(v.literal("pending"), v.literal("fetched"), v.literal("failed")),
+    fetchedAt: v.number(),
+  }).index("by_url", ["url"]),
+
   // ─── Typing indicators (ephemeral presence) ──────────────────────────────
   typingIndicators: defineTable({
     taskId: v.id("tasks"),

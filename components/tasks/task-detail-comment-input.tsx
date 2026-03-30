@@ -323,7 +323,7 @@ function CommentBottomBar({
           <PaintbrushIcon className="size-4" />
         </ToolbarButton>
 
-        <div className="mx-0.5 h-4 w-px bg-border/50" />
+        <div className="mx-0.5 h-4 w-px bg-border/40" />
 
         <EmojiPickerPopover onSelect={(emoji) => editor.chain().focus().insertContent(emoji).run()}>
           <ToolbarButton active={false} onClick={() => {}} aria-label="Add emoji">
@@ -338,7 +338,7 @@ function CommentBottomBar({
           <AtSignIcon className="size-4" />
         </ToolbarButton>
 
-        <div className="mx-0.5 h-4 w-px bg-border/50" />
+        <div className="mx-0.5 h-4 w-px bg-border/40" />
 
         <ToolbarButton active={false} onClick={onAttach} aria-label="Attach file">
           <PaperclipIcon className="size-4" />

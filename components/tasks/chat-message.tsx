@@ -3,6 +3,7 @@
 import { useState, useCallback, useEffect, memo, type ReactNode } from "react"
 import { UserAvatar } from "@/components/user-avatar"
 import { CommentAttachmentChip } from "@/components/comment-attachment-chip"
+import { CommentLinkPreview } from "@/components/comment-link-preview"
 import { EmojiPickerPopover } from "@/components/emoji-picker-popover"
 import { formatActivityTimestamp } from "@/lib/format"
 import {
@@ -263,10 +264,10 @@ export const ChatMessage = memo(function ChatMessage({
     <div
       id={`comment-${item.id}`}
       className={cn(
-        "group/msg relative rounded-xl px-3 transition-colors hover:bg-muted/25",
+        "group/msg relative px-0 transition-colors",
         isGrouped
-          ? "py-1"
-          : "mt-2.5 py-1.5",
+          ? "mt-1.5"
+          : "mt-6 first:mt-0",
       )}
     >
       {/* Floating action toolbar — Slack-style pill, top-right */}
@@ -331,51 +332,30 @@ export const ChatMessage = memo(function ChatMessage({
         </div>
       )}
 
-      {/* Slack-style row: avatar left + content right */}
-      <div className={cn("flex gap-3", isGrouped && "items-baseline")}>
-        {/* Avatar column — timeline node */}
-        <div className="relative w-7 shrink-0 self-stretch">
-          {/* Lane line — below avatar: starts 10px below the avatar circle */}
-          {laneBelow && !isGrouped && (
-            <div className="absolute left-1/2 top-[36px] -bottom-2 w-px -translate-x-1/2 bg-border" />
-          )}
-          {/* Lane line — grouped (no avatar): continuous through entire row */}
-          {isGrouped && (laneAbove || laneBelow) && (
-            <div className={cn(
-              "absolute left-1/2 w-px -translate-x-1/2 bg-border",
-              laneAbove ? "-top-2" : "top-0",
-              laneBelow ? "-bottom-2" : "bottom-0",
-            )} />
-          )}
-
-          {!isGrouped ? (
-            <div className="relative z-10 flex h-6 items-center justify-center">
-              <div className="relative z-10 flex size-8 items-center justify-center rounded-full bg-background">
-                <UserAvatar
-                  name={item.userName ?? "?"}
-                  imageUrl={isDefaultAvatar(item.userImageUrl) ? null : item.userImageUrl}
-                  className="size-7 text-[9px]"
-                />
-              </div>
-            </div>
-          ) : (
-            <span className="relative z-10 mx-auto flex min-w-[22px] items-start justify-center rounded px-1.5 pt-[7px] text-[10px] leading-none text-muted-foreground/0 transition-colors group-hover/msg:bg-muted group-hover/msg:text-muted-foreground/55">
-              {formatShortTime(item.createdAt)}
-            </span>
+      {/* Notion-style row: avatar left + content right, 32px indent */}
+      <div className="flex gap-2">
+        {/* Avatar column */}
+        <div className="w-6 shrink-0">
+          {!isGrouped && (
+            <UserAvatar
+              name={item.userName ?? "?"}
+              imageUrl={isDefaultAvatar(item.userImageUrl) ? null : item.userImageUrl}
+              className="size-6 text-[9px]"
+            />
           )}
         </div>
 
         {/* Content column */}
-        <div className="min-w-0 max-w-[820px] flex-1 overflow-hidden break-words pt-0.5">
+        <div className="min-w-0 max-w-[820px] flex-1 overflow-hidden break-words">
           {/* Header: name + time (only for non-grouped messages) */}
           {!isGrouped && (
-            <div className="flex items-center gap-2.5">
-              <span className="text-[13px] font-semibold leading-5 text-foreground">
+            <div className="flex items-baseline gap-1.5 mb-1">
+              <span className="text-[13.5px] font-semibold text-foreground">
                 {item.userName}
               </span>
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <span className="text-[13px] font-normal text-muted-foreground/72">
+                  <span className="text-xs text-muted-foreground/50">
                     {formatShortTime(item.createdAt)}
                   </span>
                 </TooltipTrigger>
@@ -415,7 +395,7 @@ export const ChatMessage = memo(function ChatMessage({
           )}
 
           {/* Body — render or edit */}
-          <div className={cn("pt-0.5", !isGrouped && "pt-1")}>
+          <div>
             {isEditing ? (
               <ChatEditArea
                 content={editContent}
@@ -424,7 +404,7 @@ export const ChatMessage = memo(function ChatMessage({
                 onCancel={handleCancelEdit}
               />
             ) : (
-              <div className="text-[13.5px] leading-6 text-foreground/92">
+              <div className="text-sm leading-[1.75] text-foreground">
                 {renderTiptapContent(item.content)}
               </div>
             )}
@@ -444,6 +424,9 @@ export const ChatMessage = memo(function ChatMessage({
               ))}
             </div>
           )}
+
+          {/* Link previews — extracted from TipTap content */}
+          {!isEditing && <CommentLinkPreview content={item.content} />}
 
           {/* Reaction badges — always visible when present */}
           {!isEditing && reactions && reactions.length > 0 && (
@@ -500,7 +483,7 @@ function ChatEditArea({
   useEffect(() => {
     void import("@/components/tasks/tiptap-editor").then((mod) => {
       setTiptapEditor(() => mod.TiptapEditor)
-    })
+    }).catch(() => { /* dynamic import failed — keep showing skeleton */ })
   }, [])
 
   if (!TiptapEditor) {

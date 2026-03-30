@@ -33,6 +33,7 @@ const tabsListVariants = cva(
         default:
           "rounded-lg p-[3px] bg-muted group-data-horizontal/tabs:h-8",
         line: "h-auto gap-0 rounded-none border-b bg-transparent p-0",
+        plain: "h-auto gap-4 rounded-none border-0 bg-transparent p-0",
       },
     },
     defaultVariants: {
@@ -75,6 +76,8 @@ function TabsTrigger({
         "dark:group-data-[variant=default]/tabs-list:text-muted-foreground dark:group-data-[variant=default]/tabs-list:hover:text-foreground dark:group-data-[variant=default]/tabs-list:data-active:border-input dark:group-data-[variant=default]/tabs-list:data-active:bg-input/30 dark:group-data-[variant=default]/tabs-list:data-active:text-foreground",
         // Line variant
         "group-data-[variant=line]/tabs-list:-mb-px group-data-[variant=line]/tabs-list:rounded-none group-data-[variant=line]/tabs-list:border-b-2 group-data-[variant=line]/tabs-list:border-transparent group-data-[variant=line]/tabs-list:px-4 group-data-[variant=line]/tabs-list:py-2 group-data-[variant=line]/tabs-list:text-muted-foreground group-data-[variant=line]/tabs-list:hover:text-foreground group-data-[variant=line]/tabs-list:data-active:border-foreground group-data-[variant=line]/tabs-list:data-active:text-foreground",
+        // Plain variant — text only, no chrome
+        "group-data-[variant=plain]/tabs-list:m-0 group-data-[variant=plain]/tabs-list:rounded-none group-data-[variant=plain]/tabs-list:border-0 group-data-[variant=plain]/tabs-list:bg-transparent group-data-[variant=plain]/tabs-list:p-0 group-data-[variant=plain]/tabs-list:shadow-none group-data-[variant=plain]/tabs-list:ring-0 group-data-[variant=plain]/tabs-list:text-muted-foreground/50 group-data-[variant=plain]/tabs-list:hover:text-muted-foreground group-data-[variant=plain]/tabs-list:data-active:font-semibold group-data-[variant=plain]/tabs-list:data-active:text-foreground",
         // Vertical
         "group-data-vertical/tabs:w-full group-data-vertical/tabs:justify-start",
         className

@@ -1,11 +1,10 @@
 "use client"
 
 import { useState } from "react"
-import { useMutation, useQuery } from "convex/react"
+import { useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { Button } from "@/components/ui/button"
 import { ConfirmDialog } from "@/components/confirm-dialog"
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -13,9 +12,9 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { formatActivitySubtitle } from "@/lib/format-activity-subtitle"
 import { toast } from "sonner"
 import { toastError } from "@/lib/toast-helpers"
+import { InlineTimeCell } from "@/components/tasks/inline-time-cell"
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -72,11 +71,6 @@ export function TaskDetailDrawerHeader({
   const archiveTask = useMutation(api.tasks.archive)
   const removeTask = useMutation(api.tasks.remove)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
-  const latestActivity = useQuery(
-    api.activityLog.latestForTask,
-    task ? { taskId: task._id } : "skip",
-  )
-
   async function handleCopyLink() {
     if (!task) return
     const url = `${window.location.origin}${window.location.pathname}?detail=${task._id}`
@@ -117,22 +111,10 @@ export function TaskDetailDrawerHeader({
     }
   }
 
-  const lastEditedLabel = task
-    ? `Edited ${new Intl.DateTimeFormat("en-US", {
-      month: "short",
-      day: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-    }).format(task.updatedAt ?? task.createdAt)}`
-    : ""
-  const lastEditedTooltip = latestActivity?.[0]
-    ? formatActivitySubtitle(latestActivity[0])
-    : "No recent activity"
-
   return (
-    <div className="flex shrink-0 items-center justify-between border-b border-border/60 px-3 h-11">
+    <div className="flex shrink-0 items-center gap-2 border-b border-border/70 px-3 h-11">
       {/* Left: nav + breadcrumb */}
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 min-w-0">
         <div className="flex items-center gap-0.5">
           <Button
             variant="ghost"
@@ -183,21 +165,26 @@ export function TaskDetailDrawerHeader({
         )}
       </div>
 
+      {/* Spacer */}
+      <div className="flex-1" />
+
+      {/* Timer — compact, always visible in top bar */}
+      {task && (
+        <div className="group/row shrink-0">
+          <InlineTimeCell
+            taskId={task._id}
+            totalMinutes={task.totalMinutes ?? 0}
+            isDone={task.statusType === "done"}
+            isBillable={task.billable}
+            variant="header"
+          />
+        </div>
+      )}
+
+      <div className="h-4 w-px bg-border/40" />
+
       {/* Right: properties toggle + view toggle + menu + close */}
       <div className="flex items-center gap-0.5">
-        {task && (
-          <>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="mr-1 hidden cursor-default text-[11px] text-muted-foreground md:block">
-                  {lastEditedLabel}
-                </span>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" sideOffset={4}>{lastEditedTooltip}</TooltipContent>
-            </Tooltip>
-            <div className="mx-0.5 hidden h-4 w-px bg-border/40 md:block" />
-          </>
-        )}
         {/* Properties toggle */}
         {onToggleProperties && (
           <Button

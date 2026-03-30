@@ -65,7 +65,7 @@ export function TaskDetailTitle({
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); handleSave() }
             if (e.key === "Escape") { setValue(title); setEditing(false) }
           }}
-          className="-mx-2 block w-[calc(100%+1rem)] resize-none overflow-hidden rounded-md px-2 text-3xl font-semibold leading-[1.2] tracking-tight text-foreground outline-none"
+          className="-mx-2 block w-[calc(100%+1rem)] resize-none overflow-hidden rounded-md px-2 text-3xl font-bold leading-[1.2] tracking-tight text-foreground outline-none"
           autoFocus
           onFocus={(e) => { e.target.style.height = "auto"; e.target.style.height = e.target.scrollHeight + "px" }}
         />
@@ -84,7 +84,7 @@ export function TaskDetailTitle({
               setTimeout(() => inputRef.current?.focus(), 0)
             }
           }}
-          className="-mx-2 cursor-text rounded-md px-2 text-3xl font-semibold leading-[1.2] tracking-tight text-foreground outline-none transition-colors hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring"
+          className="-mx-2 cursor-text rounded-md px-2 text-3xl font-bold leading-[1.2] tracking-tight text-foreground outline-none transition-colors hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring"
         >
           {title}
         </h1>

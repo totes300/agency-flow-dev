@@ -28,6 +28,7 @@ import type * as lib_taskActivityIndicators from "../lib/taskActivityIndicators.
 import type * as lib_task_helpers from "../lib/task_helpers.js";
 import type * as lib_timer from "../lib/timer.js";
 import type * as lib_validators from "../lib/validators.js";
+import type * as linkPreviews from "../linkPreviews.js";
 import type * as orgMembers from "../orgMembers.js";
 import type * as orgSettings from "../orgSettings.js";
 import type * as projectCategoryEstimates from "../projectCategoryEstimates.js";
@@ -70,6 +71,7 @@ declare const fullApi: ApiFromModules<{
   "lib/task_helpers": typeof lib_task_helpers;
   "lib/timer": typeof lib_timer;
   "lib/validators": typeof lib_validators;
+  linkPreviews: typeof linkPreviews;
   orgMembers: typeof orgMembers;
   orgSettings: typeof orgSettings;
   projectCategoryEstimates: typeof projectCategoryEstimates;

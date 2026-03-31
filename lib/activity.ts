@@ -21,6 +21,8 @@ export type ActivityEventType =
   | "time_entry_edited"
   | "time_entry_deleted"
   | "comment_added"
+  | "comment_resolved"
+  | "comment_reopened"
 
 /**
  * Format an activity event into a human-readable description.
@@ -118,6 +120,12 @@ export function formatActivityText(
     case "comment_added":
       return { text: `${userName} commented` }
 
+    case "comment_resolved":
+      return { text: `${userName} resolved a comment` }
+
+    case "comment_reopened":
+      return { text: `${userName} re-opened a comment` }
+
     default:
       return { text: `${userName} updated the task` }
   }
@@ -143,6 +151,9 @@ export function getActivityIcon(type: ActivityEventType): "status" | "user" | "c
       return "time"
     case "comment_added":
       return "comment"
+    case "comment_resolved":
+    case "comment_reopened":
+      return "check"
     default:
       return "default"
   }

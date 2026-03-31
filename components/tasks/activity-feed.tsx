@@ -43,6 +43,8 @@ export function ActivityFeed({ taskId, isAdmin, scrollRef, replyContext, onReply
   const toggleReaction = useMutation(api.commentReactions.toggle)
   const updateComment = useMutation(api.comments.update)
   const removeComment = useMutation(api.comments.remove)
+  const resolveComment = useMutation(api.comments.resolve)
+  const unresolveComment = useMutation(api.comments.unresolve)
 
   const handleReply = useCallback((commentId: string, userName: string) => {
     onReplyContextChange?.({ commentId, userName })
@@ -79,6 +81,28 @@ export function ActivityFeed({ taskId, isAdmin, scrollRef, replyContext, onReply
       }
     },
     [removeComment],
+  )
+
+  const handleResolve = useCallback(
+    async (commentId: string) => {
+      try {
+        await resolveComment({ id: commentId as Id<"comments"> })
+      } catch (err) {
+        toastError(err, "Failed to resolve comment")
+      }
+    },
+    [resolveComment],
+  )
+
+  const handleUnresolve = useCallback(
+    async (commentId: string) => {
+      try {
+        await unresolveComment({ id: commentId as Id<"comments"> })
+      } catch (err) {
+        toastError(err, "Failed to re-open comment")
+      }
+    },
+    [unresolveComment],
   )
 
   // Mark comments as seen — only when the activity section scrolls into view
@@ -249,6 +273,8 @@ export function ActivityFeed({ taskId, isAdmin, scrollRef, replyContext, onReply
           onToggleReaction={handleToggleReaction}
           onEdit={handleEditComment}
           onDelete={handleDeleteComment}
+          onResolve={handleResolve}
+          onUnresolve={handleUnresolve}
         />
       )}
 
@@ -286,6 +312,8 @@ type ViewProps = {
   onToggleReaction: (commentId: string, emoji: string) => void
   onEdit: (commentId: string, content: unknown) => void
   onDelete: (commentId: string) => void
+  onResolve: (commentId: string) => void
+  onUnresolve: (commentId: string) => void
 }
 
 // ─── Comments View — batched audits ─────────────────────────────────────────────
@@ -305,6 +333,8 @@ function CommentsView({
   onToggleReaction,
   onEdit,
   onDelete,
+  onResolve,
+  onUnresolve,
 }: ViewProps & { groupedFeed: GroupedFeedItem[] }) {
   // Compute lane line positions based on same-user continuity.
   // The lane connects ALL consecutive same-user comments, broken by batches, dividers, or user change.
@@ -390,6 +420,8 @@ function CommentsView({
           onToggleReaction={onToggleReaction}
           onEdit={onEdit}
           onDelete={onDelete}
+          onResolve={onResolve}
+          onUnresolve={onUnresolve}
         />,
       )
       if (i === lastGroupedCommentIndex) {
@@ -408,7 +440,7 @@ function CommentsView({
 
 function buildFeed(
   activities: { _id: string; type: string; userId: string; userName: string; metadata: unknown; createdAt: number }[] | undefined,
-  comments: { _id: string; userId: string; userName: string; userImageUrl?: string; content: unknown; parentCommentId?: Id<"comments">; parentUserName?: string; parentPreview?: string; createdAt: number; updatedAt?: number }[] | undefined,
+  comments: { _id: string; userId: string; userName: string; userImageUrl?: string; content: unknown; parentCommentId?: Id<"comments">; parentUserName?: string; parentPreview?: string; resolvedAt?: number; resolvedBy?: Id<"users">; resolvedByName?: string; createdAt: number; updatedAt?: number }[] | undefined,
 ): FeedItem[] | null {
   if (!activities || !comments) return null
 
@@ -432,6 +464,9 @@ function buildFeed(
     parentCommentId: c.parentCommentId,
     parentUserName: c.parentUserName,
     parentPreview: c.parentPreview,
+    resolvedAt: c.resolvedAt,
+    resolvedBy: c.resolvedBy,
+    resolvedByName: c.resolvedByName,
     createdAt: c.createdAt,
     updatedAt: c.updatedAt,
   }))

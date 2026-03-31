@@ -32,6 +32,11 @@ export const byTask = query({
         const user = await ctx.db.get(c.userId);
         userCache.set(c.userId, { name: user?.name ?? "Unknown", imageUrl: user?.imageUrl });
       }
+      // Pre-cache resolver users (may not be comment authors)
+      if (c.resolvedBy && !userCache.has(c.resolvedBy)) {
+        const resolver = await ctx.db.get(c.resolvedBy);
+        userCache.set(c.resolvedBy, { name: resolver?.name ?? "Former member" });
+      }
     }
 
     // Build maps for parent comment lookups
@@ -44,6 +49,10 @@ export const byTask = query({
 
     const enriched = comments.map((comment) => {
       const user = userCache.get(comment.userId) ?? { name: "Unknown" };
+      const resolvedByName = comment.resolvedBy
+        ? userCache.get(comment.resolvedBy)?.name ?? "Former member"
+        : undefined;
+
       return {
         _id: comment._id,
         content: comment.content,
@@ -59,6 +68,9 @@ export const byTask = query({
         parentPreview: comment.parentCommentId
           ? commentPreviewMap.get(comment.parentCommentId)
           : undefined,
+        resolvedAt: comment.resolvedAt,
+        resolvedBy: comment.resolvedBy,
+        resolvedByName,
       };
     });
 
@@ -91,6 +103,17 @@ export const create = mutation({
       const parent = await ctx.db.get(args.parentCommentId);
       if (!parent || parent.taskId !== args.taskId) {
         throw new ConvexError("Parent comment not found");
+      }
+
+      // Auto re-open: find root comment and unresolve if resolved
+      let root = parent;
+      while (root.parentCommentId) {
+        const ancestor = await ctx.db.get(root.parentCommentId);
+        if (!ancestor) break;
+        root = ancestor;
+      }
+      if (root.resolvedAt) {
+        await ctx.db.patch(root._id, { resolvedAt: undefined, resolvedBy: undefined });
       }
     }
 
@@ -189,6 +212,78 @@ export const remove = mutation({
     }
 
     await ctx.db.delete(args.id);
+  },
+});
+
+// ─── Resolve / Unresolve ────────────────────────────────────────────────────────
+
+/**
+ * Resolve a top-level comment thread.
+ */
+export const resolve = mutation({
+  args: { id: v.id("comments") },
+  handler: async (ctx, args) => {
+    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
+
+    const comment = await ctx.db.get(args.id);
+    if (!comment || comment.orgId !== orgId) throw new ConvexError("Comment not found");
+    if (comment.parentCommentId) throw new ConvexError("Only top-level comments can be resolved");
+
+    const task = await ctx.db.get(comment.taskId);
+    if (!task || (!isAdmin && !task.assigneeIds.includes(userId))) {
+      throw new ConvexError("Comment not found");
+    }
+
+    // Idempotent: already resolved → no-op
+    if (comment.resolvedAt) return;
+
+    await ctx.db.patch(args.id, {
+      resolvedAt: Date.now(),
+      resolvedBy: userId,
+    });
+
+    await logActivity(ctx, {
+      taskId: comment.taskId,
+      orgId,
+      userId,
+      type: "comment_resolved",
+      metadata: { commentId: args.id },
+    });
+  },
+});
+
+/**
+ * Re-open a resolved comment thread.
+ */
+export const unresolve = mutation({
+  args: { id: v.id("comments") },
+  handler: async (ctx, args) => {
+    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
+
+    const comment = await ctx.db.get(args.id);
+    if (!comment || comment.orgId !== orgId) throw new ConvexError("Comment not found");
+    if (comment.parentCommentId) throw new ConvexError("Only top-level comments can be re-opened");
+
+    const task = await ctx.db.get(comment.taskId);
+    if (!task || (!isAdmin && !task.assigneeIds.includes(userId))) {
+      throw new ConvexError("Comment not found");
+    }
+
+    // Idempotent: already open → no-op
+    if (!comment.resolvedAt) return;
+
+    await ctx.db.patch(args.id, {
+      resolvedAt: undefined,
+      resolvedBy: undefined,
+    });
+
+    await logActivity(ctx, {
+      taskId: comment.taskId,
+      orgId,
+      userId,
+      type: "comment_reopened",
+      metadata: { commentId: args.id },
+    });
   },
 });
 

@@ -1,6 +1,6 @@
 "use client"
 
-import { Activity, ChevronRight, CircleCheckBig, Clock3, FolderOpen, Tags, UserRound } from "lucide-react"
+import { Activity, ChevronRight, CircleCheck, CircleCheckBig, Clock3, FolderOpen, MessageSquare, Tags, UserRound } from "lucide-react"
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible"
 import { formatActivityText, type ActivityEventType } from "@/lib/activity"
 import { firstName, formatRelativeTime } from "@/lib/format"
@@ -46,6 +46,10 @@ function getBatchSummary(batch: AuditBatch): string {
       case "subtask_completed":
       case "subtask_deleted":
         return `${batch.count} ${batch.count === 1 ? "subtask updated" : "subtasks updated"}`
+      case "comment_resolved":
+        return `${batch.count} ${batch.count === 1 ? "comment resolved" : "comments resolved"}`
+      case "comment_reopened":
+        return `${batch.count} ${batch.count === 1 ? "comment re-opened" : "comments re-opened"}`
       default:
         return `${batch.count} ${batch.count === 1 ? "property updated" : "properties updated"}`
     }
@@ -78,6 +82,10 @@ function getRowIcon(type: string) {
     case "time_entry_edited":
     case "time_entry_deleted":
       return Clock3
+    case "comment_resolved":
+      return CircleCheck
+    case "comment_reopened":
+      return MessageSquare
     default:
       return Activity
   }

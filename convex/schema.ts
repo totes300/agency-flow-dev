@@ -302,6 +302,8 @@ export default defineSchema({
       content: v.optional(v.any()),
     }),
     parentCommentId: v.optional(v.id("comments")),
+    resolvedAt: v.optional(v.number()),
+    resolvedBy: v.optional(v.id("users")),
     createdAt: v.number(),
     updatedAt: v.number(),
   })

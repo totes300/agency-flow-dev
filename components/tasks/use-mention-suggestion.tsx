@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useMemo, useRef, useCallback } from "react"
+import { useState, useMemo, useRef } from "react"
 import Mention from "@tiptap/extension-mention"
 import { SuggestionDropdown } from "@/components/tasks/suggestion-dropdown"
 import { useTaskReferenceData } from "@/components/tasks/task-reference-data"
@@ -24,16 +24,15 @@ export function useMentionSuggestion() {
     () => (orgMembers ?? []).map((m) => ({ id: m._id, label: m.name })),
     [orgMembers],
   )
-  const itemsRef = useRef(items)
-  itemsRef.current = items
 
+  // eslint-disable-next-line react-hooks/preserve-manual-memoization
   const extension = useMemo(
     () =>
       Mention.configure({
         HTMLAttributes: { class: "mention" },
         suggestion: {
           items: ({ query }: { query: string }) =>
-            itemsRef.current
+            items
               .filter((item) => item.label.toLowerCase().includes(query.toLowerCase()))
               .slice(0, 5),
           render: () => ({
@@ -48,13 +47,11 @@ export function useMentionSuggestion() {
             onExit: () => { isOpenRef.current = false; setState(null) },
           }),
         },
-      }),
-    // Mention extension is created once — dynamic items use itemsRef
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [],
+    }),
+    [items],
   )
 
-  const renderMentionDropdown = useCallback(() => {
+  function renderMentionDropdown() {
     if (!state) return null
     return (
       <SuggestionDropdown
@@ -67,7 +64,7 @@ export function useMentionSuggestion() {
         itemClassName="px-2.5 py-1.5 text-sm"
       />
     )
-  }, [state])
+  }
 
   return { mentionExtension: extension, mentionOpenRef: isOpenRef, renderMentionDropdown }
 }

@@ -1,23 +1,19 @@
 "use client"
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useQuery, useMutation } from "convex/react"
 import { useConvexAuth } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { ChatMessage } from "@/components/tasks/chat-message"
-import { formatActivityText, type ActivityEventType } from "@/lib/activity"
 import { mergeActivityFeed, type FeedItem } from "@/lib/task-detail"
 import { groupFeedForCommentsView, computeMessageGrouping, computeDayDividers, getDayLabel, type GroupedFeedItem, type AuditBatch } from "@/lib/activity-grouping"
-import { formatActivityTimestamp, firstName } from "@/lib/format"
+import { firstName } from "@/lib/format"
 import { ActivityBatch } from "@/components/tasks/activity-batch"
 import type { Id } from "@/convex/_generated/dataModel"
-import { cn } from "@/lib/utils"
 import { toastError } from "@/lib/toast-helpers"
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip"
 
 export type ReplyContext = { commentId: string; userName: string }
-
-export type ActivityView = "comments" | "all"
 
 export type CommentCounts = {
   total: number
@@ -30,12 +26,10 @@ interface ActivityFeedProps {
   scrollRef: React.RefObject<HTMLDivElement | null>
   replyContext: ReplyContext | null
   onReplyContextChange?: (ctx: ReplyContext | null) => void
-  view?: ActivityView
-  onViewChange?: (view: ActivityView) => void
   onCommentCounts?: (counts: CommentCounts) => void
 }
 
-export function ActivityFeed({ taskId, isAdmin, scrollRef, replyContext, onReplyContextChange, view: viewProp, onViewChange, onCommentCounts }: ActivityFeedProps) {
+export function ActivityFeed({ taskId, isAdmin, scrollRef, replyContext, onReplyContextChange, onCommentCounts }: ActivityFeedProps) {
   const { isAuthenticated } = useConvexAuth()
 
   const currentUser = useQuery(api.users.current, isAuthenticated ? {} : "skip")
@@ -171,11 +165,6 @@ export function ActivityFeed({ taskId, isAdmin, scrollRef, replyContext, onReply
   }
   const stableAttachmentsMap = stableAttachmentsRef.current
 
-  // View toggle: controlled via props, or internal fallback
-  const [internalView, setInternalView] = useState<ActivityView>("comments")
-  const view = viewProp ?? internalView
-  const setView = onViewChange ?? setInternalView
-
   // Build unified timeline
   const feed = useMemo(() => buildFeed(activities, comments), [activities, comments])
   const groupedFeed = useMemo(
@@ -224,7 +213,7 @@ export function ActivityFeed({ taskId, isAdmin, scrollRef, replyContext, onReply
       el.scrollTop = el.scrollHeight
     }
     prevFeedLengthRef.current = feedLength
-  }, [feedLength, receiptKey, view, scrollRef])
+  }, [feedLength, receiptKey, scrollRef])
 
   const scrollToBottom = useCallback(() => {
     const el = scrollRef.current
@@ -244,22 +233,6 @@ export function ActivityFeed({ taskId, isAdmin, scrollRef, replyContext, onReply
         <div className="flex items-center justify-center p-8 text-xs text-muted-foreground/50">
           No activity yet
         </div>
-      ) : view === "comments" ? (
-        <CommentsOnlyView
-          feed={feed}
-          currentUserId={currentUserId}
-          isAdmin={isAdmin}
-          newDividerAt={newDividerAt}
-          reactionsMap={stableReactionsMap}
-          attachmentsMap={stableAttachmentsMap}
-          readReceipts={readReceipts}
-          messageGrouping={messageGrouping}
-          dayDividers={dayDividers}
-          onReply={handleReply}
-          onToggleReaction={handleToggleReaction}
-          onEdit={handleEditComment}
-          onDelete={handleDeleteComment}
-        />
       ) : (
         <CommentsView
           feed={feed}
@@ -313,75 +286,6 @@ type ViewProps = {
   onToggleReaction: (commentId: string, emoji: string) => void
   onEdit: (commentId: string, content: unknown) => void
   onDelete: (commentId: string) => void
-}
-
-// ─── Comments Only View — no activity entries ──────────────────────────────────
-
-function CommentsOnlyView({
-  feed,
-  currentUserId,
-  isAdmin,
-  newDividerAt,
-  reactionsMap,
-  attachmentsMap,
-  readReceipts,
-  messageGrouping,
-  dayDividers,
-  onReply,
-  onToggleReaction,
-  onEdit,
-  onDelete,
-}: ViewProps) {
-  const commentsOnly = useMemo(() => feed.filter((item) => item.kind === "comment"), [feed])
-
-  // Recompute day dividers and message grouping for comments-only list
-  const commentDayDividers = useMemo(() => computeDayDividers(commentsOnly), [commentsOnly])
-  const commentGrouping = useMemo(() => computeMessageGrouping(commentsOnly), [commentsOnly])
-
-  const lastIndex = commentsOnly.length - 1
-  const firstNewIndex =
-    newDividerAt !== null && newDividerAt > 0
-      ? commentsOnly.findIndex(
-          (item) => item.createdAt > newDividerAt && item.userId !== currentUserId,
-        )
-      : -1
-
-  if (commentsOnly.length === 0) {
-    return (
-      <div className="flex items-center justify-center p-8 text-xs text-muted-foreground/50">
-        No comments yet
-      </div>
-    )
-  }
-
-  return (
-    <div className="flex flex-col">
-      {commentsOnly.map((item, i) => {
-        const dayLabel = commentDayDividers.get(item.id)
-        return (
-          <Fragment key={item.id}>
-            {dayLabel && <DayDivider label={dayLabel} />}
-            {i === firstNewIndex && <NewDivider />}
-            <ChatMessage
-              item={item}
-              currentUserId={currentUserId}
-              isAdmin={isAdmin}
-              isGrouped={commentGrouping.get(item.id) ?? false}
-              reactions={reactionsMap?.[item.id]}
-              attachments={attachmentsMap?.[item.id]}
-              onReply={onReply}
-              onToggleReaction={onToggleReaction}
-              onEdit={onEdit}
-              onDelete={onDelete}
-            />
-            {i === lastIndex && (
-              <SeenBy feed={feed} readReceipts={readReceipts} currentUserId={currentUserId} />
-            )}
-          </Fragment>
-        )
-      })}
-    </div>
-  )
 }
 
 // ─── Comments View — batched audits ─────────────────────────────────────────────
@@ -535,43 +439,14 @@ function buildFeed(
   return mergeActivityFeed(activityEvents, commentEvents)
 }
 
-// ─── Audit line ─────────────────────────────────────────────────────────────────
-
-function AuditLine({ item, currentUserId }: { item: FeedItem & { kind: "audit" }; currentUserId?: Id<"users"> }) {
-  const displayName = currentUserId && item.userId === currentUserId
-    ? "You"
-    : firstName(item.userName ?? "Someone")
-
-  const { text, highlight } = formatActivityText(
-    item.type as ActivityEventType,
-    displayName,
-    item.metadata,
-  )
-
-  return (
-    <div className="flex items-baseline gap-2 py-1.5">
-      <span className="text-muted-foreground/40">•</span>
-      <span className="flex-1 text-[12px] leading-4 text-muted-foreground/70">
-        {text}
-        {highlight && (
-          <span className="font-medium text-muted-foreground"> {highlight}</span>
-        )}
-      </span>
-      <span className="shrink-0 text-[11px] text-muted-foreground/40">
-        {formatActivityTimestamp(item.createdAt)}
-      </span>
-    </div>
-  )
-}
-
 // ─── Day divider ────────────────────────────────────────────────────────────────
 
 function DayDivider({ label }: { label: string }) {
   return (
-    <div className="my-3 flex items-center gap-3">
-      <div className="h-px flex-1 bg-border/40" />
-      <span className="text-[11px] font-medium text-muted-foreground/65">{label}</span>
-      <div className="h-px flex-1 bg-border/40" />
+    <div className="my-5 flex items-center gap-3">
+      <div className="h-px flex-1 bg-border" />
+      <span className="text-[11px] font-medium text-muted-foreground">{label}</span>
+      <div className="h-px flex-1 bg-border" />
     </div>
   )
 }
@@ -613,7 +488,7 @@ function SeenBy({
 
   return (
     <TooltipProvider>
-      <div className="mb-2 mt-0.5 flex items-center gap-0.5 pl-[38px]">
+      <div className="mb-2 mt-0.5 flex items-center gap-0.5 pl-8">
         <span className="text-[10px] text-muted-foreground/40">Seen by</span>
         {seenUsers.map((user, i) => (
           <Tooltip key={user.userId}>
@@ -629,47 +504,6 @@ function SeenBy({
         ))}
       </div>
     </TooltipProvider>
-  )
-}
-
-// ─── View toggle (reusable by parents) ──────────────────────────────────────────
-
-export function ActivityViewToggle({
-  view,
-  onViewChange,
-}: {
-  view: ActivityView
-  onViewChange: (v: ActivityView) => void
-}) {
-  return (
-    <div role="radiogroup" aria-label="Activity view" className="flex items-center gap-0.5 rounded-md bg-muted p-0.5">
-      <button
-        role="radio"
-        aria-checked={view === "all"}
-        className={cn(
-          "rounded px-2.5 py-1 text-xs font-medium transition-colors",
-          view === "all"
-            ? "bg-background text-foreground shadow-sm"
-            : "text-muted-foreground hover:text-foreground",
-        )}
-        onClick={() => onViewChange("all")}
-      >
-        All
-      </button>
-      <button
-        role="radio"
-        aria-checked={view === "comments"}
-        className={cn(
-          "rounded px-2.5 py-1 text-xs font-medium transition-colors",
-          view === "comments"
-            ? "bg-background text-foreground shadow-sm"
-            : "text-muted-foreground hover:text-foreground",
-        )}
-        onClick={() => onViewChange("comments")}
-      >
-        Comments
-      </button>
-    </div>
   )
 }
 

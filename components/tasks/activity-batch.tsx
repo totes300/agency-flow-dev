@@ -94,19 +94,19 @@ export function ActivityBatch({
   const batchTime = formatRelativeTime(batch.endTime)
 
   return (
-    <Collapsible className="mt-6 first:mt-0">
-      <CollapsibleTrigger className="group flex w-full items-center gap-2 py-0 text-left">
-        <div className="flex size-6 shrink-0 items-center justify-center rounded-full bg-muted/80">
-          <Activity className="size-3 shrink-0 text-muted-foreground/60" />
-        </div>
-        <span className="text-[13.5px] font-semibold text-muted-foreground">
+    <Collapsible className="my-2">
+      <CollapsibleTrigger className="group flex w-full items-center gap-2 rounded-md py-2 text-left transition-colors hover:bg-muted/40">
+        <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-muted">
+          <Activity className="size-3.5 text-muted-foreground" strokeWidth={1.75} />
+        </span>
+        <span className="text-[13px] font-medium text-muted-foreground">
           {label}
         </span>
-        <span className="text-xs text-muted-foreground/50">{batchTime}</span>
-        <ChevronRight className="ml-0.5 size-2.5 shrink-0 text-muted-foreground/50 transition-transform duration-150 group-data-[state=open]:rotate-90" />
+        <span className="text-[12px] text-muted-foreground/50">{batchTime}</span>
+        <ChevronRight className="ml-auto size-3 shrink-0 text-muted-foreground/40 transition-transform duration-150 group-data-[state=open]:rotate-90" />
       </CollapsibleTrigger>
       <CollapsibleContent className="overflow-hidden data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=open]:fade-in-0 data-[state=closed]:fade-out-0 data-[state=open]:slide-in-from-top-1 data-[state=closed]:slide-out-to-top-1 duration-150">
-        <div className="ml-8 pt-1.5">
+        <div className="ml-5 border-l-2 border-muted pl-4 py-1.5">
           {batch.items.map((item) => {
             const displayName =
               currentUserId && item.userId === currentUserId
@@ -121,12 +121,12 @@ export function ActivityBatch({
             const RowIcon = getRowIcon(item.type)
 
             return (
-              <div key={item.id} className="flex items-center gap-2 py-[5px] text-[13px] text-muted-foreground/70">
-                <RowIcon className="size-3.5 shrink-0 text-muted-foreground/45" strokeWidth={1.5} />
+              <div key={item.id} className="flex items-center gap-2 py-[5px] text-[12.5px] text-muted-foreground">
+                <RowIcon className="size-3.5 shrink-0 text-muted-foreground/60" strokeWidth={1.5} />
                 <span>
                   {text}
                   {highlight && (
-                    <span className="font-medium text-foreground/85"> {highlight}</span>
+                    <span className="font-medium text-foreground/80"> {highlight}</span>
                   )}
                 </span>
               </div>

@@ -8,8 +8,8 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { TaskDetailTitle } from "@/components/tasks/task-detail-title"
 import { TaskDetailTime } from "@/components/tasks/task-detail-time"
 import { TaskDetailAttachments } from "@/components/tasks/task-detail-attachments"
-import { ActivityFeed, ActivityViewToggle, type ReplyContext, type ActivityView, type CommentCounts } from "@/components/tasks/activity-feed"
-import { TaskDetailCommentInput } from "@/components/tasks/task-detail-comment-input"
+import { ActivityFeed, type ReplyContext, type CommentCounts } from "@/components/tasks/activity-feed"
+import { InlineCommentInput } from "@/components/tasks/inline-comment-input"
 import { TypingIndicator } from "@/components/typing-indicator"
 import { api } from "@/convex/_generated/api"
 import { MailIcon } from "lucide-react"
@@ -68,7 +68,6 @@ export function TaskDetailDrawerContent({
   const scrollRef = useRef<HTMLDivElement>(null)
   const roRef = useRef<ResizeObserver | null>(null)
   const [replyContext, setReplyContext] = useState<ReplyContext | null>(null)
-  const [activityView, setActivityView] = useState<ActivityView>("all")
   const [commentCounts, setCommentCounts] = useState<CommentCounts>({ total: 0, unread: 0 })
   const [isDescExpanded, setIsDescExpanded] = useState(false)
   const [isDescOverflowing, setIsDescOverflowing] = useState(false)
@@ -149,7 +148,7 @@ export function TaskDetailDrawerContent({
               <TabsTrigger
                 key={tab.value}
                 value={tab.value}
-                className="inline-flex items-center gap-1 text-[13px] font-normal"
+                className="inline-flex items-center gap-1 text-[13px] font-medium"
               >
                 {tab.label}
                 {"badge" in tab && tab.badge != null && tab.badge > 0 && (
@@ -222,7 +221,7 @@ export function TaskDetailDrawerContent({
               <div className="border-t border-border/70 pt-5">
                 <div className="mb-4 flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <span className="text-xs font-semibold uppercase tracking-[0.04em] text-muted-foreground/60">Activity</span>
+                    <span className="text-[13px] font-semibold text-muted-foreground">Activity</span>
                     {commentCounts.total > 0 && (
                       <span className={cn(
                         "inline-flex items-center rounded-full px-2 h-[20px] text-[11px] tabular-nums font-medium",
@@ -234,7 +233,6 @@ export function TaskDetailDrawerContent({
                       </span>
                     )}
                   </div>
-                  <ActivityViewToggle view={activityView} onViewChange={setActivityView} />
                 </div>
                 <ActivityFeed
                   taskId={task._id}
@@ -242,19 +240,17 @@ export function TaskDetailDrawerContent({
                   scrollRef={scrollRef}
                   replyContext={replyContext}
                   onReplyContextChange={setReplyContext}
-                  view={activityView}
-                  onViewChange={setActivityView}
                   onCommentCounts={setCommentCounts}
                 />
               </div>
             </div>
 
-            {/* Comment input — inside scroll, not sticky */}
-            <div className="px-12 pb-10">
+            {/* Comment input — Notion-style inline, inside scroll */}
+            <div className="px-12 pb-10 pt-4">
               {typingUsers && typingUsers.length > 0 && (
                 <TypingIndicator typingUsers={typingUsers} />
               )}
-              <TaskDetailCommentInput
+              <InlineCommentInput
                 taskId={task._id}
                 replyContext={replyContext}
                 onClearReply={() => setReplyContext(null)}

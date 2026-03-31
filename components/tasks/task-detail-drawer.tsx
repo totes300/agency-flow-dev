@@ -81,11 +81,8 @@ export function TaskDetailDrawer({
               task={task ?? null}
               isAdmin={isAdmin}
               onClose={handleClose}
-              onNavigate={handleNavigate}
               onOpenDetail={navigateToTask}
               onToggleProperties={() => setShowProperties((p) => !p)}
-              hasNext={hasNext}
-              hasPrev={hasPrev}
               showProperties={showProperties}
             />
 

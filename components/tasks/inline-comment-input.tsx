@@ -1,8 +1,10 @@
 "use client"
 
 import { useState, useCallback, useRef, useEffect } from "react"
-import { useMutation } from "convex/react"
+import { useMutation, useQuery } from "convex/react"
+import { useConvexAuth } from "convex/react"
 import { Tiptap, useEditor } from "@tiptap/react"
+import { BubbleMenu } from "@tiptap/react/menus"
 import StarterKit from "@tiptap/starter-kit"
 import Placeholder from "@tiptap/extension-placeholder"
 import Link from "@tiptap/extension-link"
@@ -10,20 +12,17 @@ import TaskList from "@tiptap/extension-task-list"
 import TaskItem from "@tiptap/extension-task-item"
 import Underline from "@tiptap/extension-underline"
 import { api } from "@/convex/_generated/api"
-import { ToolbarButton } from "@/components/toolbar-button"
-import { CommentToolbar } from "@/components/tasks/editor-toolbar"
-import { EmojiPickerPopover } from "@/components/emoji-picker-popover"
+import { UserAvatar } from "@/components/user-avatar"
+import { BubbleToolbar } from "@/components/tasks/editor-toolbar"
 import { CommentAttachmentChip } from "@/components/comment-attachment-chip"
 import { useMentionSuggestion } from "@/components/tasks/use-mention-suggestion"
 import { toastError } from "@/lib/toast-helpers"
 import { cn } from "@/lib/utils"
 import {
   AtSignIcon,
-  SmileIcon,
   PaperclipIcon,
+  ArrowUpIcon,
   XIcon,
-  SendHorizonalIcon,
-  PaintbrushIcon,
 } from "lucide-react"
 import type { Id } from "@/convex/_generated/dataModel"
 import "./tiptap-editor.css"
@@ -39,23 +38,26 @@ interface PendingFile {
   storageId?: string
 }
 
-interface TaskDetailCommentInputProps {
+interface InlineCommentInputProps {
   taskId: Id<"tasks">
   replyContext: { commentId: string; userName: string } | null
   onClearReply: () => void
 }
 
-// ─── Main comment input ─────────────────────────────────────────────────────────
+// ─── Notion-style inline comment input ─────────────────────────────────────────
 
-export function TaskDetailCommentInput({
+export function InlineCommentInput({
   taskId,
   replyContext,
   onClearReply,
-}: TaskDetailCommentInputProps) {
+}: InlineCommentInputProps) {
+  const { isAuthenticated } = useConvexAuth()
+  const currentUser = useQuery(api.users.current, isAuthenticated ? {} : "skip")
+
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([])
   const [hasContent, setHasContent] = useState(false)
-  const [showToolbar, setShowToolbar] = useState(false)
+  const [isFocused, setIsFocused] = useState(false)
 
   const { mentionExtension, mentionOpenRef, renderMentionDropdown } = useMentionSuggestion()
 
@@ -67,6 +69,7 @@ export function TaskDetailCommentInput({
   const fileInputRef = useRef<HTMLInputElement>(null)
   const lastTypingRef = useRef(0)
   const suppressTypingRef = useRef(false)
+  const containerRef = useRef<HTMLDivElement>(null)
 
   const editor = useEditor({
     immediatelyRender: false,
@@ -76,7 +79,7 @@ export function TaskDetailCommentInput({
         bulletList: { keepMarks: true, keepAttributes: false },
         orderedList: { keepMarks: true, keepAttributes: false },
       }),
-      Placeholder.configure({ placeholder: "Write a comment..." }),
+      Placeholder.configure({ placeholder: "Add a comment..." }),
       mentionExtension,
       Link.configure({
         openOnClick: false,
@@ -95,14 +98,14 @@ export function TaskDetailCommentInput({
         void setTypingMutation({ taskId })
       }
     },
+    onFocus: () => setIsFocused(true),
     editorProps: {
       attributes: {
-        class: "comment-editor tiptap-content focus:outline-none min-h-[72px] max-h-[min(300px,50vh)] overflow-y-auto px-4 pt-5 pb-3",
+        class: "inline-comment-editor tiptap-content focus:outline-none",
       },
       handleKeyDown: (_view, event) => {
         if (event.key === "Enter" && !event.shiftKey && !event.metaKey && !event.ctrlKey) {
           if (!editor) return false
-          // Let mention/suggestion plugins handle Enter when their dropdown is open
           if (mentionOpenRef.current) return false
           if (editor.isActive("listItem") || editor.isActive("taskItem") || editor.isActive("codeBlock")) {
             return false
@@ -117,12 +120,31 @@ export function TaskDetailCommentInput({
   }, [mentionExtension])
 
   useEffect(() => {
-    if (replyContext && editor) editor.commands.focus()
+    if (replyContext && editor) {
+      editor.commands.focus()
+      setIsFocused(true)
+    }
   }, [replyContext, editor])
 
   useEffect(() => {
     return () => { void clearTypingMutation({ taskId }) }
   }, [clearTypingMutation, taskId])
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (
+        containerRef.current &&
+        !containerRef.current.contains(e.target as Node) &&
+        !hasContent &&
+        pendingFiles.length === 0 &&
+        !replyContext
+      ) {
+        setIsFocused(false)
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside)
+    return () => document.removeEventListener("mousedown", handleClickOutside)
+  }, [hasContent, pendingFiles.length, replyContext])
 
   // ─── File upload ─────────────────────────────────────────────────────────
   const handleFileSelect = useCallback(
@@ -200,7 +222,6 @@ export function TaskDetailCommentInput({
     lastTypingRef.current = 0
     suppressTypingRef.current = true
     editor.commands.clearContent()
-    editor.commands.focus()
     suppressTypingRef.current = false
     onClearReply()
 
@@ -222,6 +243,7 @@ export function TaskDetailCommentInput({
 
     setPendingFiles([])
     setIsSubmitting(false)
+    setIsFocused(false)
   }, [editor, isSubmitting, hasPendingUploads, createComment, taskId, replyContext, pendingFiles, saveAttachment, onClearReply, clearTypingMutation])
 
   const handleSubmitRef = useRef(handleSubmit)
@@ -229,12 +251,16 @@ export function TaskDetailCommentInput({
 
   if (!editor) return null
 
+  const canSend = (hasContent || pendingFiles.length > 0) && !isSubmitting && !hasPendingUploads
+  const showActions = isFocused || hasContent || pendingFiles.length > 0
+
   return (
     <Tiptap editor={editor}>
-      <div className="px-6 pb-4 pt-2">
+      <div ref={containerRef} className="border-b border-border pb-3.5">
+        {/* Reply banner */}
         {replyContext && (
-          <div className="mb-2 flex items-center justify-between rounded-lg bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground">
-            <span>&#x21A9; Replying to {replyContext.userName}</span>
+          <div className="mb-2 ml-8 flex items-center justify-between rounded-md bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground">
+            <span>↩ Replying to {replyContext.userName}</span>
             <button
               type="button"
               onClick={onClearReply}
@@ -245,37 +271,85 @@ export function TaskDetailCommentInput({
           </div>
         )}
 
-        <div className="overflow-hidden rounded-xl border border-border/40 bg-muted/60 shadow-sm transition-colors focus-within:border-border/60 focus-within:bg-muted/70">
-          {showToolbar && <CommentToolbar />}
-          <Tiptap.Content />
-
-          {pendingFiles.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 px-3 pb-2">
-              {pendingFiles.map((file) => (
-                <CommentAttachmentChip
-                  key={file.fileId}
-                  fileName={file.fileName}
-                  fileSize={file.fileSize}
-                  mimeType={file.mimeType}
-                  url={null}
-                  isPending={file.uploading}
-                />
-              ))}
-            </div>
-          )}
-
-          <CommentBottomBar
-            editor={editor}
-            onSubmit={handleSubmit}
-            onAttach={() => fileInputRef.current?.click()}
-            hasContent={hasContent}
-            pendingFileCount={pendingFiles.length}
-            isSubmitting={isSubmitting}
-            hasPendingUploads={hasPendingUploads}
-            showToolbar={showToolbar}
-            onToggleToolbar={() => setShowToolbar((v) => !v)}
+        {/* Single row: avatar, editor, actions. Placeholder alignment is handled in
+            CSS so the typed/focused state keeps its original layout. */}
+        <div
+          className="flex cursor-text items-start gap-3"
+          onClick={() => { editor.commands.focus(); setIsFocused(true) }}
+        >
+          <UserAvatar
+            name={currentUser?.name ?? "?"}
+            imageUrl={currentUser?.imageUrl}
+            className="size-6 shrink-0 text-[9px]"
           />
+
+          <div className="flex min-h-6 min-w-0 flex-1 items-start">
+            <Tiptap.Content />
+          </div>
+
+          <div className={cn(
+            "flex shrink-0 items-center gap-0.5 self-end transition-opacity duration-150",
+            showActions ? "opacity-100" : "opacity-0 pointer-events-none",
+          )}>
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click() }}
+              className="flex size-7 items-center justify-center rounded-full text-muted-foreground/40 transition-colors hover:text-muted-foreground"
+              aria-label="Attach file"
+            >
+              <PaperclipIcon className="size-4" />
+            </button>
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); insertMentionTrigger(editor) }}
+              className="flex size-7 items-center justify-center rounded-full text-muted-foreground/40 transition-colors hover:text-muted-foreground"
+              aria-label="Mention someone"
+            >
+              <AtSignIcon className="size-4" />
+            </button>
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); void handleSubmit() }}
+              disabled={!canSend}
+              className={cn(
+                "flex size-7 items-center justify-center rounded-full transition-colors",
+                canSend
+                  ? "bg-primary text-primary-foreground hover:bg-primary/90"
+                  : "bg-muted text-muted-foreground/30",
+              )}
+              aria-label="Send comment"
+            >
+              <ArrowUpIcon className="size-4" strokeWidth={2.5} />
+            </button>
+          </div>
         </div>
+
+        {/* Pending attachments */}
+        {pendingFiles.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 pl-9 pt-2">
+            {pendingFiles.map((file) => (
+              <CommentAttachmentChip
+                key={file.fileId}
+                fileName={file.fileName}
+                fileSize={file.fileSize}
+                mimeType={file.mimeType}
+                url={null}
+                isPending={file.uploading}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* Floating bubble menu */}
+        <BubbleMenu
+          updateDelay={100}
+          shouldShow={() => {
+            if (editor.state.selection.empty) return false
+            return true
+          }}
+        >
+          <BubbleToolbar />
+        </BubbleMenu>
 
         <input
           ref={fileInputRef}
@@ -288,79 +362,6 @@ export function TaskDetailCommentInput({
         {renderMentionDropdown()}
       </div>
     </Tiptap>
-  )
-}
-
-// ─── Bottom bar ─────────────────────────────────────────────────────────────────
-
-function CommentBottomBar({
-  editor,
-  onSubmit,
-  onAttach,
-  hasContent,
-  pendingFileCount,
-  isSubmitting,
-  hasPendingUploads,
-  showToolbar,
-  onToggleToolbar,
-}: {
-  editor: ReturnType<typeof useEditor>
-  onSubmit: () => void
-  onAttach: () => void
-  hasContent: boolean
-  pendingFileCount: number
-  isSubmitting: boolean
-  hasPendingUploads: boolean
-  showToolbar: boolean
-  onToggleToolbar: () => void
-}) {
-  if (!editor) return null
-
-  return (
-    <div className="flex items-center justify-between px-2.5 py-2">
-      <div className="flex items-center gap-0.5">
-        <ToolbarButton active={showToolbar} onClick={onToggleToolbar} aria-label="Toggle formatting">
-          <PaintbrushIcon className="size-4" />
-        </ToolbarButton>
-
-        <div className="mx-0.5 h-4 w-px bg-border/40" />
-
-        <EmojiPickerPopover onSelect={(emoji) => editor.chain().focus().insertContent(emoji).run()}>
-          <ToolbarButton active={false} onClick={() => {}} aria-label="Add emoji">
-            <SmileIcon className="size-4" />
-          </ToolbarButton>
-        </EmojiPickerPopover>
-        <ToolbarButton
-          active={false}
-          onClick={() => insertMentionTrigger(editor)}
-          aria-label="Mention someone"
-        >
-          <AtSignIcon className="size-4" />
-        </ToolbarButton>
-
-        <div className="mx-0.5 h-4 w-px bg-border/40" />
-
-        <ToolbarButton active={false} onClick={onAttach} aria-label="Attach file">
-          <PaperclipIcon className="size-4" />
-        </ToolbarButton>
-      </div>
-
-      <button
-        type="button"
-        onClick={onSubmit}
-        disabled={isSubmitting || hasPendingUploads}
-        className={cn(
-          "flex size-7 items-center justify-center rounded-md transition-colors",
-          !hasContent && pendingFileCount === 0
-            ? "text-muted-foreground/30"
-            : "bg-primary text-primary-foreground hover:bg-primary/90",
-          (isSubmitting || hasPendingUploads) && "opacity-50",
-        )}
-        aria-label="Send comment"
-      >
-        <SendHorizonalIcon className="size-4" />
-      </button>
-    </div>
   )
 }
 

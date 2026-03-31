@@ -36,9 +36,9 @@ export function InlineTimeCell({
 
   if (isDone) {
     return (
-      <div className={cn("flex items-center gap-[5px] opacity-35", (variant === "sidebar" || variant === "header") && "gap-1.5 opacity-60", align === "end" && "justify-end")}>
+      <div className={cn("flex items-center gap-[5px] opacity-35", variant === "sidebar" && "gap-1.5 opacity-60", variant === "header" && "gap-1 opacity-60", align === "end" && "justify-end")}>
         {totalMinutes > 0 && (
-          <span className={cn("text-xs text-muted-foreground", (variant === "sidebar" || variant === "header") && "text-[13px] font-semibold tabular-nums text-foreground/70")}>
+          <span className={cn("text-xs text-muted-foreground", variant === "sidebar" && "text-[13px] font-semibold tabular-nums text-foreground/70", variant === "header" && "text-xs tabular-nums text-muted-foreground")}>
             {minutesToDisplay(totalMinutes)}
           </span>
         )}
@@ -151,20 +151,20 @@ function RunningTimeCell({ variant = "inline", align = "start" }: { variant?: "i
 
   if (variant === "header") {
     return (
-      <div className="flex items-center gap-1.5">
+      <div className="flex items-center gap-1">
         <Tooltip>
           <TooltipTrigger asChild>
             <button
               onClick={handleStopClick}
-              className="flex size-[26px] shrink-0 cursor-pointer items-center justify-center rounded-full bg-red-50 transition-opacity hover:opacity-80 dark:bg-red-950/30"
+              className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-red-500 transition-colors hover:bg-accent dark:text-red-400"
               aria-label="Stop timer"
             >
-              <PauseIcon className="size-3 text-red-500 dark:text-red-400" strokeWidth={0} fill="currentColor" />
+              <PauseIcon className="size-3.5" strokeWidth={0} fill="currentColor" />
             </button>
           </TooltipTrigger>
-          <TooltipContent side="top" sideOffset={4}>Stop timer</TooltipContent>
+          <TooltipContent side="bottom" sideOffset={4}>Stop timer</TooltipContent>
         </Tooltip>
-        <span className="text-[13px] font-semibold tabular-nums tracking-[0.01em] text-foreground">
+        <span className="text-xs tabular-nums text-red-500 dark:text-red-400">
           {formattedTime}
         </span>
       </div>
@@ -247,15 +247,15 @@ function IdleTimeCell({
     }
   }
 
-  const circleSize = variant === "sidebar" ? 30 : variant === "header" ? 26 : 16
-  const playIconSize = variant === "inline" ? "size-3.5" : variant === "header" ? "size-3" : "size-3.5"
-  const useCircle = variant === "sidebar" || variant === "header"
+  const circleSize = variant === "sidebar" ? 30 : 16
+  const playIconSize = variant === "inline" ? "size-3.5" : "size-3.5"
+  const useCircle = variant === "sidebar"
 
   return (
     <div
       className={cn(
         "flex items-center",
-        variant === "inline" ? "gap-[5px]" : "gap-1.5",
+        variant === "inline" ? "gap-[5px]" : variant === "header" ? "gap-1" : "gap-1.5",
         align === "end" && "justify-end",
       )}
     >
@@ -264,13 +264,13 @@ function IdleTimeCell({
           <TooltipTrigger asChild>
             <button
               onClick={handlePlayClick}
-              className="flex size-[26px] shrink-0 cursor-pointer items-center justify-center rounded-full bg-emerald-50 transition-all hover:bg-emerald-100 hover:scale-105 dark:bg-emerald-950/30 dark:hover:bg-emerald-900/40"
+              className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
               aria-label="Start timer"
             >
-              <PlayIcon className="ml-px size-3 text-emerald-600 dark:text-emerald-400" strokeWidth={0} fill="currentColor" />
+              <PlayIcon className="ml-px size-3.5" strokeWidth={0} fill="currentColor" />
             </button>
           </TooltipTrigger>
-          <TooltipContent side="top" sideOffset={4}>Start timer</TooltipContent>
+          <TooltipContent side="bottom" sideOffset={4}>Start timer</TooltipContent>
         </Tooltip>
       ) : useCircle ? (
         <Tooltip>
@@ -306,13 +306,13 @@ function IdleTimeCell({
           <button
             onClick={(e) => e.stopPropagation()}
             className={cn(
-              "cursor-pointer text-[13px] font-semibold tabular-nums tracking-[0.01em] transition-colors duration-150",
+              "cursor-pointer text-xs tabular-nums transition-colors duration-150",
               hasTime
-                ? "text-foreground/80 hover:text-foreground"
-                : "text-muted-foreground/70 hover:text-foreground/80",
+                ? "text-muted-foreground hover:text-foreground"
+                : "text-muted-foreground/50 hover:text-muted-foreground",
             )}
           >
-            {hasTime ? `${minutesToDisplay(totalMinutes)}:00` : "00:00:00"}
+            {hasTime ? minutesToDisplay(totalMinutes) : "00:00"}
           </button>
         ) : variant === "sidebar" ? (
           <Tooltip>

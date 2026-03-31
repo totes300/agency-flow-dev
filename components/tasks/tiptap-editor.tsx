@@ -195,7 +195,6 @@ export function TiptapEditor({
         ]
       },
     })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // ─── Extensions ──────────────────────────────────────────────────────────
@@ -277,7 +276,7 @@ export function TiptapEditor({
     onUpdate: ({ editor: ed }) => {
       onUpdateRef.current(ed.getJSON())
     },
-  })
+  }, [extensions])
 
   // Sync external content changes (e.g., real-time updates from other users).
   // Uses a stringified ref to avoid re-running on every parent render when

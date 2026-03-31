@@ -266,8 +266,8 @@ export const ChatMessage = memo(function ChatMessage({
       className={cn(
         "group/msg relative px-0 transition-colors",
         isGrouped
-          ? "mt-1.5"
-          : "mt-6 first:mt-0",
+          ? "mt-1"
+          : "mt-5 first:mt-0",
       )}
     >
       {/* Floating action toolbar — Slack-style pill, top-right */}
@@ -332,44 +332,37 @@ export const ChatMessage = memo(function ChatMessage({
         </div>
       )}
 
-      {/* Notion-style row: avatar left + content right, 32px indent */}
-      <div className="flex gap-2">
-        {/* Avatar column */}
-        <div className="w-6 shrink-0">
-          {!isGrouped && (
+      <div>
+        {/* Header row: avatar + name + time — items-center for perfect vertical alignment */}
+        {!isGrouped && (
+          <div className="flex items-center gap-2 mb-1">
             <UserAvatar
               name={item.userName ?? "?"}
               imageUrl={isDefaultAvatar(item.userImageUrl) ? null : item.userImageUrl}
-              className="size-6 text-[9px]"
+              className="size-6 shrink-0 text-[9px]"
             />
-          )}
-        </div>
+            <span className="text-[13.5px] font-semibold text-foreground">
+              {item.userName}
+            </span>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="text-xs text-muted-foreground/50">
+                  {formatShortTime(item.createdAt)}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                <span className="text-xs">{formatActivityTimestamp(item.createdAt)}</span>
+              </TooltipContent>
+            </Tooltip>
+            {item.updatedAt && item.updatedAt !== item.createdAt && (
+              <span className="text-[10px] text-muted-foreground/55">(edited)</span>
+            )}
+          </div>
+        )}
 
-        {/* Content column */}
-        <div className="min-w-0 max-w-[820px] flex-1 overflow-hidden break-words">
-          {/* Header: name + time (only for non-grouped messages) */}
-          {!isGrouped && (
-            <div className="flex items-baseline gap-1.5 mb-1">
-              <span className="text-[13.5px] font-semibold text-foreground">
-                {item.userName}
-              </span>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className="text-xs text-muted-foreground/50">
-                    {formatShortTime(item.createdAt)}
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent side="top">
-                  <span className="text-xs">{formatActivityTimestamp(item.createdAt)}</span>
-                </TooltipContent>
-              </Tooltip>
-              {item.updatedAt && item.updatedAt !== item.createdAt && (
-                <span className="text-[10px] text-muted-foreground/55">(edited)</span>
-              )}
-            </div>
-          )}
-
-          {/* Reply label — clickable, scrolls to parent comment */}
+        {/* Content — indented to align with text after avatar */}
+        <div className="min-w-0 max-w-[820px] overflow-hidden break-words pl-8">
+          {/* Reply label */}
           {item.parentCommentId && (
             <button
               type="button"
@@ -378,10 +371,10 @@ export const ChatMessage = memo(function ChatMessage({
                 if (el) {
                   el.scrollIntoView({ behavior: "smooth", block: "center" })
                   el.classList.remove("comment-highlight")
-              void el.offsetWidth
-              el.classList.add("comment-highlight")
-            }
-          }}
+                  void el.offsetWidth
+                  el.classList.add("comment-highlight")
+                }
+              }}
               className="flex items-center gap-1 text-[11px] font-normal text-muted-foreground/58 transition-colors hover:text-foreground/80"
             >
               <CornerDownRightIcon className="size-3 shrink-0" />
@@ -394,7 +387,7 @@ export const ChatMessage = memo(function ChatMessage({
             </button>
           )}
 
-          {/* Body — render or edit */}
+          {/* Body */}
           <div>
             {isEditing ? (
               <ChatEditArea
@@ -425,10 +418,10 @@ export const ChatMessage = memo(function ChatMessage({
             </div>
           )}
 
-          {/* Link previews — extracted from TipTap content */}
+          {/* Link previews */}
           {!isEditing && <CommentLinkPreview content={item.content} />}
 
-          {/* Reaction badges — always visible when present */}
+          {/* Reaction badges */}
           {!isEditing && reactions && reactions.length > 0 && (
             <div className="flex flex-wrap gap-1.5 pb-1">
               <TooltipProvider>
@@ -457,7 +450,6 @@ export const ChatMessage = memo(function ChatMessage({
               </TooltipProvider>
             </div>
           )}
-
         </div>
       </div>
     </div>

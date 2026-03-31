@@ -76,7 +76,7 @@ export function MetadataRow({
   if (variant === "stacked") {
     return (
       <div className="group/metadata py-1.5">
-        <span className="text-[11px] font-medium text-muted-foreground/80 tracking-[0.01em]">{label}</span>
+        <span className="text-[11px] font-medium text-muted-foreground tracking-[0.01em]">{label}</span>
         <div className="mt-1 min-w-0 rounded-md py-0.5 text-[13px] font-normal text-foreground transition-colors hover:bg-accent -mx-2 px-2 cursor-default">{children}</div>
       </div>
     )
@@ -202,7 +202,7 @@ export function TaskDetailMetadata({
       ) : (
         <div className="flex flex-col">
           <div className="pb-4 pt-8">
-            <span className="text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground/45">Properties</span>
+            <span className="text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground/60">Properties</span>
           </div>
 
           {/* Group 1: Status, Assignees, Category */}

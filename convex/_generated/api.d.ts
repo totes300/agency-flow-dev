@@ -27,6 +27,7 @@ import type * as lib_rounding from "../lib/rounding.js";
 import type * as lib_taskActivityIndicators from "../lib/taskActivityIndicators.js";
 import type * as lib_task_helpers from "../lib/task_helpers.js";
 import type * as lib_timer from "../lib/timer.js";
+import type * as lib_url from "../lib/url.js";
 import type * as lib_validators from "../lib/validators.js";
 import type * as linkPreviews from "../linkPreviews.js";
 import type * as orgMembers from "../orgMembers.js";
@@ -70,6 +71,7 @@ declare const fullApi: ApiFromModules<{
   "lib/taskActivityIndicators": typeof lib_taskActivityIndicators;
   "lib/task_helpers": typeof lib_task_helpers;
   "lib/timer": typeof lib_timer;
+  "lib/url": typeof lib_url;
   "lib/validators": typeof lib_validators;
   linkPreviews: typeof linkPreviews;
   orgMembers: typeof orgMembers;

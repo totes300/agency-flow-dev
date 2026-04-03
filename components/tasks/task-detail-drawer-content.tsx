@@ -20,7 +20,25 @@ const DESC_COLLAPSED_HEIGHT = 400
 
 const SubtaskList = dynamic(
   () => import("@/components/tasks/subtask-list").then((m) => ({ default: m.SubtaskList })),
-  { ssr: false, loading: () => null },
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex flex-col gap-0.5">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <div key={i} className="grid h-9 grid-cols-[20px_1fr_116px_108px_80px_96px_76px_36px] items-center gap-0 px-2">
+            <div />
+            <div className="h-3 w-2/3 animate-pulse rounded bg-muted" />
+            <div className="h-5 w-16 animate-pulse rounded bg-muted" />
+            <div className="h-5 w-16 animate-pulse rounded bg-muted" />
+            <div className="h-3 w-10 animate-pulse rounded bg-muted" />
+            <div className="h-5 w-14 animate-pulse rounded-full bg-muted" />
+            <div className="h-3 w-10 animate-pulse rounded bg-muted" />
+            <div />
+          </div>
+        ))}
+      </div>
+    ),
+  },
 )
 
 const TiptapEditor = dynamic(
@@ -139,8 +157,8 @@ export function TaskDetailDrawerContent({
           <TabsList variant="plain" className="pb-2">
             {(
               [
-                { value: "overview", label: "Overview" },
-                { value: "time", label: "Time", badge: commentCounts.unread > 0 ? commentCounts.unread : undefined },
+                { value: "overview", label: "Overview", badge: commentCounts.unread > 0 ? commentCounts.unread : undefined },
+                { value: "time", label: "Time" },
                 { value: "files", label: "Files" },
                 { value: "email", label: "Email" },
               ] as const

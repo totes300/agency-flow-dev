@@ -642,11 +642,37 @@ function SeenBy({
 
 function FeedSkeleton() {
   return (
-    <div className="flex flex-col gap-3 p-4">
-      <div className="h-3 w-3/4 animate-pulse rounded bg-muted" />
-      <div className="h-3 w-2/3 animate-pulse rounded bg-muted" />
-      <div className="h-20 animate-pulse rounded-lg bg-muted" />
-      <div className="h-3 w-1/2 animate-pulse rounded bg-muted" />
+    <div className="flex flex-col gap-1 px-0 py-2">
+      {/* Message 1 — full (avatar + name + timestamp + body) */}
+      <div className="flex items-start gap-2.5 py-1.5">
+        <div className="size-6 shrink-0 animate-pulse rounded-full bg-muted" />
+        <div className="flex flex-1 flex-col gap-1.5">
+          <div className="flex items-center gap-2">
+            <div className="h-3 w-20 animate-pulse rounded bg-muted" />
+            <div className="h-2.5 w-10 animate-pulse rounded bg-muted" />
+          </div>
+          <div className="h-3 w-3/4 animate-pulse rounded bg-muted" />
+          <div className="h-3 w-1/2 animate-pulse rounded bg-muted" />
+        </div>
+      </div>
+      {/* Message 2 — grouped (no avatar, just body) */}
+      <div className="flex items-start gap-2.5 py-1">
+        <div className="size-6 shrink-0" />
+        <div className="flex flex-1 flex-col gap-1.5">
+          <div className="h-3 w-2/3 animate-pulse rounded bg-muted" />
+        </div>
+      </div>
+      {/* Message 3 — full */}
+      <div className="mt-4 flex items-start gap-2.5 py-1.5">
+        <div className="size-6 shrink-0 animate-pulse rounded-full bg-muted" />
+        <div className="flex flex-1 flex-col gap-1.5">
+          <div className="flex items-center gap-2">
+            <div className="h-3 w-16 animate-pulse rounded bg-muted" />
+            <div className="h-2.5 w-10 animate-pulse rounded bg-muted" />
+          </div>
+          <div className="h-3 w-5/6 animate-pulse rounded bg-muted" />
+        </div>
+      </div>
     </div>
   )
 }

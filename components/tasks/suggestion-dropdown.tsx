@@ -30,6 +30,11 @@ export function SuggestionDropdown<T>({
   const listRef = useRef<HTMLDivElement>(null)
   const activeIndex = Math.min(selectedIndex, Math.max(items.length - 1, 0))
 
+  // Reset selection to first item when the list changes (e.g. user types to filter)
+  useEffect(() => {
+    setSelectedIndex(0)
+  }, [items])
+
   useEffect(() => {
     const list = listRef.current
     if (!list) return

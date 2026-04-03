@@ -38,7 +38,9 @@ export function TaskDetailSidebar({ taskId, isAdmin }: { taskId: Id<"tasks">; is
 
       {/* Typing indicator */}
       {typingUsers && typingUsers.length > 0 && (
-        <TypingIndicator typingUsers={typingUsers} />
+        <div className="px-4">
+          <TypingIndicator typingUsers={typingUsers} />
+        </div>
       )}
 
       {/* Comment input */}

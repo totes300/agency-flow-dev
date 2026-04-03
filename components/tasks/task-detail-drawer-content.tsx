@@ -246,9 +246,11 @@ export function TaskDetailDrawerContent({
             </div>
 
             {/* Comment input — Notion-style inline, inside scroll */}
-            <div className="px-12 pb-10 pt-4">
+            <div className="px-12 pb-10 pt-3">
               {typingUsers && typingUsers.length > 0 && (
-                <TypingIndicator typingUsers={typingUsers} />
+                <div className="mb-0.5 pl-9">
+                  <TypingIndicator typingUsers={typingUsers} />
+                </div>
               )}
               <InlineCommentInput
                 taskId={task._id}

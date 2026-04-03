@@ -12,6 +12,8 @@ import { ActivityBatch } from "@/components/tasks/activity-batch"
 import type { Id } from "@/convex/_generated/dataModel"
 import { toastError } from "@/lib/toast-helpers"
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip"
+import { ArrowDown, X } from "lucide-react"
+import { cn } from "@/lib/utils"
 
 export type ReplyContext = { commentId: string; userName: string }
 
@@ -105,44 +107,67 @@ export function ActivityFeed({ taskId, isAdmin, scrollRef, replyContext, onReply
     [unresolveComment],
   )
 
-  // Mark comments as seen — only when the activity section scrolls into view
+  // Mark comments as seen — when the sentinel at the bottom of the feed is visible.
+  // Uses the last comment's createdAt as the watermark instead of Date.now() to avoid
+  // marking future comments as seen before the user actually scrolls to them.
   const markSeen = useMutation(api.comments.markSeen)
   const commentCount = comments?.length ?? 0
   const currentUserId = currentUser?._id
   const sentinelRef = useRef<HTMLDivElement>(null)
-  const markSeenFiredRef = useRef(false)
+  const lastSubmittedSeenAtRef = useRef(0)
+  const dividerFadeTimerRef = useRef<ReturnType<typeof setTimeout>>(null)
 
-  // Reset markSeen flag when task changes (newDivider reset is below with its declaration)
+  const lastCommentCreatedAt = useMemo(() => {
+    if (!comments || comments.length === 0) return 0
+    return comments[comments.length - 1].createdAt
+  }, [comments])
+
   useEffect(() => {
-    markSeenFiredRef.current = false
+    lastSubmittedSeenAtRef.current = 0
+    if (dividerFadeTimerRef.current) clearTimeout(dividerFadeTimerRef.current)
   }, [taskId])
 
   useEffect(() => {
     const sentinel = sentinelRef.current
     const scrollContainer = scrollRef.current
     if (!sentinel || !scrollContainer || !isAuthenticated) return
+    if (lastCommentCreatedAt === 0) return
 
     const io = new IntersectionObserver(
       ([entry]) => {
-        if (entry.isIntersecting && !markSeenFiredRef.current) {
-          markSeenFiredRef.current = true
-          void markSeen({ taskId })
+        if (
+          entry.isIntersecting &&
+          lastCommentCreatedAt > lastSubmittedSeenAtRef.current
+        ) {
+          lastSubmittedSeenAtRef.current = lastCommentCreatedAt
+          void markSeen({ taskId, seenAt: lastCommentCreatedAt })
+
+          // Clear the "New" divider after 3s — gives user time to register it
+          if (dividerFadeTimerRef.current) clearTimeout(dividerFadeTimerRef.current)
+          dividerFadeTimerRef.current = setTimeout(() => {
+            setDividerFading(true)
+          }, 3000)
         }
       },
       { root: scrollContainer, threshold: 0 },
     )
     io.observe(sentinel)
-    return () => io.disconnect()
-  }, [isAuthenticated, taskId, markSeen, scrollRef, commentCount])
+    return () => {
+      io.disconnect()
+      if (dividerFadeTimerRef.current) clearTimeout(dividerFadeTimerRef.current)
+    }
+  }, [isAuthenticated, taskId, markSeen, scrollRef, lastCommentCreatedAt])
 
   // Freeze lastSeenAt on first load so the "New" divider survives the markSeen update.
   const [newDividerAt, setNewDividerAt] = useState<number | null>(null)
+  const [dividerFading, setDividerFading] = useState(false)
   const newDividerCaptured = useRef(false)
 
   // Reset newDivider state when switching tasks
   useEffect(() => {
     newDividerCaptured.current = false
     setNewDividerAt(null)
+    setDividerFading(false)
   }, [taskId])
 
   useEffect(() => {
@@ -208,12 +233,26 @@ export function ActivityFeed({ taskId, isAdmin, scrollRef, replyContext, onReply
     [feed],
   )
 
-  // Scroll management
+  // Scroll management — Slack-style "N new messages" floating pill
+  const commentFeedCount = useMemo(
+    () => feed?.filter((item) => item.kind === "comment").length ?? 0,
+    [feed],
+  )
   const feedLength = feed?.length ?? 0
-  const receiptKey = readReceipts?.map((r) => r.lastSeenAt).join() ?? ""
-  const [hasNewBelow, setHasNewBelow] = useState(false)
+  const [newBelowCount, setNewBelowCount] = useState(0)
   const isScrolledUpRef = useRef(false)
+  const prevCommentCountRef = useRef(commentFeedCount)
   const prevFeedLengthRef = useRef(feedLength)
+  const initialLoadDoneRef = useRef(false)
+  const initialUnreadShownRef = useRef(false)
+
+  // Reset all scroll state when switching tasks (drawer stays mounted)
+  useEffect(() => {
+    initialLoadDoneRef.current = false
+    initialUnreadShownRef.current = false
+    isScrolledUpRef.current = false
+    setNewBelowCount(0)
+  }, [taskId])
 
   useEffect(() => {
     const el = scrollRef.current
@@ -221,7 +260,7 @@ export function ActivityFeed({ taskId, isAdmin, scrollRef, replyContext, onReply
     const handleScroll = () => {
       const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40
       isScrolledUpRef.current = !atBottom
-      if (atBottom) setHasNewBelow(false)
+      if (atBottom) setNewBelowCount(0)
     }
     el.addEventListener("scroll", handleScroll, { passive: true })
     return () => el.removeEventListener("scroll", handleScroll)
@@ -231,26 +270,49 @@ export function ActivityFeed({ taskId, isAdmin, scrollRef, replyContext, onReply
     const el = scrollRef.current
     if (!el || feedLength === 0) return
 
-    if (isScrolledUpRef.current && feedLength > prevFeedLengthRef.current) {
-      setHasNewBelow(true)
-    } else if (!isScrolledUpRef.current) {
+    // First load — just record counts, don't scroll
+    if (!initialLoadDoneRef.current) {
+      initialLoadDoneRef.current = true
+      prevCommentCountRef.current = commentFeedCount
+      prevFeedLengthRef.current = feedLength
+      return
+    }
+
+    const newComments = commentFeedCount - prevCommentCountRef.current
+
+    if (isScrolledUpRef.current && newComments > 0) {
+      // User is scrolled up — show the pill with count
+      setNewBelowCount((prev) => prev + newComments)
+    } else if (!isScrolledUpRef.current && newComments > 0) {
+      // User is at the bottom — auto-scroll to keep up with new messages
       el.scrollTop = el.scrollHeight
     }
+    prevCommentCountRef.current = commentFeedCount
     prevFeedLengthRef.current = feedLength
-  }, [feedLength, receiptKey, scrollRef])
+  }, [feedLength, commentFeedCount, scrollRef])
+
+  // Show pill on initial open if there are unread comments from other users.
+  // Runs once per task: when unreadCommentCount first resolves > 0.
+  useEffect(() => {
+    if (!initialUnreadShownRef.current && unreadCommentCount > 0) {
+      initialUnreadShownRef.current = true
+      setNewBelowCount(unreadCommentCount)
+    }
+  }, [unreadCommentCount])
 
   const scrollToBottom = useCallback(() => {
     const el = scrollRef.current
     if (!el) return
     el.scrollTo({ top: el.scrollHeight, behavior: "smooth" })
-    setHasNewBelow(false)
+    setNewBelowCount(0)
   }, [scrollRef])
+
+  const dismissNewMessages = useCallback(() => {
+    setNewBelowCount(0)
+  }, [])
 
   return (
     <>
-      {/* Sentinel for IntersectionObserver — marks comments as seen when scrolled into view */}
-      <div ref={sentinelRef} className="h-0 w-0" aria-hidden />
-
       {feed === null ? (
         <FeedSkeleton />
       ) : feed.length === 0 ? (
@@ -264,6 +326,8 @@ export function ActivityFeed({ taskId, isAdmin, scrollRef, replyContext, onReply
           currentUserId={currentUserId}
           isAdmin={isAdmin}
           newDividerAt={newDividerAt}
+          dividerFading={dividerFading}
+          onDividerFaded={() => setNewDividerAt(null)}
           reactionsMap={stableReactionsMap}
           attachmentsMap={stableAttachmentsMap}
           readReceipts={readReceipts}
@@ -278,17 +342,37 @@ export function ActivityFeed({ taskId, isAdmin, scrollRef, replyContext, onReply
         />
       )}
 
-      {/* Floating "New messages" pill */}
-      {hasNewBelow && (
-        <button
-          type="button"
-          onClick={scrollToBottom}
-          className="absolute bottom-2 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-border/50 bg-background px-3 py-1.5 text-xs font-medium text-primary shadow-md transition-colors hover:bg-muted"
-        >
-          <span className="text-sm">↓</span>
-          New messages
-        </button>
-      )}
+      {/* Sentinel at the bottom — marks comments as seen when user scrolls here */}
+      <div ref={sentinelRef} className="h-0 w-0" aria-hidden />
+
+      {/* Floating "N new messages" pill — Slack-style */}
+      <div
+        className={cn(
+          "pointer-events-none absolute bottom-2 left-1/2 z-10 -translate-x-1/2 transition-all duration-200 ease-out",
+          newBelowCount > 0
+            ? "pointer-events-auto translate-y-0 opacity-100"
+            : "translate-y-2 opacity-0",
+        )}
+      >
+        <div className="flex items-center rounded-full bg-primary shadow-lg">
+          <button
+            type="button"
+            onClick={scrollToBottom}
+            className="flex items-center gap-1.5 py-1.5 pl-3 pr-1 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90"
+          >
+            <ArrowDown className="size-3.5" />
+            {newBelowCount} new {newBelowCount === 1 ? "message" : "messages"}
+          </button>
+          <button
+            type="button"
+            onClick={dismissNewMessages}
+            className="flex items-center rounded-full p-1.5 text-primary-foreground/70 transition-colors hover:text-primary-foreground"
+            aria-label="Dismiss"
+          >
+            <X className="size-3.5" />
+          </button>
+        </div>
+      </div>
     </>
   )
 }
@@ -303,6 +387,8 @@ type ViewProps = {
   currentUserId?: Id<"users">
   isAdmin?: boolean
   newDividerAt: number | null
+  dividerFading: boolean
+  onDividerFaded: () => void
   reactionsMap: Record<string, ReactionEntry[]> | undefined
   attachmentsMap: Record<string, AttachmentEntry[]> | undefined
   readReceipts: ReadReceipt[] | undefined
@@ -324,6 +410,8 @@ function CommentsView({
   currentUserId,
   isAdmin,
   newDividerAt,
+  dividerFading,
+  onDividerFaded,
   reactionsMap,
   attachmentsMap,
   readReceipts,
@@ -395,7 +483,7 @@ function CommentsView({
       item.createdAt > newDividerAt &&
       item.userId !== currentUserId
     ) {
-      rendered.push(<NewDivider key="new-divider" />)
+      rendered.push(<NewDivider key="new-divider" fading={dividerFading} onFaded={onDividerFaded} />)
       newDividerRendered = true
     }
 
@@ -488,9 +576,17 @@ function DayDivider({ label }: { label: string }) {
 
 // ─── New divider ────────────────────────────────────────────────────────────────
 
-function NewDivider() {
+function NewDivider({ fading, onFaded }: { fading: boolean; onFaded: () => void }) {
   return (
-    <div className="my-3 flex items-center gap-3">
+    <div
+      className={cn(
+        "flex items-center gap-3 overflow-hidden transition-all duration-500 ease-in-out",
+        fading ? "my-0 max-h-0 opacity-0" : "my-3 max-h-8 opacity-100",
+      )}
+      onTransitionEnd={(e) => {
+        if (e.propertyName === "opacity" && fading) onFaded()
+      }}
+    >
       <div className="h-px flex-1 bg-destructive/50" />
       <span className="text-[9px] font-medium text-destructive/70">New</span>
       <div className="h-px flex-1 bg-destructive/50" />

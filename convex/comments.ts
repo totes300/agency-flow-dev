@@ -393,8 +393,8 @@ export const myLastSeen = query({
  * Called when user opens the Comments tab.
  */
 export const markSeen = mutation({
-  args: { taskId: v.id("tasks") },
-  handler: async (ctx, { taskId }) => {
+  args: { taskId: v.id("tasks"), seenAt: v.number() },
+  handler: async (ctx, { taskId, seenAt }) => {
     const { orgId, userId, isAdmin } = await getAuthContext(ctx);
 
     // Verify task belongs to caller's org + assignment guard
@@ -409,15 +409,17 @@ export const markSeen = mutation({
       .withIndex("by_user_task", (q) => q.eq("userId", userId).eq("taskId", taskId))
       .first();
 
-    const now = Date.now();
     if (existing) {
-      await ctx.db.patch(existing._id, { lastSeenAt: now, orgId });
+      // Only advance forward — never regress the watermark
+      if (seenAt > existing.lastSeenAt) {
+        await ctx.db.patch(existing._id, { lastSeenAt: seenAt, orgId });
+      }
     } else {
       await ctx.db.insert("commentReadReceipts", {
         taskId,
         orgId,
         userId,
-        lastSeenAt: now,
+        lastSeenAt: seenAt,
       });
     }
   },

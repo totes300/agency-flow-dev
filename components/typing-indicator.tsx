@@ -18,7 +18,7 @@ export function TypingIndicator({ typingUsers }: { typingUsers: TypingUser[] }) 
     <div
       role="status"
       aria-live="polite"
-      className="flex h-6 items-center gap-1 px-4 text-xs text-muted-foreground/60"
+      className="flex h-5 items-center gap-1 text-xs text-muted-foreground/60"
     >
       <span>{text}</span>
       <span className="flex items-center gap-0.5" aria-hidden="true">

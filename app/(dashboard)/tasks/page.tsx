@@ -8,6 +8,7 @@ import { useOrganization } from "@clerk/nextjs"
 import { useSearchParams, useRouter, usePathname } from "next/navigation"
 import { useTaskFilters } from "@/lib/hooks/use-task-filters"
 import { buildDetailUrl, parseDetailParam } from "@/lib/task-detail"
+import { findNeighborKeys } from "@/lib/reorder"
 import { useUndoAction } from "@/lib/hooks/use-undo-action"
 import { TaskReferenceDataProvider } from "@/components/tasks/task-reference-data"
 import { TasksHeader } from "@/components/tasks/tasks-header"
@@ -269,14 +270,12 @@ export default function TasksPage() {
     setOptimisticOrder(newOrder)
     pendingReorderRef.current = taskId
 
-    // Compute neighbor keys for fractional indexing
-    const prevTask = toIndex > 0 ? reordered[toIndex - 1] : null
-    const nextTask = toIndex < reordered.length - 1 ? reordered[toIndex + 1] : null
+    const { beforeKey, afterKey } = findNeighborKeys(reordered, toIndex)
 
     void reorderTask({
       taskId: taskId as Id<"tasks">,
-      beforeKey: prevTask?.manualSortKey ?? undefined,
-      afterKey: nextTask?.manualSortKey ?? undefined,
+      beforeKey,
+      afterKey,
     })
   }, [desktopGroups, reorderTask])
 

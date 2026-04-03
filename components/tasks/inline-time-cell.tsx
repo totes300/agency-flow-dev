@@ -298,8 +298,8 @@ function IdleTimeCell({
       <TimeLogPopover
         taskId={taskId}
         isBillable={isBillable}
-        align={variant === "header" ? "end" : "start"}
-        tooltipLabel={variant === "header" ? "Log time" : undefined}
+        align="end"
+        tooltipLabel="Log time"
         tooltipSide={variant === "header" ? "bottom" : "top"}
       >
         {variant === "header" ? (
@@ -315,40 +315,30 @@ function IdleTimeCell({
             {hasTime ? minutesToDisplay(totalMinutes) : "00:00"}
           </button>
         ) : variant === "sidebar" ? (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                onClick={(e) => e.stopPropagation()}
-                className={cn(
-                  "h-7 cursor-pointer rounded-md px-0 text-[13px] font-medium text-foreground transition-colors duration-150 hover:text-foreground/80",
-                  hasTime
-                    ? "text-muted-foreground hover:text-foreground"
-                    : "font-sans text-muted-foreground/50 group-hover/row:text-muted-foreground",
-                  !hasTime && "text-foreground/55",
-                )}
-              >
-                {hasTime ? minutesToDisplay(totalMinutes) : "Add time"}
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="top" sideOffset={4}>Log time</TooltipContent>
-          </Tooltip>
+          <button
+            onClick={(e) => e.stopPropagation()}
+            className={cn(
+              "h-7 cursor-pointer rounded-md px-0 text-[13px] font-medium text-foreground transition-colors duration-150 hover:text-foreground/80",
+              hasTime
+                ? "text-muted-foreground hover:text-foreground"
+                : "font-sans text-muted-foreground/50 group-hover/row:text-muted-foreground",
+              !hasTime && "text-foreground/55",
+            )}
+          >
+            {hasTime ? minutesToDisplay(totalMinutes) : "Add time"}
+          </button>
         ) : (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                onClick={(e) => e.stopPropagation()}
-                className={cn(
-                  "cursor-pointer text-[13px] transition-colors duration-150",
-                  hasTime
-                    ? "text-muted-foreground hover:text-foreground"
-                    : "text-muted-foreground/40 group-hover/row:text-muted-foreground/60",
-                )}
-              >
-                {hasTime ? minutesToDisplay(totalMinutes) : ""}
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="top" sideOffset={4}>Log time</TooltipContent>
-          </Tooltip>
+          <button
+            onClick={(e) => e.stopPropagation()}
+            className={cn(
+              "cursor-pointer text-[13px] transition-colors duration-150",
+              hasTime
+                ? "text-muted-foreground hover:text-foreground"
+                : "text-muted-foreground/40 group-hover/row:text-muted-foreground/60",
+            )}
+          >
+            {hasTime ? minutesToDisplay(totalMinutes) : "00:00"}
+          </button>
         )}
       </TimeLogPopover>
     </div>

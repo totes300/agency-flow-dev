@@ -117,6 +117,25 @@ export const sumByTasks = query({
   },
 });
 
+export const sumMyToday = query({
+  args: {},
+  handler: async (ctx) => {
+    const { userId, orgId } = await getAuthContext(ctx);
+    const orgSettings = await getOrgSettings(ctx, orgId);
+    const timezone = orgSettings?.timezone ?? "America/New_York";
+    const todayStr = getDateInTimezone(Date.now(), timezone);
+
+    const entries = await ctx.db
+      .query("timeEntries")
+      .withIndex("by_userId_date", (q) =>
+        q.eq("userId", userId).eq("date", todayStr),
+      )
+      .collect();
+
+    return entries.reduce((sum, e) => sum + e.durationMinutes, 0);
+  },
+});
+
 export const sumByProject = query({
   args: { projectId: v.id("projects") },
   handler: async (ctx, args) => {

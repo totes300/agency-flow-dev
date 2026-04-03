@@ -15,6 +15,8 @@ export default defineSchema({
     timerAccumulatedMs: v.optional(v.number()),
     timerStatus: v.optional(v.union(v.literal("running"), v.literal("paused"))),
     taskDetailView: v.optional(v.union(v.literal("modal"), v.literal("drawer"))),
+    // My Tasks view: which status types to show beyond "Today" + "Submitted"
+    todayVisibleStatuses: v.optional(v.array(v.string())),
     createdAt: v.number(),
     updatedAt: v.number(),
   }).index("byExternalId", ["externalId"]),

@@ -1034,7 +1034,6 @@ export const update = mutation({
     if (args.statusId !== undefined) {
       const status = await ctx.db.get(args.statusId);
       if (!status || status.orgId !== orgId) throw new ConvexError("Status not found");
-      if (!isAdmin && status.type === "done") throw new ConvexError("Only admins can mark tasks as done");
       updates.statusId = args.statusId;
       updates.statusType = status.type;
     }

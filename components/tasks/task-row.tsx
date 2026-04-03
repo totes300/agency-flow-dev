@@ -28,6 +28,7 @@ import { InlineTimeCell } from "@/components/tasks/inline-time-cell"
 import { TaskPreviewPopover } from "@/components/tasks/task-preview-popover"
 import { SubtaskHoverPopover } from "@/components/tasks/subtask-hover-popover"
 import { CommentHoverPopover } from "@/components/tasks/comment-hover-popover"
+import { CommentPill, InlineSubtaskRing } from "@/components/tasks/activity-indicators"
 import type { TaskWithJoins } from "@/components/tasks/tasks-table"
 import type { Id } from "@/convex/_generated/dataModel"
 
@@ -291,51 +292,3 @@ export const TaskRow = memo(function TaskRow({
   )
 })
 
-/** Inline 13px progress ring — sits next to the task title, same visual weight as FileTextIcon. */
-function InlineSubtaskRing({ done, total, isUnseen }: { done: number; total: number; isUnseen: boolean }) {
-  const circumference = 2 * Math.PI * 6
-  const progress = done / total
-  const offset = circumference * (1 - progress)
-  const isComplete = done === total
-
-  return (
-    <svg width={13} height={13} viewBox="0 0 16 16" className="block">
-      <circle
-        cx={8} cy={8} r={6}
-        fill="none"
-        stroke={isComplete && isUnseen ? "none" : "var(--border)"}
-        strokeWidth={1.75}
-      />
-      {progress > 0 && (
-        <circle
-          cx={8} cy={8} r={6}
-          fill="none"
-          className={isComplete && isUnseen ? "stroke-emerald-500" : isUnseen ? "stroke-foreground" : "stroke-muted-foreground"}
-          strokeWidth={isUnseen ? 2 : 1.75}
-          strokeDasharray={circumference}
-          strokeDashoffset={offset}
-          strokeLinecap="round"
-          transform="rotate(-90 8 8)"
-          style={isComplete && isUnseen ? { opacity: 1 } : isUnseen ? { opacity: 0.7 } : { opacity: 0.45 }}
-        />
-      )}
-    </svg>
-  )
-}
-
-/** Comment pill — gray when seen, red when unseen. */
-function CommentPill({ count, unreadCount, hasUnseen }: { count: number; unreadCount: number; hasUnseen: boolean }) {
-  const displayCount = hasUnseen ? unreadCount : count
-
-  return (
-    <span className={cn(
-      "inline-flex items-center gap-1 rounded-full px-2 h-[22px] text-[11px] tabular-nums font-medium",
-      hasUnseen
-        ? "bg-red-500 text-white dark:bg-red-600"
-        : "bg-muted text-muted-foreground",
-    )}>
-      <MessageCircleIcon className="size-3" strokeWidth={hasUnseen ? 2.5 : 2.25} />
-      {displayCount}
-    </span>
-  )
-}

@@ -8,18 +8,37 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { TaskDetailTitle } from "@/components/tasks/task-detail-title"
 import { TaskDetailTime } from "@/components/tasks/task-detail-time"
 import { TaskDetailAttachments } from "@/components/tasks/task-detail-attachments"
-import { InlineTimeCell } from "@/components/tasks/inline-time-cell"
-import { ActivityFeed, ActivityViewToggle, type ReplyContext, type ActivityView, type CommentCounts } from "@/components/tasks/activity-feed"
-import { TaskDetailCommentInput } from "@/components/tasks/task-detail-comment-input"
+import { ActivityFeed, type ReplyContext, type CommentCounts } from "@/components/tasks/activity-feed"
+import { InlineCommentInput } from "@/components/tasks/inline-comment-input"
 import { TypingIndicator } from "@/components/typing-indicator"
 import { api } from "@/convex/_generated/api"
 import { MailIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { Id } from "@/convex/_generated/dataModel"
 
+const DESC_COLLAPSED_HEIGHT = 400
+
 const SubtaskList = dynamic(
   () => import("@/components/tasks/subtask-list").then((m) => ({ default: m.SubtaskList })),
-  { ssr: false, loading: () => null },
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex flex-col gap-0.5">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <div key={i} className="grid h-9 grid-cols-[20px_1fr_116px_108px_80px_96px_76px_36px] items-center gap-0 px-2">
+            <div />
+            <div className="h-3 w-2/3 animate-pulse rounded bg-muted" />
+            <div className="h-5 w-16 animate-pulse rounded bg-muted" />
+            <div className="h-5 w-16 animate-pulse rounded bg-muted" />
+            <div className="h-3 w-10 animate-pulse rounded bg-muted" />
+            <div className="h-5 w-14 animate-pulse rounded-full bg-muted" />
+            <div className="h-3 w-10 animate-pulse rounded bg-muted" />
+            <div />
+          </div>
+        ))}
+      </div>
+    ),
+  },
 )
 
 const TiptapEditor = dynamic(
@@ -67,12 +86,9 @@ export function TaskDetailDrawerContent({
   const scrollRef = useRef<HTMLDivElement>(null)
   const roRef = useRef<ResizeObserver | null>(null)
   const [replyContext, setReplyContext] = useState<ReplyContext | null>(null)
-  const [activityView, setActivityView] = useState<ActivityView>("all")
   const [commentCounts, setCommentCounts] = useState<CommentCounts>({ total: 0, unread: 0 })
   const [isDescExpanded, setIsDescExpanded] = useState(false)
   const [isDescOverflowing, setIsDescOverflowing] = useState(false)
-
-  const DESC_COLLAPSED_HEIGHT = 400
 
   // Callback ref — re-attaches ResizeObserver whenever the DOM element mounts
   const descriptionRef = useCallback((el: HTMLDivElement | null) => {
@@ -131,42 +147,44 @@ export function TaskDetailDrawerContent({
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       {/* Fixed header — title + log time, tabs */}
-      <div className="shrink-0 px-14">
-        <div className="pt-12">
-          <div className="flex items-start gap-5">
-            <div className="min-w-0 flex-1">
-              <TaskDetailTitle taskId={task._id} title={task.title} />
-            </div>
-            <div className="group/row mt-0.5 shrink-0">
-              <InlineTimeCell
-                taskId={task._id}
-                totalMinutes={task.totalMinutes ?? 0}
-                isDone={task.statusType === "done"}
-                isBillable={task.billable}
-                variant="sidebar"
-              />
-            </div>
-          </div>
-        </div>
-        <div className="h-3" />
+      <div className="shrink-0 px-12 pt-8 pb-4">
+        <TaskDetailTitle taskId={task._id} title={task.title} />
       </div>
 
       <Tabs defaultValue="overview" className="flex flex-1 flex-col overflow-hidden gap-0">
-        <div className="shrink-0 mx-14 border-b">
-          <TabsList variant="line" className="w-auto border-b-0">
-            <TabsTrigger value="overview" className="text-[13px]">Overview</TabsTrigger>
-            <TabsTrigger value="subtasks" className="text-[13px]">Subtasks</TabsTrigger>
-            <TabsTrigger value="time" className="text-[13px]">Time</TabsTrigger>
-            <TabsTrigger value="attachments" className="text-[13px]">Attachments</TabsTrigger>
-            <TabsTrigger value="emails" className="text-[13px]">Emails</TabsTrigger>
+        {/* Tabs — plain text, no chrome: bold = active, light gray = inactive */}
+        <div className="shrink-0 px-12">
+          <TabsList variant="plain" className="pb-2">
+            {(
+              [
+                { value: "overview", label: "Overview", badge: commentCounts.unread > 0 ? commentCounts.unread : undefined },
+                { value: "time", label: "Time" },
+                { value: "files", label: "Files" },
+                { value: "email", label: "Email" },
+              ] as const
+            ).map((tab) => (
+              <TabsTrigger
+                key={tab.value}
+                value={tab.value}
+                className="inline-flex items-center gap-1 text-[13px] font-medium"
+              >
+                {tab.label}
+                {"badge" in tab && tab.badge != null && tab.badge > 0 && (
+                  <span className="inline-flex min-w-4 items-center justify-center rounded-full bg-red-500 px-1 py-px text-[10px] font-bold leading-none text-white">
+                    {tab.badge}
+                  </span>
+                )}
+              </TabsTrigger>
+            ))}
           </TabsList>
+          <div className="h-px bg-border/70" />
         </div>
 
-        {/* Overview — description and activity */}
+        {/* Overview — description, subtasks, activity, comment input */}
         <TabsContent value="overview" className="flex flex-1 flex-col overflow-hidden">
           <div ref={scrollRef} className="relative flex-1 overflow-y-auto">
             {/* Description — collapsible with fade */}
-            <div className="relative px-14 pt-4 pb-2">
+            <div className="relative px-12 pt-4 pb-2">
               <div
                 ref={descriptionRef}
                 className="overflow-hidden transition-[max-height] duration-300 ease-in-out"
@@ -186,7 +204,7 @@ export function TaskDetailDrawerContent({
               {isDescOverflowing && (
                 <>
                   {!isDescExpanded && (
-                    <div className="pointer-events-none absolute right-14 bottom-0 left-14 h-56 bg-gradient-to-t from-background from-15% via-background/40 via-60% to-transparent" />
+                    <div className="pointer-events-none absolute right-12 bottom-0 left-12 h-56 bg-gradient-to-t from-background from-15% via-background/40 via-60% to-transparent" />
                   )}
                   <div className="relative z-10 flex items-center gap-3 pt-1">
                     <div className="h-px flex-1 border-t border-dashed border-border/50" />
@@ -203,64 +221,67 @@ export function TaskDetailDrawerContent({
               )}
             </div>
 
-            {/* Activity section */}
-            <div className="px-14 pb-3 pt-6">
-              <div className="mb-4 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <h3 className="text-base font-semibold text-foreground">Activity</h3>
-                  {commentCounts.total > 0 && (
-                    <span className={cn(
-                      "inline-flex items-center rounded-full px-2 h-[20px] text-[11px] tabular-nums font-medium",
-                      commentCounts.unread > 0
-                        ? "bg-red-500 text-white dark:bg-red-600"
-                        : "bg-muted text-muted-foreground",
-                    )}>
-                      {commentCounts.unread > 0 ? commentCounts.unread : commentCounts.total}
-                    </span>
-                  )}
-                </div>
-                <ActivityViewToggle view={activityView} onViewChange={setActivityView} />
-              </div>
-              <ActivityFeed
-                taskId={task._id}
+            {/* Subtasks — merged into overview */}
+            <div className="px-12 pt-4">
+              <SubtaskList
+                parentTaskId={task._id}
+                parentProjectId={task.projectId}
+                parentBillable={task.billable}
+                parentCategoryId={task.workCategoryId}
+                parentAssigneeIds={task.assigneeIds}
                 isAdmin={isAdmin}
-                scrollRef={scrollRef}
+                onOpenDetail={onOpenDetail}
+              />
+            </div>
+
+            {/* Activity section */}
+            <div className="px-12 pb-3 pt-6">
+              <div className="border-t border-border/70 pt-5">
+                <div className="mb-4 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[13px] font-semibold text-muted-foreground">Activity</span>
+                    {commentCounts.total > 0 && (
+                      <span className={cn(
+                        "inline-flex items-center rounded-full px-2 h-[20px] text-[11px] tabular-nums font-medium",
+                        commentCounts.unread > 0
+                          ? "bg-red-500 text-white dark:bg-red-600"
+                          : "bg-muted text-muted-foreground",
+                      )}>
+                        {commentCounts.unread > 0 ? commentCounts.unread : commentCounts.total}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <ActivityFeed
+                  taskId={task._id}
+                  isAdmin={isAdmin}
+                  scrollRef={scrollRef}
+                  replyContext={replyContext}
+                  onReplyContextChange={setReplyContext}
+                  onCommentCounts={setCommentCounts}
+                />
+              </div>
+            </div>
+
+            {/* Comment input — Notion-style inline, inside scroll */}
+            <div className="px-12 pb-10 pt-3">
+              {typingUsers && typingUsers.length > 0 && (
+                <div className="mb-0.5 pl-9">
+                  <TypingIndicator typingUsers={typingUsers} />
+                </div>
+              )}
+              <InlineCommentInput
+                key={task._id}
+                taskId={task._id}
                 replyContext={replyContext}
-                onReplyContextChange={setReplyContext}
-                view={activityView}
-                onViewChange={setActivityView}
-                onCommentCounts={setCommentCounts}
+                onClearReply={() => setReplyContext(null)}
               />
             </div>
           </div>
-
-          {/* Sticky footer — typing + comment input */}
-          <div className="shrink-0">
-            {typingUsers && typingUsers.length > 0 && (
-              <TypingIndicator typingUsers={typingUsers} />
-            )}
-            <TaskDetailCommentInput
-              taskId={task._id}
-              replyContext={replyContext}
-              onClearReply={() => setReplyContext(null)}
-            />
-          </div>
-        </TabsContent>
-
-        <TabsContent value="subtasks" className="flex-1 overflow-y-auto px-14 py-5">
-          <SubtaskList
-            parentTaskId={task._id}
-            parentProjectId={task.projectId}
-            parentBillable={task.billable}
-            parentCategoryId={task.workCategoryId}
-            parentAssigneeIds={task.assigneeIds}
-            isAdmin={isAdmin}
-            onOpenDetail={onOpenDetail}
-          />
         </TabsContent>
 
         {/* Time */}
-        <TabsContent value="time" className="flex-1 overflow-y-auto px-14 py-5">
+        <TabsContent value="time" className="flex-1 overflow-y-auto px-12 py-5">
           <TaskDetailTime
             taskId={task._id}
             isBillable={task.billable}
@@ -269,13 +290,13 @@ export function TaskDetailDrawerContent({
           />
         </TabsContent>
 
-        {/* Attachments */}
-        <TabsContent value="attachments" className="flex-1 overflow-y-auto px-14 py-5">
+        {/* Files (renamed from Attachments) */}
+        <TabsContent value="files" className="flex-1 overflow-y-auto px-12 py-5">
           <TaskDetailAttachments taskId={task._id} />
         </TabsContent>
 
-        {/* Emails */}
-        <TabsContent value="emails" className="flex-1 overflow-y-auto px-14 py-5">
+        {/* Email */}
+        <TabsContent value="email" className="flex-1 overflow-y-auto px-12 py-5">
           <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-border/40 p-12">
             <MailIcon className="size-10 text-muted-foreground/30" />
             <p className="text-sm text-muted-foreground/50">Coming soon</p>

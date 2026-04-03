@@ -386,3 +386,34 @@
   pointer-events: none;
   height: 0;
 }
+
+/* ─── Notion-style inline comment editor ─────────────────────────────────────── */
+
+.inline-comment-editor {
+  display: flex;
+  width: 100%;
+  min-height: 24px;
+  flex-direction: column;
+  justify-content: center;
+  padding: 0 !important;
+  font-size: 14px;
+  line-height: 22px;
+  color: var(--foreground);
+  caret-color: var(--foreground);
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.inline-comment-editor p {
+  margin: 0;
+  line-height: 22px;
+}
+
+.inline-comment-editor p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  color: #a19e99;
+  opacity: 1;
+  pointer-events: none;
+  height: 0;
+}

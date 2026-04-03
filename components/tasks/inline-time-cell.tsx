@@ -8,7 +8,7 @@ import { toast } from "sonner"
 import { toastError } from "@/lib/toast-helpers"
 import { TimeLogPopover } from "@/components/tasks/time-log-popover"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import { PlayIcon } from "lucide-react"
+import { PlayIcon, PauseIcon } from "lucide-react"
 import type { Id } from "@/convex/_generated/dataModel"
 
 /** Convert minutes to HH:MM display */
@@ -28,7 +28,7 @@ export function InlineTimeCell({
   totalMinutes: number
   isDone: boolean
   isBillable?: boolean
-  variant?: "inline" | "sidebar"
+  variant?: "inline" | "sidebar" | "header"
   align?: "start" | "end"
 }) {
   const { timerState, isRunningOn } = useTimerActions()
@@ -36,9 +36,9 @@ export function InlineTimeCell({
 
   if (isDone) {
     return (
-      <div className={cn("flex items-center gap-[5px] opacity-35", variant === "sidebar" && "gap-2 opacity-60", align === "end" && "justify-end")}>
+      <div className={cn("flex items-center gap-[5px] opacity-35", variant === "sidebar" && "gap-1.5 opacity-60", variant === "header" && "gap-1 opacity-60", align === "end" && "justify-end")}>
         {totalMinutes > 0 && (
-          <span className={cn("text-xs text-muted-foreground", variant === "sidebar" && "text-sm font-medium text-foreground/70")}>
+          <span className={cn("text-xs text-muted-foreground", variant === "sidebar" && "text-[13px] font-semibold tabular-nums text-foreground/70", variant === "header" && "text-xs tabular-nums text-muted-foreground")}>
             {minutesToDisplay(totalMinutes)}
           </span>
         )}
@@ -136,7 +136,7 @@ const TimerCircle = React.forwardRef<
 })
 
 /** Only this component subscribes to the tick context (re-renders every second) */
-function RunningTimeCell({ variant = "inline", align = "start" }: { variant?: "inline" | "sidebar"; align?: "start" | "end" }) {
+function RunningTimeCell({ variant = "inline", align = "start" }: { variant?: "inline" | "sidebar" | "header"; align?: "start" | "end" }) {
   const { stopTimer } = useTimerActions()
   const { formattedTime } = useTimerTick()
 
@@ -149,37 +149,51 @@ function RunningTimeCell({ variant = "inline", align = "start" }: { variant?: "i
     }
   }
 
+  if (variant === "header") {
+    return (
+      <div className="flex items-center gap-1">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              onClick={handleStopClick}
+              className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-red-500 transition-colors hover:bg-accent dark:text-red-400"
+              aria-label="Stop timer"
+            >
+              <PauseIcon className="size-3.5" strokeWidth={0} fill="currentColor" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" sideOffset={4}>Stop timer</TooltipContent>
+        </Tooltip>
+        <span className="text-xs tabular-nums text-red-500 dark:text-red-400">
+          {formattedTime}
+        </span>
+      </div>
+    )
+  }
+
+  const circleSize = variant === "sidebar" ? 30 : 16
+  const stopSize = variant === "sidebar" ? "size-2.5" : "size-[7px]"
+
   return (
     <div
       className={cn(
-        "flex items-center gap-[5px]",
-        variant === "sidebar" && "gap-2",
+        "flex items-center",
+        variant === "inline" ? "gap-[5px]" : "gap-1.5",
         align === "end" && "justify-end",
       )}
     >
-      {variant === "sidebar" ? (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <TimerCircle size={30} running onClick={handleStopClick} label="Stop timer">
-              <span className="block size-2.5 rounded-[2px] bg-red-500" />
-            </TimerCircle>
-          </TooltipTrigger>
-          <TooltipContent side="top" sideOffset={4}>Stop timer</TooltipContent>
-        </Tooltip>
-      ) : (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <TimerCircle size={16} running onClick={handleStopClick} label="Stop timer">
-              <span className="block size-[7px] rounded-[1.5px] bg-red-500" />
-            </TimerCircle>
-          </TooltipTrigger>
-          <TooltipContent side="top" sideOffset={4}>Stop timer</TooltipContent>
-        </Tooltip>
-      )}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <TimerCircle size={circleSize} running onClick={handleStopClick} label="Stop timer">
+            <span className={cn("block rounded-[2px] bg-red-500", stopSize)} />
+          </TimerCircle>
+        </TooltipTrigger>
+        <TooltipContent side="top" sideOffset={4}>Stop timer</TooltipContent>
+      </Tooltip>
       <span
         className={cn(
-          "text-xs font-semibold text-red-500",
-          variant === "sidebar" && "px-0 text-[13px] font-semibold text-red-500",
+          "font-semibold tabular-nums text-red-500",
+          variant === "inline" ? "text-xs" : "text-[13px] tracking-[0.01em]",
         )}
       >
         {formattedTime}
@@ -201,7 +215,7 @@ function IdleTimeCell({
   totalMinutes: number
   isBillable: boolean
   isTimerOnAnotherTask: boolean
-  variant?: "inline" | "sidebar"
+  variant?: "inline" | "sidebar" | "header"
   align?: "start" | "end"
 }) {
   const { startTimer, stopTimer, setPendingStopResult } = useTimerActions()
@@ -233,19 +247,36 @@ function IdleTimeCell({
     }
   }
 
+  const circleSize = variant === "sidebar" ? 30 : 16
+  const playIconSize = variant === "inline" ? "size-3.5" : "size-3.5"
+  const useCircle = variant === "sidebar"
+
   return (
     <div
       className={cn(
-        "flex items-center gap-[5px]",
-        variant === "sidebar" && "gap-2",
+        "flex items-center",
+        variant === "inline" ? "gap-[5px]" : variant === "header" ? "gap-1" : "gap-1.5",
         align === "end" && "justify-end",
       )}
     >
-      {variant === "sidebar" ? (
+      {variant === "header" ? (
         <Tooltip>
           <TooltipTrigger asChild>
-            <TimerCircle size={30} running={false} onClick={handlePlayClick} label="Start timer">
-              <PlayIcon className="ml-0.5 size-3.5 fill-current text-emerald-600" strokeWidth={2.2} />
+            <button
+              onClick={handlePlayClick}
+              className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              aria-label="Start timer"
+            >
+              <PlayIcon className="ml-px size-3.5" strokeWidth={0} fill="currentColor" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" sideOffset={4}>Start timer</TooltipContent>
+        </Tooltip>
+      ) : useCircle ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <TimerCircle size={circleSize} running={false} onClick={handlePlayClick} label="Start timer">
+              <PlayIcon className={cn("ml-0.5 fill-current text-emerald-600", playIconSize)} strokeWidth={2.2} />
             </TimerCircle>
           </TooltipTrigger>
           <TooltipContent side="top" sideOffset={4}>Start timer</TooltipContent>
@@ -264,8 +295,26 @@ function IdleTimeCell({
           <TooltipContent side="top" sideOffset={4}>Start timer</TooltipContent>
         </Tooltip>
       )}
-      <TimeLogPopover taskId={taskId} isBillable={isBillable}>
-        {variant === "sidebar" ? (
+      <TimeLogPopover
+        taskId={taskId}
+        isBillable={isBillable}
+        align={variant === "header" ? "end" : "start"}
+        tooltipLabel={variant === "header" ? "Log time" : undefined}
+        tooltipSide={variant === "header" ? "bottom" : "top"}
+      >
+        {variant === "header" ? (
+          <button
+            onClick={(e) => e.stopPropagation()}
+            className={cn(
+              "cursor-pointer text-xs tabular-nums transition-colors duration-150",
+              hasTime
+                ? "text-muted-foreground hover:text-foreground"
+                : "text-muted-foreground/50 hover:text-muted-foreground",
+            )}
+          >
+            {hasTime ? minutesToDisplay(totalMinutes) : "00:00"}
+          </button>
+        ) : variant === "sidebar" ? (
           <Tooltip>
             <TooltipTrigger asChild>
               <button

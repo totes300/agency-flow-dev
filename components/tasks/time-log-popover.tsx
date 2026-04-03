@@ -16,6 +16,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover"
+import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip"
 import { ClockIcon, AlignLeftIcon, ChevronDownIcon, PlayIcon, CheckIcon } from "lucide-react"
 import { toast } from "sonner"
 import { toastError } from "@/lib/toast-helpers"
@@ -26,10 +27,16 @@ export function TimeLogPopover({
   taskId,
   isBillable,
   children,
+  align = "start",
+  tooltipLabel,
+  tooltipSide = "top",
 }: {
   taskId: Id<"tasks">
   isBillable: boolean
   children: React.ReactNode
+  align?: "start" | "center" | "end"
+  tooltipLabel?: string
+  tooltipSide?: "top" | "bottom" | "left" | "right"
 }) {
   const { isAuthenticated } = useConvexAuth()
   const { membership } = useOrganization()
@@ -112,12 +119,23 @@ export function TimeLogPopover({
 
   return (
     <Popover open={open} onOpenChange={(o) => { setOpen(o); if (!o) resetForm() }}>
-      <PopoverTrigger asChild>
-        {children}
-      </PopoverTrigger>
+      {tooltipLabel ? (
+        <Tooltip open={open ? false : undefined}>
+          <TooltipTrigger asChild>
+            <PopoverTrigger asChild>
+              {children}
+            </PopoverTrigger>
+          </TooltipTrigger>
+          <TooltipContent side={tooltipSide} sideOffset={4}>{tooltipLabel}</TooltipContent>
+        </Tooltip>
+      ) : (
+        <PopoverTrigger asChild>
+          {children}
+        </PopoverTrigger>
+      )}
       <PopoverContent
         className="w-[340px] p-0"
-        align="start"
+        align={align}
         sideOffset={4}
       >
         {/* User selector (admin only) */}

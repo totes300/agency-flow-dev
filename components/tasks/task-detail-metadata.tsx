@@ -1,12 +1,19 @@
 "use client"
 
 import { useState, useRef, useEffect, useCallback } from "react"
+import { UserAvatar } from "@/components/user-avatar"
 import { InlineStatusCell } from "@/components/tasks/inline-status-cell"
 import { InlineAssigneeCell } from "@/components/tasks/inline-assignee-cell"
 import { InlineProjectCell } from "@/components/tasks/inline-project-cell"
 import { InlineCategoryCell } from "@/components/tasks/inline-category-cell"
 import { InlineDueDateCell } from "@/components/tasks/inline-due-date-cell"
 import { Switch } from "@/components/ui/switch"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import {
   AlertDialog,
   AlertDialogContent,
@@ -35,6 +42,7 @@ import {
   TimerIcon,
   UserIcon,
   CalendarPlusIcon,
+  CheckIcon,
 } from "lucide-react"
 import type { Id, Doc } from "@/convex/_generated/dataModel"
 
@@ -67,9 +75,9 @@ export function MetadataRow({
 }) {
   if (variant === "stacked") {
     return (
-      <div className="group/metadata border-b border-border/40 py-2 last:border-b-0">
-        <span className="text-[11px] font-medium text-foreground/45">{label}</span>
-        <div className="mt-0.5 min-w-0 rounded-md py-0.5 text-[13px] transition-colors hover:bg-accent -mx-2 px-2 cursor-default">{children}</div>
+      <div className="group/metadata py-1.5">
+        <span className="text-[11px] font-medium text-muted-foreground tracking-[0.01em]">{label}</span>
+        <div className="mt-1 min-w-0 rounded-md py-0.5 text-[13px] font-normal text-foreground transition-colors hover:bg-accent -mx-2 px-2 cursor-default">{children}</div>
       </div>
     )
   }
@@ -137,59 +145,8 @@ export function TaskDetailMetadata({
     setBillableDialog({ open: false, target: false })
   }
 
-  const stackVariant = layout === "stack" ? "stacked" : "inline" as const
-
-  const stackedRows = (
-    <>
-      <MetadataRow icon={UsersIcon} label="Assignees" variant="stacked">
-        <InlineAssigneeCell taskId={task._id} assignees={task.assignees} emptyLabel="Add assignee" />
-      </MetadataRow>
-      <MetadataRow icon={TagIcon} label="Category" variant="stacked">
-        <InlineCategoryCell taskId={task._id} category={task.category} emptyLabel="Add category" />
-      </MetadataRow>
-      <MetadataRow icon={CalendarIcon} label="Due date" variant="stacked">
-        <InlineDueDateCell taskId={task._id} dueDate={task.dueDate ?? null} isOverdue={overdue} emptyLabel="Add due date" />
-      </MetadataRow>
-      <MetadataRow icon={FolderIcon} label="Project" variant="stacked">
-        <InlineProjectCell taskId={task._id} project={task.project} client={task.client} emptyLabel="Add project" />
-      </MetadataRow>
-      <MetadataRow icon={ClockIcon} label="Estimate" variant="stacked">
-        <InlineEstimateCell taskId={task._id} estimate={task.estimate} />
-      </MetadataRow>
-      <MetadataRow icon={TimerIcon} label="Tracked" variant="stacked">
-        <span className="flex items-center gap-1.5 text-[13px] text-muted-foreground">
-          <TimerIcon className="size-4 shrink-0 text-foreground/35" strokeWidth={1.75} />
-          {formatDuration(task.totalMinutes ?? 0)}
-        </span>
-      </MetadataRow>
-      <MetadataRow icon={DollarSignIcon} label="Billable" variant="stacked">
-        <div className="flex items-center gap-1.5">
-          <DollarSignIcon className="size-4 shrink-0 text-foreground/35" strokeWidth={1.75} />
-          <Switch
-            checked={task.billable}
-            onCheckedChange={handleBillableChange}
-            disabled={!isAdmin || mismatchedCount === undefined}
-            aria-label="Billable"
-            className="scale-[0.8] origin-left"
-          />
-          <span className="text-[13px] text-muted-foreground">
-            {task.billable ? "Yes" : "No"}
-          </span>
-        </div>
-      </MetadataRow>
-      {task.createdByUser && (
-        <MetadataRow icon={UserIcon} label="Created by" variant="stacked">
-          <span className="flex items-center gap-1.5 text-[13px] text-foreground">
-            <UserIcon className="size-4 shrink-0 text-foreground/35" strokeWidth={1.75} />
-            {task.createdByUser.name}
-          </span>
-        </MetadataRow>
-      )}
-    </>
-  )
-
   return (
-    <div className={cn(layout === "stack" ? "flex min-h-full flex-col px-7 pb-6" : "shrink-0 px-7 pb-6")}>
+    <div className={cn(layout === "stack" ? "flex min-h-full flex-col px-[18px] pb-5" : "shrink-0 px-7 pb-6")}>
       {layout === "grid" ? (
         <div className="grid grid-cols-2 gap-x-0">
           {/* Left column */}
@@ -244,21 +201,74 @@ export function TaskDetailMetadata({
         </div>
       ) : (
         <div className="flex flex-col">
-          <span className="mb-1 text-xs font-semibold uppercase tracking-widest text-foreground/40">Properties</span>
-          <MetadataRow icon={CircleCheckIcon} label="Status" variant="stacked">
-            <InlineStatusCell taskId={task._id} status={task.status} isAdmin={isAdmin} />
-          </MetadataRow>
-          {stackedRows}
-          {task.createdAt && (
-            <MetadataRow icon={CalendarPlusIcon} label="Created on" variant="stacked">
-              <span className="flex items-center gap-1.5 text-[13px] text-muted-foreground">
-                <CalendarPlusIcon className="size-4 shrink-0 text-foreground/35" strokeWidth={1.75} />
-                {new Date(task.createdAt).toLocaleDateString(undefined, {
-                  month: "short", day: "numeric", year: "numeric",
-                })}
+          <div className="pb-4 pt-8">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground/60">Properties</span>
+          </div>
+
+          {/* Group 1: Status, Assignees, Category */}
+          <div className="pb-4 mb-4 border-b border-border/40">
+            <MetadataRow icon={CircleCheckIcon} label="Status" variant="stacked">
+              <InlineStatusCell taskId={task._id} status={task.status} isAdmin={isAdmin} />
+            </MetadataRow>
+            <MetadataRow icon={UsersIcon} label="Assignees" variant="stacked">
+              <InlineAssigneeCell taskId={task._id} assignees={task.assignees} emptyLabel="Add assignee" />
+            </MetadataRow>
+            <MetadataRow icon={TagIcon} label="Category" variant="stacked">
+              <InlineCategoryCell taskId={task._id} category={task.category} emptyLabel="Add category" />
+            </MetadataRow>
+          </div>
+
+          {/* Group 2: Due date, Estimate, Tracked */}
+          <div className="pb-4 mb-4 border-b border-border/40">
+            <MetadataRow icon={CalendarIcon} label="Due date" variant="stacked">
+              <InlineDueDateCell taskId={task._id} dueDate={task.dueDate ?? null} isOverdue={overdue} emptyLabel="Add due date" />
+            </MetadataRow>
+            <MetadataRow icon={ClockIcon} label="Estimate" variant="stacked">
+              <InlineEstimateCell taskId={task._id} estimate={task.estimate} />
+            </MetadataRow>
+            <MetadataRow icon={TimerIcon} label="Tracked" variant="stacked">
+              <span className="text-[13px] text-foreground">
+                {formatDuration(task.totalMinutes ?? 0)}
               </span>
             </MetadataRow>
-          )}
+          </div>
+
+          {/* Group 3: Billable, Project */}
+          <div className="pb-4 mb-4 border-b border-border/40">
+            <MetadataRow icon={DollarSignIcon} label="Billing" variant="stacked">
+              <InlineBillableSelect billable={task.billable} isAdmin={isAdmin} onChange={handleBillableChange} disabled={mismatchedCount === undefined} />
+            </MetadataRow>
+            <MetadataRow icon={FolderIcon} label="Project" variant="stacked">
+              <InlineProjectCell taskId={task._id} project={task.project} client={task.client} emptyLabel="Add project" />
+            </MetadataRow>
+          </div>
+
+          {/* Group 4: Created by, Created on */}
+          <div>
+            {task.createdByUser && (
+              <MetadataRow icon={UserIcon} label="Created by" variant="stacked">
+                <div className="flex items-center gap-1.5">
+                  <UserAvatar
+                    name={task.createdByUser.name ?? "?"}
+                    imageUrl={task.createdByUser.imageUrl}
+                    className="size-5 text-[8px]"
+                  />
+                  <span className="text-[13px] text-foreground">
+                    {task.createdByUser.name}
+                  </span>
+                </div>
+              </MetadataRow>
+            )}
+            {task.createdAt && (
+              <MetadataRow icon={CalendarPlusIcon} label="Created on" variant="stacked">
+                <span className="text-[13px] text-foreground">
+                  {new Date(task.createdAt).toLocaleDateString(undefined, {
+                    month: "short", day: "numeric", year: "numeric",
+                  })}
+                </span>
+              </MetadataRow>
+            )}
+          </div>
         </div>
       )}
 
@@ -372,7 +382,7 @@ export function InlineEstimateCell({
     <button
       type="button"
       onClick={handleOpen}
-      className="text-[13px]"
+      className="text-[13px] text-foreground"
     >
       {estimate ? formatDuration(estimate) : (
         <span className="flex items-center gap-1.5 text-foreground/50 transition-colors group-hover/metadata:text-foreground/50">
@@ -381,5 +391,55 @@ export function InlineEstimateCell({
         </span>
       )}
     </button>
+  )
+}
+
+// ─── Inline billable select (dropdown) ───────────────────────────────────────
+
+function InlineBillableSelect({
+  billable,
+  isAdmin,
+  onChange,
+  disabled,
+}: {
+  billable: boolean
+  isAdmin: boolean
+  onChange: (checked: boolean) => void
+  disabled: boolean
+}) {
+  const label = billable ? "Billable" : "Non-Billable"
+
+  if (!isAdmin) {
+    return <span className="text-[13px] text-foreground">{label}</span>
+  }
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild disabled={disabled}>
+        <button
+          type="button"
+          className={cn(
+            "text-[13px] text-foreground transition-opacity",
+            disabled && "opacity-50 cursor-not-allowed",
+          )}
+        >
+          {label}
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="min-w-[140px]">
+        {([
+          { value: true, label: "Billable" },
+          { value: false, label: "Non-Billable" },
+        ] as const).map((opt) => (
+          <DropdownMenuItem
+            key={opt.label}
+            onSelect={() => { if (opt.value !== billable) onChange(opt.value) }}
+          >
+            {opt.label}
+            {opt.value === billable && <CheckIcon className="ml-auto size-3" />}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }

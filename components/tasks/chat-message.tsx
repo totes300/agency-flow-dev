@@ -3,8 +3,9 @@
 import { useState, useCallback, useEffect, memo, type ReactNode } from "react"
 import { UserAvatar } from "@/components/user-avatar"
 import { CommentAttachmentChip } from "@/components/comment-attachment-chip"
+import { CommentLinkPreview } from "@/components/comment-link-preview"
 import { EmojiPickerPopover } from "@/components/emoji-picker-popover"
-import { formatActivityTimestamp } from "@/lib/format"
+import { formatActivityTimestamp, formatRelativeTime } from "@/lib/format"
 import {
   Tooltip,
   TooltipTrigger,
@@ -25,6 +26,8 @@ import {
   PencilIcon,
   TrashIcon,
   MessageSquareIcon,
+  CircleCheckIcon,
+  RotateCcwIcon,
 } from "lucide-react"
 import type { FeedItem } from "@/lib/task-detail"
 import type { Id } from "@/convex/_generated/dataModel"
@@ -216,6 +219,8 @@ interface ChatMessageProps {
   onToggleReaction: (commentId: string, emoji: string) => void
   onEdit?: (commentId: string, content: unknown) => void
   onDelete?: (commentId: string) => void
+  onResolve?: (commentId: string) => void
+  onUnresolve?: (commentId: string) => void
 }
 
 // ─── Component ──────────────────────────────────────────────────────────────────
@@ -233,6 +238,8 @@ export const ChatMessage = memo(function ChatMessage({
   onToggleReaction,
   onEdit,
   onDelete,
+  onResolve,
+  onUnresolve,
 }: ChatMessageProps) {
   const [isEditing, setIsEditing] = useState(false)
   const [editContent, setEditContent] = useState<unknown>(null)
@@ -240,6 +247,8 @@ export const ChatMessage = memo(function ChatMessage({
   const isOwn = currentUserId && item.userId === currentUserId
   const canEdit = isOwn && onEdit
   const canDelete = (isOwn || isAdmin) && onDelete
+  const isTopLevel = !item.parentCommentId
+  const isResolved = !!item.resolvedAt
 
   const handleStartEdit = useCallback(() => {
     setEditContent(item.content)
@@ -263,133 +272,146 @@ export const ChatMessage = memo(function ChatMessage({
     <div
       id={`comment-${item.id}`}
       className={cn(
-        "group/msg relative rounded-xl px-3 transition-colors hover:bg-muted/25",
+        "group/msg relative px-0 transition-colors",
         isGrouped
-          ? "py-1"
-          : "mt-2.5 py-1.5",
+          ? "mt-1"
+          : "mt-5 first:mt-0",
       )}
     >
       {/* Floating action toolbar — Slack-style pill, top-right */}
       {!isEditing && (
         <div className="absolute top-0 right-1 z-10 flex items-center gap-0.5 rounded-lg border border-border/50 bg-background px-1 py-0.5 opacity-0 shadow-sm transition-opacity duration-100 group-hover/msg:opacity-100">
-          <button
-            type="button"
-            onClick={() => onToggleReaction(item.id, "\u{1F44D}")}
-            aria-label="Toggle thumbs up reaction"
-            className="flex size-6 items-center justify-center rounded text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground"
-          >
-            <ThumbsUpIcon className="size-3.5" />
-          </button>
-          <EmojiPickerPopover
-            onSelect={(emoji) => onToggleReaction(item.id, emoji)}
-          >
-            <button
-              type="button"
-              aria-label="Add reaction"
-              className="flex size-6 items-center justify-center rounded text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground"
-            >
-              <SmilePlusIcon className="size-3.5" />
-            </button>
-          </EmojiPickerPopover>
-          <button
-            type="button"
-            onClick={() => onReply(item.id, item.userName ?? "Someone")}
-            aria-label="Reply"
-            className="flex size-6 items-center justify-center rounded text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground"
-          >
-            <MessageSquareIcon className="size-3.5" />
-          </button>
-          {(canEdit || canDelete) && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
+          {isResolved ? (
+            <>
+              <button
+                type="button"
+                onClick={() => onReply(item.id, item.userName ?? "Someone")}
+                aria-label="Reply"
+                className="flex size-6 items-center justify-center rounded text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground"
+              >
+                <MessageSquareIcon className="size-3.5" />
+              </button>
+              {onUnresolve && (
                 <button
                   type="button"
+                  onClick={() => onUnresolve(item.id)}
+                  aria-label="Re-open"
                   className="flex size-6 items-center justify-center rounded text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground"
                 >
-                  <MoreHorizontalIcon className="size-3.5" />
+                  <RotateCcwIcon className="size-3.5" />
                 </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-32">
-                {canEdit && (
-                  <DropdownMenuItem onClick={handleStartEdit}>
-                    <PencilIcon className="mr-2 size-3.5" />
-                    Edit
-                  </DropdownMenuItem>
-                )}
-                {canDelete && (
-                  <DropdownMenuItem
-                    onClick={() => onDelete!(item.id)}
-                    className="text-destructive focus:text-destructive"
-                  >
-                    <TrashIcon className="mr-2 size-3.5" />
-                    Delete
-                  </DropdownMenuItem>
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
+              )}
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={() => onToggleReaction(item.id, "\u{1F44D}")}
+                aria-label="Toggle thumbs up reaction"
+                className="flex size-6 items-center justify-center rounded text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground"
+              >
+                <ThumbsUpIcon className="size-3.5" />
+              </button>
+              <EmojiPickerPopover
+                onSelect={(emoji) => onToggleReaction(item.id, emoji)}
+              >
+                <button
+                  type="button"
+                  aria-label="Add reaction"
+                  className="flex size-6 items-center justify-center rounded text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground"
+                >
+                  <SmilePlusIcon className="size-3.5" />
+                </button>
+              </EmojiPickerPopover>
+              <button
+                type="button"
+                onClick={() => onReply(item.id, item.userName ?? "Someone")}
+                aria-label="Reply"
+                className="flex size-6 items-center justify-center rounded text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground"
+              >
+                <MessageSquareIcon className="size-3.5" />
+              </button>
+              {isTopLevel && onResolve && (
+                <button
+                  type="button"
+                  onClick={() => onResolve(item.id)}
+                  aria-label="Resolve"
+                  className="flex size-6 items-center justify-center rounded text-muted-foreground/60 transition-colors hover:bg-green-50 hover:text-green-600"
+                >
+                  <CircleCheckIcon className="size-3.5" />
+                </button>
+              )}
+              {(canEdit || canDelete) && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      className="flex size-6 items-center justify-center rounded text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground"
+                    >
+                      <MoreHorizontalIcon className="size-3.5" />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-32">
+                    {canEdit && (
+                      <DropdownMenuItem onClick={handleStartEdit}>
+                        <PencilIcon className="mr-2 size-3.5" />
+                        Edit
+                      </DropdownMenuItem>
+                    )}
+                    {canDelete && (
+                      <DropdownMenuItem
+                        onClick={() => onDelete!(item.id)}
+                        className="text-destructive focus:text-destructive"
+                      >
+                        <TrashIcon className="mr-2 size-3.5" />
+                        Delete
+                      </DropdownMenuItem>
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
+            </>
           )}
         </div>
       )}
 
-      {/* Slack-style row: avatar left + content right */}
-      <div className={cn("flex gap-3", isGrouped && "items-baseline")}>
-        {/* Avatar column — timeline node */}
-        <div className="relative w-7 shrink-0 self-stretch">
-          {/* Lane line — below avatar: starts 10px below the avatar circle */}
-          {laneBelow && !isGrouped && (
-            <div className="absolute left-1/2 top-[36px] -bottom-2 w-px -translate-x-1/2 bg-border" />
-          )}
-          {/* Lane line — grouped (no avatar): continuous through entire row */}
-          {isGrouped && (laneAbove || laneBelow) && (
-            <div className={cn(
-              "absolute left-1/2 w-px -translate-x-1/2 bg-border",
-              laneAbove ? "-top-2" : "top-0",
-              laneBelow ? "-bottom-2" : "bottom-0",
-            )} />
-          )}
-
-          {!isGrouped ? (
-            <div className="relative z-10 flex h-6 items-center justify-center">
-              <div className="relative z-10 flex size-8 items-center justify-center rounded-full bg-background">
-                <UserAvatar
-                  name={item.userName ?? "?"}
-                  imageUrl={isDefaultAvatar(item.userImageUrl) ? null : item.userImageUrl}
-                  className="size-7 text-[9px]"
-                />
-              </div>
-            </div>
-          ) : (
-            <span className="relative z-10 mx-auto flex min-w-[22px] items-start justify-center rounded px-1.5 pt-[7px] text-[10px] leading-none text-muted-foreground/0 transition-colors group-hover/msg:bg-muted group-hover/msg:text-muted-foreground/55">
-              {formatShortTime(item.createdAt)}
+      <div>
+        {/* Header row: avatar + name + time — items-center for perfect vertical alignment */}
+        {!isGrouped && (
+          <div className="flex items-center gap-2 mb-1">
+            <UserAvatar
+              name={item.userName ?? "?"}
+              imageUrl={isDefaultAvatar(item.userImageUrl) ? null : item.userImageUrl}
+              className={cn("size-6 shrink-0 text-[9px]", isResolved && "opacity-75")}
+            />
+            <span className={cn("text-[13.5px] font-semibold text-foreground", isResolved && "opacity-75")}>
+              {item.userName}
             </span>
-          )}
-        </div>
-
-        {/* Content column */}
-        <div className="min-w-0 max-w-[820px] flex-1 overflow-hidden break-words pt-0.5">
-          {/* Header: name + time (only for non-grouped messages) */}
-          {!isGrouped && (
-            <div className="flex items-center gap-2.5">
-              <span className="text-[13px] font-semibold leading-5 text-foreground">
-                {item.userName}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className={cn("text-xs text-muted-foreground/50", isResolved && "opacity-75")}>
+                  {formatShortTime(item.createdAt)}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                <span className="text-xs">{formatActivityTimestamp(item.createdAt)}</span>
+              </TooltipContent>
+            </Tooltip>
+            {item.updatedAt && item.updatedAt !== item.createdAt && (
+              <span className="text-[10px] text-muted-foreground/55">(edited)</span>
+            )}
+            {isResolved && item.resolvedByName && (
+              <span className="ml-1 inline-flex items-center gap-1 text-[11px] font-medium text-green-600">
+                <CircleCheckIcon className="size-3.5" strokeWidth={2} />
+                Resolved by {item.resolvedByName} · {formatRelativeTime(item.resolvedAt!)}
               </span>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className="text-[13px] font-normal text-muted-foreground/72">
-                    {formatShortTime(item.createdAt)}
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent side="top">
-                  <span className="text-xs">{formatActivityTimestamp(item.createdAt)}</span>
-                </TooltipContent>
-              </Tooltip>
-              {item.updatedAt && item.updatedAt !== item.createdAt && (
-                <span className="text-[10px] text-muted-foreground/55">(edited)</span>
-              )}
-            </div>
-          )}
+            )}
+          </div>
+        )}
 
-          {/* Reply label — clickable, scrolls to parent comment */}
+        {/* Content — indented to align with text after avatar */}
+        <div className={cn("min-w-0 max-w-[820px] overflow-hidden break-words pl-8", isResolved && "opacity-75")}>
+          {/* Reply label */}
           {item.parentCommentId && (
             <button
               type="button"
@@ -398,10 +420,10 @@ export const ChatMessage = memo(function ChatMessage({
                 if (el) {
                   el.scrollIntoView({ behavior: "smooth", block: "center" })
                   el.classList.remove("comment-highlight")
-              void el.offsetWidth
-              el.classList.add("comment-highlight")
-            }
-          }}
+                  void el.offsetWidth
+                  el.classList.add("comment-highlight")
+                }
+              }}
               className="flex items-center gap-1 text-[11px] font-normal text-muted-foreground/58 transition-colors hover:text-foreground/80"
             >
               <CornerDownRightIcon className="size-3 shrink-0" />
@@ -414,8 +436,8 @@ export const ChatMessage = memo(function ChatMessage({
             </button>
           )}
 
-          {/* Body — render or edit */}
-          <div className={cn("pt-0.5", !isGrouped && "pt-1")}>
+          {/* Body */}
+          <div>
             {isEditing ? (
               <ChatEditArea
                 content={editContent}
@@ -424,7 +446,7 @@ export const ChatMessage = memo(function ChatMessage({
                 onCancel={handleCancelEdit}
               />
             ) : (
-              <div className="text-[13.5px] leading-6 text-foreground/92">
+              <div className="text-sm leading-[1.75] text-foreground">
                 {renderTiptapContent(item.content)}
               </div>
             )}
@@ -445,7 +467,10 @@ export const ChatMessage = memo(function ChatMessage({
             </div>
           )}
 
-          {/* Reaction badges — always visible when present */}
+          {/* Link previews */}
+          {!isEditing && <CommentLinkPreview content={item.content} />}
+
+          {/* Reaction badges */}
           {!isEditing && reactions && reactions.length > 0 && (
             <div className="flex flex-wrap gap-1.5 pb-1">
               <TooltipProvider>
@@ -474,7 +499,6 @@ export const ChatMessage = memo(function ChatMessage({
               </TooltipProvider>
             </div>
           )}
-
         </div>
       </div>
     </div>
@@ -500,7 +524,7 @@ function ChatEditArea({
   useEffect(() => {
     void import("@/components/tasks/tiptap-editor").then((mod) => {
       setTiptapEditor(() => mod.TiptapEditor)
-    })
+    }).catch(() => { /* dynamic import failed — keep showing skeleton */ })
   }, [])
 
   if (!TiptapEditor) {

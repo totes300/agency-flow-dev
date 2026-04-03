@@ -5,7 +5,7 @@ import { useQuery } from "convex/react"
 import { useConvexAuth } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { TaskDetailCommentInput } from "@/components/tasks/task-detail-comment-input"
-import { ActivityFeed, ActivityViewToggle, type ReplyContext, type ActivityView } from "@/components/tasks/activity-feed"
+import { ActivityFeed, type ReplyContext } from "@/components/tasks/activity-feed"
 import { TypingIndicator } from "@/components/typing-indicator"
 import type { Id } from "@/convex/_generated/dataModel"
 
@@ -15,14 +15,12 @@ export function TaskDetailSidebar({ taskId, isAdmin }: { taskId: Id<"tasks">; is
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const [replyContext, setReplyContext] = useState<ReplyContext | null>(null)
-  const [activityView, setActivityView] = useState<ActivityView>("comments")
 
   return (
     <div className="hidden w-[480px] shrink-0 flex-col overflow-hidden border-l border-border/60 bg-background md:flex">
-      {/* Header with view toggle */}
-      <div className="flex items-center justify-between border-b border-border/60 px-4 py-3">
+      {/* Header */}
+      <div className="flex items-center border-b border-border/60 px-4 py-3">
         <span className="text-sm font-semibold">Activity</span>
-        <ActivityViewToggle view={activityView} onViewChange={setActivityView} />
       </div>
 
       {/* Timeline */}
@@ -34,15 +32,15 @@ export function TaskDetailSidebar({ taskId, isAdmin }: { taskId: Id<"tasks">; is
             scrollRef={scrollRef}
             replyContext={replyContext}
             onReplyContextChange={setReplyContext}
-            view={activityView}
-            onViewChange={setActivityView}
           />
         </div>
       </div>
 
       {/* Typing indicator */}
       {typingUsers && typingUsers.length > 0 && (
-        <TypingIndicator typingUsers={typingUsers} />
+        <div className="px-4">
+          <TypingIndicator typingUsers={typingUsers} />
+        </div>
       )}
 
       {/* Comment input */}

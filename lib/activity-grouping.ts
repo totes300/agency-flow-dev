@@ -167,13 +167,18 @@ export function computeMessageGrouping(feed: FeedItem[]): Map<string, boolean> {
       continue
     }
 
+    // Resolved comments always show full header (never grouped)
+    const isResolved = "resolvedAt" in item && !!item.resolvedAt
+
     const isGrouped =
+      !isResolved &&
       prevComment !== null &&
       prevComment.userId === item.userId &&
       item.createdAt - prevComment.createdAt < GROUP_THRESHOLD_MS
 
     result.set(item.id, isGrouped)
-    prevComment = item as FeedItem & { kind: "comment" }
+    // Resolved comments break the chain — next comment must show full header
+    prevComment = isResolved ? null : item as FeedItem & { kind: "comment" }
   }
 
   return result

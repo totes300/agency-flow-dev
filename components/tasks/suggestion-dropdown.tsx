@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect, useRef } from "react"
+import { createPortal } from "react-dom"
 import { cn } from "@/lib/utils"
 import type { SuggestionKeyDownProps } from "@tiptap/suggestion"
 
@@ -27,37 +28,34 @@ export function SuggestionDropdown<T>({
 }: SuggestionDropdownProps<T>) {
   const [selectedIndex, setSelectedIndex] = useState(0)
   const listRef = useRef<HTMLDivElement>(null)
+  const activeIndex = Math.min(selectedIndex, Math.max(items.length - 1, 0))
 
-  const itemsRef = useRef(items)
-  itemsRef.current = items
-  const selectedIndexRef = useRef(selectedIndex)
-  selectedIndexRef.current = selectedIndex
-  const onSelectRef = useRef(onSelect)
-  onSelectRef.current = onSelect
-
-  useEffect(() => setSelectedIndex(0), [items])
+  // Reset selection to first item when the list changes (e.g. user types to filter)
+  useEffect(() => {
+    setSelectedIndex(0)
+  }, [items])
 
   useEffect(() => {
     const list = listRef.current
     if (!list) return
-    const selected = list.children[selectedIndex] as HTMLElement | undefined
+    const selected = list.children[activeIndex] as HTMLElement | undefined
     selected?.scrollIntoView({ block: "nearest" })
-  }, [selectedIndex])
+  }, [activeIndex])
 
   useEffect(() => {
     onKeyDownRef.current = ({ event }: SuggestionKeyDownProps) => {
-      const currentItems = itemsRef.current
+      if (items.length === 0) return false
       if (event.key === "ArrowUp") {
-        setSelectedIndex((i) => (i + currentItems.length - 1) % currentItems.length)
+        setSelectedIndex((i) => (i + items.length - 1) % items.length)
         return true
       }
       if (event.key === "ArrowDown") {
-        setSelectedIndex((i) => (i + 1) % currentItems.length)
+        setSelectedIndex((i) => (i + 1) % items.length)
         return true
       }
       if (event.key === "Enter") {
-        const item = currentItems[selectedIndexRef.current]
-        if (item) onSelectRef.current(item)
+        const item = items[activeIndex]
+        if (item) onSelect(item)
         return true
       }
       if (event.key === "Escape") {
@@ -66,14 +64,15 @@ export function SuggestionDropdown<T>({
       return false
     }
     return () => { onKeyDownRef.current = null }
-  }, [onKeyDownRef])
+  }, [activeIndex, items, onKeyDownRef, onSelect])
 
   if (items.length === 0) return null
 
   const rect = clientRect?.()
   if (!rect) return null
+  if (typeof document === "undefined") return null
 
-  return (
+  return createPortal(
     <div
       ref={listRef}
       role="listbox"
@@ -86,12 +85,12 @@ export function SuggestionDropdown<T>({
           key={keyExtractor(item)}
           type="button"
           role="option"
-          aria-selected={index === selectedIndex}
+          aria-selected={index === activeIndex}
           tabIndex={-1}
-          onClick={() => onSelectRef.current(item)}
+          onClick={() => onSelect(item)}
           className={cn(
             "flex w-full items-center rounded-md text-left transition-colors",
-            index === selectedIndex
+            index === activeIndex
               ? "bg-accent text-accent-foreground"
               : "text-popover-foreground hover:bg-accent/50",
             itemClassName,
@@ -100,6 +99,7 @@ export function SuggestionDropdown<T>({
           {renderItem(item)}
         </button>
       ))}
-    </div>
+    </div>,
+    document.body,
   )
 }

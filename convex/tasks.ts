@@ -64,6 +64,9 @@ export const getDetail = query({
     // Join parent task title for subtask breadcrumb
     const parentTask = task.parentTaskId ? await ctx.db.get(task.parentTaskId) : null;
 
+    // Resolve created-by user
+    const createdByUser = task.createdBy ? await ctx.db.get(task.createdBy) : null;
+
     const timeEntries = await ctx.db
       .query("timeEntries")
       .withIndex("by_taskId", (q) => q.eq("taskId", id))
@@ -84,6 +87,9 @@ export const getDetail = query({
       createdAt: task.createdAt,
       updatedAt: task.updatedAt,
       createdBy: task.createdBy,
+      createdByUser: createdByUser
+        ? { _id: createdByUser._id, name: createdByUser.name, imageUrl: createdByUser.imageUrl }
+        : null,
       status: status
         ? { _id: status._id, name: status.name, color: status.color, type: status.type }
         : null,

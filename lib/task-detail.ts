@@ -95,6 +95,9 @@ export type CommentEvent = {
   parentCommentId?: string
   parentUserName?: string
   parentPreview?: string
+  resolvedAt?: number
+  resolvedBy?: string
+  resolvedByName?: string
   createdAt: number
   updatedAt?: number
 }

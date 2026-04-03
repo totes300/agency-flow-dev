@@ -1,23 +1,21 @@
 "use client"
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useQuery, useMutation } from "convex/react"
 import { useConvexAuth } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { ChatMessage } from "@/components/tasks/chat-message"
-import { formatActivityText, type ActivityEventType } from "@/lib/activity"
 import { mergeActivityFeed, type FeedItem } from "@/lib/task-detail"
 import { groupFeedForCommentsView, computeMessageGrouping, computeDayDividers, getDayLabel, type GroupedFeedItem, type AuditBatch } from "@/lib/activity-grouping"
-import { formatActivityTimestamp, firstName } from "@/lib/format"
+import { firstName } from "@/lib/format"
 import { ActivityBatch } from "@/components/tasks/activity-batch"
 import type { Id } from "@/convex/_generated/dataModel"
-import { cn } from "@/lib/utils"
 import { toastError } from "@/lib/toast-helpers"
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip"
+import { ArrowDown, X } from "lucide-react"
+import { cn } from "@/lib/utils"
 
 export type ReplyContext = { commentId: string; userName: string }
-
-export type ActivityView = "comments" | "all"
 
 export type CommentCounts = {
   total: number
@@ -30,12 +28,10 @@ interface ActivityFeedProps {
   scrollRef: React.RefObject<HTMLDivElement | null>
   replyContext: ReplyContext | null
   onReplyContextChange?: (ctx: ReplyContext | null) => void
-  view?: ActivityView
-  onViewChange?: (view: ActivityView) => void
   onCommentCounts?: (counts: CommentCounts) => void
 }
 
-export function ActivityFeed({ taskId, isAdmin, scrollRef, replyContext, onReplyContextChange, view: viewProp, onViewChange, onCommentCounts }: ActivityFeedProps) {
+export function ActivityFeed({ taskId, isAdmin, scrollRef, replyContext, onReplyContextChange, onCommentCounts }: ActivityFeedProps) {
   const { isAuthenticated } = useConvexAuth()
 
   const currentUser = useQuery(api.users.current, isAuthenticated ? {} : "skip")
@@ -49,6 +45,8 @@ export function ActivityFeed({ taskId, isAdmin, scrollRef, replyContext, onReply
   const toggleReaction = useMutation(api.commentReactions.toggle)
   const updateComment = useMutation(api.comments.update)
   const removeComment = useMutation(api.comments.remove)
+  const resolveComment = useMutation(api.comments.resolve)
+  const unresolveComment = useMutation(api.comments.unresolve)
 
   const handleReply = useCallback((commentId: string, userName: string) => {
     onReplyContextChange?.({ commentId, userName })
@@ -87,44 +85,89 @@ export function ActivityFeed({ taskId, isAdmin, scrollRef, replyContext, onReply
     [removeComment],
   )
 
-  // Mark comments as seen — only when the activity section scrolls into view
+  const handleResolve = useCallback(
+    async (commentId: string) => {
+      try {
+        await resolveComment({ id: commentId as Id<"comments"> })
+      } catch (err) {
+        toastError(err, "Failed to resolve comment")
+      }
+    },
+    [resolveComment],
+  )
+
+  const handleUnresolve = useCallback(
+    async (commentId: string) => {
+      try {
+        await unresolveComment({ id: commentId as Id<"comments"> })
+      } catch (err) {
+        toastError(err, "Failed to re-open comment")
+      }
+    },
+    [unresolveComment],
+  )
+
+  // Mark comments as seen — when the sentinel at the bottom of the feed is visible.
+  // Uses the last comment's createdAt as the watermark instead of Date.now() to avoid
+  // marking future comments as seen before the user actually scrolls to them.
   const markSeen = useMutation(api.comments.markSeen)
   const commentCount = comments?.length ?? 0
   const currentUserId = currentUser?._id
   const sentinelRef = useRef<HTMLDivElement>(null)
-  const markSeenFiredRef = useRef(false)
+  const lastSubmittedSeenAtRef = useRef(0)
+  const dividerFadeTimerRef = useRef<ReturnType<typeof setTimeout>>(null)
 
-  // Reset markSeen flag when task changes (newDivider reset is below with its declaration)
+  const lastCommentCreatedAt = useMemo(() => {
+    if (!comments || comments.length === 0) return 0
+    return comments[comments.length - 1].createdAt
+  }, [comments])
+
   useEffect(() => {
-    markSeenFiredRef.current = false
+    lastSubmittedSeenAtRef.current = 0
+    if (dividerFadeTimerRef.current) clearTimeout(dividerFadeTimerRef.current)
   }, [taskId])
 
   useEffect(() => {
     const sentinel = sentinelRef.current
     const scrollContainer = scrollRef.current
     if (!sentinel || !scrollContainer || !isAuthenticated) return
+    if (lastCommentCreatedAt === 0) return
 
     const io = new IntersectionObserver(
       ([entry]) => {
-        if (entry.isIntersecting && !markSeenFiredRef.current) {
-          markSeenFiredRef.current = true
-          void markSeen({ taskId })
+        if (
+          entry.isIntersecting &&
+          lastCommentCreatedAt > lastSubmittedSeenAtRef.current
+        ) {
+          lastSubmittedSeenAtRef.current = lastCommentCreatedAt
+          void markSeen({ taskId, seenAt: lastCommentCreatedAt })
+
+          // Clear the "New" divider after 3s — gives user time to register it
+          if (dividerFadeTimerRef.current) clearTimeout(dividerFadeTimerRef.current)
+          dividerFadeTimerRef.current = setTimeout(() => {
+            setDividerFading(true)
+          }, 3000)
         }
       },
       { root: scrollContainer, threshold: 0 },
     )
     io.observe(sentinel)
-    return () => io.disconnect()
-  }, [isAuthenticated, taskId, markSeen, scrollRef, commentCount])
+    return () => {
+      io.disconnect()
+      if (dividerFadeTimerRef.current) clearTimeout(dividerFadeTimerRef.current)
+    }
+  }, [isAuthenticated, taskId, markSeen, scrollRef, lastCommentCreatedAt])
 
   // Freeze lastSeenAt on first load so the "New" divider survives the markSeen update.
   const [newDividerAt, setNewDividerAt] = useState<number | null>(null)
+  const [dividerFading, setDividerFading] = useState(false)
   const newDividerCaptured = useRef(false)
 
   // Reset newDivider state when switching tasks
   useEffect(() => {
     newDividerCaptured.current = false
     setNewDividerAt(null)
+    setDividerFading(false)
   }, [taskId])
 
   useEffect(() => {
@@ -171,11 +214,6 @@ export function ActivityFeed({ taskId, isAdmin, scrollRef, replyContext, onReply
   }
   const stableAttachmentsMap = stableAttachmentsRef.current
 
-  // View toggle: controlled via props, or internal fallback
-  const [internalView, setInternalView] = useState<ActivityView>("comments")
-  const view = viewProp ?? internalView
-  const setView = onViewChange ?? setInternalView
-
   // Build unified timeline
   const feed = useMemo(() => buildFeed(activities, comments), [activities, comments])
   const groupedFeed = useMemo(
@@ -195,12 +233,26 @@ export function ActivityFeed({ taskId, isAdmin, scrollRef, replyContext, onReply
     [feed],
   )
 
-  // Scroll management
+  // Scroll management — Slack-style "N new messages" floating pill
+  const commentFeedCount = useMemo(
+    () => feed?.filter((item) => item.kind === "comment").length ?? 0,
+    [feed],
+  )
   const feedLength = feed?.length ?? 0
-  const receiptKey = readReceipts?.map((r) => r.lastSeenAt).join() ?? ""
-  const [hasNewBelow, setHasNewBelow] = useState(false)
+  const [newBelowCount, setNewBelowCount] = useState(0)
   const isScrolledUpRef = useRef(false)
+  const prevCommentCountRef = useRef(commentFeedCount)
   const prevFeedLengthRef = useRef(feedLength)
+  const initialLoadDoneRef = useRef(false)
+  const initialUnreadShownRef = useRef(false)
+
+  // Reset all scroll state when switching tasks (drawer stays mounted)
+  useEffect(() => {
+    initialLoadDoneRef.current = false
+    initialUnreadShownRef.current = false
+    isScrolledUpRef.current = false
+    setNewBelowCount(0)
+  }, [taskId])
 
   useEffect(() => {
     const el = scrollRef.current
@@ -208,7 +260,7 @@ export function ActivityFeed({ taskId, isAdmin, scrollRef, replyContext, onReply
     const handleScroll = () => {
       const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40
       isScrolledUpRef.current = !atBottom
-      if (atBottom) setHasNewBelow(false)
+      if (atBottom) setNewBelowCount(0)
     }
     el.addEventListener("scroll", handleScroll, { passive: true })
     return () => el.removeEventListener("scroll", handleScroll)
@@ -218,48 +270,55 @@ export function ActivityFeed({ taskId, isAdmin, scrollRef, replyContext, onReply
     const el = scrollRef.current
     if (!el || feedLength === 0) return
 
-    if (isScrolledUpRef.current && feedLength > prevFeedLengthRef.current) {
-      setHasNewBelow(true)
-    } else if (!isScrolledUpRef.current) {
+    // First load — just record counts, don't scroll
+    if (!initialLoadDoneRef.current) {
+      initialLoadDoneRef.current = true
+      prevCommentCountRef.current = commentFeedCount
+      prevFeedLengthRef.current = feedLength
+      return
+    }
+
+    const newComments = commentFeedCount - prevCommentCountRef.current
+
+    if (isScrolledUpRef.current && newComments > 0) {
+      // User is scrolled up — show the pill with count
+      setNewBelowCount((prev) => prev + newComments)
+    } else if (!isScrolledUpRef.current && newComments > 0) {
+      // User is at the bottom — auto-scroll to keep up with new messages
       el.scrollTop = el.scrollHeight
     }
+    prevCommentCountRef.current = commentFeedCount
     prevFeedLengthRef.current = feedLength
-  }, [feedLength, receiptKey, view, scrollRef])
+  }, [feedLength, commentFeedCount, scrollRef])
+
+  // Show pill on initial open if there are unread comments from other users.
+  // Runs once per task: when unreadCommentCount first resolves > 0.
+  useEffect(() => {
+    if (!initialUnreadShownRef.current && unreadCommentCount > 0) {
+      initialUnreadShownRef.current = true
+      setNewBelowCount(unreadCommentCount)
+    }
+  }, [unreadCommentCount])
 
   const scrollToBottom = useCallback(() => {
     const el = scrollRef.current
     if (!el) return
     el.scrollTo({ top: el.scrollHeight, behavior: "smooth" })
-    setHasNewBelow(false)
+    setNewBelowCount(0)
   }, [scrollRef])
+
+  const dismissNewMessages = useCallback(() => {
+    setNewBelowCount(0)
+  }, [])
 
   return (
     <>
-      {/* Sentinel for IntersectionObserver — marks comments as seen when scrolled into view */}
-      <div ref={sentinelRef} className="h-0 w-0" aria-hidden />
-
       {feed === null ? (
         <FeedSkeleton />
       ) : feed.length === 0 ? (
         <div className="flex items-center justify-center p-8 text-xs text-muted-foreground/50">
           No activity yet
         </div>
-      ) : view === "comments" ? (
-        <CommentsOnlyView
-          feed={feed}
-          currentUserId={currentUserId}
-          isAdmin={isAdmin}
-          newDividerAt={newDividerAt}
-          reactionsMap={stableReactionsMap}
-          attachmentsMap={stableAttachmentsMap}
-          readReceipts={readReceipts}
-          messageGrouping={messageGrouping}
-          dayDividers={dayDividers}
-          onReply={handleReply}
-          onToggleReaction={handleToggleReaction}
-          onEdit={handleEditComment}
-          onDelete={handleDeleteComment}
-        />
       ) : (
         <CommentsView
           feed={feed}
@@ -267,6 +326,8 @@ export function ActivityFeed({ taskId, isAdmin, scrollRef, replyContext, onReply
           currentUserId={currentUserId}
           isAdmin={isAdmin}
           newDividerAt={newDividerAt}
+          dividerFading={dividerFading}
+          onDividerFaded={() => setNewDividerAt(null)}
           reactionsMap={stableReactionsMap}
           attachmentsMap={stableAttachmentsMap}
           readReceipts={readReceipts}
@@ -276,20 +337,42 @@ export function ActivityFeed({ taskId, isAdmin, scrollRef, replyContext, onReply
           onToggleReaction={handleToggleReaction}
           onEdit={handleEditComment}
           onDelete={handleDeleteComment}
+          onResolve={handleResolve}
+          onUnresolve={handleUnresolve}
         />
       )}
 
-      {/* Floating "New messages" pill */}
-      {hasNewBelow && (
-        <button
-          type="button"
-          onClick={scrollToBottom}
-          className="absolute bottom-2 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-border/50 bg-background px-3 py-1.5 text-xs font-medium text-primary shadow-md transition-colors hover:bg-muted"
-        >
-          <span className="text-sm">↓</span>
-          New messages
-        </button>
-      )}
+      {/* Sentinel at the bottom — marks comments as seen when user scrolls here */}
+      <div ref={sentinelRef} className="h-0 w-0" aria-hidden />
+
+      {/* Floating "N new messages" pill — Slack-style */}
+      <div
+        className={cn(
+          "pointer-events-none absolute bottom-2 left-1/2 z-10 -translate-x-1/2 transition-all duration-200 ease-out",
+          newBelowCount > 0
+            ? "pointer-events-auto translate-y-0 opacity-100"
+            : "translate-y-2 opacity-0",
+        )}
+      >
+        <div className="flex items-center rounded-full bg-primary shadow-lg">
+          <button
+            type="button"
+            onClick={scrollToBottom}
+            className="flex items-center gap-1.5 py-1.5 pl-3 pr-1 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90"
+          >
+            <ArrowDown className="size-3.5" />
+            {newBelowCount} new {newBelowCount === 1 ? "message" : "messages"}
+          </button>
+          <button
+            type="button"
+            onClick={dismissNewMessages}
+            className="flex items-center rounded-full p-1.5 text-primary-foreground/70 transition-colors hover:text-primary-foreground"
+            aria-label="Dismiss"
+          >
+            <X className="size-3.5" />
+          </button>
+        </div>
+      </div>
     </>
   )
 }
@@ -304,6 +387,8 @@ type ViewProps = {
   currentUserId?: Id<"users">
   isAdmin?: boolean
   newDividerAt: number | null
+  dividerFading: boolean
+  onDividerFaded: () => void
   reactionsMap: Record<string, ReactionEntry[]> | undefined
   attachmentsMap: Record<string, AttachmentEntry[]> | undefined
   readReceipts: ReadReceipt[] | undefined
@@ -313,75 +398,8 @@ type ViewProps = {
   onToggleReaction: (commentId: string, emoji: string) => void
   onEdit: (commentId: string, content: unknown) => void
   onDelete: (commentId: string) => void
-}
-
-// ─── Comments Only View — no activity entries ──────────────────────────────────
-
-function CommentsOnlyView({
-  feed,
-  currentUserId,
-  isAdmin,
-  newDividerAt,
-  reactionsMap,
-  attachmentsMap,
-  readReceipts,
-  messageGrouping,
-  dayDividers,
-  onReply,
-  onToggleReaction,
-  onEdit,
-  onDelete,
-}: ViewProps) {
-  const commentsOnly = useMemo(() => feed.filter((item) => item.kind === "comment"), [feed])
-
-  // Recompute day dividers and message grouping for comments-only list
-  const commentDayDividers = useMemo(() => computeDayDividers(commentsOnly), [commentsOnly])
-  const commentGrouping = useMemo(() => computeMessageGrouping(commentsOnly), [commentsOnly])
-
-  const lastIndex = commentsOnly.length - 1
-  const firstNewIndex =
-    newDividerAt !== null && newDividerAt > 0
-      ? commentsOnly.findIndex(
-          (item) => item.createdAt > newDividerAt && item.userId !== currentUserId,
-        )
-      : -1
-
-  if (commentsOnly.length === 0) {
-    return (
-      <div className="flex items-center justify-center p-8 text-xs text-muted-foreground/50">
-        No comments yet
-      </div>
-    )
-  }
-
-  return (
-    <div className="flex flex-col">
-      {commentsOnly.map((item, i) => {
-        const dayLabel = commentDayDividers.get(item.id)
-        return (
-          <Fragment key={item.id}>
-            {dayLabel && <DayDivider label={dayLabel} />}
-            {i === firstNewIndex && <NewDivider />}
-            <ChatMessage
-              item={item}
-              currentUserId={currentUserId}
-              isAdmin={isAdmin}
-              isGrouped={commentGrouping.get(item.id) ?? false}
-              reactions={reactionsMap?.[item.id]}
-              attachments={attachmentsMap?.[item.id]}
-              onReply={onReply}
-              onToggleReaction={onToggleReaction}
-              onEdit={onEdit}
-              onDelete={onDelete}
-            />
-            {i === lastIndex && (
-              <SeenBy feed={feed} readReceipts={readReceipts} currentUserId={currentUserId} />
-            )}
-          </Fragment>
-        )
-      })}
-    </div>
-  )
+  onResolve: (commentId: string) => void
+  onUnresolve: (commentId: string) => void
 }
 
 // ─── Comments View — batched audits ─────────────────────────────────────────────
@@ -392,6 +410,8 @@ function CommentsView({
   currentUserId,
   isAdmin,
   newDividerAt,
+  dividerFading,
+  onDividerFaded,
   reactionsMap,
   attachmentsMap,
   readReceipts,
@@ -401,6 +421,8 @@ function CommentsView({
   onToggleReaction,
   onEdit,
   onDelete,
+  onResolve,
+  onUnresolve,
 }: ViewProps & { groupedFeed: GroupedFeedItem[] }) {
   // Compute lane line positions based on same-user continuity.
   // The lane connects ALL consecutive same-user comments, broken by batches, dividers, or user change.
@@ -461,7 +483,7 @@ function CommentsView({
       item.createdAt > newDividerAt &&
       item.userId !== currentUserId
     ) {
-      rendered.push(<NewDivider key="new-divider" />)
+      rendered.push(<NewDivider key="new-divider" fading={dividerFading} onFaded={onDividerFaded} />)
       newDividerRendered = true
     }
 
@@ -486,6 +508,8 @@ function CommentsView({
           onToggleReaction={onToggleReaction}
           onEdit={onEdit}
           onDelete={onDelete}
+          onResolve={onResolve}
+          onUnresolve={onUnresolve}
         />,
       )
       if (i === lastGroupedCommentIndex) {
@@ -504,7 +528,7 @@ function CommentsView({
 
 function buildFeed(
   activities: { _id: string; type: string; userId: string; userName: string; metadata: unknown; createdAt: number }[] | undefined,
-  comments: { _id: string; userId: string; userName: string; userImageUrl?: string; content: unknown; parentCommentId?: Id<"comments">; parentUserName?: string; parentPreview?: string; createdAt: number; updatedAt?: number }[] | undefined,
+  comments: { _id: string; userId: string; userName: string; userImageUrl?: string; content: unknown; parentCommentId?: Id<"comments">; parentUserName?: string; parentPreview?: string; resolvedAt?: number; resolvedBy?: Id<"users">; resolvedByName?: string; createdAt: number; updatedAt?: number }[] | undefined,
 ): FeedItem[] | null {
   if (!activities || !comments) return null
 
@@ -528,6 +552,9 @@ function buildFeed(
     parentCommentId: c.parentCommentId,
     parentUserName: c.parentUserName,
     parentPreview: c.parentPreview,
+    resolvedAt: c.resolvedAt,
+    resolvedBy: c.resolvedBy,
+    resolvedByName: c.resolvedByName,
     createdAt: c.createdAt,
     updatedAt: c.updatedAt,
   }))
@@ -535,52 +562,31 @@ function buildFeed(
   return mergeActivityFeed(activityEvents, commentEvents)
 }
 
-// ─── Audit line ─────────────────────────────────────────────────────────────────
-
-function AuditLine({ item, currentUserId }: { item: FeedItem & { kind: "audit" }; currentUserId?: Id<"users"> }) {
-  const displayName = currentUserId && item.userId === currentUserId
-    ? "You"
-    : firstName(item.userName ?? "Someone")
-
-  const { text, highlight } = formatActivityText(
-    item.type as ActivityEventType,
-    displayName,
-    item.metadata,
-  )
-
-  return (
-    <div className="flex items-baseline gap-2 py-1.5">
-      <span className="text-muted-foreground/40">•</span>
-      <span className="flex-1 text-[12px] leading-4 text-muted-foreground/70">
-        {text}
-        {highlight && (
-          <span className="font-medium text-muted-foreground"> {highlight}</span>
-        )}
-      </span>
-      <span className="shrink-0 text-[11px] text-muted-foreground/40">
-        {formatActivityTimestamp(item.createdAt)}
-      </span>
-    </div>
-  )
-}
-
 // ─── Day divider ────────────────────────────────────────────────────────────────
 
 function DayDivider({ label }: { label: string }) {
   return (
-    <div className="my-3 flex items-center gap-3">
-      <div className="h-px flex-1 bg-border/55" />
-      <span className="text-[11px] font-medium text-muted-foreground/65">{label}</span>
-      <div className="h-px flex-1 bg-border/55" />
+    <div className="my-5 flex items-center gap-3">
+      <div className="h-px flex-1 bg-border" />
+      <span className="text-[11px] font-medium text-muted-foreground">{label}</span>
+      <div className="h-px flex-1 bg-border" />
     </div>
   )
 }
 
 // ─── New divider ────────────────────────────────────────────────────────────────
 
-function NewDivider() {
+function NewDivider({ fading, onFaded }: { fading: boolean; onFaded: () => void }) {
   return (
-    <div className="my-3 flex items-center gap-3">
+    <div
+      className={cn(
+        "flex items-center gap-3 overflow-hidden transition-all duration-500 ease-in-out",
+        fading ? "my-0 max-h-0 opacity-0" : "my-3 max-h-8 opacity-100",
+      )}
+      onTransitionEnd={(e) => {
+        if (e.propertyName === "opacity" && fading) onFaded()
+      }}
+    >
       <div className="h-px flex-1 bg-destructive/50" />
       <span className="text-[9px] font-medium text-destructive/70">New</span>
       <div className="h-px flex-1 bg-destructive/50" />
@@ -613,7 +619,7 @@ function SeenBy({
 
   return (
     <TooltipProvider>
-      <div className="mb-2 mt-0.5 flex items-center gap-0.5 pl-[38px]">
+      <div className="mb-2 mt-0.5 flex items-center gap-0.5 pl-8">
         <span className="text-[10px] text-muted-foreground/40">Seen by</span>
         {seenUsers.map((user, i) => (
           <Tooltip key={user.userId}>
@@ -632,52 +638,41 @@ function SeenBy({
   )
 }
 
-// ─── View toggle (reusable by parents) ──────────────────────────────────────────
-
-export function ActivityViewToggle({
-  view,
-  onViewChange,
-}: {
-  view: ActivityView
-  onViewChange: (v: ActivityView) => void
-}) {
-  return (
-    <div className="flex items-center gap-0.5 rounded-md bg-muted p-0.5">
-      <button
-        className={cn(
-          "rounded px-2.5 py-1 text-xs font-medium transition-colors",
-          view === "all"
-            ? "bg-background text-foreground shadow-sm"
-            : "text-muted-foreground hover:text-foreground",
-        )}
-        onClick={() => onViewChange("all")}
-      >
-        All
-      </button>
-      <button
-        className={cn(
-          "rounded px-2.5 py-1 text-xs font-medium transition-colors",
-          view === "comments"
-            ? "bg-background text-foreground shadow-sm"
-            : "text-muted-foreground hover:text-foreground",
-        )}
-        onClick={() => onViewChange("comments")}
-      >
-        Comments
-      </button>
-    </div>
-  )
-}
-
 // ─── Skeleton ───────────────────────────────────────────────────────────────────
 
 function FeedSkeleton() {
   return (
-    <div className="flex flex-col gap-3 p-4">
-      <div className="h-3 w-3/4 animate-pulse rounded bg-muted" />
-      <div className="h-3 w-2/3 animate-pulse rounded bg-muted" />
-      <div className="h-20 animate-pulse rounded-lg bg-muted" />
-      <div className="h-3 w-1/2 animate-pulse rounded bg-muted" />
+    <div className="flex flex-col gap-1 px-0 py-2">
+      {/* Message 1 — full (avatar + name + timestamp + body) */}
+      <div className="flex items-start gap-2.5 py-1.5">
+        <div className="size-6 shrink-0 animate-pulse rounded-full bg-muted" />
+        <div className="flex flex-1 flex-col gap-1.5">
+          <div className="flex items-center gap-2">
+            <div className="h-3 w-20 animate-pulse rounded bg-muted" />
+            <div className="h-2.5 w-10 animate-pulse rounded bg-muted" />
+          </div>
+          <div className="h-3 w-3/4 animate-pulse rounded bg-muted" />
+          <div className="h-3 w-1/2 animate-pulse rounded bg-muted" />
+        </div>
+      </div>
+      {/* Message 2 — grouped (no avatar, just body) */}
+      <div className="flex items-start gap-2.5 py-1">
+        <div className="size-6 shrink-0" />
+        <div className="flex flex-1 flex-col gap-1.5">
+          <div className="h-3 w-2/3 animate-pulse rounded bg-muted" />
+        </div>
+      </div>
+      {/* Message 3 — full */}
+      <div className="mt-4 flex items-start gap-2.5 py-1.5">
+        <div className="size-6 shrink-0 animate-pulse rounded-full bg-muted" />
+        <div className="flex flex-1 flex-col gap-1.5">
+          <div className="flex items-center gap-2">
+            <div className="h-3 w-16 animate-pulse rounded bg-muted" />
+            <div className="h-2.5 w-10 animate-pulse rounded bg-muted" />
+          </div>
+          <div className="h-3 w-5/6 animate-pulse rounded bg-muted" />
+        </div>
+      </div>
     </div>
   )
 }

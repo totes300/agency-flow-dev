@@ -2,6 +2,7 @@ import { v, ConvexError } from "convex/values";
 import { query, mutation, action } from "./_generated/server";
 import { getAuthContext } from "./lib/auth";
 import { isMimeTypeBlocked } from "./lib/content_validation";
+import { isSafeUrl } from "./lib/url";
 
 // ─── Query ──────────────────────────────────────────────────────────────────────
 
@@ -74,37 +75,9 @@ export const reuploadFromUrl = action({
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throw new ConvexError("Not authenticated");
 
-    // SSRF protection: only allow http(s) and block private/internal ranges
-    let parsed: URL;
-    try {
-      parsed = new URL(url);
-    } catch {
-      throw new ConvexError("Invalid URL");
-    }
-    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
-      throw new ConvexError("Only HTTP(S) URLs are allowed");
-    }
-    const hostname = parsed.hostname;
-    // Strip IPv6 brackets for comparison
-    const bare = hostname.startsWith("[") ? hostname.slice(1, -1) : hostname;
-    if (
-      bare === "localhost" ||
-      bare.startsWith("127.") ||
-      bare.startsWith("10.") ||
-      bare.startsWith("192.168.") ||
-      bare.startsWith("169.254.") ||
-      bare.startsWith("172.") && (() => {
-        const second = parseInt(bare.split(".")[1], 10);
-        return second >= 16 && second <= 31;
-      })() ||
-      bare === "::1" ||
-      bare === "0.0.0.0" ||
-      bare.startsWith("fc") || bare.startsWith("fd") || // fc00::/7 (ULA)
-      bare.startsWith("fe80") || // fe80::/10 (link-local)
-      hostname.endsWith(".internal") ||
-      bare === "metadata.google.internal"
-    ) {
-      throw new ConvexError("URL points to a private network");
+    // SSRF protection: block private/internal network destinations
+    if (!isSafeUrl(url)) {
+      throw new ConvexError("URL is invalid or points to a private network");
     }
 
     let response: Response;

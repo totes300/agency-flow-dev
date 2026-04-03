@@ -253,6 +253,7 @@ export function TaskDetailDrawerContent({
                 </div>
               )}
               <InlineCommentInput
+                key={task._id}
                 taskId={task._id}
                 replyContext={replyContext}
                 onClearReply={() => setReplyContext(null)}

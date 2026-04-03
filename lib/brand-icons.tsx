@@ -103,7 +103,6 @@ export const DOMAIN_MAP: Record<string, DomainConfig> = {
   "youtu.be":          { icon: YouTubeIcon, label: "YouTube" },
   "drive.google.com":  { icon: GoogleDriveIcon, label: "Google Drive" },
   "docs.google.com":   { icon: GoogleDriveIcon, label: "Google Docs" },
-  "sheets.google.com": { icon: GoogleDriveIcon, label: "Google Sheets" },
 }
 
 export function getDomainConfig(domain: string): DomainConfig | null {

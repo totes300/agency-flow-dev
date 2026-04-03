@@ -1,14 +1,16 @@
 import { v } from "convex/values";
 import { query, mutation, action, internalMutation, internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { getAuthContext, getAuthContextOptional } from "./lib/auth";
+import { isSafeUrl } from "./lib/url";
 
 // ─── Resolve: look up cached previews for a set of URLs ─────────────────────
 
 export const resolve = query({
   args: { urls: v.array(v.string()) },
   handler: async (ctx, { urls }) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) return {};
+    const auth = await getAuthContextOptional(ctx);
+    if (!auth) return {};
 
     const result: Record<string, { title?: string; domain: string; status: string }> = {};
     for (const url of urls) {
@@ -29,15 +31,30 @@ export const resolve = query({
 export const ensure = mutation({
   args: { urls: v.array(v.string()) },
   handler: async (ctx, { urls }) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Not authenticated");
+    await getAuthContext(ctx);
+
+    const RETRY_AFTER_MS = 5 * 60 * 1000; // retry failed/stale entries after 5 min
 
     for (const url of urls) {
       const existing = await ctx.db
         .query("linkPreviews")
         .withIndex("by_url", (q) => q.eq("url", url))
         .first();
-      if (existing) continue;
+
+      if (existing) {
+        const isStale = Date.now() - existing.fetchedAt > RETRY_AFTER_MS;
+        if (existing.status === "fetched") continue;
+        if (existing.status === "pending" && !isStale) continue;
+        // Failed or stale pending — reset and retry
+        await ctx.db.patch(existing._id, { status: "pending", fetchedAt: Date.now() });
+        if (isSafeUrl(url)) {
+          await ctx.scheduler.runAfter(0, internal.linkPreviews.fetchOgTitle, { url });
+        }
+        continue;
+      }
+
+      // Validate URL before scheduling a server-side fetch
+      if (!isSafeUrl(url)) continue;
 
       // Parse domain
       let domain: string;
@@ -69,6 +86,8 @@ export const fetchOgTitle = internalAction({
     let title: string | undefined;
 
     try {
+      if (!isSafeUrl(url)) throw new Error("Blocked URL");
+
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 8000);
 
@@ -81,6 +100,9 @@ export const fetchOgTitle = internalAction({
         signal: controller.signal,
       });
       clearTimeout(timeout);
+
+      // Re-check after redirects — the final URL may be private
+      if (!isSafeUrl(res.url)) throw new Error("Redirect to blocked URL");
 
       if (res.ok) {
         // Only read first 16KB to find OG title

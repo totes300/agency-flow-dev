@@ -104,7 +104,7 @@ export function InlineCommentInput({
         class: "inline-comment-editor tiptap-content focus:outline-none",
       },
       handleKeyDown: (_view, event) => {
-        if (event.key === "Enter" && !event.shiftKey && !event.metaKey && !event.ctrlKey) {
+        if (event.key === "Enter" && !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.isComposing) {
           if (!editor) return false
           if (mentionOpenRef.current) return false
           if (editor.isActive("listItem") || editor.isActive("taskItem") || editor.isActive("codeBlock")) {

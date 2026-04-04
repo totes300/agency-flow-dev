@@ -41,6 +41,9 @@ export default defineSchema({
     timezone: v.string(),
     roundingMinutes: v.number(),
     defaultStatusId: v.optional(v.id("statuses")),
+    // Completion defaults by role
+    completionDefaultAdminStatusId: v.optional(v.id("statuses")),
+    completionDefaultMemberStatusId: v.optional(v.id("statuses")),
     // Rate defaults
     defaultTmFlatRate: v.optional(v.number()),   // org-level default for T&M flat-rate projects
     // Branding (used in later phases, define fields now)
@@ -359,6 +362,18 @@ export default defineSchema({
     status: v.union(v.literal("pending"), v.literal("fetched"), v.literal("failed")),
     fetchedAt: v.number(),
   }).index("by_url", ["url"]),
+
+  // ─── Daily Notes (async standup, one per user per day) ────────────────────
+  dailyNotes: defineTable({
+    orgId: v.string(),
+    userId: v.id("users"),
+    date: v.string(),            // "YYYY-MM-DD" (org timezone)
+    content: v.optional(v.string()), // TipTap JSON string
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_userId_date", ["userId", "date"])
+    .index("by_orgId_userId", ["orgId", "userId"]),
 
   // ─── Typing indicators (ephemeral presence) ──────────────────────────────
   typingIndicators: defineTable({

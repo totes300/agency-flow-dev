@@ -96,15 +96,17 @@ export const TaskRow = memo(function TaskRow({
     <div
       data-task-id={task._id}
       className={cn(
-        `group/row grid ${TASK_GRID_COLS} items-center gap-x-6 border-b border-border/55 px-3 py-2.5 transition-colors hover:bg-muted/[0.38] [&>*]:min-w-0 [&>*]:overflow-hidden`,
-        isSelected && "bg-primary/5",
-        isDetailOpen && "bg-accent/50 border-l-2 border-l-primary",
+        "group/row relative border-b border-border/55 transition-colors",
+        "before:pointer-events-none before:absolute before:inset-y-0 before:-left-13 before:w-13 before:transition-colors",
+        "hover:bg-muted/[0.38] hover:before:bg-muted/[0.38]",
+        isSelected && "bg-primary/5 before:bg-primary/5",
+        isDetailOpen && "bg-accent/50 before:bg-accent/50 before:border-l-2 before:border-l-primary",
         isDone && "opacity-50",
       )}
     >
-      {/* 1. Checkbox — hidden until row hover or selection active */}
+      {/* Checkbox — positioned in left margin, hidden until row hover or selection active */}
       <div className={cn(
-        "flex items-center justify-center transition-opacity",
+        "absolute -left-7 top-0 bottom-0 flex w-4 items-center transition-opacity",
         hasSelection || isSelected || isDone ? "opacity-100" : "opacity-0 group-hover/row:opacity-100",
       )}>
         <Checkbox
@@ -117,7 +119,8 @@ export const TaskRow = memo(function TaskRow({
         />
       </div>
 
-      {/* 2. Task name + subtitle + inline icons */}
+      <div className={`grid ${TASK_GRID_COLS} items-center gap-x-6 pr-3 py-2.5 [&>*]:min-w-0 [&>*]:overflow-hidden`}>
+      {/* 1. Task name + subtitle + inline icons */}
       <button
         type="button"
         className="cursor-pointer text-left"
@@ -287,6 +290,7 @@ export const TaskRow = memo(function TaskRow({
             </>
           )}
         </RowActionMenu>
+      </div>
       </div>
     </div>
   )

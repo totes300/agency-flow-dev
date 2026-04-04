@@ -2,6 +2,7 @@
 
 import { useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
+import { toastError } from "@/lib/toast-helpers"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
@@ -35,7 +36,7 @@ export function ViewSettingsDropdown({
     const next = current.includes(key)
       ? current.filter((k) => k !== key)
       : [...current, key]
-    updateSettings({ todayVisibleStatuses: next })
+    updateSettings({ todayVisibleStatuses: next }).catch((err: unknown) => toastError(err, "Failed to save filter"))
   }
 
   return (

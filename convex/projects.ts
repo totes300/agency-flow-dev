@@ -94,37 +94,37 @@ export const create = mutation({
     const { orgId, userId } = await requireAdmin(ctx);
 
     const name = args.name.trim();
-    if (!name) throw new Error("Project name is required");
+    if (!name) throw new ConvexError("Project name is required");
     validateStringLength(name, 100, "Project name");
 
     // Validate client exists and belongs to org
     const client = await ctx.db.get(args.clientId);
-    if (!client || client.orgId !== orgId) throw new Error("Client not found");
+    if (!client || client.orgId !== orgId) throw new ConvexError("Client not found");
 
     // Validate currency
     if (!CURRENCIES.includes(args.currency as typeof CURRENCIES[number])) {
-      throw new Error("Invalid currency");
+      throw new ConvexError("Invalid currency");
     }
 
     // Fixed validation
     if (args.billingType === "fixed") {
       if (args.fixedPrice === undefined || args.fixedPrice <= 0) {
-        throw new Error("Fixed fee is required and must be greater than zero");
+        throw new ConvexError("Fixed fee is required and must be greater than zero");
       }
     }
 
     // T&M validation
     if (args.billingType === "t_and_m") {
-      if (!args.tmRateMode) throw new Error("Rate mode is required for T&M projects");
+      if (!args.tmRateMode) throw new ConvexError("Rate mode is required for T&M projects");
       if (args.tmRateMode === "flat" && (args.hourlyRate === undefined || args.hourlyRate < 0)) {
-        throw new Error("Hourly rate is required for flat-rate T&M projects");
+        throw new ConvexError("Hourly rate is required for flat-rate T&M projects");
       }
       if (args.tmRateMode === "per_category") {
         if (!args.tmCategoryRates || args.tmCategoryRates.length === 0) {
-          throw new Error("At least one category rate is required for per-category T&M projects");
+          throw new ConvexError("At least one category rate is required for per-category T&M projects");
         }
         for (const cr of args.tmCategoryRates) {
-          if (cr.rate < 0) throw new Error("Category rate cannot be negative");
+          if (cr.rate < 0) throw new ConvexError("Category rate cannot be negative");
         }
       }
     }
@@ -132,22 +132,22 @@ export const create = mutation({
     // Retainer validation
     if (args.billingType === "retainer") {
       if (!args.includedMinutesPerMonth || args.includedMinutesPerMonth <= 0) {
-        throw new Error("Monthly hours is required for retainer projects");
+        throw new ConvexError("Monthly hours is required for retainer projects");
       }
       if (args.overageRate === undefined || args.overageRate < 0) {
-        throw new Error("Overage rate is required for retainer projects");
+        throw new ConvexError("Overage rate is required for retainer projects");
       }
       if (!args.startDate || !DATE_REGEX.test(args.startDate)) {
-        throw new Error("Start date is required (YYYY-MM-DD)");
+        throw new ConvexError("Start date is required (YYYY-MM-DD)");
       }
       const [y, m, d] = args.startDate.split("-").map(Number);
       const testDate = new Date(y, m - 1, d);
       if (testDate.getFullYear() !== y || testDate.getMonth() !== m - 1 || testDate.getDate() !== d) {
-        throw new Error("Invalid date");
+        throw new ConvexError("Invalid date");
       }
       const cycleLen = args.cycleLength ?? 3;
       if (cycleLen < 1 || cycleLen > 12 || !Number.isInteger(cycleLen)) {
-        throw new Error("Cycle length must be 1-12 months");
+        throw new ConvexError("Cycle length must be 1-12 months");
       }
     }
 
@@ -169,7 +169,7 @@ export const create = mutation({
         } catch {
           attempts++;
           if (attempts >= maxAttempts) {
-            throw new Error(`Could not generate a unique project code after ${maxAttempts} attempts`);
+            throw new ConvexError(`Could not generate a unique project code after ${maxAttempts} attempts`);
           }
           code = await generateNextProjectCode(ctx, orgId);
         }
@@ -254,20 +254,20 @@ export const update = mutation({
   handler: async (ctx, args) => {
     const { orgId } = await requireAdmin(ctx);
     const project = await ctx.db.get(args.id);
-    if (!project || project.orgId !== orgId) throw new Error("Project not found");
+    if (!project || project.orgId !== orgId) throw new ConvexError("Project not found");
 
     const updates: Record<string, unknown> = { updatedAt: Date.now() };
 
     if (args.name !== undefined) {
       const name = args.name.trim();
-      if (!name) throw new Error("Project name is required");
+      if (!name) throw new ConvexError("Project name is required");
       validateStringLength(name, 100, "Project name");
       updates.name = name;
     }
 
     if (args.code !== undefined) {
       const code = args.code.trim();
-      if (!code) throw new Error("Project code is required");
+      if (!code) throw new ConvexError("Project code is required");
       await ensureUniqueProjectCode(ctx, orgId, code, args.id.toString());
       updates.code = code;
     }
@@ -284,10 +284,10 @@ export const update = mutation({
     // Fixed price update
     if (args.fixedPrice !== undefined) {
       if (project.billingType !== "fixed") {
-        throw new Error("Fixed fee can only be set on fixed projects");
+        throw new ConvexError("Fixed fee can only be set on fixed projects");
       }
       if (args.fixedPrice <= 0) {
-        throw new Error("Fixed fee must be greater than zero");
+        throw new ConvexError("Fixed fee must be greater than zero");
       }
       updates.fixedPrice = args.fixedPrice;
     }
@@ -295,21 +295,21 @@ export const update = mutation({
     // T&M rate updates
     if (args.hourlyRate !== undefined) {
       if (project.billingType !== "t_and_m" || project.tmRateMode !== "flat") {
-        throw new Error("Hourly rate can only be set on flat-rate T&M projects");
+        throw new ConvexError("Hourly rate can only be set on flat-rate T&M projects");
       }
-      if (args.hourlyRate < 0) throw new Error("Hourly rate cannot be negative");
+      if (args.hourlyRate < 0) throw new ConvexError("Hourly rate cannot be negative");
       updates.hourlyRate = args.hourlyRate;
     }
 
     if (args.tmCategoryRates !== undefined) {
       if (project.billingType !== "t_and_m" || project.tmRateMode !== "per_category") {
-        throw new Error("Category rates can only be set on per-category T&M projects");
+        throw new ConvexError("Category rates can only be set on per-category T&M projects");
       }
       if (args.tmCategoryRates.length === 0) {
-        throw new Error("Per-category T&M projects must include at least one category rate");
+        throw new ConvexError("Per-category T&M projects must include at least one category rate");
       }
       for (const cr of args.tmCategoryRates) {
-        if (cr.rate < 0) throw new Error("Category rate cannot be negative");
+        if (cr.rate < 0) throw new ConvexError("Category rate cannot be negative");
       }
       updates.tmCategoryRates = args.tmCategoryRates;
     }
@@ -323,7 +323,7 @@ export const archive = mutation({
   handler: async (ctx, args) => {
     const { orgId } = await requireAdmin(ctx);
     const project = await ctx.db.get(args.id);
-    if (!project || project.orgId !== orgId) throw new Error("Project not found");
+    if (!project || project.orgId !== orgId) throw new ConvexError("Project not found");
 
     // Stop running timers on this project's tasks
     const projectTasks = await ctx.db
@@ -359,7 +359,7 @@ export const restore = mutation({
   handler: async (ctx, args) => {
     const { orgId } = await requireAdmin(ctx);
     const project = await ctx.db.get(args.id);
-    if (!project || project.orgId !== orgId) throw new Error("Project not found");
+    if (!project || project.orgId !== orgId) throw new ConvexError("Project not found");
 
     await ctx.db.patch(args.id, { archivedAt: undefined, updatedAt: Date.now() });
     // Restore does NOT cascade — tasks stay archived
@@ -380,8 +380,8 @@ export const updateRetainer = mutation({
   handler: async (ctx, args) => {
     const { orgId } = await requireAdmin(ctx);
     const project = await ctx.db.get(args.id);
-    if (!project || project.orgId !== orgId) throw new Error("Project not found");
-    if (project.billingType !== "retainer") throw new Error("Not a retainer project");
+    if (!project || project.orgId !== orgId) throw new ConvexError("Project not found");
+    if (project.billingType !== "retainer") throw new ConvexError("Not a retainer project");
 
     const updates: Record<string, unknown> = { updatedAt: Date.now() };
 
@@ -398,28 +398,28 @@ export const updateRetainer = mutation({
     }
 
     if (args.includedMinutesPerMonth !== undefined) {
-      if (args.includedMinutesPerMonth <= 0) throw new Error("Monthly hours must be greater than 0");
+      if (args.includedMinutesPerMonth <= 0) throw new ConvexError("Monthly hours must be greater than 0");
       updates.includedMinutesPerMonth = args.includedMinutesPerMonth;
     }
 
     if (args.overageRate !== undefined) {
-      if (args.overageRate < 0) throw new Error("Overage rate cannot be negative");
+      if (args.overageRate < 0) throw new ConvexError("Overage rate cannot be negative");
       updates.overageRate = args.overageRate;
     }
 
     if (args.startDate !== undefined) {
-      if (!DATE_REGEX.test(args.startDate)) throw new Error("Invalid date format");
+      if (!DATE_REGEX.test(args.startDate)) throw new ConvexError("Invalid date format");
       const [y, m, d] = args.startDate.split("-").map(Number);
       const testDate = new Date(y, m - 1, d);
       if (testDate.getFullYear() !== y || testDate.getMonth() !== m - 1 || testDate.getDate() !== d) {
-        throw new Error("Invalid date");
+        throw new ConvexError("Invalid date");
       }
       updates.startDate = args.startDate;
     }
 
     if (args.cycleLength !== undefined) {
       if (args.cycleLength < 1 || args.cycleLength > 12 || !Number.isInteger(args.cycleLength)) {
-        throw new Error("Cycle length must be 1-12 months");
+        throw new ConvexError("Cycle length must be 1-12 months");
       }
       updates.cycleLength = args.cycleLength;
     }
@@ -724,7 +724,7 @@ export const remove = mutation({
   handler: async (ctx, args) => {
     const { orgId } = await requireAdmin(ctx);
     const project = await ctx.db.get(args.id);
-    if (!project || project.orgId !== orgId) throw new Error("Project not found");
+    if (!project || project.orgId !== orgId) throw new ConvexError("Project not found");
 
     // Block if any task has time entries
     const projectTasks = await ctx.db
@@ -737,7 +737,7 @@ export const remove = mutation({
         .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
         .first();
       if (hasEntries) {
-        throw new Error("Cannot delete a project with time entries — archive it instead");
+        throw new ConvexError("Cannot delete a project with time entries — archive it instead");
       }
     }
 

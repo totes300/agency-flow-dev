@@ -1,4 +1,4 @@
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { query, mutation } from "./_generated/server";
 import { getAuthContext, requireAdmin } from "./lib/auth";
 
@@ -27,14 +27,14 @@ export const ensure = mutation({
   handler: async (ctx, args) => {
     const { orgId, userId } = await requireAdmin(ctx);
     const project = await ctx.db.get(args.projectId);
-    if (!project || project.orgId !== orgId) throw new Error("Project not found");
-    if (project.billingType !== "retainer") throw new Error("Not a retainer project");
+    if (!project || project.orgId !== orgId) throw new ConvexError("Project not found");
+    if (project.billingType !== "retainer") throw new ConvexError("Not a retainer project");
 
     if (!Number.isInteger(args.year) || args.year < 2000) {
-      throw new Error("Year must be an integer >= 2000");
+      throw new ConvexError("Year must be an integer >= 2000");
     }
     if (!Number.isInteger(args.month) || args.month < 1 || args.month > 12) {
-      throw new Error("Month must be an integer between 1 and 12");
+      throw new ConvexError("Month must be an integer between 1 and 12");
     }
 
     const periodStart = `${args.year}-${String(args.month).padStart(2, "0")}-01`;

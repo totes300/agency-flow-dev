@@ -1,5 +1,5 @@
 import { query, mutation, internalMutation } from "./_generated/server";
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { getAuthContext, requireAdmin } from "./lib/auth";
 import { currencyValidator, categoryColorValidator } from "./lib/validators";
 import { DEFAULT_CATEGORIES } from "./lib/constants";
@@ -46,15 +46,15 @@ export const create = mutation({
     const { orgId, userId } = await requireAdmin(ctx);
 
     if (args.defaultCostRate !== undefined && args.defaultCostRate < 0) {
-      throw new Error("Cost rate cannot be negative");
+      throw new ConvexError("Cost rate cannot be negative");
     }
     if (args.defaultBillRate !== undefined && args.defaultBillRate < 0) {
-      throw new Error("Bill rate cannot be negative");
+      throw new ConvexError("Bill rate cannot be negative");
     }
 
     const trimmedName = args.name.trim();
     if (!trimmedName) {
-      throw new Error("Name is required");
+      throw new ConvexError("Name is required");
     }
 
     // Enforce unique name per org
@@ -64,7 +64,7 @@ export const create = mutation({
       .collect();
 
     if (existing.some((c) => c.name.toLowerCase() === trimmedName.toLowerCase())) {
-      throw new Error(`A category named "${trimmedName}" already exists`);
+      throw new ConvexError(`A category named "${trimmedName}" already exists`);
     }
 
     // sortOrder = max + 1
@@ -99,22 +99,22 @@ export const update = mutation({
     const { orgId } = await requireAdmin(ctx);
 
     if (args.defaultCostRate !== undefined && args.defaultCostRate < 0) {
-      throw new Error("Cost rate cannot be negative");
+      throw new ConvexError("Cost rate cannot be negative");
     }
     if (args.defaultBillRate !== undefined && args.defaultBillRate < 0) {
-      throw new Error("Bill rate cannot be negative");
+      throw new ConvexError("Bill rate cannot be negative");
     }
 
     const category = await ctx.db.get(args.id);
     if (!category || category.orgId !== orgId) {
-      throw new Error("Category not found");
+      throw new ConvexError("Category not found");
     }
 
     // If renaming, enforce uniqueness
     if (args.name !== undefined) {
       const trimmedName = args.name.trim();
       if (!trimmedName) {
-        throw new Error("Name is required");
+        throw new ConvexError("Name is required");
       }
 
       const siblings = await ctx.db
@@ -129,7 +129,7 @@ export const update = mutation({
             c.name.toLowerCase() === trimmedName.toLowerCase()
         )
       ) {
-        throw new Error(`A category named "${trimmedName}" already exists`);
+        throw new ConvexError(`A category named "${trimmedName}" already exists`);
       }
     }
 
@@ -157,7 +157,7 @@ export const archive = mutation({
     const { orgId } = await requireAdmin(ctx);
     const category = await ctx.db.get(args.id);
     if (!category || category.orgId !== orgId) {
-      throw new Error("Category not found");
+      throw new ConvexError("Category not found");
     }
     await ctx.db.patch(args.id, {
       archivedAt: Date.now(),
@@ -172,7 +172,7 @@ export const restore = mutation({
     const { orgId } = await requireAdmin(ctx);
     const category = await ctx.db.get(args.id);
     if (!category || category.orgId !== orgId) {
-      throw new Error("Category not found");
+      throw new ConvexError("Category not found");
     }
     await ctx.db.patch(args.id, {
       archivedAt: undefined,
@@ -187,7 +187,7 @@ export const remove = mutation({
     const { orgId } = await requireAdmin(ctx);
     const category = await ctx.db.get(args.id);
     if (!category || category.orgId !== orgId) {
-      throw new Error("Category not found");
+      throw new ConvexError("Category not found");
     }
     // TODO(Phase 5): Check for task references before allowing hard delete
     await ctx.db.delete(args.id);
@@ -202,7 +202,7 @@ export const reorder = mutation({
     for (let i = 0; i < args.ids.length; i++) {
       const category = await ctx.db.get(args.ids[i]);
       if (!category || category.orgId !== orgId) {
-        throw new Error("Category not found");
+        throw new ConvexError("Category not found");
       }
       await ctx.db.patch(args.ids[i], {
         sortOrder: i,

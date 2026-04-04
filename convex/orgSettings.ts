@@ -1,5 +1,5 @@
 import { query, mutation } from "./_generated/server";
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { getAuthContextOptional, requireAdmin, validateStringLength } from "./lib/auth";
 import { currencyValidator, roundingValidator, statusTypeValidator, statusColorValidator, categoryColorValidator } from "./lib/validators";
 
@@ -50,7 +50,7 @@ export const create = mutation({
       .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
       .unique();
     if (existing) {
-      throw new Error("Organization settings already exist");
+      throw new ConvexError("Organization settings already exist");
     }
 
     const now = Date.now();
@@ -69,7 +69,7 @@ export const create = mutation({
       const s = args.statuses[i];
       const trimmedName = s.name.trim();
       if (!trimmedName) {
-        throw new Error("Status name is required");
+        throw new ConvexError("Status name is required");
       }
       validateStringLength(trimmedName, 200, "Status name");
       await ctx.db.insert("statuses", {
@@ -89,7 +89,7 @@ export const create = mutation({
       const c = args.workCategories[i];
       const trimmedName = c.name.trim();
       if (!trimmedName) {
-        throw new Error("Category name is required");
+        throw new ConvexError("Category name is required");
       }
       validateStringLength(trimmedName, 200, "Category name");
       await ctx.db.insert("workCategories", {
@@ -116,6 +116,8 @@ export const update = mutation({
     timezone: v.optional(v.string()),
     roundingMinutes: v.optional(roundingValidator),
     defaultTmFlatRate: v.optional(v.number()),
+    completionDefaultAdminStatusId: v.optional(v.id("statuses")),
+    completionDefaultMemberStatusId: v.optional(v.id("statuses")),
     brandName: v.optional(v.string()),
     brandAddress: v.optional(v.string()),
     brandTaxId: v.optional(v.string()),
@@ -130,7 +132,7 @@ export const update = mutation({
       .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
       .unique();
     if (!settings) {
-      throw new Error("Organization settings not found");
+      throw new ConvexError("Organization settings not found");
     }
 
     // Validate string lengths
@@ -153,10 +155,27 @@ export const update = mutation({
       validateStringLength(args.brandPhone, 500, "Brand phone");
     }
 
+    // Validate completion default status references
+    for (const field of ["completionDefaultAdminStatusId", "completionDefaultMemberStatusId"] as const) {
+      const statusId = args[field];
+      if (statusId !== undefined) {
+        const status = await ctx.db.get(statusId);
+        if (!status || status.orgId !== orgId) {
+          throw new ConvexError("Completion default status not found");
+        }
+        if (status.archivedAt) {
+          throw new ConvexError("Cannot set an archived status as completion default");
+        }
+        if (status.type !== "done" && status.type !== "review") {
+          throw new ConvexError("Completion default must be a done or review status");
+        }
+      }
+    }
+
     // Build typed patch object with only provided fields
     // Validate rate
     if (args.defaultTmFlatRate !== undefined && args.defaultTmFlatRate < 0) {
-      throw new Error("Default flat rate cannot be negative");
+      throw new ConvexError("Default flat rate cannot be negative");
     }
 
     const patch: Partial<{
@@ -164,6 +183,8 @@ export const update = mutation({
       timezone: string;
       roundingMinutes: typeof args.roundingMinutes;
       defaultTmFlatRate: number;
+      completionDefaultAdminStatusId: typeof args.completionDefaultAdminStatusId;
+      completionDefaultMemberStatusId: typeof args.completionDefaultMemberStatusId;
       brandName: string;
       brandAddress: string;
       brandTaxId: string;
@@ -176,6 +197,8 @@ export const update = mutation({
     if (args.timezone !== undefined) patch.timezone = args.timezone;
     if (args.roundingMinutes !== undefined) patch.roundingMinutes = args.roundingMinutes;
     if (args.defaultTmFlatRate !== undefined) patch.defaultTmFlatRate = args.defaultTmFlatRate;
+    if (args.completionDefaultAdminStatusId !== undefined) patch.completionDefaultAdminStatusId = args.completionDefaultAdminStatusId;
+    if (args.completionDefaultMemberStatusId !== undefined) patch.completionDefaultMemberStatusId = args.completionDefaultMemberStatusId;
     if (args.brandName !== undefined) patch.brandName = args.brandName;
     if (args.brandAddress !== undefined) patch.brandAddress = args.brandAddress;
     if (args.brandTaxId !== undefined) patch.brandTaxId = args.brandTaxId;

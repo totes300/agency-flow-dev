@@ -20,6 +20,7 @@ import { BillingTypeBadge, type BillingType } from "@/components/billing-type-ba
 import { CURRENCIES } from "@/convex/lib/constants"
 import type { Currency } from "@/convex/lib/constants"
 import { toast } from "sonner"
+import { toastError } from "@/lib/toast-helpers"
 import { Spinner } from "@/components/ui/spinner"
 
 type ProjectData = {
@@ -65,7 +66,7 @@ export function SettingsGeneral({
       })
       toast.success("Project updated")
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to update")
+      toastError(err, "Failed to update")
     } finally {
       setSaving(false)
     }

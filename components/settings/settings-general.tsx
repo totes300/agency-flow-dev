@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/select"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Skeleton } from "@/components/ui/skeleton"
+import { extractErrorMessage } from "@/lib/toast-helpers"
 import { CURRENCIES, ROUNDING_OPTIONS } from "@/convex/lib/constants"
 import type { Currency, RoundingMinutes } from "@/convex/lib/constants"
 import { COMMON_TIMEZONES, ROUNDING_LABELS } from "@/lib/display-constants"
@@ -101,7 +102,7 @@ function SettingsGeneralForm({
       setSaved(true)
       savedTimerRef.current = setTimeout(() => setSaved(false), 2000)
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong")
+      setError(extractErrorMessage(err, "Something went wrong"))
     } finally {
       setIsSaving(false)
     }

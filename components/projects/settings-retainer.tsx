@@ -29,6 +29,7 @@ import { DatePicker } from "@/components/ui/date-picker"
 import { ConfirmDialog } from "@/components/confirm-dialog"
 import { RetainerStatusBadge } from "@/components/retainer-status-badge"
 import { toast } from "sonner"
+import { toastError } from "@/lib/toast-helpers"
 import { Loader2Icon, InfoIcon } from "lucide-react"
 import { formatDateToYMD } from "@/lib/format"
 
@@ -128,7 +129,7 @@ export function SettingsRetainer({
       })
       toast.success("Retainer settings saved")
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to save")
+      toastError(err, "Failed to save")
     } finally {
       setSaving(false)
     }
@@ -150,7 +151,7 @@ export function SettingsRetainer({
       })
       toast.success(`Retainer ${pendingStatus === "active" ? "activated" : "paused"}`)
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to update status")
+      toastError(err, "Failed to update status")
     }
     setPendingStatus(null)
   }

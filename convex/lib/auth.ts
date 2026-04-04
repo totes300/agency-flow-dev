@@ -1,3 +1,4 @@
+import { ConvexError } from "convex/values";
 import { QueryCtx, MutationCtx } from "../_generated/server";
 import { Doc, Id } from "../_generated/dataModel";
 
@@ -19,7 +20,7 @@ export function validateStringLength(
   fieldName: string
 ): void {
   if (value.length > maxLength) {
-    throw new Error(`${fieldName} must be ${maxLength} characters or fewer`);
+    throw new ConvexError(`${fieldName} must be ${maxLength} characters or fewer`);
   }
 }
 
@@ -46,13 +47,13 @@ export async function getAuthContext(
 ): Promise<AuthContext> {
   const identity = await ctx.auth.getUserIdentity();
   if (!identity) {
-    throw new Error("Not authenticated");
+    throw new ConvexError("Not authenticated");
   }
 
   const { orgId, orgRole } = parseOrgFromIdentity(identity as Record<string, unknown>);
 
   if (!orgId) {
-    throw new Error("No organization selected");
+    throw new ConvexError("No organization selected");
   }
 
   // Look up the Convex user record
@@ -62,7 +63,7 @@ export async function getAuthContext(
     .unique();
 
   if (!user) {
-    throw new Error("User not found in database");
+    throw new ConvexError("User not found in database");
   }
 
   return {
@@ -105,7 +106,7 @@ export async function requireAdmin(
 ): Promise<AuthContext> {
   const authCtx = await getAuthContext(ctx);
   if (!authCtx.isAdmin) {
-    throw new Error("Admin access required");
+    throw new ConvexError("Admin access required");
   }
   return authCtx;
 }

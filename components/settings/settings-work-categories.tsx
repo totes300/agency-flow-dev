@@ -4,6 +4,7 @@ import { useState } from "react"
 import { useQuery, useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { toast } from "sonner"
+import { toastError, extractErrorMessage } from "@/lib/toast-helpers"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -183,7 +184,7 @@ export function SettingsWorkCategories() {
               await removeCategory({ id: deleteTarget.id })
               setDeleteTarget(null)
             } catch (err) {
-              toast.error(err instanceof Error ? err.message : "Failed to delete category")
+              toastError(err, "Failed to delete category")
             }
           }
         }}
@@ -307,7 +308,7 @@ function CategoryForm({
         currency: currency as Currency,
       })
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong")
+      setError(extractErrorMessage(err, "Something went wrong"))
       setSubmitting(false)
     }
   }

@@ -33,12 +33,12 @@ import { SortableTaskRow } from "@/components/tasks/sortable-task-row"
 import type { InlineCreatedTask } from "@/components/tasks/inline-created-task-row"
 
 // Grid column template — shared between header and rows
+// Checkbox is positioned absolutely in the left margin (Notion-style alignment).
 // Only Task is flexible (1fr). Everything else is fixed width.
-// The table container sets min-width and scrolls horizontally if needed.
-// Checkbox 36 | Task 1fr | Comments 52 | Status 112 | Category 104 | Project 160 | Assignee 88 | Due 92 | Time 96 | Menu 32
-export const TASK_GRID_COLS = "grid-cols-[36px_1fr_52px_112px_104px_160px_88px_92px_96px_32px]"
-// Fixed columns total = 772px + 9 gaps × 16px = 916px. With 1fr min ~240px → ~1156px.
-export const TASK_TABLE_MIN_W = "min-w-[1156px]"
+// Task 1fr | Comments 52 | Status 112 | Category 104 | Project 160 | Assignee 88 | Due 92 | Time 96 | Menu 32
+export const TASK_GRID_COLS = "grid-cols-[1fr_52px_112px_104px_160px_88px_92px_96px_32px]"
+// Fixed columns total = 736px + 8 gaps × 24px = 928px. With 1fr min ~168px → ~1096px.
+export const TASK_TABLE_MIN_W = "min-w-[1096px]"
 
 type TaskWithJoins = Doc<"tasks"> & {
   status: Pick<Doc<"statuses">, "_id" | "name" | "color" | "type" | "icon"> | null
@@ -73,7 +73,6 @@ type ColumnDef = {
 }
 
 const COLUMN_HEADERS: ColumnDef[] = [
-  { label: "" }, // checkbox
   { label: "Task", icon: ListChecksIcon, sortField: "title", ascLabel: "Ascending (A→Z)", descLabel: "Descending (Z→A)" },
   { label: "", align: "center" },
   { label: "Status", icon: CircleDashedIcon, sortField: "status", ascLabel: "Ascending", descLabel: "Descending" },
@@ -126,41 +125,43 @@ export function TasksTable({
 
   return (
     <div className="overflow-x-auto">
-      <div className={TASK_TABLE_MIN_W}>
+      <div className={cn(TASK_TABLE_MIN_W, "md:pl-13")}>
         {/* Column headers */}
-        <div
-          className={`group/header grid ${TASK_GRID_COLS} items-center gap-x-6 border-b border-border/50 px-3 py-2 text-xs font-medium text-muted-foreground/60 [&>*]:min-w-0 [&>*]:overflow-hidden`}
-        >
-          {COLUMN_HEADERS.map((col, i) => (
-            <div key={i} className={cn("flex items-center gap-1.5 truncate", getHeaderAlignmentClass(col.align))}>
-              {i === 0 ? (
-                <div className={cn(
-                  "transition-opacity",
-                  selectedIds.size > 0 ? "opacity-100" : "opacity-0 group-hover/header:opacity-100",
-                )}>
-                  <SelectCheckbox
-                    checked={allSelected}
-                    indeterminate={someSelected && !allSelected}
-                    onChange={(checked) => onSelectAll(selectableIds, checked)}
-                    label="Select all"
+        <div className="group/header relative">
+          {/* Select-all checkbox — positioned in left margin */}
+          <div className={cn(
+            "absolute -left-7 top-0 bottom-0 flex w-4 items-center transition-opacity",
+            selectedIds.size > 0 ? "opacity-100" : "opacity-0 group-hover/header:opacity-100",
+          )}>
+            <SelectCheckbox
+              checked={allSelected}
+              indeterminate={someSelected && !allSelected}
+              onChange={(checked) => onSelectAll(selectableIds, checked)}
+              label="Select all"
+            />
+          </div>
+          <div
+            className={`grid ${TASK_GRID_COLS} items-center gap-x-6 border-b border-border/50 pr-3 py-2 text-xs font-medium text-muted-foreground/60 [&>*]:min-w-0 [&>*]:overflow-hidden`}
+          >
+            {COLUMN_HEADERS.map((col, i) => (
+              <div key={i} className={cn("flex items-center gap-1.5 truncate", getHeaderAlignmentClass(col.align))}>
+                {col.sortField && onSort ? (
+                  <SortableHeader
+                    col={col}
+                    isActive={sortBy === col.sortField}
+                    sortOrder={sortBy === col.sortField ? sortOrder : undefined}
+                    onSort={(order) => onSort(col.sortField!, order)}
+                    onResetSort={onResetSort}
                   />
-                </div>
-              ) : col.sortField && onSort ? (
-                <SortableHeader
-                  col={col}
-                  isActive={sortBy === col.sortField}
-                  sortOrder={sortBy === col.sortField ? sortOrder : undefined}
-                  onSort={(order) => onSort(col.sortField!, order)}
-                  onResetSort={onResetSort}
-                />
-              ) : (
-                <span className="flex items-center gap-1.5">
-                  {col.icon && <col.icon className="size-3 shrink-0" />}
-                  {col.label && <span>{col.label}</span>}
-                </span>
-              )}
-            </div>
-          ))}
+                ) : (
+                  <span className="flex items-center gap-1.5">
+                    {col.icon && <col.icon className="size-3 shrink-0" />}
+                    {col.label && <span>{col.label}</span>}
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
         </div>
 
         {/* Groups + rows */}

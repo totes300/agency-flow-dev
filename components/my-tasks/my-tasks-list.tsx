@@ -3,6 +3,7 @@
 import { useMemo, useCallback, useState, useRef, useEffect } from "react"
 import { useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
+import { toastError } from "@/lib/toast-helpers"
 import { DragDropProvider } from "@dnd-kit/react"
 import { isSortable } from "@dnd-kit/react/sortable"
 import { PointerSensor, PointerActivationConstraints } from "@dnd-kit/dom"
@@ -27,6 +28,7 @@ export function MyTasksList({
   currentUserId,
   onOpenDetail,
   onComplete,
+  defaultStatusId,
 }: {
   groups: MyTasksGroupType<TaskWithJoins>[]
   hiddenCount: number
@@ -36,6 +38,7 @@ export function MyTasksList({
   currentUserId: Id<"users">
   onOpenDetail: (taskId: string) => void
   onComplete: (taskId: string, statusId: Id<"statuses">) => void
+  defaultStatusId?: Id<"statuses">
 }) {
   const { statuses } = useTaskReferenceData()
   const reorderTask = useMutation(api.tasks.reorderTask)
@@ -116,11 +119,11 @@ export function MyTasksList({
 
       const { beforeKey, afterKey } = findNeighborKeys(reordered, toIndex)
 
-      void reorderTask({
+      reorderTask({
         taskId: taskId as Id<"tasks">,
         beforeKey,
         afterKey,
-      })
+      }).catch((err: unknown) => toastError(err, "Failed to reorder task"))
     },
     [displayGroups, reorderTask],
   )
@@ -183,6 +186,7 @@ export function MyTasksList({
                     isCompletedToday={isCompleted}
                     onOpenDetail={onOpenDetail}
                     onComplete={onComplete}
+                    defaultStatusId={defaultStatusId}
                     isDetailOpen={detailId === task._id}
                   />
                 </MyTasksSortableRow>

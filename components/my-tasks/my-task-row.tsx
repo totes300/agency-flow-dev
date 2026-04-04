@@ -29,6 +29,7 @@ export const MyTaskRow = memo(function MyTaskRow({
   isCompletedToday,
   onOpenDetail,
   onComplete,
+  defaultStatusId,
   isDetailOpen,
 }: {
   task: TaskWithJoins
@@ -37,6 +38,7 @@ export const MyTaskRow = memo(function MyTaskRow({
   isCompletedToday?: boolean
   onOpenDetail?: (taskId: string) => void
   onComplete?: (taskId: string, statusId: Id<"statuses">) => void
+  defaultStatusId?: Id<"statuses">
   isDetailOpen?: boolean
 }) {
   const isCompleted = isCompletedToday ?? false
@@ -66,6 +68,7 @@ export const MyTaskRow = memo(function MyTaskRow({
       <div className="mt-0.5 shrink-0" onClick={(e) => e.stopPropagation()}>
         <CompletionCheckbox
           isSubmitted={isCompleted}
+          defaultStatusId={defaultStatusId}
           onComplete={(statusId) => onComplete?.(task._id, statusId)}
         />
       </div>
@@ -151,11 +154,6 @@ export const MyTaskRow = memo(function MyTaskRow({
             isBillable={task.billable}
             align="end"
           />
-          {minutes === 0 && (
-            <span className="text-xs tabular-nums text-muted-foreground/30">
-              00:00
-            </span>
-          )}
         </div>
       </div>
     </div>

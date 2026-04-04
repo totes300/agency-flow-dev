@@ -15,6 +15,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import type { Id, Doc } from "@/convex/_generated/dataModel"
+import { extractErrorMessage } from "@/lib/toast-helpers"
 
 type ContactFormModalProps = {
   open: boolean
@@ -86,7 +87,7 @@ export function ContactFormModal({
       }
       onOpenChange(false)
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong")
+      setError(extractErrorMessage(err, "Something went wrong"))
     } finally {
       setSubmitting(false)
     }

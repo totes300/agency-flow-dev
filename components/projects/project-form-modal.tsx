@@ -30,6 +30,7 @@ import { AlertTriangleIcon, PlusIcon, XIcon, InfoIcon } from "lucide-react"
 import { CURRENCIES } from "@/convex/lib/constants"
 import type { Id } from "@/convex/_generated/dataModel"
 import { formatDateToYMD } from "@/lib/format"
+import { extractErrorMessage } from "@/lib/toast-helpers"
 
 type ProjectFormModalProps = {
   open: boolean
@@ -182,7 +183,7 @@ export function ProjectFormModal({ open, onOpenChange }: ProjectFormModalProps) 
       onOpenChange(false)
       router.push(`/projects/${newId}`)
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong")
+      setError(extractErrorMessage(err, "Something went wrong"))
     } finally {
       setSubmitting(false)
     }

@@ -37,8 +37,11 @@ import {
   StarIcon,
 } from "lucide-react"
 import { toast } from "sonner"
+import { toastError } from "@/lib/toast-helpers"
 import { StatusBadge } from "@/components/status-badge"
 import { StatusColorSwatch } from "@/components/status-color-swatch"
+import { StatusIcon } from "@/components/status-icon"
+import { getStatusColor } from "@/lib/status-colors"
 
 // ─── Sub-components ─────────────────────────────────────────────────────────────
 
@@ -70,6 +73,7 @@ export function SettingsStatuses() {
   const updateStatus = useMutation(api.statuses.update)
   const removeStatus = useMutation(api.statuses.remove)
   const setDefaultStatus = useMutation(api.statuses.setDefault)
+  const updateOrgSettings = useMutation(api.orgSettings.update)
 
   const [createOpen, setCreateOpen] = useState(false)
   const [createForType, setCreateForType] = useState<StatusType>("backlog")
@@ -137,8 +141,8 @@ export function SettingsStatuses() {
                       onClick={async () => {
                         try {
                           await setDefaultStatus({ id: status._id })
-                        } catch {
-                          toast.error("Failed to set default status")
+                        } catch (err) {
+                          toastError(err, "Failed to set default status")
                         }
                       }}
                       aria-label="Set as default"
@@ -171,6 +175,21 @@ export function SettingsStatuses() {
         </div>
       ))}
 
+      {/* Completion Defaults */}
+      <CompletionDefaults
+        statuses={activeStatuses}
+        adminDefaultId={orgSettings.completionDefaultAdminStatusId}
+        memberDefaultId={orgSettings.completionDefaultMemberStatusId}
+        onUpdate={async (field, statusId) => {
+          try {
+            await updateOrgSettings({ [field]: statusId })
+            toast.success("Completion default updated")
+          } catch (err) {
+            toastError(err, "Failed to update completion default")
+          }
+        }}
+      />
+
       {/* Delete confirmation */}
       <ConfirmDialog
         open={!!deleteTarget}
@@ -184,8 +203,8 @@ export function SettingsStatuses() {
             try {
               await removeStatus({ id: deleteTarget.id })
               setDeleteTarget(null)
-            } catch {
-              toast.error("Failed to delete status")
+            } catch (err) {
+              toastError(err, "Failed to delete status")
             }
           }
         }}
@@ -242,6 +261,75 @@ export function SettingsStatuses() {
   )
 }
 
+// ─── Completion Defaults ────────────────────────────────────────────────────────
+
+function CompletionDefaults({
+  statuses,
+  adminDefaultId,
+  memberDefaultId,
+  onUpdate,
+}: {
+  statuses: { _id: Id<"statuses">; name: string; color: string; type: string }[]
+  adminDefaultId?: Id<"statuses">
+  memberDefaultId?: Id<"statuses">
+  onUpdate: (field: "completionDefaultAdminStatusId" | "completionDefaultMemberStatusId", statusId: Id<"statuses">) => Promise<void>
+}) {
+  const completionStatuses = statuses
+    .filter((s) => s.type === "done" || s.type === "review")
+    .sort((a, b) => {
+      // Review first, then done
+      if (a.type !== b.type) return a.type === "review" ? -1 : 1
+      return 0
+    })
+
+  return (
+    <div className="mt-8">
+      <div className="flex items-center justify-between border-b pb-2">
+        <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          Completion Defaults
+        </span>
+      </div>
+      <p className="mt-2 text-xs text-muted-foreground">
+        When a team member checks a task as complete, it moves to the default status for their role.
+      </p>
+      <div className="mt-4 space-y-3">
+        {([
+          { label: "Admin completes to", field: "completionDefaultAdminStatusId" as const, value: adminDefaultId },
+          { label: "Member completes to", field: "completionDefaultMemberStatusId" as const, value: memberDefaultId },
+        ]).map(({ label, field, value }) => (
+          <div key={field} className="flex items-center gap-3">
+            <span className="w-40 shrink-0 text-sm text-muted-foreground">{label}</span>
+            <Select
+              value={value ?? ""}
+              onValueChange={(v) => {
+                if (v) onUpdate(field, v as Id<"statuses">)
+              }}
+            >
+              <SelectTrigger className="w-48">
+                <SelectValue placeholder="Not set" />
+              </SelectTrigger>
+              <SelectContent>
+                {completionStatuses.map((status) => (
+                  <SelectItem key={status._id} value={status._id}>
+                    <span className="flex items-center gap-2">
+                      <StatusIcon
+                        type={status.type as "done" | "review"}
+                        color={getStatusColor(status.color).dot}
+                        size={14}
+                      />
+                      {status.name}
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 // ─── Status Form (create + edit dialog) ─────────────────────────────────────────
 
 function StatusForm({
@@ -264,8 +352,8 @@ function StatusForm({
     setSubmitting(true)
     try {
       await onSubmit({ name: name.trim(), color, type })
-    } catch {
-      toast.error("Failed to save status")
+    } catch (err) {
+      toastError(err, "Failed to save status")
     } finally {
       setSubmitting(false)
     }

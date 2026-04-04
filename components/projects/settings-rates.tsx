@@ -16,6 +16,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { toast } from "sonner"
+import { toastError } from "@/lib/toast-helpers"
 import { PlusIcon, XIcon, Loader2Icon } from "lucide-react"
 import { NUMBER_INPUT_CLASS } from "@/lib/utils"
 
@@ -75,7 +76,7 @@ export function SettingsRates({
       }
       toast.success("Rates saved")
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to save")
+      toastError(err, "Failed to save")
     } finally {
       setSaving(false)
     }

@@ -26,6 +26,7 @@ import {
 import { ImageIcon, Loader2Icon, Trash2Icon } from "lucide-react"
 import { CURRENCIES } from "@/convex/lib/constants"
 import { toast } from "sonner"
+import { extractErrorMessage } from "@/lib/toast-helpers"
 import Image from "next/image"
 import { validateLogoFile } from "@/lib/file-upload"
 import type { Currency } from "@/convex/lib/constants"
@@ -227,7 +228,7 @@ export function ClientFormModal({ open, onOpenChange, client, defaultCurrency = 
       }
       onOpenChange(false)
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong")
+      setError(extractErrorMessage(err, "Something went wrong"))
     } finally {
       setSubmitting(false)
     }

@@ -126,6 +126,65 @@
   to { transform: rotate(360deg); }
 }
 
+/* Completion checkbox animations */
+@keyframes check-bounce {
+  0% { transform: scale(1); }
+  30% { transform: scale(1.2); }
+  60% { transform: scale(0.95); }
+  100% { transform: scale(1); }
+}
+
+@keyframes check-fill {
+  0% { fill: transparent; stroke: oklch(0.556 0 0 / 40%); }
+  40% { fill: oklch(0.723 0.219 149.579); stroke: oklch(0.723 0.219 149.579); }
+  100% { fill: oklch(0.723 0.219 149.579); stroke: oklch(0.723 0.219 149.579); }
+}
+
+@keyframes check-draw {
+  0% { stroke-dashoffset: 14; }
+  40% { stroke-dashoffset: 14; }
+  100% { stroke-dashoffset: 0; }
+}
+
+@utility animate-check-bounce {
+  animation: check-bounce 300ms cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+@utility animate-check-fill {
+  animation: check-fill 300ms ease-out forwards;
+}
+
+@utility animate-check-draw {
+  animation: check-draw 300ms ease-out forwards;
+}
+
+/* Notion-style overlay scrollbar.
+   4px, near-invisible at rest, whisper-faint on hover. */
+@utility scrollbar-thin {
+  &::-webkit-scrollbar {
+    width: 4px;
+  }
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  &::-webkit-scrollbar-thumb {
+    background: oklch(0 0 0 / 0%);
+    border-radius: 9999px;
+  }
+  &:hover::-webkit-scrollbar-thumb {
+    background: oklch(0 0 0 / 8%);
+  }
+  &:hover::-webkit-scrollbar-thumb:hover {
+    background: oklch(0 0 0 / 14%);
+  }
+  /* Firefox */
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  &:hover {
+    scrollbar-color: oklch(0 0 0 / 8%) transparent;
+  }
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

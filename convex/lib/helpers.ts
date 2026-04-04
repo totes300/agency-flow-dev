@@ -1,3 +1,4 @@
+import { ConvexError } from "convex/values";
 import { MutationCtx, QueryCtx } from "../_generated/server";
 
 /**
@@ -42,7 +43,7 @@ export async function ensureUniqueProjectCode(
     .first();
 
   if (existing && (!excludeProjectId || existing._id.toString() !== excludeProjectId)) {
-    throw new Error(`Project code "${code}" is already in use`);
+    throw new ConvexError(`Project code "${code}" is already in use`);
   }
 }
 

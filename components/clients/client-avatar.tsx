@@ -12,6 +12,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { toast } from "sonner"
+import { toastError } from "@/lib/toast-helpers"
 import { cn } from "@/lib/utils"
 import { validateLogoFile } from "@/lib/file-upload"
 import type { Id } from "@/convex/_generated/dataModel"
@@ -67,8 +68,8 @@ export function ClientAvatar({
         removeClientLogo({ clientId, storageId: previousLogoStorageId }).catch(() => {})
       }
       toast.success("Logo updated")
-    } catch {
-      toast.error("Failed to upload logo")
+    } catch (err) {
+      toastError(err, "Failed to upload logo")
     } finally {
       setUploading(false)
     }
@@ -82,8 +83,8 @@ export function ClientAvatar({
       await updateClient({ id: clientId, logoStorageId: null })
       removeClientLogo({ clientId, storageId: previousLogoStorageId }).catch(() => {})
       toast.success("Logo removed")
-    } catch {
-      toast.error("Failed to remove logo")
+    } catch (err) {
+      toastError(err, "Failed to remove logo")
     } finally {
       setUploading(false)
     }

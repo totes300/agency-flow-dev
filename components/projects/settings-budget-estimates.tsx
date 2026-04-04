@@ -16,6 +16,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { toast } from "sonner"
+import { toastError } from "@/lib/toast-helpers"
 import { PlusIcon, XIcon } from "lucide-react"
 import { Spinner } from "@/components/ui/spinner"
 import { cn, NUMBER_INPUT_CLASS } from "@/lib/utils"
@@ -118,7 +119,7 @@ export function SettingsBudgetEstimates({
       setInitialized(false)
       toast.success("Budget estimates saved")
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to save")
+      toastError(err, "Failed to save")
     } finally {
       setSaving(false)
     }

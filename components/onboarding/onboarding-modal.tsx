@@ -21,6 +21,7 @@ import {
 } from "@/convex/lib/constants"
 import type { Currency, RoundingMinutes } from "@/convex/lib/constants"
 import { cn } from "@/lib/utils"
+import { extractErrorMessage } from "@/lib/toast-helpers"
 import { StepGeneral } from "./step-general"
 import { StepStatuses } from "./step-statuses"
 import { StepCategories } from "./step-categories"
@@ -98,7 +99,7 @@ export function OnboardingModal() {
         }),
       })
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong")
+      setError(extractErrorMessage(err, "Something went wrong"))
       setIsSubmitting(false)
     }
   }

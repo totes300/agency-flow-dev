@@ -1,4 +1,4 @@
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { query, mutation } from "./_generated/server";
 import { getAuthContext, requireAdmin, validateStringLength } from "./lib/auth";
 import { generateInvoicePrefix, ensureUniquePrefix } from "./lib/helpers";
@@ -123,7 +123,7 @@ export const create = mutation({
     const { orgId, userId } = await requireAdmin(ctx);
 
     const name = args.name.trim();
-    if (!name) throw new Error("Client name is required");
+    if (!name) throw new ConvexError("Client name is required");
     validateStringLength(name, 200, "Client name");
 
     // Unique name per org
@@ -131,7 +131,7 @@ export const create = mutation({
       .query("clients")
       .withIndex("by_orgId_name", (q) => q.eq("orgId", orgId).eq("name", name))
       .first();
-    if (existing) throw new Error("A client with this name already exists");
+    if (existing) throw new ConvexError("A client with this name already exists");
 
     // Currency: default to org's (orgSettings.defaultCurrency is validated at save time)
     let currency: string = args.currency ?? "";
@@ -189,13 +189,13 @@ export const update = mutation({
   handler: async (ctx, args) => {
     const { orgId } = await requireAdmin(ctx);
     const client = await ctx.db.get(args.id);
-    if (!client || client.orgId !== orgId) throw new Error("Client not found");
+    if (!client || client.orgId !== orgId) throw new ConvexError("Client not found");
 
     const updates: Record<string, unknown> = { updatedAt: Date.now() };
 
     if (args.name !== undefined) {
       const name = args.name.trim();
-      if (!name) throw new Error("Client name is required");
+      if (!name) throw new ConvexError("Client name is required");
       validateStringLength(name, 200, "Client name");
 
       if (name !== client.name) {
@@ -204,7 +204,7 @@ export const update = mutation({
           .withIndex("by_orgId_name", (q) => q.eq("orgId", orgId).eq("name", name))
           .first();
         if (existing && existing._id !== args.id) {
-          throw new Error("A client with this name already exists");
+          throw new ConvexError("A client with this name already exists");
         }
       }
       updates.name = name;
@@ -247,7 +247,7 @@ export const archive = mutation({
   handler: async (ctx, args) => {
     const { orgId } = await requireAdmin(ctx);
     const client = await ctx.db.get(args.id);
-    if (!client || client.orgId !== orgId) throw new Error("Client not found");
+    if (!client || client.orgId !== orgId) throw new ConvexError("Client not found");
 
     await ctx.db.patch(args.id, {
       archivedAt: Date.now(),
@@ -263,7 +263,7 @@ export const restore = mutation({
   handler: async (ctx, args) => {
     const { orgId } = await requireAdmin(ctx);
     const client = await ctx.db.get(args.id);
-    if (!client || client.orgId !== orgId) throw new Error("Client not found");
+    if (!client || client.orgId !== orgId) throw new ConvexError("Client not found");
 
     await ctx.db.patch(args.id, {
       archivedAt: undefined,
@@ -278,7 +278,7 @@ export const remove = mutation({
   handler: async (ctx, args) => {
     const { orgId } = await requireAdmin(ctx);
     const client = await ctx.db.get(args.id);
-    if (!client || client.orgId !== orgId) throw new Error("Client not found");
+    if (!client || client.orgId !== orgId) throw new ConvexError("Client not found");
 
     // TODO Phase 7: block if time entries exist on any project of this client
 
@@ -335,9 +335,9 @@ export const removeClientLogo = mutation({
   handler: async (ctx, args) => {
     const { orgId } = await requireAdmin(ctx);
     const client = await ctx.db.get(args.clientId);
-    if (!client || client.orgId !== orgId) throw new Error("Client not found");
+    if (!client || client.orgId !== orgId) throw new ConvexError("Client not found");
     if (client.logoStorageId !== args.storageId) {
-      throw new Error("Storage ID does not belong to this client");
+      throw new ConvexError("Storage ID does not belong to this client");
     }
     await ctx.storage.delete(args.storageId);
   },

@@ -43,12 +43,11 @@ export function InlineCreatedTaskRow({
   return (
     <div
       className={cn(
-        `group/row grid ${TASK_GRID_COLS} items-center gap-x-6 border-b border-border/40 px-3 py-2.5 [&>*]:min-w-0 [&>*]:overflow-hidden`,
-        task.saveState === "error" && "bg-red-500/5",
+        `group/row relative grid ${TASK_GRID_COLS} items-center gap-x-6 border-b border-border/40 pr-3 py-2.5 [&>*]:min-w-0 [&>*]:overflow-hidden`,
+        "before:pointer-events-none before:absolute before:inset-y-0 before:-left-13 before:w-13",
+        task.saveState === "error" && "bg-red-500/5 before:bg-red-500/5",
       )}
     >
-      <div />
-
       <div>
         <div className="flex items-center gap-1.5">
           <PlusIcon className="size-3.5 shrink-0 text-muted-foreground/40" />

@@ -1,3 +1,4 @@
+import { ConvexError } from "convex/values";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import type { Doc } from "../_generated/dataModel";
 import type { RateContext, RateSnapshot } from "./rates";
@@ -56,12 +57,12 @@ export async function resolveSnapshot(
 ): Promise<RateSnapshot> {
   if (isBillable) {
     if (!task.workCategoryId) {
-      throw new Error("Set a category on this task before logging billable time");
+      throw new ConvexError("Set a category on this task before logging billable time");
     }
     const rateCtx = await buildRateContext(ctx, task, project);
     const rateResult = resolveRate(rateCtx);
     if (!rateResult.ok) {
-      throw new Error(rateResult.error);
+      throw new ConvexError(rateResult.error);
     }
     return rateResult.snapshot;
   }

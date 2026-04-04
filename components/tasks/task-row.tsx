@@ -101,21 +101,18 @@ export const TaskRow = memo(function TaskRow({
         "hover:bg-muted/[0.38] hover:before:bg-muted/[0.38]",
         isSelected && "bg-primary/5 before:bg-primary/5",
         isDetailOpen && "bg-accent/50 before:bg-accent/50 before:border-l-2 before:border-l-primary",
-        isDone && "opacity-50",
       )}
     >
       {/* Checkbox — positioned in left margin, hidden until row hover or selection active */}
       <div className={cn(
         "absolute -left-7 top-0 bottom-0 flex w-4 items-center transition-opacity",
-        hasSelection || isSelected || isDone ? "opacity-100" : "opacity-0 group-hover/row:opacity-100",
+        hasSelection || isSelected ? "opacity-100" : "opacity-0 group-hover/row:opacity-100",
       )}>
         <Checkbox
-          checked={isDone || isSelected}
+          checked={isSelected}
           onCheckedChange={() => onSelect(task._id, !isSelected)}
           onClick={(e) => e.stopPropagation()}
-          disabled={isDone}
-          aria-label={isDone ? `${task.title} (done)` : `Select ${task.title}`}
-          className={cn(isDone && "border-emerald-600 bg-emerald-600 text-white data-[state=checked]:border-emerald-600 data-[state=checked]:bg-emerald-600 dark:border-emerald-500 dark:bg-emerald-500 dark:data-[state=checked]:border-emerald-500 dark:data-[state=checked]:bg-emerald-500")}
+          aria-label={`Select ${task.title}`}
         />
       </div>
 
@@ -138,7 +135,6 @@ export const TaskRow = memo(function TaskRow({
           >
             <span className={cn(
               "truncate text-sm font-medium",
-              isDone && "line-through",
             )}>
               {task.title}
             </span>

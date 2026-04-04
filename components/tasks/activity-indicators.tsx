@@ -11,7 +11,7 @@ export function CommentPill({ count, unreadCount, hasUnseen }: { count: number; 
     <span className={cn(
       "inline-flex items-center gap-1 rounded-full px-2 h-[22px] text-[11px] tabular-nums font-medium",
       hasUnseen
-        ? "bg-red-500 text-white dark:bg-red-600"
+        ? "bg-red-100 text-red-600 dark:bg-red-950 dark:text-red-400"
         : "bg-muted text-muted-foreground",
     )}>
       <MessageCircleIcon className="size-3" strokeWidth={hasUnseen ? 2.5 : 2.25} />

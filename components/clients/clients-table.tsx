@@ -73,7 +73,7 @@ export function ClientsTable({
                 <span className="truncate font-medium">{client.name}</span>
                 {client.archivedAt && <ArchivedBadge />}
               </div>
-              <p className="text-xs text-muted-foreground">{client.invoicePrefix}</p>
+              <p className="text-xs text-muted-foreground">{client.prefix ?? client.invoicePrefix}</p>
             </div>
           </div>
         </TableCell>

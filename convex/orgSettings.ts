@@ -208,3 +208,36 @@ export const update = mutation({
     await ctx.db.patch(settings._id, patch);
   },
 });
+
+export const updateDefaultMyTasksStatusIds = mutation({
+  args: {
+    statusIds: v.array(v.id("statuses")),
+  },
+  handler: async (ctx, { statusIds }) => {
+    const { orgId } = await requireAdmin(ctx);
+
+    const settings = await ctx.db
+      .query("orgSettings")
+      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+      .unique();
+    if (!settings) {
+      throw new ConvexError("Organization settings not found");
+    }
+
+    // Validate all status IDs belong to this org and are active
+    for (const statusId of statusIds) {
+      const status = await ctx.db.get(statusId);
+      if (!status || status.orgId !== orgId) {
+        throw new ConvexError("Status not found");
+      }
+      if (status.archivedAt) {
+        throw new ConvexError("Cannot set an archived status as default");
+      }
+    }
+
+    await ctx.db.patch(settings._id, {
+      defaultMyTasksStatusIds: statusIds,
+      updatedAt: Date.now(),
+    });
+  },
+});

@@ -16,6 +16,51 @@ import type { Id } from "@/convex/_generated/dataModel"
 
 const LONG_PRESS_MS = 500
 
+const SubmittedIcon = (
+  <div className="flex size-4 items-center justify-center">
+    <svg viewBox="0 0 16 16" className="size-4">
+      <rect
+        x="0.5" y="0.5" width="15" height="15" rx="5"
+        className="fill-teal-500 stroke-teal-500"
+        strokeWidth="1"
+      />
+      <path
+        d="M4.5 8.5L7 11L11.5 5.5"
+        fill="none"
+        stroke="white"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  </div>
+)
+
+const AnimatingIcon = (
+  <div className="flex size-4 items-center justify-center">
+    <svg viewBox="0 0 16 16" className="size-4 animate-check-bounce">
+      <rect
+        x="0.5" y="0.5" width="15" height="15" rx="5"
+        className="animate-check-fill"
+        strokeWidth="1"
+      />
+      <path
+        d="M4.5 8.5L7 11L11.5 5.5"
+        fill="none"
+        stroke="white"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className="animate-check-draw"
+        style={{
+          strokeDasharray: 14,
+          strokeDashoffset: 14,
+        }}
+      />
+    </svg>
+  </div>
+)
+
 export function CompletionCheckbox({
   isSubmitted,
   defaultStatusId,
@@ -23,13 +68,14 @@ export function CompletionCheckbox({
 }: {
   isSubmitted: boolean
   defaultStatusId?: Id<"statuses">
-  onComplete: (statusId: Id<"statuses">) => void
+  onComplete: (statusId: Id<"statuses">, coords?: { x: number; y: number }) => void
 }) {
   const [open, setOpen] = useState(false)
   const [animating, setAnimating] = useState(false)
   const { statuses } = useTaskReferenceData()
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const isLongPress = useRef(false)
+  const lastCoords = useRef<{ x: number; y: number } | undefined>(undefined)
 
   // All statuses grouped by type for the popover
   const allStatuses = (statuses ?? []).sort((a, b) => a.sortOrder - b.sortOrder)
@@ -42,55 +88,10 @@ export function CompletionCheckbox({
   }, [])
 
   // Completed state — disabled green checkbox
-  if (isSubmitted) {
-    return (
-      <div className="flex size-4 items-center justify-center">
-        <svg viewBox="0 0 16 16" className="size-4">
-          <rect
-            x="0.5" y="0.5" width="15" height="15" rx="3"
-            className="fill-green-500 stroke-green-500"
-            strokeWidth="1"
-          />
-          <path
-            d="M4.5 8.5L7 11L11.5 5.5"
-            fill="none"
-            stroke="white"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
-      </div>
-    )
-  }
+  if (isSubmitted) return SubmittedIcon
 
   // Animating state — plays check animation then completes
-  if (animating) {
-    return (
-      <div className="flex size-4 items-center justify-center">
-        <svg viewBox="0 0 16 16" className="size-4 animate-check-bounce">
-          <rect
-            x="0.5" y="0.5" width="15" height="15" rx="3"
-            className="animate-check-fill"
-            strokeWidth="1"
-          />
-          <path
-            d="M4.5 8.5L7 11L11.5 5.5"
-            fill="none"
-            stroke="white"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className="animate-check-draw"
-            style={{
-              strokeDasharray: 14,
-              strokeDashoffset: 14,
-            }}
-          />
-        </svg>
-      </div>
-    )
-  }
+  if (animating) return AnimatingIcon
 
   function handlePointerDown(e: React.PointerEvent) {
     e.stopPropagation()
@@ -114,12 +115,13 @@ export function CompletionCheckbox({
     }
 
     clearTimer()
+    lastCoords.current = { x: e.clientX, y: e.clientY }
 
     if (defaultStatusId) {
       // Immediate completion with animation
       setAnimating(true)
       setTimeout(() => {
-        onComplete(defaultStatusId)
+        onComplete(defaultStatusId, lastCoords.current)
       }, 300)
     } else {
       // No default configured — fallback to popover
@@ -145,7 +147,7 @@ export function CompletionCheckbox({
     setOpen(false)
     setAnimating(true)
     setTimeout(() => {
-      onComplete(statusId)
+      onComplete(statusId, lastCoords.current)
     }, 300)
   }
 
@@ -162,9 +164,10 @@ export function CompletionCheckbox({
         >
           <svg viewBox="0 0 16 16" className={cn("size-4 transition-colors")}>
             <rect
-              x="0.5" y="0.5" width="15" height="15" rx="3"
+              x="0.5" y="0.5" width="15" height="15" rx="5"
               fill="none"
-              className="stroke-muted-foreground/40 transition-colors hover:stroke-muted-foreground/70"
+              className="transition-colors"
+              style={{ stroke: "var(--input)" }}
               strokeWidth="1"
             />
           </svg>

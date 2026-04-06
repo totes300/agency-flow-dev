@@ -17,6 +17,7 @@ import { MobileFab } from "@/components/my-tasks/mobile-fab"
 import { DailyNotesPanel, type SaveStatus } from "@/components/my-tasks/daily-notes-panel"
 import { useConfetti } from "@/components/my-tasks/completion-confetti"
 import { getTodayString } from "@/lib/daily-notes-helpers"
+import { useIsMobile } from "@/lib/hooks/use-is-mobile"
 import { toast } from "sonner"
 import { toastError } from "@/lib/toast-helpers"
 import { cn } from "@/lib/utils"
@@ -40,18 +41,8 @@ export default function MyTasksPage() {
   const viewingUserId = searchParams.get("user") as Id<"users"> | null
 
   const { triggerConfetti, confettiPortal } = useConfetti()
-  const [search, setSearch] = useState("")
   const [mobileTab, setMobileTab] = useState<"tasks" | "notes">("tasks")
-
-  // Responsive: force modal on mobile
-  const [isMobile, setIsMobile] = useState(false)
-  useEffect(() => {
-    const mq = window.matchMedia("(max-width: 767px)")
-    setIsMobile(mq.matches)
-    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches)
-    mq.addEventListener("change", handler)
-    return () => mq.removeEventListener("change", handler)
-  }, [])
+  const isMobile = useIsMobile()
 
   const currentUser = useQuery(api.users.current, isAuthenticated ? {} : "skip")
   const rawViewPref = currentUser?.taskDetailView ?? "drawer"
@@ -144,25 +135,10 @@ export default function MyTasksPage() {
 
   // ─── Tasks ──────────────────────────────────────────────────────────────
 
-  // Client-side search filter
   const filteredGroups = useMemo(() => {
     if (!myTasks) return []
-    const groups = myTasks.groups as MyTasksGroup<TaskWithJoins>[]
-    if (!search.trim()) return groups
-
-    const q = search.trim().toLowerCase()
-    return groups
-      .map((group) => ({
-        ...group,
-        tasks: group.tasks.filter((t: TaskWithJoins) =>
-          t.title.toLowerCase().includes(q),
-        ),
-        count: group.tasks.filter((t: TaskWithJoins) =>
-          t.title.toLowerCase().includes(q),
-        ).length,
-      }))
-      .filter((g) => g.tasks.length > 0)
-  }, [myTasks, search])
+    return myTasks.groups as MyTasksGroup<TaskWithJoins>[]
+  }, [myTasks])
 
   // Batch time query for all visible tasks
   const allVisibleTaskIds = useMemo(() => {
@@ -188,15 +164,14 @@ export default function MyTasksPage() {
 
   const updateTask = useMutation(api.tasks.update)
 
-  // Find "Today" named status for FAB creation
-  const todayStatusId = useMemo(() => {
-    if (!statuses) return undefined
-    const todayStatus = statuses.find((s) => s.name === "Today")
-    return todayStatus?._id
-  }, [statuses])
+  // Use first visible status for FAB creation
+  const primaryStatusId = useMemo(() => {
+    if (!myTasks?.visibleStatusIds?.length) return undefined
+    return myTasks.visibleStatusIds[0] as Id<"statuses">
+  }, [myTasks?.visibleStatusIds])
 
   // Completion handler with undo support
-  const handleComplete = useCallback(async (taskId: string, statusId: Id<"statuses">) => {
+  const handleComplete = useCallback(async (taskId: string, statusId: Id<"statuses">, coords?: { x: number; y: number }) => {
     // Capture previous status before mutation
     const allTasks = myTasks?.groups.flatMap((g: MyTasksGroup<TaskWithJoins>) => g.tasks) ?? []
     const task = allTasks.find((t: TaskWithJoins) => t._id === taskId)
@@ -204,7 +179,7 @@ export default function MyTasksPage() {
 
     try {
       await updateTask({ id: taskId as Id<"tasks">, statusId })
-      triggerConfetti()
+      triggerConfetti(coords?.x, coords?.y)
       const status = statuses?.find((s) => s._id === statusId)
       const message = status?.type === "done"
         ? "Task completed"
@@ -290,17 +265,15 @@ export default function MyTasksPage() {
       {/* ─── Desktop: split view (lg+) ─── */}
       <div className="mt-8 hidden min-h-0 flex-1 gap-0 lg:flex">
         <div className="min-w-0 flex-1 overflow-y-auto">
-          <div className="max-w-3xl">
+          <div className="max-w-3xl lg:pl-6">
             <MyTasksHeader
               todayMinutes={todayMinutes ?? 0}
-              todayVisibleStatuses={currentUser?.todayVisibleStatuses}
-              search={search}
-              onSearchChange={setSearch}
+              visibleStatusIds={myTasks.visibleStatusIds ?? []}
+              orgDefaultStatusIds={orgSettings?.defaultMyTasksStatusIds?.map(String)}
             />
 
             <MyTasksList
               groups={filteredGroups}
-              hiddenCount={myTasks.hiddenCount}
               timeMap={timeMap ?? undefined}
               activityMap={activityMap ?? undefined}
               detailId={detailId}
@@ -333,14 +306,12 @@ export default function MyTasksPage() {
           <>
             <MyTasksHeader
               todayMinutes={todayMinutes ?? 0}
-              todayVisibleStatuses={currentUser?.todayVisibleStatuses}
-              search={search}
-              onSearchChange={setSearch}
+              visibleStatusIds={myTasks.visibleStatusIds ?? []}
+              orgDefaultStatusIds={orgSettings?.defaultMyTasksStatusIds?.map(String)}
             />
 
             <MyTasksList
               groups={filteredGroups}
-              hiddenCount={myTasks.hiddenCount}
               timeMap={timeMap ?? undefined}
               activityMap={activityMap ?? undefined}
               detailId={detailId}
@@ -378,7 +349,7 @@ export default function MyTasksPage() {
       )}
 
       <MobileFab
-        todayStatusId={todayStatusId}
+        todayStatusId={primaryStatusId}
         currentUserId={currentUser._id}
       />
 

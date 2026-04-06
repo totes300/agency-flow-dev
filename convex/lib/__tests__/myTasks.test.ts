@@ -3,9 +3,11 @@ import {
   filterMyTasks,
   groupByStatus,
   sortWithinGroup,
+  countHiddenTasks,
   type MinimalTask,
   type MinimalStatus,
 } from "../myTaskHelpers";
+import type { Id } from "../../_generated/dataModel";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -70,6 +72,10 @@ const ALL_STATUSES = [
   STATUS_DONE,
 ];
 
+function asId(s: string): Id<"statuses"> {
+  return s as unknown as Id<"statuses">;
+}
+
 // ─── filterMyTasks ────────────────────────────────────────────────────────────
 
 describe("filterMyTasks", () => {
@@ -109,12 +115,12 @@ describe("filterMyTasks", () => {
 // ─── groupByStatus ────────────────────────────────────────────────────────────
 
 describe("groupByStatus", () => {
-  it("puts Today named status tasks into 'today' group", () => {
+  it("shows tasks whose statusId is in visibleStatusIds", () => {
     const tasks = [
       makeTask({ statusId: STATUS_TODAY._id, statusType: "backlog" }),
     ];
-    const groups = groupByStatus(tasks, ALL_STATUSES, undefined, TODAY_DATE);
-    const todayGroup = groups.find((g) => g.key === "today");
+    const groups = groupByStatus(tasks, ALL_STATUSES, [STATUS_TODAY._id], TODAY_DATE);
+    const todayGroup = groups.find((g) => g.statusId === STATUS_TODAY._id);
     expect(todayGroup).toBeDefined();
     expect(todayGroup!.tasks).toHaveLength(1);
   });
@@ -123,22 +129,32 @@ describe("groupByStatus", () => {
     const tasks = [
       makeTask({ statusId: STATUS_ADMIN_REVIEW._id, statusType: "review", updatedAt: TODAY_TS }),
     ];
-    const groups = groupByStatus(tasks, ALL_STATUSES, undefined, TODAY_DATE);
+    const groups = groupByStatus(tasks, ALL_STATUSES, [], TODAY_DATE);
     const completed = groups.find((g) => g.key === "completed_today");
     expect(completed).toBeDefined();
     expect(completed!.tasks).toHaveLength(1);
   });
 
-  it("excludes review-type tasks not updated today from completed_today", () => {
+  it("review tasks not updated today can appear in visible groups", () => {
     const tasks = [
       makeTask({ statusId: STATUS_ADMIN_REVIEW._id, statusType: "review", updatedAt: YESTERDAY_TS }),
     ];
-    const groups = groupByStatus(tasks, ALL_STATUSES, undefined, TODAY_DATE);
-    const completed = groups.find((g) => g.key === "completed_today");
-    expect(completed).toBeUndefined();
-    // Only the empty "today" group should exist
-    expect(groups).toHaveLength(1);
-    expect(groups[0].key).toBe("today");
+    // When the review status is visible, it should appear
+    const groups = groupByStatus(tasks, ALL_STATUSES, [STATUS_ADMIN_REVIEW._id], TODAY_DATE);
+    const reviewGroup = groups.find((g) => g.statusId === STATUS_ADMIN_REVIEW._id);
+    expect(reviewGroup).toBeDefined();
+    expect(reviewGroup!.tasks).toHaveLength(1);
+  });
+
+  it("review tasks not updated today are hidden when status not visible", () => {
+    const tasks = [
+      makeTask({ statusId: STATUS_ADMIN_REVIEW._id, statusType: "review", updatedAt: YESTERDAY_TS }),
+    ];
+    const groups = groupByStatus(tasks, ALL_STATUSES, [STATUS_TODAY._id], TODAY_DATE);
+    // Only the empty Today group should exist
+    const keys = groups.map((g) => g.key);
+    expect(keys).not.toContain("completed_today");
+    expect(groups.find((g) => g.statusId === STATUS_ADMIN_REVIEW._id)).toBeUndefined();
   });
 
   it("puts done-type tasks updated today into 'completed_today' group", () => {
@@ -146,79 +162,137 @@ describe("groupByStatus", () => {
       makeTask({ statusId: STATUS_DONE._id, statusType: "done", updatedAt: TODAY_TS }),
       makeTask({ statusId: STATUS_TODAY._id, statusType: "backlog" }),
     ];
-    const groups = groupByStatus(tasks, ALL_STATUSES, undefined, TODAY_DATE);
+    const groups = groupByStatus(tasks, ALL_STATUSES, [STATUS_TODAY._id], TODAY_DATE);
     const completed = groups.find((g) => g.key === "completed_today");
     expect(completed).toBeDefined();
     expect(completed!.tasks).toHaveLength(1);
   });
 
-  it("groups non-Today backlog/in_progress/blocked tasks by statusType", () => {
+  it("groups tasks by individual status when visible", () => {
     const tasks = [
       makeTask({ statusId: STATUS_IN_PROGRESS._id, statusType: "in_progress" }),
       makeTask({ statusId: STATUS_STUCK._id, statusType: "blocked" }),
     ];
-    const groups = groupByStatus(tasks, ALL_STATUSES, ["in_progress", "blocked"], TODAY_DATE);
-    expect(groups.find((g) => g.key === "in_progress")?.tasks).toHaveLength(1);
-    expect(groups.find((g) => g.key === "blocked")?.tasks).toHaveLength(1);
+    const groups = groupByStatus(
+      tasks,
+      ALL_STATUSES,
+      [STATUS_IN_PROGRESS._id, STATUS_STUCK._id],
+      TODAY_DATE,
+    );
+    expect(groups.find((g) => g.statusId === STATUS_IN_PROGRESS._id)?.tasks).toHaveLength(1);
+    expect(groups.find((g) => g.statusId === STATUS_STUCK._id)?.tasks).toHaveLength(1);
   });
 
-  it("default (undefined) shows only 'today' + 'completed_today' groups", () => {
+  it("empty visibleStatusIds shows only completed_today", () => {
     const tasks = [
       makeTask({ statusId: STATUS_TODAY._id, statusType: "backlog" }),
       makeTask({ statusId: STATUS_IN_PROGRESS._id, statusType: "in_progress" }),
       makeTask({ statusId: STATUS_ADMIN_REVIEW._id, statusType: "review", updatedAt: TODAY_TS }),
       makeTask({ statusId: STATUS_INBOX._id, statusType: "backlog" }),
     ];
-    const groups = groupByStatus(tasks, ALL_STATUSES, undefined, TODAY_DATE);
+    const groups = groupByStatus(tasks, ALL_STATUSES, [], TODAY_DATE);
     const keys = groups.map((g) => g.key);
-    expect(keys).toContain("today");
     expect(keys).toContain("completed_today");
-    expect(keys).not.toContain("in_progress");
-    expect(keys).not.toContain("backlog");
+    expect(groups).toHaveLength(1);
   });
 
-  it("custom todayVisibleStatuses filters groups accordingly", () => {
+  it("only shows groups for statuses that are in visibleStatusIds", () => {
     const tasks = [
       makeTask({ statusId: STATUS_TODAY._id, statusType: "backlog" }),
       makeTask({ statusId: STATUS_IN_PROGRESS._id, statusType: "in_progress" }),
       makeTask({ statusId: STATUS_STUCK._id, statusType: "blocked" }),
       makeTask({ statusId: STATUS_ADMIN_REVIEW._id, statusType: "review", updatedAt: TODAY_TS }),
     ];
-    const groups = groupByStatus(tasks, ALL_STATUSES, ["in_progress"], TODAY_DATE);
+    const groups = groupByStatus(
+      tasks,
+      ALL_STATUSES,
+      [STATUS_IN_PROGRESS._id],
+      TODAY_DATE,
+    );
     const keys = groups.map((g) => g.key);
-    expect(keys).toContain("today");
     expect(keys).toContain("completed_today");
-    expect(keys).toContain("in_progress");
-    expect(keys).not.toContain("blocked");
+    expect(groups.find((g) => g.statusId === STATUS_IN_PROGRESS._id)).toBeDefined();
+    expect(groups.find((g) => g.statusId === STATUS_STUCK._id)).toBeUndefined();
+    expect(groups.find((g) => g.statusId === STATUS_TODAY._id)).toBeUndefined();
   });
 
-  it("non-Today backlog tasks go into 'backlog' group when enabled", () => {
+  it("done tasks completed today appear in BOTH status group and completed_today", () => {
     const tasks = [
-      makeTask({ statusId: STATUS_INBOX._id, statusType: "backlog" }),
+      makeTask({ statusId: STATUS_DONE._id, statusType: "done", updatedAt: TODAY_TS }),
     ];
-    const groups = groupByStatus(tasks, ALL_STATUSES, ["backlog"], TODAY_DATE);
-    expect(groups.find((g) => g.key === "backlog")?.tasks).toHaveLength(1);
+    const groups = groupByStatus(tasks, ALL_STATUSES, [STATUS_DONE._id], TODAY_DATE);
+    const doneGroup = groups.find((g) => g.statusId === STATUS_DONE._id);
+    const completedToday = groups.find((g) => g.key === "completed_today");
+    expect(doneGroup).toBeDefined();
+    expect(doneGroup!.tasks).toHaveLength(1);
+    expect(completedToday).toBeDefined();
+    expect(completedToday!.tasks).toHaveLength(1);
+    // Same task in both groups
+    expect(doneGroup!.tasks[0]._id).toBe(completedToday!.tasks[0]._id);
   });
 
-  it("orders groups: today first, completed_today last", () => {
+  it("done tasks from other days show in visible group", () => {
+    const tasks = [
+      makeTask({ statusId: STATUS_DONE._id, statusType: "done", updatedAt: YESTERDAY_TS }),
+    ];
+    const groups = groupByStatus(tasks, ALL_STATUSES, [STATUS_DONE._id], TODAY_DATE);
+    const doneGroup = groups.find((g) => g.statusId === STATUS_DONE._id);
+    expect(doneGroup).toBeDefined();
+    expect(doneGroup!.tasks).toHaveLength(1);
+  });
+
+  it("completed_today is always last", () => {
     const tasks = [
       makeTask({ statusId: STATUS_TODAY._id, statusType: "backlog" }),
       makeTask({ statusId: STATUS_IN_PROGRESS._id, statusType: "in_progress" }),
       makeTask({ statusId: STATUS_STUCK._id, statusType: "blocked" }),
       makeTask({ statusId: STATUS_ADMIN_REVIEW._id, statusType: "review", updatedAt: TODAY_TS }),
     ];
-    const groups = groupByStatus(tasks, ALL_STATUSES, ["in_progress", "blocked"], TODAY_DATE);
+    const groups = groupByStatus(
+      tasks,
+      ALL_STATUSES,
+      [STATUS_TODAY._id, STATUS_IN_PROGRESS._id, STATUS_STUCK._id],
+      TODAY_DATE,
+    );
     const keys = groups.map((g) => g.key);
-    expect(keys[0]).toBe("today");
     expect(keys[keys.length - 1]).toBe("completed_today");
   });
 
-  it("does not create empty groups", () => {
+  it("creates empty groups for visible statuses with no matching tasks", () => {
     const tasks = [
       makeTask({ statusId: STATUS_TODAY._id, statusType: "backlog" }),
     ];
-    const groups = groupByStatus(tasks, ALL_STATUSES, ["in_progress", "blocked"], TODAY_DATE);
-    expect(groups.every((g) => g.tasks.length > 0)).toBe(true);
+    const groups = groupByStatus(
+      tasks,
+      ALL_STATUSES,
+      [STATUS_TODAY._id, STATUS_IN_PROGRESS._id],
+      TODAY_DATE,
+    );
+    // Both visible statuses should have groups, even if in_progress has 0 tasks
+    expect(groups.find((g) => g.statusId === STATUS_IN_PROGRESS._id)).toBeDefined();
+    expect(groups.find((g) => g.statusId === STATUS_IN_PROGRESS._id)!.tasks).toHaveLength(0);
+  });
+});
+
+// ─── countHiddenTasks ────────────────────────────────────────────────────────
+
+describe("countHiddenTasks", () => {
+  it("counts tasks not in visible statuses", () => {
+    const tasks = [
+      makeTask({ statusId: STATUS_TODAY._id, statusType: "backlog" }),
+      makeTask({ statusId: STATUS_IN_PROGRESS._id, statusType: "in_progress" }),
+      makeTask({ statusId: STATUS_STUCK._id, statusType: "blocked" }),
+    ];
+    const hidden = countHiddenTasks(tasks, [STATUS_TODAY._id], TODAY_DATE);
+    expect(hidden).toBe(2);
+  });
+
+  it("does not count completed-today tasks as hidden", () => {
+    const tasks = [
+      makeTask({ statusId: STATUS_DONE._id, statusType: "done", updatedAt: TODAY_TS }),
+    ];
+    const hidden = countHiddenTasks(tasks, [], TODAY_DATE);
+    expect(hidden).toBe(0);
   });
 });
 
@@ -235,36 +309,13 @@ describe("sortWithinGroup", () => {
     expect(sorted.map((t) => t.manualSortKey)).toEqual(["a", "b", "c"]);
   });
 
-  it("falls back to dueDate ASC, then createdAt DESC", () => {
+  it("falls back to createdAt ASC", () => {
     const tasks = [
-      makeTask({ dueDate: "2026-04-05", createdAt: 1000 }),
-      makeTask({ dueDate: "2026-04-03", createdAt: 2000 }),
-      makeTask({ dueDate: "2026-04-03", createdAt: 3000 }),
+      makeTask({ createdAt: 3000 }),
+      makeTask({ createdAt: 1000 }),
+      makeTask({ createdAt: 2000 }),
     ];
     const sorted = sortWithinGroup(tasks);
-    expect(sorted[0].dueDate).toBe("2026-04-03");
-    expect(sorted[0].createdAt).toBe(3000);
-    expect(sorted[1].dueDate).toBe("2026-04-03");
-    expect(sorted[1].createdAt).toBe(2000);
-    expect(sorted[2].dueDate).toBe("2026-04-05");
-  });
-
-  it("tasks without dueDate sort after those with dueDate", () => {
-    const tasks = [
-      makeTask({ dueDate: undefined, createdAt: 3000 }),
-      makeTask({ dueDate: "2026-04-03", createdAt: 1000 }),
-    ];
-    const sorted = sortWithinGroup(tasks);
-    expect(sorted[0].dueDate).toBe("2026-04-03");
-    expect(sorted[1].dueDate).toBeUndefined();
-  });
-
-  it("tasks without manualSortKey sort after those with manualSortKey", () => {
-    const tasks = [
-      makeTask({ manualSortKey: undefined, dueDate: "2026-04-01" }),
-      makeTask({ manualSortKey: "a", dueDate: "2026-04-10" }),
-    ];
-    const sorted = sortWithinGroup(tasks);
-    expect(sorted[0].manualSortKey).toBe("a");
+    expect(sorted.map((t) => t.createdAt)).toEqual([1000, 2000, 3000]);
   });
 });

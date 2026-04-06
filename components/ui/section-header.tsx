@@ -27,25 +27,20 @@ export function SectionHeader({
   open?: boolean
   className?: string
 }) {
-  const content = (
-    <>
-      <div className="flex items-center gap-2.5">
-        {collapsible && (
-          open ? (
-            <ChevronDownIcon className="size-4 text-muted-foreground" />
-          ) : (
-            <ChevronRightIcon className="size-4 text-muted-foreground" />
-          )
-        )}
-        <span className={SECTION_TITLE}>{title}</span>
-        {subtitle && (
-          <span className="hidden text-xs text-muted-foreground sm:inline">{subtitle}</span>
-        )}
-      </div>
-      {trailing && (
-        <div className="ml-auto shrink-0">{trailing}</div>
+  const titleContent = (
+    <div className="flex items-center gap-2.5">
+      {collapsible && (
+        open ? (
+          <ChevronDownIcon className="size-4 text-muted-foreground" />
+        ) : (
+          <ChevronRightIcon className="size-4 text-muted-foreground" />
+        )
       )}
-    </>
+      <span className={SECTION_TITLE}>{title}</span>
+      {subtitle && (
+        <span className="hidden text-xs text-muted-foreground sm:inline">{subtitle}</span>
+      )}
+    </div>
   )
 
   const baseClass = cn(
@@ -56,11 +51,23 @@ export function SectionHeader({
 
   if (collapsible) {
     return (
-      <CollapsibleTrigger className={cn(baseClass, "text-left")}>
-        {content}
-      </CollapsibleTrigger>
+      <div className={baseClass}>
+        <CollapsibleTrigger className="flex items-center gap-2.5 text-left">
+          {titleContent}
+        </CollapsibleTrigger>
+        {trailing && (
+          <div className="ml-auto shrink-0">{trailing}</div>
+        )}
+      </div>
     )
   }
 
-  return <div className={baseClass}>{content}</div>
+  return (
+    <div className={baseClass}>
+      {titleContent}
+      {trailing && (
+        <div className="ml-auto shrink-0">{trailing}</div>
+      )}
+    </div>
+  )
 }

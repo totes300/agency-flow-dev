@@ -135,9 +135,9 @@
 }
 
 @keyframes check-fill {
-  0% { fill: transparent; stroke: oklch(0.556 0 0 / 40%); }
-  40% { fill: oklch(0.723 0.219 149.579); stroke: oklch(0.723 0.219 149.579); }
-  100% { fill: oklch(0.723 0.219 149.579); stroke: oklch(0.723 0.219 149.579); }
+  0% { fill: transparent; stroke: oklch(92.3% .003 48.717); }
+  40% { fill: oklch(70.4% .14 182.503); stroke: oklch(70.4% .14 182.503); }
+  100% { fill: oklch(70.4% .14 182.503); stroke: oklch(70.4% .14 182.503); }
 }
 
 @keyframes check-draw {

@@ -1,7 +1,7 @@
 import { v, ConvexError } from "convex/values";
 import { query, mutation } from "./_generated/server";
 import { getAuthContext, requireAdmin, validateStringLength } from "./lib/auth";
-import { generateInvoicePrefix, ensureUniquePrefix } from "./lib/helpers";
+import { generateClientPrefix, ensureUniquePrefix } from "./lib/helpers";
 import { currencyValidator } from "./lib/validators";
 
 // ─── Queries ────────────────────────────────────────────────────────────────────
@@ -108,7 +108,8 @@ export const create = mutation({
   args: {
     name: v.string(),
     currency: v.optional(currencyValidator),
-    invoicePrefix: v.optional(v.string()),
+    prefix: v.optional(v.string()),
+    usePrefix: v.optional(v.boolean()),
     billingName: v.optional(v.string()),
     billingEmail: v.optional(v.string()),
     billingCountry: v.optional(v.string()),
@@ -143,16 +144,17 @@ export const create = mutation({
       currency = orgSettings?.defaultCurrency ?? "USD";
     }
 
-    // Invoice prefix: auto-generate or use provided, then dedup
-    const rawPrefix = args.invoicePrefix?.trim() || generateInvoicePrefix(name);
-    const invoicePrefix = await ensureUniquePrefix(ctx, orgId, rawPrefix);
+    // Client prefix: auto-generate or use provided, then dedup
+    const rawPrefix = args.prefix?.trim() || generateClientPrefix(name);
+    const prefix = await ensureUniquePrefix(ctx, orgId, rawPrefix);
 
     const now = Date.now();
     return await ctx.db.insert("clients", {
       orgId,
       name,
       currency,
-      invoicePrefix,
+      prefix,
+      usePrefix: args.usePrefix,
       billingName: args.billingName?.trim() || undefined,
       billingEmail: args.billingEmail?.trim() || undefined,
       billingCountry: args.billingCountry?.trim() || undefined,
@@ -174,7 +176,8 @@ export const update = mutation({
     id: v.id("clients"),
     name: v.optional(v.string()),
     currency: v.optional(currencyValidator),
-    invoicePrefix: v.optional(v.string()),
+    prefix: v.optional(v.string()),
+    usePrefix: v.optional(v.boolean()),
     billingName: v.optional(v.string()),
     billingEmail: v.optional(v.string()),
     billingCountry: v.optional(v.string()),
@@ -212,14 +215,16 @@ export const update = mutation({
 
     if (args.currency !== undefined) updates.currency = args.currency;
 
-    if (args.invoicePrefix !== undefined) {
-      const prefix = args.invoicePrefix.trim();
-      if (prefix) {
-        updates.invoicePrefix = await ensureUniquePrefix(
-          ctx, orgId, prefix, args.id.toString(),
+    if (args.prefix !== undefined) {
+      const pfx = args.prefix.trim();
+      if (pfx) {
+        updates.prefix = await ensureUniquePrefix(
+          ctx, orgId, pfx, args.id.toString(),
         );
       }
     }
+
+    if (args.usePrefix !== undefined) updates.usePrefix = args.usePrefix;
 
     // Billing fields — empty string → undefined (clear field)
     const trimOrClear = (val: string | undefined) =>

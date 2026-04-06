@@ -50,7 +50,8 @@ export function ClientFormModal({ open, onOpenChange, client, defaultCurrency = 
   // General
   const [name, setName] = useState("")
   const [currency, setCurrency] = useState(defaultCurrency)
-  const [invoicePrefix, setInvoicePrefix] = useState("")
+  const [prefix, setPrefix] = useState("")
+  const [usePrefix, setUsePrefix] = useState(false)
   // Logo
   const [logoPreview, setLogoPreview] = useState<string | null>(null)
   const [pendingLogoFile, setPendingLogoFile] = useState<File | null>(null)
@@ -86,7 +87,8 @@ export function ClientFormModal({ open, onOpenChange, client, defaultCurrency = 
     if (client) {
       setName(client.name)
       setCurrency(client.currency)
-      setInvoicePrefix(client.invoicePrefix)
+      setPrefix(client.prefix ?? client.invoicePrefix ?? "")
+      setUsePrefix(client.usePrefix ?? false)
       setBillingName(client.billingName ?? "")
       setTaxId(client.taxId ?? "")
       setBillingEmail(client.billingEmail ?? "")
@@ -99,7 +101,8 @@ export function ClientFormModal({ open, onOpenChange, client, defaultCurrency = 
     } else {
       setName("")
       setCurrency(defaultCurrency)
-      setInvoicePrefix("")
+      setPrefix("")
+      setUsePrefix(false)
       setBillingName("")
       setTaxId("")
       setBillingEmail("")
@@ -192,7 +195,8 @@ export function ClientFormModal({ open, onOpenChange, client, defaultCurrency = 
     const payload = {
       name: name.trim(),
       currency: currency as Currency,
-      invoicePrefix: invoicePrefix.trim() || undefined,
+      prefix: prefix.trim() || undefined,
+      usePrefix,
       billingName: billingName || undefined,
       billingEmail: billingEmail || undefined,
       billingCountry: billingCountry || undefined,
@@ -329,16 +333,29 @@ export function ClientFormModal({ open, onOpenChange, client, defaultCurrency = 
                   </Select>
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="invoice-prefix">Invoice Prefix</Label>
+                  <Label htmlFor="client-prefix">Prefix</Label>
                   <Input
-                    id="invoice-prefix"
-                    value={invoicePrefix}
-                    onChange={(e) => setInvoicePrefix(e.target.value.toUpperCase())}
+                    id="client-prefix"
+                    value={prefix}
+                    onChange={(e) => setPrefix(e.target.value)}
                     placeholder="Auto from name"
                     maxLength={10}
                   />
                 </div>
               </div>
+
+              {/* Use prefix toggle */}
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={usePrefix}
+                  onChange={(e) => setUsePrefix(e.target.checked)}
+                  className="size-4 rounded border-border accent-primary"
+                />
+                <span className="text-sm text-muted-foreground">
+                  Use prefix instead of full name in task lists
+                </span>
+              </label>
 
               {/* Notes */}
               <div className="space-y-1.5">

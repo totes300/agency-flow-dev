@@ -90,13 +90,21 @@ export function MiniCalendar({
     <div className="flex flex-col gap-1">
       {/* Month nav */}
       <div className="flex items-center justify-between px-1 pb-1">
-        <button onClick={prevMonth} className="rounded p-0.5 text-muted-foreground hover:text-foreground">
+        <button
+          onClick={prevMonth}
+          aria-label="Previous month"
+          className="rounded p-0.5 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:rounded-sm"
+        >
           <ChevronLeftIcon className="size-4" />
         </button>
         <span className="text-[13px] font-semibold">{monthLabel}</span>
         <button
           onClick={nextMonth}
-          className="rounded p-0.5 text-muted-foreground hover:text-foreground"
+          aria-label="Next month"
+          className={cn(
+            "rounded p-0.5 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:rounded-sm",
+            disableFuture && viewYear === today.getFullYear() && viewMonth === today.getMonth() && "opacity-30 cursor-not-allowed"
+          )}
           disabled={disableFuture && viewYear === today.getFullYear() && viewMonth === today.getMonth()}
         >
           <ChevronRightIcon className="size-4" />
@@ -129,8 +137,10 @@ export function MiniCalendar({
                 key={ci}
                 onClick={() => dateStr && onSelect(dateStr)}
                 disabled={!cell.current || !!isFutureDate}
+                aria-label={dateStr ? `Select ${dateStr}` : undefined}
+                aria-selected={!!isSelected}
                 className={cn(
-                  "flex h-7 w-full items-center justify-center rounded-md text-xs transition-colors",
+                  "flex h-7 w-full items-center justify-center rounded-md text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
                   !cell.current && "text-muted-foreground/30",
                   isFutureDate && "text-muted-foreground/20 cursor-not-allowed",
                   cell.current && !isFutureDate && !isToday && !isSelected && "text-foreground hover:bg-muted",

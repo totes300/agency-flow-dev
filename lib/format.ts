@@ -221,5 +221,10 @@ export function formatBatchTimeRange(startMs: number, endMs: number): string {
   return `${sDate}, ${sTime}–${eTime}`
 }
 
+/** Return the client's prefix or full name depending on the `usePrefix` setting. */
+export function getClientDisplayName(client: { name: string; prefix?: string; usePrefix?: boolean }): string {
+  return client.usePrefix && client.prefix ? client.prefix : client.name
+}
+
 // Re-export duration formatters for discoverability
 export { formatDuration, formatTimerDisplay } from "@/lib/duration"

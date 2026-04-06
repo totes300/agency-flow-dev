@@ -26,6 +26,8 @@ type ProjectOption = {
   code: string
   clientId: Id<"clients">
   clientName: string
+  clientPrefix: string
+  clientUsePrefix?: boolean
 }
 
 type OrgMember = {

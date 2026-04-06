@@ -31,7 +31,8 @@ clients: defineTable({
   orgId: v.string(),
   name: v.string(),                         // Required, trimmed
   currency: v.string(),                     // ISO 4217, default: org default
-  invoicePrefix: v.string(),                // Auto-generated, editable, e.g., "ACME"
+  prefix: v.optional(v.string()),            // Auto-generated, editable, e.g., "KONV"
+  usePrefix: v.optional(v.boolean()),        // Show prefix instead of full name in task lists
   billingEmail: v.optional(v.string()),     // Separate from contacts — invoices go here
   billingAddress: v.optional(v.string()),   // Multi-line
   taxId: v.optional(v.string()),            // e.g., EIN or VAT number

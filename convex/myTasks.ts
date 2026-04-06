@@ -9,7 +9,50 @@ import {
   sortWithinGroup,
   countHiddenTasks,
 } from "./lib/myTaskHelpers";
-import type { Doc } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
+
+// ─── resolveVisibleStatusIds ─────────────────────────────────────────────────
+
+/**
+ * Resolve which status IDs to show in My Tasks.
+ * Fallback chain: user preference → org default → first in_progress status.
+ * Filters out archived/deleted statuses silently.
+ */
+function resolveVisibleStatusIds(
+  user: Doc<"users"> | null,
+  orgSettings: Doc<"orgSettings"> | null,
+  activeStatuses: Doc<"statuses">[],
+): Id<"statuses">[] {
+  const activeIds = new Set(activeStatuses.map((s) => s._id as string));
+
+  // 1. User preference (skip if it contains old type-key strings)
+  const userPref = user?.todayVisibleStatuses;
+  if (userPref && userPref.length > 0) {
+    // Detect old format: type keys like "in_progress" are not valid Convex IDs
+    const isNewFormat = userPref.every((id) => activeIds.has(id));
+    if (isNewFormat) {
+      return userPref.filter((id) => activeIds.has(id)) as Id<"statuses">[];
+    }
+    // Old format detected — fall through to org default
+  }
+
+  // 2. Org default
+  const orgDefault = orgSettings?.defaultMyTasksStatusIds;
+  if (orgDefault && orgDefault.length > 0) {
+    return orgDefault.filter((id) => activeIds.has(id as string));
+  }
+
+  // 3. Final fallback: first in_progress status by sortOrder
+  const firstInProgress = activeStatuses
+    .filter((s) => s.type === "in_progress")
+    .sort((a, b) => a.sortOrder - b.sortOrder)[0];
+  if (firstInProgress) {
+    return [firstInProgress._id];
+  }
+
+  // No statuses at all — return empty
+  return [];
+}
 
 // ─── listMyTasks ──────────────────────────────────────────────────────────────
 
@@ -31,14 +74,17 @@ export const listMyTasks = query({
       .collect();
     const activeStatuses = statuses.filter((s) => !s.archivedAt);
 
-    // 2. Load all org tasks and filter to mine
+    // 2. Resolve which statuses to show
+    const visibleStatusIds = resolveVisibleStatusIds(user, orgSettings, activeStatuses);
+
+    // 3. Load all org tasks and filter to mine
     const allTasks = await ctx.db
       .query("tasks")
       .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
       .collect();
     const myTasks = filterMyTasks(allTasks, userId);
 
-    // 3. Batch-load related entities for enrichment
+    // 4. Batch-load related entities for enrichment
     const statusIds = new Set(myTasks.map((t) => t.statusId.toString()));
     const projectIds = new Set(
       myTasks.map((t) => t.projectId?.toString()).filter(Boolean) as string[],
@@ -72,17 +118,16 @@ export const listMyTasks = query({
     const enrichTask = createTaskEnricher({ statusMap, projectMap, clientMap, categoryMap, userMap });
     const enrichedTasks = myTasks.map(enrichTask);
 
-    // 4. Group and sort
-    const visibleStatuses = user?.todayVisibleStatuses;
-    const groups = groupByStatus(enrichedTasks, activeStatuses, visibleStatuses, todayDateStr);
+    // 5. Group and sort
+    const groups = groupByStatus(enrichedTasks, activeStatuses, visibleStatusIds, todayDateStr);
 
     for (const group of groups) {
       group.tasks = sortWithinGroup(group.tasks);
     }
 
-    const hiddenCount = countHiddenTasks(myTasks, activeStatuses, visibleStatuses, todayDateStr);
+    const hiddenCount = countHiddenTasks(myTasks, visibleStatusIds, todayDateStr);
 
-    return { groups, hiddenCount };
+    return { groups, hiddenCount, visibleStatusIds: visibleStatusIds.map(String) };
   },
 });
 
@@ -92,25 +137,34 @@ export const myTasksCount = query({
   args: {},
   handler: async (ctx) => {
     const { userId, orgId } = await getAuthContext(ctx);
+    const user = await ctx.db.get(userId);
 
-    // Find "Today" named status
     const statuses = await ctx.db
       .query("statuses")
       .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
       .collect();
-    const todayStatus = statuses.find((s) => s.name === "Today" && !s.archivedAt);
-    if (!todayStatus) return 0;
+    const activeStatuses = statuses.filter((s) => !s.archivedAt);
 
-    // Count tasks with that statusId assigned to me
-    const tasks = await ctx.db
-      .query("tasks")
-      .withIndex("by_orgId_statusId", (q) =>
-        q.eq("orgId", orgId).eq("statusId", todayStatus._id),
-      )
-      .collect();
+    const orgSettings = await getOrgSettings(ctx, orgId);
+    const visibleStatusIds = resolveVisibleStatusIds(user, orgSettings, activeStatuses);
 
-    return tasks.filter(
-      (t) => !t.archivedAt && !t.parentTaskId && t.assigneeIds.includes(userId),
-    ).length;
+    if (visibleStatusIds.length === 0) return 0;
+
+    // Count tasks in visible statuses assigned to me
+    let count = 0;
+    for (const statusId of visibleStatusIds) {
+      const tasks = await ctx.db
+        .query("tasks")
+        .withIndex("by_orgId_statusId", (q) =>
+          q.eq("orgId", orgId).eq("statusId", statusId),
+        )
+        .collect();
+
+      count += tasks.filter(
+        (t) => !t.archivedAt && !t.parentTaskId && t.assigneeIds.includes(userId),
+      ).length;
+    }
+
+    return count;
   },
 });

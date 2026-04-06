@@ -4,6 +4,7 @@ import dynamic from "next/dynamic"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { SettingsGeneral } from "@/components/settings/settings-general"
+import { SettingsMyTasksDefaults } from "@/components/settings/settings-my-tasks-defaults"
 
 // ─── Content-aware loading skeletons ────────────────────────────────────────────
 
@@ -136,8 +137,11 @@ export default function SettingsPage() {
           <SettingsTeam />
         </TabsContent>
 
-        <TabsContent value="statuses" className="mt-6">
+        <TabsContent value="statuses" className="mt-6 space-y-10">
           <SettingsStatuses />
+          <div className="border-t pt-8">
+            <SettingsMyTasksDefaults />
+          </div>
         </TabsContent>
 
         <TabsContent value="work-categories" className="mt-6">

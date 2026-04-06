@@ -13,7 +13,7 @@ import type { StatusType } from "./constants";
 export type TaskWithJoins = Doc<"tasks"> & {
   status: Pick<Doc<"statuses">, "_id" | "name" | "color" | "type" | "icon"> | null;
   project: Pick<Doc<"projects">, "_id" | "name" | "code"> | null;
-  client: Pick<Doc<"clients">, "_id" | "name"> | null;
+  client: Pick<Doc<"clients">, "_id" | "name" | "prefix" | "usePrefix"> | null;
   category: Pick<Doc<"workCategories">, "_id" | "name" | "color"> | null;
   assignees: Array<Pick<Doc<"users">, "_id" | "name" | "email" | "imageUrl">>;
 };
@@ -197,7 +197,7 @@ export function createTaskEnricher(maps: {
         ? { _id: project._id, name: project.name, code: project.code }
         : null,
       client: client
-        ? { _id: client._id, name: client.name }
+        ? { _id: client._id, name: client.name, prefix: client.prefix, usePrefix: client.usePrefix }
         : null,
       category: category
         ? { _id: category._id, name: category.name, color: category.color }

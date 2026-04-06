@@ -98,7 +98,7 @@ export const TaskRow = memo(function TaskRow({
       className={cn(
         "group/row relative border-b border-border/55 transition-colors",
         "before:pointer-events-none before:absolute before:inset-y-0 before:-left-13 before:w-13 before:transition-colors",
-        "hover:bg-muted/[0.38] hover:before:bg-muted/[0.38]",
+        "hover:bg-muted/70 hover:before:bg-muted/70",
         isSelected && "bg-primary/5 before:bg-primary/5",
         isDetailOpen && "bg-accent/50 before:bg-accent/50 before:border-l-2 before:border-l-primary",
       )}
@@ -134,7 +134,7 @@ export const TaskRow = memo(function TaskRow({
             onOpenDetail={onOpenDetail}
           >
             <span className={cn(
-              "truncate text-sm font-medium",
+              "truncate text-sm font-semibold",
             )}>
               {task.title}
             </span>

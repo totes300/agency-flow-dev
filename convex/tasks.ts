@@ -37,14 +37,14 @@ export const getDetail = query({
     const status = task.statusId ? await ctx.db.get(task.statusId) : null;
 
     let project: { _id: Id<"projects">; name: string; code: string } | null = null;
-    let client: { _id: Id<"clients">; name: string } | null = null;
+    let client: { _id: Id<"clients">; name: string; prefix: string; usePrefix?: boolean } | null = null;
     if (task.projectId) {
       const p = await ctx.db.get(task.projectId);
       if (p) {
         project = { _id: p._id, name: p.name, code: p.code };
         if (p.clientId) {
           const c = await ctx.db.get(p.clientId);
-          if (c) client = { _id: c._id, name: c.name };
+          if (c) client = { _id: c._id, name: c.name, prefix: c.prefix ?? c.invoicePrefix ?? "", usePrefix: c.usePrefix };
         }
       }
     }
@@ -511,7 +511,7 @@ export const list = query({
           // Fractional key sort: tasks with keys before tasks without, then createdAt
           const ak = a.manualSortKey;
           const bk = b.manualSortKey;
-          if (ak && bk) { cmp = ak.localeCompare(bk); }
+          if (ak && bk) { cmp = ak < bk ? -1 : ak > bk ? 1 : 0; }
           else if (ak) { cmp = -1; }
           else if (bk) { cmp = 1; }
           else { cmp = 0; }
@@ -963,15 +963,16 @@ export const create = mutation({
     }
     await validateAssignees(ctx, orgId, assigneeIds);
 
-    // Generate manualSortKey — append after the last task in this org.
+    // Generate manualSortKey — append after the task with the highest sort key in this org.
+    // Uses a dedicated index so we always get the true maximum key, not just the latest doc.
     // Convex OCC ensures concurrent creates on the same index range will
     // serialize (second transaction retries), so duplicate keys cannot occur.
-    const lastTask = await ctx.db
+    const lastSorted = await ctx.db
       .query("tasks")
-      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+      .withIndex("by_orgId_manualSortKey", (q) => q.eq("orgId", orgId))
       .order("desc")
       .first();
-    const lastKey = lastTask?.manualSortKey ?? null;
+    const lastKey = lastSorted?.manualSortKey ?? null;
     const manualSortKey = generateKeyBetween(lastKey, null);
 
     const now = Date.now();

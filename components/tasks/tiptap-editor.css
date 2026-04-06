@@ -152,14 +152,26 @@
 }
 
 .tiptap-content ul[data-type="taskList"] li > label input[type="checkbox"] {
-  appearance: auto;
-  -webkit-appearance: checkbox;
+  appearance: none;
+  -webkit-appearance: none;
   width: 16px;
   height: 16px;
   margin: 0;
   cursor: pointer;
   display: block;
-  accent-color: var(--primary);
+  border: 1px solid var(--input);
+  border-radius: 5px;
+  background: transparent;
+  transition: border-color 0.15s, background-color 0.15s;
+}
+
+.tiptap-content ul[data-type="taskList"] li > label input[type="checkbox"]:checked {
+  background-color: var(--primary);
+  border-color: var(--primary);
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 16 16' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M4.5 8.5L7 11L11.5 5.5' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-size: 14px;
+  background-position: center;
+  background-repeat: no-repeat;
 }
 
 .tiptap-content ul[data-type="taskList"] li > div {

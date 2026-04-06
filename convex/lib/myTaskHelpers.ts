@@ -42,24 +42,6 @@ export type MyTasksGroup<T extends MinimalTask = MinimalTask> = {
   count: number;
 };
 
-// ─── Group ordering (matches status type workflow) ──────────────────────────
-
-const GROUP_ORDER: Record<string, number> = {
-  today: 0,
-  in_progress: 1,
-  backlog: 2,
-  blocked: 3,
-  done: 4,
-  completed_today: 99, // always last
-};
-
-const TYPE_LABELS: Record<string, string> = {
-  backlog: "Backlog",
-  in_progress: "In Progress",
-  blocked: "Blocked",
-  done: "Done",
-};
-
 // ─── filterMyTasks ──────────────────────────────────────────────────────────────
 
 /**
@@ -83,30 +65,33 @@ export function filterMyTasks<T extends MinimalTask>(
 // ─── groupByStatus ──────────────────────────────────────────────────────────────
 
 /**
- * Group tasks by status for the My Tasks view.
+ * Group tasks by individual status for the My Tasks view.
  *
- * - Tasks with the "Today" named status → "today" group (always shown)
+ * - Tasks whose statusId is in visibleStatusIds → one group per status
  * - Tasks with done/review type updated today → "completed_today" group (always shown)
- * - Other tasks → grouped by statusType (only if in todayVisibleStatuses)
+ * - Everything else → hidden (counted separately)
  *
- * @param todayVisibleStatuses - undefined = focus mode (today + completed_today only);
- *   string[] = expanded mode with additional status type keys
+ * @param visibleStatusIds - resolved list of status IDs to show as groups
+ * @param statuses - all active statuses (for label/sort lookup)
  * @param todayDateStr - YYYY-MM-DD string for "completed today" filtering
  */
 export function groupByStatus<T extends MinimalTask>(
   tasks: T[],
   statuses: MinimalStatus[],
-  todayVisibleStatuses: string[] | undefined,
+  visibleStatusIds: Id<"statuses">[],
   todayDateStr: string,
 ): MyTasksGroup<T>[] {
-  // Find the "Today" named status
-  const todayStatus = statuses.find(
-    (s) => s.name === "Today" && !s.archivedAt,
-  );
+  const statusMap = new Map(statuses.map((s) => [s._id as string, s]));
+  const visibleSet = new Set(visibleStatusIds.map((id) => id as string));
 
   const groupMap = new Map<string, MyTasksGroup<T>>();
 
-  const getOrCreateGroup = (key: string, label: string, statusType: string, statusId?: Id<"statuses">): MyTasksGroup<T> => {
+  const getOrCreateGroup = (
+    key: string,
+    label: string,
+    statusType: string,
+    statusId?: Id<"statuses">,
+  ): MyTasksGroup<T> => {
     let group = groupMap.get(key);
     if (!group) {
       group = { key, label, statusType, statusId, tasks: [], count: 0 };
@@ -116,77 +101,86 @@ export function groupByStatus<T extends MinimalTask>(
   };
 
   for (const task of tasks) {
-    // Done/review tasks updated today → "completed_today" group
+    let placed = false;
+
+    // 1. Status group: if the task's status is visible → its own group
+    if (visibleSet.has(task.statusId as string)) {
+      const status = statusMap.get(task.statusId as string);
+      const key = `status_${task.statusId}`;
+      const label = status?.name ?? "Unknown";
+      const group = getOrCreateGroup(key, label, task.statusType, task.statusId);
+      group.tasks.push(task);
+      group.count++;
+      placed = true;
+    }
+
+    // 2. Completed today: done/review tasks updated today ALWAYS appear here too
     if (task.statusType === "done" || task.statusType === "review") {
       const taskDate = new Date(task.updatedAt).toISOString().slice(0, 10);
       if (taskDate === todayDateStr) {
         const group = getOrCreateGroup("completed_today", "Completed today", "done");
         group.tasks.push(task);
         group.count++;
+        placed = true;
       }
-      continue;
     }
 
-    // "Today" named status → "today" group
-    if (todayStatus && task.statusId === todayStatus._id) {
-      const group = getOrCreateGroup("today", "Today", "backlog", todayStatus._id);
-      group.tasks.push(task);
-      group.count++;
-      continue;
-    }
-
-    // Other tasks → grouped by statusType (only if visible)
-    const typeKey = task.statusType;
-    const isVisible = todayVisibleStatuses?.includes(typeKey);
-    if (isVisible) {
-      const label = TYPE_LABELS[typeKey] ?? typeKey;
-      const group = getOrCreateGroup(typeKey, label, typeKey);
-      group.tasks.push(task);
-      group.count++;
+    // Not placed anywhere = hidden
+    if (!placed) {
+      // done/review from other days without visible status → hidden
+      // other types without visible status → hidden
     }
   }
 
-  // Always include "today" group even if empty (shows empty state + inline add)
-  if (todayStatus && !groupMap.has("today")) {
-    getOrCreateGroup("today", "Today", "backlog", todayStatus._id);
+  // Always include visible status groups even if empty (shows inline add)
+  for (const statusId of visibleStatusIds) {
+    const key = `status_${statusId}`;
+    if (!groupMap.has(key)) {
+      const status = statusMap.get(statusId as string);
+      if (status) {
+        getOrCreateGroup(key, status.name, status.type, statusId);
+      }
+    }
   }
 
-  // Convert to array, filter empty (except "today" which always shows), sort by group order
+  // Sort groups: visible statuses by sortOrder, completed_today last
+  const statusSortOrder = new Map(
+    visibleStatusIds.map((id, idx) => {
+      const status = statusMap.get(id as string);
+      return [id as string, status?.sortOrder ?? idx];
+    }),
+  );
+
   return Array.from(groupMap.values())
-    .filter((g) => g.tasks.length > 0 || g.key === "today")
-    .sort((a, b) => (GROUP_ORDER[a.key] ?? 50) - (GROUP_ORDER[b.key] ?? 50));
+    .filter((g) => g.tasks.length > 0 || g.key !== "completed_today")
+    .sort((a, b) => {
+      // completed_today always last
+      if (a.key === "completed_today") return 1;
+      if (b.key === "completed_today") return -1;
+      // Sort by status sortOrder
+      const aOrder = a.statusId ? (statusSortOrder.get(a.statusId as string) ?? 50) : 50;
+      const bOrder = b.statusId ? (statusSortOrder.get(b.statusId as string) ?? 50) : 50;
+      return aOrder - bOrder;
+    });
 }
 
 // ─── sortWithinGroup ────────────────────────────────────────────────────────────
 
 /**
  * Sort tasks within a group:
- * 1. manualSortKey (string sort, present before absent)
- * 2. dueDate ASC (present before absent)
- * 3. createdAt DESC
+ * - Both have manualSortKey → string compare (fractional indexing)
+ * - Otherwise → createdAt ASC (oldest first, newest at the end)
  */
 export function sortWithinGroup<T extends MinimalTask>(tasks: T[]): T[] {
   return [...tasks].sort((a, b) => {
-    // 1. manualSortKey: present before absent, then string compare
-    const aHasKey = a.manualSortKey != null;
-    const bHasKey = b.manualSortKey != null;
-    if (aHasKey !== bHasKey) return aHasKey ? -1 : 1;
-    if (aHasKey && bHasKey) {
-      const cmp = a.manualSortKey!.localeCompare(b.manualSortKey!);
-      if (cmp !== 0) return cmp;
+    // Both have manualSortKey → use code-point order (required by fractional-indexing)
+    if (a.manualSortKey != null && b.manualSortKey != null) {
+      if (a.manualSortKey < b.manualSortKey) return -1;
+      if (a.manualSortKey > b.manualSortKey) return 1;
     }
 
-    // 2. dueDate ASC: present before absent
-    const aHasDate = a.dueDate != null;
-    const bHasDate = b.dueDate != null;
-    if (aHasDate !== bHasDate) return aHasDate ? -1 : 1;
-    if (aHasDate && bHasDate) {
-      const cmp = a.dueDate!.localeCompare(b.dueDate!);
-      if (cmp !== 0) return cmp;
-    }
-
-    // 3. createdAt DESC
-    return b.createdAt - a.createdAt;
+    // Fallback: createdAt ASC (newest at the end)
+    return a.createdAt - b.createdAt;
   });
 }
 
@@ -194,17 +188,14 @@ export function sortWithinGroup<T extends MinimalTask>(tasks: T[]): T[] {
 
 /**
  * Count tasks that are filtered out by the current view settings.
- * "completed_today" and "today" tasks are never hidden.
+ * "completed_today" tasks are never hidden.
  */
 export function countHiddenTasks<T extends MinimalTask>(
   tasks: T[],
-  statuses: MinimalStatus[],
-  todayVisibleStatuses: string[] | undefined,
+  visibleStatusIds: Id<"statuses">[],
   todayDateStr: string,
 ): number {
-  const todayStatus = statuses.find(
-    (s) => s.name === "Today" && !s.archivedAt,
-  );
+  const visibleSet = new Set(visibleStatusIds.map((id) => id as string));
 
   return tasks.filter((task) => {
     // Completed today tasks are always shown
@@ -212,9 +203,7 @@ export function countHiddenTasks<T extends MinimalTask>(
       const taskDate = new Date(task.updatedAt).toISOString().slice(0, 10);
       if (taskDate === todayDateStr) return false;
     }
-    // Today status tasks are always shown
-    if (todayStatus && task.statusId === todayStatus._id) return false;
-    // Check if type is in visible statuses
-    return !todayVisibleStatuses?.includes(task.statusType);
+    // Check if status is in visible set
+    return !visibleSet.has(task.statusId as string);
   }).length;
 }

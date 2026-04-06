@@ -61,7 +61,7 @@ export const AnimateChangeInHeight: React.FC<AnimateChangeInHeightProps> = ({
       className={cn(className, "overflow-hidden")}
       style={{ height }}
       animate={{ height }}
-      transition={{ duration: 0.1, damping: 0.2, ease: "easeIn" }}
+      transition={{ duration: 0.1, ease: "easeIn" }}
     >
       <div ref={containerRef}>{children}</div>
     </motion.div>
@@ -156,6 +156,7 @@ function renderOptionItem(
     >
       <Checkbox
         checked={checked}
+        onCheckedChange={() => {}}
         className={cn(!checked && "opacity-0 group-data-[selected=true]:opacity-100")}
       />
       {filter.icon}
@@ -215,16 +216,18 @@ const FilterValueCombobox = ({
         }
       }}
     >
-      <PopoverTrigger
-        className="rounded-none px-2 py-1.5 bg-muted hover:bg-muted/70 transition
+      <PopoverTrigger asChild>
+        <button
+          className="rounded-none px-2 py-1.5 bg-muted hover:bg-muted/70 transition
   text-foreground/70 hover:text-foreground shrink-0"
-      >
-        <div className="flex gap-1.5 items-center">
-          {findOpt(filterValues[0])?.icon}
-          {filterValues?.length === 1
-            ? (findOpt(filterValues[0])?.name ?? filterValues[0])
-            : `${filterValues?.length} selected`}
-        </div>
+        >
+          <span className="flex gap-1.5 items-center">
+            {findOpt(filterValues[0])?.icon}
+            {filterValues?.length === 1
+              ? (findOpt(filterValues[0])?.name ?? filterValues[0])
+              : `${filterValues?.length} selected`}
+          </span>
+        </button>
       </PopoverTrigger>
       <PopoverContent className="p-0" style={{ width: popoverWidth }}>
         <AnimateChangeInHeight>
@@ -300,7 +303,8 @@ const DateRangeFilterValue = ({
         type="date"
         value={from}
         onChange={(e) => setFilterValues([e.target.value, to])}
-        className="bg-muted hover:bg-muted/70 px-2 py-1.5 text-foreground/70 hover:text-foreground transition shrink-0 outline-none text-xs w-[110px]"
+        aria-label="From date"
+        className="bg-muted hover:bg-muted/70 px-2 py-1.5 text-foreground/70 hover:text-foreground transition shrink-0 outline-none focus-visible:ring-2 focus-visible:ring-ring/50 text-xs w-[110px]"
         placeholder="From"
       />
       <span className="bg-muted px-1 py-1.5 text-muted-foreground text-xs shrink-0 flex items-center">&ndash;</span>
@@ -308,7 +312,8 @@ const DateRangeFilterValue = ({
         type="date"
         value={to}
         onChange={(e) => setFilterValues([from, e.target.value])}
-        className="bg-muted hover:bg-muted/70 px-2 py-1.5 text-foreground/70 hover:text-foreground transition shrink-0 outline-none text-xs w-[110px]"
+        aria-label="To date"
+        className="bg-muted hover:bg-muted/70 px-2 py-1.5 text-foreground/70 hover:text-foreground transition shrink-0 outline-none focus-visible:ring-2 focus-visible:ring-ring/50 text-xs w-[110px]"
         placeholder="To"
       />
     </div>

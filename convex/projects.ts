@@ -33,12 +33,21 @@ export const list = query({
     if (args.billingType) {
       projects = projects.filter((p) => p.billingType === args.billingType);
     }
-    const clientMap = new Map(clients.map((c) => [c._id.toString(), c.name]));
+    const clientMap = new Map(clients.map((c) => [c._id.toString(), {
+      name: c.name,
+      prefix: c.prefix,
+      usePrefix: c.usePrefix,
+    }]));
 
-    return projects.map((p) => ({
-      ...p,
-      clientName: clientMap.get(p.clientId.toString()) ?? "Unknown",
-    }));
+    return projects.map((p) => {
+      const client = clientMap.get(p.clientId.toString());
+      return {
+        ...p,
+        clientName: client?.name ?? "Unknown",
+        clientPrefix: client?.prefix ?? "",
+        clientUsePrefix: client?.usePrefix,
+      };
+    });
   },
 });
 

@@ -7,13 +7,13 @@ import { UserAvatar } from "@/components/user-avatar"
 import { AvatarGroup, AvatarGroupCount } from "@/components/ui/avatar"
 import { TASK_GRID_COLS } from "@/components/tasks/tasks-table"
 import { cn } from "@/lib/utils"
-import { formatRelativeTime, formatShortDate, firstName } from "@/lib/format"
+import { formatRelativeTime, formatShortDate, firstName, getClientDisplayName } from "@/lib/format"
 import type { Doc, Id } from "@/convex/_generated/dataModel"
 
 type StatusPick = Pick<Doc<"statuses">, "_id" | "name" | "color" | "type">
 type CategoryPick = Pick<Doc<"workCategories">, "_id" | "name" | "color">
 type ProjectPick = Pick<Doc<"projects">, "_id" | "name" | "code">
-type ClientPick = Pick<Doc<"clients">, "_id" | "name">
+type ClientPick = Pick<Doc<"clients">, "_id" | "name" | "prefix" | "usePrefix">
 type UserPick = Pick<Doc<"users">, "_id" | "name" | "email" | "imageUrl">
 
 export type InlineCreatedTask = {
@@ -103,10 +103,9 @@ export function InlineCreatedTaskRow({
 
       <div className="min-w-0 py-0.5 text-left">
         {task.project ? (
-          <div className="min-w-0">
-            <div className="truncate text-xs font-medium">{task.client?.name}</div>
-            <div className="truncate text-[11px] leading-tight text-muted-foreground/60">{task.project.name}</div>
-          </div>
+          <span className="truncate text-[13px] text-foreground">
+            {task.client ? `${getClientDisplayName(task.client)} › ${task.project.name}` : task.project.name}
+          </span>
         ) : null}
       </div>
 

@@ -51,7 +51,7 @@ type TaskDetailData = {
   status: Pick<Doc<"statuses">, "_id" | "name" | "color" | "type"> | null
   assignees: Array<Pick<Doc<"users">, "_id" | "name" | "email" | "imageUrl">>
   project: Pick<Doc<"projects">, "_id" | "name" | "code"> | null
-  client: Pick<Doc<"clients">, "_id" | "name"> | null
+  client: Pick<Doc<"clients">, "_id" | "name" | "prefix" | "usePrefix"> | null
   category: Pick<Doc<"workCategories">, "_id" | "name" | "color"> | null
   statusType: string
   dueDate?: string

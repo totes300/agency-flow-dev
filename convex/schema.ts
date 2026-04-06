@@ -15,7 +15,8 @@ export default defineSchema({
     timerAccumulatedMs: v.optional(v.number()),
     timerStatus: v.optional(v.union(v.literal("running"), v.literal("paused"))),
     taskDetailView: v.optional(v.union(v.literal("modal"), v.literal("drawer"))),
-    // My Tasks view: which status types to show beyond "Today" + "Submitted"
+    // My Tasks view: which individual statuses to show (status IDs)
+    // During migration: may contain old type-key strings — widen accepts both
     todayVisibleStatuses: v.optional(v.array(v.string())),
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -44,6 +45,8 @@ export default defineSchema({
     // Completion defaults by role
     completionDefaultAdminStatusId: v.optional(v.id("statuses")),
     completionDefaultMemberStatusId: v.optional(v.id("statuses")),
+    // My Tasks: default visible statuses for all members (admin-configurable)
+    defaultMyTasksStatusIds: v.optional(v.array(v.id("statuses"))),
     // Rate defaults
     defaultTmFlatRate: v.optional(v.number()),   // org-level default for T&M flat-rate projects
     // Branding (used in later phases, define fields now)
@@ -110,6 +113,7 @@ export default defineSchema({
     createdBy: v.id("users"),
   })
     .index("by_orgId", ["orgId"])
+    .index("by_orgId_manualSortKey", ["orgId", "manualSortKey"])
     .index("by_orgId_statusType", ["orgId", "statusType"])
     .index("by_orgId_statusId", ["orgId", "statusId"])
     .index("by_orgId_projectId", ["orgId", "projectId"])
@@ -124,7 +128,12 @@ export default defineSchema({
     orgId: v.string(),
     name: v.string(),
     currency: v.string(),
-    invoicePrefix: v.string(),
+    /** Client abbreviation shown in task lists when usePrefix=true (e.g. "KONV"). */
+    prefix: v.optional(v.string()),
+    /** When true, task lists show the prefix instead of the full client name. */
+    usePrefix: v.optional(v.boolean()),
+    /** @deprecated Use `prefix` instead. Kept temporarily for migration. */
+    invoicePrefix: v.optional(v.string()),
     // Billing (structured for PDF invoices)
     billingName: v.optional(v.string()),
     billingEmail: v.optional(v.string()),

@@ -17,6 +17,8 @@ type DatePickerProps = {
   placeholder?: string
   className?: string
   id?: string
+  disabled?: boolean
+  "aria-invalid"?: boolean
 }
 
 export function DatePicker({
@@ -25,6 +27,8 @@ export function DatePicker({
   placeholder = "Pick a date",
   className,
   id,
+  disabled,
+  "aria-invalid": ariaInvalid,
 }: DatePickerProps) {
   return (
     <Popover>
@@ -32,6 +36,8 @@ export function DatePicker({
         <Button
           id={id}
           variant="outline"
+          disabled={disabled}
+          aria-invalid={ariaInvalid}
           className={cn(
             "w-full justify-start text-left font-normal",
             !value && "text-muted-foreground",

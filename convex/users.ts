@@ -167,7 +167,7 @@ export const updateTaskDetailView = mutation({
 });
 
 export const updateMyTasksSettings = mutation({
-  args: { todayVisibleStatuses: v.array(v.string()) },
+  args: { todayVisibleStatuses: v.optional(v.array(v.string())) },
   handler: async (ctx, { todayVisibleStatuses }) => {
     const user = await getCurrentUserOrThrow(ctx);
     await ctx.db.patch(user._id, {

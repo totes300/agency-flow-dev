@@ -39,7 +39,7 @@ export function SortableTaskRow({
           aria-label="Drag to reorder"
           aria-roledescription="sortable"
         >
-          <GripVerticalIcon className="size-3.5 text-muted-foreground/80" />
+          <GripVerticalIcon className="size-3.5 text-muted-foreground/50" />
         </div>
       )}
       {children}

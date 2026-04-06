@@ -43,7 +43,7 @@ export const TASK_TABLE_MIN_W = "min-w-[1096px]"
 type TaskWithJoins = Doc<"tasks"> & {
   status: Pick<Doc<"statuses">, "_id" | "name" | "color" | "type" | "icon"> | null
   project: Pick<Doc<"projects">, "_id" | "name" | "code"> | null
-  client: Pick<Doc<"clients">, "_id" | "name"> | null
+  client: Pick<Doc<"clients">, "_id" | "name" | "prefix" | "usePrefix"> | null
   category: Pick<Doc<"workCategories">, "_id" | "name" | "color"> | null
   assignees: Array<Pick<Doc<"users">, "_id" | "name" | "email" | "imageUrl">>
 }

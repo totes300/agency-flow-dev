@@ -336,7 +336,7 @@
 ### Task 2.1 — Schema: `clients` + `clientContacts` tables ✅
 
 - [x] Add `clients` table to `convex/schema.ts`
-  - Fields: `orgId`, `name`, `currency`, `invoicePrefix`, `billingEmail` (opt), `billingAddress` (opt), `taxId` (opt), `logoStorageId` (opt), `notes` (opt), `archivedAt` (opt), `createdAt`, `updatedAt`, `createdBy`
+  - Fields: `orgId`, `name`, `currency`, `prefix` (opt), `usePrefix` (opt), `billingEmail` (opt), `billingAddress` (opt), `taxId` (opt), `logoStorageId` (opt), `notes` (opt), `archivedAt` (opt), `createdAt`, `updatedAt`, `createdBy`
   - Index: `by_orgId` on `[orgId]`, `by_orgId_name` on `[orgId, name]`
 - [x] Add `clientContacts` table to `convex/schema.ts`
   - Fields: `orgId`, `clientId`, `name`, `email`, `phone` (opt), `isPrimary`, `createdAt`, `updatedAt`, `createdBy`
@@ -360,7 +360,7 @@
 - [x] Create `convex/clients.ts` with:
   - `list` query — all clients for org; args: `includeArchived`
   - `get` query — single client by ID + orgId check; resolves `logoUrl` from storage
-  - `create` mutation — admin only; validate name non-empty + trimmed + **unique per org**; auto-generate invoicePrefix with dedup; currency defaults to org's defaultCurrency
+  - `create` mutation — admin only; validate name non-empty + trimmed + **unique per org**; auto-generate prefix with dedup; currency defaults to org's defaultCurrency
   - `update` mutation — admin only; all fields modifiable including `logoStorageId`; name uniqueness enforced on rename; name change does NOT auto-change prefix
   - `archive` mutation — admin only; sets `archivedAt = Date.now()`; (cascade to projects/tasks added in Phase 3/5)
   - `restore` mutation — admin only; unsets `archivedAt`; does NOT cascade

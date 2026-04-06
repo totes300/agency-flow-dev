@@ -213,7 +213,7 @@ export default function ClientDetailPage() {
               {client.archivedAt && <Badge variant="secondary" className="shrink-0 text-xs">Archived</Badge>}
             </div>
             <p className="text-xs text-muted-foreground">
-              {[client.currency, client.invoicePrefix].filter(Boolean).join(" · ")}
+              {[client.currency, client.prefix ?? client.invoicePrefix].filter(Boolean).join(" · ")}
             </p>
           </div>
         </div>

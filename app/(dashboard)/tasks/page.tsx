@@ -6,6 +6,7 @@ import { api } from "@/convex/_generated/api"
 import { useConvexAuth } from "convex/react"
 import { useOrganization } from "@clerk/nextjs"
 import { useSearchParams, useRouter, usePathname } from "next/navigation"
+import { useIsMobile } from "@/lib/hooks/use-is-mobile"
 import { useTaskFilters } from "@/lib/hooks/use-task-filters"
 import { buildDetailUrl, parseDetailParam } from "@/lib/task-detail"
 import { findNeighborKeys } from "@/lib/reorder"
@@ -79,18 +80,7 @@ export default function TasksPage() {
   // Queries
   const currentUser = useQuery(api.users.current, isAuthenticated ? {} : "skip")
   const rawViewPref = currentUser?.taskDetailView ?? "modal"
-
-  // Responsive: force modal on mobile (<768px)
-  const [isMobile, setIsMobile] = useState(false)
-  useEffect(() => {
-    const mq = window.matchMedia("(max-width: 767px)")
-    setIsMobile(mq.matches)
-    function handleChange(e: MediaQueryListEvent) {
-      setIsMobile(e.matches)
-    }
-    mq.addEventListener("change", handleChange)
-    return () => mq.removeEventListener("change", handleChange)
-  }, [])
+  const isMobile = useIsMobile()
   const viewPref = isMobile ? "modal" : rawViewPref
   const counts = useQuery(api.tasks.counts, isAuthenticated ? {} : "skip")
   const listResult = useQuery(api.tasks.list, isAuthenticated ? filters.listArgs : "skip")

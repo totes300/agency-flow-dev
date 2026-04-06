@@ -164,16 +164,22 @@ export default function MyTasksPage() {
 
   const updateTask = useMutation(api.tasks.update)
 
+  // Refs for stable callbacks — avoid defeating React.memo on child rows
+  const myTasksRef = useRef(myTasks)
+  myTasksRef.current = myTasks
+  const searchParamsRef = useRef(searchParams)
+  searchParamsRef.current = searchParams
+
   // Use first visible status for FAB creation
   const primaryStatusId = useMemo(() => {
     if (!myTasks?.visibleStatusIds?.length) return undefined
     return myTasks.visibleStatusIds[0] as Id<"statuses">
   }, [myTasks?.visibleStatusIds])
 
-  // Completion handler with undo support
+  // Completion handler with undo support (reads myTasks via ref for stable identity)
   const handleComplete = useCallback(async (taskId: string, statusId: Id<"statuses">, coords?: { x: number; y: number }) => {
-    // Capture previous status before mutation
-    const allTasks = myTasks?.groups.flatMap((g: MyTasksGroup<TaskWithJoins>) => g.tasks) ?? []
+    const currentMyTasks = myTasksRef.current
+    const allTasks = currentMyTasks?.groups.flatMap((g: MyTasksGroup<TaskWithJoins>) => g.tasks) ?? []
     const task = allTasks.find((t: TaskWithJoins) => t._id === taskId)
     const previousStatusId = task?.statusId as Id<"statuses"> | undefined
 
@@ -203,13 +209,13 @@ export default function MyTasksPage() {
     } catch (err) {
       toastError(err, "Failed to update task")
     }
-  }, [updateTask, statuses, triggerConfetti, myTasks])
+  }, [updateTask, statuses, triggerConfetti])
 
-  // Open task detail via URL param
+  // Open task detail via URL param (reads searchParams via ref for stable identity)
   const handleOpenDetail = useCallback((taskId: string) => {
-    const url = buildDetailUrl(searchParams, taskId as Id<"tasks">)
+    const url = buildDetailUrl(searchParamsRef.current, taskId as Id<"tasks">)
     router.push(`${pathname}${url}`, { scroll: false })
-  }, [searchParams, router, pathname])
+  }, [router, pathname])
 
   if (!isAuthenticated || currentUser === undefined || currentUser === null || myTasks === undefined) {
     return <MyTasksSkeleton />

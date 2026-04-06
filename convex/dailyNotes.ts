@@ -25,6 +25,11 @@ export const get = query({
       )
       .unique();
 
+    // Cross-tenant guard: ensure note belongs to this org
+    if (note && note.orgId !== auth.orgId) {
+      throw new ConvexError("Note not found");
+    }
+
     return note ?? null;
   },
 });
@@ -43,6 +48,22 @@ export const upsert = mutation({
     // Members can only write their own notes
     if (!auth.isAdmin && auth.userId !== userId) {
       throw new ConvexError("You can only edit your own daily notes");
+    }
+
+    // Cross-tenant guard: verify target user belongs to this org
+    const targetUser = await ctx.db.get(userId);
+    if (!targetUser) {
+      throw new ConvexError("User not found");
+    }
+    if (auth.userId !== userId) {
+      // Admin writing for another user — verify they're in the same org
+      const membership = await ctx.db
+        .query("orgMembers")
+        .withIndex("by_userId", (q) => q.eq("userId", userId))
+        .first();
+      if (!membership || membership.orgId !== auth.orgId) {
+        throw new ConvexError("User not found in this organization");
+      }
     }
 
     validateUpsertArgs(date, content);
@@ -99,6 +120,7 @@ export const list = query({
       .order("desc")
       .take(pageSize);
 
-    return notes;
+    // Cross-tenant guard: filter to current org only
+    return notes.filter((n) => n.orgId === auth.orgId);
   },
 });

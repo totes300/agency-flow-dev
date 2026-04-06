@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useRef, useCallback } from "react"
+import { useState, useRef, useCallback, useMemo } from "react"
 import { StatusIcon } from "@/components/status-icon"
 import { getStatusColor } from "@/lib/status-colors"
 import { useTaskReferenceData } from "@/components/tasks/task-reference-data"
@@ -77,8 +77,10 @@ export function CompletionCheckbox({
   const isLongPress = useRef(false)
   const lastCoords = useRef<{ x: number; y: number } | undefined>(undefined)
 
-  // All statuses grouped by type for the popover
-  const allStatuses = (statuses ?? []).sort((a, b) => a.sortOrder - b.sortOrder)
+  const allStatuses = useMemo(
+    () => (statuses ?? []).sort((a, b) => a.sortOrder - b.sortOrder),
+    [statuses],
+  )
 
   const clearTimer = useCallback(() => {
     if (longPressTimer.current) {

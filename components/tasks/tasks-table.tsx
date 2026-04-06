@@ -63,6 +63,14 @@ type TaskListItem =
   | { kind: "task"; key: string; task: TaskWithJoins }
   | { kind: "draft"; key: string; draft: InlineCreatedTask }
 
+const DRAG_SENSORS = [
+  PointerSensor.configure({
+    activationConstraints: [
+      new PointerActivationConstraints.Distance({ value: 5 }),
+    ],
+  }),
+]
+
 type ColumnDef = {
   label: string
   icon?: React.ComponentType<{ className?: string }>
@@ -166,13 +174,7 @@ export function TasksTable({
 
         {/* Groups + rows */}
         <DragDropProvider
-          sensors={[
-            PointerSensor.configure({
-              activationConstraints: [
-                new PointerActivationConstraints.Distance({ value: 5 }),
-              ],
-            }),
-          ]}
+          sensors={DRAG_SENSORS}
           onDragEnd={(event) => {
             if (!isDragEnabled || !onReorder || event.canceled) return
 

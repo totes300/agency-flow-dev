@@ -33,8 +33,6 @@ import type * as lib_timer from "../lib/timer.js";
 import type * as lib_url from "../lib/url.js";
 import type * as lib_validators from "../lib/validators.js";
 import type * as linkPreviews from "../linkPreviews.js";
-import type * as migrations_clearOldVisibleStatuses from "../migrations/clearOldVisibleStatuses.js";
-import type * as migrations_migrateClientPrefix from "../migrations/migrateClientPrefix.js";
 import type * as myTasks from "../myTasks.js";
 import type * as orgMembers from "../orgMembers.js";
 import type * as orgSettings from "../orgSettings.js";
@@ -83,8 +81,6 @@ declare const fullApi: ApiFromModules<{
   "lib/url": typeof lib_url;
   "lib/validators": typeof lib_validators;
   linkPreviews: typeof linkPreviews;
-  "migrations/clearOldVisibleStatuses": typeof migrations_clearOldVisibleStatuses;
-  "migrations/migrateClientPrefix": typeof migrations_migrateClientPrefix;
   myTasks: typeof myTasks;
   orgMembers: typeof orgMembers;
   orgSettings: typeof orgSettings;

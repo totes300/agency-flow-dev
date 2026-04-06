@@ -27,6 +27,7 @@ export const billingTypeValidator = v.union(
   v.literal("fixed"),
   v.literal("retainer"),
   v.literal("t_and_m"),
+  v.literal("non_billable"),
 );
 
 export const tmRateModeValidator = v.union(

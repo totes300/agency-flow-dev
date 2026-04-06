@@ -38,6 +38,7 @@ Phase 1 & 2 can run in parallel. Phase 5, 6, 7 partially parallelizable.
 - Use `<Show when={{ role: 'admin' }}>` or `<Show when={{ permission: 'org:billing:manage' }}>` for role/permission-based UI
 
 ### Multi-tenancy
+- **Every Convex query and mutation MUST filter by `orgId`.** Even if an index already narrows by `userId` or another field, always include an `orgId` filter (in the index or via `.filter()`) to prevent cross-tenant data leakage. No exceptions.
 - Clerk Organization = tenant — every data record scoped by `orgId`
 - Roles from Clerk JWT: `admin` | `member` (not custom fields)
 - `TeamSwitcher` component uses `useOrganizationList()` + `useOrganization()` from Clerk
@@ -87,6 +88,9 @@ Copy `.env.example` to `.env.local` and fill in values. Required:
 - `/reports` — Reports (protected, admin only)
 - `/my-time` — Personal time tracking (protected, everyone)
 - `/settings` — Org settings with tabs: General, Team, Statuses (protected, admin only)
+
+## Pre-deployment Checklist
+- **Remove Agentation toolbar** — `app/layout.tsx` includes `<Agentation endpoint="http://localhost:4747" />` wrapped in a `NODE_ENV === "development"` check. Remove the `<Agentation>` component and its `import { Agentation } from "agentation"` before deploying to production, as it is a dev-only design annotation tool.
 
 ## Conventions
 - **shadcn/ui: always check docs before building.** When adding or modifying any shadcn/ui component, run the `shadcn` skill first to review current API, props, and composition patterns. Do not rely on training data — shadcn/ui ships breaking changes frequently.

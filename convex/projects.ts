@@ -3,6 +3,7 @@ import { query, mutation } from "./_generated/server";
 import { getAuthContext, requireAdmin, validateStringLength } from "./lib/auth";
 import { billingTypeValidator, tmRateModeValidator, currencyValidator, retainerStatusValidator } from "./lib/validators";
 import { generateNextProjectCode, ensureUniqueProjectCode } from "./lib/helpers";
+import { validateAssignees } from "./lib/task_helpers";
 import { CURRENCIES } from "./lib/constants";
 
 const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
@@ -98,6 +99,8 @@ export const create = mutation({
     startDate: v.optional(v.string()),
     cycleLength: v.optional(v.number()),
     rolloverEnabled: v.optional(v.boolean()),
+    // Team members
+    teamMembers: v.optional(v.array(v.id("users"))),
   },
   handler: async (ctx, args) => {
     const { orgId, userId } = await requireAdmin(ctx);
@@ -113,6 +116,11 @@ export const create = mutation({
     // Validate currency
     if (!CURRENCIES.includes(args.currency as typeof CURRENCIES[number])) {
       throw new ConvexError("Invalid currency");
+    }
+
+    // Validate team members belong to org
+    if (args.teamMembers && args.teamMembers.length > 0) {
+      await validateAssignees(ctx, orgId, args.teamMembers);
     }
 
     // Fixed validation
@@ -154,7 +162,7 @@ export const create = mutation({
       if (testDate.getFullYear() !== y || testDate.getMonth() !== m - 1 || testDate.getDate() !== d) {
         throw new ConvexError("Invalid date");
       }
-      const cycleLen = args.cycleLength ?? 3;
+      const cycleLen = args.cycleLength ?? 1;
       if (cycleLen < 1 || cycleLen > 12 || !Number.isInteger(cycleLen)) {
         throw new ConvexError("Cycle length must be 1-12 months");
       }
@@ -209,9 +217,12 @@ export const create = mutation({
         includedMinutesPerMonth: args.includedMinutesPerMonth,
         overageRate: args.overageRate,
         startDate: args.startDate,
-        rolloverEnabled: args.rolloverEnabled ?? true,
-        cycleLength: args.cycleLength ?? 3,
+        // Force rollover off for 1-month cycles (nothing to roll over)
+        rolloverEnabled: (args.cycleLength ?? 1) >= 2 ? (args.rolloverEnabled ?? true) : false,
+        cycleLength: args.cycleLength ?? 1,
       } : {}),
+      // Team members
+      ...(args.teamMembers && args.teamMembers.length > 0 ? { teamMembers: args.teamMembers } : {}),
       createdAt: now,
       updatedAt: now,
       createdBy: userId,
@@ -259,6 +270,7 @@ export const update = mutation({
       workCategoryId: v.id("workCategories"),
       rate: v.number(),
     }))),
+    teamMembers: v.optional(v.array(v.id("users"))),
   },
   handler: async (ctx, args) => {
     const { orgId } = await requireAdmin(ctx);
@@ -286,7 +298,22 @@ export const update = mutation({
       updates.currency = args.currency;
     }
 
+    if (args.teamMembers !== undefined) {
+      if (args.teamMembers.length > 0) {
+        await validateAssignees(ctx, orgId, args.teamMembers);
+      }
+      updates.teamMembers = args.teamMembers;
+    }
+
     if (args.defaultAssignees !== undefined) {
+      // Validate: each userId must be in the project's teamMembers
+      const effectiveTeam = (updates.teamMembers ?? project.teamMembers) as string[] | undefined;
+      const teamSet = new Set((effectiveTeam ?? []).map((id) => String(id)));
+      for (const da of args.defaultAssignees) {
+        if (!teamSet.has(da.userId.toString())) {
+          throw new ConvexError("Default assignee must be a project team member");
+        }
+      }
       updates.defaultAssignees = args.defaultAssignees;
     }
 

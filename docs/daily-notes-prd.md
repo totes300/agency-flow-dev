@@ -178,7 +178,7 @@ TipTap editor wrapper:
 <  Today, Apr 4  >
 ```
 
-- Shows "Today" label when on current date, otherwise shows day name (e.g., "Wed, Apr 2")
+- Shows "Today" label when on current date, otherwise shows day name (e.g., "Thu, Apr 2")
 - Left/right arrows navigate one day at a time
 - Right arrow disabled when on today (can't navigate to future)
 - Keyboard: left/right arrow keys when navigator is focused

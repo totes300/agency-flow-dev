@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useCallback } from "react"
+import { useState, useCallback, useEffect } from "react"
 import { ChevronLeft, ChevronRight, ChevronsRight, Check, AlertCircle } from "lucide-react"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { DailyNotesEditor } from "./daily-notes-editor"
@@ -21,12 +21,6 @@ type DailyNotesPanelProps = {
   lastUpdatedAt?: number
 }
 
-function getInitialOpen(): boolean {
-  if (typeof window === "undefined") return true
-  const stored = localStorage.getItem("daily-notes-panel-open")
-  return stored !== "false"
-}
-
 export function DailyNotesPanel({
   today,
   content,
@@ -38,7 +32,13 @@ export function DailyNotesPanel({
   userImageUrl,
   lastUpdatedAt,
 }: DailyNotesPanelProps) {
-  const [isOpen, setIsOpen] = useState(getInitialOpen)
+  const [isOpen, setIsOpen] = useState(true)
+
+  // Sync with localStorage after hydration to avoid SSR mismatch
+  useEffect(() => {
+    const stored = localStorage.getItem("daily-notes-panel-open")
+    if (stored === "false") setIsOpen(false)
+  }, [])
   const [internalDate, setInternalDate] = useState(today)
 
   const date = selectedDate ?? internalDate

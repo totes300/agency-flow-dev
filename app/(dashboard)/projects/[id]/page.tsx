@@ -28,8 +28,8 @@ const RetainerOverview = dynamic(() => import("@/components/projects/retainer-ov
 const SettingsBudgetEstimates = dynamic(() => import("@/components/projects/settings-budget-estimates").then(m => ({ default: m.SettingsBudgetEstimates })))
 const SettingsRates = dynamic(() => import("@/components/projects/settings-rates").then(m => ({ default: m.SettingsRates })))
 const SettingsRetainer = dynamic(() => import("@/components/projects/settings-retainer").then(m => ({ default: m.SettingsRetainer })))
+const ProjectTeam = dynamic(() => import("@/components/projects/project-team").then(m => ({ default: m.ProjectTeam })))
 import { ProjectDetailSkeleton } from "@/components/projects/project-detail-skeleton"
-import { DefaultAssigneesPlaceholder } from "@/components/projects/default-assignees-placeholder"
 import { TaskDetailModal } from "@/components/tasks/task-detail-modal"
 import { TaskReferenceDataProvider } from "@/components/tasks/task-reference-data"
 import { toast } from "sonner"
@@ -250,6 +250,16 @@ export default function ProjectDetailPage() {
           {project.billingType === "retainer" && (
             <RetainerOverview projectId={projectId} />
           )}
+          {project.billingType === "non_billable" && (
+            <div className="rounded-lg border bg-muted/30 p-8">
+              <div className="flex flex-col items-center justify-center gap-2 text-center">
+                <p className="text-sm font-medium">Non-billable project</p>
+                <p className="text-xs text-muted-foreground">
+                  This project has no billing configuration. Time logged here is tracked for internal reporting only.
+                </p>
+              </div>
+            </div>
+          )}
         </TabsContent>
 
         <TabsContent value="invoices" className="mt-6">
@@ -267,15 +277,20 @@ export default function ProjectDetailPage() {
           <div className="flex flex-col gap-6">
             <SettingsGeneral projectId={projectId} project={project} />
             {project.billingType === "fixed" && (
-              <SettingsBudgetEstimates projectId={projectId} currency={project.currency} />
+              <SettingsBudgetEstimates projectId={projectId} currency={project.currency} teamMembers={project.teamMembers} defaultAssignees={project.defaultAssignees} />
             )}
             {project.billingType === "t_and_m" && (
-              <SettingsRates projectId={projectId} project={project} />
+              <SettingsRates projectId={projectId} project={project} teamMembers={project.teamMembers} defaultAssignees={project.defaultAssignees} />
             )}
             {project.billingType === "retainer" && (
               <SettingsRetainer projectId={projectId} project={project} />
             )}
-            <DefaultAssigneesPlaceholder />
+            <ProjectTeam
+              projectId={projectId}
+              teamMembers={project.teamMembers}
+              defaultAssignees={project.defaultAssignees}
+              isAdmin={isAdmin ?? false}
+            />
           </div>
         </TabsContent>
       </Tabs>

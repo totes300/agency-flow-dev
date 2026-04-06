@@ -119,13 +119,13 @@ export const listMyTasks = query({
     const enrichedTasks = myTasks.map(enrichTask);
 
     // 5. Group and sort
-    const groups = groupByStatus(enrichedTasks, activeStatuses, visibleStatusIds, todayDateStr);
+    const groups = groupByStatus(enrichedTasks, activeStatuses, visibleStatusIds, todayDateStr, timezone);
 
     for (const group of groups) {
       group.tasks = sortWithinGroup(group.tasks);
     }
 
-    const hiddenCount = countHiddenTasks(myTasks, visibleStatusIds, todayDateStr);
+    const hiddenCount = countHiddenTasks(myTasks, visibleStatusIds, todayDateStr, timezone);
 
     return { groups, hiddenCount, visibleStatusIds: visibleStatusIds.map(String) };
   },

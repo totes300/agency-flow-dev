@@ -12,7 +12,7 @@ export type RateSnapshot = {
 };
 
 export type RateContext = {
-  billingType: "fixed" | "retainer" | "t_and_m";
+  billingType: "fixed" | "retainer" | "t_and_m" | "non_billable";
   // T&M fields
   tmRateMode?: "flat" | "per_category";
   hourlyRate?: number;
@@ -40,6 +40,8 @@ export function resolveRate(ctx: RateContext): RateResult {
       return resolveFixedRate(ctx);
     case "retainer":
       return resolveRetainerRate(ctx);
+    case "non_billable":
+      return { ok: true, snapshot: {} };
   }
 }
 

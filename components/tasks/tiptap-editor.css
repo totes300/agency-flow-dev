@@ -6,7 +6,6 @@
 .tiptap-content {
   position: relative;
   overflow-wrap: break-word;
-  word-break: break-word;
   white-space: pre-wrap;
   white-space: break-spaces;
   -webkit-font-variant-ligatures: none;

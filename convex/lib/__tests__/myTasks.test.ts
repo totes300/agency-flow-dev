@@ -119,7 +119,7 @@ describe("groupByStatus", () => {
     const tasks = [
       makeTask({ statusId: STATUS_TODAY._id, statusType: "backlog" }),
     ];
-    const groups = groupByStatus(tasks, ALL_STATUSES, [STATUS_TODAY._id], TODAY_DATE);
+    const groups = groupByStatus(tasks, ALL_STATUSES, [STATUS_TODAY._id], TODAY_DATE, "UTC");
     const todayGroup = groups.find((g) => g.statusId === STATUS_TODAY._id);
     expect(todayGroup).toBeDefined();
     expect(todayGroup!.tasks).toHaveLength(1);
@@ -129,7 +129,7 @@ describe("groupByStatus", () => {
     const tasks = [
       makeTask({ statusId: STATUS_ADMIN_REVIEW._id, statusType: "review", updatedAt: TODAY_TS }),
     ];
-    const groups = groupByStatus(tasks, ALL_STATUSES, [], TODAY_DATE);
+    const groups = groupByStatus(tasks, ALL_STATUSES, [], TODAY_DATE, "UTC");
     const completed = groups.find((g) => g.key === "completed_today");
     expect(completed).toBeDefined();
     expect(completed!.tasks).toHaveLength(1);
@@ -140,7 +140,7 @@ describe("groupByStatus", () => {
       makeTask({ statusId: STATUS_ADMIN_REVIEW._id, statusType: "review", updatedAt: YESTERDAY_TS }),
     ];
     // When the review status is visible, it should appear
-    const groups = groupByStatus(tasks, ALL_STATUSES, [STATUS_ADMIN_REVIEW._id], TODAY_DATE);
+    const groups = groupByStatus(tasks, ALL_STATUSES, [STATUS_ADMIN_REVIEW._id], TODAY_DATE, "UTC");
     const reviewGroup = groups.find((g) => g.statusId === STATUS_ADMIN_REVIEW._id);
     expect(reviewGroup).toBeDefined();
     expect(reviewGroup!.tasks).toHaveLength(1);
@@ -150,7 +150,7 @@ describe("groupByStatus", () => {
     const tasks = [
       makeTask({ statusId: STATUS_ADMIN_REVIEW._id, statusType: "review", updatedAt: YESTERDAY_TS }),
     ];
-    const groups = groupByStatus(tasks, ALL_STATUSES, [STATUS_TODAY._id], TODAY_DATE);
+    const groups = groupByStatus(tasks, ALL_STATUSES, [STATUS_TODAY._id], TODAY_DATE, "UTC");
     // Only the empty Today group should exist
     const keys = groups.map((g) => g.key);
     expect(keys).not.toContain("completed_today");
@@ -162,7 +162,7 @@ describe("groupByStatus", () => {
       makeTask({ statusId: STATUS_DONE._id, statusType: "done", updatedAt: TODAY_TS }),
       makeTask({ statusId: STATUS_TODAY._id, statusType: "backlog" }),
     ];
-    const groups = groupByStatus(tasks, ALL_STATUSES, [STATUS_TODAY._id], TODAY_DATE);
+    const groups = groupByStatus(tasks, ALL_STATUSES, [STATUS_TODAY._id], TODAY_DATE, "UTC");
     const completed = groups.find((g) => g.key === "completed_today");
     expect(completed).toBeDefined();
     expect(completed!.tasks).toHaveLength(1);
@@ -178,6 +178,7 @@ describe("groupByStatus", () => {
       ALL_STATUSES,
       [STATUS_IN_PROGRESS._id, STATUS_STUCK._id],
       TODAY_DATE,
+      "UTC",
     );
     expect(groups.find((g) => g.statusId === STATUS_IN_PROGRESS._id)?.tasks).toHaveLength(1);
     expect(groups.find((g) => g.statusId === STATUS_STUCK._id)?.tasks).toHaveLength(1);
@@ -190,7 +191,7 @@ describe("groupByStatus", () => {
       makeTask({ statusId: STATUS_ADMIN_REVIEW._id, statusType: "review", updatedAt: TODAY_TS }),
       makeTask({ statusId: STATUS_INBOX._id, statusType: "backlog" }),
     ];
-    const groups = groupByStatus(tasks, ALL_STATUSES, [], TODAY_DATE);
+    const groups = groupByStatus(tasks, ALL_STATUSES, [], TODAY_DATE, "UTC");
     const keys = groups.map((g) => g.key);
     expect(keys).toContain("completed_today");
     expect(groups).toHaveLength(1);
@@ -208,6 +209,7 @@ describe("groupByStatus", () => {
       ALL_STATUSES,
       [STATUS_IN_PROGRESS._id],
       TODAY_DATE,
+      "UTC",
     );
     const keys = groups.map((g) => g.key);
     expect(keys).toContain("completed_today");
@@ -220,7 +222,7 @@ describe("groupByStatus", () => {
     const tasks = [
       makeTask({ statusId: STATUS_DONE._id, statusType: "done", updatedAt: TODAY_TS }),
     ];
-    const groups = groupByStatus(tasks, ALL_STATUSES, [STATUS_DONE._id], TODAY_DATE);
+    const groups = groupByStatus(tasks, ALL_STATUSES, [STATUS_DONE._id], TODAY_DATE, "UTC");
     const doneGroup = groups.find((g) => g.statusId === STATUS_DONE._id);
     const completedToday = groups.find((g) => g.key === "completed_today");
     expect(doneGroup).toBeDefined();
@@ -235,7 +237,7 @@ describe("groupByStatus", () => {
     const tasks = [
       makeTask({ statusId: STATUS_DONE._id, statusType: "done", updatedAt: YESTERDAY_TS }),
     ];
-    const groups = groupByStatus(tasks, ALL_STATUSES, [STATUS_DONE._id], TODAY_DATE);
+    const groups = groupByStatus(tasks, ALL_STATUSES, [STATUS_DONE._id], TODAY_DATE, "UTC");
     const doneGroup = groups.find((g) => g.statusId === STATUS_DONE._id);
     expect(doneGroup).toBeDefined();
     expect(doneGroup!.tasks).toHaveLength(1);
@@ -253,6 +255,7 @@ describe("groupByStatus", () => {
       ALL_STATUSES,
       [STATUS_TODAY._id, STATUS_IN_PROGRESS._id, STATUS_STUCK._id],
       TODAY_DATE,
+      "UTC",
     );
     const keys = groups.map((g) => g.key);
     expect(keys[keys.length - 1]).toBe("completed_today");
@@ -267,6 +270,7 @@ describe("groupByStatus", () => {
       ALL_STATUSES,
       [STATUS_TODAY._id, STATUS_IN_PROGRESS._id],
       TODAY_DATE,
+      "UTC",
     );
     // Both visible statuses should have groups, even if in_progress has 0 tasks
     expect(groups.find((g) => g.statusId === STATUS_IN_PROGRESS._id)).toBeDefined();
@@ -283,7 +287,7 @@ describe("countHiddenTasks", () => {
       makeTask({ statusId: STATUS_IN_PROGRESS._id, statusType: "in_progress" }),
       makeTask({ statusId: STATUS_STUCK._id, statusType: "blocked" }),
     ];
-    const hidden = countHiddenTasks(tasks, [STATUS_TODAY._id], TODAY_DATE);
+    const hidden = countHiddenTasks(tasks, [STATUS_TODAY._id], TODAY_DATE, "UTC");
     expect(hidden).toBe(2);
   });
 
@@ -291,7 +295,7 @@ describe("countHiddenTasks", () => {
     const tasks = [
       makeTask({ statusId: STATUS_DONE._id, statusType: "done", updatedAt: TODAY_TS }),
     ];
-    const hidden = countHiddenTasks(tasks, [], TODAY_DATE);
+    const hidden = countHiddenTasks(tasks, [], TODAY_DATE, "UTC");
     expect(hidden).toBe(0);
   });
 });

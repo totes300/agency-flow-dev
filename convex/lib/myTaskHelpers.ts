@@ -5,6 +5,7 @@
 
 import type { Id } from "../_generated/dataModel";
 import type { StatusType } from "./constants";
+import { getDateInTimezone } from "./timer";
 
 // ─── Types ──────────────────────────────────────────────────────────────────────
 
@@ -74,12 +75,14 @@ export function filterMyTasks<T extends MinimalTask>(
  * @param visibleStatusIds - resolved list of status IDs to show as groups
  * @param statuses - all active statuses (for label/sort lookup)
  * @param todayDateStr - YYYY-MM-DD string for "completed today" filtering
+ * @param timezone - org timezone for converting updatedAt to date string
  */
 export function groupByStatus<T extends MinimalTask>(
   tasks: T[],
   statuses: MinimalStatus[],
   visibleStatusIds: Id<"statuses">[],
   todayDateStr: string,
+  timezone: string,
 ): MyTasksGroup<T>[] {
   const statusMap = new Map(statuses.map((s) => [s._id as string, s]));
   const visibleSet = new Set(visibleStatusIds.map((id) => id as string));
@@ -116,7 +119,7 @@ export function groupByStatus<T extends MinimalTask>(
 
     // 2. Completed today: done/review tasks updated today ALWAYS appear here too
     if (task.statusType === "done" || task.statusType === "review") {
-      const taskDate = new Date(task.updatedAt).toISOString().slice(0, 10);
+      const taskDate = getDateInTimezone(task.updatedAt, timezone);
       if (taskDate === todayDateStr) {
         const group = getOrCreateGroup("completed_today", "Completed today", "done");
         group.tasks.push(task);
@@ -194,13 +197,14 @@ export function countHiddenTasks<T extends MinimalTask>(
   tasks: T[],
   visibleStatusIds: Id<"statuses">[],
   todayDateStr: string,
+  timezone: string,
 ): number {
   const visibleSet = new Set(visibleStatusIds.map((id) => id as string));
 
   return tasks.filter((task) => {
     // Completed today tasks are always shown
     if (task.statusType === "done" || task.statusType === "review") {
-      const taskDate = new Date(task.updatedAt).toISOString().slice(0, 10);
+      const taskDate = getDateInTimezone(task.updatedAt, timezone);
       if (taskDate === todayDateStr) return false;
     }
     // Check if status is in visible set

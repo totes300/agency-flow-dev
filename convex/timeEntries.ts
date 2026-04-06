@@ -64,6 +64,7 @@ export const listToday = query({
       .withIndex("by_userId_date", (q) =>
         q.eq("userId", userId).eq("date", todayStr),
       )
+      .filter((q) => q.eq(q.field("orgId"), orgId))
       .collect();
 
     // Enrich with task name
@@ -130,6 +131,7 @@ export const sumMyToday = query({
       .withIndex("by_userId_date", (q) =>
         q.eq("userId", userId).eq("date", todayStr),
       )
+      .filter((q) => q.eq(q.field("orgId"), orgId))
       .collect();
 
     return entries.reduce((sum, e) => sum + e.durationMinutes, 0);

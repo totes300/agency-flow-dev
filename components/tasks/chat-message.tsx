@@ -42,13 +42,16 @@ function formatShortTime(timestamp: number): string {
 /** Extract plain text from TipTap JSON content for preview (first ~60 chars). */
 function extractPreviewText(content: unknown, maxLen = 60): string {
   if (!content || typeof content !== "object") return ""
-  const parts: string[] = []
+  let text = ""
   function walk(node: TiptapNode) {
-    if (node.text) parts.push(node.text)
-    if (node.content) node.content.forEach(walk)
+    if (node.text) text += node.text
+    if (Array.isArray(node.content)) node.content.forEach(walk)
+    if (node.type === "paragraph" || node.type === "heading" || node.type === "listItem" || node.type === "blockquote" || node.type === "codeBlock" || node.type === "hardBreak") {
+      text += " "
+    }
   }
   walk(content as TiptapNode)
-  const full = parts.join(" ").replace(/\s+/g, " ").trim()
+  const full = text.replace(/\s+/g, " ").trim()
   if (full.length <= maxLen) return full
   const cut = full.lastIndexOf(" ", maxLen)
   return full.slice(0, cut > 0 ? cut : maxLen) + "..."

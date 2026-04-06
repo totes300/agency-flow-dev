@@ -174,8 +174,10 @@ export default defineSchema({
     clientId: v.id("clients"),
     name: v.string(),
     code: v.string(), // "PRJ-042", editable, unique per org
-    billingType: v.union(v.literal("fixed"), v.literal("retainer"), v.literal("t_and_m")),
+    billingType: v.union(v.literal("fixed"), v.literal("retainer"), v.literal("t_and_m"), v.literal("non_billable")),
     currency: v.string(),
+    // Team members (users assigned to this project)
+    teamMembers: v.optional(v.array(v.id("users"))),
     // Retainer fields (Phase 4)
     retainerStatus: v.optional(v.union(v.literal("active"), v.literal("inactive"))),
     includedMinutesPerMonth: v.optional(v.number()), // monthly budget in minutes

@@ -91,6 +91,7 @@ export function MiniCalendar({
       {/* Month nav */}
       <div className="flex items-center justify-between px-1 pb-1">
         <button
+          type="button"
           onClick={prevMonth}
           aria-label="Previous month"
           className="rounded p-0.5 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:rounded-sm"
@@ -99,6 +100,7 @@ export function MiniCalendar({
         </button>
         <span className="text-[13px] font-semibold">{monthLabel}</span>
         <button
+          type="button"
           onClick={nextMonth}
           aria-label="Next month"
           className={cn(
@@ -134,6 +136,7 @@ export function MiniCalendar({
 
             return (
               <button
+                type="button"
                 key={ci}
                 onClick={() => dateStr && onSelect(dateStr)}
                 disabled={!cell.current || !!isFutureDate}

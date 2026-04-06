@@ -33,7 +33,7 @@ import type { Doc } from "@/convex/_generated/dataModel"
 
 type SortBy = "name" | "client"
 type FilterClient = "all" | string
-type FilterType = "all" | "fixed" | "t_and_m" | "retainer"
+type FilterType = "all" | "fixed" | "t_and_m" | "retainer" | "non_billable"
 
 export default function ProjectsPage() {
   const [includeArchived, setIncludeArchived] = useState(false)
@@ -82,16 +82,17 @@ export default function ProjectsPage() {
   }, [projects, hiddenIds, deferredSearch, sortBy, filterClient, filterType])
 
   const stats = useMemo(() => {
-    if (!projects) return { active: 0, fixed: 0, t_and_m: 0, retainer: 0 }
-    let active = 0, fixed = 0, t_and_m = 0, retainer = 0
+    if (!projects) return { active: 0, fixed: 0, t_and_m: 0, retainer: 0, non_billable: 0 }
+    let active = 0, fixed = 0, t_and_m = 0, retainer = 0, non_billable = 0
     for (const p of projects) {
       if (hiddenIds.has(p._id) || p.archivedAt) continue
       active++
       if (p.billingType === "fixed") fixed++
       else if (p.billingType === "t_and_m") t_and_m++
       else if (p.billingType === "retainer") retainer++
+      else if (p.billingType === "non_billable") non_billable++
     }
-    return { active, fixed, t_and_m, retainer }
+    return { active, fixed, t_and_m, retainer, non_billable }
   }, [projects, hiddenIds])
 
   if (!projects) return <ProjectsListSkeleton />
@@ -199,9 +200,13 @@ export default function ProjectsPage() {
             <p className="text-xs text-muted-foreground">T&M</p>
             <p className="text-lg font-semibold">{stats.t_and_m}</p>
           </div>
-          <div className="pl-4">
+          <div className="px-4">
             <p className="text-xs text-muted-foreground">Retainer</p>
             <p className="text-lg font-semibold">{stats.retainer}</p>
+          </div>
+          <div className="pl-4">
+            <p className="text-xs text-muted-foreground">Non-Billable</p>
+            <p className="text-lg font-semibold">{stats.non_billable}</p>
           </div>
         </div>
 
@@ -235,6 +240,7 @@ export default function ProjectsPage() {
               <SelectItem value="fixed" className="py-2 pl-2.5">Fixed</SelectItem>
               <SelectItem value="t_and_m" className="py-2 pl-2.5">T&M</SelectItem>
               <SelectItem value="retainer" className="py-2 pl-2.5">Retainer</SelectItem>
+              <SelectItem value="non_billable" className="py-2 pl-2.5">Non-Billable</SelectItem>
             </SelectContent>
           </Select>
 

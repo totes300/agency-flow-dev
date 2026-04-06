@@ -208,3 +208,40 @@ export function createTaskEnricher(maps: {
     };
   };
 }
+
+// ─── Default assignee resolution ────────────────────────────────────────────────
+
+/**
+ * Resolve the default assignee for a task based on its project + category.
+ *
+ * Looks up the project's `defaultAssignees` mapping for the given category.
+ * Validates the resolved user is still a valid org member before returning.
+ *
+ * Returns the userId if found and valid, null otherwise.
+ * Pure lookup — no side effects, no mutations.
+ */
+export async function resolveDefaultAssignee(
+  ctx: QueryCtx | MutationCtx,
+  orgId: string,
+  projectId: Id<"projects"> | undefined,
+  categoryId: Id<"workCategories"> | undefined,
+): Promise<Id<"users"> | null> {
+  if (!projectId || !categoryId) return null;
+
+  const project = await ctx.db.get(projectId);
+  if (!project || project.orgId !== orgId || !project.defaultAssignees) return null;
+
+  const match = project.defaultAssignees.find(
+    (da) => da.workCategoryId === categoryId
+  );
+  if (!match) return null;
+
+  // Validate the user is still a valid org member (O(1) indexed lookup)
+  const membership = await ctx.db
+    .query("orgMembers")
+    .withIndex("by_userId", (q) => q.eq("userId", match.userId))
+    .first();
+  if (!membership || membership.orgId !== orgId) return null;
+
+  return match.userId;
+}

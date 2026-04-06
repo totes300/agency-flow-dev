@@ -22,6 +22,7 @@ export function CommentPill({ count, unreadCount, hasUnseen }: { count: number; 
 
 /** Inline 13px progress ring — sits next to the task title, same visual weight as FileTextIcon. */
 export function InlineSubtaskRing({ done, total, isUnseen }: { done: number; total: number; isUnseen: boolean }) {
+  if (total === 0) return null
   const circumference = 2 * Math.PI * 6
   const progress = done / total
   const offset = circumference * (1 - progress)

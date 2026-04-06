@@ -52,7 +52,7 @@ export function DailyNotesEditor({ content, onChange }: DailyNotesEditorProps) {
       <TiptapEditor
         content={parsedContent}
         onUpdate={handleUpdate}
-        placeholder="Write your note... use @name or /command"
+        placeholder="Write your daily notes..."
         variant="document"
         autoFocus={false}
       />

@@ -18,19 +18,15 @@ export const get = query({
       throw new ConvexError("You can only view your own daily notes");
     }
 
-    const note = await ctx.db
+    const notes = await ctx.db
       .query("dailyNotes")
       .withIndex("by_userId_date", (q) =>
         q.eq("userId", userId).eq("date", date)
       )
-      .unique();
+      .collect();
 
-    // Cross-tenant guard: ensure note belongs to this org
-    if (note && note.orgId !== auth.orgId) {
-      throw new ConvexError("Note not found");
-    }
-
-    return note ?? null;
+    // Cross-tenant guard: only return note from current org
+    return notes.find((n) => n.orgId === auth.orgId) ?? null;
   },
 });
 
@@ -60,20 +56,21 @@ export const upsert = mutation({
       const membership = await ctx.db
         .query("orgMembers")
         .withIndex("by_userId", (q) => q.eq("userId", userId))
-        .first();
-      if (!membership || membership.orgId !== auth.orgId) {
+        .collect();
+      if (!membership.some((m) => m.orgId === auth.orgId)) {
         throw new ConvexError("User not found in this organization");
       }
     }
 
     validateUpsertArgs(date, content);
 
-    const existing = await ctx.db
+    const candidates = await ctx.db
       .query("dailyNotes")
       .withIndex("by_userId_date", (q) =>
         q.eq("userId", userId).eq("date", date)
       )
-      .unique();
+      .collect();
+    const existing = candidates.find((n) => n.orgId === auth.orgId);
 
     const now = Date.now();
 
@@ -116,11 +113,12 @@ export const list = query({
 
     const notes = await ctx.db
       .query("dailyNotes")
-      .withIndex("by_userId_date", (q) => q.eq("userId", userId))
+      .withIndex("by_orgId_userId", (q) =>
+        q.eq("orgId", auth.orgId).eq("userId", userId)
+      )
       .order("desc")
       .take(pageSize);
 
-    // Cross-tenant guard: filter to current org only
-    return notes.filter((n) => n.orgId === auth.orgId);
+    return notes;
   },
 });

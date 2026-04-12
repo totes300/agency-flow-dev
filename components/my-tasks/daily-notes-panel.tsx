@@ -116,22 +116,22 @@ export function DailyNotesPanel({
           </div>
 
           {/* Author + last edited */}
-          {userName && (
+          {userName ? (
             <div className="mt-2 flex items-center gap-2">
               <Avatar className="h-5 w-5">
-                {userImageUrl && <AvatarImage src={userImageUrl} alt={userName} />}
+                {userImageUrl ? <AvatarImage src={userImageUrl} alt={userName} /> : null}
                 <AvatarFallback className="text-[9px] font-medium">{initials}</AvatarFallback>
               </Avatar>
               <span className="text-xs text-muted-foreground/80">
                 {userName}
-                {lastUpdatedAt && (
+                {lastUpdatedAt ? (
                   <span className="text-muted-foreground/50">
                     {" "}&middot; Last updated {formatLastUpdated(lastUpdatedAt, today)}
                   </span>
-                )}
+                ) : null}
               </span>
             </div>
-          )}
+          ) : null}
 
           {/* Divider */}
           <div className="mt-4 border-t border-border/25" />

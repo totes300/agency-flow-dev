@@ -29,17 +29,17 @@ export function SectionHeader({
 }) {
   const titleContent = (
     <div className="flex items-center gap-2.5">
-      {collapsible && (
+      {collapsible ? (
         open ? (
           <ChevronDownIcon className="size-4 text-muted-foreground" />
         ) : (
           <ChevronRightIcon className="size-4 text-muted-foreground" />
         )
-      )}
+      ) : null}
       <span className={SECTION_TITLE}>{title}</span>
-      {subtitle && (
+      {subtitle ? (
         <span className="hidden text-xs text-muted-foreground sm:inline">{subtitle}</span>
-      )}
+      ) : null}
     </div>
   )
 
@@ -55,9 +55,9 @@ export function SectionHeader({
         <CollapsibleTrigger className="flex items-center gap-2.5 text-left">
           {titleContent}
         </CollapsibleTrigger>
-        {trailing && (
+        {trailing ? (
           <div className="ml-auto shrink-0">{trailing}</div>
-        )}
+        ) : null}
       </div>
     )
   }

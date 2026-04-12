@@ -127,9 +127,9 @@ export function ActivityBatch({
         </span>
         <span className="text-[13px] font-medium text-foreground/60">
           {label}
-          {highlight && (
+          {highlight ? (
             <span className="font-semibold text-foreground/80"> {highlight}</span>
-          )}
+          ) : null}
         </span>
         <span className="text-[12px] text-muted-foreground/50">{batchTime}</span>
         <ChevronRight className="ml-auto size-3 shrink-0 text-muted-foreground/40 transition-transform duration-150 group-data-[state=open]:rotate-90" />
@@ -168,9 +168,9 @@ export function ActivityBatch({
                   <RowIcon className="size-3.5 shrink-0 text-muted-foreground/60" strokeWidth={1.5} />
                   <span className="flex-1">
                     {text}
-                    {rowHighlight && (
+                    {rowHighlight ? (
                       <span className="font-medium text-foreground/80"> {rowHighlight}</span>
-                    )}
+                    ) : null}
                   </span>
                   <Tooltip>
                     <TooltipTrigger asChild>

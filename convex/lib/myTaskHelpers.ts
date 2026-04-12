@@ -104,8 +104,6 @@ export function groupByStatus<T extends MinimalTask>(
   };
 
   for (const task of tasks) {
-    let placed = false;
-
     // 1. Status group: if the task's status is visible → its own group
     if (visibleSet.has(task.statusId as string)) {
       const status = statusMap.get(task.statusId as string);
@@ -114,24 +112,17 @@ export function groupByStatus<T extends MinimalTask>(
       const group = getOrCreateGroup(key, label, task.statusType, task.statusId);
       group.tasks.push(task);
       group.count++;
-      placed = true;
     }
 
     // 2. Completed today: done/review tasks updated today ALWAYS appear here too
+    // (Tasks not placed in either group are hidden — done/review from other days, or tasks without visible status)
     if (task.statusType === "done" || task.statusType === "review") {
       const taskDate = getDateInTimezone(task.updatedAt, timezone);
       if (taskDate === todayDateStr) {
         const group = getOrCreateGroup("completed_today", "Completed today", "done");
         group.tasks.push(task);
         group.count++;
-        placed = true;
       }
-    }
-
-    // Not placed anywhere = hidden
-    if (!placed) {
-      // done/review from other days without visible status → hidden
-      // other types without visible status → hidden
     }
   }
 

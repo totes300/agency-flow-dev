@@ -63,7 +63,7 @@ export function InlineCreatedTaskRow({
             <>
               <AlertCircleIcon className="size-3 text-red-500" />
               <span className="text-red-600">Failed to save</span>
-              {onRetry && (
+              {onRetry ? (
                 <>
                   <span>·</span>
                   <button
@@ -74,7 +74,7 @@ export function InlineCreatedTaskRow({
                     Retry
                   </button>
                 </>
-              )}
+              ) : null}
             </>
           ) : (
             <>
@@ -124,11 +124,11 @@ export function InlineCreatedTaskRow({
                 <UserAvatar name={assignee.name} imageUrl={assignee.imageUrl} size="sm" />
               </span>
             ))}
-            {task.assignees.length > 3 && (
+            {task.assignees.length > 3 ? (
               <AvatarGroupCount>
                 <span className="text-xs">+{task.assignees.length - 3}</span>
               </AvatarGroupCount>
-            )}
+            ) : null}
           </AvatarGroup>
         )}
       </div>
@@ -139,7 +139,7 @@ export function InlineCreatedTaskRow({
 
       <div className="text-right" />
       <div className="flex items-center justify-center">
-        {task.saveState === "error" && onDismiss && (
+        {task.saveState === "error" && onDismiss ? (
           <button
             type="button"
             onClick={() => onDismiss(task.localId)}
@@ -148,7 +148,7 @@ export function InlineCreatedTaskRow({
           >
             <XIcon className="size-3.5" />
           </button>
-        )}
+        ) : null}
       </div>
     </div>
   )

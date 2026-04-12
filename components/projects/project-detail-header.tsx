@@ -102,12 +102,12 @@ export function ProjectDetailHeader({
             <div className="flex items-center gap-3">
               <h1 className="text-xl font-semibold tracking-tight">{project.name}</h1>
               <BillingTypeBadge type={project.billingType} />
-              {project.billingType === "retainer" && project.retainerStatus && (
+              {project.billingType === "retainer" && project.retainerStatus ? (
                 <RetainerStatusBadge status={project.retainerStatus} />
-              )}
-              {project.archivedAt && (
+              ) : null}
+              {project.archivedAt ? (
                 <Badge variant="secondary" className="text-xs">Archived</Badge>
-              )}
+              ) : null}
             </div>
             <div className="mt-0.5 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
               <span className="font-mono text-xs">{project.code}</span>
@@ -115,14 +115,14 @@ export function ProjectDetailHeader({
               <span>{project.clientName}</span>
               <span>&middot;</span>
               <span>{project.currency}</span>
-              {project.billingType === "retainer" && project.includedMinutesPerMonth && (
+              {project.billingType === "retainer" && project.includedMinutesPerMonth ? (
                 <>
                   <span>&middot;</span>
                   <span className="tabular-nums">
                     {formatMinutes(project.includedMinutesPerMonth)} h/mo
                   </span>
                 </>
-              )}
+              ) : null}
             </div>
           </div>
 

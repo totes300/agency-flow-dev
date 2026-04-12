@@ -15,16 +15,18 @@ export function findNeighborKeys(
 ): { beforeKey: string | undefined; afterKey: string | undefined } {
   let beforeKey: string | undefined
   for (let i = targetIndex - 1; i >= 0; i--) {
-    if (items[i].manualSortKey) {
-      beforeKey = items[i].manualSortKey!
+    const key = items[i].manualSortKey
+    if (key) {
+      beforeKey = key
       break
     }
   }
 
   let afterKey: string | undefined
   for (let i = targetIndex + 1; i < items.length; i++) {
-    if (items[i].manualSortKey) {
-      afterKey = items[i].manualSortKey!
+    const key = items[i].manualSortKey
+    if (key) {
+      afterKey = key
       break
     }
   }

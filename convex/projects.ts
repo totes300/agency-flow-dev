@@ -19,11 +19,11 @@ export const list = query({
   handler: async (ctx, args) => {
     const { orgId } = await getAuthContext(ctx);
 
-    const [projects_raw, clients] = await Promise.all([
+    const [allProjects, clients] = await Promise.all([
       ctx.db.query("projects").withIndex("by_orgId", (q) => q.eq("orgId", orgId)).collect(),
       ctx.db.query("clients").withIndex("by_orgId", (q) => q.eq("orgId", orgId)).collect(),
     ]);
-    let projects = projects_raw;
+    let projects = allProjects;
 
     if (!args.includeArchived) {
       projects = projects.filter((p) => !p.archivedAt);

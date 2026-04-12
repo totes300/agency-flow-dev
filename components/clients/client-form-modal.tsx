@@ -45,7 +45,7 @@ export function ClientFormModal({ open, onOpenChange, client, defaultCurrency = 
   const generateUploadUrl = useMutation(api.clients.generateUploadUrl)
   const removeClientLogo = useMutation(api.clients.removeClientLogo)
 
-  const isEdit = !!client
+  const isEdit = Boolean(client)
 
   // General
   const [name, setName] = useState("")

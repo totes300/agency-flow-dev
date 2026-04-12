@@ -37,11 +37,11 @@ export function InlineTimeCell({
   if (isDone) {
     return (
       <div className={cn("flex items-center gap-[5px] opacity-35", variant === "sidebar" && "gap-1.5 opacity-60", variant === "header" && "gap-1 opacity-60", align === "end" && "justify-end")}>
-        {totalMinutes > 0 && (
+        {totalMinutes > 0 ? (
           <span className={cn("text-xs text-muted-foreground", variant === "sidebar" && "text-[13px] font-semibold tabular-nums text-foreground/70", variant === "header" && "text-xs tabular-nums text-muted-foreground")}>
             {minutesToDisplay(totalMinutes)}
           </span>
-        )}
+        ) : null}
       </div>
     )
   }
@@ -112,7 +112,7 @@ const TimerCircle = React.forwardRef<
           strokeWidth={sw}
         />
         {/* Bright red arc — same circle, same radius, rotates via group */}
-        {running && (
+        {running ? (
           <g className="origin-center animate-[timer-spin_2.8s_linear_infinite]" style={{ transformOrigin: `${size / 2}px ${size / 2}px` }}>
             <circle
               cx={size / 2}
@@ -125,7 +125,7 @@ const TimerCircle = React.forwardRef<
               strokeDasharray={`${arcLen} ${gapLen}`}
             />
           </g>
-        )}
+        ) : null}
       </svg>
       {/* Icon content */}
       <span className="relative z-[1] flex items-center justify-center">

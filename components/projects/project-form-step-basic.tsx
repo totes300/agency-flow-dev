@@ -98,8 +98,8 @@ export function ProjectFormStepBasic({
   const [teamPickerOpen, setTeamPickerOpen] = useState(false)
 
   const isNewClient = clientId === NEW_CLIENT_VALUE
-  const hasValidClient = isNewClient ? !!newClientName.trim() : !!clientId
-  const canProceed = hasValidClient && !!name.trim() && !submitting
+  const hasValidClient = isNewClient ? Boolean(newClientName.trim()) : Boolean(clientId)
+  const canProceed = hasValidClient && Boolean(name.trim()) && !submitting
 
   function handleToggleMember(userId: Id<"users">) {
     if (teamMembers.includes(userId)) {

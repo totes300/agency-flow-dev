@@ -47,9 +47,9 @@ export function TaskDetailTitle({
 
   return (
     <div className="shrink-0 pb-2">
-      {projectCode && (
+      {projectCode ? (
         <span className="mb-1.5 block text-[13px] font-medium text-muted-foreground/60">{projectCode}</span>
-      )}
+      ) : null}
       {editing ? (
         <textarea
           ref={inputRef}

@@ -294,14 +294,14 @@ export default function ClientDetailPage() {
           </section>
 
           {/* Notes */}
-          {client.notes && (
+          {client.notes ? (
             <section className="space-y-2.5">
               <h2 className="text-sm font-semibold">Notes</h2>
               <p className="whitespace-pre-line text-sm leading-relaxed text-muted-foreground">
                 {client.notes}
               </p>
             </section>
-          )}
+          ) : null}
 
           {/* Documents */}
           <section className="space-y-3">

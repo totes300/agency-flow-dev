@@ -71,7 +71,7 @@ export function ClientsTable({
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <span className="truncate font-medium">{client.name}</span>
-                {client.archivedAt && <ArchivedBadge />}
+                {client.archivedAt ? <ArchivedBadge /> : null}
               </div>
               <p className="text-xs text-muted-foreground">{client.prefix ?? client.invoicePrefix}</p>
             </div>
@@ -93,11 +93,11 @@ export function ClientsTable({
           {client.billingName ? (
             <div className="min-w-0">
               <p className="truncate text-sm">{client.billingName}</p>
-              {(client.billingCity || client.billingCountry) && (
+              {(client.billingCity || client.billingCountry) ? (
                 <p className="truncate text-xs text-muted-foreground">
                   {[client.billingCity, client.billingCountry].filter(Boolean).join(", ")}
                 </p>
-              )}
+              ) : null}
             </div>
           ) : (
             <span className="text-sm text-muted-foreground">&mdash;</span>

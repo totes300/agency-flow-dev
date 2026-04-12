@@ -267,7 +267,7 @@ export const ChatMessage = memo(function ChatMessage({
   const canEdit = isOwn && onEdit
   const canDelete = (isOwn || isAdmin) && onDelete
   const isTopLevel = !item.parentCommentId
-  const isResolved = !!item.resolvedAt
+  const isResolved = Boolean(item.resolvedAt)
   const isCollapsed = isResolved && !resolvedExpanded
 
   const handleStartEdit = useCallback(() => {

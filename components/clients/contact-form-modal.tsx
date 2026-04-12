@@ -35,7 +35,7 @@ export function ContactFormModal({
   const createContact = useMutation(api.clientContacts.create)
   const updateContact = useMutation(api.clientContacts.update)
 
-  const isEdit = !!contact
+  const isEdit = Boolean(contact)
 
   const [name, setName] = useState("")
   const [email, setEmail] = useState("")

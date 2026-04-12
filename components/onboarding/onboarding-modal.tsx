@@ -57,9 +57,6 @@ export function OnboardingModal() {
     }))
   )
 
-  function handleCurrencyChange(newCurrency: Currency) {
-    setCurrency(newCurrency)
-  }
 
   async function handleSubmit() {
     setIsSubmitting(true)
@@ -140,7 +137,7 @@ export function OnboardingModal() {
               currency={currency}
               rounding={rounding}
               onTimezoneChange={setTimezone}
-              onCurrencyChange={handleCurrencyChange}
+              onCurrencyChange={setCurrency}
               onRoundingChange={setRounding}
             />
           )}

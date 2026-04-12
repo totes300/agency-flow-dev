@@ -36,7 +36,7 @@ export function InlineSubtaskRing({ done, total, isUnseen }: { done: number; tot
         stroke={isComplete && isUnseen ? "none" : "var(--border)"}
         strokeWidth={1.75}
       />
-      {progress > 0 && (
+      {progress > 0 ? (
         <circle
           cx={8} cy={8} r={6}
           fill="none"
@@ -48,7 +48,7 @@ export function InlineSubtaskRing({ done, total, isUnseen }: { done: number; tot
           transform="rotate(-90 8 8)"
           style={isComplete && isUnseen ? { opacity: 1 } : isUnseen ? { opacity: 0.7 } : { opacity: 0.45 }}
         />
-      )}
+      ) : null}
     </svg>
   )
 }

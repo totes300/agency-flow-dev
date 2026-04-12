@@ -77,9 +77,9 @@ export const MyTaskRow = memo(function MyTaskRow({
 
         {/* Title — fills remaining space */}
         <div className="col-start-2 row-start-1 flex min-w-0 items-center gap-1.5">
-          {hasUnseen && !isCompleted && (
+          {hasUnseen && !isCompleted ? (
             <span className="size-1.5 shrink-0 rounded-full bg-primary" />
-          )}
+          ) : null}
           <span className={cn("truncate text-sm font-medium", isCompleted && "line-through text-muted-foreground/60")}>
             {task.title}
           </span>
@@ -117,16 +117,16 @@ export const MyTaskRow = memo(function MyTaskRow({
         </div>
 
         {/* Metadata row — starts under the title column and doesn't affect divider placement */}
-        {hasMetadata && (
+        {hasMetadata ? (
           <div className="col-start-2 col-end-4 flex min-w-0 items-center gap-2 text-[11px] text-muted-foreground">
-            {task.project && (
+            {task.project ? (
               <span className="truncate">
                 {task.client ? `${getClientDisplayName(task.client)} · ` : ""}
                 {task.project.name}
               </span>
-            )}
+            ) : null}
 
-            {task.category && (
+            {task.category ? (
               <span className="flex shrink-0 items-center gap-1">
                 <span
                   className="size-1.5 shrink-0 rounded-full"
@@ -134,9 +134,9 @@ export const MyTaskRow = memo(function MyTaskRow({
                 />
                 {task.category.name}
               </span>
-            )}
+            ) : null}
 
-            {task.dueDate && (
+            {task.dueDate ? (
               <span
                 className={cn(
                   "flex shrink-0 items-center gap-1",
@@ -150,9 +150,9 @@ export const MyTaskRow = memo(function MyTaskRow({
                 )}
                 {formatDueDate(task.dueDate)}
               </span>
-            )}
+            ) : null}
           </div>
-        )}
+        ) : null}
       </div>
     </div>
   )

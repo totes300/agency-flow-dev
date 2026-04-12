@@ -124,9 +124,9 @@ export const TaskRow = memo(function TaskRow({
         onClick={() => onOpenDetail?.(task._id)}
       >
         <div className="flex items-center gap-1.5">
-          {hasUnseen && (
+          {hasUnseen ? (
             <span className="size-1.5 shrink-0 rounded-full bg-primary" />
-          )}
+          ) : null}
           <TaskPreviewPopover
             taskId={task._id as Id<"tasks">}
             description={task.description}
@@ -139,7 +139,7 @@ export const TaskRow = memo(function TaskRow({
               {task.title}
             </span>
           </TaskPreviewPopover>
-          {hasDescription && (
+          {hasDescription ? (
             <TaskPreviewPopover
               taskId={task._id as Id<"tasks">}
               description={task.description}
@@ -155,8 +155,8 @@ export const TaskRow = memo(function TaskRow({
                 />
               </span>
             </TaskPreviewPopover>
-          )}
-          {activity && activity.subtaskTotal > 0 && (
+          ) : null}
+          {activity && activity.subtaskTotal > 0 ? (
             <SubtaskHoverPopover
               taskId={task._id as Id<"tasks">}
               done={activity.subtaskDone}
@@ -171,7 +171,7 @@ export const TaskRow = memo(function TaskRow({
                 />
               </span>
             </SubtaskHoverPopover>
-          )}
+          ) : null}
         </div>
         <div className="truncate text-[11px] text-muted-foreground/85">
           {subtitle}
@@ -244,7 +244,7 @@ export const TaskRow = memo(function TaskRow({
                 <ArchiveRestoreIcon className="size-4" />
                 Restore
               </DropdownMenuItem>
-              {isAdmin && (
+              {isAdmin ? (
                 <>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem
@@ -255,7 +255,7 @@ export const TaskRow = memo(function TaskRow({
                     Delete permanently
                   </DropdownMenuItem>
                 </>
-              )}
+              ) : null}
             </>
           ) : (
             <>
@@ -271,7 +271,7 @@ export const TaskRow = memo(function TaskRow({
                 <ArchiveIcon className="size-4" />
                 Archive
               </DropdownMenuItem>
-              {isAdmin && (
+              {isAdmin ? (
                 <>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem
@@ -282,7 +282,7 @@ export const TaskRow = memo(function TaskRow({
                     Delete
                   </DropdownMenuItem>
                 </>
-              )}
+              ) : null}
             </>
           )}
         </RowActionMenu>

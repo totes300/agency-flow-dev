@@ -19,7 +19,7 @@ export function RateBadge({
       </span>
       <span className="text-muted-foreground">{suffix}</span>
       <span className="text-muted-foreground/60">{currency}</span>
-      {onRemove && (
+      {onRemove ? (
         <button
           onClick={onRemove}
           className="ml-0.5 text-transparent transition-colors group-hover/badge:text-muted-foreground/40 hover:!text-destructive"
@@ -27,7 +27,7 @@ export function RateBadge({
         >
           <Trash2Icon className="size-3" />
         </button>
-      )}
+      ) : null}
     </span>
   )
 }

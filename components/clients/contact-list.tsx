@@ -58,11 +58,11 @@ export function ContactList({ clientId, contacts }: ContactListProps) {
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-medium">{contact.name}</span>
-                  {contact.isPrimary && (
+                  {contact.isPrimary ? (
                     <Badge variant="secondary" className="text-[10px] leading-tight">
                       Primary
                     </Badge>
-                  )}
+                  ) : null}
                 </div>
                 <p className="mt-0.5 truncate text-sm text-muted-foreground">
                   {[contact.email, contact.phone].filter(Boolean).join(" · ")}

@@ -51,17 +51,14 @@ export function ViewSettingsDropdown({
       .catch((err: unknown) => toastError(err, "Failed to reset"))
   }
 
-  // Show blue dot when user has customized settings
-  const showDot = isCustomized
-
   return (
     <Popover>
       <PopoverTrigger asChild>
         <Button variant="ghost" size="icon" className="relative size-8">
           <SettingsIcon className="size-4" />
-          {showDot && (
+          {isCustomized ? (
             <span className="absolute top-1 right-1 size-1.5 rounded-full bg-primary" />
-          )}
+          ) : null}
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-56 p-3">
@@ -88,7 +85,7 @@ export function ViewSettingsDropdown({
           ))}
         </div>
 
-        {isCustomized && (
+        {isCustomized ? (
           <button
             type="button"
             className="mt-3 w-full text-xs text-muted-foreground hover:text-foreground transition-colors"
@@ -96,7 +93,7 @@ export function ViewSettingsDropdown({
           >
             Reset to default
           </button>
-        )}
+        ) : null}
 
         <p className="mt-3 text-[11px] text-muted-foreground/60 leading-tight">
           Completed today is always shown.

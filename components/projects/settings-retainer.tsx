@@ -147,7 +147,7 @@ export function SettingsRetainer({
     }
   }
 
-  async function handleStatusToggle() {
+  function handleStatusToggle() {
     const newStatus = isActive ? "inactive" : "active"
     setPendingStatus(newStatus)
     setConfirmStatusOpen(true)

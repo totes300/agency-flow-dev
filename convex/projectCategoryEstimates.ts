@@ -63,17 +63,17 @@ export const upsert = mutation({
         updatedAt: now,
       });
       return existing._id;
-    } else {
-      return await ctx.db.insert("projectCategoryEstimates", {
-        orgId,
-        projectId: args.projectId,
-        workCategoryId: args.workCategoryId,
-        estimatedMinutes: args.estimatedMinutes,
-        createdAt: now,
-        updatedAt: now,
-        createdBy: userId,
-      });
     }
+
+    return await ctx.db.insert("projectCategoryEstimates", {
+      orgId,
+      projectId: args.projectId,
+      workCategoryId: args.workCategoryId,
+      estimatedMinutes: args.estimatedMinutes,
+      createdAt: now,
+      updatedAt: now,
+      createdBy: userId,
+    });
   },
 });
 

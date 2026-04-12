@@ -14,7 +14,7 @@ import {
 import { CURRENCIES } from "@/convex/lib/constants"
 import type { Id } from "@/convex/_generated/dataModel"
 import { formatDateToYMD } from "@/lib/format"
-import { extractErrorMessage } from "@/lib/toast-helpers"
+import { extractErrorMessage, toastError } from "@/lib/toast-helpers"
 import { ProjectFormStepBasic, NEW_CLIENT_VALUE, type BillingType } from "./project-form-step-basic"
 import { ProjectFormStepBilling } from "./project-form-step-billing"
 
@@ -164,7 +164,11 @@ export function ProjectFormModal({ open, onOpenChange }: ProjectFormModalProps) 
       } catch (projectErr) {
         // Rollback: delete orphan client if we just created it
         if (createdNewClient) {
-          void removeClient({ id: resolvedClientId }).catch(() => {})
+          try {
+            await removeClient({ id: resolvedClientId })
+          } catch (rollbackErr) {
+            toastError(rollbackErr, "Failed to clean up client")
+          }
         }
         throw projectErr
       }

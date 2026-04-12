@@ -250,6 +250,10 @@ export default function TasksPage() {
       taskId: taskId as Id<"tasks">,
       beforeKey,
       afterKey,
+    }).catch((err) => {
+      setOptimisticOrder(null)
+      pendingReorderRef.current = null
+      toastError(err, "Failed to reorder task")
     })
   }, [desktopGroups, reorderTask])
 

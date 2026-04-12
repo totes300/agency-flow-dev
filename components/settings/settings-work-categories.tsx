@@ -376,6 +376,7 @@ function CategoryEditForm({
   const [newRate, setNewRate] = useState("")
 
   const usedCurrencies = new Set(rates.map((r) => r.currency))
+  const allCurrenciesUsed = usedCurrencies.size >= CURRENCIES.length
   const hasNameChanged = name.trim() !== initialName || color !== initialColor
 
   async function handleSaveName() {
@@ -394,6 +395,7 @@ function CategoryEditForm({
   async function handleAddRate() {
     const parsed = parseFloat(newRate)
     if (!newRate || isNaN(parsed) || parsed < 0) return
+    if (usedCurrencies.has(newCurrency)) return
     try {
       await onAddRate(newCurrency, parsed)
       toast.success(`${newCurrency} rate saved`)
@@ -482,7 +484,7 @@ function CategoryEditForm({
               Cancel
             </Button>
           </div>
-        ) : (
+        ) : !allCurrenciesUsed ? (
           <Button
             size="sm" variant="outline" className="h-8 text-xs"
             onClick={() => {
@@ -495,7 +497,7 @@ function CategoryEditForm({
             <PlusIcon className="mr-1 size-3" />
             Add currency rate
           </Button>
-        )}
+        ) : null}
       </div>
 
       {error && <p className="text-sm text-destructive">{error}</p>}

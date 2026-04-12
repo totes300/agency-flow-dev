@@ -1,93 +1,68 @@
 /**
  * Pure rate snapshot resolver.
  *
- * Determines which rate(s) to apply on a time entry based on the project's
- * billing type and the task's work category.
+ * Determines the costRate and billableRate for a time entry based on
+ * user cost rates, category billable rates, and billability.
  */
 
 export type RateSnapshot = {
-  appliedRate?: number;
-  appliedCostRate?: number;
-  appliedBillRate?: number;
+  costRate: number;
+  billableRate: number;
+  rateCurrency: string;
 };
 
 export type RateContext = {
-  billingType: "fixed" | "retainer" | "t_and_m" | "non_billable";
-  // T&M fields
-  tmRateMode?: "flat" | "per_category";
-  hourlyRate?: number;
-  tmCategoryRates?: Array<{ workCategoryId: string; rate: number }>;
-  // Fixed fields
-  categoryEstimate?: {
-    internalCostRate?: number;
-    clientBillingRate?: number;
-  };
-  // Retainer fields
-  overageRate?: number;
-  // Task fields
-  workCategoryId?: string;
+  isBillable: boolean;
+  isNonBillableProject: boolean;
+  userCostRate: number | null;
+  resolvedBillableRate: number | null;
+  billableRateError: string | null; // project-type-specific error when rate is missing
+  currency: string;
 };
 
 export type RateResult =
   | { ok: true; snapshot: RateSnapshot }
   | { ok: false; error: string };
 
+/**
+ * Pure rate resolver.
+ *
+ * Requires: userCostRate always.
+ * For billable entries on billable projects: also requires categoryBillableRate.
+ * Non-billable entries or non-billable projects: billableRate = 0.
+ */
 export function resolveRate(ctx: RateContext): RateResult {
-  switch (ctx.billingType) {
-    case "t_and_m":
-      return resolveTmRate(ctx);
-    case "fixed":
-      return resolveFixedRate(ctx);
-    case "retainer":
-      return resolveRetainerRate(ctx);
-    case "non_billable":
-      return { ok: true, snapshot: {} };
-  }
-}
-
-function resolveTmRate(ctx: RateContext): RateResult {
-  if (ctx.tmRateMode === "per_category") {
-    if (!ctx.workCategoryId) {
-      return { ok: false, error: "Set a category on this task first" };
-    }
-    const match = ctx.tmCategoryRates?.find(
-      (r) => r.workCategoryId === ctx.workCategoryId,
-    );
-    if (!match) {
-      return {
-        ok: false,
-        error: "Set a rate for this category on the project first",
-      };
-    }
-    return { ok: true, snapshot: { appliedRate: match.rate } };
+  if (ctx.userCostRate === null) {
+    return {
+      ok: false,
+      error: `Set a cost rate for this user in ${ctx.currency}`,
+    };
   }
 
-  // Flat rate
-  if (ctx.hourlyRate == null) {
-    return { ok: false, error: "Set an hourly rate on the project first" };
+  if (!ctx.isBillable || ctx.isNonBillableProject) {
+    return {
+      ok: true,
+      snapshot: {
+        costRate: ctx.userCostRate,
+        billableRate: 0,
+        rateCurrency: ctx.currency,
+      },
+    };
   }
-  return { ok: true, snapshot: { appliedRate: ctx.hourlyRate } };
-}
 
-function resolveFixedRate(ctx: RateContext): RateResult {
-  // Fixed projects use cost/bill rates from category estimates
-  // If no estimate exists, rates are null (OK — Fixed never generates invoices from rates)
+  if (ctx.resolvedBillableRate === null) {
+    return {
+      ok: false,
+      error: ctx.billableRateError ?? `Set a billable rate in ${ctx.currency}`,
+    };
+  }
+
   return {
     ok: true,
     snapshot: {
-      appliedCostRate: ctx.categoryEstimate?.internalCostRate,
-      appliedBillRate: ctx.categoryEstimate?.clientBillingRate,
-    },
-  };
-}
-
-function resolveRetainerRate(ctx: RateContext): RateResult {
-  // Retainer uses overage rate as both cost and bill rate
-  return {
-    ok: true,
-    snapshot: {
-      appliedCostRate: ctx.overageRate,
-      appliedBillRate: ctx.overageRate,
+      costRate: ctx.userCostRate,
+      billableRate: ctx.resolvedBillableRate,
+      rateCurrency: ctx.currency,
     },
   };
 }

@@ -1,7 +1,5 @@
 "use client"
 
-import { useQuery } from "convex/react"
-import { api } from "@/convex/_generated/api"
 import { Button } from "@/components/ui/button"
 import { Field, FieldGroup, FieldLabel, FieldDescription } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
@@ -20,12 +18,8 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog"
-import { AlertTriangleIcon, ArrowLeftIcon, InfoIcon, PlusIcon, XIcon } from "lucide-react"
-import { cn } from "@/lib/utils"
+import { ArrowLeftIcon, InfoIcon } from "lucide-react"
 import type { BillingType } from "./project-form-step-basic"
-
-export type TmRateMode = "flat" | "per_category"
-export type CategoryRate = { workCategoryId: string; rate: string }
 
 type StepBillingProps = {
   billingType: Exclude<BillingType, "non_billable">
@@ -33,16 +27,11 @@ type StepBillingProps = {
   // Fixed
   fixedPrice: string
   setFixedPrice: (v: string) => void
-  // T&M
-  tmRateMode: TmRateMode
-  setTmRateMode: (v: TmRateMode) => void
-  hourlyRate: string
-  setHourlyRate: (v: string) => void
-  categoryRates: CategoryRate[]
-  setCategoryRates: React.Dispatch<React.SetStateAction<CategoryRate[]>>
   // Retainer
   monthlyHours: string
   setMonthlyHours: (v: string) => void
+  monthlyFee: string
+  setMonthlyFee: (v: string) => void
   overageRate: string
   setOverageRate: (v: string) => void
   retainerStartDate: Date | undefined
@@ -69,14 +58,10 @@ export function ProjectFormStepBilling({
   currency,
   fixedPrice,
   setFixedPrice,
-  tmRateMode,
-  setTmRateMode,
-  hourlyRate,
-  setHourlyRate,
-  categoryRates,
-  setCategoryRates,
   monthlyHours,
   setMonthlyHours,
+  monthlyFee,
+  setMonthlyFee,
   overageRate,
   setOverageRate,
   retainerStartDate,
@@ -90,34 +75,7 @@ export function ProjectFormStepBilling({
   submitting,
   error,
 }: StepBillingProps) {
-  const categories = useQuery(api.workCategories.list, { includeArchived: false })
-
-  const usedCategoryIds = new Set(categoryRates.map((cr) => cr.workCategoryId))
   const cycleLengthNum = parseInt(cycleLength) || 1
-
-  function addCategoryRate() {
-    setCategoryRates((prev) => [...prev, { workCategoryId: "", rate: "" }])
-  }
-
-  function removeCategoryRate(index: number) {
-    setCategoryRates((prev) => prev.filter((_, i) => i !== index))
-  }
-
-  function updateCategoryRate(index: number, field: keyof CategoryRate, value: string) {
-    setCategoryRates((prev) =>
-      prev.map((cr, i) => (i === index ? { ...cr, [field]: value } : cr))
-    )
-  }
-
-  function handleCategorySelect(index: number, catId: string) {
-    updateCategoryRate(index, "workCategoryId", catId)
-    if (categories) {
-      const cat = categories.find((c) => c._id === catId)
-      if (cat?.defaultBillRate !== undefined) {
-        updateCategoryRate(index, "rate", String(cat.defaultBillRate))
-      }
-    }
-  }
 
   const { title, subtitle } = BILLING_TITLES[billingType]
 
@@ -170,109 +128,14 @@ export function ProjectFormStepBilling({
           </Field>
         )}
 
-        {/* T&M fields */}
+        {/* T&M — no rate inputs at creation time */}
         {billingType === "t_and_m" && (
-          <>
-            <Field>
-              <FieldLabel>Rate Mode</FieldLabel>
-              <FieldDescription className="flex items-center gap-1.5 text-xs text-warning">
-                <AlertTriangleIcon className="size-3.5 shrink-0" />
-                Cannot be changed.
-              </FieldDescription>
-              <div className="flex gap-2" role="radiogroup" aria-label="Rate Mode">
-                {(["flat", "per_category"] as const).map((mode) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    role="radio"
-                    aria-checked={tmRateMode === mode}
-                    onClick={() => setTmRateMode(mode)}
-                    className={cn(
-                      "rounded-lg border px-3.5 py-1.5 text-sm font-medium transition-colors",
-                      tmRateMode === mode
-                        ? "border-primary bg-primary/5 text-primary"
-                        : "border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground"
-                    )}
-                  >
-                    {mode === "flat" ? "Flat rate" : "Per-category"}
-                  </button>
-                ))}
-              </div>
-            </Field>
-
-            {tmRateMode === "flat" ? (
-              <Field>
-                <FieldLabel htmlFor="hourly-rate">Hourly Rate</FieldLabel>
-                <div className="flex items-center gap-2">
-                  <Input
-                    id="hourly-rate"
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={hourlyRate}
-                    onChange={(e) => setHourlyRate(e.target.value)}
-                    placeholder="0"
-                    className="w-32"
-                    autoFocus
-                  />
-                  <span className="text-sm text-muted-foreground">{currency}/h</span>
-                </div>
-              </Field>
-            ) : (
-              <div className="flex flex-col gap-3">
-                <FieldLabel>Category Rates</FieldLabel>
-                {categoryRates.map((cr, i) => (
-                  <div key={i} className="flex items-center gap-2">
-                    <Select
-                      value={cr.workCategoryId}
-                      onValueChange={(v) => handleCategorySelect(i, v)}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Category..." />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectGroup>
-                          {categories
-                            ?.filter((c) => !usedCategoryIds.has(c._id) || c._id === cr.workCategoryId)
-                            .map((c) => (
-                              <SelectItem key={c._id} value={c._id}>{c.name}</SelectItem>
-                            ))}
-                        </SelectGroup>
-                      </SelectContent>
-                    </Select>
-                    <Input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={cr.rate}
-                      onChange={(e) => updateCategoryRate(i, "rate", e.target.value)}
-                      placeholder="0"
-                      className="w-24"
-                    />
-                    <span className="shrink-0 text-xs text-muted-foreground">{currency}/h</span>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-sm"
-                      onClick={() => removeCategoryRate(i)}
-                    >
-                      <XIcon />
-                    </Button>
-                  </div>
-                ))}
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={addCategoryRate}
-                  className="w-full"
-                >
-                  <PlusIcon data-icon="inline-start" />
-                  Add category rate
-                </Button>
-              </div>
-            )}
-          </>
+          <div className="flex items-start gap-3 rounded-md border bg-muted/50 p-4">
+            <InfoIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+            <p className="text-sm text-muted-foreground">
+              Billing rates can be configured per category after creating the project.
+            </p>
+          </div>
         )}
 
         {/* Retainer fields */}
@@ -296,21 +159,41 @@ export function ProjectFormStepBilling({
                 </div>
               </Field>
               <Field>
-                <FieldLabel htmlFor="overage-rate">Overage Rate</FieldLabel>
+                <FieldLabel htmlFor="monthly-fee">Monthly Fee</FieldLabel>
                 <div className="flex items-center gap-2">
                   <Input
-                    id="overage-rate"
+                    id="monthly-fee"
                     type="number"
                     min="0"
                     step="0.01"
-                    value={overageRate}
-                    onChange={(e) => setOverageRate(e.target.value)}
-                    placeholder="95"
+                    value={monthlyFee}
+                    onChange={(e) => setMonthlyFee(e.target.value)}
+                    placeholder="2000"
                   />
-                  <span className="shrink-0 text-sm text-muted-foreground">{currency}/h</span>
+                  <span className="shrink-0 text-sm text-muted-foreground">{currency}</span>
                 </div>
               </Field>
             </div>
+
+            <Field>
+              <FieldLabel htmlFor="overage-rate">Overage Rate</FieldLabel>
+              <div className="flex items-center gap-2">
+                <Input
+                  id="overage-rate"
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  value={overageRate}
+                  onChange={(e) => setOverageRate(e.target.value)}
+                  placeholder="150"
+                  className="w-40"
+                />
+                <span className="shrink-0 text-sm text-muted-foreground">{currency}/h</span>
+              </div>
+              <FieldDescription>
+                Hourly rate charged for hours exceeding the monthly budget.
+              </FieldDescription>
+            </Field>
 
             <div className="grid gap-6 sm:grid-cols-2">
               <Field>

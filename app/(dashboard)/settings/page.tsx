@@ -52,6 +52,25 @@ function StatusesSkeleton() {
   )
 }
 
+function UserRatesSkeleton() {
+  return (
+    <div className="space-y-4">
+      <Skeleton className="h-5 w-48" />
+      <Skeleton className="h-4 w-72" />
+      <div className="space-y-2">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <div key={i} className="flex items-center gap-3 rounded-md border p-3">
+            <Skeleton className="size-8 rounded-full" />
+            <Skeleton className="h-4 w-32 flex-1" />
+            <Skeleton className="h-4 w-16" />
+            <Skeleton className="h-4 w-12" />
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function WorkCategoriesSkeleton() {
   return (
     <div>
@@ -109,6 +128,14 @@ const SettingsWorkCategories = dynamic(
   { loading: () => <WorkCategoriesSkeleton /> },
 )
 
+const SettingsUserRates = dynamic(
+  () =>
+    import("@/components/settings/settings-user-rates").then((m) => ({
+      default: m.SettingsUserRates,
+    })),
+  { loading: () => <UserRatesSkeleton /> },
+)
+
 // ─── Page ───────────────────────────────────────────────────────────────────────
 
 export default function SettingsPage() {
@@ -127,6 +154,7 @@ export default function SettingsPage() {
           <TabsTrigger value="team">Team</TabsTrigger>
           <TabsTrigger value="statuses">Statuses</TabsTrigger>
           <TabsTrigger value="work-categories">Work Categories</TabsTrigger>
+          <TabsTrigger value="user-rates">User Rates</TabsTrigger>
         </TabsList>
 
         <TabsContent value="general" className="mt-6">
@@ -146,6 +174,10 @@ export default function SettingsPage() {
 
         <TabsContent value="work-categories" className="mt-6">
           <SettingsWorkCategories />
+        </TabsContent>
+
+        <TabsContent value="user-rates" className="mt-6">
+          <SettingsUserRates />
         </TabsContent>
       </Tabs>
     </div>

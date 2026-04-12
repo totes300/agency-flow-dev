@@ -15,8 +15,6 @@ import { formatMinutes, formatCurrencyPrecise } from "@/lib/format"
 
 type TmProject = {
   currency: string
-  tmRateMode?: "flat" | "per_category"
-  hourlyRate?: number
 }
 
 export function TmOverview({
@@ -38,10 +36,7 @@ export function TmOverview({
 
   if (overview === null) return null
 
-  // Rate info string for uninvoiced detail
-  const rateInfo = project.tmRateMode === "flat" && project.hourlyRate
-    ? `${formatCurrencyPrecise(project.hourlyRate, currency)}/h flat`
-    : "per-category rates"
+  const rateInfo = "per-category rates"
 
   return (
     <div className="flex flex-col gap-6">

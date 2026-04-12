@@ -36,8 +36,6 @@ export const upsert = mutation({
     projectId: v.id("projects"),
     workCategoryId: v.id("workCategories"),
     estimatedMinutes: v.number(),
-    internalCostRate: v.optional(v.number()),
-    clientBillingRate: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const { orgId, userId } = await requireAdmin(ctx);
@@ -46,12 +44,6 @@ export const upsert = mutation({
     if (!project || project.orgId !== orgId) throw new ConvexError("Project not found");
 
     if (args.estimatedMinutes < 0) throw new ConvexError("Estimated minutes cannot be negative");
-    if (args.internalCostRate !== undefined && args.internalCostRate < 0) {
-      throw new ConvexError("Cost rate cannot be negative");
-    }
-    if (args.clientBillingRate !== undefined && args.clientBillingRate < 0) {
-      throw new ConvexError("Billing rate cannot be negative");
-    }
 
     // Find existing estimate for this project + category
     const estimates = await ctx.db
@@ -68,8 +60,6 @@ export const upsert = mutation({
     if (existing) {
       await ctx.db.patch(existing._id, {
         estimatedMinutes: args.estimatedMinutes,
-        internalCostRate: args.internalCostRate,
-        clientBillingRate: args.clientBillingRate,
         updatedAt: now,
       });
       return existing._id;
@@ -79,8 +69,6 @@ export const upsert = mutation({
         projectId: args.projectId,
         workCategoryId: args.workCategoryId,
         estimatedMinutes: args.estimatedMinutes,
-        internalCostRate: args.internalCostRate,
-        clientBillingRate: args.clientBillingRate,
         createdAt: now,
         updatedAt: now,
         createdBy: userId,
@@ -128,8 +116,6 @@ export const seedForProject = mutation({
         projectId: args.projectId,
         workCategoryId: cat._id,
         estimatedMinutes: 0, // User sets the budget later
-        internalCostRate: cat.defaultCostRate,
-        clientBillingRate: cat.defaultBillRate,
         createdAt: now,
         updatedAt: now,
         createdBy: userId,

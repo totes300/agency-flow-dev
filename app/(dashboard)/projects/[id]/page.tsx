@@ -277,7 +277,7 @@ export default function ProjectDetailPage() {
           <div className="flex flex-col gap-6">
             <SettingsGeneral projectId={projectId} project={project} />
             {project.billingType === "fixed" && (
-              <SettingsBudgetEstimates projectId={projectId} currency={project.currency} teamMembers={project.teamMembers} defaultAssignees={project.defaultAssignees} />
+              <SettingsBudgetEstimates projectId={projectId} project={project} teamMembers={project.teamMembers} defaultAssignees={project.defaultAssignees} />
             )}
             {project.billingType === "t_and_m" && (
               <SettingsRates projectId={projectId} project={project} teamMembers={project.teamMembers} defaultAssignees={project.defaultAssignees} />

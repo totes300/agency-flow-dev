@@ -210,10 +210,11 @@ export function ClientFormModal({ open, onOpenChange, client, defaultCurrency = 
 
     try {
       if (isEdit && client) {
-        // Include logo removal in the same update to avoid reactive flash
+        // Exclude currency from update — immutable after creation
+        const { currency: _currency, ...updateFields } = payload
         const updatePayload = {
           id: client._id,
-          ...payload,
+          ...updateFields,
           ...(removeExistingLogo && resolvedLogoStorageId && !pendingLogoFile
             ? { logoStorageId: null as null }
             : {}),
@@ -321,16 +322,22 @@ export function ClientFormModal({ open, onOpenChange, client, defaultCurrency = 
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1.5">
                   <Label htmlFor="client-currency">Currency</Label>
-                  <Select value={currency} onValueChange={setCurrency}>
-                    <SelectTrigger id="client-currency">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {CURRENCIES.map((c) => (
-                        <SelectItem key={c} value={c}>{c}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  {isEdit ? (
+                    <div className="flex h-9 items-center rounded-md border bg-muted/50 px-3 text-sm text-muted-foreground">
+                      {currency}
+                    </div>
+                  ) : (
+                    <Select value={currency} onValueChange={setCurrency}>
+                      <SelectTrigger id="client-currency">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {CURRENCIES.map((c) => (
+                          <SelectItem key={c} value={c}>{c}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="client-prefix">Prefix</Label>

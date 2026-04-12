@@ -10,6 +10,7 @@
 
 import type * as activityLog from "../activityLog.js";
 import type * as attachments from "../attachments.js";
+import type * as categoryRates from "../categoryRates.js";
 import type * as clientContacts from "../clientContacts.js";
 import type * as clients from "../clients.js";
 import type * as commentAttachments from "../commentAttachments.js";
@@ -33,10 +34,12 @@ import type * as lib_timer from "../lib/timer.js";
 import type * as lib_url from "../lib/url.js";
 import type * as lib_validators from "../lib/validators.js";
 import type * as linkPreviews from "../linkPreviews.js";
+import type * as migrations_deleteLegacyTimeEntries from "../migrations/deleteLegacyTimeEntries.js";
 import type * as myTasks from "../myTasks.js";
 import type * as orgMembers from "../orgMembers.js";
 import type * as orgSettings from "../orgSettings.js";
 import type * as projectCategoryEstimates from "../projectCategoryEstimates.js";
+import type * as projectRateOverrides from "../projectRateOverrides.js";
 import type * as projects from "../projects.js";
 import type * as retainerCron from "../retainerCron.js";
 import type * as retainerPeriods from "../retainerPeriods.js";
@@ -46,6 +49,7 @@ import type * as tasks from "../tasks.js";
 import type * as timeEntries from "../timeEntries.js";
 import type * as timer from "../timer.js";
 import type * as typingIndicators from "../typingIndicators.js";
+import type * as userRates from "../userRates.js";
 import type * as users from "../users.js";
 import type * as workCategories from "../workCategories.js";
 
@@ -58,6 +62,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   activityLog: typeof activityLog;
   attachments: typeof attachments;
+  categoryRates: typeof categoryRates;
   clientContacts: typeof clientContacts;
   clients: typeof clients;
   commentAttachments: typeof commentAttachments;
@@ -81,10 +86,12 @@ declare const fullApi: ApiFromModules<{
   "lib/url": typeof lib_url;
   "lib/validators": typeof lib_validators;
   linkPreviews: typeof linkPreviews;
+  "migrations/deleteLegacyTimeEntries": typeof migrations_deleteLegacyTimeEntries;
   myTasks: typeof myTasks;
   orgMembers: typeof orgMembers;
   orgSettings: typeof orgSettings;
   projectCategoryEstimates: typeof projectCategoryEstimates;
+  projectRateOverrides: typeof projectRateOverrides;
   projects: typeof projects;
   retainerCron: typeof retainerCron;
   retainerPeriods: typeof retainerPeriods;
@@ -94,6 +101,7 @@ declare const fullApi: ApiFromModules<{
   timeEntries: typeof timeEntries;
   timer: typeof timer;
   typingIndicators: typeof typingIndicators;
+  userRates: typeof userRates;
   users: typeof users;
   workCategories: typeof workCategories;
 }>;

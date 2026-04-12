@@ -16,7 +16,7 @@ import type { Id } from "@/convex/_generated/dataModel"
 import { formatDateToYMD } from "@/lib/format"
 import { extractErrorMessage } from "@/lib/toast-helpers"
 import { ProjectFormStepBasic, NEW_CLIENT_VALUE, type BillingType } from "./project-form-step-basic"
-import { ProjectFormStepBilling, type TmRateMode, type CategoryRate } from "./project-form-step-billing"
+import { ProjectFormStepBilling } from "./project-form-step-billing"
 
 type ProjectFormModalProps = {
   open: boolean
@@ -48,12 +48,9 @@ export function ProjectFormModal({ open, onOpenChange }: ProjectFormModalProps) 
 
   // Step 2 — Fixed
   const [fixedPrice, setFixedPrice] = useState("")
-  // Step 2 — T&M
-  const [tmRateMode, setTmRateMode] = useState<TmRateMode>("flat")
-  const [hourlyRate, setHourlyRate] = useState("")
-  const [categoryRates, setCategoryRates] = useState<CategoryRate[]>([])
   // Step 2 — Retainer
   const [monthlyHours, setMonthlyHours] = useState("")
+  const [monthlyFee, setMonthlyFee] = useState("")
   const [overageRate, setOverageRate] = useState("")
   const [retainerStartDate, setRetainerStartDate] = useState<Date | undefined>(undefined)
   const [cycleLength, setCycleLength] = useState("1")
@@ -77,10 +74,8 @@ export function ProjectFormModal({ open, onOpenChange }: ProjectFormModalProps) 
       setCurrency("USD")
       setTeamMembers([])
       setFixedPrice("")
-      setTmRateMode("flat")
-      setHourlyRate(orgSettings?.defaultTmFlatRate?.toString() ?? "")
-      setCategoryRates([])
       setMonthlyHours("")
+      setMonthlyFee("")
       setOverageRate("")
       const now = new Date()
       setRetainerStartDate(new Date(now.getFullYear(), now.getMonth(), 1))
@@ -90,13 +85,6 @@ export function ProjectFormModal({ open, onOpenChange }: ProjectFormModalProps) 
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: reset only on open, orgSettings read is snapshot
   }, [open])
-
-  // Pre-fill hourly rate when orgSettings loads
-  useEffect(() => {
-    if (open && orgSettings?.defaultTmFlatRate != null && !hourlyRate) {
-      setHourlyRate(orgSettings.defaultTmFlatRate.toString())
-    }
-  }, [open, orgSettings?.defaultTmFlatRate, hourlyRate])
 
   // Pre-fill code only once when nextCode first loads (not after user clears it)
   const [codePreFilled, setCodePreFilled] = useState(false)
@@ -119,10 +107,8 @@ export function ProjectFormModal({ open, onOpenChange }: ProjectFormModalProps) 
   function handleBillingTypeChange(newType: BillingType) {
     setBillingType(newType)
     setFixedPrice("")
-    setTmRateMode("flat")
-    setHourlyRate(orgSettings?.defaultTmFlatRate?.toString() ?? "")
-    setCategoryRates([])
     setMonthlyHours("")
+    setMonthlyFee("")
     setOverageRate("")
     const now = new Date()
     setRetainerStartDate(new Date(now.getFullYear(), now.getMonth(), 1))
@@ -160,27 +146,14 @@ export function ProjectFormModal({ open, onOpenChange }: ProjectFormModalProps) 
           clientId: resolvedClientId,
         name: name.trim(),
         billingType,
-        currency: currency as typeof CURRENCIES[number],
         code: code.trim() || undefined,
         teamMembers: teamMembers.length > 0 ? teamMembers : undefined,
         ...(billingType === "fixed" ? {
           fixedPrice: parseFloat(fixedPrice) || 0,
         } : {}),
-        ...(billingType === "t_and_m" ? {
-          tmRateMode,
-          ...(tmRateMode === "flat" ? {
-            hourlyRate: parseFloat(hourlyRate) || 0,
-          } : {
-            tmCategoryRates: categoryRates
-              .filter((cr) => cr.workCategoryId && cr.rate)
-              .map((cr) => ({
-                workCategoryId: cr.workCategoryId as Id<"workCategories">,
-                rate: parseFloat(cr.rate) || 0,
-              })),
-          }),
-        } : {}),
         ...(billingType === "retainer" ? {
           includedMinutesPerMonth: Math.round((parseFloat(monthlyHours) || 0) * 60),
+          monthlyFee: parseFloat(monthlyFee) || 0,
           overageRate: parseFloat(overageRate) || 0,
           startDate: retainerStartDate ? formatDateToYMD(retainerStartDate) : "",
           cycleLength: parseInt(cycleLength) || 1,
@@ -253,14 +226,10 @@ export function ProjectFormModal({ open, onOpenChange }: ProjectFormModalProps) 
               currency={currency}
               fixedPrice={fixedPrice}
               setFixedPrice={setFixedPrice}
-              tmRateMode={tmRateMode}
-              setTmRateMode={setTmRateMode}
-              hourlyRate={hourlyRate}
-              setHourlyRate={setHourlyRate}
-              categoryRates={categoryRates}
-              setCategoryRates={setCategoryRates}
               monthlyHours={monthlyHours}
               setMonthlyHours={setMonthlyHours}
+              monthlyFee={monthlyFee}
+              setMonthlyFee={setMonthlyFee}
               overageRate={overageRate}
               setOverageRate={setOverageRate}
               retainerStartDate={retainerStartDate}

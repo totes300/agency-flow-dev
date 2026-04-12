@@ -32,7 +32,6 @@ export const create = mutation({
       v.object({
         name: v.string(),
         color: categoryColorValidator,
-        defaultCostRate: v.optional(v.number()),
         defaultBillRate: v.optional(v.number()),
         currency: currencyValidator,
       })
@@ -92,11 +91,10 @@ export const create = mutation({
         throw new ConvexError("Category name is required");
       }
       validateStringLength(trimmedName, 200, "Category name");
-      await ctx.db.insert("workCategories", {
+      const catId = await ctx.db.insert("workCategories", {
         orgId,
         name: trimmedName,
         color: c.color,
-        defaultCostRate: c.defaultCostRate,
         defaultBillRate: c.defaultBillRate,
         currency: c.currency,
         sortOrder: i,
@@ -104,6 +102,18 @@ export const create = mutation({
         updatedAt: now,
         createdBy: userId,
       });
+
+      // Dual-write: also create categoryRates row if billRate provided
+      if (c.defaultBillRate !== undefined) {
+        await ctx.db.insert("categoryRates", {
+          orgId,
+          workCategoryId: catId,
+          currency: c.currency,
+          defaultBillRate: c.defaultBillRate,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
     }
 
     return settingsId;
@@ -115,7 +125,6 @@ export const update = mutation({
     defaultCurrency: v.optional(currencyValidator),
     timezone: v.optional(v.string()),
     roundingMinutes: v.optional(roundingValidator),
-    defaultTmFlatRate: v.optional(v.number()),
     completionDefaultAdminStatusId: v.optional(v.id("statuses")),
     completionDefaultMemberStatusId: v.optional(v.id("statuses")),
     brandName: v.optional(v.string()),
@@ -173,16 +182,10 @@ export const update = mutation({
     }
 
     // Build typed patch object with only provided fields
-    // Validate rate
-    if (args.defaultTmFlatRate !== undefined && args.defaultTmFlatRate < 0) {
-      throw new ConvexError("Default flat rate cannot be negative");
-    }
-
     const patch: Partial<{
       defaultCurrency: typeof args.defaultCurrency;
       timezone: string;
       roundingMinutes: typeof args.roundingMinutes;
-      defaultTmFlatRate: number;
       completionDefaultAdminStatusId: typeof args.completionDefaultAdminStatusId;
       completionDefaultMemberStatusId: typeof args.completionDefaultMemberStatusId;
       brandName: string;
@@ -196,7 +199,6 @@ export const update = mutation({
     if (args.defaultCurrency !== undefined) patch.defaultCurrency = args.defaultCurrency;
     if (args.timezone !== undefined) patch.timezone = args.timezone;
     if (args.roundingMinutes !== undefined) patch.roundingMinutes = args.roundingMinutes;
-    if (args.defaultTmFlatRate !== undefined) patch.defaultTmFlatRate = args.defaultTmFlatRate;
     if (args.completionDefaultAdminStatusId !== undefined) patch.completionDefaultAdminStatusId = args.completionDefaultAdminStatusId;
     if (args.completionDefaultMemberStatusId !== undefined) patch.completionDefaultMemberStatusId = args.completionDefaultMemberStatusId;
     if (args.brandName !== undefined) patch.brandName = args.brandName;

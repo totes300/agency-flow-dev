@@ -13,11 +13,13 @@ import {
   CardFooter,
 } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
+import { Field, FieldLabel, FieldDescription } from "@/components/ui/field"
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupInput,
+} from "@/components/ui/input-group"
 import { Switch } from "@/components/ui/switch"
-import { Separator } from "@/components/ui/separator"
-import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
   Select,
   SelectContent,
@@ -30,12 +32,13 @@ import { ConfirmDialog } from "@/components/confirm-dialog"
 import { RetainerStatusBadge } from "@/components/retainer-status-badge"
 import { toast } from "sonner"
 import { toastError } from "@/lib/toast-helpers"
-import { Loader2Icon, InfoIcon } from "lucide-react"
+import { Spinner } from "@/components/ui/spinner"
 import { formatDateToYMD } from "@/lib/format"
 
 type RetainerProject = {
   retainerStatus?: string
   includedMinutesPerMonth?: number
+  monthlyFee?: number
   overageRate?: number
   startDate?: string
   cycleLength?: number
@@ -55,6 +58,9 @@ export function SettingsRetainer({
   // Form state
   const [monthlyHours, setMonthlyHours] = useState(
     project.includedMinutesPerMonth ? String(project.includedMinutesPerMonth / 60) : ""
+  )
+  const [monthlyFee, setMonthlyFee] = useState(
+    project.monthlyFee !== undefined ? String(project.monthlyFee) : ""
   )
   const [overageRate, setOverageRate] = useState(
     project.overageRate !== undefined ? String(project.overageRate) : ""
@@ -76,29 +82,34 @@ export function SettingsRetainer({
 
   // Validation
   const parsedHours = parseFloat(monthlyHours)
-  const parsedRate = parseFloat(overageRate)
+  const parsedFee = parseFloat(monthlyFee)
+  const parsedOverageRate = parseFloat(overageRate)
   const hoursValid = !isNaN(parsedHours) && parsedHours > 0
-  const rateValid = !isNaN(parsedRate) && parsedRate >= 0
-  const canSave = hoursValid && rateValid && !!startDate
+  const feeValid = !isNaN(parsedFee) && parsedFee >= 0
+  const overageRateValid = !isNaN(parsedOverageRate) && parsedOverageRate > 0
+  const canSave = hoursValid && feeValid && overageRateValid && !!startDate
 
   // Sync from props when project changes
   useEffect(() => {
     setMonthlyHours(project.includedMinutesPerMonth ? String(project.includedMinutesPerMonth / 60) : "")
+    setMonthlyFee(project.monthlyFee !== undefined ? String(project.monthlyFee) : "")
     setOverageRate(project.overageRate !== undefined ? String(project.overageRate) : "")
     setStartDate(project.startDate ? new Date(project.startDate + "T00:00:00") : undefined)
     setCycleLength(String(project.cycleLength ?? 3))
     setRolloverEnabled(project.rolloverEnabled ?? true)
-  }, [project.includedMinutesPerMonth, project.overageRate, project.startDate, project.cycleLength, project.rolloverEnabled])
+  }, [project.includedMinutesPerMonth, project.monthlyFee, project.overageRate, project.startDate, project.cycleLength, project.rolloverEnabled])
 
   // Determine if any config fields differ from the saved project state
   function hasConfigChanges(): boolean {
     const newMinutes = Math.round(parsedHours * 60)
-    const newRate = parsedRate
+    const newFee = parsedFee
+    const newOverageRate = parsedOverageRate
     const newStartDate = startDate ? formatDateToYMD(startDate) : undefined
     const newCycleLength = parseInt(cycleLength) || 3
     return (
       newMinutes !== project.includedMinutesPerMonth ||
-      newRate !== project.overageRate ||
+      newFee !== project.monthlyFee ||
+      newOverageRate !== project.overageRate ||
       newStartDate !== project.startDate ||
       newCycleLength !== (project.cycleLength ?? 3) ||
       rolloverEnabled !== (project.rolloverEnabled ?? true)
@@ -121,7 +132,8 @@ export function SettingsRetainer({
       await updateRetainer({
         id: projectId,
         includedMinutesPerMonth: Math.round(parsedHours * 60),
-        overageRate: parsedRate,
+        monthlyFee: parsedFee,
+        overageRate: parsedOverageRate,
         startDate: startDate ? formatDateToYMD(startDate) : undefined,
         cycleLength: parseInt(cycleLength) || 3,
         rolloverEnabled,
@@ -173,103 +185,124 @@ export function SettingsRetainer({
           </CardAction>
         </CardHeader>
 
-        <CardContent className="space-y-4">
-          <Alert>
-            <InfoIcon className="size-4" />
-            <AlertDescription>
-              Changes to hours, rate, cycle length, or rollover retroactively affect the current billing cycle.
-            </AlertDescription>
-          </Alert>
+        <CardContent className="space-y-6">
+          {/* Budget */}
+          <div className="space-y-4">
+            <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Budget</p>
+            <div className="grid gap-4 sm:grid-cols-3">
+              <Field>
+                <FieldLabel htmlFor="ret-hours">Monthly hours</FieldLabel>
+                <InputGroup>
+                  <InputGroupInput
+                    id="ret-hours"
+                    type="number"
+                    min="0.5"
+                    step="0.5"
+                    value={monthlyHours}
+                    onChange={(e) => setMonthlyHours(e.target.value)}
+                    aria-invalid={monthlyHours !== "" && !hoursValid}
+                    placeholder="10"
+                  />
+                  <InputGroupAddon align="inline-end">hrs</InputGroupAddon>
+                </InputGroup>
+              </Field>
 
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <Label htmlFor="ret-hours">Monthly hours <span className="text-destructive">*</span></Label>
-              <div className="flex items-center gap-2">
-                <Input
-                  id="ret-hours"
-                  type="number"
-                  min="0.5"
-                  step="0.5"
-                  value={monthlyHours}
-                  onChange={(e) => setMonthlyHours(e.target.value)}
-                  aria-invalid={monthlyHours !== "" && !hoursValid}
+              <Field>
+                <FieldLabel htmlFor="ret-fee">Monthly fee</FieldLabel>
+                <InputGroup>
+                  <InputGroupAddon align="inline-start">{project.currency}</InputGroupAddon>
+                  <InputGroupInput
+                    id="ret-fee"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={monthlyFee}
+                    onChange={(e) => setMonthlyFee(e.target.value)}
+                    aria-invalid={monthlyFee !== "" && !feeValid}
+                    placeholder="500"
+                  />
+                  <InputGroupAddon align="inline-end">/ mo</InputGroupAddon>
+                </InputGroup>
+              </Field>
+
+              <Field>
+                <FieldLabel htmlFor="ret-overage-rate">Overage rate</FieldLabel>
+                <InputGroup>
+                  <InputGroupAddon align="inline-start">{project.currency}</InputGroupAddon>
+                  <InputGroupInput
+                    id="ret-overage-rate"
+                    type="number"
+                    min="0.01"
+                    step="0.01"
+                    value={overageRate}
+                    onChange={(e) => setOverageRate(e.target.value)}
+                    aria-invalid={overageRate !== "" && !overageRateValid}
+                    placeholder="100"
+                  />
+                  <InputGroupAddon align="inline-end">/ hr</InputGroupAddon>
+                </InputGroup>
+                <FieldDescription>Billed when hours exceed the monthly budget</FieldDescription>
+              </Field>
+            </div>
+          </div>
+
+          {/* Schedule */}
+          <div className="space-y-4">
+            <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Schedule</p>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field>
+                <FieldLabel htmlFor="ret-start-date">Start date</FieldLabel>
+                <DatePicker
+                  id="ret-start-date"
+                  value={startDate}
+                  onChange={setStartDate}
+                  placeholder="Pick start date"
                 />
-                <span className="shrink-0 text-sm text-muted-foreground">h/mo</span>
-              </div>
-              {monthlyHours !== "" && !hoursValid && (
-                <p className="text-xs text-destructive">Must be greater than 0</p>
-              )}
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="ret-overage">Overage rate <span className="text-destructive">*</span></Label>
-              <div className="flex items-center gap-2">
-                <Input
-                  id="ret-overage"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={overageRate}
-                  onChange={(e) => setOverageRate(e.target.value)}
-                  aria-invalid={overageRate !== "" && !rateValid}
-                />
-                <span className="shrink-0 text-sm text-muted-foreground">{project.currency}/h</span>
-              </div>
-              {overageRate !== "" && !rateValid && (
-                <p className="text-xs text-destructive">Must be 0 or greater</p>
-              )}
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="ret-cycle">Cycle length</FieldLabel>
+                <Select value={cycleLength} onValueChange={setCycleLength}>
+                  <SelectTrigger id="ret-cycle">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Array.from({ length: 12 }, (_, i) => i + 1).map((n) => (
+                      <SelectItem key={n} value={String(n)}>
+                        {n} {n === 1 ? "month" : "months"}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
             </div>
           </div>
 
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <Label htmlFor="ret-start-date">Start date <span className="text-destructive">*</span></Label>
-              <DatePicker
-                id="ret-start-date"
-                value={startDate}
-                onChange={setStartDate}
-                placeholder="Pick start date"
-              />
+          {/* Rollover */}
+          <div className="flex items-start justify-between gap-4 rounded-lg border p-3">
+            <div className="space-y-0.5">
+              <p className="text-sm font-medium">Rollover unused hours</p>
+              <p className="text-xs text-muted-foreground">
+                {rolloverEnabled
+                  ? "Unused hours carry forward within each cycle. Forfeited at cycle end."
+                  : "Each month is independent. Overage billed monthly."}
+              </p>
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="ret-cycle">Cycle length</Label>
-              <Select value={cycleLength} onValueChange={setCycleLength}>
-                <SelectTrigger id="ret-cycle">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {Array.from({ length: 12 }, (_, i) => i + 1).map((n) => (
-                    <SelectItem key={n} value={String(n)}>
-                      {n} {n === 1 ? "month" : "months"}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+            <Switch
+              id="ret-rollover"
+              checked={rolloverEnabled}
+              onCheckedChange={setRolloverEnabled}
+              className="shrink-0"
+            />
           </div>
 
-          <Separator />
-
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <Label htmlFor="ret-rollover" className="font-normal">Rollover</Label>
-              <Switch
-                id="ret-rollover"
-                checked={rolloverEnabled}
-                onCheckedChange={setRolloverEnabled}
-              />
-            </div>
-            <p className="text-xs text-muted-foreground">
-              {rolloverEnabled
-                ? "Unused hours carry forward within each cycle. Forfeited at cycle end."
-                : "Each month is independent. Overage billed monthly."
-              }
-            </p>
-          </div>
+          <p className="text-xs text-muted-foreground">
+            Changes retroactively affect the current billing cycle.
+          </p>
         </CardContent>
 
         <CardFooter className="justify-end">
           <Button onClick={handleSaveClick} disabled={!canSave || saving} size="sm">
-            {saving ? <><Loader2Icon className="size-3.5 animate-spin" /> Saving...</> : "Save"}
+            {saving ? <><Spinner data-icon="inline-start" /> Saving...</> : "Save"}
           </Button>
         </CardFooter>
       </Card>

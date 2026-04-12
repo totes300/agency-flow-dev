@@ -28,7 +28,7 @@ import {
 } from "@/components/ui/command"
 import { Badge } from "@/components/ui/badge"
 import { CheckIcon, ChevronsUpDownIcon, XIcon } from "lucide-react"
-import { CURRENCIES } from "@/convex/lib/constants"
+// CURRENCIES import removed — currency is now derived from client
 import { cn } from "@/lib/utils"
 import type { Id } from "@/convex/_generated/dataModel"
 import { useState } from "react"
@@ -238,21 +238,19 @@ export function ProjectFormStepBasic({
           </FieldDescription>
         </Field>
 
-        {/* Currency */}
+        {/* Currency (derived from client) */}
         <Field>
-          <FieldLabel htmlFor="project-currency">Currency</FieldLabel>
-          <Select value={currency} onValueChange={setCurrency}>
-            <SelectTrigger id="project-currency">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                {CURRENCIES.map((c) => (
-                  <SelectItem key={c} value={c}>{c}</SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
+          <FieldLabel>Currency</FieldLabel>
+          <div className="flex h-9 items-center rounded-md border bg-muted/50 px-3 text-sm text-muted-foreground">
+            {(() => {
+              if (isNewClient) return currency || "Set by org default"
+              const selectedClient = clients?.find((c) => c._id === clientId)
+              return selectedClient?.currency ?? currency ?? "—"
+            })()}
+          </div>
+          <FieldDescription className="text-xs text-muted-foreground">
+            Inherited from the client. Cannot be changed.
+          </FieldDescription>
         </Field>
 
         {/* Project Team */}

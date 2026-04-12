@@ -5,8 +5,7 @@ import type { Id } from "./_generated/dataModel";
 import { getAuthContext } from "./lib/auth";
 import { computeElapsedMs, totalElapsedMs, msToMinutes, getDateInTimezone } from "./lib/timer";
 import { roundMinutes } from "./lib/rounding";
-import { resolveRate } from "./lib/rates";
-import { getOrgSettings, buildRateContext } from "./lib/orgHelpers";
+import { getOrgSettings, resolveRateSnapshot } from "./lib/orgHelpers";
 
 const MAX_TIMER_MS = 16 * 60 * 60 * 1000; // 16 hours
 const STALE_THRESHOLD_MS = 8 * 60 * 60 * 1000; // 8 hours
@@ -123,22 +122,21 @@ export const stop = mutation({
     const project = task?.projectId ? await ctx.db.get(task.projectId) : null;
     const client = project ? await ctx.db.get(project.clientId) : null;
 
-    // Compute rate snapshot — only attempt for billable tasks
-    let rateSnapshot = {};
+    // Compute rate snapshot preview — non-blocking
+    let rateSnapshot: { costRate?: number; billableRate?: number; rateCurrency?: string } = {};
     const isBillable = task?.billable ?? false;
     if (task && project) {
-      if (isBillable && !task.workCategoryId) {
-        // Will warn user at commit time — preview still works
-      } else {
-        try {
-          const rateCtx = await buildRateContext(ctx, task, project);
-          const rateResult = resolveRate(rateCtx);
-          if (rateResult.ok) {
-            rateSnapshot = rateResult.snapshot;
-          }
-        } catch {
-          // Rate preview failure is non-blocking
-        }
+      try {
+        const snapshot = await resolveRateSnapshot(ctx, {
+          userId,
+          orgId,
+          task,
+          project,
+          isBillable,
+        });
+        rateSnapshot = snapshot;
+      } catch {
+        // Rate preview failure is non-blocking
       }
     }
 
@@ -250,28 +248,14 @@ export const commitEntry = mutation({
     // Resolve date
     const date = args.date ?? getDateInTimezone(Date.now(), timezone);
 
-    // Rate snapshot — only enforce for billable entries
-    let rateSnapshot: Record<string, number | undefined> = {};
-    if (args.isBillable) {
-      if (!task.workCategoryId) {
-        throw new ConvexError("Set a category on this task before logging billable time");
-      }
-      const rateCtx = await buildRateContext(ctx, task, project);
-      const rateResult = resolveRate(rateCtx);
-      if (!rateResult.ok) {
-        throw new ConvexError(rateResult.error);
-      }
-      rateSnapshot = rateResult.snapshot;
-    } else {
-      // Attempt rate resolution for non-billable but don't throw on failure
-      try {
-        const rateCtx = await buildRateContext(ctx, task, project);
-        const rateResult = resolveRate(rateCtx);
-        if (rateResult.ok) {
-          rateSnapshot = rateResult.snapshot;
-        }
-      } catch {}
-    }
+    // Rate snapshot (new model)
+    const rateSnapshot = await resolveRateSnapshot(ctx, {
+      userId,
+      orgId,
+      task,
+      project,
+      isBillable: args.isBillable,
+    });
 
     const now = Date.now();
     const entryId = await ctx.db.insert("timeEntries", {
@@ -283,7 +267,10 @@ export const commitEntry = mutation({
       note: args.note?.trim() || undefined,
       isBillable: args.isBillable,
       method: "timer",
-      ...rateSnapshot,
+      costRate: rateSnapshot.costRate,
+      billableRate: rateSnapshot.billableRate,
+      rateCurrency: rateSnapshot.rateCurrency,
+      snapshotCategoryId: task.workCategoryId,
       createdAt: now,
       updatedAt: now,
       createdBy: userId,

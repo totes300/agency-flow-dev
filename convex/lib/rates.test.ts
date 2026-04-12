@@ -2,113 +2,94 @@ import { describe, expect, it } from "vitest";
 import { resolveRate, type RateContext } from "./rates";
 
 describe("resolveRate", () => {
-  // ─── T&M flat ──────────────────────────────────────────────────────────────
-  it("T&M flat → appliedRate from project.hourlyRate", () => {
-    const ctx: RateContext = {
-      billingType: "t_and_m",
-      tmRateMode: "flat",
-      hourlyRate: 150,
-    };
-    expect(resolveRate(ctx)).toEqual({
+  const base: RateContext = {
+    isBillable: true,
+    isNonBillableProject: false,
+    userCostRate: 50,
+    resolvedBillableRate: 120,
+    billableRateError: null,
+    currency: "USD",
+  };
+
+  it("billable + all rates → full snapshot", () => {
+    expect(resolveRate(base)).toEqual({
       ok: true,
-      snapshot: { appliedRate: 150 },
+      snapshot: { costRate: 50, billableRate: 120, rateCurrency: "USD" },
     });
   });
 
-  it("T&M flat without hourlyRate → error", () => {
-    const ctx: RateContext = {
-      billingType: "t_and_m",
-      tmRateMode: "flat",
-    };
-    const result = resolveRate(ctx);
+  it("missing user cost rate → error", () => {
+    const result = resolveRate({ ...base, userCostRate: null });
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toContain("hourly rate");
+    if (!result.ok) expect(result.error).toContain("cost rate");
   });
 
-  // ─── T&M per-category ─────────────────────────────────────────────────────
-  it("T&M per-category + matching category → appliedRate", () => {
-    const ctx: RateContext = {
-      billingType: "t_and_m",
-      tmRateMode: "per_category",
-      tmCategoryRates: [
-        { workCategoryId: "cat-design", rate: 120 },
-        { workCategoryId: "cat-dev", rate: 180 },
-      ],
-      workCategoryId: "cat-dev",
-    };
-    expect(resolveRate(ctx)).toEqual({
-      ok: true,
-      snapshot: { appliedRate: 180 },
+  it("billable + missing billable rate → uses custom error", () => {
+    const result = resolveRate({
+      ...base,
+      resolvedBillableRate: null,
+      billableRateError: "Set a billable rate for Design in USD",
     });
-  });
-
-  it("T&M per-category + no task category → error", () => {
-    const ctx: RateContext = {
-      billingType: "t_and_m",
-      tmRateMode: "per_category",
-      tmCategoryRates: [{ workCategoryId: "cat-design", rate: 120 }],
-    };
-    const result = resolveRate(ctx);
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toContain("category");
+    if (!result.ok) expect(result.error).toBe("Set a billable rate for Design in USD");
   });
 
-  it("T&M per-category + category not in list → error", () => {
-    const ctx: RateContext = {
-      billingType: "t_and_m",
-      tmRateMode: "per_category",
-      tmCategoryRates: [{ workCategoryId: "cat-design", rate: 120 }],
-      workCategoryId: "cat-dev",
-    };
-    const result = resolveRate(ctx);
+  it("billable + missing billable rate + no custom error → fallback error", () => {
+    const result = resolveRate({
+      ...base,
+      resolvedBillableRate: null,
+      billableRateError: null,
+    });
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toContain("rate");
+    if (!result.ok) expect(result.error).toContain("billable rate");
   });
 
-  // ─── Fixed ─────────────────────────────────────────────────────────────────
-  it("Fixed + estimate → cost + bill rates", () => {
-    const ctx: RateContext = {
-      billingType: "fixed",
-      categoryEstimate: {
-        internalCostRate: 80,
-        clientBillingRate: 150,
-      },
-    };
-    expect(resolveRate(ctx)).toEqual({
+  it("retainer billable entry → billableRate = 0 (revenue is cycle-level)", () => {
+    // Retainer entries always pass resolvedBillableRate = 0 from orgHelpers,
+    // so resolveRate receives it as a valid rate and returns billableRate = 0.
+    const result = resolveRate({
+      ...base,
+      resolvedBillableRate: 0,
+    });
+    expect(result).toEqual({
       ok: true,
-      snapshot: { appliedCostRate: 80, appliedBillRate: 150 },
+      snapshot: { costRate: 50, billableRate: 0, rateCurrency: "USD" },
     });
   });
 
-  it("Fixed + no estimate → undefined rates (OK)", () => {
-    const ctx: RateContext = {
-      billingType: "fixed",
-    };
-    expect(resolveRate(ctx)).toEqual({
+  it("non-billable entry → billableRate = 0", () => {
+    const result = resolveRate({ ...base, isBillable: false });
+    expect(result).toEqual({
       ok: true,
-      snapshot: { appliedCostRate: undefined, appliedBillRate: undefined },
+      snapshot: { costRate: 50, billableRate: 0, rateCurrency: "USD" },
     });
   });
 
-  // ─── Retainer ──────────────────────────────────────────────────────────────
-  it("Retainer + overageRate → cost + bill rates", () => {
-    const ctx: RateContext = {
-      billingType: "retainer",
-      overageRate: 200,
-    };
-    expect(resolveRate(ctx)).toEqual({
+  it("non-billable project → billableRate = 0 even if isBillable", () => {
+    const result = resolveRate({ ...base, isNonBillableProject: true });
+    expect(result).toEqual({
       ok: true,
-      snapshot: { appliedCostRate: 200, appliedBillRate: 200 },
+      snapshot: { costRate: 50, billableRate: 0, rateCurrency: "USD" },
     });
   });
 
-  it("Retainer + no overageRate → undefined rates (OK)", () => {
-    const ctx: RateContext = {
-      billingType: "retainer",
-    };
-    expect(resolveRate(ctx)).toEqual({
+  it("non-billable + missing billable rate → still OK (billableRate = 0)", () => {
+    const result = resolveRate({
+      ...base,
+      isBillable: false,
+      resolvedBillableRate: null,
+    });
+    expect(result).toEqual({
       ok: true,
-      snapshot: { appliedCostRate: undefined, appliedBillRate: undefined },
+      snapshot: { costRate: 50, billableRate: 0, rateCurrency: "USD" },
+    });
+  });
+
+  it("cost rate = 0 is valid (unpaid intern)", () => {
+    const result = resolveRate({ ...base, userCostRate: 0 });
+    expect(result).toEqual({
+      ok: true,
+      snapshot: { costRate: 0, billableRate: 120, rateCurrency: "USD" },
     });
   });
 });

@@ -175,7 +175,7 @@ export const update = mutation({
   args: {
     id: v.id("clients"),
     name: v.optional(v.string()),
-    currency: v.optional(currencyValidator),
+    // currency is immutable after creation — not accepted in update
     prefix: v.optional(v.string()),
     usePrefix: v.optional(v.boolean()),
     billingName: v.optional(v.string()),
@@ -212,8 +212,6 @@ export const update = mutation({
       }
       updates.name = name;
     }
-
-    if (args.currency !== undefined) updates.currency = args.currency;
 
     if (args.prefix !== undefined) {
       const pfx = args.prefix.trim();

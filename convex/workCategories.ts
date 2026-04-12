@@ -38,16 +38,12 @@ export const create = mutation({
   args: {
     name: v.string(),
     color: categoryColorValidator,
-    defaultCostRate: v.optional(v.number()),
     defaultBillRate: v.optional(v.number()),
     currency: currencyValidator,
   },
   handler: async (ctx, args) => {
     const { orgId, userId } = await requireAdmin(ctx);
 
-    if (args.defaultCostRate !== undefined && args.defaultCostRate < 0) {
-      throw new ConvexError("Cost rate cannot be negative");
-    }
     if (args.defaultBillRate !== undefined && args.defaultBillRate < 0) {
       throw new ConvexError("Bill rate cannot be negative");
     }
@@ -71,11 +67,10 @@ export const create = mutation({
     const maxSort = existing.reduce((max, c) => Math.max(max, c.sortOrder), -1);
 
     const now = Date.now();
-    return await ctx.db.insert("workCategories", {
+    const categoryId = await ctx.db.insert("workCategories", {
       orgId,
       name: trimmedName,
       color: args.color,
-      defaultCostRate: args.defaultCostRate,
       defaultBillRate: args.defaultBillRate,
       currency: args.currency,
       sortOrder: maxSort + 1,
@@ -83,6 +78,20 @@ export const create = mutation({
       updatedAt: now,
       createdBy: userId,
     });
+
+    // Dual-write: also create categoryRates row if billRate provided
+    if (args.defaultBillRate !== undefined) {
+      await ctx.db.insert("categoryRates", {
+        orgId,
+        workCategoryId: categoryId,
+        currency: args.currency,
+        defaultBillRate: args.defaultBillRate,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+
+    return categoryId;
   },
 });
 
@@ -91,16 +100,11 @@ export const update = mutation({
     id: v.id("workCategories"),
     name: v.optional(v.string()),
     color: v.optional(categoryColorValidator),
-    defaultCostRate: v.optional(v.number()),
     defaultBillRate: v.optional(v.number()),
-    currency: v.optional(currencyValidator),
   },
   handler: async (ctx, args) => {
     const { orgId } = await requireAdmin(ctx);
 
-    if (args.defaultCostRate !== undefined && args.defaultCostRate < 0) {
-      throw new ConvexError("Cost rate cannot be negative");
-    }
     if (args.defaultBillRate !== undefined && args.defaultBillRate < 0) {
       throw new ConvexError("Bill rate cannot be negative");
     }
@@ -136,18 +140,46 @@ export const update = mutation({
     const patch: Partial<{
       name: string;
       color: string;
-      defaultCostRate: number;
       defaultBillRate: number;
-      currency: string;
       updatedAt: number;
     }> = { updatedAt: Date.now() };
     if (args.name !== undefined) patch.name = args.name.trim();
     if (args.color !== undefined) patch.color = args.color;
-    if (args.defaultCostRate !== undefined) patch.defaultCostRate = args.defaultCostRate;
     if (args.defaultBillRate !== undefined) patch.defaultBillRate = args.defaultBillRate;
-    if (args.currency !== undefined) patch.currency = args.currency;
 
     await ctx.db.patch(args.id, patch);
+
+    // Dual-write: also upsert categoryRates if billRate changed
+    if (args.defaultBillRate !== undefined) {
+      // Use org default currency (not legacy category.currency which may be stale)
+      const orgSettings = await ctx.db
+        .query("orgSettings")
+        .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+        .first();
+      const currency = orgSettings?.defaultCurrency ?? category.currency;
+      const existing = await ctx.db
+        .query("categoryRates")
+        .withIndex("by_orgId_workCategoryId_currency", (q) =>
+          q.eq("orgId", orgId).eq("workCategoryId", args.id).eq("currency", currency)
+        )
+        .unique();
+      const now = Date.now();
+      if (existing) {
+        await ctx.db.patch(existing._id, {
+          defaultBillRate: args.defaultBillRate,
+          updatedAt: now,
+        });
+      } else {
+        await ctx.db.insert("categoryRates", {
+          orgId,
+          workCategoryId: args.id,
+          currency,
+          defaultBillRate: args.defaultBillRate,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+    }
   },
 });
 

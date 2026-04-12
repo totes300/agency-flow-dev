@@ -1,10 +1,10 @@
 import { v, ConvexError } from "convex/values";
 import { query, mutation } from "./_generated/server";
 import { getAuthContext, requireAdmin, validateStringLength } from "./lib/auth";
-import { billingTypeValidator, tmRateModeValidator, currencyValidator, retainerStatusValidator } from "./lib/validators";
+import { billingTypeValidator, retainerStatusValidator } from "./lib/validators";
 import { generateNextProjectCode, ensureUniqueProjectCode } from "./lib/helpers";
 import { validateAssignees } from "./lib/task_helpers";
-import { CURRENCIES } from "./lib/constants";
+import { getDateInTimezone } from "./lib/timer";
 
 const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -82,23 +82,16 @@ export const create = mutation({
     clientId: v.id("clients"),
     name: v.string(),
     billingType: billingTypeValidator,
-    currency: currencyValidator,
     code: v.optional(v.string()),
     // Fixed fields
     fixedPrice: v.optional(v.number()),
-    // T&M fields
-    tmRateMode: v.optional(tmRateModeValidator),
-    hourlyRate: v.optional(v.number()),
-    tmCategoryRates: v.optional(v.array(v.object({
-      workCategoryId: v.id("workCategories"),
-      rate: v.number(),
-    }))),
     // Retainer fields
     includedMinutesPerMonth: v.optional(v.number()),
-    overageRate: v.optional(v.number()),
+    monthlyFee: v.optional(v.number()),
     startDate: v.optional(v.string()),
     cycleLength: v.optional(v.number()),
     rolloverEnabled: v.optional(v.boolean()),
+    overageRate: v.optional(v.number()),
     // Team members
     teamMembers: v.optional(v.array(v.id("users"))),
   },
@@ -109,14 +102,10 @@ export const create = mutation({
     if (!name) throw new ConvexError("Project name is required");
     validateStringLength(name, 100, "Project name");
 
-    // Validate client exists and belongs to org
+    // Validate client exists and belongs to org — currency derived from client
     const client = await ctx.db.get(args.clientId);
     if (!client || client.orgId !== orgId) throw new ConvexError("Client not found");
-
-    // Validate currency
-    if (!CURRENCIES.includes(args.currency as typeof CURRENCIES[number])) {
-      throw new ConvexError("Invalid currency");
-    }
+    const currency = client.currency;
 
     // Validate team members belong to org
     if (args.teamMembers && args.teamMembers.length > 0) {
@@ -130,29 +119,10 @@ export const create = mutation({
       }
     }
 
-    // T&M validation
-    if (args.billingType === "t_and_m") {
-      if (!args.tmRateMode) throw new ConvexError("Rate mode is required for T&M projects");
-      if (args.tmRateMode === "flat" && (args.hourlyRate === undefined || args.hourlyRate < 0)) {
-        throw new ConvexError("Hourly rate is required for flat-rate T&M projects");
-      }
-      if (args.tmRateMode === "per_category") {
-        if (!args.tmCategoryRates || args.tmCategoryRates.length === 0) {
-          throw new ConvexError("At least one category rate is required for per-category T&M projects");
-        }
-        for (const cr of args.tmCategoryRates) {
-          if (cr.rate < 0) throw new ConvexError("Category rate cannot be negative");
-        }
-      }
-    }
-
     // Retainer validation
     if (args.billingType === "retainer") {
       if (!args.includedMinutesPerMonth || args.includedMinutesPerMonth <= 0) {
         throw new ConvexError("Monthly hours is required for retainer projects");
-      }
-      if (args.overageRate === undefined || args.overageRate < 0) {
-        throw new ConvexError("Overage rate is required for retainer projects");
       }
       if (!args.startDate || !DATE_REGEX.test(args.startDate)) {
         throw new ConvexError("Start date is required (YYYY-MM-DD)");
@@ -165,6 +135,12 @@ export const create = mutation({
       const cycleLen = args.cycleLength ?? 1;
       if (cycleLen < 1 || cycleLen > 12 || !Number.isInteger(cycleLen)) {
         throw new ConvexError("Cycle length must be 1-12 months");
+      }
+      if (args.monthlyFee !== undefined && args.monthlyFee < 0) {
+        throw new ConvexError("Monthly fee cannot be negative");
+      }
+      if (args.overageRate === undefined || args.overageRate <= 0) {
+        throw new ConvexError("Overage rate is required for retainer projects and must be greater than zero");
       }
     }
 
@@ -200,24 +176,18 @@ export const create = mutation({
       name,
       code,
       billingType: args.billingType,
-      currency: args.currency,
+      currency, // Still writing to projects.currency during widen phase
       // Fixed fields
       ...(args.billingType === "fixed" ? {
         fixedPrice: args.fixedPrice,
-      } : {}),
-      // T&M fields
-      ...(args.billingType === "t_and_m" ? {
-        tmRateMode: args.tmRateMode,
-        hourlyRate: args.tmRateMode === "flat" ? args.hourlyRate : undefined,
-        tmCategoryRates: args.tmRateMode === "per_category" ? args.tmCategoryRates : undefined,
       } : {}),
       // Retainer fields
       ...(args.billingType === "retainer" ? {
         retainerStatus: "active" as const,
         includedMinutesPerMonth: args.includedMinutesPerMonth,
+        monthlyFee: args.monthlyFee,
         overageRate: args.overageRate,
         startDate: args.startDate,
-        // Force rollover off for 1-month cycles (nothing to roll over)
         rolloverEnabled: (args.cycleLength ?? 1) >= 2 ? (args.rolloverEnabled ?? true) : false,
         cycleLength: args.cycleLength ?? 1,
       } : {}),
@@ -228,7 +198,7 @@ export const create = mutation({
       createdBy: userId,
     });
 
-    // Seed category estimate rows for Fixed projects from org defaults
+    // Seed category estimate rows for Fixed projects (hours only, no rates)
     if (args.billingType === "fixed") {
       const categories = await ctx.db
         .query("workCategories")
@@ -241,14 +211,16 @@ export const create = mutation({
           projectId,
           workCategoryId: cat._id,
           estimatedMinutes: 0,
-          internalCostRate: cat.defaultCostRate,
-          clientBillingRate: cat.defaultBillRate,
           createdAt: now,
           updatedAt: now,
           createdBy: userId,
         });
       }
     }
+
+    // No auto-seeding of projectRateOverrides — the resolution chain
+    // falls back to categoryRates when no project override exists.
+    // Overrides are only created when a user explicitly sets a different rate.
 
     return projectId;
   },
@@ -259,16 +231,10 @@ export const update = mutation({
     id: v.id("projects"),
     name: v.optional(v.string()),
     code: v.optional(v.string()),
-    currency: v.optional(currencyValidator),
     fixedPrice: v.optional(v.number()),
     defaultAssignees: v.optional(v.array(v.object({
       workCategoryId: v.id("workCategories"),
       userId: v.id("users"),
-    }))),
-    hourlyRate: v.optional(v.number()),
-    tmCategoryRates: v.optional(v.array(v.object({
-      workCategoryId: v.id("workCategories"),
-      rate: v.number(),
     }))),
     teamMembers: v.optional(v.array(v.id("users"))),
   },
@@ -293,11 +259,6 @@ export const update = mutation({
       updates.code = code;
     }
 
-    if (args.currency !== undefined) {
-      // TODO: Currency lock — block if invoiced/paid reports exist. Always allows for now.
-      updates.currency = args.currency;
-    }
-
     if (args.teamMembers !== undefined) {
       if (args.teamMembers.length > 0) {
         await validateAssignees(ctx, orgId, args.teamMembers);
@@ -306,7 +267,6 @@ export const update = mutation({
     }
 
     if (args.defaultAssignees !== undefined) {
-      // Validate: each userId must be in the project's teamMembers
       const effectiveTeam = (updates.teamMembers ?? project.teamMembers) as string[] | undefined;
       const teamSet = new Set((effectiveTeam ?? []).map((id) => String(id)));
       for (const da of args.defaultAssignees) {
@@ -317,7 +277,6 @@ export const update = mutation({
       updates.defaultAssignees = args.defaultAssignees;
     }
 
-    // Fixed price update
     if (args.fixedPrice !== undefined) {
       if (project.billingType !== "fixed") {
         throw new ConvexError("Fixed fee can only be set on fixed projects");
@@ -326,28 +285,6 @@ export const update = mutation({
         throw new ConvexError("Fixed fee must be greater than zero");
       }
       updates.fixedPrice = args.fixedPrice;
-    }
-
-    // T&M rate updates
-    if (args.hourlyRate !== undefined) {
-      if (project.billingType !== "t_and_m" || project.tmRateMode !== "flat") {
-        throw new ConvexError("Hourly rate can only be set on flat-rate T&M projects");
-      }
-      if (args.hourlyRate < 0) throw new ConvexError("Hourly rate cannot be negative");
-      updates.hourlyRate = args.hourlyRate;
-    }
-
-    if (args.tmCategoryRates !== undefined) {
-      if (project.billingType !== "t_and_m" || project.tmRateMode !== "per_category") {
-        throw new ConvexError("Category rates can only be set on per-category T&M projects");
-      }
-      if (args.tmCategoryRates.length === 0) {
-        throw new ConvexError("Per-category T&M projects must include at least one category rate");
-      }
-      for (const cr of args.tmCategoryRates) {
-        if (cr.rate < 0) throw new ConvexError("Category rate cannot be negative");
-      }
-      updates.tmCategoryRates = args.tmCategoryRates;
     }
 
     await ctx.db.patch(args.id, updates);
@@ -406,10 +343,11 @@ export const updateRetainer = mutation({
   args: {
     id: v.id("projects"),
     includedMinutesPerMonth: v.optional(v.number()),
-    overageRate: v.optional(v.number()),
+    monthlyFee: v.optional(v.number()),
     startDate: v.optional(v.string()),
     cycleLength: v.optional(v.number()),
     rolloverEnabled: v.optional(v.boolean()),
+    overageRate: v.optional(v.number()),
     retainerStatus: v.optional(retainerStatusValidator),
     confirmed: v.optional(v.boolean()),
   },
@@ -424,10 +362,11 @@ export const updateRetainer = mutation({
     // Check if any config-changing fields are being modified (require confirmation)
     const needsConfirmation =
       (args.includedMinutesPerMonth !== undefined && args.includedMinutesPerMonth !== project.includedMinutesPerMonth) ||
-      (args.overageRate !== undefined && args.overageRate !== project.overageRate) ||
+      (args.monthlyFee !== undefined && args.monthlyFee !== project.monthlyFee) ||
       (args.cycleLength !== undefined && args.cycleLength !== project.cycleLength) ||
       (args.rolloverEnabled !== undefined && args.rolloverEnabled !== project.rolloverEnabled) ||
-      (args.startDate !== undefined && args.startDate !== project.startDate);
+      (args.startDate !== undefined && args.startDate !== project.startDate) ||
+      (args.overageRate !== undefined && args.overageRate !== project.overageRate);
 
     if (needsConfirmation && !args.confirmed) {
       throw new ConvexError("CONFIRMATION_REQUIRED");
@@ -438,9 +377,9 @@ export const updateRetainer = mutation({
       updates.includedMinutesPerMonth = args.includedMinutesPerMonth;
     }
 
-    if (args.overageRate !== undefined) {
-      if (args.overageRate < 0) throw new ConvexError("Overage rate cannot be negative");
-      updates.overageRate = args.overageRate;
+    if (args.monthlyFee !== undefined) {
+      if (args.monthlyFee < 0) throw new ConvexError("Monthly fee cannot be negative");
+      updates.monthlyFee = args.monthlyFee;
     }
 
     if (args.startDate !== undefined) {
@@ -462,6 +401,11 @@ export const updateRetainer = mutation({
 
     if (args.rolloverEnabled !== undefined) {
       updates.rolloverEnabled = args.rolloverEnabled;
+    }
+
+    if (args.overageRate !== undefined) {
+      if (args.overageRate <= 0) throw new ConvexError("Overage rate must be greater than 0");
+      updates.overageRate = args.overageRate;
     }
 
     if (args.retainerStatus !== undefined) {
@@ -492,19 +436,21 @@ export const getRetainerData = query({
 
     const {
       includedMinutesPerMonth = 0,
-      overageRate = 0,
+      monthlyFee = 0,
       startDate,
       rolloverEnabled = true,
       cycleLength = 3,
     } = project;
 
+    // Get currency from client
+    const client = await ctx.db.get(project.clientId);
+    const currency = client?.currency ?? "USD";
+
     if (!startDate) return null;
     const timezone = orgSettings?.timezone ?? "America/New_York";
 
-    // Compute today in org timezone
-    const nowUtc = new Date();
-    const orgNow = new Date(nowUtc.toLocaleString("en-US", { timeZone: timezone }));
-    const todayStr = `${orgNow.getFullYear()}-${String(orgNow.getMonth() + 1).padStart(2, "0")}-${String(orgNow.getDate()).padStart(2, "0")}`;
+    // Compute today in org timezone (same helper used by timer & time entries)
+    const todayStr = getDateInTimezone(Date.now(), timezone);
 
     // Compute cycle boundaries
     const startParts = startDate.split("-").map(Number);
@@ -512,10 +458,10 @@ export const getRetainerData = query({
     const startMonth = startParts[1] - 1; // 0-indexed
 
     // Calculate which cycle index contains today
-    const todayDate = new Date(orgNow.getFullYear(), orgNow.getMonth(), 1);
-    const startDateObj = new Date(startYear, startMonth, 1);
-    const monthsDiff = (todayDate.getFullYear() - startDateObj.getFullYear()) * 12 +
-      (todayDate.getMonth() - startDateObj.getMonth());
+    const todayParts = todayStr.split("-").map(Number);
+    const todayYear = todayParts[0];
+    const todayMonth = todayParts[1] - 1; // 0-indexed
+    const monthsDiff = (todayYear - startYear) * 12 + (todayMonth - startMonth);
     const currentCycleIndex = Math.max(0, Math.floor(monthsDiff / cycleLength));
 
     const offset = args.cycleOffset ?? 0;
@@ -570,7 +516,7 @@ export const getRetainerData = query({
           return entries.map((e) => ({
             ...e,
             taskTitle: task.title,
-            workCategoryId: task.workCategoryId,
+            workCategoryId: e.snapshotCategoryId ?? task.workCategoryId,
           }));
         }),
       )
@@ -707,21 +653,25 @@ export const getRetainerData = query({
     const utilization = cycleBudget > 0 ? (cycleWorked / cycleBudget) * 100 : 0;
 
     // Overage calculation
+    const projectOverageRate = project.overageRate ?? 0;
     let overageMinutes = 0;
+    let overageDue = 0;
     if (rolloverEnabled) {
-      // Only at cycle end
+      // Rollover: overage only at end of closed cycle
       if (isCycleClosed && cycleBalance < 0) {
         overageMinutes = Math.abs(cycleBalance);
+        overageDue = (overageMinutes / 60) * projectOverageRate;
       }
     } else {
-      // Per closed month
+      // Non-rollover: each month settles independently
       for (const m of monthlyData) {
         if (m.isMonthClosed && m.endBalance < 0) {
-          overageMinutes += Math.abs(m.endBalance);
+          const monthOverage = Math.abs(m.endBalance);
+          overageMinutes += monthOverage;
+          overageDue += (monthOverage / 60) * projectOverageRate;
         }
       }
     }
-    const overageDue = (overageMinutes / 60) * overageRate;
 
     // totalNonBillableMinutes scoped to current cycle months only
     const totalNonBillableMinutes = monthlyData.reduce(
@@ -746,11 +696,12 @@ export const getRetainerData = query({
       utilization,
       overageMinutes,
       overageDue,
-      overageRate,
+      monthlyFee,
       includedMinutesPerMonth,
       rolloverEnabled,
+      overageRate: projectOverageRate,
       totalNonBillableMinutes,
-      currency: project.currency,
+      currency,
     };
   },
 });
@@ -777,16 +728,20 @@ export const remove = mutation({
       }
     }
 
-    // Cascade delete: fetch estimates and periods in parallel
-    const [estimates, periods] = await Promise.all([
+    // Cascade delete: fetch estimates, periods, and rate overrides in parallel
+    const [estimates, periods, rateOverrides] = await Promise.all([
       ctx.db.query("projectCategoryEstimates").withIndex("by_projectId", (q) => q.eq("projectId", args.id)).collect(),
       ctx.db.query("retainerPeriods").withIndex("by_projectId", (q) => q.eq("projectId", args.id)).collect(),
+      ctx.db.query("projectRateOverrides").withIndex("by_projectId", (q) => q.eq("projectId", args.id)).collect(),
     ]);
     for (const est of estimates) {
       await ctx.db.delete(est._id);
     }
     for (const period of periods) {
       await ctx.db.delete(period._id);
+    }
+    for (const override of rateOverrides) {
+      await ctx.db.delete(override._id);
     }
 
     await ctx.db.delete(args.id);

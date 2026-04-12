@@ -30,11 +30,6 @@ export const billingTypeValidator = v.union(
   v.literal("non_billable"),
 );
 
-export const tmRateModeValidator = v.union(
-  v.literal("flat"),
-  v.literal("per_category"),
-);
-
 export const retainerStatusValidator = v.union(
   v.literal("active"),
   v.literal("inactive"),

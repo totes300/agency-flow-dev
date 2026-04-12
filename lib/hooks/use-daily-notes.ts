@@ -10,7 +10,7 @@ type UseDailyNotesParams = {
 
 export function useDailyNotes({ noteTargetUserId, upsertNote }: UseDailyNotesParams) {
   const today = useMemo(() => getTodayString(), [])
-  const [noteDate, setNoteDate] = useState(() => getTodayString())
+  const [noteDate, setNoteDate] = useState(today)
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle")
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const savedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)

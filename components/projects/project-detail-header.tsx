@@ -18,7 +18,8 @@ import { ConfirmDialog } from "@/components/confirm-dialog"
 import { BillingTypeBadge } from "@/components/billing-type-badge"
 import { RetainerStatusBadge } from "@/components/retainer-status-badge"
 import { toast } from "sonner"
-import { formatShortDate } from "@/lib/format"
+import { toastError } from "@/lib/toast-helpers"
+import { formatShortDate, formatMinutes } from "@/lib/format"
 import {
   ArrowLeftIcon,
   MoreHorizontalIcon,
@@ -59,8 +60,8 @@ export function ProjectDetailHeader({
     try {
       await archiveProject({ id: projectId })
       toast.success("Project archived")
-    } catch {
-      toast.error("Failed to archive")
+    } catch (err) {
+      toastError(err, "Failed to archive")
     }
   }
 
@@ -68,8 +69,8 @@ export function ProjectDetailHeader({
     try {
       await restoreProject({ id: projectId })
       toast.info("Project restored")
-    } catch {
-      toast.error("Failed to restore")
+    } catch (err) {
+      toastError(err, "Failed to restore")
     }
   }
 
@@ -79,7 +80,7 @@ export function ProjectDetailHeader({
       toast.success("Project deleted")
       router.replace("/projects")
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to delete")
+      toastError(err, "Failed to delete")
     }
   }
 
@@ -118,8 +119,7 @@ export function ProjectDetailHeader({
                 <>
                   <span>&middot;</span>
                   <span className="tabular-nums">
-                    {String(Math.floor(project.includedMinutesPerMonth / 60)).padStart(2, "0")}:
-                    {String(project.includedMinutesPerMonth % 60).padStart(2, "0")} h/mo
+                    {formatMinutes(project.includedMinutesPerMonth)} h/mo
                   </span>
                 </>
               )}

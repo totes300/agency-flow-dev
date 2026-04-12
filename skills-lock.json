@@ -71,6 +71,11 @@
       "sourceType": "github",
       "computedHash": "92a5c170cf238f45f08439d9d5d7947af490b880ee8f15306183240483cbed02"
     },
+    "deslop": {
+      "source": "mikecann/agent-skills",
+      "sourceType": "github",
+      "computedHash": "a238a8b75519a21b5d99223b927461a32fc311dcca145ff4f56c6cd55d97e860"
+    },
     "emil-design-eng": {
       "source": "emilkowalski/skill",
       "sourceType": "github",

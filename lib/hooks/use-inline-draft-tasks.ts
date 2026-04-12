@@ -109,9 +109,7 @@ export function useInlineDraftTasks(deps: {
   }, [])
 
   const handleRetryDraft = useCallback((draft: InlineCreatedTask) => {
-    const newLocalId = typeof crypto !== "undefined" && "randomUUID" in crypto
-      ? crypto.randomUUID()
-      : `inline-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    const newLocalId = crypto.randomUUID()
 
     // Replace old draft with new saving draft
     setInlineCreatedTasks((prev) => {

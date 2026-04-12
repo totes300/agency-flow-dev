@@ -1,5 +1,6 @@
 import { query, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
+import type { Id } from "./_generated/dataModel";
 import { getAuthContext } from "./lib/auth";
 
 // ─── Public query ───────────────────────────────────────────────────────────
@@ -32,7 +33,7 @@ export const listOrgMembers = query({
     );
 
     return results.filter(Boolean) as Array<{
-      _id: NonNullable<typeof memberships[0]["userId"]>;
+      _id: Id<"users">;
       name: string;
       email: string | undefined;
       imageUrl: string | undefined;

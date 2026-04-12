@@ -302,12 +302,12 @@ export function ProjectFormStepBasic({
                       <CommandItem
                         key={member._id}
                         value={member.name}
-                        onSelect={() => handleToggleMember(member._id as Id<"users">)}
+                        onSelect={() => handleToggleMember(member._id)}
                       >
                         <CheckIcon
                           className={cn(
                             "mr-2 size-4",
-                            teamMembers.includes(member._id as Id<"users">)
+                            teamMembers.includes(member._id)
                               ? "opacity-100"
                               : "opacity-0"
                           )}

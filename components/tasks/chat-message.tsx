@@ -293,8 +293,12 @@ export const ChatMessage = memo(function ChatMessage({
     return (
       <div
         id={`comment-${item.id}`}
+        role="button"
+        tabIndex={0}
+        aria-expanded={false}
         className="group/msg relative mt-5 mb-3 first:mt-0 cursor-pointer transition-colors"
         onClick={() => setResolvedExpanded(true)}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setResolvedExpanded(true) } }}
       >
         {/* Hover toolbar — reply + re-open */}
         <div className="absolute top-0 right-1 z-10 flex items-center gap-0.5 rounded-lg border border-border/50 bg-background px-1 py-0.5 opacity-0 shadow-sm transition-opacity duration-100 group-hover/msg:opacity-100">

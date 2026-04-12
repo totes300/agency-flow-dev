@@ -118,7 +118,7 @@ export function ProjectTeam({ projectId, teamMembers = [], defaultAssignees = []
                           key={member._id}
                           value={member.name}
                           onSelect={() => {
-                            void handleAddMember(member._id as Id<"users">)
+                            void handleAddMember(member._id)
                             setAddOpen(false)
                           }}
                         >
@@ -189,7 +189,7 @@ export function ProjectTeam({ projectId, teamMembers = [], defaultAssignees = []
                     <DropdownMenuItem
                       className="text-destructive focus:text-destructive"
                       disabled={saving}
-                      onClick={() => void handleRemoveMember(member._id as Id<"users">)}
+                      onClick={() => void handleRemoveMember(member._id)}
                     >
                       <Trash2Icon className="size-4" />
                       Remove

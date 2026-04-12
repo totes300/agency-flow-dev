@@ -89,6 +89,7 @@ export function StepCategories({
             <Input
               value={cat.name}
               onChange={(e) => handleEdit(cat.id, { name: e.target.value })}
+              aria-label={`Category name for ${cat.name || "new category"}`}
               className="h-7 flex-1 border-transparent bg-transparent px-1 text-sm hover:border-input focus:border-input"
             />
 
@@ -98,6 +99,7 @@ export function StepCategories({
               step="any"
               value={cat.defaultBillRate}
               onChange={(e) => handleRateChange(cat.id, e.target.value)}
+              aria-label={`Bill rate for ${cat.name || "new category"}`}
               placeholder="Bill rate"
               className="h-7 w-20 px-1 text-xs"
             />

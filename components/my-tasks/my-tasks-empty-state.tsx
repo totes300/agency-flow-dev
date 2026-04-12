@@ -25,8 +25,8 @@ export function TodayAllDoneState({
 }) {
   return (
     <div className="flex flex-col items-center gap-2 py-8 text-center">
-      <PartyPopperIcon className="size-8 text-emerald-500/70" />
-      <p className="text-sm font-medium text-emerald-700 dark:text-emerald-400">
+      <PartyPopperIcon className="size-8 text-primary/70" />
+      <p className="text-sm font-medium text-primary">
         All done for today!
       </p>
       {completedCount > 0 && (

@@ -49,7 +49,7 @@ import { RateBadge, NoRatesPlaceholder } from "@/components/rate-badge"
 
 function SettingsWorkCategoriesSkeleton() {
   return (
-    <div className="space-y-1">
+    <div className="flex flex-col gap-1">
       <div className="flex items-center border-b py-2 text-xs text-muted-foreground">
         <Skeleton className="ml-10 h-3 w-16 flex-1" />
         <Skeleton className="h-3 w-24" />
@@ -305,12 +305,12 @@ function CategoryForm({
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4">
-      <div className="space-y-1.5">
+    <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+      <div className="flex flex-col gap-1.5">
         <Label>Name</Label>
         <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Design, Development" autoFocus />
       </div>
-      <div className="space-y-1.5">
+      <div className="flex flex-col gap-1.5">
         <Label>Color</Label>
         <ColorPickerDropdown
           value={color}
@@ -322,7 +322,7 @@ function CategoryForm({
           })}
         />
       </div>
-      <div className="space-y-1.5">
+      <div className="flex flex-col gap-1.5">
         <Label>Default Bill Rate (optional)</Label>
         <Input
           type="number" min={0} step="any"
@@ -413,14 +413,14 @@ function CategoryEditForm({
   }
 
   return (
-    <div className="space-y-5">
+    <div className="flex flex-col gap-5">
       {/* Name & Color */}
-      <div className="space-y-4">
-        <div className="space-y-1.5">
+      <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-1.5">
           <Label>Name</Label>
           <Input value={name} onChange={(e) => setName(e.target.value)} autoFocus />
         </div>
-        <div className="space-y-1.5">
+        <div className="flex flex-col gap-1.5">
           <Label>Color</Label>
           <ColorPickerDropdown
             value={color}
@@ -435,7 +435,7 @@ function CategoryEditForm({
       </div>
 
       {/* Bill Rates */}
-      <div className="space-y-3">
+      <div className="flex flex-col gap-3">
         <Label>Default Bill Rates</Label>
         {rates.length === 0 && !addingRate && (
           <p className="text-xs text-muted-foreground">No rates set. Add a rate per currency.</p>

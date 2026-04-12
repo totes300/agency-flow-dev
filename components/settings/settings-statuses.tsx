@@ -47,14 +47,14 @@ import { getStatusColor } from "@/lib/status-colors"
 
 function SettingsStatusesSkeleton() {
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col gap-6">
       {Array.from({ length: 5 }).map((_, i) => (
         <div key={i}>
           <div className="flex items-center justify-between border-b pb-2">
             <Skeleton className="h-4 w-20" />
             <Skeleton className="size-4" />
           </div>
-          <div className="space-y-1 pt-2">
+          <div className="flex flex-col gap-1 pt-2">
             <Skeleton className="h-8 w-full" />
             {i < 2 && <Skeleton className="h-8 w-full" />}
           </div>
@@ -292,7 +292,7 @@ function CompletionDefaults({
       <p className="mt-2 text-xs text-muted-foreground">
         When a team member checks a task as complete, it moves to the default status for their role.
       </p>
-      <div className="mt-4 space-y-3">
+      <div className="mt-4 flex flex-col gap-3">
         {([
           { label: "Admin completes to", field: "completionDefaultAdminStatusId" as const, value: adminDefaultId },
           { label: "Member completes to", field: "completionDefaultMemberStatusId" as const, value: memberDefaultId },
@@ -360,8 +360,8 @@ function StatusForm({
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4">
-      <div className="space-y-2">
+    <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+      <div className="flex flex-col gap-2">
         <Label>Name</Label>
         <Input
           value={name}
@@ -372,7 +372,7 @@ function StatusForm({
       </div>
 
       {/* Group (type) */}
-      <div className="space-y-2">
+      <div className="flex flex-col gap-2">
         <Label>Group</Label>
         <Select value={type} onValueChange={(v) => setType(v as StatusType)}>
           <SelectTrigger>
@@ -389,7 +389,7 @@ function StatusForm({
       </div>
 
       {/* Color picker */}
-      <div className="space-y-2">
+      <div className="flex flex-col gap-2">
         <Label>Color</Label>
         <ColorPickerDropdown
           value={color}

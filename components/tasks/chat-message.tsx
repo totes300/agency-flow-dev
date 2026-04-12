@@ -339,7 +339,7 @@ export const ChatMessage = memo(function ChatMessage({
 
         {/* Line 2: resolved badge */}
         {item.resolvedByName && (
-          <div className="mt-1 flex items-center gap-1 pl-8 text-[11px] font-medium text-green-600/70">
+          <div className="mt-1 flex items-center gap-1 pl-8 text-[11px] font-medium text-primary/70">
             <CircleCheckIcon className="size-3.5" strokeWidth={2} />
             Resolved by {item.resolvedByName} · {formatRelativeTime(item.resolvedAt!)}
           </div>
@@ -417,7 +417,7 @@ export const ChatMessage = memo(function ChatMessage({
                   type="button"
                   onClick={() => onResolve(item.id)}
                   aria-label="Resolve"
-                  className="flex size-6 items-center justify-center rounded text-muted-foreground/60 transition-colors hover:bg-green-50 hover:text-green-600"
+                  className="flex size-6 items-center justify-center rounded text-muted-foreground/60 transition-colors hover:bg-primary/10 hover:text-primary"
                 >
                   <CircleCheckIcon className="size-3.5" />
                 </button>
@@ -580,7 +580,7 @@ export const ChatMessage = memo(function ChatMessage({
             <button
               type="button"
               onClick={() => setResolvedExpanded(false)}
-              className="mt-2 flex items-center gap-1 text-[11px] font-medium text-green-600/70 transition-colors hover:text-green-600"
+              className="mt-2 flex items-center gap-1 text-[11px] font-medium text-primary/70 transition-colors hover:text-primary"
             >
               <CircleCheckIcon className="size-3.5" strokeWidth={2} />
               Resolved by {item.resolvedByName} · {formatRelativeTime(item.resolvedAt!)}

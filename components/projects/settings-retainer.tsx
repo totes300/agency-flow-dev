@@ -185,9 +185,9 @@ export function SettingsRetainer({
           </CardAction>
         </CardHeader>
 
-        <CardContent className="space-y-6">
+        <CardContent className="flex flex-col gap-6">
           {/* Budget */}
-          <div className="space-y-4">
+          <div className="flex flex-col gap-4">
             <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Budget</p>
             <div className="grid gap-4 sm:grid-cols-3">
               <Field>
@@ -247,7 +247,7 @@ export function SettingsRetainer({
           </div>
 
           {/* Schedule */}
-          <div className="space-y-4">
+          <div className="flex flex-col gap-4">
             <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Schedule</p>
             <div className="grid gap-4 sm:grid-cols-2">
               <Field>

@@ -107,7 +107,7 @@ const TimerCircle = React.forwardRef<
           fill="none"
           className={cn(
             "transition-[stroke] duration-300",
-            running ? "stroke-red-500/20" : "stroke-border",
+            running ? "stroke-destructive/20" : "stroke-border",
           )}
           strokeWidth={sw}
         />
@@ -119,7 +119,7 @@ const TimerCircle = React.forwardRef<
               cy={size / 2}
               r={r}
               fill="none"
-              className="stroke-red-500"
+              className="stroke-destructive"
               strokeWidth={sw}
               strokeLinecap="round"
               strokeDasharray={`${arcLen} ${gapLen}`}
@@ -156,7 +156,7 @@ function RunningTimeCell({ variant = "inline", align = "start" }: { variant?: "i
           <TooltipTrigger asChild>
             <button
               onClick={handleStopClick}
-              className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-red-500 transition-colors hover:bg-accent dark:text-red-400"
+              className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-destructive transition-colors hover:bg-accent"
               aria-label="Stop timer"
             >
               <PauseIcon className="size-3.5" strokeWidth={0} fill="currentColor" />
@@ -164,7 +164,7 @@ function RunningTimeCell({ variant = "inline", align = "start" }: { variant?: "i
           </TooltipTrigger>
           <TooltipContent side="bottom" sideOffset={4}>Stop timer</TooltipContent>
         </Tooltip>
-        <span className="text-xs tabular-nums text-red-500 dark:text-red-400">
+        <span className="text-xs tabular-nums text-destructive">
           {formattedTime}
         </span>
       </div>
@@ -187,7 +187,7 @@ function RunningTimeCell({ variant = "inline", align = "start" }: { variant?: "i
           <TooltipTrigger asChild>
             <button
               onClick={handleStopClick}
-              className="flex size-[18px] shrink-0 cursor-pointer items-center justify-center rounded-full bg-muted-foreground/15 text-red-500 transition-all duration-150 hover:bg-red-500/15"
+              className="flex size-[18px] shrink-0 cursor-pointer items-center justify-center rounded-full bg-muted-foreground/15 text-destructive transition-all duration-150 hover:bg-destructive/15"
               aria-label="Stop timer"
             >
               <span className="block size-[7px] rounded-[1.5px] bg-current" />
@@ -199,7 +199,7 @@ function RunningTimeCell({ variant = "inline", align = "start" }: { variant?: "i
         <Tooltip>
           <TooltipTrigger asChild>
             <TimerCircle size={circleSize} running onClick={handleStopClick} label="Stop timer">
-              <span className={cn("block rounded-[2px] bg-red-500", stopSize)} />
+              <span className={cn("block rounded-[2px] bg-destructive", stopSize)} />
             </TimerCircle>
           </TooltipTrigger>
           <TooltipContent side="top" sideOffset={4}>Stop timer</TooltipContent>
@@ -208,7 +208,7 @@ function RunningTimeCell({ variant = "inline", align = "start" }: { variant?: "i
       <span
         className={cn(
           "tabular-nums",
-          variant === "inline" ? "text-xs font-semibold text-red-500 dark:text-red-400" : "text-[13px] font-semibold tracking-[0.01em] text-red-500",
+          variant === "inline" ? "text-xs font-semibold text-destructive" : "text-[13px] font-semibold tracking-[0.01em] text-destructive",
         )}
       >
         {formattedTime}

@@ -95,13 +95,14 @@ export function ProjectFormModal({ open, onOpenChange }: ProjectFormModalProps) 
     }
   }, [nextCode, codePreFilled])
 
-  // Auto-fill currency from selected client
-  useEffect(() => {
-    if (clientId && clientId !== NEW_CLIENT_VALUE && clients) {
-      const client = clients.find((c) => c._id === clientId)
+  // Wrap setClientId to auto-fill currency from selected client
+  function handleClientIdChange(newClientId: string) {
+    setClientId(newClientId)
+    if (newClientId && newClientId !== NEW_CLIENT_VALUE && clients) {
+      const client = clients.find((c) => c._id === newClientId)
       if (client) setCurrency(client.currency)
     }
-  }, [clientId, clients])
+  }
 
   // Reset billing-specific state when billing type changes
   function handleBillingTypeChange(newType: BillingType) {
@@ -194,7 +195,7 @@ export function ProjectFormModal({ open, onOpenChange }: ProjectFormModalProps) 
             </DialogHeader>
             <ProjectFormStepBasic
               clientId={clientId}
-              setClientId={setClientId}
+              setClientId={handleClientIdChange}
               newClientName={newClientName}
               setNewClientName={setNewClientName}
               newClientContactName={newClientContactName}

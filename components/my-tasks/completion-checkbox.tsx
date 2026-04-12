@@ -21,7 +21,7 @@ const SubmittedIcon = (
     <svg viewBox="0 0 16 16" className="size-4">
       <rect
         x="0.5" y="0.5" width="15" height="15" rx="5"
-        className="fill-teal-500 stroke-teal-500"
+        className="fill-primary stroke-primary"
         strokeWidth="1"
       />
       <path

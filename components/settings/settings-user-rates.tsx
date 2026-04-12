@@ -89,7 +89,7 @@ export function SettingsUserRates() {
   if (!members || !userRates) return null
 
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col gap-4">
       <div>
         <h2 className="text-base font-semibold">User Cost Rates</h2>
         <p className="text-sm text-muted-foreground">
@@ -166,8 +166,8 @@ export function SettingsUserRates() {
               Add cost rate for {editingUser?.userName}
             </DialogTitle>
           </DialogHeader>
-          <div className="space-y-3 py-2">
-            <div className="space-y-1.5">
+          <div className="flex flex-col gap-3 py-2">
+            <div className="flex flex-col gap-1.5">
               <Label>Currency</Label>
               <Select value={editCurrency} onValueChange={(v) => setEditCurrency(v as Currency)}>
                 <SelectTrigger>
@@ -180,7 +180,7 @@ export function SettingsUserRates() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-1.5">
+            <div className="flex flex-col gap-1.5">
               <Label>Rate per hour</Label>
               <Input
                 type="number"

@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useMemo, useState, useEffect, useRef } from "react"
+import { useCallback, useMemo, useState, useRef } from "react"
 import { useQuery, useMutation } from "convex/react"
 import { useConvexAuth } from "convex/react"
 import { useOrganization } from "@clerk/nextjs"
@@ -14,9 +14,9 @@ import { MyTasksHeader } from "@/components/my-tasks/my-tasks-header"
 import { MyTasksList } from "@/components/my-tasks/my-tasks-list"
 import { MyTasksSkeleton } from "@/components/my-tasks/my-tasks-skeleton"
 import { MobileFab } from "@/components/my-tasks/mobile-fab"
-import { DailyNotesPanel, type SaveStatus } from "@/components/my-tasks/daily-notes-panel"
+import { DailyNotesPanel } from "@/components/my-tasks/daily-notes-panel"
 import { useConfetti } from "@/components/my-tasks/completion-confetti"
-import { getTodayString } from "@/lib/daily-notes-helpers"
+import { useDailyNotes } from "@/lib/hooks/use-daily-notes"
 import { useIsMobile } from "@/lib/hooks/use-is-mobile"
 import { toast } from "sonner"
 import { toastError } from "@/lib/toast-helpers"
@@ -82,12 +82,6 @@ export default function MyTasksPage() {
   }, [orgSettings, statuses, isAdmin])
 
   // ─── Daily Notes ────────────────────────────────────────────────────────
-  const today = useMemo(() => getTodayString(), [])
-  const [noteDate, setNoteDate] = useState(() => getTodayString())
-  const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle")
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const savedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-
   // Admin can view another user's notes via ?user= param
   const noteTargetUserId = (isAdmin && viewingUserId) ? viewingUserId : currentUser?._id
   const viewingOtherUser = isAdmin && viewingUserId && currentUser && viewingUserId !== currentUser._id
@@ -100,38 +94,16 @@ export default function MyTasksPage() {
   }, [viewingOtherUser, orgMembersData, viewingUserId])
 
   const upsertNote = useMutation(api.dailyNotes.upsert)
+  const { today, noteDate, setNoteDate, saveStatus, handleNoteChange } = useDailyNotes({
+    noteTargetUserId,
+    upsertNote,
+  })
   const noteData = useQuery(
     api.dailyNotes.get,
     isAuthenticated && noteTargetUserId
       ? { userId: noteTargetUserId, date: noteDate }
       : "skip",
   )
-
-  const handleNoteChange = useCallback((json: string) => {
-    if (!noteTargetUserId) return
-    setSaveStatus("saving")
-
-    if (debounceRef.current) clearTimeout(debounceRef.current)
-    if (savedTimeoutRef.current) clearTimeout(savedTimeoutRef.current)
-
-    debounceRef.current = setTimeout(async () => {
-      try {
-        await upsertNote({ userId: noteTargetUserId, date: noteDate, content: json })
-        setSaveStatus("saved")
-        savedTimeoutRef.current = setTimeout(() => setSaveStatus("idle"), 2000)
-      } catch {
-        setSaveStatus("error")
-      }
-    }, 500)
-  }, [noteTargetUserId, noteDate, upsertNote])
-
-  // Cleanup debounce on unmount
-  useEffect(() => {
-    return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current)
-      if (savedTimeoutRef.current) clearTimeout(savedTimeoutRef.current)
-    }
-  }, [])
 
   // ─── Tasks ──────────────────────────────────────────────────────────────
 

@@ -140,7 +140,7 @@ export const MyTaskRow = memo(function MyTaskRow({
               <span
                 className={cn(
                   "flex shrink-0 items-center gap-1",
-                  !isCompleted && isOverdue(task.dueDate) && "text-red-500 font-medium",
+                  !isCompleted && isOverdue(task.dueDate) && "text-destructive font-medium",
                 )}
               >
                 {!isCompleted && isOverdue(task.dueDate) ? (

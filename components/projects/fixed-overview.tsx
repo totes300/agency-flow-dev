@@ -1,8 +1,7 @@
 "use client"
 
-import { useMemo, useState } from "react"
-import { useQuery, useMutation } from "convex/react"
-import { Show } from "@clerk/nextjs"
+import { useMemo } from "react"
+import { useQuery } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -14,20 +13,9 @@ import { ProgressCell } from "@/components/ui/progress-cell"
 import { MetricCard } from "@/components/metric-card"
 import { MonthlyTimeBreakdown, TimeLogSkeleton } from "./monthly-time-breakdown"
 import { Skeleton } from "@/components/ui/skeleton"
-import {
-  AlertDialog,
-  AlertDialogContent,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogCancel,
-  AlertDialogAction,
-} from "@/components/ui/alert-dialog"
-import { toastError } from "@/lib/toast-helpers"
 import { InfoIcon, AlertTriangleIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { formatMinutes, formatCurrencyPrecise, pluralize } from "@/lib/format"
+import { formatMinutes, formatCurrencyPrecise } from "@/lib/format"
 import { useTaskDetailNav } from "@/lib/hooks/use-task-detail-nav"
 import {
   CELL_KEY, CELL_PRIMARY, CELL_SECONDARY,
@@ -48,9 +36,6 @@ export function FixedOverview({
   const categories = useQuery(api.workCategories.list, { includeArchived: false })
   const overview = useQuery(api.timeEntries.projectOverview, { projectId })
   const monthlyData = useQuery(api.timeEntries.projectMonthlyBreakdown, { projectId })
-  const missingCostRateCount = useQuery(api.timeEntries.countMissingCostRates, { projectId })
-  const backfillMissingCostRates = useMutation(api.timeEntries.backfillMissingCostRates)
-  const [backfillDialogOpen, setBackfillDialogOpen] = useState(false)
 
   const currency = project.currency
   const fixedPrice = project.fixedPrice
@@ -60,23 +45,15 @@ export function FixedOverview({
     return estimates.reduce((sum, e) => sum + e.estimatedMinutes, 0)
   }, [estimates])
 
-  // Estimated cost = sum of (estimatedMinutes / 60) × internalCostRate per category
-  const totalEstimatedCost = useMemo(() => {
-    if (!estimates) return 0
-    return estimates.reduce(
-      (sum, e) => sum + (e.estimatedMinutes / 60) * (e.internalCostRate ?? 0),
-      0,
-    )
-  }, [estimates])
-
   // Fixed economics from real data
   const totalActualMinutes = overview?.totalMinutes ?? 0
   const totalNonBillableMinutes = overview?.totalNonBillableMinutes ?? 0
   const totalActualCost = overview?.totalActualCost ?? 0
-  const estimatedProfit = (fixedPrice ?? 0) - totalEstimatedCost
-  const actualProfit = (fixedPrice ?? 0) - totalActualCost
+  const revenue = fixedPrice ?? 0
+  const profit = revenue - totalActualCost
+  const margin = revenue > 0 ? (profit / revenue) * 100 : 0
   const effectiveRate = totalActualMinutes > 0
-    ? (fixedPrice ?? 0) / (totalActualMinutes / 60)
+    ? revenue / (totalActualMinutes / 60)
     : 0
   const budgetPercent = totalEstimatedMinutes > 0
     ? (totalActualMinutes / totalEstimatedMinutes) * 100
@@ -106,87 +83,53 @@ export function FixedOverview({
   return (
     <div className="flex flex-col gap-6">
       {/* Top metric cards */}
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         <MetricCard
-          label="Fixed Fee"
-          value={fixedPrice ? formatCurrencyPrecise(fixedPrice, currency) : "Not set"}
-          detail={
-            totalEstimatedCost > 0
-              ? `Est. cost ${formatCurrencyPrecise(totalEstimatedCost, currency)}`
-              : undefined
-          }
+          label="Revenue"
+          value={fixedPrice ? formatCurrencyPrecise(revenue, currency) : "Not set"}
+          detail="Fixed fee"
         />
         <MetricCard
-          label="Actual"
-          value={formatMinutes(totalActualMinutes)}
+          label="Cost"
+          value={totalActualCost > 0 ? formatCurrencyPrecise(totalActualCost, currency) : "—"}
           detail={
             totalActualMinutes > 0 ? (
-              <span className="flex flex-col gap-0.5 text-xs tabular-nums text-muted-foreground">
-                {totalNonBillableMinutes > 0 && (
-                  <span>{formatMinutes(totalNonBillableMinutes)} non-billable</span>
-                )}
-                <span>
-                  Labor cost {formatCurrencyPrecise(totalActualCost, currency)}
-                  {" · "}
-                  {formatCurrencyPrecise(effectiveRate, currency)}/h
-                </span>
+              <span className="text-xs tabular-nums text-muted-foreground">
+                {formatMinutes(totalActualMinutes)} logged
+                {totalNonBillableMinutes > 0 && ` · ${formatMinutes(totalNonBillableMinutes)} non-bill.`}
               </span>
-            ) : undefined
+            ) : "No time logged"
           }
         />
         <MetricCard
           label="Profit"
-          value={fixedPrice ? formatCurrencyPrecise(actualProfit, currency) : "—"}
+          value={fixedPrice ? formatCurrencyPrecise(profit, currency) : "—"}
           detail={
-            fixedPrice ? (
-              <ProfitDetail
-                estimatedProfit={estimatedProfit}
-                actualProfit={actualProfit}
-                currency={currency}
-              />
-            ) : undefined
+            fixedPrice && totalActualMinutes > 0
+              ? `${formatCurrencyPrecise(effectiveRate, currency)}/h effective`
+              : undefined
           }
-          variant={fixedPrice && actualProfit < 0 ? "destructive" : "default"}
+          variant={fixedPrice && profit < 0 ? "destructive" : "default"}
+        />
+        <MetricCard
+          label="Margin"
+          value={fixedPrice && totalActualCost > 0 ? `${Math.round(margin)}%` : "—"}
+          detail={
+            fixedPrice && totalActualCost > 0
+              ? `${formatCurrencyPrecise(profit, currency)} of ${formatCurrencyPrecise(revenue, currency)}`
+              : "No cost data yet"
+          }
+          variant={fixedPrice && margin < 0 ? "destructive" : "default"}
         />
       </div>
 
-      {/* Info / warning banner */}
-      {(missingCostRateCount ?? 0) > 0 ? (
-        <Show when={{ role: "org:admin" }} fallback={
-          <Alert variant="destructive">
-            <AlertTriangleIcon />
-            <AlertDescription>
-              Labor cost incomplete — {missingCostRateCount ?? 0}{" "}
-              {pluralize(missingCostRateCount ?? 0, "entry", "entries")} missing cost rate
-            </AlertDescription>
-          </Alert>
-        }>
-          <Alert variant="destructive">
-            <AlertTriangleIcon />
-            <AlertDescription className="flex items-center justify-between gap-4">
-              <span>
-                Labor cost incomplete — {missingCostRateCount ?? 0}{" "}
-                {pluralize(missingCostRateCount ?? 0, "entry", "entries")} missing cost rate
-              </span>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 shrink-0 text-xs"
-                onClick={() => setBackfillDialogOpen(true)}
-              >
-                Fix
-              </Button>
-            </AlertDescription>
-          </Alert>
-        </Show>
-      ) : (
-        <Alert>
-          <InfoIcon />
-          <AlertDescription>
-            Fixed-fee projects track delivery against estimated effort and labor cost.
-          </AlertDescription>
-        </Alert>
-      )}
+      {/* Info banner */}
+      <Alert>
+        <InfoIcon />
+        <AlertDescription>
+          Fixed-fee projects track delivery against estimated effort and labor cost.
+        </AlertDescription>
+      </Alert>
 
       {/* Budget */}
       <BudgetSection
@@ -210,69 +153,7 @@ export function FixedOverview({
         />
       )}
 
-      {/* Backfill missing cost rates dialog */}
-      <Show when={{ role: "org:admin" }}>
-        <AlertDialog open={backfillDialogOpen} onOpenChange={setBackfillDialogOpen}>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Fill missing cost rates?</AlertDialogTitle>
-              <AlertDialogDescription>
-                {missingCostRateCount ?? 0} past time{" "}
-                {pluralize(missingCostRateCount ?? 0, "entry has", "entries have")} no
-                internal cost rate snapshot. This will fill only missing snapshots
-                using the current cost rate setup. Existing snapshots will not be changed.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction
-                onClick={async () => {
-                  try {
-                    const result = await backfillMissingCostRates({ projectId })
-                    setBackfillDialogOpen(false)
-                    // Toast would be nice but the count auto-updates via reactivity
-                  } catch (err) {
-                    toastError(err, "Failed to backfill cost rates")
-                  }
-                }}
-              >
-                Fill missing rates
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-      </Show>
     </div>
-  )
-}
-
-// ─── Profit Detail ──────────────────────────────────────────────────────────────
-
-function ProfitDetail({
-  estimatedProfit,
-  actualProfit,
-  currency,
-}: {
-  estimatedProfit: number
-  actualProfit: number
-  currency: string
-}) {
-  const diff = estimatedProfit !== 0
-    ? Math.round(((actualProfit - estimatedProfit) / Math.abs(estimatedProfit)) * 100)
-    : null
-
-  return (
-    <span className="flex items-center gap-1.5 text-xs tabular-nums text-muted-foreground">
-      <span>Est. {formatCurrencyPrecise(estimatedProfit, currency)}</span>
-      {diff !== null && (
-        <span className={cn(
-          "font-medium",
-          diff >= 0 ? "text-success" : "text-destructive",
-        )}>
-          {diff >= 0 ? "+" : ""}{diff}%
-        </span>
-      )}
-    </span>
   )
 }
 
@@ -415,8 +296,8 @@ const EMPTY_RECORD: Record<string, number> = {}
 function FixedOverviewSkeleton() {
   return (
     <div className="flex flex-col gap-6">
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
-        {Array.from({ length: 3 }).map((_, i) => (
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+        {Array.from({ length: 4 }).map((_, i) => (
           <div key={i} className="rounded-xl border p-4 flex flex-col gap-2">
             <Skeleton className="h-3 w-16" />
             <Skeleton className="h-7 w-24" />

@@ -8,18 +8,9 @@ import { Button } from "@/components/ui/button"
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card"
 import { Field, FieldLabel, FieldDescription } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import { BillingTypeBadge, type BillingType } from "@/components/billing-type-badge"
-import { CURRENCIES } from "@/convex/lib/constants"
-import type { Currency } from "@/convex/lib/constants"
 import { toast } from "sonner"
+import { toastError } from "@/lib/toast-helpers"
 import { Spinner } from "@/components/ui/spinner"
 
 type ProjectData = {
@@ -58,14 +49,13 @@ export function SettingsGeneral({
         id: projectId,
         name: name.trim(),
         code: code.trim(),
-        currency: currency as Currency,
         ...(project.billingType === "fixed" && fixedPrice
           ? { fixedPrice: parseFloat(fixedPrice) }
           : {}),
       })
       toast.success("Project updated")
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to update")
+      toastError(err, "Failed to update")
     } finally {
       setSaving(false)
     }
@@ -87,19 +77,11 @@ export function SettingsGeneral({
             <Input id="s-code" value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} className="font-mono" />
           </Field>
           <Field>
-            <FieldLabel htmlFor="s-currency">Currency</FieldLabel>
-            <Select value={currency} onValueChange={setCurrency}>
-              <SelectTrigger id="s-currency">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  {CURRENCIES.map((c) => (
-                    <SelectItem key={c} value={c}>{c}</SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
+            <FieldLabel>Currency</FieldLabel>
+            <div className="flex h-9 items-center rounded-md border bg-muted/50 px-3 text-sm text-muted-foreground">
+              {currency}
+            </div>
+            <span className="text-xs text-muted-foreground">Inherited from client</span>
           </Field>
           {project.billingType === "fixed" && (
             <Field>

@@ -16,6 +16,7 @@ import {
   getDefaultStatusId,
   cascadeDeleteTaskData,
   createTaskEnricher,
+  resolveDefaultAssignee,
 } from "./lib/task_helpers";
 
 // ─── Detail Query ────────────────────────────────────────────────────────────────
@@ -37,14 +38,14 @@ export const getDetail = query({
     const status = task.statusId ? await ctx.db.get(task.statusId) : null;
 
     let project: { _id: Id<"projects">; name: string; code: string } | null = null;
-    let client: { _id: Id<"clients">; name: string } | null = null;
+    let client: { _id: Id<"clients">; name: string; prefix: string; usePrefix?: boolean } | null = null;
     if (task.projectId) {
       const p = await ctx.db.get(task.projectId);
       if (p) {
         project = { _id: p._id, name: p.name, code: p.code };
         if (p.clientId) {
           const c = await ctx.db.get(p.clientId);
-          if (c) client = { _id: c._id, name: c.name };
+          if (c) client = { _id: c._id, name: c.name, prefix: c.prefix ?? c.invoicePrefix ?? "", usePrefix: c.usePrefix };
         }
       }
     }
@@ -204,9 +205,15 @@ export const createSubtask = mutation({
     if (args.workCategoryId) {
       await validateWorkCategory(ctx, orgId, args.workCategoryId);
     }
-    const assigneeIds = args.assigneeIds ?? [...parent.assigneeIds];
+    let assigneeIds = args.assigneeIds ?? [...parent.assigneeIds];
     if (assigneeIds.length > 0) {
       await validateAssignees(ctx, orgId, assigneeIds);
+    }
+    // Auto-assign default assignee if no assignees after inheritance
+    if (assigneeIds.length === 0) {
+      const effectiveCategoryId = args.workCategoryId ?? parent.workCategoryId;
+      const defaultUserId = await resolveDefaultAssignee(ctx, orgId, parent.projectId, effectiveCategoryId);
+      if (defaultUserId) assigneeIds = [defaultUserId];
     }
 
     const existingSubtasks = await ctx.db
@@ -511,7 +518,7 @@ export const list = query({
           // Fractional key sort: tasks with keys before tasks without, then createdAt
           const ak = a.manualSortKey;
           const bk = b.manualSortKey;
-          if (ak && bk) { cmp = ak.localeCompare(bk); }
+          if (ak && bk) { cmp = ak < bk ? -1 : ak > bk ? 1 : 0; }
           else if (ak) { cmp = -1; }
           else if (bk) { cmp = 1; }
           else { cmp = 0; }
@@ -961,17 +968,23 @@ export const create = mutation({
     if (!isAdmin && !assigneeIds.includes(userId)) {
       assigneeIds = [userId, ...assigneeIds];
     }
+    // Auto-assign default assignee if no explicit assignees provided
+    if (assigneeIds.length === 0 && args.assigneeIds === undefined) {
+      const defaultUserId = await resolveDefaultAssignee(ctx, orgId, args.projectId, args.workCategoryId);
+      if (defaultUserId) assigneeIds = [defaultUserId];
+    }
     await validateAssignees(ctx, orgId, assigneeIds);
 
-    // Generate manualSortKey — append after the last task in this org.
+    // Generate manualSortKey — append after the task with the highest sort key in this org.
+    // Uses a dedicated index so we always get the true maximum key, not just the latest doc.
     // Convex OCC ensures concurrent creates on the same index range will
     // serialize (second transaction retries), so duplicate keys cannot occur.
-    const lastTask = await ctx.db
+    const lastSorted = await ctx.db
       .query("tasks")
-      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+      .withIndex("by_orgId_manualSortKey", (q) => q.eq("orgId", orgId))
       .order("desc")
       .first();
-    const lastKey = lastTask?.manualSortKey ?? null;
+    const lastKey = lastSorted?.manualSortKey ?? null;
     const manualSortKey = generateKeyBetween(lastKey, null);
 
     const now = Date.now();
@@ -1034,7 +1047,6 @@ export const update = mutation({
     if (args.statusId !== undefined) {
       const status = await ctx.db.get(args.statusId);
       if (!status || status.orgId !== orgId) throw new ConvexError("Status not found");
-      if (!isAdmin && status.type === "done") throw new ConvexError("Only admins can mark tasks as done");
       updates.statusId = args.statusId;
       updates.statusType = status.type;
     }
@@ -1060,6 +1072,25 @@ export const update = mutation({
     if (args.estimate !== undefined) updates.estimate = args.estimate === null ? undefined : args.estimate;
     if (args.billable !== undefined) updates.billable = args.billable;
     if (args.dueDate !== undefined) updates.dueDate = args.dueDate === null ? undefined : args.dueDate;
+
+    // Auto-assign default assignee when category or project changes
+    // Only if caller did NOT explicitly set assigneeIds (undefined = not touched, [] = explicit clear)
+    let autoAssignedUserId: Id<"users"> | null = null;
+    if (args.assigneeIds === undefined) {
+      const categoryChanged = args.workCategoryId !== undefined && args.workCategoryId !== (task.workCategoryId ?? null);
+      const projectChanged = args.projectId !== undefined && args.projectId !== (task.projectId ?? null);
+      const currentAssignees = task.assigneeIds;
+      const hasNoAssignees = !Array.isArray(currentAssignees) || currentAssignees.length === 0;
+
+      if ((categoryChanged || projectChanged) && hasNoAssignees) {
+        const effectiveProjectId = (updates.projectId ?? task.projectId) as Id<"projects"> | undefined;
+        const effectiveCategoryId = (updates.workCategoryId ?? task.workCategoryId) as Id<"workCategories"> | undefined;
+        autoAssignedUserId = await resolveDefaultAssignee(ctx, orgId, effectiveProjectId, effectiveCategoryId);
+        if (autoAssignedUserId) {
+          updates.assigneeIds = [autoAssignedUserId];
+        }
+      }
+    }
 
     await ctx.db.patch(args.id, updates);
 
@@ -1101,6 +1132,13 @@ export const update = mutation({
           await logActivity(ctx, { ...logCtx, type: "assignee_removed", metadata: { userId: uid, userName: user?.name ?? "Unknown" } });
         }
       }
+    }
+    // Log auto-assigned default assignee (separate from explicit assignee changes)
+    if (autoAssignedUserId) {
+      const autoUser = await ctx.db.get(autoAssignedUserId);
+      const effectiveCatId = (updates.workCategoryId ?? task.workCategoryId) as Id<"workCategories"> | undefined;
+      const autoCat = effectiveCatId ? await ctx.db.get(effectiveCatId) : null;
+      await logActivity(ctx, { ...logCtx, type: "assignee_added", metadata: { userId: autoAssignedUserId, userName: autoUser?.name ?? "Unknown", reason: "default_assignee", categoryName: autoCat?.name ?? "Unknown" } });
     }
     if (args.workCategoryId !== undefined && args.workCategoryId !== (task.workCategoryId ?? null)) {
       const oldCat = task.workCategoryId ? await ctx.db.get(task.workCategoryId) : null;
@@ -1346,10 +1384,20 @@ export const bulkUpdate = mutation({
         }
         case "category": {
           if (args.action.workCategoryId !== task.workCategoryId) {
-            await ctx.db.patch(taskId, { workCategoryId: args.action.workCategoryId, updatedAt: now });
+            const catPatch: Record<string, unknown> = { workCategoryId: args.action.workCategoryId, updatedAt: now };
+            // Auto-assign default assignee if task has no assignees
+            if (task.assigneeIds.length === 0 && task.projectId) {
+              const defaultUser = await resolveDefaultAssignee(ctx, orgId, task.projectId, args.action.workCategoryId);
+              if (defaultUser) catPatch.assigneeIds = [defaultUser];
+            }
+            await ctx.db.patch(taskId, catPatch);
             const oldCat = task.workCategoryId ? await ctx.db.get(task.workCategoryId) : null;
             const newCat = await ctx.db.get(args.action.workCategoryId);
             await logActivity(ctx, { taskId, orgId, userId, type: "category_changed", metadata: { from: oldCat?.name ?? "None", to: newCat?.name ?? "Unknown" } });
+            if (catPatch.assigneeIds) {
+              const autoUser = await ctx.db.get((catPatch.assigneeIds as Id<"users">[])[0]);
+              await logActivity(ctx, { taskId, orgId, userId, type: "assignee_added", metadata: { userId: (catPatch.assigneeIds as Id<"users">[])[0], userName: autoUser?.name ?? "Unknown", reason: "default_assignee", categoryName: newCat?.name ?? "Unknown" } });
+            }
           }
           updated++;
           break;
@@ -1360,7 +1408,18 @@ export const bulkUpdate = mutation({
             const hasEntries = await ctx.db.query("timeEntries").withIndex("by_taskId", (q) => q.eq("taskId", taskId)).first();
             if (hasEntries) { skipped.push({ taskId, title: task.title, reason: "Has time entries — cannot change project" }); continue; }
           }
-          await ctx.db.patch(taskId, { projectId: args.action.projectId, updatedAt: now });
+          const projPatch: Record<string, unknown> = { projectId: args.action.projectId, updatedAt: now };
+          // Auto-assign default assignee if task has no assignees
+          if (task.assigneeIds.length === 0 && task.workCategoryId) {
+            const defaultUser = await resolveDefaultAssignee(ctx, orgId, args.action.projectId, task.workCategoryId);
+            if (defaultUser) projPatch.assigneeIds = [defaultUser];
+          }
+          await ctx.db.patch(taskId, projPatch);
+          if (projPatch.assigneeIds) {
+            const autoUser = await ctx.db.get((projPatch.assigneeIds as Id<"users">[])[0]);
+            const cat = task.workCategoryId ? await ctx.db.get(task.workCategoryId) : null;
+            await logActivity(ctx, { taskId, orgId, userId, type: "assignee_added", metadata: { userId: (projPatch.assigneeIds as Id<"users">[])[0], userName: autoUser?.name ?? "Unknown", reason: "default_assignee", categoryName: cat?.name ?? "Unknown" } });
+          }
           updated++;
           break;
         }

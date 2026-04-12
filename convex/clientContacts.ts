@@ -1,4 +1,4 @@
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { query, mutation } from "./_generated/server";
 import { getAuthContext, requireAdmin, validateStringLength } from "./lib/auth";
 
@@ -12,7 +12,7 @@ export const list = query({
     // Verify client belongs to org
     const client = await ctx.db.get(args.clientId);
     if (!client || client.orgId !== orgId) {
-      throw new Error("Client not found");
+      throw new ConvexError("Client not found");
     }
 
     return await ctx.db
@@ -36,14 +36,14 @@ export const create = mutation({
     const { orgId, userId } = await requireAdmin(ctx);
 
     const client = await ctx.db.get(args.clientId);
-    if (!client || client.orgId !== orgId) throw new Error("Client not found");
+    if (!client || client.orgId !== orgId) throw new ConvexError("Client not found");
 
     const name = args.name.trim();
-    if (!name) throw new Error("Contact name is required");
+    if (!name) throw new ConvexError("Contact name is required");
     validateStringLength(name, 200, "Contact name");
 
     const email = args.email.trim().toLowerCase();
-    if (!email) throw new Error("Contact email is required");
+    if (!email) throw new ConvexError("Contact email is required");
 
     // Email uniqueness within org
     const existingEmail = await ctx.db
@@ -54,7 +54,7 @@ export const create = mutation({
       // Find the client name for the error message
       const otherClient = await ctx.db.get(existingEmail.clientId);
       const otherName = otherClient?.name ?? "another client";
-      throw new Error(`This email is already assigned to ${otherName}`);
+      throw new ConvexError(`This email is already assigned to ${otherName}`);
     }
 
     // Check if this is the first contact for the client
@@ -99,20 +99,20 @@ export const update = mutation({
     const { orgId } = await requireAdmin(ctx);
 
     const contact = await ctx.db.get(args.id);
-    if (!contact || contact.orgId !== orgId) throw new Error("Contact not found");
+    if (!contact || contact.orgId !== orgId) throw new ConvexError("Contact not found");
 
     const updates: Record<string, unknown> = { updatedAt: Date.now() };
 
     if (args.name !== undefined) {
       const name = args.name.trim();
-      if (!name) throw new Error("Contact name is required");
+      if (!name) throw new ConvexError("Contact name is required");
       validateStringLength(name, 200, "Contact name");
       updates.name = name;
     }
 
     if (args.email !== undefined) {
       const email = args.email.trim().toLowerCase();
-      if (!email) throw new Error("Contact email is required");
+      if (!email) throw new ConvexError("Contact email is required");
 
       if (email !== contact.email) {
         const existing = await ctx.db
@@ -121,7 +121,7 @@ export const update = mutation({
           .first();
         if (existing && existing._id !== args.id) {
           const otherClient = await ctx.db.get(existing.clientId);
-          throw new Error(`This email is already assigned to ${otherClient?.name ?? "another client"}`);
+          throw new ConvexError(`This email is already assigned to ${otherClient?.name ?? "another client"}`);
         }
       }
       updates.email = email;
@@ -141,7 +141,7 @@ export const remove = mutation({
     const { orgId } = await requireAdmin(ctx);
 
     const contact = await ctx.db.get(args.id);
-    if (!contact || contact.orgId !== orgId) throw new Error("Contact not found");
+    if (!contact || contact.orgId !== orgId) throw new ConvexError("Contact not found");
 
     const wasPrimary = contact.isPrimary;
     await ctx.db.delete(args.id);
@@ -171,7 +171,7 @@ export const setPrimary = mutation({
     const { orgId } = await requireAdmin(ctx);
 
     const contact = await ctx.db.get(args.id);
-    if (!contact || contact.orgId !== orgId) throw new Error("Contact not found");
+    if (!contact || contact.orgId !== orgId) throw new ConvexError("Contact not found");
 
     if (contact.isPrimary) return; // Already primary
 

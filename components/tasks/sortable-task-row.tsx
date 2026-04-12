@@ -26,7 +26,7 @@ export function SortableTaskRow({
       ref={ref}
       className={cn(
         "group/sortable relative",
-        isDragging && "z-50 rounded-md bg-background shadow-lg ring-1 ring-border/50",
+        isDragging && "z-50 bg-background shadow-sm opacity-90",
       )}
     >
       {/* Drag handle — visible on hover, overlays left padding */}
@@ -35,11 +35,11 @@ export function SortableTaskRow({
           ref={handleRef}
           role="button"
           tabIndex={0}
-          className="absolute -left-0.5 top-0 bottom-0 z-10 flex w-5 cursor-grab items-center justify-center opacity-0 transition-opacity group-hover/sortable:opacity-60 focus-visible:opacity-60 active:cursor-grabbing active:opacity-100"
+          className="absolute -left-13 top-0 bottom-0 z-10 flex w-3 cursor-grab items-center justify-center opacity-0 transition-opacity group-hover/sortable:opacity-100 focus-visible:opacity-100 active:cursor-grabbing"
           aria-label="Drag to reorder"
           aria-roledescription="sortable"
         >
-          <GripVerticalIcon className="size-3 text-muted-foreground" />
+          <GripVerticalIcon className="size-3.5 text-muted-foreground/50" />
         </div>
       )}
       {children}

@@ -4,6 +4,7 @@ const BILLING_TYPE_CONFIG = {
   fixed: { label: "Fixed" },
   t_and_m: { label: "T&M" },
   retainer: { label: "Retainer" },
+  non_billable: { label: "Non-Billable" },
 } as const
 
 export type BillingType = keyof typeof BILLING_TYPE_CONFIG

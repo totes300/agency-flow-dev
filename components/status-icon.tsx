@@ -78,15 +78,21 @@ export function StatusIcon({
         </svg>
       )
 
-    // Filled circle + checkmark — complete
+    // Filled rounded square + checkmark — complete
     case "done":
       return (
         <svg {...props}>
-          <circle cx="8" cy="8" r="7" fill={color} />
+          <rect
+            x="0.5" y="0.5" width="15" height="15" rx="5"
+            fill={color}
+            stroke={color}
+            strokeWidth="1"
+          />
           <path
-            d="M5.5 8.2 L7.2 9.9 L10.8 6.3"
+            d="M4.5 8.5L7 11L11.5 5.5"
+            fill="none"
             stroke={contrastColor}
-            strokeWidth="1.5"
+            strokeWidth="2"
             strokeLinecap="round"
             strokeLinejoin="round"
           />

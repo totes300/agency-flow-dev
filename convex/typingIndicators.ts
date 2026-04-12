@@ -1,4 +1,4 @@
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { query, mutation, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { getAuthContext } from "./lib/auth";
@@ -17,7 +17,7 @@ export const setTyping = mutation({
     // Verify task exists and belongs to org
     const task = await ctx.db.get(taskId);
     if (!task || task.orgId !== orgId) {
-      throw new Error("Task not found");
+      throw new ConvexError("Task not found");
     }
 
     const now = Date.now();

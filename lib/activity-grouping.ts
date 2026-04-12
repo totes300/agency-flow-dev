@@ -230,6 +230,13 @@ export function groupFeedForCommentsView(feed: FeedItem[]): GroupedFeedItem[] {
 
   for (const item of feed) {
     if (item.kind === "audit") {
+      // Split batch at day boundaries
+      if (
+        auditBuffer.length > 0 &&
+        !isSameDay(new Date(auditBuffer[auditBuffer.length - 1].createdAt), new Date(item.createdAt))
+      ) {
+        flushBuffer()
+      }
       auditBuffer.push(item)
     } else {
       flushBuffer()

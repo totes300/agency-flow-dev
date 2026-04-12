@@ -13,7 +13,7 @@ import type { StatusType } from "./constants";
 export type TaskWithJoins = Doc<"tasks"> & {
   status: Pick<Doc<"statuses">, "_id" | "name" | "color" | "type" | "icon"> | null;
   project: Pick<Doc<"projects">, "_id" | "name" | "code"> | null;
-  client: Pick<Doc<"clients">, "_id" | "name"> | null;
+  client: Pick<Doc<"clients">, "_id" | "name" | "prefix" | "usePrefix"> | null;
   category: Pick<Doc<"workCategories">, "_id" | "name" | "color"> | null;
   assignees: Array<Pick<Doc<"users">, "_id" | "name" | "email" | "imageUrl">>;
 };
@@ -197,7 +197,7 @@ export function createTaskEnricher(maps: {
         ? { _id: project._id, name: project.name, code: project.code }
         : null,
       client: client
-        ? { _id: client._id, name: client.name }
+        ? { _id: client._id, name: client.name, prefix: client.prefix, usePrefix: client.usePrefix }
         : null,
       category: category
         ? { _id: category._id, name: category.name, color: category.color }
@@ -207,4 +207,41 @@ export function createTaskEnricher(maps: {
       })),
     };
   };
+}
+
+// ─── Default assignee resolution ────────────────────────────────────────────────
+
+/**
+ * Resolve the default assignee for a task based on its project + category.
+ *
+ * Looks up the project's `defaultAssignees` mapping for the given category.
+ * Validates the resolved user is still a valid org member before returning.
+ *
+ * Returns the userId if found and valid, null otherwise.
+ * Pure lookup — no side effects, no mutations.
+ */
+export async function resolveDefaultAssignee(
+  ctx: QueryCtx | MutationCtx,
+  orgId: string,
+  projectId: Id<"projects"> | undefined,
+  categoryId: Id<"workCategories"> | undefined,
+): Promise<Id<"users"> | null> {
+  if (!projectId || !categoryId) return null;
+
+  const project = await ctx.db.get(projectId);
+  if (!project || project.orgId !== orgId || !project.defaultAssignees) return null;
+
+  const match = project.defaultAssignees.find(
+    (da) => da.workCategoryId === categoryId
+  );
+  if (!match) return null;
+
+  // Validate the user is still a valid org member (O(1) indexed lookup)
+  const membership = await ctx.db
+    .query("orgMembers")
+    .withIndex("by_userId", (q) => q.eq("userId", match.userId))
+    .first();
+  if (!membership || membership.orgId !== orgId) return null;
+
+  return match.userId;
 }

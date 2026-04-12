@@ -26,7 +26,7 @@ import { StatusBadge } from "@/components/status-badge"
 import { CategoryBadge } from "@/components/category-badge"
 import { UserAvatar } from "@/components/user-avatar"
 import { toast } from "sonner"
-import { firstName } from "@/lib/format"
+import { firstName, getClientDisplayName } from "@/lib/format"
 import { toastError } from "@/lib/toast-helpers"
 import {
   FolderIcon,
@@ -130,7 +130,7 @@ export function TaskFormModal({
             projects={projects ?? []}
             value={projectId}
             onChange={setProjectId}
-            selectedLabel={selectedProject ? (selectedProject.clientName ? `${selectedProject.clientName} · ${selectedProject.name}` : selectedProject.name) : undefined}
+            selectedLabel={selectedProject ? (selectedProject.clientName ? `${getClientDisplayName({ name: selectedProject.clientName, prefix: selectedProject.clientPrefix, usePrefix: selectedProject.clientUsePrefix })} · ${selectedProject.name}` : selectedProject.name) : undefined}
           />
         </div>
 

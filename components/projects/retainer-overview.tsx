@@ -69,6 +69,7 @@ export function RetainerOverview({ projectId }: { projectId: Id<"projects"> }) {
     overageMinutes,
     overageDue,
     overageRate,
+    monthlyFee,
     rolloverEnabled,
     totalNonBillableMinutes,
     currency,
@@ -156,7 +157,7 @@ export function RetainerOverview({ projectId }: { projectId: Id<"projects"> }) {
               label="Overage Due"
               value={overageDue > 0 ? formatCurrencyPrecise(overageDue, currency) : "—"}
               detail={overageDue > 0
-                ? `${formatMinutes(overageMinutes)} × ${formatCurrencyPrecise(overageRate, currency)}/h`
+                ? `${formatMinutes(overageMinutes)} @ ${formatCurrencyPrecise(overageRate, currency)}/h`
                 : "No overage"
               }
               variant={overageDue > 0 ? "warning" : "default"}
@@ -166,8 +167,25 @@ export function RetainerOverview({ projectId }: { projectId: Id<"projects"> }) {
 
         <CardFooter className="text-xs text-muted-foreground tabular-nums">
           {cycleLength} {pluralize(cycleLength, "month", "months")} &middot; {formatMinutes(cycleBudget)} budget &middot; {formatMinutes(cycleWorked)} used
+          {monthlyFee > 0 && (
+            <>
+              {" "}&middot; {formatCurrencyPrecise(monthlyFee, currency)}/mo
+              {overageDue > 0 && <> &middot; Overage {formatCurrencyPrecise(overageDue, currency)}</>}
+            </>
+          )}
         </CardFooter>
       </Card>
+
+      {/* Missing overage rate warning */}
+      {overageRate === 0 && overageMinutes > 0 && (
+        <Alert>
+          <AlertTriangleIcon />
+          <AlertTitle>Overage rate not set</AlertTitle>
+          <AlertDescription>
+            This retainer has {formatMinutes(overageMinutes)} over budget but no overage rate configured. Set an overage rate in project settings to calculate overage charges.
+          </AlertDescription>
+        </Alert>
+      )}
 
       {/* Overage Invoice Banner */}
       {isCycleClosed && overageDue > 0 && (
@@ -176,7 +194,7 @@ export function RetainerOverview({ projectId }: { projectId: Id<"projects"> }) {
           <AlertTitle>Overage invoice — {formatCurrencyPrecise(overageDue, currency)} due</AlertTitle>
           <AlertDescription className="flex items-center justify-between">
             <span>
-              {formatMinutes(overageMinutes)} over budget at {formatCurrencyPrecise(overageRate, currency)}/h
+              {formatMinutes(overageMinutes)} over budget &middot; {formatCurrencyPrecise(overageDue, currency)} due
             </span>
             <Button size="sm" variant="outline" disabled className="ml-4 shrink-0">
               Create Invoice
@@ -267,7 +285,7 @@ export function RetainerOverview({ projectId }: { projectId: Id<"projects"> }) {
                 <div className="flex-1">
                   <p className="text-sm font-medium">Extra hours invoice</p>
                   <p className="text-xs text-muted-foreground tabular-nums">
-                    {formatMinutes(overageMinutes)} × {formatCurrencyPrecise(overageRate, currency)}/h = {formatCurrencyPrecise(overageDue, currency)}
+                    {formatMinutes(overageMinutes)} over budget @ {formatCurrencyPrecise(overageRate, currency)}/h = {formatCurrencyPrecise(overageDue, currency)}
                   </p>
                 </div>
                 <Button size="sm" variant="outline" disabled className="shrink-0">

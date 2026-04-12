@@ -19,11 +19,17 @@ export function ProgressCell({
   }
 
   return (
-    <div className={cn("flex items-center gap-2.5", className)}>
+    <div
+      className={cn("flex items-center gap-2.5", className)}
+      role="progressbar"
+      aria-valuenow={Math.max(0, Math.min(percent, 100))}
+      aria-valuemin={0}
+      aria-valuemax={100}
+    >
       <div className={cn("flex-1 max-w-28 overflow-hidden", PROGRESS_TRACK)}>
         <div
           className={muted ? PROGRESS_FILL_MUTED : PROGRESS_FILL}
-          style={{ width: `${Math.min(percent, 100)}%` }}
+          style={{ width: `${Math.max(0, Math.min(percent, 100))}%` }}
         />
       </div>
       <span className={cn("text-sm tabular-nums", muted ? "text-muted-foreground/60" : "text-muted-foreground")}>

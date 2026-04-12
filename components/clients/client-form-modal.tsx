@@ -26,6 +26,7 @@ import {
 import { ImageIcon, Loader2Icon, Trash2Icon } from "lucide-react"
 import { CURRENCIES } from "@/convex/lib/constants"
 import { toast } from "sonner"
+import { extractErrorMessage } from "@/lib/toast-helpers"
 import Image from "next/image"
 import { validateLogoFile } from "@/lib/file-upload"
 import type { Currency } from "@/convex/lib/constants"
@@ -44,12 +45,13 @@ export function ClientFormModal({ open, onOpenChange, client, defaultCurrency = 
   const generateUploadUrl = useMutation(api.clients.generateUploadUrl)
   const removeClientLogo = useMutation(api.clients.removeClientLogo)
 
-  const isEdit = !!client
+  const isEdit = Boolean(client)
 
   // General
   const [name, setName] = useState("")
   const [currency, setCurrency] = useState(defaultCurrency)
-  const [invoicePrefix, setInvoicePrefix] = useState("")
+  const [prefix, setPrefix] = useState("")
+  const [usePrefix, setUsePrefix] = useState(false)
   // Logo
   const [logoPreview, setLogoPreview] = useState<string | null>(null)
   const [pendingLogoFile, setPendingLogoFile] = useState<File | null>(null)
@@ -85,7 +87,8 @@ export function ClientFormModal({ open, onOpenChange, client, defaultCurrency = 
     if (client) {
       setName(client.name)
       setCurrency(client.currency)
-      setInvoicePrefix(client.invoicePrefix)
+      setPrefix(client.prefix ?? client.invoicePrefix ?? "")
+      setUsePrefix(client.usePrefix ?? false)
       setBillingName(client.billingName ?? "")
       setTaxId(client.taxId ?? "")
       setBillingEmail(client.billingEmail ?? "")
@@ -98,7 +101,8 @@ export function ClientFormModal({ open, onOpenChange, client, defaultCurrency = 
     } else {
       setName("")
       setCurrency(defaultCurrency)
-      setInvoicePrefix("")
+      setPrefix("")
+      setUsePrefix(false)
       setBillingName("")
       setTaxId("")
       setBillingEmail("")
@@ -191,7 +195,8 @@ export function ClientFormModal({ open, onOpenChange, client, defaultCurrency = 
     const payload = {
       name: name.trim(),
       currency: currency as Currency,
-      invoicePrefix: invoicePrefix.trim() || undefined,
+      prefix: prefix.trim() || undefined,
+      usePrefix,
       billingName: billingName || undefined,
       billingEmail: billingEmail || undefined,
       billingCountry: billingCountry || undefined,
@@ -205,10 +210,11 @@ export function ClientFormModal({ open, onOpenChange, client, defaultCurrency = 
 
     try {
       if (isEdit && client) {
-        // Include logo removal in the same update to avoid reactive flash
+        // Exclude currency from update — immutable after creation
+        const { currency: _currency, ...updateFields } = payload
         const updatePayload = {
           id: client._id,
-          ...payload,
+          ...updateFields,
           ...(removeExistingLogo && resolvedLogoStorageId && !pendingLogoFile
             ? { logoStorageId: null as null }
             : {}),
@@ -227,7 +233,7 @@ export function ClientFormModal({ open, onOpenChange, client, defaultCurrency = 
       }
       onOpenChange(false)
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong")
+      setError(extractErrorMessage(err, "Something went wrong"))
     } finally {
       setSubmitting(false)
     }
@@ -316,28 +322,47 @@ export function ClientFormModal({ open, onOpenChange, client, defaultCurrency = 
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1.5">
                   <Label htmlFor="client-currency">Currency</Label>
-                  <Select value={currency} onValueChange={setCurrency}>
-                    <SelectTrigger id="client-currency">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {CURRENCIES.map((c) => (
-                        <SelectItem key={c} value={c}>{c}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  {isEdit ? (
+                    <div className="flex h-9 items-center rounded-md border bg-muted/50 px-3 text-sm text-muted-foreground">
+                      {currency}
+                    </div>
+                  ) : (
+                    <Select value={currency} onValueChange={setCurrency}>
+                      <SelectTrigger id="client-currency">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {CURRENCIES.map((c) => (
+                          <SelectItem key={c} value={c}>{c}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="invoice-prefix">Invoice Prefix</Label>
+                  <Label htmlFor="client-prefix">Prefix</Label>
                   <Input
-                    id="invoice-prefix"
-                    value={invoicePrefix}
-                    onChange={(e) => setInvoicePrefix(e.target.value.toUpperCase())}
+                    id="client-prefix"
+                    value={prefix}
+                    onChange={(e) => setPrefix(e.target.value)}
                     placeholder="Auto from name"
                     maxLength={10}
                   />
                 </div>
               </div>
+
+              {/* Use prefix toggle */}
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={usePrefix}
+                  onChange={(e) => setUsePrefix(e.target.checked)}
+                  className="size-4 rounded border-border accent-primary"
+                />
+                <span className="text-sm text-muted-foreground">
+                  Use prefix instead of full name in task lists
+                </span>
+              </label>
 
               {/* Notes */}
               <div className="space-y-1.5">

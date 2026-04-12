@@ -1,13 +1,11 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState } from "react"
 import { useQuery, useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
-import { Button } from "@/components/ui/button"
-import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card"
+import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import {
   Select,
   SelectContent,
@@ -15,159 +13,240 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { toast } from "sonner"
-import { PlusIcon, XIcon, Loader2Icon } from "lucide-react"
-import { NUMBER_INPUT_CLASS } from "@/lib/utils"
+import { toastError } from "@/lib/toast-helpers"
+import { Loader2Icon, RotateCcwIcon } from "lucide-react"
+import { useDefaultAssignees, type DefaultAssignee } from "@/lib/hooks/use-default-assignees"
+import { cn } from "@/lib/utils"
 
 type ProjectData = {
   billingType: string
-  tmRateMode?: string
-  hourlyRate?: number
-  tmCategoryRates?: Array<{ workCategoryId: Id<"workCategories">; rate: number }>
   currency: string
 }
+
+const INLINE_INPUT = "h-8 w-24 border-0 bg-transparent px-0 text-sm shadow-none outline-none ring-0 focus-visible:ring-0 tabular-nums"
+const INLINE_TRIGGER = "h-8 border-0 bg-transparent px-0 shadow-none ring-0 text-sm focus:ring-0 [&_svg:last-child]:hidden"
 
 export function SettingsRates({
   projectId,
   project,
+  teamMembers = [],
+  defaultAssignees = [],
 }: {
   projectId: Id<"projects">
   project: ProjectData
+  teamMembers?: Id<"users">[]
+  defaultAssignees?: DefaultAssignee[]
 }) {
-  const updateProject = useMutation(api.projects.update)
   const categories = useQuery(api.workCategories.list, { includeArchived: false })
-  const [hourlyRate, setHourlyRate] = useState(String(project.hourlyRate ?? ""))
-  const [catRates, setCatRates] = useState<Array<{ workCategoryId: string; rate: string }>>(
-    (project.tmCategoryRates ?? []).map((cr) => ({
-      workCategoryId: cr.workCategoryId,
-      rate: String(cr.rate),
-    }))
+  const overrides = useQuery(api.projectRateOverrides.listForProject, { projectId })
+  const categoryRates = useQuery(api.categoryRates.list, {})
+  const orgMembers = useQuery(api.orgMembers.listOrgMembers, {})
+  const upsertOverride = useMutation(api.projectRateOverrides.upsert)
+  const removeOverride = useMutation(api.projectRateOverrides.remove)
+
+  const teamMemberOptions = orgMembers?.filter((m) => teamMembers.some((id) => id.toString() === m._id.toString())) ?? []
+  const hasTeam = teamMemberOptions.length > 0
+  const { assigneeForCategory, handleAssigneeChange } = useDefaultAssignees(projectId, defaultAssignees)
+
+  const [savingId, setSavingId] = useState<string | null>(null)
+
+  // Build maps
+  const overrideMap = new Map(
+    (overrides ?? []).map((o) => [o.workCategoryId.toString(), o])
   )
-  const [saving, setSaving] = useState(false)
+  const defaultRateMap = new Map(
+    (categoryRates ?? [])
+      .filter((r) => r.currency === project.currency)
+      .map((r) => [r.workCategoryId.toString(), r.defaultBillRate])
+  )
 
-  useEffect(() => {
-    setHourlyRate(String(project.hourlyRate ?? ""))
-    setCatRates(
-      (project.tmCategoryRates ?? []).map((cr) => ({
-        workCategoryId: cr.workCategoryId,
-        rate: String(cr.rate),
-      }))
-    )
-  }, [project.hourlyRate, project.tmCategoryRates])
+  async function handleRateSave(workCategoryId: Id<"workCategories">, rateStr: string) {
+    const rate = parseFloat(rateStr)
+    if (isNaN(rate) || rate < 0) return
 
-  const usedCategoryIds = new Set(catRates.map((cr) => cr.workCategoryId))
-
-  async function handleSave() {
-    setSaving(true)
+    setSavingId(workCategoryId)
     try {
-      if (project.tmRateMode === "flat") {
-        await updateProject({ id: projectId, hourlyRate: parseFloat(hourlyRate) || 0 })
-      } else {
-        await updateProject({
-          id: projectId,
-          tmCategoryRates: catRates
-            .filter((cr) => cr.workCategoryId)
-            .map((cr) => ({
-              workCategoryId: cr.workCategoryId as Id<"workCategories">,
-              rate: parseFloat(cr.rate) || 0,
-            })),
-        })
-      }
-      toast.success("Rates saved")
+      await upsertOverride({ projectId, workCategoryId, billableRate: rate })
+      toast.success("Rate override saved")
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to save")
+      toastError(err, "Failed to save rate")
     } finally {
-      setSaving(false)
+      setSavingId(null)
     }
   }
+
+  async function handleResetToDefault(overrideId: Id<"projectRateOverrides">, categoryName: string) {
+    setSavingId(overrideId)
+    try {
+      await removeOverride({ id: overrideId })
+      toast.success(`${categoryName} reset to workspace default`)
+    } catch (err) {
+      toastError(err, "Failed to reset rate")
+    } finally {
+      setSavingId(null)
+    }
+  }
+
+  if (!categories || overrides === undefined || !categoryRates) return null
+
+  const activeCategories = categories.filter((c) => !c.archivedAt)
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Rates</CardTitle>
+        <CardTitle>Billable Rates</CardTitle>
       </CardHeader>
       <CardContent>
-      <div className="mb-3 flex items-center gap-2 text-sm">
-        <span className="text-muted-foreground">Rate mode:</span>
-        <span className="font-medium">
-          {project.tmRateMode === "flat" ? "Flat rate" : "Per-category rates"}
-        </span>
-        <span className="text-xs text-muted-foreground">(read-only)</span>
+        <p className="mb-4 text-sm text-muted-foreground">
+          Rates default to workspace category rates. Override per category for this project only.
+        </p>
+
+        {/* Header */}
+        <div className={`grid ${hasTeam ? "grid-cols-[minmax(120px,2fr)_120px_minmax(110px,1.5fr)]" : "grid-cols-[minmax(140px,2fr)_120px]"} items-center gap-3 border-b px-1 pb-2 text-xs font-medium text-muted-foreground`}>
+          <span>Category</span>
+          <span>Rate ({project.currency}/h)</span>
+          {hasTeam && <span>Default Assignee</span>}
+        </div>
+
+        {/* Rows */}
+        {activeCategories.map((cat) => {
+          const override = overrideMap.get(cat._id.toString())
+          const defaultRate = defaultRateMap.get(cat._id.toString())
+          return (
+            <CategoryRateRow
+              key={cat._id}
+              categoryId={cat._id}
+              categoryName={cat.name}
+              overrideId={override?._id}
+              overrideRate={override?.billableRate}
+              defaultRate={defaultRate}
+              saving={savingId === cat._id || savingId === override?._id}
+              onSave={(rate) => void handleRateSave(cat._id, rate)}
+              onReset={override ? () => void handleResetToDefault(override._id, cat.name) : undefined}
+              hasTeam={hasTeam}
+              assignee={assigneeForCategory(cat._id)}
+              onAssigneeChange={(v) => handleAssigneeChange(cat._id, v)}
+              teamMemberOptions={teamMemberOptions}
+            />
+          )
+        })}
+      </CardContent>
+    </Card>
+  )
+}
+
+function CategoryRateRow({
+  categoryName,
+  overrideRate,
+  defaultRate,
+  saving,
+  onSave,
+  onReset,
+  hasTeam,
+  assignee,
+  onAssigneeChange,
+  teamMemberOptions,
+}: {
+  categoryId: Id<"workCategories">
+  categoryName: string
+  overrideId: Id<"projectRateOverrides"> | undefined
+  overrideRate: number | undefined
+  defaultRate: number | undefined
+  saving: boolean
+  onSave: (rate: string) => void
+  onReset: (() => void) | undefined
+  hasTeam: boolean
+  assignee: string
+  onAssigneeChange: (v: string) => void
+  teamMemberOptions: Array<{ _id: Id<"users">; name: string }>
+}) {
+  // Draft tracks in-progress typing. null = not editing, show the committed value.
+  const [draft, setDraft] = useState<string | null>(null)
+  const isOverride = overrideRate != null
+  const displayValue = draft ?? (isOverride ? String(overrideRate) : "")
+  const placeholderText = defaultRate != null ? String(defaultRate) : "—"
+
+  function handleBlur() {
+    if (draft === null) return
+    const parsed = parseFloat(draft)
+    if (draft && !isNaN(parsed) && parsed >= 0) {
+      onSave(draft)
+    }
+    setDraft(null)
+  }
+
+  return (
+    <div className={cn(
+      "grid items-center gap-3 border-b px-1 py-1.5 last:border-0",
+      hasTeam ? "grid-cols-[minmax(120px,2fr)_120px_minmax(110px,1.5fr)]" : "grid-cols-[minmax(140px,2fr)_120px]",
+    )}>
+      <span className="text-sm">{categoryName}</span>
+
+      <div className="flex items-center gap-1">
+        {saving ? (
+          <Loader2Icon className="size-3.5 animate-spin text-muted-foreground" />
+        ) : (
+          <>
+            <Input
+              type="number"
+              min="0"
+              step="0.01"
+              value={displayValue}
+              onChange={(e) => setDraft(e.target.value)}
+              onFocus={() => setDraft(displayValue)}
+              onBlur={handleBlur}
+              placeholder={placeholderText}
+              className={cn(
+                INLINE_INPUT,
+                !isOverride && draft === null && "text-muted-foreground",
+              )}
+            />
+            {isOverride && onReset && (
+              <TooltipProvider delayDuration={300}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={onReset}
+                      className="flex size-5 items-center justify-center rounded text-muted-foreground/50 hover:text-foreground transition-colors"
+                      aria-label={`Reset ${categoryName} to workspace default`}
+                    >
+                      <RotateCcwIcon className="size-3" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="text-xs">
+                    Reset to default{defaultRate != null ? ` (${defaultRate})` : ""}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
+          </>
+        )}
       </div>
 
-      {project.tmRateMode === "flat" ? (
-        <div className="space-y-1.5">
-          <Label htmlFor="tm-rate">Hourly rate</Label>
-          <div className="flex items-center gap-2">
-            <Input
-              id="tm-rate"
-              type="number" min="0" step="0.01"
-              value={hourlyRate}
-              onChange={(e) => setHourlyRate(e.target.value)}
-              className="w-32"
-            />
-            <span className="text-sm text-muted-foreground">{project.currency}/h</span>
-          </div>
-        </div>
-      ) : (
-        <div className="space-y-3">
-          <div className="grid grid-cols-[minmax(140px,2fr)_minmax(100px,1fr)_32px] gap-2 text-xs font-medium text-muted-foreground">
-            <span>Category</span>
-            <span>Rate ({project.currency}/h)</span>
-            <span />
-          </div>
-          {catRates.map((cr, i) => (
-            <div key={i} className="grid grid-cols-[minmax(140px,2fr)_minmax(100px,1fr)_32px] items-center gap-2">
-              <Select
-                value={cr.workCategoryId}
-                onValueChange={(v) =>
-                  setCatRates((prev) => prev.map((r, j) => (j === i ? { ...r, workCategoryId: v } : r)))
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Category..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {categories
-                    ?.filter((c) => !usedCategoryIds.has(c._id) || c._id === cr.workCategoryId)
-                    .map((c) => (
-                      <SelectItem key={c._id} value={c._id}>{c.name}</SelectItem>
-                    ))}
-                </SelectContent>
-              </Select>
-              <div className="relative">
-                <Input
-                  type="number" min="0" step="0.01"
-                  value={cr.rate}
-                  onChange={(e) =>
-                    setCatRates((prev) => prev.map((r, j) => (j === i ? { ...r, rate: e.target.value } : r)))
-                  }
-                  className={NUMBER_INPUT_CLASS}
-                />
-                <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">/h</span>
-              </div>
-              <Button
-                variant="ghost" size="icon-sm"
-                onClick={() => setCatRates((prev) => prev.filter((_, j) => j !== i))}
-              >
-                <XIcon className="size-3.5" />
-              </Button>
-            </div>
-          ))}
-          <Button
-            variant="outline" size="sm"
-            onClick={() => setCatRates((prev) => [...prev, { workCategoryId: "", rate: "" }])}
-          >
-            <PlusIcon className="size-3.5" /> Add category rate
-          </Button>
-        </div>
+      {/* Assignee */}
+      {hasTeam && (
+        <Select
+          value={assignee}
+          onValueChange={(v) => onAssigneeChange(v === "__none__" ? "" : v)}
+        >
+          <SelectTrigger className={INLINE_TRIGGER}>
+            <SelectValue placeholder="None" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__none__">None</SelectItem>
+            {teamMemberOptions.map((m) => (
+              <SelectItem key={m._id} value={m._id}>{m.name}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       )}
-      </CardContent>
-      <CardFooter className="justify-end">
-        <Button onClick={handleSave} disabled={saving} size="sm">
-          {saving ? <><Loader2Icon className="size-3.5 animate-spin" /> Saving...</> : "Save"}
-        </Button>
-      </CardFooter>
-    </Card>
+    </div>
   )
 }

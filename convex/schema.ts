@@ -15,6 +15,9 @@ export default defineSchema({
     timerAccumulatedMs: v.optional(v.number()),
     timerStatus: v.optional(v.union(v.literal("running"), v.literal("paused"))),
     taskDetailView: v.optional(v.union(v.literal("modal"), v.literal("drawer"))),
+    // My Tasks view: which individual statuses to show (status IDs)
+    // During migration: may contain old type-key strings — widen accepts both
+    todayVisibleStatuses: v.optional(v.array(v.string())),
     createdAt: v.number(),
     updatedAt: v.number(),
   }).index("byExternalId", ["externalId"]),
@@ -39,8 +42,13 @@ export default defineSchema({
     timezone: v.string(),
     roundingMinutes: v.number(),
     defaultStatusId: v.optional(v.id("statuses")),
-    // Rate defaults
-    defaultTmFlatRate: v.optional(v.number()),   // org-level default for T&M flat-rate projects
+    // Completion defaults by role
+    completionDefaultAdminStatusId: v.optional(v.id("statuses")),
+    completionDefaultMemberStatusId: v.optional(v.id("statuses")),
+    // My Tasks: default visible statuses for all members (admin-configurable)
+    defaultMyTasksStatusIds: v.optional(v.array(v.id("statuses"))),
+    // Legacy — T&M flat rate default, no longer used
+    defaultTmFlatRate: v.optional(v.number()),
     // Branding (used in later phases, define fields now)
     brandName: v.optional(v.string()),
     brandLogoStorageId: v.optional(v.id("_storage")),
@@ -105,6 +113,7 @@ export default defineSchema({
     createdBy: v.id("users"),
   })
     .index("by_orgId", ["orgId"])
+    .index("by_orgId_manualSortKey", ["orgId", "manualSortKey"])
     .index("by_orgId_statusType", ["orgId", "statusType"])
     .index("by_orgId_statusId", ["orgId", "statusId"])
     .index("by_orgId_projectId", ["orgId", "projectId"])
@@ -119,7 +128,12 @@ export default defineSchema({
     orgId: v.string(),
     name: v.string(),
     currency: v.string(),
-    invoicePrefix: v.string(),
+    /** Client abbreviation shown in task lists when usePrefix=true (e.g. "KONV"). */
+    prefix: v.optional(v.string()),
+    /** When true, task lists show the prefix instead of the full client name. */
+    usePrefix: v.optional(v.boolean()),
+    /** @deprecated Use `prefix` instead. Kept temporarily for migration. */
+    invoicePrefix: v.optional(v.string()),
     // Billing (structured for PDF invoices)
     billingName: v.optional(v.string()),
     billingEmail: v.optional(v.string()),
@@ -160,18 +174,21 @@ export default defineSchema({
     clientId: v.id("clients"),
     name: v.string(),
     code: v.string(), // "PRJ-042", editable, unique per org
-    billingType: v.union(v.literal("fixed"), v.literal("retainer"), v.literal("t_and_m")),
-    currency: v.string(),
-    // Retainer fields (Phase 4)
+    billingType: v.union(v.literal("fixed"), v.literal("retainer"), v.literal("t_and_m"), v.literal("non_billable")),
+    currency: v.string(), // TODO: remove in next deploy — still written during widen, derived from client
+    // Team members (users assigned to this project)
+    teamMembers: v.optional(v.array(v.id("users"))),
+    // Retainer fields
     retainerStatus: v.optional(v.union(v.literal("active"), v.literal("inactive"))),
     includedMinutesPerMonth: v.optional(v.number()), // monthly budget in minutes
-    overageRate: v.optional(v.number()),            // $/h for overage
     startDate: v.optional(v.string()),              // YYYY-MM-DD
     rolloverEnabled: v.optional(v.boolean()),
     cycleLength: v.optional(v.number()),            // 1-12 months
+    monthlyFee: v.optional(v.number()),             // retainer monthly fee for revenue
     // Fixed fields
-    fixedPrice: v.optional(v.number()),           // sold fixed fee (required for fixed projects)
-    // T&M fields
+    fixedPrice: v.optional(v.number()),             // sold fixed fee
+    overageRate: v.optional(v.number()),             // retainer $/h for hours over budget
+    // Legacy fields — kept optional for existing data, no longer written
     hourlyRate: v.optional(v.number()),
     tmCategoryRates: v.optional(v.array(v.object({
       workCategoryId: v.id("workCategories"),
@@ -199,6 +216,7 @@ export default defineSchema({
     projectId: v.id("projects"),
     workCategoryId: v.id("workCategories"),
     estimatedMinutes: v.number(),
+    // Legacy fields — kept optional for existing data, no longer written
     internalCostRate: v.optional(v.number()),
     clientBillingRate: v.optional(v.number()),
     createdAt: v.number(),
@@ -228,10 +246,11 @@ export default defineSchema({
     note: v.optional(v.string()),
     isBillable: v.boolean(),
     method: v.union(v.literal("timer"), v.literal("manual")),
-    // invoicedInReportId deferred to Reports phase (no reports table yet)
-    appliedRate: v.optional(v.number()),
-    appliedCostRate: v.optional(v.number()),
-    appliedBillRate: v.optional(v.number()),
+    // Rate snapshot
+    costRate: v.number(),
+    billableRate: v.number(),
+    rateCurrency: v.string(),
+    snapshotCategoryId: v.optional(v.id("workCategories")),
     createdAt: v.number(),
     updatedAt: v.number(),
     createdBy: v.id("users"),
@@ -241,14 +260,51 @@ export default defineSchema({
     .index("by_userId_date", ["userId", "date"])
     .index("by_orgId_date", ["orgId", "date"]),
 
+  // ─── User Rates (per-user, per-currency cost rates) ────────────────────────
+  userRates: defineTable({
+    orgId: v.string(),
+    userId: v.id("users"),
+    currency: v.string(),
+    costRate: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_orgId", ["orgId"])
+    .index("by_orgId_userId_currency", ["orgId", "userId", "currency"]),
+
+  // ─── Category Rates (per-category, per-currency default billable rates) ───
+  categoryRates: defineTable({
+    orgId: v.string(),
+    workCategoryId: v.id("workCategories"),
+    currency: v.string(),
+    defaultBillRate: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_orgId", ["orgId"])
+    .index("by_orgId_workCategoryId_currency", ["orgId", "workCategoryId", "currency"]),
+
+  // ─── Project Rate Overrides (per-project, per-category billable rate) ─────
+  projectRateOverrides: defineTable({
+    orgId: v.string(),
+    projectId: v.id("projects"),
+    workCategoryId: v.id("workCategories"),
+    billableRate: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_orgId", ["orgId"])
+    .index("by_projectId", ["projectId"])
+    .index("by_projectId_workCategoryId", ["projectId", "workCategoryId"]),
+
   // ─── Work Categories (per org) ──────────────────────────────────────────────
   workCategories: defineTable({
     orgId: v.string(),
     name: v.string(),
     color: v.string(),
-    defaultCostRate: v.optional(v.number()),
-    defaultBillRate: v.optional(v.number()),
-    currency: v.string(),
+    defaultCostRate: v.optional(v.number()), // Legacy — cost rates now per-user in userRates
+    defaultBillRate: v.optional(v.number()), // Legacy — rates now in categoryRates table
+    currency: v.string(), // Legacy — kept for existing data, new categories use org default
     sortOrder: v.number(),
     archivedAt: v.optional(v.number()),
     createdAt: v.number(),
@@ -357,6 +413,18 @@ export default defineSchema({
     status: v.union(v.literal("pending"), v.literal("fetched"), v.literal("failed")),
     fetchedAt: v.number(),
   }).index("by_url", ["url"]),
+
+  // ─── Daily Notes (async standup, one per user per day) ────────────────────
+  dailyNotes: defineTable({
+    orgId: v.string(),
+    userId: v.id("users"),
+    date: v.string(),            // "YYYY-MM-DD" (org timezone)
+    content: v.optional(v.string()), // TipTap JSON string
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_userId_date", ["userId", "date"])
+    .index("by_orgId_userId", ["orgId", "userId"]),
 
   // ─── Typing indicators (ephemeral presence) ──────────────────────────────
   typingIndicators: defineTable({

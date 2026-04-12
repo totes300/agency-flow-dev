@@ -15,6 +15,7 @@ import { ConfirmDialog } from "@/components/confirm-dialog"
 import { ContactFormModal } from "./contact-form-modal"
 import { MoreHorizontalIcon, PlusIcon, StarIcon, PencilIcon, Trash2Icon } from "lucide-react"
 import { toast } from "sonner"
+import { toastError } from "@/lib/toast-helpers"
 import type { Id, Doc } from "@/convex/_generated/dataModel"
 
 type ContactListProps = {
@@ -57,11 +58,11 @@ export function ContactList({ clientId, contacts }: ContactListProps) {
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-medium">{contact.name}</span>
-                  {contact.isPrimary && (
+                  {contact.isPrimary ? (
                     <Badge variant="secondary" className="text-[10px] leading-tight">
                       Primary
                     </Badge>
-                  )}
+                  ) : null}
                 </div>
                 <p className="mt-0.5 truncate text-sm text-muted-foreground">
                   {[contact.email, contact.phone].filter(Boolean).join(" · ")}
@@ -85,8 +86,8 @@ export function ContactList({ clientId, contacts }: ContactListProps) {
                         try {
                           await setPrimary({ id: contact._id })
                           toast.success(`${contact.name} is now the primary contact`)
-                        } catch {
-                          toast.error("Failed to set primary contact")
+                        } catch (err) {
+                          toastError(err, "Failed to set primary contact")
                         }
                       }}
                     >
@@ -137,8 +138,8 @@ export function ContactList({ clientId, contacts }: ContactListProps) {
             try {
               await removeContact({ id: deleteTarget._id })
               setDeleteTarget(null)
-            } catch {
-              toast.error("Failed to delete contact")
+            } catch (err) {
+              toastError(err, "Failed to delete contact")
             }
           }
         }}

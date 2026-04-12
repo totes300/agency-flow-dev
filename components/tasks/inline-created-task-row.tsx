@@ -7,13 +7,13 @@ import { UserAvatar } from "@/components/user-avatar"
 import { AvatarGroup, AvatarGroupCount } from "@/components/ui/avatar"
 import { TASK_GRID_COLS } from "@/components/tasks/tasks-table"
 import { cn } from "@/lib/utils"
-import { formatRelativeTime, formatShortDate, firstName } from "@/lib/format"
+import { formatRelativeTime, formatShortDate, firstName, getClientDisplayName } from "@/lib/format"
 import type { Doc, Id } from "@/convex/_generated/dataModel"
 
 type StatusPick = Pick<Doc<"statuses">, "_id" | "name" | "color" | "type">
 type CategoryPick = Pick<Doc<"workCategories">, "_id" | "name" | "color">
 type ProjectPick = Pick<Doc<"projects">, "_id" | "name" | "code">
-type ClientPick = Pick<Doc<"clients">, "_id" | "name">
+type ClientPick = Pick<Doc<"clients">, "_id" | "name" | "prefix" | "usePrefix">
 type UserPick = Pick<Doc<"users">, "_id" | "name" | "email" | "imageUrl">
 
 export type InlineCreatedTask = {
@@ -43,12 +43,11 @@ export function InlineCreatedTaskRow({
   return (
     <div
       className={cn(
-        `group/row grid ${TASK_GRID_COLS} items-center gap-x-6 border-b border-border/40 px-3 py-2.5 [&>*]:min-w-0 [&>*]:overflow-hidden`,
-        task.saveState === "error" && "bg-red-500/5",
+        `group/row relative grid ${TASK_GRID_COLS} items-center gap-x-6 border-b border-border/40 pr-3 py-2.5 [&>*]:min-w-0 [&>*]:overflow-hidden`,
+        "before:pointer-events-none before:absolute before:inset-y-0 before:-left-13 before:w-13",
+        task.saveState === "error" && "bg-red-500/5 before:bg-red-500/5",
       )}
     >
-      <div />
-
       <div>
         <div className="flex items-center gap-1.5">
           <PlusIcon className="size-3.5 shrink-0 text-muted-foreground/40" />
@@ -64,7 +63,7 @@ export function InlineCreatedTaskRow({
             <>
               <AlertCircleIcon className="size-3 text-red-500" />
               <span className="text-red-600">Failed to save</span>
-              {onRetry && (
+              {onRetry ? (
                 <>
                   <span>·</span>
                   <button
@@ -75,7 +74,7 @@ export function InlineCreatedTaskRow({
                     Retry
                   </button>
                 </>
-              )}
+              ) : null}
             </>
           ) : (
             <>
@@ -104,10 +103,9 @@ export function InlineCreatedTaskRow({
 
       <div className="min-w-0 py-0.5 text-left">
         {task.project ? (
-          <div className="min-w-0">
-            <div className="truncate text-xs font-medium">{task.client?.name}</div>
-            <div className="truncate text-[11px] leading-tight text-muted-foreground/60">{task.project.name}</div>
-          </div>
+          <span className="truncate text-[13px] text-foreground">
+            {task.client ? `${getClientDisplayName(task.client)} › ${task.project.name}` : task.project.name}
+          </span>
         ) : null}
       </div>
 
@@ -126,11 +124,11 @@ export function InlineCreatedTaskRow({
                 <UserAvatar name={assignee.name} imageUrl={assignee.imageUrl} size="sm" />
               </span>
             ))}
-            {task.assignees.length > 3 && (
+            {task.assignees.length > 3 ? (
               <AvatarGroupCount>
                 <span className="text-xs">+{task.assignees.length - 3}</span>
               </AvatarGroupCount>
-            )}
+            ) : null}
           </AvatarGroup>
         )}
       </div>
@@ -141,7 +139,7 @@ export function InlineCreatedTaskRow({
 
       <div className="text-right" />
       <div className="flex items-center justify-center">
-        {task.saveState === "error" && onDismiss && (
+        {task.saveState === "error" && onDismiss ? (
           <button
             type="button"
             onClick={() => onDismiss(task.localId)}
@@ -150,7 +148,7 @@ export function InlineCreatedTaskRow({
           >
             <XIcon className="size-3.5" />
           </button>
-        )}
+        ) : null}
       </div>
     </div>
   )

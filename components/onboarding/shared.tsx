@@ -17,9 +17,7 @@ export type CategoryDraft = {
   id: string
   name: string
   color: CategoryColor
-  defaultCostRate: string
   defaultBillRate: string
-  currency: import("@/convex/lib/constants").Currency
 }
 
 // ─── Validation ─────────────────────────────────────────────────────────────────

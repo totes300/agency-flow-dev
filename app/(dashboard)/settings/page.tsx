@@ -4,6 +4,7 @@ import dynamic from "next/dynamic"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { SettingsGeneral } from "@/components/settings/settings-general"
+import { SettingsMyTasksDefaults } from "@/components/settings/settings-my-tasks-defaults"
 
 // ─── Content-aware loading skeletons ────────────────────────────────────────────
 
@@ -47,6 +48,25 @@ function StatusesSkeleton() {
           </div>
         </div>
       ))}
+    </div>
+  )
+}
+
+function UserRatesSkeleton() {
+  return (
+    <div className="space-y-4">
+      <Skeleton className="h-5 w-48" />
+      <Skeleton className="h-4 w-72" />
+      <div className="space-y-2">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <div key={i} className="flex items-center gap-3 rounded-md border p-3">
+            <Skeleton className="size-8 rounded-full" />
+            <Skeleton className="h-4 w-32 flex-1" />
+            <Skeleton className="h-4 w-16" />
+            <Skeleton className="h-4 w-12" />
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
@@ -108,6 +128,14 @@ const SettingsWorkCategories = dynamic(
   { loading: () => <WorkCategoriesSkeleton /> },
 )
 
+const SettingsUserRates = dynamic(
+  () =>
+    import("@/components/settings/settings-user-rates").then((m) => ({
+      default: m.SettingsUserRates,
+    })),
+  { loading: () => <UserRatesSkeleton /> },
+)
+
 // ─── Page ───────────────────────────────────────────────────────────────────────
 
 export default function SettingsPage() {
@@ -126,6 +154,7 @@ export default function SettingsPage() {
           <TabsTrigger value="team">Team</TabsTrigger>
           <TabsTrigger value="statuses">Statuses</TabsTrigger>
           <TabsTrigger value="work-categories">Work Categories</TabsTrigger>
+          <TabsTrigger value="user-rates">User Rates</TabsTrigger>
         </TabsList>
 
         <TabsContent value="general" className="mt-6">
@@ -136,12 +165,19 @@ export default function SettingsPage() {
           <SettingsTeam />
         </TabsContent>
 
-        <TabsContent value="statuses" className="mt-6">
+        <TabsContent value="statuses" className="mt-6 space-y-10">
           <SettingsStatuses />
+          <div className="border-t pt-8">
+            <SettingsMyTasksDefaults />
+          </div>
         </TabsContent>
 
         <TabsContent value="work-categories" className="mt-6">
           <SettingsWorkCategories />
+        </TabsContent>
+
+        <TabsContent value="user-rates" className="mt-6">
+          <SettingsUserRates />
         </TabsContent>
       </Tabs>
     </div>

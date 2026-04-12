@@ -6,7 +6,7 @@ import { useConvexAuth } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { ChatMessage } from "@/components/tasks/chat-message"
 import { mergeActivityFeed, type FeedItem } from "@/lib/task-detail"
-import { groupFeedForCommentsView, computeMessageGrouping, computeDayDividers, getDayLabel, type GroupedFeedItem, type AuditBatch } from "@/lib/activity-grouping"
+import { groupFeedForCommentsView, computeMessageGrouping, getDayLabel, type GroupedFeedItem, type AuditBatch } from "@/lib/activity-grouping"
 import { firstName } from "@/lib/format"
 import { ActivityBatch } from "@/components/tasks/activity-batch"
 import type { Id } from "@/convex/_generated/dataModel"
@@ -227,11 +227,6 @@ export function ActivityFeed({ taskId, isAdmin, scrollRef, replyContext, onReply
     [feed],
   )
 
-  // Day dividers
-  const dayDividers = useMemo(
-    () => (feed ? computeDayDividers(feed) : new Map<string, string>()),
-    [feed],
-  )
 
   // Scroll management — Slack-style "N new messages" floating pill
   const commentFeedCount = useMemo(
@@ -332,7 +327,6 @@ export function ActivityFeed({ taskId, isAdmin, scrollRef, replyContext, onReply
           attachmentsMap={stableAttachmentsMap}
           readReceipts={readReceipts}
           messageGrouping={messageGrouping}
-          dayDividers={dayDividers}
           onReply={handleReply}
           onToggleReaction={handleToggleReaction}
           onEdit={handleEditComment}
@@ -393,7 +387,6 @@ type ViewProps = {
   attachmentsMap: Record<string, AttachmentEntry[]> | undefined
   readReceipts: ReadReceipt[] | undefined
   messageGrouping: Map<string, boolean>
-  dayDividers: Map<string, string>
   onReply: (commentId: string, userName: string) => void
   onToggleReaction: (commentId: string, emoji: string) => void
   onEdit: (commentId: string, content: unknown) => void
@@ -416,7 +409,6 @@ function CommentsView({
   attachmentsMap,
   readReceipts,
   messageGrouping,
-  dayDividers,
   onReply,
   onToggleReaction,
   onEdit,
@@ -449,29 +441,33 @@ function CommentsView({
 
       const prev = groupedFeed[i - 1]
       const prevSameUser = prev?.kind === "comment" && prev.userId === item.userId
-      const hasDayDivider = dayDividers.has(item.id)
+      const prevTime = prev?.kind === "comment" ? prev.createdAt : 0
+      const dayChanged = prevSameUser && getDayLabel(prevTime) !== getDayLabel(item.createdAt)
       const isNewBreak = item.id === newDividerBreakId
-      hasLaneAbove.set(item.id, prevSameUser && !hasDayDivider && !isNewBreak)
+      hasLaneAbove.set(item.id, prevSameUser && !dayChanged && !isNewBreak)
 
       const next = groupedFeed[i + 1]
       const nextSameUser = next?.kind === "comment" && next.userId === item.userId
-      const nextHasDayDivider = next?.kind === "comment" && dayDividers.has(next.id)
+      const nextDayChanged = nextSameUser && next.kind === "comment" && getDayLabel(item.createdAt) !== getDayLabel(next.createdAt)
       const nextIsNewBreak = next?.kind === "comment" && next.id === newDividerBreakId
-      hasLaneBelow.set(item.id, nextSameUser && !nextHasDayDivider && !nextIsNewBreak)
+      hasLaneBelow.set(item.id, nextSameUser && !nextDayChanged && !nextIsNewBreak)
     }
 
     return { hasLaneAbove, hasLaneBelow }
-  }, [groupedFeed, dayDividers, newDividerAt, currentUserId])
+  }, [groupedFeed, newDividerAt, currentUserId])
 
   const lastGroupedCommentIndex = groupedFeed.findLastIndex((item) => item.kind === "comment")
   let newDividerRendered = false
+  let lastDayLabel = ""
   const rendered: React.ReactNode[] = []
 
   groupedFeed.forEach((item, i) => {
+    // Day dividers only before comments — batches carry their own date in the header
     if (item.kind === "comment") {
-      const dayLabel = dayDividers.get(item.id)
-      if (dayLabel) {
+      const dayLabel = getDayLabel(item.createdAt)
+      if (dayLabel !== lastDayLabel) {
         rendered.push(<DayDivider key={`day-${dayLabel}`} label={dayLabel} />)
+        lastDayLabel = dayLabel
       }
     }
 

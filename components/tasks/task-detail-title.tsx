@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from "react"
 import { useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
+import { toastError } from "@/lib/toast-helpers"
 
 export function TaskDetailTitle({
   taskId,
@@ -36,7 +37,8 @@ export function TaskDetailTitle({
     savingRef.current = true
     try {
       await updateTask({ id: taskId, title: trimmed })
-    } catch {
+    } catch (err) {
+      toastError(err, "Failed to update title")
       setValue(title)
     }
     savingRef.current = false
@@ -45,9 +47,9 @@ export function TaskDetailTitle({
 
   return (
     <div className="shrink-0 pb-2">
-      {projectCode && (
+      {projectCode ? (
         <span className="mb-1.5 block text-[13px] font-medium text-muted-foreground/60">{projectCode}</span>
-      )}
+      ) : null}
       {editing ? (
         <textarea
           ref={inputRef}

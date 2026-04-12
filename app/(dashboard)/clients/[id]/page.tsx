@@ -213,7 +213,7 @@ export default function ClientDetailPage() {
               {client.archivedAt && <Badge variant="secondary" className="shrink-0 text-xs">Archived</Badge>}
             </div>
             <p className="text-xs text-muted-foreground">
-              {[client.currency, client.invoicePrefix].filter(Boolean).join(" · ")}
+              {[client.currency, client.prefix ?? client.invoicePrefix].filter(Boolean).join(" · ")}
             </p>
           </div>
         </div>
@@ -294,14 +294,14 @@ export default function ClientDetailPage() {
           </section>
 
           {/* Notes */}
-          {client.notes && (
+          {client.notes ? (
             <section className="space-y-2.5">
               <h2 className="text-sm font-semibold">Notes</h2>
               <p className="whitespace-pre-line text-sm leading-relaxed text-muted-foreground">
                 {client.notes}
               </p>
             </section>
-          )}
+          ) : null}
 
           {/* Documents */}
           <section className="space-y-3">

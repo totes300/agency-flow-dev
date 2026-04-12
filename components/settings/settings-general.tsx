@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/select"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Skeleton } from "@/components/ui/skeleton"
+import { extractErrorMessage } from "@/lib/toast-helpers"
 import { CURRENCIES, ROUNDING_OPTIONS } from "@/convex/lib/constants"
 import type { Currency, RoundingMinutes } from "@/convex/lib/constants"
 import { COMMON_TIMEZONES, ROUNDING_LABELS } from "@/lib/display-constants"
@@ -54,19 +55,16 @@ function SettingsGeneralForm({
   initialCurrency,
   initialTimezone,
   initialRounding,
-  initialDefaultTmFlatRate,
 }: {
   initialCurrency: Currency
   initialTimezone: string
   initialRounding: RoundingMinutes
-  initialDefaultTmFlatRate: string
 }) {
   const updateSettings = useMutation(api.orgSettings.update)
 
   const [currency, setCurrency] = useState<Currency>(initialCurrency)
   const [timezone, setTimezone] = useState(initialTimezone)
   const [rounding, setRounding] = useState<RoundingMinutes>(initialRounding)
-  const [defaultTmFlatRate, setDefaultTmFlatRate] = useState(initialDefaultTmFlatRate)
   const [isSaving, setIsSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState("")
@@ -83,25 +81,22 @@ function SettingsGeneralForm({
   const hasChanges =
     currency !== initialCurrency ||
     timezone !== initialTimezone ||
-    rounding !== initialRounding ||
-    defaultTmFlatRate !== initialDefaultTmFlatRate
+    rounding !== initialRounding
 
   async function handleSave() {
     setIsSaving(true)
     setSaved(false)
     setError("")
     try {
-      const parsedRate = parseFloat(defaultTmFlatRate)
       await updateSettings({
         defaultCurrency: currency,
         timezone,
         roundingMinutes: rounding,
-        ...(defaultTmFlatRate ? { defaultTmFlatRate: parsedRate } : {}),
       })
       setSaved(true)
       savedTimerRef.current = setTimeout(() => setSaved(false), 2000)
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong")
+      setError(extractErrorMessage(err, "Something went wrong"))
     } finally {
       setIsSaving(false)
     }
@@ -172,22 +167,6 @@ function SettingsGeneralForm({
           </RadioGroup>
         </Field>
 
-        <Field orientation="horizontal">
-          <FieldLabel htmlFor="settings-tm-rate">Default T&M flat rate</FieldLabel>
-          <div className="flex items-center gap-2">
-            <Input
-              id="settings-tm-rate"
-              type="number"
-              min="0"
-              step="0.01"
-              value={defaultTmFlatRate}
-              onChange={(e) => setDefaultTmFlatRate(e.target.value)}
-              placeholder="0"
-              className="w-24"
-            />
-            <span className="text-sm text-muted-foreground">{currency}/h</span>
-          </div>
-        </Field>
       </FieldGroup>
 
       {error && (
@@ -217,7 +196,6 @@ export function SettingsGeneral() {
       initialCurrency={settings.defaultCurrency as Currency}
       initialTimezone={settings.timezone}
       initialRounding={settings.roundingMinutes as RoundingMinutes}
-      initialDefaultTmFlatRate={settings.defaultTmFlatRate?.toString() ?? ""}
     />
   )
 }

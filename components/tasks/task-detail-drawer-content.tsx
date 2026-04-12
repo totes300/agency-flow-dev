@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useQuery, useMutation } from "convex/react"
 import { useConvexAuth } from "convex/react"
+import { toastError } from "@/lib/toast-helpers"
 import dynamic from "next/dynamic"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { TaskDetailTitle } from "@/components/tasks/task-detail-title"
@@ -128,7 +129,7 @@ export function TaskDetailDrawerContent({
         void updateDescription({
           id: taskIdRef.current,
           description: JSON.stringify(content),
-        }).catch(() => {})
+        }).catch((err: unknown) => toastError(err, "Failed to save description"))
       }
       pendingSaveRef.current = doSave
       debounceRef.current = setTimeout(doSave, 1000)
@@ -182,7 +183,7 @@ export function TaskDetailDrawerContent({
 
         {/* Overview — description, subtasks, activity, comment input */}
         <TabsContent value="overview" className="flex flex-1 flex-col overflow-hidden">
-          <div ref={scrollRef} className="relative flex-1 overflow-y-auto">
+          <div ref={scrollRef} className="relative flex-1 overflow-y-auto scrollbar-thin">
             {/* Description — collapsible with fade */}
             <div className="relative px-12 pt-4 pb-2">
               <div
@@ -281,7 +282,7 @@ export function TaskDetailDrawerContent({
         </TabsContent>
 
         {/* Time */}
-        <TabsContent value="time" className="flex-1 overflow-y-auto px-12 py-5">
+        <TabsContent value="time" className="flex-1 overflow-y-auto scrollbar-thin px-12 py-5">
           <TaskDetailTime
             taskId={task._id}
             isBillable={task.billable}
@@ -291,12 +292,12 @@ export function TaskDetailDrawerContent({
         </TabsContent>
 
         {/* Files (renamed from Attachments) */}
-        <TabsContent value="files" className="flex-1 overflow-y-auto px-12 py-5">
+        <TabsContent value="files" className="flex-1 overflow-y-auto scrollbar-thin px-12 py-5">
           <TaskDetailAttachments taskId={task._id} />
         </TabsContent>
 
         {/* Email */}
-        <TabsContent value="email" className="flex-1 overflow-y-auto px-12 py-5">
+        <TabsContent value="email" className="flex-1 overflow-y-auto scrollbar-thin px-12 py-5">
           <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-border/40 p-12">
             <MailIcon className="size-10 text-muted-foreground/30" />
             <p className="text-sm text-muted-foreground/50">Coming soon</p>

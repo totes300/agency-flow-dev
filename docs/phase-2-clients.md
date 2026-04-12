@@ -31,7 +31,8 @@ clients: defineTable({
   orgId: v.string(),
   name: v.string(),                         // Required, trimmed
   currency: v.string(),                     // ISO 4217, default: org default
-  invoicePrefix: v.string(),                // Auto-generated, editable, e.g., "ACME"
+  prefix: v.optional(v.string()),            // Auto-generated, editable, e.g., "KONV"
+  usePrefix: v.optional(v.boolean()),        // Show prefix instead of full name in task lists
   billingEmail: v.optional(v.string()),     // Separate from contacts — invoices go here
   billingAddress: v.optional(v.string()),   // Multi-line
   taxId: v.optional(v.string()),            // e.g., EIN or VAT number
@@ -61,15 +62,17 @@ clientContacts: defineTable({
 ## What it stores
 
 ### Client (main record)
-**Required**: Company name + currency + invoice prefix
+**Required**: Company name + currency
+**Optional prefix** (`prefix`): short abbreviation shown in task lists when `usePrefix` is true. Auto-generated from client name (first 4 alphanumeric chars, uppercase, diacritics stripped) but can be cleared or overridden.
 **Billing details** (optional, but needed for PDF invoices in Phase 2):
 - Billing email, billing address (multi-line), tax ID, logo, notes
 
-### Invoice prefix
+### Prefix (optional)
 - Auto-generated from client name: first 4 alphanumeric characters, uppercase, diacritics stripped
   - "Acme Corp" → "ACME"
   - "Müller & Co" → "MULL"
-- **Editable** — admin can override
+- **Editable** — admin can override or clear
+- `usePrefix` (boolean) controls whether task lists show the prefix instead of the full client name
 - In Phase 2 (Billing): invoice number format is `PREFIX-YEAR-SEQ` (e.g., ACME-2026-001)
 
 ### Contacts list (1:N, separate table)
@@ -91,13 +94,13 @@ clientContacts: defineTable({
 
 ### Create
 - **Modal form**: Name (required) + currency (dropdown, defaults to org's) → create
-- Invoice prefix auto-generated from name, but editable in the modal
+- Optional prefix auto-generated from name, editable or clearable in the modal
 - Optional: contact details, billing details (can fill in now or later)
 - At least 1 contact recommended but not required at creation
 
 ### Edit
 - **All fields modifiable**, including currency (no lock)
-- Changing name does NOT auto-change invoice prefix (that's separately editable)
+- Changing name does NOT auto-change prefix (that's separately editable)
 
 ### Archive
 - **Cascades**: Client archive → all projects → all tasks archived
@@ -144,7 +147,7 @@ clientContacts.setPrimary — admin only (old primary loses flag)
 - Click row → client detail page
 
 ### Detail view (`/clients/[id]`)
-- **Header**: Name + currency badge + invoice prefix
+- **Header**: Name + currency badge + prefix (if set)
 - **Contacts list**: Table — name, email, phone, primary badge. + Add contact button.
 - **Billing details**: Billing email, address, tax ID, logo upload
 - **Notes**: free-text field
@@ -162,7 +165,7 @@ clientContacts.setPrimary — admin only (old primary loses flag)
 ## Acceptance criteria
 
 - [ ] Admin creates client (name + currency), appears in list
-- [ ] Invoice prefix auto-generated and editable
+- [ ] Optional prefix auto-generated and editable; `usePrefix` toggles display in task lists
 - [ ] Contacts list: CRUD, email uniqueness within org
 - [ ] Primary flag: exactly one per client
 - [ ] Currency modifiable (no lock)

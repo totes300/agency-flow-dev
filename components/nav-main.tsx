@@ -2,14 +2,28 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
+import { useQuery } from "convex/react"
+import { useConvexAuth } from "convex/react"
+import { api } from "@/convex/_generated/api"
 import type { NavGroup } from "@/lib/navigation"
 import {
   SidebarGroup,
   SidebarGroupLabel,
   SidebarMenu,
+  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
+
+function MyTasksBadge() {
+  const { isAuthenticated } = useConvexAuth()
+  const count = useQuery(
+    api.myTasks.myTasksCount,
+    isAuthenticated ? {} : "skip",
+  )
+  if (!count) return null
+  return <SidebarMenuBadge>{count}</SidebarMenuBadge>
+}
 
 export function NavMain({
   groups,
@@ -44,6 +58,7 @@ export function NavMain({
                       <span>{item.title}</span>
                     </Link>
                   </SidebarMenuButton>
+                  {item.url === "/my-tasks" && <MyTasksBadge />}
                 </SidebarMenuItem>
               ))}
             </SidebarMenu>

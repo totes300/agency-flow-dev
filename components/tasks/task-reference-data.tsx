@@ -26,6 +26,9 @@ type ProjectOption = {
   code: string
   clientId: Id<"clients">
   clientName: string
+  clientPrefix: string
+  clientUsePrefix?: boolean
+  defaultAssignees?: Array<{ workCategoryId: Id<"workCategories">; userId: Id<"users"> }>
 }
 
 type OrgMember = {

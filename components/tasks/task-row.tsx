@@ -28,6 +28,7 @@ import { InlineTimeCell } from "@/components/tasks/inline-time-cell"
 import { TaskPreviewPopover } from "@/components/tasks/task-preview-popover"
 import { SubtaskHoverPopover } from "@/components/tasks/subtask-hover-popover"
 import { CommentHoverPopover } from "@/components/tasks/comment-hover-popover"
+import { CommentPill, InlineSubtaskRing } from "@/components/tasks/activity-indicators"
 import type { TaskWithJoins } from "@/components/tasks/tasks-table"
 import type { Id } from "@/convex/_generated/dataModel"
 
@@ -95,37 +96,37 @@ export const TaskRow = memo(function TaskRow({
     <div
       data-task-id={task._id}
       className={cn(
-        `group/row grid ${TASK_GRID_COLS} items-center gap-x-6 border-b border-border/55 px-3 py-2.5 transition-colors hover:bg-muted/[0.38] [&>*]:min-w-0 [&>*]:overflow-hidden`,
-        isSelected && "bg-primary/5",
-        isDetailOpen && "bg-accent/50 border-l-2 border-l-primary",
-        isDone && "opacity-50",
+        "group/row relative border-b border-border/55 transition-colors",
+        "before:pointer-events-none before:absolute before:inset-y-0 before:-left-13 before:w-13 before:transition-colors",
+        "hover:bg-muted/70 hover:before:bg-muted/70",
+        isSelected && "bg-primary/5 before:bg-primary/5",
+        isDetailOpen && "bg-accent/50 before:bg-accent/50 before:border-l-2 before:border-l-primary",
       )}
     >
-      {/* 1. Checkbox — hidden until row hover or selection active */}
+      {/* Checkbox — positioned in left margin, hidden until row hover or selection active */}
       <div className={cn(
-        "flex items-center justify-center transition-opacity",
-        hasSelection || isSelected || isDone ? "opacity-100" : "opacity-0 group-hover/row:opacity-100",
+        "absolute -left-7 top-0 bottom-0 flex w-4 items-center transition-opacity",
+        hasSelection || isSelected ? "opacity-100" : "opacity-0 group-hover/row:opacity-100",
       )}>
         <Checkbox
-          checked={isDone || isSelected}
+          checked={isSelected}
           onCheckedChange={() => onSelect(task._id, !isSelected)}
           onClick={(e) => e.stopPropagation()}
-          disabled={isDone}
-          aria-label={isDone ? `${task.title} (done)` : `Select ${task.title}`}
-          className={cn(isDone && "border-emerald-600 bg-emerald-600 text-white data-[state=checked]:border-emerald-600 data-[state=checked]:bg-emerald-600 dark:border-emerald-500 dark:bg-emerald-500 dark:data-[state=checked]:border-emerald-500 dark:data-[state=checked]:bg-emerald-500")}
+          aria-label={`Select ${task.title}`}
         />
       </div>
 
-      {/* 2. Task name + subtitle + inline icons */}
+      <div className={`grid ${TASK_GRID_COLS} items-center gap-x-6 pr-3 py-2.5 [&>*]:min-w-0 [&>*]:overflow-hidden`}>
+      {/* 1. Task name + subtitle + inline icons */}
       <button
         type="button"
         className="cursor-pointer text-left"
         onClick={() => onOpenDetail?.(task._id)}
       >
         <div className="flex items-center gap-1.5">
-          {hasUnseen && (
+          {hasUnseen ? (
             <span className="size-1.5 shrink-0 rounded-full bg-primary" />
-          )}
+          ) : null}
           <TaskPreviewPopover
             taskId={task._id as Id<"tasks">}
             description={task.description}
@@ -133,13 +134,12 @@ export const TaskRow = memo(function TaskRow({
             onOpenDetail={onOpenDetail}
           >
             <span className={cn(
-              "truncate text-sm font-medium",
-              isDone && "line-through",
+              "truncate text-sm font-semibold",
             )}>
               {task.title}
             </span>
           </TaskPreviewPopover>
-          {hasDescription && (
+          {hasDescription ? (
             <TaskPreviewPopover
               taskId={task._id as Id<"tasks">}
               description={task.description}
@@ -155,8 +155,8 @@ export const TaskRow = memo(function TaskRow({
                 />
               </span>
             </TaskPreviewPopover>
-          )}
-          {activity && activity.subtaskTotal > 0 && (
+          ) : null}
+          {activity && activity.subtaskTotal > 0 ? (
             <SubtaskHoverPopover
               taskId={task._id as Id<"tasks">}
               done={activity.subtaskDone}
@@ -171,7 +171,7 @@ export const TaskRow = memo(function TaskRow({
                 />
               </span>
             </SubtaskHoverPopover>
-          )}
+          ) : null}
         </div>
         <div className="truncate text-[11px] text-muted-foreground/85">
           {subtitle}
@@ -244,7 +244,7 @@ export const TaskRow = memo(function TaskRow({
                 <ArchiveRestoreIcon className="size-4" />
                 Restore
               </DropdownMenuItem>
-              {isAdmin && (
+              {isAdmin ? (
                 <>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem
@@ -255,7 +255,7 @@ export const TaskRow = memo(function TaskRow({
                     Delete permanently
                   </DropdownMenuItem>
                 </>
-              )}
+              ) : null}
             </>
           ) : (
             <>
@@ -271,7 +271,7 @@ export const TaskRow = memo(function TaskRow({
                 <ArchiveIcon className="size-4" />
                 Archive
               </DropdownMenuItem>
-              {isAdmin && (
+              {isAdmin ? (
                 <>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem
@@ -282,60 +282,13 @@ export const TaskRow = memo(function TaskRow({
                     Delete
                   </DropdownMenuItem>
                 </>
-              )}
+              ) : null}
             </>
           )}
         </RowActionMenu>
+      </div>
       </div>
     </div>
   )
 })
 
-/** Inline 13px progress ring — sits next to the task title, same visual weight as FileTextIcon. */
-function InlineSubtaskRing({ done, total, isUnseen }: { done: number; total: number; isUnseen: boolean }) {
-  const circumference = 2 * Math.PI * 6
-  const progress = done / total
-  const offset = circumference * (1 - progress)
-  const isComplete = done === total
-
-  return (
-    <svg width={13} height={13} viewBox="0 0 16 16" className="block">
-      <circle
-        cx={8} cy={8} r={6}
-        fill="none"
-        stroke={isComplete && isUnseen ? "none" : "var(--border)"}
-        strokeWidth={1.75}
-      />
-      {progress > 0 && (
-        <circle
-          cx={8} cy={8} r={6}
-          fill="none"
-          className={isComplete && isUnseen ? "stroke-emerald-500" : isUnseen ? "stroke-foreground" : "stroke-muted-foreground"}
-          strokeWidth={isUnseen ? 2 : 1.75}
-          strokeDasharray={circumference}
-          strokeDashoffset={offset}
-          strokeLinecap="round"
-          transform="rotate(-90 8 8)"
-          style={isComplete && isUnseen ? { opacity: 1 } : isUnseen ? { opacity: 0.7 } : { opacity: 0.45 }}
-        />
-      )}
-    </svg>
-  )
-}
-
-/** Comment pill — gray when seen, red when unseen. */
-function CommentPill({ count, unreadCount, hasUnseen }: { count: number; unreadCount: number; hasUnseen: boolean }) {
-  const displayCount = hasUnseen ? unreadCount : count
-
-  return (
-    <span className={cn(
-      "inline-flex items-center gap-1 rounded-full px-2 h-[22px] text-[11px] tabular-nums font-medium",
-      hasUnseen
-        ? "bg-red-500 text-white dark:bg-red-600"
-        : "bg-muted text-muted-foreground",
-    )}>
-      <MessageCircleIcon className="size-3" strokeWidth={hasUnseen ? 2.5 : 2.25} />
-      {displayCount}
-    </span>
-  )
-}

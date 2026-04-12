@@ -1,7 +1,7 @@
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { query, mutation } from "./_generated/server";
 import { getAuthContext, requireAdmin, validateStringLength } from "./lib/auth";
-import { generateInvoicePrefix, ensureUniquePrefix } from "./lib/helpers";
+import { generateClientPrefix, ensureUniquePrefix } from "./lib/helpers";
 import { currencyValidator } from "./lib/validators";
 
 // ─── Queries ────────────────────────────────────────────────────────────────────
@@ -108,7 +108,8 @@ export const create = mutation({
   args: {
     name: v.string(),
     currency: v.optional(currencyValidator),
-    invoicePrefix: v.optional(v.string()),
+    prefix: v.optional(v.string()),
+    usePrefix: v.optional(v.boolean()),
     billingName: v.optional(v.string()),
     billingEmail: v.optional(v.string()),
     billingCountry: v.optional(v.string()),
@@ -123,7 +124,7 @@ export const create = mutation({
     const { orgId, userId } = await requireAdmin(ctx);
 
     const name = args.name.trim();
-    if (!name) throw new Error("Client name is required");
+    if (!name) throw new ConvexError("Client name is required");
     validateStringLength(name, 200, "Client name");
 
     // Unique name per org
@@ -131,7 +132,7 @@ export const create = mutation({
       .query("clients")
       .withIndex("by_orgId_name", (q) => q.eq("orgId", orgId).eq("name", name))
       .first();
-    if (existing) throw new Error("A client with this name already exists");
+    if (existing) throw new ConvexError("A client with this name already exists");
 
     // Currency: default to org's (orgSettings.defaultCurrency is validated at save time)
     let currency: string = args.currency ?? "";
@@ -143,16 +144,17 @@ export const create = mutation({
       currency = orgSettings?.defaultCurrency ?? "USD";
     }
 
-    // Invoice prefix: auto-generate or use provided, then dedup
-    const rawPrefix = args.invoicePrefix?.trim() || generateInvoicePrefix(name);
-    const invoicePrefix = await ensureUniquePrefix(ctx, orgId, rawPrefix);
+    // Client prefix: auto-generate or use provided, then dedup
+    const rawPrefix = args.prefix?.trim() || generateClientPrefix(name);
+    const prefix = await ensureUniquePrefix(ctx, orgId, rawPrefix);
 
     const now = Date.now();
     return await ctx.db.insert("clients", {
       orgId,
       name,
       currency,
-      invoicePrefix,
+      prefix,
+      usePrefix: args.usePrefix,
       billingName: args.billingName?.trim() || undefined,
       billingEmail: args.billingEmail?.trim() || undefined,
       billingCountry: args.billingCountry?.trim() || undefined,
@@ -173,8 +175,9 @@ export const update = mutation({
   args: {
     id: v.id("clients"),
     name: v.optional(v.string()),
-    currency: v.optional(currencyValidator),
-    invoicePrefix: v.optional(v.string()),
+    // currency is immutable after creation — not accepted in update
+    prefix: v.optional(v.string()),
+    usePrefix: v.optional(v.boolean()),
     billingName: v.optional(v.string()),
     billingEmail: v.optional(v.string()),
     billingCountry: v.optional(v.string()),
@@ -189,13 +192,13 @@ export const update = mutation({
   handler: async (ctx, args) => {
     const { orgId } = await requireAdmin(ctx);
     const client = await ctx.db.get(args.id);
-    if (!client || client.orgId !== orgId) throw new Error("Client not found");
+    if (!client || client.orgId !== orgId) throw new ConvexError("Client not found");
 
     const updates: Record<string, unknown> = { updatedAt: Date.now() };
 
     if (args.name !== undefined) {
       const name = args.name.trim();
-      if (!name) throw new Error("Client name is required");
+      if (!name) throw new ConvexError("Client name is required");
       validateStringLength(name, 200, "Client name");
 
       if (name !== client.name) {
@@ -204,22 +207,22 @@ export const update = mutation({
           .withIndex("by_orgId_name", (q) => q.eq("orgId", orgId).eq("name", name))
           .first();
         if (existing && existing._id !== args.id) {
-          throw new Error("A client with this name already exists");
+          throw new ConvexError("A client with this name already exists");
         }
       }
       updates.name = name;
     }
 
-    if (args.currency !== undefined) updates.currency = args.currency;
-
-    if (args.invoicePrefix !== undefined) {
-      const prefix = args.invoicePrefix.trim();
-      if (prefix) {
-        updates.invoicePrefix = await ensureUniquePrefix(
-          ctx, orgId, prefix, args.id.toString(),
+    if (args.prefix !== undefined) {
+      const pfx = args.prefix.trim();
+      if (pfx) {
+        updates.prefix = await ensureUniquePrefix(
+          ctx, orgId, pfx, args.id.toString(),
         );
       }
     }
+
+    if (args.usePrefix !== undefined) updates.usePrefix = args.usePrefix;
 
     // Billing fields — empty string → undefined (clear field)
     const trimOrClear = (val: string | undefined) =>
@@ -247,7 +250,7 @@ export const archive = mutation({
   handler: async (ctx, args) => {
     const { orgId } = await requireAdmin(ctx);
     const client = await ctx.db.get(args.id);
-    if (!client || client.orgId !== orgId) throw new Error("Client not found");
+    if (!client || client.orgId !== orgId) throw new ConvexError("Client not found");
 
     await ctx.db.patch(args.id, {
       archivedAt: Date.now(),
@@ -263,7 +266,7 @@ export const restore = mutation({
   handler: async (ctx, args) => {
     const { orgId } = await requireAdmin(ctx);
     const client = await ctx.db.get(args.id);
-    if (!client || client.orgId !== orgId) throw new Error("Client not found");
+    if (!client || client.orgId !== orgId) throw new ConvexError("Client not found");
 
     await ctx.db.patch(args.id, {
       archivedAt: undefined,
@@ -278,7 +281,7 @@ export const remove = mutation({
   handler: async (ctx, args) => {
     const { orgId } = await requireAdmin(ctx);
     const client = await ctx.db.get(args.id);
-    if (!client || client.orgId !== orgId) throw new Error("Client not found");
+    if (!client || client.orgId !== orgId) throw new ConvexError("Client not found");
 
     // TODO Phase 7: block if time entries exist on any project of this client
 
@@ -335,9 +338,9 @@ export const removeClientLogo = mutation({
   handler: async (ctx, args) => {
     const { orgId } = await requireAdmin(ctx);
     const client = await ctx.db.get(args.clientId);
-    if (!client || client.orgId !== orgId) throw new Error("Client not found");
+    if (!client || client.orgId !== orgId) throw new ConvexError("Client not found");
     if (client.logoStorageId !== args.storageId) {
-      throw new Error("Storage ID does not belong to this client");
+      throw new ConvexError("Storage ID does not belong to this client");
     }
     await ctx.storage.delete(args.storageId);
   },

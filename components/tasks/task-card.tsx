@@ -6,7 +6,7 @@ import { StatusBadge } from "@/components/status-badge"
 import { CategoryBadge } from "@/components/category-badge"
 import { UserAvatar } from "@/components/user-avatar"
 import { CalendarIcon } from "lucide-react"
-import { formatRelativeTime, formatShortDate, isOverdue, firstName } from "@/lib/format"
+import { formatRelativeTime, formatShortDate, isOverdue, firstName, getClientDisplayName } from "@/lib/format"
 import { formatActivitySubtitle } from "@/lib/format-activity-subtitle"
 import type { TaskWithJoins } from "@/components/tasks/tasks-table"
 import type { ActivityIndicator } from "@/components/tasks/task-row"
@@ -49,7 +49,7 @@ export function TaskCard({
           checked={isDone || isSelected}
           onCheckedChange={() => onSelect(task._id, !isSelected)}
           disabled={isDone}
-          className={cn(isDone && !isSelected && "border-green-600 bg-green-600 text-white data-[state=checked]:border-green-600 data-[state=checked]:bg-green-600")}
+          className={cn(isDone && !isSelected && "border-teal-500 bg-teal-500 text-white data-[state=checked]:border-teal-500 data-[state=checked]:bg-teal-500")}
         />
       </div>
 
@@ -61,7 +61,7 @@ export function TaskCard({
             <span className="size-1.5 shrink-0 rounded-full bg-primary" />
           )}
           <span className={cn(
-            "text-sm font-medium",
+            "text-sm font-semibold",
             isDone && "line-through",
           )}>
             {task.title}
@@ -82,7 +82,7 @@ export function TaskCard({
         <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
           {task.client && task.project && (
             <span className="truncate">
-              {task.client.name} · {task.project.name}
+              {getClientDisplayName(task.client)} · {task.project.name}
             </span>
           )}
           {task.assignees.length > 0 && (

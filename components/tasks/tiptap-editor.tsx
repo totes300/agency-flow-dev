@@ -327,8 +327,9 @@ export function TiptapEditor({
 
         <BubbleMenu
           updateDelay={100}
-          shouldShow={() => {
-            if (editor.state.selection.empty) return false
+          shouldShow={({ view, state }) => {
+            if (!view.hasFocus()) return false
+            if (state.selection.empty) return false
             if (editor.isActive("imageUpload") || editor.isActive("image")) return false
             return true
           }}

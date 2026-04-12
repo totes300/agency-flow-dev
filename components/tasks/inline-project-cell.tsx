@@ -3,6 +3,7 @@
 import { useState, useMemo } from "react"
 import { useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
+import { getClientDisplayName } from "@/lib/format"
 import { useTaskReferenceData } from "@/components/tasks/task-reference-data"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import {
@@ -27,9 +28,9 @@ export function InlineProjectCell({
 }: {
   taskId?: Id<"tasks">
   project: Pick<Doc<"projects">, "_id" | "name" | "code"> | null
-  client: Pick<Doc<"clients">, "_id" | "name"> | null
+  client: Pick<Doc<"clients">, "_id" | "name" | "prefix" | "usePrefix"> | null
   hasTimeEntries?: boolean
-  onSelect?: (projectId: Id<"projects"> | null, project: Pick<Doc<"projects">, "_id" | "name" | "code"> | null, client: Pick<Doc<"clients">, "_id" | "name"> | null) => void
+  onSelect?: (projectId: Id<"projects"> | null, project: Pick<Doc<"projects">, "_id" | "name" | "code"> | null, client: Pick<Doc<"clients">, "_id" | "name" | "prefix" | "usePrefix"> | null) => void
   emptyLabel?: string
 }) {
   const [open, setOpen] = useState(false)
@@ -44,7 +45,7 @@ export function InlineProjectCell({
       onSelectProp(
         projectId,
         p ? { _id: p._id, name: p.name, code: p.code } : null,
-        p?.clientId ? { _id: p.clientId as Id<"clients">, name: p.clientName ?? "Unknown" } : null,
+        p?.clientId ? { _id: p.clientId as Id<"clients">, name: p.clientName ?? "Unknown", prefix: p.clientPrefix ?? "", usePrefix: p.clientUsePrefix } : null,
       )
       return
     }
@@ -80,19 +81,11 @@ export function InlineProjectCell({
           title={locked ? "Has time entries — project cannot be changed" : undefined}
         >
           {project ? (
-            <div className="min-w-0 flex-1">
-              {client && (
-                <div className="flex items-center gap-1">
-                  <span className="truncate text-[13px] text-foreground">{client.name}</span>
-                  {locked && <LockIcon className="size-3 shrink-0 text-muted-foreground" />}
-                </div>
-              )}
-              {!client && locked && (
-                <div className="flex items-center gap-1">
-                  <LockIcon className="size-3 shrink-0 text-muted-foreground" />
-                </div>
-              )}
-              <div className="truncate text-xs leading-tight text-muted-foreground">{project.name}</div>
+            <div className="flex min-w-0 flex-1 items-center gap-1">
+              <span className="truncate text-[13px] text-muted-foreground">
+                {client ? `${getClientDisplayName(client)} › ${project.name}` : project.name}
+              </span>
+              {locked && <LockIcon className="size-3 shrink-0 text-muted-foreground" />}
             </div>
           ) : (
             <span className="flex items-center gap-1.5 rounded-md border border-dashed border-border/55 bg-muted/[0.12] px-2 py-1 text-muted-foreground/60 transition-colors group-hover/row:border-border/80 group-hover/row:bg-muted/[0.22] group-hover/row:text-muted-foreground">

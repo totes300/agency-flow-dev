@@ -1,5 +1,5 @@
 import { query, mutation, internalMutation } from "./_generated/server";
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { getAuthContext, requireAdmin, validateStringLength } from "./lib/auth";
 import { statusTypeValidator, statusColorValidator } from "./lib/validators";
 import { DEFAULT_STATUSES } from "./lib/constants";
@@ -36,7 +36,7 @@ export const create = mutation({
 
     const trimmedName = args.name.trim();
     if (!trimmedName) {
-      throw new Error("Name is required");
+      throw new ConvexError("Name is required");
     }
     validateStringLength(trimmedName, 200, "Status name");
 
@@ -76,7 +76,7 @@ export const update = mutation({
 
     const status = await ctx.db.get(args.id);
     if (!status || status.orgId !== orgId) {
-      throw new Error("Status not found");
+      throw new ConvexError("Status not found");
     }
 
     // Build typed patch
@@ -92,7 +92,7 @@ export const update = mutation({
     if (args.name !== undefined) {
       const trimmedName = args.name.trim();
       if (!trimmedName) {
-        throw new Error("Name is required");
+        throw new ConvexError("Name is required");
       }
       validateStringLength(trimmedName, 200, "Status name");
       patch.name = trimmedName;
@@ -131,7 +131,7 @@ export const archive = mutation({
 
     const status = await ctx.db.get(args.id);
     if (!status || status.orgId !== orgId) {
-      throw new Error("Status not found");
+      throw new ConvexError("Status not found");
     }
 
     await ctx.db.patch(args.id, {
@@ -148,7 +148,7 @@ export const restore = mutation({
 
     const status = await ctx.db.get(args.id);
     if (!status || status.orgId !== orgId) {
-      throw new Error("Status not found");
+      throw new ConvexError("Status not found");
     }
 
     await ctx.db.patch(args.id, {
@@ -165,7 +165,7 @@ export const remove = mutation({
 
     const status = await ctx.db.get(args.id);
     if (!status || status.orgId !== orgId) {
-      throw new Error("Status not found");
+      throw new ConvexError("Status not found");
     }
 
     // Check for task references before allowing hard delete (org-scoped)
@@ -176,19 +176,22 @@ export const remove = mutation({
       )
       .first();
     if (taskWithStatus) {
-      throw new Error("Cannot delete a status that is assigned to tasks. Archive it instead.");
+      throw new ConvexError("Cannot delete a status that is assigned to tasks. Archive it instead.");
     }
 
-    // Clear defaultStatusId in orgSettings if this status was default
+    // Clear any orgSettings references to this status
     const settings = await ctx.db
       .query("orgSettings")
       .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
       .unique();
-    if (settings?.defaultStatusId === args.id) {
-      await ctx.db.patch(settings._id, {
-        defaultStatusId: undefined,
-        updatedAt: Date.now(),
-      });
+    if (settings) {
+      const settingsPatch: Record<string, unknown> = {};
+      if (settings.defaultStatusId === args.id) settingsPatch.defaultStatusId = undefined;
+      if (settings.completionDefaultAdminStatusId === args.id) settingsPatch.completionDefaultAdminStatusId = undefined;
+      if (settings.completionDefaultMemberStatusId === args.id) settingsPatch.completionDefaultMemberStatusId = undefined;
+      if (Object.keys(settingsPatch).length > 0) {
+        await ctx.db.patch(settings._id, { ...settingsPatch, updatedAt: Date.now() });
+      }
     }
 
     await ctx.db.delete(args.id);
@@ -202,10 +205,10 @@ export const setDefault = mutation({
 
     const status = await ctx.db.get(args.id);
     if (!status || status.orgId !== orgId) {
-      throw new Error("Status not found");
+      throw new ConvexError("Status not found");
     }
     if (status.archivedAt) {
-      throw new Error("Cannot set an archived status as default");
+      throw new ConvexError("Cannot set an archived status as default");
     }
 
     const settings = await ctx.db
@@ -213,7 +216,7 @@ export const setDefault = mutation({
       .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
       .unique();
     if (!settings) {
-      throw new Error("Organization settings not found");
+      throw new ConvexError("Organization settings not found");
     }
 
     await ctx.db.patch(settings._id, {
@@ -234,7 +237,7 @@ export const reorder = mutation({
     for (let i = 0; i < args.ids.length; i++) {
       const status = await ctx.db.get(args.ids[i]);
       if (!status || status.orgId !== orgId) {
-        throw new Error("Status not found");
+        throw new ConvexError("Status not found");
       }
       await ctx.db.patch(args.ids[i], { sortOrder: i, updatedAt: now });
     }

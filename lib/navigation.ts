@@ -2,6 +2,7 @@ import {
   LayoutDashboardIcon,
   SettingsIcon,
   CheckSquareIcon,
+  CircleUserIcon,
   UsersIcon,
   FolderIcon,
   FileTextIcon,
@@ -37,6 +38,7 @@ export const navigation: NavGroup[] = [
   {
     label: "Work",
     items: [
+      { title: "My Tasks", url: "/my-tasks", icon: CircleUserIcon },
       { title: "Tasks", url: "/tasks", icon: CheckSquareIcon },
     ],
   },

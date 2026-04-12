@@ -21,6 +21,7 @@ import {
 } from "@/convex/lib/constants"
 import type { Currency, RoundingMinutes } from "@/convex/lib/constants"
 import { cn } from "@/lib/utils"
+import { extractErrorMessage } from "@/lib/toast-helpers"
 import { StepGeneral } from "./step-general"
 import { StepStatuses } from "./step-statuses"
 import { StepCategories } from "./step-categories"
@@ -52,23 +53,10 @@ export function OnboardingModal() {
       id: crypto.randomUUID(),
       name: c.name,
       color: c.color,
-      defaultCostRate: "",
       defaultBillRate: "",
-      currency: DEFAULT_CURRENCY,
     }))
   )
 
-  function handleCurrencyChange(newCurrency: Currency) {
-    const previousDefault = currency
-    setCurrency(newCurrency)
-    setCategories((prev) =>
-      prev.map((c) =>
-        c.currency === previousDefault
-          ? { ...c, currency: newCurrency }
-          : c
-      )
-    )
-  }
 
   async function handleSubmit() {
     setIsSubmitting(true)
@@ -84,21 +72,18 @@ export function OnboardingModal() {
           type: s.type,
         })),
         workCategories: categories.map((c) => {
-          const costStr = String(c.defaultCostRate ?? "").trim()
           const billStr = String(c.defaultBillRate ?? "").trim()
-          const cost = costStr ? Number(costStr) : NaN
           const bill = billStr ? Number(billStr) : NaN
           return {
             name: c.name.trim(),
             color: c.color,
-            defaultCostRate: Number.isFinite(cost) ? Math.max(0, cost) : undefined,
             defaultBillRate: Number.isFinite(bill) ? Math.max(0, bill) : undefined,
-            currency: c.currency,
+            currency, // use org default currency for all categories
           }
         }),
       })
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong")
+      setError(extractErrorMessage(err, "Something went wrong"))
       setIsSubmitting(false)
     }
   }
@@ -152,7 +137,7 @@ export function OnboardingModal() {
               currency={currency}
               rounding={rounding}
               onTimezoneChange={setTimezone}
-              onCurrencyChange={handleCurrencyChange}
+              onCurrencyChange={setCurrency}
               onRoundingChange={setRounding}
             />
           )}
@@ -163,7 +148,6 @@ export function OnboardingModal() {
             <StepCategories
               categories={categories}
               onChange={setCategories}
-              orgCurrency={currency}
             />
           )}
         </div>

@@ -25,7 +25,7 @@ export function TaskDetailSidebar({ taskId, isAdmin }: { taskId: Id<"tasks">; is
 
       {/* Timeline */}
       <div className="relative min-h-0 flex-1">
-        <div ref={scrollRef} className="h-full overflow-y-auto p-3 pb-2.5">
+        <div ref={scrollRef} className="h-full overflow-y-auto scrollbar-thin p-3 pb-2.5">
           <ActivityFeed
             taskId={taskId}
             isAdmin={isAdmin}

@@ -1,3 +1,4 @@
+import { ConvexError } from "convex/values";
 import { MutationCtx, QueryCtx } from "../_generated/server";
 
 /**
@@ -42,12 +43,12 @@ export async function ensureUniqueProjectCode(
     .first();
 
   if (existing && (!excludeProjectId || existing._id.toString() !== excludeProjectId)) {
-    throw new Error(`Project code "${code}" is already in use`);
+    throw new ConvexError(`Project code "${code}" is already in use`);
   }
 }
 
 /**
- * Generate an invoice prefix from a client name.
+ * Generate a client prefix from a client name.
  * Strips diacritics, takes first 4 alphanumeric chars, uppercased.
  *
  * "Acme Corp" → "ACME"
@@ -55,7 +56,7 @@ export async function ensureUniqueProjectCode(
  * "AB" → "AB"
  * "---" → "CLIE" (fallback)
  */
-export function generateInvoicePrefix(name: string): string {
+export function generateClientPrefix(name: string): string {
   const stripped = name
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "") // remove diacritics
@@ -67,7 +68,7 @@ export function generateInvoicePrefix(name: string): string {
 }
 
 /**
- * Ensure the invoice prefix is unique within the org.
+ * Ensure the client prefix is unique within the org.
  * If "ACME" already exists, tries "ACME2", "ACME3", etc.
  */
 export async function ensureUniquePrefix(
@@ -84,7 +85,7 @@ export async function ensureUniquePrefix(
   const existingPrefixes = new Set(
     clients
       .filter((c) => !excludeClientId || c._id.toString() !== excludeClientId)
-      .map((c) => c.invoicePrefix),
+      .map((c) => c.prefix),
   );
 
   if (!existingPrefixes.has(prefix)) return prefix;

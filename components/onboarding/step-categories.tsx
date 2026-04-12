@@ -4,7 +4,7 @@ import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { CATEGORY_COLOR_NAMES } from "@/convex/lib/constants"
-import type { CategoryColor, Currency } from "@/convex/lib/constants"
+import type { CategoryColor } from "@/convex/lib/constants"
 import { CategoryDot } from "./shared"
 import type { CategoryDraft } from "./shared"
 import {
@@ -17,11 +17,9 @@ import {
 export function StepCategories({
   categories,
   onChange,
-  orgCurrency,
 }: {
   categories: CategoryDraft[]
   onChange: (c: CategoryDraft[]) => void
-  orgCurrency: Currency
 }) {
   const [addingNew, setAddingNew] = useState(false)
   const [newName, setNewName] = useState("")
@@ -43,10 +41,10 @@ export function StepCategories({
     onChange(categories.map((c) => (c.id === id ? { ...c, ...field } : c)))
   }
 
-  function handleRateChange(id: string, field: "defaultCostRate" | "defaultBillRate", value: string) {
+  function handleRateChange(id: string, value: string) {
     const num = Number(value)
     if (value && num < 0) return
-    handleEdit(id, { [field]: value })
+    handleEdit(id, { defaultBillRate: value })
   }
 
   function handleAdd() {
@@ -57,9 +55,7 @@ export function StepCategories({
         id: crypto.randomUUID(),
         name: newName.trim(),
         color: newColor,
-        defaultCostRate: "",
         defaultBillRate: "",
-        currency: orgCurrency,
       },
     ])
     setNewName("")
@@ -93,6 +89,7 @@ export function StepCategories({
             <Input
               value={cat.name}
               onChange={(e) => handleEdit(cat.id, { name: e.target.value })}
+              aria-label={`Category name for ${cat.name || "new category"}`}
               className="h-7 flex-1 border-transparent bg-transparent px-1 text-sm hover:border-input focus:border-input"
             />
 
@@ -100,21 +97,12 @@ export function StepCategories({
               type="number"
               min={0}
               step="any"
-              value={cat.defaultCostRate}
-              onChange={(e) => handleRateChange(cat.id, "defaultCostRate", e.target.value)}
-              placeholder="Cost"
-              className="h-7 w-16 px-1 text-xs"
-            />
-            <Input
-              type="number"
-              min={0}
-              step="any"
               value={cat.defaultBillRate}
-              onChange={(e) => handleRateChange(cat.id, "defaultBillRate", e.target.value)}
-              placeholder="Bill"
-              className="h-7 w-16 px-1 text-xs"
+              onChange={(e) => handleRateChange(cat.id, e.target.value)}
+              aria-label={`Bill rate for ${cat.name || "new category"}`}
+              placeholder="Bill rate"
+              className="h-7 w-20 px-1 text-xs"
             />
-            <span className="text-xs text-muted-foreground">{cat.currency}</span>
 
             <div className="flex items-center gap-0.5">
               <Button

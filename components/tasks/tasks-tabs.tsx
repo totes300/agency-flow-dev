@@ -117,11 +117,11 @@ export function TasksTabs({
   }, [updateIndicator])
 
   return (
-    <div>
+    <div className="md:pl-13">
       <div className="border-b border-border/50">
         <div className="flex items-end justify-between">
           {/* Tabs — left side */}
-          <div ref={tabsRef} className="relative flex items-center overflow-x-auto scrollbar-none">
+          <div ref={tabsRef} className="relative -mb-px -ml-3 flex items-center overflow-x-auto pb-px scrollbar-none">
             {TABS.map((tab) => {
               const count = getCount(tab.key)
               const isActive = !isSearching && activeTab === tab.key
@@ -131,7 +131,7 @@ export function TasksTabs({
                   ref={(el) => { if (el) tabRefs.current.set(tab.key, el); }}
                   onClick={() => onTabChange(tab.key)}
                   className={cn(
-                    "relative flex shrink-0 items-center gap-1.5 rounded-t-md px-3 pb-3 pt-1.5 text-sm whitespace-nowrap transition-colors duration-200",
+                    "relative flex shrink-0 items-center gap-1.5 rounded-t-md px-3 pb-[10px] pt-1.5 text-sm whitespace-nowrap transition-colors duration-200",
                     isSearching
                       ? "text-muted-foreground/40"
                       : isActive
@@ -156,7 +156,7 @@ export function TasksTabs({
             {/* Sliding underline */}
             {!isSearching && (
               <span
-                className="pointer-events-none absolute bottom-0 h-0.5 rounded-full bg-foreground/90"
+                className="pointer-events-none absolute bottom-0 h-[2px] rounded-full bg-foreground"
                 style={{
                   left: indicator.left,
                   width: indicator.width,

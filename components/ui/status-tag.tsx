@@ -1,6 +1,6 @@
 import { cn } from "@/lib/utils"
 
-type StatusTagVariant = "billable" | "non-billable" | "mixed" | "invoiced" | "overtime"
+export type StatusTagVariant = "billable" | "non-billable" | "mixed" | "invoiced" | "overtime"
 
 const BADGE_BASE = "inline-flex h-5 items-center justify-center rounded-4xl border px-2 text-[10px] font-medium"
 

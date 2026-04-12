@@ -74,7 +74,7 @@ export function TaskDetailDrawer({
         isOpen ? "translate-x-0" : "translate-x-full pointer-events-none",
       )}
     >
-      {isOpen && (
+      {isOpen ? (
         <FocusScope trapped className="flex flex-1 flex-col min-h-0 overflow-hidden">
           <ErrorBoundary>
             <TaskDetailDrawerHeader
@@ -102,15 +102,15 @@ export function TaskDetailDrawer({
               )}
 
               {/* Properties sidebar — collapsible */}
-              {task && showProperties && (
-                <div className="w-[240px] shrink-0 overflow-y-auto border-l border-border/70">
+              {task && showProperties ? (
+                <div className="w-[240px] shrink-0 overflow-y-auto scrollbar-thin border-l border-border/70">
                   <TaskDetailMetadata task={task} isAdmin={isAdmin} layout="stack" />
                 </div>
-              )}
+              ) : null}
             </div>
           </ErrorBoundary>
         </FocusScope>
-      )}
+      ) : null}
     </div>
   )
 }

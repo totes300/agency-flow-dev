@@ -1,5 +1,5 @@
 import { query, mutation } from "./_generated/server";
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { getAuthContextOptional, requireAdmin, validateStringLength } from "./lib/auth";
 import { currencyValidator, roundingValidator, statusTypeValidator, statusColorValidator, categoryColorValidator } from "./lib/validators";
 
@@ -32,7 +32,6 @@ export const create = mutation({
       v.object({
         name: v.string(),
         color: categoryColorValidator,
-        defaultCostRate: v.optional(v.number()),
         defaultBillRate: v.optional(v.number()),
         currency: currencyValidator,
       })
@@ -50,7 +49,7 @@ export const create = mutation({
       .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
       .unique();
     if (existing) {
-      throw new Error("Organization settings already exist");
+      throw new ConvexError("Organization settings already exist");
     }
 
     const now = Date.now();
@@ -69,7 +68,7 @@ export const create = mutation({
       const s = args.statuses[i];
       const trimmedName = s.name.trim();
       if (!trimmedName) {
-        throw new Error("Status name is required");
+        throw new ConvexError("Status name is required");
       }
       validateStringLength(trimmedName, 200, "Status name");
       await ctx.db.insert("statuses", {
@@ -89,14 +88,13 @@ export const create = mutation({
       const c = args.workCategories[i];
       const trimmedName = c.name.trim();
       if (!trimmedName) {
-        throw new Error("Category name is required");
+        throw new ConvexError("Category name is required");
       }
       validateStringLength(trimmedName, 200, "Category name");
-      await ctx.db.insert("workCategories", {
+      const catId = await ctx.db.insert("workCategories", {
         orgId,
         name: trimmedName,
         color: c.color,
-        defaultCostRate: c.defaultCostRate,
         defaultBillRate: c.defaultBillRate,
         currency: c.currency,
         sortOrder: i,
@@ -104,6 +102,18 @@ export const create = mutation({
         updatedAt: now,
         createdBy: userId,
       });
+
+      // Dual-write: also create categoryRates row if billRate provided
+      if (c.defaultBillRate !== undefined) {
+        await ctx.db.insert("categoryRates", {
+          orgId,
+          workCategoryId: catId,
+          currency: c.currency,
+          defaultBillRate: c.defaultBillRate,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
     }
 
     return settingsId;
@@ -115,7 +125,8 @@ export const update = mutation({
     defaultCurrency: v.optional(currencyValidator),
     timezone: v.optional(v.string()),
     roundingMinutes: v.optional(roundingValidator),
-    defaultTmFlatRate: v.optional(v.number()),
+    completionDefaultAdminStatusId: v.optional(v.id("statuses")),
+    completionDefaultMemberStatusId: v.optional(v.id("statuses")),
     brandName: v.optional(v.string()),
     brandAddress: v.optional(v.string()),
     brandTaxId: v.optional(v.string()),
@@ -130,7 +141,7 @@ export const update = mutation({
       .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
       .unique();
     if (!settings) {
-      throw new Error("Organization settings not found");
+      throw new ConvexError("Organization settings not found");
     }
 
     // Validate string lengths
@@ -153,17 +164,30 @@ export const update = mutation({
       validateStringLength(args.brandPhone, 500, "Brand phone");
     }
 
-    // Build typed patch object with only provided fields
-    // Validate rate
-    if (args.defaultTmFlatRate !== undefined && args.defaultTmFlatRate < 0) {
-      throw new Error("Default flat rate cannot be negative");
+    // Validate completion default status references
+    for (const field of ["completionDefaultAdminStatusId", "completionDefaultMemberStatusId"] as const) {
+      const statusId = args[field];
+      if (statusId !== undefined) {
+        const status = await ctx.db.get(statusId);
+        if (!status || status.orgId !== orgId) {
+          throw new ConvexError("Completion default status not found");
+        }
+        if (status.archivedAt) {
+          throw new ConvexError("Cannot set an archived status as completion default");
+        }
+        if (status.type !== "done" && status.type !== "review") {
+          throw new ConvexError("Completion default must be a done or review status");
+        }
+      }
     }
 
+    // Build typed patch object with only provided fields
     const patch: Partial<{
       defaultCurrency: typeof args.defaultCurrency;
       timezone: string;
       roundingMinutes: typeof args.roundingMinutes;
-      defaultTmFlatRate: number;
+      completionDefaultAdminStatusId: typeof args.completionDefaultAdminStatusId;
+      completionDefaultMemberStatusId: typeof args.completionDefaultMemberStatusId;
       brandName: string;
       brandAddress: string;
       brandTaxId: string;
@@ -175,7 +199,8 @@ export const update = mutation({
     if (args.defaultCurrency !== undefined) patch.defaultCurrency = args.defaultCurrency;
     if (args.timezone !== undefined) patch.timezone = args.timezone;
     if (args.roundingMinutes !== undefined) patch.roundingMinutes = args.roundingMinutes;
-    if (args.defaultTmFlatRate !== undefined) patch.defaultTmFlatRate = args.defaultTmFlatRate;
+    if (args.completionDefaultAdminStatusId !== undefined) patch.completionDefaultAdminStatusId = args.completionDefaultAdminStatusId;
+    if (args.completionDefaultMemberStatusId !== undefined) patch.completionDefaultMemberStatusId = args.completionDefaultMemberStatusId;
     if (args.brandName !== undefined) patch.brandName = args.brandName;
     if (args.brandAddress !== undefined) patch.brandAddress = args.brandAddress;
     if (args.brandTaxId !== undefined) patch.brandTaxId = args.brandTaxId;
@@ -183,5 +208,38 @@ export const update = mutation({
     if (args.brandPhone !== undefined) patch.brandPhone = args.brandPhone;
 
     await ctx.db.patch(settings._id, patch);
+  },
+});
+
+export const updateDefaultMyTasksStatusIds = mutation({
+  args: {
+    statusIds: v.array(v.id("statuses")),
+  },
+  handler: async (ctx, { statusIds }) => {
+    const { orgId } = await requireAdmin(ctx);
+
+    const settings = await ctx.db
+      .query("orgSettings")
+      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+      .unique();
+    if (!settings) {
+      throw new ConvexError("Organization settings not found");
+    }
+
+    // Validate all status IDs belong to this org and are active
+    for (const statusId of statusIds) {
+      const status = await ctx.db.get(statusId);
+      if (!status || status.orgId !== orgId) {
+        throw new ConvexError("Status not found");
+      }
+      if (status.archivedAt) {
+        throw new ConvexError("Cannot set an archived status as default");
+      }
+    }
+
+    await ctx.db.patch(settings._id, {
+      defaultMyTasksStatusIds: statusIds,
+      updatedAt: Date.now(),
+    });
   },
 });

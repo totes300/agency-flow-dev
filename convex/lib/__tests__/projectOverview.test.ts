@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { computeLast3Months } from "../../timeEntries";
 
 /**
- * Phase A tests — project time aggregation query helpers and calculation logic.
+ * Project time aggregation query helpers and calculation logic.
  *
  * Since we can't call Convex queries directly in vitest, we test:
  * 1. Exported helper functions
@@ -40,15 +40,15 @@ describe("computeLast3Months", () => {
 // ─── Fixed overview calculation formulas ───────────────────────────────────────
 
 describe("Fixed overview calculations", () => {
-  // Fixtures from PRD: fixedPrice = 10000
+  // Fixtures: fixedPrice = 10000
   // Entries: 10h@50cost (Design, billable), 20h@40cost (Dev, billable), 5h@40cost (Dev, non-billable)
   // Estimates: Design 20h, Dev 40h
   const fixture = {
     fixedPrice: 10000,
     entries: [
-      { durationMinutes: 600, appliedCostRate: 50, isBillable: true, workCategoryId: "design" },
-      { durationMinutes: 1200, appliedCostRate: 40, isBillable: true, workCategoryId: "dev" },
-      { durationMinutes: 300, appliedCostRate: 40, isBillable: false, workCategoryId: "dev" },
+      { durationMinutes: 600, costRate: 50, isBillable: true, workCategoryId: "design" },
+      { durationMinutes: 1200, costRate: 40, isBillable: true, workCategoryId: "dev" },
+      { durationMinutes: 300, costRate: 40, isBillable: false, workCategoryId: "dev" },
     ],
     estimates: [
       { workCategoryId: "design", estimatedMinutes: 1200 }, // 20h
@@ -63,14 +63,16 @@ describe("Fixed overview calculations", () => {
 
     for (const e of f.entries) {
       totalMinutes += e.durationMinutes;
-      totalActualCost += (e.durationMinutes / 60) * (e.appliedCostRate ?? 0);
+      totalActualCost += (e.durationMinutes / 60) * (e.costRate ?? 0);
       minutesByCategory[e.workCategoryId] =
         (minutesByCategory[e.workCategoryId] ?? 0) + e.durationMinutes;
     }
 
-    const profit = f.fixedPrice - totalActualCost;
+    const revenue = f.fixedPrice;
+    const profit = revenue - totalActualCost;
+    const margin = revenue > 0 ? (profit / revenue) * 100 : 0;
     const effectiveRate =
-      totalMinutes > 0 ? f.fixedPrice / (totalMinutes / 60) : 0;
+      totalMinutes > 0 ? revenue / (totalMinutes / 60) : 0;
     const totalEstimatedMinutes = f.estimates.reduce(
       (s, e) => s + e.estimatedMinutes,
       0,
@@ -83,7 +85,9 @@ describe("Fixed overview calculations", () => {
     return {
       totalMinutes,
       totalActualCost,
+      revenue,
       profit,
+      margin,
       effectiveRate,
       budgetUsed,
       minutesByCategory,
@@ -95,18 +99,23 @@ describe("Fixed overview calculations", () => {
     expect(m.totalMinutes).toBe(2100); // 35h = 2100min
   });
 
-  it("computes totalActualCost from appliedCostRate snapshots", () => {
+  it("computes totalActualCost from costRate snapshots", () => {
     const m = computeFixedMetrics(fixture);
     // 10h*50 + 20h*40 + 5h*40 = 500 + 800 + 200 = 1500
     expect(m.totalActualCost).toBe(1500);
   });
 
-  it("computes profit = fixedPrice - totalActualCost", () => {
+  it("computes profit = revenue - totalActualCost", () => {
     const m = computeFixedMetrics(fixture);
     expect(m.profit).toBe(8500);
   });
 
-  it("computes effectiveRate = fixedPrice / totalActualHours", () => {
+  it("computes margin percentage", () => {
+    const m = computeFixedMetrics(fixture);
+    expect(m.margin).toBe(85);
+  });
+
+  it("computes effectiveRate = revenue / totalActualHours", () => {
     const m = computeFixedMetrics(fixture);
     // 10000 / 35 = 285.714...
     expect(m.effectiveRate).toBeCloseTo(285.714, 2);
@@ -139,7 +148,6 @@ describe("Fixed overview calculations", () => {
     const billableOnly = fixture.entries.filter((e) => e.isBillable);
     const billableMinutes = billableOnly.reduce((s, e) => s + e.durationMinutes, 0);
     const m = computeFixedMetrics(fixture);
-    // Total must be MORE than billable-only
     expect(m.totalMinutes).toBeGreaterThan(billableMinutes);
   });
 });
@@ -147,19 +155,19 @@ describe("Fixed overview calculations", () => {
 // ─── T&M overview calculation formulas ────────────────────────────────────────
 
 describe("T&M overview calculations", () => {
-  // Fixtures from PRD:
+  // Fixtures:
   // Billable: 10h@100 (Jan), 20h@100 (Feb), 30h@100 (Mar=current month)
   // Non-billable: 5h (Mar)
   const currentMonth = "2026-03";
 
   const entries = [
-    { durationMinutes: 600, appliedRate: 100, isBillable: true, date: "2026-01-15" },
-    { durationMinutes: 1200, appliedRate: 100, isBillable: true, date: "2026-02-15" },
-    { durationMinutes: 1800, appliedRate: 100, isBillable: true, date: "2026-03-15" },
-    { durationMinutes: 300, appliedRate: 0, isBillable: false, date: "2026-03-20" },
+    { durationMinutes: 600, billableRate: 100, isBillable: true, date: "2026-01-15" },
+    { durationMinutes: 1200, billableRate: 100, isBillable: true, date: "2026-02-15" },
+    { durationMinutes: 1800, billableRate: 100, isBillable: true, date: "2026-03-15" },
+    { durationMinutes: 300, billableRate: 0, isBillable: false, date: "2026-03-20" },
   ];
 
-  type TmEntry = { durationMinutes: number; appliedRate: number; isBillable: boolean; date: string };
+  type TmEntry = { durationMinutes: number; billableRate: number; isBillable: boolean; date: string };
 
   function computeTmMetrics(entries: TmEntry[], currentMonth: string) {
     let totalBillableMinutes = 0;
@@ -173,7 +181,7 @@ describe("T&M overview calculations", () => {
       if (e.isBillable) {
         totalBillableMinutes += e.durationMinutes;
         uninvoicedMinutes += e.durationMinutes;
-        uninvoicedAmount += (e.durationMinutes / 60) * (e.appliedRate ?? 0);
+        uninvoicedAmount += (e.durationMinutes / 60) * (e.billableRate ?? 0);
         const monthKey = e.date.slice(0, 7);
         billableByMonth[monthKey] = (billableByMonth[monthKey] ?? 0) + e.durationMinutes;
       } else {
@@ -210,7 +218,7 @@ describe("T&M overview calculations", () => {
     expect(m.totalNonBillableMinutes).toBe(300); // 5h
   });
 
-  it("computes uninvoiced from billable entries × appliedRate", () => {
+  it("computes uninvoiced from billable entries × billableRate", () => {
     const m = computeTmMetrics(entries, currentMonth);
     // 60h * 100 = 6000
     expect(m.uninvoicedAmount).toBe(6000);
@@ -241,7 +249,6 @@ describe("T&M overview calculations", () => {
   });
 
   it("archived task entries still count", () => {
-    // Simulating: same entries, task is archived — entries still included
     const m = computeTmMetrics(entries, currentMonth);
     expect(m.totalBillableMinutes).toBe(3600);
   });
@@ -251,7 +258,6 @@ describe("T&M overview calculations", () => {
 
 describe("Monthly breakdown grouping", () => {
   it("groups entries by entry.isBillable, not task.billable", () => {
-    // A task defaults to billable but an entry was marked non-billable
     const entries = [
       { isBillable: true, durationMinutes: 60 },
       { isBillable: false, durationMinutes: 30 },

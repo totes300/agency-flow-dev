@@ -39,6 +39,24 @@ function formatShortTime(timestamp: number): string {
     .toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false })
 }
 
+/** Extract plain text from TipTap JSON content for preview (first ~60 chars). */
+function extractPreviewText(content: unknown, maxLen = 60): string {
+  if (!content || typeof content !== "object") return ""
+  let text = ""
+  function walk(node: TiptapNode) {
+    if (node.text) text += node.text
+    if (Array.isArray(node.content)) node.content.forEach(walk)
+    if (node.type === "paragraph" || node.type === "heading" || node.type === "listItem" || node.type === "blockquote" || node.type === "codeBlock" || node.type === "hardBreak") {
+      text += " "
+    }
+  }
+  walk(content as TiptapNode)
+  const full = text.replace(/\s+/g, " ").trim()
+  if (full.length <= maxLen) return full
+  const cut = full.lastIndexOf(" ", maxLen)
+  return full.slice(0, cut > 0 ? cut : maxLen) + "..."
+}
+
 /** Clerk default avatars contain "default" in the URL — show monogram instead */
 function isDefaultAvatar(url?: string | null): boolean {
   if (!url) return true
@@ -243,12 +261,14 @@ export const ChatMessage = memo(function ChatMessage({
 }: ChatMessageProps) {
   const [isEditing, setIsEditing] = useState(false)
   const [editContent, setEditContent] = useState<unknown>(null)
+  const [resolvedExpanded, setResolvedExpanded] = useState(false)
 
   const isOwn = currentUserId && item.userId === currentUserId
   const canEdit = isOwn && onEdit
   const canDelete = (isOwn || isAdmin) && onDelete
   const isTopLevel = !item.parentCommentId
-  const isResolved = !!item.resolvedAt
+  const isResolved = Boolean(item.resolvedAt)
+  const isCollapsed = isResolved && !resolvedExpanded
 
   const handleStartEdit = useCallback(() => {
     setEditContent(item.content)
@@ -268,6 +288,67 @@ export const ChatMessage = memo(function ChatMessage({
     setEditContent(null)
   }, [])
 
+  // ── Collapsed resolved comment ──────────────────────────────────────────────
+  if (isCollapsed) {
+    return (
+      <div
+        id={`comment-${item.id}`}
+        role="button"
+        tabIndex={0}
+        aria-expanded={false}
+        className="group/msg relative mt-5 mb-3 first:mt-0 cursor-pointer transition-colors"
+        onClick={() => setResolvedExpanded(true)}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setResolvedExpanded(true) } }}
+      >
+        {/* Hover toolbar — reply + re-open */}
+        <div className="absolute top-0 right-1 z-10 flex items-center gap-0.5 rounded-lg border border-border/50 bg-background px-1 py-0.5 opacity-0 shadow-sm transition-opacity duration-100 group-hover/msg:opacity-100">
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onReply(item.id, item.userName ?? "Someone") }}
+            aria-label="Reply"
+            className="flex size-6 items-center justify-center rounded text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <MessageSquareIcon className="size-3.5" />
+          </button>
+          {onUnresolve && (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onUnresolve(item.id) }}
+              aria-label="Re-open"
+              className="flex size-6 items-center justify-center rounded text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <RotateCcwIcon className="size-3.5" />
+            </button>
+          )}
+        </div>
+
+        {/* Line 1: avatar + name + preview */}
+        <div className="flex items-center gap-2">
+          <UserAvatar
+            name={item.userName ?? "?"}
+            imageUrl={isDefaultAvatar(item.userImageUrl) ? null : item.userImageUrl}
+            className="size-6 shrink-0 text-[9px] opacity-50"
+          />
+          <span className="text-[13.5px] font-semibold text-foreground opacity-50">
+            {item.userName}
+          </span>
+          <span className="truncate text-[12.5px] text-muted-foreground/40">
+            &ldquo;{extractPreviewText(item.content)}&rdquo;
+          </span>
+        </div>
+
+        {/* Line 2: resolved badge */}
+        {item.resolvedByName && (
+          <div className="mt-1 flex items-center gap-1 pl-8 text-[11px] font-medium text-primary/70">
+            <CircleCheckIcon className="size-3.5" strokeWidth={2} />
+            Resolved by {item.resolvedByName} · {formatRelativeTime(item.resolvedAt!)}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // ── Normal / expanded comment ─────────────────────────────────────────────
   return (
     <div
       id={`comment-${item.id}`}
@@ -336,7 +417,7 @@ export const ChatMessage = memo(function ChatMessage({
                   type="button"
                   onClick={() => onResolve(item.id)}
                   aria-label="Resolve"
-                  className="flex size-6 items-center justify-center rounded text-muted-foreground/60 transition-colors hover:bg-green-50 hover:text-green-600"
+                  className="flex size-6 items-center justify-center rounded text-muted-foreground/60 transition-colors hover:bg-primary/10 hover:text-primary"
                 >
                   <CircleCheckIcon className="size-3.5" />
                 </button>
@@ -376,20 +457,20 @@ export const ChatMessage = memo(function ChatMessage({
       )}
 
       <div>
-        {/* Header row: avatar + name + time — items-center for perfect vertical alignment */}
+        {/* Header row: avatar + name + time */}
         {!isGrouped && (
           <div className="flex items-center gap-2 mb-1">
             <UserAvatar
               name={item.userName ?? "?"}
               imageUrl={isDefaultAvatar(item.userImageUrl) ? null : item.userImageUrl}
-              className={cn("size-6 shrink-0 text-[9px]", isResolved && "opacity-75")}
+              className="size-6 shrink-0 text-[9px]"
             />
-            <span className={cn("text-[13.5px] font-semibold text-foreground", isResolved && "opacity-75")}>
+            <span className="text-[13.5px] font-semibold text-foreground">
               {item.userName}
             </span>
             <Tooltip>
               <TooltipTrigger asChild>
-                <span className={cn("text-xs text-muted-foreground/50", isResolved && "opacity-75")}>
+                <span className="text-xs text-muted-foreground/50">
                   {formatShortTime(item.createdAt)}
                 </span>
               </TooltipTrigger>
@@ -400,17 +481,11 @@ export const ChatMessage = memo(function ChatMessage({
             {item.updatedAt && item.updatedAt !== item.createdAt && (
               <span className="text-[10px] text-muted-foreground/55">(edited)</span>
             )}
-            {isResolved && item.resolvedByName && (
-              <span className="ml-1 inline-flex items-center gap-1 text-[11px] font-medium text-green-600">
-                <CircleCheckIcon className="size-3.5" strokeWidth={2} />
-                Resolved by {item.resolvedByName} · {formatRelativeTime(item.resolvedAt!)}
-              </span>
-            )}
           </div>
         )}
 
-        {/* Content — indented to align with text after avatar */}
-        <div className={cn("min-w-0 max-w-[820px] overflow-hidden break-words pl-8", isResolved && "opacity-75")}>
+        {/* Content */}
+        <div className="min-w-0 max-w-[820px] overflow-hidden break-words pl-8">
           {/* Reply label */}
           {item.parentCommentId && (
             <button
@@ -498,6 +573,18 @@ export const ChatMessage = memo(function ChatMessage({
                 ))}
               </TooltipProvider>
             </div>
+          )}
+
+          {/* Resolved tag — bottom of expanded view */}
+          {isResolved && item.resolvedByName && (
+            <button
+              type="button"
+              onClick={() => setResolvedExpanded(false)}
+              className="mt-2 flex items-center gap-1 text-[11px] font-medium text-primary/70 transition-colors hover:text-primary"
+            >
+              <CircleCheckIcon className="size-3.5" strokeWidth={2} />
+              Resolved by {item.resolvedByName} · {formatRelativeTime(item.resolvedAt!)}
+            </button>
           )}
         </div>
       </div>

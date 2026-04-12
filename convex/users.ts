@@ -1,5 +1,5 @@
 import { query, mutation, internalMutation, QueryCtx } from "./_generated/server";
-import { v, type Validator } from "convex/values";
+import { v, ConvexError, type Validator } from "convex/values";
 import { internal } from "./_generated/api";
 import type { UserJSON } from "@clerk/backend";
 
@@ -20,7 +20,7 @@ export async function getCurrentUser(ctx: QueryCtx) {
 
 export async function getCurrentUserOrThrow(ctx: QueryCtx) {
   const user = await getCurrentUser(ctx);
-  if (!user) throw new Error("User not found");
+  if (!user) throw new ConvexError("User not found");
   return user;
 }
 
@@ -43,7 +43,7 @@ export const syncUser = mutation({
   args: {},
   handler: async (ctx) => {
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Not authenticated");
+    if (!identity) throw new ConvexError("Not authenticated");
 
     const existing = await userByExternalId(ctx, identity.subject);
     const now = Date.now();
@@ -161,6 +161,17 @@ export const updateTaskDetailView = mutation({
     const user = await getCurrentUserOrThrow(ctx);
     await ctx.db.patch(user._id, {
       taskDetailView: view,
+      updatedAt: Date.now(),
+    });
+  },
+});
+
+export const updateMyTasksSettings = mutation({
+  args: { todayVisibleStatuses: v.optional(v.array(v.string())) },
+  handler: async (ctx, { todayVisibleStatuses }) => {
+    const user = await getCurrentUserOrThrow(ctx);
+    await ctx.db.patch(user._id, {
+      todayVisibleStatuses,
       updatedAt: Date.now(),
     });
   },

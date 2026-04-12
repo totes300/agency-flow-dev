@@ -55,14 +55,14 @@ export const SubtaskRow = memo(function SubtaskRow({
     <div
       ref={ref}
       className={cn(
-        `group/row grid ${SUBTASK_GRID_COLS} items-center gap-x-3 border-b border-border/30 px-2 py-1.5 transition-colors hover:bg-muted/30 [&>*]:min-w-0 [&>*]:overflow-hidden`,
+        `group/row grid ${SUBTASK_GRID_COLS} items-center gap-x-3 border-b border-border/30 px-2 py-1.5 transition-colors hover:bg-muted/70 [&>*]:min-w-0 [&>*]:overflow-hidden`,
         isDragging && "opacity-50 bg-muted/30 z-10",
         isDone && "opacity-50",
       )}
     >
       {/* 1. Drag handle */}
-      <div className="flex cursor-grab items-center justify-center opacity-0 transition-opacity group-hover/row:opacity-40">
-        <GripVerticalIcon className="size-3.5 text-muted-foreground" />
+      <div className="flex cursor-grab items-center justify-center opacity-0 transition-opacity group-hover/row:opacity-100">
+        <GripVerticalIcon className="size-3.5 text-muted-foreground/50" />
       </div>
 
       {/* 2. Task name */}
@@ -71,7 +71,7 @@ export const SubtaskRow = memo(function SubtaskRow({
         className="cursor-pointer text-left"
         onClick={() => onOpenDetail(subtask._id)}
       >
-        <span className={cn("block truncate text-sm font-medium", isDone && "line-through")}>
+        <span className={cn("block truncate text-sm font-semibold", isDone && "line-through")}>
           {subtask.title}
         </span>
       </button>

@@ -290,13 +290,6 @@ export const update = mutation({
       throw new ConvexError("You can only edit your own time entries");
     }
 
-    // Invoiced check — `invoicedInReportId` will be added to the schema in a
-    // future invoicing phase. We guard here proactively so entries are protected
-    // as soon as the field ships.
-    if ("invoicedInReportId" in entry && entry.invoicedInReportId) {
-      throw new ConvexError("Cannot edit an invoiced time entry");
-    }
-
     const updates: Record<string, unknown> = { updatedAt: Date.now() };
 
     if (args.durationMinutes !== undefined) {
@@ -375,13 +368,6 @@ export const remove = mutation({
       throw new ConvexError("You can only delete your own time entries");
     }
 
-    // Invoiced check — `invoicedInReportId` will be added to the schema in a
-    // future invoicing phase. We guard here proactively so entries are protected
-    // as soon as the field ships.
-    if ("invoicedInReportId" in entry && entry.invoicedInReportId) {
-      throw new ConvexError("Cannot delete an invoiced time entry");
-    }
-
     // Activity log before deleting
     const h = Math.floor(entry.durationMinutes / 60);
     const m = entry.durationMinutes % 60;
@@ -445,8 +431,8 @@ export const bulkUpdateBillable = mutation({
     let updated = 0;
     for (const entry of entries) {
       if (entry.isBillable === args.isBillable) continue;
-      // Skip invoiced entries (future-proofing)
-      if ("invoicedInReportId" in entry && entry.invoicedInReportId) continue;
+      // Skip invoiced entries — changing billable status would break invoice snapshot
+      if (entry.invoiceId) continue;
 
       // Re-resolve per entry (each entry may belong to a different user)
       const snapshot = await resolveRateSnapshot(ctx, {
@@ -560,9 +546,7 @@ export const projectOverview = query({
       // Uninvoiced from billable entries using billableRate (T&M / Fixed only).
       // Retainer entries have billableRate=0 — retainer revenue is cycle-level
       // (monthlyFee + overageDue), computed in getRetainerData, not here.
-      // NOTE: Pre-invoicing phase — all billable entries treated as uninvoiced.
-      // Replace with invoice-aware filtering when invoicedInReportId ships.
-      if (e.isBillable) {
+      if (e.isBillable && !e.invoiceId) {
         uninvoicedMinutes += e.durationMinutes;
         uninvoicedAmount += (e.durationMinutes / 60) * (e.billableRate ?? 0);
       }

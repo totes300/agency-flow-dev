@@ -19,6 +19,7 @@ import {
 import { MoreHorizontalIcon, Trash2Icon } from "lucide-react"
 import { toast } from "sonner"
 import { toastError } from "@/lib/toast-helpers"
+import { BillingStatusBadge } from "@/components/invoices/billing-status-badge"
 import type { Id } from "@/convex/_generated/dataModel"
 
 type TimeEntry = {
@@ -28,6 +29,7 @@ type TimeEntry = {
   durationMinutes: number
   note?: string
   isBillable: boolean
+  invoiceId?: string
   userName: string
   userImageUrl?: string
 }
@@ -85,6 +87,7 @@ export function TimeEntriesList({
                         aria-label="Billable"
                       />
                     )}
+                    <BillingStatusBadge isBillable={entry.isBillable} invoiceId={entry.invoiceId} />
                     <span className="font-mono text-xs text-muted-foreground">
                       {formatDuration(entry.durationMinutes)}
                     </span>

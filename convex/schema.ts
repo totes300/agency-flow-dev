@@ -251,6 +251,7 @@ export default defineSchema({
     billableRate: v.number(),
     rateCurrency: v.string(),
     snapshotCategoryId: v.optional(v.id("workCategories")),
+    invoiceId: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
     createdBy: v.id("users"),

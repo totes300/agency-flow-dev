@@ -6,6 +6,7 @@ import { formatDuration } from "@/lib/duration"
 import { getInitials } from "@/lib/format"
 import { ClockIcon } from "lucide-react"
 import { EmptyState } from "@/components/empty-state"
+import { BillingStatusBadge } from "@/components/invoices/billing-status-badge"
 
 type TodayEntry = {
   _id: string
@@ -13,6 +14,7 @@ type TodayEntry = {
   durationMinutes: number
   note?: string
   isBillable: boolean
+  invoiceId?: string
 }
 
 export function ActiveTimerBanner() {
@@ -72,6 +74,7 @@ export function TodayEntries({ entries }: { entries: TodayEntry[] }) {
                 aria-label="Billable"
               />
             )}
+            <BillingStatusBadge isBillable={entry.isBillable} invoiceId={entry.invoiceId} />
             <span className="font-mono text-sm text-muted-foreground">
               {formatDuration(entry.durationMinutes)}
             </span>

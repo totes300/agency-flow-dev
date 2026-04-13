@@ -26,6 +26,7 @@ import {
 import { MoreHorizontalIcon, Trash2Icon, PencilIcon } from "lucide-react"
 import { toast } from "sonner"
 import { toastError } from "@/lib/toast-helpers"
+import { BillingStatusBadge } from "@/components/invoices/billing-status-badge"
 import type { Id } from "@/convex/_generated/dataModel"
 
 type TimeEntry = {
@@ -35,11 +36,12 @@ type TimeEntry = {
   durationMinutes: number
   note?: string
   isBillable: boolean
+  invoiceId?: string
   userName: string
   userImageUrl?: string
 }
 
-const COL = "grid-cols-[70px_120px_1fr_60px_18px_28px]"
+const COL = "grid-cols-[70px_120px_1fr_60px_auto_28px]"
 
 export function TimeEntriesTable({
   entries,
@@ -227,12 +229,13 @@ export function TimeEntriesTable({
                 {formatMinutesDisplay(entry.durationMinutes)}
               </span>
 
-              {/* Billable dot */}
-              <div className="flex items-center justify-center">
+              {/* Billable dot + billing status */}
+              <div className="flex items-center justify-center gap-1.5">
                 <div
                   className={cn("size-1.5 rounded-full", entry.isBillable ? "bg-green-500" : "bg-border")}
                   title={entry.isBillable ? "Billable" : "Non-billable"}
                 />
+                <BillingStatusBadge isBillable={entry.isBillable} invoiceId={entry.invoiceId} />
               </div>
 
               {/* Actions */}

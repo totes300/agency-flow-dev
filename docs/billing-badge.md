@@ -20,7 +20,7 @@ These decisions were validated against `docs/invoicing-prd.md` to prevent confli
 |----------|-----|
 | **No `invoices` stub table** | The invoicing PRD says new tables start empty and need no migration (line 715). Creating a stub with fewer fields risks orphaned rows when the full schema ships. Instead, `invoiceId` is typed as `v.optional(v.string())` for now — the invoicing PRD phase will widen it to `v.id("invoices")`. |
 | **Remove edit/delete guards, don't rename them** | The invoicing PRD explicitly says: "Time entries stay editable after invoicing. The invoice is the historical record, not the entry." (line 31, 423). The old `invoicedInReportId` guards were wrong — delete them entirely. |
-| **Badge only shows "Unbilled", never "Billed"** | `invoiceId` can point to a draft invoice — that's not truly "billed". The correct "Billed" state depends on `invoice.status` (draft/invoiced/paid), which requires a join. That badge ships with invoice CRUD. For now: billable + no invoiceId = "Unbilled". Billable + has invoiceId = no badge (neutral). |
+ |
 | **`bulkUpdateBillable` still skips invoiced entries** | Unlike edit/delete, changing billable status on an invoiced entry would break the invoice snapshot's financial consistency. This guard stays. |
 
 ---

@@ -5,15 +5,17 @@ import { useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
+import { Field, FieldLabel } from "@/components/ui/field"
+import { DialogClose } from "@/components/ui/dialog"
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
+  FormModal,
+  FormModalBody,
+  FormModalDescription,
+  FormModalFooter,
+  FormModalHeader,
+  FormModalTitle,
+} from "@/components/ui/form-modal"
 import type { Id, Doc } from "@/convex/_generated/dataModel"
 import { extractErrorMessage } from "@/lib/toast-helpers"
 
@@ -94,18 +96,22 @@ export function ContactFormModal({
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>{isEdit ? "Edit Contact" : "Add Contact"}</DialogTitle>
-          <DialogDescription>
-            {isEdit ? "Update contact details." : "Add a new contact for this client."}
-          </DialogDescription>
-        </DialogHeader>
+    <FormModal
+      open={open}
+      onOpenChange={(v) => { if (!submitting) onOpenChange(v) }}
+      size="md"
+    >
+      <FormModalHeader>
+        <FormModalTitle>{isEdit ? "Edit Contact" : "Add Contact"}</FormModalTitle>
+        <FormModalDescription srOnly>
+          {isEdit ? "Update contact details." : "Add a new contact for this client."}
+        </FormModalDescription>
+      </FormModalHeader>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="contact-name">Name</Label>
+      <form onSubmit={handleSubmit}>
+        <FormModalBody>
+          <Field>
+            <FieldLabel htmlFor="contact-name">Name</FieldLabel>
             <Input
               id="contact-name"
               value={name}
@@ -113,10 +119,10 @@ export function ContactFormModal({
               placeholder="John Doe"
               autoFocus
             />
-          </div>
+          </Field>
 
-          <div className="space-y-2">
-            <Label htmlFor="contact-email">Email</Label>
+          <Field>
+            <FieldLabel htmlFor="contact-email">Email</FieldLabel>
             <Input
               id="contact-email"
               type="email"
@@ -124,10 +130,10 @@ export function ContactFormModal({
               onChange={(e) => setEmail(e.target.value)}
               placeholder="john@example.com"
             />
-          </div>
+          </Field>
 
-          <div className="space-y-2">
-            <Label htmlFor="contact-phone">Phone</Label>
+          <Field>
+            <FieldLabel htmlFor="contact-phone">Phone</FieldLabel>
             <Input
               id="contact-phone"
               type="tel"
@@ -135,32 +141,44 @@ export function ContactFormModal({
               onChange={(e) => setPhone(e.target.value)}
               placeholder="+1 (555) 000-0000"
             />
-          </div>
+          </Field>
 
           {!isEdit && !isFirstContact && (
-            <div className="flex items-center gap-2">
+            <Field orientation="horizontal">
               <Checkbox
                 id="is-primary"
                 checked={isPrimary}
                 onCheckedChange={(checked) => setIsPrimary(checked === true)}
               />
-              <Label htmlFor="is-primary" className="font-normal">
+              <FieldLabel htmlFor="is-primary" className="font-normal">
                 Set as primary contact
-              </Label>
-            </div>
+              </FieldLabel>
+            </Field>
           )}
 
           {error && <p className="text-sm text-destructive">{error}</p>}
+        </FormModalBody>
 
+        <FormModalFooter>
           <Button
             type="submit"
             disabled={!name.trim() || !email.trim() || submitting}
-            className="w-full"
+            size="lg"
+            className="h-11 w-full text-base"
           >
             {submitting ? "Saving..." : isEdit ? "Save Changes" : "Add Contact"}
           </Button>
-        </form>
-      </DialogContent>
-    </Dialog>
+          <DialogClose asChild>
+            <button
+              type="button"
+              disabled={submitting}
+              className="text-sm text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+            >
+              Cancel
+            </button>
+          </DialogClose>
+        </FormModalFooter>
+      </form>
+    </FormModal>
   )
 }

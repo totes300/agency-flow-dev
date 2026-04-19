@@ -78,7 +78,6 @@ export function OnboardingModal() {
             name: c.name.trim(),
             color: c.color,
             defaultBillRate: Number.isFinite(bill) ? Math.max(0, bill) : undefined,
-            currency, // use org default currency for all categories
           }
         }),
       })

@@ -92,6 +92,12 @@ Copy `.env.example` to `.env.local` and fill in values. Required:
 ## Pre-deployment Checklist
 - **Remove Agentation toolbar** — `app/layout.tsx` includes `<Agentation endpoint="http://localhost:4747" />` wrapped in a `NODE_ENV === "development"` check. Remove the `<Agentation>` component and its `import { Agentation } from "agentation"` before deploying to production, as it is a dev-only design annotation tool.
 
+## Git safety in multi-agent worktrees
+- **NEVER `git stash` in this repo.** Multiple Claude agents and the user may share the working directory at any time. `git stash` snapshots **everyone's** uncommitted work into one entry, and a failed `git stash pop` (e.g. due to `convex/_generated/api.d.ts` conflicts) silently strands all of it. If you need a "clean" view for any reason, use a non-destructive alternative: `git diff HEAD`, `git show HEAD:path`, `git log -p path`, `git blame`, or read the file from another commit via `git show <sha>:path`. **Curiosity is not a reason to mutate the worktree.**
+- **NEVER touch files you didn't write in this session without checking `git status` and `git diff` on them first.** Untracked files (`??` in `git status`) are almost always another agent's in-progress work — assume they're load-bearing. If you must operate on a file with unfamiliar uncommitted changes, read the diff first and tell the user what you see before editing.
+- **NEVER run `git checkout <file>`, `git reset --hard`, `git restore`, `git clean`, or `git stash drop`** without first (a) reading the diff of what you're about to discard and (b) explicitly asking the user. The only exception: `git checkout` on a path inside `convex/_generated/` or other regenerated artifacts, *and only* when needed to unblock a pop the user has approved.
+- **If you find yourself wanting a `git stash + do thing + git stash pop` pattern, stop.** That pattern is forbidden here. Find a read-only path to the same answer.
+
 ## Conventions
 - **shadcn/ui: always check docs before building.** When adding or modifying any shadcn/ui component, run the `shadcn` skill first to review current API, props, and composition patterns. Do not rely on training data — shadcn/ui ships breaking changes frequently.
 - **Library docs: use Context7 MCP, not training data.** Before using or modifying code that touches **shadcn/ui**, **Tiptap**, or **dnd-kit**, fetch the latest docs via the `context7` MCP tool (`resolve-library-id` → `query-docs`). These libraries evolve fast — stale knowledge causes subtle bugs.

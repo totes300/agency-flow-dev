@@ -10,12 +10,12 @@ import { Table, TableHeader, TableBody, TableFooter, TableRow, TableHead, TableC
 import { SectionCard } from "@/components/ui/section-card"
 import { SectionHeader } from "@/components/ui/section-header"
 import { ProgressCell } from "@/components/ui/progress-cell"
-import { MetricCard } from "@/components/metric-card"
-import { MonthlyTimeBreakdown, TimeLogSkeleton } from "./monthly-time-breakdown"
 import { Skeleton } from "@/components/ui/skeleton"
+import { MonthlyTimeBreakdown, TimeLogSkeleton } from "./monthly-time-breakdown"
+import { ProjectSummaryCard } from "./summary/project-summary-card"
 import { InfoIcon, AlertTriangleIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { formatMinutes, formatCurrencyPrecise } from "@/lib/format"
+import { formatMinutes } from "@/lib/format"
 import { useTaskDetailNav } from "@/lib/hooks/use-task-detail-nav"
 import {
   CELL_KEY, CELL_PRIMARY, CELL_SECONDARY,
@@ -24,11 +24,9 @@ import {
 
 export function FixedOverview({
   projectId,
-  project,
   onNavigateToEstimates,
 }: {
   projectId: Id<"projects">
-  project: { currency: string; fixedPrice?: number }
   onNavigateToEstimates?: () => void
 }) {
   const handleTaskClick = useTaskDetailNav()
@@ -37,32 +35,18 @@ export function FixedOverview({
   const overview = useQuery(api.timeEntries.projectOverview, { projectId })
   const monthlyData = useQuery(api.timeEntries.projectMonthlyBreakdown, { projectId })
 
-  const currency = project.currency
-  const fixedPrice = project.fixedPrice
-
   const totalEstimatedMinutes = useMemo(() => {
     if (!estimates) return 0
     return estimates.reduce((sum, e) => sum + e.estimatedMinutes, 0)
   }, [estimates])
 
-  // Fixed economics from real data
   const totalActualMinutes = overview?.totalMinutes ?? 0
-  const totalNonBillableMinutes = overview?.totalNonBillableMinutes ?? 0
-  const totalActualCost = overview?.totalActualCost ?? 0
-  const revenue = fixedPrice ?? 0
-  const profit = revenue - totalActualCost
-  const margin = revenue > 0 ? (profit / revenue) * 100 : 0
-  const effectiveRate = totalActualMinutes > 0
-    ? revenue / (totalActualMinutes / 60)
-    : 0
   const budgetPercent = totalEstimatedMinutes > 0
     ? (totalActualMinutes / totalEstimatedMinutes) * 100
     : null
 
-  // Per-category actuals — stable empty fallback to avoid useMemo invalidation
   const minutesByCategory = overview?.minutesByCategory ?? EMPTY_RECORD
 
-  // Unestimated categories with logged time — enriched with name/color
   const unestimatedCategories = useMemo(() => {
     if (!estimates || !overview || !categories) return []
     const estimatedIds = new Set(estimates.map((e) => e.workCategoryId?.toString()))
@@ -75,55 +59,10 @@ export function FixedOverview({
       })
   }, [estimates, overview, categories, minutesByCategory])
 
-  // Loading skeleton
-  if (overview === undefined || estimates === undefined) {
-    return <FixedOverviewSkeleton />
-  }
-
   return (
     <div className="flex flex-col gap-6">
-      {/* Top metric cards */}
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <MetricCard
-          label="Revenue"
-          value={fixedPrice ? formatCurrencyPrecise(revenue, currency) : "Not set"}
-          detail="Fixed fee"
-        />
-        <MetricCard
-          label="Cost"
-          value={totalActualCost > 0 ? formatCurrencyPrecise(totalActualCost, currency) : "—"}
-          detail={
-            totalActualMinutes > 0 ? (
-              <span className="text-xs tabular-nums text-muted-foreground">
-                {formatMinutes(totalActualMinutes)} logged
-                {totalNonBillableMinutes > 0 && ` · ${formatMinutes(totalNonBillableMinutes)} non-bill.`}
-              </span>
-            ) : "No time logged"
-          }
-        />
-        <MetricCard
-          label="Profit"
-          value={fixedPrice ? formatCurrencyPrecise(profit, currency) : "—"}
-          detail={
-            fixedPrice && totalActualMinutes > 0
-              ? `${formatCurrencyPrecise(effectiveRate, currency)}/h effective`
-              : undefined
-          }
-          variant={fixedPrice && profit < 0 ? "destructive" : "default"}
-        />
-        <MetricCard
-          label="Margin"
-          value={fixedPrice && totalActualCost > 0 ? `${Math.round(margin)}%` : "—"}
-          detail={
-            fixedPrice && totalActualCost > 0
-              ? `${formatCurrencyPrecise(profit, currency)} of ${formatCurrencyPrecise(revenue, currency)}`
-              : "No cost data yet"
-          }
-          variant={fixedPrice && margin < 0 ? "destructive" : "default"}
-        />
-      </div>
+      <ProjectSummaryCard projectId={projectId} />
 
-      {/* Info banner */}
       <Alert>
         <InfoIcon />
         <AlertDescription>
@@ -131,18 +70,20 @@ export function FixedOverview({
         </AlertDescription>
       </Alert>
 
-      {/* Budget */}
-      <BudgetSection
-        estimates={estimates}
-        minutesByCategory={minutesByCategory}
-        totalEstimatedMinutes={totalEstimatedMinutes}
-        totalActualMinutes={totalActualMinutes}
-        budgetPercent={budgetPercent}
-        unestimatedCategories={unestimatedCategories}
-        onNavigateToEstimates={onNavigateToEstimates}
-      />
+      {estimates === undefined ? (
+        <BudgetSectionSkeleton />
+      ) : (
+        <BudgetSection
+          estimates={estimates}
+          minutesByCategory={minutesByCategory}
+          totalEstimatedMinutes={totalEstimatedMinutes}
+          totalActualMinutes={totalActualMinutes}
+          budgetPercent={budgetPercent}
+          unestimatedCategories={unestimatedCategories}
+          onNavigateToEstimates={onNavigateToEstimates}
+        />
+      )}
 
-      {/* Time Log */}
       {monthlyData === undefined ? (
         <TimeLogSkeleton />
       ) : (
@@ -153,6 +94,16 @@ export function FixedOverview({
         />
       )}
 
+    </div>
+  )
+}
+
+function BudgetSectionSkeleton() {
+  return (
+    <div className="rounded-xl border p-4 flex flex-col gap-3">
+      <Skeleton className="h-5 w-48" />
+      <Skeleton className="h-2.5 w-full rounded-full" />
+      <Skeleton className="h-32 w-full" />
     </div>
   )
 }
@@ -193,7 +144,6 @@ function BudgetSection({
 
   return (
     <SectionCard>
-      {/* Header */}
       <SectionHeader
         title="Budget"
         trailing={
@@ -210,7 +160,6 @@ function BudgetSection({
         }
       />
 
-      {/* Table */}
       {estimates.length > 0 && (
         <Table>
           <TableHeader>
@@ -241,7 +190,6 @@ function BudgetSection({
         </Table>
       )}
 
-      {/* Unestimated category warning */}
       {unestimatedCategories.length > 0 && (
         <div className={cn("flex items-center gap-3", TABLE_FOOTER, "px-5 py-3")}>
           <AlertTriangleIcon className="size-4 shrink-0 text-destructive" />
@@ -292,26 +240,4 @@ function BudgetRow({
 }
 
 const EMPTY_RECORD: Record<string, number> = {}
-
-function FixedOverviewSkeleton() {
-  return (
-    <div className="flex flex-col gap-6">
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-        {Array.from({ length: 4 }).map((_, i) => (
-          <div key={i} className="rounded-xl border p-4 flex flex-col gap-2">
-            <Skeleton className="h-3 w-16" />
-            <Skeleton className="h-7 w-24" />
-            <Skeleton className="h-3 w-32" />
-          </div>
-        ))}
-      </div>
-      <Skeleton className="h-12 w-full rounded-lg" />
-      <div className="rounded-xl border p-4 flex flex-col gap-3">
-        <Skeleton className="h-5 w-48" />
-        <Skeleton className="h-2.5 w-full rounded-full" />
-        <Skeleton className="h-32 w-full" />
-      </div>
-    </div>
-  )
-}
 

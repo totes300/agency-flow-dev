@@ -30,9 +30,12 @@ export async function getProjectCurrency(
  *
  * Looks up: userRates for costRate, projectRateOverrides → categoryRates for billableRate.
  * Throws ConvexError with a user-friendly message if a required rate is missing.
+ *
+ * Read-only — accepts QueryCtx so a timer-start preview can call it before
+ * any write happens.
  */
 export async function resolveRateSnapshot(
-  ctx: MutationCtx,
+  ctx: QueryCtx | MutationCtx,
   args: {
     userId: Id<"users">;
     orgId: string;

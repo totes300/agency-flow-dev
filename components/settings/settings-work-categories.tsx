@@ -181,7 +181,7 @@ export function SettingsWorkCategories() {
       </Button>
 
       <ConfirmDialog
-        open={!!deleteTarget}
+        open={deleteTarget !== null}
         onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}
         title="Delete category"
         description={`Are you sure you want to delete \u201c${deleteTarget?.name}\u201d? This action cannot be undone.`}
@@ -210,10 +210,9 @@ export function SettingsWorkCategories() {
             submitLabel="Create Category"
             onSubmit={async (values) => {
               const catId = await createCategory({
-                ...values,
-                currency: defaultCurrency,
+                name: values.name,
+                color: values.color,
               })
-              // If a bill rate was provided, also create a categoryRate
               if (values.defaultBillRate !== undefined) {
                 await upsertCategoryRate({
                   workCategoryId: catId,
@@ -229,7 +228,7 @@ export function SettingsWorkCategories() {
 
       {/* Edit dialog */}
       <Dialog
-        open={!!editingId}
+        open={editingId !== null}
         onOpenChange={(open) => { if (!open) setEditingId(null) }}
       >
         <DialogContent>
@@ -300,6 +299,10 @@ function CategoryForm({
       })
     } catch (err) {
       setError(extractErrorMessage(err, "Something went wrong"))
+    } finally {
+      // Always reset the submitting flag — today the parent closes the dialog
+      // on success which unmounts the form, but this guard survives any future
+      // refactor that keeps the form mounted after a successful submit.
       setSubmitting(false)
     }
   }

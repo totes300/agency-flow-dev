@@ -26,7 +26,7 @@ import {
 } from "lucide-react"
 import type { Doc } from "@/convex/_generated/dataModel"
 
-type ProjectWithClient = Doc<"projects"> & { clientName: string }
+type ProjectWithClient = Doc<"projects"> & { clientName: string; currency: string }
 
 interface ProjectsTableProps {
   projects: ProjectWithClient[]

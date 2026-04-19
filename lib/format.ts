@@ -44,6 +44,42 @@ export function formatCurrencyPrecise(amount: number, currency: string): string 
 }
 
 /**
+ * Return the currency key with the largest summed value in a `{ [currency]: sum }`
+ * map, or `undefined` if the map is empty. Used to decide which currency to
+ * show as the "headline" when a metric bucket spans multiple currencies.
+ */
+export function pickPrimaryCurrency(sums: Record<string, number>): string | undefined {
+  let best: string | undefined
+  let bestSum = -Infinity
+  for (const [currency, sum] of Object.entries(sums)) {
+    if (sum > bestSum) {
+      best = currency
+      bestSum = sum
+    }
+  }
+  return best
+}
+
+/**
+ * Format a metric bucket that aggregates sums across one or more currencies.
+ * Returns `undefined` when the bucket is empty (let the caller decide whether
+ * to hide the detail slot or show a fallback). Single-currency buckets show
+ * just the formatted amount; multi-currency buckets show the primary amount
+ * plus a "+N more" suffix. Used by the invoices metric cards today and any
+ * future reporting surface with the same shape.
+ */
+export function formatCurrencyBucketDetail(
+  sums: Record<string, number>,
+): string | undefined {
+  const currencies = Object.keys(sums)
+  const primary = pickPrimaryCurrency(sums)
+  if (!primary) return undefined
+  const main = formatCurrency(sums[primary], primary)
+  if (currencies.length === 1) return main
+  return `${main} · +${currencies.length - 1} more`
+}
+
+/**
  * Format minutes as HH:MM display string.
  * e.g., 630 → "10:30", 90 → "01:30", 0 → "00:00"
  */
@@ -54,6 +90,14 @@ export function formatMinutes(minutes: number): string {
   const m = abs % 60
   const formatted = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`
   return negative ? `-${formatted}` : formatted
+}
+
+/**
+ * Format an invoice number with prefix and zero-padded number.
+ * e.g., ("INV-", 3) → "INV-003"
+ */
+export function formatInvoiceNumber(prefix: string, number: number): string {
+  return `${prefix}${String(number).padStart(3, "0")}`
 }
 
 /**
@@ -82,6 +126,12 @@ export function formatRelativeTime(timestamp: number, now: number = Date.now()):
 export function formatShortDate(dateStr: string, locale = "en-US"): string {
   const date = new Date(dateStr + "T00:00:00")
   return date.toLocaleDateString(locale, { month: "short", day: "numeric" })
+}
+
+/** Format a YYYY-MM-DD date string for invoice display (e.g., "Mar 20, 2026"). */
+export function formatInvoiceDate(dateStr: string, locale = "en-US"): string {
+  const date = new Date(dateStr + "T00:00:00")
+  return date.toLocaleDateString(locale, { month: "short", day: "numeric", year: "numeric" })
 }
 
 /**

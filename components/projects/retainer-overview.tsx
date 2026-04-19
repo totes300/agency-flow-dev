@@ -1,6 +1,8 @@
 "use client"
 
 import { useState } from "react"
+import Link from "next/link"
+import { useSearchParams } from "next/navigation"
 import { useQuery } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
@@ -8,10 +10,7 @@ import {
   Card,
   CardHeader,
   CardTitle,
-  CardDescription,
-  CardAction,
   CardContent,
-  CardFooter,
 } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -21,29 +20,47 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { Skeleton } from "@/components/ui/skeleton"
-import { MetricCard } from "@/components/metric-card"
-import { BudgetProgress } from "@/components/budget-progress"
 import { RetainerBalanceBadge } from "@/components/retainer-balance-badge"
 import { CycleDots } from "@/components/cycle-dots"
+import { InvoiceStatusBadge } from "@/components/invoices/invoice-status-badge"
+import { CreateInvoiceModal } from "@/components/invoices/create-invoice-modal"
 import { MonthTaskTable } from "./month-task-table"
+import { ProjectSummaryCard } from "./summary/project-summary-card"
 import { cn } from "@/lib/utils"
-import { formatMinutes, formatCurrencyPrecise, pluralize } from "@/lib/format"
+import { formatMinutes, formatCurrencyPrecise, formatInvoiceNumber } from "@/lib/format"
 import { useTaskDetailNav } from "@/lib/hooks/use-task-detail-nav"
 import {
-  ChevronLeftIcon,
-  ChevronRightIcon,
   AlertTriangleIcon,
   ZapIcon,
+  ReceiptIcon,
+  ExternalLinkIcon,
 } from "lucide-react"
 
-export function RetainerOverview({ projectId }: { projectId: Id<"projects"> }) {
-  const [cycleOffset, setCycleOffset] = useState(0)
+export function RetainerOverview({
+  projectId,
+  projectName,
+  currency: projectCurrency,
+}: {
+  projectId: Id<"projects">
+  projectName: string
+  currency: string
+}) {
+  const searchParams = useSearchParams()
+  const cycleOffsetParam = Number(searchParams.get("cycleOffset") ?? "0")
+  const cycleOffset = Number.isFinite(cycleOffsetParam) ? cycleOffsetParam : 0
+  const [activeMonth, setActiveMonth] = useState<{ year: number; month: number } | null>(null)
   const handleTaskClick = useTaskDetailNav()
   const data = useQuery(api.projects.getRetainerData, { id: projectId, cycleOffset })
 
   if (data === undefined) {
-    return <RetainerOverviewSkeleton />
+    return (
+      <div className="flex flex-col gap-6">
+        <ProjectSummaryCard projectId={projectId} />
+        <MonthlyBreakdownSkeleton />
+      </div>
+    )
   }
 
   if (data === null) {
@@ -55,30 +72,15 @@ export function RetainerOverview({ projectId }: { projectId: Id<"projects"> }) {
   }
 
   const {
-    cycleNumber,
-    cycleStart,
-    cycleEnd,
     cycleLength,
     isCycleClosed,
-    hasPreviousCycle,
-    hasNextCycle,
     months,
-    cycleBudget,
-    cycleWorked,
-    utilization,
     overageMinutes,
     overageDue,
     overageRate,
-    monthlyFee,
     rolloverEnabled,
-    totalNonBillableMinutes,
     currency,
   } = data
-
-  // Format cycle date range for display
-  const startLabel = new Date(cycleStart + "T00:00:00").toLocaleDateString("en-US", { month: "short", year: "numeric" })
-  const endLabel = new Date(cycleEnd + "T00:00:00").toLocaleDateString("en-US", { month: "short", year: "numeric" })
-  const cycleLabel = startLabel === endLabel ? startLabel : `${startLabel} – ${endLabel}`
 
   // Determine the default open accordion item (current month or last month of closed cycle)
   const defaultMonth = months.find((m) => !m.isMonthClosed) ?? months[months.length - 1]
@@ -86,97 +88,18 @@ export function RetainerOverview({ projectId }: { projectId: Id<"projects"> }) {
     ? `${defaultMonth.year}-${String(defaultMonth.month + 1).padStart(2, "0")}`
     : undefined
 
+  // Cycle-closing month — target for overage and cycle-end banner CTAs
+  const closingMonth = months[months.length - 1] ?? null
+  const closingMonthInvoiced = closingMonth?.invoice != null
+  const openClosingMonthModal = () => {
+    if (!closingMonth || closingMonthInvoiced) return
+    setActiveMonth({ year: closingMonth.year, month: closingMonth.month + 1 })
+  }
+
   return (
     <div className="flex flex-col gap-6">
-      {/* Cycle Overview Card */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Cycle Overview</CardTitle>
-          <CardDescription>
-            {cycleLabel} &middot; {cycleLength}-month {rolloverEnabled ? "rollover" : "monthly"}
-            {isCycleClosed && " (closed)"}
-          </CardDescription>
-          <CardAction>
-            <div className="flex items-center gap-1">
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                onClick={() => setCycleOffset((prev) => prev - 1)}
-                disabled={!hasPreviousCycle}
-                aria-label="Previous cycle"
-              >
-                <ChevronLeftIcon />
-              </Button>
-              <span className="min-w-[60px] text-center text-xs text-muted-foreground tabular-nums">
-                Cycle {cycleNumber}
-              </span>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                onClick={() => setCycleOffset((prev) => prev + 1)}
-                disabled={!hasNextCycle}
-                aria-label="Next cycle"
-              >
-                <ChevronRightIcon />
-              </Button>
-            </div>
-          </CardAction>
-        </CardHeader>
+      <ProjectSummaryCard projectId={projectId} />
 
-        <CardContent className="flex flex-col gap-4">
-          {/* Progress Bar */}
-          <div className="flex flex-col gap-2">
-            <BudgetProgress used={cycleWorked} budget={cycleBudget} />
-            <div className="flex justify-between text-xs text-muted-foreground tabular-nums">
-              <span>{formatMinutes(cycleBudget)} budget</span>
-              {overageMinutes > 0 && (
-                <span className="text-destructive">+{formatMinutes(overageMinutes)} over</span>
-              )}
-            </div>
-          </div>
-
-          {/* Metric Cards */}
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <MetricCard
-              label="Hours Used"
-              value={formatMinutes(cycleWorked)}
-              detail={`of ${formatMinutes(cycleBudget)}`}
-            />
-            <MetricCard
-              label="Non-billable"
-              value={totalNonBillableMinutes > 0 ? formatMinutes(totalNonBillableMinutes) : "—"}
-              detail="Not counted toward retainer"
-            />
-            <MetricCard
-              label="Over Budget"
-              value={overageMinutes > 0 ? `+${formatMinutes(overageMinutes)}` : "—"}
-              detail={`${Math.round(utilization)}% utilization`}
-              variant={overageMinutes > 0 ? "destructive" : "default"}
-            />
-            <MetricCard
-              label="Overage Due"
-              value={overageDue > 0 ? formatCurrencyPrecise(overageDue, currency) : "—"}
-              detail={overageDue > 0
-                ? `${formatMinutes(overageMinutes)} @ ${formatCurrencyPrecise(overageRate, currency)}/h`
-                : "No overage"
-              }
-              variant={overageDue > 0 ? "warning" : "default"}
-            />
-          </div>
-        </CardContent>
-
-        <CardFooter className="text-xs text-muted-foreground tabular-nums">
-          {cycleLength} {pluralize(cycleLength, "month", "months")} &middot; {formatMinutes(cycleBudget)} budget &middot; {formatMinutes(cycleWorked)} used
-          {monthlyFee > 0 && (
-            <>
-              {" "}&middot; {formatCurrencyPrecise(monthlyFee, currency)}/mo
-              {overageDue > 0 && <> &middot; Overage {formatCurrencyPrecise(overageDue, currency)}</>}
-            </>
-          )}
-        </CardFooter>
-      </Card>
-
-      {/* Missing overage rate warning */}
       {overageRate === 0 && overageMinutes > 0 && (
         <Alert>
           <AlertTriangleIcon />
@@ -187,7 +110,6 @@ export function RetainerOverview({ projectId }: { projectId: Id<"projects"> }) {
         </Alert>
       )}
 
-      {/* Overage Invoice Banner */}
       {isCycleClosed && overageDue > 0 && (
         <Alert variant="destructive">
           <AlertTriangleIcon />
@@ -195,15 +117,20 @@ export function RetainerOverview({ projectId }: { projectId: Id<"projects"> }) {
           <AlertDescription className="flex items-center justify-between">
             <span>
               {formatMinutes(overageMinutes)} over budget &middot; {formatCurrencyPrecise(overageDue, currency)} due
+              {!rolloverEnabled && " · invoice each month below"}
             </span>
-            <Button size="sm" variant="outline" disabled className="ml-4 shrink-0">
-              Create Invoice
-            </Button>
+            {rolloverEnabled && (
+              <BannerInvoiceButton
+                invoiced={closingMonthInvoiced}
+                monthLabel={closingMonth?.label ?? ""}
+                onClick={openClosingMonthModal}
+                className="ml-4"
+              />
+            )}
           </AlertDescription>
         </Alert>
       )}
 
-      {/* Monthly Breakdown */}
       <Card>
         <CardHeader>
           <CardTitle>Monthly Breakdown</CardTitle>
@@ -236,7 +163,6 @@ export function RetainerOverview({ projectId }: { projectId: Id<"projects"> }) {
                   </AccordionTrigger>
                   <AccordionContent>
                     <div className="flex flex-col gap-3 pl-1">
-                      {/* Balance details */}
                       <div className="grid grid-cols-3 gap-4 rounded-md bg-muted/50 p-3 text-xs">
                         <div>
                           <span className="text-muted-foreground">Start balance</span>
@@ -252,7 +178,6 @@ export function RetainerOverview({ projectId }: { projectId: Id<"projects"> }) {
                         </div>
                       </div>
 
-                      {/* Time entries */}
                       {month.entryCount === 0 ? (
                         <p className="py-3 text-center text-sm text-muted-foreground">
                           No time entries for this month yet.
@@ -265,6 +190,32 @@ export function RetainerOverview({ projectId }: { projectId: Id<"projects"> }) {
                           ariaLabel={`Time entries for ${month.label}`}
                         />
                       )}
+
+                      {/* Invoice control — closed months only */}
+                      {month.isMonthClosed && (
+                        <div className="flex items-center justify-end gap-2 border-t pt-3">
+                          {month.invoice ? (
+                            <>
+                              <InvoiceStatusBadge status={month.invoice.status} />
+                              <Button asChild size="sm" variant="ghost">
+                                <Link href={`/invoices/${month.invoice.id}?from=project&projectId=${projectId}&tab=invoices`}>
+                                  View {formatInvoiceNumber(month.invoice.prefix, month.invoice.number)}
+                                  <ExternalLinkIcon />
+                                </Link>
+                              </Button>
+                            </>
+                          ) : (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => setActiveMonth({ year: month.year, month: month.month + 1 })}
+                            >
+                              <ReceiptIcon />
+                              Invoice this month
+                            </Button>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </AccordionContent>
                 </AccordionItem>
@@ -275,7 +226,6 @@ export function RetainerOverview({ projectId }: { projectId: Id<"projects"> }) {
         </CardContent>
       </Card>
 
-      {/* Cycle-end settlement */}
       {isCycleClosed && (
         <div>
           {overageMinutes > 0 ? (
@@ -286,101 +236,119 @@ export function RetainerOverview({ projectId }: { projectId: Id<"projects"> }) {
                   <p className="text-sm font-medium">Extra hours invoice</p>
                   <p className="text-xs text-muted-foreground tabular-nums">
                     {formatMinutes(overageMinutes)} over budget @ {formatCurrencyPrecise(overageRate, currency)}/h = {formatCurrencyPrecise(overageDue, currency)}
+                    {!rolloverEnabled && " · invoice each month below"}
                   </p>
                 </div>
-                <Button size="sm" variant="outline" disabled className="shrink-0">
-                  Create Invoice
-                </Button>
+                {rolloverEnabled && (
+                  <BannerInvoiceButton
+                    invoiced={closingMonthInvoiced}
+                    monthLabel={closingMonth?.label ?? ""}
+                    onClick={openClosingMonthModal}
+                  />
+                )}
               </CardContent>
             </Card>
           ) : (
             <Card size="sm" className="bg-muted/50">
-              <CardContent>
-                <p className="text-sm font-medium">
-                  {rolloverEnabled
-                    ? "Unused hours forfeited at cycle end"
-                    : "Unused hours forfeited — monthly settlement"
-                  }
-                </p>
-                <p className="text-xs text-muted-foreground tabular-nums">
-                  {formatMinutes(Math.abs(months[months.length - 1]?.endBalance ?? 0))} remaining &middot; not carried to next cycle
-                </p>
+              <CardContent className="flex items-center gap-2">
+                <div className="flex-1">
+                  <p className="text-sm font-medium">
+                    {rolloverEnabled
+                      ? "Unused hours forfeited at cycle end"
+                      : "Unused hours forfeited — monthly settlement"
+                    }
+                  </p>
+                  <p className="text-xs text-muted-foreground tabular-nums">
+                    {formatMinutes(Math.abs(months[months.length - 1]?.endBalance ?? 0))} remaining &middot; not carried to next cycle
+                  </p>
+                </div>
+                <BannerInvoiceButton
+                  invoiced={closingMonthInvoiced}
+                  monthLabel={closingMonth?.label ?? ""}
+                  onClick={openClosingMonthModal}
+                />
               </CardContent>
             </Card>
           )}
         </div>
       )}
 
+      {/* Create Invoice modal — remount per month so prefill resets cleanly */}
+      {activeMonth && (
+        <CreateInvoiceModal
+          key={`${projectId}-${activeMonth.year}-${activeMonth.month}`}
+          open={true}
+          onOpenChange={(next) => {
+            if (!next) setActiveMonth(null)
+          }}
+          projectId={projectId}
+          projectName={projectName}
+          billingType="retainer"
+          currency={projectCurrency}
+          initialRetainerYear={activeMonth.year}
+          initialRetainerMonth={activeMonth.month}
+        />
+      )}
+
     </div>
   )
 }
 
-function RetainerOverviewSkeleton() {
+function BannerInvoiceButton({
+  invoiced,
+  monthLabel,
+  onClick,
+  className,
+}: {
+  invoiced: boolean
+  monthLabel: string
+  onClick: () => void
+  className?: string
+}) {
+  if (invoiced) {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className={cn("shrink-0", className)}>
+            <Button size="sm" variant="outline" disabled>
+              Create Invoice
+            </Button>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent>
+          {monthLabel ? `${monthLabel} is already invoiced` : "Already invoiced"}
+        </TooltipContent>
+      </Tooltip>
+    )
+  }
   return (
-    <div className="flex flex-col gap-6">
-      {/* Cycle Overview card */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <div className="flex flex-col gap-1">
-              <Skeleton className="h-5 w-32" />
-              <Skeleton className="h-4 w-56" />
-            </div>
-            {/* Cycle navigator */}
-            <div className="flex items-center gap-1">
-              <Skeleton className="size-7 rounded-md" />
-              <Skeleton className="h-4 w-14" />
-              <Skeleton className="size-7 rounded-md" />
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-4">
-          {/* Progress bar */}
-          <div className="flex flex-col gap-2">
-            <Skeleton className="h-2.5 w-full rounded-full" />
-            <div className="flex justify-between">
-              <Skeleton className="h-3 w-24" />
-              <Skeleton className="h-3 w-20" />
-            </div>
-          </div>
-          {/* 3 metric cards */}
-          <div className="grid gap-4 sm:grid-cols-3">
-            {Array.from({ length: 3 }).map((_, i) => (
-              <div key={i} className="flex flex-col gap-2 rounded-xl p-4 ring-1 ring-foreground/10">
-                <Skeleton className="h-3 w-16" />
-                <Skeleton className="h-7 w-20" />
-                <Skeleton className="h-3 w-24" />
-              </div>
-            ))}
-          </div>
-        </CardContent>
-        <CardFooter>
-          <Skeleton className="h-3.5 w-48" />
-        </CardFooter>
-      </Card>
+    <Button size="sm" variant="outline" onClick={onClick} className={cn("shrink-0", className)}>
+      Create Invoice
+    </Button>
+  )
+}
 
-      {/* Monthly Breakdown card */}
-      <Card>
-        <CardHeader>
-          <Skeleton className="h-5 w-40" />
-        </CardHeader>
-        <CardContent className="flex flex-col gap-2">
-          {/* Accordion rows */}
-          {Array.from({ length: 3 }).map((_, i) => (
-            <div key={i} className="flex items-center justify-between border-b py-3 last:border-0">
-              <div className="flex items-center gap-3">
-                <Skeleton className="h-4 w-28" />
-                <Skeleton className="h-3 w-8" />
-              </div>
-              <div className="flex items-center gap-3">
-                <Skeleton className="h-4 w-20" />
-                <Skeleton className="h-4 w-14" />
-                <Skeleton className="h-5 w-16 rounded-full" />
-              </div>
+function MonthlyBreakdownSkeleton() {
+  return (
+    <Card>
+      <CardHeader>
+        <Skeleton className="h-5 w-40" />
+      </CardHeader>
+      <CardContent className="flex flex-col gap-2">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <div key={i} className="flex items-center justify-between border-b py-3 last:border-0">
+            <div className="flex items-center gap-3">
+              <Skeleton className="h-4 w-28" />
+              <Skeleton className="h-3 w-8" />
             </div>
-          ))}
-        </CardContent>
-      </Card>
-    </div>
+            <div className="flex items-center gap-3">
+              <Skeleton className="h-4 w-20" />
+              <Skeleton className="h-4 w-14" />
+              <Skeleton className="h-5 w-16 rounded-full" />
+            </div>
+          </div>
+        ))}
+      </CardContent>
+    </Card>
   )
 }

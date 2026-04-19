@@ -285,6 +285,32 @@ export const remove = mutation({
 
     // TODO Phase 7: block if time entries exist on any project of this client
 
+    // Explicit `orgId` filter on the projects query (defense-in-depth per
+    // CLAUDE.md "no exceptions"). The by_clientId index narrows to the
+    // client, and the client was already org-checked above, but the filter
+    // keeps the query ownable by static audit.
+    const projects = await ctx.db
+      .query("projects")
+      .withIndex("by_clientId", (q) => q.eq("clientId", args.id))
+      .filter((q) => q.eq(q.field("orgId"), orgId))
+      .collect();
+
+    // Block hard-delete when any invoice exists on any of this client's
+    // projects. Invoices are legal/financial records and must not be silently
+    // orphaned — `getInvoiceMetrics` would keep summing them.
+    for (const project of projects) {
+      const existingInvoice = await ctx.db
+        .query("invoices")
+        .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
+        .filter((q) => q.eq(q.field("orgId"), orgId))
+        .first();
+      if (existingInvoice) {
+        throw new ConvexError(
+          "Cannot delete this client — invoices exist on one or more of its projects. Delete those invoices first.",
+        );
+      }
+    }
+
     // Cascade delete contacts
     const contacts = await ctx.db
       .query("clientContacts")
@@ -295,10 +321,6 @@ export const remove = mutation({
     }
 
     // Cascade delete projects and their estimates
-    const projects = await ctx.db
-      .query("projects")
-      .withIndex("by_clientId", (q) => q.eq("clientId", args.id))
-      .collect();
     for (const project of projects) {
       // Delete estimates for this project
       const estimates = await ctx.db

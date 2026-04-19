@@ -3,7 +3,8 @@
 import { useQuery } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { Button } from "@/components/ui/button"
-import { Field, FieldGroup, FieldLabel, FieldDescription } from "@/components/ui/field"
+import { Field, FieldLabel, FieldDescription } from "@/components/ui/field"
+import { FormModalBody, FormModalFooter } from "@/components/ui/form-modal"
 import { Input } from "@/components/ui/input"
 import {
   Select,
@@ -13,6 +14,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
+import { DialogClose } from "@/components/ui/dialog"
 import {
   Popover,
   PopoverContent,
@@ -100,6 +103,9 @@ export function ProjectFormStepBasic({
   const isNewClient = clientId === NEW_CLIENT_VALUE
   const hasValidClient = isNewClient ? Boolean(newClientName.trim()) : Boolean(clientId)
   const canProceed = hasValidClient && Boolean(name.trim()) && !submitting
+  const displayedCurrency = isNewClient
+    ? currency || ""
+    : clients?.find((c) => c._id === clientId)?.currency ?? currency ?? ""
 
   function handleToggleMember(userId: Id<"users">) {
     if (teamMembers.includes(userId)) {
@@ -128,7 +134,7 @@ export function ProjectFormStepBasic({
         handleAction()
       }}
     >
-      <FieldGroup className="gap-6">
+      <FormModalBody>
         {/* Client */}
         <Field>
           <FieldLabel htmlFor="project-client">Client</FieldLabel>
@@ -151,7 +157,7 @@ export function ProjectFormStepBasic({
 
         {/* New Client inline fields */}
         {isNewClient && (
-          <div className="flex flex-col gap-4 rounded-lg border bg-muted/20 p-4">
+          <div className="flex flex-col gap-4 border-l-2 border-primary/30 pl-4">
             <Field>
               <FieldLabel htmlFor="new-client-name">Company Name</FieldLabel>
               <Input
@@ -214,40 +220,42 @@ export function ProjectFormStepBasic({
         {/* Billing Type */}
         <Field>
           <FieldLabel>Billing Type</FieldLabel>
-          <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Billing Type">
+          <ToggleGroup
+            type="single"
+            value={billingType}
+            onValueChange={(v) => { if (v) setBillingType(v as BillingType) }}
+            variant="pill"
+            spacing={2}
+            className="flex-wrap"
+            aria-label="Billing Type"
+          >
             {BILLING_TYPE_OPTIONS.map((opt) => (
-              <button
+              <ToggleGroupItem
                 key={opt.value}
-                type="button"
-                role="radio"
-                aria-checked={billingType === opt.value}
-                onClick={() => setBillingType(opt.value)}
-                className={cn(
-                  "rounded-lg border px-3.5 py-1.5 text-sm font-medium transition-colors",
-                  billingType === opt.value
-                    ? "border-primary bg-primary/5 text-primary"
-                    : "border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground"
-                )}
+                value={opt.value}
+                className="px-3.5"
               >
                 {opt.label}
-              </button>
+              </ToggleGroupItem>
             ))}
-          </div>
+          </ToggleGroup>
           <FieldDescription className="text-xs text-muted-foreground">
             Cannot be changed after creation.
           </FieldDescription>
         </Field>
 
-        {/* Currency (derived from client) */}
         <Field>
-          <FieldLabel>Currency</FieldLabel>
-          <div className="flex h-9 items-center rounded-md border bg-muted/50 px-3 text-sm text-muted-foreground">
-            {(() => {
-              if (isNewClient) return currency || "Set by org default"
-              const selectedClient = clients?.find((c) => c._id === clientId)
-              return selectedClient?.currency ?? currency ?? "—"
-            })()}
-          </div>
+          <FieldLabel htmlFor="project-currency">Currency</FieldLabel>
+          <Select value={displayedCurrency} disabled>
+            <SelectTrigger id="project-currency">
+              <SelectValue placeholder="Set by org default" />
+            </SelectTrigger>
+            <SelectContent>
+              {displayedCurrency && (
+                <SelectItem value={displayedCurrency}>{displayedCurrency}</SelectItem>
+              )}
+            </SelectContent>
+          </Select>
           <FieldDescription className="text-xs text-muted-foreground">
             Inherited from the client. Cannot be changed.
           </FieldDescription>
@@ -263,7 +271,7 @@ export function ProjectFormStepBasic({
                 variant="outline"
                 role="combobox"
                 aria-expanded={teamPickerOpen}
-                className="h-auto min-h-8 w-full justify-between font-normal"
+                className="h-auto min-h-10 w-full justify-between px-3 font-normal"
               >
                 <div className="flex flex-wrap gap-1">
                   {teamMembers.length === 0 && (
@@ -323,10 +331,10 @@ export function ProjectFormStepBasic({
         </Field>
 
         {error && <p className="text-sm text-destructive">{error}</p>}
-      </FieldGroup>
+      </FormModalBody>
 
-      <div className="mt-8">
-        <Button type="submit" disabled={!canProceed} size="lg" className="w-full">
+      <FormModalFooter>
+        <Button type="submit" disabled={!canProceed} size="lg" className="h-11 w-full text-base">
           {submitting
             ? "Creating..."
             : billingType === "non_billable"
@@ -334,7 +342,16 @@ export function ProjectFormStepBasic({
               : "Continue"
           }
         </Button>
-      </div>
+        <DialogClose asChild>
+          <button
+            type="button"
+            disabled={submitting}
+            className="text-sm text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+          >
+            Cancel
+          </button>
+        </DialogClose>
+      </FormModalFooter>
     </form>
   )
 }

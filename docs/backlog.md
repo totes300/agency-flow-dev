@@ -1016,3 +1016,53 @@
 - **Phase 6 (Tasks Detail)**: Time tab in task detail modal with full entry editing (duration, note, date, billable)
 - **Phase 2 (Reports)**: `invoicedInReportId` field on timeEntries; lock icon on invoiced entries; `getUninvoiced` query
 - **v2**: Weekly timesheet view (/my-time Harvest-style grid); quick-switch / recent timers; "Who's working now" dashboard; idle detection; nudges/reminders; time entry tags; global shortcut (Cmd+T); browser tab title with timer; activity log for time edits ("AT changed 2:00 → 8:00")
+
+---
+
+## Project Summary Card Refactor ✅ (2026-04-18)
+
+> **Goal**: Replace the three project Overview top metric grids (T&M/Fixed/Retainer) with one unified, business-critical, validated calculation layer and a single shared card component. Numbers on this surface drive pricing, hiring, and go/no-go decisions — accuracy is non-negotiable.
+>
+> PRD: [`docs/project-summary-prd.md`](project-summary-prd.md)
+> Dependency: [`docs/d1-currency-integrity-plan.md`](d1-currency-integrity-plan.md)
+>
+> **Key decisions**:
+> - Scope A (minimum): only the top metric grid gets replaced. Budget table, Monthly Breakdown accordion, Time Log, and existing Alerts stay untouched.
+> - **No rounding anywhere on the card** — raw ledger accuracy > billing-preview niceness.
+> - Per-type Revenue semantics: T&M "Earned Revenue" (work produced), Fixed "Contract Value" (`max(fixedPrice, totalBilled)`), Retainer "Earned Cycle Revenue" (`monthlyFee × cycleLength + live overageDue`).
+> - Member (non-admin) sees only the Time Breakdown column; Billing Status, Profitability, Overage are admin-only.
+> - T&M has a URL-persistent date range (This month / This quarter / This year / All time / Custom); Retainer has a URL-persistent cycle offset.
+> - Codex rescue review used as tiebreaker on opinionated formulas; Fixed Revenue and Retainer Revenue reformulated after review, then further reverted per product-owner judgment on live overage visibility.
+
+### Tasks
+
+- [x] **D1 — Unit tests**: `convex/lib/rates.test.ts` expanded to 15 tests covering currency invariant (propagation, error messages, retainer zero, non-billable + cost=0).
+- [x] **D1 — Schema invariant**: comment block above `timeEntries` in `convex/schema.ts` documenting the `rateCurrency == client.currency` invariant and its enforcement path.
+- [x] **D1 — Query return shape**: `api.projects.list` and `api.projects.get` extended with resolved `currency: string` field from client. `getRetainerData` already had it.
+- [x] **D1 — `project.currency` readers migrated**: backend readers in `convex/invoices.ts` use `getProjectCurrency(ctx, project)`; frontend readers consume the resolved `currency` field from query result.
+- [x] **D1 — Legacy field removed**: `projects.currency` dropped from schema + write in `projects.create` removed. `ProjectWithClient` type in `projects-table.tsx` augmented with explicit `currency: string`.
+- [x] **Pure calc layer**: `convex/lib/projectSummary.ts` — `computeTmSummary` / `computeFixedSummary` / `computeRetainerSummary` pure functions + `resolveDateRange` / `filterEntriesByDate` helpers.
+- [x] **Pure calc tests**: `convex/lib/__tests__/projectSummary.test.ts` — 35 fixture-based tests. 100% line coverage on the calc layer. Covers happy path, empty, date filter, custom range, extra-billed Fixed, mid-cycle overage Retainer, non-rollover, member view, costRate=0 entries.
+- [x] **Convex query**: `api.projects.getSummary({ projectId, dateRange?, cycleOffset? })` — thin dispatcher; discriminated union return; role-aware output; retainer cycle math extracted into local helper.
+- [x] **UI primitives**: `components/projects/summary/primitives/` — `summary-card-shell.tsx`, `summary-column.tsx`, `metric-row.tsx`.
+- [x] **Per-type UI**: `tm-summary.tsx` (with date range picker), `fixed-summary.tsx` (conditional Unbilled/Fully invoiced/Extra billed slot), `retainer-summary.tsx` (with cycle navigator + Uninvoiced badge).
+- [x] **Entry component**: `project-summary-card.tsx` — dispatches by `billingType`, owns skeleton (3-column unified) and error state, reads URL state for date range + cycle offset.
+- [x] **Integrations**: `<ProjectSummaryCard>` swapped into `fixed-overview.tsx`, `tm-overview.tsx`, `retainer-overview.tsx`. Each drops its old top metric grid + deprecated skeleton variant. Budget table, Monthly Breakdown accordion, Time Log, and all Alerts preserved.
+
+### Verification
+
+- [x] `npx tsc --noEmit` — 0 errors
+- [x] `npx vitest run convex/lib/rates.test.ts convex/lib/__tests__/projectSummary.test.ts` — 50 tests pass
+- [x] `npm run lint` on the new files — 0 errors (only unused-import warnings cleaned)
+- [ ] Manual verification per billing type in dev browser (owner to confirm)
+- [ ] Extra billed state on Fixed verified with a manually-crafted +manual line invoice
+- [ ] Retainer mid-cycle overage verified by logging time past budget in a test retainer
+
+### TODOs deferred to later phases
+
+- **D1 — Proactive UX (G4)**: inline warning in Project Settings → Team when an admin adds a user with no cost rate in project currency; same on Settings → Rates for categories missing a rate. Non-blocking, prevents cryptic time-logger errors.
+- **D2 — Old query deprecation**: `timeEntries.projectOverview`, `projects.getRetainerData`, `invoices.getProjectInvoiceMetrics` remain; touched when Budget table / Monthly Breakdown accordion / Invoices tab are refactored next.
+- **Change-order data model for Fixed**: distinguish positive manual extras (change orders) from discount credits. Today both lump together; future model change would let the card mark out-of-scope revenue explicitly.
+- **Ledger vs invoice reconciliation row**: no UI for this today; if users report divergence concerns we can surface a reconciliation badge on the Billed row.
+- **Retainer "All cycles" lifetime view**: explicitly out of scope v1; only per-cycle.
+- **FX conversion / multi-currency per project**: platform doesn't support this; the PRD gates on the D1 invariant (one currency per project) holding.

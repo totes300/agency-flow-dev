@@ -1,8 +1,23 @@
 "use client"
 
+import { useQuery } from "convex/react"
+import { api } from "@/convex/_generated/api"
+import type { Id } from "@/convex/_generated/dataModel"
 import { Button } from "@/components/ui/button"
-import { Field, FieldGroup, FieldLabel, FieldDescription } from "@/components/ui/field"
+import { Field, FieldLabel, FieldDescription } from "@/components/ui/field"
+import {
+  FormModalBody,
+  FormModalFooter,
+  FormModalHeader,
+  FormModalTitle,
+  FormModalDescription,
+} from "@/components/ui/form-modal"
 import { Input } from "@/components/ui/input"
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupInput,
+} from "@/components/ui/input-group"
 import {
   Select,
   SelectContent,
@@ -13,12 +28,9 @@ import {
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { DatePicker } from "@/components/ui/date-picker"
-import {
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from "@/components/ui/dialog"
+import { DialogClose } from "@/components/ui/dialog"
 import { ArrowLeftIcon, InfoIcon } from "lucide-react"
+import { formatCurrencyPrecise } from "@/lib/format"
 import type { BillingType } from "./project-form-step-basic"
 
 type StepBillingProps = {
@@ -27,6 +39,8 @@ type StepBillingProps = {
   // Fixed
   fixedPrice: string
   setFixedPrice: (v: string) => void
+  categoryEstimates: Record<string, string>
+  setCategoryEstimates: (fn: (prev: Record<string, string>) => Record<string, string>) => void
   // Retainer
   monthlyHours: string
   setMonthlyHours: (v: string) => void
@@ -48,9 +62,9 @@ type StepBillingProps = {
 }
 
 const BILLING_TITLES: Record<Exclude<BillingType, "non_billable">, { title: string; subtitle: string }> = {
-  fixed: { title: "Billing Details", subtitle: "Fixed Fee project settings" },
-  t_and_m: { title: "Billing Details", subtitle: "Time & Materials project settings" },
-  retainer: { title: "Billing Details", subtitle: "Retainer project settings" },
+  fixed: { title: "Billing Details", subtitle: "Set the price and scope estimates" },
+  t_and_m: { title: "Billing Details", subtitle: "Rates are configured after creation" },
+  retainer: { title: "Billing Details", subtitle: "Monthly recurring billing cycle" },
 }
 
 export function ProjectFormStepBilling({
@@ -58,6 +72,8 @@ export function ProjectFormStepBilling({
   currency,
   fixedPrice,
   setFixedPrice,
+  categoryEstimates,
+  setCategoryEstimates,
   monthlyHours,
   setMonthlyHours,
   monthlyFee,
@@ -86,46 +102,52 @@ export function ProjectFormStepBilling({
         onSubmit()
       }}
     >
-      {/* Step header with back */}
-      <DialogHeader className="mb-2">
-        <div className="flex items-center gap-3">
+      <FormModalHeader
+        leading={
           <button
             type="button"
             onClick={onBack}
             className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            aria-label="Back"
           >
             <ArrowLeftIcon className="size-4" />
           </button>
-          <div>
-            <DialogTitle>{title}</DialogTitle>
-            <DialogDescription>{subtitle}</DialogDescription>
-          </div>
-        </div>
-      </DialogHeader>
+        }
+      >
+        <FormModalTitle>{title}</FormModalTitle>
+        <FormModalDescription>{subtitle}</FormModalDescription>
+      </FormModalHeader>
 
-      <FieldGroup className="gap-6">
+      <FormModalBody>
         {/* Fixed Fee fields */}
         {billingType === "fixed" && (
-          <Field>
-            <FieldLabel htmlFor="fixed-price">Fixed Fee</FieldLabel>
-            <div className="flex items-center gap-2">
-              <Input
-                id="fixed-price"
-                type="number"
-                min="0.01"
-                step="0.01"
-                value={fixedPrice}
-                onChange={(e) => setFixedPrice(e.target.value)}
-                placeholder="10000"
-                className="w-40"
-                autoFocus
-              />
-              <span className="text-sm text-muted-foreground">{currency}</span>
-            </div>
-            <FieldDescription>
-              The sold project price. Used to calculate profit and effective rate.
-            </FieldDescription>
-          </Field>
+          <>
+            <Field>
+              <FieldLabel htmlFor="fixed-price">Fixed Fee</FieldLabel>
+              <InputGroup className="w-48">
+                <InputGroupInput
+                  id="fixed-price"
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  value={fixedPrice}
+                  onChange={(e) => setFixedPrice(e.target.value)}
+                  placeholder="10000"
+                  autoFocus
+                />
+                <InputGroupAddon align="inline-end">{currency}</InputGroupAddon>
+              </InputGroup>
+              <FieldDescription>
+                The sold project price. Used to calculate profit and effective rate.
+              </FieldDescription>
+            </Field>
+            <FixedScopeFieldset
+              fixedPrice={fixedPrice}
+              currency={currency}
+              categoryEstimates={categoryEstimates}
+              setCategoryEstimates={setCategoryEstimates}
+            />
+          </>
         )}
 
         {/* T&M — no rate inputs at creation time */}
@@ -144,8 +166,8 @@ export function ProjectFormStepBilling({
             <div className="grid gap-6 sm:grid-cols-2">
               <Field>
                 <FieldLabel htmlFor="monthly-hours">Monthly Hours</FieldLabel>
-                <div className="flex items-center gap-2">
-                  <Input
+                <InputGroup>
+                  <InputGroupInput
                     id="monthly-hours"
                     type="number"
                     min="0.5"
@@ -155,13 +177,13 @@ export function ProjectFormStepBilling({
                     placeholder="10"
                     autoFocus
                   />
-                  <span className="shrink-0 text-sm text-muted-foreground">h/mo</span>
-                </div>
+                  <InputGroupAddon align="inline-end">h/mo</InputGroupAddon>
+                </InputGroup>
               </Field>
               <Field>
                 <FieldLabel htmlFor="monthly-fee">Monthly Fee</FieldLabel>
-                <div className="flex items-center gap-2">
-                  <Input
+                <InputGroup>
+                  <InputGroupInput
                     id="monthly-fee"
                     type="number"
                     min="0"
@@ -170,15 +192,15 @@ export function ProjectFormStepBilling({
                     onChange={(e) => setMonthlyFee(e.target.value)}
                     placeholder="2000"
                   />
-                  <span className="shrink-0 text-sm text-muted-foreground">{currency}</span>
-                </div>
+                  <InputGroupAddon align="inline-end">{currency}</InputGroupAddon>
+                </InputGroup>
               </Field>
             </div>
 
             <Field>
               <FieldLabel htmlFor="overage-rate">Overage Rate</FieldLabel>
-              <div className="flex items-center gap-2">
-                <Input
+              <InputGroup className="w-48">
+                <InputGroupInput
                   id="overage-rate"
                   type="number"
                   min="0.01"
@@ -186,10 +208,9 @@ export function ProjectFormStepBilling({
                   value={overageRate}
                   onChange={(e) => setOverageRate(e.target.value)}
                   placeholder="150"
-                  className="w-40"
                 />
-                <span className="shrink-0 text-sm text-muted-foreground">{currency}/h</span>
-              </div>
+                <InputGroupAddon align="inline-end">{currency}/h</InputGroupAddon>
+              </InputGroup>
               <FieldDescription>
                 Hourly rate charged for hours exceeding the monthly budget.
               </FieldDescription>
@@ -246,13 +267,96 @@ export function ProjectFormStepBilling({
         )}
 
         {error && <p className="text-sm text-destructive">{error}</p>}
-      </FieldGroup>
+      </FormModalBody>
 
-      <div className="mt-8">
-        <Button type="submit" disabled={submitting} size="lg" className="w-full">
+      <FormModalFooter>
+        <Button type="submit" disabled={submitting} size="lg" className="h-11 w-full text-base">
           {submitting ? "Creating..." : "Create Project"}
         </Button>
-      </div>
+        <DialogClose asChild>
+          <button
+            type="button"
+            disabled={submitting}
+            className="text-sm text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+          >
+            Cancel
+          </button>
+        </DialogClose>
+      </FormModalFooter>
     </form>
+  )
+}
+
+/**
+ * Per-category scope estimate rows for Fixed project creation. Compact, optional —
+ * user can skip and every row defaults to 0. The hint at the bottom computes a
+ * live Expected rate so the agency sees "ezért adom el az órát" before creating.
+ */
+function FixedScopeFieldset({
+  fixedPrice,
+  currency,
+  categoryEstimates,
+  setCategoryEstimates,
+}: {
+  fixedPrice: string
+  currency: string
+  categoryEstimates: Record<string, string>
+  setCategoryEstimates: (
+    fn: (prev: Record<string, string>) => Record<string, string>,
+  ) => void
+}) {
+  const categories = useQuery(api.workCategories.list, { includeArchived: false })
+
+  const totalHours = Object.values(categoryEstimates).reduce(
+    (sum, h) => sum + (parseFloat(h) || 0),
+    0,
+  )
+  const priceNum = parseFloat(fixedPrice) || 0
+  const expectedRate = totalHours > 0 && priceNum > 0 ? priceNum / totalHours : null
+
+  return (
+    <Field>
+      <FieldLabel>Scope estimates <span className="font-normal text-muted-foreground">(optional)</span></FieldLabel>
+      <FieldDescription>
+        Hours per category. Unlocks Expected hourly rate and scope-creep tracking after creation.
+      </FieldDescription>
+      {categories === undefined ? (
+        <div className="mt-2 h-24 rounded-md border bg-muted/30" />
+      ) : categories.length === 0 ? (
+        <p className="mt-2 text-sm text-muted-foreground">
+          No work categories yet. You can add estimates later.
+        </p>
+      ) : (
+        <div className="mt-2 flex flex-col gap-1 rounded-md border bg-background p-2">
+          {categories.map((cat: { _id: Id<"workCategories">; name: string }) => (
+            <div key={cat._id} className="grid grid-cols-[1fr_auto] items-center gap-3 px-1 py-0.5">
+              <span className="text-sm">{cat.name}</span>
+              <Input
+                type="number"
+                min="0"
+                step="0.5"
+                value={categoryEstimates[cat._id.toString()] ?? ""}
+                onChange={(e) =>
+                  setCategoryEstimates((prev) => ({
+                    ...prev,
+                    [cat._id.toString()]: e.target.value,
+                  }))
+                }
+                placeholder="0"
+                className="h-8 w-24 text-right tabular-nums"
+              />
+            </div>
+          ))}
+          <div className="mt-1 flex items-center justify-between border-t px-1 pt-2 text-xs">
+            <span className="text-muted-foreground">
+              Total {totalHours.toFixed(1)} h
+              {expectedRate !== null && (
+                <> · Expected rate <span className="font-medium text-foreground tabular-nums">{formatCurrencyPrecise(expectedRate, currency)}/h</span></>
+              )}
+            </span>
+          </div>
+        </div>
+      )}
+    </Field>
   )
 }

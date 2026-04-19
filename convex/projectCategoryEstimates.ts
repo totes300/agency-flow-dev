@@ -77,53 +77,6 @@ export const upsert = mutation({
   },
 });
 
-/**
- * Seed estimate rows for a new Fixed project from org category defaults.
- * Creates one estimate per active work category with the category's
- * default cost/bill rates. Called automatically during project creation.
- */
-export const seedForProject = mutation({
-  args: {
-    projectId: v.id("projects"),
-  },
-  handler: async (ctx, args) => {
-    const { orgId, userId } = await requireAdmin(ctx);
-
-    const project = await ctx.db.get(args.projectId);
-    if (!project || project.orgId !== orgId) throw new ConvexError("Project not found");
-    if (project.billingType !== "fixed") throw new ConvexError("Seed is only for fixed projects");
-
-    // Check if estimates already exist
-    const existing = await ctx.db
-      .query("projectCategoryEstimates")
-      .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
-      .first();
-    if (existing) return; // Already seeded
-
-    // Get all active work categories for this org
-    const categories = await ctx.db
-      .query("workCategories")
-      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
-      .collect();
-
-    const activeCategories = categories.filter((c) => !c.archivedAt);
-    if (activeCategories.length === 0) return;
-
-    const now = Date.now();
-    for (const cat of activeCategories) {
-      await ctx.db.insert("projectCategoryEstimates", {
-        orgId,
-        projectId: args.projectId,
-        workCategoryId: cat._id,
-        estimatedMinutes: 0, // User sets the budget later
-        createdAt: now,
-        updatedAt: now,
-        createdBy: userId,
-      });
-    }
-  },
-});
-
 export const remove = mutation({
   args: { id: v.id("projectCategoryEstimates") },
   handler: async (ctx, args) => {

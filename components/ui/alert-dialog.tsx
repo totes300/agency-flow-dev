@@ -35,8 +35,11 @@ function AlertDialogOverlay({
   return (
     <AlertDialogPrimitive.Overlay
       data-slot="alert-dialog-overlay"
+      // Intentional fork from shadcn v4 default: solid `bg-black/50`, no
+      // `backdrop-blur-xs`. Keeps the destructive/confirm surface calmly
+      // grounded instead of glassy. Matches Dialog and Sheet overlays.
       className={cn(
-        "fixed inset-0 z-60 bg-black/10 duration-100 supports-backdrop-filter:backdrop-blur-xs data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
+        "fixed inset-0 z-60 bg-black/50 duration-100 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
         className
       )}
       {...props}

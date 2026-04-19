@@ -47,8 +47,6 @@ export default defineSchema({
     completionDefaultMemberStatusId: v.optional(v.id("statuses")),
     // My Tasks: default visible statuses for all members (admin-configurable)
     defaultMyTasksStatusIds: v.optional(v.array(v.id("statuses"))),
-    // Legacy — T&M flat rate default, no longer used
-    defaultTmFlatRate: v.optional(v.number()),
     // Branding (used in later phases, define fields now)
     brandName: v.optional(v.string()),
     brandLogoStorageId: v.optional(v.id("_storage")),
@@ -56,6 +54,10 @@ export default defineSchema({
     brandTaxId: v.optional(v.string()),
     brandEmail: v.optional(v.string()),
     brandPhone: v.optional(v.string()),
+    // Invoicing
+    nextInvoiceNumber: v.optional(v.number()),
+    invoicePrefix: v.optional(v.string()),
+    defaultPaymentTermsDays: v.optional(v.number()),
     // Base
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -175,7 +177,8 @@ export default defineSchema({
     name: v.string(),
     code: v.string(), // "PRJ-042", editable, unique per org
     billingType: v.union(v.literal("fixed"), v.literal("retainer"), v.literal("t_and_m"), v.literal("non_billable")),
-    currency: v.string(), // TODO: remove in next deploy — still written during widen, derived from client
+    // Currency is NOT stored on the project. Canonical source: client.currency.
+    // See D1 invariant in convex/schema.ts above `timeEntries`.
     // Team members (users assigned to this project)
     teamMembers: v.optional(v.array(v.id("users"))),
     // Retainer fields
@@ -188,13 +191,6 @@ export default defineSchema({
     // Fixed fields
     fixedPrice: v.optional(v.number()),             // sold fixed fee
     overageRate: v.optional(v.number()),             // retainer $/h for hours over budget
-    // Legacy fields — kept optional for existing data, no longer written
-    hourlyRate: v.optional(v.number()),
-    tmCategoryRates: v.optional(v.array(v.object({
-      workCategoryId: v.id("workCategories"),
-      rate: v.number(),
-    }))),
-    tmRateMode: v.optional(v.union(v.literal("flat"), v.literal("per_category"))),
     // Default assignees
     defaultAssignees: v.optional(v.array(v.object({
       workCategoryId: v.id("workCategories"),
@@ -216,9 +212,6 @@ export default defineSchema({
     projectId: v.id("projects"),
     workCategoryId: v.id("workCategories"),
     estimatedMinutes: v.number(),
-    // Legacy fields — kept optional for existing data, no longer written
-    internalCostRate: v.optional(v.number()),
-    clientBillingRate: v.optional(v.number()),
     createdAt: v.number(),
     updatedAt: v.number(),
     createdBy: v.id("users"),
@@ -236,7 +229,93 @@ export default defineSchema({
   }).index("by_projectId", ["projectId"])
     .index("by_projectId_periodStart", ["projectId", "periodStart"]),
 
+  // ─── Invoices ──────────────────────────────────────────────────────────────
+  invoices: defineTable({
+    orgId: v.string(),
+    projectId: v.id("projects"),
+    clientId: v.id("clients"),
+    number: v.number(),
+    prefix: v.string(),
+    subject: v.optional(v.string()),
+    status: v.union(
+      v.literal("draft"),
+      v.literal("invoiced"),
+      v.literal("paid")
+    ),
+    currency: v.string(),
+    subtotal: v.number(),
+    total: v.number(),
+    issueDate: v.string(),
+    dueDate: v.optional(v.string()),
+    paidAt: v.optional(v.number()),
+    periodStart: v.optional(v.string()),
+    periodEnd: v.optional(v.string()),
+    note: v.optional(v.string()),
+    roundingMinutes: v.optional(v.number()),
+    // Retainer balance snapshot (retainer invoices only)
+    retainerStartBalanceMinutes: v.optional(v.number()),
+    retainerIncludedMinutes: v.optional(v.number()),
+    retainerUsedMinutes: v.optional(v.number()),
+    retainerEndBalanceMinutes: v.optional(v.number()),
+    retainerMonthlyFee: v.optional(v.number()),
+    retainerOverageRate: v.optional(v.number()),
+    // Snapshot of the project's retainer config at invoice creation. Reading
+    // live `project.rolloverEnabled` / `project.cycleLength` would silently
+    // flip a draft's balance meaning when an admin toggles settings mid-cycle.
+    retainerRolloverEnabled: v.optional(v.boolean()),
+    retainerCycleLength: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    createdBy: v.id("users"),
+  })
+    .index("by_orgId", ["orgId"])
+    .index("by_projectId", ["projectId"])
+    .index("by_clientId", ["clientId"])
+    .index("by_orgId_status", ["orgId", "status"]),
+
+  // ─── Invoice Line Items ───────────────────────────────────────────────────
+  invoiceLineItems: defineTable({
+    orgId: v.string(),
+    invoiceId: v.id("invoices"),
+    sortOrder: v.number(),
+    lineType: v.union(
+      v.literal("time"),
+      v.literal("fixed"),
+      v.literal("retainer_fee"),
+      v.literal("overage"),
+      v.literal("manual")
+    ),
+    description: v.string(),
+    quantity: v.number(),
+    unitPrice: v.number(),
+    amount: v.number(),
+    amountOverridden: v.optional(v.boolean()),
+    // Source-of-truth minutes on time rows, set at creation from the summed
+    // time-entry minutes. `quantity` (hours) is the display/billing unit.
+    // Retainer recalc reads `quantityMinutes` to avoid hours→minutes rounding
+    // drift. Mirrors the pattern used by Harvest, Bonsai, and Toggl.
+    quantityMinutes: v.optional(v.number()),
+    workCategoryId: v.optional(v.id("workCategories")),
+    timeEntryIds: v.optional(v.array(v.id("timeEntries"))),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_invoiceId", ["invoiceId"]),
+
   // ─── Time Entries ────────────────────────────────────────────────────────────
+  // INVARIANT (D1 — see docs/d1-currency-integrity-plan.md):
+  //   timeEntries.rateCurrency MUST equal client.currency(task.projectId.clientId)
+  //   for every entry at creation and update time. The Project Summary card
+  //   (api.projects.getSummary) aggregates money amounts without currency
+  //   partitioning, so mixed-currency entries on a single project would
+  //   silently produce wrong totals.
+  //
+  //   Enforcement: resolveRateSnapshot in convex/lib/orgHelpers.ts snapshots
+  //   rateCurrency = getProjectCurrency(project) = client.currency.
+  //   Drift vectors eliminated: client.currency is immutable (convex/clients.ts:178),
+  //   project.clientId is immutable (convex/projects.ts update mutation).
+  //
+  //   DO NOT patch rateCurrency, invoiceId's currency, or project.clientId
+  //   directly. DO NOT add a mutation that allows client.currency edits.
   timeEntries: defineTable({
     orgId: v.string(),
     taskId: v.id("tasks"),
@@ -246,11 +325,12 @@ export default defineSchema({
     note: v.optional(v.string()),
     isBillable: v.boolean(),
     method: v.union(v.literal("timer"), v.literal("manual")),
-    // Rate snapshot
+    // Rate snapshot — rateCurrency invariant above.
     costRate: v.number(),
     billableRate: v.number(),
     rateCurrency: v.string(),
     snapshotCategoryId: v.optional(v.id("workCategories")),
+    invoiceId: v.optional(v.id("invoices")),
     createdAt: v.number(),
     updatedAt: v.number(),
     createdBy: v.id("users"),
@@ -302,9 +382,6 @@ export default defineSchema({
     orgId: v.string(),
     name: v.string(),
     color: v.string(),
-    defaultCostRate: v.optional(v.number()), // Legacy — cost rates now per-user in userRates
-    defaultBillRate: v.optional(v.number()), // Legacy — rates now in categoryRates table
-    currency: v.string(), // Legacy — kept for existing data, new categories use org default
     sortOrder: v.number(),
     archivedAt: v.optional(v.number()),
     createdAt: v.number(),

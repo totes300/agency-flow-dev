@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect, useMemo } from "react"
-import { useParams, useSearchParams, useRouter } from "next/navigation"
+import { useParams, useSearchParams, useRouter, usePathname } from "next/navigation"
 import { useQuery } from "convex/react"
 import { useConvexAuth } from "convex/react"
 import { api } from "@/convex/_generated/api"
@@ -11,6 +11,10 @@ import { ProjectDetailHeader } from "@/components/projects/project-detail-header
 import dynamic from "next/dynamic"
 import { SettingsGeneral } from "@/components/projects/settings-general"
 
+import { ProjectDetailSkeleton } from "@/components/projects/project-detail-skeleton"
+import { ProjectInvoicesSkeleton } from "@/components/invoices/project-invoices-skeleton"
+import { ProjectTimeSkeleton } from "@/components/projects/project-time-skeleton"
+
 const FixedOverview = dynamic(() => import("@/components/projects/fixed-overview").then(m => ({ default: m.FixedOverview })))
 const TmOverview = dynamic(() => import("@/components/projects/tm-overview").then(m => ({ default: m.TmOverview })))
 const RetainerOverview = dynamic(() => import("@/components/projects/retainer-overview").then(m => ({ default: m.RetainerOverview })))
@@ -18,7 +22,17 @@ const SettingsBudgetEstimates = dynamic(() => import("@/components/projects/sett
 const SettingsRates = dynamic(() => import("@/components/projects/settings-rates").then(m => ({ default: m.SettingsRates })))
 const SettingsRetainer = dynamic(() => import("@/components/projects/settings-retainer").then(m => ({ default: m.SettingsRetainer })))
 const ProjectTeam = dynamic(() => import("@/components/projects/project-team").then(m => ({ default: m.ProjectTeam })))
-import { ProjectDetailSkeleton } from "@/components/projects/project-detail-skeleton"
+// Content-aware `loading` fallbacks prevent the blank flash between chunk
+// load and the component's internal Convex skeleton taking over. Matches the
+// real layouts in `project-invoices.tsx` and `project-time.tsx`.
+const ProjectInvoices = dynamic(
+  () => import("@/components/invoices/project-invoices").then(m => ({ default: m.ProjectInvoices })),
+  { loading: () => <ProjectInvoicesSkeleton /> },
+)
+const ProjectTime = dynamic(
+  () => import("@/components/projects/project-time").then(m => ({ default: m.ProjectTime })),
+  { loading: () => <ProjectTimeSkeleton /> },
+)
 import { TaskDetailModal } from "@/components/tasks/task-detail-modal"
 import { TaskReferenceDataProvider } from "@/components/tasks/task-reference-data"
 import { useIsAdmin } from "@/lib/hooks/use-is-admin"
@@ -29,6 +43,7 @@ export default function ProjectDetailPage() {
   const params = useParams()
   const searchParams = useSearchParams()
   const router = useRouter()
+  const pathname = usePathname()
   const projectId = params.id as Id<"projects">
   const project = useQuery(api.projects.get, isAuthenticated ? { id: projectId } : "skip")
   const overview = useQuery(api.timeEntries.projectOverview, isAuthenticated ? { projectId } : "skip")
@@ -43,9 +58,26 @@ export default function ProjectDetailPage() {
   )
 
   const [scrollTarget, setScrollTarget] = useState<string | null>(null)
+  // URL is the source of truth for the active tab — keeps back button, refresh,
+  // and shareable links working (CLAUDE.md: filterable views persist to URL).
   const tabParam = searchParams.get("tab")
-  const defaultTab = tabParam === "settings" ? "settings" : tabParam === "invoices" ? "invoices" : "overview"
-  const [tab, setTab] = useState(defaultTab)
+  const tab =
+    tabParam === "settings" || tabParam === "invoices" || tabParam === "time"
+      ? tabParam
+      : "overview"
+
+  function setTab(next: string) {
+    const next_ = new URLSearchParams(searchParams.toString())
+    if (next === "overview") next_.delete("tab")
+    else next_.set("tab", next)
+    const qs = next_.toString()
+    router.push(qs ? `${pathname}?${qs}` : pathname)
+  }
+
+  // If non-billable project navigated with ?tab=invoices or ?tab=time, fall back to overview
+  const isBillable = project ? project.billingType !== "non_billable" : true
+  const effectiveTab =
+    ((tab === "invoices" || tab === "time") && !isBillable) ? "overview" : tab
 
   const referenceData = useMemo(
     () => ({
@@ -102,10 +134,15 @@ export default function ProjectDetailPage() {
       />
 
       {/* Tabs */}
-      <Tabs value={tab} onValueChange={setTab}>
+      <Tabs value={effectiveTab} onValueChange={setTab}>
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="invoices">Invoices</TabsTrigger>
+          {project.billingType !== "non_billable" && (
+            <TabsTrigger value="time">Time</TabsTrigger>
+          )}
+          {project.billingType !== "non_billable" && (
+            <TabsTrigger value="invoices">Invoices</TabsTrigger>
+          )}
           <TabsTrigger value="settings">Settings</TabsTrigger>
         </TabsList>
 
@@ -113,7 +150,6 @@ export default function ProjectDetailPage() {
           {project.billingType === "fixed" && (
             <FixedOverview
               projectId={projectId}
-              project={project}
               onNavigateToEstimates={() => {
                 setTab("settings")
                 setScrollTarget("budget-estimates-section")
@@ -124,7 +160,11 @@ export default function ProjectDetailPage() {
             <TmOverview projectId={projectId} project={project} />
           )}
           {project.billingType === "retainer" && (
-            <RetainerOverview projectId={projectId} />
+            <RetainerOverview
+              projectId={projectId}
+              projectName={project.name}
+              currency={project.currency}
+            />
           )}
           {project.billingType === "non_billable" && (
             <div className="rounded-lg border bg-muted/30 p-8">
@@ -138,16 +178,21 @@ export default function ProjectDetailPage() {
           )}
         </TabsContent>
 
-        <TabsContent value="invoices" className="mt-6">
-          <div className="rounded-lg border bg-muted/30 p-8">
-            <div className="flex flex-col items-center justify-center gap-2 text-center">
-              <p className="text-sm font-medium">Invoices coming soon</p>
-              <p className="text-xs text-muted-foreground">
-                Invoice creation and tracking will be available in a future update.
-              </p>
-            </div>
-          </div>
-        </TabsContent>
+        {project.billingType !== "non_billable" && (
+          <TabsContent value="time" className="mt-6">
+            <ProjectTime
+              projectId={projectId}
+              project={{ billingType: project.billingType, currency: project.currency }}
+              onNavigateToInvoices={() => setTab("invoices")}
+            />
+          </TabsContent>
+        )}
+
+        {project.billingType !== "non_billable" && (
+          <TabsContent value="invoices" className="mt-6">
+            <ProjectInvoices projectId={projectId} project={project} />
+          </TabsContent>
+        )}
 
         <TabsContent value="settings" className="mt-6">
           <div className="flex flex-col gap-6">

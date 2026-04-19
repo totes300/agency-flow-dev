@@ -33,7 +33,6 @@ export const create = mutation({
         name: v.string(),
         color: categoryColorValidator,
         defaultBillRate: v.optional(v.number()),
-        currency: currencyValidator,
       })
     ),
   },
@@ -83,7 +82,9 @@ export const create = mutation({
       });
     }
 
-    // Insert work categories
+    // Insert work categories. Bill rates land in categoryRates only,
+    // keyed by the org's default currency (the only currency available
+    // during onboarding).
     for (let i = 0; i < args.workCategories.length; i++) {
       const c = args.workCategories[i];
       const trimmedName = c.name.trim();
@@ -95,20 +96,17 @@ export const create = mutation({
         orgId,
         name: trimmedName,
         color: c.color,
-        defaultBillRate: c.defaultBillRate,
-        currency: c.currency,
         sortOrder: i,
         createdAt: now,
         updatedAt: now,
         createdBy: userId,
       });
 
-      // Dual-write: also create categoryRates row if billRate provided
-      if (c.defaultBillRate !== undefined) {
+      if (c.defaultBillRate !== undefined && c.defaultBillRate >= 0) {
         await ctx.db.insert("categoryRates", {
           orgId,
           workCategoryId: catId,
-          currency: c.currency,
+          currency: args.defaultCurrency,
           defaultBillRate: c.defaultBillRate,
           createdAt: now,
           updatedAt: now,
@@ -132,6 +130,10 @@ export const update = mutation({
     brandTaxId: v.optional(v.string()),
     brandEmail: v.optional(v.string()),
     brandPhone: v.optional(v.string()),
+    // Invoicing
+    invoicePrefix: v.optional(v.string()),
+    nextInvoiceNumber: v.optional(v.number()),
+    defaultPaymentTermsDays: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const { orgId } = await requireAdmin(ctx);
@@ -164,6 +166,39 @@ export const update = mutation({
       validateStringLength(args.brandPhone, 500, "Brand phone");
     }
 
+    // Validate invoicing fields
+    if (args.invoicePrefix !== undefined) {
+      const normalizedPrefix = args.invoicePrefix.trim().toUpperCase();
+      if (!normalizedPrefix) {
+        throw new ConvexError("Invoice prefix cannot be empty");
+      }
+      validateStringLength(normalizedPrefix, 20, "Invoice prefix");
+      args.invoicePrefix = normalizedPrefix;
+    }
+    if (args.nextInvoiceNumber !== undefined) {
+      if (!Number.isInteger(args.nextInvoiceNumber) || args.nextInvoiceNumber < 1) {
+        throw new ConvexError("Next invoice number must be a positive integer");
+      }
+      // Lock the counter once the sequence has started. Invoice numbers are
+      // machine-generated and monotonic; editing them retroactively risks
+      // duplicates (a legal/tax issue). The counter is only editable during
+      // initial setup or migration — before the first invoice is created.
+      const anyInvoice = await ctx.db
+        .query("invoices")
+        .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+        .first();
+      if (anyInvoice) {
+        throw new ConvexError(
+          "Invoice numbering is locked — the counter cannot be changed after the first invoice is created.",
+        );
+      }
+    }
+    if (args.defaultPaymentTermsDays !== undefined) {
+      if (!Number.isInteger(args.defaultPaymentTermsDays) || args.defaultPaymentTermsDays < 1 || args.defaultPaymentTermsDays > 365) {
+        throw new ConvexError("Payment terms must be between 1 and 365 days");
+      }
+    }
+
     // Validate completion default status references
     for (const field of ["completionDefaultAdminStatusId", "completionDefaultMemberStatusId"] as const) {
       const statusId = args[field];
@@ -193,6 +228,9 @@ export const update = mutation({
       brandTaxId: string;
       brandEmail: string;
       brandPhone: string;
+      invoicePrefix: string;
+      nextInvoiceNumber: number;
+      defaultPaymentTermsDays: number;
       updatedAt: number;
     }> = { updatedAt: Date.now() };
 
@@ -206,6 +244,9 @@ export const update = mutation({
     if (args.brandTaxId !== undefined) patch.brandTaxId = args.brandTaxId;
     if (args.brandEmail !== undefined) patch.brandEmail = args.brandEmail;
     if (args.brandPhone !== undefined) patch.brandPhone = args.brandPhone;
+    if (args.invoicePrefix !== undefined) patch.invoicePrefix = args.invoicePrefix;
+    if (args.nextInvoiceNumber !== undefined) patch.nextInvoiceNumber = args.nextInvoiceNumber;
+    if (args.defaultPaymentTermsDays !== undefined) patch.defaultPaymentTermsDays = args.defaultPaymentTermsDays;
 
     await ctx.db.patch(settings._id, patch);
   },

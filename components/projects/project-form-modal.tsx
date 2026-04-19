@@ -5,12 +5,11 @@ import { useQuery, useMutation } from "convex/react"
 import { useRouter } from "next/navigation"
 import { api } from "@/convex/_generated/api"
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
+  FormModal,
+  FormModalDescription,
+  FormModalHeader,
+  FormModalTitle,
+} from "@/components/ui/form-modal"
 import { CURRENCIES } from "@/convex/lib/constants"
 import type { Id } from "@/convex/_generated/dataModel"
 import { formatDateToYMD } from "@/lib/format"
@@ -48,6 +47,9 @@ export function ProjectFormModal({ open, onOpenChange }: ProjectFormModalProps) 
 
   // Step 2 — Fixed
   const [fixedPrice, setFixedPrice] = useState("")
+  // Fixed scope: workCategoryId → hours string. Populated lazily as the user
+  // types; any category not in this map is treated as 0 hours on submit.
+  const [categoryEstimates, setCategoryEstimates] = useState<Record<string, string>>({})
   // Step 2 — Retainer
   const [monthlyHours, setMonthlyHours] = useState("")
   const [monthlyFee, setMonthlyFee] = useState("")
@@ -74,6 +76,7 @@ export function ProjectFormModal({ open, onOpenChange }: ProjectFormModalProps) 
       setCurrency("USD")
       setTeamMembers([])
       setFixedPrice("")
+      setCategoryEstimates({})
       setMonthlyHours("")
       setMonthlyFee("")
       setOverageRate("")
@@ -108,6 +111,7 @@ export function ProjectFormModal({ open, onOpenChange }: ProjectFormModalProps) 
   function handleBillingTypeChange(newType: BillingType) {
     setBillingType(newType)
     setFixedPrice("")
+    setCategoryEstimates({})
     setMonthlyHours("")
     setMonthlyFee("")
     setOverageRate("")
@@ -151,6 +155,16 @@ export function ProjectFormModal({ open, onOpenChange }: ProjectFormModalProps) 
         teamMembers: teamMembers.length > 0 ? teamMembers : undefined,
         ...(billingType === "fixed" ? {
           fixedPrice: parseFloat(fixedPrice) || 0,
+          ...(Object.keys(categoryEstimates).length > 0
+            ? {
+                categoryEstimates: Object.entries(categoryEstimates)
+                  .map(([workCategoryId, hoursStr]) => ({
+                    workCategoryId: workCategoryId as Id<"workCategories">,
+                    estimatedMinutes: Math.round((parseFloat(hoursStr) || 0) * 60),
+                  }))
+                  .filter((e) => e.estimatedMinutes > 0),
+              }
+            : {}),
         } : {}),
         ...(billingType === "retainer" ? {
           includedMinutesPerMonth: Math.round((parseFloat(monthlyHours) || 0) * 60),
@@ -187,16 +201,15 @@ export function ProjectFormModal({ open, onOpenChange }: ProjectFormModalProps) 
   }
 
   return (
-    <Dialog open={open} onOpenChange={(v) => { if (!submitting) onOpenChange(v) }}>
-      <DialogContent className="max-h-[85vh] gap-0 p-0 sm:max-w-xl">
+    <FormModal open={open} onOpenChange={(v) => { if (!submitting) onOpenChange(v) }} size="xl">
         {step === 1 && (
-          <div className="max-h-[85vh] overflow-y-auto px-8 py-6">
-            <DialogHeader className="mb-6">
-              <DialogTitle>New Project</DialogTitle>
-              <DialogDescription>
+          <>
+            <FormModalHeader>
+              <FormModalTitle>New Project</FormModalTitle>
+              <FormModalDescription srOnly>
                 Add a new project to start tracking time and budgets.
-              </DialogDescription>
-            </DialogHeader>
+              </FormModalDescription>
+            </FormModalHeader>
             <ProjectFormStepBasic
               clientId={clientId}
               setClientId={handleClientIdChange}
@@ -221,16 +234,17 @@ export function ProjectFormModal({ open, onOpenChange }: ProjectFormModalProps) 
               submitting={submitting}
               error={error}
             />
-          </div>
+          </>
         )}
 
         {step === 2 && billingType !== "non_billable" && (
-          <div className="max-h-[85vh] overflow-y-auto px-8 py-6">
-            <ProjectFormStepBilling
+          <ProjectFormStepBilling
               billingType={billingType}
               currency={currency}
               fixedPrice={fixedPrice}
               setFixedPrice={setFixedPrice}
+              categoryEstimates={categoryEstimates}
+              setCategoryEstimates={setCategoryEstimates}
               monthlyHours={monthlyHours}
               setMonthlyHours={setMonthlyHours}
               monthlyFee={monthlyFee}
@@ -248,9 +262,7 @@ export function ProjectFormModal({ open, onOpenChange }: ProjectFormModalProps) 
               submitting={submitting}
               error={error}
             />
-          </div>
         )}
-      </DialogContent>
-    </Dialog>
+    </FormModal>
   )
 }

@@ -8,6 +8,12 @@ import { getOrgSettings, resolveRateSnapshot } from "./lib/orgHelpers";
 import { validateAssignees } from "./lib/task_helpers";
 import { logActivity } from "./activityLog";
 
+function formatDurationHHMM(minutes: number): string {
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
 // ─── Queries ────────────────────────────────────────────────────────────────────
 
 export const listByTask = query({
@@ -21,6 +27,7 @@ export const listByTask = query({
     const entries = await ctx.db
       .query("timeEntries")
       .withIndex("by_taskId", (q) => q.eq("taskId", args.taskId))
+      .filter((q) => q.eq(q.field("orgId"), orgId))
       .collect();
 
     // Member sees only own entries
@@ -108,6 +115,7 @@ export const sumByTasks = query({
         const entries = await ctx.db
           .query("timeEntries")
           .withIndex("by_taskId", (q) => q.eq("taskId", taskId))
+          .filter((q) => q.eq(q.field("orgId"), orgId))
           .collect();
         const total = entries.reduce((sum, e) => sum + e.durationMinutes, 0);
         results[taskId.toString()] = total;
@@ -162,6 +170,7 @@ export const sumByProject = query({
         const entries = await ctx.db
           .query("timeEntries")
           .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
+          .filter((q) => q.eq(q.field("orgId"), orgId))
           .collect();
         for (const e of entries) {
           totalMinutes += e.durationMinutes;
@@ -255,16 +264,16 @@ export const create = mutation({
       createdBy: auth.userId,
     });
 
-    // Activity log
-    const h = Math.floor(rounded / 60);
-    const m = rounded % 60;
-    const durStr = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
     await logActivity(ctx, {
       taskId: args.taskId,
       orgId: auth.orgId,
       userId: auth.userId,
       type: "time_entry_logged",
-      metadata: { entryId, duration: durStr, note: args.note?.trim() || null },
+      metadata: {
+        entryId,
+        duration: formatDurationHHMM(rounded),
+        note: args.note?.trim() || null,
+      },
     });
 
     return entryId;
@@ -290,11 +299,8 @@ export const update = mutation({
       throw new ConvexError("You can only edit your own time entries");
     }
 
-    // Invoiced check — `invoicedInReportId` will be added to the schema in a
-    // future invoicing phase. We guard here proactively so entries are protected
-    // as soon as the field ships.
-    if ("invoicedInReportId" in entry && entry.invoicedInReportId) {
-      throw new ConvexError("Cannot edit an invoiced time entry");
+    if (entry.invoiceId) {
+      throw new ConvexError("Cannot edit an invoiced time entry — void the invoice first");
     }
 
     const updates: Record<string, unknown> = { updatedAt: Date.now() };
@@ -334,20 +340,14 @@ export const update = mutation({
         updates.costRate = snapshot.costRate;
         updates.billableRate = snapshot.billableRate;
         updates.rateCurrency = snapshot.rateCurrency;
-        updates.snapshotCategoryId = task.workCategoryId ?? undefined;
+        updates.snapshotCategoryId = task.workCategoryId;
       }
       updates.isBillable = args.isBillable;
     }
 
     await ctx.db.patch(args.id, updates);
 
-    // Activity log if duration changed
     if (args.durationMinutes !== undefined && updates.durationMinutes !== entry.durationMinutes) {
-      const fmtDur = (mins: number) => {
-        const h = Math.floor(mins / 60);
-        const m = mins % 60;
-        return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
-      };
       await logActivity(ctx, {
         taskId: entry.taskId,
         orgId,
@@ -355,8 +355,8 @@ export const update = mutation({
         type: "time_entry_edited",
         metadata: {
           entryId: args.id,
-          oldDuration: fmtDur(entry.durationMinutes),
-          newDuration: fmtDur(updates.durationMinutes as number),
+          oldDuration: formatDurationHHMM(entry.durationMinutes),
+          newDuration: formatDurationHHMM(updates.durationMinutes as number),
         },
       });
     }
@@ -375,23 +375,16 @@ export const remove = mutation({
       throw new ConvexError("You can only delete your own time entries");
     }
 
-    // Invoiced check — `invoicedInReportId` will be added to the schema in a
-    // future invoicing phase. We guard here proactively so entries are protected
-    // as soon as the field ships.
-    if ("invoicedInReportId" in entry && entry.invoicedInReportId) {
-      throw new ConvexError("Cannot delete an invoiced time entry");
+    if (entry.invoiceId) {
+      throw new ConvexError("Cannot delete an invoiced time entry — void the invoice first");
     }
 
-    // Activity log before deleting
-    const h = Math.floor(entry.durationMinutes / 60);
-    const m = entry.durationMinutes % 60;
-    const durStr = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
     await logActivity(ctx, {
       taskId: entry.taskId,
       orgId,
       userId,
       type: "time_entry_deleted",
-      metadata: { entryId: args.id, duration: durStr },
+      metadata: { entryId: args.id, duration: formatDurationHHMM(entry.durationMinutes) },
     });
 
     await ctx.db.delete(args.id);
@@ -413,6 +406,7 @@ export const countMismatchedBillable = query({
     const entries = await ctx.db
       .query("timeEntries")
       .withIndex("by_taskId", (q) => q.eq("taskId", args.taskId))
+      .filter((q) => q.eq(q.field("orgId"), orgId))
       .collect();
 
     return entries.filter((e) => e.isBillable !== args.targetBillable).length;
@@ -439,14 +433,15 @@ export const bulkUpdateBillable = mutation({
     const entries = await ctx.db
       .query("timeEntries")
       .withIndex("by_taskId", (q) => q.eq("taskId", args.taskId))
+      .filter((q) => q.eq(q.field("orgId"), orgId))
       .collect();
 
     const now = Date.now();
     let updated = 0;
     for (const entry of entries) {
       if (entry.isBillable === args.isBillable) continue;
-      // Skip invoiced entries (future-proofing)
-      if ("invoicedInReportId" in entry && entry.invoicedInReportId) continue;
+      // Skip invoiced entries — changing billable status would break the invoice snapshot
+      if (entry.invoiceId) continue;
 
       // Re-resolve per entry (each entry may belong to a different user)
       const snapshot = await resolveRateSnapshot(ctx, {
@@ -462,7 +457,7 @@ export const bulkUpdateBillable = mutation({
         costRate: snapshot.costRate,
         billableRate: snapshot.billableRate,
         rateCurrency: snapshot.rateCurrency,
-        snapshotCategoryId: task.workCategoryId ?? undefined,
+        snapshotCategoryId: task.workCategoryId,
         updatedAt: now,
       });
       updated++;
@@ -476,6 +471,200 @@ export const bulkUpdateBillable = mutation({
 // the new rate model requires costRate on every entry at creation time.
 
 // ─── Project Reporting Queries ──────────────────────────────────────────────────
+
+/**
+ * Per-entry list for the project Time tab. Flattens across tasks and returns
+ * a display-ready row for each entry with task, category, user, and invoice context.
+ *
+ * Filters (all optional, applied in-memory after org+project tenancy):
+ *   - memberId: narrow to entries by a specific user
+ *   - billingStatus: "all" | "billable_uninvoiced" | "invoiced" | "non_billable"
+ *   - search: case-insensitive match against task title OR entry note
+ *
+ * Returns `availableMembers`: the dynamic set of users who have logged time on
+ * this project (used to populate the member filter dropdown — not just current
+ * project.teamMembers, so ex-team-members with billable history still surface).
+ */
+export const listProjectEntries = query({
+  args: {
+    projectId: v.id("projects"),
+    memberId: v.optional(v.id("users")),
+    billingStatus: v.optional(
+      v.union(
+        v.literal("all"),
+        v.literal("billable_uninvoiced"),
+        v.literal("invoiced"),
+        v.literal("non_billable"),
+      ),
+    ),
+    search: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
+
+    const project = await ctx.db.get(args.projectId);
+    if (!project || project.orgId !== orgId) {
+      return { entries: [], availableMembers: [] };
+    }
+
+    // Fetch tasks for this project (orgId-indexed).
+    const tasks = await ctx.db
+      .query("tasks")
+      .withIndex("by_orgId_projectId", (q) =>
+        q.eq("orgId", orgId).eq("projectId", args.projectId),
+      )
+      .collect();
+    const taskMap = new Map(tasks.map((t) => [t._id.toString(), t]));
+
+    // Fetch all entries for the project's tasks.
+    // Tenancy: `by_taskId` doesn't narrow by orgId; filter explicitly (CLAUDE.md).
+    const rawEntries = (
+      await Promise.all(
+        tasks.map((task) =>
+          ctx.db
+            .query("timeEntries")
+            .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
+            .filter((q) => q.eq(q.field("orgId"), orgId))
+            .collect(),
+        ),
+      )
+    ).flat();
+
+    // Members see only their own entries (matches listByTask).
+    const visible = isAdmin
+      ? rawEntries
+      : rawEntries.filter((e) => e.userId === userId);
+
+    // Denormalize: user, category, invoice (tenancy-guarded).
+    const userIds = [...new Set(visible.map((e) => e.userId.toString()))];
+    const users = await Promise.all(
+      userIds.map((id) => ctx.db.get(id as Id<"users">)),
+    );
+    const userMap = new Map(
+      users.filter(Boolean).map((u) => [u!._id.toString(), u!]),
+    );
+
+    const categoryIds = new Set<string>();
+    for (const e of visible) {
+      if (e.snapshotCategoryId) categoryIds.add(e.snapshotCategoryId.toString());
+    }
+    const categories = await Promise.all(
+      [...categoryIds].map((id) => ctx.db.get(id as Id<"workCategories">)),
+    );
+    const categoryMap = new Map(
+      categories.filter(Boolean).map((c) => [c!._id.toString(), c!]),
+    );
+
+    const invoiceIds = new Set<string>();
+    for (const e of visible) {
+      if (e.invoiceId) invoiceIds.add(e.invoiceId.toString());
+    }
+    const invoices = await Promise.all(
+      [...invoiceIds].map((id) => ctx.db.get(id as Id<"invoices">)),
+    );
+    const invoiceMap = new Map(
+      invoices
+        .filter((inv): inv is NonNullable<typeof inv> => Boolean(inv) && inv!.orgId === orgId)
+        .map((inv) => [inv._id.toString(), inv]),
+    );
+
+    // Build rows.
+    type Row = {
+      _id: Id<"timeEntries">;
+      taskId: Id<"tasks">;
+      taskTitle: string;
+      userId: Id<"users">;
+      userName: string;
+      userImageUrl: string | undefined;
+      date: string;
+      durationMinutes: number;
+      note: string | undefined;
+      isBillable: boolean;
+      billableRate: number;
+      costRate: number;
+      workCategoryId: Id<"workCategories"> | undefined;
+      workCategoryName: string | undefined;
+      workCategoryColor: string | undefined;
+      invoiceId: Id<"invoices"> | undefined;
+      invoicePrefix: string | undefined;
+      invoiceNumber: number | undefined;
+      invoiceStatus: "draft" | "invoiced" | "paid" | undefined;
+      invoiceDueDate: string | undefined;
+    };
+
+    let rows: Row[] = visible.map((e) => {
+      const task = taskMap.get(e.taskId.toString());
+      const user = userMap.get(e.userId.toString());
+      const catId = e.snapshotCategoryId;
+      const cat = catId ? categoryMap.get(catId.toString()) : undefined;
+      const inv = e.invoiceId ? invoiceMap.get(e.invoiceId.toString()) : undefined;
+      return {
+        _id: e._id,
+        taskId: e.taskId,
+        taskTitle: task?.title ?? "Unknown task",
+        userId: e.userId,
+        userName: user?.name ?? "Unknown",
+        userImageUrl: user?.imageUrl,
+        date: e.date,
+        durationMinutes: e.durationMinutes,
+        note: e.note,
+        isBillable: e.isBillable,
+        billableRate: e.billableRate,
+        costRate: e.costRate,
+        workCategoryId: catId,
+        workCategoryName: cat?.name,
+        workCategoryColor: cat?.color,
+        invoiceId: inv?._id,
+        invoicePrefix: inv?.prefix,
+        invoiceNumber: inv?.number,
+        invoiceStatus: inv?.status,
+        invoiceDueDate: inv?.dueDate,
+      };
+    });
+
+    // Apply filters.
+    if (args.memberId) {
+      rows = rows.filter((r) => r.userId === args.memberId);
+    }
+    if (args.billingStatus && args.billingStatus !== "all") {
+      rows = rows.filter((r) => {
+        if (args.billingStatus === "non_billable") return !r.isBillable;
+        if (args.billingStatus === "invoiced") return r.isBillable && !!r.invoiceId;
+        // billable_uninvoiced
+        return r.isBillable && !r.invoiceId;
+      });
+    }
+    const searchTerm = args.search?.trim().toLowerCase();
+    if (searchTerm) {
+      rows = rows.filter(
+        (r) =>
+          r.taskTitle.toLowerCase().includes(searchTerm) ||
+          (r.note?.toLowerCase().includes(searchTerm) ?? false),
+      );
+    }
+
+    // Stable sort: newest date first, then newest creation first.
+    const createdAtMap = new Map(visible.map((e) => [e._id.toString(), e.createdAt]));
+    rows.sort((a, b) => {
+      if (a.date !== b.date) return b.date.localeCompare(a.date);
+      const aCreated = createdAtMap.get(a._id.toString()) ?? 0;
+      const bCreated = createdAtMap.get(b._id.toString()) ?? 0;
+      return bCreated - aCreated;
+    });
+
+    // Dynamic member list: every user who has an entry on this project
+    // (visible to the caller, respecting member-only visibility).
+    const availableMembers = [...userMap.values()]
+      .map((u) => ({
+        id: u._id,
+        name: u.name,
+        imageUrl: u.imageUrl,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    return { entries: rows, availableMembers };
+  },
+});
 
 /**
  * Aggregate overview metrics for a project — used by Fixed and T&M overviews
@@ -504,10 +693,11 @@ export const projectOverview = query({
           const entries = await ctx.db
             .query("timeEntries")
             .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
+            .filter((q) => q.eq(q.field("orgId"), orgId))
             .collect();
           return entries.map((e) => ({
             ...e,
-            workCategoryId: e.snapshotCategoryId ?? task.workCategoryId,
+            workCategoryId: e.snapshotCategoryId,
           }));
         }),
       )
@@ -527,6 +717,8 @@ export const projectOverview = query({
     let totalActualCost = 0;
     let uninvoicedMinutes = 0;
     let uninvoicedAmount = 0;
+    let invoicedBillableMinutes = 0;
+    let invoicedBillableAmount = 0;
     let lastLoggedDate: string | null = null;
     const minutesByCategory: Record<string, number> = {};
     const billableMinutesByCategory: Record<string, number> = {};
@@ -557,14 +749,17 @@ export const projectOverview = query({
       // Labor cost from costRate (all project types)
       totalActualCost += (e.durationMinutes / 60) * (e.costRate ?? 0);
 
-      // Uninvoiced from billable entries using billableRate (T&M / Fixed only).
+      // Split billable entries into invoiced / uninvoiced (T&M / Fixed only).
       // Retainer entries have billableRate=0 — retainer revenue is cycle-level
       // (monthlyFee + overageDue), computed in getRetainerData, not here.
-      // NOTE: Pre-invoicing phase — all billable entries treated as uninvoiced.
-      // Replace with invoice-aware filtering when invoicedInReportId ships.
       if (e.isBillable) {
-        uninvoicedMinutes += e.durationMinutes;
-        uninvoicedAmount += (e.durationMinutes / 60) * (e.billableRate ?? 0);
+        if (e.invoiceId) {
+          invoicedBillableMinutes += e.durationMinutes;
+          invoicedBillableAmount += (e.durationMinutes / 60) * (e.billableRate ?? 0);
+        } else {
+          uninvoicedMinutes += e.durationMinutes;
+          uninvoicedAmount += (e.durationMinutes / 60) * (e.billableRate ?? 0);
+        }
       }
 
       // Last logged date
@@ -585,6 +780,33 @@ export const projectOverview = query({
       minutes: billableByMonth[month] ?? 0,
     }));
 
+    // Invoice count (for all billing types) + Fixed-specific invoiced amount
+    // from `fixed`-type line items. Single pass fetches invoices once and
+    // only re-scans line items for Fixed projects.
+    let invoicedAmount = 0;
+    let invoiceCount = 0;
+    if (project.billingType === "fixed" || project.billingType === "t_and_m") {
+      const projectInvoices = await ctx.db
+        .query("invoices")
+        .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
+        .filter((q) => q.eq(q.field("orgId"), orgId))
+        .collect();
+      invoiceCount = projectInvoices.length;
+
+      if (project.billingType === "fixed") {
+        for (const inv of projectInvoices) {
+          const lineItems = await ctx.db
+            .query("invoiceLineItems")
+            .withIndex("by_invoiceId", (q) => q.eq("invoiceId", inv._id))
+            .filter((q) => q.eq(q.field("orgId"), orgId))
+            .collect();
+          for (const li of lineItems) {
+            if (li.lineType === "fixed") invoicedAmount += li.amount;
+          }
+        }
+      }
+    }
+
     return {
       totalMinutes,
       totalBillableMinutes,
@@ -597,6 +819,15 @@ export const projectOverview = query({
       totalActualCost,
       uninvoicedMinutes,
       uninvoicedAmount,
+      // T&M-oriented split: time-based invoiced vs uninvoiced figures from
+      // the entry ledger (hours × billableRate snapshot). For the Invoices
+      // tab "Total Invoiced" money figure (which includes manual/overage
+      // lines), use api.invoices.getProjectInvoiceMetrics instead.
+      invoicedBillableMinutes,
+      invoicedBillableAmount,
+      invoiceCount,
+      // Fixed-specific — sum of `fixed`-type line items across invoices.
+      invoicedAmount,
     };
   },
 });
@@ -621,8 +852,6 @@ export const projectMonthlyBreakdown = query({
       )
       .collect();
 
-    const taskMap = new Map(tasks.map((t) => [t._id.toString(), t]));
-
     // Fetch work categories for enrichment
     const categories = await ctx.db
       .query("workCategories")
@@ -637,12 +866,13 @@ export const projectMonthlyBreakdown = query({
           const entries = await ctx.db
             .query("timeEntries")
             .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
+            .filter((q) => q.eq(q.field("orgId"), orgId))
             .collect();
           return entries.map((e) => ({
             ...e,
             taskId: task._id.toString(),
             taskTitle: task.title,
-            workCategoryId: (e.snapshotCategoryId ?? task.workCategoryId)?.toString() ?? null,
+            workCategoryId: e.snapshotCategoryId?.toString() ?? null,
           }));
         }),
       )

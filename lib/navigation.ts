@@ -7,6 +7,7 @@ import {
   FolderIcon,
   FileTextIcon,
   ClockIcon,
+  ReceiptIcon,
   type LucideIcon,
 } from "lucide-react"
 
@@ -52,6 +53,7 @@ export const navigation: NavGroup[] = [
   {
     label: "Finance",
     items: [
+      { title: "Invoices", url: "/invoices", icon: ReceiptIcon, adminOnly: true },
       { title: "Reports", url: "/reports", icon: FileTextIcon, adminOnly: true },
       { title: "My Time", url: "/my-time", icon: ClockIcon },
     ],

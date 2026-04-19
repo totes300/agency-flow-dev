@@ -8,14 +8,14 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
 import { Textarea } from "@/components/ui/textarea"
+import { DialogClose } from "@/components/ui/dialog"
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
+  FormModal,
+  FormModalDescription,
+  FormModalFooter,
+  FormModalHeader,
+  FormModalTitle,
+} from "@/components/ui/form-modal"
 import {
   Select,
   SelectContent,
@@ -175,7 +175,9 @@ export function ClientFormModal({ open, onOpenChange, client, defaultCurrency = 
 
       // Remove old logo after successful update
       if (resolvedLogoStorageId) {
-        removeClientLogo({ clientId, storageId: resolvedLogoStorageId }).catch(() => {})
+        void removeClientLogo({ clientId, storageId: resolvedLogoStorageId }).catch((err) => {
+          toast.error(extractErrorMessage(err, "Failed to clean up old logo"))
+        })
       }
     } catch (err) {
       toast.error("Failed to upload logo")
@@ -243,16 +245,19 @@ export function ClientFormModal({ open, onOpenChange, client, defaultCurrency = 
   const displayLogoUrl = logoPreview ?? (removeExistingLogo ? null : resolvedLogoUrl)
 
   return (
-    <Dialog open={open} onOpenChange={(v) => { if (!submitting) onOpenChange(v) }}>
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-3xl">
-        <DialogHeader>
-          <DialogTitle>{isEdit ? "Edit Client" : "New Client"}</DialogTitle>
-          <DialogDescription>
-            {isEdit ? "Update client details and billing information." : "Add a new client to your organization."}
-          </DialogDescription>
-        </DialogHeader>
+    <FormModal
+      open={open}
+      onOpenChange={(v) => { if (!submitting) onOpenChange(v) }}
+      size="3xl"
+    >
+      <FormModalHeader align="start">
+        <FormModalTitle>{isEdit ? "Edit Client" : "New Client"}</FormModalTitle>
+        <FormModalDescription>
+          {isEdit ? "Update client details and billing information." : "Add a new client to your organization."}
+        </FormModalDescription>
+      </FormModalHeader>
 
-        <form onSubmit={handleSubmit}>
+      <form onSubmit={handleSubmit}>
           <div className="flex flex-col gap-6 sm:flex-row sm:gap-0">
             {/* ── Left column: Client ──────────────────── */}
             <div className="flex flex-1 flex-col gap-6 sm:pr-8">
@@ -322,22 +327,20 @@ export function ClientFormModal({ open, onOpenChange, client, defaultCurrency = 
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1.5">
                   <Label htmlFor="client-currency">Currency</Label>
-                  {isEdit ? (
-                    <div className="flex h-9 items-center rounded-md border bg-muted/50 px-3 text-sm text-muted-foreground">
-                      {currency}
-                    </div>
-                  ) : (
-                    <Select value={currency} onValueChange={setCurrency}>
-                      <SelectTrigger id="client-currency">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {CURRENCIES.map((c) => (
-                          <SelectItem key={c} value={c}>{c}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  )}
+                  <Select
+                    value={currency}
+                    onValueChange={setCurrency}
+                    disabled={isEdit}
+                  >
+                    <SelectTrigger id="client-currency">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {CURRENCIES.map((c) => (
+                        <SelectItem key={c} value={c}>{c}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="client-prefix">Prefix</Label>
@@ -480,16 +483,17 @@ export function ClientFormModal({ open, onOpenChange, client, defaultCurrency = 
 
           {error && <p className="mt-4 text-sm text-destructive">{error}</p>}
 
-          <DialogFooter className="mt-6">
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-              Cancel
-            </Button>
+          <FormModalFooter align="row">
+            <DialogClose asChild>
+              <Button type="button" variant="outline" disabled={submitting}>
+                Cancel
+              </Button>
+            </DialogClose>
             <Button type="submit" disabled={!name.trim() || submitting}>
               {submitting ? "Saving..." : isEdit ? "Save Changes" : "Create Client"}
             </Button>
-          </DialogFooter>
+          </FormModalFooter>
         </form>
-      </DialogContent>
-    </Dialog>
+    </FormModal>
   )
 }

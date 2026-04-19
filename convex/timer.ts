@@ -73,6 +73,18 @@ export const start = mutation({
       throw new ConvexError("You can only start timers on tasks assigned to you");
     }
 
+    // Validate rates upfront so the user discovers missing rates before
+    // spending time, not when they try to commit the entry.
+    const project = await ctx.db.get(task.projectId);
+    if (!project) throw new ConvexError("Project not found");
+    await resolveRateSnapshot(ctx, {
+      userId,
+      orgId,
+      task,
+      project,
+      isBillable: task.billable,
+    });
+
     const now = Date.now();
     await ctx.db.patch(userId, {
       timerTaskId: args.taskId,
@@ -80,6 +92,43 @@ export const start = mutation({
       timerAccumulatedMs: 0,
       timerStatus: "running" as const,
     });
+  },
+});
+
+/**
+ * Read-only preview: returns whether the user can log time on this task at the
+ * resolved rates, with a user-friendly reason if not. Intended for timer
+ * buttons / time-entry forms to show inline warnings without firing a mutation.
+ */
+export const previewRateForTask = query({
+  args: { taskId: v.id("tasks") },
+  handler: async (ctx, args) => {
+    const { userId, orgId } = await getAuthContext(ctx);
+
+    const task = await ctx.db.get(args.taskId);
+    if (!task || task.orgId !== orgId) return { ok: false as const, reason: "Task not found" };
+    if (!task.projectId) return { ok: false as const, reason: "Assign a project first" };
+
+    const project = await ctx.db.get(task.projectId);
+    if (!project) return { ok: false as const, reason: "Project not found" };
+
+    try {
+      const snapshot = await resolveRateSnapshot(ctx, {
+        userId,
+        orgId,
+        task,
+        project,
+        isBillable: task.billable,
+      });
+      return {
+        ok: true as const,
+        billableRate: snapshot.billableRate,
+        rateCurrency: snapshot.rateCurrency,
+      };
+    } catch (err) {
+      const reason = err instanceof ConvexError ? String(err.data ?? err.message) : "Rate not configured";
+      return { ok: false as const, reason };
+    }
   },
 });
 
@@ -96,17 +145,11 @@ export const stop = mutation({
     const accumulated = user.timerAccumulatedMs ?? 0;
     const startedAt = user.timerStartedAt ?? now;
 
-    // Compute total elapsed
-    let elapsedMs: number;
-    if (user.timerStatus === "running") {
-      elapsedMs = totalElapsedMs(startedAt, now, accumulated);
-    } else {
-      // Paused — just the accumulated time
-      elapsedMs = accumulated;
-    }
-
-    // Cap at 16 hours
-    if (elapsedMs > MAX_TIMER_MS) elapsedMs = MAX_TIMER_MS;
+    const rawElapsedMs =
+      user.timerStatus === "running"
+        ? totalElapsedMs(startedAt, now, accumulated)
+        : accumulated;
+    const elapsedMs = Math.min(rawElapsedMs, MAX_TIMER_MS);
 
     const isStale = elapsedMs >= STALE_THRESHOLD_MS;
 

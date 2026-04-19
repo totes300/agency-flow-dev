@@ -1,10 +1,29 @@
 import { v, ConvexError } from "convex/values";
+import type { Doc } from "./_generated/dataModel";
 import { query, mutation } from "./_generated/server";
 import { getAuthContext, requireAdmin, validateStringLength } from "./lib/auth";
 import { billingTypeValidator, retainerStatusValidator } from "./lib/validators";
 import { generateNextProjectCode, ensureUniqueProjectCode } from "./lib/helpers";
 import { validateAssignees } from "./lib/task_helpers";
 import { getDateInTimezone } from "./lib/timer";
+import { getOrgSettings, getProjectCurrency } from "./lib/orgHelpers";
+import type {
+  ResolvedProjectListItem,
+  ResolvedProjectDetail,
+} from "./lib/types";
+import {
+  computeTmSummary,
+  computeFixedSummary,
+  computeRetainerSummary,
+  resolveDateRange,
+  type EntryInput,
+  type InvoiceInput,
+  type LineItemInput,
+  type DateRange,
+  type DateRangePreset,
+  type RetainerCycleContext,
+  type ProjectSummary,
+} from "./lib/projectSummary";
 
 const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -16,7 +35,11 @@ export const list = query({
     clientId: v.optional(v.id("clients")),
     billingType: v.optional(billingTypeValidator),
   },
-  handler: async (ctx, args) => {
+  // Explicit return annotation: forces every field of ResolvedProjectListItem
+  // to be assembled below. Any new project-fetching query that forgets to
+  // resolve `currency` from the client will fail type-checking instead of
+  // silently shipping `undefined` to 14+ downstream consumers.
+  handler: async (ctx, args): Promise<ResolvedProjectListItem[]> => {
     const { orgId } = await getAuthContext(ctx);
 
     const [allProjects, clients] = await Promise.all([
@@ -38,6 +61,7 @@ export const list = query({
       name: c.name,
       prefix: c.prefix,
       usePrefix: c.usePrefix,
+      currency: c.currency,
     }]));
 
     return projects.map((p) => {
@@ -47,6 +71,9 @@ export const list = query({
         clientName: client?.name ?? "Unknown",
         clientPrefix: client?.prefix ?? "",
         clientUsePrefix: client?.usePrefix,
+        // Resolved currency — single source of truth is client.currency.
+        // See D1 invariant in convex/schema.ts above `timeEntries`.
+        currency: client?.currency ?? "USD",
       };
     });
   },
@@ -54,7 +81,8 @@ export const list = query({
 
 export const get = query({
   args: { id: v.id("projects") },
-  handler: async (ctx, args) => {
+  // See `list` for the rationale behind the explicit return annotation.
+  handler: async (ctx, args): Promise<ResolvedProjectDetail | null> => {
     const { orgId } = await getAuthContext(ctx);
     const project = await ctx.db.get(args.id);
     if (!project || project.orgId !== orgId) return null;
@@ -63,6 +91,8 @@ export const get = query({
     return {
       ...project,
       clientName: client?.name ?? "Unknown",
+      // Resolved currency — single source of truth is client.currency.
+      currency: client?.currency ?? "USD",
     };
   },
 });
@@ -85,6 +115,16 @@ export const create = mutation({
     code: v.optional(v.string()),
     // Fixed fields
     fixedPrice: v.optional(v.number()),
+    // Fixed-only optional scope estimate. When provided, seeds
+    // projectCategoryEstimates with these values instead of zeros.
+    categoryEstimates: v.optional(
+      v.array(
+        v.object({
+          workCategoryId: v.id("workCategories"),
+          estimatedMinutes: v.number(),
+        }),
+      ),
+    ),
     // Retainer fields
     includedMinutesPerMonth: v.optional(v.number()),
     monthlyFee: v.optional(v.number()),
@@ -102,10 +142,10 @@ export const create = mutation({
     if (!name) throw new ConvexError("Project name is required");
     validateStringLength(name, 100, "Project name");
 
-    // Validate client exists and belongs to org — currency derived from client
+    // Validate client exists and belongs to org — currency is derived from client
+    // at read time, not stored on the project (see D1 invariant in schema.ts).
     const client = await ctx.db.get(args.clientId);
     if (!client || client.orgId !== orgId) throw new ConvexError("Client not found");
-    const currency = client.currency;
 
     // Validate team members belong to org
     if (args.teamMembers && args.teamMembers.length > 0) {
@@ -116,6 +156,16 @@ export const create = mutation({
     if (args.billingType === "fixed") {
       if (args.fixedPrice === undefined || args.fixedPrice <= 0) {
         throw new ConvexError("Fixed fee is required and must be greater than zero");
+      }
+      // Per-row guard: the per-category upsert mutation rejects negatives
+      // (projectCategoryEstimates.ts:46). The create path must match that
+      // invariant — a bad client shouldn't be able to seed negative estimates.
+      if (args.categoryEstimates) {
+        for (const est of args.categoryEstimates) {
+          if (est.estimatedMinutes < 0) {
+            throw new ConvexError("Estimated minutes cannot be negative");
+          }
+        }
       }
     }
 
@@ -176,7 +226,7 @@ export const create = mutation({
       name,
       code,
       billingType: args.billingType,
-      currency, // Still writing to projects.currency during widen phase
+      // Currency is derived from client.currency — not stored on project.
       // Fixed fields
       ...(args.billingType === "fixed" ? {
         fixedPrice: args.fixedPrice,
@@ -198,19 +248,29 @@ export const create = mutation({
       createdBy: userId,
     });
 
-    // Seed category estimate rows for Fixed projects (hours only, no rates)
+    // Seed category estimate rows for Fixed projects.
+    // If args.categoryEstimates was provided (via the creation modal's scope
+    // step), use those values; otherwise default every active category to 0
+    // minutes so the Budget tab has a row to edit.
     if (args.billingType === "fixed") {
       const categories = await ctx.db
         .query("workCategories")
         .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
         .collect();
       const activeCategories = categories.filter((c) => !c.archivedAt);
+      const providedMap = new Map(
+        (args.categoryEstimates ?? []).map((e) => [
+          e.workCategoryId.toString(),
+          e.estimatedMinutes,
+        ]),
+      );
       for (const cat of activeCategories) {
+        const minutes = providedMap.get(cat._id.toString()) ?? 0;
         await ctx.db.insert("projectCategoryEstimates", {
           orgId,
           projectId,
           workCategoryId: cat._id,
-          estimatedMinutes: 0,
+          estimatedMinutes: minutes,
           createdAt: now,
           updatedAt: now,
           createdBy: userId,
@@ -516,7 +576,7 @@ export const getRetainerData = query({
           return entries.map((e) => ({
             ...e,
             taskTitle: task.title,
-            workCategoryId: e.snapshotCategoryId ?? task.workCategoryId,
+            workCategoryId: e.snapshotCategoryId,
           }));
         }),
       )
@@ -547,6 +607,29 @@ export const getRetainerData = query({
       .collect();
     const catMap = new Map(categories.map((c) => [c._id.toString(), c]));
 
+    // Fetch retainer invoices for this project and map them by month key
+    // (periodStart YYYY-MM-01 → periodEnd last day). Retainer invoices always
+    // write exact month boundaries and the duplicate guard ensures at most one
+    // invoice (draft or finalized) per month.
+    const projectInvoices = await ctx.db
+      .query("invoices")
+      .withIndex("by_projectId", (q) => q.eq("projectId", args.id))
+      .filter((q) => q.eq(q.field("orgId"), orgId))
+      .collect();
+    const invoiceByMonthKey = new Map<string, Doc<"invoices">>();
+    for (const inv of projectInvoices) {
+      if (!inv.periodStart || !inv.periodEnd) continue;
+      const startMatch = /^(\d{4})-(\d{2})-01$/.exec(inv.periodStart);
+      if (!startMatch) continue;
+      const y = Number(startMatch[1]);
+      const m = Number(startMatch[2]); // 1-12
+      const expectedLastDay = new Date(y, m, 0).getDate();
+      const expectedEnd = `${startMatch[1]}-${startMatch[2]}-${String(expectedLastDay).padStart(2, "0")}`;
+      if (inv.periodEnd !== expectedEnd) continue;
+      const key = inv.periodStart.slice(0, 7); // "YYYY-MM"
+      invoiceByMonthKey.set(key, inv);
+    }
+
     // Compute balances (sequential — each month depends on the previous)
     type CategoryGroupTask = {
       taskId: string;
@@ -563,6 +646,12 @@ export const getRetainerData = query({
       totalMinutes: number;
       tasks: CategoryGroupTask[];
     };
+    type MonthInvoice = {
+      id: Doc<"invoices">["_id"];
+      number: number;
+      prefix: string;
+      status: Doc<"invoices">["status"];
+    };
     type MonthData = typeof months[number] & {
       workedMinutes: number;
       startBalance: number;
@@ -577,6 +666,7 @@ export const getRetainerData = query({
       entryCount: number;
       taskCount: number;
       categoryCount: number;
+      invoice: MonthInvoice | null;
     };
     const monthlyData: MonthData[] = [];
 
@@ -628,6 +718,7 @@ export const getRetainerData = query({
         allMonthEntries.map((e) => e.workCategoryId?.toString() ?? "uncategorized"),
       );
 
+      const monthInvoice = invoiceByMonthKey.get(monthKey);
       monthlyData.push({
         ...m,
         workedMinutes,
@@ -643,6 +734,14 @@ export const getRetainerData = query({
         entryCount: allMonthEntries.length,
         taskCount: uniqueTaskIds.size,
         categoryCount: uniqueCatIds.size,
+        invoice: monthInvoice
+          ? {
+              id: monthInvoice._id,
+              number: monthInvoice.number,
+              prefix: monthInvoice.prefix,
+              status: monthInvoice.status,
+            }
+          : null,
       });
     }
 
@@ -705,6 +804,311 @@ export const getRetainerData = query({
     };
   },
 });
+
+// ─── Project Summary (unified overview card) ──────────────────────────────────
+//
+// Single thin dispatcher backing <ProjectSummaryCard>. Delegates business math
+// to the pure calc layer in lib/projectSummary.ts so every formula can be unit-
+// tested via fixtures without a Convex runtime.
+//
+// Return shape: discriminated union keyed on billingType. Member (non-admin)
+// callers receive only `timeBreakdown` + minimal metadata; Billing Status,
+// Profitability, and Overage are omitted per permissions rules (§5 of PRD).
+//
+// See docs/project-summary-prd.md for the canonical formulas.
+
+const dateRangePresetValidator = v.union(
+  v.literal("this_month"),
+  v.literal("this_quarter"),
+  v.literal("this_year"),
+  v.literal("all"),
+  v.literal("custom"),
+);
+
+export const getSummary = query({
+  args: {
+    projectId: v.id("projects"),
+    dateRange: v.optional(
+      v.object({
+        preset: dateRangePresetValidator,
+        from: v.optional(v.string()),
+        to: v.optional(v.string()),
+      }),
+    ),
+    cycleOffset: v.optional(v.number()),
+  },
+  handler: async (ctx, args): Promise<ProjectSummary | null> => {
+    const { orgId, isAdmin } = await getAuthContext(ctx);
+
+    const project = await ctx.db.get(args.projectId);
+    if (!project || project.orgId !== orgId) return null;
+    if (project.billingType === "non_billable") return null;
+
+    const currency = await getProjectCurrency(ctx, project);
+
+    // Fetch all tasks + their entries once. Every branch needs the entries;
+    // Fixed + Retainer slice the same set differently.
+    const tasks = await ctx.db
+      .query("tasks")
+      .withIndex("by_orgId_projectId", (q) =>
+        q.eq("orgId", orgId).eq("projectId", args.projectId),
+      )
+      .collect();
+    const rawEntries = (
+      await Promise.all(
+        tasks.map((task) =>
+          ctx.db
+            .query("timeEntries")
+            .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
+            .filter((q) => q.eq(q.field("orgId"), orgId))
+            .collect(),
+        ),
+      )
+    ).flat();
+    const entries: EntryInput[] = rawEntries.map((e) => ({
+      durationMinutes: e.durationMinutes,
+      isBillable: e.isBillable,
+      invoiceId: e.invoiceId ? e.invoiceId.toString() : null,
+      costRate: e.costRate,
+      billableRate: e.billableRate,
+      date: e.date,
+    }));
+
+    if (project.billingType === "t_and_m") {
+      const orgSettings = await getOrgSettings(ctx, orgId);
+      const timezone = orgSettings?.timezone ?? "America/New_York";
+      const today = getDateInTimezone(Date.now(), timezone);
+
+      const preset: DateRangePreset = args.dateRange?.preset ?? "all";
+      const dateRange: DateRange = resolveDateRange(preset, today, {
+        from: args.dateRange?.from,
+        to: args.dateRange?.to,
+      });
+
+      return computeTmSummary({
+        entries,
+        dateRange,
+        currency,
+        subtitle: "Time & Materials Billing",
+        isAdmin,
+      });
+    }
+
+    if (project.billingType === "fixed") {
+      const [invoices, estimates] = await Promise.all([
+        ctx.db
+          .query("invoices")
+          .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
+          .filter((q) => q.eq(q.field("orgId"), orgId))
+          .collect(),
+        ctx.db
+          .query("projectCategoryEstimates")
+          .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
+          .collect(),
+      ]);
+
+      const lineItemsByInvoice = await Promise.all(
+        invoices.map((inv) =>
+          ctx.db
+            .query("invoiceLineItems")
+            .withIndex("by_invoiceId", (q) => q.eq("invoiceId", inv._id))
+            .filter((q) => q.eq(q.field("orgId"), orgId))
+            .collect()
+            .then((items) => items.map((li) => ({ li, inv }))),
+        ),
+      );
+      const lineItems: LineItemInput[] = lineItemsByInvoice
+        .flat()
+        .map(({ li, inv }) => ({
+          lineType: li.lineType,
+          amount: li.amount,
+          invoiceStatus: inv.status,
+        }));
+
+      const invoiceInputs: InvoiceInput[] = invoices.map((inv) => ({
+        status: inv.status,
+        total: inv.total,
+      }));
+
+      const estimatedBudgetMinutes = estimates.length > 0
+        ? estimates.reduce((sum, est) => sum + est.estimatedMinutes, 0)
+        : null;
+
+      return computeFixedSummary({
+        entries,
+        invoices: invoiceInputs,
+        lineItems,
+        fixedPrice: project.fixedPrice ?? null,
+        estimatedBudgetMinutes,
+        currency,
+        subtitle: "Fixed Fee Billing",
+        isAdmin,
+      });
+    }
+
+    // Retainer
+    const {
+      includedMinutesPerMonth = 0,
+      monthlyFee = 0,
+      overageRate = 0,
+      startDate,
+      rolloverEnabled = true,
+      cycleLength = 1,
+    } = project;
+
+    if (!startDate) return null;
+
+    const orgSettings = await getOrgSettings(ctx, orgId);
+    const timezone = orgSettings?.timezone ?? "America/New_York";
+    const todayStr = getDateInTimezone(Date.now(), timezone);
+
+    const cycleContext = resolveRetainerCycleContext({
+      startDate,
+      cycleLength,
+      offset: args.cycleOffset ?? 0,
+      todayStr,
+    });
+    if (!cycleContext) return null;
+
+    // Entries within cycle range
+    const cycleEntries = entries.filter(
+      (e) => e.date >= cycleContext.start && e.date <= cycleContext.end,
+    );
+
+    // hasUninvoicedClosedMonth flag: at least one closed month inside the cycle
+    // has no invoice attached. Mirrors getClosedUninvoicedMonths semantics.
+    const retainerInvoices = await ctx.db
+      .query("invoices")
+      .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
+      .filter((q) => q.eq(q.field("orgId"), orgId))
+      .collect();
+    const invoiceByMonthKey = new Map<string, Doc<"invoices">>();
+    for (const inv of retainerInvoices) {
+      if (!inv.periodStart || !inv.periodEnd) continue;
+      const startMatch = /^(\d{4})-(\d{2})-01$/.exec(inv.periodStart);
+      if (!startMatch) continue;
+      const y = Number(startMatch[1]);
+      const m = Number(startMatch[2]);
+      const expectedLastDay = new Date(y, m, 0).getDate();
+      const expectedEnd = `${startMatch[1]}-${startMatch[2]}-${String(expectedLastDay).padStart(2, "0")}`;
+      if (inv.periodEnd !== expectedEnd) continue;
+      invoiceByMonthKey.set(inv.periodStart.slice(0, 7), inv);
+    }
+
+    let hasUninvoicedClosedMonth = false;
+    for (const monthKey of cycleContext.monthKeys) {
+      const isMonthClosed =
+        lastDayOfMonth(monthKey) < todayStr;
+      if (isMonthClosed && !invoiceByMonthKey.has(monthKey)) {
+        hasUninvoicedClosedMonth = true;
+        break;
+      }
+    }
+
+    const { start, end, length, number, offset, isCycleClosed, hasPreviousCycle, hasNextCycle } = cycleContext;
+    const cycleForSummary: RetainerCycleContext = {
+      number,
+      offset,
+      start,
+      end,
+      length,
+      isCycleClosed,
+      hasPreviousCycle,
+      hasNextCycle,
+      hasUninvoicedClosedMonth,
+    };
+
+    const startLabel = new Date(start + "T00:00:00").toLocaleDateString("en-US", { month: "short", year: "numeric" });
+    const endLabel = new Date(end + "T00:00:00").toLocaleDateString("en-US", { month: "short", year: "numeric" });
+    const rangeLabel = startLabel === endLabel ? startLabel : `${startLabel} – ${endLabel}`;
+    const subtitle = `${rangeLabel} · ${length}-month ${rolloverEnabled ? "rollover" : "monthly"}${isCycleClosed ? " (closed)" : ""}`;
+
+    return computeRetainerSummary({
+      entries: cycleEntries,
+      monthlyFee,
+      overageRate,
+      includedMinutesPerMonth,
+      cycle: cycleForSummary,
+      currency,
+      subtitle,
+      isAdmin,
+    });
+  },
+});
+
+/**
+ * Resolve retainer cycle boundaries for a given project + offset.
+ *
+ * Mirrors the cycle math in getRetainerData (lines 466-505). Kept here as a
+ * small pure helper to avoid a full extraction refactor in this PR; a future
+ * cleanup can DRY this up with getRetainerData via a shared lib/retainerCycle.ts.
+ */
+function resolveRetainerCycleContext(input: {
+  startDate: string;
+  cycleLength: number;
+  offset: number;
+  todayStr: string;
+}): {
+  start: string;
+  end: string;
+  length: number;
+  number: number;
+  offset: number;
+  isCycleClosed: boolean;
+  hasPreviousCycle: boolean;
+  hasNextCycle: boolean;
+  monthKeys: string[];
+} | null {
+  const [startYear, startMonth1] = input.startDate.split("-").map(Number);
+  const startMonth = startMonth1 - 1;
+
+  const [todayYear, todayMonth1] = input.todayStr.split("-").map(Number);
+  const todayMonth = todayMonth1 - 1;
+
+  const monthsDiff = (todayYear - startYear) * 12 + (todayMonth - startMonth);
+  const currentCycleIndex = Math.max(0, Math.floor(monthsDiff / input.cycleLength));
+
+  const targetCycleIndex = currentCycleIndex + input.offset;
+  if (targetCycleIndex < 0) return null;
+
+  const firstMonthOffset = targetCycleIndex * input.cycleLength;
+  const monthKeys: string[] = [];
+  for (let i = 0; i < input.cycleLength; i++) {
+    const mOffset = firstMonthOffset + i;
+    const y = startYear + Math.floor((startMonth + mOffset) / 12);
+    const m = (startMonth + mOffset) % 12;
+    monthKeys.push(`${y}-${String(m + 1).padStart(2, "0")}`);
+  }
+
+  const firstKey = monthKeys[0];
+  const lastKey = monthKeys[monthKeys.length - 1];
+  const start = `${firstKey}-01`;
+  const end = `${lastKey}-${String(
+    new Date(
+      Number(lastKey.slice(0, 4)),
+      Number(lastKey.slice(5, 7)),
+      0,
+    ).getDate(),
+  ).padStart(2, "0")}`;
+
+  return {
+    start,
+    end,
+    length: input.cycleLength,
+    number: targetCycleIndex + 1,
+    offset: input.offset,
+    isCycleClosed: end < input.todayStr,
+    hasPreviousCycle: targetCycleIndex > 0,
+    hasNextCycle: targetCycleIndex < currentCycleIndex,
+    monthKeys,
+  };
+}
+
+function lastDayOfMonth(monthKey: string): string {
+  const [y, m] = monthKey.split("-").map(Number);
+  const lastDay = new Date(y, m, 0).getDate();
+  return `${monthKey}-${String(lastDay).padStart(2, "0")}`;
+}
 
 export const remove = mutation({
   args: { id: v.id("projects") },

@@ -39,7 +39,7 @@ export function DatePicker({
           disabled={disabled}
           aria-invalid={ariaInvalid}
           className={cn(
-            "w-full justify-start text-left font-normal",
+            "h-10 w-full justify-start px-3 text-left font-normal",
             !value && "text-muted-foreground",
             className
           )}

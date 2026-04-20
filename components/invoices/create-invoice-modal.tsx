@@ -34,7 +34,11 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { Skeleton } from "@/components/ui/skeleton"
-import { formatCurrency } from "@/lib/format"
+import {
+  formatCurrency,
+  formatDateToYMDOrUndefined,
+  parseYMDToLocalDate,
+} from "@/lib/format"
 import { extractErrorMessage } from "@/lib/toast-helpers"
 import { toast } from "sonner"
 import { InfoIcon, LoaderIcon } from "lucide-react"
@@ -77,20 +81,6 @@ function getPresetDates(preset: Preset, timezone: string): { start?: string; end
   return {}
 }
 
-function dateToString(date: Date | undefined): string | undefined {
-  if (!date) return undefined
-  const y = date.getFullYear()
-  const m = String(date.getMonth() + 1).padStart(2, "0")
-  const d = String(date.getDate()).padStart(2, "0")
-  return `${y}-${m}-${d}`
-}
-
-function stringToDate(str: string | undefined): Date | undefined {
-  if (!str) return undefined
-  const [y, m, d] = str.split("-").map(Number)
-  return new Date(y, m - 1, d)
-}
-
 const BILLING_TYPE_LABELS: Record<string, string> = {
   t_and_m: "Time & Materials",
   fixed: "Fixed Fee",
@@ -106,6 +96,8 @@ export function CreateInvoiceModal({
   currency,
   initialRetainerYear,
   initialRetainerMonth,
+  timeEntryIds,
+  skippedCount,
   onCreated,
 }: {
   open: boolean
@@ -122,6 +114,19 @@ export function CreateInvoiceModal({
    */
   initialRetainerYear?: number
   initialRetainerMonth?: number
+  /**
+   * Selection mode (T&M only): when provided, the modal hides preset/date
+   * inputs and shows a compact "N entries · date range" summary. The preview
+   * and create call forward these ids to the backend. Incompatible with
+   * retainer billing (enforced server-side).
+   */
+  timeEntryIds?: Id<"timeEntries">[]
+  /**
+   * How many of the parent's original selection were skipped (non-billable
+   * or already invoiced). Drives the "N of M" hint in SelectionSummary so
+   * the user isn't surprised by a smaller invoice than they selected.
+   */
+  skippedCount?: number
   onCreated?: (invoiceId: Id<"invoices">) => void
 }) {
   const router = useRouter()
@@ -132,6 +137,7 @@ export function CreateInvoiceModal({
   const timezone = orgSettings?.timezone ?? "UTC"
   const isRetainer = billingType === "retainer"
   const isFixed = billingType === "fixed"
+  const isSelectionMode = timeEntryIds !== undefined && timeEntryIds.length > 0
 
   const [preset, setPreset] = useState<Preset>("all")
   const [customStart, setCustomStart] = useState<string | undefined>(undefined)
@@ -152,13 +158,37 @@ export function CreateInvoiceModal({
     return getPresetDates(preset, timezone)
   }, [preset, customStart, customEnd, timezone])
 
-  const retainerYear = selectedMonth ? Number(selectedMonth.split("-")[0]) : undefined
-  const retainerMonthNum = selectedMonth ? Number(selectedMonth.split("-")[1]) : undefined
+  const retainerMonths = useQuery(
+    api.invoices.getRetainerUninvoicedMonths,
+    isAuthenticated && open && isRetainer ? { projectId } : "skip",
+  )
+
+  const closedUninvoicedMonths = useMemo(
+    () => retainerMonths ?? [],
+    [retainerMonths],
+  )
+
+  // When retainer and no prefill / manual pick yet, default to the most recent
+  // closed uninvoiced month — that's the 90% path ("invoice last month").
+  // `closedUninvoicedMonths` is returned oldest → newest.
+  const autoSelectedMonth = useMemo(() => {
+    if (!isRetainer) return undefined
+    if (closedUninvoicedMonths.length === 0) return undefined
+    const latest = closedUninvoicedMonths[closedUninvoicedMonths.length - 1]
+    return `${latest.year}-${latest.month}`
+  }, [isRetainer, closedUninvoicedMonths])
+
+  const effectiveMonth = selectedMonth ?? autoSelectedMonth
+
+  const retainerYear = effectiveMonth ? Number(effectiveMonth.split("-")[0]) : undefined
+  const retainerMonthNum = effectiveMonth ? Number(effectiveMonth.split("-")[1]) : undefined
 
   const preview = useQuery(
     api.invoices.getInvoicePreview,
     isAuthenticated && open && !isRetainer
-      ? { projectId, startDate: dateRange.start, endDate: dateRange.end, roundingMinutes }
+      ? isSelectionMode
+        ? { projectId, roundingMinutes, timeEntryIds }
+        : { projectId, startDate: dateRange.start, endDate: dateRange.end, roundingMinutes }
       : "skip",
   )
 
@@ -169,23 +199,18 @@ export function CreateInvoiceModal({
       : "skip",
   )
 
-  const retainerMonths = useQuery(
-    api.invoices.getRetainerUninvoicedMonths,
-    isAuthenticated && open && isRetainer ? { projectId } : "skip",
-  )
-
-  const closedUninvoicedMonths = retainerMonths ?? []
-
   const previewLoading = isRetainer
-    ? (selectedMonth ? retainerPreview === undefined : false)
+    ? (effectiveMonth ? retainerPreview === undefined : false)
     : preview === undefined
   const hasEntries = preview !== null && preview !== undefined && preview.entryCount > 0
 
-  const canCreate = isRetainer
-    ? selectedMonth !== undefined && retainerPreview !== null && retainerPreview !== undefined
-    : isFixed
-      ? preview !== null && preview !== undefined && (preview.billingAmount ?? 0) > 0
-      : hasEntries
+  const canCreate = isSelectionMode
+    ? hasEntries
+    : isRetainer
+      ? effectiveMonth !== undefined && retainerPreview !== null && retainerPreview !== undefined
+      : isFixed
+        ? preview !== null && preview !== undefined && (preview.billingAmount ?? 0) > 0
+        : hasEntries
 
   function handlePresetChange(newPreset: Preset) {
     setPreset(newPreset)
@@ -198,11 +223,12 @@ export function CreateInvoiceModal({
     try {
       const invoiceId = await createInvoice({
         projectId,
-        startDate: isRetainer ? undefined : dateRange.start,
-        endDate: isRetainer ? undefined : dateRange.end,
+        startDate: isRetainer || isSelectionMode ? undefined : dateRange.start,
+        endDate: isRetainer || isSelectionMode ? undefined : dateRange.end,
         roundingMinutes,
         retainerYear: isRetainer ? retainerYear : undefined,
         retainerMonth: isRetainer ? retainerMonthNum : undefined,
+        timeEntryIds: isSelectionMode ? timeEntryIds : undefined,
       })
       onOpenChange(false)
       if (onCreated) {
@@ -246,13 +272,24 @@ export function CreateInvoiceModal({
       </FormModalHeader>
 
       <FormModalBody>
-        {/* Period card — T&M / Fixed: date range presets; Retainer: month dropdown */}
+        {/* Period card — Selection: compact summary; T&M / Fixed: presets; Retainer: month */}
         <div className="rounded-lg border p-6">
-          <p className="mb-4 text-sm font-medium">{isRetainer ? "Month" : "Period"}</p>
+          <p className="mb-4 text-sm font-medium">
+            {isSelectionMode ? "Selected entries" : isRetainer ? "Month" : "Period"}
+          </p>
 
-          {isRetainer ? (
+          {isSelectionMode ? (
+            <SelectionSummary
+              count={timeEntryIds!.length}
+              skippedCount={skippedCount ?? 0}
+              totalMinutes={preview?.totalMinutes}
+              totalAmount={preview?.totalAmount}
+              currency={currency}
+              loading={preview === undefined}
+            />
+          ) : isRetainer ? (
             <Select
-              value={selectedMonth ?? ""}
+              value={effectiveMonth ?? ""}
               onValueChange={(v) => setSelectedMonth(v || undefined)}
             >
               <SelectTrigger className="w-full">
@@ -299,10 +336,10 @@ export function CreateInvoiceModal({
                   <FieldLabel htmlFor="invoice-start-date">Start date</FieldLabel>
                   <DatePicker
                     id="invoice-start-date"
-                    value={stringToDate(dateRange.start)}
+                    value={parseYMDToLocalDate(dateRange.start)}
                     onChange={(d) => {
                       if (preset !== "custom") setPreset("custom")
-                      setCustomStart(dateToString(d))
+                      setCustomStart(formatDateToYMDOrUndefined(d))
                     }}
                     disabled={preset !== "custom"}
                     placeholder="Start"
@@ -312,10 +349,10 @@ export function CreateInvoiceModal({
                   <FieldLabel htmlFor="invoice-end-date">End date</FieldLabel>
                   <DatePicker
                     id="invoice-end-date"
-                    value={stringToDate(dateRange.end)}
+                    value={parseYMDToLocalDate(dateRange.end)}
                     onChange={(d) => {
                       if (preset !== "custom") setPreset("custom")
-                      setCustomEnd(dateToString(d))
+                      setCustomEnd(formatDateToYMDOrUndefined(d))
                     }}
                     disabled={preset !== "custom"}
                     placeholder="End"
@@ -326,46 +363,48 @@ export function CreateInvoiceModal({
           )}
         </div>
 
-        {/* Options card — rounding (all types) */}
-        <div className="rounded-lg border p-6">
-          <div className="mb-4 flex items-center gap-1.5">
-            <p className="text-sm font-medium">Options</p>
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <InfoIcon className="size-3.5 text-muted-foreground" />
-                </TooltipTrigger>
-                <TooltipContent side="right" className="max-w-[220px]">
-                  Rounding only affects hours on this invoice. Original tracked time is not modified.
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+        {/* Options card — rounding (T&M + Retainer only; Fixed doesn't roll up time) */}
+        {!isFixed && (
+          <div className="rounded-lg border p-6">
+            <div className="mb-4 flex items-center gap-1.5">
+              <p className="text-sm font-medium">Options</p>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <InfoIcon className="size-3.5 text-muted-foreground" />
+                  </TooltipTrigger>
+                  <TooltipContent side="right" className="max-w-[220px]">
+                    Rounding only affects hours on this invoice. Original tracked time is not modified.
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </div>
+            <Select
+              value={String(roundingMinutes)}
+              onValueChange={(v) => setRoundingMinutes(Number(v))}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  {ROUNDING_OPTIONS.map((opt) => (
+                    <SelectItem key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
           </div>
-          <Select
-            value={String(roundingMinutes)}
-            onValueChange={(v) => setRoundingMinutes(Number(v))}
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                {ROUNDING_OPTIONS.map((opt) => (
-                  <SelectItem key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
-        </div>
+        )}
 
         {/* Preview card */}
         <div className="rounded-lg border bg-muted/30 p-6">
           <p className="mb-4 text-sm font-medium">Preview</p>
 
           {isRetainer ? (
-            !selectedMonth ? (
+            !effectiveMonth ? (
               <p className="text-xs text-muted-foreground">Select a month to see the preview.</p>
             ) : previewLoading ? (
               <div className="flex flex-col gap-2">
@@ -456,5 +495,59 @@ export function CreateInvoiceModal({
         </DialogClose>
       </FormModalFooter>
     </FormModal>
+  )
+}
+
+function SelectionSummary({
+  count,
+  skippedCount,
+  totalMinutes,
+  totalAmount,
+  currency,
+  loading,
+}: {
+  count: number
+  skippedCount: number
+  totalMinutes: number | undefined
+  totalAmount: number | undefined
+  currency: string
+  loading: boolean
+}) {
+  const originalTotal = count + skippedCount
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center justify-between">
+        <span className="text-sm text-muted-foreground">Entries selected</span>
+        <span className="text-sm font-medium tabular-nums">
+          {skippedCount > 0 ? `${count} of ${originalTotal}` : count}
+        </span>
+      </div>
+      {skippedCount > 0 && (
+        <p className="-mt-1 text-xs text-muted-foreground">
+          {skippedCount} {skippedCount === 1 ? "entry" : "entries"} skipped —
+          non-billable or already invoiced.
+        </p>
+      )}
+      <div className="flex items-center justify-between">
+        <span className="text-sm text-muted-foreground">Total time</span>
+        {loading ? (
+          <Skeleton className="h-5 w-16" />
+        ) : (
+          <span className="text-sm font-medium tabular-nums">
+            {((totalMinutes ?? 0) / 60).toFixed(1)}h
+          </span>
+        )}
+      </div>
+      <div className="flex items-center justify-between">
+        <span className="text-sm text-muted-foreground">Total billed</span>
+        {loading ? (
+          <Skeleton className="h-5 w-20" />
+        ) : (
+          <span className="text-sm font-medium tabular-nums">
+            {formatCurrency(totalAmount ?? 0, currency)}
+          </span>
+        )}
+      </div>
+    </div>
   )
 }

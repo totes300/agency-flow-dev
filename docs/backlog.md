@@ -1066,3 +1066,93 @@
 - **Ledger vs invoice reconciliation row**: no UI for this today; if users report divergence concerns we can surface a reconciliation badge on the Billed row.
 - **Retainer "All cycles" lifetime view**: explicitly out of scope v1; only per-cycle.
 - **FX conversion / multi-currency per project**: platform doesn't support this; the PRD gates on the D1 invariant (one currency per project) holding.
+
+---
+
+## Project Time Tab — Bonsai-style Refactor ✅ (2026-04-19)
+
+> **Goal**: Rework the project detail **Time** tab to match Bonsai's agency time-tracking UX: top stats row, flexible grouping, inline billable toggle, row action menu, Add Time modal (with zero-tasks quick-create), header-level "Invoice Unbilled Hours" button, bulk mark billable/non-billable, and preset + custom date-range filter.
+>
+> PRD: [`docs/project-time-tab-bonsai-refactor-prd.md`](project-time-tab-bonsai-refactor-prd.md) (rev 3)
+>
+> **Key decisions** (from PRD §2/§10):
+> - Default grouping: **By Day**; all six options (None, Day, Week, Month, Member, Task) URL-synced via `?groupBy=`.
+> - Billable toggle fires immediate mutation + Undo toast that runs the reverse mutation — no delayed-commit layer (simplified from rev 2).
+> - Edit modal allows changing the Task on non-invoiced entries; backend re-resolves category + rate snapshot on task swap.
+> - Add Time admin member picker: project team first, "Show all org members" toggle appends the rest.
+> - Date range filter: This week, Last week, This month, Last month, This year, All time, Custom (URL-synced via `dateRange` + `from`/`to`).
+> - Bulk billable toggle reuses the existing `update` mutation in a client-side `Promise.all` loop; bounded by visible rows.
+> - Stats row: T&M = 4 stats (Total / Billable / Unbilled Hours + Unbilled Amount); Fixed / Retainer = 3 stats (Total / Billable / Non-billable).
+> - `getInvoicePreview` extended with optional `timeEntryIds` + T&M-only guard so preview and create contracts can't drift.
+
+### Tasks
+
+- [x] **Shared date helpers**: `lib/date-buckets.ts` — `bucketKey`, `bucketLabel`, `resolveDateRangePreset`, `todayInTimezone`. Pure string math; ISO-week ambiguity avoided by keying week buckets on the Monday date. Colocated Vitest suite (`date-buckets.test.ts`, 23 tests) covers year boundaries, DST-safe labels, and preset date arithmetic.
+- [x] **Format helper**: `formatHoursCompact(minutes)` in `lib/format.ts` — `Xh Ym` output for the stats row.
+- [x] **Convex date validation**: `convex/lib/dateValidation.ts` — round-trip `assertValidDateString`. Applied in `timeEntries.create`, `timeEntries.update`, `timer.ts` stopAndLog (replaces three weak `new Date()` checks that accepted `2026-02-30`).
+- [x] **Backend — `timeEntries.update`**: validator extended with `taskId?`; on task change, backend re-validates same-project + non-archived, overwrites `snapshotCategoryId`, and re-resolves the rate cascade. Invoiced-entry block unchanged.
+- [x] **Backend — `timeEntries.listProjectEntries`**: optional `fromDate` / `toDate` filter args for the new date-range toolbar.
+- [x] **Backend — `tasks.listByProject`**: new lightweight query for the time-entry modal task picker. Members see only their assigned tasks; admins see all. Archived excluded.
+- [x] **Backend — `invoices.getInvoicePreview`**: optional `timeEntryIds` arg with T&M-only guard to mirror `createInvoice`'s Path B contract.
+- [x] **UI — `project-time-stats.tsx`** (new): adaptive 4/3 stats row + content-aware skeleton primitive.
+- [x] **UI — `project-time-filters.tsx`**: reorganized to `[Members][Billing Status (T&M)][Date range][Group by][Search]`. Date-range custom picker opens a Popover with two `DatePicker`s. Group by Select is URL-synced (`day` default omitted).
+- [x] **UI — `project-time-table.tsx`**: new Billing column with green/muted `$` inline toggle (aria-pressed, tooltip, immediate-mutation + Undo toast). Row ⋯ menu (Edit / Delete, both disabled with tooltip on invoiced rows). Checkbox column only renders when selection is enabled (admin + T&M).
+- [x] **UI — `project-time-grouped.tsx`** (new): collapsible group headers with caret + calendar glyph on date groupings + right-aligned hour total. Keyboard-operable (`role="button"`, `aria-expanded`, Enter/Space). Collapse state is local; resets on `groupBy` change.
+- [x] **UI — `time-entry-modal.tsx`** (new): create + edit modes. Task select editable in edit mode, read-only date/duration/billable/note on invoiced entries. Inline quick-create-task block shown when project has zero tasks (title + category + assignee, calls `api.tasks.create`). Admin member picker is project-team-first with "Show all org members" toggle. Duration field reuses `parseDuration` (accepts `1:30` / `1h 30m` / `90m` / `1.5`).
+- [x] **UI — `project-time-selection-toolbar.tsx`**: added Mark Billable / Mark Non-Billable buttons (client-side `Promise.allSettled` over the selection, partial-failure toast). Create Invoice button now opens `CreateInvoiceModal` in selection mode instead of calling `createInvoice` directly.
+- [x] **UI — `create-invoice-modal.tsx`**: new `timeEntryIds` prop drives a compact "selection summary" card (replaces period/preset inputs). Preview + create mutation both forward ids. Retainer and selection modes are mutually exclusive.
+- [x] **UI — `project-time.tsx`**: orchestrator owns stats, filters, header action row (Invoice Unbilled Hours + Add Time), flat vs grouped table switch, and the invoice / time-entry modals. Admin gating for the selection column and toolbar. URL state for `member`, `billingStatus`, `search`, `groupBy`, `dateRange`, `from`, `to`.
+- [x] **UI — `project-time-skeleton.tsx`**: content-aware skeleton now mirrors the new layout (stats row + 4 filter pills + header buttons + table rows).
+
+### Verification
+
+- [x] `npx tsc --noEmit` — 0 errors
+- [x] `npx vitest run lib/date-buckets.test.ts` — 23 tests pass
+- [x] `npm run lint` on new/modified files — 0 errors (pre-existing repo-wide warnings untouched)
+- [ ] Manual verification in dev browser: Add Time, inline task quick-create on zero-tasks project, inline `$` toggle + undo, ⋯ Edit/Delete, header Invoice Unbilled Hours → `CreateInvoiceModal`, selection toolbar bulk mark + Create Invoice, date-range presets + custom popover, grouping switch
+
+### TODOs deferred to later phases
+
+- **Bulk category reassignment / bulk delete / bulk move-to-task** on the selection toolbar (v2 — beyond PRD §10.6 scope).
+- **Row ⋯ → Duplicate entry** (out of scope per PRD §8).
+- **Inline cell editing** (double-click on cell to edit without opening the modal) — deferred.
+- **Keyboard shortcut** for Add Time (`N`, etc.) — deferred per PRD §8.
+- **Deep-link quick-create** (`/tasks?project=<id>&create=1`) — follow-up polish; today inline quick-create solves the zero-tasks case in-place.
+- **Mobile-responsive grouped layout** — out of scope (desktop-first per PRD §1 non-goals).
+- **Pagination / virtualization** for very long flat lists — current flat list is fine for MVP scale; revisit when a single project exceeds ~1k visible entries.
+- **Tags column** — out of scope until a tags model exists.
+- **Bulk billable activity log entry** for the new bulk toolbar actions — per-entry activity log still fires on each `update`, but a single "bulk edit" summary isn't persisted today.
+
+### Senior review round 1 ✅ (2026-04-19)
+
+> **Goal**: Eliminate tech debt introduced during the Bonsai-style Time tab refactor. Senior-level pass for shadcn/Tailwind best practices, React correctness, and shared-helpers consolidation.
+>
+> **Scope**: 48 audit findings triaged into P0 / P1 / P2 / skip. 17 concrete changes landed; 11 findings intentionally skipped as false-positives or scope-creep.
+
+**P0 — CLAUDE.md rule compliance:**
+- [x] `<EmptyStateBanner>` extracted to `components/projects/empty-state-banner.tsx` — page orchestrator rule ("page files are thin orchestrators; every section goes in its own file").
+- [x] **Audited** the `lastFilterKey` / `lastGrouping` setState-during-render pattern and verified it's the React-recommended "store info from previous renders" pattern (not a useEffect sync). CLAUDE.md only bans useEffect sync — the current pattern is explicitly allowed. No change.
+
+**P1 — Tech debt / shadcn / Tailwind:**
+- [x] **Date helpers consolidated** to `lib/format.ts`: new `formatDateToYMDOrUndefined` (nullable overload of existing `formatDateToYMD`), `parseYMDToLocalDate`, and `formatDateToUS`. Removed 4 duplicate `dateToString`/`stringToDate`/`formatDate`/`toDateString` local functions from `create-invoice-modal.tsx`, `invoice-document.tsx`, `project-time-filters.tsx`, `project-time-table.tsx`, and `time-entry-modal.tsx`.
+- [x] **Billable colors tokenized** — replaced the hard-coded `text-emerald-600 dark:text-emerald-400 hover:bg-emerald-100/60 dark:hover:bg-emerald-500/15` combo with the existing global `--success` semantic token (`text-success hover:bg-success/10`). One less arbitrary-color site in the codebase; auto-dark-mode-safe.
+- [x] **Raw `<button>` → `<Button>` swept across the refactor**: `BillableToggleCell` (table `$` toggle), `RowActionsMenu` (⋯ trigger), `GroupHeader` (grouped-view caret row), `FilterPopover` (Clear all), `SelectionToolbar` (clear selection X), `EmptyStateBanner` (View invoices action), `TimeEntryModal` (Show all org members link). All replaced with proper shadcn variants (`ghost` / `link` / `icon`).
+- [x] **Pure `groupTimeEntries` extracted** from `project-time-grouped.tsx` into `lib/time-entry-grouping.ts` as a generic `<T extends GroupableEntry>` helper. Colocated Vitest suite (`time-entry-grouping.test.ts`) with 9 tests covering day / week / month / member / task axes, within-group sort stability, and empty/missing-createdAt edge cases. Enables reuse outside the project Time tab if a similar grouping lands later (e.g. reports).
+
+**P2 — Architecture & safety:**
+- [x] **`ProjectTimeContext` provider** at `components/projects/project-time-context.tsx`. Context carries `projectId`, `project`, `isAdmin`, `currentUserId`, `orgMembers`, `categories`, `timezone`. Eliminates prop-drilling through `TimeEntryModal`, `ProjectTimeTable`, `ProjectTimeGrouped`, `ProjectTimeSelectionToolbar`. Net: `TimeEntryModal` public props dropped from 8 → 3 (`open`, `onOpenChange`, `mode`+`entry`).
+- [x] **Thin-wrapper collapse**: deleted `AddTimeModal`, `EditEntryModal`, and `RowEditTable` pass-through components from `project-time.tsx`. `TimeEntryModal` is now rendered directly with `mode` and `entry` props (no intermediate wrapper). Saves ~60 LOC of bookkeeping.
+- [x] **In-flight guard on `BillableToggleCell`** via `useRef` — prevents double-firing the update mutation if a user spam-clicks the toggle. The undo-toast mutation also runs through the same guard.
+
+**Skipped (audit false positives / scope creep):**
+- Audit flagged the setState-during-render pattern as an anti-pattern; confirmed with React docs and CLAUDE.md that it's actually the recommended pattern for "reset state when prop changes" (useEffect is what's banned, not this).
+- Checkbox `e.stopPropagation()` flagged as coupling — standard composite-row pattern, left as-is.
+- Search `aria-label`-only input flagged for missing visible label — aria-label is sufficient for a secondary control with an icon affordance.
+- Filter vs selection URL/local asymmetry flagged — agent self-admitted "current design is correct; no change needed."
+- `IconBadge` component extraction — premature; only one use site in the codebase.
+- Additional DST/boundary tests for date-buckets and a separate test file for `dateValidation` — deferred; the existing suite already covers the critical cases.
+
+**Verification:**
+- [x] `npx tsc --noEmit` — 0 errors.
+- [x] `npx vitest run lib/date-buckets.test.ts lib/time-entry-grouping.test.ts lib/format.test.ts` — 72 tests pass.
+- [x] `npm run lint` on touched files — 0 errors.

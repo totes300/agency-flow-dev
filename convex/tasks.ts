@@ -166,6 +166,59 @@ export const getSubtasks = query({
   },
 });
 
+/**
+ * List non-archived tasks for a project — used by the time-entry modal task
+ * picker. Ordered by status type (to-do first), then alpha by title.
+ * Members see only tasks they are assigned to (matches top-level visibility);
+ * admins see all.
+ */
+export const listByProject = query({
+  args: { projectId: v.id("projects") },
+  handler: async (ctx, args) => {
+    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
+
+    const project = await ctx.db.get(args.projectId);
+    if (!project || project.orgId !== orgId) return [];
+
+    const tasks = await ctx.db
+      .query("tasks")
+      .withIndex("by_orgId_projectId", (q) =>
+        q.eq("orgId", orgId).eq("projectId", args.projectId),
+      )
+      .collect();
+
+    const visible = tasks.filter((t) => {
+      if (t.archivedAt) return false;
+      if (!isAdmin && !t.assigneeIds.includes(userId)) return false;
+      return true;
+    });
+
+    const statusTypeOrder: Record<StatusType, number> = {
+      backlog: 0,
+      in_progress: 1,
+      review: 2,
+      blocked: 3,
+      done: 4,
+    };
+
+    return visible
+      .map((t) => ({
+        _id: t._id,
+        title: t.title,
+        billable: t.billable,
+        workCategoryId: t.workCategoryId,
+        statusType: t.statusType,
+      }))
+      .sort((a, b) => {
+        const statusDiff =
+          (statusTypeOrder[a.statusType] ?? 99) -
+          (statusTypeOrder[b.statusType] ?? 99);
+        if (statusDiff !== 0) return statusDiff;
+        return a.title.localeCompare(b.title);
+      });
+  },
+});
+
 export const createSubtask = mutation({
   args: {
     parentTaskId: v.id("tasks"),

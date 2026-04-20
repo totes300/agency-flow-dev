@@ -1,7 +1,4 @@
-import {
-  ColoredPillBadge,
-  type ColoredPillTone,
-} from "@/components/ui/colored-pill-badge"
+import { StatusChip, type StatusChipTone } from "@/components/ui/status-chip"
 
 type InvoiceStatus = "draft" | "invoiced" | "paid"
 
@@ -14,7 +11,7 @@ type InvoiceVisualState = InvoiceStatus | "overdue"
 
 const statusConfig: Record<
   InvoiceVisualState,
-  { label: string; tone: ColoredPillTone }
+  { label: string; tone: StatusChipTone }
 > = {
   draft: { label: "Draft", tone: "neutral" },
   invoiced: { label: "Invoiced", tone: "blue" },
@@ -50,10 +47,9 @@ export function InvoiceStatusBadge({
   const { label, tone } = statusConfig[visualState]
 
   return (
-    <ColoredPillBadge
+    <StatusChip
       data-slot="invoice-status-badge"
       tone={tone}
-      showDot
       label={label}
       className={className}
     />

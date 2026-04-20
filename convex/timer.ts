@@ -6,6 +6,7 @@ import { getAuthContext } from "./lib/auth";
 import { computeElapsedMs, totalElapsedMs, msToMinutes, getDateInTimezone } from "./lib/timer";
 import { roundMinutes } from "./lib/rounding";
 import { getOrgSettings, resolveRateSnapshot } from "./lib/orgHelpers";
+import { assertValidDateString } from "./lib/dateValidation";
 
 const MAX_TIMER_MS = 16 * 60 * 60 * 1000; // 16 hours
 const STALE_THRESHOLD_MS = 8 * 60 * 60 * 1000; // 8 hours
@@ -103,11 +104,15 @@ export const start = mutation({
 export const previewRateForTask = query({
   args: { taskId: v.id("tasks") },
   handler: async (ctx, args) => {
-    const { userId, orgId } = await getAuthContext(ctx);
+    const { userId, orgId, isAdmin } = await getAuthContext(ctx);
 
     const task = await ctx.db.get(args.taskId);
     if (!task || task.orgId !== orgId) return { ok: false as const, reason: "Task not found" };
+    if (task.archivedAt) return { ok: false as const, reason: "Task is archived" };
     if (!task.projectId) return { ok: false as const, reason: "Assign a project first" };
+    if (!isAdmin && !task.assigneeIds.includes(userId)) {
+      return { ok: false as const, reason: "Task isn't assigned to you" };
+    }
 
     const project = await ctx.db.get(task.projectId);
     if (!project) return { ok: false as const, reason: "Project not found" };
@@ -267,11 +272,7 @@ export const commitEntry = mutation({
       throw new ConvexError("Duration must be greater than 0");
     }
 
-    if (args.date) {
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(args.date) || isNaN(new Date(args.date).getTime())) {
-        throw new ConvexError("Invalid date format — expected YYYY-MM-DD");
-      }
-    }
+    if (args.date) assertValidDateString(args.date);
 
     const task = await ctx.db.get(args.taskId);
     if (!task || task.orgId !== orgId) throw new ConvexError("Task not found");

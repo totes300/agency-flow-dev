@@ -29,7 +29,7 @@ export default function DashboardLayout({
               <DashboardBreadcrumb />
             </div>
           </header>
-          <div className="flex flex-1 flex-col gap-4 px-6 pb-6 pt-0 lg:px-10">
+          <div className="flex flex-1 flex-col gap-4 px-12 pb-6 pt-0 md:px-20 lg:px-32 xl:px-64 2xl:px-96">
             <OnboardingGate>
               <TimerProvider>
                 {children}

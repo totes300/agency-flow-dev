@@ -80,6 +80,18 @@ export function formatCurrencyBucketDetail(
 }
 
 /**
+ * Format minutes as compact "Xh Ym" (e.g., for stats rows).
+ *   0 → "0h 0m", 90 → "1h 30m", 60 → "1h 0m", 59 → "0h 59m"
+ */
+export function formatHoursCompact(minutes: number): string {
+  const negative = minutes < 0
+  const abs = Math.abs(minutes)
+  const h = Math.floor(abs / 60)
+  const m = abs % 60
+  return `${negative ? "-" : ""}${h}h ${m}m`
+}
+
+/**
  * Format minutes as HH:MM display string.
  * e.g., 630 → "10:30", 90 → "01:30", 0 → "00:00"
  */
@@ -108,6 +120,33 @@ export function formatDateToYMD(date: Date): string {
   const m = String(date.getMonth() + 1).padStart(2, "0")
   const d = String(date.getDate()).padStart(2, "0")
   return `${y}-${m}-${d}`
+}
+
+/**
+ * Nullable overload of `formatDateToYMD` — most date-picker bindings accept
+ * `Date | undefined`, so this saves the caller from writing the ternary.
+ */
+export function formatDateToYMDOrUndefined(date: Date | undefined): string | undefined {
+  return date ? formatDateToYMD(date) : undefined
+}
+
+/**
+ * Parse a YYYY-MM-DD string into a local-timezone Date (midnight local).
+ * Returns `undefined` for empty/undefined input. Counterpart to
+ * `formatDateToYMDOrUndefined` for date-picker value round-trips.
+ */
+export function parseYMDToLocalDate(str: string | undefined): Date | undefined {
+  if (!str) return undefined
+  const [y, m, d] = str.split("-").map(Number)
+  return new Date(y, m - 1, d)
+}
+
+/**
+ * Format a YYYY-MM-DD string as US-style MM/DD/YYYY (table cell display).
+ */
+export function formatDateToUS(dateStr: string): string {
+  const [y, m, d] = dateStr.split("-")
+  return `${m}/${d}/${y}`
 }
 
 /** Format a timestamp as relative time (e.g., "2m ago", "3h ago", "5d ago"). */

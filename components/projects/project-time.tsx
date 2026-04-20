@@ -12,16 +12,38 @@ import {
   ProjectTimeTable,
   type TimeEntryRow,
 } from "@/components/projects/project-time-table"
+import { ProjectTimeGrouped } from "@/components/projects/project-time-grouped"
 import { ProjectTimeSelectionToolbar } from "@/components/projects/project-time-selection-toolbar"
 import { ProjectTimeSkeleton } from "@/components/projects/project-time-skeleton"
-import { ClipboardListIcon, ReceiptIcon } from "lucide-react"
+import { ProjectTimeStats } from "@/components/projects/project-time-stats"
+import { TimeEntryModal } from "@/components/projects/time-entry-modal"
+import { EmptyStateBanner } from "@/components/projects/empty-state-banner"
+import { CreateInvoiceModal } from "@/components/invoices/create-invoice-modal"
+import { Button } from "@/components/ui/button"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+import { useIsAdmin } from "@/lib/hooks/use-is-admin"
+import {
+  resolveDateRangePreset,
+  type DateRangePreset,
+  type Grouping,
+} from "@/lib/date-buckets"
+import { ClipboardListIcon, PlusIcon, ReceiptIcon } from "lucide-react"
 
 type ProjectLite = {
+  name: string
   billingType: string
   currency: string
+  teamMembers?: Id<"users">[]
 }
 
 type BillingStatusFilter = "all" | "billable_uninvoiced" | "invoiced" | "non_billable"
+
+const DEFAULT_DATE_RANGE: DateRangePreset = "this_month"
 
 function parseBillingStatus(value: string | null): BillingStatusFilter | undefined {
   if (
@@ -34,29 +56,32 @@ function parseBillingStatus(value: string | null): BillingStatusFilter | undefin
   return undefined
 }
 
-function EmptyStateBanner({
-  icon: Icon,
-  title,
-  description,
-  action,
-}: {
-  icon: typeof ClipboardListIcon
-  title: string
-  description: string
-  action?: React.ReactNode
-}) {
-  return (
-    <div className="flex flex-col items-center justify-center gap-3 rounded-lg border bg-muted/30 p-10 text-center">
-      <div className="flex size-10 items-center justify-center rounded-xl bg-muted/60">
-        <Icon className="size-5 text-muted-foreground/60" />
-      </div>
-      <div className="max-w-md">
-        <p className="text-sm font-medium">{title}</p>
-        <p className="mt-1 text-xs text-muted-foreground">{description}</p>
-      </div>
-      {action}
-    </div>
-  )
+function parseGrouping(value: string | null): Grouping {
+  if (
+    value === "none" ||
+    value === "week" ||
+    value === "month" ||
+    value === "member" ||
+    value === "task"
+  ) {
+    return value
+  }
+  return "day"
+}
+
+function parseDateRangePreset(value: string | null): DateRangePreset {
+  if (
+    value === "all" ||
+    value === "this_week" ||
+    value === "last_week" ||
+    value === "this_month" ||
+    value === "last_month" ||
+    value === "this_year" ||
+    value === "custom"
+  ) {
+    return value
+  }
+  return DEFAULT_DATE_RANGE
 }
 
 export function ProjectTime({
@@ -69,6 +94,7 @@ export function ProjectTime({
   onNavigateToInvoices?: () => void
 }) {
   const { isAuthenticated } = useConvexAuth()
+  const isAdmin = useIsAdmin() ?? false
   const searchParams = useSearchParams()
   const router = useRouter()
   const pathname = usePathname()
@@ -76,40 +102,83 @@ export function ProjectTime({
   const memberId = (searchParams.get("member") || undefined) as Id<"users"> | undefined
   const billingStatus = parseBillingStatus(searchParams.get("billingStatus"))
   const search = searchParams.get("search") || undefined
-  const hasFilters = Boolean(memberId || billingStatus || search)
+  const groupBy = parseGrouping(searchParams.get("groupBy"))
+  const dateRangePreset = parseDateRangePreset(searchParams.get("dateRange"))
+  const customFrom = searchParams.get("from") || undefined
+  const customTo = searchParams.get("to") || undefined
 
   const isTmProject = project.billingType === "t_and_m"
 
-  const data = useQuery(
-    api.timeEntries.listProjectEntries,
-    isAuthenticated ? { projectId, memberId, billingStatus, search } : "skip",
-  )
+  // Queries
+  const currentUser = useQuery(api.users.current, isAuthenticated ? {} : "skip")
   const orgSettings = useQuery(api.orgSettings.get, isAuthenticated ? {} : "skip")
+  const orgMembersData = useQuery(
+    api.orgMembers.listOrgMembers,
+    isAuthenticated ? {} : "skip",
+  )
+  const categories = useQuery(
+    api.workCategories.list,
+    isAuthenticated ? {} : "skip",
+  )
   const timezone = orgSettings?.timezone ?? "UTC"
 
+  // Resolve date range → fromDate/toDate for the query
+  const { fromDate, toDate } = useMemo(() => {
+    if (dateRangePreset === "all") return { fromDate: undefined, toDate: undefined }
+    if (dateRangePreset === "custom") {
+      // Only apply custom range if both bounds are set AND to >= from.
+      // Otherwise behave as "all" to avoid empty-state flicker while the
+      // user is still picking dates.
+      if (customFrom && customTo && customTo >= customFrom) {
+        return { fromDate: customFrom, toDate: customTo }
+      }
+      return { fromDate: undefined, toDate: undefined }
+    }
+    const resolved = resolveDateRangePreset(dateRangePreset, timezone)
+    return { fromDate: resolved?.from, toDate: resolved?.to }
+  }, [dateRangePreset, customFrom, customTo, timezone])
+
+  const data = useQuery(
+    api.timeEntries.listProjectEntries,
+    isAuthenticated
+      ? { projectId, memberId, billingStatus, search, fromDate, toDate }
+      : "skip",
+  )
+
+  // Selection state — only meaningful when the toolbar can render.
+  const selectionEnabled = isAdmin && isTmProject
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
 
-  // Reset selection when filters change — selected IDs may no longer be visible.
-  const filterKey = `${memberId ?? ""}::${billingStatus ?? ""}::${search ?? ""}`
+  // Track filter params to prune selection when the visible set narrows. We
+  // intersect (not clear) so the user keeps the entries they care about when
+  // they tweak a filter — only rows that actually dropped out get removed.
+  const filterKey = `${memberId ?? ""}::${billingStatus ?? ""}::${search ?? ""}::${fromDate ?? ""}::${toDate ?? ""}`
   const [lastFilterKey, setLastFilterKey] = useState(filterKey)
-  if (lastFilterKey !== filterKey) {
-    setLastFilterKey(filterKey)
-    setSelectedIds(new Set())
-  }
 
-  // Escape clears selection (matches tasks bulk-toolbar affordance)
+  // Escape clears selection (matches tasks bulk-toolbar affordance). Skip
+  // while a Radix dialog is open so Esc there closes the dialog first.
   useEffect(() => {
     if (selectedIds.size === 0) return
     function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") setSelectedIds(new Set())
+      if (e.key !== "Escape") return
+      if (document.querySelector('[role="dialog"][data-state="open"]')) return
+      setSelectedIds(new Set())
     }
     document.addEventListener("keydown", handleKeyDown)
     return () => document.removeEventListener("keydown", handleKeyDown)
   }, [selectedIds.size])
 
+  // Add Time / Edit modal state
+  const [isAddOpen, setIsAddOpen] = useState(false)
+  const [editEntryId, setEditEntryId] = useState<Id<"timeEntries"> | null>(null)
+
+  // Invoice modal state
+  type InvoiceModalMode =
+    | { kind: "all" }
+    | { kind: "selection"; ids: Id<"timeEntries">[]; skipped: number }
+  const [invoiceModal, setInvoiceModal] = useState<InvoiceModalMode | null>(null)
+
   // Detect the "all billable time invoiced" sub-state for T&M empty banner.
-  // Requires: at least one billable entry exists AND all billable entries are invoiced.
-  // A project with only non-billable entries must NOT trigger this banner.
   const tmAllInvoiced = useMemo(() => {
     if (!isTmProject || !data) return false
     const billable = data.entries.filter((e) => e.isBillable)
@@ -117,19 +186,66 @@ export function ProjectTime({
     return billable.every((e) => e.invoiceId != null)
   }, [isTmProject, data])
 
+  const unbilledCount = useMemo(() => {
+    if (!data) return 0
+    return data.entries.filter((e) => e.isBillable && !e.invoiceId).length
+  }, [data])
+
+  // Default dateRange is "this_month", so treat that as "no filter applied".
+  // Only wider / narrower ranges or other dimensions count as active filters.
+  const hasFilters = Boolean(
+    memberId ||
+      billingStatus ||
+      search ||
+      dateRangePreset !== DEFAULT_DATE_RANGE,
+  )
+
   if (data === undefined) return <ProjectTimeSkeleton />
 
   const entries = data.entries as TimeEntryRow[]
   const availableMembers = data.availableMembers
 
+  // Intersect selection with visible entries whenever the filter changes.
+  // Runs after the skeleton guard so `entries` reflects the new filter.
+  if (lastFilterKey !== filterKey) {
+    setLastFilterKey(filterKey)
+    if (selectedIds.size > 0) {
+      const visible = new Set<string>(entries.map((e) => e._id))
+      const pruned = new Set<string>()
+      for (const id of selectedIds) if (visible.has(id)) pruned.add(id)
+      if (pruned.size !== selectedIds.size) setSelectedIds(pruned)
+    }
+  }
+
   // Phase 2: no entries at all AND no active filters → basic empty state
-  if (entries.length === 0 && !hasFilters) {
+  if (entries.length === 0 && !hasFilters && !isAddOpen) {
     return (
-      <EmptyStateBanner
-        icon={ClipboardListIcon}
-        title="No time logged yet"
-        description="Assign tasks and start tracking to see entries here."
-      />
+      <>
+        <div className="flex flex-col gap-4">
+          <div className="flex items-center justify-end">
+            <Button onClick={() => setIsAddOpen(true)}>
+              <PlusIcon data-icon="inline-start" className="size-4" />
+              Add Time
+            </Button>
+          </div>
+          <EmptyStateBanner
+            icon={ClipboardListIcon}
+            title="No time logged yet"
+            description="Log time manually or start the timer on a task to see entries here."
+          />
+        </div>
+        <TimeEntryModal
+          mode="create"
+          open={isAddOpen}
+          onOpenChange={setIsAddOpen}
+          projectId={projectId}
+          projectTeamMembers={project.teamMembers}
+          isAdmin={isAdmin}
+          currentUserId={currentUser?._id}
+          orgMembers={orgMembersData ?? undefined}
+          categories={categories ?? undefined}
+        />
+      </>
     )
   }
 
@@ -142,56 +258,109 @@ export function ProjectTime({
     })
   }
 
-  function handleSelectAllVisible(selectAll: boolean) {
+  // Scoped to the rows the child passes in — in grouped view that's the
+  // rows of one group, so "Select all" in a collapsed/expanded group only
+  // touches that group and leaves other groups' selections alone.
+  function handleSelectAllVisible(selectAll: boolean, rows: TimeEntryRow[]) {
     setSelectedIds((prev) => {
-      if (!selectAll) {
-        const next = new Set(prev)
-        for (const row of entries) {
-          if (row.isBillable && !row.invoiceId) next.delete(row._id)
-        }
-        return next
-      }
       const next = new Set(prev)
-      for (const row of entries) {
-        if (row.isBillable && !row.invoiceId) next.add(row._id)
+      for (const row of rows) {
+        if (!row.isBillable || row.invoiceId) continue
+        if (selectAll) next.add(row._id)
+        else next.delete(row._id)
       }
       return next
     })
   }
 
   function switchToInvoicesTab() {
-    // Clear Time-tab-only filters from the URL before switching.
     const params = new URLSearchParams(searchParams.toString())
     params.delete("member")
     params.delete("billingStatus")
     params.delete("search")
     params.set("tab", "invoices")
     router.push(`${pathname}?${params.toString()}`)
-    // Parent owns the authoritative tab state — keep it in sync.
     onNavigateToInvoices?.()
+  }
+
+  // Within-group secondary sort key — entries come pre-sorted by (date desc,
+  // createdAt desc) from the server, so index-from-end preserves that order
+  // when the grouped view re-buckets rows.
+  const createdAtMap = new Map<string, number>()
+  entries.forEach((e, i) => createdAtMap.set(e._id, entries.length - i))
+
+  const headerActions = (
+    <>
+      {isAdmin && isTmProject && (
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-9"
+                  disabled={unbilledCount === 0}
+                  onClick={() => setInvoiceModal({ kind: "all" })}
+                >
+                  <ReceiptIcon data-icon="inline-start" className="size-4" />
+                  Invoice Unbilled Hours
+                </Button>
+              </span>
+            </TooltipTrigger>
+            {unbilledCount === 0 && (
+              <TooltipContent>No unbilled hours</TooltipContent>
+            )}
+          </Tooltip>
+        </TooltipProvider>
+      )}
+      <Button size="sm" className="h-9" onClick={() => setIsAddOpen(true)}>
+        <PlusIcon data-icon="inline-start" className="size-4" />
+        Add Time
+      </Button>
+    </>
+  )
+
+  const editEntryRow = editEntryId
+    ? entries.find((e) => e._id === editEntryId)
+    : undefined
+
+  const sharedTableProps = {
+    selectedIds,
+    onToggle: handleToggle,
+    onSelectAllVisible: handleSelectAllVisible,
+    selectable: selectionEnabled,
+    showAmounts: isTmProject,
+    currency: project.currency,
+    timezone,
+    isAdmin,
+    currentUserId: currentUser?._id,
+    onEdit: setEditEntryId,
   }
 
   return (
     <div className="flex flex-col gap-4">
+      <ProjectTimeStats
+        entries={entries}
+        billingType={project.billingType}
+        currency={project.currency}
+      />
+
       <ProjectTimeFilters
         availableMembers={availableMembers}
         billingType={project.billingType}
+        actions={headerActions}
       />
 
-      {/* T&M-specific: all billable time invoiced */}
       {tmAllInvoiced && !hasFilters && (
         <EmptyStateBanner
           icon={ReceiptIcon}
           title="All billable time has been invoiced."
           description="New billable entries will appear here automatically."
           action={
-            <button
-              type="button"
-              onClick={switchToInvoicesTab}
-              className="text-sm font-medium text-primary hover:underline"
-            >
+            <Button variant="link" size="sm" onClick={switchToInvoicesTab}>
               View invoices
-            </button>
+            </Button>
           }
         />
       )}
@@ -210,26 +379,87 @@ export function ProjectTime({
             </Link>
           }
         />
+      ) : groupBy === "none" ? (
+        <ProjectTimeTable entries={entries} {...sharedTableProps} />
       ) : (
-        <ProjectTimeTable
+        <ProjectTimeGrouped
           entries={entries}
-          selectedIds={selectedIds}
-          onToggle={handleToggle}
-          onSelectAllVisible={handleSelectAllVisible}
-          selectable={isTmProject}
-          showAmounts={isTmProject}
-          currency={project.currency}
-          timezone={timezone}
+          grouping={groupBy}
+          createdAtMap={createdAtMap}
+          {...sharedTableProps}
         />
       )}
 
-      {isTmProject && (
+      {selectionEnabled && (
         <ProjectTimeSelectionToolbar
           selectedIds={selectedIds}
           entries={entries}
           currency={project.currency}
-          projectId={projectId}
           onDeselectAll={() => setSelectedIds(new Set())}
+          onCreateInvoice={(ids, skipped) =>
+            setInvoiceModal({ kind: "selection", ids, skipped })
+          }
+        />
+      )}
+
+      <TimeEntryModal
+        mode="create"
+        open={isAddOpen}
+        onOpenChange={setIsAddOpen}
+        projectId={projectId}
+        projectTeamMembers={project.teamMembers}
+        isAdmin={isAdmin}
+        currentUserId={currentUser?._id}
+        orgMembers={orgMembersData ?? undefined}
+        categories={categories ?? undefined}
+      />
+
+      {editEntryRow && (
+        <TimeEntryModal
+          mode="edit"
+          entry={{
+            _id: editEntryRow._id,
+            taskId: editEntryRow.taskId,
+            date: editEntryRow.date,
+            durationMinutes: editEntryRow.durationMinutes,
+            isBillable: editEntryRow.isBillable,
+            note: editEntryRow.note,
+            invoiceId: editEntryRow.invoiceId,
+            userId: editEntryRow.userId,
+          }}
+          open={editEntryId !== null}
+          onOpenChange={(o) => {
+            if (!o) setEditEntryId(null)
+          }}
+          projectId={projectId}
+          projectTeamMembers={project.teamMembers}
+          isAdmin={isAdmin}
+          currentUserId={currentUser?._id}
+          orgMembers={orgMembersData ?? undefined}
+          categories={categories ?? undefined}
+        />
+      )}
+
+      {invoiceModal !== null && (
+        <CreateInvoiceModal
+          open={invoiceModal !== null}
+          onOpenChange={(o) => {
+            if (!o) setInvoiceModal(null)
+          }}
+          projectId={projectId}
+          projectName={project.name}
+          billingType={project.billingType}
+          currency={project.currency}
+          timeEntryIds={
+            invoiceModal.kind === "selection" ? invoiceModal.ids : undefined
+          }
+          skippedCount={
+            invoiceModal.kind === "selection" ? invoiceModal.skipped : 0
+          }
+          onCreated={() => {
+            setInvoiceModal(null)
+            setSelectedIds(new Set())
+          }}
         />
       )}
     </div>

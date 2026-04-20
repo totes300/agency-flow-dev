@@ -401,12 +401,24 @@ export const getInvoicePreview = query({
     startDate: v.optional(v.string()),
     endDate: v.optional(v.string()),
     roundingMinutes: v.number(),
+    // Selection mode (T&M only): preview aggregates totals over an explicit
+    // id list instead of a date range. Mutually exclusive with startDate/endDate.
+    timeEntryIds: v.optional(v.array(v.id("timeEntries"))),
   },
   handler: async (ctx, args) => {
     const { orgId } = await requireAdmin(ctx);
 
     const project = await ctx.db.get(args.projectId);
     if (!project || project.orgId !== orgId) return null;
+
+    // Contract-mirror guard: `createInvoice` only accepts `timeEntryIds` for
+    // T&M projects — preview must match so callers can't preview a state
+    // that would fail to materialize.
+    if (args.timeEntryIds !== undefined && project.billingType !== "t_and_m") {
+      throw new ConvexError(
+        "Selecting specific time entries is only supported for Time & Materials projects.",
+      );
+    }
 
     // Get all tasks for this project
     const tasks = await ctx.db
@@ -436,12 +448,18 @@ export const getInvoicePreview = query({
       )
     ).flat();
 
-    // Apply date range filter
-    const filtered = allEntries.filter((e) => {
-      if (args.startDate && e.date < args.startDate) return false;
-      if (args.endDate && e.date > args.endDate) return false;
-      return true;
-    });
+    // Build filtered set — either from explicit ids or date range.
+    let filtered: typeof allEntries;
+    if (args.timeEntryIds !== undefined) {
+      const wanted = new Set(args.timeEntryIds.map((id) => id.toString()));
+      filtered = allEntries.filter((e) => wanted.has(e._id.toString()));
+    } else {
+      filtered = allEntries.filter((e) => {
+        if (args.startDate && e.date < args.startDate) return false;
+        if (args.endDate && e.date > args.endDate) return false;
+        return true;
+      });
+    }
 
     // Group entries — same grouping logic as createInvoice
     // T&M: by (workCategoryId, taskId, billableRate). Fixed: by (workCategoryId, taskId) only.

@@ -24,6 +24,7 @@ import type * as lib_auth from "../lib/auth.js";
 import type * as lib_constants from "../lib/constants.js";
 import type * as lib_content_validation from "../lib/content_validation.js";
 import type * as lib_dailyNotesHelpers from "../lib/dailyNotesHelpers.js";
+import type * as lib_dateValidation from "../lib/dateValidation.js";
 import type * as lib_helpers from "../lib/helpers.js";
 import type * as lib_myTaskHelpers from "../lib/myTaskHelpers.js";
 import type * as lib_orgHelpers from "../lib/orgHelpers.js";
@@ -79,6 +80,7 @@ declare const fullApi: ApiFromModules<{
   "lib/constants": typeof lib_constants;
   "lib/content_validation": typeof lib_content_validation;
   "lib/dailyNotesHelpers": typeof lib_dailyNotesHelpers;
+  "lib/dateValidation": typeof lib_dateValidation;
   "lib/helpers": typeof lib_helpers;
   "lib/myTaskHelpers": typeof lib_myTaskHelpers;
   "lib/orgHelpers": typeof lib_orgHelpers;

@@ -1,0 +1,556 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Status chip · v3 refined</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://rsms.me/" />
+    <link rel="stylesheet" href="https://rsms.me/inter/inter.css" />
+    <style>
+      :root {
+        font-family: "Inter", system-ui, sans-serif;
+        font-feature-settings: "cv11", "ss01", "ss07", "cv05";
+      }
+      html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+      .tnum { font-variant-numeric: tabular-nums; }
+
+      /* ─── status chip — v3.1 ───────────────────────────────────── */
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        height: 22px;
+        padding: 0 9px;
+        border: 1px solid;
+        border-radius: 6px;
+        background: transparent;
+        font-size: 12px;
+        font-weight: 500;
+        letter-spacing: 0.01em;
+        line-height: 1;
+        white-space: nowrap;
+      }
+
+      /* light-mode tones */
+      .chip-neutral {
+        color: #52525b;
+        border-color: rgb(212 212 216 / 1);
+        background: rgb(250 250 250 / 1);
+      }
+      .chip-blue {
+        color: #1d4ed8;
+        border-color: rgb(147 197 253 / 0.6);
+        background: rgb(239 246 255 / 0.55);
+      }
+      .chip-red {
+        color: #b91c1c;
+        border-color: rgb(252 165 165 / 0.6);
+        background: rgb(254 242 242 / 0.55);
+      }
+      .chip-green {
+        color: #047857;
+        border-color: rgb(110 231 183 / 0.6);
+        background: rgb(236 253 245 / 0.55);
+      }
+      .chip-amber {
+        color: #b45309;
+        border-color: rgb(253 211 77 / 0.6);
+        background: rgb(255 251 235 / 0.55);
+      }
+
+      /* dark-mode tones (applied inside .dark scope) */
+      .dark .chip-neutral {
+        color: #a1a1aa;
+        border-color: rgb(63 63 70 / 1);
+        background: rgb(24 24 27 / 1);
+      }
+      .dark .chip-blue {
+        color: #93c5fd;
+        border-color: rgb(59 130 246 / 0.45);
+        background: rgb(30 58 138 / 0.2);
+      }
+      .dark .chip-red {
+        color: #fca5a5;
+        border-color: rgb(239 68 68 / 0.45);
+        background: rgb(127 29 29 / 0.2);
+      }
+      .dark .chip-green {
+        color: #6ee7b7;
+        border-color: rgb(16 185 129 / 0.45);
+        background: rgb(6 78 59 / 0.2);
+      }
+      .dark .chip-amber {
+        color: #fcd34d;
+        border-color: rgb(245 158 11 / 0.45);
+        background: rgb(120 53 15 / 0.2);
+      }
+
+      /* ─── view link ────────────────────────────────────────────── */
+      .view-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 12px;
+        color: #71717a;
+        text-decoration: none;
+        padding: 2px 2px;
+        border-radius: 3px;
+        transition: color 140ms ease-out;
+      }
+      .view-link svg {
+        width: 12px;
+        height: 12px;
+        transition: transform 140ms ease-out;
+      }
+      .view-link:hover {
+        color: #18181b;
+      }
+      .view-link:hover svg {
+        transform: translate(1px, -1px);
+      }
+      .view-link:focus-visible {
+        outline: 2px solid #3b82f6;
+        outline-offset: 2px;
+      }
+      .dark .view-link { color: #a1a1aa; }
+      .dark .view-link:hover { color: #fafafa; }
+
+      /* ─── panels ───────────────────────────────────────────────── */
+      .panel {
+        border-radius: 12px;
+        border: 1px solid #e4e4e7;
+        background: #ffffff;
+        overflow: hidden;
+      }
+      .dark .panel {
+        border-color: rgb(39 39 42);
+        background: rgb(9 9 11);
+      }
+
+      .row:hover { background: rgb(250 250 250 / 0.75); }
+      .dark .row:hover { background: rgb(24 24 27 / 0.6); }
+
+      /* category pill — unchanged from app */
+      .cat {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        border-radius: 5px;
+        padding: 3px 9px 3px 6px;
+        font-size: 12px;
+      }
+      .cat-dot { width: 6px; height: 6px; border-radius: 9999px; flex-shrink: 0; }
+
+      /* hairline dividers */
+      .rowdiv { border-top: 1px solid rgb(244 244 245); }
+      .dark .rowdiv { border-top: 1px solid rgb(39 39 42); }
+
+      /* spec card */
+      .spec-card {
+        border: 1px dashed rgb(212 212 216);
+        border-radius: 12px;
+        padding: 32px;
+        background:
+          linear-gradient(to right, rgb(244 244 245) 1px, transparent 1px) 0 0 / 8px 100%,
+          linear-gradient(to bottom, rgb(244 244 245) 1px, transparent 1px) 0 0 / 100% 8px,
+          #fafafa;
+      }
+      .dark .spec-card {
+        border-color: rgb(63 63 70);
+        background:
+          linear-gradient(to right, rgb(39 39 42) 1px, transparent 1px) 0 0 / 8px 100%,
+          linear-gradient(to bottom, rgb(39 39 42) 1px, transparent 1px) 0 0 / 100% 8px,
+          rgb(9 9 11);
+      }
+
+      /* label micro-type */
+      .kicker {
+        font-size: 10.5px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        font-weight: 500;
+        color: #a1a1aa;
+      }
+      .dark .kicker { color: #71717a; }
+
+      .section-title {
+        font-size: 13px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+        color: #18181b;
+      }
+      .dark .section-title { color: #fafafa; }
+    </style>
+  </head>
+  <body class="bg-white text-zinc-900 antialiased dark:bg-zinc-950 dark:text-zinc-50">
+    <div class="mx-auto max-w-[1200px] px-8 py-16">
+
+      <!-- Header -->
+      <header class="mb-14 flex items-start justify-between gap-8">
+        <div>
+          <p class="kicker mb-2">Preview · v3.1 shipping</p>
+          <h1 class="text-3xl font-semibold tracking-tight">Status chip — shipping spec</h1>
+          <p class="mt-3 max-w-2xl text-[14px] leading-relaxed text-zinc-500 dark:text-zinc-400">
+            Single Status column: rounded-rect chip + inline <code class="rounded bg-zinc-100 px-1 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">↗ View</code> link for invoiced rows.
+            Ragged alignment accepted — prioritising column-count and header clarity over
+            vertical rhythm of actions.
+          </p>
+        </div>
+        <button
+          id="theme-toggle"
+          class="flex items-center gap-2 rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-600 transition-colors hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px">
+            <circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>
+          </svg>
+          <span>Toggle dark</span>
+        </button>
+      </header>
+
+      <!-- ── Section: Time table in final spec ──────────────────── -->
+      <section class="mb-16">
+        <div class="mb-5 flex items-baseline justify-between">
+          <h2 class="section-title">Time tab · final</h2>
+          <p class="text-xs text-zinc-400">Hover the <em>Invoiced / Overdue / Paid / Draft</em> rows to see the View transition.</p>
+        </div>
+
+        <div class="panel">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="text-xs text-zinc-500 dark:text-zinc-400">
+                <th class="w-24 py-3 pl-5 text-left font-medium">Date</th>
+                <th class="w-40 py-3 pr-4 text-left font-medium">Member</th>
+                <th class="py-3 pr-4 text-left font-medium">Task</th>
+                <th class="w-36 py-3 pr-4 text-left font-medium">Category</th>
+                <th class="w-48 py-3 pr-4 text-left font-medium">Status</th>
+                <th class="w-16 py-3 pr-4 text-right font-medium">Hours</th>
+                <th class="w-20 py-3 pr-4 text-right font-medium">Amount</th>
+                <th class="w-10 py-3 pr-5"></th>
+              </tr>
+            </thead>
+            <tbody>
+              <!-- Uninvoiced -->
+              <tr class="row rowdiv">
+                <td class="py-3 pl-5 tnum text-zinc-500 dark:text-zinc-400">04/19/2026</td>
+                <td class="py-3 pr-4"><span class="inline-flex items-center gap-2"><span class="size-6 shrink-0 rounded-full bg-zinc-200 dark:bg-zinc-800"></span><span>Adam Toth</span></span></td>
+                <td class="py-3 pr-4 font-medium">Test magic</td>
+                <td class="py-3 pr-4">
+                  <span class="cat" style="background:rgb(249 115 22 / 0.13); color:#c2410c;">
+                    <span class="cat-dot" style="background:#f97316"></span>
+                    Copywriting
+                  </span>
+                </td>
+                <td class="py-3 pr-4"><span class="chip chip-neutral">Uninvoiced</span></td>
+                <td class="py-3 pr-4 text-zinc-300 dark:text-zinc-700">—</td>
+                <td class="py-3 pr-4 text-right tnum">00:30</td>
+                <td class="py-3 pr-4 text-right tnum">$50</td>
+                <td class="py-3 pr-5 text-right text-zinc-400">⋯</td>
+              </tr>
+
+              <!-- Invoiced -->
+              <tr class="row rowdiv">
+                <td class="py-3 pl-5 tnum text-zinc-500 dark:text-zinc-400">04/18/2026</td>
+                <td class="py-3 pr-4"><span class="inline-flex items-center gap-2"><span class="size-6 shrink-0 rounded-full bg-zinc-200 dark:bg-zinc-800"></span><span>Adam Toth</span></span></td>
+                <td class="py-3 pr-4 font-medium">Ongoing task 01</td>
+                <td class="py-3 pr-4">
+                  <span class="cat" style="background:rgb(249 115 22 / 0.13); color:#c2410c;">
+                    <span class="cat-dot" style="background:#f97316"></span>
+                    Copywriting
+                  </span>
+                </td>
+                <td class="py-3 pr-4"><span class="chip chip-blue">Invoiced</span></td>
+                <td class="py-3 pr-4">
+                  <a href="#" class="view-link" aria-label="View invoice INV-001" title="Open INV-001"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>View</a>
+                </td>
+                <td class="py-3 pr-4 text-right tnum">08:00</td>
+                <td class="py-3 pr-4 text-right tnum">$800</td>
+                <td class="py-3 pr-5 text-right text-zinc-400">⋯</td>
+              </tr>
+
+              <!-- Overdue -->
+              <tr class="row rowdiv">
+                <td class="py-3 pl-5 tnum text-zinc-500 dark:text-zinc-400">03/28/2026</td>
+                <td class="py-3 pr-4"><span class="inline-flex items-center gap-2"><span class="size-6 shrink-0 rounded-full bg-zinc-200 dark:bg-zinc-800"></span><span>Adam Toth</span></span></td>
+                <td class="py-3 pr-4 font-medium">Newsletter March</td>
+                <td class="py-3 pr-4">
+                  <span class="cat" style="background:rgb(249 115 22 / 0.13); color:#c2410c;">
+                    <span class="cat-dot" style="background:#f97316"></span>
+                    Copywriting
+                  </span>
+                </td>
+                <td class="py-3 pr-4"><span class="chip chip-red">Overdue</span></td>
+                <td class="py-3 pr-4">
+                  <a href="#" class="view-link" aria-label="View invoice INV-002" title="Open INV-002"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>View</a>
+                </td>
+                <td class="py-3 pr-4 text-right tnum">04:00</td>
+                <td class="py-3 pr-4 text-right tnum">$400</td>
+                <td class="py-3 pr-5 text-right text-zinc-400">⋯</td>
+              </tr>
+
+              <!-- Paid -->
+              <tr class="row rowdiv">
+                <td class="py-3 pl-5 tnum text-zinc-500 dark:text-zinc-400">02/14/2026</td>
+                <td class="py-3 pr-4"><span class="inline-flex items-center gap-2"><span class="size-6 shrink-0 rounded-full bg-zinc-200 dark:bg-zinc-800"></span><span>Adam Toth</span></span></td>
+                <td class="py-3 pr-4 font-medium">Landing copy v3</td>
+                <td class="py-3 pr-4">
+                  <span class="cat" style="background:rgb(249 115 22 / 0.13); color:#c2410c;">
+                    <span class="cat-dot" style="background:#f97316"></span>
+                    Copywriting
+                  </span>
+                </td>
+                <td class="py-3 pr-4"><span class="chip chip-green">Paid</span></td>
+                <td class="py-3 pr-4">
+                  <a href="#" class="view-link" aria-label="View invoice INV-001" title="Open INV-001"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>View</a>
+                </td>
+                <td class="py-3 pr-4 text-right tnum">02:30</td>
+                <td class="py-3 pr-4 text-right tnum">$250</td>
+                <td class="py-3 pr-5 text-right text-zinc-400">⋯</td>
+              </tr>
+
+              <!-- Draft -->
+              <tr class="row rowdiv">
+                <td class="py-3 pl-5 tnum text-zinc-500 dark:text-zinc-400">04/16/2026</td>
+                <td class="py-3 pr-4"><span class="inline-flex items-center gap-2"><span class="size-6 shrink-0 rounded-full bg-zinc-200 dark:bg-zinc-800"></span><span>Adam Toth</span></span></td>
+                <td class="py-3 pr-4 font-medium">Brand audit</td>
+                <td class="py-3 pr-4">
+                  <span class="cat" style="background:rgb(14 165 233 / 0.13); color:#0369a1;">
+                    <span class="cat-dot" style="background:#0ea5e9"></span>
+                    Strategy
+                  </span>
+                </td>
+                <td class="py-3 pr-4"><span class="chip chip-neutral">Draft</span></td>
+                <td class="py-3 pr-4">
+                  <a href="#" class="view-link" aria-label="View invoice INV-003" title="Open INV-003"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>View</a>
+                </td>
+                <td class="py-3 pr-4 text-right tnum">06:00</td>
+                <td class="py-3 pr-4 text-right tnum">$600</td>
+                <td class="py-3 pr-5 text-right text-zinc-400">⋯</td>
+              </tr>
+
+              <!-- Non-billable -->
+              <tr class="row rowdiv">
+                <td class="py-3 pl-5 tnum text-zinc-500 dark:text-zinc-400">04/17/2026</td>
+                <td class="py-3 pr-4"><span class="inline-flex items-center gap-2"><span class="size-6 shrink-0 rounded-full bg-zinc-200 dark:bg-zinc-800"></span><span>Adam Toth</span></span></td>
+                <td class="py-3 pr-4 font-medium">Internal sync</td>
+                <td class="py-3 pr-4">
+                  <span class="cat" style="background:rgb(139 92 246 / 0.13); color:#6d28d9;">
+                    <span class="cat-dot" style="background:#8b5cf6"></span>
+                    Admin
+                  </span>
+                </td>
+                <td class="py-3 pr-4">
+                  <span class="chip chip-neutral">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:11px;height:11px;flex-shrink:0">
+                      <circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/>
+                    </svg>
+                    Non-billable
+                  </span>
+                </td>
+                <td class="py-3 pr-4 text-zinc-300 dark:text-zinc-700">—</td>
+                <td class="py-3 pr-4 text-right tnum">00:45</td>
+                <td class="py-3 pr-4 text-right text-zinc-400">—</td>
+                <td class="py-3 pr-5 text-right text-zinc-400">⋯</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ── Section: Chip specimens ────────────────────────────── -->
+      <section class="mb-16">
+        <div class="mb-5 flex items-baseline justify-between">
+          <h2 class="section-title">Chip anatomy</h2>
+          <p class="text-xs text-zinc-400">All six states · 3× scale specimen</p>
+        </div>
+
+        <div class="spec-card">
+          <div class="flex flex-wrap items-center gap-x-10 gap-y-8" style="zoom:2">
+            <span class="chip chip-neutral">Uninvoiced</span>
+            <span class="chip chip-blue">Invoiced</span>
+            <span class="chip chip-red">Overdue</span>
+            <span class="chip chip-green">Paid</span>
+            <span class="chip chip-neutral">Draft</span>
+            <span class="chip chip-neutral">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:11px;height:11px;flex-shrink:0">
+                <circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/>
+              </svg>
+              Non-billable
+            </span>
+          </div>
+
+          <div class="mt-10 grid grid-cols-2 gap-10 pt-6 border-t border-zinc-200 dark:border-zinc-800 text-[12.5px] leading-relaxed text-zinc-600 dark:text-zinc-400">
+            <div>
+              <p class="kicker mb-3">Metrics</p>
+              <ul class="space-y-1.5">
+                <li><span class="text-zinc-900 dark:text-zinc-200">Height</span> 22px (locked via line-height + padding)</li>
+                <li><span class="text-zinc-900 dark:text-zinc-200">Radius</span> 6px — rounded-rect</li>
+                <li><span class="text-zinc-900 dark:text-zinc-200">Border</span> 1px solid, 60% alpha tone</li>
+                <li><span class="text-zinc-900 dark:text-zinc-200">Fill</span> 55% alpha tint (light) / 20% alpha (dark)</li>
+                <li><span class="text-zinc-900 dark:text-zinc-200">Padding</span> 0 9px</li>
+                <li><span class="text-zinc-900 dark:text-zinc-200">Icon gap</span> 5px</li>
+              </ul>
+            </div>
+            <div>
+              <p class="kicker mb-3">Typography</p>
+              <ul class="space-y-1.5">
+                <li><span class="text-zinc-900 dark:text-zinc-200">Size</span> 12px</li>
+                <li><span class="text-zinc-900 dark:text-zinc-200">Weight</span> 500 (medium)</li>
+                <li><span class="text-zinc-900 dark:text-zinc-200">Letter-spacing</span> 0.01em (crispness at small size)</li>
+                <li><span class="text-zinc-900 dark:text-zinc-200">Case</span> Sentence</li>
+                <li><span class="text-zinc-900 dark:text-zinc-200">Font feature</span> cv11, ss01</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── Section: column-split alignment proof ─────────────── -->
+      <section class="mb-16">
+        <div class="mb-5 flex items-baseline justify-between">
+          <h2 class="section-title">Alignment proof — one column vs split</h2>
+          <p class="text-xs text-zinc-400">Watch the vertical rhythm of the View links</p>
+        </div>
+
+        <div class="grid grid-cols-2 gap-6">
+          <!-- Before: one column -->
+          <div class="panel" style="padding:24px">
+            <p class="kicker mb-4">Before — single column</p>
+            <table class="text-sm" style="border-collapse:separate; border-spacing:0 6px">
+              <tr>
+                <td class="pr-3"><span class="chip chip-neutral">Uninvoiced</span></td>
+                <td></td>
+              </tr>
+              <tr>
+                <td class="pr-3"><span class="chip chip-blue">Invoiced</span></td>
+                <td><a href="#" class="view-link"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>View</a></td>
+              </tr>
+              <tr>
+                <td class="pr-3"><span class="chip chip-red">Overdue</span></td>
+                <td><a href="#" class="view-link"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>View</a></td>
+              </tr>
+              <tr>
+                <td class="pr-3"><span class="chip chip-green">Paid</span></td>
+                <td><a href="#" class="view-link"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>View</a></td>
+              </tr>
+              <tr>
+                <td class="pr-3"><span class="chip chip-neutral">Draft</span></td>
+                <td><a href="#" class="view-link"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>View</a></td>
+              </tr>
+              <tr>
+                <td class="pr-3"><span class="chip chip-neutral">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:11px;height:11px;flex-shrink:0"><circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/></svg>
+                  Non-billable
+                </span></td>
+                <td></td>
+              </tr>
+            </table>
+            <p class="mt-5 text-xs text-zinc-500 dark:text-zinc-400">
+              View sits at a different x-position on every row — eye keeps jumping left/right.
+            </p>
+          </div>
+
+          <!-- After: split -->
+          <div class="panel" style="padding:24px;border-color:rgb(16 185 129 / 0.35)">
+            <p class="kicker mb-4" style="color:#059669">After — Status + Invoice split</p>
+            <table class="text-sm" style="border-collapse:separate; border-spacing:0 6px">
+              <tr>
+                <td style="width:128px"><span class="chip chip-neutral">Uninvoiced</span></td>
+                <td class="text-zinc-300 dark:text-zinc-700">—</td>
+              </tr>
+              <tr>
+                <td style="width:128px"><span class="chip chip-blue">Invoiced</span></td>
+                <td><a href="#" class="view-link"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>View</a></td>
+              </tr>
+              <tr>
+                <td style="width:128px"><span class="chip chip-red">Overdue</span></td>
+                <td><a href="#" class="view-link"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>View</a></td>
+              </tr>
+              <tr>
+                <td style="width:128px"><span class="chip chip-green">Paid</span></td>
+                <td><a href="#" class="view-link"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>View</a></td>
+              </tr>
+              <tr>
+                <td style="width:128px"><span class="chip chip-neutral">Draft</span></td>
+                <td><a href="#" class="view-link"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>View</a></td>
+              </tr>
+              <tr>
+                <td style="width:128px"><span class="chip chip-neutral">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:11px;height:11px;flex-shrink:0"><circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/></svg>
+                  Non-billable
+                </span></td>
+                <td class="text-zinc-300 dark:text-zinc-700">—</td>
+              </tr>
+            </table>
+            <p class="mt-5 text-xs text-zinc-500 dark:text-zinc-400">
+              Views line up on one vertical axis. The <code class="rounded bg-zinc-100 px-1 dark:bg-zinc-800">—</code> dashes sit quiet; they read as "nothing here" without begging for attention.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── Section: Invoices list page ────────────────────────── -->
+      <section class="mb-16">
+        <div class="mb-5 flex items-baseline justify-between">
+          <h2 class="section-title">Invoices list — same chip, no View column (row is the link)</h2>
+        </div>
+
+        <div class="panel">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="text-xs text-zinc-500 dark:text-zinc-400">
+                <th class="w-32 py-3 pl-5 text-left font-medium">Invoice</th>
+                <th class="py-3 pr-4 text-left font-medium">Client · Project</th>
+                <th class="w-32 py-3 pr-4 text-left font-medium">Due date</th>
+                <th class="w-40 py-3 pr-4 text-left font-medium">Status</th>
+                <th class="w-32 py-3 pr-5 text-right font-medium">Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="row rowdiv">
+                <td class="py-3 pl-5 font-medium tnum">INV-004</td>
+                <td class="py-3 pr-4 text-zinc-500 dark:text-zinc-400">Acme Inc. · Website rebuild</td>
+                <td class="py-3 pr-4 tnum text-zinc-500 dark:text-zinc-400">May 15, 2026</td>
+                <td class="py-3 pr-4"><span class="chip chip-blue">Invoiced</span></td>
+                <td class="py-3 pr-5 text-right tnum">$2,400.00</td>
+              </tr>
+              <tr class="row rowdiv">
+                <td class="py-3 pl-5 font-medium tnum">INV-003</td>
+                <td class="py-3 pr-4 text-zinc-500 dark:text-zinc-400">Pragmatico · Ongoing</td>
+                <td class="py-3 pr-4 tnum text-zinc-500 dark:text-zinc-400">Apr 30, 2026</td>
+                <td class="py-3 pr-4"><span class="chip chip-neutral">Draft</span></td>
+                <td class="py-3 pr-5 text-right tnum">$600.00</td>
+              </tr>
+              <tr class="row rowdiv">
+                <td class="py-3 pl-5 font-medium tnum">INV-002</td>
+                <td class="py-3 pr-4 text-zinc-500 dark:text-zinc-400">Pragmatico · Ongoing</td>
+                <td class="py-3 pr-4 tnum" style="color:#b91c1c">Mar 28, 2026</td>
+                <td class="py-3 pr-4"><span class="chip chip-red">Overdue</span></td>
+                <td class="py-3 pr-5 text-right tnum">$400.00</td>
+              </tr>
+              <tr class="row rowdiv">
+                <td class="py-3 pl-5 font-medium tnum">INV-001</td>
+                <td class="py-3 pr-4 text-zinc-500 dark:text-zinc-400">Pragmatico · Ongoing</td>
+                <td class="py-3 pr-4 tnum text-zinc-500 dark:text-zinc-400">Feb 14, 2026</td>
+                <td class="py-3 pr-4"><span class="chip chip-green">Paid</span></td>
+                <td class="py-3 pr-5 text-right tnum">$250.00</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <footer class="mt-16 border-t border-zinc-200 pt-8 text-xs text-zinc-400 dark:border-zinc-800">
+        Approve → I'll introduce a single <code class="rounded bg-zinc-100 px-1 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">&lt;StatusChip&gt;</code> component, replace <code class="rounded bg-zinc-100 px-1 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">InvoiceStatusBadge</code> / <code class="rounded bg-zinc-100 px-1 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">BillingStatusBadge</code> everywhere they're used (time table, invoice list, invoice sidebar, retainer card), and wire up the <em>View</em> link with <code class="rounded bg-zinc-100 px-1 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">aria-label</code> carrying the invoice id.
+      </footer>
+    </div>
+
+    <script>
+      const t = document.getElementById("theme-toggle");
+      t.addEventListener("click", () => document.documentElement.classList.toggle("dark"));
+      if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
+        document.documentElement.classList.add("dark");
+      }
+    </script>
+  </body>
+</html>

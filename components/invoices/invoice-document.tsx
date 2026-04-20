@@ -10,22 +10,13 @@ import { InvoiceParties } from "@/components/invoices/invoice-parties"
 import { InvoiceWorkBreakdown, type CategoryGroup } from "@/components/invoices/invoice-work-breakdown"
 import { InvoiceBillingSummary, type BalanceData } from "@/components/invoices/invoice-billing-summary"
 import { toastError } from "@/lib/toast-helpers"
-import { formatInvoiceDate, formatInvoiceNumber } from "@/lib/format"
+import {
+  formatDateToYMDOrUndefined,
+  formatInvoiceDate,
+  formatInvoiceNumber,
+  parseYMDToLocalDate,
+} from "@/lib/format"
 import { LockIcon, XIcon } from "lucide-react"
-
-function dateToString(date: Date | undefined): string | undefined {
-  if (!date) return undefined
-  const y = date.getFullYear()
-  const m = String(date.getMonth() + 1).padStart(2, "0")
-  const d = String(date.getDate()).padStart(2, "0")
-  return `${y}-${m}-${d}`
-}
-
-function stringToDate(str: string | undefined): Date | undefined {
-  if (!str) return undefined
-  const [y, m, d] = str.split("-").map(Number)
-  return new Date(y, m - 1, d)
-}
 
 /** Line types that belong in the billing summary card, not the work breakdown */
 const BILLING_LINE_TYPES = new Set(["fixed", "retainer_fee", "overage", "manual"])
@@ -50,7 +41,7 @@ export function InvoiceDocument({
   const updateInvoice = useMutation(api.invoices.updateInvoice)
 
   async function handleDateChange(field: "issueDate" | "dueDate", date: Date | undefined) {
-    const dateStr = dateToString(date)
+    const dateStr = formatDateToYMDOrUndefined(date)
     // issueDate is required; ignore undefined. dueDate is optional — pass null to clear.
     if (!dateStr && field === "issueDate") return
     const value = dateStr ?? (field === "dueDate" ? null : undefined)
@@ -123,7 +114,7 @@ export function InvoiceDocument({
           ) : (
             <div className="mt-1">
               <DatePicker
-                value={stringToDate(invoice.issueDate)}
+                value={parseYMDToLocalDate(invoice.issueDate)}
                 onChange={(d) => handleDateChange("issueDate", d)}
                 className="h-8 text-sm"
               />
@@ -137,7 +128,7 @@ export function InvoiceDocument({
           ) : (
             <div className="mt-1 flex items-center gap-1">
               <DatePicker
-                value={stringToDate(invoice.dueDate)}
+                value={parseYMDToLocalDate(invoice.dueDate)}
                 onChange={(d) => handleDateChange("dueDate", d)}
                 className="h-8 text-sm"
               />

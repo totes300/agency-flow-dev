@@ -125,7 +125,7 @@ export default function ProjectDetailPage() {
 
   return (
     <TaskReferenceDataProvider value={referenceData}>
-    <div className="mx-auto w-full max-w-5xl flex flex-col gap-6">
+    <div className="mx-auto w-full max-w-7xl flex flex-col gap-6">
       <ProjectDetailHeader
         projectId={projectId}
         project={project}
@@ -182,7 +182,12 @@ export default function ProjectDetailPage() {
           <TabsContent value="time" className="mt-6">
             <ProjectTime
               projectId={projectId}
-              project={{ billingType: project.billingType, currency: project.currency }}
+              project={{
+                name: project.name,
+                billingType: project.billingType,
+                currency: project.currency,
+                teamMembers: project.teamMembers,
+              }}
               onNavigateToInvoices={() => setTab("invoices")}
             />
           </TabsContent>

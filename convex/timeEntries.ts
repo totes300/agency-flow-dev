@@ -1,11 +1,12 @@
 import { v, ConvexError } from "convex/values";
 import { query, mutation } from "./_generated/server";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { getAuthContext } from "./lib/auth";
 import { roundMinutes } from "./lib/rounding";
 import { getDateInTimezone } from "./lib/timer";
 import { getOrgSettings, resolveRateSnapshot } from "./lib/orgHelpers";
 import { validateAssignees } from "./lib/task_helpers";
+import { assertValidDateString } from "./lib/dateValidation";
 import { logActivity } from "./activityLog";
 
 function formatDurationHHMM(minutes: number): string {
@@ -207,11 +208,7 @@ export const create = mutation({
       entryUserId = args.userId;
     }
 
-    if (args.date) {
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(args.date) || isNaN(new Date(args.date).getTime())) {
-        throw new ConvexError("Invalid date format — expected YYYY-MM-DD");
-      }
-    }
+    if (args.date) assertValidDateString(args.date);
 
     const task = await ctx.db.get(args.taskId);
     if (!task || task.orgId !== auth.orgId) throw new ConvexError("Task not found");
@@ -287,6 +284,7 @@ export const update = mutation({
     note: v.optional(v.union(v.string(), v.null())),
     date: v.optional(v.string()),
     isBillable: v.optional(v.boolean()),
+    taskId: v.optional(v.id("tasks")),
   },
   handler: async (ctx, args) => {
     const { userId, orgId, isAdmin } = await getAuthContext(ctx);
@@ -302,6 +300,8 @@ export const update = mutation({
     if (entry.invoiceId) {
       throw new ConvexError("Cannot edit an invoiced time entry — void the invoice first");
     }
+
+    if (args.date !== undefined) assertValidDateString(args.date);
 
     const updates: Record<string, unknown> = { updatedAt: Date.now() };
 
@@ -321,28 +321,69 @@ export const update = mutation({
       updates.date = args.date;
     }
 
-    if (args.isBillable !== undefined) {
-      // When billable status changes, re-resolve rate snapshot
-      if (args.isBillable !== entry.isBillable) {
-        const task = await ctx.db.get(entry.taskId);
-        if (!task) throw new ConvexError("Task not found");
-        if (!task.projectId) throw new ConvexError("Task has no project");
-        const project = await ctx.db.get(task.projectId);
-        if (!project) throw new ConvexError("Project not found");
+    // Resolve target task if a change was requested. All downstream rate
+    // re-resolution (billable toggle OR task swap) must point at the SAME
+    // task doc, so fetch once.
+    const targetTaskId = args.taskId ?? entry.taskId;
+    const taskChanged = args.taskId !== undefined && args.taskId !== entry.taskId;
 
-        const snapshot = await resolveRateSnapshot(ctx, {
-          userId: entry.userId,
-          orgId,
-          task,
-          project,
-          isBillable: args.isBillable,
-        });
-        updates.costRate = snapshot.costRate;
-        updates.billableRate = snapshot.billableRate;
-        updates.rateCurrency = snapshot.rateCurrency;
-        updates.snapshotCategoryId = task.workCategoryId;
+    let targetTask: Doc<"tasks"> | null = null;
+    async function loadTargetTask(): Promise<Doc<"tasks">> {
+      if (targetTask) return targetTask;
+      const fetched = await ctx.db.get(targetTaskId);
+      if (!fetched || fetched.orgId !== orgId) {
+        throw new ConvexError("Task not found");
       }
+      targetTask = fetched;
+      return fetched;
+    }
+
+    if (taskChanged) {
+      const task = await loadTargetTask();
+      if (task.archivedAt) {
+        throw new ConvexError("Cannot move time to an archived task");
+      }
+      if (!task.projectId) {
+        throw new ConvexError("Target task must belong to a project");
+      }
+      // Preserve the "same project" invariant: moving a time entry across
+      // projects would break project-level reporting and rate cascades.
+      const oldTask = await ctx.db.get(entry.taskId);
+      if (!oldTask || oldTask.projectId !== task.projectId) {
+        throw new ConvexError("Target task must belong to the same project");
+      }
+      updates.taskId = task._id;
+      updates.snapshotCategoryId = task.workCategoryId;
+    }
+
+    if (args.isBillable !== undefined) {
       updates.isBillable = args.isBillable;
+    }
+
+    // Re-resolve rate snapshot when anything that feeds into rate resolution
+    // changed: billable flag, or task (category/project cascade). The snapshot
+    // walks category → project → user overrides, so all cases must re-snapshot.
+    const billableChanged =
+      args.isBillable !== undefined && args.isBillable !== entry.isBillable;
+    const effectiveIsBillable = args.isBillable ?? entry.isBillable;
+
+    if (billableChanged || taskChanged) {
+      const task = await loadTargetTask();
+      if (!task.projectId) throw new ConvexError("Task has no project");
+      const project = await ctx.db.get(task.projectId);
+      if (!project) throw new ConvexError("Project not found");
+
+      const snapshot = await resolveRateSnapshot(ctx, {
+        userId: entry.userId,
+        orgId,
+        task,
+        project,
+        isBillable: effectiveIsBillable,
+      });
+      updates.costRate = snapshot.costRate;
+      updates.billableRate = snapshot.billableRate;
+      updates.rateCurrency = snapshot.rateCurrency;
+      updates.snapshotCategoryId = task.workCategoryId;
     }
 
     await ctx.db.patch(args.id, updates);
@@ -498,8 +539,12 @@ export const listProjectEntries = query({
       ),
     ),
     search: v.optional(v.string()),
+    fromDate: v.optional(v.string()),
+    toDate: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    if (args.fromDate !== undefined) assertValidDateString(args.fromDate, "fromDate");
+    if (args.toDate !== undefined) assertValidDateString(args.toDate, "toDate");
     const { orgId, userId, isAdmin } = await getAuthContext(ctx);
 
     const project = await ctx.db.get(args.projectId);
@@ -623,6 +668,12 @@ export const listProjectEntries = query({
     });
 
     // Apply filters.
+    if (args.fromDate) {
+      rows = rows.filter((r) => r.date >= args.fromDate!);
+    }
+    if (args.toDate) {
+      rows = rows.filter((r) => r.date <= args.toDate!);
+    }
     if (args.memberId) {
       rows = rows.filter((r) => r.userId === args.memberId);
     }

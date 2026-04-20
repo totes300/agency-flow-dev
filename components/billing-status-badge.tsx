@@ -1,16 +1,12 @@
-import { ColoredPillBadge } from "@/components/ui/colored-pill-badge"
+import { BanIcon } from "lucide-react"
+import { StatusChip } from "@/components/ui/status-chip"
 
 type BillingState = "non_billable" | "uninvoiced"
 
-const LABELS: Record<BillingState, string> = {
-  non_billable: "Non-billable",
-  uninvoiced: "Uninvoiced",
-}
-
 /**
- * Muted tag for time-entry rows that aren't (yet) tied to an invoice. Uses
- * the `neutral` tone of {@link ColoredPillBadge} so it sits quieter than
- * status badges (which carry semantic color).
+ * Row-level state tag for time entries that aren't tied to an invoice yet.
+ * Built on `StatusChip` so `Uninvoiced` and `Non-billable` read as siblings
+ * of `Invoiced / Overdue / Paid / Draft` — all outlined chips, same anatomy.
  */
 export function BillingStatusBadge({
   state,
@@ -19,11 +15,23 @@ export function BillingStatusBadge({
   state: BillingState
   className?: string
 }) {
+  if (state === "non_billable") {
+    return (
+      <StatusChip
+        data-slot="billing-status-badge"
+        tone="neutral"
+        leading={<BanIcon aria-hidden className="size-3 shrink-0" />}
+        label="Non-billable"
+        className={className}
+      />
+    )
+  }
+
   return (
-    <ColoredPillBadge
+    <StatusChip
       data-slot="billing-status-badge"
       tone="neutral"
-      label={LABELS[state]}
+      label="Uninvoiced"
       className={className}
     />
   )

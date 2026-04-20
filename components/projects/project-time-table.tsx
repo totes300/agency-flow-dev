@@ -1,6 +1,9 @@
 "use client"
 
 import Link from "next/link"
+import { useRef, useState } from "react"
+import { useMutation } from "convex/react"
+import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import {
   Table,
@@ -10,13 +13,46 @@ import {
   TableRow,
   TableCell,
 } from "@/components/ui/table"
+import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { CategoryBadge } from "@/components/category-badge"
 import { UserAvatar } from "@/components/user-avatar"
 import { InvoiceStatusBadge } from "@/components/invoices/invoice-status-badge"
 import { BillingStatusBadge } from "@/components/billing-status-badge"
-import { formatCurrency, formatMinutes, formatInvoiceNumber } from "@/lib/format"
+import {
+  formatCurrency,
+  formatDateToUS,
+  formatInvoiceNumber,
+  formatMinutes,
+} from "@/lib/format"
+import { toastError } from "@/lib/toast-helpers"
+import { toast } from "sonner"
 import { cn } from "@/lib/utils"
+import {
+  ArrowUpRightIcon,
+  BanIcon,
+  DollarSignIcon,
+  MoreHorizontalIcon,
+  PencilIcon,
+  Trash2Icon,
+} from "lucide-react"
 
 export type TimeEntryRow = {
   _id: Id<"timeEntries">
@@ -30,6 +66,7 @@ export type TimeEntryRow = {
   note: string | undefined
   isBillable: boolean
   billableRate: number
+  costRate: number
   workCategoryId: Id<"workCategories"> | undefined
   workCategoryName: string | undefined
   workCategoryColor: string | undefined
@@ -40,14 +77,29 @@ export type TimeEntryRow = {
   invoiceDueDate: string | undefined
 }
 
-function formatDate(dateStr: string): string {
-  const [year, month, day] = dateStr.split("-")
-  return `${month}/${day}/${year}`
-}
-
 /** T&M billable + uninvoiced entries are the only rows that can be selected. */
 function isSelectable(row: TimeEntryRow, selectable: boolean): boolean {
   return selectable && row.isBillable && !row.invoiceId
+}
+
+export type ProjectTimeTableProps = {
+  entries: TimeEntryRow[]
+  selectedIds: Set<string>
+  onToggle: (id: string) => void
+  /**
+   * Toggle every selectable row in `entries` (this table's own slice — in
+   * grouped view that's one group). The parent owns the Set and folds these
+   * rows in/out without touching rows from other groups.
+   */
+  onSelectAllVisible: (selectAll: boolean, rows: TimeEntryRow[]) => void
+  /** True when checkboxes should render (admin + T&M). */
+  selectable: boolean
+  showAmounts: boolean
+  currency: string
+  timezone: string
+  isAdmin: boolean
+  currentUserId: Id<"users"> | undefined
+  onEdit: (entryId: Id<"timeEntries">) => void
 }
 
 export function ProjectTimeTable({
@@ -59,16 +111,10 @@ export function ProjectTimeTable({
   showAmounts,
   currency,
   timezone,
-}: {
-  entries: TimeEntryRow[]
-  selectedIds: Set<string>
-  onToggle: (id: string) => void
-  onSelectAllVisible: (selectAll: boolean) => void
-  selectable: boolean
-  showAmounts: boolean
-  currency: string
-  timezone: string
-}) {
+  isAdmin,
+  currentUserId,
+  onEdit,
+}: ProjectTimeTableProps) {
   const selectableRows = entries.filter((r) => isSelectable(r, selectable))
   const allSelected =
     selectableRows.length > 0 && selectableRows.every((r) => selectedIds.has(r._id))
@@ -83,7 +129,9 @@ export function ProjectTimeTable({
             <TableHead className="w-10">
               <Checkbox
                 checked={allSelected ? true : someSelected ? "indeterminate" : false}
-                onCheckedChange={(checked) => onSelectAllVisible(checked === true)}
+                onCheckedChange={(checked) =>
+                  onSelectAllVisible(checked === true, entries)
+                }
                 aria-label="Select all visible entries"
                 disabled={selectableRows.length === 0}
               />
@@ -93,94 +141,282 @@ export function ProjectTimeTable({
           <TableHead className="w-40">Member</TableHead>
           <TableHead>Task</TableHead>
           <TableHead className="w-40">Category</TableHead>
+          <TableHead className="w-48">Status</TableHead>
           <TableHead className="w-20 text-right">Hours</TableHead>
           {showAmounts && <TableHead className="w-20 text-right">Rate</TableHead>}
           {showAmounts && <TableHead className="w-24 text-right">Amount</TableHead>}
-          <TableHead className="w-32">Status</TableHead>
+          <TableHead className="w-10" aria-label="Row actions" />
         </TableRow>
       </TableHeader>
       <TableBody>
-        {entries.map((row) => {
-          const rowSelectable = isSelectable(row, selectable)
-          const checked = selectedIds.has(row._id)
-          const amount = (row.durationMinutes / 60) * row.billableRate
-
-          return (
-            // Row click is a mouse-only convenience hit target — keyboard
-            // users toggle via the checkbox inside, which carries the accessible
-            // name and focusable role. Adding tabIndex/role here would create a
-            // competing tab stop next to the checkbox (bad for screen readers).
-            <TableRow
-              key={row._id}
-              className={cn(rowSelectable && "cursor-pointer")}
-              data-selectable={rowSelectable || undefined}
-              onClick={() => {
-                if (rowSelectable) onToggle(row._id)
-              }}
-            >
-              {selectable && (
-                <TableCell onClick={(e) => e.stopPropagation()}>
-                  {rowSelectable ? (
-                    <Checkbox
-                      checked={checked}
-                      onCheckedChange={() => onToggle(row._id)}
-                      aria-label={`Select entry on ${row.date}`}
-                    />
-                  ) : null}
-                </TableCell>
-              )}
-              <TableCell className="text-muted-foreground tabular-nums">
-                {formatDate(row.date)}
-              </TableCell>
-              <TableCell>
-                <span className="flex items-center gap-2">
-                  <UserAvatar
-                    name={row.userName}
-                    imageUrl={row.userImageUrl}
-                    size="sm"
-                  />
-                  <span className="truncate text-sm">{row.userName}</span>
-                </span>
-              </TableCell>
-              <TableCell>
-                <span className="truncate text-sm font-medium">{row.taskTitle}</span>
-                {row.note && (
-                  <span className="block truncate text-xs text-muted-foreground">
-                    {row.note}
-                  </span>
-                )}
-              </TableCell>
-              <TableCell>
-                {row.workCategoryName && row.workCategoryColor ? (
-                  <CategoryBadge
-                    name={row.workCategoryName}
-                    color={row.workCategoryColor}
-                  />
-                ) : (
-                  <span className="text-xs text-muted-foreground">—</span>
-                )}
-              </TableCell>
-              <TableCell className="text-right tabular-nums">
-                {formatMinutes(row.durationMinutes)}
-              </TableCell>
-              {showAmounts && (
-                <TableCell className="text-right tabular-nums text-muted-foreground">
-                  {row.isBillable ? formatCurrency(row.billableRate, currency) : "—"}
-                </TableCell>
-              )}
-              {showAmounts && (
-                <TableCell className="text-right tabular-nums">
-                  {row.isBillable ? formatCurrency(amount, currency) : "—"}
-                </TableCell>
-              )}
-              <TableCell onClick={(e) => e.stopPropagation()}>
-                <BillingStatusCell row={row} timezone={timezone} />
-              </TableCell>
-            </TableRow>
-          )
-        })}
+        {entries.map((row) => (
+          <TimeEntryTableRow
+            key={row._id}
+            row={row}
+            selected={selectedIds.has(row._id)}
+            onToggle={onToggle}
+            selectable={selectable}
+            showAmounts={showAmounts}
+            currency={currency}
+            timezone={timezone}
+            canEdit={isAdmin || row.userId === currentUserId}
+            onEdit={onEdit}
+          />
+        ))}
       </TableBody>
     </Table>
+  )
+}
+
+function TimeEntryTableRow({
+  row,
+  selected,
+  onToggle,
+  selectable,
+  showAmounts,
+  currency,
+  timezone,
+  canEdit,
+  onEdit,
+}: {
+  row: TimeEntryRow
+  selected: boolean
+  onToggle: (id: string) => void
+  selectable: boolean
+  showAmounts: boolean
+  currency: string
+  timezone: string
+  canEdit: boolean
+  onEdit: (entryId: Id<"timeEntries">) => void
+}) {
+  const rowSelectable = isSelectable(row, selectable)
+  const amount = (row.durationMinutes / 60) * row.billableRate
+  const isInvoiced = !!row.invoiceId
+
+  return (
+    <TableRow
+      className={cn(rowSelectable && "cursor-pointer")}
+      data-selectable={rowSelectable || undefined}
+      onClick={() => {
+        if (rowSelectable) onToggle(row._id)
+      }}
+    >
+      {selectable && (
+        <TableCell onClick={(e) => e.stopPropagation()}>
+          {rowSelectable ? (
+            <Checkbox
+              checked={selected}
+              onCheckedChange={() => onToggle(row._id)}
+              aria-label={`Select entry on ${row.date}`}
+            />
+          ) : null}
+        </TableCell>
+      )}
+      <TableCell className="text-muted-foreground tabular-nums">
+        {formatDateToUS(row.date)}
+      </TableCell>
+      <TableCell>
+        <span className="flex items-center gap-2">
+          <UserAvatar name={row.userName} imageUrl={row.userImageUrl} size="sm" />
+          <span className="truncate text-sm">{row.userName}</span>
+        </span>
+      </TableCell>
+      <TableCell>
+        <span className="truncate text-sm font-medium">{row.taskTitle}</span>
+        {row.note && (
+          <span className="block truncate text-xs text-muted-foreground">
+            {row.note}
+          </span>
+        )}
+      </TableCell>
+      <TableCell>
+        {row.workCategoryName && row.workCategoryColor ? (
+          <CategoryBadge
+            name={row.workCategoryName}
+            color={row.workCategoryColor}
+          />
+        ) : (
+          <span className="text-xs text-muted-foreground">—</span>
+        )}
+      </TableCell>
+      <TableCell onClick={(e) => e.stopPropagation()}>
+        <BillingStatusCell row={row} timezone={timezone} />
+      </TableCell>
+      <TableCell className="text-right tabular-nums">
+        {formatMinutes(row.durationMinutes)}
+      </TableCell>
+      {showAmounts && (
+        <TableCell className="text-right tabular-nums text-muted-foreground">
+          {row.isBillable ? formatCurrency(row.billableRate, currency) : "—"}
+        </TableCell>
+      )}
+      {showAmounts && (
+        <TableCell className="text-right tabular-nums">
+          {row.isBillable ? formatCurrency(amount, currency) : "—"}
+        </TableCell>
+      )}
+      <TableCell onClick={(e) => e.stopPropagation()}>
+        {canEdit && (
+          <RowActionsMenu
+            row={row}
+            isInvoiced={isInvoiced}
+            onEdit={() => onEdit(row._id)}
+          />
+        )}
+      </TableCell>
+    </TableRow>
+  )
+}
+
+function RowActionsMenu({
+  row,
+  isInvoiced,
+  onEdit,
+}: {
+  row: TimeEntryRow
+  isInvoiced: boolean
+  onEdit: () => void
+}) {
+  const updateEntry = useMutation(api.timeEntries.update)
+  const removeEntry = useMutation(api.timeEntries.remove)
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const [isDeleting, setIsDeleting] = useState(false)
+  const toggleInFlightRef = useRef(false)
+
+  async function runToggle(target: boolean): Promise<boolean> {
+    try {
+      await updateEntry({ id: row._id, isBillable: target })
+      return true
+    } catch (err) {
+      toastError(err, "Couldn't update entry")
+      return false
+    }
+  }
+
+  async function handleToggleBillable() {
+    if (isInvoiced || toggleInFlightRef.current) return
+    toggleInFlightRef.current = true
+    const target = !row.isBillable
+    const current = row.isBillable
+    const ok = await runToggle(target)
+    toggleInFlightRef.current = false
+    if (!ok) return
+    toast(`Marked ${target ? "billable" : "non-billable"}`, {
+      id: `billable-toggle-${row._id}`,
+      action: {
+        label: "Undo",
+        onClick: () => {
+          void runToggle(current)
+        },
+      },
+    })
+  }
+
+  async function handleDelete() {
+    setIsDeleting(true)
+    try {
+      await removeEntry({ id: row._id })
+      toast.success("Entry deleted")
+      setConfirmOpen(false)
+    } catch (err) {
+      toastError(err, "Failed to delete entry")
+    } finally {
+      setIsDeleting(false)
+    }
+  }
+
+  const disabledTooltip = isInvoiced ? "Can't modify invoiced entries" : ""
+  const toggleLabel = row.isBillable ? "Mark non-billable" : "Mark billable"
+  const ToggleIcon = row.isBillable ? BanIcon : DollarSignIcon
+
+  return (
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label="Row actions"
+            className="size-7 text-muted-foreground"
+          >
+            <MoreHorizontalIcon aria-hidden className="size-4" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-44">
+          <DropdownMenuItem
+            onSelect={(e) => {
+              if (isInvoiced) {
+                e.preventDefault()
+                return
+              }
+              onEdit()
+            }}
+            disabled={isInvoiced}
+            title={disabledTooltip}
+          >
+            <PencilIcon aria-hidden className="size-3.5" />
+            Edit
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            onSelect={(e) => {
+              if (isInvoiced) {
+                e.preventDefault()
+                return
+              }
+              e.preventDefault()
+              void handleToggleBillable()
+            }}
+            disabled={isInvoiced}
+            title={disabledTooltip}
+          >
+            <ToggleIcon aria-hidden className="size-3.5" />
+            {toggleLabel}
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            variant="destructive"
+            disabled={isInvoiced}
+            title={disabledTooltip}
+            onSelect={(e) => {
+              if (isInvoiced) {
+                e.preventDefault()
+                return
+              }
+              e.preventDefault()
+              setConfirmOpen(true)
+            }}
+          >
+            <Trash2Icon aria-hidden className="size-3.5" />
+            Delete
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this entry?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently removes the time entry. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={isDeleting}
+              onClick={(e) => {
+                e.preventDefault()
+                void handleDelete()
+              }}
+            >
+              {isDeleting ? "Deleting…" : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   )
 }
 
@@ -194,20 +430,27 @@ function BillingStatusCell({
   if (!row.isBillable) return <BillingStatusBadge state="non_billable" />
 
   if (row.invoiceId && row.invoiceStatus && row.invoicePrefix && row.invoiceNumber != null) {
+    const invoiceNumber = formatInvoiceNumber(row.invoicePrefix, row.invoiceNumber)
     return (
-      <Link
-        href={`/invoices/${row.invoiceId}`}
-        className="inline-flex items-center gap-1.5 hover:opacity-80"
-      >
+      <span className="inline-flex items-center gap-3">
         <InvoiceStatusBadge
           status={row.invoiceStatus}
           dueDate={row.invoiceDueDate}
           timezone={timezone}
         />
-        <span className="text-xs text-muted-foreground tabular-nums">
-          {formatInvoiceNumber(row.invoicePrefix, row.invoiceNumber)}
-        </span>
-      </Link>
+        <Link
+          href={`/invoices/${row.invoiceId}`}
+          aria-label={`View invoice ${invoiceNumber}`}
+          title={`Open ${invoiceNumber}`}
+          className="group inline-flex items-center gap-1 rounded-sm text-xs text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500"
+        >
+          <ArrowUpRightIcon
+            aria-hidden
+            className="size-3 transition-transform group-hover:translate-x-[1px] group-hover:-translate-y-[1px]"
+          />
+          View
+        </Link>
+      </span>
     )
   }
 

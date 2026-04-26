@@ -27,14 +27,14 @@ export type EntryInput = {
 };
 
 export type InvoiceInput = {
-  status: "draft" | "invoiced" | "paid";
+  status: "draft" | "invoiced" | "paid" | "void";
   total: number;
 };
 
 export type LineItemInput = {
   lineType: "time" | "fixed" | "retainer_fee" | "overage" | "manual";
   amount: number;
-  invoiceStatus: "draft" | "invoiced" | "paid";
+  invoiceStatus: "draft" | "invoiced" | "paid" | "void";
 };
 
 export type DateRangePreset =
@@ -285,7 +285,8 @@ export function computeFixedSummary(args: {
   let billedAmount = 0;
   let totalBilledAcrossLineTypes = 0;
   for (const li of args.lineItems) {
-    if (li.invoiceStatus === "draft") continue;
+    // Drafts are provisional; voids are historical. Neither counts as billed.
+    if (li.invoiceStatus === "draft" || li.invoiceStatus === "void") continue;
     totalBilledAcrossLineTypes += li.amount;
     if (li.lineType === "fixed") billedAmount += li.amount;
   }

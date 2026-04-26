@@ -294,7 +294,7 @@ export function InlineAddTask({
     <div
       ref={rowRef}
       onBlur={handleRowBlur}
-      className={`group/row relative grid ${TASK_GRID_COLS} items-center gap-x-6 border-b border-border/40 pr-3 py-2.5 before:pointer-events-none before:absolute before:inset-y-0 before:-left-13 before:w-13 [&>*]:min-w-0 [&>*]:overflow-hidden`}
+      className={`group/row relative grid ${TASK_GRID_COLS} items-center gap-x-6 border-b border-border/40 pr-3 py-2.5 before:pointer-events-none before:absolute before:inset-y-0 before:-left-12 before:w-12 [&>*]:min-w-0 [&>*]:overflow-hidden`}
     >
       <div className="flex items-center gap-1.5">
         <PlusIcon className="size-3.5 shrink-0 text-muted-foreground/40" />

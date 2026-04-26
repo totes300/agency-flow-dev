@@ -7,7 +7,7 @@ import { useOrganization } from "@clerk/nextjs"
 import { api } from "@/convex/_generated/api"
 import { useTimerActions } from "@/lib/hooks/use-timer"
 import { parseDuration, formatDuration, QUICK_DURATIONS } from "@/lib/duration"
-import { formatShortDate, getInitials } from "@/lib/format"
+import { formatDateToYMD, formatShortDate, getInitials } from "@/lib/format"
 import { TimeEntriesList } from "@/components/time/time-entries-list"
 import { Switch } from "@/components/ui/switch"
 import { Button } from "@/components/ui/button"
@@ -16,12 +16,51 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover"
+import { MiniCalendar, addDays } from "@/components/ui/mini-calendar"
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip"
-import { ClockIcon, AlignLeftIcon, ChevronDownIcon, PlayIcon, CheckIcon } from "lucide-react"
+import {
+  ClockIcon,
+  AlignLeftIcon,
+  ChevronDownIcon,
+  PlayIcon,
+  CheckIcon,
+  CalendarIcon,
+  ArrowLeftIcon,
+  DollarSignIcon,
+} from "lucide-react"
 import { toast } from "sonner"
 import { toastError } from "@/lib/toast-helpers"
 import { cn } from "@/lib/utils"
 import type { Id } from "@/convex/_generated/dataModel"
+
+type DatePreset = {
+  label: string
+  icon: "clock" | "arrow"
+  getDate: (today: Date) => Date
+}
+
+function getPreviousFriday(today: Date): Date {
+  const d = new Date(today)
+  const day = d.getDay()
+  const diff = day === 5 ? 7 : ((day - 5 + 7) % 7) || 7
+  d.setDate(d.getDate() - diff)
+  return d
+}
+
+const DATE_PRESETS: DatePreset[] = [
+  { label: "Today", icon: "clock", getDate: (d) => d },
+  { label: "Yesterday", icon: "arrow", getDate: (d) => addDays(d, -1) },
+  { label: "2 days ago", icon: "arrow", getDate: (d) => addDays(d, -2) },
+  { label: "Last Friday", icon: "arrow", getDate: (d) => getPreviousFriday(d) },
+]
+
+function formatDatePill(dateStr: string): string {
+  const today = formatDateToYMD(new Date())
+  const yesterday = formatDateToYMD(addDays(new Date(), -1))
+  if (dateStr === today) return `Today, ${formatShortDate(dateStr)}`
+  if (dateStr === yesterday) return `Yesterday, ${formatShortDate(dateStr)}`
+  return formatShortDate(dateStr)
+}
 
 export function TimeLogPopover({
   taskId,
@@ -51,6 +90,8 @@ export function TimeLogPopover({
   const [note, setNote] = useState("")
   const [billable, setBillable] = useState(isBillable)
   const [saving, setSaving] = useState(false)
+  const [selectedDate, setSelectedDate] = useState(() => formatDateToYMD(new Date()))
+  const [datePickerOpen, setDatePickerOpen] = useState(false)
   const [selectedUserId, setSelectedUserId] = useState<Id<"users"> | null>(null)
   const [userPickerOpen, setUserPickerOpen] = useState(false)
 
@@ -74,6 +115,14 @@ export function TimeLogPopover({
     : null
   const displayName = selectedMember?.name ?? currentUser?.name ?? "You"
 
+  // Derived: parsed duration drives validity, preview, and Save label
+  const parsedMinutes = parseDuration(durationStr)
+  const trimmed = durationStr.trim()
+  const durationValid = parsedMinutes !== null && parsedMinutes > 0
+  const canonicalForm = durationValid ? formatDuration(parsedMinutes) : ""
+  const showPreview = trimmed.length > 0 && durationValid && canonicalForm.toLowerCase() !== trimmed.toLowerCase()
+  const showError = trimmed.length > 0 && !durationValid
+
   function resetForm() {
     setDurationStr("")
     setNote("")
@@ -81,25 +130,24 @@ export function TimeLogPopover({
     setEntriesExpanded(false)
     setSelectedUserId(null)
     setUserPickerOpen(false)
+    setSelectedDate(formatDateToYMD(new Date()))
+    setDatePickerOpen(false)
   }
 
   async function handleSave() {
-    const minutes = parseDuration(durationStr)
-    if (!minutes) {
-      toast.error("Enter a valid duration")
-      return
-    }
+    if (saving || !durationValid) return
     setSaving(true)
     try {
       await createEntry({
         taskId,
-        durationMinutes: minutes,
+        durationMinutes: parsedMinutes,
         note: note.trim() || undefined,
         isBillable: billable,
+        date: selectedDate,
         ...(isAdmin && selectedUserId ? { userId: selectedUserId } : {}),
       })
       const forUser = selectedMember ? ` for ${selectedMember.name}` : ""
-      toast.success(`${formatDuration(minutes)} logged${forUser}`)
+      toast.success(`${formatDuration(parsedMinutes)} logged${forUser}`)
       resetForm()
     } catch (err) {
       toastError(err, "Failed to log time")
@@ -114,6 +162,14 @@ export function TimeLogPopover({
       setOpen(false)
     } catch (err) {
       toastError(err, "Failed to start timer")
+    }
+  }
+
+  // Cmd/Ctrl+Enter from any field saves
+  function handlePopoverKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+      e.preventDefault()
+      void handleSave()
     }
   }
 
@@ -137,17 +193,18 @@ export function TimeLogPopover({
         className="w-[340px] p-0"
         align={align}
         sideOffset={4}
+        onKeyDown={handlePopoverKeyDown}
       >
-        {/* User selector (admin only) */}
+        {/* User selector (admin only, compact) */}
         {isAdmin && orgMembers ? (
           <div className="border-b border-border/40">
             <button
               type="button"
               onClick={() => setUserPickerOpen(prev => !prev)}
-              className="flex w-full items-center gap-2 px-4 py-2.5 text-sm"
+              className="flex w-full items-center gap-2 px-4 py-2 text-xs text-muted-foreground transition-colors hover:bg-muted/50"
             >
-              <div className="flex size-6 shrink-0 items-center justify-center rounded-full bg-muted">
-                <span className="text-[9px] font-semibold text-muted-foreground">
+              <div className="flex size-5 shrink-0 items-center justify-center rounded-full bg-muted">
+                <span className="text-[8px] font-semibold text-muted-foreground">
                   {getInitials(displayName)}
                 </span>
               </div>
@@ -195,115 +252,218 @@ export function TimeLogPopover({
         ) : null}
 
         {/* Duration input + play button */}
-        <div className="flex items-center gap-2 border-b border-border/40 px-4 py-2.5">
-          <input
-            type="text"
-            value={durationStr}
-            onChange={(e) => setDurationStr(e.target.value)}
-            className="flex-1 bg-transparent font-mono text-sm text-foreground outline-none placeholder:text-muted-foreground/40"
-            placeholder="0h 00m"
-            aria-label="Duration"
-            autoFocus
-            onKeyDown={(e) => { if (e.key === "Enter") handleSave() }}
-          />
-          <Button
-            variant="secondary"
-            size="icon-sm"
-            onClick={handlePlayClick}
-            className="rounded-full"
-            aria-label="Start timer"
-          >
-            <PlayIcon className="size-3.5" fill="currentColor" strokeWidth={0} />
-          </Button>
-        </div>
-
-        {/* Quick buttons */}
-        <div className="flex flex-wrap gap-1.5 border-b border-border/40 px-4 py-2.5">
-          {QUICK_DURATIONS.map((btn) => (
-            <Button
-              key={btn.label}
-              variant="secondary"
-              size="xs"
-              onClick={() => setDurationStr(btn.label)}
-            >
-              {btn.label}
-            </Button>
-          ))}
-        </div>
-
-        {/* Icon rows: date + note */}
-        <div className="flex flex-col px-4 py-1.5">
-          <div className="flex items-center gap-2.5 border-b border-border/40 py-2">
-            <ClockIcon className="size-3.5 shrink-0 text-muted-foreground" strokeWidth={1.5} />
-            <span className="text-sm text-muted-foreground">
-              Today, {formatShortDate(new Date().toISOString().slice(0, 10))}
-            </span>
+        <div className="flex flex-col gap-1 px-4 pt-3.5 pb-2.5">
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={durationStr}
+              onChange={(e) => setDurationStr(e.target.value)}
+              className={cn(
+                "flex-1 bg-transparent font-mono text-base tracking-tight text-foreground outline-none placeholder:text-muted-foreground/40",
+                showError && "text-destructive",
+              )}
+              placeholder="0h 00m"
+              aria-label="Duration"
+              aria-invalid={showError ? true : undefined}
+              autoFocus
+              autoComplete="off"
+            />
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={handlePlayClick}
+                  className="rounded-full text-muted-foreground hover:text-foreground"
+                  aria-label="Start timer"
+                >
+                  <PlayIcon className="size-3.5" fill="currentColor" strokeWidth={0} />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top">Start timer instead</TooltipContent>
+            </Tooltip>
           </div>
-          <div className="flex items-center gap-2.5 py-2">
+          {showPreview ? (
+            <span className="font-mono text-xs text-muted-foreground">
+              → {canonicalForm}
+            </span>
+          ) : showError ? (
+            <span className="text-xs text-destructive">
+              Try formats like 1h 30m, 90m, 1.5, or 1:30
+            </span>
+          ) : null}
+        </div>
+
+        {/* Quick presets — bigger hit targets, default-emphasized when selected */}
+        <div className="flex flex-wrap gap-1.5 px-4 pb-2.5">
+          {QUICK_DURATIONS.map((btn) => {
+            const isActive = trimmed === btn.label
+            return (
+              <Button
+                key={btn.label}
+                variant={isActive ? "default" : "outline"}
+                size="sm"
+                onClick={() => setDurationStr(btn.label)}
+              >
+                {btn.label}
+              </Button>
+            )
+          })}
+        </div>
+
+        {/* Metadata rows: date, note, billable */}
+        <div className="flex flex-col px-2 pb-2">
+          {/* Date — clickable popover with presets + calendar */}
+          <Popover open={datePickerOpen} onOpenChange={setDatePickerOpen}>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-sm text-foreground transition-colors hover:bg-muted/60"
+              >
+                <CalendarIcon className="size-3.5 shrink-0 text-muted-foreground" strokeWidth={1.5} />
+                <span className="flex-1 text-left">{formatDatePill(selectedDate)}</span>
+                <ChevronDownIcon
+                  className="size-3 text-muted-foreground"
+                  strokeWidth={2}
+                />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent className="w-[380px] p-0" align="start">
+              <div className="flex">
+                <div className="flex w-[140px] flex-col gap-0.5 border-r bg-muted/30 p-2">
+                  <div className="px-2 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Quick set
+                  </div>
+                  {DATE_PRESETS.map((preset) => {
+                    const presetDate = formatDateToYMD(preset.getDate(new Date()))
+                    const isActive = selectedDate === presetDate
+                    return (
+                      <button
+                        key={preset.label}
+                        onClick={() => {
+                          setSelectedDate(presetDate)
+                          setDatePickerOpen(false)
+                        }}
+                        className={cn(
+                          "flex items-center gap-2 rounded-md px-2 py-1.5 text-xs font-medium transition-colors",
+                          isActive
+                            ? "bg-primary/10 text-primary"
+                            : "text-foreground hover:bg-muted",
+                        )}
+                      >
+                        {preset.icon === "clock" ? (
+                          <ClockIcon className={cn("size-3.5 shrink-0", isActive ? "text-primary" : "text-muted-foreground")} />
+                        ) : (
+                          <ArrowLeftIcon className={cn("size-3.5 shrink-0", isActive ? "text-primary" : "text-muted-foreground")} />
+                        )}
+                        {preset.label}
+                      </button>
+                    )
+                  })}
+                </div>
+                <div className="flex-1 p-3">
+                  <MiniCalendar
+                    selected={selectedDate}
+                    onSelect={(d) => {
+                      setSelectedDate(d)
+                      setDatePickerOpen(false)
+                    }}
+                    disableFuture
+                  />
+                </div>
+              </div>
+            </PopoverContent>
+          </Popover>
+
+          {/* Note */}
+          <div className="flex items-center gap-2.5 rounded-md px-2 py-1.5">
             <AlignLeftIcon className="size-3.5 shrink-0 text-muted-foreground" strokeWidth={1.5} />
             <input
               type="text"
               value={note}
               onChange={(e) => setNote(e.target.value)}
-              className="flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground/60"
+              className="flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
               placeholder="Add a note"
               aria-label="Note"
-              onKeyDown={(e) => { if (e.key === "Enter") handleSave() }}
             />
           </div>
+
+          {/* Billable — full row clickable, mirrors Date row structure: icon + label + control */}
+          {isBillable ? (
+            <label className="flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 hover:bg-muted/60">
+              <DollarSignIcon
+                className={cn(
+                  "size-3.5 shrink-0 transition-colors",
+                  billable ? "text-foreground" : "text-muted-foreground",
+                )}
+                strokeWidth={1.5}
+              />
+              <span className={cn(
+                "flex-1 text-sm transition-colors",
+                billable ? "text-foreground" : "text-muted-foreground",
+              )}>
+                {billable ? "Billable" : "Non-billable"}
+              </span>
+              <Switch checked={billable} onCheckedChange={setBillable} />
+            </label>
+          ) : null}
         </div>
 
-        {/* Billable + Save */}
-        <div className="flex items-center justify-between border-t border-border/40 px-4 py-2.5">
-          {isBillable ? (
-            <div className="flex items-center gap-2">
-              <Switch checked={billable} onCheckedChange={setBillable} />
-              <span className="text-sm text-muted-foreground">Billable</span>
-            </div>
-          ) : (
-            <div />
-          )}
-          <Button onClick={handleSave} disabled={saving}>
-            Save
+        {/* Footer: helper text balra, dynamic Save jobbra with inline shortcut hint */}
+        <div className="flex items-center justify-between gap-3 border-t border-border/40 px-4 py-2.5">
+          <span className="text-xs text-muted-foreground">
+            {durationValid ? (
+              <>
+                Press <kbd className="rounded border border-border/60 bg-muted px-1 font-mono text-[10px] text-foreground">⌘</kbd>{" "}
+                <kbd className="rounded border border-border/60 bg-muted px-1 font-mono text-[10px] text-foreground">↵</kbd> to save
+              </>
+            ) : (
+              "Enter a duration to save"
+            )}
+          </span>
+          <Button
+            onClick={handleSave}
+            disabled={saving || !durationValid}
+          >
+            {durationValid ? `Save ${canonicalForm}` : "Save"}
           </Button>
         </div>
 
-        {/* Time entries section */}
+        {/* Time entries section — same surface, hairline divider, refined density */}
         {entries && entries.length > 0 && (
-          <>
-            <div className="h-px bg-border" />
-            <div className="flex flex-col px-4 py-2.5">
-              <button
-                type="button"
-                onClick={() => setEntriesExpanded(prev => !prev)}
-                className="flex items-center justify-between"
-                aria-expanded={entriesExpanded}
-              >
-                <div className="flex items-center gap-1.5">
-                  <ChevronDownIcon
-                    className={cn(
-                      "size-3 text-muted-foreground transition-transform duration-150",
-                      !entriesExpanded && "-rotate-90",
-                    )}
-                    strokeWidth={2}
-                  />
-                  <span className="text-xs font-medium text-muted-foreground">Time entries</span>
-                </div>
-                <span className="font-mono text-xs text-muted-foreground">
-                  {formatDuration(totalMinutes)}
+          <div className="flex flex-col border-t border-border/40 px-4 py-2.5">
+            <button
+              type="button"
+              onClick={() => setEntriesExpanded(prev => !prev)}
+              className="flex items-center justify-between"
+              aria-expanded={entriesExpanded}
+            >
+              <div className="flex items-center gap-1.5">
+                <ChevronDownIcon
+                  className={cn(
+                    "size-3 text-muted-foreground transition-transform duration-150",
+                    !entriesExpanded && "-rotate-90",
+                  )}
+                  strokeWidth={2}
+                />
+                <span className="text-xs font-medium text-muted-foreground">
+                  Time entries ({entries.length})
                 </span>
-              </button>
-              {entriesExpanded && (
-                <div className="mt-2.5">
-                  <TimeEntriesList
-                    entries={entries}
-                    isAdmin={isAdmin}
-                    currentUserId={currentUser?._id}
-                  />
-                </div>
-              )}
-            </div>
-          </>
+              </div>
+              <span className="font-mono text-xs text-muted-foreground">
+                {formatDuration(totalMinutes)}
+              </span>
+            </button>
+            {entriesExpanded && (
+              <div className="mt-2.5">
+                <TimeEntriesList
+                  entries={entries}
+                  isAdmin={isAdmin}
+                  currentUserId={currentUser?._id}
+                />
+              </div>
+            )}
+          </div>
         )}
       </PopoverContent>
     </Popover>

@@ -334,7 +334,7 @@ export default function TasksPage() {
 
   return (
     <TaskReferenceDataProvider value={referenceData}>
-    <div>
+    <div className="flex w-full flex-col">
       <div className="flex flex-col gap-4">
         <TasksHeader />
 

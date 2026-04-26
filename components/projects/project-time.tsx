@@ -16,6 +16,7 @@ import { ProjectTimeGrouped } from "@/components/projects/project-time-grouped"
 import { ProjectTimeSelectionToolbar } from "@/components/projects/project-time-selection-toolbar"
 import { ProjectTimeSkeleton } from "@/components/projects/project-time-skeleton"
 import { ProjectTimeStats } from "@/components/projects/project-time-stats"
+import { ProjectTimeHiddenSelectionBanner } from "@/components/projects/project-time-hidden-selection-banner"
 import { TimeEntryModal } from "@/components/projects/time-entry-modal"
 import { EmptyStateBanner } from "@/components/projects/empty-state-banner"
 import { CreateInvoiceModal } from "@/components/invoices/create-invoice-modal"
@@ -84,6 +85,41 @@ function parseDateRangePreset(value: string | null): DateRangePreset {
   return DEFAULT_DATE_RANGE
 }
 
+/**
+ * Resolves the disabled state + tooltip for the "Invoice Unbilled Hours"
+ * header button. The button always renders so non-admins and non-T&M
+ * projects can see why invoicing-from-time isn't available here — a silent
+ * hide just makes the feature undiscoverable.
+ */
+function getInvoiceButtonState(
+  isAdmin: boolean,
+  billingType: string,
+  unbilledCount: number,
+): { disabled: boolean; tooltip: string | null } {
+  if (!isAdmin) {
+    return { disabled: true, tooltip: "Only admins can create invoices" }
+  }
+  if (billingType === "non_billable") {
+    return { disabled: true, tooltip: "This project is non-billable" }
+  }
+  if (billingType === "fixed") {
+    return {
+      disabled: true,
+      tooltip: "Fixed-price project — create invoices from the Invoices tab",
+    }
+  }
+  if (billingType === "retainer") {
+    return {
+      disabled: true,
+      tooltip: "Retainer project — create invoices from the Invoices tab",
+    }
+  }
+  if (unbilledCount === 0) {
+    return { disabled: true, tooltip: "No unbilled hours" }
+  }
+  return { disabled: false, tooltip: null }
+}
+
 export function ProjectTime({
   projectId,
   project,
@@ -146,27 +182,29 @@ export function ProjectTime({
   )
 
   // Selection state — only meaningful when the toolbar can render.
+  //
+  // Stored as a Map (id → row) rather than a plain Set so that rows hidden
+  // by the current filter stay selected with their stashed data. This is the
+  // Linear/Notion pattern: a filter change shouldn't silently un-select work
+  // the user deliberately picked. A banner surfaces the hidden count, and
+  // bulk actions run against the full set so the user's intent is honored.
   const selectionEnabled = isAdmin && isTmProject
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
-
-  // Track filter params to prune selection when the visible set narrows. We
-  // intersect (not clear) so the user keeps the entries they care about when
-  // they tweak a filter — only rows that actually dropped out get removed.
-  const filterKey = `${memberId ?? ""}::${billingStatus ?? ""}::${search ?? ""}::${fromDate ?? ""}::${toDate ?? ""}`
-  const [lastFilterKey, setLastFilterKey] = useState(filterKey)
+  const [selection, setSelection] = useState<Map<string, TimeEntryRow>>(
+    () => new Map(),
+  )
 
   // Escape clears selection (matches tasks bulk-toolbar affordance). Skip
   // while a Radix dialog is open so Esc there closes the dialog first.
   useEffect(() => {
-    if (selectedIds.size === 0) return
+    if (selection.size === 0) return
     function handleKeyDown(e: KeyboardEvent) {
       if (e.key !== "Escape") return
       if (document.querySelector('[role="dialog"][data-state="open"]')) return
-      setSelectedIds(new Set())
+      setSelection(new Map())
     }
     document.addEventListener("keydown", handleKeyDown)
     return () => document.removeEventListener("keydown", handleKeyDown)
-  }, [selectedIds.size])
+  }, [selection.size])
 
   // Add Time / Edit modal state
   const [isAddOpen, setIsAddOpen] = useState(false)
@@ -205,18 +243,6 @@ export function ProjectTime({
   const entries = data.entries as TimeEntryRow[]
   const availableMembers = data.availableMembers
 
-  // Intersect selection with visible entries whenever the filter changes.
-  // Runs after the skeleton guard so `entries` reflects the new filter.
-  if (lastFilterKey !== filterKey) {
-    setLastFilterKey(filterKey)
-    if (selectedIds.size > 0) {
-      const visible = new Set<string>(entries.map((e) => e._id))
-      const pruned = new Set<string>()
-      for (const id of selectedIds) if (visible.has(id)) pruned.add(id)
-      if (pruned.size !== selectedIds.size) setSelectedIds(pruned)
-    }
-  }
-
   // Phase 2: no entries at all AND no active filters → basic empty state
   if (entries.length === 0 && !hasFilters && !isAddOpen) {
     return (
@@ -249,11 +275,29 @@ export function ProjectTime({
     )
   }
 
-  function handleToggle(id: string) {
-    setSelectedIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
+  // Visible vs. hidden selection. Visible rows re-fetch their data fresh
+  // from the current query result; hidden rows fall back to the stash.
+  const visibleIds = new Set<string>(entries.map((e) => e._id))
+  const selectedEntries: TimeEntryRow[] = []
+  const hiddenSelectedEntries: TimeEntryRow[] = []
+  for (const e of entries) {
+    if (selection.has(e._id)) selectedEntries.push(e)
+  }
+  for (const [id, entry] of selection) {
+    if (!visibleIds.has(id)) {
+      hiddenSelectedEntries.push(entry)
+      selectedEntries.push(entry)
+    }
+  }
+
+  // Derived Set for the child tables — they still key off the simple form.
+  const selectedIds = new Set(selection.keys())
+
+  function handleToggle(row: TimeEntryRow) {
+    setSelection((prev) => {
+      const next = new Map(prev)
+      if (next.has(row._id)) next.delete(row._id)
+      else next.set(row._id, row)
       return next
     })
   }
@@ -262,15 +306,19 @@ export function ProjectTime({
   // rows of one group, so "Select all" in a collapsed/expanded group only
   // touches that group and leaves other groups' selections alone.
   function handleSelectAllVisible(selectAll: boolean, rows: TimeEntryRow[]) {
-    setSelectedIds((prev) => {
-      const next = new Set(prev)
+    setSelection((prev) => {
+      const next = new Map(prev)
       for (const row of rows) {
         if (!row.isBillable || row.invoiceId) continue
-        if (selectAll) next.add(row._id)
+        if (selectAll) next.set(row._id, row)
         else next.delete(row._id)
       }
       return next
     })
+  }
+
+  function clearSelection() {
+    setSelection(new Map())
   }
 
   function switchToInvoicesTab() {
@@ -289,31 +337,32 @@ export function ProjectTime({
   const createdAtMap = new Map<string, number>()
   entries.forEach((e, i) => createdAtMap.set(e._id, entries.length - i))
 
+  const invoiceBtn = getInvoiceButtonState(isAdmin, project.billingType, unbilledCount)
+
   const headerActions = (
     <>
-      {isAdmin && isTmProject && (
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-9"
-                  disabled={unbilledCount === 0}
-                  onClick={() => setInvoiceModal({ kind: "all" })}
-                >
-                  <ReceiptIcon data-icon="inline-start" className="size-4" />
-                  Invoice Unbilled Hours
-                </Button>
-              </span>
-            </TooltipTrigger>
-            {unbilledCount === 0 && (
-              <TooltipContent>No unbilled hours</TooltipContent>
-            )}
-          </Tooltip>
-        </TooltipProvider>
-      )}
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            {/* span needed so the tooltip tracks hover even when the button is disabled */}
+            <span>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-9"
+                disabled={invoiceBtn.disabled}
+                onClick={() => setInvoiceModal({ kind: "all" })}
+              >
+                <ReceiptIcon data-icon="inline-start" className="size-4" />
+                Invoice Unbilled Hours
+              </Button>
+            </span>
+          </TooltipTrigger>
+          {invoiceBtn.tooltip && (
+            <TooltipContent>{invoiceBtn.tooltip}</TooltipContent>
+          )}
+        </Tooltip>
+      </TooltipProvider>
       <Button size="sm" className="h-9" onClick={() => setIsAddOpen(true)}>
         <PlusIcon data-icon="inline-start" className="size-4" />
         Add Time
@@ -344,12 +393,19 @@ export function ProjectTime({
         entries={entries}
         billingType={project.billingType}
         currency={project.currency}
+        timezone={timezone}
       />
 
       <ProjectTimeFilters
         availableMembers={availableMembers}
         billingType={project.billingType}
         actions={headerActions}
+      />
+
+      <ProjectTimeHiddenSelectionBanner
+        hiddenCount={hiddenSelectedEntries.length}
+        totalCount={selection.size}
+        onClearSelection={clearSelection}
       />
 
       {tmAllInvoiced && !hasFilters && (
@@ -392,10 +448,9 @@ export function ProjectTime({
 
       {selectionEnabled && (
         <ProjectTimeSelectionToolbar
-          selectedIds={selectedIds}
-          entries={entries}
+          selectedEntries={selectedEntries}
           currency={project.currency}
-          onDeselectAll={() => setSelectedIds(new Set())}
+          onDeselectAll={clearSelection}
           onCreateInvoice={(ids, skipped) =>
             setInvoiceModal({ kind: "selection", ids, skipped })
           }
@@ -458,7 +513,7 @@ export function ProjectTime({
           }
           onCreated={() => {
             setInvoiceModal(null)
-            setSelectedIds(new Set())
+            setSelection(new Map())
           }}
         />
       )}

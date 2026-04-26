@@ -1,0 +1,1715 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Workday — Prototype</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    /* Notion-leaning neutrals: pure white surfaces, subtle warmth on chrome */
+    --bg: #ffffff;
+    --surface: #ffffff;
+    --surface-2: #fbfaf9;
+    --border: #ececeb;
+    --border-strong: #e0dfdd;
+    --fg: #37352f;
+    --fg-muted: #787673;
+    --fg-subtle: #a8a6a1;
+    --accent: #2383e2;        /* Notion blue */
+    --danger: #e03e3e;
+    --radius: 8px;
+    --radius-sm: 4px;
+
+    --cat-design: #7c3aed;
+    --cat-dev:    #2563eb;
+    --cat-qa:     #10b981;
+    --cat-mtg:    #f59e0b;
+    --cat-research:#ec4899;
+
+    --hour-height: 40px;       /* 1h = 40px → 8h column = 320px */
+    --workday-h: 320px;
+    --col-min-w: 168px;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter', ui-sans-serif, -apple-system, system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    font-size: 14px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* ── App shell ─────────────────────────────────────────────── */
+  .app {
+    max-width: 1440px;
+    margin: 0 auto;
+    padding: 28px 32px 64px;
+  }
+
+  .page-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 28px;
+    margin-bottom: 28px;
+  }
+  .page-header-left { flex: 1; min-width: 0; }
+  .page-header h1 {
+    font-size: 28px;
+    font-weight: 700;
+    margin: 0;
+    letter-spacing: -0.02em;
+    color: var(--fg);
+    line-height: 1.15;
+  }
+  .page-header .sub {
+    color: var(--fg-muted);
+    font-size: 13px;
+    margin-top: 6px;
+  }
+  .page-header-right {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;  /* visually align with title cap-height */
+    flex-shrink: 0;
+  }
+  .ctrl-divider {
+    width: 1px;
+    height: 18px;
+    background: var(--border);
+    margin: 0 4px;
+  }
+
+  /* ── Week nav ──────────────────────────────────────────────── */
+  .week-nav {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+  }
+  .week-arrow {
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+    width: 28px; height: 28px;
+    border-radius: 4px;
+    color: var(--fg-muted);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background .1s, color .1s;
+  }
+  .week-arrow:hover { background: var(--surface-2); color: var(--fg); }
+  .week-picker-anchor { position: relative; }
+  .week-picker-btn {
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+    padding: 5px 8px 5px 10px;
+    border-radius: 4px;
+    color: var(--fg);
+    font: inherit;
+    font-size: 14px;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: background .1s;
+  }
+  .week-picker-btn:hover, .week-picker-btn[aria-expanded="true"] { background: var(--surface-2); }
+  .week-picker-btn .caret { color: var(--fg-subtle); }
+
+  /* ── Week picker popover ───────────────────────────────────── */
+  .week-picker {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 50%;
+    transform: translate(-50%, -3px);
+    width: 320px;
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: 10px;
+    box-shadow:
+      0 1px 2px rgba(0,0,0,.04),
+      0 8px 24px rgba(0,0,0,.08),
+      0 20px 48px rgba(0,0,0,.06);
+    padding: 10px;
+    z-index: 60;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .12s, transform .12s;
+  }
+  .week-picker.open {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translate(-50%, 0);
+  }
+  .wp-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 4px 8px;
+  }
+  .wp-month {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--fg);
+    letter-spacing: -0.005em;
+  }
+  .wp-nav {
+    width: 26px; height: 26px;
+    border-radius: 4px;
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+    color: var(--fg-muted);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .wp-nav:hover { background: var(--surface-2); color: var(--fg); }
+
+  .wp-dows {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    padding: 0 4px 4px;
+    gap: 2px;
+  }
+  .wp-dows span {
+    text-align: center;
+    color: var(--fg-subtle);
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: lowercase;
+    padding: 4px 0;
+  }
+  .wp-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    padding: 0 4px;
+  }
+  .wp-week {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 2px;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: background .08s;
+    position: relative;
+  }
+  .wp-week:hover { background: var(--surface-2); }
+  .wp-week.selected { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  .wp-week.selected:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+  .wp-day {
+    text-align: center;
+    padding: 6px 0;
+    font-size: 12.5px;
+    font-variant-numeric: tabular-nums;
+    color: var(--fg);
+    border-radius: 4px;
+    line-height: 1.2;
+    position: relative;
+  }
+  .wp-day.muted { color: var(--fg-subtle); opacity: .55; }
+  .wp-day.today {
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .wp-day.today::after {
+    content: '';
+    position: absolute;
+    bottom: 2px; left: 50%;
+    transform: translateX(-50%);
+    width: 3px; height: 3px;
+    border-radius: 50%;
+    background: var(--accent);
+  }
+  .wp-week.selected .wp-day { color: var(--fg); }
+  .wp-week.selected .wp-day.muted { color: var(--fg-subtle); }
+  .wp-week.selected .wp-day.today { color: var(--accent); }
+
+  .wp-foot {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    justify-content: center;
+  }
+  .wp-action {
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+    padding: 5px 12px;
+    border-radius: 4px;
+    color: var(--accent);
+    font: inherit;
+    font-size: 12.5px;
+    font-weight: 500;
+    transition: background .1s;
+  }
+  .wp-action:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  /* (week-arrow + week-picker-btn defined below) */
+  .toggle-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--fg-muted);
+    font-size: 13px;
+    cursor: pointer;
+    padding: 5px 8px;
+    border-radius: 4px;
+  }
+  .toggle-row:hover { background: var(--surface-2); }
+  .switch {
+    position: relative;
+    width: 28px; height: 16px;
+    background: var(--border-strong);
+    border-radius: 999px;
+    cursor: pointer;
+    transition: background .15s;
+  }
+  .switch::after {
+    content: '';
+    position: absolute;
+    top: 2px; left: 2px;
+    width: 12px; height: 12px;
+    background: white;
+    border-radius: 50%;
+    transition: transform .15s;
+    box-shadow: 0 1px 2px rgba(0,0,0,.18);
+  }
+  .switch.on { background: var(--accent); }
+  .switch.on::after { transform: translateX(12px); }
+
+  /* ── Filter button + popover ───────────────────────────────── */
+  .filter-anchor { position: relative; }
+  .filter-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 8px 5px 10px;
+    background: transparent;
+    border: 0;
+    border-radius: 4px;
+    color: var(--fg);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background .1s;
+  }
+  .filter-btn:hover, .filter-btn[aria-expanded="true"] { background: var(--surface-2); }
+  .filter-btn .caret { color: var(--fg-subtle); margin-left: 1px; }
+  .filter-btn svg:first-child { color: var(--fg-muted); }
+
+  .filter-popover {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    width: 280px;
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    box-shadow:
+      0 1px 2px rgba(0,0,0,.04),
+      0 6px 24px rgba(0,0,0,.08),
+      0 16px 48px rgba(0,0,0,.06);
+    padding: 6px;
+    z-index: 50;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-3px);
+    transition: opacity .12s, transform .12s;
+  }
+  .filter-popover.open {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0);
+  }
+  .filter-search {
+    display: block;
+    width: 100%;
+    padding: 7px 10px;
+    font: inherit;
+    font-size: 13px;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    background: var(--surface-2);
+    color: var(--fg);
+    margin-bottom: 4px;
+  }
+  .filter-search::placeholder { color: var(--fg-subtle); }
+  .filter-search:focus {
+    outline: none;
+    border-color: var(--accent);
+    background: var(--surface);
+  }
+  .filter-list {
+    max-height: 280px;
+    overflow-y: auto;
+    padding: 2px 0;
+  }
+  .filter-row {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    padding: 6px 8px;
+    background: transparent;
+    border: 0;
+    border-radius: 5px;
+    cursor: pointer;
+    text-align: left;
+    color: var(--fg);
+    font: inherit;
+    font-size: 13px;
+    transition: background .1s;
+  }
+  .filter-row:hover { background: var(--surface-2); }
+  .filter-row .check {
+    width: 16px; height: 16px;
+    border: 1.5px solid var(--border-strong);
+    border-radius: 3px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    background: var(--surface);
+    transition: background .1s, border-color .1s;
+  }
+  .filter-row .check svg { opacity: 0; color: white; }
+  .filter-row.checked .check {
+    background: var(--accent);
+    border-color: var(--accent);
+  }
+  .filter-row.checked .check svg { opacity: 1; }
+  .filter-row .avatar {
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    font-weight: 600;
+    color: white;
+    flex-shrink: 0;
+  }
+  .filter-row .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .filter-row .role { color: var(--fg-subtle); font-size: 11.5px; flex-shrink: 0; }
+
+  .filter-divider { height: 1px; background: var(--border); margin: 4px 4px; }
+  .filter-foot {
+    display: flex;
+    gap: 4px;
+    padding: 4px 2px 2px;
+    border-top: 1px solid var(--border);
+    margin-top: 4px;
+  }
+  .filter-action {
+    flex: 1;
+    padding: 5px 8px;
+    background: transparent;
+    border: 0;
+    border-radius: 4px;
+    color: var(--fg-muted);
+    font: inherit;
+    font-size: 12.5px;
+    cursor: pointer;
+    text-align: center;
+  }
+  .filter-action:hover { background: var(--surface-2); color: var(--fg); }
+
+  /* ── Grid ──────────────────────────────────────────────────── */
+  .grid-wrap {
+    /* no border/background — children are individually styled cards */
+  }
+
+  /* shared template so header columns align with each user-row's columns */
+  .grid-template {
+    display: grid;
+    grid-template-columns: 200px repeat(var(--day-count, 5), minmax(var(--col-min-w), 1fr));
+  }
+
+  /* ── Header strip ──────────────────────────────────────────── */
+  .grid-header {
+    margin-bottom: 8px;
+    padding: 0;
+  }
+  .gh {
+    padding: 6px 14px 10px;
+    color: var(--fg-subtle);
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.2;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .gh.user-col {
+    color: transparent; /* keep slot but hide label — Notion-quiet */
+  }
+  .gh .day-name {
+    color: var(--fg-subtle);
+    font-size: 11.5px;
+    font-weight: 500;
+    text-transform: lowercase;
+    letter-spacing: 0;
+  }
+  .gh .day-num {
+    color: var(--fg);
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    line-height: 1;
+  }
+  .gh.today .day-num { color: var(--accent); }
+  .gh.today .day-name { color: var(--accent); opacity: .8; }
+
+  /* ── User row (one card per person) ────────────────────────── */
+  .user-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .user-row {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    transition: border-color .12s, background .12s;
+  }
+  .user-row:hover {
+    border-color: var(--border-strong);
+  }
+
+  .user-cell {
+    padding: 18px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    background: var(--surface-2);
+    border-right: 1px solid var(--border);
+    min-height: calc(var(--workday-h) + 64px);
+  }
+  .user-identity {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .user-cell .avatar {
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 600;
+    color: white;
+    flex-shrink: 0;
+  }
+  .user-cell .meta { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
+  .user-cell .name { font-weight: 600; color: var(--fg); font-size: 14px; line-height: 1.25; letter-spacing: -0.005em; }
+  .user-cell .role { color: var(--fg-subtle); font-size: 12px; line-height: 1.2; }
+
+  .user-week-summary {
+    margin-top: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .user-week-summary .lbl {
+    color: var(--fg-subtle);
+    font-size: 12px;
+    font-weight: 400;
+  }
+  .user-week-summary .val {
+    color: var(--fg);
+    font-size: 22px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.015em;
+    line-height: 1.1;
+  }
+  .user-week-summary .val.zero { color: var(--fg-subtle); font-weight: 400; }
+
+  .day-cell {
+    border-right: 1px solid var(--border);
+    padding: 14px 10px 12px;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    background: var(--surface);
+  }
+  .day-cell:last-child { border-right: 0; }
+  .day-cell.weekend { background: var(--surface-2); }
+  .day-cell.today {
+    background: linear-gradient(to bottom, rgba(35,131,226,0.025) 0%, transparent 80px);
+  }
+
+  .day-stack {
+    position: relative;
+    min-height: var(--workday-h);
+    border-radius: 4px;
+    overflow: visible;
+  }
+  .day-stack .capacity-line {
+    position: absolute;
+    left: -2px; right: -2px;
+    height: 1px;
+    background: var(--border-strong);
+    pointer-events: none;
+  }
+  .day-stack .capacity-label {
+    position: absolute;
+    right: 0;
+    transform: translateY(-50%);
+    padding: 0 4px;
+    background: var(--surface);
+    font-size: 9.5px;
+    color: var(--fg-subtle);
+    letter-spacing: 0.02em;
+    pointer-events: none;
+    line-height: 1;
+  }
+  .day-stack.empty {
+    display: flex;
+    align-items: flex-start;
+    justify-content: flex-start;
+    padding-top: 6px;
+  }
+  .day-stack.empty .idle {
+    color: var(--fg-subtle);
+    font-size: 12px;
+    opacity: .6;
+  }
+
+  .day-total {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    color: var(--fg-muted);
+    font-size: 12px;
+    font-weight: 500;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .day-total .lbl { color: var(--fg-subtle); font-weight: 400; font-size: 11px; }
+  .day-total.zero { color: var(--fg-subtle); font-weight: 400; }
+  .day-total.zero .lbl { display: none; }
+  .day-total.zero .val { color: var(--fg-subtle); }
+  .day-total.over .val { color: var(--danger); font-weight: 600; }
+
+  /* ── Task box ──────────────────────────────────────────────── */
+  .task-box {
+    position: absolute;
+    left: 1px; right: 1px;
+    padding: 7px 10px 6px;
+    border-radius: 4px;
+    cursor: pointer;
+    overflow: hidden;
+    background: color-mix(in srgb, var(--cat-color) 11%, transparent);
+    color: color-mix(in srgb, var(--cat-color) 65%, var(--fg));
+    transition: background .12s, box-shadow .12s;
+    user-select: none;
+  }
+  .task-box::before {
+    /* tiny category dot in top-left — Notion-style category indicator */
+    content: '';
+    position: absolute;
+    top: 9px; left: 8px;
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--cat-color);
+    opacity: 0.85;
+  }
+  .task-box:hover {
+    background: color-mix(in srgb, var(--cat-color) 18%, transparent);
+    z-index: 5;
+  }
+  .task-box:focus-visible {
+    outline: 2px solid var(--cat-color);
+    outline-offset: 1px;
+  }
+
+  .tb-row1 {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+    line-height: 1.25;
+    padding-left: 12px;  /* leave room for dot */
+  }
+  .tb-title {
+    font-weight: 500;
+    font-size: 12.5px;
+    color: var(--fg);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1 1 auto;
+    min-width: 0;
+    letter-spacing: -0.005em;
+  }
+  .tb-dur {
+    font-size: 11px;
+    color: var(--fg-muted);
+    flex-shrink: 0;
+    font-variant-numeric: tabular-nums;
+    font-weight: 500;
+  }
+  .tb-project {
+    font-size: 11.5px;
+    color: var(--fg-muted);
+    margin-top: 2px;
+    padding-left: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    line-height: 1.3;
+  }
+
+  /* size tiers */
+  .task-box[data-tier="full"]   .tb-project { display: block; }
+  .task-box[data-tier="medium"] .tb-project { display: none; }
+  .task-box[data-tier="small"]  .tb-project { display: none; }
+  .task-box[data-tier="small"]  .tb-dur { display: none; }
+  .task-box[data-tier="small"]  { padding: 4px 10px; }
+  .task-box[data-tier="small"]::before { top: 7px; }
+  .task-box[data-tier="sliver"] .tb-row1 { display: none; }
+  .task-box[data-tier="sliver"] .tb-project { display: none; }
+  .task-box[data-tier="sliver"] {
+    padding: 0;
+    background: color-mix(in srgb, var(--cat-color) 50%, transparent);
+  }
+  .task-box[data-tier="sliver"]::before { display: none; }
+
+  /* ── Hover popover ─────────────────────────────────────────── */
+  #popover {
+    position: fixed;
+    z-index: 100;
+    min-width: 280px;
+    max-width: 360px;
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    box-shadow:
+      0 1px 2px rgba(0,0,0,.04),
+      0 4px 16px rgba(0,0,0,.08),
+      0 16px 32px rgba(0,0,0,.06);
+    padding: 0;
+    opacity: 0;
+    transform: translateY(-2px);
+    pointer-events: none;
+    transition: opacity .12s, transform .12s;
+    overflow: hidden;
+  }
+  #popover.open {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+  }
+  .pop-head {
+    padding: 12px 14px 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .pop-title {
+    font-weight: 600;
+    font-size: 13.5px;
+    color: var(--fg);
+    line-height: 1.3;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .pop-title .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .pop-meta {
+    margin-top: 3px;
+    font-size: 11.5px;
+    color: var(--fg-muted);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .pop-meta .sep { color: var(--fg-subtle); }
+  .pop-entries {
+    padding: 6px 0;
+  }
+  .pop-entry {
+    display: grid;
+    grid-template-columns: 96px 48px 1fr auto;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 14px;
+    cursor: pointer;
+    transition: background .1s;
+    font-size: 12.5px;
+  }
+  .pop-entry:hover { background: var(--bg); }
+  .pop-entry .time {
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--fg);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+  .pop-entry .dur {
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--fg-muted);
+    font-size: 11.5px;
+    font-variant-numeric: tabular-nums;
+  }
+  .pop-entry .note {
+    color: var(--fg-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+  }
+  .pop-entry .note.empty { color: var(--fg-subtle); font-style: italic; }
+  .pop-entry .billable {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: #22c55e;
+    flex-shrink: 0;
+  }
+  .pop-entry .billable.no { background: var(--fg-subtle); opacity: .5; }
+  .pop-foot {
+    padding: 9px 14px;
+    border-top: 1px solid var(--border);
+    background: #fcfcfb;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 12px;
+  }
+  .pop-foot .label { color: var(--fg-muted); }
+  .pop-foot .total {
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--fg);
+    font-weight: 600;
+  }
+
+  /* ── Drawer (fake) ─────────────────────────────────────────── */
+  .drawer-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(28, 25, 23, 0);
+    pointer-events: none;
+    transition: background .2s;
+    z-index: 200;
+  }
+  .drawer-overlay.open {
+    background: rgba(28, 25, 23, .35);
+    pointer-events: auto;
+  }
+  .drawer {
+    position: fixed;
+    top: 0; right: 0;
+    height: 100vh;
+    width: 540px;
+    max-width: 90vw;
+    background: var(--surface);
+    border-left: 1px solid var(--border);
+    box-shadow: -8px 0 32px rgba(0,0,0,.08);
+    transform: translateX(100%);
+    transition: transform .22s cubic-bezier(.32,.72,0,1);
+    z-index: 201;
+    display: flex;
+    flex-direction: column;
+  }
+  .drawer.open { transform: translateX(0); }
+  .drawer-head {
+    padding: 18px 22px 14px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+  }
+  .drawer-head .h-meta {
+    color: var(--fg-muted);
+    font-size: 11.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 4px;
+  }
+  .drawer-head h2 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 600;
+    line-height: 1.3;
+  }
+  .drawer-close {
+    background: transparent;
+    border: 0;
+    padding: 4px;
+    border-radius: 5px;
+    cursor: pointer;
+    color: var(--fg-muted);
+  }
+  .drawer-close:hover { background: var(--bg); color: var(--fg); }
+
+  .drawer-body { padding: 20px 22px; overflow-y: auto; flex: 1; }
+  .drawer-stub {
+    color: var(--fg-muted);
+    font-size: 13px;
+    padding: 14px;
+    background: var(--bg);
+    border: 1px dashed var(--border-strong);
+    border-radius: 6px;
+  }
+  .drawer-stub strong { color: var(--fg); }
+
+  /* ── Footer hint ───────────────────────────────────────────── */
+  .legend {
+    margin-top: 36px;
+    padding: 0;
+    font-size: 12.5px;
+    color: var(--fg-muted);
+    line-height: 1.6;
+  }
+  .legend h3 {
+    color: var(--fg-subtle);
+    margin: 0 0 10px;
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .legend ul { margin: 0; padding-left: 16px; }
+  .legend li { margin: 2px 0; }
+  .legend code {
+    background: var(--surface-2);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 11.5px;
+    color: var(--fg);
+  }
+
+  /* ── overtime / capacity ───────────────────────────────────── */
+  .overtime-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--danger);
+    font-size: 11px;
+    font-weight: 500;
+    margin-left: 6px;
+  }
+  .overtime-pill::before {
+    content: '';
+    width: 5px; height: 5px;
+    border-radius: 50%;
+    background: var(--danger);
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <header class="page-header">
+    <div class="page-header-left">
+      <h1>Workday</h1>
+      <div class="sub">See what your team worked on this week.</div>
+    </div>
+    <div class="page-header-right">
+      <div class="week-nav">
+        <button class="week-arrow" id="prev" title="Previous week" aria-label="Previous week">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <div class="week-picker-anchor">
+          <button class="week-picker-btn" id="weekPickerBtn" aria-haspopup="true" aria-expanded="false">
+            <span id="weekLabel">Apr 21 – 25, 2026</span>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="caret"><polyline points="6 9 12 15 18 9"/></svg>
+          </button>
+          <div class="week-picker" id="weekPicker" role="dialog">
+            <div class="wp-head">
+              <button class="wp-nav" id="monthPrev" aria-label="Previous month">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+              </button>
+              <span class="wp-month" id="monthLabel">April 2026</span>
+              <button class="wp-nav" id="monthNext" aria-label="Next month">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+              </button>
+            </div>
+            <div class="wp-dows">
+              <span>Mo</span><span>Tu</span><span>We</span><span>Th</span><span>Fr</span><span>Sa</span><span>Su</span>
+            </div>
+            <div class="wp-grid" id="weekPickerGrid"><!-- injected --></div>
+            <div class="wp-foot">
+              <button class="wp-action" id="jumpToday">Jump to this week</button>
+            </div>
+          </div>
+        </div>
+        <button class="week-arrow" id="next" title="Next week" aria-label="Next week">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+      </div>
+
+      <div class="ctrl-divider"></div>
+
+      <div class="filter-anchor">
+        <button class="filter-btn" id="filterBtn" aria-haspopup="true" aria-expanded="false">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+          <span id="filterBtnLabel">All members</span>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="caret"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+        <div class="filter-popover" id="filterPopover" role="dialog">
+          <input type="text" class="filter-search" id="filterSearch" placeholder="Search members…" />
+          <div class="filter-list" id="filterList"><!-- injected --></div>
+          <div class="filter-foot">
+            <button class="filter-action" id="filterSelectAll">Select all</button>
+            <button class="filter-action" id="filterClear">Clear</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="ctrl-divider"></div>
+
+      <label class="toggle-row" for="weekendToggle">
+        <span>Weekend</span>
+        <span class="switch" id="weekendToggle" role="switch" aria-checked="false" tabindex="0"></span>
+      </label>
+    </div>
+  </header>
+
+  <div class="grid-wrap" id="gridWrap" style="--day-count: 5;">
+    <div class="grid-header grid-template" id="gridHeader"><!-- injected --></div>
+    <div class="user-rows" id="userRows"><!-- injected --></div>
+  </div>
+
+  <div class="legend">
+    <h3>How to read this prototype</h3>
+    <ul>
+      <li><strong>Click</strong> any task box → opens the task drawer (mocked).</li>
+      <li><strong>Hover</strong> any box for ~200 ms → popover lists the individual time entries that built it.</li>
+      <li>Box <strong>height</strong> = duration on a fixed scale (1 hour = <code>40px</code>; full column = 8 h workday). Empty space at bottom = capacity remaining.</li>
+      <li>Box <strong>color</strong> = task category, tinted with the same <code>color-mix</code> pattern as <code>CategoryBadge</code>.</li>
+      <li>Box <strong>order within a day</strong> = first <code>startedAt</code> on that task ascending.</li>
+      <li>Box <strong>content tiers</strong>: ≥60 px = title + project + duration · 36–59 px = title + duration · 18–35 px = title only · &lt;18 px = colored sliver (everything in popover).</li>
+      <li>Day total turns <strong style="color: var(--danger)">red</strong> when over 8 h; a thin red bar appears on top of the overflow box.</li>
+      <li>Avatars row filters the grid; weekend toggle reveals Sat / Sun columns.</li>
+    </ul>
+  </div>
+</div>
+
+<!-- Hover popover -->
+<div id="popover" role="tooltip"></div>
+
+<!-- Drawer -->
+<div class="drawer-overlay" id="overlay"></div>
+<aside class="drawer" id="drawer" aria-hidden="true">
+  <div class="drawer-head">
+    <div>
+      <div class="h-meta">Task</div>
+      <h2 id="drawerTitle">Task title</h2>
+    </div>
+    <button class="drawer-close" id="drawerClose" aria-label="Close drawer">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    </button>
+  </div>
+  <div class="drawer-body">
+    <div class="drawer-stub">
+      In production this is the existing <strong>TaskDetailDrawer</strong> (<code>components/tasks/task-detail-drawer.tsx</code>), opened via the URL-driven <code>useTaskDetail</code> hook by pushing <code>?task=&lt;id&gt;</code>. This prototype just shows the slide-in surface.
+    </div>
+    <div class="drawer-stub" style="margin-top:12px;">
+      Click on a popover row in production scrolls the drawer's <strong>Time tab</strong> to that specific entry.
+    </div>
+  </div>
+</aside>
+
+<script>
+/* ─── Dummy data ──────────────────────────────────────────────── */
+const CATEGORIES = {
+  design:   { name: 'Design',      color: 'var(--cat-design)',   raw: '#7c3aed' },
+  dev:      { name: 'Development', color: 'var(--cat-dev)',      raw: '#2563eb' },
+  qa:       { name: 'QA',          color: 'var(--cat-qa)',       raw: '#10b981' },
+  mtg:      { name: 'Meeting',     color: 'var(--cat-mtg)',      raw: '#f59e0b' },
+  research: { name: 'Research',    color: 'var(--cat-research)', raw: '#ec4899' },
+};
+
+const PROJECTS = {
+  acme:     'Acme Web Redesign',
+  konv:     'Konverted CRM',
+  fintech:  'Fintech Dashboard',
+  internal: 'Internal Tools',
+};
+
+const USERS = [
+  { id: 'adam', name: 'Adam Toth',     role: 'Admin',  initials: 'AT', color: '#6366f1' },
+  { id: 'kata', name: 'Kata Nagy',     role: 'Member', initials: 'KN', color: '#0891b2' },
+  { id: 'bela', name: 'Béla Kovács',   role: 'Member', initials: 'BK', color: '#16a34a' },
+  { id: 'zsof', name: 'Zsófia Horváth',role: 'Member', initials: 'ZH', color: '#db2777' },
+];
+
+const DAYS = [
+  { key: 'mon', label: 'Mon', date: 'Apr 21', weekend: false },
+  { key: 'tue', label: 'Tue', date: 'Apr 22', weekend: false },
+  { key: 'wed', label: 'Wed', date: 'Apr 23', weekend: false, today: true },
+  { key: 'thu', label: 'Thu', date: 'Apr 24', weekend: false },
+  { key: 'fri', label: 'Fri', date: 'Apr 25', weekend: false },
+  { key: 'sat', label: 'Sat', date: 'Apr 26', weekend: true },
+  { key: 'sun', label: 'Sun', date: 'Apr 27', weekend: true },
+];
+
+/**
+ * Each entry: { user, day, task, project, category, start, end, note, billable }
+ * start/end in minutes since midnight (for popover display + ordering).
+ */
+function entry(user, day, task, project, category, startHHMM, endHHMM, note, billable=true) {
+  const [sh, sm] = startHHMM.split(':').map(Number);
+  const [eh, em] = endHHMM.split(':').map(Number);
+  return {
+    user, day, task, project, category,
+    start: sh*60 + sm,
+    end: eh*60 + em,
+    duration: (eh*60+em) - (sh*60+sm),
+    note, billable
+  };
+}
+
+const ENTRIES = [
+  // ── Adam ──
+  // Mon — 7h, switches between Design & Dev (aggregated boxes)
+  entry('adam','mon','Design auth flows','acme','design','09:00','10:30','reviewed competitors'),
+  entry('adam','mon','Dev login screen','acme','dev','11:00','13:00','wired up Clerk components'),
+  entry('adam','mon','Daily standup','internal','mtg','14:00','14:30',''),
+  entry('adam','mon','Design auth flows','acme','design','14:30','16:00','sketched mobile flow'),
+  entry('adam','mon','QA review','konv','qa','16:00','17:30','tested onboarding'),
+
+  // Tue — 6h
+  entry('adam','tue','Design auth flows','acme','design','09:30','12:30','final pixel polish'),
+  entry('adam','tue','Dev login screen','acme','dev','13:30','16:30','passkey support'),
+
+  // Wed — light day, 1.5h with one tiny entry to demo sliver tier
+  entry('adam','wed','Daily standup','internal','mtg','09:00','09:30','sprint kickoff'),
+  entry('adam','wed','Research: stripe vs lago','fintech','research','10:00','11:00','pricing API comparison'),
+  entry('adam','wed','Quick fix: button hover','acme','dev','11:00','11:10','one-line CSS fix'),
+
+  // Thu — overtime 8.5h
+  entry('adam','thu','Dev login screen','acme','dev','09:00','13:00','SSR auth flow'),
+  entry('adam','thu','Design auth flows','acme','design','14:00','18:00','dark mode pass', false),
+  entry('adam','thu','Daily standup','internal','mtg','18:00','18:30','EOD sync'),
+
+  // Fri — 7h, smaller variety
+  entry('adam','fri','Daily standup','internal','mtg','09:00','09:30',''),
+  entry('adam','fri','Design auth flows','acme','design','09:30','12:00','handoff prep'),
+  entry('adam','fri','Dev login screen','acme','dev','13:00','16:00','code review'),
+  entry('adam','fri','QA review','konv','qa','16:00','17:00','regression tests'),
+
+  // ── Kata ──
+  entry('kata','mon','Build CRM dashboard','konv','dev','09:00','12:00','metric cards'),
+  entry('kata','mon','Daily standup','internal','mtg','13:00','13:30',''),
+  entry('kata','mon','Build CRM dashboard','konv','dev','14:00','16:30','filter chips'),
+
+  entry('kata','tue','Design pricing page','fintech','design','09:00','12:00',''),
+  entry('kata','tue','Build pricing page','fintech','dev','13:00','17:00',''),
+
+  entry('kata','wed','Build pricing page','fintech','dev','09:00','13:00','tier toggle'),
+  entry('kata','wed','Build pricing page','fintech','dev','14:00','17:00','annual discount logic'),
+
+  entry('kata','thu','Build pricing page','fintech','dev','09:00','12:00','responsive fixes'),
+  entry('kata','thu','Daily standup','internal','mtg','14:00','14:30',''),
+
+  // Fri — empty for Kata (demo zero-day)
+
+  // ── Béla ──
+  entry('bela','mon','Research user interviews','fintech','research','09:00','11:00','synthesized notes'),
+  entry('bela','mon','Design dashboard hero','acme','design','11:00','13:00','first variant'),
+  entry('bela','mon','Design dashboard hero','acme','design','14:00','17:00','three variants'),
+
+  entry('bela','tue','Design dashboard hero','acme','design','09:00','12:30','iteration 4'),
+  entry('bela','tue','Daily standup','internal','mtg','13:30','14:00',''),
+  entry('bela','tue','Design dashboard hero','acme','design','14:00','18:00','final selection'),
+
+  // Wed — empty for Béla
+
+  entry('bela','thu','Design dashboard hero','acme','design','09:00','13:00','prep handoff'),
+  entry('bela','thu','Design dashboard hero','acme','design','14:00','17:30','annotations'),
+
+  entry('bela','fri','Research user interviews','fintech','research','09:00','12:00','round 2'),
+  entry('bela','fri','Design dashboard hero','acme','design','13:00','17:00','export assets'),
+
+  // ── Zsófia ──
+  // Mon — empty
+  entry('zsof','tue','Daily standup','internal','mtg','10:00','10:30',''),  // 30m — small tier
+
+  entry('zsof','wed','Build CRM dashboard','konv','dev','09:00','12:00',''),
+  entry('zsof','wed','Build CRM dashboard','konv','dev','13:00','15:00',''),
+
+  entry('zsof','thu','Build CRM dashboard','konv','dev','09:00','13:00',''),
+  entry('zsof','thu','QA review','konv','qa','14:00','16:00',''),
+
+  // Fri — empty
+];
+
+/* ─── Derived structure: aggregate to (user × day × task) boxes ── */
+function aggregate(filteredEntries) {
+  // map key = user|day|task
+  const map = new Map();
+  for (const e of filteredEntries) {
+    const k = `${e.user}|${e.day}|${e.task}`;
+    if (!map.has(k)) {
+      map.set(k, {
+        user: e.user, day: e.day, task: e.task,
+        project: e.project, category: e.category,
+        durationMin: 0,
+        firstStart: e.start,
+        entries: [],
+      });
+    }
+    const box = map.get(k);
+    box.durationMin += e.duration;
+    box.firstStart = Math.min(box.firstStart, e.start);
+    box.entries.push(e);
+  }
+  // sort entries within each box by start
+  for (const box of map.values()) {
+    box.entries.sort((a,b) => a.start - b.start);
+  }
+  return Array.from(map.values());
+}
+
+function dayBoxes(boxes, userId, dayKey) {
+  return boxes
+    .filter(b => b.user === userId && b.day === dayKey)
+    .sort((a,b) => a.firstStart - b.firstStart);
+}
+
+/* ─── Box content tier picker (matches spec) ───────────────────── */
+function tierFor(heightPx) {
+  if (heightPx >= 60) return 'full';
+  if (heightPx >= 36) return 'medium';
+  if (heightPx >= 18) return 'small';
+  return 'sliver';
+}
+
+/* ─── Format helpers ──────────────────────────────────────────── */
+function fmtDur(min) {
+  const h = Math.floor(min/60), m = min%60;
+  if (h === 0) return `${m}m`;
+  if (m === 0) return `${h}h`;
+  return `${h}h ${m}m`;
+}
+function fmtTime(min) {
+  const h = Math.floor(min/60), m = min%60;
+  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+}
+
+/* ─── Render ──────────────────────────────────────────────────── */
+const HOUR_PX = 40;            // 1h = 40px
+const WORKDAY_MIN = 8 * 60;    // 480m = 8h
+const MIN_BOX_PX = 6;          // sliver floor
+
+let visibleUsers = new Set(USERS.map(u => u.id));
+let showWeekend = false;
+
+function render() {
+  renderFilter();
+
+  const wrap = document.getElementById('gridWrap');
+  const header = document.getElementById('gridHeader');
+  const rowsContainer = document.getElementById('userRows');
+  header.innerHTML = '';
+  rowsContainer.innerHTML = '';
+
+  const days = DAYS.filter(d => showWeekend || !d.weekend);
+  wrap.style.setProperty('--day-count', days.length);
+
+  // ── Header strip ─────────────────────────────
+  const headEmpty = document.createElement('div');
+  headEmpty.className = 'gh user-col';
+  headEmpty.textContent = '·';
+  header.appendChild(headEmpty);
+  for (const d of days) {
+    const gh = document.createElement('div');
+    gh.className = 'gh' + (d.today ? ' today' : '');
+    gh.innerHTML = `<span class="day-name">${d.label.toLowerCase()}</span><span class="day-num">${d.date.split(' ')[1]}</span>`;
+    header.appendChild(gh);
+  }
+
+  // ── Per-user row cards ──────────────────────
+  const allBoxes = aggregate(ENTRIES);
+  const orderedUsers = USERS.filter(u => visibleUsers.has(u.id));
+
+  for (const u of orderedUsers) {
+    const row = document.createElement('div');
+    row.className = 'user-row grid-template';
+    row.style.setProperty('--user-color', u.color);
+
+    // weekly totals
+    const userBoxes = allBoxes.filter(b => b.user === u.id);
+    const userWeekMin = userBoxes.reduce((s,b) => s + b.durationMin, 0);
+
+    // user identity cell
+    const uc = document.createElement('div');
+    uc.className = 'user-cell';
+    uc.innerHTML = `
+      <div class="user-identity">
+        <span class="avatar" style="background:${u.color}">${u.initials}</span>
+        <div class="meta">
+          <span class="name">${u.name}</span>
+          <span class="role">${u.role.toLowerCase()}</span>
+        </div>
+      </div>
+      <div class="user-week-summary">
+        <span class="val ${userWeekMin === 0 ? 'zero' : ''}">${userWeekMin === 0 ? '0h' : fmtDur(userWeekMin)}</span>
+        <span class="lbl">this week</span>
+      </div>
+    `;
+    row.appendChild(uc);
+
+    // day cells
+    for (const d of days) {
+      const cell = document.createElement('div');
+      cell.className = 'day-cell' + (d.weekend ? ' weekend' : '') + (d.today ? ' today' : '');
+      const stack = document.createElement('div');
+      stack.className = 'day-stack';
+
+      const boxes = dayBoxes(allBoxes, u.id, d.key);
+      const totalMin = boxes.reduce((s,b) => s + b.durationMin, 0);
+
+      if (boxes.length === 0) {
+        stack.classList.add('empty');
+        const idle = document.createElement('span');
+        idle.className = 'idle';
+        idle.textContent = 'No work logged';
+        stack.appendChild(idle);
+      } else {
+        let cursorPx = 0;
+        for (const b of boxes) {
+          const heightPx = Math.max(MIN_BOX_PX, (b.durationMin / 60) * HOUR_PX);
+          const tier = tierFor(heightPx);
+          const el = document.createElement('div');
+          el.className = 'task-box';
+          el.dataset.tier = tier;
+          el.style.top = cursorPx + 'px';
+          el.style.height = heightPx + 'px';
+          el.style.setProperty('--cat-color', CATEGORIES[b.category].raw);
+
+          el.innerHTML = `
+            <div class="tb-row1">
+              <span class="tb-title">${b.task}</span>
+              <span class="tb-dur">${fmtDur(b.durationMin)}</span>
+            </div>
+            <div class="tb-project">${PROJECTS[b.project]}</div>
+          `;
+          el._box = b;
+          attachInteractions(el);
+          stack.appendChild(el);
+          cursorPx += heightPx;
+        }
+
+        // Grow stack to fit content (no clipping when overtime)
+        if (cursorPx > WORKDAY_MIN / 60 * HOUR_PX) {
+          stack.style.height = cursorPx + 'px';
+
+          // 8h capacity marker line
+          const line = document.createElement('div');
+          line.className = 'capacity-line';
+          line.style.top = (WORKDAY_MIN / 60 * HOUR_PX) + 'px';
+          stack.appendChild(line);
+
+          const lbl = document.createElement('div');
+          lbl.className = 'capacity-label';
+          lbl.style.top = (WORKDAY_MIN / 60 * HOUR_PX) + 'px';
+          lbl.textContent = '8h';
+          stack.appendChild(lbl);
+        }
+      }
+
+      cell.appendChild(stack);
+
+      // Day total
+      const tot = document.createElement('div');
+      tot.className = 'day-total' + (totalMin === 0 ? ' zero' : '') + (totalMin > WORKDAY_MIN ? ' over' : '');
+      if (totalMin === 0) {
+        tot.innerHTML = `<span class="lbl"></span><span class="val">—</span>`;
+      } else if (totalMin > WORKDAY_MIN) {
+        tot.innerHTML = `<span class="lbl">total</span><span class="val">${fmtDur(totalMin)}<span class="overtime-pill">+${fmtDur(totalMin - WORKDAY_MIN)}</span></span>`;
+      } else {
+        tot.innerHTML = `<span class="lbl">total</span><span class="val">${fmtDur(totalMin)}</span>`;
+      }
+      cell.appendChild(tot);
+
+      row.appendChild(cell);
+    }
+
+    rowsContainer.appendChild(row);
+  }
+}
+
+/* ─── Member filter popover ───────────────────────────────────── */
+let filterSearch = '';
+
+function renderFilter() {
+  // button label
+  const lbl = document.getElementById('filterBtnLabel');
+  const allActive = visibleUsers.size === USERS.length;
+  if (allActive) {
+    lbl.textContent = 'All members';
+  } else if (visibleUsers.size === 0) {
+    lbl.textContent = 'No members';
+  } else if (visibleUsers.size === 1) {
+    const u = USERS.find(x => visibleUsers.has(x.id));
+    lbl.textContent = u ? u.name : '1 member';
+  } else {
+    lbl.textContent = `${visibleUsers.size} of ${USERS.length} members`;
+  }
+
+  // list
+  const list = document.getElementById('filterList');
+  list.innerHTML = '';
+  const q = filterSearch.trim().toLowerCase();
+  const filtered = q ? USERS.filter(u => u.name.toLowerCase().includes(q)) : USERS;
+
+  if (filtered.length === 0) {
+    const empty = document.createElement('div');
+    empty.style.cssText = 'padding: 10px 12px; color: var(--fg-subtle); font-size: 12.5px; text-align: center;';
+    empty.textContent = 'No members match';
+    list.appendChild(empty);
+    return;
+  }
+
+  for (const u of filtered) {
+    const isOn = visibleUsers.has(u.id);
+    const row = document.createElement('button');
+    row.className = 'filter-row' + (isOn ? ' checked' : '');
+    row.innerHTML = `
+      <span class="check">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+      </span>
+      <span class="avatar" style="background:${u.color}">${u.initials}</span>
+      <span class="nm">${u.name}</span>
+      <span class="role">${u.role.toLowerCase()}</span>
+    `;
+    row.addEventListener('click', (e) => { e.stopPropagation(); toggleUser(u.id); });
+    list.appendChild(row);
+  }
+}
+
+function toggleUser(id) {
+  if (visibleUsers.has(id)) {
+    if (visibleUsers.size === 1) {
+      // un-checking the last member would empty the grid; treat as "select all" reset
+      visibleUsers = new Set(USERS.map(u => u.id));
+    } else {
+      visibleUsers.delete(id);
+    }
+  } else {
+    visibleUsers.add(id);
+  }
+  render();
+}
+
+const filterBtn = document.getElementById('filterBtn');
+const filterPopover = document.getElementById('filterPopover');
+const filterSearchInput = document.getElementById('filterSearch');
+
+function openFilter() {
+  filterPopover.classList.add('open');
+  filterBtn.setAttribute('aria-expanded', 'true');
+  setTimeout(() => filterSearchInput.focus(), 30);
+}
+function closeFilter() {
+  filterPopover.classList.remove('open');
+  filterBtn.setAttribute('aria-expanded', 'false');
+  filterSearch = '';
+  filterSearchInput.value = '';
+  renderFilter();
+}
+filterBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (filterPopover.classList.contains('open')) closeFilter();
+  else openFilter();
+});
+filterSearchInput.addEventListener('input', (e) => {
+  filterSearch = e.target.value;
+  renderFilter();
+});
+filterSearchInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeFilter();
+});
+document.addEventListener('click', (e) => {
+  if (!filterPopover.contains(e.target) && !filterBtn.contains(e.target)) {
+    if (filterPopover.classList.contains('open')) closeFilter();
+  }
+});
+
+document.getElementById('filterSelectAll').addEventListener('click', (e) => {
+  e.stopPropagation();
+  visibleUsers = new Set(USERS.map(u => u.id));
+  render();
+});
+document.getElementById('filterClear').addEventListener('click', (e) => {
+  e.stopPropagation();
+  // "Clear" reverts to All (because empty state would be useless)
+  visibleUsers = new Set(USERS.map(u => u.id));
+  render();
+});
+
+/* ─── Hover popover (200ms delay) ─────────────────────────────── */
+const popover = document.getElementById('popover');
+let hoverTimer = null;
+let activeBox = null;
+
+function attachInteractions(el) {
+  el.addEventListener('mouseenter', () => {
+    clearTimeout(hoverTimer);
+    hoverTimer = setTimeout(() => showPopover(el), 200);
+  });
+  el.addEventListener('mouseleave', () => {
+    clearTimeout(hoverTimer);
+    setTimeout(() => {
+      if (!popover.matches(':hover')) hidePopover();
+    }, 80);
+  });
+  el.addEventListener('click', () => openDrawer(el._box));
+}
+popover.addEventListener('mouseleave', hidePopover);
+
+function showPopover(el) {
+  const b = el._box;
+  const cat = CATEGORIES[b.category];
+  const totalMin = b.durationMin;
+
+  popover.innerHTML = `
+    <div class="pop-head">
+      <div class="pop-title">
+        <span class="dot" style="background:${cat.raw}"></span>
+        ${b.task}
+      </div>
+      <div class="pop-meta">
+        <span>${PROJECTS[b.project]}</span>
+        <span class="sep">·</span>
+        <span>${cat.name}</span>
+      </div>
+    </div>
+    <div class="pop-entries">
+      ${b.entries.map(e => `
+        <div class="pop-entry">
+          <span class="time">${fmtTime(e.start)}–${fmtTime(e.end)}</span>
+          <span class="dur">${fmtDur(e.duration)}</span>
+          <span class="note ${e.note ? '' : 'empty'}">${e.note || 'no note'}</span>
+          <span class="billable ${e.billable ? '' : 'no'}" title="${e.billable ? 'Billable' : 'Non-billable'}"></span>
+        </div>
+      `).join('')}
+    </div>
+    <div class="pop-foot">
+      <span class="label">Total today</span>
+      <span class="total">${fmtDur(totalMin)}</span>
+    </div>
+  `;
+
+  // Position
+  const rect = el.getBoundingClientRect();
+  popover.style.visibility = 'hidden';
+  popover.classList.add('open');
+  const popH = popover.offsetHeight;
+  const popW = popover.offsetWidth;
+  let top = rect.top + rect.height / 2 - popH / 2;
+  let left = rect.right + 10;
+  if (left + popW > window.innerWidth - 12) {
+    left = rect.left - popW - 10;
+  }
+  if (top < 12) top = 12;
+  if (top + popH > window.innerHeight - 12) top = window.innerHeight - popH - 12;
+  popover.style.top = top + 'px';
+  popover.style.left = left + 'px';
+  popover.style.visibility = 'visible';
+  activeBox = el;
+}
+function hidePopover() {
+  popover.classList.remove('open');
+  activeBox = null;
+}
+
+/* ─── Drawer (mocked) ─────────────────────────────────────────── */
+const drawer = document.getElementById('drawer');
+const overlay = document.getElementById('overlay');
+function openDrawer(box) {
+  hidePopover();
+  document.getElementById('drawerTitle').textContent = box.task;
+  drawer.classList.add('open');
+  overlay.classList.add('open');
+  drawer.setAttribute('aria-hidden', 'false');
+}
+function closeDrawer() {
+  drawer.classList.remove('open');
+  overlay.classList.remove('open');
+  drawer.setAttribute('aria-hidden', 'true');
+}
+document.getElementById('drawerClose').addEventListener('click', closeDrawer);
+overlay.addEventListener('click', closeDrawer);
+document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeDrawer(); hidePopover(); } });
+
+/* ─── Toolbar ─────────────────────────────────────────────────── */
+document.querySelector('label.toggle-row').addEventListener('click', (e) => {
+  e.preventDefault();
+  showWeekend = !showWeekend;
+  const sw = document.getElementById('weekendToggle');
+  sw.classList.toggle('on', showWeekend);
+  sw.setAttribute('aria-checked', showWeekend);
+  render();
+  updateWeekLabel();
+});
+/* ─── Week picker ─────────────────────────────────────────────── */
+// "Today" anchored to Apr 23, 2026 to match the highlighted Wed in the demo data.
+const TODAY = new Date(2026, 3, 23); // months are 0-indexed
+const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+const MONTH_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+function startOfWeek(date) {
+  // Monday as week start
+  const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const dow = d.getDay();           // 0 = Sun
+  const diff = (dow === 0 ? -6 : 1 - dow);
+  d.setDate(d.getDate() + diff);
+  return d;
+}
+function addDays(date, n) {
+  const d = new Date(date);
+  d.setDate(d.getDate() + n);
+  return d;
+}
+function sameDay(a, b) {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+function sameWeek(a, b) {
+  return sameDay(startOfWeek(a), startOfWeek(b));
+}
+
+let selectedWeekStart = startOfWeek(TODAY);
+let displayMonth = { y: selectedWeekStart.getFullYear(), m: selectedWeekStart.getMonth() };
+
+function fmtWeekLabel(start) {
+  const end = addDays(start, 4);                  // Mon–Fri label by default; weekend toggle could extend
+  const lastEnd = showWeekend ? addDays(start, 6) : end;
+  const yearSuffix = `, ${lastEnd.getFullYear()}`;
+  if (start.getMonth() === lastEnd.getMonth()) {
+    return `${MONTH_SHORT[start.getMonth()]} ${start.getDate()} – ${lastEnd.getDate()}${yearSuffix}`;
+  }
+  return `${MONTH_SHORT[start.getMonth()]} ${start.getDate()} – ${MONTH_SHORT[lastEnd.getMonth()]} ${lastEnd.getDate()}${yearSuffix}`;
+}
+
+function updateWeekLabel() {
+  document.getElementById('weekLabel').textContent = fmtWeekLabel(selectedWeekStart);
+}
+
+function renderWeekPicker() {
+  document.getElementById('monthLabel').textContent = `${MONTH_NAMES[displayMonth.m]} ${displayMonth.y}`;
+
+  const grid = document.getElementById('weekPickerGrid');
+  grid.innerHTML = '';
+
+  // First Monday on or before day 1 of the displayed month
+  const first = new Date(displayMonth.y, displayMonth.m, 1);
+  const gridStart = startOfWeek(first);
+
+  for (let w = 0; w < 6; w++) {
+    const weekStart = addDays(gridStart, w * 7);
+    const row = document.createElement('div');
+    row.className = 'wp-week';
+    if (sameWeek(weekStart, selectedWeekStart)) row.classList.add('selected');
+
+    for (let i = 0; i < 7; i++) {
+      const d = addDays(weekStart, i);
+      const cell = document.createElement('span');
+      cell.className = 'wp-day';
+      if (d.getMonth() !== displayMonth.m) cell.classList.add('muted');
+      if (sameDay(d, TODAY)) cell.classList.add('today');
+      cell.textContent = d.getDate();
+      row.appendChild(cell);
+    }
+
+    row.addEventListener('click', () => {
+      selectedWeekStart = weekStart;
+      // After selection, keep the popover open briefly then close
+      renderWeekPicker();
+      updateWeekLabel();
+      closeWeekPicker();
+    });
+
+    grid.appendChild(row);
+  }
+}
+
+const weekPickerBtn = document.getElementById('weekPickerBtn');
+const weekPicker = document.getElementById('weekPicker');
+
+function openWeekPicker() {
+  // align displayMonth with selected week before opening
+  displayMonth = { y: selectedWeekStart.getFullYear(), m: selectedWeekStart.getMonth() };
+  renderWeekPicker();
+  weekPicker.classList.add('open');
+  weekPickerBtn.setAttribute('aria-expanded', 'true');
+}
+function closeWeekPicker() {
+  weekPicker.classList.remove('open');
+  weekPickerBtn.setAttribute('aria-expanded', 'false');
+}
+weekPickerBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (weekPicker.classList.contains('open')) closeWeekPicker();
+  else openWeekPicker();
+});
+document.addEventListener('click', (e) => {
+  if (!weekPicker.contains(e.target) && !weekPickerBtn.contains(e.target)) {
+    if (weekPicker.classList.contains('open')) closeWeekPicker();
+  }
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && weekPicker.classList.contains('open')) closeWeekPicker();
+});
+
+document.getElementById('monthPrev').addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (displayMonth.m === 0) { displayMonth.m = 11; displayMonth.y -= 1; }
+  else displayMonth.m -= 1;
+  renderWeekPicker();
+});
+document.getElementById('monthNext').addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (displayMonth.m === 11) { displayMonth.m = 0; displayMonth.y += 1; }
+  else displayMonth.m += 1;
+  renderWeekPicker();
+});
+document.getElementById('jumpToday').addEventListener('click', (e) => {
+  e.stopPropagation();
+  selectedWeekStart = startOfWeek(TODAY);
+  displayMonth = { y: selectedWeekStart.getFullYear(), m: selectedWeekStart.getMonth() };
+  renderWeekPicker();
+  updateWeekLabel();
+  closeWeekPicker();
+});
+
+document.getElementById('prev').addEventListener('click', () => {
+  selectedWeekStart = addDays(selectedWeekStart, -7);
+  updateWeekLabel();
+});
+document.getElementById('next').addEventListener('click', () => {
+  selectedWeekStart = addDays(selectedWeekStart, 7);
+  updateWeekLabel();
+});
+
+updateWeekLabel();
+
+/* ─── Boot ────────────────────────────────────────────────────── */
+render();
+</script>
+</body>
+</html>

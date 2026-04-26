@@ -31,6 +31,10 @@ const statusChipVariants = cva(
           "border-green-200 bg-green-500/15 text-green-700 dark:border-green-800 dark:bg-green-500/25 dark:text-green-300",
         amber:
           "border-amber-200 bg-amber-500/15 text-amber-700 dark:border-amber-800 dark:bg-amber-500/25 dark:text-amber-300",
+        // `void` reads as historical/cancelled without red-flagging.
+        // Dashed border + line-through says "record kept, do not act".
+        void:
+          "border-dashed border-border bg-transparent text-muted-foreground [text-decoration:line-through] decoration-muted-foreground/60",
       },
     },
     defaultVariants: { tone: "neutral" },

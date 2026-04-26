@@ -633,7 +633,7 @@ export const listProjectEntries = query({
       invoiceId: Id<"invoices"> | undefined;
       invoicePrefix: string | undefined;
       invoiceNumber: number | undefined;
-      invoiceStatus: "draft" | "invoiced" | "paid" | undefined;
+      invoiceStatus: "draft" | "invoiced" | "paid" | "void" | undefined;
       invoiceDueDate: string | undefined;
     };
 

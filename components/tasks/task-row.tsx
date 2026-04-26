@@ -97,7 +97,7 @@ export const TaskRow = memo(function TaskRow({
       data-task-id={task._id}
       className={cn(
         "group/row relative border-b border-border/55 transition-colors",
-        "before:pointer-events-none before:absolute before:inset-y-0 before:-left-13 before:w-13 before:transition-colors",
+        "before:pointer-events-none before:absolute before:inset-y-0 before:-left-12 before:w-12 before:transition-colors",
         "hover:bg-muted/70 hover:before:bg-muted/70",
         isSelected && "bg-primary/5 before:bg-primary/5",
         isDetailOpen && "bg-accent/50 before:bg-accent/50 before:border-l-2 before:border-l-primary",

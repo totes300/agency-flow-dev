@@ -7,7 +7,7 @@ import { useTaskReferenceData } from "@/components/tasks/task-reference-data"
 import type { StatusType } from "@/convex/lib/constants"
 import {
   Dialog,
-  DialogContent,
+  DialogFullscreenContent,
   DialogDescription,
   DialogTitle,
 } from "@/components/ui/dialog"
@@ -35,6 +35,7 @@ import {
   TagIcon,
   CheckIcon,
   AlignLeftIcon,
+  XIcon,
 } from "lucide-react"
 import type { Id } from "@/convex/_generated/dataModel"
 
@@ -118,12 +119,21 @@ export function TaskFormModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        className="flex max-h-[80vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-[560px]"
-        onKeyDown={handleKeyDown}
-      >
+      <DialogFullscreenContent>
+        <div
+          className="relative flex max-h-[80vh] w-full max-w-[560px] flex-col gap-0 overflow-hidden rounded-xl bg-background p-0 ring-1 ring-foreground/10 shadow-xl outline-none"
+          onKeyDown={handleKeyDown}
+        >
         <DialogTitle className="sr-only">Create task</DialogTitle>
         <DialogDescription className="sr-only">Fill in the details to create a new task</DialogDescription>
+        <button
+          type="button"
+          onClick={() => onOpenChange(false)}
+          className="absolute top-3 right-3 z-10 inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          aria-label="Close"
+        >
+          <XIcon className="size-4" />
+        </button>
         {/* Project picker */}
         <div className="flex items-center gap-2 px-5 pt-4 pb-3">
           <ProjectPicker
@@ -208,7 +218,8 @@ export function TaskFormModal({
             Create task
           </Button>
         </div>
-      </DialogContent>
+        </div>
+      </DialogFullscreenContent>
     </Dialog>
   )
 }

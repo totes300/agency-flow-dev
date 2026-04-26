@@ -73,7 +73,7 @@ export type TimeEntryRow = {
   invoiceId: Id<"invoices"> | undefined
   invoicePrefix: string | undefined
   invoiceNumber: number | undefined
-  invoiceStatus: "draft" | "invoiced" | "paid" | undefined
+  invoiceStatus: "draft" | "invoiced" | "paid" | "void" | undefined
   invoiceDueDate: string | undefined
 }
 
@@ -85,7 +85,10 @@ function isSelectable(row: TimeEntryRow, selectable: boolean): boolean {
 export type ProjectTimeTableProps = {
   entries: TimeEntryRow[]
   selectedIds: Set<string>
-  onToggle: (id: string) => void
+  /** Receives the full row, not just the id, so the parent can stash the
+   *  row data alongside the selection — lets the Time tab keep a row selected
+   *  even after the current filter hides it. */
+  onToggle: (row: TimeEntryRow) => void
   /**
    * Toggle every selectable row in `entries` (this table's own slice — in
    * grouped view that's one group). The parent owns the Set and folds these
@@ -141,7 +144,7 @@ export function ProjectTimeTable({
           <TableHead className="w-40">Member</TableHead>
           <TableHead>Task</TableHead>
           <TableHead className="w-40">Category</TableHead>
-          <TableHead className="w-48">Status</TableHead>
+          <TableHead className="w-32">Status</TableHead>
           <TableHead className="w-20 text-right">Hours</TableHead>
           {showAmounts && <TableHead className="w-20 text-right">Rate</TableHead>}
           {showAmounts && <TableHead className="w-24 text-right">Amount</TableHead>}
@@ -181,7 +184,7 @@ function TimeEntryTableRow({
 }: {
   row: TimeEntryRow
   selected: boolean
-  onToggle: (id: string) => void
+  onToggle: (row: TimeEntryRow) => void
   selectable: boolean
   showAmounts: boolean
   currency: string
@@ -198,7 +201,7 @@ function TimeEntryTableRow({
       className={cn(rowSelectable && "cursor-pointer")}
       data-selectable={rowSelectable || undefined}
       onClick={() => {
-        if (rowSelectable) onToggle(row._id)
+        if (rowSelectable) onToggle(row)
       }}
     >
       {selectable && (
@@ -206,7 +209,7 @@ function TimeEntryTableRow({
           {rowSelectable ? (
             <Checkbox
               checked={selected}
-              onCheckedChange={() => onToggle(row._id)}
+              onCheckedChange={() => onToggle(row)}
               aria-label={`Select entry on ${row.date}`}
             />
           ) : null}
@@ -325,7 +328,37 @@ function RowActionsMenu({
     }
   }
 
-  const disabledTooltip = isInvoiced ? "Can't modify invoiced entries" : ""
+  // Invoiced rows are locked: rather than rendering a menu of greyed-out
+  // items that require a tooltip to explain why, we show a single useful
+  // action — "Open invoice INV-…" — which itself communicates the lock.
+  // Uninvoiced rows get the full edit/toggle/delete menu.
+  if (isInvoiced && row.invoicePrefix && row.invoiceNumber != null) {
+    const invoiceNumber = formatInvoiceNumber(row.invoicePrefix, row.invoiceNumber)
+    return (
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label="Row actions"
+            className="size-7 text-muted-foreground"
+          >
+            <MoreHorizontalIcon aria-hidden className="size-4" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-52">
+          <DropdownMenuItem asChild>
+            <Link href={`/invoices/${row.invoiceId}`}>
+              <ArrowUpRightIcon aria-hidden className="size-3.5" />
+              Open invoice {invoiceNumber}
+            </Link>
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    )
+  }
+
   const toggleLabel = row.isBillable ? "Mark non-billable" : "Mark billable"
   const ToggleIcon = row.isBillable ? BanIcon : DollarSignIcon
 
@@ -344,31 +377,15 @@ function RowActionsMenu({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-44">
-          <DropdownMenuItem
-            onSelect={(e) => {
-              if (isInvoiced) {
-                e.preventDefault()
-                return
-              }
-              onEdit()
-            }}
-            disabled={isInvoiced}
-            title={disabledTooltip}
-          >
+          <DropdownMenuItem onSelect={onEdit}>
             <PencilIcon aria-hidden className="size-3.5" />
             Edit
           </DropdownMenuItem>
           <DropdownMenuItem
             onSelect={(e) => {
-              if (isInvoiced) {
-                e.preventDefault()
-                return
-              }
               e.preventDefault()
               void handleToggleBillable()
             }}
-            disabled={isInvoiced}
-            title={disabledTooltip}
           >
             <ToggleIcon aria-hidden className="size-3.5" />
             {toggleLabel}
@@ -376,13 +393,7 @@ function RowActionsMenu({
           <DropdownMenuSeparator />
           <DropdownMenuItem
             variant="destructive"
-            disabled={isInvoiced}
-            title={disabledTooltip}
             onSelect={(e) => {
-              if (isInvoiced) {
-                e.preventDefault()
-                return
-              }
               e.preventDefault()
               setConfirmOpen(true)
             }}
@@ -420,6 +431,11 @@ function RowActionsMenu({
   )
 }
 
+/**
+ * Status cell shows only the state chip. For invoiced rows the jump-to-invoice
+ * lives in the row action menu as "Open invoice INV-…", keeping this cell
+ * narrow and scannable.
+ */
 function BillingStatusCell({
   row,
   timezone,
@@ -428,31 +444,14 @@ function BillingStatusCell({
   timezone: string
 }) {
   if (!row.isBillable) return <BillingStatusBadge state="non_billable" />
-
-  if (row.invoiceId && row.invoiceStatus && row.invoicePrefix && row.invoiceNumber != null) {
-    const invoiceNumber = formatInvoiceNumber(row.invoicePrefix, row.invoiceNumber)
+  if (row.invoiceId && row.invoiceStatus) {
     return (
-      <span className="inline-flex items-center gap-3">
-        <InvoiceStatusBadge
-          status={row.invoiceStatus}
-          dueDate={row.invoiceDueDate}
-          timezone={timezone}
-        />
-        <Link
-          href={`/invoices/${row.invoiceId}`}
-          aria-label={`View invoice ${invoiceNumber}`}
-          title={`Open ${invoiceNumber}`}
-          className="group inline-flex items-center gap-1 rounded-sm text-xs text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500"
-        >
-          <ArrowUpRightIcon
-            aria-hidden
-            className="size-3 transition-transform group-hover:translate-x-[1px] group-hover:-translate-y-[1px]"
-          />
-          View
-        </Link>
-      </span>
+      <InvoiceStatusBadge
+        status={row.invoiceStatus}
+        dueDate={row.invoiceDueDate}
+        timezone={timezone}
+      />
     )
   }
-
   return <BillingStatusBadge state="uninvoiced" />
 }

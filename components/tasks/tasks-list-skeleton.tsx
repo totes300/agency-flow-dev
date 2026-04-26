@@ -5,9 +5,9 @@ import { TASK_GRID_COLS, TASK_TABLE_MIN_W } from "@/components/tasks/tasks-table
 
 export function TasksListSkeleton() {
   return (
-    <div className="space-y-5">
+    <div className="w-full space-y-5">
       {/* Header */}
-      <div className="flex items-center justify-between md:pl-13">
+      <div className="flex items-center justify-between">
         <div className="flex items-baseline gap-2">
           <Skeleton className="h-7 w-32" />
           <Skeleton className="h-5 w-6" />
@@ -19,7 +19,7 @@ export function TasksListSkeleton() {
       </div>
 
       {/* Tabs */}
-      <div className="flex items-center justify-between border-b pb-0 md:pl-13">
+      <div className="flex items-center justify-between border-b pb-0">
         <div className="flex items-center gap-1">
           {Array.from({ length: 6 }).map((_, i) => (
             <Skeleton key={i} className="my-2.5 mx-1 h-5 w-16 rounded-md" />
@@ -32,8 +32,8 @@ export function TasksListSkeleton() {
       </div>
 
       {/* Table */}
-      <div className="overflow-x-auto">
-        <div className={`${TASK_TABLE_MIN_W} md:pl-13`}>
+      <div className="overflow-x-auto md:-ml-12 md:pl-12">
+        <div className={TASK_TABLE_MIN_W}>
           {/* Column headers */}
           <div className={`grid ${TASK_GRID_COLS} items-center gap-x-6 pr-3 py-1`}>
             <Skeleton className="h-3 w-8" />

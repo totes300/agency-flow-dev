@@ -44,10 +44,14 @@ export function ProjectTimeStats({
   entries,
   billingType,
   currency,
+  timezone,
 }: {
   entries: TimeEntryRow[]
   billingType: string
   currency: string
+  /** Org timezone. Surfaces as a trailing indicator so users in other zones
+   *  don't have to guess what "today" means in these totals. */
+  timezone?: string
 }) {
   const stats = computeStats(entries, billingType, currency)
   return (
@@ -70,6 +74,11 @@ export function ProjectTimeStats({
           )}
         </div>
       ))}
+      {timezone && (
+        <span className="ml-auto text-xs text-muted-foreground">
+          Times in {timezone}
+        </span>
+      )}
     </div>
   )
 }

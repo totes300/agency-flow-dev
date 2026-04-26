@@ -36,6 +36,7 @@ const ProjectTime = dynamic(
 import { TaskDetailModal } from "@/components/tasks/task-detail-modal"
 import { TaskReferenceDataProvider } from "@/components/tasks/task-reference-data"
 import { useIsAdmin } from "@/lib/hooks/use-is-admin"
+import { useBreadcrumbTitle } from "@/lib/hooks/use-breadcrumb-title"
 
 export default function ProjectDetailPage() {
   const { isAuthenticated } = useConvexAuth()
@@ -56,6 +57,8 @@ export default function ProjectDetailPage() {
     api.orgMembers.listOrgMembers,
     isAuthenticated ? {} : "skip",
   )
+
+  useBreadcrumbTitle(project?.name ?? null)
 
   const [scrollTarget, setScrollTarget] = useState<string | null>(null)
   // URL is the source of truth for the active tab — keeps back button, refresh,
@@ -125,7 +128,7 @@ export default function ProjectDetailPage() {
 
   return (
     <TaskReferenceDataProvider value={referenceData}>
-    <div className="mx-auto w-full max-w-7xl flex flex-col gap-6">
+    <div className="flex w-full flex-col gap-6">
       <ProjectDetailHeader
         projectId={projectId}
         project={project}

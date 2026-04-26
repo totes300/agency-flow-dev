@@ -68,7 +68,7 @@ export function TaskGroup({
 
   return (
     <div>
-      <div className="group/group relative flex w-full items-center gap-2 border-b border-border/70 bg-muted/[0.16] pr-3 py-2.5 transition-colors hover:bg-muted/[0.3] before:pointer-events-none before:absolute before:inset-y-0 before:-left-13 before:w-13 before:bg-muted/[0.16] before:transition-colors hover:before:bg-muted/[0.3]">
+      <div className="group/group relative flex w-full items-center gap-2 border-b border-border/70 bg-muted/[0.16] pr-3 py-2.5 transition-colors hover:bg-muted/[0.3] before:pointer-events-none before:absolute before:inset-y-0 before:-left-12 before:w-12 before:bg-muted/[0.16] before:transition-colors hover:before:bg-muted/[0.3]">
         {/* Group checkbox — positioned in left gutter */}
         {taskIds && selectedIds && onSelectGroup ? (
           <div className={cn(

@@ -8,8 +8,8 @@ export type InvoiceBucket = {
 
 export type InvoiceMetrics = {
   draft: InvoiceBucket
-  outstanding: InvoiceBucket
-  overdue: InvoiceBucket
+  unpaid: InvoiceBucket
+  pastDue: InvoiceBucket
   paidThisMonth: InvoiceBucket
 }
 
@@ -22,14 +22,14 @@ export function InvoicesMetricCards({ metrics }: { metrics: InvoiceMetrics }) {
         detail={formatCurrencyBucketDetail(metrics.draft.currencySums)}
       />
       <MetricCard
-        label="Outstanding"
-        value={String(metrics.outstanding.count)}
-        detail={formatCurrencyBucketDetail(metrics.outstanding.currencySums)}
+        label="Unpaid"
+        value={String(metrics.unpaid.count)}
+        detail={formatCurrencyBucketDetail(metrics.unpaid.currencySums)}
       />
       <MetricCard
-        label="Overdue"
-        value={String(metrics.overdue.count)}
-        detail={formatCurrencyBucketDetail(metrics.overdue.currencySums)}
+        label="Past due"
+        value={String(metrics.pastDue.count)}
+        detail={formatCurrencyBucketDetail(metrics.pastDue.currencySums)}
         variant="destructive"
       />
       <MetricCard

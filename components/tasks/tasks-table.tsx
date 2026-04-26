@@ -132,8 +132,8 @@ export function TasksTable({
   const someSelected = selectableIds.some((id) => selectedIds.has(id))
 
   return (
-    <div className="overflow-x-auto">
-      <div className={cn(TASK_TABLE_MIN_W, "md:pl-13")}>
+    <div className="overflow-x-auto md:-ml-12 md:pl-12">
+      <div className={TASK_TABLE_MIN_W}>
         {/* Column headers */}
         <div className="group/header relative">
           {/* Select-all checkbox — positioned in left margin */}

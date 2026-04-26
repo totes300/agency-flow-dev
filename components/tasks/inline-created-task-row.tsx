@@ -44,7 +44,7 @@ export function InlineCreatedTaskRow({
     <div
       className={cn(
         `group/row relative grid ${TASK_GRID_COLS} items-center gap-x-6 border-b border-border/40 pr-3 py-2.5 [&>*]:min-w-0 [&>*]:overflow-hidden`,
-        "before:pointer-events-none before:absolute before:inset-y-0 before:-left-13 before:w-13",
+        "before:pointer-events-none before:absolute before:inset-y-0 before:-left-12 before:w-12",
         task.saveState === "error" && "bg-red-500/5 before:bg-red-500/5",
       )}
     >

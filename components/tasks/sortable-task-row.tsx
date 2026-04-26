@@ -35,7 +35,7 @@ export function SortableTaskRow({
           ref={handleRef}
           role="button"
           tabIndex={0}
-          className="absolute -left-13 top-0 bottom-0 z-10 flex w-3 cursor-grab items-center justify-center opacity-0 transition-opacity group-hover/sortable:opacity-100 focus-visible:opacity-100 active:cursor-grabbing"
+          className="absolute -left-12 top-0 bottom-0 z-10 flex w-3 cursor-grab items-center justify-center opacity-0 transition-opacity group-hover/sortable:opacity-100 focus-visible:opacity-100 active:cursor-grabbing"
           aria-label="Drag to reorder"
           aria-roledescription="sortable"
         >

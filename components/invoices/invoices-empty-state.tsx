@@ -15,12 +15,31 @@ export type InvoicesEmptyReason =
   | "project-no-invoices"
   | "no-matches"
 
+/** Copy for `project-no-invoices` depends on the project's billing type so
+ *  the description points at the right next action (log time vs. hit a
+ *  milestone vs. wait for the next retainer month). */
+const PROJECT_EMPTY_COPY: Record<string, { description: string }> = {
+  t_and_m: {
+    description:
+      "Log time on the Time tab, then create an invoice here when you're ready to bill.",
+  },
+  fixed: {
+    description: "Create invoices as you hit delivery milestones on this project.",
+  },
+  retainer: {
+    description:
+      "Retainer invoices appear here once you create them. Create this month's invoice from the banner above the list.",
+  },
+}
+
 export interface InvoicesEmptyStateProps {
   reason: InvoicesEmptyReason
   /** Required for `project-no-invoices` when the user can create; enables the CTA. */
   onCreateInvoice?: () => void
   /** Optional clear-filters handler for `no-matches`. */
   onClearFilters?: () => void
+  /** Tailors the `project-no-invoices` description per billing type. */
+  billingType?: string
   className?: string
 }
 
@@ -28,6 +47,7 @@ export function InvoicesEmptyState({
   reason,
   onCreateInvoice,
   onClearFilters,
+  billingType,
   className,
 }: InvoicesEmptyStateProps) {
   return (
@@ -54,7 +74,10 @@ export function InvoicesEmptyState({
         <EmptyState
           icon={ReceiptIcon}
           title="No invoices"
-          description="Create an invoice to start billing for this project."
+          description={
+            PROJECT_EMPTY_COPY[billingType ?? ""]?.description ??
+            "Create an invoice to start billing for this project."
+          }
           action={
             <Button onClick={onCreateInvoice} disabled={!onCreateInvoice}>
               Create Invoice

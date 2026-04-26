@@ -117,7 +117,7 @@ export function TasksTabs({
   }, [updateIndicator])
 
   return (
-    <div className="md:pl-13">
+    <div>
       <div className="border-b border-border/50">
         <div className="flex items-end justify-between">
           {/* Tabs — left side */}

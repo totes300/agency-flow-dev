@@ -21,7 +21,6 @@ import { toast } from "sonner"
 import { toastError } from "@/lib/toast-helpers"
 import { formatShortDate, formatMinutes } from "@/lib/format"
 import {
-  ArrowLeftIcon,
   MoreHorizontalIcon,
   ArchiveIcon,
   ArchiveRestoreIcon,
@@ -87,16 +86,6 @@ export function ProjectDetailHeader({
   return (
     <>
       <div>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="mb-2 -ml-2 text-muted-foreground"
-          onClick={() => router.push("/projects")}
-        >
-          <ArrowLeftIcon data-icon="inline-start" />
-          Projects
-        </Button>
-
         <div className="flex items-start justify-between">
           <div>
             <div className="flex items-center gap-3">

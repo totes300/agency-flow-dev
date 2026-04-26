@@ -1,4 +1,4 @@
-import { query, mutation } from "./_generated/server";
+import { query, mutation, type MutationCtx } from "./_generated/server";
 import { v, ConvexError } from "convex/values";
 import { requireAdmin } from "./lib/auth";
 import { getOrgSettings, getProjectCurrency } from "./lib/orgHelpers";
@@ -87,9 +87,26 @@ export const listInvoices = query({
  */
 export const listAllInvoices = query({
   args: {
-    status: v.optional(v.union(v.literal("draft"), v.literal("invoiced"), v.literal("paid"))),
-    clientId: v.optional(v.id("clients")),
-    projectId: v.optional(v.id("projects")),
+    status: v.optional(
+      v.union(
+        v.literal("draft"),
+        v.literal("invoiced"),
+        v.literal("paid"),
+        v.literal("void"),
+      ),
+    ),
+    // Multi-value filters with optional "is not" operator. Shape mirrors the
+    // `Filter[]` wire format the UI uses so args build up from filters 1:1.
+    clientIds: v.optional(v.array(v.id("clients"))),
+    clientIdsOp: v.optional(v.union(v.literal("is"), v.literal("isNot"))),
+    projectIds: v.optional(v.array(v.id("projects"))),
+    projectIdsOp: v.optional(v.union(v.literal("is"), v.literal("isNot"))),
+    // Inclusive YYYY-MM-DD ranges. Empty strings are ignored (the UI
+    // materializes a date-range filter before the user picks both ends).
+    issueDateFrom: v.optional(v.string()),
+    issueDateTo: v.optional(v.string()),
+    dueDateFrom: v.optional(v.string()),
+    dueDateTo: v.optional(v.string()),
     search: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -110,8 +127,37 @@ export const listAllInvoices = query({
         .collect();
     }
 
-    if (args.clientId) invoices = invoices.filter((inv) => inv.clientId === args.clientId);
-    if (args.projectId) invoices = invoices.filter((inv) => inv.projectId === args.projectId);
+    if (args.clientIds && args.clientIds.length > 0) {
+      const set = new Set(args.clientIds);
+      const isNot = args.clientIdsOp === "isNot";
+      invoices = invoices.filter((inv) =>
+        isNot ? !set.has(inv.clientId) : set.has(inv.clientId),
+      );
+    }
+    if (args.projectIds && args.projectIds.length > 0) {
+      const set = new Set(args.projectIds);
+      const isNot = args.projectIdsOp === "isNot";
+      invoices = invoices.filter((inv) =>
+        isNot ? !set.has(inv.projectId) : set.has(inv.projectId),
+      );
+    }
+
+    if (args.issueDateFrom) {
+      invoices = invoices.filter((inv) => inv.issueDate >= args.issueDateFrom!);
+    }
+    if (args.issueDateTo) {
+      invoices = invoices.filter((inv) => inv.issueDate <= args.issueDateTo!);
+    }
+    if (args.dueDateFrom) {
+      invoices = invoices.filter(
+        (inv) => inv.dueDate != null && inv.dueDate >= args.dueDateFrom!,
+      );
+    }
+    if (args.dueDateTo) {
+      invoices = invoices.filter(
+        (inv) => inv.dueDate != null && inv.dueDate <= args.dueDateTo!,
+      );
+    }
 
     const searchTerm = args.search?.trim().toLowerCase();
     if (searchTerm) {
@@ -165,10 +211,15 @@ export const hasAnyInvoice = query({
 
 /**
  * Aggregate metrics for the global /invoices page.
- * Returns per-currency sums + counts for Draft, Outstanding, Overdue, Paid This Month.
+ * Returns per-currency sums + counts for Draft, Unpaid, Past due, Paid This Month.
  *
- * Product decision: invoices with undefined dueDate are treated as Outstanding
- * (no overdue clock). See docs/invoicing-issue-7-tasks.md.
+ *   Unpaid   = status "invoiced" AND (no dueDate OR dueDate >= today)
+ *   Past due = status "invoiced" AND dueDate <  today
+ *
+ * "Past due" is derived, not stored — server recomputes it each call against
+ * today in the org timezone so the counts stay consistent with the badge.
+ *
+ * Void invoices are historical and excluded from every bucket.
  */
 export const getInvoiceMetrics = query({
   args: {},
@@ -189,8 +240,8 @@ export const getInvoiceMetrics = query({
     type Bucket = { count: number; currencySums: Record<string, number> };
     const empty = (): Bucket => ({ count: 0, currencySums: {} });
     const draft = empty();
-    const outstanding = empty();
-    const overdue = empty();
+    const unpaid = empty();
+    const pastDue = empty();
     const paidThisMonth = empty();
 
     function accumulate(bucket: Bucket, inv: Doc<"invoices">) {
@@ -200,14 +251,16 @@ export const getInvoiceMetrics = query({
     }
 
     for (const inv of invoices) {
+      if (inv.status === "void") continue;
+
       if (inv.status === "draft") {
         accumulate(draft, inv);
       } else if (inv.status === "invoiced") {
-        // undefined dueDate → Outstanding (product decision)
+        // Undefined dueDate has no overdue clock — stays in Unpaid.
         if (inv.dueDate == null || inv.dueDate >= todayStr) {
-          accumulate(outstanding, inv);
+          accumulate(unpaid, inv);
         } else {
-          accumulate(overdue, inv);
+          accumulate(pastDue, inv);
         }
       } else if (inv.status === "paid") {
         if (inv.paidAt != null) {
@@ -221,7 +274,7 @@ export const getInvoiceMetrics = query({
       }
     }
 
-    return { draft, outstanding, overdue, paidThisMonth };
+    return { draft, unpaid, pastDue, paidThisMonth };
   },
 });
 
@@ -309,8 +362,22 @@ export const getReadyToInvoice = query({
 });
 
 /**
- * Get invoice metrics for a project — totals for metric cards.
- * Returns billing-type-specific fields for Fixed Fee projects.
+ * Get invoice metrics for a project — feeds the project's Invoices tab.
+ *
+ * Three payment-health buckets (all single-currency — project has exactly one
+ * currency via the D1 invariant):
+ *
+ *   unpaid       = status "invoiced" AND (no dueDate OR dueDate >= today)
+ *   pastDue      = status "invoiced" AND dueDate <  today
+ *   paidLifetime = status "paid" — sum shown as a muted summary line
+ *
+ * Plus billing-type-specific context:
+ *   Fixed    → fixedBilled / fixedRemaining / fixedPercentInvoiced
+ *   Retainer → uninvoicedMonths (full {year, month, label} objects so the
+ *              callout bar can pre-fill the CreateInvoiceModal)
+ *
+ * Void invoices are excluded everywhere.
+ * "Today" resolved in org timezone so the past-due line matches the badge.
  */
 export const getProjectInvoiceMetrics = query({
   args: {
@@ -326,11 +393,35 @@ export const getProjectInvoiceMetrics = query({
       .query("invoices")
       .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
       .collect();
-    const orgInvoices = invoices.filter((inv) => inv.orgId === orgId);
+    // Void invoices are historical — excluded from totals and counts so the
+    // metric cards reflect the live picture.
+    const orgInvoices = invoices.filter(
+      (inv) => inv.orgId === orgId && inv.status !== "void",
+    );
+
+    const orgSettings = await getOrgSettings(ctx, orgId);
+    const timezone = orgSettings?.timezone ?? "UTC";
+    const todayStr = getDateInTimezone(Date.now(), timezone);
+
+    type Bucket = { count: number; amount: number };
+    const empty = (): Bucket => ({ count: 0, amount: 0 });
+    const unpaid = empty();
+    const pastDue = empty();
+    const paidLifetime = empty();
 
     let totalInvoiced = 0;
     for (const inv of orgInvoices) {
       totalInvoiced += inv.total;
+
+      if (inv.status === "invoiced") {
+        const overdue = inv.dueDate != null && inv.dueDate < todayStr;
+        const bucket = overdue ? pastDue : unpaid;
+        bucket.count += 1;
+        bucket.amount = round2(bucket.amount + inv.total);
+      } else if (inv.status === "paid") {
+        paidLifetime.count += 1;
+        paidLifetime.amount = round2(paidLifetime.amount + inv.total);
+      }
     }
 
     // Fixed Fee: compute billed amount from lineType:"fixed" items only
@@ -339,7 +430,8 @@ export const getProjectInvoiceMetrics = query({
     let fixedBilled = 0;
     if (project.billingType === "fixed") {
       for (const inv of orgInvoices) {
-        if (inv.status === "draft") continue;
+        // Drafts are provisional; voids are historical. Neither counts as billed.
+        if (inv.status === "draft" || inv.status === "void") continue;
         const items = await ctx.db
           .query("invoiceLineItems")
           .withIndex("by_invoiceId", (q) => q.eq("invoiceId", inv._id))
@@ -354,11 +446,9 @@ export const getProjectInvoiceMetrics = query({
     const fixedPrice = project.fixedPrice ?? 0;
 
     // Retainer: compute uninvoiced closed months
-    let uninvoicedMonthCount = 0;
-    let uninvoicedMonthLabels: string[] = [];
+    type UninvoicedMonth = { year: number; month: number; label: string };
+    let uninvoicedMonths: UninvoicedMonth[] = [];
     if (project.billingType === "retainer") {
-      const orgSettings = await getOrgSettings(ctx, orgId);
-      const timezone = orgSettings?.timezone ?? "UTC";
       const closedUninvoiced = await getClosedUninvoicedMonths(
         ctx as any,
         orgId,
@@ -366,8 +456,11 @@ export const getProjectInvoiceMetrics = query({
         project,
         timezone,
       );
-      uninvoicedMonthCount = closedUninvoiced.length;
-      uninvoicedMonthLabels = closedUninvoiced.map((m) => m.label);
+      uninvoicedMonths = closedUninvoiced.map((m) => ({
+        year: m.year,
+        month: m.month,
+        label: m.label,
+      }));
     }
 
     const currency = await getProjectCurrency(ctx, project);
@@ -376,6 +469,10 @@ export const getProjectInvoiceMetrics = query({
       totalInvoiced,
       invoiceCount: orgInvoices.length,
       currency,
+      // Payment-health buckets (single-currency per D1 invariant)
+      unpaid,
+      pastDue,
+      paidLifetime,
       // Fixed Fee specific
       fixedPrice,
       fixedBilled,
@@ -383,9 +480,9 @@ export const getProjectInvoiceMetrics = query({
       fixedPercentInvoiced: fixedPrice > 0
         ? Math.round((fixedBilled / fixedPrice) * 100)
         : 0,
-      // Retainer specific
-      uninvoicedMonthCount,
-      uninvoicedMonthLabels,
+      // Retainer specific — full {year, month, label} so the callout bar
+      // can pre-fill the CreateInvoiceModal with one click.
+      uninvoicedMonths,
     };
   },
 });
@@ -503,7 +600,7 @@ export const getInvoicePreview = query({
       let alreadyInvoiced = 0;
       for (const inv of existingInvoices) {
         if (inv.orgId !== orgId) continue;
-        if (inv.status === "draft") continue;
+        if (inv.status === "draft" || inv.status === "void") continue;
         const items = await ctx.db
           .query("invoiceLineItems")
           .withIndex("by_invoiceId", (q) => q.eq("invoiceId", inv._id))
@@ -853,6 +950,8 @@ async function cascadeRetainerChain(
       (inv) =>
         inv._id !== previousInvoice._id &&
         inv.orgId === previousInvoice.orgId &&
+        // Void invoices don't participate in the retainer chain.
+        inv.status !== "void" &&
         inv.periodStart &&
         inv.periodStart > previousInvoice.periodEnd!,
     )
@@ -929,14 +1028,18 @@ async function getClosedUninvoicedMonths(
     if (m > 12) { m = 1; y++; }
   }
 
-  // Get existing invoices for this project (any status — duplicate guard is regardless of status)
+  // Get existing invoices for this project. Void invoices don't claim a
+  // month — the period is re-invoiceable.
   const invoices = await ctx.db
     .query("invoices")
     .withIndex("by_projectId", (q: any) => q.eq("projectId", projectId))
     .collect();
   const invoicedMonths = new Set(
     invoices
-      .filter((inv: Doc<"invoices">) => inv.orgId === orgId && inv.periodStart)
+      .filter(
+        (inv: Doc<"invoices">) =>
+          inv.orgId === orgId && inv.status !== "void" && inv.periodStart,
+      )
       .map((inv: Doc<"invoices">) => inv.periodStart!.slice(0, 7)),
   );
 
@@ -1157,7 +1260,8 @@ export const createInvoice = mutation({
       const lastDay = new Date(y, m, 0).getDate();
       effectiveEnd = `${y}-${String(m).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
 
-      // Duplicate guard: one invoice per project-month regardless of status
+      // Duplicate guard: one live invoice per project-month. Voided invoices
+      // are historical records — the month is re-invoiceable.
       const existingInvoices = await ctx.db
         .query("invoices")
         .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
@@ -1165,6 +1269,7 @@ export const createInvoice = mutation({
       const duplicate = existingInvoices.find(
         (inv) =>
           inv.orgId === orgId &&
+          inv.status !== "void" &&
           inv.periodStart === effectiveStart &&
           inv.periodEnd === effectiveEnd,
       );
@@ -1478,7 +1583,12 @@ export const createInvoice = mutation({
         .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
         .collect();
       const projectInvoiceIds = existingInvoices
-        .filter((inv) => inv.orgId === orgId && inv.status !== "draft")
+        .filter(
+          (inv) =>
+            inv.orgId === orgId &&
+            inv.status !== "draft" &&
+            inv.status !== "void",
+        )
         .map((inv) => inv._id);
 
       let alreadyInvoiced = 0;
@@ -1689,7 +1799,7 @@ export const getInvoice = query({
         .collect();
       for (const inv of projectInvoices) {
         if (inv.orgId !== orgId) continue;
-        if (inv.status === "draft") continue;
+        if (inv.status === "draft" || inv.status === "void") continue;
         const invItems = await ctx.db
           .query("invoiceLineItems")
           .withIndex("by_invoiceId", (q) => q.eq("invoiceId", inv._id))
@@ -2034,11 +2144,23 @@ export const removeInvoiceLineItem = mutation({
 
 // ─── Lifecycle Mutations ───────────────────────────────────────────────────────
 
-/** Valid status transitions for the invoice state machine. */
+/** Valid status transitions for the invoice state machine.
+ *
+ *   draft    → invoiced | void
+ *   invoiced → paid | draft | void
+ *   paid     → invoiced                 (reversal; correction path)
+ *   void     → —                        (terminal; retainer chain already re-opened)
+ *
+ * `paid → void` is intentionally disallowed: a settled invoice is reconciled
+ * with an external payment. Reversing it is "refund / credit note" territory,
+ * not a plain void, and should flow through `paid → invoiced → void` if ever
+ * needed.
+ */
 const VALID_TRANSITIONS: Record<string, string[]> = {
-  draft: ["invoiced"],
-  invoiced: ["paid", "draft"],
+  draft: ["invoiced", "void"],
+  invoiced: ["paid", "draft", "void"],
   paid: ["invoiced"],
+  void: [],
 };
 
 /**
@@ -2072,6 +2194,8 @@ async function findLaterRetainerInvoice(
       (inv) =>
         inv._id !== invoice._id &&
         inv.orgId === orgId &&
+        // Void invoices don't own a live snapshot and don't block unwinding.
+        inv.status !== "void" &&
         inv.periodStart &&
         inv.periodStart > invoice.periodEnd!,
     )
@@ -2091,6 +2215,58 @@ async function findLaterRetainerInvoice(
  *
  * No direct paid → draft path.
  */
+type InvoiceStatus = "draft" | "invoiced" | "paid" | "void";
+type TransitionResult = { ok: true } | { ok: false; reason: string };
+
+/**
+ * Apply a status transition to a single invoice. Factored out of
+ * `changeInvoiceStatus` so `bulkChangeInvoiceStatus` can accumulate per-row
+ * failures without aborting the whole mutation.
+ *
+ * Returns a result object rather than throwing — the single-row mutation
+ * still throws on failure to preserve its existing contract.
+ */
+async function applyStatusTransition(
+  ctx: MutationCtx,
+  orgId: string,
+  invoice: Doc<"invoices">,
+  newStatus: InvoiceStatus,
+): Promise<TransitionResult> {
+  const allowed = VALID_TRANSITIONS[invoice.status];
+  if (!allowed || !allowed.includes(newStatus)) {
+    return {
+      ok: false,
+      reason: `Cannot transition from "${invoice.status}" to "${newStatus}".`,
+    };
+  }
+
+  // Retainer chain guards: these transitions re-open the chain by either
+  // discarding snapshot data (void) or unfreezing it (revert to draft).
+  // Later retainer invoices — draft or finalized — chained off this one's
+  // end balance, so we must unwind in reverse order.
+  const reopensRetainerChain =
+    (invoice.status === "invoiced" && newStatus === "draft") ||
+    newStatus === "void";
+  if (reopensRetainerChain) {
+    const blocker = await findLaterRetainerInvoice(ctx, orgId, invoice);
+    if (blocker) {
+      const label = blocker.periodStart ? monthLabel(blocker.periodStart) : "a later";
+      return {
+        ok: false,
+        reason: `Remove the ${label} invoice first. Retainer invoices must be unwound in reverse order.`,
+      };
+    }
+  }
+
+  const now = Date.now();
+  const patch: Record<string, unknown> = { status: newStatus, updatedAt: now };
+  if (newStatus === "paid") patch.paidAt = now;
+  if (invoice.status === "paid" && newStatus === "invoiced") patch.paidAt = undefined;
+
+  await ctx.db.patch(invoice._id, patch);
+  return { ok: true };
+}
+
 export const changeInvoiceStatus = mutation({
   args: {
     id: v.id("invoices"),
@@ -2098,6 +2274,7 @@ export const changeInvoiceStatus = mutation({
       v.literal("draft"),
       v.literal("invoiced"),
       v.literal("paid"),
+      v.literal("void"),
     ),
   },
   handler: async (ctx, args) => {
@@ -2108,43 +2285,49 @@ export const changeInvoiceStatus = mutation({
       throw new ConvexError("Invoice not found.");
     }
 
-    const allowed = VALID_TRANSITIONS[invoice.status];
-    if (!allowed || !allowed.includes(args.newStatus)) {
-      throw new ConvexError(
-        `Cannot transition from "${invoice.status}" to "${args.newStatus}".`,
-      );
-    }
+    const result = await applyStatusTransition(ctx, orgId, invoice, args.newStatus);
+    if (!result.ok) throw new ConvexError(result.reason);
+  },
+});
 
-    // Retainer revert guard: reverting an invoiced retainer back to draft
-    // unfreezes its balance snapshot, which later invoices have already
-    // chained from. Block if ANY later retainer invoice exists (draft or
-    // finalized) — a later draft's start balance was captured from here.
-    if (invoice.status === "invoiced" && args.newStatus === "draft") {
-      const blocker = await findLaterRetainerInvoice(ctx, orgId, invoice);
-      if (blocker) {
-        const label = blocker.periodStart ? monthLabel(blocker.periodStart) : "a later";
-        throw new ConvexError(
-          `Remove the ${label} invoice first. Retainer invoices must be unwound in reverse order.`,
-        );
+/**
+ * Apply a status transition to multiple invoices in one call. Commits
+ * succeeded rows even when some fail — matches how the Time-tab bulk
+ * billable-toggle surfaces partial success.
+ *
+ * Returns both lists so the UI can toast "N updated, M failed" with reasons.
+ */
+export const bulkChangeInvoiceStatus = mutation({
+  args: {
+    ids: v.array(v.id("invoices")),
+    newStatus: v.union(
+      v.literal("draft"),
+      v.literal("invoiced"),
+      v.literal("paid"),
+      v.literal("void"),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const { orgId } = await requireAdmin(ctx);
+
+    const succeeded: Id<"invoices">[] = [];
+    const failed: { id: Id<"invoices">; reason: string }[] = [];
+
+    for (const id of args.ids) {
+      const invoice = await ctx.db.get(id);
+      if (!invoice || invoice.orgId !== orgId) {
+        failed.push({ id, reason: "Invoice not found." });
+        continue;
+      }
+      const result = await applyStatusTransition(ctx, orgId, invoice, args.newStatus);
+      if (result.ok) {
+        succeeded.push(id);
+      } else {
+        failed.push({ id, reason: result.reason });
       }
     }
 
-    const now = Date.now();
-    const patch: Record<string, unknown> = {
-      status: args.newStatus,
-      updatedAt: now,
-    };
-
-    // Set paidAt when marking as paid
-    if (args.newStatus === "paid") {
-      patch.paidAt = now;
-    }
-    // Clear paidAt when reverting from paid
-    if (invoice.status === "paid" && args.newStatus === "invoiced") {
-      patch.paidAt = undefined;
-    }
-
-    await ctx.db.patch(args.id, patch);
+    return { succeeded, failed };
   },
 });
 

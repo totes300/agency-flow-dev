@@ -13,15 +13,20 @@ import { formatCurrency, formatMinutes } from "@/lib/format"
 import { BanIcon, DollarSignIcon, LoaderIcon, PlusIcon, XIcon } from "lucide-react"
 import type { TimeEntryRow } from "@/components/projects/project-time-table"
 
+/**
+ * Renders when one or more time entries are selected. Operates on the full
+ * selection — visible rows merged with filter-hidden rows stashed in the
+ * parent — so bulk actions honor the user's original intent even across
+ * filter changes. Filter-hidden state is surfaced separately by
+ * `<ProjectTimeHiddenSelectionBanner>`; this bar just shows totals + actions.
+ */
 export function ProjectTimeSelectionToolbar({
-  selectedIds,
-  entries,
+  selectedEntries,
   currency,
   onDeselectAll,
   onCreateInvoice,
 }: {
-  selectedIds: Set<string>
-  entries: TimeEntryRow[]
+  selectedEntries: TimeEntryRow[]
   currency: string
   onDeselectAll: () => void
   /**
@@ -36,20 +41,19 @@ export function ProjectTimeSelectionToolbar({
     null,
   )
 
-  const selected = entries.filter((e) => selectedIds.has(e._id))
-  const count = selected.length
-  const totalMinutes = selected.reduce((sum, e) => sum + e.durationMinutes, 0)
-  const totalAmount = selected.reduce(
+  const count = selectedEntries.length
+  const totalMinutes = selectedEntries.reduce((sum, e) => sum + e.durationMinutes, 0)
+  const totalAmount = selectedEntries.reduce(
     (sum, e) => sum + (e.durationMinutes / 60) * e.billableRate,
     0,
   )
 
   // Bulk button visibility: only show when there's something to flip, and
   // skip already-invoiced rows (backend blocks; UI filters for consistency).
-  const flippableToBillable = selected.filter(
+  const flippableToBillable = selectedEntries.filter(
     (e) => !e.isBillable && !e.invoiceId,
   )
-  const flippableToNonBillable = selected.filter(
+  const flippableToNonBillable = selectedEntries.filter(
     (e) => e.isBillable && !e.invoiceId,
   )
 
@@ -85,7 +89,7 @@ export function ProjectTimeSelectionToolbar({
 
   function handleCreate() {
     if (count === 0) return
-    const billableUninvoiced = selected
+    const billableUninvoiced = selectedEntries
       .filter((e) => e.isBillable && !e.invoiceId)
       .map((e) => e._id as Id<"timeEntries">)
     if (billableUninvoiced.length === 0) {

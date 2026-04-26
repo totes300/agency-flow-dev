@@ -240,7 +240,8 @@ export default defineSchema({
     status: v.union(
       v.literal("draft"),
       v.literal("invoiced"),
-      v.literal("paid")
+      v.literal("paid"),
+      v.literal("void")
     ),
     currency: v.string(),
     subtotal: v.number(),

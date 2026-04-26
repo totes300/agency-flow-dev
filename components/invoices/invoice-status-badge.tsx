@@ -1,6 +1,6 @@
 import { StatusChip, type StatusChipTone } from "@/components/ui/status-chip"
 
-type InvoiceStatus = "draft" | "invoiced" | "paid"
+export type InvoiceStatus = "draft" | "invoiced" | "paid" | "void"
 
 /**
  * Visual state derived from `status` + `dueDate`. Overdue is a *displayed*
@@ -17,6 +17,7 @@ const statusConfig: Record<
   invoiced: { label: "Invoiced", tone: "blue" },
   overdue: { label: "Overdue", tone: "red" },
   paid: { label: "Paid", tone: "green" },
+  void: { label: "Void", tone: "void" },
 }
 
 function isOverdue(

@@ -1,7 +1,7 @@
 "use client"
 
 import { useMemo, useState } from "react"
-import { ChevronLeftIcon, ChevronRightIcon, ChevronDownIcon } from "lucide-react"
+import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
@@ -70,10 +70,9 @@ export function WorkdayWeekPicker({
         <PopoverTrigger asChild>
           <Button
             variant="ghost"
-            className="h-8 gap-1 px-2.5 text-[13px] font-medium tabular-nums"
+            className="h-8 px-2.5 text-[13px] font-medium tabular-nums"
           >
             {label}
-            <ChevronDownIcon className="size-3.5 text-muted-foreground" />
           </Button>
         </PopoverTrigger>
         <PopoverContent

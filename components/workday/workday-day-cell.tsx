@@ -32,8 +32,8 @@ export function WorkdayDayCell({
       style={
         isToday
           ? {
-              backgroundImage:
-                "linear-gradient(to bottom, color-mix(in srgb, var(--primary) 2.5%, transparent) 0%, transparent 80px)",
+              backgroundColor:
+                "color-mix(in srgb, var(--primary) 3%, transparent)",
             }
           : undefined
       }
@@ -52,9 +52,11 @@ export function WorkdayDayCell({
             />
           ))
         ) : (
-          <span className="pt-1 text-[11.5px] text-muted-foreground/60">
-            No work logged
-          </span>
+          <div className="absolute inset-0 flex items-center justify-center">
+            <span className="text-[11.5px] text-muted-foreground/60">
+              No work logged
+            </span>
+          </div>
         )}
 
         {/* 8h capacity hairline — visible when overtime spills past the stack. */}

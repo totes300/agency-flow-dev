@@ -1,15 +1,17 @@
 "use client"
 
-import { useEffect, useRef, useMemo, useCallback } from "react"
+import { useEffect, useRef, useMemo, useCallback, useState } from "react"
 import { Tiptap, useEditor } from "@tiptap/react"
 import { BubbleMenu } from "@tiptap/react/menus"
+import { TiptapLightbox, type LightboxImage } from "@/components/tasks/tiptap-lightbox"
 import { useMutation, useAction } from "convex/react"
 import StarterKit from "@tiptap/starter-kit"
 import Placeholder from "@tiptap/extension-placeholder"
 import Link from "@tiptap/extension-link"
 import Image from "@tiptap/extension-image"
-import TaskList from "@tiptap/extension-task-list"
-import TaskItem from "@tiptap/extension-task-item"
+import { Markdown } from "@tiptap/markdown"
+import { PortableTaskList, PortableTaskItem } from "@/components/tasks/portable-task-list"
+import { MarkdownClipboard } from "@/components/tasks/markdown-clipboard"
 import Underline from "@tiptap/extension-underline"
 import Highlight from "@tiptap/extension-highlight"
 import TextAlign from "@tiptap/extension-text-align"
@@ -210,14 +212,25 @@ export function TiptapEditor({
         openOnClick: false,
         HTMLAttributes: { class: "text-primary underline cursor-pointer" },
       }),
-      Image.configure({ allowBase64: true }),
+      Image.configure({
+        allowBase64: true,
+        resize: {
+          enabled: true,
+          directions: ["left", "right"],
+          minWidth: 80,
+          minHeight: 40,
+          alwaysPreserveAspectRatio: true,
+        },
+      }),
       TextAlign.configure({ types: ["heading", "paragraph"] }),
       Table.configure({ resizable: true }),
       TableRow,
       TableHeader,
       TableCell,
-      TaskList,
-      TaskItem.configure({ nested: true }),
+      PortableTaskList,
+      PortableTaskItem.configure({ nested: true }),
+      Markdown,
+      MarkdownClipboard,
       Underline,
       Highlight.configure({ multicolor: true }),
       mentionExtension,
@@ -278,24 +291,23 @@ export function TiptapEditor({
     },
   }, [extensions])
 
-  // Sync external content changes (e.g., real-time updates from other users).
-  // Uses a stringified ref to avoid re-running on every parent render when
-  // the content object reference changes but the data is identical.
+  // Sync external content changes (date switch, edits from another tab, etc.).
+  // Tiptap is an uncontrolled editor — `content` only takes effect on mount.
+  // We re-apply when the prop diverges, but ONLY while the editor is unfocused.
+  // While focused, the user is the source of truth: applying a stale server
+  // echo here would clobber unsaved keystrokes and reset the ProseMirror
+  // selection (causing typed text to land outside the current node).
   // emitUpdate: false prevents our onUpdate from firing and creating a loop.
-  const contentKeyRef = useRef<string>("")
   useEffect(() => {
     if (!editor || !content) return
+    if (editor.isFocused) return
     const incoming = JSON.stringify(content)
-    if (incoming === contentKeyRef.current) return
     const current = JSON.stringify(editor.getJSON())
-    if (current !== incoming) {
-      contentKeyRef.current = incoming
-      const handle = setTimeout(() => {
-        editor.commands.setContent(content as Record<string, unknown>, { emitUpdate: false })
-      }, 0)
-      return () => clearTimeout(handle)
-    }
-    contentKeyRef.current = incoming
+    if (current === incoming) return
+    const handle = setTimeout(() => {
+      editor.commands.setContent(content as Record<string, unknown>, { emitUpdate: false })
+    }, 0)
+    return () => clearTimeout(handle)
   }, [content, editor])
 
   // Keep editable state in sync when prop changes after creation
@@ -307,6 +319,44 @@ export function TiptapEditor({
   useEffect(() => {
     if (autoFocus && editor) editor.commands.focus()
   }, [autoFocus, editor])
+
+  // ─── Image lightbox ──────────────────────────────────────────────────────
+  const [lightbox, setLightbox] = useState<{ open: boolean; index: number; slides: LightboxImage[] }>(
+    { open: false, index: 0, slides: [] },
+  )
+
+  const handleContentClick = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      if (!editor) return
+      const target = event.target as HTMLElement | null
+      if (!target) return
+      // Only intercept direct clicks on rendered images inside content.
+      // Skip uploads-in-progress (image-upload node renders a wrapper, not <img>),
+      // skip images inside an `imageUpload` node, and skip modifier-clicks (Cmd/Ctrl)
+      // so the user can still open in a new tab.
+      if (target.tagName !== "IMG") return
+      if (target.closest('[data-type="imageUpload"]')) return
+      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+      const clickedSrc = (target as HTMLImageElement).currentSrc || (target as HTMLImageElement).src
+      if (!clickedSrc) return
+
+      const collected: LightboxImage[] = []
+      editor.state.doc.descendants((node) => {
+        if (node.type.name === "image" && typeof node.attrs.src === "string" && node.attrs.src) {
+          collected.push({ src: node.attrs.src, alt: node.attrs.alt ?? undefined })
+        }
+      })
+      if (collected.length === 0) return
+
+      const startIndex = Math.max(
+        0,
+        collected.findIndex((s) => s.src === clickedSrc),
+      )
+      event.preventDefault()
+      setLightbox({ open: true, index: startIndex, slides: collected })
+    },
+    [editor],
+  )
 
   if (!editor) return null
 
@@ -323,7 +373,16 @@ export function TiptapEditor({
       >
         {variant !== "document" && <DescriptionToolbar />}
 
-        <Tiptap.Content />
+        <div onClick={handleContentClick}>
+          <Tiptap.Content />
+        </div>
+
+        <TiptapLightbox
+          open={lightbox.open}
+          index={lightbox.index}
+          slides={lightbox.slides}
+          onClose={() => setLightbox((prev) => ({ ...prev, open: false }))}
+        />
 
         <BubbleMenu
           updateDelay={100}

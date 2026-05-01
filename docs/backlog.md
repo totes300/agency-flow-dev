@@ -1249,3 +1249,17 @@
 **Test infrastructure gap**:
 - Convex integration tests for `weekGrid` (cross-tenant isolation, member auto-scope, overtime totals not clipped) — repo has no `convex-test` harness yet. Acceptance criteria 8 / 9 in slices 1, 2, 4 left unchecked. Add when the harness lands.
 
+## TipTap Task List Clipboard Interop ✅ (2026-05-01)
+
+Two-layer interop fix because Notion and Google Docs largely ignore foreign HTML on paste — they read text/plain and run their own markdown parser.
+
+**Layer 1 — HTML interop** (`components/tasks/portable-task-list.ts`): replaced default `TaskList` / `TaskItem` with `PortableTaskList` / `PortableTaskItem`. Override `renderHTML` to emit GFM-flavored HTML (`<ul class="contains-task-list"><li class="task-list-item"><input type="checkbox">…</li></ul>`). Bigger `parseHTML` accepts GFM `li.task-list-item` and any `<li>` whose direct child (or `<label>` child) is `<input type="checkbox">`. Targets HTML-aware editors (GitHub, Linear, Obsidian).
+
+**Layer 2 — markdown clipboard** (`components/tasks/markdown-clipboard.ts` + `@tiptap/markdown`): adds a `MarkdownClipboard` extension that registers `clipboardTextSerializer` to write GFM markdown into text/plain on copy, and a `handlePaste` that detects task-list patterns in pasted text/plain (including normalizing Google Docs' ☐/☑ unicode glyphs to `- [ ]` / `- [x]`) and parses them via `editor.markdown.parse`. Targets editors that prefer plain text (Notion, Google Docs, Slack).
+
+In-editor rendering is unchanged — TaskItem's NodeView still drives the viewport, and the CSS is untouched.
+
+### TODOs deferred
+
+- **Notion's text/plain markdown for to-dos** is not GFM standard — it uses leading bullets like `- ` followed by checkbox glyphs in some cases. If round-tripping from Notion misses items, expand `normalizeUnicodeCheckboxes` in `markdown-clipboard.ts`.
+

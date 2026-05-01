@@ -310,9 +310,14 @@ export function TiptapEditor({
     return () => clearTimeout(handle)
   }, [content, editor])
 
-  // Keep editable state in sync when prop changes after creation
+  // Keep editable state in sync when prop changes after creation.
+  // emitUpdate: false — TipTap's setEditable defaults to firing a fake
+  // "update" event even though no doc change occurred. That event would
+  // serialize the current (potentially empty, mid-load) doc through our
+  // onUpdate handler and trigger a destructive save. The flag toggle is
+  // not a content change; it must not emit update.
   useEffect(() => {
-    if (editor) editor.setEditable(editable)
+    if (editor) editor.setEditable(editable, false)
   }, [editor, editable])
 
   // Auto-focus when requested
@@ -364,10 +369,18 @@ export function TiptapEditor({
     <Tiptap instance={editor}>
       <div
         data-variant={variant}
+        onClick={(e) => {
+          // Empty/below-content click anywhere in the document zone focuses the editor
+          // at the end. Clicks inside rendered content bubble through their own targets,
+          // so this only fires for the surrounding empty space.
+          if (variant !== "document") return
+          if (e.target !== e.currentTarget) return
+          editor.commands.focus("end")
+        }}
         className={cn(
           "tiptap-editor overflow-hidden",
           variant === "document"
-            ? "bg-background"
+            ? "bg-background min-h-[180px] cursor-text"
             : "rounded-lg border border-border/40",
         )}
       >

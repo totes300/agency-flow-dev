@@ -134,15 +134,12 @@ export function TaskDetailDrawerContent({
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       <Tabs defaultValue="overview" className="flex flex-1 flex-col overflow-hidden gap-0">
-        {/* Single scroll surface — title, tabs, and content all scroll together (Notion-style) */}
         <div ref={scrollRef} className="relative flex-1 overflow-y-auto scrollbar-thin">
-          {/* Title scrolls with content */}
-          <div className="px-12 pt-8 pb-4">
+          <div className="px-12 pt-8 pb-6">
             <TaskDetailTitle taskId={task._id} title={task.title} />
           </div>
 
-          {/* Tabs scroll with the content — Notion-style single surface */}
-          <div className="px-12">
+          <div className="px-12 pb-6">
             <TabsList variant="plain" className="pb-2">
               {(
                 [
@@ -169,9 +166,8 @@ export function TaskDetailDrawerContent({
             <div className="h-px bg-border/70" />
           </div>
 
-          {/* Overview — description, subtasks, activity, comment input */}
           <TabsContent value="overview" className="flex flex-col">
-            <div className="px-12 pt-4 pb-2">
+            <div className="px-12">
               <TiptapEditor
                 content={descriptionContent}
                 onUpdate={handleDescriptionUpdate}
@@ -179,7 +175,7 @@ export function TaskDetailDrawerContent({
               />
             </div>
 
-            <div className="px-12 pt-4">
+            <div className="px-12 pt-6">
               <SubtaskList
                 parentTaskId={task._id}
                 parentProjectId={task.projectId}
@@ -191,7 +187,7 @@ export function TaskDetailDrawerContent({
               />
             </div>
 
-            <div className="px-12 pb-3 pt-6">
+            <div className="px-12 pt-8">
               <div className="border-t border-border/70 pt-5">
                 <div className="mb-4 flex items-center justify-between">
                   <div className="flex items-center gap-2">
@@ -219,7 +215,7 @@ export function TaskDetailDrawerContent({
               </div>
             </div>
 
-            <div className="px-12 pb-10 pt-3">
+            <div className="px-12 pt-6 pb-[40vh]">
               {typingUsers && typingUsers.length > 0 && (
                 <div className="mb-0.5 pl-9">
                   <TypingIndicator typingUsers={typingUsers} />

@@ -1,0 +1,1023 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Invoicing — Final PRD prototype</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  :root { font-family: 'Inter', system-ui, sans-serif; }
+  body { background: #fafaf9; color: #18181b; }
+  .mono { font-family: 'JetBrains Mono', monospace; }
+  .tabular { font-variant-numeric: tabular-nums; }
+
+  .pill { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 500; line-height: 1.4; }
+  .badge-num { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; font-size: 11px; font-weight: 600; line-height: 1; }
+  .nav-row { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: 6px; font-size: 14px; color: #3f3f46; cursor: pointer; }
+  .nav-row.active { background: #f4f4f5; color: #18181b; font-weight: 500; }
+  .nav-row:hover:not(.active) { background: #f4f4f5; }
+  .panel { background: white; border: 1px solid #e4e4e7; border-radius: 10px; }
+  .panel-header { padding: 12px 16px; border-bottom: 1px solid #f4f4f5; }
+  .annotation { font-size: 12px; color: #71717a; line-height: 1.55; }
+  .annotation strong { color: #18181b; font-weight: 600; }
+  .col-label { font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: #71717a; }
+  .doc-line { display: flex; justify-content: space-between; padding: 6px 0; font-size: 13px; }
+
+  .has-tooltip { position: relative; }
+  .tooltip { display: none; position: absolute; left: 100%; top: 50%; transform: translateY(-50%) translateX(8px); background: #18181b; color: white; padding: 6px 10px; border-radius: 6px; font-size: 11px; white-space: nowrap; z-index: 30; }
+  .tooltip::before { content: ''; position: absolute; right: 100%; top: 50%; transform: translateY(-50%); border: 5px solid transparent; border-right-color: #18181b; }
+  .has-tooltip:hover .tooltip { display: block; }
+
+  .toast { background: #18181b; color: white; padding: 10px 14px; border-radius: 8px; font-size: 13px; display: inline-flex; align-items: center; gap: 12px; box-shadow: 0 8px 16px -4px rgb(0 0 0 / 0.2); }
+
+  .section-anchor { scroll-margin-top: 80px; }
+  .section-tag { display: inline-block; padding: 2px 8px; border-radius: 4px; background: #ecfdf5; color: #047857; font-size: 10px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
+  .section-tag.modified { background: #fef3c7; color: #92400e; }
+  .section-tag.shared { background: #dbeafe; color: #1e40af; }
+
+  .input-mock { background: white; border: 1px solid #e4e4e7; border-radius: 6px; padding: 8px 10px; font-size: 13px; color: #18181b; width: 100%; }
+  .input-mock.textarea { min-height: 70px; resize: vertical; font-family: inherit; }
+
+  /* Print/document feel for invoice */
+  .invoice-doc { background: white; box-shadow: 0 8px 30px -12px rgb(0 0 0 / 0.12); border-radius: 6px; }
+</style>
+</head>
+<body class="min-h-screen">
+
+<!-- ───────────────── HEADER ───────────────── -->
+<header class="border-b border-zinc-200 bg-white sticky top-0 z-40">
+  <div class="max-w-[1200px] mx-auto px-6 py-3 flex items-center gap-6">
+    <div class="flex-1">
+      <h1 class="text-base font-semibold tracking-tight">Invoicing — Final PRD prototype</h1>
+      <p class="text-xs text-zinc-500">Every surface from <span class="mono text-zinc-600">docs/invoicing-update.md</span></p>
+    </div>
+    <nav class="flex items-center gap-1 text-xs flex-wrap justify-end">
+      <a href="#sidebar" class="px-2.5 py-1 rounded text-zinc-600 hover:bg-zinc-100">1 · Sidebar</a>
+      <a href="#inbox" class="px-2.5 py-1 rounded text-zinc-600 hover:bg-zinc-100">2 · Inbox</a>
+      <a href="#empty" class="px-2.5 py-1 rounded text-zinc-600 hover:bg-zinc-100">3 · Empty</a>
+      <a href="#banners" class="px-2.5 py-1 rounded text-zinc-600 hover:bg-zinc-100">4 · Banners</a>
+      <a href="#breakdown" class="px-2.5 py-1 rounded text-zinc-600 hover:bg-zinc-100">5 · Breakdown</a>
+      <a href="#monthly-rows" class="px-2.5 py-1 rounded text-zinc-600 hover:bg-zinc-100">6 · Rows</a>
+      <a href="#document" class="px-2.5 py-1 rounded text-zinc-600 hover:bg-zinc-100">7 · Invoice doc</a>
+      <a href="#modal" class="px-2.5 py-1 rounded text-zinc-600 hover:bg-zinc-100">8 · Modal</a>
+      <a href="#settings" class="px-2.5 py-1 rounded text-zinc-600 hover:bg-zinc-100">9 · Settings</a>
+    </nav>
+  </div>
+</header>
+
+<main class="max-w-[1200px] mx-auto px-6 py-12 space-y-20">
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     1 · SIDEBAR
+═══════════════════════════════════════════════════════════════════════ -->
+<section id="sidebar" class="section-anchor">
+  <div class="mb-6">
+    <div class="flex items-center gap-3 mb-2">
+      <span class="col-label">Surface 1</span>
+      <span class="section-tag modified">Modified</span>
+    </div>
+    <h2 class="text-xl font-semibold tracking-tight">Sidebar — Invoices nav badge</h2>
+    <p class="annotation mt-1">Red number = to-generate count. Red alert-circle icon = overdue exists. Hover the row → tooltip.</p>
+  </div>
+
+  <div class="grid grid-cols-[260px_1fr] gap-8 items-start">
+    <div class="panel" style="overflow: visible;">
+      <div class="px-3 py-3 space-y-0.5">
+        <div class="nav-row"><span class="size-4 bg-zinc-300 rounded-sm"></span> Dashboard</div>
+        <div class="nav-row"><span class="size-4 bg-zinc-300 rounded-sm"></span> Tasks</div>
+        <div class="nav-row"><span class="size-4 bg-zinc-300 rounded-sm"></span> My time</div>
+        <div class="nav-row"><span class="size-4 bg-zinc-300 rounded-sm"></span> Clients</div>
+        <div class="nav-row"><span class="size-4 bg-zinc-300 rounded-sm"></span> Projects</div>
+        <div class="nav-row active has-tooltip">
+          <span class="size-4 bg-zinc-400 rounded-sm"></span>
+          <span class="flex-1">Invoices</span>
+          <span class="badge-num bg-red-600 text-white">3</span>
+          <svg viewBox="0 0 16 16" class="size-3.5 text-red-600 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5V4a1.5 1.5 0 0 0-1.5-1.5h-9A1.5 1.5 0 0 0 2 4v9a1.5 1.5 0 0 0 1.5 1.5H6"/><path d="M5.5 1.5v2"/><path d="M10.5 1.5v2"/><path d="M2 6.5h3.5"/><circle cx="11.5" cy="11.5" r="3.5"/><path d="M12 12 11.5 11.5V10"/></svg>
+          <span class="tooltip">3 ready to bill · 2 overdue</span>
+        </div>
+        <div class="nav-row"><span class="size-4 bg-zinc-300 rounded-sm"></span> Reports</div>
+        <div class="nav-row"><span class="size-4 bg-zinc-300 rounded-sm"></span> Settings</div>
+      </div>
+    </div>
+
+    <div>
+      <div class="space-y-3 text-sm">
+        <div class="flex gap-3 items-baseline">
+          <code class="mono text-xs px-2 py-0.5 rounded bg-zinc-100 text-zinc-700 shrink-0">Both signals</code>
+          <span class="text-zinc-700 inline-flex items-center gap-1.5"><span class="badge-num bg-red-600 text-white align-middle">3</span> +
+            <svg viewBox="0 0 16 16" class="size-3.5 text-red-600 inline" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5V4a1.5 1.5 0 0 0-1.5-1.5h-9A1.5 1.5 0 0 0 2 4v9a1.5 1.5 0 0 0 1.5 1.5H6"/><path d="M5.5 1.5v2"/><path d="M10.5 1.5v2"/><path d="M2 6.5h3.5"/><circle cx="11.5" cy="11.5" r="3.5"/><path d="M12 12 11.5 11.5V10"/></svg>
+            calendar-clock icon → "3 to bill, 2 overdue"</span>
+        </div>
+        <div class="flex gap-3 items-baseline">
+          <code class="mono text-xs px-2 py-0.5 rounded bg-zinc-100 text-zinc-700 shrink-0">Only to-gen</code>
+          <span class="text-zinc-700"><span class="badge-num bg-red-600 text-white align-middle">3</span> only — no overdue exists</span>
+        </div>
+        <div class="flex gap-3 items-baseline">
+          <code class="mono text-xs px-2 py-0.5 rounded bg-zinc-100 text-zinc-700 shrink-0">Only overdue</code>
+          <span class="text-zinc-700 inline-flex items-center gap-1.5">
+            <svg viewBox="0 0 16 16" class="size-3.5 text-red-600 inline" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5V4a1.5 1.5 0 0 0-1.5-1.5h-9A1.5 1.5 0 0 0 2 4v9a1.5 1.5 0 0 0 1.5 1.5H6"/><path d="M5.5 1.5v2"/><path d="M10.5 1.5v2"/><path d="M2 6.5h3.5"/><circle cx="11.5" cy="11.5" r="3.5"/><path d="M12 12 11.5 11.5V10"/></svg>
+            calendar-clock icon only — caught up on generation</span>
+        </div>
+        <div class="flex gap-3 items-baseline">
+          <code class="mono text-xs px-2 py-0.5 rounded bg-zinc-100 text-zinc-700 shrink-0">All clean</code>
+          <span class="text-zinc-700">no badge, no icon — sidebar item is plain</span>
+        </div>
+      </div>
+      <div class="mt-6 pt-6 border-t border-zinc-200">
+        <p class="annotation"><strong>Backend:</strong> single query <code class="mono">getOverdueInvoicesAggregate</code> + the existing <code class="mono">getReadyToInvoiceUnified</code> count. Tooltip text built client-side.</p>
+        <p class="annotation mt-2 italic text-zinc-400">▶ Hover the "Invoices" row above to see the tooltip in action.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     2 · /invoices INBOX
+═══════════════════════════════════════════════════════════════════════ -->
+<section id="inbox" class="section-anchor">
+  <div class="mb-6">
+    <div class="flex items-center gap-3 mb-2">
+      <span class="col-label">Surface 2</span>
+      <span class="section-tag">New layout</span>
+    </div>
+    <h2 class="text-xl font-semibold tracking-tight">/invoices Inbox — full page</h2>
+    <p class="annotation mt-1">3 metric cards · Overdue (with bulk select + undo) · To-generate (with state badges, last-invoiced subline, batch button).</p>
+  </div>
+
+  <!-- Page header -->
+  <div class="bg-white rounded-t-xl border border-zinc-200 border-b-0 px-6 py-5">
+    <div class="flex items-baseline justify-between">
+      <h1 class="text-2xl font-semibold tracking-tight">Invoices</h1>
+      <button class="text-sm px-3 py-1.5 rounded-md border border-zinc-300 bg-white hover:bg-zinc-50 font-medium">⚙ Invoicing settings</button>
+    </div>
+  </div>
+
+  <!-- Metric cards -->
+  <div class="border border-zinc-200 border-t-0 border-b-0 bg-white px-6 py-5">
+    <div class="grid grid-cols-3 gap-3">
+      <div class="border border-zinc-200 rounded-lg p-3">
+        <div class="text-xs text-zinc-500">Outstanding</div>
+        <div class="text-xl font-semibold tabular mt-1">€2,840</div>
+        <div class="text-xs text-zinc-400 mt-0.5">4 invoices</div>
+      </div>
+      <div class="border-2 border-red-200 bg-red-50/60 rounded-lg p-3">
+        <div class="text-xs text-red-700 font-medium">Overdue</div>
+        <div class="text-xl font-semibold tabular mt-1 text-red-700">€1,840</div>
+        <div class="text-xs text-red-600/70 mt-0.5">2 invoices</div>
+      </div>
+      <div class="border border-zinc-200 rounded-lg p-3">
+        <div class="text-xs text-zinc-500">Drafts</div>
+        <div class="text-xl font-semibold tabular mt-1">2</div>
+        <div class="text-xs text-zinc-400 mt-0.5">drafts</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Overdue section -->
+  <div class="border border-zinc-200 border-t-0 border-b-0 bg-white">
+    <div class="bg-red-50/60 border-y border-red-200/50 px-6 py-3 flex items-center justify-between">
+      <h3 class="text-sm font-semibold text-red-900 flex items-center gap-2">
+        <svg viewBox="0 0 16 16" class="size-3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5V4a1.5 1.5 0 0 0-1.5-1.5h-9A1.5 1.5 0 0 0 2 4v9a1.5 1.5 0 0 0 1.5 1.5H6"/><path d="M5.5 1.5v2"/><path d="M10.5 1.5v2"/><path d="M2 6.5h3.5"/><circle cx="11.5" cy="11.5" r="3.5"/><path d="M12 12 11.5 11.5V10"/></svg>
+        Overdue · 2 invoices · €1,840
+      </h3>
+    </div>
+    <div class="divide-y divide-zinc-100">
+      <div class="px-6 py-3 flex items-center gap-4 text-sm">
+        <input type="checkbox" checked class="size-4 rounded border-zinc-300 accent-zinc-900" />
+        <div class="flex-1 min-w-0">
+          <div class="font-medium">Acme Corp · INV-2026-12</div>
+          <div class="text-xs text-zinc-500">Apr 2026 retainer · 12 days late · due Apr 19</div>
+        </div>
+        <span class="tabular text-zinc-900 font-medium">€640</span>
+      </div>
+      <div class="px-6 py-3 flex items-center gap-4 text-sm">
+        <input type="checkbox" checked class="size-4 rounded border-zinc-300 accent-zinc-900" />
+        <div class="flex-1 min-w-0">
+          <div class="font-medium">Globex · INV-2026-09</div>
+          <div class="text-xs text-zinc-500">Jan–Mar cycle · 5 days late · due Apr 26</div>
+        </div>
+        <span class="tabular text-zinc-900 font-medium">€1,200</span>
+      </div>
+    </div>
+
+    <!-- Sticky bar mock (positioned inline for prototype clarity) -->
+    <div class="bg-zinc-900 text-white px-6 py-2.5 flex items-center justify-between text-sm">
+      <span><strong>2 selected</strong> · €1,840</span>
+      <div class="flex gap-2">
+        <button class="text-xs px-3 py-1.5 rounded-md bg-white text-zinc-900 font-medium">Mark as paid</button>
+        <button class="text-xs px-3 py-1.5 rounded-md text-white/80 hover:text-white">Cancel</button>
+      </div>
+    </div>
+    <div class="px-6 py-2 border-t border-zinc-100 text-[11px] text-zinc-400 italic">
+      ▶ When nothing is selected, each row shows its own "Mark paid" button. Bulk-select mode (≥1 row checked) hides per-row actions — the sticky bar takes over.
+    </div>
+  </div>
+
+  <!-- To generate section -->
+  <div class="border border-zinc-200 border-t-0 border-b-0 bg-white">
+    <div class="bg-zinc-50/60 border-y border-zinc-200/60 px-6 py-3 flex items-center justify-between">
+      <h3 class="text-sm font-semibold">To generate · 5</h3>
+      <button class="text-xs px-3 py-1 rounded-md border border-zinc-300 hover:bg-zinc-50 text-zinc-700 font-medium flex items-center gap-1.5">
+        <svg viewBox="0 0 16 16" class="size-3.5" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 8h10M8 3v10" stroke-linecap="round"/></svg>
+        Generate all within-budget reports (1)
+      </button>
+    </div>
+    <div class="divide-y divide-zinc-100">
+      <div class="px-6 py-3 grid grid-cols-[1fr_140px_88px_auto] items-center gap-4 text-sm">
+        <div class="min-w-0">
+          <div class="font-medium">Acme Corp · Website Retainer</div>
+          <div class="text-xs text-zinc-500">Mar 2026 · 38h / 40h used · last invoiced Feb 28</div>
+        </div>
+        <div><span class="pill bg-emerald-100 text-emerald-800">within budget</span></div>
+        <span class="tabular text-zinc-500 text-right">€0</span>
+        <button class="text-xs px-3 py-1.5 rounded-md bg-zinc-900 text-white font-medium">Generate</button>
+      </div>
+      <div class="px-6 py-3 grid grid-cols-[1fr_140px_88px_auto] items-center gap-4 text-sm">
+        <div class="min-w-0">
+          <div class="font-medium">Acme Corp · Website Retainer</div>
+          <div class="text-xs text-zinc-500">Apr 2026 · 42h / 40h · last invoiced Mar 1</div>
+        </div>
+        <div><span class="pill bg-amber-100 text-amber-800">2.0h over</span></div>
+        <span class="tabular font-medium text-right">€150</span>
+        <button class="text-xs px-3 py-1.5 rounded-md bg-zinc-900 text-white font-medium">Generate</button>
+      </div>
+      <div class="px-6 py-3 grid grid-cols-[1fr_140px_88px_auto] items-center gap-4 text-sm">
+        <div class="min-w-0">
+          <div class="font-medium">Globex · Q2 Cycle</div>
+          <div class="text-xs text-zinc-500">Apr–Jun cycle closed Apr 30</div>
+        </div>
+        <div><span class="pill bg-amber-100 text-amber-800">6h over</span></div>
+        <span class="tabular font-medium text-right">€450</span>
+        <button class="text-xs px-3 py-1.5 rounded-md bg-zinc-900 text-white font-medium">Generate</button>
+      </div>
+      <div class="px-6 py-3 grid grid-cols-[1fr_140px_88px_auto] items-center gap-4 text-sm">
+        <div class="min-w-0">
+          <div class="font-medium">Initech · Redesign</div>
+          <div class="text-xs text-zinc-500">Fixed · last invoiced Mar 12</div>
+        </div>
+        <div></div>
+        <span class="tabular font-medium text-right">€5,000</span>
+        <button class="text-xs px-3 py-1.5 rounded-md bg-zinc-900 text-white font-medium">Generate</button>
+      </div>
+      <div class="px-6 py-3 grid grid-cols-[1fr_140px_88px_auto] items-center gap-4 text-sm">
+        <div class="min-w-0">
+          <div class="font-medium">Umbrella · T&M Maintenance</div>
+          <div class="text-xs text-zinc-500">Apr 2026 · 47.5h · last invoiced Apr 1</div>
+        </div>
+        <div></div>
+        <span class="tabular font-medium text-right">€4,750</span>
+        <button class="text-xs px-3 py-1.5 rounded-md bg-zinc-900 text-white font-medium">Generate</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- All invoices stub -->
+  <div class="border border-zinc-200 border-t-0 rounded-b-xl bg-white">
+    <div class="px-6 py-3 border-b border-zinc-100">
+      <div class="flex items-center gap-3 text-sm">
+        <span class="font-semibold mr-2">All invoices</span>
+        <button class="px-2.5 py-1 rounded text-xs bg-zinc-100 text-zinc-900 font-medium">All</button>
+        <button class="px-2.5 py-1 rounded text-xs text-zinc-600 hover:bg-zinc-50">Draft</button>
+        <button class="px-2.5 py-1 rounded text-xs text-zinc-600 hover:bg-zinc-50">Outstanding</button>
+        <button class="px-2.5 py-1 rounded text-xs text-zinc-600 hover:bg-zinc-50">Paid</button>
+        <span class="ml-auto text-xs text-zinc-400 italic">— existing InvoiceList component, unchanged —</span>
+      </div>
+    </div>
+    <div class="px-6 py-6 text-xs text-zinc-400 italic text-center">existing invoice table renders here</div>
+  </div>
+
+  <!-- Floating undo toast preview -->
+  <div class="mt-4 flex justify-center">
+    <div class="toast">
+      <svg viewBox="0 0 16 16" class="size-4 text-emerald-400" fill="currentColor"><path d="M8 0a8 8 0 100 16A8 8 0 008 0zm3.7 6.3l-4 4a1 1 0 01-1.4 0l-2-2a1 1 0 011.4-1.4L7 8.6l3.3-3.3a1 1 0 011.4 1.4z"/></svg>
+      <span><strong>2 invoices marked as paid</strong> · €1,840</span>
+      <span class="text-zinc-500">·</span>
+      <button class="font-semibold text-white underline-offset-2 hover:underline">Undo (5s)</button>
+    </div>
+  </div>
+
+  <p class="annotation mt-6 text-center max-w-3xl mx-auto"><strong>Floating undo toast</strong> appears at the bottom of the viewport for 5 seconds after bulk Mark-as-Paid commits. Reverts via <code class="mono">undoMarkInvoicesPaid</code>.</p>
+</section>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     3 · INBOX EMPTY STATE
+═══════════════════════════════════════════════════════════════════════ -->
+<section id="empty" class="section-anchor">
+  <div class="mb-6">
+    <div class="flex items-center gap-3 mb-2">
+      <span class="col-label">Surface 3</span>
+      <span class="section-tag">New</span>
+    </div>
+    <h2 class="text-xl font-semibold tracking-tight">/invoices Inbox — empty state</h2>
+    <p class="annotation mt-1">When both Overdue and To-generate are empty. Reward state with last-invoiced + next-month-close context.</p>
+  </div>
+
+  <div class="bg-white rounded-xl border border-zinc-200 p-6">
+    <!-- Page header (same as full Inbox, but data is "all caught up") -->
+    <div class="border-b border-zinc-100 pb-5 mb-6">
+      <h1 class="text-2xl font-semibold tracking-tight">Invoices</h1>
+      <p class="text-sm text-zinc-500 mt-0.5">All caught up</p>
+    </div>
+
+    <div class="grid grid-cols-3 gap-3 mb-10">
+      <div class="border border-zinc-200 rounded-lg p-3">
+        <div class="text-xs text-zinc-500">Outstanding</div>
+        <div class="text-xl font-semibold tabular mt-1">€0</div>
+        <div class="text-xs text-zinc-400 mt-0.5">0 invoices</div>
+      </div>
+      <div class="border border-zinc-200 rounded-lg p-3">
+        <div class="text-xs text-zinc-500">Overdue</div>
+        <div class="text-xl font-semibold tabular mt-1">€0</div>
+        <div class="text-xs text-zinc-400 mt-0.5">0 invoices</div>
+      </div>
+      <div class="border border-zinc-200 rounded-lg p-3">
+        <div class="text-xs text-zinc-500">Drafts</div>
+        <div class="text-xl font-semibold tabular mt-1">0</div>
+        <div class="text-xs text-zinc-400 mt-0.5">drafts</div>
+      </div>
+    </div>
+
+    <div class="text-center py-12">
+      <div class="size-14 mx-auto bg-emerald-100 rounded-full grid place-items-center text-emerald-600 mb-4">
+        <svg viewBox="0 0 16 16" class="size-7" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M3 8l3 3 7-7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </div>
+      <h3 class="text-lg font-semibold mb-1">All caught up</h3>
+      <p class="text-sm text-zinc-500 mb-5">No invoices to generate · No overdue payments</p>
+      <div class="text-xs text-zinc-400 space-y-0.5">
+        <div>Last invoiced 3 days ago · INV-2026-15 · Acme Corp</div>
+        <div>Next month-close in 12 days</div>
+      </div>
+    </div>
+  </div>
+
+  <p class="annotation mt-4"><strong>Backend:</strong> <code class="mono">getInboxEmptyStateContext</code> returns <code class="mono">{ lastInvoice, daysToNextMonthClose }</code> for the subline.</p>
+</section>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     4 · PROJECT OVERVIEW BANNERS
+═══════════════════════════════════════════════════════════════════════ -->
+<section id="banners" class="section-anchor">
+  <div class="mb-6">
+    <div class="flex items-center gap-3 mb-2">
+      <span class="col-label">Surface 4</span>
+      <span class="section-tag shared">Shared component</span>
+    </div>
+    <h2 class="text-xl font-semibold tracking-tight">Project Overview — &lt;InvoiceBanner /&gt;</h2>
+    <p class="annotation mt-1">Single shared component, all 5 trigger states. 4-column grid: <code class="mono">[icon] [title + subline] [amount column] [Generate]</code>. Plain panel, no decorative accents.</p>
+  </div>
+
+  <div class="bg-amber-50/60 border border-amber-200/50 rounded-md px-4 py-2.5 mb-4 text-xs text-amber-900">
+    <strong>Prototype-only:</strong> these 5 banners are stacked here for review. In production a project shows exactly ONE banner — whichever variant matches that project's billing type and state.
+  </div>
+
+  <div class="space-y-3">
+    <!-- Variant: Retainer monthly -->
+    <div>
+      <div class="text-xs text-zinc-400 mb-1.5">Retainer · monthly · ≥1 closed uninvoiced month</div>
+      <div class="panel p-4 grid grid-cols-[36px_1fr_100px_auto] items-center gap-4">
+        <span class="size-9 rounded-lg bg-zinc-100 grid place-items-center text-zinc-600">
+          <svg viewBox="0 0 16 16" class="size-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M2 7h12"/><path d="M5 10h2"/></svg>
+        </span>
+        <div class="min-w-0">
+          <div class="text-sm font-medium">2 months ready to bill</div>
+          <div class="text-xs text-zinc-500">Last invoiced Feb 28 · Mar & Apr ready</div>
+        </div>
+        <div class="text-right">
+          <div class="text-sm font-semibold tabular text-amber-700">€240</div>
+          <div class="text-xs text-zinc-500">overage</div>
+        </div>
+        <button class="text-sm px-4 py-1.5 rounded-md bg-zinc-900 text-white font-medium">Generate invoice</button>
+      </div>
+    </div>
+
+    <!-- Variant: Retainer cycle closed (overage) -->
+    <div>
+      <div class="text-xs text-zinc-400 mb-1.5">Retainer · cycle (rollover ON) · cycle closed with overage</div>
+      <div class="panel p-4 grid grid-cols-[36px_1fr_100px_auto] items-center gap-4">
+        <span class="size-9 rounded-lg bg-zinc-100 grid place-items-center text-zinc-600">
+          <svg viewBox="0 0 16 16" class="size-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 1l3 3-3 3"/><path d="M2 7V6.5A2.5 2.5 0 014.5 4H14"/><path d="M5 15l-3-3 3-3"/><path d="M14 9v.5a2.5 2.5 0 01-2.5 2.5H2"/></svg>
+        </span>
+        <div class="min-w-0">
+          <div class="text-sm font-medium">Apr–Jun cycle closed</div>
+          <div class="text-xs text-zinc-500">Closed Apr 30 · 6h over · 126h / 120h used</div>
+        </div>
+        <div class="text-right">
+          <div class="text-sm font-semibold tabular text-amber-700">€450</div>
+          <div class="text-xs text-zinc-500">overage</div>
+        </div>
+        <button class="text-sm px-4 py-1.5 rounded-md bg-zinc-900 text-white font-medium">Generate invoice</button>
+      </div>
+    </div>
+
+    <!-- Variant: Retainer cycle closed (within budget) -->
+    <div>
+      <div class="text-xs text-zinc-400 mb-1.5">Retainer · cycle (rollover ON) · cycle closed within budget</div>
+      <div class="panel p-4 grid grid-cols-[36px_1fr_100px_auto] items-center gap-4">
+        <span class="size-9 rounded-lg bg-zinc-100 grid place-items-center text-zinc-600">
+          <svg viewBox="0 0 16 16" class="size-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 1l3 3-3 3"/><path d="M2 7V6.5A2.5 2.5 0 014.5 4H14"/><path d="M5 15l-3-3 3-3"/><path d="M14 9v.5a2.5 2.5 0 01-2.5 2.5H2"/></svg>
+        </span>
+        <div class="min-w-0">
+          <div class="text-sm font-medium">Apr–Jun cycle closed</div>
+          <div class="text-xs text-zinc-500">Closed Apr 30 · 102h / 120h used</div>
+        </div>
+        <div class="text-right">
+          <div class="text-sm font-semibold tabular text-zinc-700">€0</div>
+          <div class="text-xs text-emerald-700">within budget</div>
+        </div>
+        <button class="text-sm px-4 py-1.5 rounded-md bg-zinc-900 text-white font-medium">Generate invoice</button>
+      </div>
+    </div>
+
+    <!-- Variant: Fixed -->
+    <div>
+      <div class="text-xs text-zinc-400 mb-1.5">Fixed · remaining > 0</div>
+      <div class="panel p-4 grid grid-cols-[36px_1fr_100px_auto] items-center gap-4">
+        <span class="size-9 rounded-lg bg-zinc-100 grid place-items-center text-zinc-600">
+          <svg viewBox="0 0 16 16" class="size-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 1.5H4A1.5 1.5 0 002.5 3v10A1.5 1.5 0 004 14.5h8A1.5 1.5 0 0013.5 13V5L10 1.5z"/><path d="M10 1.5V5h3.5"/><path d="M5.5 8.5h5"/><path d="M5.5 11h5"/></svg>
+        </span>
+        <div class="min-w-0">
+          <div class="text-sm font-medium">Remaining to invoice</div>
+          <div class="text-xs text-zinc-500">Last invoiced Mar 12 · 50% of contract billed</div>
+        </div>
+        <div class="text-right">
+          <div class="text-sm font-semibold tabular text-zinc-700">€5,000</div>
+          <div class="text-xs text-zinc-500">remaining</div>
+        </div>
+        <button class="text-sm px-4 py-1.5 rounded-md bg-zinc-900 text-white font-medium">Generate invoice</button>
+      </div>
+    </div>
+
+    <!-- Variant: T&M -->
+    <div>
+      <div class="text-xs text-zinc-400 mb-1.5">T&M · uninvoiced billable hours > 0</div>
+      <div class="panel p-4 grid grid-cols-[36px_1fr_100px_auto] items-center gap-4">
+        <span class="size-9 rounded-lg bg-zinc-100 grid place-items-center text-zinc-600">
+          <svg viewBox="0 0 16 16" class="size-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="6" x2="10" y1="1" y2="1"/><line x1="8" x2="10" y1="9.5" y2="7.5"/><circle cx="8" cy="9.5" r="5"/></svg>
+        </span>
+        <div class="min-w-0">
+          <div class="text-sm font-medium flex items-center gap-2">Uninvoiced balance · 47.5h
+            <span class="pill bg-zinc-100 text-zinc-600 text-[10px]">⌛ 30 days</span>
+          </div>
+          <div class="text-xs text-zinc-500">Last invoiced Apr 1</div>
+        </div>
+        <div class="text-right">
+          <div class="text-sm font-semibold tabular text-zinc-700">€4,750</div>
+          <div class="text-xs text-zinc-500">unbilled</div>
+        </div>
+        <button class="text-sm px-4 py-1.5 rounded-md bg-zinc-900 text-white font-medium">Generate invoice</button>
+      </div>
+    </div>
+  </div>
+
+  <p class="annotation mt-6"><strong>Cadence chip</strong> (e.g. <code class="mono">⌛ 30 days</code>) only renders on T&M / Fixed banners when <code class="mono">daysSinceLastInvoice ≥ 30</code>. Retainers are month-aligned by definition so they don't need it. Subtle zinc tone — informs without yelling.</p>
+  <p class="annotation mt-2"><strong>Cycle-in-progress retainer = NO banner.</strong> The cycle progress state is rendered in the Monthly Breakdown card header instead — see surface 5.</p>
+</section>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     5 · MONTHLY BREAKDOWN — CYCLE PROGRESS HEADER
+═══════════════════════════════════════════════════════════════════════ -->
+<section id="breakdown" class="section-anchor">
+  <div class="mb-6">
+    <div class="flex items-center gap-3 mb-2">
+      <span class="col-label">Surface 5</span>
+      <span class="section-tag modified">Modified</span>
+    </div>
+    <h2 class="text-xl font-semibold tracking-tight">Monthly Breakdown — cycle progress in header</h2>
+    <p class="annotation mt-1">For rollover-cycle retainers, the cycle progress is folded into the card header. The previous "Cycle X in progress" info card is removed.</p>
+  </div>
+
+  <div class="panel">
+    <div class="px-5 py-4 border-b border-zinc-100 flex items-center justify-between">
+      <div>
+        <h3 class="text-base font-semibold">Monthly Breakdown</h3>
+        <p class="text-xs text-zinc-500 mt-1">Apr–Jun cycle · 2/3 months closed · 65% used</p>
+      </div>
+      <span class="pill bg-zinc-100 text-zinc-700">Cycle closes Jun 30</span>
+    </div>
+
+    <div class="divide-y divide-zinc-100">
+      <div class="px-5 py-3.5 flex items-center justify-between text-sm">
+        <div class="flex items-center gap-3">
+          <span class="size-1.5 rounded-full bg-emerald-500"></span>
+          <span class="font-medium">April 2026</span>
+          <span class="text-xs text-zinc-400">closed</span>
+        </div>
+        <div class="flex items-center gap-6 text-xs text-zinc-600">
+          <span class="tabular">38h / 40h</span>
+          <span class="tabular text-emerald-700">+2h carry</span>
+        </div>
+      </div>
+      <div class="px-5 py-3.5 flex items-center justify-between text-sm">
+        <div class="flex items-center gap-3">
+          <span class="size-1.5 rounded-full bg-amber-500"></span>
+          <span class="font-medium">May 2026</span>
+          <span class="text-xs text-zinc-400">closed</span>
+        </div>
+        <div class="flex items-center gap-6 text-xs text-zinc-600">
+          <span class="tabular">42h / 42h</span>
+          <span class="tabular text-zinc-500">−0h</span>
+        </div>
+      </div>
+      <div class="px-5 py-3.5 flex items-center justify-between text-sm bg-zinc-50/40">
+        <div class="flex items-center gap-3">
+          <span class="size-1.5 rounded-full bg-zinc-400"></span>
+          <span class="font-medium">June 2026</span>
+          <span class="text-xs text-zinc-400">in progress</span>
+        </div>
+        <div class="flex items-center gap-6 text-xs text-zinc-600">
+          <span class="tabular">12h / 38h</span>
+          <span class="tabular text-zinc-400">running</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <p class="annotation mt-4"><strong>No per-row Generate buttons</strong> on rollover cycles — the cycle is the billing unit. The single Generate happens via the banner above (surface 4) when the cycle closes.</p>
+</section>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     6 · MONTHLY BREAKDOWN — RETAINER MONTHLY ROWS
+═══════════════════════════════════════════════════════════════════════ -->
+<section id="monthly-rows" class="section-anchor">
+  <div class="mb-6">
+    <div class="flex items-center gap-3 mb-2">
+      <span class="col-label">Surface 6</span>
+      <span class="section-tag modified">Modified</span>
+    </div>
+    <h2 class="text-xl font-semibold tracking-tight">Monthly Breakdown rows — retainer monthly (no rollover)</h2>
+    <p class="annotation mt-1">Per-row Generate buttons restored. After generation, row shows doc number + status badge + view link.</p>
+  </div>
+
+  <div class="panel">
+    <div class="px-5 py-4 border-b border-zinc-100 flex items-center justify-between">
+      <h3 class="text-base font-semibold">Monthly Breakdown</h3>
+      <button class="text-xs text-zinc-500 hover:text-zinc-900 flex items-center gap-1">
+        Sort: oldest first
+        <svg viewBox="0 0 16 16" class="size-3" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6l4 4 4-4"/></svg>
+      </button>
+    </div>
+
+    <!-- Column header strip for grid alignment -->
+    <div class="grid grid-cols-[14px_1fr_88px_140px_92px_140px] items-center gap-3 px-5 py-2 border-b border-zinc-100 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
+      <span></span>
+      <span>Month</span>
+      <span class="text-right">Hours</span>
+      <span>State</span>
+      <span class="text-right">Amount</span>
+      <span></span>
+    </div>
+
+    <div class="divide-y divide-zinc-100">
+      <!-- Jan: within budget, invoiced -->
+      <div class="grid grid-cols-[14px_1fr_88px_140px_92px_140px] items-center gap-3 px-5 py-3 text-sm">
+        <span class="size-1.5 rounded-full bg-emerald-500"></span>
+        <span>January 2026</span>
+        <span class="tabular text-xs text-zinc-500 text-right">38h / 40h</span>
+        <span><span class="pill bg-emerald-100 text-emerald-800">within budget</span></span>
+        <span class="tabular text-zinc-700 text-right">€0</span>
+        <a href="#" class="mono text-xs text-zinc-700 hover:text-zinc-900 hover:underline underline-offset-2">INV-2026-01 ↗</a>
+      </div>
+
+      <!-- Feb: over budget, invoiced -->
+      <div class="grid grid-cols-[14px_1fr_88px_140px_92px_140px] items-center gap-3 px-5 py-3 text-sm">
+        <span class="size-1.5 rounded-full bg-amber-500"></span>
+        <span>February 2026</span>
+        <span class="tabular text-xs text-zinc-500 text-right">44h / 40h</span>
+        <span><span class="pill bg-amber-100 text-amber-800">over budget</span></span>
+        <span class="tabular text-amber-700 text-right">€300</span>
+        <a href="#" class="mono text-xs text-zinc-700 hover:text-zinc-900 hover:underline underline-offset-2">INV-2026-02 ↗</a>
+      </div>
+
+      <!-- Mar: NEXT ACTION (within budget, ungenerated) — subtle weight bump -->
+      <div class="grid grid-cols-[14px_1fr_88px_140px_92px_140px] items-center gap-3 px-5 py-3 text-sm bg-zinc-50/50">
+        <span class="size-1.5 rounded-full bg-emerald-500"></span>
+        <span class="font-medium">March 2026</span>
+        <span class="tabular text-xs text-zinc-500 text-right">38h / 40h</span>
+        <span><span class="pill bg-emerald-100 text-emerald-800">within budget</span></span>
+        <span class="tabular text-zinc-700 text-right">€0</span>
+        <button class="text-xs px-3 py-1.5 rounded-md bg-zinc-900 text-white font-medium justify-self-end">Generate</button>
+      </div>
+
+      <!-- Apr: over budget, ungenerated -->
+      <div class="grid grid-cols-[14px_1fr_88px_140px_92px_140px] items-center gap-3 px-5 py-3 text-sm">
+        <span class="size-1.5 rounded-full bg-amber-500"></span>
+        <span>April 2026</span>
+        <span class="tabular text-xs text-zinc-500 text-right">42h / 40h</span>
+        <span><span class="pill bg-amber-100 text-amber-800">over budget</span></span>
+        <span class="tabular text-amber-700 text-right">€150</span>
+        <button class="text-xs px-3 py-1.5 rounded-md bg-zinc-900 text-white font-medium justify-self-end">Generate</button>
+      </div>
+
+      <!-- May: in progress -->
+      <div class="grid grid-cols-[14px_1fr_88px_140px_92px_140px] items-center gap-3 px-5 py-3 text-sm">
+        <span class="size-1.5 rounded-full bg-zinc-400"></span>
+        <span class="text-zinc-600">May 2026</span>
+        <span class="tabular text-xs text-zinc-500 text-right">12h / 40h</span>
+        <span><span class="pill bg-zinc-100 text-zinc-600">in progress</span></span>
+        <span></span>
+        <span></span>
+      </div>
+    </div>
+
+    <!-- Legend -->
+    <div class="px-5 py-2.5 border-t border-zinc-100 flex items-center gap-5 text-xs text-zinc-500">
+      <span class="flex items-center gap-1.5"><span class="size-1.5 rounded-full bg-emerald-500"></span>within budget</span>
+      <span class="flex items-center gap-1.5"><span class="size-1.5 rounded-full bg-amber-500"></span>overage</span>
+      <span class="flex items-center gap-1.5"><span class="size-1.5 rounded-full bg-zinc-400"></span>in progress</span>
+    </div>
+  </div>
+
+  <p class="annotation mt-4 space-y-1">
+    <span class="block"><strong>State pill — fixed 3-word dictionary:</strong> <code class="mono">within budget</code> · <code class="mono">over budget</code> · <code class="mono">in progress</code>. Never any dynamic data (no <code class="mono">2.0h over</code>, no <code class="mono">closes May 31</code>, no <code class="mono">paid</code>). Hours specifics live in the Hours column; payment state lives in the Inbox.</span>
+    <span class="block"><strong>Status column dropped</strong> — the State pill carries the period status (closed = within/over budget; not closed = in progress). One signal, one column.</span>
+    <span class="block"><strong>Next-action affordance:</strong> the oldest closed-uninvoiced row (March) gets a subtle <code class="mono">bg-zinc-50</code> wash and <code class="mono">font-medium</code> month name. Just enough to direct the eye, no chrome.</span>
+    <span class="block"><strong>Clickable invoice number:</strong> <code class="mono">INV-2026-01 ↗</code> is one link target — the doc number itself is the affordance.</span>
+    <span class="block"><strong>Legend</strong> at the card footer documents the dot colors (which match the pill colors). <strong>Sort</strong> at the header lets the user flip between oldest-first / newest-first.</span>
+  </p>
+</section>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     7 · INVOICE DOCUMENT
+═══════════════════════════════════════════════════════════════════════ -->
+<section id="document" class="section-anchor">
+  <div class="mb-6">
+    <div class="flex items-center gap-3 mb-2">
+      <span class="col-label">Surface 7</span>
+      <span class="section-tag modified">Modified</span>
+    </div>
+    <h2 class="text-xl font-semibold tracking-tight">Invoice document — full anatomy</h2>
+    <p class="annotation mt-1">Single doc type for all project types. Adds: payment instructions block + "Message to client" block (new). Within-budget retainer = €0 total, auto-Paid.</p>
+  </div>
+
+  <div class="grid grid-cols-2 gap-6">
+
+    <!-- Variant 1: retainer with overage -->
+    <div>
+      <div class="text-xs text-zinc-400 mb-2">Retainer monthly · 2h overage · €150 due</div>
+      <div class="invoice-doc p-8 text-sm">
+        <div class="flex justify-between items-start mb-6">
+          <div>
+            <div class="text-xs uppercase tracking-wider text-zinc-400 mb-1">Invoice</div>
+            <div class="mono text-base font-semibold">INV-2026-04</div>
+          </div>
+          <div class="text-right text-xs text-zinc-500 space-y-0.5">
+            <div>Issued <span class="tabular">May 1, 2026</span></div>
+            <div>Due <span class="tabular">May 31, 2026</span></div>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-6 text-xs mb-6">
+          <div>
+            <div class="text-zinc-400 uppercase tracking-wider mb-1">From</div>
+            <div class="font-medium">Konverted Studio</div>
+            <div class="text-zinc-500">Andrássy út 12<br/>1061 Budapest, HU<br/>Tax ID: HU12345678</div>
+          </div>
+          <div>
+            <div class="text-zinc-400 uppercase tracking-wider mb-1">To</div>
+            <div class="font-medium">Acme Corp</div>
+            <div class="text-zinc-500">Friedrichstraße 88<br/>10117 Berlin, DE<br/>VAT: DE123456789</div>
+          </div>
+        </div>
+
+        <div class="text-xs uppercase tracking-wider text-zinc-400 mb-2 flex justify-between">
+          <span>Work delivered</span>
+          <span class="tabular text-zinc-600">42.0h / 40h</span>
+        </div>
+        <div class="space-y-1 mb-3 text-xs">
+          <div class="font-medium text-zinc-700 flex justify-between"><span>● Design</span><span class="tabular text-zinc-500">12.0h</span></div>
+          <div class="ml-3 doc-line text-xs"><span class="text-zinc-600">Homepage refinements</span><span class="tabular text-zinc-500">6.0h</span></div>
+          <div class="ml-3 doc-line text-xs"><span class="text-zinc-600">Mobile mockups</span><span class="tabular text-zinc-500">6.0h</span></div>
+          <div class="font-medium text-zinc-700 flex justify-between mt-1.5"><span>● Development</span><span class="tabular text-zinc-500">30.0h</span></div>
+          <div class="ml-3 doc-line text-xs"><span class="text-zinc-600">API integration</span><span class="tabular text-zinc-500">22.0h</span></div>
+          <div class="ml-3 doc-line text-xs"><span class="text-zinc-600">Auth refactor</span><span class="tabular text-zinc-500">8.0h</span></div>
+        </div>
+
+        <div class="border-t border-zinc-200 pt-3 space-y-1">
+          <div class="doc-line text-xs"><span class="text-zinc-600">Retainer fee (paid via subscription)</span><span class="tabular">€5,000.00</span></div>
+          <div class="doc-line text-xs"><span class="text-zinc-600">Overage (2h × €75/h)</span><span class="tabular">€150.00</span></div>
+          <div class="doc-line border-t border-zinc-300 pt-2 mt-1 font-semibold"><span>Total due</span><span class="tabular">€150.00</span></div>
+        </div>
+
+        <!-- Message to client -->
+        <div class="mt-6 pt-4 border-t border-zinc-200">
+          <div class="uppercase tracking-wider text-emerald-700 text-xs mb-2 flex items-center gap-1.5">
+            Message to client
+          </div>
+          <div class="bg-emerald-50/50 border border-emerald-200/40 rounded-md p-3 text-zinc-700 text-xs leading-relaxed italic">
+            Hi Sarah — busy month! Most of the overage came from the API integration scope-creep we discussed on Apr 22. Happy to walk through the breakdown anytime.<br/><br/>
+            — Adam
+          </div>
+        </div>
+
+        <div class="mt-4 pt-4 border-t border-zinc-200 text-xs text-zinc-500">
+          <div class="uppercase tracking-wider text-zinc-400 mb-1">Payment instructions</div>
+          <div>IBAN HU42 1177 3016 1111 1018 0000 0000<br/>Reference: INV-2026-04 · Net 30</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Variant 2: within budget €0 -->
+    <div>
+      <div class="text-xs text-zinc-400 mb-2">Retainer monthly · within budget · €0 due (auto-Paid on generation)</div>
+      <div class="invoice-doc p-8 text-sm">
+        <div class="flex justify-between items-start mb-6">
+          <div>
+            <div class="text-xs uppercase tracking-wider text-zinc-400 mb-1">Invoice</div>
+            <div class="mono text-base font-semibold">INV-2026-03</div>
+          </div>
+          <div class="text-right text-xs text-zinc-500 space-y-0.5">
+            <div>Issued <span class="tabular">Apr 1, 2026</span></div>
+            <div>Status <span class="pill bg-emerald-100 text-emerald-800 ml-1">Paid</span></div>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-6 text-xs mb-6">
+          <div>
+            <div class="text-zinc-400 uppercase tracking-wider mb-1">From</div>
+            <div class="font-medium">Konverted Studio</div>
+            <div class="text-zinc-500">Budapest, HU</div>
+          </div>
+          <div>
+            <div class="text-zinc-400 uppercase tracking-wider mb-1">To</div>
+            <div class="font-medium">Acme Corp</div>
+            <div class="text-zinc-500">Berlin, DE</div>
+          </div>
+        </div>
+
+        <div class="text-xs uppercase tracking-wider text-zinc-400 mb-2 flex justify-between">
+          <span>Work delivered</span>
+          <span class="tabular text-zinc-600">38.0h / 40h</span>
+        </div>
+        <div class="space-y-1 mb-3 text-xs">
+          <div class="font-medium text-zinc-700 flex justify-between"><span>● Design</span><span class="tabular text-zinc-500">12.0h</span></div>
+          <div class="ml-3 doc-line text-xs"><span class="text-zinc-600">Homepage refinements</span><span class="tabular text-zinc-500">12.0h</span></div>
+          <div class="font-medium text-zinc-700 flex justify-between mt-1.5"><span>● Development</span><span class="tabular text-zinc-500">26.0h</span></div>
+          <div class="ml-3 doc-line text-xs"><span class="text-zinc-600">API integration</span><span class="tabular text-zinc-500">18.0h</span></div>
+          <div class="ml-3 doc-line text-xs"><span class="text-zinc-600">Auth refactor</span><span class="tabular text-zinc-500">8.0h</span></div>
+        </div>
+
+        <div class="border-t border-zinc-200 pt-3 space-y-1">
+          <div class="doc-line text-xs"><span class="text-zinc-600">Retainer fee (paid via subscription)</span><span class="tabular">€5,000.00</span></div>
+          <div class="doc-line text-xs"><span class="text-zinc-600">Overage</span><span class="tabular">€0.00</span></div>
+          <div class="doc-line border-t border-zinc-300 pt-2 mt-1 font-semibold"><span>Total due</span><span class="tabular">€0.00</span></div>
+        </div>
+
+        <div class="mt-6 pt-4 border-t border-zinc-200">
+          <div class="uppercase tracking-wider text-emerald-700 text-xs mb-2">Message to client</div>
+          <div class="bg-emerald-50/50 border border-emerald-200/40 rounded-md p-3 text-zinc-700 text-xs leading-relaxed italic">
+            Thank you for a smooth March! Full delivery report attached. Ping me anytime with questions.
+          </div>
+        </div>
+
+        <div class="mt-4 pt-4 border-t border-zinc-200 text-xs text-zinc-500">
+          <div class="uppercase tracking-wider text-zinc-400 mb-1">Payment instructions</div>
+          <div>No payment due — your subscription covers this period.</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <p class="annotation mt-6"><strong>Message to client</strong> defaults from <code class="mono">orgSettings.invoiceMessageTemplate</code>, editable per invoice. Renders as a soft-backgrounded callout block on the printed invoice. Empty in draft → shows "+ Add a message to client" affordance; empty when sent → block is hidden.</p>
+</section>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     8 · CREATE INVOICE MODAL
+═══════════════════════════════════════════════════════════════════════ -->
+<section id="modal" class="section-anchor">
+  <div class="mb-6">
+    <div class="flex items-center gap-3 mb-2">
+      <span class="col-label">Surface 8</span>
+      <span class="section-tag modified">Modified preview</span>
+    </div>
+    <h2 class="text-xl font-semibold tracking-tight">CreateInvoiceModal — preview adapts to single-doc model</h2>
+    <p class="annotation mt-1">Existing modal — only the preview card changes. Title and CTA stay "Create Invoice" everywhere. No "Generate report" variant.</p>
+  </div>
+
+  <div class="grid grid-cols-2 gap-6">
+
+    <!-- Modal mock 1: retainer overage -->
+    <div>
+      <div class="text-xs text-zinc-400 mb-2">Retainer · April 2026 · 2h overage selected</div>
+      <div class="panel" style="max-width: 480px;">
+        <div class="px-6 py-5 border-b border-zinc-100">
+          <h3 class="text-lg font-semibold">Create Invoice</h3>
+          <p class="text-sm text-zinc-500 mt-0.5">Acme Website Retainer — Retainer</p>
+        </div>
+        <div class="px-6 py-5 space-y-4">
+          <div>
+            <label class="block text-sm font-medium mb-2">Month</label>
+            <div class="input-mock flex items-center justify-between text-sm">
+              <span>April 2026</span>
+              <svg viewBox="0 0 16 16" class="size-4 text-zinc-400" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6l4 4 4-4"/></svg>
+            </div>
+          </div>
+          <div>
+            <label class="block text-sm font-medium mb-2 flex items-center gap-1.5">Options
+              <svg viewBox="0 0 16 16" class="size-3.5 text-zinc-400" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6"/><path d="M8 7v3M8 5.5v0"/></svg>
+            </label>
+            <div class="input-mock flex items-center justify-between text-sm">
+              <span>Don't round</span>
+              <svg viewBox="0 0 16 16" class="size-4 text-zinc-400" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6l4 4 4-4"/></svg>
+            </div>
+          </div>
+          <div class="bg-zinc-50/60 border border-zinc-200/80 rounded-lg p-4 space-y-2">
+            <div class="text-xs font-medium text-zinc-700 mb-2">Preview</div>
+            <div class="doc-line text-xs"><span class="text-zinc-600">Total time</span><span class="tabular">42.0h</span></div>
+            <div class="doc-line text-xs"><span class="text-zinc-600">Retainer fee (paid via subscription)</span><span class="tabular">€5,000.00</span></div>
+            <div class="doc-line text-xs"><span class="text-zinc-600">Overage (2h × €75/h)</span><span class="tabular">€150.00</span></div>
+            <div class="doc-line border-t border-zinc-300 pt-2 mt-1 font-semibold text-xs"><span>Total due</span><span class="tabular">€150.00</span></div>
+          </div>
+        </div>
+        <div class="px-6 py-4 border-t border-zinc-100">
+          <button class="w-full text-sm h-11 rounded-md bg-zinc-900 text-white font-medium">Create Invoice</button>
+          <button class="w-full text-xs text-zinc-500 mt-2 hover:text-zinc-900">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal mock 2: within budget -->
+    <div>
+      <div class="text-xs text-zinc-400 mb-2">Retainer · March 2026 · within budget</div>
+      <div class="panel" style="max-width: 480px;">
+        <div class="px-6 py-5 border-b border-zinc-100">
+          <h3 class="text-lg font-semibold">Create Invoice</h3>
+          <p class="text-sm text-zinc-500 mt-0.5">Acme Website Retainer — Retainer</p>
+        </div>
+        <div class="px-6 py-5 space-y-4">
+          <div>
+            <label class="block text-sm font-medium mb-2">Month</label>
+            <div class="input-mock flex items-center justify-between text-sm">
+              <span>March 2026</span>
+              <svg viewBox="0 0 16 16" class="size-4 text-zinc-400" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6l4 4 4-4"/></svg>
+            </div>
+          </div>
+          <div>
+            <label class="block text-sm font-medium mb-2">Options</label>
+            <div class="input-mock flex items-center justify-between text-sm">
+              <span>Don't round</span>
+              <svg viewBox="0 0 16 16" class="size-4 text-zinc-400" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6l4 4 4-4"/></svg>
+            </div>
+          </div>
+          <div class="bg-zinc-50/60 border border-zinc-200/80 rounded-lg p-4 space-y-2">
+            <div class="text-xs font-medium text-zinc-700 mb-2">Preview</div>
+            <div class="doc-line text-xs"><span class="text-zinc-600">Total time</span><span class="tabular">38.0h</span></div>
+            <div class="doc-line text-xs"><span class="text-zinc-600">Retainer fee (paid via subscription)</span><span class="tabular">€5,000.00</span></div>
+            <div class="doc-line text-xs"><span class="text-zinc-600">Overage</span><span class="tabular">€0.00</span></div>
+            <div class="doc-line border-t border-zinc-300 pt-2 mt-1 font-semibold text-xs"><span>Total due</span><span class="tabular">€0.00</span></div>
+            <div class="text-[11px] text-emerald-700 mt-1 italic">Will be auto-marked as Paid on creation (delivery report)</div>
+          </div>
+        </div>
+        <div class="px-6 py-4 border-t border-zinc-100">
+          <button class="w-full text-sm h-11 rounded-md bg-zinc-900 text-white font-medium">Create Invoice</button>
+          <button class="w-full text-xs text-zinc-500 mt-2 hover:text-zinc-900">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <p class="annotation mt-6"><strong>Within-budget preview</strong> shows a small italic emerald hint: "Will be auto-marked as Paid on creation". Communicates the auto-Paid behavior before commit so users aren't surprised.</p>
+</section>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     9 · SETTINGS → INVOICING
+═══════════════════════════════════════════════════════════════════════ -->
+<section id="settings" class="section-anchor">
+  <div class="mb-6">
+    <div class="flex items-center gap-3 mb-2">
+      <span class="col-label">Surface 9</span>
+      <span class="section-tag">New fields</span>
+    </div>
+    <h2 class="text-xl font-semibold tracking-tight">Settings → Invoicing</h2>
+    <p class="annotation mt-1">Two new org-level fields land here: <code class="mono">paymentInstructions</code> + <code class="mono">invoiceMessageTemplate</code>.</p>
+  </div>
+
+  <div class="panel">
+    <div class="px-6 py-5 border-b border-zinc-100">
+      <h3 class="text-base font-semibold">Invoicing</h3>
+      <p class="text-sm text-zinc-500 mt-0.5">Defaults for every invoice your agency generates.</p>
+    </div>
+
+    <div class="px-6 py-6 space-y-6">
+
+      <!-- Existing fields (kept for context) -->
+      <div class="grid grid-cols-2 gap-6">
+        <div>
+          <label class="block text-sm font-medium mb-1.5">Invoice prefix</label>
+          <div class="input-mock mono text-sm">INV-</div>
+          <p class="text-xs text-zinc-400 mt-1.5">Used as the prefix for every invoice number.</p>
+        </div>
+        <div>
+          <label class="block text-sm font-medium mb-1.5">Default payment terms</label>
+          <div class="input-mock flex items-center justify-between text-sm">
+            <span>Net 30 days</span>
+            <svg viewBox="0 0 16 16" class="size-4 text-zinc-400" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6l4 4 4-4"/></svg>
+          </div>
+          <p class="text-xs text-zinc-400 mt-1.5">Auto-fills the due date on new invoices.</p>
+        </div>
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium mb-1.5">Next invoice number</label>
+        <div class="input-mock mono text-sm" style="max-width: 160px;">16</div>
+        <p class="text-xs text-zinc-400 mt-1.5">Editable if you're migrating from another invoicing system.</p>
+      </div>
+
+      <hr class="border-zinc-200" />
+
+      <!-- New: payment instructions -->
+      <div>
+        <label class="block text-sm font-medium mb-1.5 flex items-center gap-2">
+          Payment instructions
+          <span class="section-tag">New</span>
+        </label>
+        <div class="input-mock textarea text-sm">IBAN HU42 1177 3016 1111 1018 0000 0000
+SWIFT: OTPVHUHB
+Reference: {invoiceNumber}
+Net 30 — pay by {dueDate}</div>
+        <p class="text-xs text-zinc-400 mt-1.5">Renders at the bottom of every invoice document. Plain text or simple Markdown.</p>
+      </div>
+
+      <!-- New: message template -->
+      <div>
+        <label class="block text-sm font-medium mb-1.5 flex items-center gap-2">
+          Default message to client
+          <span class="section-tag">New</span>
+        </label>
+        <div class="input-mock textarea text-sm">Thank you for your business. Reply with any questions or feedback on the work delivered this period.</div>
+        <p class="text-xs text-zinc-400 mt-1.5">Seeds the "Message to client" block on every new invoice. Editable per-invoice in the editor. Leave empty to omit by default.</p>
+      </div>
+
+    </div>
+  </div>
+
+  <p class="annotation mt-6"><strong>Both fields are optional.</strong> Empty payment instructions = block hidden on invoice. Empty message template = each new invoice's Message block starts empty (with a "+ Add a message to client" affordance in draft).</p>
+</section>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     SUMMARY OF SCOPE
+═══════════════════════════════════════════════════════════════════════ -->
+<section class="bg-zinc-100/60 rounded-2xl border border-zinc-200 p-8">
+  <h2 class="text-xl font-semibold tracking-tight mb-2">Scope summary — what ships</h2>
+  <p class="annotation mb-6">9 surfaces, 10 implementation PRs (per <code class="mono">docs/invoicing-update.md</code> §Implementation Order).</p>
+
+  <div class="grid grid-cols-3 gap-6 text-sm">
+    <div>
+      <div class="text-xs font-semibold uppercase tracking-wider text-emerald-700 mb-3">New components</div>
+      <ul class="space-y-1.5 text-zinc-700">
+        <li>• <code class="mono text-xs">&lt;InvoiceBanner /&gt;</code></li>
+        <li>• <code class="mono text-xs">&lt;InboxOverdueSection /&gt;</code></li>
+        <li>• <code class="mono text-xs">&lt;InboxToGenerateSection /&gt;</code></li>
+        <li>• <code class="mono text-xs">&lt;InboxEmptyState /&gt;</code></li>
+        <li>• <code class="mono text-xs">&lt;InvoiceMessageBlock /&gt;</code></li>
+        <li>• Sidebar badge + alert icon + tooltip</li>
+      </ul>
+    </div>
+    <div>
+      <div class="text-xs font-semibold uppercase tracking-wider text-amber-700 mb-3">Modified components</div>
+      <ul class="space-y-1.5 text-zinc-700">
+        <li>• <code class="mono text-xs">CreateInvoiceModal</code> — preview only</li>
+        <li>• <code class="mono text-xs">retainer-overview.tsx</code> — banner + breakdown header</li>
+        <li>• <code class="mono text-xs">fixed-overview.tsx</code> — add banner</li>
+        <li>• <code class="mono text-xs">tm-overview.tsx</code> — use shared banner</li>
+        <li>• <code class="mono text-xs">project-invoices.tsx</code> — drop callout</li>
+        <li>• Settings → Invoicing tab</li>
+      </ul>
+    </div>
+    <div>
+      <div class="text-xs font-semibold uppercase tracking-wider text-blue-700 mb-3">Backend</div>
+      <ul class="space-y-1.5 text-zinc-700">
+        <li>• 2 new <code class="mono text-xs">orgSettings</code> fields</li>
+        <li>• 1 new <code class="mono text-xs">invoices</code> field</li>
+        <li>• 3 new queries</li>
+        <li>• 3 new mutations</li>
+        <li>• <code class="mono text-xs">createInvoice</code> auto-Paid branch</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="border-t border-zinc-200 py-6 mt-12 bg-white">
+  <div class="max-w-[1200px] mx-auto px-6 text-xs text-zinc-400 flex justify-between">
+    <span>Invoicing redesign — final PRD prototype</span>
+    <span class="mono">prototypes/invoicing-final.html</span>
+  </div>
+</footer>
+
+</body>
+</html>

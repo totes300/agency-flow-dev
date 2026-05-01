@@ -1,0 +1,1355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Invoicing UX Redesign — Prototype</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/lucide@latest"></script>
+<style>
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 240 10% 3.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 240 10% 3.9%;
+    --primary: 240 5.9% 10%;
+    --primary-foreground: 0 0% 98%;
+    --muted: 240 4.8% 95.9%;
+    --muted-foreground: 240 3.8% 46.1%;
+    --accent: 240 4.8% 95.9%;
+    --accent-foreground: 240 5.9% 10%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 5.9% 90%;
+    --input: 240 5.9% 90%;
+    --ring: 240 5.9% 10%;
+  }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif; }
+  .tabular-nums { font-variant-numeric: tabular-nums; }
+  [data-state="active"] { background: white; box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05); }
+</style>
+</head>
+<body class="bg-zinc-50 text-zinc-900">
+
+<div class="mx-auto max-w-6xl px-6 py-8">
+
+  <!-- Doc header -->
+  <div class="mb-8 rounded-lg border border-zinc-200 bg-white p-5">
+    <h1 class="text-lg font-semibold tracking-tight">Invoicing UX Redesign — Prototype</h1>
+    <p class="mt-1 text-sm text-zinc-600">
+      Egységesített ready-to-invoice fluency mind a 3 projekt-típuson + global inbox.
+      Egy banner / projekt / akció. Neutral tone (nem destructive). T&M minta a kanonikus.
+    </p>
+    <div class="mt-4 flex gap-2 text-xs text-zinc-500">
+      <span class="rounded bg-zinc-100 px-2 py-0.5">3 Overview tab variáns</span>
+      <span class="rounded bg-zinc-100 px-2 py-0.5">Global Ready inbox</span>
+      <span class="rounded bg-zinc-100 px-2 py-0.5">Empty states</span>
+    </div>
+  </div>
+
+  <!-- View switcher -->
+  <div class="mb-6 flex flex-wrap gap-1 rounded-lg border border-zinc-200 bg-zinc-100 p-1 text-sm w-fit">
+    <button data-view="dashboard" data-state="active" class="view-btn rounded-md px-3 py-1.5 font-medium transition">Dashboard</button>
+    <button data-view="projects-list" class="view-btn rounded-md px-3 py-1.5 font-medium transition">Projects list</button>
+    <button data-view="retainer" class="view-btn rounded-md px-3 py-1.5 font-medium transition">Retainer · monthly (no rollover)</button>
+    <button data-view="retainer-cycle-mid" class="view-btn rounded-md px-3 py-1.5 font-medium transition">Retainer · cycle in progress</button>
+    <button data-view="retainer-cycle-closed" class="view-btn rounded-md px-3 py-1.5 font-medium transition">Retainer · cycle closed</button>
+    <button data-view="fixed" class="view-btn rounded-md px-3 py-1.5 font-medium transition">Fixed</button>
+    <button data-view="tm" class="view-btn rounded-md px-3 py-1.5 font-medium transition">T&M</button>
+    <button data-view="global" class="view-btn rounded-md px-3 py-1.5 font-medium transition">Global Ready Inbox</button>
+    <button data-view="statement" class="view-btn rounded-md px-3 py-1.5 font-medium transition">Report &amp; Invoice PDFs</button>
+    <button data-view="empty" class="view-btn rounded-md px-3 py-1.5 font-medium transition">Empty / fully invoiced</button>
+  </div>
+
+  <!-- Scope legend -->
+  <div class="mb-6 rounded-lg border border-zinc-200 bg-white p-5">
+    <div class="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-500">App scope</div>
+    <div class="grid grid-cols-2 gap-4 text-xs">
+      <div class="rounded-md border border-zinc-200 bg-zinc-50 p-3">
+        <div class="font-semibold text-zinc-900 mb-1">Within budget → <span class="text-emerald-700">Report</span></div>
+        <p class="text-zinc-600">Period végén PDF generálódik. Action: <strong>Generate report</strong>. Ezután letölthető — te kintről küldöd emailben.</p>
+      </div>
+      <div class="rounded-md border border-zinc-200 bg-zinc-50 p-3">
+        <div class="font-semibold text-zinc-900 mb-1">Overage → <span class="text-red-700">Invoice</span></div>
+        <p class="text-zinc-600">Period végén PDF generálódik. Action: <strong>Generate invoice</strong>. Ezután letölthető — te kintről küldöd, fizetés után az appban "Mark as paid".</p>
+      </div>
+    </div>
+    <p class="mt-3 text-[11px] text-zinc-500">No rollover → minden hónapra report vagy invoice. Rollover ON → minden ciklusra report vagy invoice. Az app nem küld, csak generál. Recurring fee Stripe-on át megy külön, az app azt nem trackeli.</p>
+  </div>
+
+  <!-- ╔══════════ DASHBOARD — simple billing surface ══════════╗ -->
+  <section data-view-content="dashboard" class="space-y-4">
+
+    <div class="flex gap-6">
+
+      <!-- Sidebar — persistent badge -->
+      <aside class="w-52 shrink-0 rounded-lg border border-zinc-200 bg-white p-3 h-fit">
+        <div class="mb-3 flex items-center gap-2 px-2">
+          <div class="flex h-7 w-7 items-center justify-center rounded-md bg-zinc-900 text-xs font-bold text-white">K</div>
+          <div class="text-sm font-semibold">Konverted</div>
+        </div>
+        <nav class="space-y-0.5 text-sm">
+          <a class="flex items-center gap-2 rounded-md bg-zinc-100 px-2 py-1.5 font-medium text-zinc-900">
+            <i data-lucide="layout-dashboard" class="h-3.5 w-3.5"></i>Dashboard
+          </a>
+          <a class="flex items-center gap-2 rounded-md px-2 py-1.5 text-zinc-700 hover:bg-zinc-50">
+            <i data-lucide="users" class="h-3.5 w-3.5"></i>Clients
+          </a>
+          <a class="flex items-center gap-2 rounded-md px-2 py-1.5 text-zinc-700 hover:bg-zinc-50">
+            <i data-lucide="folder" class="h-3.5 w-3.5"></i>Projects
+          </a>
+          <a class="relative flex items-center gap-2 rounded-md px-2 py-1.5 text-zinc-700 hover:bg-zinc-50">
+            <i data-lucide="receipt" class="h-3.5 w-3.5"></i>
+            <span class="flex-1">Invoices</span>
+            <span class="rounded-full bg-red-500 px-1.5 text-[10px] font-bold text-white tabular-nums">6</span>
+          </a>
+          <a class="flex items-center gap-2 rounded-md px-2 py-1.5 text-zinc-700 hover:bg-zinc-50">
+            <i data-lucide="bar-chart-3" class="h-3.5 w-3.5"></i>Reports
+          </a>
+        </nav>
+      </aside>
+
+      <!-- Main -->
+      <div class="flex-1 space-y-5 min-w-0">
+
+        <div>
+          <div class="text-xs text-zinc-500">Tuesday, May 1</div>
+          <h2 class="mt-0.5 text-2xl font-semibold tracking-tight">Good morning, Adam</h2>
+        </div>
+
+        <!-- BILLING SNAPSHOT POINTER -->
+        <a class="block rounded-xl border border-zinc-200 bg-white p-5 hover:border-zinc-300 hover:bg-zinc-50 cursor-pointer transition">
+          <div class="flex items-center justify-between gap-4">
+            <div class="flex items-center gap-4 min-w-0">
+              <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-zinc-900 text-white">
+                <i data-lucide="receipt" class="h-5 w-5"></i>
+              </div>
+              <div class="min-w-0">
+                <div class="flex items-baseline gap-3 flex-wrap">
+                  <span class="text-base font-semibold">Invoicing</span>
+                  <span class="text-xs text-zinc-500 tabular-nums">6 to generate · 2 overdue</span>
+                </div>
+                <div class="mt-0.5 text-sm text-zinc-600">
+                  <span class="font-semibold tabular-nums text-red-700">$1,840</span> overdue
+                  <span class="text-zinc-400">·</span>
+                  <span class="tabular-nums">$13,020</span> outstanding total
+                </div>
+              </div>
+            </div>
+            <div class="flex items-center gap-1.5 text-sm font-medium text-zinc-900 shrink-0">
+              Open inbox
+              <i data-lucide="arrow-right" class="h-4 w-4"></i>
+            </div>
+          </div>
+        </a>
+
+        <!-- Other dashboard widgets placeholder -->
+        <div class="rounded-xl border border-dashed border-zinc-300 bg-white p-8 text-center">
+          <div class="text-[10px] font-semibold uppercase tracking-wide text-zinc-400 mb-1">Out of scope</div>
+          <p class="text-sm text-zinc-500">Other dashboard widgets — time tracked today, tasks, project activity — live here but aren't part of this redesign.</p>
+        </div>
+
+      </div>
+    </div>
+
+    <div class="rounded-lg border border-dashed border-zinc-300 bg-white p-4 text-xs text-zinc-600">
+      <div class="font-semibold text-zinc-900 mb-1">Dashboard logikája</div>
+      <p>Egyetlen pointer-card. Mutatja a kulcsszámokat (mennyi van to generate, mennyi overdue, mennyi outstanding $). Klikk → /invoices, ahol a tényleges munka történik. A Dashboard a teljes agency-overview, billing-en kívül más widgetek is lesznek rajta.</p>
+    </div>
+  </section>
+
+  <!-- ╔══════════ PROJECTS LIST — billing state column ══════════╗ -->
+  <section data-view-content="projects-list" class="hidden space-y-4">
+
+    <div class="rounded-lg border border-zinc-200 bg-white p-6">
+      <div class="flex items-start justify-between">
+        <div>
+          <h2 class="text-2xl font-semibold tracking-tight">Projects</h2>
+          <p class="mt-1 text-sm text-zinc-500">Scan billing state across your portfolio at a glance</p>
+        </div>
+        <div class="flex gap-2">
+          <button class="rounded-md border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium hover:bg-zinc-50">
+            <i data-lucide="filter" class="inline h-3 w-3 mr-1"></i>Filter
+          </button>
+          <button class="rounded-md bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-zinc-800">
+            New project
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Simplified projects table -->
+    <div class="rounded-lg border border-zinc-200 bg-white overflow-hidden">
+      <table class="w-full text-sm">
+        <thead class="bg-zinc-50 text-xs uppercase tracking-wide text-zinc-500">
+          <tr>
+            <th class="px-5 py-3 text-left font-medium">Project</th>
+            <th class="px-3 py-3 text-left font-medium">Client</th>
+            <th class="px-3 py-3 text-left font-medium">Status</th>
+            <th class="px-3 py-3 text-right font-medium">To bill</th>
+            <th class="w-10"></th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-zinc-100">
+          <tr class="hover:bg-zinc-50 cursor-pointer">
+            <td class="px-5 py-3 font-medium">Delta UX audit</td>
+            <td class="px-3 py-3 text-xs text-zinc-600">Delta</td>
+            <td class="px-3 py-3">
+              <span class="inline-flex items-center gap-1.5 text-xs text-red-700 font-medium">
+                <span class="h-1.5 w-1.5 rounded-full bg-red-500"></span>Overdue
+              </span>
+            </td>
+            <td class="px-3 py-3 text-right tabular-nums font-semibold text-red-700">$640</td>
+          </tr>
+          <tr class="hover:bg-zinc-50 cursor-pointer">
+            <td class="px-5 py-3 font-medium">Arlow monthly retainer</td>
+            <td class="px-3 py-3 text-xs text-zinc-600">Arlow</td>
+            <td class="px-3 py-3">
+              <span class="inline-flex items-center gap-1.5 text-xs text-zinc-700 font-medium">
+                <span class="h-1.5 w-1.5 rounded-full bg-zinc-700"></span>Action needed
+              </span>
+            </td>
+            <td class="px-3 py-3 text-right tabular-nums font-semibold">$860</td>
+          </tr>
+          <tr class="hover:bg-zinc-50 cursor-pointer">
+            <td class="px-5 py-3 font-medium">Acme quarterly retainer</td>
+            <td class="px-3 py-3 text-xs text-zinc-600">Acme Corp</td>
+            <td class="px-3 py-3">
+              <span class="inline-flex items-center gap-1.5 text-xs text-zinc-700 font-medium">
+                <span class="h-1.5 w-1.5 rounded-full bg-zinc-700"></span>Action needed <span class="text-amber-700 font-normal">· 5 days waiting</span>
+              </span>
+            </td>
+            <td class="px-3 py-3 text-right tabular-nums font-semibold">$460</td>
+          </tr>
+          <tr class="hover:bg-zinc-50 cursor-pointer">
+            <td class="px-5 py-3 font-medium">Beta Co website</td>
+            <td class="px-3 py-3 text-xs text-zinc-600">Beta Co</td>
+            <td class="px-3 py-3">
+              <span class="inline-flex items-center gap-1.5 text-xs text-zinc-700 font-medium">
+                <span class="h-1.5 w-1.5 rounded-full bg-zinc-700"></span>Action needed
+              </span>
+            </td>
+            <td class="px-3 py-3 text-right tabular-nums">$6,000</td>
+          </tr>
+          <tr class="hover:bg-zinc-50 cursor-pointer">
+            <td class="px-5 py-3 font-medium">Acme consulting</td>
+            <td class="px-3 py-3 text-xs text-zinc-600">Acme Corp</td>
+            <td class="px-3 py-3">
+              <span class="inline-flex items-center gap-1.5 text-xs text-zinc-700 font-medium">
+                <span class="h-1.5 w-1.5 rounded-full bg-zinc-700"></span>Action needed
+              </span>
+            </td>
+            <td class="px-3 py-3 text-right tabular-nums">$1,920</td>
+          </tr>
+          <tr class="hover:bg-zinc-50 cursor-pointer">
+            <td class="px-5 py-3 font-medium">Gamma SEO retainer</td>
+            <td class="px-3 py-3 text-xs text-zinc-600">Gamma</td>
+            <td class="px-3 py-3">
+              <span class="inline-flex items-center gap-1.5 text-xs text-zinc-700 font-medium">
+                <span class="h-1.5 w-1.5 rounded-full bg-zinc-700"></span>Action needed <span class="text-zinc-500 font-normal">· within budget</span>
+              </span>
+            </td>
+            <td class="px-3 py-3 text-right tabular-nums text-zinc-400">$0</td>
+          </tr>
+          <tr class="hover:bg-zinc-50 cursor-pointer">
+            <td class="px-5 py-3 font-medium">Echo studio retainer</td>
+            <td class="px-3 py-3 text-xs text-zinc-600">Echo studio</td>
+            <td class="px-3 py-3">
+              <span class="inline-flex items-center gap-1.5 text-xs text-emerald-700 font-medium">
+                <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>Up to date
+              </span>
+            </td>
+            <td class="px-3 py-3 text-right tabular-nums text-zinc-400">—</td>
+          </tr>
+          <tr class="hover:bg-zinc-50 cursor-pointer">
+            <td class="px-5 py-3 font-medium">Hotel landing page</td>
+            <td class="px-3 py-3 text-xs text-zinc-600">Hotel Olive</td>
+            <td class="px-3 py-3">
+              <span class="inline-flex items-center gap-1.5 text-xs text-emerald-700 font-medium">
+                <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>Up to date
+              </span>
+            </td>
+            <td class="px-3 py-3 text-right tabular-nums text-zinc-400">—</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="rounded-lg border border-dashed border-zinc-300 bg-white p-4 text-xs text-zinc-600">
+      <div class="font-semibold text-zinc-900 mb-1">Projects lista logikája</div>
+      <p>Három állapot. <strong class="text-red-700">Overdue</strong> (piros) — invoice elküldve, nem fizettek. <strong>Action needed</strong> (szürke) — van mit generálni (overage VAGY within budget — egyformán). <strong class="text-emerald-700">Up to date</strong> (zöld) — semmi tennivaló. A sor alszövege opcionálisan magyaráz ("5 days waiting", "within budget"), de a fő státusz egységes. Sortálható: az Overdue mindig felül, aztán Action needed, aztán Up to date. To bill oszlop a $-érték.</p>
+    </div>
+  </section>
+
+  <!-- ╔══════════ RETAINER OVERVIEW ══════════╗ -->
+  <section data-view-content="retainer" class="hidden space-y-4">
+
+    <!-- Project header -->
+    <div class="rounded-lg border border-zinc-200 bg-white p-6">
+      <div class="flex items-start justify-between">
+        <div>
+          <div class="mb-2 flex items-center gap-2 text-sm text-zinc-500">
+            <a class="hover:text-zinc-900" href="#">Projects</a>
+            <i data-lucide="chevron-right" class="h-3.5 w-3.5"></i>
+            <span>Arlow monthly retainer</span>
+          </div>
+          <div class="flex items-center gap-2.5">
+            <h2 class="text-2xl font-semibold tracking-tight">Arlow monthly retainer</h2>
+            <span class="rounded-md bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-700">Retainer</span>
+            <span class="flex items-center gap-1 text-xs font-medium text-emerald-600">
+              <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>Active
+            </span>
+          </div>
+          <div class="mt-1 text-sm text-zinc-500">PRJ-002 · Arlow · USD · 10:00 h/mo</div>
+        </div>
+        <div class="text-right text-sm text-zinc-500">
+          <div>Last logged: Apr 26</div>
+          <button class="mt-2 rounded-md border border-zinc-200 bg-white px-3 py-1 text-xs font-medium hover:bg-zinc-50">Edit</button>
+        </div>
+      </div>
+      <div class="mt-5 flex gap-1 border-b border-zinc-200 -mb-2 -mx-2 px-2">
+        <button class="border-b-2 border-zinc-900 px-3 py-2 text-sm font-medium">Overview</button>
+        <button class="border-b-2 border-transparent px-3 py-2 text-sm text-zinc-600 hover:text-zinc-900">Time</button>
+        <button class="border-b-2 border-transparent px-3 py-2 text-sm text-zinc-600 hover:text-zinc-900">Invoices</button>
+        <button class="border-b-2 border-transparent px-3 py-2 text-sm text-zinc-600 hover:text-zinc-900">Settings</button>
+      </div>
+    </div>
+
+    <!-- Project Finances summary card -->
+    <div class="rounded-lg border border-zinc-200 bg-white p-6">
+      <div class="mb-4 flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <h3 class="text-base font-semibold">Project Finances</h3>
+        </div>
+        <div class="flex items-center gap-2 text-sm text-zinc-600">
+          <button class="rounded-md p-1 hover:bg-zinc-100"><i data-lucide="chevron-left" class="h-4 w-4"></i></button>
+          <span class="font-medium">Cycle 4</span>
+          <button class="rounded-md p-1 hover:bg-zinc-100"><i data-lucide="chevron-right" class="h-4 w-4"></i></button>
+        </div>
+      </div>
+      <div class="text-sm text-zinc-500 mb-5">April 2026 · closed</div>
+
+      <div class="grid grid-cols-3 gap-6">
+        <div>
+          <div class="text-xs uppercase tracking-wide text-zinc-500">Time breakdown</div>
+          <div class="mt-2 flex items-center gap-3">
+            <div class="relative h-12 w-20">
+              <svg viewBox="0 0 80 50" class="h-full w-full">
+                <path d="M 8 42 A 32 32 0 0 1 72 42" fill="none" stroke="#e4e4e7" stroke-width="6" stroke-linecap="round" />
+                <path d="M 8 42 A 32 32 0 0 1 72 42" fill="none" stroke="#dc2626" stroke-width="6" stroke-linecap="round" />
+              </svg>
+              <span class="absolute inset-0 flex items-center justify-center text-xs font-bold text-red-600">⚠</span>
+            </div>
+            <div>
+              <div class="text-xs text-zinc-500">Billable hours</div>
+              <div class="font-semibold tabular-nums">20:45</div>
+              <div class="mt-1 text-xs text-zinc-500">Non-billable: <span class="tabular-nums">00:00</span></div>
+            </div>
+          </div>
+          <div class="mt-3 text-[11px] text-zinc-500">Monthly fee · <span class="tabular-nums text-zinc-700">$1,000</span> (via Stripe)</div>
+        </div>
+
+        <div>
+          <div class="text-xs uppercase tracking-wide text-zinc-500">Overage</div>
+          <div class="mt-2">
+            <div class="text-xs text-zinc-500">Over budget</div>
+            <div class="text-base font-semibold tabular-nums text-red-600">+10:45</div>
+            <div class="mt-1 text-xs text-zinc-500">Amount due</div>
+            <div class="text-base font-semibold tabular-nums text-red-600">$860.00</div>
+          </div>
+        </div>
+
+        <div>
+          <div class="text-xs uppercase tracking-wide text-zinc-500">Profitability <span class="text-zinc-400">(internal)</span></div>
+          <div class="mt-2 grid grid-cols-2 gap-x-3 gap-y-1.5 text-sm">
+            <div>
+              <div class="text-xs text-zinc-500">Revenue</div>
+              <div class="font-semibold tabular-nums">$1,860</div>
+            </div>
+            <div>
+              <div class="text-xs text-zinc-500">Profit</div>
+              <div class="font-semibold tabular-nums">$1,030</div>
+            </div>
+            <div>
+              <div class="text-xs text-zinc-500">Cost</div>
+              <div class="font-semibold tabular-nums">$830</div>
+            </div>
+            <div>
+              <div class="text-xs text-zinc-500">Margin</div>
+              <div class="font-semibold tabular-nums">55%</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- State A: WITH OVERAGE (primary CTA) -->
+    <div class="rounded-lg border border-zinc-200 bg-zinc-50 p-4">
+      <div class="flex items-center gap-3">
+        <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-white ring-1 ring-zinc-200">
+          <i data-lucide="receipt" class="h-4 w-4 text-zinc-700"></i>
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-baseline gap-2 flex-wrap">
+            <span class="text-sm font-semibold text-zinc-900">3 months ready to bill</span>
+            <span class="text-sm text-zinc-500 tabular-nums">·</span>
+            <span class="text-sm font-semibold text-red-700 tabular-nums">$1,000.00 overage</span>
+          </div>
+          <div class="mt-1 flex items-center gap-1.5">
+            <span class="rounded bg-white px-1.5 py-0.5 text-[11px] font-medium text-red-700 ring-1 ring-red-200">Apr · $860 due</span>
+            <span class="rounded bg-white px-1.5 py-0.5 text-[11px] font-medium text-red-700 ring-1 ring-red-200">Mar · $140 due</span>
+            <span class="rounded bg-white px-1.5 py-0.5 text-[11px] font-medium text-zinc-600 ring-1 ring-zinc-200">Feb · within budget</span>
+          </div>
+          <div class="mt-1 text-[11px] text-zinc-500">Recurring fees handled via Stripe</div>
+        </div>
+        <button class="rounded-md bg-zinc-900 px-3.5 py-2 text-sm font-medium text-white hover:bg-zinc-800 shrink-0">
+          Generate invoice
+        </button>
+      </div>
+    </div>
+
+
+    <!-- Monthly Breakdown -->
+    <div class="rounded-lg border border-zinc-200 bg-white">
+      <div class="border-b border-zinc-200 p-5">
+        <h3 class="text-base font-semibold">Monthly Breakdown</h3>
+      </div>
+      <ul class="divide-y divide-zinc-100">
+        <li class="flex items-center gap-3 px-5 py-3.5 hover:bg-zinc-50">
+          <i data-lucide="chevron-right" class="h-4 w-4 text-zinc-400"></i>
+          <span class="font-medium text-sm">April 2026</span>
+          <span class="ml-auto text-sm text-zinc-500 tabular-nums">20:45 / 10:00</span>
+          <span class="text-sm font-medium tabular-nums text-red-600 min-w-16 text-right">-10:45</span>
+          <span class="rounded-md bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700 ring-1 ring-red-200">$860 overage</span>
+          <button class="rounded-md bg-zinc-900 px-2.5 py-1 text-xs font-medium text-white hover:bg-zinc-800">Generate invoice</button>
+        </li>
+        <li class="flex items-center gap-3 px-5 py-3.5 hover:bg-zinc-50">
+          <i data-lucide="chevron-right" class="h-4 w-4 text-zinc-400"></i>
+          <span class="font-medium text-sm">March 2026</span>
+          <span class="ml-auto text-sm text-zinc-500 tabular-nums">12:00 / 10:00</span>
+          <span class="text-sm font-medium tabular-nums text-red-600 min-w-16 text-right">-2:00</span>
+          <span class="rounded-md bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700 ring-1 ring-red-200">$140 overage</span>
+          <button class="rounded-md bg-zinc-900 px-2.5 py-1 text-xs font-medium text-white hover:bg-zinc-800">Generate invoice</button>
+        </li>
+        <li class="flex items-center gap-3 px-5 py-3.5 hover:bg-zinc-50">
+          <i data-lucide="chevron-right" class="h-4 w-4 text-zinc-400"></i>
+          <span class="font-medium text-sm">February 2026</span>
+          <span class="ml-auto text-sm text-zinc-500 tabular-nums">09:30 / 10:00</span>
+          <span class="text-sm font-medium tabular-nums text-emerald-600 min-w-16 text-right">+0:30</span>
+          <span class="rounded-md bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-emerald-200">within budget</span>
+          <button class="rounded-md bg-zinc-900 px-2.5 py-1 text-xs font-medium text-white hover:bg-zinc-800">Generate report</button>
+        </li>
+        <li class="flex items-center gap-3 px-5 py-3.5 hover:bg-zinc-50">
+          <i data-lucide="chevron-right" class="h-4 w-4 text-zinc-400"></i>
+          <span class="font-medium text-sm">January 2026</span>
+          <span class="ml-auto text-sm text-zinc-500 tabular-nums">10:00 / 10:00</span>
+          <span class="text-sm font-medium tabular-nums text-zinc-500 min-w-16 text-right">0:00</span>
+          <span class="text-xs text-zinc-500">RPT-2026-01</span>
+          <button class="rounded-md border border-zinc-200 bg-white p-1.5 hover:bg-zinc-50" title="Download PDF"><i data-lucide="download" class="h-3 w-3"></i></button>
+        </li>
+      </ul>
+    </div>
+
+    <div class="rounded-lg border border-dashed border-zinc-300 bg-white p-4 text-xs text-zinc-600">
+      <div class="font-semibold text-zinc-900 mb-1">No rollover modell</div>
+      <p>Minden lezárt hónapra generálsz egy PDF-et. Overage van → <strong>Generate invoice</strong>. Within budget → <strong>Generate report</strong>. Generálás után a sor mutatja az INV-XX vagy RPT-XX számot + download icon. A recurring fee Stripe-on át megy külön, az app csak referenciaként mutatja.</p>
+    </div>
+  </section>
+
+  <!-- ╔══════════ RETAINER · CYCLE IN PROGRESS (rollover ON, mid-cycle) ══════════╗ -->
+  <section data-view-content="retainer-cycle-mid" class="hidden space-y-4">
+
+    <div class="rounded-lg border border-zinc-200 bg-white p-6">
+      <div class="flex items-start justify-between">
+        <div>
+          <div class="mb-2 flex items-center gap-2 text-sm text-zinc-500">
+            <a class="hover:text-zinc-900" href="#">Projects</a>
+            <i data-lucide="chevron-right" class="h-3.5 w-3.5"></i>
+            <span>Acme quarterly retainer</span>
+          </div>
+          <div class="flex items-center gap-2.5">
+            <h2 class="text-2xl font-semibold tracking-tight">Acme quarterly retainer</h2>
+            <span class="rounded-md bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-700">Retainer</span>
+            <span class="flex items-center gap-1 text-xs font-medium text-emerald-600">
+              <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>Active
+            </span>
+          </div>
+          <div class="mt-1 text-sm text-zinc-500">PRJ-007 · Acme · USD · 30:00 h/3mo · <span class="font-medium text-zinc-700">rollover ON</span></div>
+        </div>
+        <div class="text-right text-sm text-zinc-500">
+          <div>Last logged: Apr 28</div>
+          <button class="mt-2 rounded-md border border-zinc-200 bg-white px-3 py-1 text-xs font-medium hover:bg-zinc-50">Edit</button>
+        </div>
+      </div>
+      <div class="mt-5 flex gap-1 border-b border-zinc-200 -mb-2 -mx-2 px-2">
+        <button class="border-b-2 border-zinc-900 px-3 py-2 text-sm font-medium">Overview</button>
+        <button class="border-b-2 border-transparent px-3 py-2 text-sm text-zinc-600 hover:text-zinc-900">Time</button>
+        <button class="border-b-2 border-transparent px-3 py-2 text-sm text-zinc-600 hover:text-zinc-900">Invoices</button>
+        <button class="border-b-2 border-transparent px-3 py-2 text-sm text-zinc-600 hover:text-zinc-900">Settings</button>
+      </div>
+    </div>
+
+    <div class="rounded-lg border border-zinc-200 bg-white p-6">
+      <div class="mb-4 flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <h3 class="text-base font-semibold">Project Finances</h3>
+          <span class="rounded-md bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-600 ring-1 ring-zinc-200">In progress</span>
+        </div>
+        <div class="flex items-center gap-2 text-sm text-zinc-600">
+          <button class="rounded-md p-1 hover:bg-zinc-100"><i data-lucide="chevron-left" class="h-4 w-4"></i></button>
+          <span class="font-medium">Cycle 4</span>
+          <button class="rounded-md p-1 hover:bg-zinc-100"><i data-lucide="chevron-right" class="h-4 w-4"></i></button>
+        </div>
+      </div>
+      <div class="text-sm text-zinc-500 mb-5">Apr-Jun 2026 · 3-month cycle · <span class="text-zinc-700">2 of 3 months elapsed</span></div>
+
+      <div class="grid grid-cols-3 gap-6">
+        <div>
+          <div class="text-xs uppercase tracking-wide text-zinc-500">Cycle progress</div>
+          <div class="mt-2">
+            <div class="text-base font-semibold tabular-nums">22:30 / 30:00</div>
+            <div class="text-xs text-zinc-500 mt-0.5">75% used · 2 months in</div>
+            <div class="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-zinc-100">
+              <div class="h-full bg-zinc-700" style="width:75%"></div>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div class="text-xs uppercase tracking-wide text-zinc-500">Cycle balance</div>
+          <div class="mt-2">
+            <div class="text-base font-semibold tabular-nums text-zinc-900">+7:30</div>
+            <div class="text-xs text-zinc-500 mt-0.5">remaining in cycle</div>
+            <div class="mt-1 text-xs text-zinc-500">Settles Jun 30, 2026</div>
+          </div>
+        </div>
+
+        <div>
+          <div class="text-xs uppercase tracking-wide text-zinc-500">Cycle profitability</div>
+          <div class="mt-2 grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm">
+            <div>
+              <div class="text-xs text-zinc-500">Revenue (est.)</div>
+              <div class="font-semibold tabular-nums">$5,400</div>
+            </div>
+            <div>
+              <div class="text-xs text-zinc-500">Profit (est.)</div>
+              <div class="font-semibold tabular-nums">$3,180</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Info card: cycle in progress -->
+    <div class="rounded-lg border border-zinc-200 bg-white p-4">
+      <div class="flex items-center gap-3">
+        <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-zinc-100">
+          <i data-lucide="clock" class="h-4 w-4 text-zinc-600"></i>
+        </div>
+        <div class="flex-1">
+          <div class="text-sm font-medium text-zinc-900">Cycle 4 in progress · ends Jun 30, 2026</div>
+          <div class="mt-0.5 text-xs text-zinc-500">
+            Cycle report or invoice will be ready when the cycle closes.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Monthly Breakdown — months visible but NOT independently invoiceable -->
+    <div class="rounded-lg border border-zinc-200 bg-white">
+      <div class="border-b border-zinc-200 p-5">
+        <h3 class="text-base font-semibold">Monthly Breakdown</h3>
+        <p class="mt-0.5 text-xs text-zinc-500">Months show progression — invoicing happens at cycle close, not per month.</p>
+      </div>
+      <ul class="divide-y divide-zinc-100">
+        <li class="flex items-center gap-3 px-5 py-3.5">
+          <i data-lucide="chevron-right" class="h-4 w-4 text-zinc-400"></i>
+          <span class="font-medium text-sm">April 2026</span>
+          <span class="flex gap-0.5">
+            <span class="h-1.5 w-1.5 rounded-full bg-zinc-900"></span>
+            <span class="h-1.5 w-1.5 rounded-full bg-zinc-300"></span>
+            <span class="h-1.5 w-1.5 rounded-full bg-zinc-300"></span>
+          </span>
+          <span class="ml-auto text-sm text-zinc-500 tabular-nums">12:00 / 10:00</span>
+          <span class="text-sm font-medium tabular-nums text-red-600 min-w-16 text-right">-2:00</span>
+        </li>
+        <li class="flex items-center gap-3 px-5 py-3.5">
+          <i data-lucide="chevron-right" class="h-4 w-4 text-zinc-400"></i>
+          <span class="font-medium text-sm">May 2026</span>
+          <span class="flex gap-0.5">
+            <span class="h-1.5 w-1.5 rounded-full bg-zinc-300"></span>
+            <span class="h-1.5 w-1.5 rounded-full bg-zinc-900"></span>
+            <span class="h-1.5 w-1.5 rounded-full bg-zinc-300"></span>
+          </span>
+          <span class="ml-auto text-sm text-zinc-500 tabular-nums">10:30 / 8:00</span>
+          <span class="text-sm font-medium tabular-nums text-red-600 min-w-16 text-right">-2:30</span>
+        </li>
+        <li class="flex items-center gap-3 px-5 py-3.5 opacity-60">
+          <i data-lucide="chevron-right" class="h-4 w-4 text-zinc-400"></i>
+          <span class="font-medium text-sm">June 2026</span>
+          <span class="flex gap-0.5">
+            <span class="h-1.5 w-1.5 rounded-full bg-zinc-300"></span>
+            <span class="h-1.5 w-1.5 rounded-full bg-zinc-300"></span>
+            <span class="h-1.5 w-1.5 rounded-full bg-zinc-900"></span>
+          </span>
+          <span class="ml-auto text-sm text-zinc-500 tabular-nums">— / 12:00</span>
+          <span class="text-sm font-medium tabular-nums text-zinc-400 min-w-16 text-right">—</span>
+          <span class="rounded-md bg-zinc-50 px-2 py-0.5 text-xs font-medium text-zinc-500">upcoming</span>
+        </li>
+      </ul>
+    </div>
+
+    <div class="rounded-lg border border-dashed border-zinc-300 bg-white p-4 text-xs text-zinc-600">
+      <div class="font-semibold text-zinc-900 mb-1">Cycle in progress modell</div>
+      <p>Ciklus még nyitott, semmi nem generálható. Egy info-sor mutatja mikor zár (Jun 30) — akkor lehet majd PDF-et csinálni. A hónapok csak progress-t mutatnak, nincs gomb mellettük. "Over · rolls in" jelzi, hogy az adott hónap túlórája átgörög a következőre, nem önálló overage.</p>
+    </div>
+  </section>
+
+  <!-- ╔══════════ RETAINER · CYCLE CLOSED (rollover ON, ready to invoice) ══════════╗ -->
+  <section data-view-content="retainer-cycle-closed" class="hidden space-y-4">
+
+    <div class="rounded-lg border border-zinc-200 bg-white p-6">
+      <div class="flex items-start justify-between">
+        <div>
+          <div class="mb-2 flex items-center gap-2 text-sm text-zinc-500">
+            <a class="hover:text-zinc-900" href="#">Projects</a>
+            <i data-lucide="chevron-right" class="h-3.5 w-3.5"></i>
+            <span>Acme quarterly retainer</span>
+          </div>
+          <div class="flex items-center gap-2.5">
+            <h2 class="text-2xl font-semibold tracking-tight">Acme quarterly retainer</h2>
+            <span class="rounded-md bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-700">Retainer</span>
+            <span class="flex items-center gap-1 text-xs font-medium text-emerald-600">
+              <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>Active
+            </span>
+          </div>
+          <div class="mt-1 text-sm text-zinc-500">PRJ-007 · Acme · USD · 30:00 h/3mo · <span class="font-medium text-zinc-700">rollover ON</span></div>
+        </div>
+        <div class="text-right text-sm text-zinc-500">
+          <div>Last logged: Mar 30</div>
+          <button class="mt-2 rounded-md border border-zinc-200 bg-white px-3 py-1 text-xs font-medium hover:bg-zinc-50">Edit</button>
+        </div>
+      </div>
+      <div class="mt-5 flex gap-1 border-b border-zinc-200 -mb-2 -mx-2 px-2">
+        <button class="border-b-2 border-zinc-900 px-3 py-2 text-sm font-medium">Overview</button>
+        <button class="border-b-2 border-transparent px-3 py-2 text-sm text-zinc-600 hover:text-zinc-900">Time</button>
+        <button class="border-b-2 border-transparent px-3 py-2 text-sm text-zinc-600 hover:text-zinc-900">Invoices</button>
+        <button class="border-b-2 border-transparent px-3 py-2 text-sm text-zinc-600 hover:text-zinc-900">Settings</button>
+      </div>
+    </div>
+
+    <div class="rounded-lg border border-zinc-200 bg-white p-6">
+      <div class="mb-4 flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <h3 class="text-base font-semibold">Project Finances</h3>
+        </div>
+        <div class="flex items-center gap-2 text-sm text-zinc-600">
+          <button class="rounded-md p-1 hover:bg-zinc-100"><i data-lucide="chevron-left" class="h-4 w-4"></i></button>
+          <span class="font-medium">Cycle 3</span>
+          <button class="rounded-md p-1 hover:bg-zinc-100"><i data-lucide="chevron-right" class="h-4 w-4"></i></button>
+        </div>
+      </div>
+      <div class="text-sm text-zinc-500 mb-5">January – March 2026 · closed</div>
+
+      <div class="grid grid-cols-3 gap-6">
+        <div>
+          <div class="text-xs uppercase tracking-wide text-zinc-500">Cycle utilization</div>
+          <div class="mt-2">
+            <div class="text-base font-semibold tabular-nums">35:45 / 30:00</div>
+            <div class="text-xs text-red-600 mt-0.5">5:45 over budget</div>
+            <div class="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-zinc-100">
+              <div class="h-full bg-red-500" style="width:100%"></div>
+            </div>
+          </div>
+          <div class="mt-3 text-[11px] text-zinc-500">Cycle fees · <span class="tabular-nums text-zinc-700">$5,400</span> (3× $1,800 via Stripe)</div>
+        </div>
+
+        <div>
+          <div class="text-xs uppercase tracking-wide text-zinc-500">Cycle overage</div>
+          <div class="mt-2">
+            <div class="text-xs text-zinc-500">5:45h @ $80</div>
+            <div class="text-base font-semibold tabular-nums text-red-600">$460.00</div>
+            <div class="mt-1 text-xs text-zinc-500">Amount due</div>
+          </div>
+        </div>
+
+        <div>
+          <div class="text-xs uppercase tracking-wide text-zinc-500">Profitability <span class="text-zinc-400">(internal)</span></div>
+          <div class="mt-2 grid grid-cols-2 gap-x-3 gap-y-1.5 text-sm">
+            <div>
+              <div class="text-xs text-zinc-500">Revenue</div>
+              <div class="font-semibold tabular-nums">$5,860</div>
+            </div>
+            <div>
+              <div class="text-xs text-zinc-500">Profit</div>
+              <div class="font-semibold tabular-nums">$3,640</div>
+            </div>
+            <div>
+              <div class="text-xs text-zinc-500">Cost</div>
+              <div class="font-semibold tabular-nums">$2,220</div>
+            </div>
+            <div>
+              <div class="text-xs text-zinc-500">Margin</div>
+              <div class="font-semibold tabular-nums">62%</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- State A: WITH OVERAGE — primary CTA -->
+    <div class="rounded-lg border border-zinc-200 bg-zinc-50 p-4">
+      <div class="flex items-center gap-3">
+        <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-white ring-1 ring-zinc-200">
+          <i data-lucide="receipt" class="h-4 w-4 text-zinc-700"></i>
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-baseline gap-2 flex-wrap">
+            <span class="text-sm font-semibold text-zinc-900">Cycle 3 closed</span>
+            <span class="text-sm text-zinc-500 tabular-nums">·</span>
+            <span class="text-sm font-semibold text-red-700 tabular-nums">$460.00 overage to bill</span>
+          </div>
+          <div class="mt-0.5 text-xs text-zinc-500">
+            Jan–Mar 2026 · <span class="text-zinc-700">3× $1,800 fee pre-paid via Stripe</span> · 5:45h overage @ $80/h
+          </div>
+        </div>
+        <button class="rounded-md bg-zinc-900 px-3.5 py-2 text-sm font-medium text-white hover:bg-zinc-800 shrink-0">
+          Generate invoice
+        </button>
+      </div>
+    </div>
+
+
+    <!-- Monthly Breakdown — months visible, NOT independently invoiceable -->
+    <div class="rounded-lg border border-zinc-200 bg-white">
+      <div class="border-b border-zinc-200 p-5">
+        <h3 class="text-base font-semibold">Monthly Breakdown</h3>
+        <p class="mt-0.5 text-xs text-zinc-500">3-month cycle — invoiced as a single cycle invoice above.</p>
+      </div>
+      <ul class="divide-y divide-zinc-100">
+        <li class="flex items-center gap-3 px-5 py-3.5">
+          <i data-lucide="chevron-right" class="h-4 w-4 text-zinc-400"></i>
+          <span class="font-medium text-sm">January 2026</span>
+          <span class="flex gap-0.5">
+            <span class="h-1.5 w-1.5 rounded-full bg-zinc-900"></span>
+            <span class="h-1.5 w-1.5 rounded-full bg-zinc-300"></span>
+            <span class="h-1.5 w-1.5 rounded-full bg-zinc-300"></span>
+          </span>
+          <span class="ml-auto text-sm text-zinc-500 tabular-nums">8:00 / 10:00</span>
+          <span class="text-sm font-medium tabular-nums text-emerald-600 min-w-16 text-right">+2:00</span>
+          <span class="rounded-md bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-600">rolled forward</span>
+        </li>
+        <li class="flex items-center gap-3 px-5 py-3.5">
+          <i data-lucide="chevron-right" class="h-4 w-4 text-zinc-400"></i>
+          <span class="font-medium text-sm">February 2026</span>
+          <span class="flex gap-0.5">
+            <span class="h-1.5 w-1.5 rounded-full bg-zinc-300"></span>
+            <span class="h-1.5 w-1.5 rounded-full bg-zinc-900"></span>
+            <span class="h-1.5 w-1.5 rounded-full bg-zinc-300"></span>
+          </span>
+          <span class="ml-auto text-sm text-zinc-500 tabular-nums">14:30 / 12:00</span>
+          <span class="text-sm font-medium tabular-nums text-red-600 min-w-16 text-right">-2:30</span>
+          <span class="rounded-md bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-600">over · rolled in</span>
+        </li>
+        <li class="flex items-center gap-3 px-5 py-3.5">
+          <i data-lucide="chevron-right" class="h-4 w-4 text-zinc-400"></i>
+          <span class="font-medium text-sm">March 2026</span>
+          <span class="flex gap-0.5">
+            <span class="h-1.5 w-1.5 rounded-full bg-zinc-300"></span>
+            <span class="h-1.5 w-1.5 rounded-full bg-zinc-300"></span>
+            <span class="h-1.5 w-1.5 rounded-full bg-zinc-900"></span>
+          </span>
+          <span class="ml-auto text-sm text-zinc-500 tabular-nums">13:15 / 9:30</span>
+          <span class="text-sm font-medium tabular-nums text-red-600 min-w-16 text-right">-3:45</span>
+          <span class="rounded-md bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700 ring-1 ring-red-200">cycle overage</span>
+        </li>
+      </ul>
+    </div>
+
+    <div class="rounded-lg border border-dashed border-zinc-300 bg-white p-4 text-xs text-zinc-600">
+      <div class="font-semibold text-zinc-900 mb-1">Rollover ON modell</div>
+      <p>A ciklus a billing egység, nem a hónap. Cycle close után egy PDF generálódik az egész ciklusra. Overage van → <strong>Generate invoice</strong>. Within budget → <strong>Generate report</strong>. A hónapok csak progress-t mutatnak, hónap-szintű generálás nincs.</p>
+    </div>
+  </section>
+
+  <!-- ╔══════════ FIXED OVERVIEW ══════════╗ -->
+  <section data-view-content="fixed" class="hidden space-y-4">
+
+    <div class="rounded-lg border border-zinc-200 bg-white p-6">
+      <div class="flex items-start justify-between">
+        <div>
+          <div class="mb-2 flex items-center gap-2 text-sm text-zinc-500">
+            <a class="hover:text-zinc-900" href="#">Projects</a>
+            <i data-lucide="chevron-right" class="h-3.5 w-3.5"></i>
+            <span>Beta Co website</span>
+          </div>
+          <div class="flex items-center gap-2.5">
+            <h2 class="text-2xl font-semibold tracking-tight">Beta Co website</h2>
+            <span class="rounded-md bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-700">Fixed</span>
+            <span class="flex items-center gap-1 text-xs font-medium text-emerald-600">
+              <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>Active
+            </span>
+          </div>
+          <div class="mt-1 text-sm text-zinc-500">PRJ-014 · Beta Co · USD · $10,000 budget</div>
+        </div>
+        <div class="text-right text-sm text-zinc-500">
+          <div>Last logged: Apr 28</div>
+          <button class="mt-2 rounded-md border border-zinc-200 bg-white px-3 py-1 text-xs font-medium hover:bg-zinc-50">Edit</button>
+        </div>
+      </div>
+      <div class="mt-5 flex gap-1 border-b border-zinc-200 -mb-2 -mx-2 px-2">
+        <button class="border-b-2 border-zinc-900 px-3 py-2 text-sm font-medium">Overview</button>
+        <button class="border-b-2 border-transparent px-3 py-2 text-sm text-zinc-600 hover:text-zinc-900">Time</button>
+        <button class="border-b-2 border-transparent px-3 py-2 text-sm text-zinc-600 hover:text-zinc-900">Invoices</button>
+        <button class="border-b-2 border-transparent px-3 py-2 text-sm text-zinc-600 hover:text-zinc-900">Settings</button>
+      </div>
+    </div>
+
+    <div class="rounded-lg border border-zinc-200 bg-white p-6">
+      <div class="mb-4 flex items-center gap-2">
+        <h3 class="text-base font-semibold">Project Finances</h3>
+      </div>
+
+      <div class="grid grid-cols-4 gap-6">
+        <div>
+          <div class="text-xs uppercase tracking-wide text-zinc-500">Budget</div>
+          <div class="mt-2 text-xl font-semibold tabular-nums">$10,000.00</div>
+        </div>
+        <div>
+          <div class="text-xs uppercase tracking-wide text-zinc-500">Invoiced</div>
+          <div class="mt-2 text-xl font-semibold tabular-nums">$4,000.00</div>
+          <div class="text-xs text-zinc-500 mt-0.5">2 invoices</div>
+        </div>
+        <div>
+          <div class="text-xs uppercase tracking-wide text-zinc-500">Remaining</div>
+          <div class="mt-2 text-xl font-semibold tabular-nums">$6,000.00</div>
+          <div class="text-xs text-zinc-500 mt-0.5">60% available</div>
+        </div>
+        <div>
+          <div class="text-xs uppercase tracking-wide text-zinc-500">Profit</div>
+          <div class="mt-2 text-xl font-semibold tabular-nums text-emerald-600">$2,400.00</div>
+          <div class="text-xs text-zinc-500 mt-0.5">24% margin</div>
+        </div>
+      </div>
+
+      <div class="mt-5">
+        <div class="h-2 w-full overflow-hidden rounded-full bg-zinc-100">
+          <div class="h-full bg-zinc-900" style="width:40%"></div>
+        </div>
+        <div class="mt-1.5 flex justify-between text-xs text-zinc-500 tabular-nums">
+          <span>$4,000 invoiced</span>
+          <span>40%</span>
+          <span>$10,000 budget</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ⭐ NEW: Fixed ready-to-invoice banner -->
+    <div class="rounded-lg border border-zinc-200 bg-zinc-50 p-4">
+      <div class="flex items-center gap-3">
+        <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-white ring-1 ring-zinc-200">
+          <i data-lucide="receipt" class="h-4 w-4 text-zinc-700"></i>
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-baseline gap-2 flex-wrap">
+            <span class="text-sm font-semibold text-zinc-900">$6,000.00 remaining to invoice</span>
+          </div>
+          <div class="mt-0.5 text-xs text-zinc-500">Bill at any time — issue partial or full invoices against the project budget</div>
+        </div>
+        <button class="rounded-md bg-zinc-900 px-3.5 py-2 text-sm font-medium text-white hover:bg-zinc-800 shrink-0">
+          Generate invoice
+        </button>
+      </div>
+    </div>
+
+    <div class="rounded-lg border border-dashed border-zinc-300 bg-white p-4 text-xs text-zinc-600">
+      <div class="font-semibold text-zinc-900 mb-1">Fixed modell</div>
+      <p>Egyszer egy rögzített budget van ($10,000). Te döntöd el mikor generálsz invoice-t belőle (deposit, milestone, final). Banner mutatja a remaining összeget. Generate invoice → PDF letölthető, küldöd kintről, fizetés után Mark as paid.</p>
+    </div>
+  </section>
+
+  <!-- ╔══════════ T&M OVERVIEW ══════════╗ -->
+  <section data-view-content="tm" class="hidden space-y-4">
+
+    <div class="rounded-lg border border-zinc-200 bg-white p-6">
+      <div class="flex items-start justify-between">
+        <div>
+          <div class="mb-2 flex items-center gap-2 text-sm text-zinc-500">
+            <a class="hover:text-zinc-900" href="#">Projects</a>
+            <i data-lucide="chevron-right" class="h-3.5 w-3.5"></i>
+            <span>Acme Corp consulting</span>
+          </div>
+          <div class="flex items-center gap-2.5">
+            <h2 class="text-2xl font-semibold tracking-tight">Acme Corp consulting</h2>
+            <span class="rounded-md bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-700">T&M</span>
+            <span class="flex items-center gap-1 text-xs font-medium text-emerald-600">
+              <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>Active
+            </span>
+          </div>
+          <div class="mt-1 text-sm text-zinc-500">PRJ-021 · Acme Corp · USD · Time & materials</div>
+        </div>
+        <div class="text-right text-sm text-zinc-500">
+          <div>Last logged: Apr 30</div>
+          <button class="mt-2 rounded-md border border-zinc-200 bg-white px-3 py-1 text-xs font-medium hover:bg-zinc-50">Edit</button>
+        </div>
+      </div>
+      <div class="mt-5 flex gap-1 border-b border-zinc-200 -mb-2 -mx-2 px-2">
+        <button class="border-b-2 border-zinc-900 px-3 py-2 text-sm font-medium">Overview</button>
+        <button class="border-b-2 border-transparent px-3 py-2 text-sm text-zinc-600 hover:text-zinc-900">Time</button>
+        <button class="border-b-2 border-transparent px-3 py-2 text-sm text-zinc-600 hover:text-zinc-900">Invoices</button>
+        <button class="border-b-2 border-transparent px-3 py-2 text-sm text-zinc-600 hover:text-zinc-900">Settings</button>
+      </div>
+    </div>
+
+    <div class="rounded-lg border border-zinc-200 bg-white p-6">
+      <div class="mb-4 flex items-center gap-2">
+        <h3 class="text-base font-semibold">Project Finances</h3>
+      </div>
+
+      <div class="grid grid-cols-4 gap-6">
+        <div>
+          <div class="text-xs uppercase tracking-wide text-zinc-500">Hours logged</div>
+          <div class="mt-2 text-xl font-semibold tabular-nums">87:30</div>
+          <div class="text-xs text-zinc-500 mt-0.5">all time</div>
+        </div>
+        <div>
+          <div class="text-xs uppercase tracking-wide text-zinc-500">Billable</div>
+          <div class="mt-2 text-xl font-semibold tabular-nums">82:15</div>
+          <div class="text-xs text-zinc-500 mt-0.5">94% billable</div>
+        </div>
+        <div>
+          <div class="text-xs uppercase tracking-wide text-zinc-500">Invoiced</div>
+          <div class="mt-2 text-xl font-semibold tabular-nums">$4,200.00</div>
+          <div class="text-xs text-zinc-500 mt-0.5">3 invoices</div>
+        </div>
+        <div>
+          <div class="text-xs uppercase tracking-wide text-zinc-500">Profit</div>
+          <div class="mt-2 text-xl font-semibold tabular-nums text-emerald-600">$2,890.00</div>
+          <div class="text-xs text-zinc-500 mt-0.5">42% margin</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- T&M ready-to-invoice banner (canonical pattern, refactored to shared component) -->
+    <div class="rounded-lg border border-zinc-200 bg-zinc-50 p-4">
+      <div class="flex items-center gap-3">
+        <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-white ring-1 ring-zinc-200">
+          <i data-lucide="receipt" class="h-4 w-4 text-zinc-700"></i>
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-baseline gap-2 flex-wrap">
+            <span class="text-sm font-semibold text-zinc-900">Uninvoiced balance</span>
+            <span class="text-sm text-zinc-500 tabular-nums">·</span>
+            <span class="text-sm font-semibold text-zinc-900 tabular-nums">$1,920.00</span>
+          </div>
+          <div class="mt-0.5 text-xs text-zinc-500">24:00 hours across 12 entries · since last invoice (Mar 31)</div>
+        </div>
+        <button class="rounded-md bg-zinc-900 px-3.5 py-2 text-sm font-medium text-white hover:bg-zinc-800 shrink-0">
+          Generate invoice
+        </button>
+      </div>
+    </div>
+
+    <!-- Time entries summary table -->
+    <div class="rounded-lg border border-dashed border-zinc-300 bg-white p-4 text-xs text-zinc-600">
+      <div class="font-semibold text-zinc-900 mb-1">T&amp;M modell</div>
+      <p>Folyamatos óra-alapú számlázás. Banner mutatja az uninvoiced balance-t (eddig nem számlázott billable órák × rate). Te döntöd el mikor zársz egy periódust — Generate invoice → PDF a kiválasztott időszakra. Részletes time entry-k a Time tabon.</p>
+    </div>
+  </section>
+
+  <!-- ╔══════════ GLOBAL INVOICES ══════════╗ -->
+  <section data-view-content="global" class="hidden">
+
+    <div class="grid grid-cols-3 gap-5">
+
+      <!-- LEFT: 2/3 main content -->
+      <div class="col-span-2 space-y-4">
+
+        <div class="flex items-end justify-between">
+          <div>
+            <h2 class="text-2xl font-semibold tracking-tight">Invoices</h2>
+            <p class="mt-1 text-sm text-zinc-500 tabular-nums">6 to generate · 2 overdue · $13,020 outstanding</p>
+          </div>
+          <button class="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium hover:bg-zinc-50">
+            New invoice
+          </button>
+        </div>
+
+        <!-- OVERDUE -->
+        <section>
+          <div class="mb-2 flex items-baseline justify-between">
+            <h3 class="text-sm font-semibold text-red-700">Overdue</h3>
+            <span class="text-xs text-zinc-500 tabular-nums">2 unpaid · $1,840</span>
+          </div>
+          <ul class="divide-y divide-zinc-100 rounded-lg border border-zinc-200 bg-white">
+            <li class="flex items-center gap-3 px-4 py-3 hover:bg-zinc-50">
+              <div class="flex h-7 w-7 items-center justify-center rounded-md bg-zinc-100 text-[11px] font-bold text-zinc-700">A</div>
+              <div class="flex-1 min-w-0">
+                <div class="text-sm font-medium">Acme · April overage</div>
+                <div class="mt-0.5 text-[11px] text-red-600">INV-014 · 12 days late · generated Apr 1</div>
+              </div>
+              <span class="text-sm font-semibold tabular-nums">$1,200</span>
+              <button class="rounded-md border border-zinc-300 bg-white p-1.5 hover:bg-zinc-50" title="Download PDF"><i data-lucide="download" class="h-3.5 w-3.5"></i></button>
+              <button class="rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-xs font-medium hover:bg-zinc-50">Mark as paid</button>
+            </li>
+            <li class="flex items-center gap-3 px-4 py-3 hover:bg-zinc-50">
+              <div class="flex h-7 w-7 items-center justify-center rounded-md bg-zinc-100 text-[11px] font-bold text-zinc-700">D</div>
+              <div class="flex-1 min-w-0">
+                <div class="text-sm font-medium">Delta · UX audit</div>
+                <div class="mt-0.5 text-[11px] text-red-600">INV-022 · 5 days late · generated Apr 12</div>
+              </div>
+              <span class="text-sm font-semibold tabular-nums">$640</span>
+              <button class="rounded-md border border-zinc-300 bg-white p-1.5 hover:bg-zinc-50" title="Download PDF"><i data-lucide="download" class="h-3.5 w-3.5"></i></button>
+              <button class="rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-xs font-medium hover:bg-zinc-50">Mark as paid</button>
+            </li>
+          </ul>
+        </section>
+
+        <!-- TO GENERATE -->
+        <section>
+          <div class="mb-2 flex items-baseline justify-between">
+            <h3 class="text-sm font-semibold text-zinc-900">To generate</h3>
+            <span class="text-xs text-zinc-500 tabular-nums">6 closed periods</span>
+          </div>
+          <ul class="divide-y divide-zinc-100 rounded-lg border border-zinc-200 bg-white">
+            <li class="flex items-center gap-3 px-4 py-3 hover:bg-zinc-50">
+              <div class="flex h-7 w-7 items-center justify-center rounded-md bg-zinc-100 text-[11px] font-bold text-zinc-700">A</div>
+              <div class="flex-1 min-w-0">
+                <div class="text-sm font-medium">Arlow · April</div>
+                <div class="mt-0.5 text-[11px] text-zinc-500">10:45h overage</div>
+              </div>
+              <span class="text-sm font-semibold tabular-nums">$860</span>
+              <button class="rounded-md bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-zinc-800">Generate invoice</button>
+            </li>
+            <li class="flex items-center gap-3 px-4 py-3 hover:bg-zinc-50">
+              <div class="flex h-7 w-7 items-center justify-center rounded-md bg-zinc-100 text-[11px] font-bold text-zinc-700">A</div>
+              <div class="flex-1 min-w-0">
+                <div class="text-sm font-medium">Acme · Cycle 3 (Jan-Mar)</div>
+                <div class="mt-0.5 text-[11px] text-amber-700">5:45h overage · 5 days waiting</div>
+              </div>
+              <span class="text-sm font-semibold tabular-nums">$460</span>
+              <button class="rounded-md bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-zinc-800">Generate invoice</button>
+            </li>
+            <li class="flex items-center gap-3 px-4 py-3 hover:bg-zinc-50">
+              <div class="flex h-7 w-7 items-center justify-center rounded-md bg-zinc-100 text-[11px] font-bold text-zinc-700">G</div>
+              <div class="flex-1 min-w-0">
+                <div class="text-sm font-medium">Gamma · April</div>
+                <div class="mt-0.5 text-[11px] text-emerald-700">Within budget</div>
+              </div>
+              <span class="text-sm tabular-nums text-zinc-400">$0</span>
+              <button class="rounded-md bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-zinc-800">Generate report</button>
+            </li>
+            <li class="flex items-center gap-3 px-4 py-3 hover:bg-zinc-50">
+              <div class="flex h-7 w-7 items-center justify-center rounded-md bg-zinc-100 text-[11px] font-bold text-zinc-700">B</div>
+              <div class="flex-1 min-w-0">
+                <div class="text-sm font-medium">Beta Co · website</div>
+                <div class="mt-0.5 text-[11px] text-zinc-500">$6,000 remaining of $10,000 budget</div>
+              </div>
+              <span class="text-sm font-semibold tabular-nums">$6,000</span>
+              <button class="rounded-md bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-zinc-800">Generate invoice</button>
+            </li>
+            <li class="flex items-center gap-3 px-4 py-3 hover:bg-zinc-50">
+              <div class="flex h-7 w-7 items-center justify-center rounded-md bg-zinc-100 text-[11px] font-bold text-zinc-700">A</div>
+              <div class="flex-1 min-w-0">
+                <div class="text-sm font-medium">Acme · consulting (T&amp;M)</div>
+                <div class="mt-0.5 text-[11px] text-zinc-500">24h since Mar 31</div>
+              </div>
+              <span class="text-sm font-semibold tabular-nums">$1,920</span>
+              <button class="rounded-md bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-zinc-800">Generate invoice</button>
+            </li>
+            <li class="flex items-center gap-3 px-4 py-3 hover:bg-zinc-50">
+              <div class="flex h-7 w-7 items-center justify-center rounded-md bg-zinc-100 text-[11px] font-bold text-zinc-700">D</div>
+              <div class="flex-1 min-w-0">
+                <div class="text-sm font-medium">Delta · UX audit (T&amp;M)</div>
+                <div class="mt-0.5 text-[11px] text-zinc-500">40:45h since Apr 18</div>
+              </div>
+              <span class="text-sm font-semibold tabular-nums">$3,260</span>
+              <button class="rounded-md bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-zinc-800">Generate invoice</button>
+            </li>
+          </ul>
+        </section>
+
+      </div>
+      <!-- /LEFT 2/3 -->
+
+      <!-- RIGHT: 1/3 sidebar -->
+      <aside class="space-y-3">
+        <div class="rounded-lg border border-zinc-200 bg-white p-4 text-xs">
+          <div class="text-zinc-500">Outstanding</div>
+          <div class="mt-1 text-lg font-semibold tabular-nums">$8,420</div>
+        </div>
+        <div class="rounded-lg border border-zinc-200 bg-white p-4 text-xs">
+          <div class="text-zinc-500">This month</div>
+          <div class="mt-1 text-lg font-semibold tabular-nums">$12,650</div>
+          <div class="text-zinc-500">8 sent</div>
+        </div>
+
+        <div class="rounded-lg border border-zinc-200 bg-white">
+          <div class="border-b border-zinc-100 px-4 py-2.5">
+            <h3 class="text-xs font-semibold">Recently generated</h3>
+          </div>
+          <ul class="divide-y divide-zinc-100 text-xs">
+            <li class="flex items-center gap-2 px-4 py-2.5">
+              <div class="h-1.5 w-1.5 rounded-full bg-emerald-500"></div>
+              <div class="flex-1 min-w-0">
+                <div class="font-medium text-zinc-900 truncate">Beta Co · April</div>
+                <div class="text-[11px] text-zinc-500">INV-026 · Paid Apr 30</div>
+              </div>
+              <button class="rounded p-0.5 hover:bg-zinc-100" title="Download"><i data-lucide="download" class="h-3 w-3"></i></button>
+              <span class="tabular-nums">$2,000</span>
+            </li>
+            <li class="flex items-center gap-2 px-4 py-2.5">
+              <div class="h-1.5 w-1.5 rounded-full bg-zinc-400"></div>
+              <div class="flex-1 min-w-0">
+                <div class="font-medium text-zinc-900 truncate">Echo · April</div>
+                <div class="text-[11px] text-zinc-500">INV-025 · awaiting payment</div>
+              </div>
+              <button class="rounded p-0.5 hover:bg-zinc-100" title="Download"><i data-lucide="download" class="h-3 w-3"></i></button>
+              <span class="tabular-nums">$890</span>
+            </li>
+            <li class="flex items-center gap-2 px-4 py-2.5">
+              <div class="h-1.5 w-1.5 rounded-full bg-emerald-500"></div>
+              <div class="flex-1 min-w-0">
+                <div class="font-medium text-zinc-900 truncate">Gamma · March</div>
+                <div class="text-[11px] text-zinc-500">RPT-017 · within budget</div>
+              </div>
+              <button class="rounded p-0.5 hover:bg-zinc-100" title="Download"><i data-lucide="download" class="h-3 w-3"></i></button>
+              <span class="tabular-nums text-zinc-400">$0</span>
+            </li>
+          </ul>
+        </div>
+
+      </aside>
+    </div>
+
+    <div class="mt-4 rounded-lg border border-dashed border-zinc-300 bg-white p-4 text-xs text-zinc-600">
+      <div class="font-semibold text-zinc-900 mb-1">Inbox logikája</div>
+      <p>Két szekció. <strong>Overdue</strong>: már generált invoice-ok awaiting payment — Download icon + Mark as paid gomb. <strong>To generate</strong>: lezárt periódusok PDF nélkül — overage esetén <strong>Generate invoice</strong>, within budget esetén <strong>Generate report</strong>. Sidebar: outstanding $ + Recently generated lista, mindegyiken download icon.</p>
+    </div>
+  </section>
+
+  <!-- ╔══════════ STATEMENT PDF MOCKUP ══════════╗ -->
+  <section data-view-content="statement" class="hidden space-y-6">
+
+    <div class="rounded-lg border border-zinc-200 bg-white p-5 text-xs text-zinc-600">
+      <div class="font-semibold text-zinc-900 mb-1.5">Két dokumentumtípus</div>
+      <p>
+        <strong>Report</strong> = within budget, $0 due, record a kliensnek. <strong>Invoice</strong> = overage van, $X due, kliensnek küldhető fizetésre.
+        Recurring fee mindkettőn info-szövegként szerepel (project setting alapján), de az app nem trackeli a Stripe payment-eket.
+      </p>
+    </div>
+
+    <div class="grid grid-cols-2 gap-6">
+
+      <!-- REPORT -->
+      <div class="rounded-lg border border-zinc-200 bg-white shadow-sm overflow-hidden">
+        <div class="bg-emerald-50 px-5 py-2 text-xs font-semibold uppercase tracking-wide text-emerald-700 border-b border-emerald-200">Within budget · Report</div>
+        <div class="p-8">
+          <div class="flex items-start justify-between mb-6">
+            <div>
+              <div class="text-2xl font-bold tracking-tight">Report</div>
+              <div class="text-sm text-zinc-500 mt-0.5">RPT-2026-018</div>
+            </div>
+            <div class="text-right text-xs">
+              <div class="font-semibold text-zinc-900">Konverted Web Agency</div>
+              <div class="text-zinc-500">123 Main St · Budapest</div>
+              <div class="text-zinc-500">billing@konverted.io</div>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-4 mb-6 pb-6 border-b border-zinc-200 text-xs">
+            <div>
+              <div class="text-zinc-500 uppercase tracking-wide mb-1">For</div>
+              <div class="font-medium">Acme Corp</div>
+              <div class="text-zinc-600">Jane Doe · finance@acme.com</div>
+            </div>
+            <div>
+              <div class="text-zinc-500 uppercase tracking-wide mb-1">Period</div>
+              <div class="font-medium">February 2026</div>
+              <div class="text-zinc-600">Issued: Mar 1, 2026</div>
+            </div>
+          </div>
+
+          <div class="mb-2 text-xs uppercase tracking-wide text-zinc-500">Hours used</div>
+          <div class="rounded-md bg-zinc-50 p-3 text-sm tabular-nums">
+            <div class="flex justify-between"><span class="text-zinc-700">Used this period</span><span class="font-medium">9:30</span></div>
+            <div class="flex justify-between mt-1"><span class="text-zinc-700">Budget</span><span class="font-medium">10:00</span></div>
+            <div class="flex justify-between mt-1 pt-2 border-t border-zinc-200"><span class="font-semibold text-emerald-700">Within budget</span><span class="font-semibold text-emerald-700">+0:30</span></div>
+          </div>
+
+          <div class="mt-5 mb-2 text-xs uppercase tracking-wide text-zinc-500">Summary</div>
+          <table class="w-full text-sm">
+            <tbody>
+              <tr class="border-b border-zinc-200">
+                <td class="py-2 text-zinc-700">Monthly fee</td>
+                <td class="py-2 text-right text-zinc-500 text-xs">via Stripe</td>
+                <td class="py-2 text-right tabular-nums">$1,000.00</td>
+              </tr>
+              <tr class="bg-emerald-50">
+                <td class="py-2 px-2 font-semibold text-emerald-900">Amount due</td>
+                <td class="py-2 px-2 text-right text-emerald-700 text-xs">No additional payment</td>
+                <td class="py-2 px-2 text-right tabular-nums font-bold text-emerald-900">$0.00</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div class="mt-6 text-xs text-zinc-500 italic">
+            For your records — all hours this period covered by the monthly fee.
+          </div>
+        </div>
+      </div>
+
+      <!-- INVOICE -->
+      <div class="rounded-lg border border-zinc-200 bg-white shadow-sm overflow-hidden">
+        <div class="bg-red-50 px-5 py-2 text-xs font-semibold uppercase tracking-wide text-red-700 border-b border-red-200">Overage · Invoice</div>
+        <div class="p-8">
+          <div class="flex items-start justify-between mb-6">
+            <div>
+              <div class="text-2xl font-bold tracking-tight">Invoice</div>
+              <div class="text-sm text-zinc-500 mt-0.5">INV-2026-019</div>
+            </div>
+            <div class="text-right text-xs">
+              <div class="font-semibold text-zinc-900">Konverted Web Agency</div>
+              <div class="text-zinc-500">123 Main St · Budapest</div>
+              <div class="text-zinc-500">billing@konverted.io</div>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-4 mb-6 pb-6 border-b border-zinc-200 text-xs">
+            <div>
+              <div class="text-zinc-500 uppercase tracking-wide mb-1">Bill to</div>
+              <div class="font-medium">Acme Corp</div>
+              <div class="text-zinc-600">Jane Doe · finance@acme.com</div>
+            </div>
+            <div>
+              <div class="text-zinc-500 uppercase tracking-wide mb-1">Period</div>
+              <div class="font-medium">April 2026</div>
+              <div class="text-zinc-600">Issued: May 1 · Due: May 15</div>
+            </div>
+          </div>
+
+          <div class="mb-2 text-xs uppercase tracking-wide text-zinc-500">Hours used</div>
+          <div class="rounded-md bg-zinc-50 p-3 text-sm tabular-nums">
+            <div class="flex justify-between"><span class="text-zinc-700">Used this period</span><span class="font-medium">20:45</span></div>
+            <div class="flex justify-between mt-1"><span class="text-zinc-700">Budget</span><span class="font-medium">10:00</span></div>
+            <div class="flex justify-between mt-1 pt-2 border-t border-zinc-200"><span class="font-semibold text-red-700">Over budget</span><span class="font-semibold text-red-700">-10:45</span></div>
+          </div>
+
+          <div class="mt-5 mb-2 text-xs uppercase tracking-wide text-zinc-500">Summary</div>
+          <table class="w-full text-sm">
+            <tbody>
+              <tr class="border-b border-zinc-200">
+                <td class="py-2 text-zinc-700">Monthly fee</td>
+                <td class="py-2 text-right text-zinc-500 text-xs">via Stripe</td>
+                <td class="py-2 text-right tabular-nums">$1,000.00</td>
+              </tr>
+              <tr class="border-b border-zinc-200">
+                <td class="py-2 text-zinc-700">Overage <span class="text-zinc-500">(10:45h × $80)</span></td>
+                <td class="py-2 text-right text-zinc-500 text-xs">Payable now</td>
+                <td class="py-2 text-right tabular-nums">$860.00</td>
+              </tr>
+              <tr class="bg-red-50">
+                <td class="py-2 px-2 font-semibold text-red-900">Amount due</td>
+                <td class="py-2 px-2 text-right text-red-700 text-xs">By May 15, 2026</td>
+                <td class="py-2 px-2 text-right tabular-nums font-bold text-red-900">$860.00</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div class="mt-6 text-xs text-zinc-500 italic">
+            Monthly fee charged via Stripe. Overage payable separately to the address above.
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="rounded-lg border border-dashed border-zinc-300 bg-white p-4 text-xs text-zinc-600">
+      <div class="font-semibold text-zinc-900 mb-1">PDF logikája</div>
+      <p><strong>Report</strong> (zöld) → within budget, $0 due. <strong>Invoice</strong> (piros) → overage, $X due. Recurring fee minden PDF-en info-szövegként ("via Stripe"), dátum nélkül — az app nem trackeli a fee payment-eket. Cycle-szintű dokumentum ugyanez a 2 sablon, csak Period mező = "Jan-Mar 2026" és Monthly fee sor = "3× $1,000".</p>
+    </div>
+  </section>
+
+  <!-- ╔══════════ EMPTY STATES ══════════╗ -->
+  <section data-view-content="empty" class="hidden space-y-4">
+
+    <h3 class="text-base font-semibold">Retainer · minden hónap kiszámlázva</h3>
+    <div class="rounded-lg border border-zinc-200 bg-white p-6">
+      <div class="mb-4 flex items-center justify-between">
+        <h3 class="text-base font-semibold">Project Finances</h3>
+        <span class="text-sm text-zinc-500">Cycle 4</span>
+      </div>
+      <div class="text-sm text-zinc-600">3 hónap · 0 uninvoiced · $0 due</div>
+      <div class="mt-3 rounded-md bg-emerald-50 p-3 text-sm text-emerald-800 ring-1 ring-emerald-200">
+        <i data-lucide="check-circle-2" class="inline h-4 w-4 mr-1.5"></i>
+        All months in this cycle have been invoiced
+      </div>
+    </div>
+    <p class="text-xs text-zinc-500">→ Ready-to-invoice banner rejtett. Csak a Project Finances + Monthly Breakdown látszik. Az Invoices tab-on lehet ad-hoc új invoice-t kreálni a header gombbal.</p>
+
+    <h3 class="text-base font-semibold mt-8">Fixed · teljesen kiszámlázott budget</h3>
+    <div class="rounded-lg border border-zinc-200 bg-white p-6">
+      <div class="grid grid-cols-4 gap-6">
+        <div>
+          <div class="text-xs uppercase tracking-wide text-zinc-500">Budget</div>
+          <div class="mt-2 text-xl font-semibold tabular-nums">$10,000.00</div>
+        </div>
+        <div>
+          <div class="text-xs uppercase tracking-wide text-zinc-500">Invoiced</div>
+          <div class="mt-2 text-xl font-semibold tabular-nums text-emerald-600">$10,000.00</div>
+        </div>
+        <div>
+          <div class="text-xs uppercase tracking-wide text-zinc-500">Remaining</div>
+          <div class="mt-2 text-xl font-semibold tabular-nums">$0.00</div>
+        </div>
+        <div>
+          <div class="text-xs uppercase tracking-wide text-zinc-500">Profit</div>
+          <div class="mt-2 text-xl font-semibold tabular-nums text-emerald-600">$4,200.00</div>
+        </div>
+      </div>
+      <div class="mt-5">
+        <div class="h-2 w-full overflow-hidden rounded-full bg-emerald-100">
+          <div class="h-full bg-emerald-500" style="width:100%"></div>
+        </div>
+        <div class="mt-1.5 flex justify-between text-xs">
+          <span class="text-emerald-700 font-medium">Fully invoiced</span>
+          <span class="text-zinc-500">100%</span>
+        </div>
+      </div>
+    </div>
+    <p class="text-xs text-zinc-500">→ Banner eltűnik. A Project Finances kártyán "Fully invoiced" success state. Az user még tud ad-hoc invoice-t készíteni az Invoices tab-on (pl. change request), de aktívan nincs bíztatva.</p>
+
+    <h3 class="text-base font-semibold mt-8">T&M · nincs uninvoiced billable hour</h3>
+    <div class="rounded-lg border border-zinc-200 bg-white p-6">
+      <div class="text-sm text-zinc-600">All billable hours invoiced through Apr 30, 2026</div>
+    </div>
+    <p class="text-xs text-zinc-500">→ Banner eltűnik (ahogy ma is működik). Ad-hoc invoice az Invoices tab header gombjáról.</p>
+
+    <h3 class="text-base font-semibold mt-8">Global ready inbox · semmi nem ready</h3>
+    <div class="rounded-lg border border-zinc-200 bg-white p-12 text-center">
+      <div class="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-emerald-50">
+        <i data-lucide="check-circle-2" class="h-6 w-6 text-emerald-600"></i>
+      </div>
+      <h3 class="mt-3 text-base font-semibold">All caught up</h3>
+      <p class="mt-1 text-sm text-zinc-500">Nothing ready to invoice across your projects.</p>
+    </div>
+
+  </section>
+
+</div>
+
+<script>
+  lucide.createIcons();
+  document.querySelectorAll('.view-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const view = btn.dataset.view;
+      document.querySelectorAll('.view-btn').forEach(b => b.removeAttribute('data-state'));
+      btn.dataset.state = 'active';
+      document.querySelectorAll('[data-view-content]').forEach(s => s.classList.add('hidden'));
+      document.querySelector(`[data-view-content="${view}"]`).classList.remove('hidden');
+    });
+  });
+</script>
+
+</body>
+</html>

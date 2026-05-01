@@ -322,6 +322,11 @@ export default defineSchema({
     taskId: v.id("tasks"),
     userId: v.id("users"),
     date: v.string(),                         // YYYY-MM-DD (org timezone)
+    // Wall-clock start of the entry in epoch ms. Required: powers the Workday
+    // grid's hour-of-day axis and any future calendar/overlap features. End is
+    // derived as startedAt + durationMinutes * 60_000 (avoids rounding drift —
+    // durationMinutes is rounded by orgSettings.roundingMinutes, wall-clock is not).
+    startedAt: v.number(),
     durationMinutes: v.number(),
     note: v.optional(v.string()),
     isBillable: v.boolean(),

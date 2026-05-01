@@ -8,6 +8,7 @@ import {
   FileTextIcon,
   ClockIcon,
   ReceiptIcon,
+  CalendarDaysIcon,
   type LucideIcon,
 } from "lucide-react"
 
@@ -51,10 +52,16 @@ export const navigation: NavGroup[] = [
     ],
   },
   {
+    label: "Insights",
+    items: [
+      { title: "Workday", url: "/workday", icon: CalendarDaysIcon },
+      { title: "Reports", url: "/reports", icon: FileTextIcon, adminOnly: true },
+    ],
+  },
+  {
     label: "Finance",
     items: [
       { title: "Invoices", url: "/invoices", icon: ReceiptIcon, adminOnly: true },
-      { title: "Reports", url: "/reports", icon: FileTextIcon, adminOnly: true },
       { title: "My Time", url: "/my-time", icon: ClockIcon },
     ],
   },

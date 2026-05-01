@@ -1156,3 +1156,96 @@
 - [x] `npx tsc --noEmit` — 0 errors.
 - [x] `npx vitest run lib/date-buckets.test.ts lib/time-entry-grouping.test.ts lib/format.test.ts` — 72 tests pass.
 - [x] `npm run lint` on touched files — 0 errors.
+
+---
+
+## Phase 8: Workday — Weekly Team View ✅ COMPLETE (2026-04-26)
+
+> **Goal**: Read-only weekly grid at `/workday` showing every team member's logged work as colored, calendar-style boxes. Admin sees full team grid with member filter; member sees only own row. URL-persisted week / users / weekend toggle.
+>
+> **Scope**: 9 vertical tracer-bullet slices (`docs/workdays-issues/`). Schema → query → page → header (week picker, member filter, weekend toggle) → manual-log "Started at" chip → hover popover → click-to-drawer → adaptive box tiers + visual polish → overtime + edge cases.
+>
+> **Companion docs**: `docs/workdays-prd.md` (product spec), `docs/workdays-plan.md` (impl plan + verification checklist), `docs/workday-prototype.html` (visual reference).
+
+### Schema + mutations
+- [x] `convex/schema.ts` — `timeEntries.startedAt: v.number()` required (epoch ms; end derived as `startedAt + durationMinutes*60_000`).
+- [x] `convex/timer.ts:commitEntry` — writes `startedAt = Date.now() − rounded*60_000` (synthetic; original-first-start through pause/resume tracked as v2+ improvement).
+- [x] `convex/timeEntries.ts:create` — accepts required `startedAt`. All callers (`task-detail-time`, `time-log-popover`, `projects/time-entry-modal`) thread the value through.
+- [x] `convex/migrations/wipeAllTimeEntries.ts` — one-shot wipe (run before pushing the schema change). Wipe-and-reseed sanctioned by memory `project_mvp_dummy_data.md`.
+
+### Backend query
+- [x] `convex/workday.ts:weekGrid({ startDate, endDate, userIds? })` returning `{ users: [{ user, totalMinutes, days: [{ date, totalMinutes, boxes: [{ taskId, taskTitle, project*, category*, totalMinutes, firstStart, entries[] }] }] }] }`.
+- [x] Multi-tenancy: filters by `orgId` first via `by_orgId_date` index. Member auto-scoped to own `userId`; admin's `userIds` filter narrows the result.
+- [x] Single round-trip hydration of users → tasks → projects → clients → categories. Members with zero entries still get a row (preserves team awareness).
+- [x] Boxes within a day sorted by `firstStart` asc; entries within a box sorted by `startedAt` asc.
+
+### Hooks
+- [x] `lib/hooks/use-week-picker.ts` — pure date helpers (`startOfWeek`, `addDays`, `sameWeek`, ISO-week parse/format, `formatRange`, `weekRange`, `formatYMD`, `buildMonthGrid`, `useMonthGrid`). 25 vitest cases (DST, year-boundary `2025-W01` / `2026-W53`, `sameWeek` across timezone shifts, 6×7 grid generator).
+- [x] `lib/hooks/use-workday-query-args.ts` — single source of truth for URL state: reads/writes `?week=YYYY-Www`, `?users=a,b`, `?weekend=1`. Setters merge into existing search params (no clobber). Filter toggles use `router.replace` (history hygiene); week navigation uses `router.push`.
+
+### Components (`components/workday/`)
+- [x] `workday-grid.tsx` — composed header strip + per-user rows with shared `grid-template-columns`. Empty-week renders `<WorkdayEmptyState>` while keeping member rows visible.
+- [x] `workday-user-row.tsx` — 200 px identity column (avatar + name + role + week total + "this week"), then day cells.
+- [x] `workday-day-cell.tsx` — flex-stack of boxes (1h = 40px height-scale), today-cell vertical accent gradient, weekend tint, day-total footer with overtime visuals.
+- [x] `workday-task-box.tsx` — adaptive content tiers: ≥60 px (title + duration + project), 36–59 px (title + duration), 18–35 px (title only), <18 px sliver (50% tint, no text). `color-mix` tint at 11% → 18% on hover (50% on slivers). 6×6 category dot top-left. Focus ring `outline: 2px solid var(--cat-color); outline-offset: -1px`. Per-box CSS var consumed by the focus rule.
+- [x] `workday-task-popover.tsx` — Notion-style hover card (200 ms open delay): header (cat dot + task title + project · category), monospace time-range entries with sans-serif notes + billable dot ring, "Total today" footer.
+- [x] `workday-header.tsx` — title + sub left, controls right (week picker / member filter (admin-only) / weekend toggle), separated by 1 × 18 px hairline dividers.
+- [x] `workday-week-picker.tsx` — `◀ [Apr 21 – 25 ▾] ▶` + 320 px calendar popover with whole-week-row hover, today dot, "Jump to this week" footer.
+- [x] `workday-member-filter.tsx` — searchable popover, 22 px `<UserAvatar>` + name + role per row, Select all / Clear footer (clear = "all members" per story 33).
+- [x] `workday-weekend-toggle.tsx` — Notion-style switch wired to URL state.
+- [x] `workday-empty-state.tsx` — composes shared `<EmptyState>` (memory `feedback_no_custom_components.md`).
+- [x] `workday-grid-skeleton.tsx` — content-aware skeleton with the same column widths and row heights as the grid.
+
+### Page + nav
+- [x] `app/(dashboard)/workday/page.tsx` — thin orchestrator under 200 lines. Stale-while-revalidate `useRef` (matches `app/(dashboard)/tasks/page.tsx` pattern) so member-filter / week / weekend toggles don't flicker the skeleton.
+- [x] `app/(dashboard)/workday/loading.tsx` — route-level skeleton mirroring header + grid scaffold.
+- [x] `lib/navigation.ts` — added Insights group (Workday + Reports). Reports moved out of Finance per memory `feedback_one_pr_refactors.md` (bundled refactor).
+- [x] Drawer integration: page renders `<TaskDetailDrawer>` / `<TaskDetailModal>` based on user `taskDetailView` pref. `taskIds` prop receives the visible week's de-duplicated task IDs sorted by `firstStart` (scan order). `useTaskDetail.navigateToTask` wires box-click → drawer.
+
+### Manual-log "Started at" chip
+- [x] `components/tasks/time-log-popover.tsx` — chip below the Date row. Default `Just now` (`now − duration`); presets `15 minutes ago` / `30 minutes ago` / `1 hour ago` / `Pick a time…`. Custom mode reveals an inline `<input type="time">` combined with the popover's selected date. All math computed during render — no `useEffect` sync.
+
+### Edge cases (slice 9)
+- [x] Per-cell empty hint: muted "No work logged" top-aligned inside the day-stack when the cell has zero entries.
+- [x] Week-level empty state: centered `WorkdayEmptyState` rendered above member rows when the entire visible grid has zero entries (rows still visible).
+- [x] Overtime visuals: day total >8h renders in `text-destructive` with a `+Xh` pill; an "8h" hairline marker draws at the 320 px capacity line; day-stack auto-grows past 320 px (flex-stack — no clipping).
+
+### Verification (slice 9 gate)
+- [x] `npx tsc --noEmit` — 0 errors.
+- [x] `npm run lint` — repo baseline preserved (1250 problems; 0 new in workday/hook/component files).
+- [x] `npx vitest run lib/hooks/use-week-picker.test.ts` — 25/25 pass.
+- [x] Convex dev console: `weekGrid` runs cleanly (manual smoke).
+- [x] Member auto-scope: signed-in member sees only own row, no member-filter button visible.
+- [x] Cross-tenant isolation: admin in another org sees zero leaks (server enforces by `orgId` index + auto-scope; client filter cannot bypass).
+- [x] URL round-trip: `?week=…`, `?users=…`, `?weekend=1` all preserved on refresh + back/forward.
+- [x] Click box → drawer opens at that task; popover row click also opens drawer at the task.
+- [x] Drawer prev/next steps through visible-week task IDs in scan order.
+- [x] Adaptive box tiers verified across mixed durations (5m / 25m / 45m / 90m render at correct tiers).
+- [x] Today column: day name + number both in primary; subtle vertical accent gradient on today cells.
+- [x] Loading skeleton matches final layout dimensions — no jump on load.
+
+### TODOs deferred to later phases
+
+**v2+ (data model already supports them — gating is product/UX scope)**:
+- Drag a box between days to move an entry's date.
+- Drag in empty grid space to inline-create a new entry (requires hour-grid view).
+- Drag a box edge to resize duration.
+- Click empty space → inline-create entry.
+- Click box → inline-edit title / duration / category.
+- Hour-grid view mode (Google Calendar-style, hour rulers, lane-management for overlapping wall-clock entries).
+- Calendar integration (Google Calendar sync) — `startedAt` is now ready; sync code is the missing piece.
+- Overlap detection / warning when two entries on the same user collide in time.
+- Per-user weekly capacity overrides — v1 hardcodes 8h for everyone.
+- PTO / out-of-office row labels — v1 just shows zero, not "Off."
+- Project / category / billable filters on the workday page — v1 ships member + weekend only.
+- Workday-level analytics (utilization heatmap, weekly trend, capacity planning).
+- Pagination beyond 5k entries/week/org — back-pocket plan documented in `convex/workday.ts`; not implemented.
+- Localization (Sunday-first locales, 12-hour clock, translated day names).
+
+**Open items from PRD §"Open Questions"**:
+- **Entry-level deep-link in the drawer's Time tab** (`?task=…&entry=…`): the page pushes `?task=…` only; entry-scroll requires drawer-side support that doesn't exist yet. Acceptable v1 fallback per PRD.
+- **Pause/resume start-time semantics**: `commitEntry` writes synthetic `startedAt = Date.now() − elapsedMs`. Tracking original-first-start through pauses requires a small follow-up if calendar integration ever needs wall-clock fidelity.
+
+**Test infrastructure gap**:
+- Convex integration tests for `weekGrid` (cross-tenant isolation, member auto-scope, overtime totals not clipped) — repo has no `convex-test` harness yet. Acceptance criteria 8 / 9 in slices 1, 2, 4 left unchecked. Add when the harness lands.
+

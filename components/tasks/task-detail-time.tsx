@@ -15,6 +15,7 @@ import { MiniCalendar, addDays } from "@/components/ui/mini-calendar"
 import { parseDuration, formatDuration, QUICK_DURATIONS } from "@/lib/duration"
 import { formatTimerDisplay, formatMinutesDisplay } from "@/lib/duration"
 import { formatDateToYMD, formatShortDate, getWeekBounds } from "@/lib/format"
+import { anchorStartedAt } from "@/lib/workday"
 import { toast } from "sonner"
 import { toastError } from "@/lib/toast-helpers"
 import { cn } from "@/lib/utils"
@@ -113,6 +114,7 @@ export function TaskDetailTime({
       await createEntry({
         taskId,
         durationMinutes: minutes,
+        startedAt: anchorStartedAt(selectedDate, minutes),
         note: note.trim() || undefined,
         isBillable: billable,
         date: selectedDate,

@@ -289,9 +289,6 @@ export const commitEntry = mutation({
     // Round duration
     const rounded = roundMinutes(args.durationMinutes, roundingMinutes);
 
-    // Resolve date
-    const date = args.date ?? getDateInTimezone(Date.now(), timezone);
-
     // Rate snapshot (new model)
     const rateSnapshot = await resolveRateSnapshot(ctx, {
       userId,
@@ -301,12 +298,23 @@ export const commitEntry = mutation({
       isBillable: args.isBillable,
     });
 
+    // Synthetic startedAt — the timer flow doesn't thread the real session
+    // start through stop→commit (acceptable per v1 PRD). Sessions that cross
+    // midnight file under their start day, matching Toggl/Harvest.
     const now = Date.now();
+    const startedAt = now - rounded * 60_000;
+    const date = getDateInTimezone(startedAt, timezone);
+    if (args.date !== undefined && args.date !== date) {
+      throw new ConvexError(
+        `date (${args.date}) does not match startedAt's day (${date}).`,
+      );
+    }
     const entryId = await ctx.db.insert("timeEntries", {
       orgId,
       taskId: args.taskId,
       userId,
       date,
+      startedAt,
       durationMinutes: rounded,
       note: args.note?.trim() || undefined,
       isBillable: args.isBillable,

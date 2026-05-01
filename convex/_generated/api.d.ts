@@ -39,6 +39,7 @@ import type * as lib_url from "../lib/url.js";
 import type * as lib_validators from "../lib/validators.js";
 import type * as linkPreviews from "../linkPreviews.js";
 import type * as migrations_deleteLegacyTimeEntries from "../migrations/deleteLegacyTimeEntries.js";
+import type * as migrations_wipeAllTimeEntries from "../migrations/wipeAllTimeEntries.js";
 import type * as myTasks from "../myTasks.js";
 import type * as orgMembers from "../orgMembers.js";
 import type * as orgSettings from "../orgSettings.js";
@@ -56,6 +57,7 @@ import type * as typingIndicators from "../typingIndicators.js";
 import type * as userRates from "../userRates.js";
 import type * as users from "../users.js";
 import type * as workCategories from "../workCategories.js";
+import type * as workday from "../workday.js";
 
 import type {
   ApiFromModules,
@@ -95,6 +97,7 @@ declare const fullApi: ApiFromModules<{
   "lib/validators": typeof lib_validators;
   linkPreviews: typeof linkPreviews;
   "migrations/deleteLegacyTimeEntries": typeof migrations_deleteLegacyTimeEntries;
+  "migrations/wipeAllTimeEntries": typeof migrations_wipeAllTimeEntries;
   myTasks: typeof myTasks;
   orgMembers: typeof orgMembers;
   orgSettings: typeof orgSettings;
@@ -112,6 +115,7 @@ declare const fullApi: ApiFromModules<{
   userRates: typeof userRates;
   users: typeof users;
   workCategories: typeof workCategories;
+  workday: typeof workday;
 }>;
 
 /**

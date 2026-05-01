@@ -190,6 +190,7 @@ export const create = mutation({
   args: {
     taskId: v.id("tasks"),
     durationMinutes: v.number(),
+    startedAt: v.number(),                    // wall-clock start, epoch ms
     note: v.optional(v.string()),
     isBillable: v.optional(v.boolean()),
     date: v.optional(v.string()),
@@ -227,8 +228,13 @@ export const create = mutation({
     const rounded = roundMinutes(args.durationMinutes, roundingMinutes);
     if (rounded <= 0) throw new ConvexError("Duration must be greater than 0");
 
-    // Resolve date
-    const date = args.date ?? getDateInTimezone(Date.now(), timezone);
+    // Invariant: date === getDateInTimezone(startedAt, orgTz). startedAt wins.
+    const date = getDateInTimezone(args.startedAt, timezone);
+    if (args.date !== undefined && args.date !== date) {
+      throw new ConvexError(
+        `date (${args.date}) does not match startedAt's day (${date}).`,
+      );
+    }
 
     // Determine billable before rate resolution — non-billable entries skip rate enforcement
     const isBillable = args.isBillable ?? task.billable;
@@ -248,6 +254,7 @@ export const create = mutation({
       taskId: args.taskId,
       userId: entryUserId,
       date,
+      startedAt: args.startedAt,
       durationMinutes: rounded,
       note: args.note?.trim() || undefined,
       isBillable,
@@ -283,6 +290,7 @@ export const update = mutation({
     durationMinutes: v.optional(v.number()),
     note: v.optional(v.union(v.string(), v.null())),
     date: v.optional(v.string()),
+    startedAt: v.optional(v.number()),
     isBillable: v.optional(v.boolean()),
     taskId: v.optional(v.id("tasks")),
   },
@@ -317,8 +325,21 @@ export const update = mutation({
       updates.note = args.note === null ? undefined : args.note.trim() || undefined;
     }
 
-    if (args.date !== undefined) {
-      updates.date = args.date;
+    // Invariant (see create): date === getDateInTimezone(startedAt, orgTz).
+    // Server doesn't re-anchor; clients call reanchorStartedAt and send both.
+    if (args.date !== undefined || args.startedAt !== undefined) {
+      const orgSettings = await getOrgSettings(ctx, orgId);
+      const timezone = orgSettings?.timezone ?? "America/New_York";
+      const nextStartedAt = args.startedAt ?? entry.startedAt;
+      const nextDate = args.date ?? entry.date;
+      const derivedDate = getDateInTimezone(nextStartedAt, timezone);
+      if (nextDate !== derivedDate) {
+        throw new ConvexError(
+          `date (${nextDate}) does not match startedAt's day (${derivedDate}). When changing date, also send a re-anchored startedAt.`,
+        );
+      }
+      if (args.startedAt !== undefined) updates.startedAt = nextStartedAt;
+      if (args.date !== undefined) updates.date = nextDate;
     }
 
     // Resolve target task if a change was requested. All downstream rate
@@ -622,6 +643,9 @@ export const listProjectEntries = query({
       userName: string;
       userImageUrl: string | undefined;
       date: string;
+      // Wall-clock start in epoch ms — required by the edit form so a date
+      // change can re-anchor `startedAt` and keep date/startedAt consistent.
+      startedAt: number;
       durationMinutes: number;
       note: string | undefined;
       isBillable: boolean;
@@ -651,6 +675,7 @@ export const listProjectEntries = query({
         userName: user?.name ?? "Unknown",
         userImageUrl: user?.imageUrl,
         date: e.date,
+        startedAt: e.startedAt,
         durationMinutes: e.durationMinutes,
         note: e.note,
         isBillable: e.isBillable,

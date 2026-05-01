@@ -34,6 +34,7 @@ import { UserAvatar } from "@/components/user-avatar"
 import { CategoryBadge } from "@/components/category-badge"
 import { parseDuration, formatMinutesDisplay } from "@/lib/duration"
 import { formatDateToYMD, parseYMDToLocalDate } from "@/lib/format"
+import { anchorStartedAt, reanchorStartedAt } from "@/lib/workday"
 import { extractErrorMessage, toastError } from "@/lib/toast-helpers"
 import { toast } from "sonner"
 import { LoaderIcon, PlusIcon } from "lucide-react"
@@ -51,6 +52,9 @@ type EditEntryLite = {
   _id: Id<"timeEntries">
   taskId: Id<"tasks">
   date: string
+  /** Wall-clock start in epoch ms. Needed so a date change can re-anchor
+   *  startedAt and keep the date/startedAt invariant satisfied server-side. */
+  startedAt: number
   durationMinutes: number
   isBillable: boolean
   note: string | undefined
@@ -192,6 +196,7 @@ function TimeEntryModalForm({
   onSubmitCreate: (args: {
     taskId: Id<"tasks">
     durationMinutes: number
+    startedAt: number
     date: string
     isBillable: boolean
     note?: string
@@ -202,6 +207,7 @@ function TimeEntryModalForm({
     taskId?: Id<"tasks">
     durationMinutes?: number
     date?: string
+    startedAt?: number
     isBillable?: boolean
     note?: string | null
   }) => Promise<unknown>
@@ -323,6 +329,7 @@ function TimeEntryModalForm({
         await onSubmitCreate({
           taskId,
           durationMinutes: minutes,
+          startedAt: anchorStartedAt(dateStr, minutes),
           date: dateStr,
           isBillable,
           note: note.trim() || undefined,
@@ -335,7 +342,12 @@ function TimeEntryModalForm({
         }
         if (taskId !== editEntry!.taskId) args.taskId = taskId
         if (minutes !== editEntry!.durationMinutes) args.durationMinutes = minutes
-        if (dateStr !== editEntry!.date) args.date = dateStr
+        if (dateStr !== editEntry!.date) {
+          // Server enforces the date↔startedAt invariant. Re-anchor here so
+          // the entry's wall-clock time-of-day rides along to the new date.
+          args.date = dateStr
+          args.startedAt = reanchorStartedAt(editEntry!.startedAt, dateStr)
+        }
         if (isBillable !== editEntry!.isBillable) args.isBillable = isBillable
         const trimmedNote = note.trim()
         const currentNote = editEntry!.note ?? ""

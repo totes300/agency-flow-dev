@@ -30,6 +30,7 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 import { toastError } from "@/lib/toast-helpers"
+import { anchorStartedAt } from "@/lib/workday"
 import { cn } from "@/lib/utils"
 import type { Id } from "@/convex/_generated/dataModel"
 
@@ -60,6 +61,52 @@ function formatDatePill(dateStr: string): string {
   if (dateStr === today) return `Today, ${formatShortDate(dateStr)}`
   if (dateStr === yesterday) return `Yesterday, ${formatShortDate(dateStr)}`
   return formatShortDate(dateStr)
+}
+
+type StartedAtMode = "default" | "15m" | "30m" | "1h" | "custom"
+
+const STARTED_AT_PRESETS: { value: StartedAtMode; label: string }[] = [
+  { value: "default", label: "Just now" },
+  { value: "15m", label: "15 minutes ago" },
+  { value: "30m", label: "30 minutes ago" },
+  { value: "1h", label: "1 hour ago" },
+  { value: "custom", label: "Pick a time…" },
+]
+
+function offsetMsForMode(mode: StartedAtMode): number {
+  switch (mode) {
+    case "default": return 0
+    case "15m":     return 15 * 60_000
+    case "30m":     return 30 * 60_000
+    case "1h":      return 60 * 60_000
+    case "custom":  return 0
+  }
+}
+
+/** Combine a YYYY-MM-DD date string with HH:MM, returning an epoch ms. */
+function combineDateAndTime(dateStr: string, timeStr: string): number | null {
+  const m = /^(\d{2}):(\d{2})$/.exec(timeStr)
+  if (!m) return null
+  const [yy, mm, dd] = dateStr.split("-").map(Number)
+  return new Date(yy, mm - 1, dd, Number(m[1]), Number(m[2]), 0, 0).getTime()
+}
+
+function computeStartedAt(
+  mode: StartedAtMode,
+  durationMinutes: number,
+  selectedDate: string,
+  customTime: string,
+): number {
+  if (mode === "custom") {
+    const fromCustom = combineDateAndTime(selectedDate, customTime)
+    if (fromCustom !== null) return fromCustom
+  }
+  return anchorStartedAt(selectedDate, durationMinutes) - offsetMsForMode(mode)
+}
+
+function formatTimeHHMM(ms: number): string {
+  const d = new Date(ms)
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`
 }
 
 export function TimeLogPopover({
@@ -94,6 +141,12 @@ export function TimeLogPopover({
   const [datePickerOpen, setDatePickerOpen] = useState(false)
   const [selectedUserId, setSelectedUserId] = useState<Id<"users"> | null>(null)
   const [userPickerOpen, setUserPickerOpen] = useState(false)
+  // Started-at chip (slice 6). Computed during render — no useEffect sync.
+  const [startedAtMode, setStartedAtMode] = useState<
+    "default" | "15m" | "30m" | "1h" | "custom"
+  >("default")
+  const [customTime, setCustomTime] = useState("") // "HH:MM"
+  const [startedAtPickerOpen, setStartedAtPickerOpen] = useState(false)
 
   // Only load members when admin AND popover is open
   const orgMembers = useQuery(
@@ -123,6 +176,10 @@ export function TimeLogPopover({
   const showPreview = trimmed.length > 0 && durationValid && canonicalForm.toLowerCase() !== trimmed.toLowerCase()
   const showError = trimmed.length > 0 && !durationValid
 
+  const startedAtLabel = formatTimeHHMM(
+    computeStartedAt(startedAtMode, parsedMinutes ?? 0, selectedDate, customTime),
+  )
+
   function resetForm() {
     setDurationStr("")
     setNote("")
@@ -132,6 +189,9 @@ export function TimeLogPopover({
     setUserPickerOpen(false)
     setSelectedDate(formatDateToYMD(new Date()))
     setDatePickerOpen(false)
+    setStartedAtMode("default")
+    setCustomTime("")
+    setStartedAtPickerOpen(false)
   }
 
   async function handleSave() {
@@ -141,6 +201,8 @@ export function TimeLogPopover({
       await createEntry({
         taskId,
         durationMinutes: parsedMinutes,
+        // Recompute at submit so we send the value as of click, not last render.
+        startedAt: computeStartedAt(startedAtMode, parsedMinutes, selectedDate, customTime),
         note: note.trim() || undefined,
         isBillable: billable,
         date: selectedDate,
@@ -372,6 +434,71 @@ export function TimeLogPopover({
                   />
                 </div>
               </div>
+            </PopoverContent>
+          </Popover>
+
+          {/* Started at — chip with quick presets + free-form picker */}
+          <Popover open={startedAtPickerOpen} onOpenChange={setStartedAtPickerOpen}>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-sm text-foreground transition-colors hover:bg-muted/60"
+              >
+                <ClockIcon
+                  className="size-3.5 shrink-0 text-muted-foreground"
+                  strokeWidth={1.5}
+                />
+                <span className="flex-1 text-left">
+                  Started at <span className="font-mono">{startedAtLabel}</span>
+                </span>
+                <ChevronDownIcon
+                  className="size-3 text-muted-foreground"
+                  strokeWidth={2}
+                />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent className="w-[220px] p-1" align="start">
+              {STARTED_AT_PRESETS.map((preset) => {
+                const isActive = startedAtMode === preset.value
+                return (
+                  <button
+                    key={preset.value}
+                    type="button"
+                    onClick={() => {
+                      setStartedAtMode(preset.value)
+                      if (preset.value !== "custom") {
+                        setStartedAtPickerOpen(false)
+                      }
+                    }}
+                    className={cn(
+                      "flex w-full items-center justify-between rounded-md px-2 py-1.5 text-xs transition-colors",
+                      isActive
+                        ? "bg-primary/10 text-primary"
+                        : "text-foreground hover:bg-muted",
+                    )}
+                  >
+                    <span>{preset.label}</span>
+                    {isActive ? (
+                      <CheckIcon className="size-3.5" strokeWidth={2} />
+                    ) : null}
+                  </button>
+                )
+              })}
+              {startedAtMode === "custom" ? (
+                <div className="mt-1 border-t border-border/40 pt-2">
+                  <label className="block px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Time on {formatDatePill(selectedDate)}
+                  </label>
+                  <input
+                    type="time"
+                    value={customTime}
+                    onChange={(e) => setCustomTime(e.target.value)}
+                    className="mx-2 mb-1 w-[calc(100%-1rem)] rounded-md border border-border bg-background px-2 py-1 font-mono text-sm text-foreground outline-none focus:border-primary"
+                    aria-label="Custom start time"
+                    autoFocus
+                  />
+                </div>
+              ) : null}
             </PopoverContent>
           </Popover>
 

@@ -476,6 +476,7 @@ export function ProjectTime({
             _id: editEntryRow._id,
             taskId: editEntryRow.taskId,
             date: editEntryRow.date,
+            startedAt: editEntryRow.startedAt,
             durationMinutes: editEntryRow.durationMinutes,
             isBillable: editEntryRow.isBillable,
             note: editEntryRow.note,

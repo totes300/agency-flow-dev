@@ -62,6 +62,9 @@ export type TimeEntryRow = {
   userName: string
   userImageUrl: string | undefined
   date: string
+  /** Wall-clock start in epoch ms — used by the edit modal to keep
+   *  date/startedAt consistent when the user moves an entry to a new date. */
+  startedAt: number
   durationMinutes: number
   note: string | undefined
   isBillable: boolean

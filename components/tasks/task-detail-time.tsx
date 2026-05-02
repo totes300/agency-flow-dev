@@ -14,8 +14,9 @@ import { MiniCalendar, addDays } from "@/components/ui/mini-calendar"
 
 import { parseDuration, formatDuration, QUICK_DURATIONS } from "@/lib/duration"
 import { formatTimerDisplay, formatMinutesDisplay } from "@/lib/duration"
-import { formatDateToYMD, formatShortDate, getWeekBounds } from "@/lib/format"
-import { anchorStartedAt } from "@/lib/workday"
+import { formatDateToYMD, formatShortDate, getWeekBounds, parseYMDToLocalDate } from "@/lib/format"
+import { anchorStartedAt, getYMDInTimezone } from "@/lib/workday"
+import { useOrgTimezone } from "@/lib/hooks/use-org-timezone"
 import { toast } from "sonner"
 import { toastError } from "@/lib/toast-helpers"
 import { cn } from "@/lib/utils"
@@ -75,13 +76,18 @@ export function TaskDetailTime({
     api.timeEntries.listByTask,
     isAuthenticated ? { taskId } : "skip",
   )
+  const { timezone, isReady: timezoneReady } = useOrgTimezone()
 
   const createEntry = useMutation(api.timeEntries.create)
 
   // ─── Form state ─────────────────────────────────────────────────────────────
   const [durationStr, setDurationStr] = useState("")
   const [note, setNote] = useState("")
-  const [selectedDate, setSelectedDate] = useState(() => formatDateToYMD(new Date()))
+  // selectedDate is derived: explicit user pick wins, else org-tz today.
+  // Computed during render so midnight rollover and tz changes update.
+  const [userPickedDate, setUserPickedDate] = useState<string | null>(null)
+  const orgToday = getYMDInTimezone(new Date(), timezone)
+  const selectedDate = userPickedDate ?? orgToday
   const [billable, setBillable] = useState(isBillable)
   const [saving, setSaving] = useState(false)
 
@@ -104,6 +110,11 @@ export function TaskDetailTime({
 
   async function handleSave() {
     if (saving) return
+    if (!timezoneReady) {
+      // Block save until org timezone is loaded — see use-org-timezone.ts.
+      toast.error("Loading workspace settings…")
+      return
+    }
     const minutes = parseDuration(durationStr)
     if (!minutes) {
       toast.error("Enter a valid duration")
@@ -114,7 +125,7 @@ export function TaskDetailTime({
       await createEntry({
         taskId,
         durationMinutes: minutes,
-        startedAt: anchorStartedAt(selectedDate, minutes),
+        startedAt: anchorStartedAt(selectedDate, minutes, timezone),
         note: note.trim() || undefined,
         isBillable: billable,
         date: selectedDate,
@@ -122,7 +133,7 @@ export function TaskDetailTime({
       toast.success(`${formatDuration(minutes)} logged`)
       setDurationStr("")
       setNote("")
-      setSelectedDate(formatDateToYMD(new Date()))
+      setUserPickedDate(null)
       setBillable(isBillable)
     } catch (err) {
       toastError(err, "Failed to log time")
@@ -187,7 +198,8 @@ export function TaskDetailTime({
               <PopoverTrigger asChild>
                 <button
                   type="button"
-                  className="flex items-center gap-2.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+                  disabled={!timezoneReady}
+                  className="flex items-center gap-2.5 text-sm text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <CalendarIcon className="size-3.5 shrink-0" strokeWidth={1.5} />
                   <span>{formatShortDate(selectedDate)}</span>
@@ -201,12 +213,14 @@ export function TaskDetailTime({
                       Quick set
                     </div>
                     {TIME_PRESETS.map((preset) => {
-                      const presetDate = formatDateToYMD(preset.getDate(new Date()))
+                      // Build presets relative to org-tz today, not browser-local.
+                      const todayLocalProxy = parseYMDToLocalDate(orgToday) ?? new Date()
+                      const presetDate = formatDateToYMD(preset.getDate(todayLocalProxy))
                       const isActive = selectedDate === presetDate
                       return (
                         <button
                           key={preset.label}
-                          onClick={() => setSelectedDate(presetDate)}
+                          onClick={() => setUserPickedDate(presetDate)}
                           className={cn(
                             "flex items-center gap-2 rounded-md px-2 py-1.5 text-xs font-medium transition-colors",
                             isActive
@@ -229,8 +243,9 @@ export function TaskDetailTime({
                   <div className="flex-1 p-3">
                     <MiniCalendar
                       selected={selectedDate}
-                      onSelect={setSelectedDate}
+                      onSelect={setUserPickedDate}
                       disableFuture
+                      timezone={timezone}
                     />
                   </div>
                 </div>
@@ -252,7 +267,7 @@ export function TaskDetailTime({
 
         {/* Log time button + Billable */}
         <div className="flex items-center gap-3 border-t border-border/40 px-4 py-2.5">
-          <Button className="px-6" onClick={handleSave} disabled={!durationStr.trim() || saving}>
+          <Button className="px-6" onClick={handleSave} disabled={!durationStr.trim() || saving || !timezoneReady}>
             Log time
           </Button>
           <div className="flex items-center gap-2">

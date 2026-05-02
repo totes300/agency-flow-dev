@@ -134,6 +134,8 @@ export const update = mutation({
     invoicePrefix: v.optional(v.string()),
     nextInvoiceNumber: v.optional(v.number()),
     defaultPaymentTermsDays: v.optional(v.number()),
+    paymentInstructions: v.optional(v.string()),
+    invoiceMessageTemplate: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const { orgId } = await requireAdmin(ctx);
@@ -198,6 +200,12 @@ export const update = mutation({
         throw new ConvexError("Payment terms must be between 1 and 365 days");
       }
     }
+    if (args.paymentInstructions !== undefined) {
+      validateStringLength(args.paymentInstructions, 5000, "Payment instructions");
+    }
+    if (args.invoiceMessageTemplate !== undefined) {
+      validateStringLength(args.invoiceMessageTemplate, 5000, "Invoice message template");
+    }
 
     // Validate completion default status references
     for (const field of ["completionDefaultAdminStatusId", "completionDefaultMemberStatusId"] as const) {
@@ -231,6 +239,8 @@ export const update = mutation({
       invoicePrefix: string;
       nextInvoiceNumber: number;
       defaultPaymentTermsDays: number;
+      paymentInstructions: string | undefined;
+      invoiceMessageTemplate: string | undefined;
       updatedAt: number;
     }> = { updatedAt: Date.now() };
 
@@ -247,6 +257,14 @@ export const update = mutation({
     if (args.invoicePrefix !== undefined) patch.invoicePrefix = args.invoicePrefix;
     if (args.nextInvoiceNumber !== undefined) patch.nextInvoiceNumber = args.nextInvoiceNumber;
     if (args.defaultPaymentTermsDays !== undefined) patch.defaultPaymentTermsDays = args.defaultPaymentTermsDays;
+    // Empty string clears the field — `ctx.db.patch` deletes a key when given
+    // `undefined`, so empty input persists as a missing field rather than "".
+    if (args.paymentInstructions !== undefined) {
+      patch.paymentInstructions = args.paymentInstructions === "" ? undefined : args.paymentInstructions;
+    }
+    if (args.invoiceMessageTemplate !== undefined) {
+      patch.invoiceMessageTemplate = args.invoiceMessageTemplate === "" ? undefined : args.invoiceMessageTemplate;
+    }
 
     await ctx.db.patch(settings._id, patch);
   },

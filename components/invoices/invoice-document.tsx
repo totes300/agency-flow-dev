@@ -7,6 +7,8 @@ import type { Doc } from "@/convex/_generated/dataModel"
 import { DatePicker } from "@/components/ui/date-picker"
 import { InlineEditable } from "@/components/inline-editable"
 import { InvoiceParties } from "@/components/invoices/invoice-parties"
+import { InvoiceMessageBlock } from "@/components/invoices/invoice-message-block"
+import { PaymentInstructionsBlock } from "@/components/invoices/payment-instructions-block"
 import { InvoiceWorkBreakdown, type CategoryGroup } from "@/components/invoices/invoice-work-breakdown"
 import { InvoiceBillingSummary, type BalanceData } from "@/components/invoices/invoice-billing-summary"
 import { toastError } from "@/lib/toast-helpers"
@@ -21,6 +23,8 @@ import { LockIcon, XIcon } from "lucide-react"
 /** Line types that belong in the billing summary card, not the work breakdown */
 const BILLING_LINE_TYPES = new Set(["fixed", "retainer_fee", "overage", "manual"])
 
+type BillingType = "t_and_m" | "fixed" | "retainer" | "non_billable"
+
 export function InvoiceDocument({
   invoice,
   categoryGroups,
@@ -28,14 +32,16 @@ export function InvoiceDocument({
   project,
   client,
   brand,
+  org,
   readOnly,
 }: {
   invoice: Doc<"invoices">
   categoryGroups: CategoryGroup[]
   lineItems: Doc<"invoiceLineItems">[]
-  project: { name: string; billingType: string; fixedPrice?: number } | null
+  project: { name: string; billingType: BillingType; fixedPrice?: number } | null
   client: { name: string; billingName?: string; billingEmail?: string; billingStreet?: string; billingStreet2?: string; billingCity?: string; billingZip?: string; billingCountry?: string; taxId?: string } | null
   brand: { brandName?: string; brandAddress?: string; brandTaxId?: string; brandEmail?: string; brandPhone?: string } | null
+  org: { paymentInstructions: string | undefined; invoiceMessageTemplate: string | undefined }
   readOnly: boolean
 }) {
   const updateInvoice = useMutation(api.invoices.updateInvoice)
@@ -77,11 +83,20 @@ export function InvoiceDocument({
 
   return (
     <div className="flex flex-col gap-8 rounded-lg border bg-card p-6 md:p-8">
-      {/* Locked banner */}
+      {/* Locked banner — amber-left accent reads as 'gated', not 'placeholder skeleton' */}
       {readOnly && (
-        <div className="flex items-center gap-2 rounded-md bg-muted px-4 py-3 text-sm text-muted-foreground">
+        <div
+          role="status"
+          className="flex items-center gap-2 rounded-md border border-amber-200/70 border-l-4 border-l-amber-500 bg-amber-50/60 px-4 py-3 text-sm text-amber-900 dark:border-amber-900/40 dark:border-l-amber-500 dark:bg-amber-950/30 dark:text-amber-200"
+        >
           <LockIcon className="size-4 shrink-0" />
-          This invoice is locked. Revert to draft to make changes.
+          <span>
+            This invoice is locked.{" "}
+            <span className="text-amber-800/80 dark:text-amber-300/80">
+              Use <span className="font-medium">Revert to draft</span> in the
+              sidebar to make changes.
+            </span>
+          </span>
         </div>
       )}
 
@@ -178,6 +193,19 @@ export function InvoiceDocument({
                 } satisfies BalanceData
               : undefined
           }
+        />
+      )}
+
+      {/* Org-level payment instructions ("system voice") rendered above the
+          per-invoice message ("personal voice") per PRD § US-41. Both blocks
+          live below the billing summary; either renders null when empty. */}
+      <PaymentInstructionsBlock paymentInstructions={org.paymentInstructions} />
+
+      {project && (
+        <InvoiceMessageBlock
+          invoice={invoice}
+          project={project}
+          template={org.invoiceMessageTemplate}
         />
       )}
     </div>

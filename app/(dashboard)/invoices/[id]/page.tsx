@@ -1,13 +1,16 @@
 "use client"
 
-import { useEffect, useState } from "react"
-import { useParams, useSearchParams, useRouter } from "next/navigation"
+import { useState } from "react"
+import { useParams, useSearchParams } from "next/navigation"
 import { useQuery } from "convex/react"
 import { useConvexAuth } from "convex/react"
+import { notFound } from "next/navigation"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { ArrowLeftIcon, InfoIcon, XIcon } from "lucide-react"
 import Link from "next/link"
+import { Alert, AlertDescription, AlertAction } from "@/components/ui/alert"
+import { Button } from "@/components/ui/button"
 import { InvoiceDocument } from "@/components/invoices/invoice-document"
 import { InvoiceSidebar } from "@/components/invoices/invoice-sidebar"
 import { InvoiceEditorSkeleton } from "@/components/invoices/invoice-editor-skeleton"
@@ -17,73 +20,71 @@ export default function InvoiceEditorPage() {
   const { isAuthenticated } = useConvexAuth()
   const params = useParams()
   const searchParams = useSearchParams()
-  const router = useRouter()
   const invoiceId = params.id as Id<"invoices">
   const [nudgeDismissed, setNudgeDismissed] = useState(false)
 
   const data = useQuery(api.invoices.getInvoice, isAuthenticated ? { id: invoiceId } : "skip")
 
-  // Redirect to invoices list if invoice not found
-  useEffect(() => {
-    if (data === null) {
-      router.replace("/invoices")
-    }
-  }, [data, router])
+  if (data === undefined) return <InvoiceEditorSkeleton />
+  if (data === null) notFound()
 
-  if (data === undefined || data === null) return <InvoiceEditorSkeleton />
-
-  const { invoice, categoryGroups, lineItems, project, client, brand, timezone, orgInvoiceCount, fixedBilled } = data
+  const { invoice, categoryGroups, lineItems, project, client, brand, timezone, orgInvoiceCount, fixedBilled, org } = data
   const readOnly = invoice.status !== "draft"
 
-  // Contextual back link from ?from= params
   const fromType = searchParams.get("from")
   const fromProjectId = searchParams.get("projectId")
   const backHref = fromType === "project" && fromProjectId
     ? `/projects/${fromProjectId}?tab=invoices`
     : "/invoices"
 
-  const breadcrumb = `Invoices > ${formatInvoiceNumber(invoice.prefix, invoice.number)}`
+  const invoiceLabel = formatInvoiceNumber(invoice.prefix, invoice.number)
 
-  // First-time brand info nudge: show when this is the org's first invoice
-  // and brand info is incomplete (missing name or address)
   const brandIncomplete = !brand?.brandName || !brand?.brandAddress
   const showBrandNudge = orgInvoiceCount <= 1 && brandIncomplete && !nudgeDismissed
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
-      {/* Header with back link + breadcrumb */}
-      <div className="flex items-center gap-3">
-        <button
-          type="button"
-          onClick={() => router.push(backHref)}
+      <nav aria-label="Breadcrumb" className="flex items-center gap-3">
+        <Button
+          variant="ghost"
+          size="icon"
           aria-label="Back"
-          className="flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          className="size-8"
+          asChild
         >
-          <ArrowLeftIcon className="size-4" />
-        </button>
-        <span className="text-sm text-muted-foreground">{breadcrumb}</span>
-      </div>
+          <Link href={backHref}>
+            <ArrowLeftIcon className="size-4" />
+          </Link>
+        </Button>
+        <ol className="flex items-center gap-2 text-sm text-muted-foreground">
+          <li>
+            <Link href="/invoices" className="hover:text-foreground">Invoices</Link>
+          </li>
+          <li aria-hidden="true">›</li>
+          <li aria-current="page" className="text-foreground">{invoiceLabel}</li>
+        </ol>
+      </nav>
 
-      {/* First-time brand info nudge */}
       {showBrandNudge && (
-        <div className="flex items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 dark:border-blue-900 dark:bg-blue-950/50">
-          <InfoIcon className="size-4 shrink-0 text-blue-600 dark:text-blue-400" />
-          <p className="flex-1 text-sm text-blue-800 dark:text-blue-300">
+        <Alert variant="info">
+          <InfoIcon />
+          <AlertDescription>
             Complete your agency details in{" "}
-            <Link href="/settings" className="font-medium underline underline-offset-2">
-              Settings
-            </Link>{" "}
+            <Link href="/settings" className="font-medium">Settings</Link>{" "}
             for professional invoices.
-          </p>
-          <button
-            type="button"
-            onClick={() => setNudgeDismissed(true)}
-            aria-label="Dismiss tip"
-            className="shrink-0 rounded-md p-1 text-blue-600 hover:bg-blue-100 dark:text-blue-400 dark:hover:bg-blue-900"
-          >
-            <XIcon className="size-4" />
-          </button>
-        </div>
+          </AlertDescription>
+          <AlertAction>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-6"
+              onClick={() => setNudgeDismissed(true)}
+              aria-label="Dismiss tip"
+            >
+              <XIcon className="size-3.5" />
+            </Button>
+          </AlertAction>
+        </Alert>
       )}
 
       {/* Two-column layout */}
@@ -97,6 +98,7 @@ export default function InvoiceEditorPage() {
             project={project}
             client={client}
             brand={brand}
+            org={org}
             readOnly={readOnly}
           />
         </div>

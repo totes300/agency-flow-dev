@@ -16,6 +16,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { DatePicker } from "@/components/ui/date-picker"
 import { Field, FieldLabel } from "@/components/ui/field"
@@ -89,10 +90,10 @@ export function ProjectTimeFilters({
   const activeMember = searchParams.get("member") ?? ""
   const activeBillingStatus = searchParams.get("billingStatus") ?? ""
   const activeGroupBy = searchParams.get("groupBy") ?? "day"
-  // Default date range is "this_month" — must match `DEFAULT_DATE_RANGE` in
+  // Default date range is "all" — must match `DEFAULT_DATE_RANGE` in
   // `project-time.tsx` so the badge count and the orchestrator's `hasFilters`
   // stay aligned.
-  const activeDateRange = (searchParams.get("dateRange") ?? "this_month") as DateRangePreset
+  const activeDateRange = (searchParams.get("dateRange") ?? "all") as DateRangePreset
   const customFrom = searchParams.get("from") ?? undefined
   const customTo = searchParams.get("to") ?? undefined
 
@@ -125,14 +126,14 @@ export function ProjectTimeFilters({
     let count = 0
     if (activeMember) count++
     if (activeBillingStatus && activeBillingStatus !== ALL_VALUE) count++
-    if (activeDateRange !== "this_month") count++
+    if (activeDateRange !== "all") count++
     return count
   }, [activeMember, activeBillingStatus, activeDateRange])
 
   const handleDateRangeChange = useCallback(
     (value: string) => {
       const next = value as DateRangePreset
-      if (next === "this_month") {
+      if (next === "all") {
         // Matches the orchestrator's default — drop the param entirely so
         // links stay clean.
         setParams([
@@ -176,7 +177,7 @@ export function ProjectTimeFilters({
   )
 
   const handleClearAll = useCallback(() => {
-    // "Clear" restores the defaults — date range goes back to this_month,
+    // "Clear" restores the defaults — date range goes back to "all",
     // which is represented by the absence of the `dateRange` param.
     setParams([
       ["member", undefined],
@@ -296,15 +297,12 @@ function FilterPopover({
           <ListFilterIcon aria-hidden className="size-3.5" />
           Filter
           {activeFilterCount > 0 && (
-            <span
-              className={cn(
-                "ml-1 inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-primary px-1 text-xs font-medium text-primary-foreground",
-                "h-5",
-              )}
+            <Badge
+              className="ml-1 min-w-5 rounded-full tabular-nums"
               aria-label={`${activeFilterCount} active filters`}
             >
               {activeFilterCount}
-            </span>
+            </Badge>
           )}
         </Button>
       </PopoverTrigger>

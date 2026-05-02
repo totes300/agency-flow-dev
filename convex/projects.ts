@@ -5,7 +5,7 @@ import { getAuthContext, requireAdmin, validateStringLength } from "./lib/auth";
 import { billingTypeValidator, retainerStatusValidator } from "./lib/validators";
 import { generateNextProjectCode, ensureUniqueProjectCode } from "./lib/helpers";
 import { validateAssignees } from "./lib/task_helpers";
-import { getDateInTimezone } from "./lib/timer";
+import { getDateInTimezone, ORG_TIMEZONE_FALLBACK } from "./lib/timer";
 import { getOrgSettings, getProjectCurrency } from "./lib/orgHelpers";
 import type {
   ResolvedProjectListItem,
@@ -507,7 +507,7 @@ export const getRetainerData = query({
     const currency = client?.currency ?? "USD";
 
     if (!startDate) return null;
-    const timezone = orgSettings?.timezone ?? "America/New_York";
+    const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
 
     // Compute today in org timezone (same helper used by timer & time entries)
     const todayStr = getDateInTimezone(Date.now(), timezone);
@@ -876,7 +876,7 @@ export const getSummary = query({
 
     if (project.billingType === "t_and_m") {
       const orgSettings = await getOrgSettings(ctx, orgId);
-      const timezone = orgSettings?.timezone ?? "America/New_York";
+      const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
       const today = getDateInTimezone(Date.now(), timezone);
 
       const preset: DateRangePreset = args.dateRange?.preset ?? "all";
@@ -959,7 +959,7 @@ export const getSummary = query({
     if (!startDate) return null;
 
     const orgSettings = await getOrgSettings(ctx, orgId);
-    const timezone = orgSettings?.timezone ?? "America/New_York";
+    const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
     const todayStr = getDateInTimezone(Date.now(), timezone);
 
     const cycleContext = resolveRetainerCycleContext({

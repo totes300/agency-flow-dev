@@ -1,38 +1,24 @@
 "use client"
 
 import { useState, useEffect, useMemo } from "react"
-import { useParams, useSearchParams, useRouter, usePathname } from "next/navigation"
+import { useParams, useSearchParams, useRouter, usePathname, notFound } from "next/navigation"
 import { useQuery } from "convex/react"
 import { useConvexAuth } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ProjectDetailHeader } from "@/components/projects/project-detail-header"
-import dynamic from "next/dynamic"
 import { SettingsGeneral } from "@/components/projects/settings-general"
-
 import { ProjectDetailSkeleton } from "@/components/projects/project-detail-skeleton"
-import { ProjectInvoicesSkeleton } from "@/components/invoices/project-invoices-skeleton"
-import { ProjectTimeSkeleton } from "@/components/projects/project-time-skeleton"
-
-const FixedOverview = dynamic(() => import("@/components/projects/fixed-overview").then(m => ({ default: m.FixedOverview })))
-const TmOverview = dynamic(() => import("@/components/projects/tm-overview").then(m => ({ default: m.TmOverview })))
-const RetainerOverview = dynamic(() => import("@/components/projects/retainer-overview").then(m => ({ default: m.RetainerOverview })))
-const SettingsBudgetEstimates = dynamic(() => import("@/components/projects/settings-budget-estimates").then(m => ({ default: m.SettingsBudgetEstimates })))
-const SettingsRates = dynamic(() => import("@/components/projects/settings-rates").then(m => ({ default: m.SettingsRates })))
-const SettingsRetainer = dynamic(() => import("@/components/projects/settings-retainer").then(m => ({ default: m.SettingsRetainer })))
-const ProjectTeam = dynamic(() => import("@/components/projects/project-team").then(m => ({ default: m.ProjectTeam })))
-// Content-aware `loading` fallbacks prevent the blank flash between chunk
-// load and the component's internal Convex skeleton taking over. Matches the
-// real layouts in `project-invoices.tsx` and `project-time.tsx`.
-const ProjectInvoices = dynamic(
-  () => import("@/components/invoices/project-invoices").then(m => ({ default: m.ProjectInvoices })),
-  { loading: () => <ProjectInvoicesSkeleton /> },
-)
-const ProjectTime = dynamic(
-  () => import("@/components/projects/project-time").then(m => ({ default: m.ProjectTime })),
-  { loading: () => <ProjectTimeSkeleton /> },
-)
+import { FixedOverview } from "@/components/projects/fixed-overview"
+import { TmOverview } from "@/components/projects/tm-overview"
+import { RetainerOverview } from "@/components/projects/retainer-overview"
+import { SettingsBudgetEstimates } from "@/components/projects/settings-budget-estimates"
+import { SettingsRates } from "@/components/projects/settings-rates"
+import { SettingsRetainer } from "@/components/projects/settings-retainer"
+import { ProjectTeam } from "@/components/projects/project-team"
+import { ProjectInvoices } from "@/components/invoices/project-invoices"
+import { ProjectTime } from "@/components/projects/project-time"
 import { TaskDetailModal } from "@/components/tasks/task-detail-modal"
 import { TaskReferenceDataProvider } from "@/components/tasks/task-reference-data"
 import { useIsAdmin } from "@/lib/hooks/use-is-admin"
@@ -118,13 +104,8 @@ export default function ProjectDetailPage() {
     return () => cancelAnimationFrame(id)
   }, [scrollTarget, tab])
 
-  useEffect(() => {
-    if (project === null) {
-      router.replace("/projects")
-    }
-  }, [project, router])
-
-  if (project === undefined || project === null) return <ProjectDetailSkeleton />
+  if (project === undefined) return <ProjectDetailSkeleton />
+  if (project === null) notFound()
 
   return (
     <TaskReferenceDataProvider value={referenceData}>
@@ -149,27 +130,32 @@ export default function ProjectDetailPage() {
           <TabsTrigger value="settings">Settings</TabsTrigger>
         </TabsList>
 
+        {/* Mount only the active tab — TabsContent + conditional render keeps
+            heavy children (ProjectTime entry list, FixedOverview metrics) out of
+            the tree until selected. */}
         <TabsContent value="overview" className="mt-6">
-          {project.billingType === "fixed" && (
+          {effectiveTab === "overview" && project.billingType === "fixed" && (
             <FixedOverview
               projectId={projectId}
+              projectName={project.name}
+              currency={project.currency}
               onNavigateToEstimates={() => {
                 setTab("settings")
                 setScrollTarget("budget-estimates-section")
               }}
             />
           )}
-          {project.billingType === "t_and_m" && (
+          {effectiveTab === "overview" && project.billingType === "t_and_m" && (
             <TmOverview projectId={projectId} project={project} />
           )}
-          {project.billingType === "retainer" && (
+          {effectiveTab === "overview" && project.billingType === "retainer" && (
             <RetainerOverview
               projectId={projectId}
               projectName={project.name}
               currency={project.currency}
             />
           )}
-          {project.billingType === "non_billable" && (
+          {effectiveTab === "overview" && project.billingType === "non_billable" && (
             <div className="rounded-lg border bg-muted/30 p-8">
               <div className="flex flex-col items-center justify-center gap-2 text-center">
                 <p className="text-sm font-medium">Non-billable project</p>
@@ -183,44 +169,50 @@ export default function ProjectDetailPage() {
 
         {project.billingType !== "non_billable" && (
           <TabsContent value="time" className="mt-6">
-            <ProjectTime
-              projectId={projectId}
-              project={{
-                name: project.name,
-                billingType: project.billingType,
-                currency: project.currency,
-                teamMembers: project.teamMembers,
-              }}
-              onNavigateToInvoices={() => setTab("invoices")}
-            />
+            {effectiveTab === "time" && (
+              <ProjectTime
+                projectId={projectId}
+                project={{
+                  name: project.name,
+                  billingType: project.billingType,
+                  currency: project.currency,
+                  teamMembers: project.teamMembers,
+                }}
+                onNavigateToInvoices={() => setTab("invoices")}
+              />
+            )}
           </TabsContent>
         )}
 
         {project.billingType !== "non_billable" && (
           <TabsContent value="invoices" className="mt-6">
-            <ProjectInvoices projectId={projectId} project={project} />
+            {effectiveTab === "invoices" && (
+              <ProjectInvoices projectId={projectId} project={project} />
+            )}
           </TabsContent>
         )}
 
         <TabsContent value="settings" className="mt-6">
-          <div className="flex flex-col gap-6">
-            <SettingsGeneral projectId={projectId} project={project} />
-            {project.billingType === "fixed" && (
-              <SettingsBudgetEstimates projectId={projectId} project={project} teamMembers={project.teamMembers} defaultAssignees={project.defaultAssignees} />
-            )}
-            {project.billingType === "t_and_m" && (
-              <SettingsRates projectId={projectId} project={project} teamMembers={project.teamMembers} defaultAssignees={project.defaultAssignees} />
-            )}
-            {project.billingType === "retainer" && (
-              <SettingsRetainer projectId={projectId} project={project} />
-            )}
-            <ProjectTeam
-              projectId={projectId}
-              teamMembers={project.teamMembers}
-              defaultAssignees={project.defaultAssignees}
-              isAdmin={isAdmin ?? false}
-            />
-          </div>
+          {effectiveTab === "settings" && (
+            <div className="flex flex-col gap-6">
+              <SettingsGeneral projectId={projectId} project={project} />
+              {project.billingType === "fixed" && (
+                <SettingsBudgetEstimates projectId={projectId} project={project} teamMembers={project.teamMembers} defaultAssignees={project.defaultAssignees} />
+              )}
+              {project.billingType === "t_and_m" && (
+                <SettingsRates projectId={projectId} project={project} teamMembers={project.teamMembers} defaultAssignees={project.defaultAssignees} />
+              )}
+              {project.billingType === "retainer" && (
+                <SettingsRetainer projectId={projectId} project={project} />
+              )}
+              <ProjectTeam
+                projectId={projectId}
+                teamMembers={project.teamMembers}
+                defaultAssignees={project.defaultAssignees}
+                isAdmin={isAdmin ?? false}
+              />
+            </div>
+          )}
         </TabsContent>
       </Tabs>
 

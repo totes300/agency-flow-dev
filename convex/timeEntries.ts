@@ -3,7 +3,7 @@ import { query, mutation } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { getAuthContext } from "./lib/auth";
 import { roundMinutes } from "./lib/rounding";
-import { getDateInTimezone } from "./lib/timer";
+import { getDateInTimezone, ORG_TIMEZONE_FALLBACK } from "./lib/timer";
 import { getOrgSettings, resolveRateSnapshot } from "./lib/orgHelpers";
 import { validateAssignees } from "./lib/task_helpers";
 import { assertValidDateString } from "./lib/dateValidation";
@@ -64,7 +64,7 @@ export const listToday = query({
     const { userId, orgId } = await getAuthContext(ctx);
 
     const orgSettings = await getOrgSettings(ctx, orgId);
-    const timezone = orgSettings?.timezone ?? "America/New_York";
+    const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
     const todayStr = getDateInTimezone(Date.now(), timezone);
 
     const entries = await ctx.db
@@ -132,7 +132,7 @@ export const sumMyToday = query({
   handler: async (ctx) => {
     const { userId, orgId } = await getAuthContext(ctx);
     const orgSettings = await getOrgSettings(ctx, orgId);
-    const timezone = orgSettings?.timezone ?? "America/New_York";
+    const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
     const todayStr = getDateInTimezone(Date.now(), timezone);
 
     const entries = await ctx.db
@@ -221,7 +221,7 @@ export const create = mutation({
 
     // Get org settings
     const orgSettings = await getOrgSettings(ctx, auth.orgId);
-    const timezone = orgSettings?.timezone ?? "America/New_York";
+    const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
     const roundingMinutes = orgSettings?.roundingMinutes ?? 1;
 
     // Round duration
@@ -329,7 +329,7 @@ export const update = mutation({
     // Server doesn't re-anchor; clients call reanchorStartedAt and send both.
     if (args.date !== undefined || args.startedAt !== undefined) {
       const orgSettings = await getOrgSettings(ctx, orgId);
-      const timezone = orgSettings?.timezone ?? "America/New_York";
+      const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
       const nextStartedAt = args.startedAt ?? entry.startedAt;
       const nextDate = args.date ?? entry.date;
       const derivedDate = getDateInTimezone(nextStartedAt, timezone);
@@ -781,7 +781,7 @@ export const projectOverview = query({
 
     // Get org timezone for "this month" computation
     const orgSettings = await getOrgSettings(ctx, orgId);
-    const timezone = orgSettings?.timezone ?? "America/New_York";
+    const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
     const nowDate = getDateInTimezone(Date.now(), timezone);
     const currentMonth = nowDate.slice(0, 7); // "YYYY-MM"
 

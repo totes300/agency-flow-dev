@@ -4,6 +4,7 @@ import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { useQuery } from "convex/react"
 import { useConvexAuth } from "convex/react"
+import { CalendarClockIcon } from "lucide-react"
 import { api } from "@/convex/_generated/api"
 import type { NavGroup } from "@/lib/navigation"
 import {
@@ -14,6 +15,12 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+import { cn } from "@/lib/utils"
 
 function MyTasksBadge() {
   const { isAuthenticated } = useConvexAuth()
@@ -23,6 +30,56 @@ function MyTasksBadge() {
   )
   if (!count) return null
   return <SidebarMenuBadge>{count}</SidebarMenuBadge>
+}
+
+/**
+ * Sidebar signal block on the `Invoices` row — count badge + calendar-clock
+ * icon for overdue, with a hover tooltip explaining both.
+ *
+ * Render rules (PRD US 1–4):
+ *   - `toGenerateCount === 0 && overdueCount === 0` → render nothing (clean
+ *     state is silent — the absence is the signal).
+ *   - `toGenerateCount > 0` → numeric badge (right-aligned, primary tint).
+ *   - `overdueCount > 0` → calendar-clock icon next to the badge, red tint.
+ *   - Hover (mouse or focus) → tooltip with the count breakdown.
+ *
+ * Composition: `SidebarMenuBadge` owns position + collapsed-state hiding;
+ * `pointer-events-auto` re-enables hover so the Tooltip trigger fires.
+ */
+function InvoicesNavSignals() {
+  const { isAuthenticated } = useConvexAuth()
+  const signals = useQuery(
+    api.invoices.getInvoicingNavSignals,
+    isAuthenticated ? {} : "skip",
+  )
+  if (!signals) return null
+  const { toGenerateCount, overdueCount } = signals
+  if (toGenerateCount === 0 && overdueCount === 0) return null
+
+  const tooltipParts: string[] = []
+  if (toGenerateCount > 0) tooltipParts.push(`${toGenerateCount} ready to bill`)
+  if (overdueCount > 0) tooltipParts.push(`${overdueCount} overdue`)
+  const tooltip = tooltipParts.join(" · ")
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <SidebarMenuBadge
+          aria-label={tooltip}
+          className={cn(
+            "pointer-events-auto gap-1",
+            overdueCount > 0 && "text-red-700 dark:text-red-300",
+          )}
+        >
+          {overdueCount > 0 && (
+            <CalendarClockIcon className="size-3.5" aria-hidden />
+          )}
+          {toGenerateCount > 0 && <span>{toGenerateCount}</span>}
+        </SidebarMenuBadge>
+      </TooltipTrigger>
+      <TooltipContent side="right">{tooltip}</TooltipContent>
+    </Tooltip>
+  )
 }
 
 export function NavMain({
@@ -59,6 +116,7 @@ export function NavMain({
                     </Link>
                   </SidebarMenuButton>
                   {item.url === "/my-tasks" && <MyTasksBadge />}
+                  {item.url === "/invoices" && <InvoicesNavSignals />}
                 </SidebarMenuItem>
               ))}
             </SidebarMenu>

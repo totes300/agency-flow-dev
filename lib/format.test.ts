@@ -6,6 +6,8 @@ import {
   formatDateToYMD,
   formatRelativeTime,
   formatShortDate,
+  formatLastInvoiced,
+  daysSinceLastInvoice,
   getInitials,
   firstName,
   isOverdue,
@@ -104,6 +106,78 @@ describe("formatShortDate", () => {
   it("formats another date", () => {
     const result = formatShortDate("2026-12-25")
     expect(result).toBe("Dec 25")
+  })
+})
+
+// ─── formatLastInvoiced ─────────────────────────────────────────────────────────
+
+describe("formatLastInvoiced", () => {
+  // Anchor at Mar 19 2026 12:00 UTC. Boundaries are computed in `tz`.
+  const tz = "UTC"
+  const now = new Date(Date.UTC(2026, 2, 19, 12, 0, 0))
+  const daysAgo = (n: number) => new Date(Date.UTC(2026, 2, 19 - n, 12, 0, 0))
+
+  it("returns empty string for null", () => {
+    expect(formatLastInvoiced(null, { now, timezone: tz })).toBe("")
+  })
+  it("returns 'today' for same day (0d)", () => {
+    expect(formatLastInvoiced(daysAgo(0), { now, timezone: tz })).toBe("today")
+  })
+  it("returns 'yesterday' for 1 day ago", () => {
+    expect(formatLastInvoiced(daysAgo(1), { now, timezone: tz })).toBe("yesterday")
+  })
+  it("returns 'N days ago' for 13 days ago", () => {
+    expect(formatLastInvoiced(daysAgo(13), { now, timezone: tz })).toBe("13 days ago")
+  })
+  it("switches to absolute date at 14-day boundary", () => {
+    expect(formatLastInvoiced(daysAgo(14), { now, timezone: tz })).toBe("Mar 5, 2026")
+  })
+  it("returns absolute date for 60 days ago", () => {
+    expect(formatLastInvoiced(daysAgo(60), { now, timezone: tz })).toBe("Jan 18, 2026")
+  })
+  it("returns absolute date for ~1 year ago", () => {
+    expect(
+      formatLastInvoiced(new Date(Date.UTC(2025, 2, 19, 12, 0, 0)), { now, timezone: tz }),
+    ).toBe("Mar 19, 2025")
+  })
+  it("accepts a numeric (millisecond) timestamp", () => {
+    expect(formatLastInvoiced(daysAgo(1).getTime(), { now, timezone: tz })).toBe("yesterday")
+  })
+  it("respects the requested timezone — same UTC instant, different calendar day", () => {
+    // Mar 19 02:00 UTC = Mar 18 22:00 NYC = Mar 19 11:00 Tokyo.
+    const stamp = new Date(Date.UTC(2026, 2, 19, 2, 0, 0))
+    const probe = new Date(Date.UTC(2026, 2, 19, 14, 0, 0)) // Mar 19 10:00 NYC, Mar 19 23:00 Tokyo
+    expect(formatLastInvoiced(stamp, { now: probe, timezone: "America/New_York" })).toBe("yesterday")
+    expect(formatLastInvoiced(stamp, { now: probe, timezone: "Asia/Tokyo" })).toBe("today")
+  })
+  it("DST-safe — 'yesterday' holds across US spring-forward", () => {
+    // 2026-03-08 = US DST start (02:00 EST → 03:00 EDT). Calendar diff stays 1.
+    const dayBefore = new Date(Date.UTC(2026, 2, 7, 22, 0, 0))
+    const today = new Date(Date.UTC(2026, 2, 8, 22, 0, 0))
+    expect(formatLastInvoiced(dayBefore, { now: today, timezone: "America/New_York" })).toBe("yesterday")
+  })
+})
+
+// ─── daysSinceLastInvoice ───────────────────────────────────────────────────────
+
+describe("daysSinceLastInvoice", () => {
+  const tz = "UTC"
+  const now = new Date(Date.UTC(2026, 2, 19, 12, 0, 0))
+
+  it("returns null when there is no last invoice", () => {
+    expect(daysSinceLastInvoice(null, { now, timezone: tz })).toBe(null)
+  })
+  it("returns 0 for today", () => {
+    expect(daysSinceLastInvoice(now.getTime(), { now, timezone: tz })).toBe(0)
+  })
+  it("returns N for N days ago", () => {
+    const ts = Date.UTC(2026, 2, 19 - 30, 12, 0, 0) // 30 days
+    expect(daysSinceLastInvoice(ts, { now, timezone: tz })).toBe(30)
+  })
+  it("agrees with formatLastInvoiced on the boundary", () => {
+    const ts = Date.UTC(2026, 2, 19 - 14, 12, 0, 0)
+    expect(daysSinceLastInvoice(ts, { now, timezone: tz })).toBe(14)
+    expect(formatLastInvoiced(ts, { now, timezone: tz })).toBe("Mar 5, 2026")
   })
 })
 

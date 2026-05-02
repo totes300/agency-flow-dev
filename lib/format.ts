@@ -1,3 +1,11 @@
+/**
+ * Round a number to 2 decimal places. Centralized so client and server
+ * formatting use the same rounding rule on currency-shaped numbers.
+ */
+export function round2(n: number): number {
+  return Math.round(n * 100) / 100
+}
+
 /** Check if two dates fall on the same calendar day. */
 export function isSameDay(a: Date, b: Date): boolean {
   return (
@@ -161,10 +169,137 @@ export function formatRelativeTime(timestamp: number, now: number = Date.now()):
   return `${days}d ago`
 }
 
+/**
+ * Calendar-day difference in `timezone`. DST-safe because we compare
+ * YYYY-MM-DD strings rendered in the zone, not raw ms. Positive values mean
+ * `from` is older than `to`.
+ */
+function calendarDaysBetween(from: Date, to: Date, timezone: string): number {
+  const fmt = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  })
+  const [fy, fm, fd] = fmt.format(from).split("-").map(Number)
+  const [ty, tm, td] = fmt.format(to).split("-").map(Number)
+  // UTC midnight anchors → exact 86,400,000 ms per day; the YMD strings
+  // already absorbed any DST shift in the target zone.
+  return Math.round((Date.UTC(ty, tm - 1, td) - Date.UTC(fy, fm - 1, fd)) / 86_400_000)
+}
+
+/**
+ * Calendar-day count between two YYYY-MM-DD strings. Positive when `to` is
+ * later than `from`; zero on the same day. Both anchors are treated as UTC
+ * midnight, so this is exact integer arithmetic — no timezone parameter
+ * needed (YMD strings already encode the calendar day in the caller's zone).
+ *
+ * Shared by the Inbox overdue badge ("3d late") and any other surface that
+ * compares two YMD values without going through `Date`.
+ */
+export function daysBetweenYMD(fromYMD: string, toYMD: string): number {
+  const [fy, fm, fd] = fromYMD.split("-").map(Number)
+  const [ty, tm, td] = toYMD.split("-").map(Number)
+  const fromMs = Date.UTC(fy, fm - 1, fd)
+  const toMs = Date.UTC(ty, tm - 1, td)
+  return Math.round((toMs - fromMs) / 86_400_000)
+}
+
+/**
+ * Calendar-day count from a "last invoiced" timestamp to now, in the given
+ * timezone. `null` input → `null` output (no last invoice). Shares the
+ * DST-safe diff with `formatLastInvoiced` so the cadence chip and the subline
+ * agree on what "30 days" means.
+ */
+export function daysSinceLastInvoice(
+  lastInvoicedAt: number | null,
+  opts: { now?: Date; timezone: string },
+): number | null {
+  if (lastInvoicedAt === null) return null
+  const now = opts.now ?? new Date()
+  return calendarDaysBetween(new Date(lastInvoicedAt), now, opts.timezone)
+}
+
+/**
+ * Format a "last invoiced" date for invoice-banner / breakdown / inbox sublines.
+ *   null      → "" (empty — caller decides whether to render)
+ *   < 14d ago → relative ("today", "yesterday", "3 days ago")
+ *   ≥ 14d ago → absolute ("Mar 1, 2026")
+ *
+ * Calendar-day delta is computed in `opts.timezone` (the org's setting) so the
+ * "yesterday" boundary matches the rest of the invoicing flow. Sole source of
+ * truth — banner subline, inbox row subline, and the cadence-chip threshold
+ * all read from this helper.
+ */
+export function formatLastInvoiced(
+  date: number | Date | null,
+  opts: { now?: Date; timezone: string },
+): string {
+  if (date === null) return ""
+  const d = typeof date === "number" ? new Date(date) : date
+  const now = opts.now ?? new Date()
+  const days = calendarDaysBetween(d, now, opts.timezone)
+  if (days < 14) {
+    if (days <= 0) return "today"
+    if (days === 1) return "yesterday"
+    return `${days} days ago`
+  }
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: opts.timezone,
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(d)
+}
+
 /** Format a YYYY-MM-DD date string as short display (e.g., "Mar 20"). */
 export function formatShortDate(dateStr: string, locale = "en-US"): string {
   const date = new Date(dateStr + "T00:00:00")
   return date.toLocaleDateString(locale, { month: "short", day: "numeric" })
+}
+
+/**
+ * Reconstruct a retainer cycle's month list from its closing month and length.
+ * Used by surfaces that carry only the closing month (e.g. Inbox rows) and
+ * need the full range to feed `formatCycleLabel`.
+ *
+ * Months are 1-indexed (1=Jan). Computed via an absolute month index so cross-
+ * year cycles (Nov-Jan) work without manual wraparound branches.
+ */
+export function buildCycleMonths(
+  closingYear: number,
+  closingMonth: number,
+  cycleLength: number,
+): Array<{ year: number; month: number }> {
+  if (cycleLength < 1) return [{ year: closingYear, month: closingMonth }]
+  const closingIndex = closingYear * 12 + (closingMonth - 1)
+  const startIndex = closingIndex - (cycleLength - 1)
+  const months: Array<{ year: number; month: number }> = []
+  for (let i = 0; i < cycleLength; i++) {
+    const idx = startIndex + i
+    months.push({ year: Math.floor(idx / 12), month: (idx % 12) + 1 })
+  }
+  return months
+}
+
+/**
+ * Build a retainer cycle's range label, e.g. "Apr–Jun" / "Dec 2026 – Feb 2027".
+ * Same year → bare short-month abbreviations; cross-year falls back to absolute
+ * "Mon YYYY" on each side. Shared between the InvoiceBanner subline and the
+ * Monthly Breakdown card header so both surfaces always agree on the wording.
+ */
+export function formatCycleLabel(
+  months: Array<{ year: number; month: number }>,
+): string {
+  if (months.length === 0) return ""
+  const first = months[0]
+  const last = months[months.length - 1]
+  const monthName = (m: number) =>
+    new Date(2000, m, 1).toLocaleDateString("en-US", { month: "short" })
+  if (first.year === last.year) {
+    return `${monthName(first.month)}–${monthName(last.month)}`
+  }
+  return `${monthName(first.month)} ${first.year} – ${monthName(last.month)} ${last.year}`
 }
 
 /** Format a YYYY-MM-DD date string for invoice display (e.g., "Mar 20, 2026"). */

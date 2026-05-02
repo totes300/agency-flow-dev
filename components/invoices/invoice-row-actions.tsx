@@ -2,7 +2,7 @@
 
 import { useState } from "react"
 import { useMutation } from "convex/react"
-import { MoreHorizontal, CheckCircle2, Undo2, Ban, FileCheck } from "lucide-react"
+import { MoreHorizontal, Undo2, Ban } from "lucide-react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { toast } from "sonner"
@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import type { InvoiceStatus } from "@/components/invoices/invoice-status-badge"
 
-type TransitionLabel = {
+type SecondaryAction = {
   label: string
   icon: React.ReactNode
   target: InvoiceStatus
@@ -25,25 +25,36 @@ type TransitionLabel = {
 }
 
 /**
- * Available transitions per current state. Order matches the state machine
- * in `convex/invoices.ts` — forward progression first, reversal below a
- * separator, Void last as the destructive option.
+ * The forward-progression action exposed *inline* per status. This is the
+ * "most likely next thing the agency owner clicks" — Ready→Generate's
+ * sibling for issued invoices. Always visible on hover so users don't dig
+ * through a `…` menu for the dominant action.
+ *
+ *   draft     → Mark as invoiced
+ *   invoiced  → Mark as paid
+ *   paid      → none (terminal-ish)
+ *   void      → none
  */
-const TRANSITIONS: Record<InvoiceStatus, TransitionLabel[]> = {
+const PRIMARY_ACTION: Record<
+  InvoiceStatus,
+  { label: string; target: InvoiceStatus } | null
+> = {
+  draft: { label: "Mark as invoiced", target: "invoiced" },
+  invoiced: { label: "Mark as paid", target: "paid" },
+  paid: null,
+  void: null,
+}
+
+/**
+ * Reversal + destructive transitions — these go in the overflow menu,
+ * since they're rare and reverting an invoice's lifecycle is a
+ * deliberate, second-thought action.
+ */
+const SECONDARY_ACTIONS: Record<InvoiceStatus, SecondaryAction[]> = {
   draft: [
-    {
-      label: "Mark as invoiced",
-      icon: <FileCheck className="size-3.5" />,
-      target: "invoiced",
-    },
     { label: "Void", icon: <Ban className="size-3.5" />, target: "void", destructive: true },
   ],
   invoiced: [
-    {
-      label: "Mark as paid",
-      icon: <CheckCircle2 className="size-3.5" />,
-      target: "paid",
-    },
     {
       label: "Revert to draft",
       icon: <Undo2 className="size-3.5" />,
@@ -78,13 +89,10 @@ export function InvoiceRowActions({
   const changeStatus = useMutation(api.invoices.changeInvoiceStatus)
   const [open, setOpen] = useState(false)
 
-  const transitions = TRANSITIONS[status]
-  if (transitions.length === 0) return null
+  const primary = PRIMARY_ACTION[status]
+  const secondary = SECONDARY_ACTIONS[status]
 
-  // Void is always the last, destructive entry — separate it visually.
-  const [void_, ...rest] = transitions.slice().reverse()
-  const forward = rest.reverse()
-  const hasVoid = void_?.target === "void"
+  if (!primary && secondary.length === 0) return null
 
   async function run(target: InvoiceStatus) {
     try {
@@ -95,37 +103,62 @@ export function InvoiceRowActions({
     }
   }
 
+  // Void is always the last, destructive entry. The earlier definition keeps
+  // forward + reversal first so the menu reads top-to-bottom in lifecycle
+  // order, with the destructive option visually separated below.
+  const reversal = secondary.filter((a) => a.target !== "void")
+  const voidAction = secondary.find((a) => a.target === "void") ?? null
+
   return (
-    <DropdownMenu open={open} onOpenChange={setOpen}>
-      <DropdownMenuTrigger asChild>
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label="Invoice actions"
-          onClick={(e) => e.stopPropagation()}
-          className="size-7 text-muted-foreground hover:text-foreground"
-        >
-          <MoreHorizontal className="size-4" />
+    <div
+      className="flex items-center justify-end gap-1"
+      onClick={(e) => e.stopPropagation()}
+    >
+      {primary && (
+        <Button size="sm" onClick={() => run(primary.target)}>
+          {primary.label}
         </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        align="end"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {forward.map((t) => (
-          <DropdownMenuItem key={t.target} onSelect={() => run(t.target)}>
-            {t.icon}
-            {t.label}
-          </DropdownMenuItem>
-        ))}
-        {hasVoid && forward.length > 0 && <DropdownMenuSeparator />}
-        {hasVoid && (
-          <DropdownMenuItem variant="destructive" onSelect={() => run("void")}>
-            {void_.icon}
-            {void_.label}
-          </DropdownMenuItem>
-        )}
-      </DropdownMenuContent>
-    </DropdownMenu>
+      )}
+
+      {secondary.length > 0 && (
+        // Overflow trigger fades on hover — the primary button carries the
+        // dominant affordance, so the dots can stay quiet at rest.
+        <div className="opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 group-data-[selected=true]:opacity-100">
+          <DropdownMenu open={open} onOpenChange={setOpen}>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="More invoice actions"
+                className="size-7 text-muted-foreground hover:text-foreground"
+              >
+                <MoreHorizontal className="size-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="end"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {reversal.map((t) => (
+                <DropdownMenuItem key={t.target} onSelect={() => run(t.target)}>
+                  {t.icon}
+                  {t.label}
+                </DropdownMenuItem>
+              ))}
+              {voidAction && reversal.length > 0 && <DropdownMenuSeparator />}
+              {voidAction && (
+                <DropdownMenuItem
+                  variant="destructive"
+                  onSelect={() => run("void")}
+                >
+                  {voidAction.icon}
+                  {voidAction.label}
+                </DropdownMenuItem>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      )}
+    </div>
   )
 }

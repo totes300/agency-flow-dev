@@ -2,7 +2,7 @@ import { query } from "./_generated/server";
 import { getAuthContext } from "./lib/auth";
 import { createTaskEnricher } from "./lib/task_helpers";
 import { getOrgSettings } from "./lib/orgHelpers";
-import { getDateInTimezone } from "./lib/timer";
+import { getDateInTimezone, ORG_TIMEZONE_FALLBACK } from "./lib/timer";
 import {
   filterMyTasks,
   groupByStatus,
@@ -64,7 +64,7 @@ export const listMyTasks = query({
 
     // Get today's date in org timezone
     const orgSettings = await getOrgSettings(ctx, orgId);
-    const timezone = orgSettings?.timezone ?? "America/New_York";
+    const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
     const todayDateStr = getDateInTimezone(Date.now(), timezone);
 
     // 1. Load all org statuses (active only)

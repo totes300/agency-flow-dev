@@ -37,9 +37,11 @@ import { Skeleton } from "@/components/ui/skeleton"
 import {
   formatCurrency,
   formatDateToYMDOrUndefined,
+  formatInvoiceNumber,
   parseYMDToLocalDate,
 } from "@/lib/format"
 import { extractErrorMessage } from "@/lib/toast-helpers"
+import { ORG_TIMEZONE_FALLBACK } from "@/lib/hooks/use-org-timezone"
 import { toast } from "sonner"
 import { InfoIcon, LoaderIcon } from "lucide-react"
 
@@ -134,7 +136,7 @@ export function CreateInvoiceModal({
   const orgSettings = useQuery(api.orgSettings.get, isAuthenticated ? {} : "skip")
   const createInvoice = useMutation(api.invoices.createInvoice)
 
-  const timezone = orgSettings?.timezone ?? "UTC"
+  const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK
   const isRetainer = billingType === "retainer"
   const isFixed = billingType === "fixed"
   const isSelectionMode = timeEntryIds !== undefined && timeEntryIds.length > 0
@@ -203,11 +205,18 @@ export function CreateInvoiceModal({
     ? (effectiveMonth ? retainerPreview === undefined : false)
     : preview === undefined
   const hasEntries = preview !== null && preview !== undefined && preview.entryCount > 0
+  // Server-side guard: createInvoice rejects retainer rows with total === 0
+  // ("Download statement instead"). Mirror it here so the Create button is
+  // disabled before the user clicks rather than failing post-submit.
+  const isRetainerNonBillable = isRetainer && retainerPreview?.total === 0
 
   const canCreate = isSelectionMode
     ? hasEntries
     : isRetainer
-      ? effectiveMonth !== undefined && retainerPreview !== null && retainerPreview !== undefined
+      ? effectiveMonth !== undefined &&
+        retainerPreview !== null &&
+        retainerPreview !== undefined &&
+        !isRetainerNonBillable
       : isFixed
         ? preview !== null && preview !== undefined && (preview.billingAmount ?? 0) > 0
         : hasEntries
@@ -221,7 +230,7 @@ export function CreateInvoiceModal({
     setIsCreating(true)
     setError("")
     try {
-      const invoiceId = await createInvoice({
+      const { invoiceId, resumed, prefix, number } = await createInvoice({
         projectId,
         startDate: isRetainer || isSelectionMode ? undefined : dateRange.start,
         endDate: isRetainer || isSelectionMode ? undefined : dateRange.end,
@@ -236,7 +245,11 @@ export function CreateInvoiceModal({
       } else {
         router.push(`/invoices/${invoiceId}?from=project&projectId=${projectId}&tab=invoices`)
       }
-      toast.success("Invoice created")
+      if (resumed) {
+        toast.info(`Resuming draft ${formatInvoiceNumber(prefix, number)}`)
+      } else {
+        toast.success("Invoice created")
+      }
     } catch (err) {
       setError(extractErrorMessage(err, "Failed to create invoice"))
     } finally {
@@ -463,7 +476,7 @@ export function CreateInvoiceModal({
                 </div>
                 {!hasEntries && !isFixed && (
                   <p className="mt-2 text-xs text-muted-foreground">
-                    No billable time found for this period.
+                    No billable time found for this period. Try expanding the date range or check that entries are marked billable.
                   </p>
                 )}
               </div>
@@ -475,6 +488,12 @@ export function CreateInvoiceModal({
       </FormModalBody>
 
       <FormModalFooter>
+        {isRetainerNonBillable && effectiveMonth && (
+          <p className="text-center text-xs text-muted-foreground">
+            No billable amount this month — download the statement from the
+            project page instead.
+          </p>
+        )}
         <Button
           onClick={handleCreate}
           disabled={!canCreate || isCreating}
@@ -485,13 +504,14 @@ export function CreateInvoiceModal({
           {isCreating ? "Creating..." : "Create Invoice"}
         </Button>
         <DialogClose asChild>
-          <button
+          <Button
             type="button"
+            variant="ghost"
             disabled={isCreating}
-            className="text-sm text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+            className="text-sm text-muted-foreground hover:text-foreground"
           >
             Cancel
-          </button>
+          </Button>
         </DialogClose>
       </FormModalFooter>
     </FormModal>

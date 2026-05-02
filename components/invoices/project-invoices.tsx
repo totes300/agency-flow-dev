@@ -7,12 +7,14 @@ import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { Button } from "@/components/ui/button"
 import { InvoiceList, type InvoiceRow } from "@/components/invoices/invoice-list"
+import { toInvoiceListRow } from "@/lib/invoices/list-rows"
 import { InvoicesEmptyState } from "@/components/invoices/invoices-empty-state"
 import { CreateInvoiceModal } from "@/components/invoices/create-invoice-modal"
 import { ProjectInvoicesSkeleton } from "@/components/invoices/project-invoices-skeleton"
 import { ProjectInvoicesPaymentCards } from "@/components/invoices/project-invoices-payment-cards"
 import { ProjectInvoicesRetainerCallout } from "@/components/invoices/project-invoices-retainer-callout"
 import { formatCurrency } from "@/lib/format"
+import { ORG_TIMEZONE_FALLBACK } from "@/lib/hooks/use-org-timezone"
 import { PlusIcon } from "lucide-react"
 
 /**
@@ -42,10 +44,14 @@ export function ProjectInvoices({
   if (invoices === undefined || metrics === undefined || overview === undefined) {
     return <ProjectInvoicesSkeleton />
   }
-  if (metrics === null) return null
+  // metrics === null only when the project itself was deleted between the
+  // initial render and this query — the parent <ProjectDetailPage> already
+  // routes to notFound() in that case, so this branch is just defensive
+  // alignment with the loading skeleton (no blank flash on race).
+  if (metrics === null) return <ProjectInvoicesSkeleton />
 
   const { billingType, currency } = project
-  const timezone = orgSettings?.timezone ?? "UTC"
+  const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK
   const hasInvoices = invoices.length > 0
   const paidLifetime = metrics.paidLifetime.amount
 
@@ -88,7 +94,7 @@ export function ProjectInvoices({
       {/* Invoice list or empty state */}
       {hasInvoices ? (
         <InvoiceList
-          invoices={invoices as InvoiceRow[]}
+          rows={(invoices as InvoiceRow[]).map(toInvoiceListRow)}
           timezone={timezone}
           fromProject={{ projectId }}
         />

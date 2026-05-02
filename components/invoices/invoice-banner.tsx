@@ -1,0 +1,152 @@
+"use client"
+
+import { useState } from "react"
+import { Button } from "@/components/ui/button"
+import { CreateInvoiceModal } from "@/components/invoices/create-invoice-modal"
+import type { Id } from "@/convex/_generated/dataModel"
+import { cn } from "@/lib/utils"
+import {
+  deriveInvoiceBannerView,
+  type InvoiceBannerState,
+} from "@/lib/invoice-banner-view"
+import { HourglassIcon, ReceiptIcon, RepeatIcon, TimerIcon, type LucideIcon } from "lucide-react"
+
+export type { InvoiceBannerState } from "@/lib/invoice-banner-view"
+
+/**
+ * Single shared "ready to bill" banner across all 3 project Overviews.
+ *
+ * Renders a compact 4-column layout per `prototypes/invoicing-final.html`:
+ *   [icon] [title + subline (+ optional cadence chip)] [amount column] [Generate]
+ *
+ * Visibility per project type is the caller's responsibility: pass `null` to
+ * render nothing (mid-cycle rollover retainer, fully invoiced Fixed, no
+ * uninvoiced T&M hours, etc.). The component itself is always actionable
+ * when rendered — there is no `variant` / `disabled` prop.
+ *
+ * Copy / amount tone derivation lives in `lib/invoice-banner-view.ts` so
+ * it's unit-testable without React. The CTA opens `<CreateInvoiceModal>`
+ * pre-filled per `state.kind`. Resume-draft handling lives inside the modal.
+ */
+const ICON_BY_KIND: Record<InvoiceBannerState["kind"], LucideIcon> = {
+  fixed: ReceiptIcon,
+  tm: TimerIcon,
+  "retainer-monthly": RepeatIcon,
+  "retainer-cycle-closed": RepeatIcon,
+}
+
+// Subtle category-token tints per billing type so users pattern-match the
+// surface without reading the title. Stays muted enough not to compete with
+// status/warning colors elsewhere in the page.
+const TINT_BY_KIND: Record<InvoiceBannerState["kind"], string> = {
+  fixed: "bg-violet-100 text-violet-700 dark:bg-violet-950/40 dark:text-violet-300",
+  tm: "bg-sky-100 text-sky-700 dark:bg-sky-950/40 dark:text-sky-300",
+  "retainer-monthly":
+    "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300",
+  "retainer-cycle-closed":
+    "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300",
+}
+
+const CADENCE_THRESHOLD_DAYS = 30
+
+export function InvoiceBanner({
+  state,
+  projectId,
+  projectName,
+  currency,
+  timezone,
+}: {
+  state: InvoiceBannerState | null
+  projectId: Id<"projects">
+  projectName: string
+  currency: string
+  timezone: string
+}) {
+  const [open, setOpen] = useState(false)
+
+  if (!state) return null
+
+  const Icon = ICON_BY_KIND[state.kind]
+  const view = deriveInvoiceBannerView(state, currency, timezone)
+  const showCadenceChip =
+    (state.kind === "fixed" || state.kind === "tm") &&
+    state.daysSinceLastInvoice !== null &&
+    state.daysSinceLastInvoice >= CADENCE_THRESHOLD_DAYS
+
+  const billingType =
+    state.kind === "fixed" ? "fixed" : state.kind === "tm" ? "t_and_m" : "retainer"
+  const initialRetainerYear =
+    state.kind === "retainer-monthly" || state.kind === "retainer-cycle-closed"
+      ? state.targetYear
+      : undefined
+  const initialRetainerMonth =
+    state.kind === "retainer-monthly" || state.kind === "retainer-cycle-closed"
+      ? state.targetMonth
+      : undefined
+
+  return (
+    <>
+      <div className="grid grid-cols-[36px_1fr_auto_auto] items-center gap-4 rounded-lg border bg-card px-4 py-3">
+        <span className={cn("grid size-9 place-items-center rounded-lg", TINT_BY_KIND[state.kind])}>
+          <Icon className="size-4" />
+        </span>
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 text-sm font-medium">
+            <span className="truncate">{view.title}</span>
+            {showCadenceChip && (
+              <span
+                className="inline-flex shrink-0 items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground tabular-nums"
+                aria-label={`${state.daysSinceLastInvoice} days since last invoice`}
+              >
+                <HourglassIcon className="size-3" aria-hidden />
+                {state.daysSinceLastInvoice} days
+              </span>
+            )}
+          </div>
+          {view.subline && (
+            <p className="mt-0.5 truncate text-xs text-muted-foreground">{view.subline}</p>
+          )}
+        </div>
+        <div className="text-right">
+          <div
+            className={cn(
+              "text-sm font-semibold tabular-nums",
+              view.amountTone === "warn" && "text-amber-700 dark:text-amber-500",
+              view.amountTone === "neutral" && "text-foreground",
+            )}
+          >
+            {view.amount}
+          </div>
+          <div
+            className={cn(
+              "text-xs",
+              view.labelTone === "ok"
+                ? "text-emerald-700 dark:text-emerald-500"
+                : "text-muted-foreground",
+            )}
+          >
+            {view.amountLabel}
+          </div>
+        </div>
+        <Button size="sm" onClick={() => setOpen(true)}>
+          Generate invoice
+        </Button>
+      </div>
+
+      <CreateInvoiceModal
+        // Stable key — only changes when the pre-fill target changes (a
+        // different retainer month). Avoids modal remount + query re-runs
+        // on every open/close.
+        key={`${projectId}-${initialRetainerYear ?? "x"}-${initialRetainerMonth ?? "x"}`}
+        open={open}
+        onOpenChange={setOpen}
+        projectId={projectId}
+        projectName={projectName}
+        billingType={billingType}
+        currency={currency}
+        initialRetainerYear={initialRetainerYear}
+        initialRetainerMonth={initialRetainerMonth}
+      />
+    </>
+  )
+}

@@ -58,6 +58,8 @@ export default defineSchema({
     nextInvoiceNumber: v.optional(v.number()),
     invoicePrefix: v.optional(v.string()),
     defaultPaymentTermsDays: v.optional(v.number()),
+    paymentInstructions: v.optional(v.string()),
+    invoiceMessageTemplate: v.optional(v.string()),
     // Base
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -252,6 +254,9 @@ export default defineSchema({
     periodStart: v.optional(v.string()),
     periodEnd: v.optional(v.string()),
     note: v.optional(v.string()),
+    // Editable per-invoice message rendered on the invoice document. Seeded
+    // from `orgSettings.invoiceMessageTemplate` at creation; admin can edit.
+    messageToClient: v.optional(v.string()),
     roundingMinutes: v.optional(v.number()),
     // Retainer balance snapshot (retainer invoices only)
     retainerStartBalanceMinutes: v.optional(v.number()),

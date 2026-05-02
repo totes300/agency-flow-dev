@@ -4,8 +4,8 @@ import { useState, useRef, useEffect } from "react"
 import { useQuery, useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { Button } from "@/components/ui/button"
-import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
-import { Input } from "@/components/ui/input"
+import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
+import { Textarea } from "@/components/ui/textarea"
 import {
   Select,
   SelectContent,
@@ -46,6 +46,16 @@ function SettingsGeneralSkeleton() {
             <Skeleton className="h-5 w-48" />
           </div>
         </div>
+        <div className="flex flex-col gap-2">
+          <Skeleton className="h-4 w-40" />
+          <Skeleton className="h-24 w-full" />
+          <Skeleton className="h-3 w-72" />
+        </div>
+        <div className="flex flex-col gap-2">
+          <Skeleton className="h-4 w-44" />
+          <Skeleton className="h-24 w-full" />
+          <Skeleton className="h-3 w-72" />
+        </div>
       </div>
     </div>
   )
@@ -55,16 +65,22 @@ function SettingsGeneralForm({
   initialCurrency,
   initialTimezone,
   initialRounding,
+  initialPaymentInstructions,
+  initialInvoiceMessageTemplate,
 }: {
   initialCurrency: Currency
   initialTimezone: string
   initialRounding: RoundingMinutes
+  initialPaymentInstructions: string
+  initialInvoiceMessageTemplate: string
 }) {
   const updateSettings = useMutation(api.orgSettings.update)
 
   const [currency, setCurrency] = useState<Currency>(initialCurrency)
   const [timezone, setTimezone] = useState(initialTimezone)
   const [rounding, setRounding] = useState<RoundingMinutes>(initialRounding)
+  const [paymentInstructions, setPaymentInstructions] = useState(initialPaymentInstructions)
+  const [invoiceMessageTemplate, setInvoiceMessageTemplate] = useState(initialInvoiceMessageTemplate)
   const [isSaving, setIsSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState("")
@@ -81,18 +97,35 @@ function SettingsGeneralForm({
   const hasChanges =
     currency !== initialCurrency ||
     timezone !== initialTimezone ||
-    rounding !== initialRounding
+    rounding !== initialRounding ||
+    paymentInstructions !== initialPaymentInstructions ||
+    invoiceMessageTemplate !== initialInvoiceMessageTemplate
 
   async function handleSave() {
     setIsSaving(true)
     setSaved(false)
     setError("")
     try {
-      await updateSettings({
+      // Send only changed template fields. Empty strings are passed through —
+      // the server interprets "" as "clear" and stores the field as undefined.
+      const patch: {
+        defaultCurrency: Currency
+        timezone: string
+        roundingMinutes: RoundingMinutes
+        paymentInstructions?: string
+        invoiceMessageTemplate?: string
+      } = {
         defaultCurrency: currency,
         timezone,
         roundingMinutes: rounding,
-      })
+      }
+      if (paymentInstructions !== initialPaymentInstructions) {
+        patch.paymentInstructions = paymentInstructions
+      }
+      if (invoiceMessageTemplate !== initialInvoiceMessageTemplate) {
+        patch.invoiceMessageTemplate = invoiceMessageTemplate
+      }
+      await updateSettings(patch)
       setSaved(true)
       savedTimerRef.current = setTimeout(() => setSaved(false), 2000)
     } catch (err) {
@@ -167,6 +200,34 @@ function SettingsGeneralForm({
           </RadioGroup>
         </Field>
 
+        <Field>
+          <FieldLabel htmlFor="settings-payment-instructions">Payment instructions</FieldLabel>
+          <Textarea
+            id="settings-payment-instructions"
+            value={paymentInstructions}
+            onChange={(e) => setPaymentInstructions(e.target.value)}
+            rows={4}
+            placeholder="IBAN, Stripe link, payment terms…"
+          />
+          <FieldDescription>
+            Renders on every invoice document. IBAN, Stripe link, terms, etc.
+          </FieldDescription>
+        </Field>
+
+        <Field>
+          <FieldLabel htmlFor="settings-invoice-message-template">Default message to client</FieldLabel>
+          <Textarea
+            id="settings-invoice-message-template"
+            value={invoiceMessageTemplate}
+            onChange={(e) => setInvoiceMessageTemplate(e.target.value)}
+            rows={4}
+            placeholder="Thanks for the work this month — full breakdown below."
+          />
+          <FieldDescription>
+            Seeded into every new invoice&rsquo;s message block. You can edit per-invoice.
+          </FieldDescription>
+        </Field>
+
       </FieldGroup>
 
       {error && (
@@ -196,6 +257,8 @@ export function SettingsGeneral() {
       initialCurrency={settings.defaultCurrency as Currency}
       initialTimezone={settings.timezone}
       initialRounding={settings.roundingMinutes as RoundingMinutes}
+      initialPaymentInstructions={settings.paymentInstructions ?? ""}
+      initialInvoiceMessageTemplate={settings.invoiceMessageTemplate ?? ""}
     />
   )
 }

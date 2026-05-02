@@ -1,8 +1,7 @@
 "use client"
 
-import { useEffect, useMemo } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
-import type { Id } from "@/convex/_generated/dataModel"
 import {
   Table,
   TableHeader,
@@ -12,8 +11,17 @@ import {
 } from "@/components/ui/table"
 import { Checkbox } from "@/components/ui/checkbox"
 import { useRowSelection } from "@/lib/hooks/use-row-selection"
-import { InvoiceRow } from "@/components/invoices/invoice-row"
+import {
+  InvoiceRowItem,
+  ReadyRowItem,
+} from "@/components/invoices/invoice-row"
+import { CreateInvoiceModal } from "@/components/invoices/create-invoice-modal"
 import { InvoiceBulkBar } from "@/components/invoices/invoice-bulk-bar"
+import {
+  readyRowKey,
+  type ListRow,
+  type ReadyRow,
+} from "@/lib/invoices/list-rows"
 
 export type InvoiceRow = {
   _id: string
@@ -31,36 +39,51 @@ export type InvoiceRow = {
 }
 
 /**
- * Orchestrator: owns selection state, wires the sticky bulk bar, and renders
- * rows through `<InvoiceRow>`. Presentation of an individual row lives in
- * `invoice-row.tsx` — this file should stay thin.
+ * Unified invoice table. Rows can be in two states:
+ *
+ *   - `ready`   — no invoice exists yet (project work waiting to be billed)
+ *   - `invoice` — an invoice row in any lifecycle status (draft → void)
+ *
+ * Both render with the same column grammar — Number / Issue / Due cells
+ * em-dash for ready rows, encoding "not yet issued" without a separate
+ * column structure. Selection is unified across both kinds; the bulk bar
+ * surfaces actions per-kind (Generate for ready, Mark paid / Void for
+ * invoices) and gracefully handles mixed selection by acting on each
+ * kind's slice.
  */
 export function InvoiceList({
-  invoices,
+  rows,
   showProject = false,
+  showStatus = true,
   timezone = "UTC",
   fromProject,
   emptyState,
 }: {
-  invoices: InvoiceRow[]
+  rows: ListRow[]
   showProject?: boolean
+  /**
+   * Hide the Status column on tabs where every row has the same status
+   * (Draft, Paid, Void) — the tab nav already names that status, so the
+   * column is dead weight. Keep it on Ready (within-budget / over) and
+   * Outstanding (overdue accent), and on the project detail tab where
+   * statuses mix.
+   */
+  showStatus?: boolean
   timezone?: string
   fromProject?: { projectId: string }
   /**
-   * Rendered instead of the table when `invoices` is empty. Pass an
+   * Rendered instead of the table when `rows` is empty. Pass an
    * `<InvoicesEmptyState>` variant so filtered views don't blank-flash.
    */
   emptyState?: React.ReactNode
 }) {
   const router = useRouter()
+  const [activeReady, setActiveReady] = useState<ReadyRow | null>(null)
 
-  // Memoize visible IDs so `useRowSelection`'s range + header-state logic
+  // Memoize visible keys so `useRowSelection`'s range + header-state logic
   // stays stable across unrelated re-renders.
-  const visibleIds = useMemo(
-    () => invoices.map((i) => i._id as Id<"invoices">),
-    [invoices],
-  )
-  const selection = useRowSelection<Id<"invoices">>(visibleIds)
+  const visibleKeys = useMemo(() => rows.map((r) => r.key), [rows])
+  const selection = useRowSelection<string>(visibleKeys)
 
   // Escape clears selection. Ignored when a Radix dropdown/dialog owns focus,
   // since Radix handles its own Escape first (same guard the Time tab uses).
@@ -76,18 +99,23 @@ export function InvoiceList({
     return () => window.removeEventListener("keydown", onKey)
   }, [selection])
 
-  if (invoices.length === 0) return emptyState ?? null
+  if (rows.length === 0) return emptyState ?? null
 
-  function handleRowClick(invoice: InvoiceRow) {
+  function handleInvoiceOpen(invoice: InvoiceRow) {
     const params = fromProject
       ? `?from=project&projectId=${fromProject.projectId}&tab=invoices`
       : ""
     router.push(`/invoices/${invoice._id}${params}`)
   }
 
-  const selectedInvoices = invoices.filter((i) =>
-    selection.isSelected(i._id as Id<"invoices">),
-  )
+  // Selected slices, keyed back to source rows for the bulk bar.
+  const selectedReady: ReadyRow[] = []
+  const selectedInvoices: InvoiceRow[] = []
+  for (const r of rows) {
+    if (!selection.isSelected(r.key)) continue
+    if (r.kind === "ready") selectedReady.push(r.ready)
+    else selectedInvoices.push(r.invoice)
+  }
 
   const headerChecked: boolean | "indeterminate" =
     selection.headerState === "all"
@@ -107,8 +135,8 @@ export function InvoiceList({
                 onCheckedChange={() => selection.toggleAllVisible()}
                 aria-label={
                   selection.headerState === "all"
-                    ? "Deselect all invoices"
-                    : "Select all invoices"
+                    ? "Deselect all rows"
+                    : "Select all rows"
                 }
               />
             </TableHead>
@@ -117,33 +145,82 @@ export function InvoiceList({
             {showProject && <TableHead>Client</TableHead>}
             {showProject && <TableHead>Project</TableHead>}
             <TableHead className="w-24">Type</TableHead>
-            <TableHead className="w-24">Status</TableHead>
+            {showStatus && <TableHead className="w-32">Status</TableHead>}
             <TableHead className="w-28 text-right">Total</TableHead>
-            <TableHead className="w-28">Issue Date</TableHead>
             <TableHead className="w-28">Due Date</TableHead>
-            <TableHead className="w-10 pl-0" />
+            <TableHead className="w-44 pl-0" />
           </TableRow>
         </TableHeader>
         <TableBody>
-          {invoices.map((invoice) => (
-            <InvoiceRow
-              key={invoice._id}
-              invoice={invoice}
-              showProject={showProject}
-              timezone={timezone}
-              selected={selection.isSelected(invoice._id as Id<"invoices">)}
-              onSelect={(id, shiftKey) => selection.toggle(id, { shiftKey })}
-              onOpen={handleRowClick}
-            />
-          ))}
+          {rows.map((row) => {
+            if (row.kind === "ready") {
+              return (
+                <ReadyRowItem
+                  key={row.key}
+                  row={row.ready}
+                  showProject={showProject}
+                  showStatus={showStatus}
+                  selected={selection.isSelected(row.key)}
+                  onSelect={(shiftKey) =>
+                    selection.toggle(row.key, { shiftKey })
+                  }
+                  onGenerate={() => setActiveReady(row.ready)}
+                />
+              )
+            }
+            return (
+              <InvoiceRowItem
+                key={row.key}
+                invoice={row.invoice}
+                showProject={showProject}
+                showStatus={showStatus}
+                timezone={timezone}
+                selected={selection.isSelected(row.key)}
+                onSelect={(_id, shiftKey) =>
+                  selection.toggle(row.key, { shiftKey })
+                }
+                onOpen={handleInvoiceOpen}
+              />
+            )
+          })}
         </TableBody>
       </Table>
 
+      {activeReady && (
+        <CreateInvoiceModal
+          // Remount per row so prefill resets cleanly
+          key={readyRowKey(activeReady)}
+          open={true}
+          onOpenChange={(next) => {
+            if (!next) setActiveReady(null)
+          }}
+          projectId={activeReady.projectId}
+          projectName={activeReady.projectName}
+          billingType={billingTypeForKind(activeReady.kind)}
+          currency={activeReady.currency}
+          initialRetainerYear={activeReady.period?.year}
+          initialRetainerMonth={activeReady.period?.month}
+          onCreated={(invoiceId) => router.push(`/invoices/${invoiceId}`)}
+        />
+      )}
+
       <InvoiceBulkBar
-        selectedIds={selection.selectedIds}
+        selectedReady={selectedReady}
         selectedInvoices={selectedInvoices}
         onClear={selection.clear}
       />
     </>
   )
+}
+
+function billingTypeForKind(kind: ReadyRow["kind"]): string {
+  switch (kind) {
+    case "retainer-monthly":
+    case "retainer-cycle":
+      return "retainer"
+    case "fixed":
+      return "fixed"
+    case "tm":
+      return "t_and_m"
+  }
 }

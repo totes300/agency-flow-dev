@@ -3,7 +3,7 @@ import { query, mutation } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { getAuthContext } from "./lib/auth";
-import { computeElapsedMs, totalElapsedMs, msToMinutes, getDateInTimezone } from "./lib/timer";
+import { computeElapsedMs, totalElapsedMs, msToMinutes, getDateInTimezone, ORG_TIMEZONE_FALLBACK } from "./lib/timer";
 import { roundMinutes } from "./lib/rounding";
 import { getOrgSettings, resolveRateSnapshot } from "./lib/orgHelpers";
 import { assertValidDateString } from "./lib/dateValidation";
@@ -283,7 +283,7 @@ export const commitEntry = mutation({
 
     // Get org settings
     const orgSettings = await getOrgSettings(ctx, orgId);
-    const timezone = orgSettings?.timezone ?? "America/New_York";
+    const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
     const roundingMinutes = orgSettings?.roundingMinutes ?? 1;
 
     // Round duration

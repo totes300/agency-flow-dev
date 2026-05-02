@@ -1,4 +1,11 @@
 /**
+ * Fallback IANA timezone when an org's `orgSettings.timezone` is missing.
+ * Single source of truth for the server. The client mirror lives in
+ * `lib/hooks/use-org-timezone.ts` and MUST stay in sync.
+ */
+export const ORG_TIMEZONE_FALLBACK = "America/New_York";
+
+/**
  * Compute elapsed milliseconds for a single running segment.
  * Returns 0 if result would be negative.
  */

@@ -34,7 +34,8 @@ import { UserAvatar } from "@/components/user-avatar"
 import { CategoryBadge } from "@/components/category-badge"
 import { parseDuration, formatMinutesDisplay } from "@/lib/duration"
 import { formatDateToYMD, parseYMDToLocalDate } from "@/lib/format"
-import { anchorStartedAt, reanchorStartedAt } from "@/lib/workday"
+import { anchorStartedAt, reanchorStartedAt, getYMDInTimezone } from "@/lib/workday"
+import { useOrgTimezone } from "@/lib/hooks/use-org-timezone"
 import { extractErrorMessage, toastError } from "@/lib/toast-helpers"
 import { toast } from "sonner"
 import { LoaderIcon, PlusIcon } from "lucide-react"
@@ -102,6 +103,7 @@ export function TimeEntryModal({
     api.tasks.listByProject,
     isAuthenticated && open ? { projectId } : "skip",
   )
+  const { timezone, isReady: timezoneReady } = useOrgTimezone()
   const createEntry = useMutation(api.timeEntries.create)
   const updateEntry = useMutation(api.timeEntries.update)
   const createTask = useMutation(api.tasks.create)
@@ -143,6 +145,8 @@ export function TimeEntryModal({
         currentUserId={currentUserId}
         orgMembers={orgMembers}
         categories={categories}
+        timezone={timezone}
+        timezoneReady={timezoneReady}
         onClose={() => onOpenChange(false)}
         onCreateTask={async (args) => {
           const id = await createTask({ ...args, projectId })
@@ -173,6 +177,8 @@ function TimeEntryModalForm({
   currentUserId,
   orgMembers,
   categories,
+  timezone,
+  timezoneReady,
   onClose,
   onCreateTask,
   onSubmitCreate,
@@ -187,6 +193,8 @@ function TimeEntryModalForm({
   currentUserId: Id<"users"> | undefined
   orgMembers: OrgMember[] | undefined
   categories: Doc<"workCategories">[] | undefined
+  timezone: string
+  timezoneReady: boolean
   onClose: () => void
   onCreateTask: (args: {
     title: string
@@ -216,10 +224,17 @@ function TimeEntryModalForm({
   const [taskId, setTaskId] = useState<Id<"tasks"> | undefined>(
     editEntry?.taskId,
   )
+  // For create mode, date defaults to org-tz today (not browser-local) so a
+  // cross-tz user doesn't silently book entries to the wrong org day. We
+  // initialize with `undefined` and resolve during render against the live
+  // org timezone — by the time the user picks a date the picker will have
+  // updated even if `orgSettings` finished loading mid-flow.
   const [date, setDate] = useState<Date | undefined>(() => {
     if (editEntry) return parseYMDToLocalDate(editEntry.date)
-    return new Date()
+    return undefined
   })
+  const orgTodayDate = parseYMDToLocalDate(getYMDInTimezone(new Date(), timezone))
+  const effectiveDate = date ?? orgTodayDate
   const [durationInput, setDurationInput] = useState<string>(() =>
     editEntry ? formatMinutesDisplay(editEntry.durationMinutes) : "",
   )
@@ -308,11 +323,19 @@ function TimeEntryModalForm({
     if (isInvoiced) return
     setError("")
 
+    // Block save until org timezone is loaded — anchoring with the fallback
+    // tz could disagree with what the server uses to validate the entry's
+    // date↔startedAt invariant.
+    if (!timezoneReady) {
+      setError("Loading workspace settings…")
+      return
+    }
+
     if (!taskId) {
       setError("Pick a task for this time entry.")
       return
     }
-    if (!date) {
+    if (!effectiveDate) {
       setError("Pick a date.")
       return
     }
@@ -324,12 +347,12 @@ function TimeEntryModalForm({
 
     setIsSubmitting(true)
     try {
-      const dateStr = formatDateToYMD(date)
+      const dateStr = formatDateToYMD(effectiveDate)
       if (mode === "create") {
         await onSubmitCreate({
           taskId,
           durationMinutes: minutes,
-          startedAt: anchorStartedAt(dateStr, minutes),
+          startedAt: anchorStartedAt(dateStr, minutes, timezone),
           date: dateStr,
           isBillable,
           note: note.trim() || undefined,
@@ -346,7 +369,7 @@ function TimeEntryModalForm({
           // Server enforces the date↔startedAt invariant. Re-anchor here so
           // the entry's wall-clock time-of-day rides along to the new date.
           args.date = dateStr
-          args.startedAt = reanchorStartedAt(editEntry!.startedAt, dateStr)
+          args.startedAt = reanchorStartedAt(editEntry!.startedAt, dateStr, timezone)
         }
         if (isBillable !== editEntry!.isBillable) args.isBillable = isBillable
         const trimmedNote = note.trim()
@@ -507,9 +530,9 @@ function TimeEntryModalForm({
             <FieldLabel htmlFor="entry-date">Date</FieldLabel>
             <DatePicker
               id="entry-date"
-              value={date}
+              value={effectiveDate}
               onChange={setDate}
-              disabled={isInvoiced}
+              disabled={isInvoiced || !timezoneReady}
             />
           </Field>
           <Field>
@@ -642,7 +665,7 @@ function TimeEntryModalForm({
           </Button>
         </DialogClose>
         {!isInvoiced && (
-          <Button type="submit" disabled={isSubmitting}>
+          <Button type="submit" disabled={isSubmitting || !timezoneReady}>
             {isSubmitting && (
               <LoaderIcon data-icon="inline-start" className="animate-spin" />
             )}

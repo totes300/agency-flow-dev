@@ -1,5 +1,7 @@
 "use client"
 
+import { useMemo } from "react"
+import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { formatCurrencyPrecise, formatHoursCompact } from "@/lib/format"
 import type { TimeEntryRow } from "@/components/projects/project-time-table"
@@ -44,41 +46,35 @@ export function ProjectTimeStats({
   entries,
   billingType,
   currency,
-  timezone,
 }: {
   entries: TimeEntryRow[]
   billingType: string
   currency: string
-  /** Org timezone. Surfaces as a trailing indicator so users in other zones
-   *  don't have to guess what "today" means in these totals. */
-  timezone?: string
 }) {
-  const stats = computeStats(entries, billingType, currency)
+  // Memoized: parent rerenders on every selection toggle and on every Convex
+  // backend tick (entries gets a fresh ref); recomputing the loop each time
+  // is wasted work for hundreds of entries.
+  const stats = useMemo(
+    () => computeStats(entries, billingType, currency),
+    [entries, billingType, currency],
+  )
   return (
     <div
       role="group"
       aria-label="Time totals"
-      className="flex flex-wrap items-center gap-x-6 gap-y-2"
+      className="flex flex-wrap items-center gap-x-4 gap-y-2"
     >
       {stats.map((s, i) => (
-        <div
-          key={s.label}
-          className="flex items-center gap-6"
-        >
+        <div key={s.label} className="flex items-center gap-x-4">
           <div className="flex items-baseline gap-2">
             <span className="text-xs text-muted-foreground">{s.label}</span>
             <span className="text-sm font-medium tabular-nums">{s.value}</span>
           </div>
           {i < stats.length - 1 && (
-            <span aria-hidden className="text-muted-foreground/40">·</span>
+            <Separator orientation="vertical" className="h-4" />
           )}
         </div>
       ))}
-      {timezone && (
-        <span className="ml-auto text-xs text-muted-foreground">
-          Times in {timezone}
-        </span>
-      )}
     </div>
   )
 }

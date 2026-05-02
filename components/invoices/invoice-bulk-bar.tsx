@@ -3,7 +3,12 @@
 import { useMemo, useState } from "react"
 import { useMutation } from "convex/react"
 import { AnimatePresence, motion } from "motion/react"
-import { CheckCircle2, Ban, Loader2, XIcon } from "lucide-react"
+import {
+  CheckCircle2,
+  Ban,
+  Loader2,
+  XIcon,
+} from "lucide-react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { Button } from "@/components/ui/button"
@@ -18,62 +23,75 @@ import { toastError } from "@/lib/toast-helpers"
 import { formatCurrency, pluralize } from "@/lib/format"
 import type { InvoiceRow } from "@/components/invoices/invoice-list"
 import type { InvoiceStatus } from "@/components/invoices/invoice-status-badge"
+import type { ReadyRow } from "@/lib/invoices/list-rows"
 
 type Pending = "paid" | "void" | null
 
 /**
- * Sticky bulk-action bar visually mirroring
- * `project-time-selection-toolbar` so the two selection patterns read as
- * siblings. Action visibility rules:
+ * Sticky bulk bar across the unified invoice table. Selection can mix
+ * lifecycle stages (ready + draft + invoiced + …) — each action button
+ * acts on its own slice and labels its own count, so the user never has to
+ * untangle which action covers which row.
  *
- *   Mark paid — all selected rows are status "invoiced" (the only legal path).
- *   Void     — all selected rows are status "draft" OR "invoiced".
- *   Mixed    — neither shown; Clear always shown.
+ * Visibility rules:
  *
- * Totals show a single primary-currency formatted amount when the selection
- * is single-currency, and a "mixed currencies" pill with a tooltip breakdown
- * otherwise. Never sum across currencies.
+ *   Mark paid  — every selected *invoice* row is status "invoiced".
+ *                Ready rows in the selection are ignored.
+ *   Void       — every selected *invoice* row is status "draft" or "invoiced".
+ *                Ready rows in the selection are ignored.
+ *
+ * Ready rows have no batch action — every Ready row carries config (rounding,
+ * date range, milestone) that requires CreateInvoiceModal. Selection of Ready
+ * rows still contributes to the multi-currency total preview.
+ *
+ * Multi-currency totals never sum across currencies — accounting hazard.
  */
 export function InvoiceBulkBar({
-  selectedIds,
+  selectedReady,
   selectedInvoices,
   onClear,
 }: {
-  selectedIds: ReadonlySet<Id<"invoices">>
+  selectedReady: ReadyRow[]
   selectedInvoices: InvoiceRow[]
   onClear: () => void
 }) {
   const bulkChange = useMutation(api.invoices.bulkChangeInvoiceStatus)
   const [pending, setPending] = useState<Pending>(null)
 
-  const count = selectedIds.size
+  const count = selectedReady.length + selectedInvoices.length
 
-  const allStatuses = useMemo(
+  const allInvoiceStatuses = useMemo(
     () => new Set<InvoiceStatus>(selectedInvoices.map((i) => i.status)),
     [selectedInvoices],
   )
   const canMarkPaid =
-    count > 0 && allStatuses.size === 1 && allStatuses.has("invoiced")
+    selectedInvoices.length > 0 &&
+    allInvoiceStatuses.size === 1 &&
+    allInvoiceStatuses.has("invoiced")
   const canVoid =
-    count > 0 &&
-    [...allStatuses].every((s) => s === "draft" || s === "invoiced")
+    selectedInvoices.length > 0 &&
+    [...allInvoiceStatuses].every((s) => s === "draft" || s === "invoiced")
 
-  // Group totals by currency. Never sum across currencies — accounting hazard.
+  // Group totals by currency across ALL selected rows (ready amount + invoice
+  // total). Never sum across currencies.
   const totalsByCurrency = useMemo(() => {
     const map = new Map<string, number>()
-    for (const inv of selectedInvoices) {
-      map.set(inv.currency, (map.get(inv.currency) ?? 0) + inv.total)
+    for (const r of selectedReady) {
+      map.set(r.currency, (map.get(r.currency) ?? 0) + r.amount)
+    }
+    for (const i of selectedInvoices) {
+      map.set(i.currency, (map.get(i.currency) ?? 0) + i.total)
     }
     return map
-  }, [selectedInvoices])
+  }, [selectedReady, selectedInvoices])
   const currencies = [...totalsByCurrency.keys()]
 
-  async function runBulk(newStatus: "paid" | "void") {
-    if (count === 0 || pending) return
+  async function runMark(newStatus: "paid" | "void") {
+    if (selectedInvoices.length === 0 || pending) return
     setPending(newStatus)
     try {
       const res = await bulkChange({
-        ids: [...selectedIds] as Id<"invoices">[],
+        ids: selectedInvoices.map((i) => i._id as Id<"invoices">),
         newStatus,
       })
       const succeeded = res.succeeded.length
@@ -84,14 +102,13 @@ export function InvoiceBulkBar({
           `${succeeded} ${pluralize(succeeded, "invoice", "invoices")} ${label}`,
         )
       } else {
-        toast.warning(
-          `${succeeded} ${label}, ${failed} failed`,
-          { description: res.failed[0]?.reason },
-        )
+        toast.warning(`${succeeded} ${label}, ${failed} failed`, {
+          description: res.failed[0]?.reason,
+        })
       }
       onClear()
     } catch (err) {
-      toastError(err, `Failed to update invoices`)
+      toastError(err, "Failed to update invoices")
     } finally {
       setPending(null)
     }
@@ -110,7 +127,7 @@ export function InvoiceBulkBar({
           <div className="flex items-center gap-2 rounded-xl border border-border bg-background px-3 py-2 shadow-lg">
             <div className="flex items-center gap-2 pr-2">
               <span className="text-sm font-medium tabular-nums">
-                {count} {pluralize(count, "invoice", "invoices")}
+                {count} {pluralize(count, "row", "rows")}
               </span>
               <Button
                 type="button"
@@ -135,7 +152,7 @@ export function InvoiceBulkBar({
               <Button
                 size="sm"
                 variant="outline"
-                onClick={() => runBulk("paid")}
+                onClick={() => void runMark("paid")}
                 disabled={pending !== null}
               >
                 {pending === "paid" ? (
@@ -143,14 +160,14 @@ export function InvoiceBulkBar({
                 ) : (
                   <CheckCircle2 data-icon="inline-start" className="size-3.5" />
                 )}
-                Mark paid
+                Mark {selectedInvoices.length} paid
               </Button>
             )}
             {canVoid && (
               <Button
                 size="sm"
                 variant="outline"
-                onClick={() => runBulk("void")}
+                onClick={() => void runMark("void")}
                 disabled={pending !== null}
               >
                 {pending === "void" ? (
@@ -158,7 +175,7 @@ export function InvoiceBulkBar({
                 ) : (
                   <Ban data-icon="inline-start" className="size-3.5" />
                 )}
-                Void
+                Void {selectedInvoices.length}
               </Button>
             )}
           </div>

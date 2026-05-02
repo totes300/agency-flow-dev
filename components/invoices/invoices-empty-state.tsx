@@ -1,7 +1,14 @@
 "use client"
 
 import Link from "next/link"
-import { ReceiptIcon, SearchXIcon } from "lucide-react"
+import {
+  BanIcon,
+  CircleCheckIcon,
+  ClockIcon,
+  FilePenIcon,
+  ReceiptIcon,
+  SearchXIcon,
+} from "lucide-react"
 import { EmptyState } from "@/components/empty-state"
 import { Button } from "@/components/ui/button"
 
@@ -9,11 +16,21 @@ import { Button } from "@/components/ui/button"
  * One empty state for every invoice list in the app — the global
  * `/invoices` page, the project detail "Invoices" tab, and filtered
  * result sets. Pick a `reason`; copy and CTA follow.
+ *
+ * Per-tab variants (`tab-draft`, `tab-outstanding`, `tab-paid`, `tab-void`)
+ * fire on the global page when a status tab is genuinely empty (no filters
+ * active). Each one uses its own icon + descriptive copy so the user reads
+ * what *would* live there. The Ready tab has its own celebratory
+ * "all caught up" state in `InboxEmptyState` and isn't represented here.
  */
 export type InvoicesEmptyReason =
   | "global-no-invoices"
   | "project-no-invoices"
   | "no-matches"
+  | "tab-draft"
+  | "tab-outstanding"
+  | "tab-paid"
+  | "tab-void"
 
 /** Copy for `project-no-invoices` depends on the project's billing type so
  *  the description points at the right next action (log time vs. hit a
@@ -53,8 +70,12 @@ export function InvoicesEmptyState({
   return (
     <div
       className={
-        className ??
-        "flex flex-1 items-center justify-center py-20"
+        // No `flex-1` — empty states for list views sit near the top of the
+        // content area, not centered to viewport. Centering looks like a
+        // 404; the Notion/Linear/ClickUp pattern is "label the empty
+        // space," with the icon+copy a comfortable distance below the
+        // toolbar so the eye finds it without it dominating the page.
+        className ?? "flex items-center justify-center py-16"
       }
     >
       {reason === "global-no-invoices" && (
@@ -98,6 +119,38 @@ export function InvoicesEmptyState({
               </Button>
             ) : undefined
           }
+        />
+      )}
+
+      {reason === "tab-draft" && (
+        <EmptyState
+          icon={FilePenIcon}
+          title="No drafts"
+          description="Generate an invoice from the Ready tab to save it as a draft before sending."
+        />
+      )}
+
+      {reason === "tab-outstanding" && (
+        <EmptyState
+          icon={ClockIcon}
+          title="Nothing outstanding"
+          description="Invoices you've issued and sent appear here while they wait to be paid."
+        />
+      )}
+
+      {reason === "tab-paid" && (
+        <EmptyState
+          icon={CircleCheckIcon}
+          title="No paid invoices yet"
+          description="Once you mark an invoice as paid, it'll live here for your records."
+        />
+      )}
+
+      {reason === "tab-void" && (
+        <EmptyState
+          icon={BanIcon}
+          title="No voided invoices"
+          description="Cancelled invoices are kept here so your audit trail stays complete."
         />
       )}
     </div>

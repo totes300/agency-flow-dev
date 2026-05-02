@@ -3,7 +3,8 @@
 import { useState, useMemo } from "react"
 import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { formatDateToYMD, isSameDay } from "@/lib/format"
+import { formatDateToYMD, isSameDay, parseYMDToLocalDate } from "@/lib/format"
+import { getYMDInTimezone } from "@/lib/workday"
 
 // ─── Date helpers ────────────────────────────────────────────────────────────
 
@@ -36,13 +37,31 @@ export function MiniCalendar({
   selected,
   onSelect,
   disableFuture = false,
+  timezone,
 }: {
   selected: string | null // YYYY-MM-DD
   onSelect: (date: string) => void
   disableFuture?: boolean
+  /** When set, "today" is computed in this IANA timezone rather than the
+   *  browser's local tz. Time-tracking callers pass the org timezone so
+   *  the highlight, default view month, and `disableFuture` cap align
+   *  with the org-tz date the rest of the form anchors against. */
+  timezone?: string
 }) {
-  const today = useMemo(() => new Date(), [])
-  const todayStr = useMemo(() => formatDateToYMD(today), [today])
+  // Both `today` and `todayStr` are derived from the same source of truth.
+  // When `timezone` is provided, "today" is org-tz today (proxied as a
+  // local-midnight Date so the existing month/day arithmetic still works).
+  // Otherwise we keep the legacy browser-local behavior to avoid breaking
+  // any other consumer of MiniCalendar.
+  const todayStr = useMemo(
+    () =>
+      timezone ? getYMDInTimezone(new Date(), timezone) : formatDateToYMD(new Date()),
+    [timezone],
+  )
+  const today = useMemo(
+    () => parseYMDToLocalDate(todayStr) ?? new Date(),
+    [todayStr],
+  )
   const [viewYear, setViewYear] = useState(today.getFullYear())
   const [viewMonth, setViewMonth] = useState(today.getMonth())
 

@@ -7,7 +7,7 @@ import { useOrganization } from "@clerk/nextjs"
 import { api } from "@/convex/_generated/api"
 import { useTimerActions } from "@/lib/hooks/use-timer"
 import { parseDuration, formatDuration, QUICK_DURATIONS } from "@/lib/duration"
-import { formatDateToYMD, formatShortDate, getInitials } from "@/lib/format"
+import { formatDateToYMD, formatShortDate, getInitials, parseYMDToLocalDate } from "@/lib/format"
 import { TimeEntriesList } from "@/components/time/time-entries-list"
 import { Switch } from "@/components/ui/switch"
 import { Button } from "@/components/ui/button"
@@ -30,7 +30,13 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 import { toastError } from "@/lib/toast-helpers"
-import { anchorStartedAt } from "@/lib/workday"
+import {
+  anchorStartedAt,
+  tzWallToEpoch,
+  getHMSInTimezone,
+  getYMDInTimezone,
+} from "@/lib/workday"
+import { useOrgTimezone } from "@/lib/hooks/use-org-timezone"
 import { cn } from "@/lib/utils"
 import type { Id } from "@/convex/_generated/dataModel"
 
@@ -55,9 +61,14 @@ const DATE_PRESETS: DatePreset[] = [
   { label: "Last Friday", icon: "arrow", getDate: (d) => getPreviousFriday(d) },
 ]
 
-function formatDatePill(dateStr: string): string {
-  const today = formatDateToYMD(new Date())
-  const yesterday = formatDateToYMD(addDays(new Date(), -1))
+function formatDatePill(dateStr: string, timezone: string): string {
+  // "Today" / "Yesterday" must compare against org-tz today, not browser
+  // local — otherwise cross-tz users see the wrong relative label.
+  const today = getYMDInTimezone(new Date(), timezone)
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(today)
+  const yesterday = m
+    ? formatDateToYMD(addDays(new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])), -1))
+    : ""
   if (dateStr === today) return `Today, ${formatShortDate(dateStr)}`
   if (dateStr === yesterday) return `Yesterday, ${formatShortDate(dateStr)}`
   return formatShortDate(dateStr)
@@ -83,12 +94,19 @@ function offsetMsForMode(mode: StartedAtMode): number {
   }
 }
 
-/** Combine a YYYY-MM-DD date string with HH:MM, returning an epoch ms. */
-function combineDateAndTime(dateStr: string, timeStr: string): number | null {
+/** Combine a YYYY-MM-DD date string with HH:MM in the org timezone,
+ *  returning an epoch ms. The HH:MM the user types is interpreted as
+ *  wall-clock in org tz so the resulting startedAt's date matches
+ *  `dateStr` in org tz (server invariant). */
+function combineDateAndTime(
+  dateStr: string,
+  timeStr: string,
+  timezone: string,
+): number | null {
   const m = /^(\d{2}):(\d{2})$/.exec(timeStr)
   if (!m) return null
   const [yy, mm, dd] = dateStr.split("-").map(Number)
-  return new Date(yy, mm - 1, dd, Number(m[1]), Number(m[2]), 0, 0).getTime()
+  return tzWallToEpoch(yy, mm, dd, Number(m[1]), Number(m[2]), 0, timezone)
 }
 
 function computeStartedAt(
@@ -96,17 +114,18 @@ function computeStartedAt(
   durationMinutes: number,
   selectedDate: string,
   customTime: string,
+  timezone: string,
 ): number {
   if (mode === "custom") {
-    const fromCustom = combineDateAndTime(selectedDate, customTime)
+    const fromCustom = combineDateAndTime(selectedDate, customTime, timezone)
     if (fromCustom !== null) return fromCustom
   }
-  return anchorStartedAt(selectedDate, durationMinutes) - offsetMsForMode(mode)
+  return anchorStartedAt(selectedDate, durationMinutes, timezone) - offsetMsForMode(mode)
 }
 
-function formatTimeHHMM(ms: number): string {
-  const d = new Date(ms)
-  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`
+function formatTimeHHMM(ms: number, timezone: string): string {
+  const { hour, minute } = getHMSInTimezone(ms, timezone)
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`
 }
 
 export function TimeLogPopover({
@@ -129,6 +148,7 @@ export function TimeLogPopover({
   const { startTimer } = useTimerActions()
   const createEntry = useMutation(api.timeEntries.create)
   const currentUser = useQuery(api.users.current, isAuthenticated ? {} : "skip")
+  const { timezone, isReady: timezoneReady } = useOrgTimezone()
 
   const isAdmin = membership?.role === "org:admin"
 
@@ -137,7 +157,12 @@ export function TimeLogPopover({
   const [note, setNote] = useState("")
   const [billable, setBillable] = useState(isBillable)
   const [saving, setSaving] = useState(false)
-  const [selectedDate, setSelectedDate] = useState(() => formatDateToYMD(new Date()))
+  // selectedDate is derived: explicit user pick wins, otherwise org-tz today.
+  // Computing during render keeps it correct across midnight rollover and
+  // org-tz changes without a sync effect.
+  const [userPickedDate, setUserPickedDate] = useState<string | null>(null)
+  const orgToday = getYMDInTimezone(new Date(), timezone)
+  const selectedDate = userPickedDate ?? orgToday
   const [datePickerOpen, setDatePickerOpen] = useState(false)
   const [selectedUserId, setSelectedUserId] = useState<Id<"users"> | null>(null)
   const [userPickerOpen, setUserPickerOpen] = useState(false)
@@ -177,7 +202,8 @@ export function TimeLogPopover({
   const showError = trimmed.length > 0 && !durationValid
 
   const startedAtLabel = formatTimeHHMM(
-    computeStartedAt(startedAtMode, parsedMinutes ?? 0, selectedDate, customTime),
+    computeStartedAt(startedAtMode, parsedMinutes ?? 0, selectedDate, customTime, timezone),
+    timezone,
   )
 
   function resetForm() {
@@ -187,7 +213,7 @@ export function TimeLogPopover({
     setEntriesExpanded(false)
     setSelectedUserId(null)
     setUserPickerOpen(false)
-    setSelectedDate(formatDateToYMD(new Date()))
+    setUserPickedDate(null)
     setDatePickerOpen(false)
     setStartedAtMode("default")
     setCustomTime("")
@@ -195,14 +221,14 @@ export function TimeLogPopover({
   }
 
   async function handleSave() {
-    if (saving || !durationValid) return
+    if (saving || !durationValid || !timezoneReady) return
     setSaving(true)
     try {
       await createEntry({
         taskId,
         durationMinutes: parsedMinutes,
         // Recompute at submit so we send the value as of click, not last render.
-        startedAt: computeStartedAt(startedAtMode, parsedMinutes, selectedDate, customTime),
+        startedAt: computeStartedAt(startedAtMode, parsedMinutes, selectedDate, customTime, timezone),
         note: note.trim() || undefined,
         isBillable: billable,
         date: selectedDate,
@@ -378,12 +404,16 @@ export function TimeLogPopover({
           {/* Date — clickable popover with presets + calendar */}
           <Popover open={datePickerOpen} onOpenChange={setDatePickerOpen}>
             <PopoverTrigger asChild>
+              {/* Disabled until org tz is loaded — picking a date with the
+                  fallback tz could let a save proceed for a YMD that's
+                  future in the real org tz once settings finally resolve. */}
               <button
                 type="button"
-                className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-sm text-foreground transition-colors hover:bg-muted/60"
+                disabled={!timezoneReady}
+                className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-sm text-foreground transition-colors hover:bg-muted/60 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <CalendarIcon className="size-3.5 shrink-0 text-muted-foreground" strokeWidth={1.5} />
-                <span className="flex-1 text-left">{formatDatePill(selectedDate)}</span>
+                <span className="flex-1 text-left">{formatDatePill(selectedDate, timezone)}</span>
                 <ChevronDownIcon
                   className="size-3 text-muted-foreground"
                   strokeWidth={2}
@@ -397,13 +427,16 @@ export function TimeLogPopover({
                     Quick set
                   </div>
                   {DATE_PRESETS.map((preset) => {
-                    const presetDate = formatDateToYMD(preset.getDate(new Date()))
+                    // Build presets relative to org-tz "today" (a local-Date
+                    // representation of the org-tz YMD), not browser-local.
+                    const todayLocalProxy = parseYMDToLocalDate(orgToday) ?? new Date()
+                    const presetDate = formatDateToYMD(preset.getDate(todayLocalProxy))
                     const isActive = selectedDate === presetDate
                     return (
                       <button
                         key={preset.label}
                         onClick={() => {
-                          setSelectedDate(presetDate)
+                          setUserPickedDate(presetDate)
                           setDatePickerOpen(false)
                         }}
                         className={cn(
@@ -427,10 +460,11 @@ export function TimeLogPopover({
                   <MiniCalendar
                     selected={selectedDate}
                     onSelect={(d) => {
-                      setSelectedDate(d)
+                      setUserPickedDate(d)
                       setDatePickerOpen(false)
                     }}
                     disableFuture
+                    timezone={timezone}
                   />
                 </div>
               </div>
@@ -487,7 +521,7 @@ export function TimeLogPopover({
               {startedAtMode === "custom" ? (
                 <div className="mt-1 border-t border-border/40 pt-2">
                   <label className="block px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                    Time on {formatDatePill(selectedDate)}
+                    Time on {formatDatePill(selectedDate, timezone)}
                   </label>
                   <input
                     type="time"
@@ -550,7 +584,7 @@ export function TimeLogPopover({
           </span>
           <Button
             onClick={handleSave}
-            disabled={saving || !durationValid}
+            disabled={saving || !durationValid || !timezoneReady}
           >
             {durationValid ? `Save ${canonicalForm}` : "Save"}
           </Button>

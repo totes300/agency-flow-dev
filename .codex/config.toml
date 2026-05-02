@@ -1,3 +1,10 @@
 [mcp_servers.agentation]
+args = [
+    "-y",
+    "agentation-mcp",
+    "server",
+]
 command = "npx"
-args = [ "-y", "agentation-mcp", "server" ]
+
+[mcp_servers.clerk]
+url = "https://mcp.clerk.com/mcp"

@@ -1,8 +1,27 @@
-import { query, mutation, type MutationCtx } from "./_generated/server";
+import { query, mutation, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { v, ConvexError } from "convex/values";
-import { requireAdmin } from "./lib/auth";
+import { requireAdmin, validateStringLength } from "./lib/auth";
 import { getOrgSettings, getProjectCurrency } from "./lib/orgHelpers";
-import { getDateInTimezone } from "./lib/timer";
+import { getDateInTimezone, ORG_TIMEZONE_FALLBACK } from "./lib/timer";
+import {
+  canEditInvoiceMessage,
+  findResumableInvoice,
+} from "./lib/invoiceCreation";
+import {
+  buildFixedReadyRow,
+  buildRetainerCycleReadyRows,
+  buildRetainerMonthlyReadyRows,
+  buildTmReadyRows,
+  enumerateRetainerCycleState,
+  isInvoiceable,
+  sortReadyRows,
+  type ReadyRow,
+} from "./lib/readyToInvoice";
+import {
+  classifyMarkPaid,
+  classifyUndo,
+  type PriorState,
+} from "./lib/markPaid";
 import type { Doc, Id } from "./_generated/dataModel";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -48,9 +67,8 @@ export const listInvoices = query({
       invoices = await ctx.db
         .query("invoices")
         .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId!))
+        .filter((q) => q.eq(q.field("orgId"), orgId))
         .collect();
-      // Filter by orgId to prevent cross-tenant leakage
-      invoices = invoices.filter((inv) => inv.orgId === orgId);
     } else {
       invoices = await ctx.db
         .query("invoices")
@@ -232,7 +250,7 @@ export const getInvoiceMetrics = query({
       .collect();
 
     const orgSettings = await getOrgSettings(ctx, orgId);
-    const timezone = orgSettings?.timezone ?? "UTC";
+    const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
     const todayStr = getDateInTimezone(Date.now(), timezone);
     // Current month in org timezone, e.g. "2026-04"
     const currentYearMonth = todayStr.slice(0, 7);
@@ -279,85 +297,349 @@ export const getInvoiceMetrics = query({
 });
 
 /**
- * Closed, uninvoiced retainer months across all retainer projects in the org.
- * Feeds the "Ready to invoice" card on /invoices.
+ * Inbox empty-state context — feeds the "All caught up" reward state.
+ *
+ * Returns the most recent finalized invoice (excluding drafts and voids) so
+ * the screen can render "Last invoiced … · INV-… · {clientName}", plus the
+ * day count to the next month-close (1-31). Both numbers are scoped to the
+ * org timezone — same DST-safe rule that drives `formatLastInvoiced` so the
+ * relative "X days ago" reads consistently across the app.
+ *
+ * Admin-only because the empty state lives on the admin Inbox page (members
+ * never see this surface).
  */
-export const getReadyToInvoice = query({
+export const getInboxEmptyStateContext = query({
   args: {},
   handler: async (ctx) => {
     const { orgId } = await requireAdmin(ctx);
 
     const orgSettings = await getOrgSettings(ctx, orgId);
-    const timezone = orgSettings?.timezone ?? "UTC";
+    const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
+    const todayStr = getDateInTimezone(Date.now(), timezone);
 
-    const projects = await ctx.db
-      .query("projects")
+    const invoices = await ctx.db
+      .query("invoices")
       .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
       .collect();
-    const retainerProjects = projects.filter(
-      (p) => p.billingType === "retainer" && !p.archivedAt,
-    );
 
-    type ReadyRow = {
-      clientId: Id<"clients">;
-      clientName: string;
-      clientLogoUrl: string | null;
-      projectId: Id<"projects">;
-      projectName: string;
-      monthlyFee: number;
-      currency: string;
-      year: number;
-      month: number;
-      label: string;
-      startDate: string;
-      endDate: string;
-    };
-
-    const rows: ReadyRow[] = [];
-    const clientLogoCache = new Map<string, string | null>();
-
-    for (const project of retainerProjects) {
-      const months = await getClosedUninvoicedMonths(
-        ctx as any,
-        orgId,
-        project._id,
-        project,
-        timezone,
-      );
-      if (months.length === 0) continue;
-
-      const client = await ctx.db.get(project.clientId);
-      if (!client || client.orgId !== orgId) continue;
-
-      const clientKey = client._id.toString();
-      let logoUrl = clientLogoCache.get(clientKey) ?? null;
-      if (!clientLogoCache.has(clientKey)) {
-        logoUrl = client.logoStorageId
-          ? await ctx.storage.getUrl(client.logoStorageId)
-          : null;
-        clientLogoCache.set(clientKey, logoUrl);
-      }
-
-      for (const m of months) {
-        rows.push({
-          clientId: client._id,
-          clientName: client.name,
-          clientLogoUrl: logoUrl,
-          projectId: project._id,
-          projectName: project.name,
-          monthlyFee: project.monthlyFee ?? 0,
-          currency: client.currency,
-          year: m.year,
-          month: m.month,
-          label: m.label,
-          startDate: m.startDate,
-          endDate: m.endDate,
-        });
-      }
+    let last: Doc<"invoices"> | null = null;
+    for (const inv of invoices) {
+      if (inv.status === "draft" || inv.status === "void") continue;
+      if (last === null || inv.issueDate > last.issueDate) last = inv;
     }
 
-    rows.sort((a, b) => (a.startDate < b.startDate ? -1 : a.startDate > b.startDate ? 1 : 0));
-    return rows;
+    let lastInvoice: {
+      id: Id<"invoices">;
+      prefix: string;
+      number: number;
+      issueDate: string;
+      issueDateTimestamp: number;
+      clientName: string;
+    } | null = null;
+    if (last !== null) {
+      const client = await ctx.db.get(last.clientId);
+      const clientName =
+        client && client.orgId === orgId ? client.name : "Unknown";
+      lastInvoice = {
+        id: last._id,
+        prefix: last.prefix,
+        number: last.number,
+        issueDate: last.issueDate,
+        issueDateTimestamp: Date.parse(last.issueDate + "T00:00:00Z"),
+        clientName,
+      };
+    }
+
+    // Days until the next month-close in org timezone. End-of-month is the
+    // last calendar day of `todayStr`'s month — same loop math `getRetainerData`
+    // uses, kept here to avoid a cross-file dep for one date calculation.
+    const [yStr, mStr] = todayStr.split("-");
+    const year = Number(yStr);
+    const month = Number(mStr); // 1-12
+    const lastDay = new Date(year, month, 0).getDate();
+    const todayDay = Number(todayStr.slice(8, 10));
+    const daysToNextMonthClose = Math.max(0, lastDay - todayDay);
+
+    return { lastInvoice, daysToNextMonthClose };
+  },
+});
+
+/**
+ * Walk every billable project in the org and emit its ready-to-invoice rows.
+ *
+ * Single source of truth for both `getReadyToInvoiceUnified` (returns the
+ * rows themselves) and `getInvoicingNavSignals` (returns just the length).
+ * Pulling the iteration into one helper is what keeps the sidebar count and
+ * the Inbox feed from drifting — adding a new row condition or a new project
+ * filter only happens in one place.
+ *
+ * Row decision logic still lives in `convex/lib/readyToInvoice.ts` (pure,
+ * unit-tested); this shim is responsible for fetching docs, computing
+ * per-month retainer balances, and feeding the helpers.
+ *
+ * Output: rows already labelled `kind` ("retainer-monthly" | "retainer-cycle"
+ * | "fixed" | "tm"), sorted oldest-first by period (Fixed/no-period rows
+ * trail by client+project name). Multi-currency rows are NOT aggregated —
+ * each row carries its own currency.
+ */
+async function enumerateReadyRows(
+  ctx: QueryCtx,
+  orgId: string,
+  todayStr: string,
+): Promise<ReadyRow[]> {
+  const projects = await ctx.db
+    .query("projects")
+    .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+    .collect();
+
+  // Cache clients once — many projects may share one.
+  const clientCache = new Map<string, Doc<"clients"> | null>();
+  async function getClient(clientId: Id<"clients">) {
+    const key = clientId.toString();
+    if (clientCache.has(key)) return clientCache.get(key) ?? null;
+    const c = await ctx.db.get(clientId);
+    const safe = c && c.orgId === orgId ? c : null;
+    clientCache.set(key, safe);
+    return safe;
+  }
+
+  const allRows: ReadyRow[] = [];
+
+  for (const project of projects) {
+    // Skip non-billable, archived, or orphaned projects. The orphan guard
+    // (deleted client) keeps the query crash-free per the test spec.
+    if (project.billingType === "non_billable") continue;
+    if (project.archivedAt) continue;
+    const client = await getClient(project.clientId);
+    if (!client) continue;
+
+    const projectInvoices = await ctx.db
+      .query("invoices")
+      .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
+      .filter((q) => q.eq(q.field("orgId"), orgId))
+      .collect();
+
+    // Map Convex doc shape → helper input shape (drops fields we don't need
+    // for row decisions, lets the helper stay free of `Doc<>` coupling).
+    const invoiceInputs = projectInvoices.map((inv) => ({
+      _id: inv._id,
+      status: inv.status,
+      total: inv.total,
+      issueDate: inv.issueDate,
+      periodStart: inv.periodStart,
+      periodEnd: inv.periodEnd,
+    }));
+
+    const projectInput = {
+      _id: project._id,
+      name: project.name,
+      billingType: project.billingType,
+      archivedAt: project.archivedAt,
+      clientId: project.clientId,
+      startDate: project.startDate,
+      fixedPrice: project.fixedPrice,
+      monthlyFee: project.monthlyFee,
+      includedMinutesPerMonth: project.includedMinutesPerMonth,
+      overageRate: project.overageRate,
+      rolloverEnabled: project.rolloverEnabled,
+      cycleLength: project.cycleLength,
+    };
+    const clientInput = {
+      _id: client._id,
+      name: client.name,
+      currency: client.currency,
+    };
+
+    if (project.billingType === "fixed") {
+      // Sum lineType:"fixed" amounts on finalized (non-draft, non-void)
+      // invoices. Same logic as `getProjectInvoiceMetrics` Fixed branch.
+      let fixedBilledFinalized = 0;
+      for (const inv of projectInvoices) {
+        if (inv.status === "draft" || inv.status === "void") continue;
+        const items = await ctx.db
+          .query("invoiceLineItems")
+          .withIndex("by_invoiceId", (q) => q.eq("invoiceId", inv._id))
+          .collect();
+        for (const item of items) {
+          if (item.lineType === "fixed") fixedBilledFinalized += item.amount;
+        }
+      }
+      const row = buildFixedReadyRow({
+        project: projectInput,
+        client: clientInput,
+        invoices: invoiceInputs,
+        fixedBilledFinalized: round2(fixedBilledFinalized),
+      });
+      if (row) allRows.push(row);
+      continue;
+    }
+
+    if (project.billingType === "t_and_m") {
+      const tasks = await ctx.db
+        .query("tasks")
+        .withIndex("by_orgId_projectId", (q) =>
+          q.eq("orgId", orgId).eq("projectId", project._id),
+        )
+        .collect();
+      const entries = (
+        await Promise.all(
+          tasks.map((t) =>
+            ctx.db
+              .query("timeEntries")
+              .withIndex("by_taskId", (q) => q.eq("taskId", t._id))
+              .filter((q) => q.eq(q.field("orgId"), orgId))
+              .collect(),
+          ),
+        )
+      ).flat();
+      const entryInputs = entries.map((e) => ({
+        _id: e._id,
+        date: e.date,
+        durationMinutes: e.durationMinutes,
+        isBillable: e.isBillable,
+        invoiceId: e.invoiceId,
+        billableRate: e.billableRate,
+      }));
+      const rows = buildTmReadyRows({
+        project: projectInput,
+        client: clientInput,
+        invoices: invoiceInputs,
+        entries: entryInputs,
+        todayStr,
+      });
+      allRows.push(...rows);
+      continue;
+    }
+
+    if (project.billingType === "retainer") {
+      // Compute per-month worked minutes for every closed month from project
+      // start onward. Used by both rollover modes — only the chaining
+      // differs, which we do here once.
+      if (!project.startDate) continue;
+      const tasks = await ctx.db
+        .query("tasks")
+        .withIndex("by_orgId_projectId", (q) =>
+          q.eq("orgId", orgId).eq("projectId", project._id),
+        )
+        .collect();
+      const entries = (
+        await Promise.all(
+          tasks.map((t) =>
+            ctx.db
+              .query("timeEntries")
+              .withIndex("by_taskId", (q) => q.eq("taskId", t._id))
+              .filter((q) => q.eq(q.field("orgId"), orgId))
+              .collect(),
+          ),
+        )
+      ).flat();
+      const billableByMonth = new Map<string, number>(); // YYYY-MM → minutes
+      for (const e of entries) {
+        if (!e.isBillable) continue;
+        const key = e.date.slice(0, 7);
+        billableByMonth.set(key, (billableByMonth.get(key) ?? 0) + e.durationMinutes);
+      }
+
+      const { closedMonths, cycles } = enumerateRetainerCycleState({
+        startDate: project.startDate,
+        todayStr,
+        includedMinutes: project.includedMinutesPerMonth ?? 0,
+        cycleLength: project.cycleLength ?? 3,
+        rolloverEnabled: project.rolloverEnabled ?? true,
+        billableByMonth,
+      });
+
+      if (project.rolloverEnabled ?? true) {
+        allRows.push(
+          ...buildRetainerCycleReadyRows({
+            project: projectInput,
+            client: clientInput,
+            invoices: invoiceInputs,
+            cycles,
+          }),
+        );
+      } else {
+        allRows.push(
+          ...buildRetainerMonthlyReadyRows({
+            project: projectInput,
+            client: clientInput,
+            invoices: invoiceInputs,
+            monthBalances: closedMonths,
+          }),
+        );
+      }
+    }
+  }
+
+  // Drop rows that wouldn't produce a billable invoice ($0 retainer months).
+  // Those surface on the project page as downloadable statements instead —
+  // see `convex/lib/readyToInvoice.ts:isInvoiceable` for the invariant.
+  return sortReadyRows(allRows.filter(isInvoiceable));
+}
+
+/**
+ * Unified Inbox feed — one row per pending billing unit across all 4 project
+ * types in the org. Admin-only.
+ *
+ * Iteration body is shared with `getInvoicingNavSignals` via
+ * `enumerateReadyRows`. See that helper for the row decision logic.
+ */
+export const getReadyToInvoiceUnified = query({
+  args: {},
+  handler: async (ctx): Promise<ReadyRow[]> => {
+    const { orgId } = await requireAdmin(ctx);
+    const orgSettings = await getOrgSettings(ctx, orgId);
+    const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
+    const todayStr = getDateInTimezone(Date.now(), timezone);
+    return enumerateReadyRows(ctx, orgId, todayStr);
+  },
+});
+
+/**
+ * Sidebar nav signals — feeds the `Invoices` row badge + calendar-clock icon.
+ * Admin-only (the row itself is hidden for members).
+ *
+ * Two signals:
+ *   - `toGenerateCount` — number of pending billing units across all project
+ *     types. Composed from the same logic as `getReadyToInvoiceUnified` so
+ *     the badge can never disagree with the Inbox.
+ *   - `overdueCount` — number of `invoiced` rows whose `dueDate < today` in
+ *     the org timezone. Same rule the Overdue section applies, kept here
+ *     so the icon state and Inbox count never diverge.
+ *
+ * Spec text describes `hasOverdue: boolean`, but the user-facing tooltip
+ * needs the count (`"3 ready to bill · 2 overdue"`). Returning the count
+ * lets the UI derive `hasOverdue = overdueCount > 0` while still satisfying
+ * the tooltip copy. One round-trip, both signals.
+ */
+export const getInvoicingNavSignals = query({
+  args: {},
+  handler: async (ctx) => {
+    const { orgId } = await requireAdmin(ctx);
+    const orgSettings = await getOrgSettings(ctx, orgId);
+    const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
+    const todayStr = getDateInTimezone(Date.now(), timezone);
+
+    // Count overdue invoices via the org-status index — narrows the scan to
+    // `invoiced` only, then filters dueDate. No need to inspect drafts/paid/void.
+    const invoicedRows = await ctx.db
+      .query("invoices")
+      .withIndex("by_orgId_status", (q) =>
+        q.eq("orgId", orgId).eq("status", "invoiced"),
+      )
+      .collect();
+    let overdueCount = 0;
+    for (const inv of invoicedRows) {
+      if (inv.dueDate != null && inv.dueDate < todayStr) overdueCount += 1;
+    }
+
+    // Reuse the same iteration as `getReadyToInvoiceUnified` so the badge
+    // count can never disagree with the Inbox feed. Convex caches identical
+    // query bodies; both queries materialize from the same in-memory pass
+    // when both are subscribed (the typical "open /invoices" flow).
+    const rows = await enumerateReadyRows(ctx, orgId, todayStr);
+
+    return { toGenerateCount: rows.length, overdueCount };
   },
 });
 
@@ -392,15 +674,14 @@ export const getProjectInvoiceMetrics = query({
     const invoices = await ctx.db
       .query("invoices")
       .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
+      .filter((q) => q.eq(q.field("orgId"), orgId))
       .collect();
     // Void invoices are historical — excluded from totals and counts so the
     // metric cards reflect the live picture.
-    const orgInvoices = invoices.filter(
-      (inv) => inv.orgId === orgId && inv.status !== "void",
-    );
+    const orgInvoices = invoices.filter((inv) => inv.status !== "void");
 
     const orgSettings = await getOrgSettings(ctx, orgId);
-    const timezone = orgSettings?.timezone ?? "UTC";
+    const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
     const todayStr = getDateInTimezone(Date.now(), timezone);
 
     type Bucket = { count: number; amount: number };
@@ -410,6 +691,9 @@ export const getProjectInvoiceMetrics = query({
     const paidLifetime = empty();
 
     let totalInvoiced = 0;
+    // Track the most recent finalized issue date for the "Last invoiced" subline.
+    // Drafts don't count — they aren't sent yet. Voids are already excluded.
+    let lastInvoicedYMD: string | null = null;
     for (const inv of orgInvoices) {
       totalInvoiced += inv.total;
 
@@ -421,6 +705,9 @@ export const getProjectInvoiceMetrics = query({
       } else if (inv.status === "paid") {
         paidLifetime.count += 1;
         paidLifetime.amount = round2(paidLifetime.amount + inv.total);
+      }
+      if (inv.status !== "draft" && (lastInvoicedYMD === null || inv.issueDate > lastInvoicedYMD)) {
+        lastInvoicedYMD = inv.issueDate;
       }
     }
 
@@ -450,7 +737,7 @@ export const getProjectInvoiceMetrics = query({
     let uninvoicedMonths: UninvoicedMonth[] = [];
     if (project.billingType === "retainer") {
       const closedUninvoiced = await getClosedUninvoicedMonths(
-        ctx as any,
+        ctx,
         orgId,
         args.projectId,
         project,
@@ -483,6 +770,9 @@ export const getProjectInvoiceMetrics = query({
       // Retainer specific — full {year, month, label} so the callout bar
       // can pre-fill the CreateInvoiceModal with one click.
       uninvoicedMonths,
+      // Latest finalized issueDate as a UTC-midnight ms timestamp (or null).
+      // Consumed by the InvoiceBanner subline via `formatLastInvoiced(..., { timezone })`.
+      lastInvoicedAt: lastInvoicedYMD ? Date.parse(lastInvoicedYMD + "T00:00:00Z") : null,
     };
   },
 });
@@ -595,11 +885,11 @@ export const getInvoicePreview = query({
       const existingInvoices = await ctx.db
         .query("invoices")
         .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
+        .filter((q) => q.eq(q.field("orgId"), orgId))
         .collect();
 
       let alreadyInvoiced = 0;
       for (const inv of existingInvoices) {
-        if (inv.orgId !== orgId) continue;
         if (inv.status === "draft" || inv.status === "void") continue;
         const items = await ctx.db
           .query("invoiceLineItems")
@@ -751,7 +1041,7 @@ function groupRetainerEntryMinutes(
  *     stays consistent as the admin edits unfinalized months.
  */
 async function getRetainerStartBalance(
-  ctx: any,
+  ctx: QueryCtx,
   orgId: string,
   projectId: Id<"projects">,
   periodStart: string,
@@ -774,12 +1064,12 @@ async function getRetainerStartBalance(
   const existingInvoices: Doc<"invoices">[] = await ctx.db
     .query("invoices")
     .withIndex("by_projectId", (q: any) => q.eq("projectId", projectId))
+    .filter((q: any) => q.eq(q.field("orgId"), orgId))
     .collect();
 
   const previous = existingInvoices
     .filter(
       (inv: Doc<"invoices">) =>
-        inv.orgId === orgId &&
         inv.periodEnd &&
         inv.periodEnd < periodStart &&
         inv.retainerEndBalanceMinutes != null,
@@ -802,7 +1092,7 @@ async function getRetainerStartBalance(
  * Frozen fields: retainerStartBalanceMinutes, retainerIncludedMinutes, retainerMonthlyFee, retainerOverageRate.
  */
 async function recalcRetainerBalance(
-  ctx: any,
+  ctx: MutationCtx,
   invoiceId: Id<"invoices">,
   invoice: Doc<"invoices">,
   project: Doc<"projects">,
@@ -926,7 +1216,7 @@ async function recalcRetainerBalance(
  * recursively recalc it so its own subsequent drafts stay in lockstep.
  */
 async function cascadeRetainerChain(
-  ctx: any,
+  ctx: MutationCtx,
   previousInvoice: Doc<"invoices">,
   _previousEndBalance: number,
   project: Doc<"projects">,
@@ -943,13 +1233,13 @@ async function cascadeRetainerChain(
     .withIndex("by_projectId", (q: any) =>
       q.eq("projectId", previousInvoice.projectId),
     )
+    .filter((q: any) => q.eq(q.field("orgId"), previousInvoice.orgId))
     .collect();
 
   const next = projectInvoices
     .filter(
       (inv) =>
         inv._id !== previousInvoice._id &&
-        inv.orgId === previousInvoice.orgId &&
         // Void invoices don't participate in the retainer chain.
         inv.status !== "void" &&
         inv.periodStart &&
@@ -993,7 +1283,7 @@ async function cascadeRetainerChain(
  * Used by both the retainer preview query and the metrics query.
  */
 async function getClosedUninvoicedMonths(
-  ctx: { db: { query: (table: string) => any; get: (id: any) => any } },
+  ctx: QueryCtx,
   orgId: string,
   projectId: Id<"projects">,
   project: Doc<"projects">,
@@ -1033,17 +1323,78 @@ async function getClosedUninvoicedMonths(
   const invoices = await ctx.db
     .query("invoices")
     .withIndex("by_projectId", (q: any) => q.eq("projectId", projectId))
+    .filter((q: any) => q.eq(q.field("orgId"), orgId))
     .collect();
   const invoicedMonths = new Set(
     invoices
       .filter(
         (inv: Doc<"invoices">) =>
-          inv.orgId === orgId && inv.status !== "void" && inv.periodStart,
+          inv.status !== "void" && inv.periodStart,
       )
       .map((inv: Doc<"invoices">) => inv.periodStart!.slice(0, 7)),
   );
 
-  return allMonths.filter((m) => !invoicedMonths.has(`${m.year}-${String(m.month).padStart(2, "0")}`));
+  const uninvoiced = allMonths.filter(
+    (mn) => !invoicedMonths.has(`${mn.year}-${String(mn.month).padStart(2, "0")}`),
+  );
+
+  // Filter out non-billable months ($0 invoice would be blocked by the
+  // createInvoice guard anyway). Non-billable months surface on the project
+  // page as downloadable statements instead — see `convex/statements.ts`
+  // and `isInvoiceable` for the invariant.
+  const monthlyFee = project.monthlyFee ?? 0;
+  const overageRate = project.overageRate ?? 0;
+  const includedMinutes = project.includedMinutesPerMonth ?? 0;
+
+  // If both monthlyFee AND overageRate are zero, no closed month is
+  // billable — short-circuit without touching time entries.
+  if (monthlyFee === 0 && overageRate === 0) return [];
+  // If monthlyFee > 0, every closed month is billable (fee always charges).
+  // No need to compute per-month balances.
+  if (monthlyFee > 0) return uninvoiced;
+
+  // monthlyFee == 0 and overageRate > 0: only over-budget months are
+  // billable. Compute per-month balances using the same walker the Ready
+  // feed uses, then keep only months whose endBalance is negative.
+  const tasks = await ctx.db
+    .query("tasks")
+    .withIndex("by_orgId_projectId", (q: any) =>
+      q.eq("orgId", orgId).eq("projectId", projectId),
+    )
+    .collect();
+  const entries = (
+    await Promise.all(
+      tasks.map((t: Doc<"tasks">) =>
+        ctx.db
+          .query("timeEntries")
+          .withIndex("by_taskId", (q: any) => q.eq("taskId", t._id))
+          .filter((q: any) => q.eq(q.field("orgId"), orgId))
+          .collect(),
+      ),
+    )
+  ).flat();
+  const billableByMonth = new Map<string, number>();
+  for (const e of entries as Doc<"timeEntries">[]) {
+    if (!e.isBillable) continue;
+    const key = e.date.slice(0, 7);
+    billableByMonth.set(key, (billableByMonth.get(key) ?? 0) + e.durationMinutes);
+  }
+  const { closedMonths } = enumerateRetainerCycleState({
+    startDate,
+    todayStr,
+    includedMinutes,
+    cycleLength: project.cycleLength ?? 3,
+    rolloverEnabled: project.rolloverEnabled ?? true,
+    billableByMonth,
+  });
+  const overBudgetKeys = new Set(
+    closedMonths
+      .filter((cm) => cm.endBalance < 0)
+      .map((cm) => `${cm.year}-${String(cm.month).padStart(2, "0")}`),
+  );
+  return uninvoiced.filter((mn) =>
+    overBudgetKeys.has(`${mn.year}-${String(mn.month).padStart(2, "0")}`),
+  );
 }
 
 /**
@@ -1061,8 +1412,8 @@ export const getRetainerUninvoicedMonths = query({
     const project = await ctx.db.get(args.projectId);
     if (!project || project.orgId !== orgId || project.billingType !== "retainer") return [];
     const orgSettings = await getOrgSettings(ctx, orgId);
-    const timezone = orgSettings?.timezone ?? "UTC";
-    return getClosedUninvoicedMonths(ctx as any, orgId, args.projectId, project, timezone);
+    const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
+    return getClosedUninvoicedMonths(ctx, orgId, args.projectId, project, timezone);
   },
 });
 
@@ -1090,7 +1441,7 @@ export const getRetainerInvoicePreview = query({
 
     // Validate month is closed and within project range
     const orgSettingsVal = await getOrgSettings(ctx, orgId);
-    const tzVal = orgSettingsVal?.timezone ?? "UTC";
+    const tzVal = orgSettingsVal?.timezone ?? ORG_TIMEZONE_FALLBACK;
     const todayVal = getDateInTimezone(Date.now(), tzVal);
     const lastDayCheck = new Date(args.year, args.month, 0).getDate();
     const mEndCheck = `${args.year}-${String(args.month).padStart(2, "0")}-${String(lastDayCheck).padStart(2, "0")}`;
@@ -1215,6 +1566,53 @@ export const createInvoice = mutation({
       throw new ConvexError("Client not found for project.");
     }
 
+    // Pre-fetch invoices on this project once. Used by:
+    //   (a) the resume-existing-draft check (all billing types)
+    //   (b) the retainer sequential-month / start-month guards (later)
+    //   (c) the Fixed `alreadyInvoiced` accumulator (later)
+    const projectInvoices = await ctx.db
+      .query("invoices")
+      .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
+      .filter((q) => q.eq(q.field("orgId"), orgId))
+      .collect();
+
+    // Resume-existing-draft: Fixed has no period; T&M Path A keys on the
+    // requested date range. Both must run BEFORE the "no uninvoiced entries"
+    // guard for T&M, because already-stamped entries on the existing draft
+    // would otherwise short-circuit the call with a misleading error.
+    // Retainer is checked after its month boundaries are derived.
+    // Path B (timeEntryIds) can't collide with a draft because already-invoiced
+    // entries are rejected during entry resolution.
+    if (billingType === "fixed") {
+      const resume = findResumableInvoice(projectInvoices, {
+        orgId,
+        billingType: "fixed",
+      });
+      if (resume.kind === "resume-draft") {
+        return {
+          invoiceId: resume.invoice._id,
+          resumed: true,
+          prefix: resume.invoice.prefix,
+          number: resume.invoice.number,
+        };
+      }
+    } else if (billingType === "t_and_m" && args.timeEntryIds === undefined) {
+      const resume = findResumableInvoice(projectInvoices, {
+        orgId,
+        billingType: "t_and_m",
+        requestedPeriodStart: args.startDate,
+        requestedPeriodEnd: args.endDate,
+      });
+      if (resume.kind === "resume-draft") {
+        return {
+          invoiceId: resume.invoice._id,
+          resumed: true,
+          prefix: resume.invoice.prefix,
+          number: resume.invoice.number,
+        };
+      }
+    }
+
     // 1. Get all tasks for this project
     const tasks = await ctx.db
       .query("tasks")
@@ -1260,27 +1658,32 @@ export const createInvoice = mutation({
       const lastDay = new Date(y, m, 0).getDate();
       effectiveEnd = `${y}-${String(m).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
 
-      // Duplicate guard: one live invoice per project-month. Voided invoices
-      // are historical records — the month is re-invoiceable.
-      const existingInvoices = await ctx.db
-        .query("invoices")
-        .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
-        .collect();
-      const duplicate = existingInvoices.find(
-        (inv) =>
-          inv.orgId === orgId &&
-          inv.status !== "void" &&
-          inv.periodStart === effectiveStart &&
-          inv.periodEnd === effectiveEnd,
-      );
-      if (duplicate) {
+      // Resume-or-block: one live invoice per project-month.
+      //  - Existing draft → return its id (caller resumes editing).
+      //  - Existing invoiced/paid → throw (re-invoicing requires void first).
+      //  - Voided → historical only, the month is re-invoiceable.
+      const resumeRetainer = findResumableInvoice(projectInvoices, {
+        orgId,
+        billingType: "retainer",
+        requestedPeriodStart: effectiveStart,
+        requestedPeriodEnd: effectiveEnd,
+      });
+      if (resumeRetainer.kind === "resume-draft") {
+        return {
+          invoiceId: resumeRetainer.invoice._id,
+          resumed: true,
+          prefix: resumeRetainer.invoice.prefix,
+          number: resumeRetainer.invoice.number,
+        };
+      }
+      if (resumeRetainer.kind === "blocked-duplicate") {
         const label = monthLabel(effectiveStart);
         throw new ConvexError(`An invoice for ${label} already exists.`);
       }
 
       // BUG FIX: Validate month is within valid billing window
       const orgSettingsForValidation = await getOrgSettings(ctx, orgId);
-      const validationTimezone = orgSettingsForValidation?.timezone ?? "UTC";
+      const validationTimezone = orgSettingsForValidation?.timezone ?? ORG_TIMEZONE_FALLBACK;
       const todayStr = getDateInTimezone(Date.now(), validationTimezone);
 
       // Reject months before project start month (day-of-month ignored — see projectStartMonth)
@@ -1318,7 +1721,7 @@ export const createInvoice = mutation({
             const prevMonth = ((startParts[1] - 1 + prevMonthOffset) % 12) + 1;
             const prevStart = `${prevYear}-${String(prevMonth).padStart(2, "0")}-01`;
 
-            const hasPrevInvoice = existingInvoices.some(
+            const hasPrevInvoice = projectInvoices.some(
               (inv) =>
                 inv.orgId === orgId &&
                 inv.periodStart === prevStart,
@@ -1436,7 +1839,7 @@ export const createInvoice = mutation({
     const paymentTermsDays = orgSettings?.defaultPaymentTermsDays ?? 30;
 
     // 7. Compute issue date and due date
-    const timezone = orgSettings?.timezone ?? "UTC";
+    const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
     const issueDate = getDateInTimezone(Date.now(), timezone);
     const issueDateObj = new Date(issueDate + "T00:00:00Z");
     issueDateObj.setUTCDate(issueDateObj.getUTCDate() + paymentTermsDays);
@@ -1578,11 +1981,7 @@ export const createInvoice = mutation({
       // Calculate already invoiced: sum of lineType:"fixed" amounts across
       // finalized project invoices only. Drafts are provisional — counting
       // them would let a delete-then-recreate cycle over-bill the project.
-      const existingInvoices = await ctx.db
-        .query("invoices")
-        .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
-        .collect();
-      const projectInvoiceIds = existingInvoices
+      const projectInvoiceIds = projectInvoices
         .filter(
           (inv) =>
             inv.orgId === orgId &&
@@ -1620,7 +2019,19 @@ export const createInvoice = mutation({
     subtotal = round2(subtotal);
     const total = subtotal; // no tax in v1
 
+    // Hard guard: refuse €0 retainer invoices. A within-budget month with no
+    // monthly fee owes nothing, so creating an invoice is misleading — the
+    // client has nothing to pay. The download statement on the project page
+    // serves the "share the period summary" need without polluting /invoices
+    // with auto-paid €0 rows. See `isInvoiceable` for the invariant.
+    if (billingType === "retainer" && total === 0) {
+      throw new ConvexError(
+        "This month has no billable amount. Download the statement from the project page instead.",
+      );
+    }
+
     // 10. Create the invoice
+    const messageToClient = orgSettings?.invoiceMessageTemplate || undefined;
     const invoiceData: Record<string, unknown> = {
       orgId,
       projectId: args.projectId,
@@ -1641,6 +2052,7 @@ export const createInvoice = mutation({
       updatedAt: now,
       createdBy: userId,
     };
+    if (messageToClient !== undefined) invoiceData.messageToClient = messageToClient;
 
     // Retainer: snapshot balance, rate, AND cycle config. Recalc reads these
     // snapshots instead of live project fields so the draft's balance meaning
@@ -1654,6 +2066,18 @@ export const createInvoice = mutation({
       invoiceData.retainerOverageRate = retainerOverageRate;
       invoiceData.retainerRolloverEnabled = project.rolloverEnabled ?? true;
       invoiceData.retainerCycleLength = project.cycleLength ?? 3;
+    }
+
+    // 10a. Allocate invoice number BEFORE the invoice insert. Convex mutations
+    // are transactional — patch + insert either both commit or both roll back —
+    // but claiming the number first makes the ordering self-documenting and
+    // avoids reasoning about partial state if a future refactor splits work
+    // across mutations.
+    if (orgSettings) {
+      await ctx.db.patch(orgSettings._id, {
+        nextInvoiceNumber: nextNumber + 1,
+        updatedAt: now,
+      });
     }
 
     const invoiceId = await ctx.db.insert("invoices", invoiceData as never);
@@ -1684,15 +2108,7 @@ export const createInvoice = mutation({
       await ctx.db.patch(e._id, { invoiceId, updatedAt: now });
     }
 
-    // 13. Increment nextInvoiceNumber atomically (Convex OCC)
-    if (orgSettings) {
-      await ctx.db.patch(orgSettings._id, {
-        nextInvoiceNumber: nextNumber + 1,
-        updatedAt: now,
-      });
-    }
-
-    return invoiceId;
+    return { invoiceId, resumed: false, prefix, number: nextNumber };
   },
 });
 
@@ -1796,9 +2212,9 @@ export const getInvoice = query({
       const projectInvoices = await ctx.db
         .query("invoices")
         .withIndex("by_projectId", (q) => q.eq("projectId", invoice.projectId))
+        .filter((q) => q.eq(q.field("orgId"), orgId))
         .collect();
       for (const inv of projectInvoices) {
-        if (inv.orgId !== orgId) continue;
         if (inv.status === "draft" || inv.status === "void") continue;
         const invItems = await ctx.db
           .query("invoiceLineItems")
@@ -1842,7 +2258,14 @@ export const getInvoice = query({
             brandPhone: orgSettings.brandPhone,
           }
         : null,
-      timezone: orgSettings?.timezone ?? "UTC",
+      timezone: orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK,
+      // Org-level template surfaces rendered on the invoice document.
+      // Bundled with `getInvoice` so the editor doesn't need a second
+      // `orgSettings.get` round-trip — same trip-saving as `brand`.
+      org: {
+        paymentInstructions: orgSettings?.paymentInstructions,
+        invoiceMessageTemplate: orgSettings?.invoiceMessageTemplate,
+      },
     };
   },
 });
@@ -1902,6 +2325,46 @@ export const updateInvoice = mutation({
     if (args.note !== undefined) patch.note = args.note || undefined;
 
     await ctx.db.patch(args.id, patch);
+  },
+});
+
+/**
+ * Update the editable `messageToClient` block on an invoice. Has its own
+ * gate (`canEditInvoiceMessage`) because €0 auto-Paid retainer invoices stay
+ * editable indefinitely — the rest of `updateInvoice` is draft-only.
+ * Trims input; empty (after trim) clears the field.
+ */
+export const updateInvoiceMessage = mutation({
+  args: {
+    id: v.id("invoices"),
+    messageToClient: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const { orgId } = await requireAdmin(ctx);
+
+    // Trim first, then validate — a 5001-char input with trailing whitespace
+    // that trims to <5000 should be accepted, not rejected.
+    const trimmed = args.messageToClient.trim();
+    validateStringLength(trimmed, 5000, "Message to client");
+
+    const invoice = await ctx.db.get(args.id);
+    if (!invoice || invoice.orgId !== orgId) {
+      throw new ConvexError("Invoice not found.");
+    }
+
+    const project = await ctx.db.get(invoice.projectId);
+    if (!project || project.orgId !== orgId) {
+      throw new ConvexError("Project not found for invoice.");
+    }
+
+    if (!canEditInvoiceMessage(invoice, project)) {
+      throw new ConvexError("This invoice's message is locked.");
+    }
+
+    await ctx.db.patch(args.id, {
+      messageToClient: trimmed === "" ? undefined : trimmed,
+      updatedAt: Date.now(),
+    });
   },
 });
 
@@ -2176,7 +2639,7 @@ const VALID_TRANSITIONS: Record<string, string[]> = {
  * Returns the nearest blocking invoice, or null if no guard is needed.
  */
 async function findLaterRetainerInvoice(
-  ctx: any,
+  ctx: QueryCtx,
   orgId: string,
   invoice: Doc<"invoices">,
 ): Promise<Doc<"invoices"> | null> {
@@ -2187,13 +2650,13 @@ async function findLaterRetainerInvoice(
   const projectInvoices: Doc<"invoices">[] = await ctx.db
     .query("invoices")
     .withIndex("by_projectId", (q: any) => q.eq("projectId", invoice.projectId))
+    .filter((q: any) => q.eq(q.field("orgId"), orgId))
     .collect();
 
   const later = projectInvoices
     .filter(
       (inv) =>
         inv._id !== invoice._id &&
-        inv.orgId === orgId &&
         // Void invoices don't own a live snapshot and don't block unwinding.
         inv.status !== "void" &&
         inv.periodStart &&
@@ -2328,6 +2791,129 @@ export const bulkChangeInvoiceStatus = mutation({
     }
 
     return { succeeded, failed };
+  },
+});
+
+/**
+ * Inbox bulk mark-paid — admin-only, idempotent, returns a `priorStates`
+ * snapshot the UI hands to `undoMarkInvoicesPaid` within the 5s undo window.
+ *
+ * Decision logic (per-row classify + patch outcome) lives in
+ * `convex/lib/markPaid.ts` so it can be unit-tested without convex-test.
+ *
+ * Behavior recap (PRD § Concurrency rules · US 7, 48):
+ *   - Already `paid`        → no-op (counted as `updated`, snapshot included).
+ *   - `invoiced`            → patch `{status: "paid", paidAt: now}`.
+ *   - `draft` / `void`      → skipped with reason (defensive — Inbox only
+ *                             surfaces overdue rows, but stale UI state on a
+ *                             second tab could include other statuses).
+ *   - Cross-tenant / missing → skipped with reason.
+ *
+ * Last-write wins: no version check on the mark side. The snapshot allows
+ * the undo path to detect a race and skip without overwriting.
+ */
+export const markInvoicesPaid = mutation({
+  args: {
+    invoiceIds: v.array(v.id("invoices")),
+  },
+  handler: async (ctx, args) => {
+    const { orgId } = await requireAdmin(ctx);
+    const now = Date.now();
+
+    let updated = 0;
+    const priorStates: PriorState[] = [];
+    const skipped: { id: Id<"invoices">; reason: string }[] = [];
+
+    for (const id of args.invoiceIds) {
+      const invoice = await ctx.db.get(id);
+      if (!invoice || invoice.orgId !== orgId) {
+        skipped.push({ id, reason: "Invoice not found." });
+        continue;
+      }
+      const outcome = classifyMarkPaid(
+        { status: invoice.status, paidAt: invoice.paidAt },
+        now,
+      );
+      if (outcome.kind === "skip") {
+        skipped.push({ id, reason: outcome.reason });
+        continue;
+      }
+      priorStates.push({
+        id,
+        status: outcome.prior.status,
+        paidAt: outcome.prior.paidAt,
+      });
+      updated += 1;
+      if (outcome.kind === "patch") {
+        await ctx.db.patch(id, {
+          status: "paid",
+          paidAt: outcome.setPaidAt,
+          updatedAt: now,
+        });
+      }
+      // `noop`: counted in `updated`, no DB write.
+    }
+
+    return { updated, skipped, priorStates };
+  },
+});
+
+/**
+ * Inbox undo — reverts a prior `markInvoicesPaid` batch within the 5s window.
+ *
+ * Skip rule: if an invoice's current status is no longer "paid", another
+ * admin (or another tab) transitioned it during our window. Per the PRD we
+ * NEVER overwrite their edit — that row is added to `skipped` with a reason
+ * the UI surfaces in the toast.
+ */
+export const undoMarkInvoicesPaid = mutation({
+  args: {
+    priorStates: v.array(
+      v.object({
+        id: v.id("invoices"),
+        status: v.union(
+          v.literal("draft"),
+          v.literal("invoiced"),
+          v.literal("paid"),
+          v.literal("void"),
+        ),
+        paidAt: v.union(v.number(), v.null()),
+      }),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const { orgId } = await requireAdmin(ctx);
+    const now = Date.now();
+
+    let reverted = 0;
+    const skipped: { id: Id<"invoices">; reason: string }[] = [];
+
+    for (const snapshot of args.priorStates) {
+      const invoice = await ctx.db.get(snapshot.id);
+      if (!invoice || invoice.orgId !== orgId) {
+        skipped.push({ id: snapshot.id, reason: "Invoice not found." });
+        continue;
+      }
+      const outcome = classifyUndo(
+        { status: invoice.status, paidAt: invoice.paidAt },
+        { status: snapshot.status, paidAt: snapshot.paidAt },
+      );
+      if (outcome.kind === "skip") {
+        skipped.push({ id: snapshot.id, reason: outcome.reason });
+        continue;
+      }
+      // `paidAt: undefined` clears the field on the doc (Convex patch
+      // convention). Snapshot's `null` means "not paid" → unset the field.
+      const patch: Record<string, unknown> = {
+        status: outcome.setStatus,
+        updatedAt: now,
+      };
+      patch.paidAt = outcome.setPaidAt ?? undefined;
+      await ctx.db.patch(snapshot.id, patch);
+      reverted += 1;
+    }
+
+    return { reverted, skipped };
   },
 });
 

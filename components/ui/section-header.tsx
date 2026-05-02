@@ -5,10 +5,25 @@ import { ChevronDownIcon, ChevronRightIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { SECTION_TITLE } from "@/lib/table-tokens"
 
+type Tone = "default" | "destructive"
+
+const TONE_BG: Record<Tone, string> = {
+  default: "",
+  destructive:
+    "border-b border-red-200/70 bg-red-50/60 dark:border-red-900/40 dark:bg-red-950/30",
+}
+
+const TONE_TITLE: Record<Tone, string> = {
+  default: "",
+  destructive: "text-red-700 dark:text-red-300",
+}
+
 /**
  * Section header row — title left, optional trailing content right.
  * When collapsible=true, renders as a Radix CollapsibleTrigger with chevron.
  * When static, renders as a plain div.
+ *
+ * `tone="destructive"` tints the bar red for overdue/error sections.
  *
  * Must be used inside a Radix Collapsible when collapsible=true.
  */
@@ -19,6 +34,7 @@ export function SectionHeader({
   collapsible,
   open,
   className,
+  tone = "default",
 }: {
   title: string
   subtitle?: string
@@ -26,6 +42,7 @@ export function SectionHeader({
   collapsible?: boolean
   open?: boolean
   className?: string
+  tone?: Tone
 }) {
   const titleContent = (
     <div className="flex items-center gap-2.5">
@@ -36,7 +53,7 @@ export function SectionHeader({
           <ChevronRightIcon className="size-4 text-muted-foreground" />
         )
       ) : null}
-      <span className={SECTION_TITLE}>{title}</span>
+      <span className={cn(SECTION_TITLE, TONE_TITLE[tone])}>{title}</span>
       {subtitle ? (
         <span className="hidden text-xs text-muted-foreground sm:inline">{subtitle}</span>
       ) : null}
@@ -45,6 +62,7 @@ export function SectionHeader({
 
   const baseClass = cn(
     "flex w-full items-center justify-between px-5 py-3",
+    TONE_BG[tone],
     collapsible && "cursor-pointer transition-colors hover:bg-muted/50",
     className,
   )

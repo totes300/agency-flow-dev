@@ -11,11 +11,13 @@ import { SectionCard } from "@/components/ui/section-card"
 import { SectionHeader } from "@/components/ui/section-header"
 import { ProgressCell } from "@/components/ui/progress-cell"
 import { Skeleton } from "@/components/ui/skeleton"
+import { InvoiceBanner, type InvoiceBannerState } from "@/components/invoices/invoice-banner"
 import { MonthlyTimeBreakdown, TimeLogSkeleton } from "./monthly-time-breakdown"
 import { ProjectSummaryCard } from "./summary/project-summary-card"
 import { InfoIcon, AlertTriangleIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { formatMinutes } from "@/lib/format"
+import { daysSinceLastInvoice, formatMinutes } from "@/lib/format"
+import { ORG_TIMEZONE_FALLBACK } from "@/lib/hooks/use-org-timezone"
 import { useTaskDetailNav } from "@/lib/hooks/use-task-detail-nav"
 import {
   CELL_KEY, CELL_PRIMARY, CELL_SECONDARY,
@@ -24,9 +26,13 @@ import {
 
 export function FixedOverview({
   projectId,
+  projectName,
+  currency,
   onNavigateToEstimates,
 }: {
   projectId: Id<"projects">
+  projectName: string
+  currency: string
   onNavigateToEstimates?: () => void
 }) {
   const handleTaskClick = useTaskDetailNav()
@@ -34,6 +40,21 @@ export function FixedOverview({
   const categories = useQuery(api.workCategories.list, { includeArchived: false })
   const overview = useQuery(api.timeEntries.projectOverview, { projectId })
   const monthlyData = useQuery(api.timeEntries.projectMonthlyBreakdown, { projectId })
+  const metrics = useQuery(api.invoices.getProjectInvoiceMetrics, { projectId })
+  const orgSettings = useQuery(api.orgSettings.get)
+  const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK
+
+  // Banner state — render only when there's still money to invoice.
+  const bannerState: InvoiceBannerState | null =
+    metrics && metrics.fixedRemaining > 0
+      ? {
+          kind: "fixed",
+          remaining: metrics.fixedRemaining,
+          lastInvoicedAt: metrics.lastInvoicedAt,
+          daysSinceLastInvoice: daysSinceLastInvoice(metrics.lastInvoicedAt, { timezone }),
+          percentBilled: metrics.fixedPercentInvoiced,
+        }
+      : null
 
   const totalEstimatedMinutes = useMemo(() => {
     if (!estimates) return 0
@@ -62,6 +83,14 @@ export function FixedOverview({
   return (
     <div className="flex flex-col gap-6">
       <ProjectSummaryCard projectId={projectId} />
+
+      <InvoiceBanner
+        state={bannerState}
+        projectId={projectId}
+        projectName={projectName}
+        currency={currency}
+        timezone={timezone}
+      />
 
       <Alert>
         <InfoIcon />

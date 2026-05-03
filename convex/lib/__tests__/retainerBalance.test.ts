@@ -1,10 +1,22 @@
 import { describe, it, expect } from "vitest";
+import {
+  computeRetainerBalance,
+  getRetainerRecalcCyclePosition,
+  getRetainerCyclePosition,
+  getRetainerCycleStartMonth,
+} from "../retainerBalance";
 
 /**
  * Phase B tests — retainer balance computation with real time entries.
  *
  * Tests the balance chaining, overage, and badge status logic as pure functions
- * matching the getRetainerData query implementation.
+ * matching the `getRetainerData` view layer. The local `computeRetainerChain`
+ * helper here mirrors the per-month walker used to render the project Overview.
+ *
+ * Below those tests, the bottom of this file targets the **invoice-side**
+ * `computeRetainerBalance` (in `convex/lib/retainerBalance.ts`), asserting the
+ * post-refactor contract: `total = overageAmount` (Stripe collects the monthly
+ * fee separately, so it never appears on a chargeable line item).
  */
 
 type MonthInput = {
@@ -411,5 +423,176 @@ describe("Retainer invariants", () => {
   it("overageDue = overageMinutes / 60 * overageRate", () => {
     const r = computeRetainerChain(fixture);
     expect(r.overageDue).toBe((r.overageMinutes / 60) * fixture.overageRate);
+  });
+});
+
+// ─── Invoice-side: computeRetainerBalance contract ───────────────────────────
+//
+// These tests target the actual production helper in
+// `convex/lib/retainerBalance.ts`. After the invoicing refactor the contract
+// is "total === overageAmount" — the monthly retainer fee is collected via
+// Stripe and never charged on an invoice line item.
+
+describe("computeRetainerBalance (invoice-side)", () => {
+  const minutes = (h: number) => h * 60;
+
+  it("rollover OFF, within budget → total === 0 and isOverageDue false", () => {
+    const r = computeRetainerBalance({
+      taskMinutesMap: new Map([["k1", minutes(10)]]),
+      roundingMinutes: 0,
+      startBalance: 0,
+      includedMinutes: minutes(20),
+      monthlyFee: 1000, // Stripe — context only, must NOT enter `total`
+      overageRate: 100,
+      rolloverEnabled: false,
+      cycleLength: 1,
+      positionInCycle: 0,
+    });
+    expect(r.usedMinutes).toBe(minutes(10));
+    expect(r.endBalance).toBe(minutes(10));
+    expect(r.isOverageDue).toBe(false);
+    expect(r.overageAmount).toBe(0);
+    expect(r.total).toBe(0); // post-refactor: total = overage only
+    expect(r.monthlyFee).toBe(1000); // returned as context
+  });
+
+  it("rollover OFF, over budget → total === overageAmount", () => {
+    const r = computeRetainerBalance({
+      taskMinutesMap: new Map([["k1", minutes(25)]]),
+      roundingMinutes: 0,
+      startBalance: 0,
+      includedMinutes: minutes(20),
+      monthlyFee: 1000,
+      overageRate: 100,
+      rolloverEnabled: false,
+      cycleLength: 1,
+      positionInCycle: 0,
+    });
+    expect(r.isOverageDue).toBe(true);
+    expect(r.overageHours).toBe(5);
+    expect(r.overageAmount).toBe(500);
+    expect(r.total).toBe(500); // monthlyFee NOT added
+    expect(r.total).toBe(r.overageAmount);
+  });
+
+  it("rollover ON cycle math: 3-month cycle, end-of-cycle bills full overage", () => {
+    // 3-month cycle, included = 20h × 3 = 60h, used = 75h → 15h over.
+    const r = computeRetainerBalance({
+      taskMinutesMap: new Map([["k1", minutes(75)]]),
+      roundingMinutes: 0,
+      startBalance: 0,
+      includedMinutes: minutes(20) * 3, // cycle bucket = 3× monthly
+      monthlyFee: 1000,
+      overageRate: 80,
+      rolloverEnabled: true,
+      cycleLength: 3,
+      positionInCycle: 2, // closing month
+    });
+    expect(r.isOverageDue).toBe(true);
+    expect(r.overageHours).toBe(15);
+    expect(r.overageAmount).toBe(1200);
+    expect(r.total).toBe(1200);
+    expect(r.total).toBe(r.overageAmount);
+  });
+
+  it("rollover ON, mid-cycle position → isOverageDue false even if negative balance", () => {
+    // Position 1 of a 3-month cycle. Negative balance does not trigger overage —
+    // only the closing position bills.
+    const r = computeRetainerBalance({
+      taskMinutesMap: new Map([["k1", minutes(40)]]),
+      roundingMinutes: 0,
+      startBalance: 0,
+      includedMinutes: minutes(20) * 3,
+      monthlyFee: 1000,
+      overageRate: 100,
+      rolloverEnabled: true,
+      cycleLength: 3,
+      positionInCycle: 1,
+    });
+    expect(r.isOverageDue).toBe(false);
+    expect(r.total).toBe(0);
+  });
+});
+
+describe("getRetainerCyclePosition", () => {
+  it("returns 0 for the project's first month", () => {
+    expect(getRetainerCyclePosition("2026-01-01", 2026, 1, 3)).toBe(0);
+  });
+
+  it("returns cycleLength-1 at the cycle's closing month", () => {
+    expect(getRetainerCyclePosition("2026-01-01", 2026, 3, 3)).toBe(2);
+  });
+
+  it("wraps to 0 at the start of the next cycle", () => {
+    expect(getRetainerCyclePosition("2026-01-01", 2026, 4, 3)).toBe(0);
+  });
+
+  it("returns -1 when the project has no startDate", () => {
+    expect(getRetainerCyclePosition(undefined, 2026, 4, 3)).toBe(-1);
+  });
+});
+
+describe("getRetainerRecalcCyclePosition", () => {
+  it("uses the closing position for rollover cycle invoice recalculation", () => {
+    // Regression: rollover invoices store periodStart as the cycle's first
+    // month. Recalc must not classify that invoice as mid-cycle and delete the
+    // derived overage line.
+    expect(getRetainerCyclePosition("2026-02-01", 2026, 2, 3)).toBe(0);
+    expect(
+      getRetainerRecalcCyclePosition({
+        rolloverEnabled: true,
+        cycleLength: 3,
+      }),
+    ).toBe(2);
+
+    const r = computeRetainerBalance({
+      taskMinutesMap: new Map([["cycle", 30 * 60]]),
+      roundingMinutes: 0,
+      startBalance: 0,
+      includedMinutes: 24 * 60,
+      monthlyFee: 1200,
+      overageRate: 120,
+      rolloverEnabled: true,
+      cycleLength: 3,
+      positionInCycle: getRetainerRecalcCyclePosition({
+        rolloverEnabled: true,
+        cycleLength: 3,
+      }),
+    });
+    expect(r.isOverageDue).toBe(true);
+    expect(r.overageAmount).toBe(720);
+  });
+
+  it("keeps monthly retainer recalculation independent of cycle position", () => {
+    expect(
+      getRetainerRecalcCyclePosition({
+        rolloverEnabled: false,
+        cycleLength: 3,
+      }),
+    ).toBe(-1);
+  });
+});
+
+describe("getRetainerCycleStartMonth", () => {
+  it("locates the first month of the same cycle", () => {
+    // Project starts Jan; cycle length 3; ask about June (position 2 of cycle 2).
+    // Cycle 2 starts in April.
+    expect(getRetainerCycleStartMonth("2026-01-01", 2026, 6, 3)).toEqual({
+      year: 2026,
+      month: 4,
+    });
+  });
+
+  it("handles year wrap-around inside a cycle", () => {
+    // Project starts 2025-11; cycle length 3 → Nov, Dec, Jan(2026) is one cycle.
+    // Asking about Jan 2026 returns Nov 2025.
+    expect(getRetainerCycleStartMonth("2025-11-01", 2026, 1, 3)).toEqual({
+      year: 2025,
+      month: 11,
+    });
+  });
+
+  it("returns null when the project has no startDate", () => {
+    expect(getRetainerCycleStartMonth(undefined, 2026, 4, 3)).toBeNull();
   });
 });

@@ -2,8 +2,14 @@
  * Pure copy/layout derivation for `<InvoiceBanner>`. Lives outside the
  * component so the wording can be unit-tested without React or Convex.
  *
- * Returns the rendered strings + tone hints for the 4 banner kinds. The
+ * Returns the rendered strings + tone hints for the 3 banner kinds. The
  * component itself only handles layout, icon, modal, and click handling.
+ *
+ * Rollover retainer cycles intentionally have no banner — the cycle's
+ * billing action lives on the Monthly Breakdown card's cycle-end row per
+ * PRD § User Story 4 ("single primary action per row"). The previous
+ * `retainer-cycle-closed` branch existed but never fired (its preconditions
+ * were mutually exclusive); it was removed during the Issue #01 follow-up.
  */
 
 import { formatCurrencyPrecise, formatLastInvoiced, formatMinutes } from "@/lib/format"
@@ -29,17 +35,6 @@ export type InvoiceBannerState =
       readyMonthsLabel: string
       overageDue: number
       lastInvoicedAt: number | null
-      targetYear: number
-      targetMonth: number
-    }
-  | {
-      kind: "retainer-cycle-closed"
-      cycleLabel: string
-      closedAt: number
-      usedMinutes: number
-      budgetMinutes: number
-      overageDue: number
-      withinBudget: boolean
       targetYear: number
       targetMonth: number
     }
@@ -103,23 +98,5 @@ export function deriveInvoiceBannerView(
       }
     }
 
-    case "retainer-cycle-closed": {
-      const closedPhrase = formatLastInvoiced(state.closedAt, { timezone })
-      const overSegment = state.withinBudget
-        ? null
-        : `${formatMinutes(state.usedMinutes - state.budgetMinutes)} over`
-      return {
-        title: `${state.cycleLabel} cycle closed`,
-        subline: join([
-          closedPhrase ? `Closed ${closedPhrase}` : null,
-          overSegment,
-          `${formatMinutes(state.usedMinutes)} / ${formatMinutes(state.budgetMinutes)} used`,
-        ]),
-        amount: formatCurrencyPrecise(state.overageDue, currency),
-        amountLabel: state.withinBudget ? "within budget" : "overage",
-        amountTone: state.withinBudget ? "neutral" : "warn",
-        labelTone: state.withinBudget ? "ok" : "muted",
-      }
-    }
   }
 }

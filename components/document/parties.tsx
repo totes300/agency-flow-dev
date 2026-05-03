@@ -39,7 +39,11 @@ function PartyBlock({ label, info }: { label: string; info: PartyInfo }) {
   )
 }
 
-export function InvoiceParties({
+/**
+ * From / To block at the top of invoice and monthly report documents.
+ * Brand info on the left, client billing info on the right.
+ */
+export function DocumentParties({
   brand,
   client,
 }: {

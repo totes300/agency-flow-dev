@@ -13,9 +13,9 @@ import {
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Skeleton } from "@/components/ui/skeleton"
 import { InvoiceBanner, type InvoiceBannerState } from "@/components/invoices/invoice-banner"
-import { MonthlyBreakdownCard } from "./monthly-breakdown-card"
+import { MonthlyBreakdownCard, ROW_GRID } from "./monthly-breakdown-card"
 import { ProjectSummaryCard } from "./summary/project-summary-card"
-import { formatCycleLabel, formatMinutes } from "@/lib/format"
+import { formatMinutes } from "@/lib/format"
 import { ORG_TIMEZONE_FALLBACK } from "@/lib/hooks/use-org-timezone"
 import { AlertTriangleIcon } from "lucide-react"
 
@@ -34,11 +34,15 @@ function formatMonthList(months: Array<{ year: number; month: number }>): string
 
 /**
  * Pure helper — derives the banner state from `getRetainerData` output and
- * `getProjectInvoiceMetrics`. Returns `null` for the no-banner cases:
- *  - Mid-cycle of the current rollover cycle (cycle progress lives in #08).
- *  - Browsing a past cycle (cycleOffset !== 0).
- *  - Closing month of a closed cycle is already invoiced.
- *  - Monthly-settlement project with no closed-uninvoiced months.
+ * `getProjectInvoiceMetrics`. Returns `null` for the no-banner cases.
+ *
+ * Only the **monthly-settlement** path (rollover OFF) renders a banner: it
+ * aggregates closed-uninvoiced months across the project history. Rollover
+ * cycle invoicing lives on the cycle-end row of the Monthly Breakdown card
+ * (PRD § User Story 4: single primary action per row). The previous
+ * `retainer-cycle-closed` banner branch was dead code — it required
+ * `cycleOffset === 0 && isCycleClosed`, which is mutually exclusive
+ * (the cycle containing today is by definition not yet closed).
  */
 type RetainerData = NonNullable<FunctionReturnType<typeof api.projects.getRetainerData>>
 type Metrics = NonNullable<FunctionReturnType<typeof api.invoices.getProjectInvoiceMetrics>>
@@ -46,52 +50,28 @@ type Metrics = NonNullable<FunctionReturnType<typeof api.invoices.getProjectInvo
 function computeRetainerBannerState(
   data: RetainerData,
   metrics: Metrics | undefined,
-  cycleOffset: number,
 ): InvoiceBannerState | null {
-  const { rolloverEnabled, isCycleClosed, months, overageDue, cycleBudget, cycleWorked } = data
-  const closingMonth = months[months.length - 1] ?? null
+  const { rolloverEnabled, overageDue } = data
+  if (rolloverEnabled) return null
 
-  // Monthly settlement (rollover OFF): aggregate any closed-uninvoiced months
-  // across the full project history. Independent of which cycle is being viewed.
-  if (!rolloverEnabled) {
-    if (!metrics || metrics.uninvoicedMonths.length === 0) return null
-    const ready = metrics.uninvoicedMonths
-    return {
-      kind: "retainer-monthly",
-      readyMonthCount: ready.length,
-      readyMonthsLabel: formatMonthList(ready),
-      overageDue,
-      lastInvoicedAt: metrics.lastInvoicedAt,
-      targetYear: ready[0].year,
-      targetMonth: ready[0].month,
-    }
-  }
-
-  // Cycle rollover: only render on the just-closed current cycle.
-  const isCurrentCycle = cycleOffset === 0
-  if (!isCycleClosed || !isCurrentCycle || !closingMonth || closingMonth.invoice) {
-    return null
-  }
+  if (!metrics || metrics.uninvoicedMonths.length === 0) return null
+  const ready = metrics.uninvoicedMonths
   return {
-    kind: "retainer-cycle-closed",
-    cycleLabel: formatCycleLabel(months),
-    closedAt: Date.parse(closingMonth.endDate + "T00:00:00Z"),
-    usedMinutes: cycleWorked,
-    budgetMinutes: cycleBudget,
+    kind: "retainer-monthly",
+    readyMonthCount: ready.length,
+    readyMonthsLabel: formatMonthList(ready),
     overageDue,
-    withinBudget: overageDue === 0,
-    targetYear: closingMonth.year,
-    targetMonth: closingMonth.month + 1,
+    lastInvoicedAt: metrics.lastInvoicedAt,
+    targetYear: ready[0].year,
+    targetMonth: ready[0].month,
   }
 }
 
 export function RetainerOverview({
   projectId,
-  projectName,
   currency: projectCurrency,
 }: {
   projectId: Id<"projects">
-  projectName: string
   currency: string
 }) {
   const searchParams = useSearchParams()
@@ -121,7 +101,7 @@ export function RetainerOverview({
 
   const { overageMinutes, overageRate } = data
 
-  const bannerState = computeRetainerBannerState(data, metrics ?? undefined, cycleOffset)
+  const bannerState = computeRetainerBannerState(data, metrics ?? undefined)
 
   return (
     <div className="flex flex-col gap-6">
@@ -130,7 +110,6 @@ export function RetainerOverview({
       <InvoiceBanner
         state={bannerState}
         projectId={projectId}
-        projectName={projectName}
         currency={projectCurrency}
         timezone={timezone}
       />
@@ -148,7 +127,6 @@ export function RetainerOverview({
       <MonthlyBreakdownCard
         data={data}
         projectId={projectId}
-        projectName={projectName}
         currency={projectCurrency}
       />
     </div>
@@ -156,10 +134,8 @@ export function RetainerOverview({
 }
 
 function MonthlyBreakdownSkeleton() {
-  // Mirrors `monthly-breakdown-card.tsx` — same column template, padding, and
-  // borders so the skeleton-to-content swap doesn't shift any pixel.
-  const grid =
-    "grid grid-cols-[8px_minmax(0,1fr)_108px_124px_100px_112px] items-center gap-x-5 px-6"
+  // Reuses the live card's `ROW_GRID` so the skeleton-to-content swap doesn't
+  // shift any pixel (CLAUDE.md content-aware skeletons rule).
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between gap-3 space-y-0 px-6 py-4">
@@ -167,7 +143,7 @@ function MonthlyBreakdownSkeleton() {
         <Skeleton className="h-7 w-32" />
       </CardHeader>
       <CardContent className="px-0 pb-0">
-        <div className={`${grid} border-b py-2`}>
+        <div className={`${ROW_GRID} border-b py-2`}>
           <span aria-hidden />
           <Skeleton className="h-3 w-12" />
           <Skeleton className="h-3 w-10 justify-self-end" />
@@ -177,7 +153,7 @@ function MonthlyBreakdownSkeleton() {
         </div>
         <ul className="divide-y">
           {Array.from({ length: 3 }).map((_, i) => (
-            <li key={i} className={`${grid} py-3`}>
+            <li key={i} className={`${ROW_GRID} py-3`}>
               <Skeleton className="size-1.5 rounded-full" />
               <Skeleton className="h-4 w-28" />
               <Skeleton className="h-3 w-20 justify-self-end" />

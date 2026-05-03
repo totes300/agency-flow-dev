@@ -46,14 +46,14 @@ export function InboxEmptyState({
       <h3 className="mt-4 text-lg font-semibold">{headline}</h3>
       <p className="mt-1 text-sm text-muted-foreground">
         Nothing to bill, nothing overdue. Within-budget retainer months
-        appear as downloadable statements on each project page.
+        appear as downloadable monthly reports on each project page.
       </p>
       {lastInvoice ? (
         <p className="mt-5 text-xs text-muted-foreground">
           Last invoiced{" "}
           {formatLastInvoiced(lastInvoice.issueDateTimestamp, { timezone })} ·{" "}
           <Link
-            href={`/invoices/${lastInvoice.id}`}
+            href={`/invoices/${formatInvoiceNumber(lastInvoice.prefix, lastInvoice.number)}`}
             className="font-mono hover:text-foreground hover:underline"
           >
             {formatInvoiceNumber(lastInvoice.prefix, lastInvoice.number)}

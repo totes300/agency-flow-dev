@@ -5,7 +5,6 @@ import {
   CircleUserIcon,
   UsersIcon,
   FolderIcon,
-  FileTextIcon,
   ClockIcon,
   ReceiptIcon,
   CalendarDaysIcon,
@@ -55,7 +54,6 @@ export const navigation: NavGroup[] = [
     label: "Insights",
     items: [
       { title: "Workday", url: "/workday", icon: CalendarDaysIcon },
-      { title: "Reports", url: "/reports", icon: FileTextIcon, adminOnly: true },
     ],
   },
   {

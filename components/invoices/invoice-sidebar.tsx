@@ -12,8 +12,9 @@ import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { toastError } from "@/lib/toast-helpers"
 import { cn } from "@/lib/utils"
+import { getDocumentBillingType } from "@/lib/documentBillingType"
 import { formatCurrency, formatInvoiceDate } from "@/lib/format"
-import { ChevronDownIcon } from "lucide-react"
+import { ChevronDownIcon, PrinterIcon } from "lucide-react"
 
 export function InvoiceSidebar({
   invoice,
@@ -22,6 +23,7 @@ export function InvoiceSidebar({
   readOnly,
   backHref,
   fixedBilled,
+  onPrint,
 }: {
   invoice: Doc<"invoices">
   project: { name: string; billingType: string; fixedPrice?: number } | null
@@ -29,6 +31,7 @@ export function InvoiceSidebar({
   readOnly: boolean
   backHref: string
   fixedBilled?: number
+  onPrint?: () => void
 }) {
   const router = useRouter()
   const updateInvoice = useMutation(api.invoices.updateInvoice)
@@ -62,7 +65,6 @@ export function InvoiceSidebar({
     | null
     | "markInvoiced"
     | "revertToDraft"
-    | "revertToInvoiced"
     | "delete"
   >(null)
   const [actionLoading, setActionLoading] = useState(false)
@@ -98,17 +100,22 @@ export function InvoiceSidebar({
     setConfirmAction(null)
   }
 
-  async function handleDelete() {
-    setActionLoading(true)
-    try {
-      await deleteInvoiceMutation({ id: invoice._id })
-      toast.success("Invoice deleted")
-      router.replace(backHref)
-    } catch (err) {
-      toastError(err, "Failed to delete invoice")
-    }
-    setActionLoading(false)
+  function handleDelete() {
+    // Optimistic navigation pattern (Linear / Notion / Stripe).
+    //
+    // Navigate away FIRST, fire-and-forget the mutation second. This unmounts
+    // the page before Convex's reactive subscription sees the deletion and
+    // flips `getInvoice` to `null` — which would otherwise race with the
+    // page render and trigger `notFound()` mid-navigation.
+    //
+    // If the server rejects the delete, the toast tells the user on the
+    // destination page; we don't try to navigate back because that's worse
+    // UX than leaving them on a clean list view.
     setConfirmAction(null)
+    router.replace(backHref)
+    void deleteInvoiceMutation({ id: invoice._id })
+      .then(() => toast.success("Invoice deleted"))
+      .catch((err) => toastError(err, "Failed to delete invoice"))
   }
 
   const showFixedProgress =
@@ -116,6 +123,11 @@ export function InvoiceSidebar({
     project.fixedPrice != null &&
     project.fixedPrice > 0 &&
     fixedBilled != null
+  const billingTypeLabel = getDocumentBillingType({
+    billingType: project?.billingType,
+    retainerRolloverEnabled: invoice.retainerRolloverEnabled,
+    retainerCycleLength: invoice.retainerCycleLength,
+  })
 
   return (
     <div className="flex flex-col gap-6">
@@ -161,7 +173,10 @@ export function InvoiceSidebar({
         </div>
       </div>
 
-      <hr className="border-border" />
+      <div>
+        <p className="mb-1 text-xs font-medium text-muted-foreground">Billing type</p>
+        <p className="text-sm">{billingTypeLabel}</p>
+      </div>
 
       {/* Note — collapsed by default when empty; always visible summary keeps
           existing notes discoverable without demanding attention. */}
@@ -222,10 +237,16 @@ export function InvoiceSidebar({
           </Button>
         )}
 
+        {onPrint && (
+          <Button variant="outline" onClick={onPrint}>
+            <PrinterIcon data-icon="inline-start" className="size-3.5" />
+            Save as PDF
+          </Button>
+        )}
+
         {invoice.status === "invoiced" && (
           <>
             <Button
-              variant="outline"
               onClick={() => {
                 void handleStatusChange("paid", "Invoice marked as paid")
               }}
@@ -248,10 +269,10 @@ export function InvoiceSidebar({
           <Button
             variant="ghost"
             className="text-muted-foreground"
-            onClick={() => setConfirmAction("revertToInvoiced")}
+            onClick={() => setConfirmAction("revertToDraft")}
             disabled={actionLoading}
           >
-            Revert to Invoiced
+            Revert to Draft
           </Button>
         )}
 
@@ -285,18 +306,6 @@ export function InvoiceSidebar({
         confirmLabel="Revert to Draft"
         onConfirm={() => {
           void handleStatusChange("draft", "Invoice reverted to draft")
-        }}
-      />
-
-      {/* Confirm: Revert to Invoiced */}
-      <ConfirmDialog
-        open={confirmAction === "revertToInvoiced"}
-        onOpenChange={(open) => { if (!open) setConfirmAction(null) }}
-        title="Revert to Invoiced"
-        description="This will mark the invoice as unpaid."
-        confirmLabel="Revert to Invoiced"
-        onConfirm={() => {
-          void handleStatusChange("invoiced", "Invoice reverted to invoiced")
         }}
       />
 

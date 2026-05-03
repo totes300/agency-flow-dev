@@ -26,12 +26,10 @@ import {
 
 export function FixedOverview({
   projectId,
-  projectName,
   currency,
   onNavigateToEstimates,
 }: {
   projectId: Id<"projects">
-  projectName: string
   currency: string
   onNavigateToEstimates?: () => void
 }) {
@@ -87,7 +85,6 @@ export function FixedOverview({
       <InvoiceBanner
         state={bannerState}
         projectId={projectId}
-        projectName={projectName}
         currency={currency}
         timezone={timezone}
       />

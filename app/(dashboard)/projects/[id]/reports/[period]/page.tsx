@@ -10,20 +10,22 @@ import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
-import { StatementDocument } from "@/components/projects/statement-document"
+import { MonthlyReportDocument } from "@/components/projects/monthly-report-document"
+import { useBreadcrumbTitle } from "@/lib/hooks/use-breadcrumb-title"
 
 /**
- * Retainer statement page.
+ * Retainer Monthly Report page (D8 in `docs/invoicing-refactor.md`).
  *
- * URL: /projects/[id]/statements/[period] where period = "YYYY-MM".
+ * URL: /projects/[id]/reports/[period] where period = "YYYY-MM".
  *
- * The statement is rendered live from `getRetainerStatement`. The "Save as
- * PDF" path uses the browser-native print dialog (window.print) — the same
- * pattern invoices use, no PDF library, no server render. A sibling
- * `print:hidden` class on the chrome keeps the printed output to just the
- * StatementDocument card.
+ * The report is rendered live from `getRetainerStatement` (server symbol
+ * kept; only the visible header + this route URL are rebranded — see Open
+ * Question 1). The "Save as PDF" path uses the browser-native print dialog
+ * (window.print) — same pattern invoices use, no PDF library, no server
+ * render. A sibling `print:hidden` class on the chrome keeps the printed
+ * output to just the MonthlyReportDocument card.
  */
-export default function ProjectStatementPage() {
+export default function ProjectMonthlyReportPage() {
   const { isAuthenticated } = useConvexAuth()
   const params = useParams()
   const projectId = params.id as Id<"projects">
@@ -31,16 +33,17 @@ export default function ProjectStatementPage() {
   const parsed = parsePeriod(periodParam)
 
   // Skip the query for malformed period strings — the page will 404 below.
-  const statement = useQuery(
+  const report = useQuery(
     api.statements.getRetainerStatement,
     isAuthenticated && parsed
       ? { projectId, year: parsed.year, month: parsed.month }
       : "skip",
   )
+  useBreadcrumbTitle(report ? `Report · ${report.period.label}` : null)
 
   if (!parsed) notFound()
-  if (statement === undefined) return <StatementSkeleton />
-  if (statement === null) notFound()
+  if (report === undefined) return <ReportSkeleton />
+  if (report === null) notFound()
 
   const backHref = `/projects/${projectId}`
 
@@ -48,33 +51,14 @@ export default function ProjectStatementPage() {
     <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
       {/* Chrome — hidden when printing */}
       <nav
-        aria-label="Breadcrumb"
+        aria-label="Document navigation"
         className="flex items-center justify-between gap-3 print:hidden"
       >
-        <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" aria-label="Back" className="size-8" asChild>
-            <Link href={backHref}>
-              <ArrowLeftIcon className="size-4" />
-            </Link>
-          </Button>
-          <ol className="flex items-center gap-2 text-sm text-muted-foreground">
-            <li>
-              <Link href="/projects" className="hover:text-foreground">
-                Projects
-              </Link>
-            </li>
-            <li aria-hidden="true">›</li>
-            <li>
-              <Link href={backHref} className="hover:text-foreground">
-                {statement.project.name}
-              </Link>
-            </li>
-            <li aria-hidden="true">›</li>
-            <li aria-current="page" className="text-foreground">
-              Statement · {statement.period.label}
-            </li>
-          </ol>
-        </div>
+        <Button variant="ghost" size="icon" aria-label="Back" className="size-8" asChild>
+          <Link href={backHref}>
+            <ArrowLeftIcon className="size-4" />
+          </Link>
+        </Button>
         <Button
           size="sm"
           variant="outline"
@@ -85,7 +69,7 @@ export default function ProjectStatementPage() {
         </Button>
       </nav>
 
-      <StatementDocument statement={statement} />
+      <MonthlyReportDocument report={report} />
     </div>
   )
 }
@@ -106,7 +90,7 @@ function parsePeriod(raw: string): { year: number; month: number } | null {
   return { year, month }
 }
 
-function StatementSkeleton() {
+function ReportSkeleton() {
   return (
     <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
       <div className="flex items-center justify-between gap-3 print:hidden">

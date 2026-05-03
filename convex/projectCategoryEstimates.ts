@@ -19,10 +19,11 @@ export const list = query({
     const enriched = await Promise.all(
       estimates.map(async (est) => {
         const category = await ctx.db.get(est.workCategoryId);
+        const safeCategory = category && category.orgId === orgId ? category : null;
         return {
           ...est,
-          categoryName: category?.name ?? "Unknown",
-          categoryColor: category?.color ?? "default",
+          categoryName: safeCategory?.name ?? "Unknown",
+          categoryColor: safeCategory?.color ?? "default",
         };
       })
     );
@@ -42,6 +43,9 @@ export const upsert = mutation({
 
     const project = await ctx.db.get(args.projectId);
     if (!project || project.orgId !== orgId) throw new ConvexError("Project not found");
+
+    const category = await ctx.db.get(args.workCategoryId);
+    if (!category || category.orgId !== orgId) throw new ConvexError("Category not found");
 
     if (args.estimatedMinutes < 0) throw new ConvexError("Estimated minutes cannot be negative");
 

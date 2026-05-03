@@ -5,7 +5,59 @@
  * Extracted to keep the mutation slim and unit-testable without convex-test.
  */
 
+import { ConvexError } from "convex/values";
 import type { Id } from "../_generated/dataModel";
+
+/**
+ * The exact user-facing message thrown when a retainer period has no overage
+ * to bill. Re-exported as a const so the UI tests + Generate-invoice button
+ * gate can match against the same string.
+ */
+export const NO_OVERAGE_MESSAGE =
+  "This period has no overage. Download the monthly report instead.";
+
+/**
+ * The exact user-facing message thrown when `createInvoice` is called for a
+ * non-cycle-end month on a rollover-ON retainer project. Cycle invoices
+ * cover the entire cycle in one row; mid-cycle months never bill.
+ */
+export const NOT_CYCLE_END_MESSAGE =
+  "Retainer cycle invoices can only be created for the cycle's closing month.";
+
+/**
+ * Bouncer for the retainer branch of `createInvoice`. Throws when the
+ * computed balance shows no overage — within-budget periods produce a
+ * Monthly Report, never an invoice (D3 in `docs/invoicing-refactor.md`).
+ *
+ * Pure: takes the result of `computeRetainerBalance` and throws or returns
+ * void. Lives next to `findResumableInvoice` so all the createInvoice
+ * pure-helper branching has one home.
+ */
+export function assertRetainerInvoiceable(opts: {
+  isOverageDue: boolean;
+}): void {
+  if (!opts.isOverageDue) {
+    throw new ConvexError(NO_OVERAGE_MESSAGE);
+  }
+}
+
+/**
+ * Bouncer for rollover-ON retainer cycles: `createInvoice` only accepts the
+ * cycle's closing month. Mid-cycle months throw with a fixed message that
+ * the UI can match.
+ *
+ * `cyclePosition` is 0-indexed; the closing month is `cycleLength - 1`.
+ */
+export function assertRolloverCycleEnd(opts: {
+  rolloverEnabled: boolean;
+  cyclePosition: number;
+  cycleLength: number;
+}): void {
+  if (!opts.rolloverEnabled) return;
+  if (opts.cyclePosition !== opts.cycleLength - 1) {
+    throw new ConvexError(NOT_CYCLE_END_MESSAGE);
+  }
+}
 
 /**
  * Structural subset of an invoice document that the resume-check needs.
@@ -110,24 +162,17 @@ export function findResumableInvoice<T extends InvoiceLike>(
 }
 
 /**
- * Gate for editing `messageToClient` post-creation.
- *  - Draft: editable.
- *  - €0 auto-Paid retainer (status=paid, total=0, type=retainer): editable
- *    indefinitely (PRD § 39 — invoice was never sent to the client).
- *  - Money-due Invoiced/Paid: locked.
- *  - Void: locked.
+ * Gate for editing `messageToClient` post-creation. Draft only — once an
+ * invoice is finalized, voided, or marked paid the message is locked.
+ *
+ * The previous "€0 auto-Paid retainer stays editable" carve-out died with
+ * the invoicing refactor (`docs/invoicing-refactor.md` D3): retainer
+ * invoices can no longer be created with `total === 0` because
+ * `assertRetainerInvoiceable` rejects within-budget periods at creation.
+ * The carve-out's only path was unreachable.
  */
 export function canEditInvoiceMessage(invoice: {
   status: "draft" | "invoiced" | "paid" | "void";
-  total: number;
-}, project: { billingType: "t_and_m" | "fixed" | "retainer" | "non_billable" }): boolean {
-  if (invoice.status === "draft") return true;
-  if (
-    invoice.status === "paid" &&
-    invoice.total === 0 &&
-    project.billingType === "retainer"
-  ) {
-    return true;
-  }
-  return false;
+}): boolean {
+  return invoice.status === "draft";
 }

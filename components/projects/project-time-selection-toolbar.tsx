@@ -30,9 +30,10 @@ export function ProjectTimeSelectionToolbar({
   currency: string
   onDeselectAll: () => void
   /**
-   * Opens `CreateInvoiceModal` in selection mode. Parent owns the modal and
-   * receives both the ids to invoice and how many of the selected rows were
-   * skipped (non-billable / already invoiced) so it can show "N of M".
+   * Generates a draft invoice from the selected time entries via
+   * `useGenerateInvoice` (the parent owns the hook). Receives the ids to
+   * invoice and how many of the selected rows were skipped (non-billable /
+   * already invoiced) so the parent can show "N of M".
    */
   onCreateInvoice: (ids: Id<"timeEntries">[], skipped: number) => void
 }) {

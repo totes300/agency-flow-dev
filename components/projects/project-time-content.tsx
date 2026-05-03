@@ -22,7 +22,8 @@ import { ProjectTimeStats } from "@/components/projects/project-time-stats"
 import { ProjectTimeHiddenSelectionBanner } from "@/components/projects/project-time-hidden-selection-banner"
 import { TimeEntryModal } from "@/components/projects/time-entry-modal"
 import { EmptyStateBanner } from "@/components/projects/empty-state-banner"
-import { CreateInvoiceModal } from "@/components/invoices/create-invoice-modal"
+import { useGenerateInvoice } from "@/lib/hooks/use-generate-invoice"
+import type { Id as IdType } from "@/convex/_generated/dataModel"
 import { Button } from "@/components/ui/button"
 import {
   Tooltip,
@@ -139,11 +140,20 @@ export function ProjectTimeContent({
   )
 
   const [editEntryId, setEditEntryId] = useState<Id<"timeEntries"> | null>(null)
+  const { generate, pending: isGenerating } = useGenerateInvoice()
 
-  type InvoiceModalMode =
-    | { kind: "all" }
-    | { kind: "selection"; ids: Id<"timeEntries">[]; skipped: number }
-  const [invoiceModal, setInvoiceModal] = useState<InvoiceModalMode | null>(null)
+  function handleGenerateAll() {
+    void generate({ projectId })
+  }
+
+  function handleGenerateSelection(ids: IdType<"timeEntries">[]) {
+    void generate({
+      projectId,
+      timeEntryIds: ids,
+      navigateTo: (identifier) => `/invoices/${identifier}`,
+    })
+    setSelection(new Map())
+  }
 
   // ─── Effects ──────────────────────────────────────────────────────────────
 
@@ -264,8 +274,8 @@ export function ProjectTimeContent({
                 variant="outline"
                 size="sm"
                 className="h-9"
-                disabled={invoiceBtn.disabled}
-                onClick={() => setInvoiceModal({ kind: "all" })}
+                disabled={invoiceBtn.disabled || isGenerating}
+                onClick={handleGenerateAll}
               >
                 <ReceiptIcon data-icon="inline-start" className="size-4" />
                 Invoice Unbilled Hours
@@ -358,9 +368,7 @@ export function ProjectTimeContent({
           selectedEntries={selectedEntries}
           currency={project.currency}
           onDeselectAll={clearSelection}
-          onCreateInvoice={(ids, skipped) =>
-            setInvoiceModal({ kind: "selection", ids, skipped })
-          }
+          onCreateInvoice={(ids) => handleGenerateSelection(ids)}
         />
       )}
 
@@ -391,24 +399,6 @@ export function ProjectTimeContent({
         />
       )}
 
-      {invoiceModal !== null && (
-        <CreateInvoiceModal
-          open={invoiceModal !== null}
-          onOpenChange={(o) => {
-            if (!o) setInvoiceModal(null)
-          }}
-          projectId={projectId}
-          projectName={project.name}
-          billingType={project.billingType}
-          currency={project.currency}
-          timeEntryIds={invoiceModal.kind === "selection" ? invoiceModal.ids : undefined}
-          skippedCount={invoiceModal.kind === "selection" ? invoiceModal.skipped : 0}
-          onCreated={() => {
-            setInvoiceModal(null)
-            setSelection(new Map())
-          }}
-        />
-      )}
     </div>
   )
 }

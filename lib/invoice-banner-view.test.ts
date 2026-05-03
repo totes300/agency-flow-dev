@@ -86,46 +86,5 @@ describe("deriveInvoiceBannerView — Retainer monthly", () => {
   })
 })
 
-describe("deriveInvoiceBannerView — Retainer cycle-closed", () => {
-  it("includes 'N over' segment and used/budget pair when over budget", () => {
-    const state: InvoiceBannerState = {
-      kind: "retainer-cycle-closed",
-      cycleLabel: "Apr–Jun",
-      closedAt: Date.UTC(2026, 5, 30, 12, 0, 0),
-      usedMinutes: 126 * 60,
-      budgetMinutes: 120 * 60,
-      overageDue: 450,
-      withinBudget: false,
-      targetYear: 2026,
-      targetMonth: 6,
-    }
-    const view = deriveInvoiceBannerView(state, "EUR", tz)
-    expect(view.title).toBe("Apr–Jun cycle closed")
-    expect(view.amountLabel).toBe("overage")
-    expect(view.amountTone).toBe("warn")
-    expect(view.subline).toContain("06:00 over")
-    expect(view.subline).toContain("126:00 / 120:00 used")
-  })
-
-  it("within budget → 'within budget' label, neutral amount, ok label tone", () => {
-    const state: InvoiceBannerState = {
-      kind: "retainer-cycle-closed",
-      cycleLabel: "Apr–Jun",
-      closedAt: Date.UTC(2026, 5, 30, 12, 0, 0),
-      usedMinutes: 102 * 60,
-      budgetMinutes: 120 * 60,
-      overageDue: 0,
-      withinBudget: true,
-      targetYear: 2026,
-      targetMonth: 6,
-    }
-    const view = deriveInvoiceBannerView(state, "EUR", tz)
-    expect(view.amountLabel).toBe("within budget")
-    expect(view.amountTone).toBe("neutral")
-    expect(view.labelTone).toBe("ok")
-    expect(view.subline).not.toContain("over")
-  })
-})
-
 // Reference timestamp ignored, just keeps imports tidy.
 void now

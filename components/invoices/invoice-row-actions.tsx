@@ -2,12 +2,13 @@
 
 import { useState } from "react"
 import { useMutation } from "convex/react"
-import { MoreHorizontal, Undo2, Ban } from "lucide-react"
+import { Ban, DownloadIcon, MoreHorizontal, Trash2, Undo2 } from "lucide-react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { toast } from "sonner"
 import { toastError } from "@/lib/toast-helpers"
 import { Button } from "@/components/ui/button"
+import { ConfirmDialog } from "@/components/confirm-dialog"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -17,12 +18,29 @@ import {
 } from "@/components/ui/dropdown-menu"
 import type { InvoiceStatus } from "@/components/invoices/invoice-status-badge"
 
-type SecondaryAction = {
+type StatusAction = {
+  kind: "status"
   label: string
   icon: React.ReactNode
   target: InvoiceStatus
   destructive?: boolean
 }
+
+type DownloadAction = {
+  kind: "download"
+  label: string
+  icon: React.ReactNode
+  destructive?: false
+}
+
+type DeleteAction = {
+  kind: "delete"
+  label: string
+  icon: React.ReactNode
+  destructive: true
+}
+
+type SecondaryAction = StatusAction | DownloadAction | DeleteAction
 
 /**
  * The forward-progression action exposed *inline* per status. This is the
@@ -52,21 +70,46 @@ const PRIMARY_ACTION: Record<
  */
 const SECONDARY_ACTIONS: Record<InvoiceStatus, SecondaryAction[]> = {
   draft: [
-    { label: "Void", icon: <Ban className="size-3.5" />, target: "void", destructive: true },
+    {
+      kind: "status",
+      label: "Void",
+      icon: <Ban className="size-3.5" />,
+      target: "void",
+      destructive: true,
+    },
   ],
   invoiced: [
     {
+      kind: "status",
       label: "Revert to draft",
       icon: <Undo2 className="size-3.5" />,
       target: "draft",
     },
-    { label: "Void", icon: <Ban className="size-3.5" />, target: "void", destructive: true },
+    {
+      kind: "status",
+      label: "Void",
+      icon: <Ban className="size-3.5" />,
+      target: "void",
+      destructive: true,
+    },
   ],
   paid: [
     {
-      label: "Revert to invoiced",
+      kind: "download",
+      label: "Download PDF",
+      icon: <DownloadIcon className="size-3.5" />,
+    },
+    {
+      kind: "status",
+      label: "Revert to draft",
       icon: <Undo2 className="size-3.5" />,
-      target: "invoiced",
+      target: "draft",
+    },
+    {
+      kind: "delete",
+      label: "Delete",
+      icon: <Trash2 className="size-3.5" />,
+      destructive: true,
     },
   ],
   void: [],
@@ -81,13 +124,20 @@ const PAST_TENSE: Record<InvoiceStatus, string> = {
 
 export function InvoiceRowActions({
   invoiceId,
+  identifier,
   status,
 }: {
   invoiceId: Id<"invoices">
+  /** Friendly URL identifier (e.g. "INV-035") for navigation. */
+  identifier: string
   status: InvoiceStatus
 }) {
   const changeStatus = useMutation(api.invoices.changeInvoiceStatus)
+  const deleteInvoice = useMutation(api.invoices.deleteInvoice)
   const [open, setOpen] = useState(false)
+  const [confirmAction, setConfirmAction] = useState<"delete" | "draft" | null>(
+    null,
+  )
 
   const primary = PRIMARY_ACTION[status]
   const secondary = SECONDARY_ACTIONS[status]
@@ -100,65 +150,127 @@ export function InvoiceRowActions({
       toast.success(`Invoice ${PAST_TENSE[target]}`)
     } catch (err) {
       toastError(err, `Failed to update invoice`)
+    } finally {
+      setConfirmAction(null)
+      setOpen(false)
     }
   }
 
-  // Void is always the last, destructive entry. The earlier definition keeps
-  // forward + reversal first so the menu reads top-to-bottom in lifecycle
-  // order, with the destructive option visually separated below.
-  const reversal = secondary.filter((a) => a.target !== "void")
-  const voidAction = secondary.find((a) => a.target === "void") ?? null
+  async function runDelete() {
+    try {
+      await deleteInvoice({ id: invoiceId })
+      toast.success("Invoice deleted")
+    } catch (err) {
+      toastError(err, "Failed to delete invoice")
+    } finally {
+      setConfirmAction(null)
+      setOpen(false)
+    }
+  }
+
+  function downloadPdf() {
+    window.open(`/invoices/${identifier}?print=1`, "_blank", "noopener,noreferrer")
+    setOpen(false)
+  }
+
+  function handleAction(action: SecondaryAction) {
+    if (action.kind === "download") {
+      downloadPdf()
+      return
+    }
+    if (action.kind === "delete") {
+      setConfirmAction("delete")
+      return
+    }
+    if (status === "paid" && action.target === "draft") {
+      setConfirmAction("draft")
+      return
+    }
+    void run(action.target)
+  }
+
+  const regularActions = secondary.filter((a) => !a.destructive)
+  const destructiveActions = secondary.filter((a) => a.destructive)
 
   return (
-    <div
-      className="flex items-center justify-end gap-1"
-      onClick={(e) => e.stopPropagation()}
-    >
-      {primary && (
-        <Button size="sm" onClick={() => run(primary.target)}>
-          {primary.label}
-        </Button>
-      )}
+    <>
+      <div
+        className="flex items-center justify-end gap-1"
+      >
+        {primary && (
+          <Button size="sm" onClick={() => run(primary.target)}>
+            {primary.label}
+          </Button>
+        )}
 
-      {secondary.length > 0 && (
-        // Overflow trigger fades on hover — the primary button carries the
-        // dominant affordance, so the dots can stay quiet at rest.
-        <div className="opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 group-data-[selected=true]:opacity-100">
-          <DropdownMenu open={open} onOpenChange={setOpen}>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label="More invoice actions"
-                className="size-7 text-muted-foreground hover:text-foreground"
-              >
-                <MoreHorizontal className="size-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent
-              align="end"
-              onClick={(e) => e.stopPropagation()}
-            >
-              {reversal.map((t) => (
-                <DropdownMenuItem key={t.target} onSelect={() => run(t.target)}>
-                  {t.icon}
-                  {t.label}
-                </DropdownMenuItem>
-              ))}
-              {voidAction && reversal.length > 0 && <DropdownMenuSeparator />}
-              {voidAction && (
-                <DropdownMenuItem
-                  variant="destructive"
-                  onSelect={() => run("void")}
+        {secondary.length > 0 && (
+          <div
+            className={
+              status === "paid"
+                ? ""
+                : "opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 group-data-[selected=true]:opacity-100"
+            }
+          >
+            <DropdownMenu open={open} onOpenChange={setOpen}>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="More invoice actions"
+                  className="size-7 text-muted-foreground hover:text-foreground"
                 >
-                  {voidAction.icon}
-                  {voidAction.label}
-                </DropdownMenuItem>
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-      )}
-    </div>
+                  <MoreHorizontal className="size-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                align="end"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {regularActions.map((action) => (
+                  <DropdownMenuItem
+                    key={action.label}
+                    onSelect={() => handleAction(action)}
+                  >
+                    {action.icon}
+                    {action.label}
+                  </DropdownMenuItem>
+                ))}
+                {destructiveActions.length > 0 && regularActions.length > 0 && (
+                  <DropdownMenuSeparator />
+                )}
+                {destructiveActions.map((action) => (
+                  <DropdownMenuItem
+                    key={action.label}
+                    variant="destructive"
+                    onSelect={() => handleAction(action)}
+                  >
+                    {action.icon}
+                    {action.label}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        )}
+      </div>
+
+      <ConfirmDialog
+        open={confirmAction === "draft"}
+        onOpenChange={(next) => setConfirmAction(next ? "draft" : null)}
+        title="Revert paid invoice to draft?"
+        description="This clears the paid date and moves the invoice back to draft so it can be edited before sending again."
+        confirmLabel="Revert to draft"
+        onConfirm={() => void run("draft")}
+      />
+      <ConfirmDialog
+        open={confirmAction === "delete"}
+        onOpenChange={(next) => setConfirmAction(next ? "delete" : null)}
+        title="Delete paid invoice?"
+        description="This removes the invoice and releases its linked time entries so the period can be billed again."
+        confirmLabel="Delete invoice"
+        variant="destructive"
+        onConfirm={() => void runDelete()}
+      />
+    </>
   )
 }

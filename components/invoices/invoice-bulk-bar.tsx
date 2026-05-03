@@ -40,9 +40,10 @@ type Pending = "paid" | "void" | null
  *   Void       — every selected *invoice* row is status "draft" or "invoiced".
  *                Ready rows in the selection are ignored.
  *
- * Ready rows have no batch action — every Ready row carries config (rounding,
- * date range, milestone) that requires CreateInvoiceModal. Selection of Ready
- * rows still contributes to the multi-currency total preview.
+ * Ready rows have no batch action — each Ready row generates its draft
+ * individually via `useGenerateInvoice` and the user lands on the draft
+ * page (D10). Selection of Ready rows still contributes to the
+ * multi-currency total preview.
  *
  * Multi-currency totals never sum across currencies — accounting hazard.
  */

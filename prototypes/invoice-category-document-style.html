@@ -1,0 +1,508 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Invoice Category Style Prototype</title>
+    <style>
+      :root {
+        --paper: #ffffff;
+        --ink: #202124;
+        --muted: #77736d;
+        --faint: #eeece8;
+        --line: #dedbd4;
+        --soft: #faf9f7;
+        --accent: #2f2d2a;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: #f4f3f0;
+        color: var(--ink);
+        font-family:
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
+        line-height: 1.45;
+      }
+
+      .page {
+        max-width: 1180px;
+        margin: 32px auto;
+        padding: 0 24px 48px;
+      }
+
+      .intro {
+        max-width: 760px;
+        margin: 0 0 24px;
+      }
+
+      .intro h1 {
+        margin: 0 0 8px;
+        font-size: 24px;
+        letter-spacing: -0.01em;
+      }
+
+      .intro p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .documents {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 24px;
+        align-items: start;
+      }
+
+      .document {
+        background: var(--paper);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 32px;
+        box-shadow: 0 1px 1px rgb(0 0 0 / 0.02);
+      }
+
+      .doc-label {
+        margin: 0 0 4px;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 650;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+      }
+
+      .doc-title {
+        margin: 0;
+        font-size: 23px;
+        letter-spacing: -0.01em;
+      }
+
+      .doc-meta {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 16px;
+        margin: 30px 0;
+        padding: 18px 0;
+        border-block: 1px solid var(--line);
+      }
+
+      .meta-label {
+        margin: 0 0 4px;
+        color: var(--muted);
+        font-size: 10px;
+        font-weight: 650;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+      }
+
+      .meta-value {
+        margin: 0;
+        font-size: 14px;
+      }
+
+      .section-title {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 10px;
+      }
+
+      .section-title h2 {
+        margin: 0;
+        font-size: 14px;
+        letter-spacing: 0.01em;
+      }
+
+      .section-title p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .work-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+
+      .work-table th {
+        padding: 9px 0;
+        border-bottom: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 10px;
+        font-weight: 650;
+        letter-spacing: 0.1em;
+        text-align: left;
+        text-transform: uppercase;
+      }
+
+      .work-table th.num,
+      .work-table td.num {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .category-row td {
+        padding: 18px 0 8px;
+        border-bottom: 1px solid var(--faint);
+      }
+
+      .category-name {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      .category-rule {
+        width: 3px;
+        height: 18px;
+        border-radius: 999px;
+        background: var(--accent);
+      }
+
+      .category-note {
+        margin-left: 13px;
+        padding-left: 10px;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 500;
+        letter-spacing: 0;
+        text-transform: none;
+      }
+
+      .task-row td {
+        padding: 10px 0;
+        border-bottom: 1px solid var(--faint);
+        vertical-align: top;
+      }
+
+      .task-title {
+        padding-left: 13px;
+      }
+
+      .task-title strong {
+        display: block;
+        font-weight: 520;
+      }
+
+      .task-title span {
+        display: block;
+        margin-top: 2px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .category-total td {
+        padding: 9px 0 16px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 600;
+      }
+
+      .total-box {
+        margin-top: 28px;
+        margin-left: auto;
+        width: min(320px, 100%);
+        border-top: 1px solid var(--line);
+        padding-top: 12px;
+      }
+
+      .total-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 5px 0;
+        font-size: 14px;
+      }
+
+      .total-row.final {
+        margin-top: 8px;
+        border-top: 1px solid var(--line);
+        padding-top: 12px;
+        font-size: 18px;
+        font-weight: 750;
+      }
+
+      .report-summary {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 1px;
+        overflow: hidden;
+        margin: 0 0 28px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--line);
+      }
+
+      .report-summary div {
+        background: var(--soft);
+        padding: 14px;
+      }
+
+      @media (max-width: 900px) {
+        .documents {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media print {
+        body {
+          background: white;
+        }
+
+        .page {
+          margin: 0;
+          max-width: none;
+          padding: 0;
+        }
+
+        .intro {
+          display: none;
+        }
+
+        .documents {
+          display: block;
+        }
+
+        .document {
+          break-after: page;
+          border: 0;
+          border-radius: 0;
+          box-shadow: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <section class="intro">
+        <h1>Invoice/report category style prototype</h1>
+        <p>
+          Recommendation: replace app-style category pills with document-style
+          category sections. Categories become prominent section headers with a
+          subtle marker and subtotal; tasks stay visibly nested underneath.
+        </p>
+      </section>
+
+      <section class="documents">
+        <article class="document" aria-labelledby="invoice-title">
+          <p class="doc-label">Invoice</p>
+          <h2 id="invoice-title" class="doc-title">Feb-Apr 2026 overage</h2>
+
+          <div class="doc-meta">
+            <div>
+              <p class="meta-label">Invoice</p>
+              <p class="meta-value">INV-030</p>
+            </div>
+            <div>
+              <p class="meta-label">Issue Date</p>
+              <p class="meta-value">May 3, 2026</p>
+            </div>
+            <div>
+              <p class="meta-label">Due Date</p>
+              <p class="meta-value">Jun 2, 2026</p>
+            </div>
+          </div>
+
+          <div class="section-title">
+            <h3>Work performed</h3>
+            <p>Grouped by category</p>
+          </div>
+
+          <table class="work-table">
+            <thead>
+              <tr>
+                <th>Description</th>
+                <th class="num">Hours</th>
+                <th class="num">Rate</th>
+                <th class="num">Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="category-row">
+                <td colspan="3">
+                  <div class="category-name">
+                    <span class="category-rule"></span>
+                    Development
+                    <span class="category-note">2 tasks</span>
+                  </div>
+                </td>
+                <td class="num"><strong>30.0h</strong></td>
+              </tr>
+              <tr class="task-row">
+                <td class="task-title">
+                  <strong>Cycle work</strong>
+                  <span>Implementation, QA fixes, release preparation</span>
+                </td>
+                <td class="num">24.0h</td>
+                <td class="num">$120</td>
+                <td class="num">$2,880</td>
+              </tr>
+              <tr class="task-row">
+                <td class="task-title">
+                  <strong>Retainer reporting adjustments</strong>
+                  <span>Invoice-ready state and report output review</span>
+                </td>
+                <td class="num">6.0h</td>
+                <td class="num">$120</td>
+                <td class="num">$720</td>
+              </tr>
+              <tr class="category-total">
+                <td colspan="3">Development subtotal</td>
+                <td class="num">$3,600</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div class="total-box">
+            <div class="total-row">
+              <span>Included in retainer</span>
+              <span>24.0h</span>
+            </div>
+            <div class="total-row">
+              <span>Used</span>
+              <span>30.0h</span>
+            </div>
+            <div class="total-row">
+              <span>Overage</span>
+              <span>6.0h x $120/h</span>
+            </div>
+            <div class="total-row final">
+              <span>Total due</span>
+              <span>$720</span>
+            </div>
+          </div>
+        </article>
+
+        <article class="document" aria-labelledby="report-title">
+          <p class="doc-label">Monthly Report</p>
+          <h2 id="report-title" class="doc-title">April 2026</h2>
+
+          <div class="doc-meta">
+            <div>
+              <p class="meta-label">Period</p>
+              <p class="meta-value">Apr 1-30</p>
+            </div>
+            <div>
+              <p class="meta-label">Budget</p>
+              <p class="meta-value">8.0h</p>
+            </div>
+            <div>
+              <p class="meta-label">Used</p>
+              <p class="meta-value">5.5h</p>
+            </div>
+          </div>
+
+          <div class="report-summary">
+            <div>
+              <p class="meta-label">Remaining</p>
+              <p class="meta-value">2.5h</p>
+            </div>
+            <div>
+              <p class="meta-label">Status</p>
+              <p class="meta-value">Within budget</p>
+            </div>
+            <div>
+              <p class="meta-label">Amount due</p>
+              <p class="meta-value">$0</p>
+            </div>
+          </div>
+
+          <div class="section-title">
+            <h3>Work breakdown</h3>
+            <p>Every task shown under its category</p>
+          </div>
+
+          <table class="work-table">
+            <thead>
+              <tr>
+                <th>Category / Task</th>
+                <th class="num">Hours</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="category-row">
+                <td>
+                  <div class="category-name">
+                    <span class="category-rule"></span>
+                    Design
+                    <span class="category-note">3 tasks</span>
+                  </div>
+                </td>
+                <td class="num"><strong>3.25h</strong></td>
+              </tr>
+              <tr class="task-row">
+                <td class="task-title">
+                  <strong>Landing page revisions</strong>
+                  <span>Hero hierarchy, responsive polish</span>
+                </td>
+                <td class="num">1.50h</td>
+              </tr>
+              <tr class="task-row">
+                <td class="task-title">
+                  <strong>Invoice workflow review</strong>
+                  <span>Ready tab, paid tab, sidebar actions</span>
+                </td>
+                <td class="num">1.25h</td>
+              </tr>
+              <tr class="task-row">
+                <td class="task-title">
+                  <strong>Report PDF layout</strong>
+                  <span>Document spacing and print review</span>
+                </td>
+                <td class="num">0.50h</td>
+              </tr>
+              <tr class="category-total">
+                <td>Design subtotal</td>
+                <td class="num">3.25h</td>
+              </tr>
+
+              <tr class="category-row">
+                <td>
+                  <div class="category-name">
+                    <span class="category-rule"></span>
+                    Development
+                    <span class="category-note">2 tasks</span>
+                  </div>
+                </td>
+                <td class="num"><strong>2.25h</strong></td>
+              </tr>
+              <tr class="task-row">
+                <td class="task-title">
+                  <strong>Retainer calculations</strong>
+                  <span>Cycle labels and uninvoiced state logic</span>
+                </td>
+                <td class="num">1.75h</td>
+              </tr>
+              <tr class="task-row">
+                <td class="task-title">
+                  <strong>Regression test pass</strong>
+                  <span>Typecheck and summary tests</span>
+                </td>
+                <td class="num">0.50h</td>
+              </tr>
+              <tr class="category-total">
+                <td>Development subtotal</td>
+                <td class="num">2.25h</td>
+              </tr>
+            </tbody>
+          </table>
+        </article>
+      </section>
+    </main>
+  </body>
+</html>

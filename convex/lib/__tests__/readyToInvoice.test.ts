@@ -238,18 +238,18 @@ describe("enumerateRetainerCycleState", () => {
 // ─── Retainer monthly (rollover OFF) ──────────────────────────────────────────
 
 describe("buildRetainerMonthlyReadyRows", () => {
-  it("emits a within-budget row for a closed positive-balance month", () => {
+  // Contract after the invoicing refactor (`docs/invoicing-refactor.md`):
+  //   - within-budget months never appear; they render as Monthly Reports.
+  //   - over-budget months emit one row whose `amount = overageHours × rate`.
+  //   - the previous `invoiceTotal = monthlyFee + overage` field is gone.
+  it("emits NO row for a within-budget closed month", () => {
     const rows = buildRetainerMonthlyReadyRows({
       project: makeProject({ rolloverEnabled: false, overageRate: 100 }),
       client: makeClient(),
       invoices: [],
       monthBalances: [{ year: 2026, month: 3, endBalance: 120 }],
     });
-    expect(rows).toHaveLength(1);
-    expect(rows[0].badgeKind).toBe("within-budget");
-    expect(rows[0].amount).toBe(0);
-    expect(rows[0].overageHours).toBeUndefined();
-    expect(rows[0].kind).toBe("retainer-monthly");
+    expect(rows).toEqual([]);
   });
 
   it("emits an over-budget row with computed overage charge", () => {
@@ -272,16 +272,16 @@ describe("buildRetainerMonthlyReadyRows", () => {
       invoices: [
         inv({
           status: "invoiced",
-          periodStart: "2026-03-01",
-          periodEnd: "2026-03-31",
+          periodStart: "2026-04-01",
+          periodEnd: "2026-04-30",
         }),
       ],
       monthBalances: [
-        { year: 2026, month: 3, endBalance: 120 },
-        { year: 2026, month: 4, endBalance: 0 },
+        { year: 2026, month: 3, endBalance: -60 }, // over → row
+        { year: 2026, month: 4, endBalance: -120 }, // over but already invoiced
       ],
     });
-    expect(rows.map((r) => r.period?.month)).toEqual([4]);
+    expect(rows.map((r) => r.period?.month)).toEqual([3]);
   });
 
   it("treats voided invoices as non-blocking (the month is re-invoiceable)", () => {
@@ -295,9 +295,20 @@ describe("buildRetainerMonthlyReadyRows", () => {
           periodEnd: "2026-03-31",
         }),
       ],
-      monthBalances: [{ year: 2026, month: 3, endBalance: 120 }],
+      monthBalances: [{ year: 2026, month: 3, endBalance: -60 }], // over
     });
     expect(rows).toHaveLength(1);
+  });
+
+  it("emits no row when over-budget but overageRate is 0 (pathological config)", () => {
+    const rows = buildRetainerMonthlyReadyRows({
+      project: makeProject({ rolloverEnabled: false, overageRate: 0 }),
+      client: makeClient(),
+      invoices: [],
+      monthBalances: [{ year: 2026, month: 3, endBalance: -60 }],
+    });
+    // No row: amount would be 0 → never bill.
+    expect(rows).toEqual([]);
   });
 
   it("returns nothing when rolloverEnabled is true (cycle handles it)", () => {
@@ -314,7 +325,11 @@ describe("buildRetainerMonthlyReadyRows", () => {
 // ─── Retainer cycle (rollover ON) ─────────────────────────────────────────────
 
 describe("buildRetainerCycleReadyRows", () => {
-  it("emits a row for a closed cycle whose closing month has no invoice", () => {
+  // Contract after the invoicing refactor: only over-budget closed cycles
+  // emit a row. Within-budget cycles render as Monthly Reports. The row's
+  // period anchors to the cycle's CLOSING month — `cycleLengthMonths` lets
+  // the UI render the full range ("Jan–Mar") without a second project fetch.
+  it("emits NO row for a within-budget closed cycle", () => {
     const rows = buildRetainerCycleReadyRows({
       project: makeProject({ rolloverEnabled: true, overageRate: 100, cycleLength: 3 }),
       client: makeClient(),
@@ -323,7 +338,24 @@ describe("buildRetainerCycleReadyRows", () => {
         {
           closingYear: 2026,
           closingMonth: 3,
-          cycleBalance: -180, // 3h over
+          cycleBalance: 300, // within budget
+          isCycleClosed: true,
+        },
+      ],
+    });
+    expect(rows).toEqual([]);
+  });
+
+  it("emits one row per closed over-budget cycle (cycle-end period anchor)", () => {
+    const rows = buildRetainerCycleReadyRows({
+      project: makeProject({ rolloverEnabled: true, overageRate: 100, cycleLength: 3 }),
+      client: makeClient(),
+      invoices: [],
+      cycles: [
+        {
+          closingYear: 2026,
+          closingMonth: 3,
+          cycleBalance: -180, // 3h over the entire cycle
           isCycleClosed: true,
         },
       ],
@@ -334,6 +366,8 @@ describe("buildRetainerCycleReadyRows", () => {
     expect(rows[0].overageHours).toBe(3);
     expect(rows[0].amount).toBe(300);
     expect(rows[0].period).toEqual({ year: 2026, month: 3 });
+    // The row carries the cycle length so the UI can format "Jan–Mar".
+    expect(rows[0].cycleLengthMonths).toBe(3);
   });
 
   it("excludes mid-cycle (isCycleClosed: false)", () => {
@@ -345,7 +379,7 @@ describe("buildRetainerCycleReadyRows", () => {
         {
           closingYear: 2026,
           closingMonth: 6,
-          cycleBalance: 60,
+          cycleBalance: -60,
           isCycleClosed: false,
         },
       ],
@@ -355,7 +389,7 @@ describe("buildRetainerCycleReadyRows", () => {
 
   it("skips the cycle when its closing month is already invoiced", () => {
     const rows = buildRetainerCycleReadyRows({
-      project: makeProject({ rolloverEnabled: true }),
+      project: makeProject({ rolloverEnabled: true, overageRate: 100 }),
       client: makeClient(),
       invoices: [
         inv({
@@ -368,12 +402,66 @@ describe("buildRetainerCycleReadyRows", () => {
         {
           closingYear: 2026,
           closingMonth: 3,
-          cycleBalance: 0,
+          cycleBalance: -120,
           isCycleClosed: true,
         },
       ],
     });
     expect(rows).toEqual([]);
+  });
+
+  it("skips the cycle when a CYCLE-SPANNING invoice already covers it", () => {
+    // Issue #01 introduced multi-month cycle invoices (periodStart=cycleStart,
+    // periodEnd=cycleEnd). The Ready-feed dedup must key invoices by anchor
+    // month (= periodEnd's YYYY-MM), not by periodStart, so a billed cycle
+    // disappears from Ready instead of resurfacing as a duplicate.
+    const rows = buildRetainerCycleReadyRows({
+      project: makeProject({ rolloverEnabled: true, overageRate: 100, cycleLength: 3 }),
+      client: makeClient(),
+      invoices: [
+        inv({
+          status: "invoiced",
+          periodStart: "2026-01-01", // cycle start (Jan)
+          periodEnd: "2026-03-31",   // cycle end (Mar) → anchor = "2026-03"
+        }),
+      ],
+      cycles: [
+        {
+          closingYear: 2026,
+          closingMonth: 3,
+          cycleBalance: -180,
+          isCycleClosed: true,
+        },
+      ],
+    });
+    expect(rows).toEqual([]);
+  });
+
+  it("a voided cycle invoice frees the period (cycle row reappears)", () => {
+    // Per PRD § D5 — voiding releases the period for re-billing. Anchor-key
+    // logic must agree: voided invoices are ignored regardless of period
+    // shape.
+    const rows = buildRetainerCycleReadyRows({
+      project: makeProject({ rolloverEnabled: true, overageRate: 100, cycleLength: 3 }),
+      client: makeClient(),
+      invoices: [
+        inv({
+          status: "void",
+          periodStart: "2026-01-01",
+          periodEnd: "2026-03-31",
+        }),
+      ],
+      cycles: [
+        {
+          closingYear: 2026,
+          closingMonth: 3,
+          cycleBalance: -180,
+          isCycleClosed: true,
+        },
+      ],
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].amount).toBe(300);
   });
 });
 
@@ -556,6 +644,10 @@ describe("buildTmReadyRows", () => {
 // ─── isInvoiceable ─────────────────────────────────────────────────────────────
 
 describe("isInvoiceable", () => {
+  // After the invoicing refactor (`docs/invoicing-refactor.md`) the canonical
+  // rule is `row.amount > 0`. The previous `invoiceTotal = monthlyFee + overage`
+  // composite is gone — the monthly retainer fee is a Stripe subscription, so
+  // the only billable number is the overage in `amount`.
   function row(over: Partial<ReadyRow>): ReadyRow {
     return {
       kind: "retainer-monthly",
@@ -565,47 +657,20 @@ describe("isInvoiceable", () => {
       clientName: "Client 1",
       sortKey: "2026-03/client 1",
       amount: 0,
-      invoiceTotal: 0,
       currency: "USD",
-      badgeKind: "within-budget",
+      badgeKind: "over-budget",
       lastInvoicedAt: null,
       period: { year: 2026, month: 3 },
       ...over,
     };
   }
 
-  it("rejects within-budget retainer with no monthly fee (delivery-only)", () => {
-    expect(isInvoiceable(row({ amount: 0, invoiceTotal: 0 }))).toBe(false);
-  });
-
-  it("accepts within-budget retainer with a monthly fee", () => {
-    // monthlyFee is in invoiceTotal, not in amount (amount = overage only).
-    expect(isInvoiceable(row({ amount: 0, invoiceTotal: 2500 }))).toBe(true);
+  it("rejects rows with amount === 0 (zero-amount invoices never produced)", () => {
+    expect(isInvoiceable(row({ amount: 0 }))).toBe(false);
   });
 
   it("accepts over-budget retainer with overage charge", () => {
-    expect(
-      isInvoiceable(
-        row({ badgeKind: "over-budget", amount: 200, invoiceTotal: 2700 }),
-      ),
-    ).toBe(true);
-  });
-
-  it("rejects over-budget retainer when overage rate is unset and no monthly fee", () => {
-    // Pathological config but the helper stays honest: invoiceTotal would be 0
-    // if monthlyFee=0 AND overageRate=0. The over-budget flag still surfaces
-    // via badgeKind for the alert in the project header — we just won't auto-
-    // generate a $0 invoice from it.
-    expect(
-      isInvoiceable(
-        row({
-          badgeKind: "over-budget",
-          amount: 0,
-          invoiceTotal: 0,
-          overageHours: 2,
-        }),
-      ),
-    ).toBe(false);
+    expect(isInvoiceable(row({ badgeKind: "over-budget", amount: 200 }))).toBe(true);
   });
 
   it("accepts fixed rows with a remaining balance", () => {
@@ -616,7 +681,6 @@ describe("isInvoiceable", () => {
           badgeKind: null,
           period: undefined,
           amount: 5000,
-          invoiceTotal: 5000,
         }),
       ),
     ).toBe(true);
@@ -624,19 +688,8 @@ describe("isInvoiceable", () => {
 
   it("accepts T&M rows when entries have a billable rate", () => {
     expect(
-      isInvoiceable(
-        row({ kind: "tm", badgeKind: null, amount: 320, invoiceTotal: 320 }),
-      ),
+      isInvoiceable(row({ kind: "tm", badgeKind: null, amount: 320 })),
     ).toBe(true);
-  });
-
-  it("falls back to amount when invoiceTotal is omitted (legacy rows)", () => {
-    expect(
-      isInvoiceable(row({ amount: 100, invoiceTotal: undefined })),
-    ).toBe(true);
-    expect(
-      isInvoiceable(row({ amount: 0, invoiceTotal: undefined })),
-    ).toBe(false);
   });
 });
 
@@ -652,34 +705,33 @@ describe("selectBatchEligibleRows", () => {
       clientName: "Client 1",
       sortKey: "2026-03/client 1",
       amount: 0,
-      invoiceTotal: 0,
       currency: "USD",
-      badgeKind: "within-budget",
+      badgeKind: "over-budget",
       lastInvoicedAt: null,
       period: { year: 2026, month: 3 },
       ...over,
     };
   }
 
-  it("is a thin wrapper around isInvoiceable", () => {
-    const billable = row({ invoiceTotal: 2500 });
-    const zero = row({ invoiceTotal: 0 });
+  it("is a thin wrapper around isInvoiceable (amount > 0)", () => {
+    const billable = row({ amount: 200 });
+    const zero = row({ amount: 0 });
     expect(selectBatchEligibleRows([billable, zero])).toEqual([billable]);
   });
 
   it("preserves input order for mixed rows", () => {
     const a = row({
       projectId: id<"projects">("a"),
-      invoiceTotal: 100,
+      amount: 100,
       period: { year: 2026, month: 1 },
     });
     const b = row({
       projectId: id<"projects">("b"),
-      invoiceTotal: 0,
+      amount: 0,
     });
     const c = row({
       projectId: id<"projects">("c"),
-      invoiceTotal: 200,
+      amount: 200,
       period: { year: 2026, month: 2 },
     });
     expect(selectBatchEligibleRows([a, b, c]).map((r) => r.projectId)).toEqual([
@@ -691,6 +743,8 @@ describe("selectBatchEligibleRows", () => {
 
 describe("sortReadyRows", () => {
   it("orders rows oldest-first by sortKey across project types", () => {
+    // Both retainer months are over-budget — within-budget months never reach
+    // the Ready feed after the invoicing refactor.
     const monthly = buildRetainerMonthlyReadyRows({
       project: makeProject({
         _id: id<"projects">("p_ret"),
@@ -700,7 +754,7 @@ describe("sortReadyRows", () => {
       client: makeClient(),
       invoices: [],
       monthBalances: [
-        { year: 2026, month: 4, endBalance: 0 },
+        { year: 2026, month: 4, endBalance: -120 },
         { year: 2026, month: 1, endBalance: -60 },
       ],
     });
@@ -724,11 +778,13 @@ describe("sortReadyRows", () => {
   });
 
   it("does not aggregate currencies across rows", () => {
+    // Each row must be over-budget for the refactor's "no zero rows" rule —
+    // both balances are negative so we get one row per project.
     const usdRow = buildRetainerMonthlyReadyRows({
       project: makeProject({ rolloverEnabled: false, overageRate: 100 }),
       client: makeClient({ currency: "USD" }),
       invoices: [],
-      monthBalances: [{ year: 2026, month: 3, endBalance: 0 }],
+      monthBalances: [{ year: 2026, month: 3, endBalance: -60 }],
     });
     const eurRow = buildRetainerMonthlyReadyRows({
       project: makeProject({

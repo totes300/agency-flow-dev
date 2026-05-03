@@ -12,6 +12,8 @@ import {
   firstName,
   isOverdue,
   getWeekBounds,
+  buildCycleMonths,
+  formatCycleLabel,
 } from "./format"
 
 // ─── formatCurrency ─────────────────────────────────────────────────────────────
@@ -275,5 +277,65 @@ describe("getWeekBounds", () => {
     const { start, end } = getWeekBounds(0, monday)
     expect(start).toBe("2026-03-16")
     expect(end).toBe("2026-03-22")
+  })
+})
+
+// ─── Cycle range helpers ────────────────────────────────────────────────────────
+//
+// Pins the codebase-wide convention: month is 1-indexed (1=Jan…12=Dec) on
+// every API. Both `buildCycleMonths` and `formatCycleLabel` consume that.
+// Round-tripping the pair guards against silent off-by-one regressions in
+// either direction (the bug that originally sent us here).
+
+describe("buildCycleMonths", () => {
+  it("walks back from the closing month, 1-indexed", () => {
+    expect(buildCycleMonths(2026, 4, 3)).toEqual([
+      { year: 2026, month: 2 },
+      { year: 2026, month: 3 },
+      { year: 2026, month: 4 },
+    ])
+  })
+  it("crosses the year boundary cleanly", () => {
+    expect(buildCycleMonths(2027, 2, 4)).toEqual([
+      { year: 2026, month: 11 },
+      { year: 2026, month: 12 },
+      { year: 2027, month: 1 },
+      { year: 2027, month: 2 },
+    ])
+  })
+  it("degenerate cycleLength <1 returns just the closing month", () => {
+    expect(buildCycleMonths(2026, 7, 0)).toEqual([{ year: 2026, month: 7 }])
+  })
+})
+
+describe("formatCycleLabel", () => {
+  it("formats a same-year range with bare short months", () => {
+    expect(
+      formatCycleLabel([
+        { year: 2026, month: 2 },
+        { year: 2026, month: 3 },
+        { year: 2026, month: 4 },
+      ]),
+    ).toBe("Feb–Apr")
+  })
+  it("falls back to month + year on cross-year ranges", () => {
+    expect(
+      formatCycleLabel([
+        { year: 2026, month: 12 },
+        { year: 2027, month: 1 },
+        { year: 2027, month: 2 },
+      ]),
+    ).toBe("Dec 2026 – Feb 2027")
+  })
+  it("is the inverse of buildCycleMonths for any closing month", () => {
+    // Round-trip pin: closing April 2026, 3-month cycle → "Feb–Apr".
+    expect(formatCycleLabel(buildCycleMonths(2026, 4, 3))).toBe("Feb–Apr")
+    // Closing January 2027, 3-month cycle → "Nov 2026 – Jan 2027".
+    expect(formatCycleLabel(buildCycleMonths(2027, 1, 3))).toBe(
+      "Nov 2026 – Jan 2027",
+    )
+  })
+  it("handles empty input safely", () => {
+    expect(formatCycleLabel([])).toBe("")
   })
 })

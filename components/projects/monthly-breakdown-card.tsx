@@ -3,7 +3,12 @@
 import { useMemo, useState } from "react"
 import Link from "next/link"
 import type { FunctionReturnType } from "convex/server"
-import { ArrowDownIcon, ArrowUpIcon, DownloadIcon, ExternalLinkIcon } from "lucide-react"
+import {
+  ArrowDownIcon,
+  ArrowUpIcon,
+  DownloadIcon,
+  ExternalLinkIcon,
+} from "lucide-react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import {
@@ -14,8 +19,18 @@ import {
 } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { ColoredPillBadge } from "@/components/ui/colored-pill-badge"
-import { CreateInvoiceModal } from "@/components/invoices/create-invoice-modal"
-import { formatCurrency, formatCycleLabel, formatInvoiceNumber, formatMinutes, formatShortDate } from "@/lib/format"
+import { useGenerateInvoice } from "@/lib/hooks/use-generate-invoice"
+import {
+  formatCurrency,
+  formatCycleLabel,
+  formatInvoiceNumber,
+  formatMinutes,
+  formatShortDate,
+} from "@/lib/format"
+import {
+  decideRetainerRowAction,
+  type RetainerRowAction,
+} from "@/lib/retainer-row-action"
 import { cn } from "@/lib/utils"
 
 // ─── Types ──────────────────────────────────────────────────────────────────────
@@ -57,32 +72,44 @@ function MetricDot({ tone }: { tone: ToneKey }) {
 
 // ─── Layout tokens ──────────────────────────────────────────────────────────────
 
-// dot · month · hours · state pill · amount · action — fixed 6-col grid so
-// every row aligns vertically regardless of state. Column widths tightened to
-// match `prototypes/invoicing-final.html`; gap-3 + px-5 gives the row rhythm
-// while keeping the card breathable on 1024px viewports.
-const ROW_GRID = "grid grid-cols-[14px_minmax(0,1fr)_92px_112px_92px_112px] items-center gap-3 px-5"
+/**
+ * dot · month · hours · state pill · amount · action — fixed 6-col grid so
+ * every row aligns vertically regardless of state.
+ *
+ * Exported so the skeleton in `retainer-overview.tsx` can mirror the live
+ * card pixel-for-pixel (CLAUDE.md content-aware skeletons rule). Single
+ * source of truth.
+ */
+export const ROW_GRID = "grid grid-cols-[14px_minmax(0,1fr)_92px_112px_92px_112px] items-center gap-3 px-5"
 
 // ─── Main Component ─────────────────────────────────────────────────────────────
 
 export function MonthlyBreakdownCard({
   data,
   projectId,
-  projectName,
   currency,
 }: {
   data: RetainerData
   projectId: Id<"projects">
-  projectName: string
   currency: string
 }) {
-  const { months, rolloverEnabled, isCycleClosed, cycleLength, utilization, cycleEnd, overageRate, monthlyFee } = data
+  const {
+    months,
+    rolloverEnabled,
+    isCycleClosed,
+    cycleLength,
+    utilization,
+    cycleEnd,
+    overageRate,
+    monthlyFee,
+    overageDue,
+  } = data
 
   // Component-state-only sort — intentional deviation from the URL-state rule
   // (PRD § Further Notes): the toggle is a transient per-visit preference, not
   // part of the page's shareable view.
   const [sortDir, setSortDir] = useState<"oldest" | "newest">("oldest")
-  const [activeMonth, setActiveMonth] = useState<{ year: number; month: number } | null>(null)
+  const { generate, pending } = useGenerateInvoice()
 
   // Compute view rows during render — no useEffect sync. Resort is cheap.
   const sortedMonths = useMemo(() => {
@@ -90,14 +117,29 @@ export function MonthlyBreakdownCard({
     return [...months].reverse()
   }, [months, sortDir])
 
-  // Oldest closed-uninvoiced row index (in original chronological order) gets
-  // the subtle highlight. Only meaningful in monthly settlement mode — rollover
-  // cycles bill via the banner, not per-row.
+  // Per-row action decided once per render — same source of truth the
+  // ActionCell consumes. Highlight then picks the row whose action is
+  // "generate" (the one the user is being asked to do). Both modes use the
+  // shared `decideRetainerRowAction` rule.
+  const actionByMonthKey = useMemo(() => {
+    const ctx = {
+      isRollover: rolloverEnabled,
+      cycleLength,
+      cycleHasOverage: overageDue > 0,
+      overageRate,
+    }
+    const out = new Map<string, RetainerRowAction>()
+    for (const m of months) out.set(monthKey(m), decideRetainerRowAction(m, ctx))
+    return out
+  }, [months, rolloverEnabled, cycleLength, overageDue, overageRate])
+
   const highlightKey = useMemo(() => {
-    if (rolloverEnabled) return null
-    const next = months.find((m) => m.isMonthClosed && !m.invoice)
-    return next ? monthKey(next) : null
-  }, [months, rolloverEnabled])
+    for (const m of months) {
+      const key = monthKey(m)
+      if (actionByMonthKey.get(key) === "generate") return key
+    }
+    return null
+  }, [months, actionByMonthKey])
 
   const closedCount = months.filter((m) => m.isMonthClosed).length
   const cycleLabel = formatCycleLabel(months)
@@ -106,7 +148,7 @@ export function MonthlyBreakdownCard({
 
   return (
     <Card>
-      <CardHeader className="flex flex-row items-center justify-between gap-3 space-y-0 px-6 py-4">
+      <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0 px-6 py-4">
         <div className="flex min-w-0 flex-col gap-1">
           <CardTitle>Monthly Breakdown</CardTitle>
           {rolloverEnabled && (
@@ -114,6 +156,7 @@ export function MonthlyBreakdownCard({
               {cycleLabel} cycle · {closedCount}/{cycleLength} months closed · {utilizationPct}% used
             </p>
           )}
+          <StripeDisclaimer monthlyFee={monthlyFee} currency={currency} />
         </div>
         {rolloverEnabled ? (
           <ColoredPillBadge
@@ -146,19 +189,28 @@ export function MonthlyBreakdownCard({
         </div>
 
         <ul className="divide-y">
-          {sortedMonths.map((month) => (
-            <MonthRow
-              key={monthKey(month)}
-              month={month}
-              currency={currency}
-              overageRate={overageRate}
-              monthlyFee={monthlyFee}
-              projectId={projectId}
-              isHighlighted={!rolloverEnabled && monthKey(month) === highlightKey}
-              showGenerate={!rolloverEnabled}
-              onGenerate={() => setActiveMonth({ year: month.year, month: month.month + 1 })}
-            />
-          ))}
+          {sortedMonths.map((month) => {
+            const key = monthKey(month)
+            return (
+              <MonthRow
+                key={key}
+                month={month}
+                action={actionByMonthKey.get(key) ?? "report"}
+                currency={currency}
+                overageRate={overageRate}
+                projectId={projectId}
+                isHighlighted={key === highlightKey}
+                isPending={pending}
+                onGenerate={() =>
+                  void generate({
+                    projectId,
+                    retainerYear: month.year,
+                    retainerMonth: month.month,
+                  })
+                }
+              />
+            )
+          })}
         </ul>
 
         {/* Footer legend — documents the dot semantics so the row chrome stays minimal */}
@@ -171,23 +223,6 @@ export function MonthlyBreakdownCard({
           ))}
         </div>
       </CardContent>
-
-      {activeMonth && (
-        <CreateInvoiceModal
-          // Remount per month so prefill resets cleanly
-          key={`${projectId}-${activeMonth.year}-${activeMonth.month}`}
-          open={true}
-          onOpenChange={(next) => {
-            if (!next) setActiveMonth(null)
-          }}
-          projectId={projectId}
-          projectName={projectName}
-          billingType="retainer"
-          currency={currency}
-          initialRetainerYear={activeMonth.year}
-          initialRetainerMonth={activeMonth.month}
-        />
-      )}
     </Card>
   )
 }
@@ -196,21 +231,21 @@ export function MonthlyBreakdownCard({
 
 function MonthRow({
   month,
+  action,
   currency,
   overageRate,
-  monthlyFee,
   projectId,
   isHighlighted,
-  showGenerate,
+  isPending,
   onGenerate,
 }: {
   month: MonthData
+  action: RetainerRowAction
   currency: string
   overageRate: number
-  monthlyFee: number
   projectId: Id<"projects">
   isHighlighted: boolean
-  showGenerate: boolean
+  isPending: boolean
   onGenerate: () => void
 }) {
   const state = billingStateOf(month)
@@ -242,11 +277,11 @@ function MonthRow({
       </span>
       <AmountCell month={month} state={state} currency={currency} overageRate={overageRate} />
       <ActionCell
-        month={month}
+        action={action}
+        invoice={month.invoice}
         projectId={projectId}
-        monthlyFee={monthlyFee}
-        overageRate={overageRate}
-        showGenerate={showGenerate}
+        month={month}
+        isPending={isPending}
         onGenerate={onGenerate}
       />
     </li>
@@ -268,12 +303,7 @@ function AmountCell({
 
   // Raw ledger view — no rounding (CLAUDE.md: rounding only at invoice generation).
   // Within-budget = €0 (the retainer fee covered the work); over-budget = overage
-  // hours × project overageRate. When overageRate isn't configured the cell
-  // shows €0 — the missing-rate warning lives in a sibling alert on the page.
-  //
-  // Color: zero amounts stay muted, non-zero amounts use foreground so the cell
-  // reads as a number, not a warning. The state pill carries the warning signal —
-  // amber-on-amount + amber pill in the same row was two signals shouting.
+  // hours × project overageRate.
   const overageHours = state === "over_budget" ? Math.abs(month.endBalance) / 60 : 0
   const amount = state === "over_budget" ? overageHours * overageRate : 0
 
@@ -289,70 +319,57 @@ function AmountCell({
   )
 }
 
+/** Pure render — see `decideRetainerRowAction` for the rule. */
 function ActionCell({
-  month,
+  action,
+  invoice,
   projectId,
-  monthlyFee,
-  overageRate,
-  showGenerate,
+  month,
+  isPending,
   onGenerate,
 }: {
-  month: MonthData
+  action: RetainerRowAction
+  invoice: MonthData["invoice"]
   projectId: Id<"projects">
-  monthlyFee: number
-  overageRate: number
-  showGenerate: boolean
+  month: MonthData
+  isPending: boolean
   onGenerate: () => void
 }) {
-  if (!month.isMonthClosed) return <span aria-hidden />
-
-  // Already invoiced: invoice number IS the link. The statement is omitted
-  // here — the invoice document carries the same balance breakdown plus
-  // billing detail, so a sibling "Statement" link would be redundant.
-  if (month.invoice) {
+  if (action === "invoice-link" && invoice) {
     return (
       <Link
-        href={`/invoices/${month.invoice.id}?from=project&projectId=${projectId}&tab=invoices`}
+        href={`/invoices/${formatInvoiceNumber(invoice.prefix, invoice.number)}?from=project&projectId=${projectId}&tab=invoices`}
         className="inline-flex items-center gap-1 justify-self-end font-mono text-xs text-foreground/80 hover:text-foreground hover:underline"
       >
-        {formatInvoiceNumber(month.invoice.prefix, month.invoice.number)}
+        {formatInvoiceNumber(invoice.prefix, invoice.number)}
         <ExternalLinkIcon className="size-3" />
       </Link>
     )
   }
-
-  // Closed, no invoice. Decide between Generate (billable) and Statement
-  // (informational only). The invariant matches `isInvoiceable` on the
-  // server: monthlyFee + overage > 0 → billable. We compute overage from
-  // the row's endBalance + project rate so the gate matches what the
-  // server-side createInvoice guard would do — no UI / server drift.
-  const overageMinutes = month.endBalance < 0 ? Math.abs(month.endBalance) : 0
-  const overageAmount = (overageMinutes / 60) * overageRate
-  const isInvoiceable = monthlyFee + overageAmount > 0
-
-  // Mid-cycle months in rollover mode: the cycle-end banner handles
-  // generation, so we only show Statement here. `showGenerate` mirrors
-  // `!rolloverEnabled` from the parent.
-  if (isInvoiceable && showGenerate) {
+  if (action === "generate") {
     return (
-      <Button size="sm" onClick={onGenerate} className="justify-self-end">
+      <Button
+        size="sm"
+        onClick={onGenerate}
+        disabled={isPending}
+        className="justify-self-end"
+      >
         Generate
       </Button>
     )
   }
-
-  return <StatementLink projectId={projectId} month={month} />
+  return <ReportLink projectId={projectId} month={month} />
 }
 
-function StatementLink({
+function ReportLink({
   projectId,
   month,
 }: {
   projectId: Id<"projects">
   month: MonthData
 }) {
-  // URL period token: month.month is 0-indexed in MonthData.
-  const period = `${month.year}-${String(month.month + 1).padStart(2, "0")}`
+  // URL period token: month.month is 1-indexed (1-12).
+  const period = `${month.year}-${String(month.month).padStart(2, "0")}`
   return (
     <Button
       asChild
@@ -361,16 +378,36 @@ function StatementLink({
       className="justify-self-end"
     >
       <Link
-        href={`/projects/${projectId}/statements/${period}`}
-        // Open in a new tab so the user keeps their place on the project
-        // page — same gesture as other "view document" links in the app.
+        href={`/projects/${projectId}/reports/${period}`}
+        // Open in a new tab so the user can use the browser's native
+        // Print → Save as PDF dialog (PRD user story 18).
         target="_blank"
         rel="noopener"
       >
         <DownloadIcon data-icon="inline-start" className="size-3.5" />
-        Statement
+        Report
       </Link>
     </Button>
+  )
+}
+
+/**
+ * Stripe disclaimer line — D11 in `docs/invoicing-refactor.md`. Hardcoded text
+ * sourced from project config; no Stripe API integration.
+ */
+function StripeDisclaimer({
+  monthlyFee,
+  currency,
+}: {
+  monthlyFee: number
+  currency: string
+}) {
+  return (
+    <p className="text-xs text-muted-foreground">
+      Monthly retainer fee ({formatCurrency(monthlyFee, currency)}/mo) is billed
+      separately via Stripe. This panel shows hours used and overage billed
+      through this tool.
+    </p>
   )
 }
 
@@ -394,6 +431,5 @@ function SortToggle({
 // ─── Pure helpers ───────────────────────────────────────────────────────────────
 
 function monthKey(m: { year: number; month: number }): string {
-  return `${m.year}-${String(m.month + 1).padStart(2, "0")}`
+  return `${m.year}-${String(m.month).padStart(2, "0")}`
 }
-

@@ -3,41 +3,34 @@
 import { useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import type { Doc, Id } from "@/convex/_generated/dataModel"
-import { Button } from "@/components/ui/button"
 import { InlineEditable, InlineEditableNumber } from "@/components/inline-editable"
 import { toastError } from "@/lib/toast-helpers"
-import { formatCurrency } from "@/lib/format"
-import { PlusIcon, XIcon } from "lucide-react"
+import { formatCurrency, getCurrencySymbol } from "@/lib/format"
+import { PlusIcon, Trash2Icon } from "lucide-react"
 
-export type BalanceData = {
-  startBalanceMinutes: number
-  includedMinutes: number
-  usedMinutes: number
-  endBalanceMinutes: number
-}
-
-function formatMinutesAsHours(minutes: number): string {
-  const hours = minutes / 60
-  const sign = hours < 0 ? "−" : ""
-  return `${sign}${Math.abs(hours).toFixed(1)}h`
-}
+type BillingField = "description" | "quantity" | "unitPrice" | "amount"
 
 /**
- * Billing summary card for Fixed Fee and Retainer invoices.
- * Renders optional balance section (retainer) + billing line items + total.
+ * Billing summary card for fixed fee / retainer charge rows.
+ *
+ * Layout decisions worth knowing:
+ * - `table-fixed` + `<colgroup>` widths so columns don't reflow when a row
+ *   enters edit mode (the previous content-driven layout caused visible
+ *   column jumps as the user clicked between cells).
+ * - Editable rows route through the `<InlineEditableNumber>` chip, which
+ *   renders the currency symbol *inside* the chip so "$" and the number
+ *   read as a single tight unit.
  */
 export function InvoiceBillingSummary({
   invoiceId,
   billingItems,
   readOnly,
   currency,
-  balanceData,
 }: {
   invoiceId: Id<"invoices">
   billingItems: Doc<"invoiceLineItems">[]
   readOnly: boolean
   currency: string
-  balanceData?: BalanceData
 }) {
   const updateLineItem = useMutation(api.invoices.updateInvoiceLineItem)
   const addLineItem = useMutation(api.invoices.addInvoiceLineItem)
@@ -45,7 +38,7 @@ export function InvoiceBillingSummary({
 
   function handleUpdate(
     lineItemId: Id<"invoiceLineItems">,
-    field: "description" | "amount",
+    field: BillingField,
     value: string | number,
   ) {
     void updateLineItem({ id: lineItemId, [field]: value }).catch((err) =>
@@ -66,104 +59,149 @@ export function InvoiceBillingSummary({
   }
 
   const total = billingItems.reduce((sum, item) => sum + item.amount, 0)
+  const symbol = getCurrencySymbol(currency)
 
   return (
-    <div className="rounded-lg border bg-muted/30 p-6">
-      <div className="flex flex-col gap-3">
-        {/* Balance section (retainer only) */}
-        {balanceData && (
-          <>
-            <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Budget</p>
-            <div className="flex flex-col gap-1.5">
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-muted-foreground">Starting balance</span>
-                <span className="text-sm tabular-nums">{formatMinutesAsHours(balanceData.startBalanceMinutes)}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-muted-foreground">Included</span>
-                <span className="text-sm tabular-nums">{formatMinutesAsHours(balanceData.includedMinutes)}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-muted-foreground">Used</span>
-                <span className="text-sm tabular-nums">{formatMinutesAsHours(balanceData.usedMinutes)}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium">Ending balance</span>
-                <span className={`text-sm font-medium tabular-nums ${balanceData.endBalanceMinutes < 0 ? "text-destructive" : ""}`}>
-                  {formatMinutesAsHours(balanceData.endBalanceMinutes)}
-                </span>
-              </div>
-            </div>
-            <hr className="border-border" />
-          </>
-        )}
+    <section>
+      <h2 className="mb-3 text-sm font-semibold">Billing Summary</h2>
+      <table className="w-full table-fixed text-sm">
+        <colgroup>
+          <col />
+          <col className="w-24" />
+          <col className="w-32" />
+          <col className="w-36" />
+          {!readOnly && <col className="w-10" />}
+        </colgroup>
+        <thead className="border-b text-xs uppercase tracking-wider text-muted-foreground">
+          <tr>
+            <th className="py-2 pr-3 text-left font-semibold">Description</th>
+            <th className="px-3 py-2 text-right font-semibold">Qty</th>
+            <th className="px-3 py-2 text-right font-semibold">Rate</th>
+            <th className="py-2 pl-3 text-right font-semibold">Amount</th>
+            {!readOnly && <th aria-label="Actions" />}
+          </tr>
+        </thead>
+        <tbody>
+          {billingItems.map((li) => {
+            const isManual = li.lineType === "manual"
+            const editable = !readOnly && isManual
 
-        {/* Billing line items — `fixed`, `retainer_fee`, `overage` rows are
-            anchored to project snapshots, so their amounts are read-only. Use
-            a manual adjustment line for discounts or one-off charges. */}
-        {billingItems.map((li) => {
-          const isAmountEditable = !readOnly && li.lineType === "manual"
-          return (
-            <div key={li._id} className="group flex items-center justify-between">
-              <span className="flex-1 text-sm">
-                <InlineEditable
-                  value={li.description}
-                  onSave={(val) => handleUpdate(li._id, "description", val)}
-                  readOnly={readOnly}
-                  ariaLabel="Edit description"
-                  errorMessage="Failed to update line item"
-                />
-              </span>
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-medium tabular-nums">
-                  {isAmountEditable ? (
+            return (
+              <tr key={li._id} className="group border-b">
+                <td className="py-3 pr-3">
+                  <InlineEditable
+                    value={li.description}
+                    onSave={(val) => handleUpdate(li._id, "description", val)}
+                    readOnly={readOnly}
+                    ariaLabel="Edit description"
+                    errorMessage="Failed to update line item"
+                  />
+                </td>
+
+                <td className="px-3 py-3 text-right tabular-nums">
+                  {editable ? (
+                    <InlineEditableNumber
+                      value={li.quantity}
+                      onSave={(val) => handleUpdate(li._id, "quantity", val)}
+                      ariaLabel="Edit quantity"
+                      errorMessage="Failed to update line item"
+                    />
+                  ) : (
+                    <span className="text-muted-foreground">
+                      {renderQty(li)}
+                    </span>
+                  )}
+                </td>
+
+                <td className="px-3 py-3 text-right tabular-nums">
+                  {editable ? (
+                    <InlineEditableNumber
+                      value={li.unitPrice}
+                      onSave={(val) => handleUpdate(li._id, "unitPrice", val)}
+                      ariaLabel="Edit rate"
+                      errorMessage="Failed to update line item"
+                      prefix={symbol}
+                    />
+                  ) : (
+                    <span className="text-muted-foreground">
+                      {renderRate(li, currency)}
+                    </span>
+                  )}
+                </td>
+
+                <td className="py-3 pl-3 text-right font-medium tabular-nums">
+                  {editable ? (
                     <InlineEditableNumber
                       value={li.amount}
                       onSave={(val) => handleUpdate(li._id, "amount", val)}
                       ariaLabel="Edit amount"
                       errorMessage="Failed to update line item"
+                      prefix={symbol}
                     />
                   ) : (
                     formatCurrency(li.amount, currency)
                   )}
-                </span>
-                {!readOnly && li.lineType === "manual" && (
-                  <button
-                    type="button"
-                    aria-label="Remove line item"
-                    onClick={() => handleRemoveLine(li._id)}
-                    className="invisible size-5 rounded text-muted-foreground/50 hover:text-destructive group-hover:visible"
-                  >
-                    <XIcon className="size-3.5" />
-                  </button>
+                </td>
+
+                {!readOnly && (
+                  <td className="py-3 pl-2 text-right">
+                    {isManual && (
+                      <button
+                        type="button"
+                        aria-label="Remove line item"
+                        onClick={() => handleRemoveLine(li._id)}
+                        className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground/60 opacity-0 transition-[opacity,color,background-color] hover:bg-muted hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
+                      >
+                        <Trash2Icon className="size-3.5" />
+                      </button>
+                    )}
+                  </td>
                 )}
-              </div>
-            </div>
-          )
-        })}
+              </tr>
+            )
+          })}
 
-        {/* Add line item */}
-        {!readOnly && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="w-fit text-muted-foreground"
-            onClick={handleAddLine}
-          >
-            <PlusIcon className="mr-1.5 size-3.5" />
-            Add line item
-          </Button>
-        )}
+          {!readOnly && (
+            <tr>
+              <td colSpan={5} className="py-2">
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1.5 rounded-md px-1 py-1 text-sm text-muted-foreground hover:text-foreground"
+                  onClick={handleAddLine}
+                >
+                  <PlusIcon className="size-3.5" />
+                  Add line item
+                </button>
+              </td>
+            </tr>
+          )}
 
-        {/* Total */}
-        <hr className="border-border" />
-        <div className="flex items-center justify-between">
-          <span className="text-sm font-semibold">Total</span>
-          <span className="text-base font-bold tabular-nums">
-            {formatCurrency(total, currency)}
-          </span>
-        </div>
-      </div>
-    </div>
+          <tr className="border-t">
+            <td className="py-4 pr-3 text-sm font-semibold" colSpan={3}>
+              Total
+            </td>
+            <td className="py-4 pl-3 text-right text-base font-bold tabular-nums">
+              {formatCurrency(total, currency)}
+            </td>
+            {!readOnly && <td />}
+          </tr>
+        </tbody>
+      </table>
+    </section>
   )
+}
+
+function renderQty(item: Doc<"invoiceLineItems">): string {
+  if (item.lineType === "overage") return `${formatQuantity(item.quantity)}h`
+  return "—"
+}
+
+function renderRate(item: Doc<"invoiceLineItems">, currency: string): string {
+  if (item.lineType === "overage") return `${formatCurrency(item.unitPrice, currency)}/h`
+  if (item.lineType === "fixed") return "Fixed"
+  return "—"
+}
+
+function formatQuantity(value: number): string {
+  return Number.isInteger(value) ? String(value) : String(value)
 }

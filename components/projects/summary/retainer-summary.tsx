@@ -114,8 +114,8 @@ function CycleNavigator({ cycle }: { cycle: RetainerSummary["cycle"] }) {
       >
         <ChevronLeftIcon />
       </Button>
-      <span className="min-w-16 text-center text-xs text-muted-foreground tabular-nums">
-        Cycle {cycle.number}
+      <span className="min-w-24 text-center text-xs text-muted-foreground tabular-nums">
+        {cycleRangeLabel(cycle)}
       </span>
       <Button
         variant="ghost"
@@ -128,4 +128,23 @@ function CycleNavigator({ cycle }: { cycle: RetainerSummary["cycle"] }) {
       </Button>
     </div>
   )
+}
+
+function cycleRangeLabel(cycle: RetainerSummary["cycle"]): string {
+  if (cycle.start.slice(0, 7) === cycle.end.slice(0, 7)) {
+    return monthYearLabel(cycle.start)
+  }
+  const start = monthYearLabel(cycle.start)
+  const end = monthYearLabel(cycle.end)
+  if (cycle.start.slice(0, 4) === cycle.end.slice(0, 4)) {
+    return `${start.split(" ")[0]}-${end}`
+  }
+  return `${start}-${end}`
+}
+
+function monthYearLabel(date: string): string {
+  return new Date(date + "T00:00:00").toLocaleDateString("en-US", {
+    month: "short",
+    year: "numeric",
+  })
 }

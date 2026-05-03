@@ -52,6 +52,25 @@ export function formatCurrencyPrecise(amount: number, currency: string): string 
 }
 
 /**
+ * Just the symbol for a currency code (e.g. "USD" → "$"). Used by inline
+ * editable money inputs that render the symbol as a static prefix beside
+ * the editable number — `formatCurrency` would emit the value too.
+ */
+export function getCurrencySymbol(currency: string): string {
+  return (
+    new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency,
+      currencyDisplay: "narrowSymbol",
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+    })
+      .formatToParts(0)
+      .find((part) => part.type === "currency")?.value ?? currency
+  )
+}
+
+/**
  * Return the currency key with the largest summed value in a `{ [currency]: sum }`
  * map, or `undefined` if the map is empty. Used to decide which currency to
  * show as the "headline" when a metric bucket spans multiple currencies.
@@ -114,7 +133,10 @@ export function formatMinutes(minutes: number): string {
 
 /**
  * Format an invoice number with prefix and zero-padded number.
- * e.g., ("INV-", 3) → "INV-003"
+ * Used to compose both the displayed invoice number ("INV-003") and the
+ * URL segment under `/invoices/`. The inverse parser lives server-side
+ * in `convex/lib/invoiceIdentifier.ts` (only the backend needs to resolve
+ * a URL segment back to a row).
  */
 export function formatInvoiceNumber(prefix: string, number: number): string {
   return `${prefix}${String(number).padStart(3, "0")}`
@@ -285,8 +307,13 @@ export function buildCycleMonths(
 /**
  * Build a retainer cycle's range label, e.g. "Apr–Jun" / "Dec 2026 – Feb 2027".
  * Same year → bare short-month abbreviations; cross-year falls back to absolute
- * "Mon YYYY" on each side. Shared between the InvoiceBanner subline and the
- * Monthly Breakdown card header so both surfaces always agree on the wording.
+ * "Mon YYYY" on each side. Shared between the InvoiceBanner subline, the
+ * Monthly Breakdown card header, and the `/invoices` Ready row Subject so
+ * every surface agrees on the wording.
+ *
+ * Months are **1-indexed** (1=Jan…12=Dec) — matches the codebase-wide
+ * convention (storage YYYY-MM strings, `period.month`, `buildCycleMonths`,
+ * etc.). Only the JS `Date()` constructor below converts to 0-indexed.
  */
 export function formatCycleLabel(
   months: Array<{ year: number; month: number }>,
@@ -295,7 +322,7 @@ export function formatCycleLabel(
   const first = months[0]
   const last = months[months.length - 1]
   const monthName = (m: number) =>
-    new Date(2000, m, 1).toLocaleDateString("en-US", { month: "short" })
+    new Date(2000, m - 1, 1).toLocaleDateString("en-US", { month: "short" })
   if (first.year === last.year) {
     return `${monthName(first.month)}–${monthName(last.month)}`
   }

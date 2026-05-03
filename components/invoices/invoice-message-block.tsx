@@ -10,18 +10,13 @@ import { Textarea } from "@/components/ui/textarea"
 import { canEditInvoiceMessage } from "@/convex/lib/invoiceCreation"
 import { toastError } from "@/lib/toast-helpers"
 
-type BillingType = "t_and_m" | "fixed" | "retainer" | "non_billable"
-
 /**
  * Editable per-invoice message rendered on the invoice document.
  *
  *  - Draft: editable. Empty → "+ Add a message to client" affordance that
  *    opens the editor seeded with the org template.
- *  - €0 auto-Paid retainer (status=paid, total=0, type=retainer): editable
- *    indefinitely (PRD § 39 — invoice was never sent).
- *  - Money-due Invoiced/Paid: read-only. Renders nothing if `messageToClient`
- *    is empty (no placeholder on sent invoices).
- *  - Void: read-only.
+ *  - Invoiced / Paid / Void: read-only. Renders nothing when
+ *    `messageToClient` is empty (no placeholder on sent invoices).
  *
  * Gate logic is shared with the server-side `updateInvoiceMessage` mutation
  * via `canEditInvoiceMessage` — single source of truth.
@@ -31,16 +26,14 @@ type BillingType = "t_and_m" | "fixed" | "retainer" | "non_billable"
  */
 export function InvoiceMessageBlock({
   invoice,
-  project,
   template,
 }: {
   invoice: Doc<"invoices">
-  project: { billingType: BillingType }
   template: string | undefined
 }) {
   const updateMessage = useMutation(api.invoices.updateInvoiceMessage)
   const persistedMessage = invoice.messageToClient ?? ""
-  const editable = canEditInvoiceMessage(invoice, project)
+  const editable = canEditInvoiceMessage(invoice)
 
   // Local draft only matters while focused. Computed (not synced) — when
   // not editing we render `persistedMessage` directly, so external updates

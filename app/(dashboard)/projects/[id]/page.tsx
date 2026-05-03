@@ -137,7 +137,6 @@ export default function ProjectDetailPage() {
           {effectiveTab === "overview" && project.billingType === "fixed" && (
             <FixedOverview
               projectId={projectId}
-              projectName={project.name}
               currency={project.currency}
               onNavigateToEstimates={() => {
                 setTab("settings")
@@ -151,7 +150,6 @@ export default function ProjectDetailPage() {
           {effectiveTab === "overview" && project.billingType === "retainer" && (
             <RetainerOverview
               projectId={projectId}
-              projectName={project.name}
               currency={project.currency}
             />
           )}

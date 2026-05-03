@@ -352,7 +352,7 @@ function RowActionsMenu({
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-52">
           <DropdownMenuItem asChild>
-            <Link href={`/invoices/${row.invoiceId}`}>
+            <Link href={`/invoices/${invoiceNumber}`}>
               <ArrowUpRightIcon aria-hidden className="size-3.5" />
               Open invoice {invoiceNumber}
             </Link>

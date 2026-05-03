@@ -32,7 +32,7 @@ export type InvoiceInput = {
 };
 
 export type LineItemInput = {
-  lineType: "time" | "fixed" | "retainer_fee" | "overage" | "manual";
+  lineType: "time" | "fixed" | "overage" | "manual";
   amount: number;
   invoiceStatus: "draft" | "invoiced" | "paid" | "void";
 };

@@ -6,24 +6,43 @@ import { api } from "@/convex/_generated/api"
 import type { Doc } from "@/convex/_generated/dataModel"
 import { DatePicker } from "@/components/ui/date-picker"
 import { InlineEditable } from "@/components/inline-editable"
-import { InvoiceParties } from "@/components/invoices/invoice-parties"
+import { DocumentParties } from "@/components/document/parties"
+import { RetainerUsageTable } from "@/components/document/retainer-usage-table"
 import { InvoiceMessageBlock } from "@/components/invoices/invoice-message-block"
 import { PaymentInstructionsBlock } from "@/components/invoices/payment-instructions-block"
 import { InvoiceWorkBreakdown, type CategoryGroup } from "@/components/invoices/invoice-work-breakdown"
-import { InvoiceBillingSummary, type BalanceData } from "@/components/invoices/invoice-billing-summary"
+import { InvoiceBillingSummary } from "@/components/invoices/invoice-billing-summary"
 import { toastError } from "@/lib/toast-helpers"
 import {
+  formatCurrency,
   formatDateToYMDOrUndefined,
   formatInvoiceDate,
   formatInvoiceNumber,
   parseYMDToLocalDate,
 } from "@/lib/format"
-import { LockIcon, XIcon } from "lucide-react"
-
-/** Line types that belong in the billing summary card, not the work breakdown */
-const BILLING_LINE_TYPES = new Set(["fixed", "retainer_fee", "overage", "manual"])
+import { getDocumentBillingType } from "@/lib/documentBillingType"
+import { getRetainerUsageLabels } from "@/lib/retainerLabels"
+import { LockIcon } from "lucide-react"
 
 type BillingType = "t_and_m" | "fixed" | "retainer" | "non_billable"
+
+export type RetainerUsageDocData = {
+  kind: "month" | "cycle"
+  closed: boolean
+  monthlyIncludedMinutes: number
+  rows: Array<{
+    label: string
+    availableMinutes: number
+    usedMinutes: number
+    balanceMinutes: number
+  }>
+  total: {
+    availableMinutes: number
+    usedMinutes: number
+    balanceMinutes: number
+    amountDue: number
+  }
+}
 
 export function InvoiceDocument({
   invoice,
@@ -32,6 +51,7 @@ export function InvoiceDocument({
   project,
   client,
   brand,
+  retainerUsage,
   org,
   readOnly,
 }: {
@@ -41,6 +61,7 @@ export function InvoiceDocument({
   project: { name: string; billingType: BillingType; fixedPrice?: number } | null
   client: { name: string; billingName?: string; billingEmail?: string; billingStreet?: string; billingStreet2?: string; billingCity?: string; billingZip?: string; billingCountry?: string; taxId?: string } | null
   brand: { brandName?: string; brandAddress?: string; brandTaxId?: string; brandEmail?: string; brandPhone?: string } | null
+  retainerUsage: RetainerUsageDocData | null
   org: { paymentInstructions: string | undefined; invoiceMessageTemplate: string | undefined }
   readOnly: boolean
 }) {
@@ -48,7 +69,6 @@ export function InvoiceDocument({
 
   async function handleDateChange(field: "issueDate" | "dueDate", date: Date | undefined) {
     const dateStr = formatDateToYMDOrUndefined(date)
-    // issueDate is required; ignore undefined. dueDate is optional — pass null to clear.
     if (!dateStr && field === "issueDate") return
     const value = dateStr ?? (field === "dueDate" ? null : undefined)
     void updateInvoice({ id: invoice._id, [field]: value }).catch((err) =>
@@ -59,31 +79,79 @@ export function InvoiceDocument({
   const billingType = project?.billingType ?? "t_and_m"
   const showAmounts = billingType === "t_and_m"
   const hasBillingSummary = billingType === "fixed" || billingType === "retainer"
+  const invoiceNumber = formatInvoiceNumber(invoice.prefix, invoice.number)
+  const billingTypeLabel = getDocumentBillingType({
+    billingType,
+    retainerRolloverEnabled: invoice.retainerRolloverEnabled,
+    retainerCycleLength: invoice.retainerCycleLength,
+  })
 
-  // For Fixed/Retainer: separate time rows from billing rows
-  // Work breakdown shows only lineType:"time" rows
-  // Billing summary shows lineType:"fixed", "retainer_fee", "overage", "manual"
-  const workBreakdownGroups = useMemo(() => {
-    if (!hasBillingSummary) return categoryGroups
+  // Single source of truth for line item bucketing. Children render whatever
+  // they receive; no double-filtering anywhere downstream
+  // (decision 2026-05-03 Q7).
+  //
+  // For Fixed/Retainer: time rows go to Work Breakdown, fixed/overage/manual
+  // rows go to the Billing Summary card. Manual rows belong to Billing because
+  // they're typically discounts or one-off charges that should sit next to the
+  // total.
+  // For T&M: everything stays in Work Breakdown (manual rows render as
+  // "Additional items" inside the breakdown), no Billing Summary.
+  const { workBreakdownGroups, manualWorkItems, billingItems } = useMemo(() => {
+    if (!hasBillingSummary) {
+      const manualOnlyGroups = categoryGroups
+        .map((group) => ({
+          ...group,
+          lineItems: group.lineItems.filter((li) => li.lineType !== "manual"),
+        }))
+        .filter((group) => group.lineItems.length > 0)
+        .map((group) => ({
+          ...group,
+          subtotalHours:
+            Math.round(group.lineItems.reduce((s, li) => s + li.quantity, 0) * 100) / 100,
+        }))
+      const manualItems = categoryGroups.flatMap((g) =>
+        g.lineItems.filter((li) => li.lineType === "manual"),
+      )
+      return {
+        workBreakdownGroups: manualOnlyGroups,
+        manualWorkItems: manualItems,
+        billingItems: [] as Doc<"invoiceLineItems">[],
+      }
+    }
 
-    // Filter category groups to only include time line items
-    return categoryGroups
+    // Fixed / retainer — strip everything that belongs in Billing Summary
+    // before passing to the work breakdown.
+    const timeGroups = categoryGroups
       .map((group) => {
-        const timeItems = group.lineItems.filter((li) => !BILLING_LINE_TYPES.has(li.lineType))
-        const subtotalHours = timeItems.reduce((sum, li) => sum + li.quantity, 0)
-        return { ...group, lineItems: timeItems, subtotalHours: Math.round(subtotalHours * 100) / 100 }
+        const timeItems = group.lineItems.filter((li) => li.lineType === "time")
+        return {
+          ...group,
+          lineItems: timeItems,
+          subtotalHours:
+            Math.round(timeItems.reduce((s, li) => s + li.quantity, 0) * 100) / 100,
+        }
       })
       .filter((group) => group.lineItems.length > 0)
-  }, [categoryGroups, hasBillingSummary])
+    const billing = lineItems.filter(
+      (li) => li.lineType === "fixed" || li.lineType === "overage" || li.lineType === "manual",
+    )
+    return {
+      workBreakdownGroups: timeGroups,
+      manualWorkItems: [] as Doc<"invoiceLineItems">[],
+      billingItems: billing,
+    }
+  }, [categoryGroups, lineItems, hasBillingSummary])
 
-  const billingItems = useMemo(() => {
-    if (!hasBillingSummary) return []
-    return lineItems.filter((li) => BILLING_LINE_TYPES.has(li.lineType))
-  }, [lineItems, hasBillingSummary])
+  const usageLabels = retainerUsage
+    ? getRetainerUsageLabels({
+        kind: retainerUsage.kind,
+        closed: retainerUsage.closed,
+        monthlyIncludedMinutes: retainerUsage.monthlyIncludedMinutes,
+      })
+    : null
 
   return (
     <div className="flex flex-col gap-8 rounded-lg border bg-card p-6 md:p-8">
-      {/* Locked banner — amber-left accent reads as 'gated', not 'placeholder skeleton' */}
       {readOnly && (
         <div
           role="status"
@@ -100,7 +168,6 @@ export function InvoiceDocument({
         </div>
       )}
 
-      {/* Subject */}
       <InlineEditable
         value={invoice.subject ?? ""}
         onSave={async (next) => {
@@ -113,62 +180,70 @@ export function InvoiceDocument({
         className="text-xl font-semibold"
       />
 
-      {/* FROM / TO */}
-      <InvoiceParties brand={brand} client={client} />
+      <DocumentParties brand={brand} client={client} />
 
-      {/* Invoice meta */}
-      <div className="flex gap-8">
-        <div>
-          <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Invoice</p>
-          <p className="mt-1 text-sm font-medium">{formatInvoiceNumber(invoice.prefix, invoice.number)}</p>
+      <div className="grid gap-8 md:grid-cols-2">
+        <div className="flex flex-wrap gap-x-10 gap-y-4">
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Invoice</p>
+            <p className="mt-1 text-sm font-medium">{invoiceNumber}</p>
+          </div>
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Billing Type</p>
+            <p className="mt-1 text-sm">{billingTypeLabel}</p>
+          </div>
         </div>
-        <div>
-          <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Issue Date</p>
-          {readOnly ? (
-            <p className="mt-1 text-sm">{formatInvoiceDate(invoice.issueDate)}</p>
-          ) : (
-            <div className="mt-1">
-              <DatePicker
-                value={parseYMDToLocalDate(invoice.issueDate)}
-                onChange={(d) => handleDateChange("issueDate", d)}
-                className="h-8 text-sm"
-              />
-            </div>
-          )}
-        </div>
-        <div>
-          <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Due Date</p>
-          {readOnly ? (
-            <p className="mt-1 text-sm">{invoice.dueDate ? formatInvoiceDate(invoice.dueDate) : "—"}</p>
-          ) : (
-            <div className="mt-1 flex items-center gap-1">
-              <DatePicker
-                value={parseYMDToLocalDate(invoice.dueDate)}
-                onChange={(d) => handleDateChange("dueDate", d)}
-                className="h-8 text-sm"
-              />
-              {invoice.dueDate && (
-                <button
-                  type="button"
-                  onClick={() => handleDateChange("dueDate", undefined)}
-                  aria-label="Clear due date"
-                  className="flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-                >
-                  <XIcon className="size-3.5" />
-                </button>
-              )}
-            </div>
-          )}
+
+        <div className="flex flex-wrap gap-x-8 gap-y-4">
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Issue Date</p>
+            {readOnly ? (
+              <p className="mt-1 text-sm">{formatInvoiceDate(invoice.issueDate)}</p>
+            ) : (
+              <div className="mt-1">
+                <DatePicker
+                  value={parseYMDToLocalDate(invoice.issueDate)}
+                  onChange={(d) => handleDateChange("issueDate", d)}
+                  className="h-8 w-36 text-sm"
+                />
+              </div>
+            )}
+          </div>
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Due Date</p>
+            {readOnly ? (
+              <p className="mt-1 text-sm">{invoice.dueDate ? formatInvoiceDate(invoice.dueDate) : "—"}</p>
+            ) : (
+              <div className="mt-1">
+                <DatePicker
+                  value={parseYMDToLocalDate(invoice.dueDate)}
+                  onChange={(d) => handleDateChange("dueDate", d)}
+                  className="h-8 w-36 text-sm"
+                />
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
-      {/* Separator */}
       <hr className="border-border" />
 
-      {/* Work breakdown */}
+      {billingType === "retainer" && retainerUsage && usageLabels && (
+        <RetainerUsageTable
+          rows={retainerUsage.rows}
+          total={retainerUsage.total}
+          totalLabel={usageLabels.totalLabel}
+          balanceLabel={usageLabels.balanceLabel}
+          subtitle={usageLabels.subtitle}
+          currency={invoice.currency}
+          showPayment={false}
+        />
+      )}
+
       <InvoiceWorkBreakdown
         invoiceId={invoice._id}
-        categoryGroups={workBreakdownGroups}
+        timeCategoryGroups={workBreakdownGroups}
+        manualItems={manualWorkItems}
         showAmounts={showAmounts}
         readOnly={readOnly}
         currency={invoice.currency}
@@ -176,38 +251,28 @@ export function InvoiceDocument({
         total={invoice.total}
       />
 
-      {/* Billing summary card (Fixed / Retainer) */}
       {hasBillingSummary && billingItems.length > 0 && (
         <InvoiceBillingSummary
           invoiceId={invoice._id}
           billingItems={billingItems}
           readOnly={readOnly}
           currency={invoice.currency}
-          balanceData={
-            billingType === "retainer" && invoice.retainerStartBalanceMinutes != null
-              ? {
-                  startBalanceMinutes: invoice.retainerStartBalanceMinutes,
-                  includedMinutes: invoice.retainerIncludedMinutes ?? 0,
-                  usedMinutes: invoice.retainerUsedMinutes ?? 0,
-                  endBalanceMinutes: invoice.retainerEndBalanceMinutes ?? 0,
-                } satisfies BalanceData
-              : undefined
-          }
         />
       )}
 
-      {/* Org-level payment instructions ("system voice") rendered above the
-          per-invoice message ("personal voice") per PRD § US-41. Both blocks
-          live below the billing summary; either renders null when empty. */}
+      {billingType === "retainer" && (invoice.retainerMonthlyFee ?? 0) > 0 && (
+        <p className="text-xs text-muted-foreground">
+          Monthly retainer fee — {formatCurrency(invoice.retainerMonthlyFee ?? 0, invoice.currency)}/mo —
+          billed separately via Stripe.
+        </p>
+      )}
+
       <PaymentInstructionsBlock paymentInstructions={org.paymentInstructions} />
 
-      {project && (
-        <InvoiceMessageBlock
-          invoice={invoice}
-          project={project}
-          template={org.invoiceMessageTemplate}
-        />
-      )}
+      <InvoiceMessageBlock
+        invoice={invoice}
+        template={org.invoiceMessageTemplate}
+      />
     </div>
   )
 }

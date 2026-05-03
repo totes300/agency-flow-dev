@@ -7,6 +7,10 @@ import { generateNextProjectCode, ensureUniqueProjectCode } from "./lib/helpers"
 import { validateAssignees } from "./lib/task_helpers";
 import { getDateInTimezone, ORG_TIMEZONE_FALLBACK } from "./lib/timer";
 import { getOrgSettings, getProjectCurrency } from "./lib/orgHelpers";
+import {
+  getInvoiceAnchorMonthKey,
+  invoiceCoversMonth,
+} from "./lib/invoiceAnchor";
 import type {
   ResolvedProjectListItem,
   ResolvedProjectDetail,
@@ -512,15 +516,19 @@ export const getRetainerData = query({
     // Compute today in org timezone (same helper used by timer & time entries)
     const todayStr = getDateInTimezone(Date.now(), timezone);
 
-    // Compute cycle boundaries
+    // Compute cycle boundaries.
+    //
+    // CONVENTION: month is 1-indexed (1=Jan…12=Dec) everywhere in this
+    // codebase. Storage formats (YYYY-MM strings, period.month, etc.) and
+    // every cross-module API agree. Only the JS `Date()` constructor uses
+    // 0-indexed months — we adjust at THAT boundary alone (`m - 1`).
     const startParts = startDate.split("-").map(Number);
     const startYear = startParts[0];
-    const startMonth = startParts[1] - 1; // 0-indexed
+    const startMonth = startParts[1]; // 1-12
 
-    // Calculate which cycle index contains today
     const todayParts = todayStr.split("-").map(Number);
     const todayYear = todayParts[0];
-    const todayMonth = todayParts[1] - 1; // 0-indexed
+    const todayMonth = todayParts[1]; // 1-12
     const monthsDiff = (todayYear - startYear) * 12 + (todayMonth - startMonth);
     const currentCycleIndex = Math.max(0, Math.floor(monthsDiff / cycleLength));
 
@@ -528,11 +536,11 @@ export const getRetainerData = query({
     const targetCycleIndex = currentCycleIndex + offset;
     if (targetCycleIndex < 0) return null;
 
-    // Build month list for target cycle
+    // Build month list for target cycle.
     const cycleStartMonthOffset = targetCycleIndex * cycleLength;
     const months: Array<{
       year: number;
-      month: number; // 0-indexed
+      month: number; // 1-indexed (1=Jan)
       label: string;
       startDate: string;
       endDate: string;
@@ -540,15 +548,21 @@ export const getRetainerData = query({
 
     for (let i = 0; i < cycleLength; i++) {
       const mOffset = cycleStartMonthOffset + i;
-      const y = startYear + Math.floor((startMonth + mOffset) / 12);
-      const m = (startMonth + mOffset) % 12;
-      const lastDay = new Date(y, m + 1, 0).getDate();
+      // Walk forward from startMonth in absolute "months since year 0" space,
+      // then split back to year + 1-indexed month.
+      const absoluteMonths = startYear * 12 + (startMonth - 1) + mOffset;
+      const y = Math.floor(absoluteMonths / 12);
+      const m = (absoluteMonths % 12) + 1; // 1-12
+      const lastDay = new Date(y, m, 0).getDate(); // (m, 0) = last day of month m
       months.push({
         year: y,
         month: m,
-        label: new Date(y, m, 1).toLocaleDateString("en-US", { month: "long", year: "numeric" }),
-        startDate: `${y}-${String(m + 1).padStart(2, "0")}-01`,
-        endDate: `${y}-${String(m + 1).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`,
+        label: new Date(y, m - 1, 1).toLocaleDateString("en-US", {
+          month: "long",
+          year: "numeric",
+        }),
+        startDate: `${y}-${String(m).padStart(2, "0")}-01`,
+        endDate: `${y}-${String(m).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`,
       });
     }
 
@@ -607,10 +621,14 @@ export const getRetainerData = query({
       .collect();
     const catMap = new Map(categories.map((c) => [c._id.toString(), c]));
 
-    // Fetch retainer invoices for this project and map them by month key
-    // (periodStart YYYY-MM-01 → periodEnd last day). Retainer invoices always
-    // write exact month boundaries and the duplicate guard ensures at most one
-    // invoice (draft or finalized) per month.
+    // Fetch retainer invoices for this project and attach each to its
+    // **anchor** month (the YYYY-MM of `periodEnd`). For monthly retainers
+    // (rollover OFF) the anchor is the single billed month. For rollover
+    // cycle invoices (multi-month period after Issue #01) the anchor is the
+    // cycle-end month — that's the row that carries the cycle's primary
+    // action ("Generate" before billing, invoice link after). Centralised in
+    // `convex/lib/invoiceAnchor.ts` so the Ready feed and Monthly Report
+    // queries agree on the same convention.
     const projectInvoices = await ctx.db
       .query("invoices")
       .withIndex("by_projectId", (q) => q.eq("projectId", args.id))
@@ -618,15 +636,12 @@ export const getRetainerData = query({
       .collect();
     const invoiceByMonthKey = new Map<string, Doc<"invoices">>();
     for (const inv of projectInvoices) {
-      if (!inv.periodStart || !inv.periodEnd) continue;
-      const startMatch = /^(\d{4})-(\d{2})-01$/.exec(inv.periodStart);
-      if (!startMatch) continue;
-      const y = Number(startMatch[1]);
-      const m = Number(startMatch[2]); // 1-12
-      const expectedLastDay = new Date(y, m, 0).getDate();
-      const expectedEnd = `${startMatch[1]}-${startMatch[2]}-${String(expectedLastDay).padStart(2, "0")}`;
-      if (inv.periodEnd !== expectedEnd) continue;
-      const key = inv.periodStart.slice(0, 7); // "YYYY-MM"
+      // Voided invoices free their period for re-billing (PRD § D5). The
+      // audit trail still lives on `/invoices` Voided tab — the project
+      // row should treat the period as unbilled so Generate can re-fire.
+      if (inv.status === "void") continue;
+      const key = getInvoiceAnchorMonthKey(inv);
+      if (!key) continue;
       invoiceByMonthKey.set(key, inv);
     }
 
@@ -672,7 +687,7 @@ export const getRetainerData = query({
 
     for (let i = 0; i < months.length; i++) {
       const m = months[i];
-      const monthKey = `${m.year}-${String(m.month + 1).padStart(2, "0")}`;
+      const monthKey = `${m.year}-${String(m.month).padStart(2, "0")}`;
       const monthBillable = billableByMonth[monthKey] ?? [];
       const monthNonBillable = nonBillableByMonth[monthKey] ?? [];
       const workedMinutes = monthBillable.reduce((s, e) => s + e.durationMinutes, 0);
@@ -975,31 +990,49 @@ export const getSummary = query({
       (e) => e.date >= cycleContext.start && e.date <= cycleContext.end,
     );
 
-    // hasUninvoicedClosedMonth flag: at least one closed month inside the cycle
-    // has no invoice attached. Mirrors getClosedUninvoicedMonths semantics.
+    // Badge semantics after the invoicing refactor: "Uninvoiced" means
+    // "there is an invoiceable overage period not covered by a live invoice",
+    // not merely "a closed calendar month has no invoice". Within-budget
+    // retainer periods produce Monthly Reports, so marking them Uninvoiced
+    // makes the owner think a billable action is missing when none exists.
     const retainerInvoices = await ctx.db
       .query("invoices")
       .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
       .filter((q) => q.eq(q.field("orgId"), orgId))
       .collect();
-    const invoiceByMonthKey = new Map<string, Doc<"invoices">>();
-    for (const inv of retainerInvoices) {
-      if (!inv.periodStart || !inv.periodEnd) continue;
-      const startMatch = /^(\d{4})-(\d{2})-01$/.exec(inv.periodStart);
-      if (!startMatch) continue;
-      const y = Number(startMatch[1]);
-      const m = Number(startMatch[2]);
-      const expectedLastDay = new Date(y, m, 0).getDate();
-      const expectedEnd = `${startMatch[1]}-${startMatch[2]}-${String(expectedLastDay).padStart(2, "0")}`;
-      if (inv.periodEnd !== expectedEnd) continue;
-      invoiceByMonthKey.set(inv.periodStart.slice(0, 7), inv);
+    const liveInvoices = retainerInvoices.filter((inv) => inv.status !== "void");
+
+    const monthBillableMinutes = new Map<string, number>();
+    for (const entry of cycleEntries) {
+      if (!entry.isBillable) continue;
+      const key = entry.date.slice(0, 7);
+      monthBillableMinutes.set(
+        key,
+        (monthBillableMinutes.get(key) ?? 0) + entry.durationMinutes,
+      );
     }
 
     let hasUninvoicedClosedMonth = false;
-    for (const monthKey of cycleContext.monthKeys) {
-      const isMonthClosed =
-        lastDayOfMonth(monthKey) < todayStr;
-      if (isMonthClosed && !invoiceByMonthKey.has(monthKey)) {
+    if (rolloverEnabled) {
+      const cycleBillableMinutes = Array.from(monthBillableMinutes.values()).reduce(
+        (sum, minutes) => sum + minutes,
+        0,
+      );
+      const cycleBudgetMinutes = includedMinutesPerMonth * cycleLength;
+      if (cycleContext.isCycleClosed && cycleBillableMinutes > cycleBudgetMinutes) {
+        const [y, m] = cycleContext.end.slice(0, 7).split("-").map(Number);
+        const covered = liveInvoices.some((inv) => invoiceCoversMonth(inv, y, m));
+        hasUninvoicedClosedMonth = !covered;
+      }
+    } else {
+      for (const monthKey of cycleContext.monthKeys) {
+        const isMonthClosed = lastDayOfMonth(monthKey) < todayStr;
+        if (!isMonthClosed) continue;
+        const billableMinutes = monthBillableMinutes.get(monthKey) ?? 0;
+        if (billableMinutes <= includedMinutesPerMonth) continue;
+        const [y, m] = monthKey.split("-").map(Number);
+        const covered = liveInvoices.some((inv) => invoiceCoversMonth(inv, y, m));
+        if (covered) continue;
         hasUninvoicedClosedMonth = true;
         break;
       }

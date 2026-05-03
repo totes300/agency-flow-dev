@@ -10,12 +10,15 @@ import { BillingTypeBadge, type BillingType } from "@/components/billing-type-ba
 import {
   buildCycleMonths,
   formatCurrency,
-  formatCycleLabel,
   formatInvoiceDate,
   formatInvoiceNumber,
 } from "@/lib/format"
+import { getYMDInTimezone } from "@/lib/workday"
 import type { Id } from "@/convex/_generated/dataModel"
-import type { InvoiceRow as InvoiceRowType } from "@/components/invoices/invoice-list"
+import type {
+  DateColumn,
+  InvoiceRow as InvoiceRowType,
+} from "@/components/invoices/invoice-list"
 import type { ReadyRow } from "@/lib/invoices/list-rows"
 import { cn } from "@/lib/utils"
 
@@ -24,16 +27,22 @@ import { cn } from "@/lib/utils"
 export function InvoiceRowItem({
   invoice,
   showProject,
+  showType,
   showStatus,
+  showDate,
   timezone,
+  dateColumn,
   selected,
   onSelect,
   onOpen,
 }: {
   invoice: InvoiceRowType
   showProject: boolean
+  showType: boolean
   showStatus: boolean
+  showDate: boolean
   timezone: string
+  dateColumn: DateColumn
   selected: boolean
   /**
    * `id` is forwarded for callers that need to track per-id state. The list
@@ -75,22 +84,24 @@ export function InvoiceRowItem({
       <TableCell className="font-medium">
         {formatInvoiceNumber(invoice.prefix, invoice.number)}
       </TableCell>
-      <TableCell className="text-muted-foreground">
+      <TableCell className="max-w-0 truncate text-muted-foreground">
         {invoice.subject ?? "—"}
       </TableCell>
       {showProject && (
-        <TableCell className="text-muted-foreground">
+        <TableCell className="max-w-0 truncate text-muted-foreground">
           {invoice.clientName}
         </TableCell>
       )}
       {showProject && (
-        <TableCell className="text-muted-foreground">
+        <TableCell className="max-w-0 truncate text-muted-foreground">
           {invoice.projectName}
         </TableCell>
       )}
-      <TableCell>
-        <BillingTypeBadge type={invoice.projectBillingType as BillingType} />
-      </TableCell>
+      {showType && (
+        <TableCell>
+          <BillingTypeBadge type={invoice.projectBillingType as BillingType} />
+        </TableCell>
+      )}
       {showStatus && (
         <TableCell>
           <InvoiceStatusBadge
@@ -103,12 +114,25 @@ export function InvoiceRowItem({
       <TableCell className="text-right font-medium tabular-nums">
         {formatCurrency(invoice.total, invoice.currency)}
       </TableCell>
-      <TableCell className="text-muted-foreground">
-        {invoice.dueDate ? formatInvoiceDate(invoice.dueDate) : "—"}
-      </TableCell>
-      <TableCell className="w-44 pl-0 text-right">
+      {showDate && (
+        <TableCell className="text-muted-foreground">
+          {dateColumn === "paid"
+            ? formatPaidDate(invoice.paidAt, timezone)
+            : invoice.dueDate
+              ? formatInvoiceDate(invoice.dueDate)
+              : "—"}
+        </TableCell>
+      )}
+      <TableCell
+        className={cn(
+          invoice.status === "paid" ? "w-12" : "w-44",
+          "pl-0 text-right",
+        )}
+        onClick={(e) => e.stopPropagation()}
+      >
         <InvoiceRowActions
           invoiceId={invoice._id as Id<"invoices">}
+          identifier={formatInvoiceNumber(invoice.prefix, invoice.number)}
           status={invoice.status}
         />
       </TableCell>
@@ -128,23 +152,26 @@ export function InvoiceRowItem({
 export function ReadyRowItem({
   row,
   showProject,
+  showType,
   showStatus,
+  showDate,
   selected,
   onSelect,
   onGenerate,
 }: {
   row: ReadyRow
   showProject: boolean
+  showType: boolean
   showStatus: boolean
+  showDate: boolean
   selected: boolean
   onSelect: (shiftKey: boolean) => void
   onGenerate: () => void
 }) {
   return (
     <TableRow
-      className={cn("group cursor-pointer", selected && "bg-muted/40")}
+      className={cn("group", selected && "bg-muted/40")}
       data-selected={selected || undefined}
-      onClick={onGenerate}
     >
       <TableCell className="w-10 pr-0" onClick={(e) => e.stopPropagation()}>
         <Checkbox
@@ -160,16 +187,24 @@ export function ReadyRowItem({
         />
       </TableCell>
       <TableCell className="text-muted-foreground">—</TableCell>
-      <TableCell className="font-medium">{readySubject(row)}</TableCell>
-      {showProject && (
-        <TableCell className="text-muted-foreground">{row.clientName}</TableCell>
-      )}
-      {showProject && (
-        <TableCell className="text-muted-foreground">{row.projectName}</TableCell>
-      )}
-      <TableCell>
-        <BillingTypeBadge type={billingTypeForKind(row.kind) as BillingType} />
+      <TableCell className="max-w-0 truncate font-medium">
+        {readySubject(row)}
       </TableCell>
+      {showProject && (
+        <TableCell className="max-w-0 truncate text-muted-foreground">
+          {row.clientName}
+        </TableCell>
+      )}
+      {showProject && (
+        <TableCell className="max-w-0 truncate text-muted-foreground">
+          {row.projectName}
+        </TableCell>
+      )}
+      {showType && (
+        <TableCell>
+          <BillingTypeBadge type={billingTypeForKind(row.kind) as BillingType} />
+        </TableCell>
+      )}
       {showStatus && (
         <TableCell>
           <ReadinessBadge row={row} />
@@ -183,7 +218,7 @@ export function ReadyRowItem({
       >
         {formatCurrency(row.amount, row.currency)}
       </TableCell>
-      <TableCell className="text-muted-foreground">—</TableCell>
+      {showDate && <TableCell className="text-muted-foreground">—</TableCell>}
       <TableCell
         className="w-44 pl-0 text-right"
         onClick={(e) => e.stopPropagation()}
@@ -194,6 +229,11 @@ export function ReadyRowItem({
       </TableCell>
     </TableRow>
   )
+}
+
+function formatPaidDate(paidAt: number | undefined, timezone: string): string {
+  if (paidAt == null) return "—"
+  return formatInvoiceDate(getYMDInTimezone(new Date(paidAt), timezone))
 }
 
 function ReadinessBadge({ row }: { row: ReadyRow }) {
@@ -227,15 +267,15 @@ function billingTypeForKind(kind: ReadyRow["kind"]): string {
 
 function readySubject(row: ReadyRow): string {
   if (row.kind === "retainer-monthly" && row.period) {
-    return monthLong(row.period)
+    return `${monthLong(row.period)} overage`
   }
   if (row.kind === "retainer-cycle" && row.period) {
-    return `${cycleLabelFor(row)} cycle`
+    return `${cycleSubjectLabelFor(row)} overage`
   }
   if (row.kind === "tm" && row.period) {
     return monthLong(row.period)
   }
-  return "Full milestone"
+  return "Fixed fee"
 }
 
 function monthLong(p: { year: number; month: number }): string {
@@ -252,11 +292,16 @@ function monthShort(p: { year: number; month: number }): string {
   })
 }
 
-function cycleLabelFor(row: ReadyRow): string {
+function cycleSubjectLabelFor(row: ReadyRow): string {
   if (!row.period) return ""
   const cycleLen = row.cycleLengthMonths
-  if (!cycleLen || cycleLen < 1) return monthShort(row.period)
-  return formatCycleLabel(
-    buildCycleMonths(row.period.year, row.period.month, cycleLen),
-  )
+  if (!cycleLen || cycleLen < 1) return monthLong(row.period)
+  const months = buildCycleMonths(row.period.year, row.period.month, cycleLen)
+  const first = months[0]
+  const last = months[months.length - 1]
+  if (!first || !last) return monthLong(row.period)
+  const firstMonth = monthShort(first)
+  const lastMonth = monthShort(last)
+  if (first.year === last.year) return `${firstMonth}-${lastMonth} ${last.year}`
+  return `${firstMonth} ${first.year}-${lastMonth} ${last.year}`
 }

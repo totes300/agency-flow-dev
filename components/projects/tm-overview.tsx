@@ -51,7 +51,6 @@ export function TmOverview({
       <InvoiceBanner
         state={bannerState}
         projectId={projectId}
-        projectName={project.name}
         currency={currency}
         timezone={timezone}
       />

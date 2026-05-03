@@ -1,12 +1,10 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useParams, useSearchParams } from "next/navigation"
 import { useQuery } from "convex/react"
 import { useConvexAuth } from "convex/react"
-import { notFound } from "next/navigation"
 import { api } from "@/convex/_generated/api"
-import type { Id } from "@/convex/_generated/dataModel"
 import { ArrowLeftIcon, InfoIcon, XIcon } from "lucide-react"
 import Link from "next/link"
 import { Alert, AlertDescription, AlertAction } from "@/components/ui/alert"
@@ -14,22 +12,27 @@ import { Button } from "@/components/ui/button"
 import { InvoiceDocument } from "@/components/invoices/invoice-document"
 import { InvoiceSidebar } from "@/components/invoices/invoice-sidebar"
 import { InvoiceEditorSkeleton } from "@/components/invoices/invoice-editor-skeleton"
+import { InvoiceDeletedState } from "@/components/invoices/invoice-deleted-state"
 import { formatInvoiceNumber } from "@/lib/format"
+import { useBreadcrumbTitle } from "@/lib/hooks/use-breadcrumb-title"
 
 export default function InvoiceEditorPage() {
   const { isAuthenticated } = useConvexAuth()
   const params = useParams()
   const searchParams = useSearchParams()
-  const invoiceId = params.id as Id<"invoices">
+  // The `[id]` route segment now carries the friendly identifier ("INV-035").
+  // The backend resolver also accepts a raw Convex doc ID for backwards compat
+  // with bookmarks saved before the URL refactor.
+  const invoiceIdentifier = params.id as string
   const [nudgeDismissed, setNudgeDismissed] = useState(false)
 
-  const data = useQuery(api.invoices.getInvoice, isAuthenticated ? { id: invoiceId } : "skip")
-
-  if (data === undefined) return <InvoiceEditorSkeleton />
-  if (data === null) notFound()
-
-  const { invoice, categoryGroups, lineItems, project, client, brand, timezone, orgInvoiceCount, fixedBilled, org } = data
-  const readOnly = invoice.status !== "draft"
+  const data = useQuery(api.invoices.getInvoice, isAuthenticated ? { identifier: invoiceIdentifier } : "skip")
+  const printRequested = searchParams.get("print") === "1"
+  const breadcrumbTitle =
+    data && data !== null
+      ? formatInvoiceNumber(data.invoice.prefix, data.invoice.number)
+      : null
+  useBreadcrumbTitle(breadcrumbTitle)
 
   const fromType = searchParams.get("from")
   const fromProjectId = searchParams.get("projectId")
@@ -37,14 +40,37 @@ export default function InvoiceEditorPage() {
     ? `/projects/${fromProjectId}?tab=invoices`
     : "/invoices"
 
-  const invoiceLabel = formatInvoiceNumber(invoice.prefix, invoice.number)
+  useEffect(() => {
+    if (!printRequested || data === undefined || data === null) return
+    const timeout = window.setTimeout(() => window.print(), 250)
+    return () => window.clearTimeout(timeout)
+  }, [data, printRequested])
+
+  if (data === undefined) return <InvoiceEditorSkeleton />
+  // `data === null` means either:
+  //   (a) the invoice was just deleted (this user clicked Delete in the
+  //       sidebar and the optimistic router.replace is mid-flight), or
+  //   (b) another user / another tab deleted it while we were viewing, or
+  //   (c) the URL points at a non-existent ID (genuinely bad link).
+  //
+  // We render the same "Invoice deleted" state for all three. Case (a)
+  // flickers for a frame at most before the sidebar's router.replace lands;
+  // cases (b) and (c) match the Linear / Notion pattern of telling the user
+  // explicitly what happened with a back button rather than 404'ing.
+  if (data === null) return <InvoiceDeletedState backHref={backHref} />
+
+  const { invoice, categoryGroups, lineItems, project, client, brand, timezone, orgInvoiceCount, fixedBilled, retainerUsage, org } = data
+  const readOnly = invoice.status !== "draft"
 
   const brandIncomplete = !brand?.brandName || !brand?.brandAddress
   const showBrandNudge = orgInvoiceCount <= 1 && brandIncomplete && !nudgeDismissed
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
-      <nav aria-label="Breadcrumb" className="flex items-center gap-3">
+      <nav
+        aria-label="Document navigation"
+        className="flex items-center gap-3 print:hidden"
+      >
         <Button
           variant="ghost"
           size="icon"
@@ -56,17 +82,10 @@ export default function InvoiceEditorPage() {
             <ArrowLeftIcon className="size-4" />
           </Link>
         </Button>
-        <ol className="flex items-center gap-2 text-sm text-muted-foreground">
-          <li>
-            <Link href="/invoices" className="hover:text-foreground">Invoices</Link>
-          </li>
-          <li aria-hidden="true">›</li>
-          <li aria-current="page" className="text-foreground">{invoiceLabel}</li>
-        </ol>
       </nav>
 
       {showBrandNudge && (
-        <Alert variant="info">
+        <Alert variant="info" className="print:hidden">
           <InfoIcon />
           <AlertDescription>
             Complete your agency details in{" "}
@@ -90,7 +109,7 @@ export default function InvoiceEditorPage() {
       {/* Two-column layout */}
       <div className="flex flex-col gap-8 lg:flex-row">
         {/* Left: The Paper */}
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 print:w-full">
           <InvoiceDocument
             invoice={invoice}
             categoryGroups={categoryGroups}
@@ -98,13 +117,14 @@ export default function InvoiceEditorPage() {
             project={project}
             client={client}
             brand={brand}
+            retainerUsage={retainerUsage}
             org={org}
             readOnly={readOnly}
           />
         </div>
 
         {/* Right: Sidebar */}
-        <div className="w-full lg:w-80 lg:shrink-0">
+        <div className="w-full print:hidden lg:w-80 lg:shrink-0">
           <div className="lg:sticky lg:top-20">
             <InvoiceSidebar
               invoice={invoice}
@@ -113,6 +133,7 @@ export default function InvoiceEditorPage() {
               readOnly={readOnly}
               backHref={backHref}
               fixedBilled={fixedBilled}
+              onPrint={() => window.print()}
             />
           </div>
         </div>

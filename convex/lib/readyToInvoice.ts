@@ -9,6 +9,7 @@
  * here.
  */
 import type { Id } from "../_generated/dataModel";
+import { getInvoiceAnchorMonthKey } from "./invoiceAnchor";
 
 // ─── Input shapes ───────────────────────────────────────────────────────────────
 
@@ -55,6 +56,12 @@ export type TimeEntryInput = {
 // ─── Output shape ───────────────────────────────────────────────────────────────
 
 export type ReadyRowKind = "retainer-monthly" | "retainer-cycle" | "fixed" | "tm";
+/**
+ * Kept for backward-compatibility with downstream consumers (UI badges, etc.).
+ * After the invoicing refactor (`docs/invoicing-refactor.md`) the Ready feed
+ * never emits within-budget retainer rows, so every retainer row's badge is
+ * `over-budget`. Fixed/T&M rows continue to set `null`.
+ */
 export type BadgeKind = "within-budget" | "over-budget";
 
 export type ReadyRow = {
@@ -67,16 +74,16 @@ export type ReadyRow = {
   period?: { year: number; month: number };
   /** Sort key — chronological for periods, project-name fallback for fixed. */
   sortKey: string;
-  /** Pre-computed total in project currency. €0 for within-budget retainer rows. */
+  /**
+   * Canonical billable amount in project currency. After the invoicing
+   * refactor this is always > 0 for emitted rows — within-budget retainer
+   * periods don't appear in the Ready feed at all (they render as Monthly
+   * Reports on the project page). The previous `invoiceTotal` field
+   * (`monthlyFee + overage`) is gone — Stripe collects the monthly fee, so
+   * `amount` is the only billable number.
+   */
   amount: number;
   currency: string;
-  /**
-   * Total amount the invoice would carry once generated (monthlyFee + overage
-   * for retainer; same as `amount` for Fixed and T&M). Drives `isInvoiceable`
-   * — see comment on that helper for why this differs from `amount`. Optional
-   * because helper tests built rows without this field before it was added.
-   */
-  invoiceTotal?: number;
   /** Set for retainer rows; null for fixed/T&M (badge column stays empty). */
   badgeKind: BadgeKind | null;
   /** Hours over budget — only set when badgeKind === "over-budget". */
@@ -111,12 +118,20 @@ export function computeLastInvoicedAt(invoices: InvoiceInput[]): number | null {
   return bestYMD ? Date.parse(bestYMD + "T12:00:00Z") : null;
 }
 
-/** Set of "YYYY-MM" keys that already have a non-void invoice on the project. */
+/**
+ * Set of "YYYY-MM" anchor months that already have a non-void invoice on
+ * the project. The anchor (`getInvoiceAnchorMonthKey`) is the cycle-end
+ * month for rollover cycle invoices and the single billed month for
+ * monthly retainer invoices — exactly the key both `buildRetainerMonthly`
+ * and `buildRetainerCycle` Ready rows use, so a billed period correctly
+ * disappears from the Ready feed.
+ */
 function invoicedMonthKeys(invoices: InvoiceInput[]): Set<string> {
   const out = new Set<string>();
   for (const inv of invoices) {
-    if (inv.status === "void" || !inv.periodStart) continue;
-    out.add(inv.periodStart.slice(0, 7));
+    if (inv.status === "void") continue;
+    const key = getInvoiceAnchorMonthKey(inv);
+    if (key) out.add(key);
   }
   return out;
 }
@@ -157,7 +172,6 @@ export function buildFixedReadyRow(opts: {
     clientName: client.name,
     sortKey: client.name.toLowerCase() + "/" + project.name.toLowerCase(),
     amount: roundCents(remaining),
-    invoiceTotal: roundCents(remaining),
     currency: client.currency,
     badgeKind: null,
     lastInvoicedAt: computeLastInvoicedAt(invoices),
@@ -223,7 +237,6 @@ export function buildTmReadyRows(opts: {
       period: { year: b.year, month: b.month },
       sortKey: `${b.year}-${String(b.month).padStart(2, "0")}/${client.name.toLowerCase()}`,
       amount: roundCents(b.amount),
-      invoiceTotal: roundCents(b.amount),
       currency: client.currency,
       badgeKind: null,
       lastInvoicedAt,
@@ -236,9 +249,9 @@ export function buildTmReadyRows(opts: {
 
 /**
  * Retainer with `rolloverEnabled === false` → one row per closed-uninvoiced
- * month. Caller pre-computes the per-month overage minutes (the helper-local
- * version of `computeRetainerBalance` would need rate/category context we
- * don't replicate here for tests).
+ * **over-budget** month. Within-budget months never appear in the Ready feed
+ * after the invoicing refactor (`docs/invoicing-refactor.md`) — they render
+ * as Monthly Reports on the project page instead.
  *
  * `monthBalances` shape: one entry per CLOSED month chronological, with
  * `endBalance` (positive = within budget, negative = over budget). The shim
@@ -257,16 +270,16 @@ export function buildRetainerMonthlyReadyRows(opts: {
 
   const invoiced = invoicedMonthKeys(invoices);
   const overageRate = project.overageRate ?? 0;
-  const monthlyFee = project.monthlyFee ?? 0;
   const lastInvoicedAt = computeLastInvoicedAt(invoices);
   const out: ReadyRow[] = [];
   for (const m of monthBalances) {
     const key = `${m.year}-${String(m.month).padStart(2, "0")}`;
     if (invoiced.has(key)) continue;
     const overMinutes = m.endBalance < 0 ? Math.abs(m.endBalance) : 0;
+    if (overMinutes <= 0) continue; // within budget → Monthly Report, not invoice
     const overHours = overMinutes / 60;
-    const overBudget = overMinutes > 0;
-    const amount = overBudget ? overHours * overageRate : 0;
+    const amount = overHours * overageRate;
+    if (amount <= 0) continue; // pathological config: no overageRate → no row
     out.push({
       kind: "retainer-monthly",
       projectId: project._id,
@@ -276,10 +289,9 @@ export function buildRetainerMonthlyReadyRows(opts: {
       period: { year: m.year, month: m.month },
       sortKey: `${key}/${client.name.toLowerCase()}`,
       amount: roundCents(amount),
-      invoiceTotal: roundCents(monthlyFee + amount),
       currency: client.currency,
-      badgeKind: overBudget ? "over-budget" : "within-budget",
-      overageHours: overBudget ? overHours : undefined,
+      badgeKind: "over-budget",
+      overageHours: overHours,
       lastInvoicedAt,
     });
   }
@@ -440,7 +452,6 @@ export function buildRetainerCycleReadyRows(opts: {
 
   const invoiced = invoicedMonthKeys(invoices);
   const overageRate = project.overageRate ?? 0;
-  const monthlyFee = project.monthlyFee ?? 0;
   const lastInvoicedAt = computeLastInvoicedAt(invoices);
   const cycleLengthMonths = project.cycleLength;
   const out: ReadyRow[] = [];
@@ -449,9 +460,10 @@ export function buildRetainerCycleReadyRows(opts: {
     const key = `${c.closingYear}-${String(c.closingMonth).padStart(2, "0")}`;
     if (invoiced.has(key)) continue; // already invoiced
     const overMinutes = c.cycleBalance < 0 ? Math.abs(c.cycleBalance) : 0;
+    if (overMinutes <= 0) continue; // within budget → Monthly Report, not invoice
     const overHours = overMinutes / 60;
-    const overBudget = overMinutes > 0;
-    const amount = overBudget ? overHours * overageRate : 0;
+    const amount = overHours * overageRate;
+    if (amount <= 0) continue; // pathological config: no overageRate → no row
     out.push({
       kind: "retainer-cycle",
       projectId: project._id,
@@ -461,10 +473,9 @@ export function buildRetainerCycleReadyRows(opts: {
       period: { year: c.closingYear, month: c.closingMonth },
       sortKey: `${key}/${client.name.toLowerCase()}`,
       amount: roundCents(amount),
-      invoiceTotal: roundCents(monthlyFee + amount),
       currency: client.currency,
-      badgeKind: overBudget ? "over-budget" : "within-budget",
-      overageHours: overBudget ? overHours : undefined,
+      badgeKind: "over-budget",
+      overageHours: overHours,
       lastInvoicedAt,
       cycleLengthMonths,
     });
@@ -477,19 +488,18 @@ export function buildRetainerCycleReadyRows(opts: {
 /**
  * Single source of truth for "would generating an invoice from this row
  * actually charge anything?". Used by:
- *   - the createInvoice retainer guard (refuses €0 retainer invoices)
- *   - the Ready feed filter (€0 retainer rows become statements, not invoices)
- *   - the project's MonthlyBreakdownCard (Generate vs Download statement)
+ *   - the Ready feed filter (within-budget retainer rows are dropped at
+ *     construction now, so this is a no-op for them)
+ *   - the project's MonthlyBreakdownCard (Generate vs Download report)
  *   - any future auto-charge cron
  *
- * For retainer rows we read `invoiceTotal` (monthlyFee + overage), NOT
- * `amount` — `amount` reflects only the overage delta and would mis-classify
- * a within-budget retainer with a non-zero monthly fee as "no invoice
- * needed". Older callers built rows without `invoiceTotal`; we fall back
- * to `amount` so those tests still pass.
+ * After the invoicing refactor (`docs/invoicing-refactor.md`) the canonical
+ * rule is `row.amount > 0`. The previous `invoiceTotal = monthlyFee + overage`
+ * field is gone — Stripe collects the monthly fee, so the only billable
+ * number is the overage in `amount`.
  */
 export function isInvoiceable(row: ReadyRow): boolean {
-  return (row.invoiceTotal ?? row.amount) > 0;
+  return row.amount > 0;
 }
 
 // ─── Batch eligibility ─────────────────────────────────────────────────────────

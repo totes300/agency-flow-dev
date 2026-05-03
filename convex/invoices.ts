@@ -6,7 +6,15 @@ import { getDateInTimezone, ORG_TIMEZONE_FALLBACK } from "./lib/timer";
 import {
   canEditInvoiceMessage,
   findResumableInvoice,
+  assertRetainerInvoiceable,
+  assertRolloverCycleEnd,
 } from "./lib/invoiceCreation";
+import {
+  computeRetainerBalance,
+  getRetainerRecalcCyclePosition,
+  getRetainerCyclePosition,
+  getRetainerCycleStartMonth,
+} from "./lib/retainerBalance";
 import {
   buildFixedReadyRow,
   buildRetainerCycleReadyRows,
@@ -17,11 +25,19 @@ import {
   sortReadyRows,
   type ReadyRow,
 } from "./lib/readyToInvoice";
+import { getInvoiceAnchorMonthKey } from "./lib/invoiceAnchor";
 import {
   classifyMarkPaid,
   classifyUndo,
   type PriorState,
 } from "./lib/markPaid";
+import {
+  buildRetainerUsageRows,
+  monthRangeFrom,
+  reconcileUsedMinutesToTotal,
+  type YearMonth,
+} from "./lib/retainerUsage";
+import { resolveInvoiceByIdentifier } from "./lib/invoiceIdentifier";
 import type { Doc, Id } from "./_generated/dataModel";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -42,6 +58,36 @@ function monthLabel(dateStr: string): string {
   const [year, month] = dateStr.split("-");
   const date = new Date(Number(year), Number(month) - 1, 1);
   return date.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+}
+
+function monthShortLabel(dateStr: string): string {
+  const [, month] = dateStr.split("-");
+  const date = new Date(2000, Number(month) - 1, 1);
+  return date.toLocaleDateString("en-US", { month: "short" });
+}
+
+function periodSubjectLabel(periodStart: string, periodEnd: string): string {
+  if (periodStart.slice(0, 7) === periodEnd.slice(0, 7)) {
+    return monthLabel(periodStart);
+  }
+  const startYear = periodStart.slice(0, 4);
+  const endYear = periodEnd.slice(0, 4);
+  const startMonth = monthShortLabel(periodStart);
+  const endMonth = monthShortLabel(periodEnd);
+  if (startYear === endYear) return `${startMonth}-${endMonth} ${endYear}`;
+  return `${startMonth} ${startYear}-${endMonth} ${endYear}`;
+}
+
+/** Inclusive month list from a YYYY-MM-DD periodStart to periodEnd. */
+function invoiceMonthRange(
+  periodStart: string | undefined,
+  periodEnd: string | undefined,
+): YearMonth[] {
+  if (!periodStart || !periodEnd) return [];
+  const [startYear, startMonth] = periodStart.split("-").map(Number);
+  const [endYear, endMonth] = periodEnd.split("-").map(Number);
+  const span = (endYear * 12 + (endMonth - 1)) - (startYear * 12 + (startMonth - 1)) + 1;
+  return monthRangeFrom({ year: startYear, month: startMonth }, span);
 }
 
 /** Format an invoice number for display/search, matching lib/format.ts:formatInvoiceNumber. */
@@ -656,7 +702,8 @@ export const getInvoicingNavSignals = query({
  * Plus billing-type-specific context:
  *   Fixed    → fixedBilled / fixedRemaining / fixedPercentInvoiced
  *   Retainer → uninvoicedMonths (full {year, month, label} objects so the
- *              callout bar can pre-fill the CreateInvoiceModal)
+ *              callout bar can hand the next billable period to
+ *              `useGenerateInvoice` and route directly to its draft)
  *
  * Void invoices are excluded everywhere.
  * "Today" resolved in org timezone so the past-due line matches the badge.
@@ -768,7 +815,8 @@ export const getProjectInvoiceMetrics = query({
         ? Math.round((fixedBilled / fixedPrice) * 100)
         : 0,
       // Retainer specific — full {year, month, label} so the callout bar
-      // can pre-fill the CreateInvoiceModal with one click.
+      // can hand the next billable period to `useGenerateInvoice` and
+      // route directly to its draft.
       uninvoicedMonths,
       // Latest finalized issueDate as a UTC-midnight ms timestamp (or null).
       // Consumed by the InvoiceBanner subline via `formatLastInvoiced(..., { timezone })`.
@@ -916,95 +964,10 @@ export const getInvoicePreview = query({
 });
 
 // ─── Shared Retainer Math ─────────────────────────────────────────────────────
-
-type RetainerComputeInput = {
-  /** Grouped task minutes: Map<groupKey, totalMinutes> */
-  taskMinutesMap: Map<string, number>;
-  roundingMinutes: number;
-  startBalance: number;
-  includedMinutes: number;
-  monthlyFee: number;
-  overageRate: number;
-  rolloverEnabled: boolean;
-  cycleLength: number;
-  /** Position of this month within its cycle (0-indexed). -1 if unknown. */
-  positionInCycle: number;
-};
-
-type RetainerComputeResult = {
-  usedMinutes: number;
-  endBalance: number;
-  isOverageDue: boolean;
-  overageMinutes: number;
-  overageHours: number;
-  overageAmount: number;
-  retainerFeeAmount: number;
-  total: number;
-};
-
-/**
- * Single source of truth for retainer balance + overage computation.
- * Used by createInvoice, getRetainerInvoicePreview, and recalcRetainerBalance.
- */
-function computeRetainerBalance(input: RetainerComputeInput): RetainerComputeResult {
-  // Sum rounded task hours → used minutes
-  let usedMinutes = 0;
-  for (const minutes of input.taskMinutesMap.values()) {
-    usedMinutes += roundMinutesUp(minutes, input.roundingMinutes);
-  }
-
-  const endBalance = input.startBalance + input.includedMinutes - usedMinutes;
-
-  // Overage logic
-  let isOverageDue = false;
-  if (endBalance < 0) {
-    if (!input.rolloverEnabled) {
-      isOverageDue = true;
-    } else {
-      // Rollover ON: overage only on cycle-closing month
-      isOverageDue = input.positionInCycle >= 0 && input.positionInCycle === input.cycleLength - 1;
-    }
-  }
-
-  let overageMinutes = 0;
-  let overageHours = 0;
-  let overageAmount = 0;
-  if (isOverageDue) {
-    overageMinutes = Math.abs(endBalance);
-    overageHours = round2(overageMinutes / 60);
-    overageAmount = round2(overageHours * input.overageRate);
-  }
-
-  const retainerFeeAmount = input.monthlyFee;
-  const total = round2(retainerFeeAmount + overageAmount);
-
-  return {
-    usedMinutes,
-    endBalance,
-    isOverageDue,
-    overageMinutes,
-    overageHours,
-    overageAmount,
-    retainerFeeAmount,
-    total,
-  };
-}
-
-/**
- * Compute position of a month within its retainer cycle (0-indexed).
- * Returns -1 if project start date is missing.
- */
-function getRetainerCyclePosition(
-  projectStartDate: string | undefined,
-  monthYear: number,
-  monthMonth: number, // 1-12
-  cycleLength: number,
-): number {
-  if (!projectStartDate) return -1;
-  const startParts = projectStartDate.split("-").map(Number);
-  const monthsDiff = (monthYear - startParts[0]) * 12 + (monthMonth - startParts[1]);
-  return monthsDiff % cycleLength;
-}
+//
+// `computeRetainerBalance`, `getRetainerCyclePosition`, and
+// `getRetainerCycleStartMonth` live in `convex/lib/retainerBalance.ts` so they
+// can be imported by unit tests without convex-test scaffolding. Imports above.
 
 // Collapse a YYYY-MM-DD start date to its month boundary (YYYY-MM-01) so
 // validation guards compare at month granularity. The rest of the retainer
@@ -1014,71 +977,19 @@ function projectStartMonth(startDate: string | undefined): string | undefined {
 }
 
 /**
- * Group time entries by (workCategoryId, taskId) and return a Map of group key → total minutes.
- * Shared between create, preview, and recalc.
- */
-function groupRetainerEntryMinutes(
-  entries: Array<{ workCategoryId?: string | null; taskId: string; durationMinutes: number }>,
-): Map<string, number> {
-  const map = new Map<string, number>();
-  for (const e of entries) {
-    const key = `${e.workCategoryId ?? "none"}::${e.taskId}`;
-    map.set(key, (map.get(key) ?? 0) + e.durationMinutes);
-  }
-  return map;
-}
-
-/**
- * Derive the start balance for a retainer invoice.
+ * Start-balance for a retainer invoice. Always 0 after the invoicing refactor.
  *
- * The rules mirror the retainer overview engine (convex/projects.ts):
- *   - Rollover OFF  → always 0. Each month is independent; overage settles the
- *     deficit and the next month starts clean.
- *   - Rollover ON, first month of a new cycle → 0. Cycles reset.
- *   - Rollover ON, subsequent month in cycle → chain from the latest prior
- *     retainer invoice on the project. Drafts AND finalized count — draft
- *     edits cascade forward via {@link recalcRetainerBalance} so the chain
- *     stays consistent as the admin edits unfinalized months.
+ *   - Rollover OFF  → each month independent.
+ *   - Rollover ON   → cycle invoices cover the **entire** cycle in one row, so
+ *     the cycle's effective start balance is 0 too. The previous per-month
+ *     `retainerEndBalanceMinutes` chain (and its `cascadeRetainerChain`
+ *     re-snapshot) was deleted with the refactor; mid-cycle months never
+ *     produce an invoice anymore.
+ *
+ * Kept as a function (not inlined) so call sites stay legible and any future
+ * change to the rule lands in one place.
  */
-async function getRetainerStartBalance(
-  ctx: QueryCtx,
-  orgId: string,
-  projectId: Id<"projects">,
-  periodStart: string,
-  project: Doc<"projects">,
-): Promise<number> {
-  const rolloverEnabled = project.rolloverEnabled ?? true;
-
-  // Rollover OFF: each month independent — always start at 0
-  if (!rolloverEnabled) return 0;
-
-  // Rollover ON: check cycle position
-  const cycleLength = project.cycleLength ?? 3;
-  const [periodYear, periodMonth] = periodStart.split("-").map(Number);
-  const position = getRetainerCyclePosition(project.startDate, periodYear, periodMonth, cycleLength);
-
-  // First month of cycle (position 0) always starts at 0
-  if (position === 0) return 0;
-
-  // Subsequent month in cycle: chain from the latest prior invoice (any status).
-  const existingInvoices: Doc<"invoices">[] = await ctx.db
-    .query("invoices")
-    .withIndex("by_projectId", (q: any) => q.eq("projectId", projectId))
-    .filter((q: any) => q.eq(q.field("orgId"), orgId))
-    .collect();
-
-  const previous = existingInvoices
-    .filter(
-      (inv: Doc<"invoices">) =>
-        inv.periodEnd &&
-        inv.periodEnd < periodStart &&
-        inv.retainerEndBalanceMinutes != null,
-    )
-    .sort((a: Doc<"invoices">, b: Doc<"invoices">) => (b.periodEnd! > a.periodEnd! ? 1 : -1));
-
-  if (previous.length > 0) {
-    return previous[0].retainerEndBalanceMinutes ?? 0;
-  }
+function getRetainerStartBalance(): number {
   return 0;
 }
 
@@ -1126,11 +1037,10 @@ async function recalcRetainerBalance(
   const rolloverEnabled =
     invoice.retainerRolloverEnabled ?? project.rolloverEnabled ?? true;
 
-  let positionInCycle = -1;
-  if (invoice.periodStart) {
-    const parts = invoice.periodStart.split("-").map(Number);
-    positionInCycle = getRetainerCyclePosition(project.startDate, parts[0], parts[1], cycleLength);
-  }
+  const positionInCycle = getRetainerRecalcCyclePosition({
+    rolloverEnabled,
+    cycleLength,
+  });
 
   const result = computeRetainerBalance({
     taskMinutesMap,
@@ -1199,88 +1109,24 @@ async function recalcRetainerBalance(
     total: subtotal,
     updatedAt: now,
   });
-
-  // Chain cascade — editing this invoice's time rows changes its end balance,
-  // which is the start balance of the NEXT retainer month. If the next month
-  // has a draft invoice, re-snapshot its start balance from the new end
-  // balance and recurse. Finalized invoices are frozen by design; if one
-  // happens to follow a draft, we stop the cascade there — the stale-chain
-  // concern is guarded at the revert/delete boundary by
-  // {@link findLaterRetainerInvoice}.
-  await cascadeRetainerChain(ctx, invoice, result.endBalance, project);
-}
-
-/**
- * If a later-month draft retainer invoice exists on the same project, update
- * its `retainerStartBalanceMinutes` from the updated prior end balance and
- * recursively recalc it so its own subsequent drafts stay in lockstep.
- */
-async function cascadeRetainerChain(
-  ctx: MutationCtx,
-  previousInvoice: Doc<"invoices">,
-  _previousEndBalance: number,
-  project: Doc<"projects">,
-) {
-  if (!previousInvoice.periodEnd) return;
-  // Cascade only makes sense when the chain is "on". Cycle boundaries handle
-  // the reset inside {@link getRetainerStartBalance}.
-  const rolloverEnabled =
-    previousInvoice.retainerRolloverEnabled ?? project.rolloverEnabled ?? true;
-  if (!rolloverEnabled) return;
-
-  const projectInvoices: Doc<"invoices">[] = await ctx.db
-    .query("invoices")
-    .withIndex("by_projectId", (q: any) =>
-      q.eq("projectId", previousInvoice.projectId),
-    )
-    .filter((q: any) => q.eq(q.field("orgId"), previousInvoice.orgId))
-    .collect();
-
-  const next = projectInvoices
-    .filter(
-      (inv) =>
-        inv._id !== previousInvoice._id &&
-        // Void invoices don't participate in the retainer chain.
-        inv.status !== "void" &&
-        inv.periodStart &&
-        inv.periodStart > previousInvoice.periodEnd!,
-    )
-    .sort((a, b) => (a.periodStart! > b.periodStart! ? 1 : -1))[0];
-
-  if (!next || next.status !== "draft" || !next.periodStart) return;
-
-  // Re-derive start balance rather than assuming the updated end balance
-  // flows directly through — this keeps cycle-boundary resets honored by
-  // the shared rule in getRetainerStartBalance.
-  const newStartBalance = await getRetainerStartBalance(
-    ctx,
-    next.orgId,
-    next.projectId,
-    next.periodStart,
-    project,
-  );
-
-  // Only touch the draft when the chained value actually changed.
-  if ((next.retainerStartBalanceMinutes ?? 0) === newStartBalance) return;
-
-  const now = Date.now();
-  await ctx.db.patch(next._id, {
-    retainerStartBalanceMinutes: newStartBalance,
-    updatedAt: now,
-  });
-
-  // Re-run the recalc on the downstream draft with the refreshed start
-  // balance. This will itself cascade further forward if more drafts chain.
-  const refreshed: Doc<"invoices"> = {
-    ...next,
-    retainerStartBalanceMinutes: newStartBalance,
-  };
-  await recalcRetainerBalance(ctx, next._id, refreshed, project);
 }
 
 /**
  * Enumerate all closed months from project start to today that don't have an invoice.
  * Used by both the retainer preview query and the metrics query.
+ */
+/**
+ * Closed retainer periods that still need an invoice. Same model the Ready
+ * feed uses (`buildRetainerMonthlyReadyRows` / `buildRetainerCycleReadyRows`):
+ *
+ *   - Rollover OFF → one entry per closed over-budget month.
+ *   - Rollover ON  → one entry per closed cycle whose `cycleBalance < 0`,
+ *                     anchored to the cycle's closing month (the row
+ *                     `createInvoice` keys on).
+ *
+ * Dedup is keyed on `getInvoiceAnchorMonthKey` so a cycle invoice (which
+ * spans multiple months) correctly hides every month it covers — same
+ * convention the Ready feed and Monthly Breakdown card use.
  */
 async function getClosedUninvoicedMonths(
   ctx: QueryCtx,
@@ -1292,118 +1138,87 @@ async function getClosedUninvoicedMonths(
   const startDate = project.startDate;
   if (!startDate) return [];
 
-  const todayStr = getDateInTimezone(Date.now(), timezone);
-  const [todayYear, todayMonth] = todayStr.split("-").map(Number);
-  const [startYear, startMonth] = startDate.split("-").map(Number);
-
-  // Build all months from project start to today
-  const allMonths: { year: number; month: number; label: string; startDate: string; endDate: string }[] = [];
-  let y = startYear;
-  let m = startMonth;
-  while (y < todayYear || (y === todayYear && m <= todayMonth)) {
-    const lastDay = new Date(y, m, 0).getDate();
-    const mStart = `${y}-${String(m).padStart(2, "0")}-01`;
-    const mEnd = `${y}-${String(m).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
-    const isClosed = mEnd < todayStr;
-    if (isClosed) {
-      allMonths.push({
-        year: y,
-        month: m,
-        label: monthLabel(mStart),
-        startDate: mStart,
-        endDate: mEnd,
-      });
-    }
-    m++;
-    if (m > 12) { m = 1; y++; }
-  }
-
-  // Get existing invoices for this project. Void invoices don't claim a
-  // month — the period is re-invoiceable.
-  const invoices = await ctx.db
-    .query("invoices")
-    .withIndex("by_projectId", (q: any) => q.eq("projectId", projectId))
-    .filter((q: any) => q.eq(q.field("orgId"), orgId))
-    .collect();
-  const invoicedMonths = new Set(
-    invoices
-      .filter(
-        (inv: Doc<"invoices">) =>
-          inv.status !== "void" && inv.periodStart,
-      )
-      .map((inv: Doc<"invoices">) => inv.periodStart!.slice(0, 7)),
-  );
-
-  const uninvoiced = allMonths.filter(
-    (mn) => !invoicedMonths.has(`${mn.year}-${String(mn.month).padStart(2, "0")}`),
-  );
-
-  // Filter out non-billable months ($0 invoice would be blocked by the
-  // createInvoice guard anyway). Non-billable months surface on the project
-  // page as downloadable statements instead — see `convex/statements.ts`
-  // and `isInvoiceable` for the invariant.
-  const monthlyFee = project.monthlyFee ?? 0;
   const overageRate = project.overageRate ?? 0;
-  const includedMinutes = project.includedMinutesPerMonth ?? 0;
+  if (overageRate === 0) return [];
 
-  // If both monthlyFee AND overageRate are zero, no closed month is
-  // billable — short-circuit without touching time entries.
-  if (monthlyFee === 0 && overageRate === 0) return [];
-  // If monthlyFee > 0, every closed month is billable (fee always charges).
-  // No need to compute per-month balances.
-  if (monthlyFee > 0) return uninvoiced;
+  const todayStr = getDateInTimezone(Date.now(), timezone);
 
-  // monthlyFee == 0 and overageRate > 0: only over-budget months are
-  // billable. Compute per-month balances using the same walker the Ready
-  // feed uses, then keep only months whose endBalance is negative.
+  // Walk the project once: gather billable minutes per YYYY-MM, then run the
+  // same cycle-state enumerator the Ready feed uses.
   const tasks = await ctx.db
     .query("tasks")
-    .withIndex("by_orgId_projectId", (q: any) =>
+    .withIndex("by_orgId_projectId", (q) =>
       q.eq("orgId", orgId).eq("projectId", projectId),
     )
     .collect();
   const entries = (
     await Promise.all(
-      tasks.map((t: Doc<"tasks">) =>
+      tasks.map((t) =>
         ctx.db
           .query("timeEntries")
-          .withIndex("by_taskId", (q: any) => q.eq("taskId", t._id))
-          .filter((q: any) => q.eq(q.field("orgId"), orgId))
+          .withIndex("by_taskId", (q) => q.eq("taskId", t._id))
+          .filter((q) => q.eq(q.field("orgId"), orgId))
           .collect(),
       ),
     )
   ).flat();
   const billableByMonth = new Map<string, number>();
-  for (const e of entries as Doc<"timeEntries">[]) {
+  for (const e of entries) {
     if (!e.isBillable) continue;
     const key = e.date.slice(0, 7);
     billableByMonth.set(key, (billableByMonth.get(key) ?? 0) + e.durationMinutes);
   }
-  const { closedMonths } = enumerateRetainerCycleState({
+
+  const rolloverEnabled = project.rolloverEnabled ?? true;
+  const cycleLength = project.cycleLength ?? 3;
+  const { closedMonths, cycles } = enumerateRetainerCycleState({
     startDate,
     todayStr,
-    includedMinutes,
-    cycleLength: project.cycleLength ?? 3,
-    rolloverEnabled: project.rolloverEnabled ?? true,
+    includedMinutes: project.includedMinutesPerMonth ?? 0,
+    cycleLength,
+    rolloverEnabled,
     billableByMonth,
   });
-  const overBudgetKeys = new Set(
-    closedMonths
-      .filter((cm) => cm.endBalance < 0)
-      .map((cm) => `${cm.year}-${String(cm.month).padStart(2, "0")}`),
-  );
-  return uninvoiced.filter((mn) =>
-    overBudgetKeys.has(`${mn.year}-${String(mn.month).padStart(2, "0")}`),
-  );
+
+  // Anchor-keyed dedup: rollover cycle invoices span multiple months but
+  // anchor on `periodEnd`'s YYYY-MM (the cycle-end). Mirrors the Ready feed.
+  const projectInvoices = await ctx.db
+    .query("invoices")
+    .withIndex("by_projectId", (q) => q.eq("projectId", projectId))
+    .filter((q) => q.eq(q.field("orgId"), orgId))
+    .collect();
+  const invoicedKeys = new Set<string>();
+  for (const inv of projectInvoices) {
+    if (inv.status === "void") continue;
+    const key = getInvoiceAnchorMonthKey(inv);
+    if (key) invoicedKeys.add(key);
+  }
+
+  // Build invoiceable periods, anchored to the row `createInvoice` keys on.
+  // Rollover ON: one entry per closed over-budget cycle (cycle-end row).
+  // Rollover OFF: one entry per closed over-budget month.
+  type Period = { year: number; month: number };
+  const invoiceablePeriods: Period[] = rolloverEnabled
+    ? cycles
+        .filter((c) => c.isCycleClosed && c.cycleBalance < 0)
+        .map((c) => ({ year: c.closingYear, month: c.closingMonth }))
+    : closedMonths
+        .filter((cm) => cm.endBalance < 0)
+        .map((cm) => ({ year: cm.year, month: cm.month }));
+
+  return invoiceablePeriods
+    .filter((p) => !invoicedKeys.has(`${p.year}-${String(p.month).padStart(2, "0")}`))
+    .map((p) => ({
+      year: p.year,
+      month: p.month,
+      label: monthLabel(`${p.year}-${String(p.month).padStart(2, "0")}-01`),
+      startDate: `${p.year}-${String(p.month).padStart(2, "0")}-01`,
+      endDate: `${p.year}-${String(p.month).padStart(2, "0")}-${String(new Date(p.year, p.month, 0).getDate()).padStart(2, "0")}`,
+    }));
 }
 
 /**
- * Live preview for retainer invoice creation modal.
- * Returns balance data, fee, overage, and total for a selected month.
- */
-/**
  * Get closed uninvoiced months for a retainer project.
- * Dedicated query for the month dropdown — no preview math.
  */
 export const getRetainerUninvoicedMonths = query({
   args: { projectId: v.id("projects") },
@@ -1414,108 +1229,6 @@ export const getRetainerUninvoicedMonths = query({
     const orgSettings = await getOrgSettings(ctx, orgId);
     const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
     return getClosedUninvoicedMonths(ctx, orgId, args.projectId, project, timezone);
-  },
-});
-
-/**
- * Live preview for retainer invoice creation modal.
- * Uses shared computeRetainerBalance for consistent math with createInvoice.
- */
-export const getRetainerInvoicePreview = query({
-  args: {
-    projectId: v.id("projects"),
-    year: v.number(),
-    month: v.number(), // 1-12
-    roundingMinutes: v.number(),
-  },
-  handler: async (ctx, args) => {
-    const { orgId } = await requireAdmin(ctx);
-
-    // Validate month range
-    if (args.month < 1 || args.month > 12 || !Number.isInteger(args.month) || !Number.isInteger(args.year)) {
-      return null;
-    }
-
-    const project = await ctx.db.get(args.projectId);
-    if (!project || project.orgId !== orgId || project.billingType !== "retainer") return null;
-
-    // Validate month is closed and within project range
-    const orgSettingsVal = await getOrgSettings(ctx, orgId);
-    const tzVal = orgSettingsVal?.timezone ?? ORG_TIMEZONE_FALLBACK;
-    const todayVal = getDateInTimezone(Date.now(), tzVal);
-    const lastDayCheck = new Date(args.year, args.month, 0).getDate();
-    const mEndCheck = `${args.year}-${String(args.month).padStart(2, "0")}-${String(lastDayCheck).padStart(2, "0")}`;
-    if (mEndCheck >= todayVal) return null; // month not closed yet
-    const mStartCheck = `${args.year}-${String(args.month).padStart(2, "0")}-01`;
-    const projectStart = projectStartMonth(project.startDate);
-    if (projectStart && mStartCheck < projectStart) return null; // before project start month
-
-    const client = await ctx.db.get(project.clientId);
-    if (!client || client.orgId !== orgId) return null;
-
-    const lastDay = new Date(args.year, args.month, 0).getDate();
-    const mStart = `${args.year}-${String(args.month).padStart(2, "0")}-01`;
-    const mEnd = `${args.year}-${String(args.month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
-
-    // Get billable uninvoiced entries for this month
-    const tasks = await ctx.db
-      .query("tasks")
-      .withIndex("by_orgId_projectId", (q) =>
-        q.eq("orgId", orgId).eq("projectId", args.projectId),
-      )
-      .collect();
-
-    const allEntries = (
-      await Promise.all(
-        tasks.map(async (task) => {
-          const entries = await ctx.db
-            .query("timeEntries")
-            .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
-            .filter((q) => q.eq(q.field("orgId"), orgId))
-            .collect();
-          return entries
-            .filter((e) => e.isBillable && !e.invoiceId && e.date >= mStart && e.date <= mEnd)
-            .map((e) => ({
-              workCategoryId: e.snapshotCategoryId?.toString() ?? null,
-              taskId: e.taskId.toString(),
-              durationMinutes: e.durationMinutes,
-            }));
-        }),
-      )
-    ).flat();
-
-    // Use shared grouping helper — same as createInvoice
-    const taskMinutesMap = groupRetainerEntryMinutes(allEntries);
-
-    // Get start balance using shared helper
-    const startBalance = await getRetainerStartBalance(ctx, orgId, args.projectId, mStart, project);
-
-    const cycleLength = project.cycleLength ?? 3;
-    const positionInCycle = getRetainerCyclePosition(project.startDate, args.year, args.month, cycleLength);
-
-    const result = computeRetainerBalance({
-      taskMinutesMap,
-      roundingMinutes: args.roundingMinutes,
-      startBalance,
-      includedMinutes: project.includedMinutesPerMonth ?? 0,
-      monthlyFee: project.monthlyFee ?? 0,
-      overageRate: project.overageRate ?? 0,
-      rolloverEnabled: project.rolloverEnabled ?? true,
-      cycleLength,
-      positionInCycle,
-    });
-
-    return {
-      totalMinutes: result.usedMinutes,
-      retainerFee: result.retainerFeeAmount,
-      startBalance,
-      included: project.includedMinutesPerMonth ?? 0,
-      used: result.usedMinutes,
-      endBalance: result.endBalance,
-      overageAmount: result.overageAmount,
-      total: result.total,
-      currency: client?.currency ?? "USD",
-    };
   },
 });
 
@@ -1645,7 +1358,12 @@ export const createInvoice = mutation({
     ).flat();
 
     // 3. Apply date range filter
-    // Retainer: compute month boundaries from retainerYear/retainerMonth
+    // Retainer: derive period from `retainerYear` / `retainerMonth`. After the
+    // invoicing refactor (`docs/invoicing-refactor.md`):
+    //   - Rollover OFF → period = the requested month's boundaries.
+    //   - Rollover ON  → period = the **entire cycle range** ending in the
+    //     requested month. Caller MUST pass the cycle-end month; mid-cycle
+    //     months are rejected.
     let effectiveStart = args.startDate;
     let effectiveEnd = args.endDate;
     if (billingType === "retainer") {
@@ -1654,14 +1372,36 @@ export const createInvoice = mutation({
       }
       const y = args.retainerYear;
       const m = args.retainerMonth;
-      effectiveStart = `${y}-${String(m).padStart(2, "0")}-01`;
-      const lastDay = new Date(y, m, 0).getDate();
-      effectiveEnd = `${y}-${String(m).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+      const rolloverEnabled = project.rolloverEnabled ?? true;
+      const cycleLength = project.cycleLength ?? 3;
 
-      // Resume-or-block: one live invoice per project-month.
+      if (rolloverEnabled) {
+        // Cycle invoice — must be cycle-end. Positions 0…cycleLength-1; only
+        // the closing position produces an invoice.
+        const position = getRetainerCyclePosition(project.startDate, y, m, cycleLength);
+        assertRolloverCycleEnd({
+          rolloverEnabled,
+          cyclePosition: position,
+          cycleLength,
+        });
+        const cycleStart = getRetainerCycleStartMonth(project.startDate, y, m, cycleLength);
+        if (!cycleStart) {
+          throw new ConvexError("Retainer project is missing a start date.");
+        }
+        effectiveStart = `${cycleStart.year}-${String(cycleStart.month).padStart(2, "0")}-01`;
+        const lastDay = new Date(y, m, 0).getDate();
+        effectiveEnd = `${y}-${String(m).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+      } else {
+        effectiveStart = `${y}-${String(m).padStart(2, "0")}-01`;
+        const lastDay = new Date(y, m, 0).getDate();
+        effectiveEnd = `${y}-${String(m).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+      }
+
+      // Resume-or-block: one live invoice per period (month for rollover-OFF,
+      // cycle range for rollover-ON).
       //  - Existing draft → return its id (caller resumes editing).
       //  - Existing invoiced/paid → throw (re-invoicing requires void first).
-      //  - Voided → historical only, the month is re-invoiceable.
+      //  - Voided → historical only, the period is re-invoiceable.
       const resumeRetainer = findResumableInvoice(projectInvoices, {
         orgId,
         billingType: "retainer",
@@ -1681,57 +1421,23 @@ export const createInvoice = mutation({
         throw new ConvexError(`An invoice for ${label} already exists.`);
       }
 
-      // BUG FIX: Validate month is within valid billing window
+      // Validate window: effectiveStart must not precede project start month;
+      // effectiveEnd (cycle-end or month-end) must be in the past.
       const orgSettingsForValidation = await getOrgSettings(ctx, orgId);
       const validationTimezone = orgSettingsForValidation?.timezone ?? ORG_TIMEZONE_FALLBACK;
       const todayStr = getDateInTimezone(Date.now(), validationTimezone);
 
-      // Reject months before project start month (day-of-month ignored — see projectStartMonth)
       const projectStart = projectStartMonth(project.startDate);
       if (projectStart && effectiveStart < projectStart) {
         throw new ConvexError("Cannot create an invoice for a month before the retainer start date.");
       }
 
-      // Reject months that haven't closed yet (endDate must be in the past)
       if (effectiveEnd >= todayStr) {
-        throw new ConvexError("Cannot create an invoice for a month that hasn't ended yet.");
-      }
-
-      // Sequential guard — reject if any earlier month in the same cycle has
-      // NO invoice yet. Drafts count: each month's draft chains its
-      // `retainerStartBalanceMinutes` from the prior month's end balance, so
-      // the sequence only needs an invoice to exist, not to be finalized.
-      // (Rollover ON only — balance chaining requires order.)
-      // Default rolloverEnabled to true to match the rest of the retainer system
-      // (computeRetainerBalance and getRetainerData both use `?? true`).
-      if (project.rolloverEnabled ?? true) {
-        const cycleLen = project.cycleLength ?? 3;
-        const position = getRetainerCyclePosition(project.startDate, y, m, cycleLen);
-
-        if (position > 0) {
-          // Check that all previous months in this cycle have an invoice
-          for (let p = 0; p < position; p++) {
-            // Compute the month at position p in this cycle
-            const startParts = project.startDate!.split("-").map(Number);
-            const cycleStartMonthOffset = Math.floor(
-              ((y - startParts[0]) * 12 + (m - startParts[1])) / cycleLen
-            ) * cycleLen;
-            const prevMonthOffset = cycleStartMonthOffset + p;
-            const prevYear = startParts[0] + Math.floor((startParts[1] - 1 + prevMonthOffset) / 12);
-            const prevMonth = ((startParts[1] - 1 + prevMonthOffset) % 12) + 1;
-            const prevStart = `${prevYear}-${String(prevMonth).padStart(2, "0")}-01`;
-
-            const hasPrevInvoice = projectInvoices.some(
-              (inv) =>
-                inv.orgId === orgId &&
-                inv.periodStart === prevStart,
-            );
-            if (!hasPrevInvoice) {
-              const prevLabel = monthLabel(prevStart);
-              throw new ConvexError(`Create the ${prevLabel} invoice first. Retainer months must be invoiced in order when rollover is enabled.`);
-            }
-          }
-        }
+        throw new ConvexError(
+          rolloverEnabled
+            ? "Cannot create a cycle invoice before the cycle's closing month has ended."
+            : "Cannot create an invoice for a month that hasn't ended yet.",
+        );
       }
     }
 
@@ -1845,18 +1551,24 @@ export const createInvoice = mutation({
     issueDateObj.setUTCDate(issueDateObj.getUTCDate() + paymentTermsDays);
     const dueDate = issueDateObj.toISOString().slice(0, 10);
 
-    // 8. Auto-prefill subject — "March 2026 — Project" for period-scoped invoices, project name otherwise
+    // 8. Auto-prefill subject. Keep this as the billing unit only; Client and
+    // Project are separate columns on the invoice list, so repeating them here
+    // makes the table slower to scan.
     const subject =
-      billingType !== "fixed" && periodStart
-        ? `${monthLabel(periodStart)} — ${project.name}`
-        : project.name;
+      billingType === "fixed"
+        ? "Fixed fee"
+        : billingType === "retainer" && periodStart && periodEnd
+          ? `${periodSubjectLabel(periodStart, periodEnd)} overage`
+          : periodStart
+            ? monthLabel(periodStart)
+            : project.name;
 
     // 9. Build line items
     const now = Date.now();
     let subtotal = 0;
 
     type LineItem = {
-      lineType: "time" | "fixed" | "retainer_fee" | "overage";
+      lineType: "time" | "fixed" | "overage";
       description: string;
       quantity: number;
       unitPrice: number;
@@ -1914,9 +1626,17 @@ export const createInvoice = mutation({
     let retainerOverageRate = 0;
 
     if (billingType === "retainer") {
+      const rolloverEnabled = project.rolloverEnabled ?? true;
+      const cycleLength = project.cycleLength ?? 3;
+
       retainerFee = project.monthlyFee ?? 0;
       retainerOverageRate = project.overageRate ?? 0;
-      retainerIncluded = project.includedMinutesPerMonth ?? 0;
+      // Cycle invoice covers the full cycle, so the included bucket scales
+      // with `cycleLength`. Monthly (rollover-OFF) keeps the per-month bucket.
+      const monthlyIncluded = project.includedMinutesPerMonth ?? 0;
+      retainerIncluded = rolloverEnabled
+        ? monthlyIncluded * cycleLength
+        : monthlyIncluded;
 
       // Build task minutes map from grouped entries (same grouping as line items above)
       const taskMinutesMap = new Map<string, number>();
@@ -1925,11 +1645,14 @@ export const createInvoice = mutation({
         taskMinutesMap.set(key, (taskMinutesMap.get(key) ?? 0) + group.minutes);
       }
 
-      retainerStartBalance = await getRetainerStartBalance(ctx, orgId, args.projectId, periodStart!, project);
+      // Refactor: cycle invoices start at 0, monthly invoices start at 0 too —
+      // the per-month chain is gone. See `getRetainerStartBalance` docstring.
+      retainerStartBalance = getRetainerStartBalance();
 
-      const cycleLength = project.cycleLength ?? 3;
-      const positionInCycle = args.retainerMonth && args.retainerYear
-        ? getRetainerCyclePosition(project.startDate, args.retainerYear, args.retainerMonth, cycleLength)
+      // For rollover ON, the closing-month position triggers `isOverageDue`.
+      // For rollover OFF, position is irrelevant — overage settles per-month.
+      const positionInCycle = rolloverEnabled
+        ? cycleLength - 1
         : -1;
 
       const retainerResult = computeRetainerBalance({
@@ -1939,7 +1662,7 @@ export const createInvoice = mutation({
         includedMinutes: retainerIncluded,
         monthlyFee: retainerFee,
         overageRate: retainerOverageRate,
-        rolloverEnabled: project.rolloverEnabled ?? true,
+        rolloverEnabled,
         cycleLength,
         positionInCycle,
       });
@@ -1947,31 +1670,26 @@ export const createInvoice = mutation({
       retainerUsed = retainerResult.usedMinutes;
       retainerEndBalance = retainerResult.endBalance;
 
-      // Retainer fee line item
-      subtotal += retainerResult.retainerFeeAmount;
+      // Within-budget guard — D3 in `docs/invoicing-refactor.md`. The bouncer
+      // is at the door of *creation*: a within-budget period produces no
+      // invoice. The owner downloads the Monthly Report instead.
+      assertRetainerInvoiceable({
+        isOverageDue: retainerResult.isOverageDue,
+      });
+
+      // Single Overage line item — the monthly retainer fee is collected via
+      // Stripe and surfaces only as disclaimer text on the doc, never as a
+      // chargeable line.
+      subtotal += retainerResult.overageAmount;
       lineItems.push({
-        lineType: "retainer_fee",
-        description: "Retainer fee",
-        quantity: 1,
-        unitPrice: retainerFee,
-        amount: retainerResult.retainerFeeAmount,
+        lineType: "overage",
+        description: `Overage (${retainerResult.overageHours}h × ${retainerOverageRate}/h)`,
+        quantity: retainerResult.overageHours,
+        unitPrice: retainerOverageRate,
+        amount: retainerResult.overageAmount,
         workCategoryId: undefined,
         entryIds: [],
       });
-
-      // Overage line item
-      if (retainerResult.isOverageDue) {
-        subtotal += retainerResult.overageAmount;
-        lineItems.push({
-          lineType: "overage",
-          description: `Overage (${retainerResult.overageHours}h × ${retainerOverageRate}/h)`,
-          quantity: retainerResult.overageHours,
-          unitPrice: retainerOverageRate,
-          amount: retainerResult.overageAmount,
-          workCategoryId: undefined,
-          entryIds: [],
-        });
-      }
     }
 
     // Fixed: add the fixed fee line item
@@ -2019,16 +1737,9 @@ export const createInvoice = mutation({
     subtotal = round2(subtotal);
     const total = subtotal; // no tax in v1
 
-    // Hard guard: refuse €0 retainer invoices. A within-budget month with no
-    // monthly fee owes nothing, so creating an invoice is misleading — the
-    // client has nothing to pay. The download statement on the project page
-    // serves the "share the period summary" need without polluting /invoices
-    // with auto-paid €0 rows. See `isInvoiceable` for the invariant.
-    if (billingType === "retainer" && total === 0) {
-      throw new ConvexError(
-        "This month has no billable amount. Download the statement from the project page instead.",
-      );
-    }
+    // Within-budget retainer periods are rejected at the bouncer (see
+    // `assertRetainerInvoiceable` in the retainer branch above) — by the time
+    // we reach this point, retainer invoices always have overage > 0.
 
     // 10. Create the invoice
     const messageToClient = orgSettings?.invoiceMessageTemplate || undefined;
@@ -2119,17 +1830,23 @@ export const createInvoice = mutation({
  * line items grouped by category, project info, client info, org brand settings.
  */
 export const getInvoice = query({
-  args: { id: v.id("invoices") },
+  // `identifier` is the URL segment. Two accepted forms (decision 2026-05-03):
+  //   1. Friendly form, e.g. "INV-035" — primary path; produced by every
+  //      internal link via `formatInvoiceNumber(prefix, number)`.
+  //   2. Convex doc ID — backwards-compat fallback for bookmarks / pasted
+  //      links saved before the URL refactor.
+  // The page never has to know which form it received.
+  args: { identifier: v.string() },
   handler: async (ctx, args) => {
     const { orgId } = await requireAdmin(ctx);
 
-    const invoice = await ctx.db.get(args.id);
-    if (!invoice || invoice.orgId !== orgId) return null;
+    const invoice = await resolveInvoiceByIdentifier(ctx, orgId, args.identifier);
+    if (!invoice) return null;
 
     // Fetch line items
     const lineItems = await ctx.db
       .query("invoiceLineItems")
-      .withIndex("by_invoiceId", (q) => q.eq("invoiceId", args.id))
+      .withIndex("by_invoiceId", (q) => q.eq("invoiceId", invoice._id))
       .collect();
     lineItems.sort((a, b) => a.sortOrder - b.sortOrder);
 
@@ -2179,7 +1896,7 @@ export const getInvoice = query({
         grouped.push(group);
       }
       group.lineItems.push(li);
-      // Only time lines have hour quantities; fixed/retainer_fee/overage/manual
+      // Only time lines have hour quantities; fixed/overage/manual
       // store amounts or unit counts that must not inflate the hours subtotal.
       if (li.lineType === "time") group.subtotalHours += li.quantity;
     }
@@ -2227,12 +1944,107 @@ export const getInvoice = query({
       fixedBilled = round2(fixedBilled);
     }
 
+    // Same shape as `convex/statements.ts` returns; frontend
+    // (`lib/retainerLabels.ts`) renders both via the same component.
+    let retainerUsage: {
+      kind: "month" | "cycle";
+      closed: boolean;
+      monthlyIncludedMinutes: number;
+      rows: Array<{
+        label: string;
+        availableMinutes: number;
+        usedMinutes: number;
+        balanceMinutes: number;
+      }>;
+      total: {
+        availableMinutes: number;
+        usedMinutes: number;
+        balanceMinutes: number;
+        amountDue: number;
+      };
+    } | null = null;
+    if (
+      project &&
+      project.billingType === "retainer" &&
+      invoice.retainerIncludedMinutes != null &&
+      invoice.retainerUsedMinutes != null &&
+      invoice.retainerEndBalanceMinutes != null
+    ) {
+      const rolloverEnabled =
+        invoice.retainerRolloverEnabled ?? project.rolloverEnabled ?? true;
+      const cycleLength =
+        invoice.retainerCycleLength ?? project.cycleLength ?? 3;
+      const months = invoiceMonthRange(invoice.periodStart, invoice.periodEnd);
+      const effectiveMonths: YearMonth[] =
+        months.length > 0
+          ? months
+          : [{ year: Number(invoice.issueDate.slice(0, 4)), month: Number(invoice.issueDate.slice(5, 7)) }];
+      // For rollover invoices the snapshot stores the cycle total
+      // (monthly × cycleLength). Reverse-divide to get the per-month budget.
+      // Assumes integer monthly minutes — every supported retainer size
+      // (5h/8h/10h/15h/20h/30h/40h/50h) is divisible, and the project form
+      // doesn't allow fractional input.
+      const monthlyIncluded = rolloverEnabled
+        ? Math.round(invoice.retainerIncludedMinutes / cycleLength)
+        : invoice.retainerIncludedMinutes;
+
+      // Raw per-month usage from the time entries this invoice line items
+      // reference. May not sum exactly to `invoice.retainerUsedMinutes`
+      // (snapshot is rounded at invoice generation per
+      // `feedback_no_rounding_on_reporting.md`).
+      const entryIds = new Set<Id<"timeEntries">>();
+      for (const item of lineItems) {
+        if (item.lineType !== "time") continue;
+        for (const entryId of item.timeEntryIds ?? []) entryIds.add(entryId);
+      }
+      const rawByMonth = new Map<string, number>();
+      const entryDocs = await Promise.all(
+        Array.from(entryIds).map((entryId) => ctx.db.get(entryId)),
+      );
+      for (const entry of entryDocs) {
+        if (!entry || entry.orgId !== orgId || !entry.isBillable) continue;
+        const key = entry.date.slice(0, 7);
+        rawByMonth.set(key, (rawByMonth.get(key) ?? 0) + entry.durationMinutes);
+      }
+
+      // Round per row so the per-month rows reconcile to the billed snapshot
+      // total exactly (decision 2026-05-03 Q1). The previous implementation
+      // dumped the rounding delta silently on the last month.
+      const usedByMonth = reconcileUsedMinutesToTotal({
+        months: effectiveMonths,
+        rawByMonth,
+        totalUsedMinutes: invoice.retainerUsedMinutes,
+      });
+
+      const rows = buildRetainerUsageRows({
+        months: effectiveMonths,
+        monthlyIncludedMinutes: monthlyIncluded,
+        usedMinutesByMonth: usedByMonth,
+      });
+
+      retainerUsage = {
+        kind: rolloverEnabled ? "cycle" : "month",
+        closed: true, // an invoice doc only renders for an issued invoice
+        monthlyIncludedMinutes: monthlyIncluded,
+        rows,
+        total: {
+          // Footer values come from the frozen snapshot — never recomputed —
+          // so the document always matches what the client was billed.
+          availableMinutes: invoice.retainerIncludedMinutes,
+          usedMinutes: invoice.retainerUsedMinutes,
+          balanceMinutes: invoice.retainerEndBalanceMinutes,
+          amountDue: invoice.total,
+        },
+      };
+    }
+
     return {
       invoice,
       lineItems,
       categoryGroups: grouped,
       orgInvoiceCount: orgInvoiceSample.length,
       fixedBilled,
+      retainerUsage,
       project: project
         ? { name: project.name, billingType: project.billingType, fixedPrice: project.fixedPrice }
         : null,
@@ -2329,10 +2141,9 @@ export const updateInvoice = mutation({
 });
 
 /**
- * Update the editable `messageToClient` block on an invoice. Has its own
- * gate (`canEditInvoiceMessage`) because €0 auto-Paid retainer invoices stay
- * editable indefinitely — the rest of `updateInvoice` is draft-only.
- * Trims input; empty (after trim) clears the field.
+ * Update the editable `messageToClient` block on an invoice. Editable on
+ * drafts only (`canEditInvoiceMessage`); finalized, paid, and voided
+ * invoices are locked. Trims input; empty (after trim) clears the field.
  */
 export const updateInvoiceMessage = mutation({
   args: {
@@ -2352,12 +2163,7 @@ export const updateInvoiceMessage = mutation({
       throw new ConvexError("Invoice not found.");
     }
 
-    const project = await ctx.db.get(invoice.projectId);
-    if (!project || project.orgId !== orgId) {
-      throw new ConvexError("Project not found for invoice.");
-    }
-
-    if (!canEditInvoiceMessage(invoice, project)) {
+    if (!canEditInvoiceMessage(invoice)) {
       throw new ConvexError("This invoice's message is locked.");
     }
 
@@ -2394,9 +2200,9 @@ export const updateInvoiceLineItem = mutation({
       throw new ConvexError("Only draft invoices can be edited.");
     }
 
-    // Derived line types (`fixed`, `retainer_fee`, `overage`) are anchored to
-    // project/invoice snapshots (fixedPrice, retainerMonthlyFee, etc.). Editing
-    // their numeric fields would silently desync the total from the snapshot.
+    // Derived line types (`fixed`, `overage`) are anchored to project/invoice
+    // snapshots (fixedPrice, retainerOverageRate, etc.). Editing their numeric
+    // fields would silently desync the total from the snapshot.
     // Discounts/adjustments must be expressed as a manual line.
     // Description stays editable so admins can relabel.
     if (lineItem.lineType !== "time" && lineItem.lineType !== "manual") {
@@ -2549,15 +2355,11 @@ export const removeInvoiceLineItem = mutation({
       throw new ConvexError("Only draft invoices can be edited.");
     }
 
-    // Guard core billing rows: `fixed` and `retainer_fee` are derived from the
-    // project and anchor the invoice total — removing them leaves the invoice
-    // in an incoherent state. `overage` is auto-managed by recalcRetainerBalance.
-    // Only `time` and `manual` rows can be removed by the user.
-    if (
-      lineItem.lineType === "fixed" ||
-      lineItem.lineType === "retainer_fee" ||
-      lineItem.lineType === "overage"
-    ) {
+    // Guard core billing rows: `fixed` is derived from the project and anchors
+    // the invoice total — removing it leaves the invoice in an incoherent
+    // state. `overage` is auto-managed by `recalcRetainerBalance`. Only `time`
+    // and `manual` rows can be removed by the user.
+    if (lineItem.lineType === "fixed" || lineItem.lineType === "overage") {
       throw new ConvexError(
         "This line item is derived from the project and cannot be removed.",
       );
@@ -2611,72 +2413,25 @@ export const removeInvoiceLineItem = mutation({
  *
  *   draft    → invoiced | void
  *   invoiced → paid | draft | void
- *   paid     → invoiced                 (reversal; correction path)
+ *   paid     → invoiced | draft         (reversal; correction paths)
  *   void     → —                        (terminal; retainer chain already re-opened)
  *
  * `paid → void` is intentionally disallowed: a settled invoice is reconciled
  * with an external payment. Reversing it is "refund / credit note" territory,
- * not a plain void, and should flow through `paid → invoiced → void` if ever
- * needed.
+ * not a plain void, and should flow through a correction state if ever needed.
  */
 const VALID_TRANSITIONS: Record<string, string[]> = {
   draft: ["invoiced", "void"],
   invoiced: ["paid", "draft", "void"],
-  paid: ["invoiced"],
+  paid: ["invoiced", "draft"],
   void: [],
 };
-
-/**
- * Check whether a retainer invoice has ANY later invoice (draft or finalized)
- * on the same project. Used by both `deleteInvoice` (LIFO) and
- * `changeInvoiceStatus` (revert guard) — both operations un-freeze the
- * invoice's balance snapshot, which later invoices have already chained from.
- *
- * Drafts are included: a later draft's `retainerStartBalanceMinutes` was
- * captured from this invoice's end balance; reverting/deleting here would
- * strand that chain.
- *
- * Returns the nearest blocking invoice, or null if no guard is needed.
- */
-async function findLaterRetainerInvoice(
-  ctx: QueryCtx,
-  orgId: string,
-  invoice: Doc<"invoices">,
-): Promise<Doc<"invoices"> | null> {
-  if (!invoice.periodEnd) return null;
-  const project = await ctx.db.get(invoice.projectId);
-  if (!project || project.orgId !== orgId || project.billingType !== "retainer") return null;
-
-  const projectInvoices: Doc<"invoices">[] = await ctx.db
-    .query("invoices")
-    .withIndex("by_projectId", (q: any) => q.eq("projectId", invoice.projectId))
-    .filter((q: any) => q.eq(q.field("orgId"), orgId))
-    .collect();
-
-  const later = projectInvoices
-    .filter(
-      (inv) =>
-        inv._id !== invoice._id &&
-        // Void invoices don't own a live snapshot and don't block unwinding.
-        inv.status !== "void" &&
-        inv.periodStart &&
-        inv.periodStart > invoice.periodEnd!,
-    )
-    .sort((a, b) => (a.periodStart! > b.periodStart! ? 1 : -1));
-
-  // Return the LATEST later invoice — LIFO guidance: unwind from the newest
-  // backwards. E.g. to revert March with April and May invoiced, the user
-  // must revert May first, then April, then March.
-  return later.length > 0 ? later[later.length - 1] : null;
-}
 
 /**
  * Change invoice status following the state machine:
  *   draft → invoiced → paid
  *   invoiced → draft (revert)
- *   paid → invoiced (revert)
- *
- * No direct paid → draft path.
+ *   paid → invoiced | draft (revert)
  */
 type InvoiceStatus = "draft" | "invoiced" | "paid" | "void";
 type TransitionResult = { ok: true } | { ok: false; reason: string };
@@ -2703,28 +2458,15 @@ async function applyStatusTransition(
     };
   }
 
-  // Retainer chain guards: these transitions re-open the chain by either
-  // discarding snapshot data (void) or unfreezing it (revert to draft).
-  // Later retainer invoices — draft or finalized — chained off this one's
-  // end balance, so we must unwind in reverse order.
-  const reopensRetainerChain =
-    (invoice.status === "invoiced" && newStatus === "draft") ||
-    newStatus === "void";
-  if (reopensRetainerChain) {
-    const blocker = await findLaterRetainerInvoice(ctx, orgId, invoice);
-    if (blocker) {
-      const label = blocker.periodStart ? monthLabel(blocker.periodStart) : "a later";
-      return {
-        ok: false,
-        reason: `Remove the ${label} invoice first. Retainer invoices must be unwound in reverse order.`,
-      };
-    }
-  }
-
+  // No LIFO retainer-chain guard after the invoicing refactor
+  // (`docs/invoicing-refactor.md` D5): every retainer invoice now starts
+  // from a 0 balance (`getRetainerStartBalance()`), so voiding or reverting
+  // an earlier invoice does not strand any later invoice's snapshot. The
+  // period frees up and can be re-billed — exactly user story 12.
   const now = Date.now();
   const patch: Record<string, unknown> = { status: newStatus, updatedAt: now };
   if (newStatus === "paid") patch.paidAt = now;
-  if (invoice.status === "paid" && newStatus === "invoiced") patch.paidAt = undefined;
+  if (invoice.status === "paid" && newStatus !== "paid") patch.paidAt = undefined;
 
   await ctx.db.patch(invoice._id, patch);
   return { ok: true };
@@ -2923,10 +2665,10 @@ export const undoMarkInvoicesPaid = mutation({
  * 2. Delete all line items
  * 3. Delete the invoice
  *
- * Retainer LIFO guard: retainer invoices cannot be deleted if any later
- * retainer invoice (draft or finalized) exists for the same project. A later
- * draft's `retainerStartBalanceMinutes` was captured from this invoice's end
- * balance; deleting out of order breaks the chain.
+ * No LIFO retainer-chain guard after the invoicing refactor
+ * (`docs/invoicing-refactor.md` D5): every retainer invoice starts from a 0
+ * balance, so deleting an earlier one does not strand a later invoice's
+ * snapshot. The period frees up and can be re-billed.
  */
 export const deleteInvoice = mutation({
   args: {
@@ -2938,13 +2680,6 @@ export const deleteInvoice = mutation({
     const invoice = await ctx.db.get(args.id);
     if (!invoice || invoice.orgId !== orgId) {
       throw new ConvexError("Invoice not found.");
-    }
-
-    // Retainer LIFO guard — applies to drafts and finalized invoices alike.
-    const blocker = await findLaterRetainerInvoice(ctx, orgId, invoice);
-    if (blocker) {
-      const label = blocker.periodStart ? monthLabel(blocker.periodStart) : "a later";
-      throw new ConvexError(`Delete the ${label} invoice first.`);
     }
 
     // 1. Unlink time entries — collect all timeEntryIds from line items BEFORE deleting them

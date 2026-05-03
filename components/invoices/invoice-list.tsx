@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo } from "react"
 import { useRouter } from "next/navigation"
 import {
   Table,
@@ -15,13 +15,10 @@ import {
   InvoiceRowItem,
   ReadyRowItem,
 } from "@/components/invoices/invoice-row"
-import { CreateInvoiceModal } from "@/components/invoices/create-invoice-modal"
+import { useGenerateInvoice } from "@/lib/hooks/use-generate-invoice"
 import { InvoiceBulkBar } from "@/components/invoices/invoice-bulk-bar"
-import {
-  readyRowKey,
-  type ListRow,
-  type ReadyRow,
-} from "@/lib/invoices/list-rows"
+import { type ListRow, type ReadyRow } from "@/lib/invoices/list-rows"
+import { formatInvoiceNumber } from "@/lib/format"
 
 export type InvoiceRow = {
   _id: string
@@ -33,10 +30,13 @@ export type InvoiceRow = {
   total: number
   issueDate: string
   dueDate?: string
+  paidAt?: number
   clientName: string
   projectName: string
   projectBillingType: string
 }
+
+export type DateColumn = "due" | "paid"
 
 /**
  * Unified invoice table. Rows can be in two states:
@@ -54,22 +54,28 @@ export type InvoiceRow = {
 export function InvoiceList({
   rows,
   showProject = false,
+  showType = true,
   showStatus = true,
+  showDate = true,
   timezone = "UTC",
+  dateColumn = "due",
   fromProject,
   emptyState,
 }: {
   rows: ListRow[]
   showProject?: boolean
+  showType?: boolean
+  showDate?: boolean
   /**
    * Hide the Status column on tabs where every row has the same status
    * (Draft, Paid, Void) — the tab nav already names that status, so the
    * column is dead weight. Keep it on Ready (within-budget / over) and
    * Outstanding (overdue accent), and on the project detail tab where
    * statuses mix.
-   */
+  */
   showStatus?: boolean
   timezone?: string
+  dateColumn?: DateColumn
   fromProject?: { projectId: string }
   /**
    * Rendered instead of the table when `rows` is empty. Pass an
@@ -78,7 +84,7 @@ export function InvoiceList({
   emptyState?: React.ReactNode
 }) {
   const router = useRouter()
-  const [activeReady, setActiveReady] = useState<ReadyRow | null>(null)
+  const { generate, pending } = useGenerateInvoice()
 
   // Memoize visible keys so `useRowSelection`'s range + header-state logic
   // stays stable across unrelated re-renders.
@@ -105,7 +111,27 @@ export function InvoiceList({
     const params = fromProject
       ? `?from=project&projectId=${fromProject.projectId}&tab=invoices`
       : ""
-    router.push(`/invoices/${invoice._id}${params}`)
+    router.push(`/invoices/${formatInvoiceNumber(invoice.prefix, invoice.number)}${params}`)
+  }
+
+  function handleGenerate(row: ReadyRow) {
+    if (pending) return
+    void generate({
+      projectId: row.projectId,
+      // Retainer rows carry the period; T&M rows carry the month for context
+      // but the server resolves the date range from uninvoiced entries when
+      // we omit it. Send retainer year/month only for retainer rows so the
+      // server takes the retainer code path.
+      retainerYear:
+        row.kind === "retainer-monthly" || row.kind === "retainer-cycle"
+          ? row.period?.year
+          : undefined,
+      retainerMonth:
+        row.kind === "retainer-monthly" || row.kind === "retainer-cycle"
+          ? row.period?.month
+          : undefined,
+      navigateTo: (identifier) => `/invoices/${identifier}`,
+    })
   }
 
   // Selected slices, keyed back to source rows for the bulk bar.
@@ -126,7 +152,7 @@ export function InvoiceList({
 
   return (
     <>
-      <Table>
+      <Table className="table-fixed">
         <TableHeader>
           <TableRow>
             <TableHead className="w-10 pr-0">
@@ -140,15 +166,21 @@ export function InvoiceList({
                 }
               />
             </TableHead>
-            <TableHead className="w-28">Number</TableHead>
+            <TableHead className="w-24">Number</TableHead>
             <TableHead>Subject</TableHead>
-            {showProject && <TableHead>Client</TableHead>}
-            {showProject && <TableHead>Project</TableHead>}
-            <TableHead className="w-24">Type</TableHead>
+            {showProject && <TableHead className="w-40">Client</TableHead>}
+            {showProject && <TableHead className="w-48">Project</TableHead>}
+            {showType && <TableHead className="w-24">Type</TableHead>}
             {showStatus && <TableHead className="w-32">Status</TableHead>}
             <TableHead className="w-28 text-right">Total</TableHead>
-            <TableHead className="w-28">Due Date</TableHead>
-            <TableHead className="w-44 pl-0" />
+            {showDate && (
+              <TableHead className="w-32">
+                {dateColumn === "paid" ? "Paid Date" : "Due Date"}
+              </TableHead>
+            )}
+            <TableHead
+              className={dateColumn === "paid" ? "w-12 pl-0" : "w-44 pl-0"}
+            />
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -159,12 +191,14 @@ export function InvoiceList({
                   key={row.key}
                   row={row.ready}
                   showProject={showProject}
+                  showType={showType}
                   showStatus={showStatus}
+                  showDate={showDate}
                   selected={selection.isSelected(row.key)}
                   onSelect={(shiftKey) =>
                     selection.toggle(row.key, { shiftKey })
                   }
-                  onGenerate={() => setActiveReady(row.ready)}
+                  onGenerate={() => handleGenerate(row.ready)}
                 />
               )
             }
@@ -173,8 +207,11 @@ export function InvoiceList({
                 key={row.key}
                 invoice={row.invoice}
                 showProject={showProject}
+                showType={showType}
                 showStatus={showStatus}
+                showDate={showDate}
                 timezone={timezone}
+                dateColumn={dateColumn}
                 selected={selection.isSelected(row.key)}
                 onSelect={(_id, shiftKey) =>
                   selection.toggle(row.key, { shiftKey })
@@ -186,24 +223,6 @@ export function InvoiceList({
         </TableBody>
       </Table>
 
-      {activeReady && (
-        <CreateInvoiceModal
-          // Remount per row so prefill resets cleanly
-          key={readyRowKey(activeReady)}
-          open={true}
-          onOpenChange={(next) => {
-            if (!next) setActiveReady(null)
-          }}
-          projectId={activeReady.projectId}
-          projectName={activeReady.projectName}
-          billingType={billingTypeForKind(activeReady.kind)}
-          currency={activeReady.currency}
-          initialRetainerYear={activeReady.period?.year}
-          initialRetainerMonth={activeReady.period?.month}
-          onCreated={(invoiceId) => router.push(`/invoices/${invoiceId}`)}
-        />
-      )}
-
       <InvoiceBulkBar
         selectedReady={selectedReady}
         selectedInvoices={selectedInvoices}
@@ -211,16 +230,4 @@ export function InvoiceList({
       />
     </>
   )
-}
-
-function billingTypeForKind(kind: ReadyRow["kind"]): string {
-  switch (kind) {
-    case "retainer-monthly":
-    case "retainer-cycle":
-      return "retainer"
-    case "fixed":
-      return "fixed"
-    case "tm":
-      return "t_and_m"
-  }
 }

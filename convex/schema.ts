@@ -277,7 +277,9 @@ export default defineSchema({
     .index("by_orgId", ["orgId"])
     .index("by_projectId", ["projectId"])
     .index("by_clientId", ["clientId"])
-    .index("by_orgId_status", ["orgId", "status"]),
+    .index("by_orgId_status", ["orgId", "status"])
+    // Friendly-URL lookup: `/invoices/INV-035` → (orgId, "INV-", 35).
+    .index("by_orgId_prefix_number", ["orgId", "prefix", "number"]),
 
   // ─── Invoice Line Items ───────────────────────────────────────────────────
   invoiceLineItems: defineTable({
@@ -287,7 +289,6 @@ export default defineSchema({
     lineType: v.union(
       v.literal("time"),
       v.literal("fixed"),
-      v.literal("retainer_fee"),
       v.literal("overage"),
       v.literal("manual")
     ),

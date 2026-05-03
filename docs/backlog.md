@@ -1263,3 +1263,65 @@ In-editor rendering is unchanged — TaskItem's NodeView still drives the viewpo
 
 - **Notion's text/plain markdown for to-dos** is not GFM standard — it uses leading bullets like `- ` followed by checkbox glyphs in some cases. If round-tripping from Notion misses items, expand `normalizeUnicodeCheckboxes` in `markdown-clipboard.ts`.
 
+---
+
+## Invoicing Refactor — One Document Per Period (2026-05-02)
+
+> **Goal**: One document per closed retainer period. Overage > $0 → numbered invoice (lifecycle, pay this). Overage = $0 → on-demand "Monthly Report" (no number, no lifecycle, FYI). Monthly retainer fee is collected by Stripe — never billed here. `/invoices` Ready feed shows only periods that need an invoice.
+>
+> **Companion docs**: `docs/invoicing-refactor.md` (PRD), `docs/invoicing-refactor-issues/01-overage-only-invoices.md`, `…/02-monthly-report-rebrand.md`, `…/03-cutover-wipe-reseed-verification.md`.
+
+### Issue #01 — Overage-only invoices + Stripe disclaimer
+- [x] Schema — drop `v.literal("retainer_fee")` from `invoiceLineItems.lineType` union (`convex/schema.ts`).
+- [x] `computeRetainerBalance` — `total = overageAmount` (monthly fee returned as separate context field). `convex/lib/retainerBalance.ts` + `retainerBalance.test.ts` updated.
+- [x] `buildRetainerMonthlyReadyRows` / `buildRetainerCycleReadyRows` — drop within-budget rows, drop `invoiceTotal` plumbing. `convex/lib/readyToInvoice.ts` + `readyToInvoice.test.ts`.
+- [x] `isInvoiceable` predicate — simplified to `row.amount > 0`. Single source of truth for batch-select gating.
+- [x] `createInvoice` (retainer branch) — early throw on within-budget retainer with the user-facing `NO_OVERAGE_MESSAGE`. Rollover branch scopes time entries to the entire cycle and writes a single Overage line item. `convex/lib/invoiceCreation.ts` + `invoiceCreation.test.ts`.
+- [x] `getRetainerInvoicePreview` — `total` returns overage only; `monthlyFee` returned as separate context field (no `retainer_fee` preview row).
+- [x] Monthly Breakdown card — single primary action per row (invoice number link, "Generate", or "Download report"). Stripe disclaimer line below the card title (D11). `components/projects/monthly-breakdown-card.tsx`.
+- [x] `CreateInvoiceModal` — deleted (D10). Click "Generate" → draft created → navigate to draft page. Hook lives at `lib/hooks/use-generate-invoice.ts`.
+- [x] Invoice document — drops "Retainer fee" line, adds Stripe disclaimer context, renders activity summary prominently.
+
+### Issue #02 — Monthly Report rebrand + in-progress support + `/reports` removal
+- [x] Pure helper `classifyReportPeriod(year, month, todayStr)` returning `"past" | "current" | "future"`. `convex/lib/reportPeriod.ts` + `reportPeriod.test.ts` (3 branches).
+- [x] `getRetainerStatement` query — accepts current month + adds `inProgress` flag (true for current month, false for closed, null for future). Cycle-to-date block returned for rollover projects (cycleStart, cycleEnd, includedMinutes, usedMinutes, balanceMinutes). Server symbol kept as-is per Open Question 1.
+- [x] `MonthlyReportDocument` — replaces `StatementDocument`. Header text "Monthly Report" (D8). NO AMOUNT DUE block under any branch. Stripe disclaimer line. "In progress — partial data" badge when `inProgress: true` (badge only — no other UI affordance per Open Question 3). Cycle-to-date section for rollover projects (user story 17).
+- [x] Route URL `/projects/[id]/statements/[period]` → `/projects/[id]/reports/[period]` per Open Question 2. All in-app links updated. Direct-URL probe → `notFound()` for future months.
+- [x] Monthly Breakdown "Download report" — opens in a new tab (`target="_blank"`) so the owner can use the browser's native Print → Save as PDF dialog (user story 18).
+- [x] `/reports` global route deleted. Reports nav entry removed from `lib/navigation.ts` (D13). Direct URL → 404.
+- [x] Stale `retainer_fee` literal removed from codebase (`convex/lib/projectSummary.ts` LineItemInput type, comment in `convex/invoices.ts`, comments in `components/invoices/invoice-billing-summary.tsx` + `invoice-document.tsx`).
+- [x] Inbox empty-state copy refers to "downloadable monthly reports" instead of "statements".
+
+### Issue #03 — Cutover (HITL — pending user)
+- [x] Wipe migration written: `convex/migrations/wipeInvoicingForRefactor.ts`. Run from the Convex dashboard with `npx convex run migrations/wipeInvoicingForRefactor:default '{"confirm":"WIPE_INVOICING_FOR_REFACTOR"}'`. Drains `invoices` → `invoiceLineItems` → `retainerPeriods` in 500-row batches; auto-advances tables.
+- [ ] Confirm with user that the dev/dummy data is OK to wipe, then run the migration.
+- [ ] Reseed through the app UI (or your existing dev-org seed flow) covering: monthly within-budget closed, monthly over-budget closed, rollover mid-cycle, rollover cycle-end with overage, rollover cycle-end within budget, T&M with billable hours, Fixed with remaining balance, in-progress current month.
+- [ ] Run the verification list below end-to-end.
+
+### Verification (Definition of Done)
+- [x] `npx tsc --noEmit` returns 0 errors.
+- [x] `npx vitest run` — all updated and new tests pass (pre-existing failures in `lib/format-activity-timestamp.test.ts`, `convex/lib/__tests__/taskActivityIndicators.test.ts`, and `.reference/tiptap-docs/...` are out of scope).
+- [x] `npm run build` succeeds.
+- [x] No `retainer_fee` literal remains in codebase (`rg "retainer_fee"` zero matches outside `docs/`).
+- [ ] DB wipe + reseed verified: no `retainer_fee` line items remain.
+- [ ] Zero retainer rows in `/invoices` Ready for within-budget projects.
+- [ ] `/invoices` tabs (Ready / Draft / Sent / Paid / Overdue) all render and function as before.
+- [ ] Monthly Report download works for every closed retainer period (mid-cycle and cycle-end, rollover and non-rollover).
+- [ ] Monthly Report renders for in-progress current month with "In progress — partial data" badge.
+- [ ] Stripe disclaimer line visible on retainer Project pages.
+- [ ] Generate invoice: clicking Ready row → lands on draft page (no modal).
+- [ ] Within-budget rows on Monthly Breakdown card show only "Download report" — no Generate invoice.
+- [ ] Overage rows on Monthly Breakdown card show only "Generate invoice" (or invoice number link if billed) — no secondary statement download.
+- [ ] Voiding an overage invoice causes the period to reappear in Ready. Voided invoice remains visible in the Voided tab with audit trail.
+- [ ] T&M and Fixed Price flows demonstrate no behavioral change vs. pre-refactor.
+- [x] `/reports` global route removed from nav and unreachable via URL.
+
+### TODOs deferred to later phases
+- **One-click "Send" via Resend** — auto-send the right artifact per period (invoice if overage, report if not). Backlog only; no cron, no Resend infra in MVP.
+- **Period locking** — when reports are downloaded or sent. Today reports are always live truth; back-dated edits re-render on next view (D7). Owner is responsible for not back-dating into already-sent periods.
+- **Cross-client global "monthly reports queue"** view — `/reports` page was removed; per-project hunting is the MVP workflow. Re-introduce when the workflow demonstrably hurts.
+- **Pro-rated included budget for partial months** — partial-month projects currently get the full bucket (D12). Acknowledged money leak vs. Stripe pro-rated charge; revisit when client count grows.
+- **Stripe webhook for payment-date display + payment reconciliation** — disclaimer text only today. No customer-id field, no payment date on documents, no auto-charge.
+- **`/reports` analytics view** (revenue mix, margin, utilization) — re-introduce with a defined scope when real cross-project demand emerges.
+- **Credit notes** — handled today by void + re-create. No `creditNotes` entity in MVP.
+- **Statement / report sent-tracking entity** (`sentReports` table) — reports are pure on-demand renders today (D4). Becomes a purely additive future change when auto-send ships.

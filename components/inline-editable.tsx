@@ -5,37 +5,78 @@ import { useInlineEdit } from "@/lib/hooks/use-inline-edit"
 import { toastError } from "@/lib/toast-helpers"
 import { cn } from "@/lib/utils"
 
-// Shared surface styling: transparent underline by default, strengthens on
-// hover, locks in on focus. Linear-style single underline (no border swap,
-// no padding shift between view ↔ edit modes).
-const surfaceBase =
-  "inline-block bg-transparent text-left outline-none " +
-  "border-b border-transparent transition-colors " +
-  "hover:border-border/60 " +
-  "focus-visible:border-foreground/70"
+// ─── Chip surface (Notion / Stripe pattern) ─────────────────────────────────
+//
+// The chip is a single visual unit holding `prefix? + input + suffix?`. It's
+// the ONE element responsible for visible chrome — the input itself is naked
+// (no border, no padding, transparent). Visual state is driven entirely by
+// `:hover` and `:focus-within` on the chip; there is no DOM swap between view
+// and edit modes.
+//
+// Focus ring uses `box-shadow: inset` instead of `border` so the 1px outline
+// adds zero layout footprint (a transparent → visible border swap would
+// produce a 1px nudge on every focus).
+const chipSurface =
+  "inline-flex items-center cursor-text rounded-md " +
+  "px-1.5 py-0.5 transition-[background-color,box-shadow] " +
+  "bg-transparent hover:bg-accent/60 " +
+  "focus-within:bg-background focus-within:hover:bg-background " +
+  "focus-within:shadow-[inset_0_0_0_1px_var(--color-border)]"
+
+// Strips every default browser style — the chip alone owns the visual chrome.
+const nakedInput =
+  "min-w-0 border-0 bg-transparent p-0 outline-none " +
+  "focus:outline-none focus:ring-0"
+
+function selectAllOnFocus(e: React.FocusEvent<HTMLInputElement>) {
+  e.currentTarget.select()
+}
+
+/**
+ * Blur the input after Enter / Escape so the next focus re-runs select-all
+ * cleanly. Without this, `useInlineEdit.cancel()` flips `editing` off but
+ * leaves the input focused, and subsequent keystrokes desync the controlled
+ * `value` from the rendered field.
+ */
+function blurOnSubmitOrCancel(e: React.KeyboardEvent<HTMLInputElement>) {
+  if (e.key === "Enter" || e.key === "Escape") {
+    e.currentTarget.blur()
+  }
+}
+
+// Allow only digits and a single decimal point. Anything else (letters,
+// extra dots, signs) is silently dropped before it reaches the draft.
+function sanitizeNumericInput(raw: string): string {
+  const stripped = raw.replace(/[^0-9.]/g, "")
+  const firstDot = stripped.indexOf(".")
+  if (firstDot === -1) return stripped
+  return (
+    stripped.slice(0, firstDot + 1) +
+    stripped.slice(firstDot + 1).replace(/\./g, "")
+  )
+}
 
 // ─── Text ────────────────────────────────────────────────────────────────────
 
 export interface InlineEditableProps {
   value: string
   onSave: (next: string) => void | Promise<void>
-  /** Accessible name for the trigger (required — screen readers cannot infer it from context). */
+  /** Accessible name for the input (required — screen readers cannot infer it from context). */
   ariaLabel: string
   /** Rendered when the value is empty. */
   placeholder?: string
   /** Prefixed to the error toast; the underlying Convex message is appended. */
   errorMessage?: string
   readOnly?: boolean
+  /** Applied to the chip wrapper. Use this for typography/width overrides. */
   className?: string
 }
 
 /**
- * Click-to-edit single-line text surface.
- *
- * View mode: a `button` (Tab-reachable, Enter/Space activates). On commit the
- * draft is trimmed and diffed against the current value; no-op if unchanged.
- * On save failure the error is toasted and the draft is preserved so typing
- * isn't silently lost.
+ * Click-to-edit single-line text. The input is always mounted; the chip's
+ * hover and focus-within states give the visual affordance. On commit the
+ * draft is trimmed and diffed against the current value (no-op if unchanged).
+ * Save failure preserves the draft and re-focuses so typing isn't lost.
  */
 export function InlineEditable({
   value,
@@ -51,13 +92,12 @@ export function InlineEditable({
     serialize: (v) => v,
     onCommit: async (draft) => {
       const trimmed = draft.trim()
-      if (trimmed === value) return
+      if (trimmed === value) return false
       try {
         await onSave(trimmed)
+        return true
       } catch (err) {
         toastError(err, errorMessage ?? "Failed to save")
-        // Re-throw so the hook keeps the edit surface open and preserves the
-        // draft — user sees their typing and can retry.
         throw err
       }
     },
@@ -71,30 +111,37 @@ export function InlineEditable({
     )
   }
 
-  if (edit.editing) {
-    return (
-      <input
-        type="text"
-        autoFocus
-        aria-label={ariaLabel}
-        value={edit.draft}
-        onChange={(e) => edit.setDraft(e.target.value)}
-        onBlur={() => void edit.commit()}
-        onKeyDown={edit.handleKeyDown}
-        className={cn(surfaceBase, className)}
-      />
-    )
-  }
+  // `edit.draft` is the single source of truth — it tracks user typing while
+  // editing, and the hook auto-syncs it with `value` when the prop changes
+  // externally. Avoids the value-flash window during commit.
+  const display = edit.draft
 
   return (
-    <button
-      type="button"
-      aria-label={ariaLabel}
-      onClick={edit.beginEdit}
-      className={cn(surfaceBase, "cursor-text", className)}
-    >
-      {value || <span className="text-muted-foreground">{placeholder}</span>}
-    </button>
+    <label className={cn(chipSurface, "w-full", className)}>
+      <input
+        type="text"
+        aria-label={ariaLabel}
+        value={display}
+        placeholder={placeholder}
+        onFocus={(e) => {
+          edit.beginEdit()
+          selectAllOnFocus(e)
+        }}
+        onChange={(e) => {
+          if (!edit.editing) edit.beginEdit()
+          edit.setDraft(e.target.value)
+        }}
+        onBlur={() => void edit.commit()}
+        onKeyDown={(e) => {
+          edit.handleKeyDown(e)
+          blurOnSubmitOrCancel(e)
+        }}
+        className={cn(
+          nakedInput,
+          "w-full text-left placeholder:text-muted-foreground",
+        )}
+      />
+    </label>
   )
 }
 
@@ -104,42 +151,56 @@ export interface InlineEditableNumberProps {
   value: number
   onSave: (next: number) => void | Promise<void>
   ariaLabel: string
-  /** Suffix appended in view mode (e.g. "h" for hours). Not editable. */
+  /** Static, non-editable text shown inside the chip on the left
+   * (typically a currency symbol). Sits flush against the input so `$5`
+   * reads as one tight unit. */
+  prefix?: string
+  /** Static, non-editable text shown inside the chip on the right
+   * (e.g. "h" for hours). */
   suffix?: string
   errorMessage?: string
   readOnly?: boolean
+  /** Applied to the chip wrapper. */
   className?: string
-  /** Overrides the default `w-20` input width. Useful for rate vs hours cells. */
-  inputClassName?: string
 }
 
 /**
- * Click-to-edit numeric surface with non-negative clamping. Same UX as
- * {@link InlineEditable} but with a right-aligned `tabular-nums` display and
- * a fixed-width input in edit mode.
+ * Click-to-edit numeric value with non-negative clamping.
+ *
+ * The input width is **content-fit** via the HTML `size` attribute (which is
+ * why we use `type="text" + inputMode="decimal"` rather than `type="number"`,
+ * which ignores `size`). As a result the chip wraps tightly around whatever
+ * the user has typed: the prefix `$` sits one space away from the value
+ * regardless of length, instead of floating at the far left of a fixed-width
+ * input.
+ *
+ * `-mr-1.5` on the chip absorbs its own right padding, putting the value's
+ * right edge flush with the cell's right edge so editable rows align with
+ * non-editable rows like `$720` above them.
  */
 export function InlineEditableNumber({
   value,
   onSave,
   ariaLabel,
+  prefix,
   suffix,
   errorMessage,
   readOnly = false,
   className,
-  inputClassName,
 }: InlineEditableNumberProps) {
   const edit = useInlineEdit<number>({
     value,
     serialize: (v) => String(v),
     onCommit: async (draft) => {
       const parsed = parseFloat(draft)
-      if (Number.isNaN(parsed)) return
-      // Clamp to non-negative: mirrors the server guard in
+      if (Number.isNaN(parsed)) return false
+      // Clamp to non-negative — mirrors the server guard in
       // convex/invoices.ts:updateInvoiceLineItem.
       const clamped = Math.max(0, parsed)
-      if (clamped === value) return
+      if (clamped === value) return false
       try {
         await onSave(clamped)
+        return true
       } catch (err) {
         toastError(err, errorMessage ?? "Failed to save")
         throw err
@@ -147,44 +208,64 @@ export function InlineEditableNumber({
     },
   })
 
-  const display = suffix ? `${value}${suffix}` : String(value)
+  // `edit.draft` is the single source of truth — see InlineEditable above
+  // for why we don't fall back to `String(value)` when `editing` is false.
+  const display = edit.draft
+  // `size` is the input's character width. Bumping by 1 leaves room for
+  // the cursor at the end of the value during editing.
+  const inputSize = Math.max(2, display.length + 1)
 
   if (readOnly) {
     return (
-      <span className={cn("tabular-nums", className)}>{display}</span>
-    )
-  }
-
-  if (edit.editing) {
-    return (
-      <input
-        type="number"
-        step="any"
-        min={0}
-        autoFocus
-        aria-label={ariaLabel}
-        value={edit.draft}
-        onChange={(e) => edit.setDraft(e.target.value)}
-        onBlur={() => void edit.commit()}
-        onKeyDown={edit.handleKeyDown}
-        className={cn(
-          surfaceBase,
-          "w-20 text-right tabular-nums",
-          inputClassName,
-          className,
+      <span className={cn("inline-flex items-center tabular-nums", className)}>
+        {prefix && (
+          <span className="select-none pr-0.5 text-muted-foreground">
+            {prefix}
+          </span>
         )}
-      />
+        <span>{value}</span>
+        {suffix && (
+          <span className="select-none pl-0.5 text-muted-foreground">
+            {suffix}
+          </span>
+        )}
+      </span>
     )
   }
 
   return (
-    <button
-      type="button"
-      aria-label={ariaLabel}
-      onClick={edit.beginEdit}
-      className={cn(surfaceBase, "cursor-text tabular-nums", className)}
-    >
-      {display}
-    </button>
+    <label className={cn(chipSurface, "-mr-1.5 tabular-nums", className)}>
+      {prefix && (
+        <span className="select-none pr-0.5 text-muted-foreground">
+          {prefix}
+        </span>
+      )}
+      <input
+        type="text"
+        inputMode="decimal"
+        size={inputSize}
+        aria-label={ariaLabel}
+        value={display}
+        onFocus={(e) => {
+          edit.beginEdit()
+          selectAllOnFocus(e)
+        }}
+        onChange={(e) => {
+          if (!edit.editing) edit.beginEdit()
+          edit.setDraft(sanitizeNumericInput(e.target.value))
+        }}
+        onBlur={() => void edit.commit()}
+        onKeyDown={(e) => {
+          edit.handleKeyDown(e)
+          blurOnSubmitOrCancel(e)
+        }}
+        className={cn(nakedInput, "text-right tabular-nums")}
+      />
+      {suffix && (
+        <span className="select-none pl-0.5 text-muted-foreground">
+          {suffix}
+        </span>
+      )}
+    </label>
   )
 }

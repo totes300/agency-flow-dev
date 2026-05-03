@@ -194,12 +194,14 @@ export default function InvoicesPage() {
           <InvoiceList
             rows={listRows}
             showProject
-            // Status column only carries information on Ready (within-budget /
-            // over) and Outstanding (overdue accent). On the monomorphic tabs
-            // (Draft / Paid / Void) every row's status is the tab's name, so
-            // the column is dead weight there.
-            showStatus={statusTab === "ready" || statusTab === "outstanding"}
+            showType={statusTab !== "paid"}
+            // Status only carries useful invoice state on Outstanding. Ready
+            // rows are pre-invoice work, so empty status/date columns just
+            // make the scan worse and squeeze Subject/Client.
+            showStatus={statusTab === "outstanding"}
+            showDate={statusTab !== "ready"}
             timezone={timezone}
+            dateColumn={statusTab === "paid" ? "paid" : "due"}
             emptyState={
               hasFilters ? (
                 <InvoicesEmptyState

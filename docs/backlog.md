@@ -1318,6 +1318,43 @@ In-editor rendering is unchanged — TaskItem's NodeView still drives the viewpo
 
 ### TODOs deferred to later phases
 - **One-click "Send" via Resend** — auto-send the right artifact per period (invoice if overage, report if not). Backlog only; no cron, no Resend infra in MVP.
+
+---
+
+## Phase 8 — Time Entry Settlement
+
+> **Goal**: Fix the reporting bug where within-budget retainer periods (and Fixed projects) leave time entries forever "open / not invoiced". Split *invoice linkage* from *client-facing work closure* via a lightweight settlement model on `timeEntries` + 2 new admin-action fields on `retainerPeriods`.
+>
+> **PRD**: `docs/phase-8-time-entry-settlement.md`
+>
+> **Slice plan**: 4 vertical slices. Slices 1 + 2 run in parallel; 3 blocks on both; 4 closes out the phase.
+> - `docs/phase-8-slice-1-settlement-foundation.md` — T&M + Fixed + void settlement end-to-end
+> - `docs/phase-8-slice-2-retainer-cycle-extraction.md` — refactor + `isMonthClosed` rename ✅
+> - `docs/phase-8-slice-3-period-close-reopen.md` — retainer within-budget close + write guard
+> - `docs/phase-8-slice-4-cycle-close-and-ui-polish.md` — rollover cycle close + drill-down + entry-list polish
+
+### Slice 2 — Retainer cycle extraction + `isMonthClosed` rename ✅ (2026-05-24)
+
+Behavior-preserving refactor that consolidates the cycle math and renames the overloaded `isMonthClosed` flag. No entries are settled by this slice — `closedAt`/`closedBy` ship as optional schema fields, populated by Slice 3/4. The 3-state pill (`In progress` / `Open` / `Closed`) renders the new lifecycle even though `Closed` won't fire on real data until Slice 3 lands a Close button.
+
+- [x] Schema — added `closedAt: v.optional(v.number())` and `closedBy: v.optional(v.id("users"))` to `retainerPeriods`. Naming matches the existing `createdBy` convention (no `UserId` suffix). No new indexes; the existing `by_projectId_periodStart` is sufficient.
+- [x] New `convex/lib/retainerCycle.ts` with `getCyclePeriods` (pure boundary builder), `computePeriodOverageContext`, `computeCycleOverageContext` (async, DB-backed). All three share an internal `applyOverageRule` helper so the rollover-vs-non-rollover predicate is defined once and consumed identically by read path, period-close, and cycle-close.
+- [x] `getRetainerData` refactored to consume `getCyclePeriods` (replacing ~50 lines of inlined cycle math). `resolveRetainerCycleContext` in `getSummary` also delegates to the shared helper — second inlined implementation dies.
+- [x] `isMonthClosed` split into `periodEnded` (calendar) + `isClosed`/`closedAt` (admin) on each `getRetainerData` month row. `balanceStatus` continues to key on `periodEnded` (financial due-ness stays calendar-driven). `lib/retainer-row-action.ts` overage-bill gate also keyed on `periodEnded` — critical that billing overage does NOT require an admin Close first.
+- [x] `components/projects/monthly-breakdown-card.tsx` — `billingStateOf` → `lifecycleStateOf` (3-state pill: `in_progress` neutral / `open` blue / `closed` green). Header counter relabeled "N/N months ended". `AmountCell` derives over-budget signal from `endBalance` directly now that the pill no longer carries the budget axis.
+- [x] Unit tests for `getCyclePeriods` (monthly + rollover + year-wrap + offset navigation + null cycle) and `applyOverageRule` (all three modes + invariants). 17 new tests, all green. Existing `retainerBalance.test.ts` (49 tests) untouched and still green.
+- [x] `npx tsc --noEmit` clean. Lint clean on touched files.
+
+**Note**: pre-existing test failures in `lib/format-activity-timestamp.test.ts`, `convex/lib/__tests__/taskActivityIndicators.test.ts`, and `.reference/tiptap-docs/…` are unrelated to this slice (untouched files; failures predate this work).
+
+### TODOs deferred to later phases
+- **Settlement model + invoice transition wiring** (T&M / Fixed / void) — Slice 1 of this phase.
+- **Period close/reopen mutation + closed-period write guard** — Slice 3 of this phase.
+- **Rollover cycle close, period drill-down, time-entry list polish** — Slice 4 of this phase.
+- **`projectId` denormalization on `timeEntries`** — perf-driven follow-up; `closePeriod`/`reopenPeriod` use task fan-out (N+1 acknowledged). Trigger threshold: 10K+ entries/org or visible latency.
+- **Project-completion auto-close** (`settledReason: "manual_close"`) — requires a project status field that doesn't exist yet. Separate project-lifecycle phase.
+- **`billingPeriods` ledger table replacing `invoiceId` as canonical lock** — escalation path documented in `docs/billing-periods-monthly-close-prd.md`. Triggers: first compliance audit request, repeated statement editing pain, or 3rd parallel duplication bug.
+- **Period-scoped audit event log + reopen with reason** — `billing-periods-monthly-close-prd.md`.
 - **Period locking** — when reports are downloaded or sent. Today reports are always live truth; back-dated edits re-render on next view (D7). Owner is responsible for not back-dating into already-sent periods.
 - **Cross-client global "monthly reports queue"** view — `/reports` page was removed; per-project hunting is the MVP workflow. Re-introduce when the workflow demonstrably hurts.
 - **Pro-rated included budget for partial months** — partial-month projects currently get the full bucket (D12). Acknowledged money leak vs. Stripe pro-rated charge; revisit when client count grows.

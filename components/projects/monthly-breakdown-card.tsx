@@ -18,7 +18,7 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { ColoredPillBadge } from "@/components/ui/colored-pill-badge"
+import { ColoredPillBadge, type ColoredPillTone } from "@/components/ui/colored-pill-badge"
 import { useGenerateInvoice } from "@/lib/hooks/use-generate-invoice"
 import {
   formatCurrency,
@@ -37,28 +37,44 @@ import { cn } from "@/lib/utils"
 
 type RetainerData = NonNullable<FunctionReturnType<typeof api.projects.getRetainerData>>
 type MonthData = RetainerData["months"][number]
-type BillingState = "within_budget" | "over_budget" | "in_progress"
+// Phase 8 — pill is lifecycle, not budget. Calendar truth (`periodEnded`) +
+// admin truth (`isClosed`) together give three states:
+//   in_progress = current month, still accumulating hours
+//   open        = ended but not yet settled by an admin (needs action)
+//   closed      = admin clicked Close period
+// Budget signal (within/over) lives in the Amount column (foreground vs
+// muted color), not the pill — so the pill stays one-axis and the eye can
+// scan it without parsing two dimensions at once.
+type LifecycleState = "in_progress" | "open" | "closed"
 
-// Fixed 3-value pill dictionary — never embeds dynamic data. See PRD § Module Design #5.
-function billingStateOf(month: MonthData): BillingState {
-  if (!month.isMonthClosed) return "in_progress"
-  return month.endBalance >= 0 ? "within_budget" : "over_budget"
+function lifecycleStateOf(month: MonthData): LifecycleState {
+  if (!month.periodEnded) return "in_progress"
+  if (month.isClosed) return "closed"
+  return "open"
 }
 
-type ToneKey = "green" | "amber" | "neutral"
+// Use the pill component's own tone vocabulary so the standalone MetricDot
+// can never drift from the pill chrome.
+type ToneKey = ColoredPillTone
 
 const TONE_DOT: Record<ToneKey, string> = {
+  neutral: "bg-muted-foreground/40",
+  blue: "bg-blue-500",
   green: "bg-green-500",
+  red: "bg-red-500",
   amber: "bg-amber-500",
-  neutral: "bg-muted-foreground/50",
 }
 
 // Single source of truth for label + tone — pill, dot, and legend all read
 // from one record so the mapping never drifts.
-const STATE_META: Record<BillingState, { label: string; tone: ToneKey }> = {
-  within_budget: { label: "within budget", tone: "green" },
-  over_budget: { label: "over budget", tone: "amber" },
+//
+//   in_progress → neutral (muted, the eye skips it)
+//   open        → blue    (action signal — admin needs to Close or Bill)
+//   closed      → green   (done; no action required)
+const STATE_META: Record<LifecycleState, { label: string; tone: ToneKey }> = {
   in_progress: { label: "in progress", tone: "neutral" },
+  open: { label: "open", tone: "blue" },
+  closed: { label: "closed", tone: "green" },
 }
 
 function MetricDot({ tone }: { tone: ToneKey }) {
@@ -141,7 +157,11 @@ export function MonthlyBreakdownCard({
     return null
   }, [months, actionByMonthKey])
 
-  const closedCount = months.filter((m) => m.isMonthClosed).length
+  // Phase 8 — header counter is calendar-based ("N of N ended"), not admin.
+  // Picking the calendar meaning keeps the number stable across the same
+  // visit regardless of whether someone has clicked Close yet; per-row
+  // closed-vs-open is visible from the pill.
+  const endedCount = months.filter((m) => m.periodEnded).length
   const cycleLabel = formatCycleLabel(months)
   const utilizationPct = Math.round(utilization)
   const cycleEndLabel = formatShortDate(cycleEnd)
@@ -153,7 +173,7 @@ export function MonthlyBreakdownCard({
           <CardTitle>Monthly Breakdown</CardTitle>
           {rolloverEnabled && (
             <p className="truncate text-xs text-muted-foreground">
-              {cycleLabel} cycle · {closedCount}/{cycleLength} months closed · {utilizationPct}% used
+              {cycleLabel} cycle · {endedCount}/{cycleLength} months ended · {utilizationPct}% used
             </p>
           )}
           <StripeDisclaimer monthlyFee={monthlyFee} currency={currency} />
@@ -215,7 +235,7 @@ export function MonthlyBreakdownCard({
 
         {/* Footer legend — documents the dot semantics so the row chrome stays minimal */}
         <div className="flex items-center gap-5 border-t px-6 py-3 text-xs text-muted-foreground">
-          {(Object.keys(STATE_META) as BillingState[]).map((state) => (
+          {(Object.keys(STATE_META) as LifecycleState[]).map((state) => (
             <span key={state} className="flex items-center gap-1.5">
               <MetricDot tone={STATE_META[state].tone} />
               {STATE_META[state].label}
@@ -248,7 +268,7 @@ function MonthRow({
   isPending: boolean
   onGenerate: () => void
 }) {
-  const state = billingStateOf(month)
+  const state = lifecycleStateOf(month)
   const meta = STATE_META[state]
 
   return (
@@ -295,17 +315,18 @@ function AmountCell({
   overageRate,
 }: {
   month: MonthData
-  state: BillingState
+  state: LifecycleState
   currency: string
   overageRate: number
 }) {
   if (state === "in_progress") return <span aria-hidden />
 
   // Raw ledger view — no rounding (CLAUDE.md: rounding only at invoice generation).
-  // Within-budget = €0 (the retainer fee covered the work); over-budget = overage
-  // hours × project overageRate.
-  const overageHours = state === "over_budget" ? Math.abs(month.endBalance) / 60 : 0
-  const amount = state === "over_budget" ? overageHours * overageRate : 0
+  // Over-budget = overage hours × project overageRate; otherwise €0 (the
+  // retainer fee covered the work). Reads directly from `endBalance` now
+  // that the pill no longer carries the budget axis.
+  const overageHours = month.endBalance < 0 ? Math.abs(month.endBalance) / 60 : 0
+  const amount = overageHours * overageRate
 
   return (
     <span

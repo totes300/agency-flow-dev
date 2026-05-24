@@ -220,6 +220,12 @@ export default defineSchema({
   }).index("by_projectId", ["projectId"]),
 
   // ─── Retainer Periods (lazy-created per project per month) ───────────────────
+  //
+  // `closedAt`/`closedBy` are populated by `closePeriod`/`closeRetainerCycle`
+  // (Phase 8 Slice 3/4). When set, the row's period is admin-settled — its
+  // time entries should be locked from edits and excluded from "needs
+  // attention" feeds. Calendar-end vs admin-settled are two distinct concepts
+  // (see `periodEnded` vs `isClosed` on `getRetainerData`'s month rows).
   retainerPeriods: defineTable({
     orgId: v.string(),
     projectId: v.id("projects"),
@@ -228,6 +234,8 @@ export default defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
     createdBy: v.id("users"),
+    closedAt: v.optional(v.number()),     // Phase 8 — admin settlement timestamp (ms)
+    closedBy: v.optional(v.id("users")),  // Phase 8 — admin who clicked Close
   }).index("by_projectId", ["projectId"])
     .index("by_projectId_periodStart", ["projectId", "periodStart"]),
 

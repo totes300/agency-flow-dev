@@ -23,7 +23,7 @@ const rolloverCtx: RetainerRowContext = {
 const month = (
   partial: Partial<RetainerRowMonthInput> = {},
 ): RetainerRowMonthInput => ({
-  isMonthClosed: true,
+  periodEnded: true,
   cyclePosition: 1,
   endBalance: 0,
   invoice: null,
@@ -76,7 +76,7 @@ describe("decideRetainerRowAction — monthly retainer (rollover OFF)", () => {
   it("in-progress month → report (never generate, even if currently over)", () => {
     expect(
       decideRetainerRowAction(
-        month({ isMonthClosed: false, endBalance: -180 }),
+        month({ periodEnded: false, endBalance: -180 }),
         monthlyCtx,
       ),
     ).toBe("report");
@@ -96,7 +96,7 @@ describe("decideRetainerRowAction — rollover retainer", () => {
   it("cycle-end row with cycle overage → generate", () => {
     expect(
       decideRetainerRowAction(
-        month({ cyclePosition: 3, isMonthClosed: true }),
+        month({ cyclePosition: 3, periodEnded: true }),
         rolloverCtx,
       ),
     ).toBe("generate");
@@ -105,7 +105,7 @@ describe("decideRetainerRowAction — rollover retainer", () => {
   it("mid-cycle row never generates — even if over budget that month", () => {
     expect(
       decideRetainerRowAction(
-        month({ cyclePosition: 2, isMonthClosed: true, endBalance: -300 }),
+        month({ cyclePosition: 2, periodEnded: true, endBalance: -300 }),
         rolloverCtx,
       ),
     ).toBe("report");
@@ -114,7 +114,7 @@ describe("decideRetainerRowAction — rollover retainer", () => {
   it("cycle-end row when cycle is within budget → report", () => {
     expect(
       decideRetainerRowAction(
-        month({ cyclePosition: 3, isMonthClosed: true }),
+        month({ cyclePosition: 3, periodEnded: true }),
         { ...rolloverCtx, cycleHasOverage: false },
       ),
     ).toBe("report");
@@ -123,7 +123,7 @@ describe("decideRetainerRowAction — rollover retainer", () => {
   it("cycle-end row in an unclosed cycle → report (mid-cycle visit)", () => {
     expect(
       decideRetainerRowAction(
-        month({ cyclePosition: 3, isMonthClosed: false }),
+        month({ cyclePosition: 3, periodEnded: false }),
         rolloverCtx,
       ),
     ).toBe("report");

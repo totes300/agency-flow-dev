@@ -11,6 +11,7 @@ import {
   getInvoiceAnchorMonthKey,
   invoiceCoversMonth,
 } from "./lib/invoiceAnchor";
+import { getCyclePeriods } from "./lib/retainerCycle";
 import type {
   ResolvedProjectListItem,
   ResolvedProjectDetail,
@@ -516,60 +517,35 @@ export const getRetainerData = query({
     // Compute today in org timezone (same helper used by timer & time entries)
     const todayStr = getDateInTimezone(Date.now(), timezone);
 
-    // Compute cycle boundaries.
+    // Resolve cycle boundaries via shared helper. See convex/lib/retainerCycle.ts
+    // for the rules — this is the only place we ask "what months belong to
+    // this cycle?", and the close mutations (Phase 8 Slice 3/4) consume the
+    // same helper so the read path and write path can never disagree on
+    // whether a date falls inside a given period.
     //
-    // CONVENTION: month is 1-indexed (1=Jan…12=Dec) everywhere in this
-    // codebase. Storage formats (YYYY-MM strings, period.month, etc.) and
-    // every cross-module API agree. Only the JS `Date()` constructor uses
-    // 0-indexed months — we adjust at THAT boundary alone (`m - 1`).
-    const startParts = startDate.split("-").map(Number);
-    const startYear = startParts[0];
-    const startMonth = startParts[1]; // 1-12
-
-    const todayParts = todayStr.split("-").map(Number);
-    const todayYear = todayParts[0];
-    const todayMonth = todayParts[1]; // 1-12
-    const monthsDiff = (todayYear - startYear) * 12 + (todayMonth - startMonth);
-    const currentCycleIndex = Math.max(0, Math.floor(monthsDiff / cycleLength));
-
-    const offset = args.cycleOffset ?? 0;
-    const targetCycleIndex = currentCycleIndex + offset;
-    if (targetCycleIndex < 0) return null;
-
-    // Build month list for target cycle.
-    const cycleStartMonthOffset = targetCycleIndex * cycleLength;
-    const months: Array<{
-      year: number;
-      month: number; // 1-indexed (1=Jan)
-      label: string;
-      startDate: string;
-      endDate: string;
-    }> = [];
-
-    for (let i = 0; i < cycleLength; i++) {
-      const mOffset = cycleStartMonthOffset + i;
-      // Walk forward from startMonth in absolute "months since year 0" space,
-      // then split back to year + 1-indexed month.
-      const absoluteMonths = startYear * 12 + (startMonth - 1) + mOffset;
-      const y = Math.floor(absoluteMonths / 12);
-      const m = (absoluteMonths % 12) + 1; // 1-12
-      const lastDay = new Date(y, m, 0).getDate(); // (m, 0) = last day of month m
-      months.push({
-        year: y,
-        month: m,
-        label: new Date(y, m - 1, 1).toLocaleDateString("en-US", {
-          month: "long",
-          year: "numeric",
-        }),
-        startDate: `${y}-${String(m).padStart(2, "0")}-01`,
-        endDate: `${y}-${String(m).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`,
-      });
-    }
-
-    const cycleStartStr = months[0].startDate;
-    const cycleEndStr = months[months.length - 1].endDate;
-    const isCycleClosed = cycleEndStr < todayStr;
-    const isCurrentCycle = targetCycleIndex === currentCycleIndex;
+    // Local `startDate`/`endDate` keys on `months[]` are kept (instead of the
+    // helper's `periodStart`/`periodEnd`) so the downstream `monthlyData`
+    // shape stays byte-compatible with existing consumers.
+    const cycle = getCyclePeriods({
+      startDate,
+      cycleLength,
+      todayStr,
+      cycleOffset: args.cycleOffset,
+    });
+    if (!cycle) return null;
+    const targetCycleIndex = cycle.cycleIndex;
+    const currentCycleIndex = cycle.currentCycleIndex;
+    const months = cycle.periods.map((p) => ({
+      year: p.year,
+      month: p.month,
+      label: p.label,
+      startDate: p.periodStart,
+      endDate: p.periodEnd,
+    }));
+    const cycleStartStr = cycle.cycleStart;
+    const cycleEndStr = cycle.cycleEnd;
+    const isCycleClosed = cycle.isCycleClosed;
+    const isCurrentCycle = cycle.isCurrentCycle;
 
     // Fetch all tasks for the project (including archived — historical reporting)
     const tasks = await ctx.db
@@ -645,6 +621,20 @@ export const getRetainerData = query({
       invoiceByMonthKey.set(key, inv);
     }
 
+    // Phase 8 — admin-settled period rows. `isClosed`/`closedAt` on each
+    // displayed month reflects an explicit admin "Close period" action; it
+    // is independent of `periodEnded` (calendar). The close mutations
+    // (Slice 3/4) populate these via `retainerPeriods.closedAt`.
+    const retainerPeriodRows = await ctx.db
+      .query("retainerPeriods")
+      .withIndex("by_projectId", (q) => q.eq("projectId", args.id))
+      .filter((q) => q.eq(q.field("orgId"), orgId))
+      .collect();
+    const periodRowByStart = new Map<string, Doc<"retainerPeriods">>();
+    for (const row of retainerPeriodRows) {
+      periodRowByStart.set(row.periodStart, row);
+    }
+
     // Compute balances (sequential — each month depends on the previous)
     type CategoryGroupTask = {
       taskId: string;
@@ -673,7 +663,15 @@ export const getRetainerData = query({
       available: number;
       endBalance: number;
       totalNonBillableMinutes: number;
-      isMonthClosed: boolean;
+      // Calendar truth: the month's last day has already passed in the org's
+      // timezone. Drives financial due-ness (overage, "due" balanceStatus)
+      // and the overage-bill gate. Independent of admin action.
+      periodEnded: boolean;
+      // Admin-settlement truth: someone clicked "Close period" on this
+      // month (or on the cycle containing it). Drives the lock guard on
+      // entry edits and the row's primary action. Independent of calendar.
+      isClosed: boolean;
+      closedAt: number | undefined; // ms timestamp when admin clicked Close
       balanceStatus: "due" | "deficit" | "rollover" | "unused" | "on_track";
       cyclePosition: number;
       billableCategoryGroups: CategoryGroup[];
@@ -692,7 +690,14 @@ export const getRetainerData = query({
       const monthNonBillable = nonBillableByMonth[monthKey] ?? [];
       const workedMinutes = monthBillable.reduce((s, e) => s + e.durationMinutes, 0);
       const totalNonBillableMinutes = monthNonBillable.reduce((s, e) => s + e.durationMinutes, 0);
-      const isMonthClosed = m.endDate < todayStr;
+      // Phase 8 — `periodEnded` is calendar-only (was `isMonthClosed`); the
+      // new `isClosed`/`closedAt` carry the admin-settlement state read from
+      // `retainerPeriods`. `balanceStatus` continues to key on `periodEnded`
+      // — financial due-ness is a calendar question, not an admin one.
+      const periodEnded = m.endDate < todayStr;
+      const periodRow = periodRowByStart.get(m.startDate);
+      const closedAt = periodRow?.closedAt;
+      const isClosed = closedAt !== undefined;
 
       let startBalance: number;
       if (rolloverEnabled) {
@@ -710,13 +715,13 @@ export const getRetainerData = query({
         if (rolloverEnabled) {
           balanceStatus = (i === cycleLength - 1 && isCycleClosed) ? "due" : "deficit";
         } else {
-          balanceStatus = isMonthClosed ? "due" : "deficit";
+          balanceStatus = periodEnded ? "due" : "deficit";
         }
       } else if (endBalance > 0) {
         if (rolloverEnabled) {
           balanceStatus = (i === cycleLength - 1 && isCycleClosed) ? "unused" : "rollover";
         } else {
-          balanceStatus = isMonthClosed ? "unused" : "on_track";
+          balanceStatus = periodEnded ? "unused" : "on_track";
         }
       } else {
         balanceStatus = "on_track";
@@ -741,7 +746,9 @@ export const getRetainerData = query({
         available,
         endBalance,
         totalNonBillableMinutes,
-        isMonthClosed,
+        periodEnded,
+        isClosed,
+        closedAt,
         balanceStatus,
         cyclePosition: i + 1,
         billableCategoryGroups,
@@ -777,9 +784,11 @@ export const getRetainerData = query({
         overageDue = (overageMinutes / 60) * projectOverageRate;
       }
     } else {
-      // Non-rollover: each month settles independently
+      // Non-rollover: each month settles independently. Calendar-driven —
+      // `periodEnded` (not `isClosed`) gates due-ness, so an unbilled
+      // overage month still shows due even before an admin clicks Close.
       for (const m of monthlyData) {
-        if (m.isMonthClosed && m.endBalance < 0) {
+        if (m.periodEnded && m.endBalance < 0) {
           const monthOverage = Math.abs(m.endBalance);
           overageMinutes += monthOverage;
           overageDue += (monthOverage / 60) * projectOverageRate;
@@ -1026,8 +1035,11 @@ export const getSummary = query({
       }
     } else {
       for (const monthKey of cycleContext.monthKeys) {
-        const isMonthClosed = lastDayOfMonth(monthKey) < todayStr;
-        if (!isMonthClosed) continue;
+        // Calendar-only check (was `isMonthClosed`; renamed in Phase 8 so
+        // the codebase has one name per concept — admin settlement lives on
+        // `retainerPeriods.closedAt`, not on a calendar comparison).
+        const periodEnded = lastDayOfMonth(monthKey) < todayStr;
+        if (!periodEnded) continue;
         const billableMinutes = monthBillableMinutes.get(monthKey) ?? 0;
         if (billableMinutes <= includedMinutesPerMonth) continue;
         const [y, m] = monthKey.split("-").map(Number);
@@ -1072,9 +1084,10 @@ export const getSummary = query({
 /**
  * Resolve retainer cycle boundaries for a given project + offset.
  *
- * Mirrors the cycle math in getRetainerData (lines 466-505). Kept here as a
- * small pure helper to avoid a full extraction refactor in this PR; a future
- * cleanup can DRY this up with getRetainerData via a shared lib/retainerCycle.ts.
+ * Thin adapter over `getCyclePeriods` (Phase 8 — Slice 2) that preserves the
+ * pre-existing return shape `{ start, end, length, number, offset, ...,
+ * monthKeys }` consumed by `getSummary`. The boundary math itself lives in
+ * `convex/lib/retainerCycle.ts` so the read and write paths cannot drift.
  */
 function resolveRetainerCycleContext(input: {
   startDate: string;
@@ -1092,47 +1105,24 @@ function resolveRetainerCycleContext(input: {
   hasNextCycle: boolean;
   monthKeys: string[];
 } | null {
-  const [startYear, startMonth1] = input.startDate.split("-").map(Number);
-  const startMonth = startMonth1 - 1;
-
-  const [todayYear, todayMonth1] = input.todayStr.split("-").map(Number);
-  const todayMonth = todayMonth1 - 1;
-
-  const monthsDiff = (todayYear - startYear) * 12 + (todayMonth - startMonth);
-  const currentCycleIndex = Math.max(0, Math.floor(monthsDiff / input.cycleLength));
-
-  const targetCycleIndex = currentCycleIndex + input.offset;
-  if (targetCycleIndex < 0) return null;
-
-  const firstMonthOffset = targetCycleIndex * input.cycleLength;
-  const monthKeys: string[] = [];
-  for (let i = 0; i < input.cycleLength; i++) {
-    const mOffset = firstMonthOffset + i;
-    const y = startYear + Math.floor((startMonth + mOffset) / 12);
-    const m = (startMonth + mOffset) % 12;
-    monthKeys.push(`${y}-${String(m + 1).padStart(2, "0")}`);
-  }
-
-  const firstKey = monthKeys[0];
-  const lastKey = monthKeys[monthKeys.length - 1];
-  const start = `${firstKey}-01`;
-  const end = `${lastKey}-${String(
-    new Date(
-      Number(lastKey.slice(0, 4)),
-      Number(lastKey.slice(5, 7)),
-      0,
-    ).getDate(),
-  ).padStart(2, "0")}`;
+  const cycle = getCyclePeriods({
+    startDate: input.startDate,
+    cycleLength: input.cycleLength,
+    todayStr: input.todayStr,
+    cycleOffset: input.offset,
+  });
+  if (!cycle) return null;
+  const monthKeys = cycle.periods.map((p) => p.periodStart.slice(0, 7));
 
   return {
-    start,
-    end,
+    start: cycle.cycleStart,
+    end: cycle.cycleEnd,
     length: input.cycleLength,
-    number: targetCycleIndex + 1,
+    number: cycle.cycleIndex + 1,
     offset: input.offset,
-    isCycleClosed: end < input.todayStr,
-    hasPreviousCycle: targetCycleIndex > 0,
-    hasNextCycle: targetCycleIndex < currentCycleIndex,
+    isCycleClosed: cycle.isCycleClosed,
+    hasPreviousCycle: cycle.cycleIndex > 0,
+    hasNextCycle: cycle.cycleIndex < cycle.currentCycleIndex,
     monthKeys,
   };
 }

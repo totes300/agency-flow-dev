@@ -14,7 +14,13 @@
  */
 
 export type RetainerRowMonthInput = {
-  isMonthClosed: boolean;
+  /**
+   * Calendar truth: the row's last day has passed in the org's timezone.
+   * Renamed from `isMonthClosed` in Phase 8 — the old name was overloaded
+   * with admin-settlement state. Overage-bill gating is calendar-driven and
+   * must NOT require an admin "Close period" click first.
+   */
+  periodEnded: boolean;
   cyclePosition: number; // 1-indexed within the cycle (1…cycleLength)
   endBalance: number; // minutes; positive = within budget
   invoice: { status: "draft" | "invoiced" | "paid" | "void" } | null;
@@ -39,7 +45,7 @@ export function decideRetainerRowAction(
   // self-contained — same answer either way.
   if (month.invoice && month.invoice.status !== "void") return "invoice-link";
 
-  if (!month.isMonthClosed) return "report";
+  if (!month.periodEnded) return "report";
   if (ctx.overageRate <= 0) return "report";
 
   if (ctx.isRollover) {

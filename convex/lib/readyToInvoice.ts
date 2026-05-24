@@ -51,6 +51,9 @@ export type TimeEntryInput = {
   durationMinutes: number;
   isBillable: boolean;
   invoiceId: Id<"invoices"> | undefined | null;
+  // Phase 8 — period-close settlement lock. Either field being set
+  // disqualifies the entry from the Ready feed (and from re-billing).
+  settledAt?: number | null;
 };
 
 // ─── Output shape ───────────────────────────────────────────────────────────────
@@ -206,11 +209,13 @@ export function buildTmReadyRows(opts: {
   if (project.billingType !== "t_and_m") return [];
   if (project.archivedAt) return [];
 
-  // Bucket uninvoiced billable entries by YYYY-MM.
+  // Bucket open billable entries by YYYY-MM. Phase 8 — `settledAt` joins
+  // `invoiceId` as a lock signal so a Fixed-included or retainer-included
+  // hour can't bubble back into the Ready feed.
   type Bucket = { year: number; month: number; minutes: number; amount: number };
   const buckets = new Map<string, Bucket>();
   for (const e of entries) {
-    if (!e.isBillable || e.invoiceId) continue;
+    if (!e.isBillable || e.invoiceId || e.settledAt) continue;
     const ymKey = e.date.slice(0, 7); // YYYY-MM
     const [y, m] = ymKey.split("-").map(Number);
     // Skip current month — only closed periods feed the Inbox.

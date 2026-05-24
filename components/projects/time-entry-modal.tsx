@@ -60,6 +60,10 @@ type EditEntryLite = {
   isBillable: boolean
   note: string | undefined
   invoiceId: Id<"invoices"> | undefined
+  // Phase 8 — settlement lock (independent of invoice linkage). When set,
+  // the entry was closed by a period-close flow (retainer or Fixed) and
+  // the edit form should be read-only just as it is for invoiced entries.
+  settledAt: number | undefined
   userId: Id<"users">
 }
 
@@ -110,7 +114,11 @@ export function TimeEntryModal({
 
   const mode: Mode = modeProps.mode
   const editEntry = modeProps.mode === "edit" ? modeProps.entry : undefined
-  const isInvoiced = editEntry?.invoiceId != null
+  // Phase 8 — "locked" covers both axes: invoiceId (T&M/Fixed/overage) and
+  // settledAt (retainer within-budget close + Fixed settlement). The form
+  // is read-only in either case; the backend guards reject the mutation
+  // regardless of which axis triggered the lock.
+  const isLocked = editEntry?.invoiceId != null || editEntry?.settledAt != null
 
   // Reset form state when the modal is reopened (keyed by entry id or "new")
   const formKey = mode === "edit" ? editEntry!._id : "new"
@@ -129,8 +137,10 @@ export function TimeEntryModal({
         <FormModalDescription>
           {mode === "create"
             ? "Log time against a task on this project."
-            : isInvoiced
-              ? "This entry is on a finalized invoice and is read-only."
+            : isLocked
+              ? editEntry?.invoiceId
+                ? "This entry is linked to an invoice and is read-only."
+                : "This entry is in a closed period and is read-only."
               : "Adjust the details of this entry."}
         </FormModalDescription>
       </FormModalHeader>
@@ -138,7 +148,7 @@ export function TimeEntryModal({
       <TimeEntryModalForm
         mode={mode}
         editEntry={editEntry}
-        isInvoiced={isInvoiced}
+        isLocked={isLocked}
         projectTasks={projectTasks}
         projectTeamMembers={projectTeamMembers}
         isAdmin={isAdmin}
@@ -170,7 +180,7 @@ type TaskOption = {
 function TimeEntryModalForm({
   mode,
   editEntry,
-  isInvoiced,
+  isLocked,
   projectTasks,
   projectTeamMembers,
   isAdmin,
@@ -186,7 +196,7 @@ function TimeEntryModalForm({
 }: {
   mode: Mode
   editEntry: EditEntryLite | undefined
-  isInvoiced: boolean
+  isLocked: boolean
   projectTasks: TaskOption[] | undefined
   projectTeamMembers: Id<"users">[] | undefined
   isAdmin: boolean
@@ -320,7 +330,7 @@ function TimeEntryModalForm({
 
   async function handleSubmit(e?: React.FormEvent) {
     e?.preventDefault()
-    if (isInvoiced) return
+    if (isLocked) return
     setError("")
 
     // Block save until org timezone is loaded — anchoring with the fallback
@@ -486,7 +496,7 @@ function TimeEntryModalForm({
             value={taskId ?? ""}
             onValueChange={(v) => handleTaskChange(v as Id<"tasks">)}
             disabled={
-              isInvoiced ||
+              isLocked ||
               projectTasks === undefined ||
               projectTasks.length === 0
             }
@@ -532,7 +542,7 @@ function TimeEntryModalForm({
               id="entry-date"
               value={effectiveDate}
               onChange={setDate}
-              disabled={isInvoiced || !timezoneReady}
+              disabled={isLocked || !timezoneReady}
             />
           </Field>
           <Field>
@@ -542,10 +552,10 @@ function TimeEntryModalForm({
               value={durationInput}
               onChange={(e) => setDurationInput(e.target.value)}
               placeholder="01:30"
-              disabled={isInvoiced}
+              disabled={isLocked}
               inputMode="text"
               aria-describedby="entry-duration-help"
-              autoFocus={!isInvoiced && !hasNoTasks}
+              autoFocus={!isLocked && !hasNoTasks}
             />
             <FieldDescription id="entry-duration-help">
               Formats: 1:30, 1h 30m, 90m, 1.5, 90.
@@ -563,7 +573,7 @@ function TimeEntryModalForm({
           <Switch
             checked={isBillable}
             onCheckedChange={setIsBillable}
-            disabled={isInvoiced}
+            disabled={isLocked}
             aria-label="Billable"
           />
         </div>
@@ -574,7 +584,7 @@ function TimeEntryModalForm({
             <Select
               value={memberId ?? ""}
               onValueChange={(v) => setMemberId(v as Id<"users">)}
-              disabled={isInvoiced || mode === "edit"}
+              disabled={isLocked || mode === "edit"}
             >
               <SelectTrigger id="entry-member" className="w-full">
                 <SelectValue placeholder="Select a team member" />
@@ -650,7 +660,7 @@ function TimeEntryModalForm({
             value={note}
             onChange={(e) => setNote(e.target.value)}
             placeholder="Optional details about this time"
-            disabled={isInvoiced}
+            disabled={isLocked}
             rows={3}
           />
         </Field>
@@ -664,7 +674,7 @@ function TimeEntryModalForm({
             Cancel
           </Button>
         </DialogClose>
-        {!isInvoiced && (
+        {!isLocked && (
           <Button type="submit" disabled={isSubmitting || !timezoneReady}>
             {isSubmitting && (
               <LoaderIcon data-icon="inline-start" className="animate-spin" />

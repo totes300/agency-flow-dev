@@ -305,8 +305,19 @@ export const update = mutation({
       throw new ConvexError("You can only edit your own time entries");
     }
 
-    if (entry.invoiceId) {
-      throw new ConvexError("Cannot edit an invoiced time entry — void the invoice first");
+    // Phase 8 — settlement guard. `invoiceId` covers T&M / Fixed / retainer
+    // overage; `settledAt` covers retainer within-budget close (Slice 3,
+    // populates without an invoice). Distinct messages so the unblock path
+    // is obvious to the user.
+    if (entry.invoiceId !== undefined) {
+      throw new ConvexError(
+        "Cannot edit a time entry linked to an invoice — delete or void the invoice first",
+      );
+    }
+    if (entry.settledAt !== undefined) {
+      throw new ConvexError(
+        "Cannot edit a settled time entry — reopen the period first",
+      );
     }
 
     if (args.date !== undefined) assertValidDateString(args.date);
@@ -437,8 +448,16 @@ export const remove = mutation({
       throw new ConvexError("You can only delete your own time entries");
     }
 
-    if (entry.invoiceId) {
-      throw new ConvexError("Cannot delete an invoiced time entry — void the invoice first");
+    // Phase 8 — settlement guard (same rule as `update`).
+    if (entry.invoiceId !== undefined) {
+      throw new ConvexError(
+        "Cannot delete a time entry linked to an invoice — delete or void the invoice first",
+      );
+    }
+    if (entry.settledAt !== undefined) {
+      throw new ConvexError(
+        "Cannot delete a settled time entry — reopen the period first",
+      );
     }
 
     await logActivity(ctx, {
@@ -502,8 +521,10 @@ export const bulkUpdateBillable = mutation({
     let updated = 0;
     for (const entry of entries) {
       if (entry.isBillable === args.isBillable) continue;
-      // Skip invoiced entries — changing billable status would break the invoice snapshot
-      if (entry.invoiceId) continue;
+      // Skip locked entries — changing billable status would break the
+      // invoice snapshot OR the settled-period report. Both axes apply.
+      if (entry.invoiceId !== undefined) continue;
+      if (entry.settledAt !== undefined) continue;
 
       // Re-resolve per entry (each entry may belong to a different user)
       const snapshot = await resolveRateSnapshot(ctx, {
@@ -551,11 +572,18 @@ export const listProjectEntries = query({
   args: {
     projectId: v.id("projects"),
     memberId: v.optional(v.id("users")),
+    // Phase 8 vocabulary — collapsed UI states (matches `entryStatus()`):
+    //   open         billable && !invoiceId && !settledAt
+    //   draft        invoiceId set, settledAt unset (on a draft invoice)
+    //   closed       settledAt set (any reason — invoiced/retainer/fixed)
+    //   non_billable !isBillable (settled or not — billability is the row axis)
+    //   all          no filter
     billingStatus: v.optional(
       v.union(
         v.literal("all"),
-        v.literal("billable_uninvoiced"),
-        v.literal("invoiced"),
+        v.literal("open"),
+        v.literal("draft"),
+        v.literal("closed"),
         v.literal("non_billable"),
       ),
     ),
@@ -659,6 +687,16 @@ export const listProjectEntries = query({
       invoiceNumber: number | undefined;
       invoiceStatus: "draft" | "invoiced" | "paid" | "void" | undefined;
       invoiceDueDate: string | undefined;
+      // Phase 8 — settlement snapshot. Slice 4's period drill-down + entry
+      // tooltips read these directly so the UI never has to re-fetch.
+      settledAt: number | undefined;
+      settledReason:
+        | "invoiced"
+        | "retainer_included"
+        | "fixed_included"
+        | undefined;
+      settledPeriodStart: string | undefined;
+      settledPeriodEnd: string | undefined;
     };
 
     let rows: Row[] = visible.map((e) => {
@@ -689,6 +727,10 @@ export const listProjectEntries = query({
         invoiceNumber: inv?.number,
         invoiceStatus: inv?.status,
         invoiceDueDate: inv?.dueDate,
+        settledAt: e.settledAt,
+        settledReason: e.settledReason,
+        settledPeriodStart: e.settledPeriodStart,
+        settledPeriodEnd: e.settledPeriodEnd,
       };
     });
 
@@ -703,11 +745,21 @@ export const listProjectEntries = query({
       rows = rows.filter((r) => r.userId === args.memberId);
     }
     if (args.billingStatus && args.billingStatus !== "all") {
+      // Phase 8 — collapsed UI vocabulary; mirrors `entryStatus()` in
+      // `convex/lib/settleEntries.ts`. The "non_billable" row always wins
+      // its axis (settled or not) — billability is the more informative
+      // axis for that row per Revision Pass #5.
       rows = rows.filter((r) => {
         if (args.billingStatus === "non_billable") return !r.isBillable;
-        if (args.billingStatus === "invoiced") return r.isBillable && !!r.invoiceId;
-        // billable_uninvoiced
-        return r.isBillable && !r.invoiceId;
+        if (!r.isBillable) return false;
+        if (args.billingStatus === "open") {
+          return r.invoiceId === undefined && r.settledAt === undefined;
+        }
+        if (args.billingStatus === "draft") {
+          return r.invoiceId !== undefined && r.settledAt === undefined;
+        }
+        // closed
+        return r.settledAt !== undefined;
       });
     }
     const searchTerm = args.search?.trim().toLowerCase();
@@ -791,10 +843,16 @@ export const projectOverview = query({
     let totalNonBillableMinutes = 0;
     let thisMonthBillableMinutes = 0;
     let totalActualCost = 0;
-    let uninvoicedMinutes = 0;
-    let uninvoicedAmount = 0;
-    let invoicedBillableMinutes = 0;
-    let invoicedBillableAmount = 0;
+    // Phase 8 — three buckets over billable entries, mirroring `entryStatus()`:
+    //   open      → still actionable, needs billing or closure
+    //   invoiced  → on a finalized invoice with rate-driven revenue
+    //   settled   → covered by retainer fee or fixed price (no extra revenue)
+    let openMinutes = 0;
+    let openAmount = 0;
+    let invoicedMinutes = 0;
+    let invoicedAmount = 0;
+    let settledMinutes = 0;
+    let settledAmount = 0;
     let lastLoggedDate: string | null = null;
     const minutesByCategory: Record<string, number> = {};
     const billableMinutesByCategory: Record<string, number> = {};
@@ -825,16 +883,37 @@ export const projectOverview = query({
       // Labor cost from costRate (all project types)
       totalActualCost += (e.durationMinutes / 60) * (e.costRate ?? 0);
 
-      // Split billable entries into invoiced / uninvoiced (T&M / Fixed only).
-      // Retainer entries have billableRate=0 — retainer revenue is cycle-level
-      // (monthlyFee + overageDue), computed in getRetainerData, not here.
+      // Phase 8 — three-way split over billable entries:
+      //
+      //   settledReason === "invoiced"            → invoiced bucket (revenue)
+      //   settledReason ∈ {retainer_included,     → settled bucket (covered,
+      //                    fixed_included}            no extra revenue)
+      //   settledAt unset, invoiceId set          → invoiced bucket (draft —
+      //                                              still bound to an invoice
+      //                                              that hasn't finalized yet,
+      //                                              counts as "in progress")
+      //   neither settled nor invoiced            → open bucket
+      //
+      // Retainer entries within budget have billableRate=0 today — they
+      // contribute to the bucket's minutes but $0 to its amount, which is
+      // correct (retainer revenue lives in `getRetainerData`'s cycle math).
       if (e.isBillable) {
-        if (e.invoiceId) {
-          invoicedBillableMinutes += e.durationMinutes;
-          invoicedBillableAmount += (e.durationMinutes / 60) * (e.billableRate ?? 0);
+        const amount = (e.durationMinutes / 60) * (e.billableRate ?? 0);
+        if (e.settledReason === "invoiced") {
+          invoicedMinutes += e.durationMinutes;
+          invoicedAmount += amount;
+        } else if (e.settledReason !== undefined) {
+          // retainer_included or fixed_included
+          settledMinutes += e.durationMinutes;
+          settledAmount += amount;
+        } else if (e.invoiceId !== undefined) {
+          // Draft invoice — entry is reserved for the draft, treat as
+          // invoiced-pending so it doesn't show in the "ready to bill" feed.
+          invoicedMinutes += e.durationMinutes;
+          invoicedAmount += amount;
         } else {
-          uninvoicedMinutes += e.durationMinutes;
-          uninvoicedAmount += (e.durationMinutes / 60) * (e.billableRate ?? 0);
+          openMinutes += e.durationMinutes;
+          openAmount += amount;
         }
       }
 
@@ -856,10 +935,12 @@ export const projectOverview = query({
       minutes: billableByMonth[month] ?? 0,
     }));
 
-    // Invoice count (for all billing types) + Fixed-specific invoiced amount
-    // from `fixed`-type line items. Single pass fetches invoices once and
-    // only re-scans line items for Fixed projects.
-    let invoicedAmount = 0;
+    // Invoice count (for all billing types) + Fixed-specific revenue from
+    // `fixed`-type line items. Renamed `invoicedAmount` → `fixedLineItemsAmount`
+    // in Phase 8 to dodge the collision with the new entry-derived
+    // `invoicedAmount` bucket above (T&M / retainer overage time billed
+    // hourly via a finalized invoice).
+    let fixedLineItemsAmount = 0;
     let invoiceCount = 0;
     if (project.billingType === "fixed" || project.billingType === "t_and_m") {
       const projectInvoices = await ctx.db
@@ -877,7 +958,7 @@ export const projectOverview = query({
             .filter((q) => q.eq(q.field("orgId"), orgId))
             .collect();
           for (const li of lineItems) {
-            if (li.lineType === "fixed") invoicedAmount += li.amount;
+            if (li.lineType === "fixed") fixedLineItemsAmount += li.amount;
           }
         }
       }
@@ -893,17 +974,21 @@ export const projectOverview = query({
       minutesByCategory,
       billableMinutesByCategory,
       totalActualCost,
-      uninvoicedMinutes,
-      uninvoicedAmount,
-      // T&M-oriented split: time-based invoiced vs uninvoiced figures from
-      // the entry ledger (hours × billableRate snapshot). For the Invoices
-      // tab "Total Invoiced" money figure (which includes manual/overage
-      // lines), use api.invoices.getProjectInvoiceMetrics instead.
-      invoicedBillableMinutes,
-      invoicedBillableAmount,
+      // ─── Phase 8 — entry-derived billing buckets ────────────────────────
+      // Time-based figures from the entry ledger (hours × billableRate
+      // snapshot). For the Invoices tab "Total Invoiced" money figure
+      // (which includes manual/overage lines), use api.invoices.getProjectInvoiceMetrics
+      // instead — that one is invoice-derived, not entry-derived.
+      openMinutes,     // was `uninvoicedMinutes`
+      openAmount,      // was `uninvoicedAmount`
+      invoicedMinutes, // was `invoicedBillableMinutes` — billed hourly (T&M, overage)
+      invoicedAmount,  // was `invoicedBillableAmount`
+      settledMinutes,  // NEW — settledReason ∈ {retainer_included, fixed_included}
+      settledAmount,   // NEW
       invoiceCount,
       // Fixed-specific — sum of `fixed`-type line items across invoices.
-      invoicedAmount,
+      // Distinct from `invoicedAmount` above (entry-derived).
+      fixedLineItemsAmount,
     };
   },
 });

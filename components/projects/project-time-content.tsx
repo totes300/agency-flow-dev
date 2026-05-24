@@ -384,6 +384,7 @@ export function ProjectTimeContent({
             isBillable: editEntryRow.isBillable,
             note: editEntryRow.note,
             invoiceId: editEntryRow.invoiceId,
+            settledAt: editEntryRow.settledAt,
             userId: editEntryRow.userId,
           }}
           open={editEntryId !== null}

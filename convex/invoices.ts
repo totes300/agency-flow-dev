@@ -27,6 +27,10 @@ import {
 } from "./lib/readyToInvoice";
 import { getInvoiceAnchorMonthKey } from "./lib/invoiceAnchor";
 import {
+  settleInvoiceEntries,
+  unsettleInvoiceEntries,
+} from "./lib/settleEntries";
+import {
   classifyMarkPaid,
   classifyUndo,
   type PriorState,
@@ -544,6 +548,7 @@ async function enumerateReadyRows(
         durationMinutes: e.durationMinutes,
         isBillable: e.isBillable,
         invoiceId: e.invoiceId,
+        settledAt: e.settledAt ?? null,
         billableRate: e.billableRate,
       }));
       const rows = buildTmReadyRows({
@@ -863,7 +868,10 @@ export const getInvoicePreview = query({
       )
       .collect();
 
-    // Fetch all billable, uninvoiced entries
+    // Fetch all billable entries that are NOT yet locked. Phase 8 — both
+    // `invoiceId` (legacy) and `settledAt` (period-close) lock an entry;
+    // either makes it ineligible for inclusion on a new invoice (a
+    // retainer-included entry must not be re-billed as overage).
     const allEntries = (
       await Promise.all(
         tasks.map(async (task) => {
@@ -873,7 +881,7 @@ export const getInvoicePreview = query({
             .filter((q) => q.eq(q.field("orgId"), orgId))
             .collect();
           return entries
-            .filter((e) => e.isBillable && !e.invoiceId)
+            .filter((e) => e.isBillable && !e.invoiceId && !e.settledAt)
             .map((e) => ({
               ...e,
               taskTitle: task.title,
@@ -1339,6 +1347,9 @@ export const createInvoice = mutation({
 
     // 2. Fetch all billable, uninvoiced entries
     // Tenancy: `by_taskId` doesn't narrow by orgId; filter explicitly (CLAUDE.md).
+    // Phase 8 — `settledAt` joins `invoiceId` as a lock signal (same
+    // reasoning as the recalc path above — a period-closed entry must not
+    // get pulled onto a fresh draft).
     const allEntries = (
       await Promise.all(
         tasks.map(async (task) => {
@@ -1348,7 +1359,7 @@ export const createInvoice = mutation({
             .filter((q) => q.eq(q.field("orgId"), orgId))
             .collect();
           return entries
-            .filter((e) => e.isBillable && !e.invoiceId)
+            .filter((e) => e.isBillable && !e.invoiceId && !e.settledAt)
             .map((e) => ({
               ...e,
               workCategoryId: e.snapshotCategoryId,
@@ -2469,6 +2480,60 @@ async function applyStatusTransition(
   if (invoice.status === "paid" && newStatus !== "paid") patch.paidAt = undefined;
 
   await ctx.db.patch(invoice._id, patch);
+
+  // ─── Phase 8 — settlement side-effects ────────────────────────────────
+  //
+  // Patch the invoice doc first, then settle/unsettle the entries it owns.
+  // Rules per the transition table in `docs/phase-8-time-entry-settlement.md`:
+  //
+  //   draft → invoiced       settle (Fixed → "fixed_included", else "invoiced")
+  //   draft → void           unsettle + clear invoiceId
+  //   invoiced → draft       unsettle, keep invoiceId  → entries become "draft"
+  //   invoiced → paid        no settlement change       (already settled)
+  //   invoiced → void        unsettle + clear invoiceId
+  //   paid → invoiced        no settlement change
+  //   paid → draft           unsettle, keep invoiceId
+  //
+  // `paid → void` is in `VALID_TRANSITIONS[invoice.status]` only when
+  // `invoice.status === "void"` (terminal) — never reached here.
+  const wentToVoid = newStatus === "void";
+  const wentToDraft = newStatus === "draft";
+  const wasFinalized =
+    invoice.status === "invoiced" || invoice.status === "paid";
+  const draftBecameInvoiced =
+    invoice.status === "draft" && newStatus === "invoiced";
+
+  if (draftBecameInvoiced) {
+    // Resolve project.billingType to pick the right reason for Fixed.
+    // `invoice.projectId` is required; defensive guard kept so a bad
+    // legacy row can't crash the mutation.
+    const project = invoice.projectId
+      ? await ctx.db.get(invoice.projectId)
+      : null;
+    const reason = project?.billingType === "fixed"
+      ? "fixed_included"
+      : "invoiced";
+    await settleInvoiceEntries(
+      ctx,
+      invoice._id,
+      orgId,
+      invoice.periodStart,
+      invoice.periodEnd,
+      reason,
+    );
+  } else if (wentToVoid) {
+    // Free the period — entries become eligible for a fresh invoice run.
+    await unsettleInvoiceEntries(ctx, invoice._id, orgId, {
+      clearInvoiceId: true,
+    });
+  } else if (wentToDraft && wasFinalized) {
+    // Demote: entries display as "draft" (still owned by the invoice).
+    await unsettleInvoiceEntries(ctx, invoice._id, orgId, {
+      clearInvoiceId: false,
+    });
+  }
+  // invoiced ↔ paid: no settlement change (entries stay closed either way).
+
   return { ok: true };
 }
 
@@ -2682,30 +2747,21 @@ export const deleteInvoice = mutation({
       throw new ConvexError("Invoice not found.");
     }
 
-    // 1. Unlink time entries — collect all timeEntryIds from line items BEFORE deleting them
+    // 1. Unlink + unsettle time entries via the shared helper. Same
+    //    tenancy + canonical-set guarantees as the inline loop this
+    //    replaced, plus it clears the four Phase 8 settlement fields so
+    //    a previously-settled entry doesn't drag stale snapshot data
+    //    into its next invoice run.
+    await unsettleInvoiceEntries(ctx, args.id, orgId, {
+      clearInvoiceId: true,
+    });
+
+    // 2. Delete all line items (now read separately — settle helper
+    //    consumed them but didn't delete them).
     const lineItems = await ctx.db
       .query("invoiceLineItems")
       .withIndex("by_invoiceId", (q) => q.eq("invoiceId", args.id))
       .collect();
-
-    const now = Date.now();
-    for (const li of lineItems) {
-      if (li.timeEntryIds && li.timeEntryIds.length > 0) {
-        for (const entryId of li.timeEntryIds) {
-          const entry = await ctx.db.get(entryId);
-          // Explicit tenancy gate (see removeInvoiceLineItem for rationale).
-          if (
-            entry &&
-            entry.orgId === orgId &&
-            entry.invoiceId === args.id
-          ) {
-            await ctx.db.patch(entryId, { invoiceId: undefined, updatedAt: now });
-          }
-        }
-      }
-    }
-
-    // 2. Delete all line items
     for (const li of lineItems) {
       await ctx.db.delete(li._id);
     }

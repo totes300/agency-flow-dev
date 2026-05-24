@@ -893,6 +893,7 @@ export const getSummary = query({
       durationMinutes: e.durationMinutes,
       isBillable: e.isBillable,
       invoiceId: e.invoiceId ? e.invoiceId.toString() : null,
+      settledAt: e.settledAt ?? null,
       costRate: e.costRate,
       billableRate: e.billableRate,
       date: e.date,

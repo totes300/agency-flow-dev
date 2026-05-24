@@ -30,14 +30,20 @@ type ProjectLite = {
   teamMembers?: Id<"users">[]
 }
 
-type BillingStatusFilter = "all" | "billable_uninvoiced" | "invoiced" | "non_billable"
+// Phase 8 — Vocabulary aligned with `entryStatus()` in
+// `convex/lib/settleEntries.ts`. Old values (`billable_uninvoiced`,
+// `invoiced`) were renamed; `invoiced` collapses into the broader
+// `closed` bucket because the row badge no longer splits invoiced /
+// settled (that detail lives in the period drill-down — Slice 4).
+type BillingStatusFilter = "all" | "open" | "draft" | "closed" | "non_billable"
 
 const DEFAULT_DATE_RANGE: DateRangePreset = "all"
 
 function parseBillingStatus(value: string | null): BillingStatusFilter | undefined {
   if (
-    value === "billable_uninvoiced" ||
-    value === "invoiced" ||
+    value === "open" ||
+    value === "draft" ||
+    value === "closed" ||
     value === "non_billable"
   ) {
     return value

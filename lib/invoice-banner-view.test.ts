@@ -34,16 +34,16 @@ describe("deriveInvoiceBannerView — Fixed", () => {
 })
 
 describe("deriveInvoiceBannerView — T&M", () => {
-  it("renders uninvoiced balance + minutes in title", () => {
+  it("renders open balance + minutes in title", () => {
     const state: InvoiceBannerState = {
       kind: "tm",
-      uninvoicedAmount: 4750,
-      uninvoicedMinutes: 47 * 60 + 30,
+      openAmount: 4750,
+      openMinutes: 47 * 60 + 30,
       lastInvoicedAt: Date.UTC(2026, 3, 1, 12, 0, 0),
       daysSinceLastInvoice: 30,
     }
     const view = deriveInvoiceBannerView(state, "EUR", tz)
-    expect(view.title).toContain("Uninvoiced balance")
+    expect(view.title).toContain("Open balance")
     expect(view.title).toContain("47:30")
     expect(view.amountLabel).toBe("unbilled")
     expect(view.subline).toContain("Last invoiced")

@@ -78,6 +78,16 @@ export type TimeEntryRow = {
   invoiceNumber: number | undefined
   invoiceStatus: "draft" | "invoiced" | "paid" | "void" | undefined
   invoiceDueDate: string | undefined
+  // Phase 8 — settlement snapshot. Used by selection-toolbar / stats /
+  // edit-modal lock gating, and by Slice 4's tooltips / drill-down.
+  settledAt: number | undefined
+  settledReason:
+    | "invoiced"
+    | "retainer_included"
+    | "fixed_included"
+    | undefined
+  settledPeriodStart: string | undefined
+  settledPeriodEnd: string | undefined
 }
 
 /** T&M billable + uninvoiced entries are the only rows that can be selected. */

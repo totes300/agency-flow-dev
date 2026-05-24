@@ -173,15 +173,15 @@ describe("T&M overview calculations", () => {
     let totalBillableMinutes = 0;
     let totalNonBillableMinutes = 0;
     let thisMonthBillableMinutes = 0;
-    let uninvoicedMinutes = 0;
-    let uninvoicedAmount = 0;
+    let openMinutes = 0;
+    let openAmount = 0;
     const billableByMonth: Record<string, number> = {};
 
     for (const e of entries) {
       if (e.isBillable) {
         totalBillableMinutes += e.durationMinutes;
-        uninvoicedMinutes += e.durationMinutes;
-        uninvoicedAmount += (e.durationMinutes / 60) * (e.billableRate ?? 0);
+        openMinutes += e.durationMinutes;
+        openAmount += (e.durationMinutes / 60) * (e.billableRate ?? 0);
         const monthKey = e.date.slice(0, 7);
         billableByMonth[monthKey] = (billableByMonth[monthKey] ?? 0) + e.durationMinutes;
       } else {
@@ -202,8 +202,8 @@ describe("T&M overview calculations", () => {
       totalBillableMinutes,
       totalNonBillableMinutes,
       thisMonthBillableMinutes,
-      uninvoicedMinutes,
-      uninvoicedAmount,
+      openMinutes,
+      openAmount,
       last3BillableMonths: last3,
     };
   }
@@ -218,11 +218,11 @@ describe("T&M overview calculations", () => {
     expect(m.totalNonBillableMinutes).toBe(300); // 5h
   });
 
-  it("computes uninvoiced from billable entries × billableRate", () => {
+  it("computes open from billable entries × billableRate", () => {
     const m = computeTmMetrics(entries, currentMonth);
     // 60h * 100 = 6000
-    expect(m.uninvoicedAmount).toBe(6000);
-    expect(m.uninvoicedMinutes).toBe(3600);
+    expect(m.openAmount).toBe(6000);
+    expect(m.openMinutes).toBe(3600);
   });
 
   it("computes thisMonthBillableMinutes for current month billable only", () => {

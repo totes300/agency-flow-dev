@@ -111,7 +111,7 @@ export function ProjectInvoices({
         billingType={billingType}
         currency={currency}
         metrics={metrics}
-        uninvoicedAmount={overview?.uninvoicedAmount ?? 0}
+        openAmount={overview?.openAmount ?? 0}
       />
 
       {/* Retainer callout — replaces a 3rd card with a primary CTA */}

@@ -20,7 +20,10 @@ function computeStats(
   for (const e of entries) {
     total += e.durationMinutes
     if (e.isBillable) billable += e.durationMinutes
-    if (e.isBillable && !e.invoiceId) {
+    // Phase 8 — "unbilled" is open billable: not on an invoice AND not
+    // settled by a period close. A retainer-included entry is covered by
+    // the monthly fee and should not appear in the unbilled stat.
+    if (e.isBillable && !e.invoiceId && !e.settledAt) {
       unbilledMinutes += e.durationMinutes
       unbilledAmount += (e.durationMinutes / 60) * e.billableRate
     }

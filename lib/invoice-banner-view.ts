@@ -24,8 +24,10 @@ export type InvoiceBannerState =
     }
   | {
       kind: "tm"
-      uninvoicedAmount: number
-      uninvoicedMinutes: number
+      // Phase 8 — was `uninvoiced*`; renamed to `open*` to match the new
+      // entry-display vocabulary (open / draft / closed / non_billable).
+      openAmount: number
+      openMinutes: number
       lastInvoicedAt: number | null
       daysSinceLastInvoice: number | null
     }
@@ -75,9 +77,9 @@ export function deriveInvoiceBannerView(
 
     case "tm":
       return {
-        title: `Uninvoiced balance · ${formatMinutes(state.uninvoicedMinutes)}`,
+        title: `Open balance · ${formatMinutes(state.openMinutes)}`,
         subline: lastInvoicedSubline(state.lastInvoicedAt),
-        amount: formatCurrencyPrecise(state.uninvoicedAmount, currency),
+        amount: formatCurrencyPrecise(state.openAmount, currency),
         amountLabel: "unbilled",
         amountTone: "neutral",
         labelTone: "muted",

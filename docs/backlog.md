@@ -1333,6 +1333,36 @@ In-editor rendering is unchanged — TaskItem's NodeView still drives the viewpo
 > - `docs/phase-8-slice-3-period-close-reopen.md` — retainer within-budget close + write guard
 > - `docs/phase-8-slice-4-cycle-close-and-ui-polish.md` — rollover cycle close + drill-down + entry-list polish
 
+### Slice 1 — Settlement foundation + invoice transitions ✅ (2026-05-24)
+
+The T&M / Fixed / void axis of the settlement model. After this slice, finalizing any invoice stamps its entries with `settledAt` + `settledReason`; voiding (or deleting, or reverting to draft) unsettles them per the transition table. The entry-edit/delete guards key on both `invoiceId` AND `settledAt`. A backfill mutation brought existing dummy invoices forward into the new model.
+
+Retainer within-budget close (the headline ❌ bug) stays for Slice 3 — Slice 1 only handles the invoice-anchored paths.
+
+- [x] Schema — added `settledAt`, `settledReason` (3-value enum: `invoiced` / `retainer_included` / `fixed_included`), `settledPeriodStart`, `settledPeriodEnd` to `timeEntries`. No new indexes; canonical-set rule documented inline.
+- [x] New `convex/lib/settleEntries.ts` — `settleInvoiceEntries(ctx, invoiceId, orgId, periodStart?, periodEnd?, reason="invoiced")` and `unsettleInvoiceEntries(ctx, invoiceId, orgId, { clearInvoiceId? })`. Both walk via `invoiceLineItems.by_invoiceId` (no new index), enforce tenancy, and respect the canonical-set invariant (only entries referenced by a line item AND carrying matching `invoiceId` are touched).
+- [x] `entryStatus(e)` derived helper — `!isBillable → non_billable`, `invoiceId && !settledAt → draft`, `settledAt → closed`, else `open`. 9 unit tests covering all reason values + invariants. Settled non-billable still displays `non_billable` (Revision Pass #5).
+- [x] `applyStatusTransition` in `convex/invoices.ts` wired per the PRD's transition table: `draft → invoiced` settles (Fixed → `fixed_included`, else `invoiced`); `→ void` unsettles + clears `invoiceId`; demotions back to `draft` unsettle but keep `invoiceId` so entries display as `draft`. `paid → void` remains disallowed (existing `VALID_TRANSITIONS`).
+- [x] `deleteInvoice` — inline unlink loop replaced with `unsettleInvoiceEntries({ clearInvoiceId: true })`. Same tenancy + canonical-set guarantees, plus clears the four settlement fields so a previously-settled entry doesn't carry stale snapshot data forward.
+- [x] `timeEntries.update` / `timeEntries.remove` / `bulkUpdateBillable` — all three guards now key on `invoiceId || settledAt`. Distinct error messages for invoice-link vs settled-no-invoice so the unblock path is obvious.
+- [x] `listProjectEntries.billingStatus` enum extended: `open` / `draft` / `closed` / `non_billable` (was `billable_uninvoiced` / `invoiced` / `non_billable`). Filter logic mirrors `entryStatus()` exactly. `Row` shape gained `settledAt` / `settledReason` / `settledPeriodStart` / `settledPeriodEnd` so Slice 4's tooltips and drill-down read straight from the query.
+- [x] `projectOverview` shape renamed and extended (T&M-oriented entry buckets):
+  - `uninvoicedMinutes/Amount` → `openMinutes/Amount`
+  - `invoicedBillableMinutes/Amount` → `invoicedMinutes/Amount`
+  - NEW `settledMinutes/Amount` — sum of `retainer_included` + `fixed_included`
+  - Existing Fixed-specific `invoicedAmount` (sum of `lineType: "fixed"` line items) renamed to `fixedLineItemsAmount` to dodge the name collision; zero external readers.
+- [x] All 8 consumer files updated: [convex/timeEntries.ts](convex/timeEntries.ts), [convex/lib/__tests__/projectOverview.test.ts](convex/lib/__tests__/projectOverview.test.ts), [components/projects/tm-overview.tsx](components/projects/tm-overview.tsx), [lib/invoice-banner-view.ts](lib/invoice-banner-view.ts) + [.test.ts](lib/invoice-banner-view.test.ts) (banner kind `tm` field rename), [components/invoices/project-invoices.tsx](components/invoices/project-invoices.tsx) + [project-invoices-payment-cards.tsx](components/invoices/project-invoices-payment-cards.tsx) (prop rename `uninvoicedAmount` → `openAmount`), [components/projects/project-time.tsx](components/projects/project-time.tsx) + [project-time-filters.tsx](components/projects/project-time-filters.tsx) (filter enum rename, dropdown options).
+- [x] **Invoice-predicate audit (Revision Pass #4)** — every `invoiceId` billing predicate reclassified:
+  - `convex/lib/readyToInvoice.ts:213` — added `|| e.settledAt` so settled hours can't bubble back into the Ready feed.
+  - `convex/lib/projectSummary.ts:192` — `billed` bucket now keys on `invoiceId || settledAt` (a retainer-included hour is "billed" via the monthly fee, not "unbilled").
+  - `convex/invoices.ts:880, 1355` — `createInvoice` candidate-entry filters now exclude `settledAt` so a Fixed-included or retainer-included hour can't be double-billed.
+  - `convex/timeEntries.ts:526` — `bulkUpdateBillable` skip predicate covers both axes.
+  - `components/projects/project-time-stats.tsx`, `project-time-selection-toolbar.tsx`, `time-entry-modal.tsx` — "unbilled" / "flippable" / `isLocked` predicates updated.
+  - Upstream `EntryInput`/`TimeEntryInput` shapes in `projectSummary.ts` and `readyToInvoice.ts` gained `settledAt`; the two callsites in `convex/projects.ts:895` and `convex/invoices.ts:550` pass it through.
+- [x] `convex/lib/settleEntries.ts → backfillSettledFromInvoiceId` internalMutation — walks every entry, stamps `settledAt`/`settledReason`/`settledPeriodStart/End` for entries linked to finalized invoices. Idempotent. Per-project `billingType` cache. Run with `npx convex run lib/settleEntries:backfillSettledFromInvoiceId` once after deploy.
+- [x] 9 new tests for `entryStatus()`. All 99 retainer + settlement tests green (49 retainerBalance + 17 retainerCycle + 17 retainer-row-action + 7 projectOverview + 9 settleEntries = 99). Same 4 pre-existing failures (tiptap vendor / activity timestamp / task indicators) remain — untouched by this diff.
+- [x] `npx tsc --noEmit` clean. Lint clean on every touched file (2 pre-existing `any` errors at `convex/invoices.ts:1022, 1104` from commit `cd496708` April 19 are out of scope).
+
 ### Slice 2 — Retainer cycle extraction + `isMonthClosed` rename ✅ (2026-05-24)
 
 Behavior-preserving refactor that consolidates the cycle math and renames the overloaded `isMonthClosed` flag. No entries are settled by this slice — `closedAt`/`closedBy` ship as optional schema fields, populated by Slice 3/4. The 3-state pill (`In progress` / `Open` / `Closed`) renders the new lifecycle even though `Closed` won't fire on real data until Slice 3 lands a Close button.

@@ -31,14 +31,17 @@ export function TmOverview({
   const currency = project.currency
   const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK
 
-  // Banner state — render only when there are uninvoiced billable hours.
+  // Banner state — render only when there are open (unbilled, unsettled)
+  // billable hours. Phase 8: field renamed `uninvoiced*` → `open*` so the
+  // name reflects post-settlement semantics (a Fixed-invoice entry is now
+  // "settled / fixed_included", not "uninvoiced").
   // Computed during render (no useEffect sync) per CLAUDE.md derived-state rule.
   const bannerState: InvoiceBannerState | null =
-    overview && metrics && overview.uninvoicedAmount > 0
+    overview && metrics && overview.openAmount > 0
       ? {
           kind: "tm",
-          uninvoicedAmount: overview.uninvoicedAmount,
-          uninvoicedMinutes: overview.uninvoicedMinutes,
+          openAmount: overview.openAmount,
+          openMinutes: overview.openMinutes,
           lastInvoicedAt: metrics.lastInvoicedAt,
           daysSinceLastInvoice: daysSinceLastInvoice(metrics.lastInvoicedAt, { timezone }),
         }

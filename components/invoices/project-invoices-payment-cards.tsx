@@ -30,13 +30,13 @@ export function ProjectInvoicesPaymentCards({
   billingType,
   currency,
   metrics,
-  uninvoicedAmount,
+  openAmount,
 }: {
   billingType: string
   currency: string
   metrics: ProjectInvoicesMetrics
-  /** T&M only: uninvoiced time $ from the project overview query. */
-  uninvoicedAmount: number
+  /** T&M only: open (unbilled, unsettled) time $ from the project overview query. */
+  openAmount: number
 }) {
   const cards = [
     <PaymentBucketCard
@@ -59,7 +59,7 @@ export function ProjectInvoicesPaymentCards({
       <MetricCard
         key="unbilled"
         label="Unbilled time"
-        value={formatCurrency(uninvoicedAmount, currency)}
+        value={formatCurrency(openAmount, currency)}
       />,
     )
   } else if (billingType === "fixed") {

@@ -354,6 +354,37 @@ export default defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
     createdBy: v.id("users"),
+
+    // ─── Phase 8 — Settlement fields ─────────────────────────────────────
+    //
+    // `invoiceId` tracks the document linkage; the four fields below track
+    // client-facing work closure as a separate axis. The two are NOT the
+    // same concept — a Fixed-invoice entry has `invoiceId` set but its
+    // revenue is the fixed line, not the time rate; a retainer-within-
+    // budget entry has no invoice but is closed by the period-close flow.
+    //
+    // An entry is "locked" (no edits / no delete) when either field is set.
+    // For "is this hour revenue-bearing?" reports, read `settledReason` —
+    // only `"invoiced"` means revenue was rate-driven on a document.
+    //
+    // Populated by `convex/lib/settleEntries.ts` helpers (invoice-anchored
+    // settlement, Slice 1) and `convex/retainerPeriods.ts:closePeriod`
+    // (period-anchored settlement, Slice 3). See parent PRD § Derived
+    // Status for the row-level `entryStatus()` derivation.
+    settledAt: v.optional(v.number()),         // event timestamp (ms)
+    settledReason: v.optional(
+      v.union(
+        v.literal("invoiced"),                  // billed hourly — T&M direct OR retainer overage line
+        v.literal("retainer_included"),         // covered by retainer monthly fee (within-budget close)
+        v.literal("fixed_included"),            // covered by fixed project price (Fixed invoice close)
+      ),
+    ),
+    settledPeriodStart: v.optional(v.string()), // YYYY-MM-DD
+    settledPeriodEnd: v.optional(v.string()),   // YYYY-MM-DD
+    // No new index — settle helpers walk via `invoiceLineItems.by_invoiceId`.
+    // Canonical-set rule: "entries settled by invoice X" = the union of
+    // line-item `timeEntryIds` arrays, NOT every entry that happens to
+    // carry `invoiceId === X`. Data drift is treated as a bug.
   })
     .index("by_orgId", ["orgId"])
     .index("by_taskId", ["taskId"])

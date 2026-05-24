@@ -41,10 +41,14 @@ type Member = {
   imageUrl: string | undefined
 }
 
+// Phase 8 — three-state lifecycle + non-billable. The old "Invoiced"
+// label is gone because the row badge collapses invoiced + settled into
+// one "Closed" bucket (Slice 4 drill-down splits them when needed).
 const BILLING_STATUS_OPTIONS = [
   { value: ALL_VALUE, label: "All" },
-  { value: "billable_uninvoiced", label: "Billable · Uninvoiced" },
-  { value: "invoiced", label: "Invoiced" },
+  { value: "open", label: "Open" },
+  { value: "draft", label: "Draft" },
+  { value: "closed", label: "Closed" },
   { value: "non_billable", label: "Non-billable" },
 ] as const
 

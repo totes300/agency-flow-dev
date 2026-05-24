@@ -1,0 +1,1890 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Time Tracking V1 Prototype</title>
+  <style>
+    :root {
+      --bg: #f7f7f5;
+      --surface: #ffffff;
+      --surface-2: #fbfbfa;
+      --surface-3: #f1f1ee;
+      --text: #1e1e1c;
+      --muted: #6c6a64;
+      --subtle: #9a978f;
+      --border: #e6e3dc;
+      --border-strong: #d4d0c7;
+      --green: #14843b;
+      --green-bg: #ebf8ef;
+      --amber: #a85d00;
+      --amber-bg: #fff4df;
+      --red: #b42318;
+      --red-bg: #fff0ed;
+      --blue: #1f5fda;
+      --blue-bg: #eef4ff;
+      --shadow: 0 18px 50px rgba(20, 18, 15, 0.14);
+      --radius: 8px;
+    }
+
+    * { box-sizing: border-box; }
+
+    html,
+    body {
+      margin: 0;
+      min-height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 14px;
+      line-height: 1.45;
+    }
+
+    button,
+    input,
+    select,
+    textarea {
+      font: inherit;
+    }
+
+    button {
+      border: 0;
+      cursor: pointer;
+    }
+
+    .app {
+      display: grid;
+      grid-template-columns: 248px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    .sidebar {
+      border-right: 1px solid var(--border);
+      background: #fbfbfa;
+      padding: 18px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 4px 8px;
+      font-weight: 650;
+    }
+
+    .brand-mark {
+      width: 30px;
+      height: 30px;
+      border-radius: 6px;
+      background: #34363b;
+      color: white;
+      display: grid;
+      place-items: center;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .search-shell {
+      height: 36px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: white;
+      color: var(--subtle);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 10px;
+    }
+
+    .nav-group {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .nav-label {
+      margin: 12px 8px 5px;
+      color: var(--subtle);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      min-height: 32px;
+      padding: 0 9px;
+      border-radius: 7px;
+      color: var(--muted);
+      font-weight: 520;
+    }
+
+    .nav-item.active {
+      background: var(--surface-3);
+      color: var(--text);
+    }
+
+    .nav-item .dot {
+      margin-left: auto;
+      min-width: 18px;
+      height: 18px;
+      padding: 0 5px;
+      border-radius: 999px;
+      background: #ff5964;
+      color: white;
+      font-size: 11px;
+      display: grid;
+      place-items: center;
+    }
+
+    .main {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .topbar {
+      height: 56px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 24px;
+    }
+
+    .title-wrap {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 700;
+    }
+
+    .helper {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .top-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .icon-btn,
+    .btn,
+    .chip {
+      height: 34px;
+      border-radius: 7px;
+      border: 1px solid var(--border);
+      background: white;
+      color: var(--text);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      padding: 0 11px;
+      font-weight: 600;
+    }
+
+    .icon-btn {
+      width: 34px;
+      padding: 0;
+      color: var(--muted);
+    }
+
+    .btn.primary {
+      background: #17a300;
+      border-color: #17a300;
+      color: white;
+    }
+
+    .btn.ghost {
+      background: transparent;
+      color: var(--muted);
+    }
+
+    .btn.danger {
+      color: var(--red);
+      background: var(--red-bg);
+      border-color: #ffd4cc;
+    }
+
+    .btn:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
+    .tabs {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0 24px;
+      display: flex;
+      align-items: flex-end;
+      gap: 4px;
+    }
+
+    .tab {
+      height: 46px;
+      padding: 0 15px;
+      border-bottom: 2px solid transparent;
+      background: transparent;
+      color: var(--muted);
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 650;
+    }
+
+    .tab.active {
+      color: var(--text);
+      border-bottom-color: var(--text);
+    }
+
+    .count {
+      min-width: 22px;
+      height: 19px;
+      padding: 0 7px;
+      border-radius: 999px;
+      background: var(--surface-3);
+      color: var(--muted);
+      font-size: 12px;
+      display: grid;
+      place-items: center;
+    }
+
+    .attention {
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      background: #f59e0b;
+      box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.18);
+    }
+
+    .toolbar {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      border-bottom: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.96);
+      backdrop-filter: blur(10px);
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .search {
+      width: 280px;
+      height: 36px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: white;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 10px;
+      color: var(--muted);
+    }
+
+    .search input {
+      width: 100%;
+      border: 0;
+      outline: 0;
+      background: transparent;
+      color: var(--text);
+    }
+
+    .toolbar-spacer {
+      flex: 1;
+    }
+
+    .chip.active {
+      background: var(--blue-bg);
+      border-color: #cddcff;
+      color: var(--blue);
+    }
+
+    .mini-count {
+      min-width: 18px;
+      height: 18px;
+      border-radius: 999px;
+      background: var(--blue);
+      color: white;
+      font-size: 11px;
+      display: grid;
+      place-items: center;
+    }
+
+    .menu-wrap {
+      position: relative;
+    }
+
+    .menu {
+      display: none;
+      position: absolute;
+      top: 40px;
+      left: 0;
+      width: 210px;
+      background: white;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      padding: 6px;
+      z-index: 50;
+    }
+
+    .menu.open {
+      display: block;
+    }
+
+    .menu button {
+      width: 100%;
+      height: 34px;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--text);
+      text-align: left;
+      padding: 0 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .menu button:hover {
+      background: var(--surface-3);
+    }
+
+    .workspace {
+      padding: 20px 24px 96px;
+      overflow: auto;
+    }
+
+    .summary-line {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 12px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .summary-strong {
+      color: var(--text);
+      font-weight: 700;
+    }
+
+    .table-shell {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: white;
+      overflow: hidden;
+    }
+
+    .retainer-board {
+      display: grid;
+      grid-template-columns: 360px minmax(0, 1fr);
+      min-height: 640px;
+      background: white;
+    }
+
+    .period-list {
+      border-right: 1px solid var(--border);
+      background: #fbfbfa;
+      overflow: auto;
+    }
+
+    .period-list-head {
+      padding: 14px 16px 10px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .period-list-title {
+      font-size: 12px;
+      font-weight: 800;
+      color: var(--subtle);
+      text-transform: uppercase;
+    }
+
+    .period-card {
+      width: 100%;
+      border: 0;
+      border-bottom: 1px solid var(--border);
+      background: transparent;
+      text-align: left;
+      padding: 14px 16px;
+      display: grid;
+      gap: 9px;
+    }
+
+    .period-card:hover {
+      background: #f4f3ef;
+    }
+
+    .period-card.active {
+      background: white;
+      box-shadow: inset 3px 0 0 #1f1f1d;
+    }
+
+    .period-card-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .period-card-title {
+      font-weight: 750;
+      color: var(--text);
+    }
+
+    .period-card-sub {
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 12.5px;
+    }
+
+    .period-card-metrics {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .retainer-detail {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .detail-hero {
+      padding: 18px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 18px;
+    }
+
+    .detail-title {
+      font-size: 18px;
+      font-weight: 800;
+      margin-bottom: 3px;
+    }
+
+    .detail-meta {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .metric-strip {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(120px, 1fr));
+      gap: 10px;
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--border);
+      background: #fbfbfa;
+    }
+
+    .mini-metric {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: white;
+      padding: 10px 12px;
+    }
+
+    .mini-metric-label {
+      color: var(--subtle);
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    .mini-metric-value {
+      margin-top: 4px;
+      font-size: 18px;
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .work-area {
+      padding: 18px 20px 22px;
+      display: grid;
+      gap: 16px;
+    }
+
+    .work-section-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: baseline;
+    }
+
+    .work-section-title {
+      font-size: 14px;
+      font-weight: 800;
+    }
+
+    .task-stack {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .task-block {
+      border-bottom: 1px solid var(--border);
+      background: white;
+    }
+
+    .task-block:last-child {
+      border-bottom: 0;
+    }
+
+    .task-summary {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 120px 110px;
+      gap: 12px;
+      min-height: 48px;
+      align-items: center;
+      padding: 0 14px;
+      background: #fff;
+    }
+
+    .task-title {
+      font-weight: 750;
+    }
+
+    .entry-list {
+      background: #fbfbfa;
+      border-top: 1px solid var(--border);
+    }
+
+    .entry-line {
+      display: grid;
+      grid-template-columns: 96px 132px minmax(0, 1fr) 78px;
+      gap: 12px;
+      align-items: center;
+      min-height: 38px;
+      padding: 0 14px 0 34px;
+      color: var(--muted);
+      border-bottom: 1px solid #eeece6;
+      font-size: 13px;
+    }
+
+    .entry-line:last-child {
+      border-bottom: 0;
+    }
+
+    .grid {
+      display: grid;
+      align-items: center;
+      min-width: 1180px;
+    }
+
+    .grid.tm {
+      grid-template-columns: 38px 94px 150px 128px minmax(220px, 1.4fr) minmax(180px, 1fr) 150px 94px 132px 92px 96px 110px 44px;
+    }
+
+    .grid.retainer {
+      grid-template-columns: 38px 150px minmax(190px, 1fr) 150px 96px 96px 180px 104px 104px 150px 44px;
+    }
+
+    .grid.fixed {
+      grid-template-columns: 38px minmax(200px, 1.1fr) 150px minmax(220px, 1.2fr) 142px 128px 104px 116px 180px 140px 44px;
+    }
+
+    .head {
+      min-height: 38px;
+      background: var(--surface-2);
+      border-bottom: 1px solid var(--border);
+      color: var(--subtle);
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    .cell {
+      padding: 0 10px;
+      min-width: 0;
+    }
+
+    .row {
+      min-height: calc(46px + var(--row-extra, 0px));
+      border-bottom: 1px solid var(--border);
+      background: white;
+    }
+
+    .row:hover {
+      background: #fbfbfa;
+    }
+
+    .group-row {
+      min-height: calc(44px + var(--row-extra, 0px));
+      background: #f6f5f2;
+      font-weight: 700;
+    }
+
+    .group-row .cell {
+      color: var(--text);
+    }
+
+    .entry-row {
+      background: #fff;
+    }
+
+    .muted {
+      color: var(--muted);
+    }
+
+    .subtle {
+      color: var(--subtle);
+    }
+
+    .num {
+      font-variant-numeric: tabular-nums;
+    }
+
+    .right {
+      text-align: right;
+    }
+
+    .truncate {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .inline {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .avatar {
+      width: 23px;
+      height: 23px;
+      border-radius: 999px;
+      background: #42474f;
+      color: white;
+      font-size: 10px;
+      font-weight: 700;
+      display: grid;
+      place-items: center;
+      flex: 0 0 auto;
+    }
+
+    .project-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 3px;
+      flex: 0 0 auto;
+    }
+
+    .check {
+      width: 16px;
+      height: 16px;
+      border: 1.5px solid var(--border-strong);
+      border-radius: 4px;
+      background: white;
+      display: grid;
+      place-items: center;
+      color: white;
+      margin-left: 2px;
+    }
+
+    .check.checked {
+      background: var(--text);
+      border-color: var(--text);
+    }
+
+    .check.checked:after {
+      content: "x";
+      font-size: 12px;
+      line-height: 1;
+    }
+
+    .pill {
+      height: 22px;
+      border-radius: 999px;
+      padding: 0 8px;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 12px;
+      font-weight: 650;
+      white-space: nowrap;
+    }
+
+    .pill.green { color: var(--green); background: var(--green-bg); }
+    .pill.amber { color: var(--amber); background: var(--amber-bg); }
+    .pill.red { color: var(--red); background: var(--red-bg); }
+    .pill.neutral { color: var(--muted); background: var(--surface-3); }
+    .pill.blue { color: var(--blue); background: var(--blue-bg); }
+
+    .quiet-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      font-weight: 700;
+      color: var(--muted);
+    }
+
+    .quiet-status:before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      background: var(--subtle);
+    }
+
+    .quiet-status.amber { color: var(--amber); }
+    .quiet-status.amber:before { background: #f59e0b; }
+    .quiet-status.green { color: var(--green); }
+    .quiet-status.green:before { background: #16a34a; }
+    .quiet-status.red { color: var(--red); }
+    .quiet-status.red:before { background: #dc2626; }
+
+    .bar {
+      height: 7px;
+      border-radius: 999px;
+      background: #ebe8e0;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .bar-fill {
+      height: 100%;
+      border-radius: 999px;
+      background: #222;
+    }
+
+    .bar-fill.green { background: #16a34a; }
+    .bar-fill.amber { background: #f59e0b; }
+    .bar-fill.red { background: #dc2626; }
+
+    .row-actions {
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--muted);
+      font-weight: 800;
+    }
+
+    .row-actions:hover {
+      background: var(--surface-3);
+      color: var(--text);
+    }
+
+    .footer-note {
+      min-height: calc(44px + var(--row-extra, 0px));
+      background: #fbfbfa;
+      border-bottom: 1px solid var(--border-strong);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 0 16px 0 48px;
+      min-width: 1180px;
+    }
+
+    .bulkbar {
+      position: fixed;
+      left: 50%;
+      bottom: 24px;
+      transform: translateX(-50%) translateY(120px);
+      opacity: 0;
+      pointer-events: none;
+      transition: transform 160ms ease, opacity 160ms ease;
+      min-width: 560px;
+      max-width: calc(100vw - 48px);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: #1f1f1d;
+      color: white;
+      box-shadow: var(--shadow);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 10px 12px 10px 16px;
+      z-index: 60;
+    }
+
+    .bulkbar.show {
+      transform: translateX(-50%) translateY(0);
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .bulkbar .muted {
+      color: #c9c6bd;
+    }
+
+    .bulkbar .btn {
+      background: white;
+      color: #1f1f1d;
+      border-color: white;
+    }
+
+    .overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(18, 17, 15, 0.38);
+      display: none;
+      z-index: 80;
+    }
+
+    .overlay.open {
+      display: block;
+    }
+
+    .drawer {
+      position: fixed;
+      top: 0;
+      right: 0;
+      width: 390px;
+      max-width: calc(100vw - 28px);
+      height: 100%;
+      background: white;
+      box-shadow: var(--shadow);
+      transform: translateX(110%);
+      transition: transform 180ms ease;
+      z-index: 90;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .drawer.open {
+      transform: translateX(0);
+    }
+
+    .modal {
+      position: fixed;
+      inset: 0;
+      display: none;
+      place-items: center;
+      z-index: 100;
+      padding: 24px;
+    }
+
+    .modal.open {
+      display: grid;
+    }
+
+    .modal-card {
+      width: 620px;
+      max-width: calc(100vw - 48px);
+      max-height: calc(100vh - 48px);
+      overflow: auto;
+      background: white;
+      border-radius: 10px;
+      box-shadow: var(--shadow);
+      border: 1px solid var(--border);
+    }
+
+    .panel-head {
+      min-height: 60px;
+      padding: 16px 18px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .panel-title {
+      font-size: 16px;
+      font-weight: 750;
+    }
+
+    .panel-body {
+      padding: 18px;
+      display: grid;
+      gap: 16px;
+    }
+
+    .panel-foot {
+      padding: 14px 18px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      background: #fbfbfa;
+    }
+
+    .field {
+      display: grid;
+      gap: 6px;
+    }
+
+    .field label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 750;
+    }
+
+    .field input,
+    .field select,
+    .field textarea {
+      width: 100%;
+      min-height: 38px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 8px 10px;
+      outline: none;
+      background: white;
+      color: var(--text);
+    }
+
+    .field textarea {
+      min-height: 82px;
+      resize: vertical;
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    .callout {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #fbfbfa;
+      padding: 12px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .callout.amber {
+      border-color: #ffe0a3;
+      background: var(--amber-bg);
+    }
+
+    .invoice-lines {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .invoice-line {
+      min-height: 42px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 96px 112px;
+      gap: 10px;
+      align-items: center;
+      padding: 0 12px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .invoice-line:last-child {
+      border-bottom: 0;
+    }
+
+    .toast {
+      position: fixed;
+      right: 24px;
+      bottom: 24px;
+      background: #1f1f1d;
+      color: white;
+      border-radius: 9px;
+      padding: 12px 14px;
+      box-shadow: var(--shadow);
+      transform: translateY(80px);
+      opacity: 0;
+      transition: all 160ms ease;
+      z-index: 130;
+    }
+
+    .toast.show {
+      transform: translateY(0);
+      opacity: 1;
+    }
+
+    .empty {
+      min-height: 280px;
+      display: grid;
+      place-items: center;
+      text-align: center;
+      color: var(--muted);
+    }
+
+    @media (max-width: 900px) {
+      .app {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar {
+        display: none;
+      }
+
+      .search {
+        width: 100%;
+      }
+
+      .toolbar-spacer {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">KO</div>
+        <div>Konverted</div>
+      </div>
+      <div class="search-shell">Search <span style="margin-left:auto;color:var(--subtle)">Cmd K</span></div>
+      <nav class="nav-group">
+        <div class="nav-item">Home</div>
+        <div class="nav-item">Notifications <span class="dot">4</span></div>
+        <div class="nav-item">Clients</div>
+        <div class="nav-item">Projects</div>
+        <div class="nav-item">Tasks</div>
+        <div class="nav-item active">Time Tracking</div>
+        <div class="nav-item">Timesheets</div>
+        <div class="nav-item">Invoices</div>
+        <div class="nav-item">Reports</div>
+      </nav>
+      <div style="margin-top:auto" class="nav-group">
+        <div class="nav-item">Settings</div>
+        <div class="nav-item">? Support</div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="title-wrap">
+          <h1>Time Tracking</h1>
+          <div class="helper">Review time across projects, clean it up, and create invoice drafts.</div>
+        </div>
+        <div class="top-actions">
+          <button class="icon-btn" title="Timer">&gt;</button>
+          <button class="icon-btn" title="More">...</button>
+          <button class="btn primary" data-open-add>+ Add Time</button>
+        </div>
+      </header>
+
+      <section class="tabs" aria-label="Billing type tabs">
+        <button class="tab active" data-tab="tm">T&amp;M <span class="count" data-count="tm">3</span><span class="attention" title="Unbilled work older than cadence"></span></button>
+        <button class="tab" data-tab="retainer">Retainer <span class="count" data-count="retainer">5</span><span class="attention" title="Ready periods"></span></button>
+        <button class="tab" data-tab="fixed">Fixed <span class="count" data-count="fixed">3</span><span class="attention" title="Over-scope work"></span></button>
+      </section>
+
+      <section class="toolbar">
+        <div class="search">Search <input id="searchInput" placeholder="Search task, note, project, client, member"></div>
+        <div class="menu-wrap">
+          <button class="chip" id="dateButton">This month v</button>
+          <div class="menu" id="dateMenu"></div>
+        </div>
+        <button class="chip active" data-open-filters>Filter <span class="mini-count" id="filterCount">2</span></button>
+        <div class="menu-wrap" id="groupWrap">
+          <button class="chip" id="groupButton">By Project v</button>
+          <div class="menu" id="groupMenu"></div>
+        </div>
+        <div class="toolbar-spacer"></div>
+        <button class="chip" id="densityButton">Density: Compact</button>
+      </section>
+
+      <section class="workspace">
+        <div class="summary-line">
+          <div id="summaryText"></div>
+          <div class="muted" id="modeHint"></div>
+        </div>
+        <div class="table-shell" id="tableShell"></div>
+      </section>
+    </main>
+  </div>
+
+  <div class="bulkbar" id="bulkbar">
+    <div>
+      <strong id="bulkTitle">0 selected</strong>
+      <span class="muted" id="bulkMeta"></span>
+    </div>
+    <div class="inline">
+      <button class="btn" id="bulkInvoice">Create invoice</button>
+      <button class="btn ghost" id="bulkClear" style="color:white;border-color:#555">Clear</button>
+    </div>
+  </div>
+
+  <div class="overlay" id="overlay"></div>
+
+  <aside class="drawer" id="filterDrawer">
+    <div class="panel-head">
+      <div>
+        <div class="panel-title">Filters</div>
+        <div class="helper">Values here are mocked for prototype review.</div>
+      </div>
+      <button class="icon-btn" data-close-panels>x</button>
+    </div>
+    <div class="panel-body">
+      <div class="field">
+        <label>Client</label>
+        <select id="clientFilter">
+          <option value="all">All clients</option>
+          <option>Acme Corp</option>
+          <option>Northwind</option>
+          <option>Konverted</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Project</label>
+        <select id="projectFilter">
+          <option value="all">All projects</option>
+          <option>Acme Website Redesign</option>
+          <option>Northwind Growth Sprint</option>
+          <option>Konverted Monthly Retainer</option>
+          <option>Brand Launch Fixed</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Member</label>
+        <select id="memberFilter">
+          <option value="all">All members</option>
+          <option>Adam Toth</option>
+          <option>Ella Stone</option>
+          <option>Mark Lane</option>
+        </select>
+      </div>
+      <div class="field">
+        <label id="statusLabel">Billing status</label>
+        <select id="statusFilter"></select>
+      </div>
+    </div>
+    <div class="panel-foot">
+      <button class="btn ghost" id="clearFilters">Clear filters</button>
+      <button class="btn primary" data-close-panels>Done</button>
+    </div>
+  </aside>
+
+  <section class="modal" id="addModal">
+    <div class="modal-card">
+      <div class="panel-head">
+        <div>
+          <div class="panel-title">Add Time</div>
+          <div class="helper">Manual entry across projects.</div>
+        </div>
+        <button class="icon-btn" data-close-panels>x</button>
+      </div>
+      <div class="panel-body">
+        <div class="form-grid">
+          <div class="field">
+            <label>Project</label>
+            <select>
+              <option>Acme Website Redesign</option>
+              <option>Konverted Monthly Retainer</option>
+              <option>Brand Launch Fixed</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Task</label>
+            <select>
+              <option>Homepage wireframes</option>
+              <option>Weekly optimization report</option>
+              <option>Case study landing page</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Member</label>
+            <select>
+              <option>Adam Toth</option>
+              <option>Ella Stone</option>
+              <option>Mark Lane</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Date</label>
+            <input type="date" value="2026-05-09">
+          </div>
+          <div class="field">
+            <label>Duration</label>
+            <input value="01:30" placeholder="01:30">
+          </div>
+          <div class="field">
+            <label>Billing</label>
+            <select>
+              <option>Billable</option>
+              <option>Non-billable</option>
+            </select>
+          </div>
+        </div>
+        <div class="field">
+          <label>Note</label>
+          <textarea placeholder="What was done?"></textarea>
+        </div>
+      </div>
+      <div class="panel-foot">
+        <button class="btn ghost" data-close-panels>Cancel</button>
+        <button class="btn primary" id="saveTime">Save time</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="modal" id="invoiceModal">
+    <div class="modal-card">
+      <div class="panel-head">
+        <div>
+          <div class="panel-title" id="invoiceTitle">Create invoice draft</div>
+          <div class="helper" id="invoiceSubtitle">Review the draft setup before continuing.</div>
+        </div>
+        <button class="icon-btn" data-close-panels>x</button>
+      </div>
+      <div class="panel-body" id="invoiceBody"></div>
+      <div class="panel-foot">
+        <button class="btn ghost" data-close-panels>Cancel</button>
+        <button class="btn primary" id="createDraft">Create draft</button>
+      </div>
+    </div>
+  </section>
+
+  <div class="toast" id="toast">Saved</div>
+
+  <script>
+    const state = {
+      tab: "tm",
+      dateRange: "This month",
+      group: { tm: "Project", retainer: "Project period", fixed: "Project" },
+      search: "",
+      density: "Compact",
+      filters: {
+        client: "all",
+        project: "all",
+        member: "all",
+        status: "all"
+      },
+      selected: new Set(),
+      activeRetainerId: "r2"
+    };
+
+    const statusOptions = {
+      tm: ["All", "Unbilled", "Invoiced", "Non-billable"],
+      retainer: ["All", "Open", "Ready", "Done"],
+      fixed: ["All", "Open", "Ready", "Done"]
+    };
+
+    const groupOptions = {
+      tm: ["Project", "Task", "Member", "Day", "Week", "Month", "None"],
+      retainer: ["Project period", "Project", "Client", "Month", "Member"],
+      fixed: ["Project", "Category", "Client", "Member", "Month"]
+    };
+
+    const dateOptions = ["This week", "Last week", "This month", "Last month", "This year", "All time", "Custom"];
+
+    const tmRows = [
+      { id: "tm1", project: "Acme Website Redesign", client: "Acme Corp", member: "Adam Toth", initials: "AT", category: "Strategy", task: "Homepage wireframes", note: "Reviewed hero variants", date: "May 8", billable: true, status: "Unbilled", hours: 4.5, rate: 120, color: "#2563eb" },
+      { id: "tm2", project: "Acme Website Redesign", client: "Acme Corp", member: "Ella Stone", initials: "ES", category: "Design", task: "Homepage wireframes", note: "Responsive cleanup", date: "May 7", billable: true, status: "Unbilled", hours: 3.25, rate: 110, color: "#2563eb" },
+      { id: "tm3", project: "Acme Website Redesign", client: "Acme Corp", member: "Mark Lane", initials: "ML", category: "Development", task: "CMS setup", note: "Schema edits", date: "May 6", billable: true, status: "Invoiced", hours: 2, rate: 135, color: "#2563eb" },
+      { id: "tm4", project: "Northwind Growth Sprint", client: "Northwind", member: "Adam Toth", initials: "AT", category: "Ads", task: "Campaign QA", note: "Budget review", date: "May 5", billable: true, status: "Unbilled", hours: 5.75, rate: 125, color: "#16a34a" },
+      { id: "tm5", project: "Northwind Growth Sprint", client: "Northwind", member: "Ella Stone", initials: "ES", category: "Reporting", task: "Weekly report", note: "Internal cleanup", date: "May 3", billable: false, status: "Non-billable", hours: 1.5, rate: 0, color: "#16a34a" },
+      { id: "tm6", project: "Konverted Audit", client: "Konverted", member: "Adam Toth", initials: "AT", category: "Consulting", task: "Tracking plan", note: "Analytics mapping", date: "Apr 29", billable: true, status: "Invoiced", hours: 3, rate: 150, color: "#a855f7" }
+    ];
+
+    const retainerRows = [
+      { id: "r1", period: "May 2026", project: "Konverted Monthly Retainer", client: "Konverted", used: 28, included: 40, fee: 4000, overage: 0, status: "Open", color: "#16a34a", entries: 7, mode: "monthly" },
+      { id: "r2", period: "Apr 2026", project: "Konverted Monthly Retainer", client: "Konverted", used: 42, included: 40, fee: 4000, overage: 300, status: "Ready", color: "#16a34a", entries: 11, mode: "monthly" },
+      { id: "r3", period: "Apr 2026", project: "Acme Support Retainer", client: "Acme Corp", used: 0, included: 20, fee: 2500, overage: 0, status: "Ready", color: "#2563eb", entries: 0, mode: "monthly" },
+      { id: "r4", period: "Q1 2026 cycle", project: "Acme Support Retainer", client: "Acme Corp", used: 126, included: 120, fee: 2500, overage: 900, status: "Ready", color: "#2563eb", entries: 24, mode: "3-month rollover" },
+      { id: "r5", period: "Q2 2026 cycle", project: "Acme Support Retainer", client: "Acme Corp", used: 18, included: 120, fee: 2500, overage: 0, status: "Open", color: "#2563eb", entries: 5, mode: "3-month rollover" }
+    ];
+
+    const retainerWork = {
+      r1: [
+        { task: "Weekly optimization report", category: "Reporting", hours: 12, entries: [
+          ["May 6", "Adam Toth", "Performance summary", 4],
+          ["May 13", "Adam Toth", "Recommendations", 8]
+        ]},
+        { task: "Landing page monitoring", category: "Optimization", hours: 16, entries: [
+          ["May 8", "Ella Stone", "QA and notes", 6],
+          ["May 15", "Mark Lane", "Tracking fixes", 10]
+        ]}
+      ],
+      r2: [
+        { task: "Monthly analytics report", category: "Reporting", hours: 18, entries: [
+          ["Apr 5", "Adam Toth", "GA4 pull and commentary", 6],
+          ["Apr 8", "Adam Toth", "Client-ready summary", 5],
+          ["Apr 12", "Ella Stone", "Charts cleanup", 7]
+        ]},
+        { task: "Conversion fixes", category: "Optimization", hours: 14, entries: [
+          ["Apr 10", "Mark Lane", "Form event debugging", 6],
+          ["Apr 17", "Mark Lane", "Hero test cleanup", 8]
+        ]},
+        { task: "Client strategy call", category: "Strategy", hours: 10, entries: [
+          ["Apr 22", "Adam Toth", "Prep and call", 4],
+          ["Apr 23", "Adam Toth", "Follow-up plan", 6]
+        ]}
+      ],
+      r3: [],
+      r4: [
+        { task: "Q1 support and reporting", category: "Reporting", hours: 46, entries: [
+          ["Jan 28", "Adam Toth", "January report", 12],
+          ["Feb 26", "Adam Toth", "February report", 16],
+          ["Mar 27", "Ella Stone", "March visuals", 18]
+        ]},
+        { task: "Growth experiments", category: "Optimization", hours: 52, entries: [
+          ["Feb 11", "Mark Lane", "Experiment setup", 20],
+          ["Mar 12", "Mark Lane", "Test iteration", 18],
+          ["Mar 20", "Ella Stone", "Variant QA", 14]
+        ]},
+        { task: "Strategic workshops", category: "Strategy", hours: 28, entries: [
+          ["Jan 15", "Adam Toth", "Roadmap workshop", 14],
+          ["Mar 8", "Adam Toth", "Cycle close review", 14]
+        ]}
+      ],
+      r5: [
+        { task: "April report", category: "Reporting", hours: 8, entries: [
+          ["Apr 30", "Adam Toth", "Monthly notes", 8]
+        ]},
+        { task: "Tracking maintenance", category: "Development", hours: 10, entries: [
+          ["May 4", "Mark Lane", "Pixel QA", 10]
+        ]}
+      ]
+    };
+
+    const fixedRows = [
+      { id: "f1", project: "Brand Launch Fixed", client: "Northwind", task: "Visual identity system", member: "Ella Stone", initials: "ES", category: "Design", tracked: 87, estimated: 60, status: "Open", health: "Over budget", color: "#dc2626" },
+      { id: "f2", project: "Brand Launch Fixed", client: "Northwind", task: "Landing page build", member: "Mark Lane", initials: "ML", category: "Development", tracked: 34, estimated: 48, status: "Open", health: "On budget", color: "#dc2626" },
+      { id: "f3", project: "Acme Sales Deck", client: "Acme Corp", task: "Deck polish", member: "Adam Toth", initials: "AT", category: "Strategy", tracked: 18, estimated: 24, status: "Ready", health: "On budget", color: "#2563eb" },
+      { id: "f4", project: "Konverted Case Study", client: "Konverted", task: "Story outline", member: "Adam Toth", initials: "AT", category: "Content", tracked: 9, estimated: null, status: "Open", health: "No estimate", color: "#a855f7" }
+    ];
+
+    function money(value, currency) {
+      return (currency || "EUR") + new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(value);
+    }
+
+    function hours(value) {
+      const h = Math.floor(value);
+      const m = Math.round((value - h) * 60);
+      return h + "h" + (m ? " " + m + "m" : "");
+    }
+
+    function statusClass(status) {
+      if (status === "Unbilled" || status === "Ready") return "amber";
+      if (status === "Invoiced" || status === "Done") return "green";
+      if (status === "Over budget") return "red";
+      return "neutral";
+    }
+
+    function filteredRows(rows) {
+      const q = state.search.trim().toLowerCase();
+      return rows.filter((row) => {
+        const haystack = Object.values(row).join(" ").toLowerCase();
+        if (q && !haystack.includes(q)) return false;
+        if (state.filters.client !== "all" && row.client !== state.filters.client) return false;
+        if (state.filters.project !== "all" && row.project !== state.filters.project) return false;
+        if (state.filters.member !== "all" && row.member !== state.filters.member) return false;
+        if (state.filters.status !== "all" && row.status !== state.filters.status) return false;
+        return true;
+      });
+    }
+
+    function groupRows(rows, tab) {
+      const group = state.group[tab];
+      if (group === "None") return [["All rows", rows]];
+      const keyFor = (row) => {
+        if (group === "Project") return row.project;
+        if (group === "Project period") return row.project + " - " + row.period;
+        if (group === "Task") return row.task;
+        if (group === "Category") return row.category;
+        if (group === "Member") return row.member || "Unassigned";
+        if (group === "Client") return row.client;
+        if (group === "Month") return row.period || "May 2026";
+        if (group === "Day") return row.date || "May 2026";
+        if (group === "Week") return "May 4-10, 2026";
+        return row.project || "Group";
+      };
+      const map = new Map();
+      rows.forEach((row) => {
+        const key = keyFor(row);
+        if (!map.has(key)) map.set(key, []);
+        map.get(key).push(row);
+      });
+      return [...map.entries()];
+    }
+
+    function render() {
+      renderTabs();
+      renderMenus();
+      renderStatusFilter();
+      renderToolbar();
+      if (state.tab === "tm") renderTm();
+      if (state.tab === "retainer") renderRetainer();
+      if (state.tab === "fixed") renderFixed();
+      renderBulk();
+    }
+
+    function renderTabs() {
+      document.querySelectorAll(".tab").forEach((tab) => {
+        tab.classList.toggle("active", tab.dataset.tab === state.tab);
+      });
+    }
+
+    function renderMenus() {
+      document.getElementById("dateMenu").innerHTML = dateOptions.map((value) =>
+        `<button data-date="${value}">${value}<span>${state.dateRange === value ? "x" : ""}</span></button>`
+      ).join("");
+      document.getElementById("groupMenu").innerHTML = groupOptions[state.tab].map((value) =>
+        `<button data-group="${value}">${value}<span>${state.group[state.tab] === value ? "x" : ""}</span></button>`
+      ).join("");
+    }
+
+    function renderStatusFilter() {
+      const select = document.getElementById("statusFilter");
+      const current = state.filters.status;
+      select.innerHTML = statusOptions[state.tab].map((label) => {
+        const value = label === "All" ? "all" : label;
+        return `<option value="${value}" ${current === value ? "selected" : ""}>${label}</option>`;
+      }).join("");
+      document.getElementById("statusLabel").textContent =
+        state.tab === "retainer" ? "Period status" :
+        state.tab === "fixed" ? "Scope status" :
+        "Billing status";
+    }
+
+    function renderToolbar() {
+      document.getElementById("dateButton").textContent = state.dateRange + " v";
+      document.getElementById("groupButton").textContent = "By " + state.group[state.tab] + " v";
+      document.getElementById("groupWrap").style.display = state.tab === "retainer" ? "none" : "block";
+      document.getElementById("searchInput").value = state.search;
+      document.getElementById("clientFilter").value = state.filters.client;
+      document.getElementById("projectFilter").value = state.filters.project;
+      document.getElementById("memberFilter").value = state.filters.member;
+      document.getElementById("statusFilter").value = state.filters.status;
+      const activeCount = ["client", "project", "member", "status"].filter((k) => state.filters[k] !== "all").length + (state.search ? 1 : 0);
+      document.getElementById("filterCount").textContent = activeCount || 0;
+    }
+
+    function renderTm() {
+      const rows = filteredRows(tmRows);
+      const groups = groupRows(rows, "tm");
+      const unbilled = rows.filter((r) => r.status === "Unbilled" && r.billable);
+      const amount = unbilled.reduce((sum, r) => sum + r.hours * r.rate, 0);
+      document.getElementById("summaryText").innerHTML =
+        `<span class="summary-strong">${rows.length}</span> entries - <span class="summary-strong">${hours(rows.reduce((s, r) => s + r.hours, 0))}</span> total - <span class="summary-strong">${money(amount)}</span> unbilled`;
+      document.getElementById("modeHint").textContent = "T&M prices from time entries.";
+      const html = [
+        `<div class="grid tm head">
+          <div class="cell"></div><div class="cell">Date</div><div class="cell">Member</div><div class="cell">Category</div><div class="cell">Task</div><div class="cell">Project</div><div class="cell">Client</div><div class="cell">Billing</div><div class="cell">Status</div><div class="cell right">Hours</div><div class="cell right">Rate</div><div class="cell right">Amount</div><div class="cell"></div>
+        </div>`
+      ];
+      if (!rows.length) html.push(emptyMarkup("No T&M time matches this view."));
+      groups.forEach(([group, items]) => {
+        const groupAmount = items.filter((r) => r.status === "Unbilled" && r.billable).reduce((sum, r) => sum + r.hours * r.rate, 0);
+        html.push(`<div class="grid tm row group-row">
+          <div class="cell"><span class="check" data-group-select="${group}"></span></div>
+          <div class="cell" style="grid-column:2 / span 5"><span class="inline"><span class="project-dot" style="background:${items[0].color}"></span>${group}</span></div>
+          <div class="cell muted" style="grid-column:7 / span 2">${items.length} entries</div>
+          <div class="cell"><span class="quiet-status amber">Unbilled ${money(groupAmount)}</span></div>
+          <div class="cell right num">${hours(items.reduce((s, r) => s + r.hours, 0))}</div>
+          <div class="cell right"></div>
+          <div class="cell right">${money(groupAmount)}</div>
+          <div class="cell"><button class="row-actions" data-invoice-group="${group}" title="Invoice group">...</button></div>
+        </div>`);
+        items.forEach((row) => {
+          const eligible = row.billable && row.status === "Unbilled";
+          html.push(`<div class="grid tm row entry-row">
+            <div class="cell">${eligible ? `<span class="check ${state.selected.has(row.id) ? "checked" : ""}" data-select="${row.id}"></span>` : ""}</div>
+            <div class="cell num muted">${row.date}</div>
+            <div class="cell"><span class="inline"><span class="avatar">${row.initials}</span><span class="truncate">${row.member}</span></span></div>
+            <div class="cell"><span class="pill neutral">${row.category}</span></div>
+            <div class="cell truncate"><strong>${row.task}</strong><div class="subtle truncate">${row.note}</div></div>
+            <div class="cell truncate">${row.project}</div>
+            <div class="cell truncate muted">${row.client}</div>
+            <div class="cell">${row.billable ? '<span class="pill green">$ Billable</span>' : '<span class="pill neutral">Non-billable</span>'}</div>
+            <div class="cell"><span class="pill ${statusClass(row.status)}">${row.status}</span></div>
+            <div class="cell right num">${hours(row.hours)}</div>
+            <div class="cell right num">${row.rate ? money(row.rate) + "/h" : "-"}</div>
+            <div class="cell right num">${row.rate ? money(row.hours * row.rate) : "-"}</div>
+            <div class="cell"><button class="row-actions" data-row-actions="${row.id}">...</button></div>
+          </div>`);
+        });
+        html.push(`<div class="footer-note"><span>Total ${hours(items.reduce((s, r) => s + r.hours, 0))} - Unbilled ${money(groupAmount)}</span><button class="btn" data-invoice-group="${group}">Create invoice for group</button></div>`);
+      });
+      document.getElementById("tableShell").innerHTML = html.join("");
+    }
+
+    function renderRetainer() {
+      const rows = filteredRows(retainerRows);
+      const ready = rows.filter((r) => r.status === "Ready");
+      const active = rows.find((r) => r.id === state.activeRetainerId) || rows[0];
+      if (active) state.activeRetainerId = active.id;
+      document.getElementById("summaryText").innerHTML =
+        `<span class="summary-strong">${rows.length}</span> periods/cycles - <span class="summary-strong">${ready.length}</span> ready - <span class="summary-strong">${money(ready.reduce((s, r) => s + r.overage, 0))}</span> overage due`;
+      document.getElementById("modeHint").textContent = "Select a retainer period to review its tasks and time entries.";
+      if (!rows.length || !active) {
+        document.getElementById("tableShell").innerHTML = emptyMarkup("No retainer periods match this view.");
+        return;
+      }
+
+      const activeWork = retainerWork[active.id] || [];
+      const pct = active.included ? Math.min(100, Math.round((active.used / active.included) * 100)) : 0;
+      const actionLabel = active.status === "Ready" && active.overage > 0 ? "Create overage invoice" : active.status === "Ready" ? "Open report" : "No action yet";
+      const actionDisabled = active.status === "Open";
+      const workMarkup = activeWork.length ? activeWork.map((task) => `
+        <div class="task-block">
+          <div class="task-summary">
+            <div>
+              <div class="task-title">${task.task}</div>
+              <div class="subtle">${task.category}</div>
+            </div>
+            <div class="right num"><strong>${hours(task.hours)}</strong></div>
+            <div class="right muted">${task.entries.length} entries</div>
+          </div>
+          <div class="entry-list">
+            ${task.entries.map((entry) => `
+              <div class="entry-line">
+                <div class="num">${entry[0]}</div>
+                <div>${entry[1]}</div>
+                <div class="truncate">${entry[2]}</div>
+                <div class="right num">${hours(entry[3])}</div>
+              </div>
+            `).join("")}
+          </div>
+        </div>
+      `).join("") : `
+        <div class="empty" style="min-height:220px">
+          <div>
+            <h3>No time logged in this period</h3>
+            <p>The period can still be reviewed, but there is no work breakdown.</p>
+          </div>
+        </div>
+      `;
+
+      document.getElementById("tableShell").innerHTML = `
+        <div class="retainer-board">
+          <div class="period-list">
+            <div class="period-list-head">
+              <div class="period-list-title">Retainer periods</div>
+              <div class="helper">One row per month or rollover cycle.</div>
+            </div>
+            ${rows.map((row) => {
+              const rowPct = row.included ? Math.min(100, Math.round((row.used / row.included) * 100)) : 0;
+              return `
+                <button class="period-card ${row.id === active.id ? "active" : ""}" data-retainer-period="${row.id}">
+                  <div class="period-card-top">
+                    <div>
+                      <div class="period-card-title">${row.project}</div>
+                      <div class="period-card-sub">${row.period} - ${row.mode}</div>
+                    </div>
+                    <span class="pill ${statusClass(row.status)}">${row.status}</span>
+                  </div>
+                  <div class="bar"><div class="bar-fill ${row.used > row.included ? "amber" : "green"}" style="width:${rowPct}%"></div></div>
+                  <div class="period-card-metrics">
+                    <span>${hours(row.used)} / ${hours(row.included)}</span>
+                    <strong>${row.overage ? money(row.overage) : "Report"}</strong>
+                  </div>
+                </button>
+              `;
+            }).join("")}
+          </div>
+
+          <div class="retainer-detail">
+            <div class="detail-hero">
+              <div>
+                <div class="detail-title">${active.project}</div>
+                <div class="detail-meta">${active.client} - ${active.period} - ${active.mode}</div>
+              </div>
+              <div class="inline">
+                <span class="pill ${statusClass(active.status)}">${active.status}</span>
+                <button class="btn" data-invoice-retainer="${active.id}" ${actionDisabled ? "disabled" : ""}>${actionLabel}</button>
+              </div>
+            </div>
+            <div class="metric-strip">
+              <div class="mini-metric">
+                <div class="mini-metric-label">Used</div>
+                <div class="mini-metric-value">${hours(active.used)}</div>
+              </div>
+              <div class="mini-metric">
+                <div class="mini-metric-label">Included</div>
+                <div class="mini-metric-value">${hours(active.included)}</div>
+              </div>
+              <div class="mini-metric">
+                <div class="mini-metric-label">Overage</div>
+                <div class="mini-metric-value">${active.overage ? money(active.overage) : "-"}</div>
+              </div>
+              <div class="mini-metric">
+                <div class="mini-metric-label">Monthly fee</div>
+                <div class="mini-metric-value">${money(active.fee)}/mo</div>
+              </div>
+            </div>
+            <div class="work-area">
+              <div class="work-section-head">
+                <div>
+                  <div class="work-section-title">Measured work in this ${active.mode.includes("rollover") ? "cycle" : "month"}</div>
+                  <div class="helper">Tasks and time entries are scoped only to the selected retainer period.</div>
+                </div>
+                <div class="muted">${active.entries} entries</div>
+              </div>
+              <div class="task-stack">${workMarkup}</div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderFixed() {
+      const rows = filteredRows(fixedRows);
+      const groups = groupRows(rows, "fixed");
+      const over = rows.filter((r) => r.health === "Over budget");
+      document.getElementById("summaryText").innerHTML =
+        `<span class="summary-strong">${rows.length}</span> work items - <span class="summary-strong">${hours(rows.reduce((s, r) => s + r.tracked, 0))}</span> actual - <span class="summary-strong">${over.length}</span> over budget`;
+      document.getElementById("modeHint").textContent = "Fixed progress uses category/project estimates, not task quotes.";
+      const html = [
+        `<div class="grid fixed head">
+          <div class="cell"></div><div class="cell">Project</div><div class="cell">Client</div><div class="cell">Category</div><div class="cell">Task evidence</div><div class="cell">Member</div><div class="cell right">Actual</div><div class="cell right">Estimated</div><div class="cell">Progress</div><div class="cell">Status</div><div class="cell"></div>
+        </div>`
+      ];
+      if (!rows.length) html.push(emptyMarkup("No fixed work matches this view."));
+      groups.forEach(([group, items]) => {
+        html.push(`<div class="grid fixed row group-row">
+          <div class="cell"><span class="check" data-fixed-group="${group}"></span></div>
+          <div class="cell" style="grid-column:2 / span 6"><span class="inline"><span class="project-dot" style="background:${items[0].color}"></span>${group}</span></div>
+          <div class="cell right">${hours(items.reduce((s, r) => s + r.tracked, 0))}</div>
+          <div class="cell"></div>
+          <div class="cell"><span class="quiet-status ${items.some((i) => i.health === "Over budget") ? "red" : "green"}">${items.some((i) => i.health === "Over budget") ? "Budget attention" : "On budget"}</span></div>
+          <div class="cell"><button class="row-actions" data-invoice-fixed="${group}">...</button></div>
+        </div>`);
+        items.forEach((row) => {
+          const pct = row.estimated ? Math.min(100, Math.round((row.tracked / row.estimated) * 100)) : 0;
+          html.push(`<div class="grid fixed row entry-row">
+            <div class="cell"><span class="check ${state.selected.has(row.id) ? "checked" : ""}" data-select="${row.id}"></span></div>
+            <div class="cell truncate"><strong>${row.project}</strong></div>
+            <div class="cell muted">${row.client}</div>
+            <div class="cell"><span class="pill neutral">${row.category}</span></div>
+            <div class="cell truncate">${row.task}</div>
+            <div class="cell"><span class="inline"><span class="avatar">${row.initials}</span>${row.member}</span></div>
+            <div class="cell right num">${hours(row.tracked)}</div>
+            <div class="cell right num">${row.estimated ? hours(row.estimated) : "-"}</div>
+            <div class="cell">${row.estimated ? `<div class="bar"><div class="bar-fill ${row.tracked > row.estimated ? "red" : "green"}" style="width:${pct}%"></div></div>` : '<span class="subtle">No category estimate</span>'}</div>
+            <div class="cell"><span class="quiet-status ${statusClass(row.status)}">${row.status}</span><div class="subtle">${row.health}</div></div>
+            <div class="cell"><button class="row-actions" data-invoice-fixed="${row.project}">...</button></div>
+          </div>`);
+        });
+        html.push(`<div class="footer-note"><span>Actual ${hours(items.reduce((s, r) => s + r.tracked, 0))} - Category/project budget, not task quotes</span><button class="btn" data-invoice-fixed="${group}">Create fixed invoice</button></div>`);
+      });
+      document.getElementById("tableShell").innerHTML = html.join("");
+    }
+
+    function emptyMarkup(message) {
+      return `<div class="empty"><div><h3>${message}</h3><p>Try clearing filters or changing the date range.</p><button class="btn" id="emptyClear">Clear filters</button></div></div>`;
+    }
+
+    function renderBulk() {
+      const bar = document.getElementById("bulkbar");
+      const selectedIds = [...state.selected];
+      if (!selectedIds.length) {
+        bar.classList.remove("show");
+        return;
+      }
+      const rows = [...tmRows, ...retainerRows, ...fixedRows].filter((r) => state.selected.has(r.id));
+      const projectSet = new Set(rows.map((r) => r.project));
+      document.getElementById("bulkTitle").textContent = selectedIds.length + " selected";
+      if (state.tab === "tm") {
+        const total = rows.reduce((s, r) => s + (r.hours || 0), 0);
+        const amount = rows.reduce((s, r) => s + ((r.hours || 0) * (r.rate || 0)), 0);
+        document.getElementById("bulkMeta").textContent = " - " + [...projectSet][0] + " - " + hours(total) + " - " + money(amount);
+        document.getElementById("bulkInvoice").textContent = projectSet.size > 1 ? "Mixed projects" : "Create invoice";
+        document.getElementById("bulkInvoice").disabled = projectSet.size > 1;
+      } else if (state.tab === "retainer") {
+        document.getElementById("bulkMeta").textContent = " - ready period/cycle";
+        document.getElementById("bulkInvoice").textContent = selectedIds.length > 1 ? "One period/cycle at a time" : "Create overage invoice";
+        document.getElementById("bulkInvoice").disabled = selectedIds.length > 1;
+      } else {
+        document.getElementById("bulkMeta").textContent = " - delivery evidence selected";
+        document.getElementById("bulkInvoice").textContent = "Create fixed invoice";
+        document.getElementById("bulkInvoice").disabled = false;
+      }
+      bar.classList.add("show");
+    }
+
+    function openPanels() {
+      document.getElementById("overlay").classList.add("open");
+    }
+
+    function closePanels() {
+      document.getElementById("overlay").classList.remove("open");
+      document.getElementById("filterDrawer").classList.remove("open");
+      document.getElementById("addModal").classList.remove("open");
+      document.getElementById("invoiceModal").classList.remove("open");
+      document.querySelectorAll(".menu").forEach((m) => m.classList.remove("open"));
+    }
+
+    function openInvoice(kind, target) {
+      openPanels();
+      document.getElementById("invoiceModal").classList.add("open");
+      const body = document.getElementById("invoiceBody");
+      if (kind === "tm") {
+        const selected = [...state.selected].length ? tmRows.filter((r) => state.selected.has(r.id)) : tmRows.filter((r) => r.project === target && r.status === "Unbilled");
+        const amount = selected.reduce((s, r) => s + r.hours * r.rate, 0);
+        document.getElementById("invoiceTitle").textContent = "Create T&M invoice draft";
+        document.getElementById("invoiceSubtitle").textContent = "Selected billable time prices this invoice.";
+        body.innerHTML = invoiceCallout("T&M", "Amount is calculated from selected hours and captured rates.") +
+          invoiceLines(selected.map((r) => [r.task, hours(r.hours), money(r.hours * r.rate)])) +
+          `<div class="callout"><strong>Total ${money(amount)}</strong><span class="muted">${selected.length} entries will be linked to this draft.</span></div>`;
+      }
+      if (kind === "retainer") {
+        const row = retainerRows.find((r) => r.id === target) || retainerRows[1];
+        document.getElementById("invoiceTitle").textContent = row.overage > 0 ? "Create retainer overage invoice" : "Open retainer report";
+        document.getElementById("invoiceSubtitle").textContent = row.project + " - " + row.period;
+        body.innerHTML = invoiceCallout("Retainer", "The primary status stays simple. The row numbers and action explain whether this is report-only or invoiceable overage.") +
+          invoiceLines([
+            ["Monthly fee context", row.mode, money(row.fee) + "/mo"],
+            ["Overage", hours(Math.max(row.used - row.included, 0)), row.overage ? money(row.overage) : "-"],
+            ["Usage report", row.entries + " entries", hours(row.used)]
+          ]) +
+          `<div class="callout"><strong>${row.status}</strong><span class="muted">${row.mode} - used ${hours(row.used)} of ${hours(row.included)} included.</span></div>`;
+      }
+      if (kind === "fixed") {
+        document.getElementById("invoiceTitle").textContent = "Create fixed invoice draft";
+        document.getElementById("invoiceSubtitle").textContent = target;
+        body.innerHTML = invoiceCallout("Fixed", "The selected work is delivery evidence. Budget progress comes from category/project estimates, not task quotes.") +
+          `<div class="form-grid"><div class="field"><label>Invoice amount</label><input value="EUR8,000"></div><div class="field"><label>Subject</label><input value="${target} fixed invoice"></div></div>` +
+          invoiceLines([
+            ["Selected evidence", "Category/task/time entries", "Included"],
+            ["Pricing basis", "Fixed or remaining amount", "EUR8,000"]
+          ]);
+      }
+    }
+
+    function invoiceCallout(label, text) {
+      return `<div class="callout"><strong>${label} billing logic</strong><span class="muted">${text}</span></div>`;
+    }
+
+    function invoiceLines(lines) {
+      return `<div class="invoice-lines">${lines.map((line) =>
+        `<div class="invoice-line"><div class="truncate">${line[0]}</div><div class="right muted">${line[1]}</div><div class="right num"><strong>${line[2]}</strong></div></div>`
+      ).join("")}</div>`;
+    }
+
+    function showToast(text) {
+      const toast = document.getElementById("toast");
+      toast.textContent = text;
+      toast.classList.add("show");
+      setTimeout(() => toast.classList.remove("show"), 1700);
+    }
+
+    document.addEventListener("click", (event) => {
+      const target = event.target;
+      if (target.closest("[data-open-add]")) {
+        openPanels();
+        document.getElementById("addModal").classList.add("open");
+      }
+      if (target.closest("[data-open-filters]")) {
+        openPanels();
+        document.getElementById("filterDrawer").classList.add("open");
+      }
+      if (target.closest("[data-close-panels]") || target.id === "overlay") {
+        closePanels();
+      }
+      const tab = target.closest("[data-tab]");
+      if (tab) {
+        state.tab = tab.dataset.tab;
+        state.selected.clear();
+        state.filters.status = "all";
+        render();
+      }
+      const periodCard = target.closest("[data-retainer-period]");
+      if (periodCard) {
+        state.activeRetainerId = periodCard.dataset.retainerPeriod;
+        state.selected.clear();
+        render();
+      }
+      if (target.id === "dateButton") {
+        document.getElementById("dateMenu").classList.toggle("open");
+        document.getElementById("groupMenu").classList.remove("open");
+      }
+      if (target.id === "groupButton") {
+        document.getElementById("groupMenu").classList.toggle("open");
+        document.getElementById("dateMenu").classList.remove("open");
+      }
+      const dateButton = target.closest("[data-date]");
+      if (dateButton) {
+        state.dateRange = dateButton.dataset.date;
+        render();
+      }
+      const groupButton = target.closest("[data-group]");
+      if (groupButton) {
+        state.group[state.tab] = groupButton.dataset.group;
+        render();
+      }
+      const select = target.closest("[data-select]");
+      if (select) {
+        const id = select.dataset.select;
+        if (state.selected.has(id)) state.selected.delete(id);
+        else state.selected.add(id);
+        render();
+      }
+      const invoiceGroup = target.closest("[data-invoice-group]");
+      if (invoiceGroup) openInvoice("tm", invoiceGroup.dataset.invoiceGroup);
+      const invoiceRetainer = target.closest("[data-invoice-retainer]");
+      if (invoiceRetainer && !invoiceRetainer.disabled) openInvoice("retainer", invoiceRetainer.dataset.invoiceRetainer);
+      const invoiceFixed = target.closest("[data-invoice-fixed]");
+      if (invoiceFixed) openInvoice("fixed", invoiceFixed.dataset.invoiceFixed);
+      if (target.id === "bulkClear") {
+        state.selected.clear();
+        render();
+      }
+      if (target.id === "bulkInvoice" && !target.disabled) {
+        if (state.tab === "tm") openInvoice("tm", "selection");
+        if (state.tab === "retainer") openInvoice("retainer", [...state.selected][0]);
+        if (state.tab === "fixed") openInvoice("fixed", "Selected fixed evidence");
+      }
+      if (target.id === "saveTime") {
+        closePanels();
+        showToast("Time entry saved");
+      }
+      if (target.id === "createDraft") {
+        closePanels();
+        state.selected.clear();
+        render();
+        showToast("Invoice draft created");
+      }
+      if (target.id === "clearFilters" || target.id === "emptyClear") {
+        state.search = "";
+        state.filters = { client: "all", project: "all", member: "all", status: "all" };
+        render();
+      }
+      if (target.id === "densityButton") {
+        state.density = state.density === "Compact" ? "Comfortable" : "Compact";
+        target.textContent = "Density: " + state.density;
+        document.documentElement.style.setProperty("--row-extra", state.density === "Comfortable" ? "8px" : "0px");
+        showToast("Density changed to " + state.density);
+      }
+      if (target.closest("[data-row-actions]")) {
+        showToast("Row actions: edit, open task, open invoice");
+      }
+    });
+
+    document.getElementById("searchInput").addEventListener("input", (event) => {
+      state.search = event.target.value;
+      render();
+    });
+
+    ["clientFilter", "projectFilter", "memberFilter", "statusFilter"].forEach((id) => {
+      document.getElementById(id).addEventListener("change", (event) => {
+        const key = id.replace("Filter", "");
+        state.filters[key] = event.target.value;
+        render();
+      });
+    });
+
+    render();
+  </script>
+</body>
+</html>

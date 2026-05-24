@@ -1,0 +1,2046 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Time Entry Settlement — PRD Visual Verification</title>
+  <style>
+    :root {
+      --bg: #f4f1eb;
+      --surface: #fffdf8;
+      --surface-2: #f8f5ef;
+      --surface-3: #efeae0;
+      --ink: #20201d;
+      --muted: #716d63;
+      --faint: #a59f92;
+      --line: #ded7ca;
+      --line-strong: #c8bead;
+      --green: #26765a;
+      --green-bg: #e7f1eb;
+      --amber: #9a6415;
+      --amber-bg: #f7ead2;
+      --red: #9d3b32;
+      --red-bg: #f5ded9;
+      --blue: #2f5f87;
+      --blue-bg: #e3edf4;
+      --purple: #6b4a8a;
+      --purple-bg: #ece4f4;
+      --grey: #5d5a52;
+      --grey-bg: #ebe7df;
+      --radius: 8px;
+      --radius-sm: 5px;
+      --mono: "SF Mono", "Cascadia Mono", "Roboto Mono", Consolas, monospace;
+      --sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --serif: Georgia, "Times New Roman", serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: var(--sans);
+      font-size: 14px;
+      line-height: 1.5;
+      padding: 40px 20px 80px;
+    }
+
+    .container { max-width: 1180px; margin: 0 auto; }
+
+    /* Header */
+    .header {
+      text-align: center;
+      margin-bottom: 32px;
+      padding-bottom: 28px;
+      border-bottom: 1px solid var(--line);
+    }
+    .header h1 {
+      font-family: var(--serif);
+      font-size: 32px;
+      font-weight: 500;
+      margin: 0 0 8px;
+      letter-spacing: -0.01em;
+    }
+    .header .subtitle {
+      color: var(--muted);
+      font-size: 15px;
+      max-width: 720px;
+      margin: 0 auto;
+    }
+    .header .tag {
+      display: inline-block;
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--faint);
+      margin-bottom: 12px;
+    }
+
+    /* Legend */
+    .legend {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 20px 24px;
+      margin-bottom: 40px;
+    }
+    .legend h3 {
+      font-family: var(--serif);
+      font-size: 16px;
+      font-weight: 500;
+      margin: 0 0 14px;
+      color: var(--ink);
+    }
+    .legend-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+    }
+    .legend-item {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .legend-item .label-row { display: flex; align-items: center; gap: 8px; }
+    .legend-item .desc { font-size: 12px; color: var(--muted); line-height: 1.45; }
+
+    /* Status pills (consistent with codebase convention: pill + dot) */
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 9px;
+      border-radius: 100px;
+      font-size: 11.5px;
+      font-weight: 500;
+      letter-spacing: 0.005em;
+      white-space: nowrap;
+    }
+    .pill .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .pill.open      { background: var(--blue-bg);   color: var(--blue); }
+    .pill.open .dot { background: var(--blue); }
+    .pill.draft     { background: var(--amber-bg);  color: var(--amber); }
+    .pill.draft .dot{ background: var(--amber); }
+    .pill.invoiced  { background: var(--green-bg);  color: var(--green); }
+    .pill.invoiced .dot { background: var(--green); }
+    .pill.settled   { background: var(--purple-bg); color: var(--purple); }
+    .pill.settled .dot { background: var(--purple); }
+    .pill.closed    { background: var(--grey-bg);   color: var(--grey); }
+    .pill.closed .dot { background: var(--grey); }
+    .pill.nonbillable { background: var(--surface-3); color: var(--faint); }
+    .pill.nonbillable .dot { background: var(--faint); }
+    /* In progress — passive, nothing to act on. Hollow/low-emphasis so the
+       eye skips it and lands on rows that actually need action. */
+    .pill.inprogress { background: transparent; color: var(--faint); padding-left: 0; }
+    .pill.inprogress .dot { background: transparent; border: 1.5px solid var(--faint); }
+
+    /* Scenario card */
+    .scenario {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      margin-bottom: 36px;
+      overflow: hidden;
+    }
+    .scenario-header {
+      padding: 22px 26px 18px;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface-2);
+    }
+    .scenario-header .crumb {
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--faint);
+      margin-bottom: 8px;
+    }
+    .scenario-header h2 {
+      font-family: var(--serif);
+      font-size: 22px;
+      font-weight: 500;
+      margin: 0 0 4px;
+      letter-spacing: -0.005em;
+    }
+    .scenario-header .meta {
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .scenario-header .project-tag {
+      display: inline-block;
+      font-size: 10.5px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--muted);
+      background: var(--surface-3);
+      padding: 2px 8px;
+      border-radius: 4px;
+      margin-right: 8px;
+      vertical-align: 2px;
+    }
+
+    .scenario-body {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0;
+    }
+    .state-pane { padding: 24px 26px; }
+    .state-pane.before { border-right: 1px solid var(--line); background: var(--surface); }
+    .state-pane.after  { background: var(--surface-2); }
+    .state-pane .pane-label {
+      font-size: 10.5px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--faint);
+      margin-bottom: 14px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .state-pane .pane-label .arrow { color: var(--ink); font-size: 13px; }
+
+    /* Entry rows */
+    .entry-list {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+      background: var(--line);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      overflow: hidden;
+      margin-bottom: 18px;
+    }
+    .entry-row {
+      background: var(--surface);
+      padding: 11px 14px;
+      display: grid;
+      grid-template-columns: 60px 1fr 70px 110px;
+      align-items: center;
+      gap: 12px;
+      font-size: 13px;
+    }
+    .entry-row .date {
+      color: var(--muted);
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+    .entry-row .desc { color: var(--ink); }
+    .entry-row .hours {
+      font-variant-numeric: tabular-nums;
+      color: var(--ink);
+      text-align: right;
+    }
+    .entry-row .status-cell { text-align: right; }
+
+    /* Action button */
+    .action-row {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      padding: 8px 0 0;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 12.5px;
+      font-weight: 500;
+      cursor: pointer;
+      border: 1px solid var(--line-strong);
+      background: var(--surface);
+      color: var(--ink);
+      transition: background 0.1s;
+    }
+    .btn:hover { background: var(--surface-2); }
+    .btn.primary {
+      background: var(--ink);
+      color: var(--surface);
+      border-color: var(--ink);
+    }
+    .btn.primary:hover { background: #000; }
+    .btn-arrow { font-size: 12px; opacity: 0.6; }
+    .action-note {
+      color: var(--muted);
+      font-size: 12px;
+      font-style: italic;
+    }
+
+    /* Project finances breakdown */
+    .finances {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      padding: 16px 18px;
+      margin-top: 16px;
+    }
+    .finances .fin-title {
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--faint);
+      margin-bottom: 12px;
+    }
+    .fin-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+    }
+    .fin-cell {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+    .fin-cell .fin-label {
+      font-size: 11.5px;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .fin-cell .fin-value {
+      font-family: var(--mono);
+      font-size: 17px;
+      color: var(--ink);
+      font-weight: 500;
+      font-variant-numeric: tabular-nums;
+    }
+    .fin-cell .fin-sub {
+      font-size: 11px;
+      color: var(--faint);
+      font-variant-numeric: tabular-nums;
+    }
+    .fin-cell.changed .fin-value { color: var(--green); }
+    .fin-cell.diminished .fin-value { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--faint); }
+
+    /* Period row (retainer monthly breakdown) */
+    .period-row {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      padding: 13px 16px;
+      display: grid;
+      grid-template-columns: 12px 1fr 90px 130px 80px auto;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: 12px;
+    }
+    .period-row .dot-ind {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+    }
+    .period-row .dot-ind.closed { background: var(--purple); }
+    .period-row .month { font-weight: 500; }
+    .period-row .hours-cell { font-variant-numeric: tabular-nums; color: var(--muted); }
+    .period-row .amount { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+    .period-row .closed-meta { font-size: 11px; color: var(--faint); font-style: italic; }
+
+    /* Tooltip-style info box */
+    .info-box {
+      background: var(--surface-3);
+      border-left: 3px solid var(--line-strong);
+      padding: 11px 14px;
+      border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+      margin-bottom: 14px;
+      font-size: 12.5px;
+      color: var(--muted);
+    }
+    .info-box strong { color: var(--ink); font-weight: 500; }
+    .info-box code {
+      font-family: var(--mono);
+      font-size: 11.5px;
+      background: var(--surface);
+      padding: 1px 5px;
+      border-radius: 3px;
+      color: var(--ink);
+    }
+
+    /* Schema view */
+    .schema-view {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 24px 28px;
+      margin-top: 40px;
+    }
+    .schema-view h2 {
+      font-family: var(--serif);
+      font-size: 20px;
+      font-weight: 500;
+      margin: 0 0 14px;
+    }
+    .schema-view .subtitle {
+      color: var(--muted);
+      margin-bottom: 22px;
+      font-size: 13px;
+    }
+    .schema-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 16px;
+    }
+    .schema-card {
+      background: var(--surface-2);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      padding: 14px 16px;
+    }
+    .schema-card .schema-title {
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--faint);
+      margin-bottom: 8px;
+    }
+    .schema-card pre {
+      font-family: var(--mono);
+      font-size: 11.5px;
+      line-height: 1.55;
+      color: var(--ink);
+      margin: 0;
+      white-space: pre-wrap;
+    }
+    .schema-card pre .key { color: var(--blue); }
+    .schema-card pre .val { color: var(--green); }
+    .schema-card pre .undef { color: var(--faint); font-style: italic; }
+    .schema-card pre .note { color: var(--muted); font-style: italic; }
+
+    .tooltip-illust {
+      background: #20201d;
+      color: #f4f1eb;
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      display: inline-block;
+      margin-top: 6px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+    }
+    .tooltip-illust .tt-meta {
+      font-size: 10.5px;
+      color: #a59f92;
+      margin-top: 2px;
+    }
+
+    /* ─── App-frame for tab redesigns ──────────────────────────── */
+    .app-frame {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
+      margin-bottom: 36px;
+    }
+    .app-header {
+      padding: 22px 28px 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .app-header .crumb {
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--faint);
+      margin-bottom: 8px;
+    }
+    .app-header .title-row {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      margin-bottom: 4px;
+    }
+    .app-header h2 {
+      font-family: var(--serif);
+      font-size: 22px;
+      font-weight: 500;
+      margin: 0;
+      letter-spacing: -0.005em;
+    }
+    .app-header .type-chip {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 9px;
+      border-radius: 100px;
+      background: var(--surface-3);
+      font-size: 11.5px;
+      color: var(--muted);
+    }
+    .app-header .active-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 12px;
+      color: var(--green);
+    }
+    .app-header .active-chip::before {
+      content: "";
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--green);
+    }
+    .app-header .meta-line {
+      color: var(--muted);
+      font-size: 12.5px;
+      margin-bottom: 16px;
+    }
+    .app-tabs {
+      display: flex;
+      gap: 4px;
+      padding: 0 16px;
+    }
+    .app-tab {
+      padding: 8px 14px;
+      font-size: 13.5px;
+      color: var(--muted);
+      border-bottom: 2px solid transparent;
+      margin-bottom: -1px;
+    }
+    .app-tab.active {
+      color: var(--ink);
+      background: var(--surface-2);
+      border-radius: 6px 6px 0 0;
+      border-bottom-color: var(--ink);
+    }
+    .app-body {
+      padding: 22px 28px;
+    }
+
+    /* Summary breakdown row */
+    .summary-row {
+      display: flex;
+      gap: 32px;
+      align-items: baseline;
+      margin-bottom: 6px;
+    }
+    .summary-cell .summary-label {
+      font-size: 11.5px;
+      color: var(--muted);
+      margin-right: 8px;
+    }
+    .summary-cell .summary-value {
+      font-size: 14px;
+      font-weight: 500;
+      font-variant-numeric: tabular-nums;
+    }
+    .summary-breakdown {
+      display: flex;
+      gap: 18px;
+      align-items: center;
+      font-size: 11.5px;
+      color: var(--muted);
+      padding: 4px 0 14px;
+    }
+    .summary-breakdown .bd-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-variant-numeric: tabular-nums;
+    }
+    .summary-breakdown .bd-item .bd-dot {
+      width: 7px; height: 7px;
+      border-radius: 2px;
+    }
+    .bd-dot.open { background: var(--blue); }
+    .bd-dot.invoiced { background: var(--green); }
+    .bd-dot.settled { background: var(--purple); }
+    .bd-dot.draft { background: var(--amber); }
+
+    /* Stacked bar (horizontal) */
+    .stacked-bar {
+      display: flex;
+      height: 6px;
+      border-radius: 100px;
+      overflow: hidden;
+      background: var(--surface-3);
+      margin-bottom: 4px;
+    }
+    .stacked-bar .seg {
+      height: 100%;
+    }
+    .stacked-bar .seg.open { background: var(--blue); }
+    .stacked-bar .seg.invoiced { background: var(--green); }
+    .stacked-bar .seg.settled { background: var(--purple); }
+
+    /* Toolbar (time tab) */
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin: 14px 0 18px;
+    }
+    .toolbar .search {
+      flex: 1;
+      max-width: 280px;
+      padding: 7px 12px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface-2);
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .toolbar .tb-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 11px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface);
+      font-size: 13px;
+      color: var(--ink);
+      cursor: pointer;
+    }
+    .toolbar .tb-btn.active {
+      background: var(--surface-3);
+    }
+    .toolbar .tb-spacer { flex: 1; }
+    .toolbar .tb-cta {
+      background: #2c6ef2;
+      color: white;
+      border: none;
+      padding: 7px 14px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 500;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      cursor: pointer;
+    }
+
+    /* Time entry table */
+    .te-table {
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      overflow: hidden;
+    }
+    .te-day-header {
+      display: grid;
+      grid-template-columns: 30px 1fr auto auto;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 14px;
+      background: var(--surface-2);
+      border-bottom: 1px solid var(--line);
+      font-size: 12.5px;
+    }
+    .te-day-header .day-arrow { color: var(--muted); font-size: 12px; }
+    .te-day-header .day-label { font-weight: 500; }
+    .te-day-header .day-meta { color: var(--muted); font-size: 11.5px; }
+    .te-day-header .closed-tag {
+      font-size: 10.5px;
+      color: var(--purple);
+      background: var(--purple-bg);
+      padding: 2px 7px;
+      border-radius: 100px;
+      letter-spacing: 0.01em;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .te-day-header .day-total {
+      font-variant-numeric: tabular-nums;
+      font-weight: 500;
+      font-size: 13px;
+    }
+    .te-col-header {
+      display: grid;
+      grid-template-columns: 90px 120px 1fr 130px 100px 60px 22px;
+      gap: 10px;
+      padding: 7px 14px;
+      font-size: 10.5px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--faint);
+      background: var(--surface);
+      border-bottom: 1px solid var(--line);
+    }
+    .te-row {
+      display: grid;
+      grid-template-columns: 90px 120px 1fr 130px 100px 60px 22px;
+      gap: 10px;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--line);
+      align-items: center;
+      font-size: 13px;
+      background: var(--surface);
+    }
+    .te-row:last-child { border-bottom: none; }
+    .te-row.locked { opacity: 0.72; }
+    .te-row.locked .te-task::after {
+      content: "🔒";
+      font-size: 10px;
+      margin-left: 6px;
+      opacity: 0.6;
+    }
+    .te-row .te-date { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+    .te-row .te-member { display: flex; align-items: center; gap: 7px; font-size: 12.5px; }
+    .te-row .te-member .avatar {
+      width: 22px; height: 22px;
+      border-radius: 50%;
+      background: var(--surface-3);
+      flex-shrink: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      color: var(--muted);
+      font-weight: 500;
+    }
+    .te-row .te-task { color: var(--ink); }
+    .te-row .te-task .te-note { display: block; font-size: 11.5px; color: var(--faint); margin-top: 2px; }
+    .te-row .te-cat .cat-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11.5px;
+      color: var(--muted);
+    }
+    .te-row .te-cat .cat-dot { width: 6px; height: 6px; border-radius: 50%; }
+    .te-row .te-hours { font-variant-numeric: tabular-nums; text-align: right; font-size: 12.5px; }
+    .te-row .te-menu { color: var(--faint); text-align: center; cursor: pointer; }
+
+    /* Filter dropdown */
+    .filter-dropdown {
+      position: absolute;
+      top: 100%; left: 0;
+      margin-top: 4px;
+      width: 240px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: 0 12px 32px rgba(0,0,0,0.08);
+      padding: 12px;
+      z-index: 10;
+      font-size: 12.5px;
+    }
+    .filter-dropdown .fd-section-title {
+      font-size: 10.5px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--faint);
+      margin-bottom: 8px;
+    }
+    .filter-dropdown .fd-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 5px 0;
+      color: var(--ink);
+    }
+    .filter-dropdown .fd-check {
+      width: 14px; height: 14px;
+      border: 1px solid var(--line-strong);
+      border-radius: 3px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      color: var(--surface);
+    }
+    .filter-dropdown .fd-check.checked {
+      background: var(--ink);
+      border-color: var(--ink);
+    }
+
+    /* Overview tab specific */
+    .ov-card {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 20px 24px;
+      margin-bottom: 18px;
+    }
+    .ov-card .ov-title {
+      font-family: var(--serif);
+      font-size: 17px;
+      font-weight: 500;
+      margin: 0 0 3px;
+    }
+    .ov-card .ov-sub {
+      color: var(--muted);
+      font-size: 12.5px;
+      margin-bottom: 16px;
+    }
+    .ov-card .ov-header-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 16px;
+    }
+    .ov-card .cycle-nav {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .ov-card .cycle-nav .nav-arrow {
+      width: 24px; height: 24px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      cursor: pointer;
+    }
+
+    .finances-grid {
+      display: grid;
+      grid-template-columns: 1.2fr 1fr 1.2fr;
+      gap: 32px;
+      padding-top: 6px;
+    }
+    .fin-section {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .fin-section .fin-section-title {
+      font-size: 13.5px;
+      font-weight: 500;
+      margin-bottom: 12px;
+      color: var(--ink);
+    }
+    .fin-time-row {
+      display: flex;
+      gap: 18px;
+      align-items: center;
+    }
+    .fin-donut {
+      width: 78px; height: 78px;
+      border-radius: 50%;
+      background: conic-gradient(var(--ink) 0deg 270deg, var(--surface-3) 270deg 360deg);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      flex-shrink: 0;
+    }
+    .fin-donut::after {
+      content: "";
+      position: absolute;
+      width: 58px; height: 58px;
+      background: var(--surface);
+      border-radius: 50%;
+    }
+    .fin-donut-text {
+      position: relative;
+      z-index: 1;
+      text-align: center;
+      font-size: 12px;
+    }
+    .fin-donut-text .ttl {
+      font-weight: 500;
+      font-size: 13px;
+      display: block;
+      font-variant-numeric: tabular-nums;
+    }
+    .fin-donut-text .sub {
+      font-size: 10px;
+      color: var(--muted);
+    }
+    .fin-stats { flex: 1; }
+    .fin-stat-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 12px;
+    }
+    .fin-stat-row .fs-label {
+      font-size: 11.5px;
+      color: var(--muted);
+    }
+    .fin-stat-row .fs-value {
+      font-size: 16px;
+      font-weight: 500;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* Monthly breakdown rich row */
+    .mb-table {
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      overflow: hidden;
+    }
+    .mb-col-header {
+      display: grid;
+      grid-template-columns: 24px 1fr 120px 180px 100px 220px;
+      gap: 16px;
+      padding: 9px 16px;
+      font-size: 10.5px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--faint);
+      background: var(--surface-2);
+      border-bottom: 1px solid var(--line);
+    }
+    .mb-row {
+      display: grid;
+      grid-template-columns: 24px 1fr 120px 180px 100px 220px;
+      gap: 16px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+      align-items: center;
+      font-size: 13px;
+    }
+    .mb-row:last-child { border-bottom: none; }
+    .mb-row .mb-month-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--faint);
+    }
+    .mb-row .mb-month-dot.in-progress { background: var(--blue); }
+    .mb-row .mb-month-dot.ready-close { background: var(--green); }
+    .mb-row .mb-month-dot.ready-invoice { background: var(--amber); }
+    .mb-row .mb-month-dot.closed-statement { background: var(--purple); }
+    .mb-row .mb-month-dot.invoiced { background: var(--green); }
+    .mb-row .mb-month { font-weight: 500; }
+    .mb-row .mb-hours { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12.5px; }
+    .mb-row .mb-amount { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 13px; }
+    .mb-row .mb-actions {
+      display: flex;
+      gap: 6px;
+      justify-content: flex-end;
+    }
+    .mb-row .mb-actions .btn { padding: 5px 10px; font-size: 12px; }
+
+    /* Reopen confirmation dialog illustration */
+    .dialog-illust {
+      max-width: 480px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 18px 20px;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.12);
+      margin: 14px 0;
+    }
+    .dialog-illust h4 {
+      font-family: var(--serif);
+      font-size: 15px;
+      font-weight: 500;
+      margin: 0 0 8px;
+    }
+    .dialog-illust p {
+      font-size: 12.5px;
+      color: var(--muted);
+      margin: 0 0 14px;
+      line-height: 1.55;
+    }
+    .dialog-illust .dialog-actions {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    .annotation {
+      display: inline-block;
+      font-size: 10.5px;
+      color: var(--amber);
+      background: var(--amber-bg);
+      padding: 2px 7px;
+      border-radius: 100px;
+      margin-left: 6px;
+      letter-spacing: 0.02em;
+      font-weight: 500;
+    }
+    .annotation.new {
+      color: var(--green);
+      background: var(--green-bg);
+    }
+
+    .section-divider {
+      text-align: center;
+      margin: 50px 0 24px;
+      color: var(--faint);
+      font-size: 11px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+    .section-divider span {
+      background: var(--bg);
+      padding: 0 14px;
+      position: relative;
+      z-index: 1;
+    }
+    .section-divider::before {
+      content: "";
+      display: block;
+      height: 1px;
+      background: var(--line);
+      position: relative;
+      top: 8px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+
+    <!-- ─── Header ──────────────────────────────────────────────────── -->
+    <div class="header">
+      <div class="tag">Phase 8 PRD · Visual Verification</div>
+      <h1>Time Entry Settlement</h1>
+      <p class="subtitle">
+        How each project type closes its time entries, what the user sees, and what gets written to the database.
+        Four scenarios, four billing realities, one consistent model.
+      </p>
+    </div>
+
+    <!-- ─── Status Legend ────────────────────────────────────────────── -->
+    <div class="legend">
+      <h3>Status badges — what entries look like</h3>
+      <div class="legend-grid" style="grid-template-columns: repeat(3, 1fr);">
+        <div class="legend-item">
+          <div class="label-row">
+            <span class="pill open"><span class="dot"></span>Open</span>
+          </div>
+          <div class="desc">Needs attention. Billable hour, not yet on an invoice or in a closed period.</div>
+        </div>
+        <div class="legend-item">
+          <div class="label-row">
+            <span class="pill draft"><span class="dot"></span>Draft</span>
+          </div>
+          <div class="desc">On a draft invoice. Read-only until the invoice is finalized or the draft is dropped.</div>
+        </div>
+        <div class="legend-item">
+          <div class="label-row">
+            <span class="pill closed"><span class="dot"></span>Closed</span>
+          </div>
+          <div class="desc">Done — invoiced, or covered by the retainer fee / fixed price. No longer needs attention.</div>
+        </div>
+      </div>
+      <div style="margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); line-height: 1.5;">
+        <strong style="color: var(--ink);">One pill = one fact.</strong>
+        The row badge is just the lifecycle (Open / Draft / Closed). <em>Whether</em> a closed hour earned revenue
+        (invoiced) or was covered by the retainer/fixed deal lives in the <strong>Amount column</strong> and reports — not on every row.
+        The schema still records the precise reason (<code style="font-family:var(--mono);font-size:11px;background:var(--surface-2);padding:1px 5px;border-radius:3px;">settledReason</code>) for those reports.
+      </div>
+
+      <!-- Status lexicon — #3: one vocabulary across all surfaces -->
+      <div style="margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line);">
+        <div style="font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:var(--faint);margin-bottom:10px;">Status lexicon — same words, every surface <span class="annotation new" style="margin-left:6px;">NEW · #3</span></div>
+        <table style="width:100%;border-collapse:collapse;font-size:12px;">
+          <thead>
+            <tr style="color:var(--faint);font-size:10.5px;letter-spacing:0.06em;text-transform:uppercase;">
+              <th style="text-align:left;padding:4px 8px;font-weight:500;">Lifecycle stage</th>
+              <th style="text-align:left;padding:4px 8px;font-weight:500;">Time entry</th>
+              <th style="text-align:left;padding:4px 8px;font-weight:500;">Period (month)</th>
+              <th style="text-align:left;padding:4px 8px;font-weight:500;">Invoice doc</th>
+            </tr>
+          </thead>
+          <tbody style="color:var(--ink);">
+            <tr style="border-top:1px solid var(--line);">
+              <td style="padding:6px 8px;color:var(--muted);">Accruing / editable</td>
+              <td style="padding:6px 8px;"><span class="pill open"><span class="dot"></span>Open</span></td>
+              <td style="padding:6px 8px;"><span class="pill inprogress"><span class="dot"></span>In progress</span></td>
+              <td style="padding:6px 8px;"><span class="pill draft"><span class="dot"></span>Draft</span></td>
+            </tr>
+            <tr style="border-top:1px solid var(--line);">
+              <td style="padding:6px 8px;color:var(--muted);">Claimed, awaiting finalize</td>
+              <td style="padding:6px 8px;"><span class="pill draft"><span class="dot"></span>Draft</span></td>
+              <td style="padding:6px 8px;"><span class="pill open"><span class="dot"></span>Open</span> <span style="color:var(--faint);font-size:11px;">(ended)</span></td>
+              <td style="padding:6px 8px;"><span class="pill draft"><span class="dot"></span>Draft</span></td>
+            </tr>
+            <tr style="border-top:1px solid var(--line);">
+              <td style="padding:6px 8px;color:var(--muted);">Done / locked</td>
+              <td style="padding:6px 8px;"><span class="pill closed"><span class="dot"></span>Closed</span></td>
+              <td style="padding:6px 8px;"><span class="pill closed"><span class="dot"></span>Closed</span></td>
+              <td style="padding:6px 8px;"><span class="pill closed"><span class="dot"></span>Invoiced / Paid</span></td>
+            </tr>
+          </tbody>
+        </table>
+        <p style="margin:10px 0 0;font-size:11.5px;color:var(--muted);line-height:1.5;">
+          The Invoices tab keeps its document-native words (<em>Draft → Invoiced → Paid → Void</em>) because that's a financial document lifecycle.
+          But "Open / Closed" mean the same thing everywhere else, and <strong style="color:var(--ink);">"Closed" never collides</strong> — a closed period whose overage is on a Paid invoice reads consistently: the period is <em>Closed</em>, the invoice is <em>Paid</em>, the hours are <em>Closed</em>.
+        </p>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════
+         SCENARIO 1 — T&M (T&M project, hourly billing)
+         ═══════════════════════════════════════════════════════════════ -->
+    <div class="scenario">
+      <div class="scenario-header">
+        <div class="crumb">Scenario 1 · T&amp;M project</div>
+        <h2>
+          <span class="project-tag">PRJ-007</span>
+          Acme Corp — Q1 advisory
+        </h2>
+        <div class="meta">Time &amp; Materials · USD · $180/h · 3 entries logged in March</div>
+      </div>
+
+      <div class="scenario-body">
+        <!-- BEFORE -->
+        <div class="state-pane before">
+          <div class="pane-label">Before · Mar 31 evening</div>
+          <div class="entry-list">
+            <div class="entry-row">
+              <span class="date">Mar 3</span>
+              <span class="desc">Strategy review call</span>
+              <span class="hours">2h 30m</span>
+              <span class="status-cell"><span class="pill open"><span class="dot"></span>Open</span></span>
+            </div>
+            <div class="entry-row">
+              <span class="date">Mar 14</span>
+              <span class="desc">Roadmap workshop</span>
+              <span class="hours">4h 00m</span>
+              <span class="status-cell"><span class="pill open"><span class="dot"></span>Open</span></span>
+            </div>
+            <div class="entry-row">
+              <span class="date">Mar 28</span>
+              <span class="desc">Implementation review</span>
+              <span class="hours">1h 45m</span>
+              <span class="status-cell"><span class="pill open"><span class="dot"></span>Open</span></span>
+            </div>
+          </div>
+          <div class="action-row">
+            <button class="btn primary">Generate invoice</button>
+            <span class="action-note">Bill 8h 15m × $180 = $1,485</span>
+          </div>
+
+          <div class="finances">
+            <div class="fin-title">Project finances</div>
+            <div class="fin-grid">
+              <div class="fin-cell"><div class="fin-label">Open</div><div class="fin-value">$1,485</div><div class="fin-sub">8h 15m</div></div>
+              <div class="fin-cell"><div class="fin-label">Invoiced</div><div class="fin-value">$0</div><div class="fin-sub">0h</div></div>
+              <div class="fin-cell"><div class="fin-label">Settled</div><div class="fin-value">$0</div><div class="fin-sub">0h</div></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- AFTER -->
+        <div class="state-pane after">
+          <div class="pane-label">After · invoice INV-042 finalized <span class="arrow">→</span></div>
+          <div class="entry-list">
+            <div class="entry-row">
+              <span class="date">Mar 3</span>
+              <span class="desc">Strategy review call</span>
+              <span class="hours">2h 30m</span>
+              <span class="status-cell"><span class="pill closed"><span class="dot"></span>Closed</span></span>
+            </div>
+            <div class="entry-row">
+              <span class="date">Mar 14</span>
+              <span class="desc">Roadmap workshop</span>
+              <span class="hours">4h 00m</span>
+              <span class="status-cell"><span class="pill closed"><span class="dot"></span>Closed</span></span>
+            </div>
+            <div class="entry-row">
+              <span class="date">Mar 28</span>
+              <span class="desc">Implementation review</span>
+              <span class="hours">1h 45m</span>
+              <span class="status-cell"><span class="pill closed"><span class="dot"></span>Closed</span></span>
+            </div>
+          </div>
+          <div class="action-note">All 3 entries → <code style="font-family:var(--mono);font-size:11.5px;background:var(--surface);padding:1px 5px;border-radius:3px;">settledReason: "invoiced"</code></div>
+
+          <div class="finances">
+            <div class="fin-title">Project finances</div>
+            <div class="fin-grid">
+              <div class="fin-cell"><div class="fin-label">Open</div><div class="fin-value">$0</div><div class="fin-sub">0h</div></div>
+              <div class="fin-cell changed"><div class="fin-label">Invoiced</div><div class="fin-value">$1,485</div><div class="fin-sub">8h 15m</div></div>
+              <div class="fin-cell"><div class="fin-label">Settled</div><div class="fin-value">$0</div><div class="fin-sub">0h</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════
+         SCENARIO 2 — Retainer within-budget (the main bug being fixed)
+         ═══════════════════════════════════════════════════════════════ -->
+    <div class="scenario">
+      <div class="scenario-header">
+        <div class="crumb">Scenario 2 · Retainer · WITHIN BUDGET (the main bug)</div>
+        <h2>
+          <span class="project-tag">PRJ-002</span>
+          Arlow monthly retainer
+        </h2>
+        <div class="meta">Retainer · USD · 10h/mo @ $1,000 · rollover OFF · March used 7h 30m of 10h</div>
+      </div>
+
+      <div class="scenario-body">
+        <!-- BEFORE -->
+        <div class="state-pane before">
+          <div class="pane-label">Before · today (Apr 5) — March cycle closed, no overage</div>
+
+          <div class="period-row">
+            <span class="dot-ind"></span>
+            <span class="month">March 2026</span>
+            <span class="hours-cell">7h 30m / 10h</span>
+            <span><span class="pill open"><span class="dot"></span>Open</span></span>
+            <span class="amount">$0</span>
+            <button class="btn primary">Close</button>
+          </div>
+
+          <div class="info-box" style="margin-top:10px;">
+            <strong>The bug today:</strong> March ended a week ago with no overage, so no invoice was created. The 7h 30m below are still tagged <em>"Open"</em> — but they will never be invoiced. The agency was already paid via the monthly retainer fee.
+          </div>
+
+          <div class="entry-list">
+            <div class="entry-row">
+              <span class="date">Mar 8</span>
+              <span class="desc">Newsletter draft</span>
+              <span class="hours">2h 00m</span>
+              <span class="status-cell"><span class="pill open"><span class="dot"></span>Open</span></span>
+            </div>
+            <div class="entry-row">
+              <span class="date">Mar 17</span>
+              <span class="desc">Social calendar</span>
+              <span class="hours">3h 00m</span>
+              <span class="status-cell"><span class="pill open"><span class="dot"></span>Open</span></span>
+            </div>
+            <div class="entry-row">
+              <span class="date">Mar 25</span>
+              <span class="desc">Team sync, asset review</span>
+              <span class="hours">2h 30m</span>
+              <span class="status-cell"><span class="pill open"><span class="dot"></span>Open</span></span>
+            </div>
+          </div>
+
+          <div class="finances">
+            <div class="fin-title">Project finances</div>
+            <div class="fin-grid">
+              <div class="fin-cell diminished">
+                <div class="fin-label" style="color:var(--red);">Open <span style="color:var(--red);">✗</span></div>
+                <div class="fin-value">$1,350</div>
+                <div class="fin-sub" style="color:var(--red);">misleading — already paid</div>
+              </div>
+              <div class="fin-cell"><div class="fin-label">Invoiced</div><div class="fin-value">$0</div><div class="fin-sub">0h</div></div>
+              <div class="fin-cell"><div class="fin-label">Settled</div><div class="fin-value">$0</div><div class="fin-sub">0h</div></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- AFTER -->
+        <div class="state-pane after">
+          <div class="pane-label">After · admin clicks "Close" <span class="arrow">→</span></div>
+
+          <div class="period-row">
+            <span class="dot-ind closed"></span>
+            <span class="month">March 2026</span>
+            <span class="hours-cell">7h 30m / 10h</span>
+            <span><span class="pill closed"><span class="dot"></span>Closed</span></span>
+            <span class="amount">$0</span>
+            <button class="btn">⋯</button>
+          </div>
+
+          <div class="info-box" style="margin-top:10px;">
+            Period <code>closedAt = 2026-04-05</code>, <code>closedBy = Adam</code>.
+            Statement PDF generated. All 3 entries below stamped <code>settledReason: "retainer_included"</code>.
+          </div>
+
+          <div class="entry-list">
+            <div class="entry-row">
+              <span class="date">Mar 8</span>
+              <span class="desc">Newsletter draft</span>
+              <span class="hours">2h 00m</span>
+              <span class="status-cell"><span class="pill closed"><span class="dot"></span>Closed</span></span>
+            </div>
+            <div class="entry-row">
+              <span class="date">Mar 17</span>
+              <span class="desc">Social calendar</span>
+              <span class="hours">3h 00m</span>
+              <span class="status-cell"><span class="pill closed"><span class="dot"></span>Closed</span></span>
+            </div>
+            <div class="entry-row">
+              <span class="date">Mar 25</span>
+              <span class="desc">Team sync, asset review</span>
+              <span class="hours">2h 30m</span>
+              <span class="status-cell"><span class="pill closed"><span class="dot"></span>Closed</span></span>
+            </div>
+          </div>
+
+          <div style="font-size:12px;color:var(--muted);font-style:italic;margin-top:6px;">
+            Hover tooltip on a Settled entry:
+            <span class="tooltip-illust">
+              Settled Apr 5, 2026<br>
+              <span class="tt-meta">Included in retainer · Mar 1 – Mar 31, 2026</span>
+            </span>
+          </div>
+
+          <div class="finances">
+            <div class="fin-title">Project finances</div>
+            <div class="fin-grid">
+              <div class="fin-cell"><div class="fin-label">Open</div><div class="fin-value">$0</div><div class="fin-sub">0h</div></div>
+              <div class="fin-cell"><div class="fin-label">Invoiced</div><div class="fin-value">$0</div><div class="fin-sub">0h</div></div>
+              <div class="fin-cell changed"><div class="fin-label">Settled</div><div class="fin-value">$1,350</div><div class="fin-sub">7h 30m · covered by retainer</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════
+         SCENARIO 3 — Retainer with overage
+         ═══════════════════════════════════════════════════════════════ -->
+    <div class="scenario">
+      <div class="scenario-header">
+        <div class="crumb">Scenario 3 · Retainer · WITH OVERAGE</div>
+        <h2>
+          <span class="project-tag">PRJ-011</span>
+          Northwind growth retainer
+        </h2>
+        <div class="meta">Retainer · USD · 20h/mo @ $3,000 · overage $200/h · February used 25h 00m (5h over)</div>
+      </div>
+
+      <div class="scenario-body">
+        <!-- BEFORE -->
+        <div class="state-pane before">
+          <div class="pane-label">Before · Mar 2 morning — Feb overage ready to invoice</div>
+
+          <div class="period-row">
+            <span class="dot-ind" style="background:var(--amber);"></span>
+            <span class="month">February 2026</span>
+            <span class="hours-cell">25h 00m / 20h</span>
+            <span><span class="pill open"><span class="dot"></span>Open</span></span>
+            <span class="amount">$1,000</span>
+            <button class="btn primary">Bill overage</button>
+          </div>
+
+          <div class="entry-list">
+            <div class="entry-row">
+              <span class="date">Feb 9</span>
+              <span class="desc">Q1 campaign kickoff</span>
+              <span class="hours">6h 00m</span>
+              <span class="status-cell"><span class="pill open"><span class="dot"></span>Open</span></span>
+            </div>
+            <div class="entry-row">
+              <span class="date">Feb 16</span>
+              <span class="desc">Ad creative production</span>
+              <span class="hours">9h 00m</span>
+              <span class="status-cell"><span class="pill open"><span class="dot"></span>Open</span></span>
+            </div>
+            <div class="entry-row">
+              <span class="date">Feb 24</span>
+              <span class="desc">Launch &amp; QA</span>
+              <span class="hours">10h 00m</span>
+              <span class="status-cell"><span class="pill open"><span class="dot"></span>Open</span></span>
+            </div>
+          </div>
+
+          <div class="finances">
+            <div class="fin-title">Project finances · February</div>
+            <div class="fin-grid">
+              <div class="fin-cell"><div class="fin-label">Open</div><div class="fin-value">25h</div><div class="fin-sub">5h overage</div></div>
+              <div class="fin-cell"><div class="fin-label">Invoiced</div><div class="fin-value">$0</div><div class="fin-sub">0h</div></div>
+              <div class="fin-cell"><div class="fin-label">Settled</div><div class="fin-value">$0</div><div class="fin-sub">0h</div></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- AFTER -->
+        <div class="state-pane after">
+          <div class="pane-label">After · INV-038 overage invoice finalized <span class="arrow">→</span></div>
+
+          <div class="period-row">
+            <span class="dot-ind closed"></span>
+            <span class="month">February 2026</span>
+            <span class="hours-cell">25h 00m / 20h</span>
+            <span><span class="pill closed"><span class="dot"></span>Closed</span></span>
+            <span class="amount">$1,000</span>
+            <button class="btn">⋯</button>
+          </div>
+
+          <div class="info-box" style="margin-top:10px;">
+            <strong>All 3 entries get the same treatment:</strong> they're stamped with the same <code>invoiceId</code> and <code>settledReason: "invoiced"</code>. The within-budget 20h shows as work-breakdown on the invoice (no $); the 5h overage carries the dollar amount.
+          </div>
+
+          <div class="entry-list">
+            <div class="entry-row">
+              <span class="date">Feb 9</span>
+              <span class="desc">Q1 campaign kickoff</span>
+              <span class="hours">6h 00m</span>
+              <span class="status-cell"><span class="pill closed"><span class="dot"></span>Closed</span></span>
+            </div>
+            <div class="entry-row">
+              <span class="date">Feb 16</span>
+              <span class="desc">Ad creative production</span>
+              <span class="hours">9h 00m</span>
+              <span class="status-cell"><span class="pill closed"><span class="dot"></span>Closed</span></span>
+            </div>
+            <div class="entry-row">
+              <span class="date">Feb 24</span>
+              <span class="desc">Launch &amp; QA</span>
+              <span class="hours">10h 00m</span>
+              <span class="status-cell"><span class="pill closed"><span class="dot"></span>Closed</span></span>
+            </div>
+          </div>
+
+          <div class="finances">
+            <div class="fin-title">Project finances · February</div>
+            <div class="fin-grid">
+              <div class="fin-cell"><div class="fin-label">Open</div><div class="fin-value">$0</div><div class="fin-sub">0h</div></div>
+              <div class="fin-cell changed"><div class="fin-label">Invoiced</div><div class="fin-value">$1,000</div><div class="fin-sub">25h · 5h overage paid</div></div>
+              <div class="fin-cell"><div class="fin-label">Settled</div><div class="fin-value">$0</div><div class="fin-sub">0h</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════
+         SCENARIO 4 — Fixed project
+         ═══════════════════════════════════════════════════════════════ -->
+    <div class="scenario">
+      <div class="scenario-header">
+        <div class="crumb">Scenario 4 · Fixed-price project</div>
+        <h2>
+          <span class="project-tag">PRJ-014</span>
+          Bayview brand refresh
+        </h2>
+        <div class="meta">Fixed · USD · $12,000 total · Jan–Mar delivery · invoiced in 3 milestones</div>
+      </div>
+
+      <div class="scenario-body">
+        <!-- BEFORE -->
+        <div class="state-pane before">
+          <div class="pane-label">Before · Mar 31 — milestone 3 invoice ready</div>
+
+          <div class="info-box">
+            Milestone 3 covers <strong>Mar 1 – Mar 31</strong>. The $4,000 fee is fixed; the 18h logged below are delivery evidence, not revenue drivers. The Fixed invoice will close them through its period end.
+          </div>
+
+          <div class="entry-list">
+            <div class="entry-row">
+              <span class="date">Mar 4</span>
+              <span class="desc">Logo refinement</span>
+              <span class="hours">5h 00m</span>
+              <span class="status-cell"><span class="pill open"><span class="dot"></span>Open</span></span>
+            </div>
+            <div class="entry-row">
+              <span class="date">Mar 12</span>
+              <span class="desc">Brand book copy</span>
+              <span class="hours">6h 30m</span>
+              <span class="status-cell"><span class="pill open"><span class="dot"></span>Open</span></span>
+            </div>
+            <div class="entry-row">
+              <span class="date">Mar 22</span>
+              <span class="desc">Launch assets export</span>
+              <span class="hours">6h 30m</span>
+              <span class="status-cell"><span class="pill open"><span class="dot"></span>Open</span></span>
+            </div>
+          </div>
+
+          <div class="action-row">
+            <button class="btn primary">Generate invoice</button>
+            <span class="action-note">Fixed line: $4,000 · period Mar 1–31</span>
+          </div>
+
+          <div class="finances">
+            <div class="fin-title">Project finances · all-time</div>
+            <div class="fin-grid">
+              <div class="fin-cell"><div class="fin-label">Open</div><div class="fin-value">18h 00m</div><div class="fin-sub">delivery for M3</div></div>
+              <div class="fin-cell"><div class="fin-label">Invoiced</div><div class="fin-value">$0</div><div class="fin-sub">hourly — N/A</div></div>
+              <div class="fin-cell"><div class="fin-label">Settled</div><div class="fin-value">36h 00m</div><div class="fin-sub">M1 + M2 delivery</div></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- AFTER -->
+        <div class="state-pane after">
+          <div class="pane-label">After · INV-051 milestone 3 finalized <span class="arrow">→</span></div>
+
+          <div class="info-box" style="margin-top:0;">
+            All 3 entries → <code>invoiceId = INV-051</code>, <code>settledReason: "fixed_included"</code>, <code>settledPeriodStart/End = Mar 1 / Mar 31</code>.
+            <br><strong>Critical:</strong> They show as <em>Settled</em> (not <em>Invoiced</em>) — revenue came from the Fixed line, not from their hourly rates. The derived-status order in code matters here.
+          </div>
+
+          <div class="entry-list">
+            <div class="entry-row">
+              <span class="date">Mar 4</span>
+              <span class="desc">Logo refinement</span>
+              <span class="hours">5h 00m</span>
+              <span class="status-cell"><span class="pill closed"><span class="dot"></span>Closed</span></span>
+            </div>
+            <div class="entry-row">
+              <span class="date">Mar 12</span>
+              <span class="desc">Brand book copy</span>
+              <span class="hours">6h 30m</span>
+              <span class="status-cell"><span class="pill closed"><span class="dot"></span>Closed</span></span>
+            </div>
+            <div class="entry-row">
+              <span class="date">Mar 22</span>
+              <span class="desc">Launch assets export</span>
+              <span class="hours">6h 30m</span>
+              <span class="status-cell"><span class="pill closed"><span class="dot"></span>Closed</span></span>
+            </div>
+          </div>
+
+          <div style="font-size:12px;color:var(--muted);font-style:italic;margin-top:6px;">
+            Hover tooltip:
+            <span class="tooltip-illust">
+              Settled Mar 31, 2026<br>
+              <span class="tt-meta">Included in fixed price · INV-051 · Mar 1 – Mar 31, 2026</span>
+            </span>
+          </div>
+
+          <div class="finances">
+            <div class="fin-title">Project finances · all-time</div>
+            <div class="fin-grid">
+              <div class="fin-cell"><div class="fin-label">Open</div><div class="fin-value">0h</div><div class="fin-sub">0h</div></div>
+              <div class="fin-cell"><div class="fin-label">Invoiced</div><div class="fin-value">$0</div><div class="fin-sub">hourly — N/A</div></div>
+              <div class="fin-cell changed"><div class="fin-label">Settled</div><div class="fin-value">54h 00m</div><div class="fin-sub">M1 + M2 + M3 delivery</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ════════════════════════════════════════════════════════════════
+         TAB REDESIGN 1 — TIME TAB
+         ════════════════════════════════════════════════════════════════ -->
+    <div class="section-divider"><span>How the actual screens evolve — Time tab</span></div>
+
+    <div style="margin-bottom:18px;color:var(--muted);font-size:13px;text-align:center;">
+      Same Arlow retainer as your screenshot, but with the PRD's status model applied to a richer set of entries.
+      <strong style="color:var(--green);">Green annotations</strong> = new in this PRD ·
+      <strong style="color:var(--amber);">amber annotations</strong> = changed behavior
+    </div>
+
+    <div class="app-frame">
+      <div class="app-header">
+        <div class="title-row">
+          <h2>Arlow monthly retainer</h2>
+          <span class="type-chip">Retainer</span>
+          <span class="active-chip">Active</span>
+        </div>
+        <div class="meta-line">PRJ-002 · Arlow · USD · 10:00 h/mo</div>
+        <div class="app-tabs">
+          <div class="app-tab">Overview</div>
+          <div class="app-tab active">Time</div>
+          <div class="app-tab">Invoices</div>
+          <div class="app-tab">Settings</div>
+        </div>
+      </div>
+
+      <div class="app-body">
+
+        <!-- Summary row — kept simple, matches original screenshot -->
+        <div class="summary-row" style="margin-bottom: 4px;">
+          <div class="summary-cell"><span class="summary-label">Total hours</span><span class="summary-value">22h 45m</span></div>
+          <div class="summary-cell"><span class="summary-label">Billable</span><span class="summary-value">22h 45m</span></div>
+          <div class="summary-cell"><span class="summary-label">Non-billable</span><span class="summary-value">0h</span></div>
+          <div class="summary-cell" style="margin-left: 8px;"><span class="summary-label">Open</span><span class="summary-value" style="color: var(--blue);">18h 15m</span></div>
+        </div>
+        <div style="font-size:11.5px;color:var(--faint);font-style:italic;margin-bottom:14px;">
+          One extra number — <strong style="color:var(--muted);">Open</strong> = what still needs billing/closing. No further micro-breakdown; that lives in reports.
+        </div>
+
+        <!-- Toolbar — T3, T5 -->
+        <div class="toolbar" style="position:relative;">
+          <input class="search" placeholder="Search task or note" disabled>
+          <div style="position:relative;">
+            <button class="tb-btn active">⚙ Filter <span style="color:var(--green);font-weight:500;font-size:11px;">3 active</span></button>
+            <!-- Filter dropdown illustration (T5) -->
+            <div class="filter-dropdown" style="display:block;">
+              <div class="fd-section-title">Status <span class="annotation new" style="margin-left:6px;">NEW · T5</span></div>
+              <div class="fd-item"><span class="fd-check checked">✓</span>Open</div>
+              <div class="fd-item"><span class="fd-check"></span>Draft</div>
+              <div class="fd-item"><span class="fd-check checked">✓</span>Closed</div>
+              <div class="fd-item"><span class="fd-check"></span>Non-billable</div>
+            </div>
+          </div>
+          <button class="tb-btn">⊞ By Day</button>
+          <div class="tb-spacer"></div>
+          <span style="color:var(--faint);font-size:11.5px;font-style:italic;">
+            <span class="annotation">CHANGED · T3</span>
+            "Invoice Unbilled Hours" hidden — no invoiceable hours in this view
+          </span>
+          <button class="tb-cta">+ Add Time</button>
+        </div>
+
+        <!-- Time entry table — T1, T4, T6 -->
+        <div class="te-table">
+
+          <!-- Yesterday (current period — in progress) -->
+          <div class="te-day-header">
+            <span class="day-arrow">▾</span>
+            <span><span class="day-label">Yesterday</span> <span class="day-meta">· 3 entries</span></span>
+            <span></span>
+            <span class="day-total">2h 0m</span>
+          </div>
+          <div class="te-col-header">
+            <span>Date</span><span>Member</span><span>Task</span><span>Category</span><span>Status</span><span style="text-align:right;">Hours</span><span></span>
+          </div>
+          <div class="te-row">
+            <span class="te-date">05/23/26</span>
+            <span class="te-member"><span class="avatar">AT</span>Adam Toth</span>
+            <span class="te-task">Teso</span>
+            <span class="te-cat"><span class="cat-pill">—</span></span>
+            <span><span class="pill open"><span class="dot"></span>Open</span></span>
+            <span class="te-hours">01:00</span>
+            <span class="te-menu">⋯</span>
+          </div>
+          <div class="te-row">
+            <span class="te-date">05/23/26</span>
+            <span class="te-member"><span class="avatar">AT</span>Adam Toth</span>
+            <span class="te-task">Add new people to about 2</span>
+            <span class="te-cat"><span class="cat-pill"><span class="cat-dot" style="background:#8b5cf6;"></span>Development</span></span>
+            <span><span class="pill open"><span class="dot"></span>Open</span></span>
+            <span class="te-hours">00:30</span>
+            <span class="te-menu">⋯</span>
+          </div>
+          <div class="te-row">
+            <span class="te-date">05/23/26</span>
+            <span class="te-member"><span class="avatar">AT</span>Adam Toth</span>
+            <span class="te-task">Add new people to about 2</span>
+            <span class="te-cat"><span class="cat-pill"><span class="cat-dot" style="background:#8b5cf6;"></span>Development</span></span>
+            <span><span class="pill open"><span class="dot"></span>Open</span></span>
+            <span class="te-hours">00:30</span>
+            <span class="te-menu">⋯</span>
+          </div>
+
+          <!-- Mar 28 — closed retainer period -->
+          <div class="te-day-header">
+            <span class="day-arrow">▾</span>
+            <span><span class="day-label">Sat, Mar 28, 2026</span> <span class="day-meta">· 2 entries</span></span>
+            <span class="closed-tag">● Closed · Mar 1–31</span>
+            <span class="day-total">2h 30m</span>
+          </div>
+          <div class="te-col-header">
+            <span>Date</span><span>Member</span><span>Task</span><span>Category</span><span>Status</span><span style="text-align:right;">Hours</span><span></span>
+          </div>
+          <div class="te-row locked">
+            <span class="te-date">03/28/26</span>
+            <span class="te-member"><span class="avatar">AT</span>Adam Toth</span>
+            <span class="te-task">Newsletter draft</span>
+            <span class="te-cat"><span class="cat-pill"><span class="cat-dot" style="background:#3b82f6;"></span>Design</span></span>
+            <span><span class="pill closed"><span class="dot"></span>Closed</span></span>
+            <span class="te-hours">02:00</span>
+            <span class="te-menu">⋯</span>
+          </div>
+          <div class="te-row locked">
+            <span class="te-date">03/28/26</span>
+            <span class="te-member"><span class="avatar">AT</span>Adam Toth</span>
+            <span class="te-task">Quick fix on hero copy</span>
+            <span class="te-cat"><span class="cat-pill"><span class="cat-dot" style="background:#3b82f6;"></span>Design</span></span>
+            <span><span class="pill closed"><span class="dot"></span>Closed</span></span>
+            <span class="te-hours">00:30</span>
+            <span class="te-menu">⋯</span>
+          </div>
+
+          <!-- Feb — overage invoice -->
+          <div class="te-day-header">
+            <span class="day-arrow">▾</span>
+            <span><span class="day-label">Wed, Feb 18, 2026</span> <span class="day-meta">· 1 entry</span></span>
+            <span class="closed-tag">● Closed · INV-038</span>
+            <span class="day-total">2h 00m</span>
+          </div>
+          <div class="te-col-header">
+            <span>Date</span><span>Member</span><span>Task</span><span>Category</span><span>Status</span><span style="text-align:right;">Hours</span><span></span>
+          </div>
+          <div class="te-row locked">
+            <span class="te-date">02/18/26</span>
+            <span class="te-member"><span class="avatar">AT</span>Adam Toth</span>
+            <span class="te-task">Q1 campaign overage hour</span>
+            <span class="te-cat"><span class="cat-pill"><span class="cat-dot" style="background:#8b5cf6;"></span>Development</span></span>
+            <span><span class="pill closed"><span class="dot"></span>Closed</span></span>
+            <span class="te-hours">02:00</span>
+            <span class="te-menu">⋯</span>
+          </div>
+        </div>
+
+        <!-- annotation note -->
+        <div style="margin-top: 14px; padding: 12px 14px; background: var(--surface-2); border-radius: 6px; font-size: 12px; color: var(--muted); line-height: 1.55;">
+          <strong style="color:var(--ink);">Status = one word.</strong> The row shows only <em>Open / Draft / Closed</em> — no "Invoiced vs Settled" split cluttering every row.
+          <strong style="color:var(--ink);"> Locked rows</strong> (Mar &amp; Feb) have 72% opacity + 🔒; their <code style="font-family:var(--mono);font-size:11px;background:var(--surface);padding:1px 5px;border-radius:3px;">⋯</code> menu offers <em>View invoice / statement</em> or <em>Reopen</em>, not Edit/Delete.
+          <strong style="color:var(--ink);"> The "why" lives in the day-group header</strong> — Mar shows "Closed · Mar 1–31", Feb shows "INV-038" — so the reference is there without repeating it on each row (Harvest pattern).
+        </div>
+
+      </div>
+    </div>
+
+
+    <!-- ════════════════════════════════════════════════════════════════
+         TAB REDESIGN 2 — OVERVIEW TAB
+         ════════════════════════════════════════════════════════════════ -->
+    <div class="section-divider"><span>How the actual screens evolve — Overview tab</span></div>
+
+    <div style="margin-bottom:18px;color:var(--muted);font-size:13px;text-align:center;">
+      Monthly Breakdown grows from "display only" → action-driven per row (Bonsai pattern).
+      Each month state has its own primary CTA.
+    </div>
+
+    <div class="app-frame">
+      <div class="app-header">
+        <div class="title-row">
+          <h2>Arlow monthly retainer</h2>
+          <span class="type-chip">Retainer</span>
+          <span class="active-chip">Active</span>
+        </div>
+        <div class="meta-line">PRJ-002 · Arlow · USD · 10:00 h/mo</div>
+        <div class="app-tabs">
+          <div class="app-tab active">Overview</div>
+          <div class="app-tab">Time</div>
+          <div class="app-tab">Invoices</div>
+          <div class="app-tab">Settings</div>
+        </div>
+      </div>
+
+      <div class="app-body" style="background: var(--bg); padding: 22px 28px;">
+
+        <!-- Project Finances card — O1 -->
+        <div class="ov-card">
+          <div class="ov-header-row">
+            <div>
+              <h3 class="ov-title">Project Finances</h3>
+              <p class="ov-sub">May 2026 · 1-month rollover (in progress) <span class="annotation">CHANGED · O4</span> no global "Cycle closed" badge — state lives per-month</p>
+            </div>
+            <div class="cycle-nav">
+              <span class="nav-arrow">‹</span>
+              <span>May 2026</span>
+              <span class="nav-arrow">›</span>
+            </div>
+          </div>
+
+          <div class="finances-grid">
+
+            <!-- Time breakdown — reverted to clean donut (no micro-breakdown) -->
+            <div class="fin-section">
+              <div class="fin-section-title">Time breakdown <span class="annotation">UNCHANGED</span></div>
+              <div class="fin-time-row">
+                <div class="fin-donut">
+                  <div class="fin-donut-text">
+                    <span class="ttl">7h 30m</span>
+                    <span class="sub">of 10:00</span>
+                  </div>
+                </div>
+                <div class="fin-stats">
+                  <div class="fin-stat-row">
+                    <span class="fs-label">Billable hours</span>
+                    <span class="fs-value">7h 30m</span>
+                  </div>
+                  <div class="fin-stat-row">
+                    <span class="fs-label">Non-billable hours</span>
+                    <span class="fs-value" style="color:var(--muted);">0h</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Overage -->
+            <div class="fin-section">
+              <div class="fin-section-title">Overage</div>
+              <div class="fin-stat-row">
+                <span class="fs-label">Over budget</span>
+                <span class="fs-value" style="color:var(--muted);">—</span>
+              </div>
+              <div class="fin-stat-row">
+                <span class="fs-label">Overage due</span>
+                <span class="fs-value" style="color:var(--muted);">—</span>
+              </div>
+            </div>
+
+            <!-- Cycle profitability -->
+            <div class="fin-section">
+              <div class="fin-section-title">Cycle profitability</div>
+              <div class="fin-stat-row">
+                <span class="fs-label">Earned revenue</span>
+                <span class="fs-value">$1,000.00</span>
+              </div>
+              <div class="fin-stat-row">
+                <span class="fs-label">Profit</span>
+                <span class="fs-value" style="color:var(--green);">$1,000.00</span>
+              </div>
+              <div class="fin-stat-row">
+                <span class="fs-label">Margin</span>
+                <span class="fs-value">100%</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Monthly Breakdown card — O2, O3, O5 -->
+        <div class="ov-card">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;">
+            <div>
+              <h3 class="ov-title">Monthly Breakdown</h3>
+              <p class="ov-sub" style="margin-bottom: 0;">
+                <span class="annotation">CHANGED · O5</span>
+                Contextual hint: <em style="color:var(--muted);">"Monthly retainer fee ($1,000/mo) is billed separately via Stripe. Close ended months below to send a statement and lock the hours."</em>
+              </p>
+            </div>
+          </div>
+
+          <div class="mb-table">
+            <div class="mb-col-header">
+              <span></span>
+              <span>Month</span>
+              <span style="text-align:right;">Hours</span>
+              <span>Status</span>
+              <span style="text-align:right;" title="Overage billed through this tool. The monthly retainer fee is charged separately via Stripe.">Billed here ⓘ</span>
+              <span style="text-align:right;"></span>
+            </div>
+
+            <!-- May 2026 — current month, In progress (passive, can't close mid-month) -->
+            <div class="mb-row">
+              <span class="mb-month-dot in-progress"></span>
+              <span class="mb-month">May 2026 <span style="font-size:11px;color:var(--faint);font-weight:400;">· current</span></span>
+              <span class="mb-hours" style="text-align:right;">7h 30m / 10h</span>
+              <span><span class="pill inprogress"><span class="dot"></span>In progress</span></span>
+              <span class="mb-amount" style="text-align:right;color:var(--muted);">—</span>
+              <span class="mb-actions">
+                <button class="btn">Preview</button>
+                <span class="te-menu" style="font-size:16px;padding:4px 8px;">⋯</span>
+              </span>
+            </div>
+
+            <!-- Apr 2026 — ended, within budget → Close (primary), rest in ··· -->
+            <div class="mb-row">
+              <span class="mb-month-dot in-progress"></span>
+              <span class="mb-month">April 2026</span>
+              <span class="mb-hours" style="text-align:right;">8h 15m / 10h</span>
+              <span><span class="pill open"><span class="dot"></span>Open</span></span>
+              <span class="mb-amount" style="text-align:right;">$0</span>
+              <span class="mb-actions">
+                <button class="btn primary">Close</button>
+                <span class="te-menu" style="font-size:16px;padding:4px 8px;">⋯</span>
+              </span>
+            </div>
+
+            <!-- Jan 2026 — ended, overage → Bill overage (primary), rest in ··· -->
+            <div class="mb-row">
+              <span class="mb-month-dot in-progress"></span>
+              <span class="mb-month">January 2026</span>
+              <span class="mb-hours" style="text-align:right;">22h 30m / 20h</span>
+              <span><span class="pill open"><span class="dot"></span>Open</span></span>
+              <span class="mb-amount" style="text-align:right;">$500</span>
+              <span class="mb-actions">
+                <button class="btn primary">Bill overage</button>
+                <span class="te-menu" style="font-size:16px;padding:4px 8px;">⋯</span>
+              </span>
+            </div>
+
+            <!-- Mar 2026 — closed, statement ($0): artifact is the primary CTA -->
+            <div class="mb-row">
+              <span class="mb-month-dot closed-statement"></span>
+              <span class="mb-month">March 2026</span>
+              <span class="mb-hours" style="text-align:right;">2h 30m / 10h</span>
+              <span><span class="pill closed"><span class="dot"></span>Closed</span></span>
+              <span class="mb-amount" style="text-align:right;">$0</span>
+              <span class="mb-actions">
+                <button class="btn">↓ Statement</button>
+                <span class="te-menu" style="font-size:16px;padding:4px 8px;">⋯</span>
+              </span>
+            </div>
+
+            <!-- Feb 2026 — closed, invoiced ($1,000): invoice link is the primary CTA -->
+            <div class="mb-row">
+              <span class="mb-month-dot closed-statement"></span>
+              <span class="mb-month">February 2026</span>
+              <span class="mb-hours" style="text-align:right;">25h 00m / 20h</span>
+              <span><span class="pill closed"><span class="dot"></span>Closed</span></span>
+              <span class="mb-amount" style="text-align:right;">$1,000</span>
+              <span class="mb-actions">
+                <button class="btn">↗ INV-038</button>
+                <span class="te-menu" style="font-size:16px;padding:4px 8px;">⋯</span>
+              </span>
+            </div>
+
+          </div>
+
+          <div style="margin-top:14px;padding:11px 14px;background:var(--surface-2);border-radius:6px;font-size:12px;color:var(--muted);line-height:1.55;">
+            <strong style="color:var(--ink);">One CTA per row + <code style="font-family:var(--mono);font-size:11px;background:var(--surface);padding:1px 5px;border-radius:3px;">⋯</code>.</strong>
+            Every row ends with one primary button and one overflow menu — clean vertical rhythm.
+            <br><strong style="color:var(--ink);">#2 — Status reflects whether you must act.</strong> <em>In progress</em> (hollow, faint) = current month, nothing to do — the eye skips it. <em>Open</em> (blue) = ended, needs your action — paired with the dark button. <em>Closed</em> (grey) = done. No longer two meanings on one "Open".
+            <br><strong style="color:var(--ink);">#1 — "Close" opens the statement to review, then confirms</strong> (Stripe finalize pattern) — so Preview isn't a separate item on closable rows; it's the first step of Close. Standalone Preview stays only on the current month.
+            <br><strong style="color:var(--ink);">#6 — "Billed here"</strong> (not "Amount") = overage billed through this tool. The retainer fee is charged separately via Stripe, so this column never double-counts it.
+          </div>
+        </div>
+
+        <!-- Close flow + Reopen dialogs — #1, #4, CC1 -->
+        <div style="margin-top:24px;padding:20px 22px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);">
+          <h4 style="font-family:var(--serif);font-size:15px;font-weight:500;margin:0 0 4px;">Close flow — review, then confirm <span class="annotation new" style="margin-left:6px;">NEW · #1 + #4</span></h4>
+          <p style="margin:0 0 16px;font-size:12px;color:var(--muted);">Clicking <em>Close</em> never closes immediately — it opens the statement to review (Stripe "Finalize" pattern). Preview <em>is</em> this step.</p>
+
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start;">
+            <!-- Step 1: the statement preview -->
+            <div>
+              <div style="font-size:10.5px;letter-spacing:0.08em;text-transform:uppercase;color:var(--faint);margin-bottom:8px;">Step 1 · Review the statement</div>
+              <div style="background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:16px;">
+                <div style="display:flex;justify-content:space-between;border-bottom:1px solid var(--line);padding-bottom:10px;margin-bottom:10px;">
+                  <div>
+                    <div style="font-family:var(--serif);font-size:15px;">Statement — March 2026</div>
+                    <div style="font-size:11px;color:var(--muted);">Arlow · PRJ-002</div>
+                  </div>
+                  <div style="font-size:11px;color:var(--muted);text-align:right;">Mar 1 – Mar 31<br>Within budget</div>
+                </div>
+                <div style="font-size:12px;color:var(--muted);display:flex;justify-content:space-between;margin-bottom:6px;">
+                  <span>Hours used</span><span style="font-variant-numeric:tabular-nums;color:var(--ink);">2h 30m / 10h</span>
+                </div>
+                <div style="font-size:12px;color:var(--muted);display:flex;justify-content:space-between;margin-bottom:6px;">
+                  <span>Overage</span><span style="font-variant-numeric:tabular-nums;color:var(--ink);">—</span>
+                </div>
+                <div style="font-size:12px;display:flex;justify-content:space-between;border-top:1px solid var(--line);padding-top:8px;margin-top:8px;">
+                  <span style="font-weight:500;">Amount due</span><span style="font-family:var(--mono);font-weight:500;">$0.00</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Step 2: confirm dialog with reversibility -->
+            <div>
+              <div style="font-size:10.5px;letter-spacing:0.08em;text-transform:uppercase;color:var(--faint);margin-bottom:8px;">Step 2 · Confirm</div>
+              <div class="dialog-illust" style="margin:0;">
+                <h4>Send statement &amp; close March?</h4>
+                <p>
+                  The <strong>2h 30m</strong> in March will be locked and marked closed.
+                  The statement above becomes the client-facing record.
+                </p>
+                <p style="display:flex;align-items:center;gap:6px;color:var(--green);font-style:normal;background:var(--green-bg);padding:7px 10px;border-radius:6px;margin-bottom:14px;">
+                  ↺ You can reopen this month anytime if you need to make changes.
+                </p>
+                <div class="dialog-actions">
+                  <button class="btn">Cancel</button>
+                  <button class="btn primary">Send &amp; close</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <p style="margin:16px 0 0;font-size:11.5px;color:var(--faint);font-style:italic;">
+            <strong>#4 — Reversibility reassurance:</strong> the green line tells the user the action is safe (reopen anytime), which makes them comfortable acting. The inverse of a scary confirm — Stripe lowers anxiety to increase action.
+          </p>
+        </div>
+
+        <!-- Reopen confirmation dialog — CC1 -->
+        <div style="margin-top:18px;padding:20px 22px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);">
+          <h4 style="font-family:var(--serif);font-size:15px;font-weight:500;margin:0 0 12px;">Reopen confirmation <span class="annotation new" style="margin-left:6px;">CC1</span></h4>
+          <div class="dialog-illust">
+            <h4>Reopen March 2026?</h4>
+            <p>
+              The <strong>2 closed hours</strong> become editable again. The statement (downloaded Apr 5 by Adam) is now historical — regenerate and resend if you change anything.
+            </p>
+            <div class="dialog-actions">
+              <button class="btn">Cancel</button>
+              <button class="btn primary">Reopen period</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Drill-down period detail — #5: reveals the collapsed split -->
+        <div style="margin-top:18px;padding:20px 22px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);">
+          <h4 style="font-family:var(--serif);font-size:15px;font-weight:500;margin:0 0 4px;">Period detail — the collapsed split is revealed on drill-down <span class="annotation new" style="margin-left:6px;">NEW · #5</span></h4>
+          <p style="margin:0 0 16px;font-size:12px;color:var(--muted);">The row says only "Closed". Clicking it opens this detail, where the invoiced-vs-covered breakdown <em>does</em> appear — progressive disclosure, no information lost.</p>
+
+          <div style="background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:18px;max-width:560px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+              <div style="font-family:var(--serif);font-size:16px;">February 2026 · Closed</div>
+              <span class="te-menu" style="font-size:16px;">⋯</span>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+              <div style="background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:12px 14px;">
+                <div style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px;margin-bottom:4px;"><span style="width:7px;height:7px;background:var(--purple);border-radius:2px;"></span>Covered by retainer</div>
+                <div style="font-family:var(--mono);font-size:16px;font-weight:500;">20h 00m</div>
+                <div style="font-size:11px;color:var(--faint);">included in $1,000/mo fee</div>
+              </div>
+              <div style="background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:12px 14px;">
+                <div style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px;margin-bottom:4px;"><span style="width:7px;height:7px;background:var(--green);border-radius:2px;"></span>Invoiced overage</div>
+                <div style="font-family:var(--mono);font-size:16px;font-weight:500;">5h 00m</div>
+                <div style="font-size:11px;color:var(--faint);">$1,000 · INV-038</div>
+              </div>
+            </div>
+            <div style="margin-top:12px;font-size:11.5px;color:var(--muted);font-style:italic;">
+              This is where <code style="font-family:var(--mono);font-size:11px;background:var(--surface);padding:1px 5px;border-radius:3px;">settledReason</code> earns its keep — the schema distinction (invoiced vs retainer_included) surfaces only here, not on every row.
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+
+    <!-- ─── Schema snapshot ──────────────────────────────────────────── -->
+    <div class="section-divider"><span>What gets written to the database</span></div>
+
+    <div class="schema-view">
+      <h2>Time entry record · before vs after settlement</h2>
+      <p class="subtitle">Same shape for all scenarios — only the values differ. <em>4 new fields total</em>, plus the existing <code style="font-family:var(--mono);font-size:11.5px;background:var(--surface-2);padding:1px 5px;border-radius:3px;">invoiceId</code>.</p>
+
+      <div class="schema-grid" style="grid-template-columns: repeat(4, 1fr); gap: 12px;">
+
+        <!-- T&M invoiced -->
+        <div class="schema-card">
+          <div class="schema-title">Scenario 1 · T&amp;M invoiced</div>
+<pre><span class="key">invoiceId</span>:           INV-042
+<span class="key">settledAt</span>:           Mar 31 17:42
+<span class="key">settledReason</span>:       <span class="val">"invoiced"</span>
+<span class="key">settledPeriodStart</span>:  2026-03-01
+<span class="key">settledPeriodEnd</span>:    2026-03-31
+
+<span class="note">→ Status: Invoiced</span></pre>
+        </div>
+
+        <!-- Retainer within-budget -->
+        <div class="schema-card">
+          <div class="schema-title">Scenario 2 · Retainer within-budget</div>
+<pre><span class="key">invoiceId</span>:           <span class="undef">undefined</span>
+<span class="key">settledAt</span>:           Apr 5 09:14
+<span class="key">settledReason</span>:       <span class="val">"retainer_included"</span>
+<span class="key">settledPeriodStart</span>:  2026-03-01
+<span class="key">settledPeriodEnd</span>:    2026-03-31
+
+<span class="note">→ Status: Settled
+   No invoice — paid via retainer fee</span></pre>
+        </div>
+
+        <!-- Retainer overage -->
+        <div class="schema-card">
+          <div class="schema-title">Scenario 3 · Retainer overage</div>
+<pre><span class="key">invoiceId</span>:           INV-038
+<span class="key">settledAt</span>:           Mar 2 10:22
+<span class="key">settledReason</span>:       <span class="val">"invoiced"</span>
+<span class="key">settledPeriodStart</span>:  2026-02-01
+<span class="key">settledPeriodEnd</span>:    2026-02-28
+
+<span class="note">→ Status: Invoiced
+   Even within-budget entries on
+   the overage invoice get this</span></pre>
+        </div>
+
+        <!-- Fixed -->
+        <div class="schema-card">
+          <div class="schema-title">Scenario 4 · Fixed milestone</div>
+<pre><span class="key">invoiceId</span>:           INV-051
+<span class="key">settledAt</span>:           Mar 31 18:01
+<span class="key">settledReason</span>:       <span class="val">"fixed_included"</span>
+<span class="key">settledPeriodStart</span>:  2026-03-01
+<span class="key">settledPeriodEnd</span>:    2026-03-31
+
+<span class="note">→ Status: Settled
+   Has invoiceId, but revenue
+   came from the Fixed line</span></pre>
+        </div>
+
+      </div>
+
+      <div style="margin-top: 28px; padding-top: 22px; border-top: 1px solid var(--line);">
+        <div class="schema-title" style="margin-bottom: 12px;">Retainer period record · after admin closes it</div>
+        <div class="schema-card" style="background: var(--surface); max-width: 480px;">
+<pre><span class="key">_id</span>:                 retainerPeriods/abc123
+<span class="key">projectId</span>:           PRJ-002 (Arlow)
+<span class="key">periodStart</span>:         2026-03-01
+<span class="key">periodEnd</span>:           2026-03-31
+<span class="key">closedAt</span>:            Apr 5 09:14
+<span class="key">closedBy</span>:            users/adam
+
+<span class="note">→ This + the 3 settled entries
+  is everything the model needs.
+  No new tables. No state machine.</span></pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- ─── Footer note ──────────────────────────────────────────────── -->
+    <div style="text-align:center; margin-top: 60px; color: var(--faint); font-size: 12px;">
+      Phase 8 · Time Entry Settlement · <a href="phase-8-time-entry-settlement.md" style="color: var(--muted);">phase-8-time-entry-settlement.md</a>
+    </div>
+
+  </div>
+</body>
+</html>

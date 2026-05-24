@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from "react"
 import { useMutation } from "convex/react"
+import dynamic from "next/dynamic"
 import { api } from "@/convex/_generated/api"
 import { useTaskReferenceData } from "@/components/tasks/task-reference-data"
 import type { StatusType } from "@/convex/lib/constants"
@@ -21,7 +22,6 @@ import {
   CommandEmpty,
 } from "@/components/ui/command"
 import { Button } from "@/components/ui/button"
-import { Textarea } from "@/components/ui/textarea"
 import { StatusBadge } from "@/components/status-badge"
 import { CategoryBadge } from "@/components/category-badge"
 import { UserAvatar } from "@/components/user-avatar"
@@ -39,6 +39,31 @@ import {
 } from "lucide-react"
 import type { Id } from "@/convex/_generated/dataModel"
 
+// Same Tiptap editor used in task detail — keeps the description storage
+// format (stringified ProseMirror JSON) identical across both write paths.
+const TiptapEditor = dynamic(
+  () => import("@/components/tasks/tiptap-editor").then((mod) => ({ default: mod.TiptapEditor })),
+  {
+    ssr: false,
+    loading: () => <div className="h-[80px] animate-pulse rounded-lg bg-muted/40" />,
+  },
+)
+
+// A Tiptap doc counts as empty only if every top-level node is a textual block
+// (paragraph/heading) with no inline content. Atom blocks like image, table,
+// horizontalRule, or attachment are always "content" even with no `.content`
+// array — without this, an image-only description would be silently dropped.
+function isTiptapDocEmpty(doc: unknown): boolean {
+  if (!doc || typeof doc !== "object") return true
+  const content = (doc as { content?: Array<{ type?: string; content?: unknown[] }> }).content
+  if (!content || content.length === 0) return true
+  const TEXTUAL_BLOCKS = new Set(["paragraph", "heading"])
+  return content.every((node) => {
+    if (!node.type || !TEXTUAL_BLOCKS.has(node.type)) return false
+    return !node.content || node.content.length === 0
+  })
+}
+
 export function TaskFormModal({
   open,
   onOpenChange,
@@ -48,7 +73,9 @@ export function TaskFormModal({
 }) {
   const titleRef = useRef<HTMLInputElement>(null)
   const [title, setTitle] = useState("")
-  const [description, setDescription] = useState("")
+  // Tiptap doc JSON (or undefined if untouched). Stored as the same shape
+  // task-detail-overview emits, so the create + edit paths agree on format.
+  const [description, setDescription] = useState<unknown>(undefined)
   const [projectId, setProjectId] = useState<Id<"projects"> | undefined>()
   const [statusId, setStatusId] = useState<Id<"statuses"> | undefined>()
   const [assigneeIds, setAssigneeIds] = useState<Id<"users">[]>([])
@@ -68,7 +95,7 @@ export function TaskFormModal({
 
   function resetForm() {
     setTitle("")
-    setDescription("")
+    setDescription(undefined)
     setProjectId(undefined)
     setStatusId(undefined)
     setAssigneeIds([])
@@ -83,7 +110,7 @@ export function TaskFormModal({
     try {
       await createTask({
         title: trimmed,
-        description: description.trim() || undefined,
+        description: isTiptapDocEmpty(description) ? undefined : JSON.stringify(description),
         projectId,
         statusId,
         assigneeIds: assigneeIds.length > 0 ? assigneeIds : undefined,
@@ -121,7 +148,8 @@ export function TaskFormModal({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogFullscreenContent>
         <div
-          className="relative flex max-h-[80vh] w-full max-w-[560px] flex-col gap-0 overflow-hidden rounded-xl bg-background p-0 ring-1 ring-foreground/10 shadow-xl outline-none"
+          data-expanded={showDescription}
+          className="relative flex max-h-[80vh] w-full flex-col gap-0 overflow-hidden rounded-xl bg-background p-0 ring-1 ring-foreground/10 shadow-xl outline-none transition-[max-width] duration-200 ease-out max-w-[560px] data-[expanded=true]:max-w-[760px]"
           onKeyDown={handleKeyDown}
         >
         <DialogTitle className="sr-only">Create task</DialogTitle>
@@ -155,14 +183,15 @@ export function TaskFormModal({
           />
         </div>
 
-        {/* Description */}
-        <div className="flex-1 px-5 pb-3">
+        {/* Description — min-h-0 lets this flex item shrink past its content
+            so overflow-y-auto actually scrolls instead of pushing the modal
+            past max-h-[80vh] and getting clipped by the outer overflow-hidden. */}
+        <div className="flex-1 min-h-0 overflow-y-auto px-5 pb-3">
           {showDescription ? (
-            <Textarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
+            <TiptapEditor
+              content={description}
+              onUpdate={setDescription}
               placeholder="Add description..."
-              className="min-h-[80px] resize-none border-none bg-transparent p-0 text-sm shadow-none focus-visible:ring-0"
               autoFocus
             />
           ) : (

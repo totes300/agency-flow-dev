@@ -1,0 +1,954 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>/time-tracking — Admin invoicing workbench</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  :root {
+    --fg: #1f1d1b;
+    --fg-muted: #6e6a64;
+    --fg-subtle: #9b968f;
+    --bg: #ffffff;
+    --bg-subtle: #fafaf9;
+    --bg-hover: #f6f5f3;
+    --bg-row-alt: #fcfbfa;
+    --border: #ebeae6;
+    --border-strong: #dcdad4;
+    --accent: #2563eb;
+    --accent-bg: #eff4ff;
+    --accent-border: #c7d8fe;
+    --green-text: #15803d;
+    --green-fill: #16a34a;
+    --green-bg: rgba(34,197,94,0.08);
+    --green-border: rgba(34,197,94,0.30);
+    --green-dot: #16a34a;
+    --amber-text: #b45309;
+    --amber-bg: rgba(245,158,11,0.08);
+    --amber-border: rgba(245,158,11,0.32);
+    --amber-strip: #f59e0b;
+    --amber-dot: #f59e0b;
+    --red-text: #b91c1c;
+    --red-dot: #dc2626;
+    --bar-track: #efedea;
+    --bar-fill: #1f1d1b;
+    --bar-overage: #f59e0b;
+    --bar-on-track: #16a34a;
+  }
+  html, body { background: var(--bg); color: var(--fg); }
+  body {
+    font-family: ui-sans-serif, "Inter", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    font-size: 13.5px;
+    color: var(--fg);
+  }
+  .num { font-variant-numeric: tabular-nums; }
+  .mono { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; }
+
+  /* ---------- Sidebar ---------- */
+  .sidebar { width: 240px; background: var(--bg-subtle); border-right: 1px solid var(--border); }
+  .sb-section { padding: 14px 10px 4px; font-size: 11px; font-weight: 600; color: var(--fg-subtle); letter-spacing: 0.06em; text-transform: uppercase; }
+  .nav-li { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-radius: 6px; font-size: 13.5px; color: var(--fg-muted); cursor: default; }
+  .nav-li.active { background: var(--bg-hover); color: var(--fg); font-weight: 500; }
+  .nav-li:hover:not(.active) { background: #f3f1ee; }
+  .nav-li .badge { margin-left: auto; font-size: 11px; color: var(--fg-subtle); background: #ece9e3; padding: 1px 6px; border-radius: 999px; }
+
+  /* ---------- Page header ---------- */
+  .page-header { display: flex; align-items: baseline; justify-content: space-between; padding: 18px 24px 14px; border-bottom: 1px solid var(--border); }
+  .page-title { font-size: 18px; font-weight: 600; letter-spacing: -0.005em; }
+  .page-helper { font-size: 12.5px; color: var(--fg-subtle); }
+  .page-helper a { color: var(--fg-muted); text-decoration: underline; text-decoration-color: var(--border-strong); text-underline-offset: 3px; }
+
+  /* ---------- Tabs ---------- */
+  .tabs { display: flex; padding: 0 24px; border-bottom: 1px solid var(--border); }
+  .tab { display: inline-flex; align-items: center; gap: 8px; padding: 11px 16px; font-size: 14px; color: var(--fg-muted); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; user-select: none; }
+  .tab:hover { color: var(--fg); }
+  .tab.active { color: var(--fg); font-weight: 600; border-bottom-color: var(--fg); }
+  .tab-count { font-size: 11.5px; font-weight: 500; color: var(--fg-subtle); background: var(--bg-hover); padding: 1px 7px; border-radius: 999px; min-width: 22px; text-align: center; }
+  .tab.active .tab-count { background: #ece9e3; color: var(--fg-muted); }
+  .tab-dot { width: 7px; height: 7px; border-radius: 999px; background: var(--amber-strip); box-shadow: 0 0 0 3px rgba(245,158,11,0.18); }
+
+  /* ---------- Toolbar ---------- */
+  .toolbar { display: flex; align-items: center; gap: 8px; padding: 12px 24px; border-bottom: 1px solid var(--border); background: var(--bg); flex-wrap: wrap; }
+  .search { display: inline-flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); width: 220px; }
+  .search input { background: transparent; border: 0; outline: 0; font-size: 13px; width: 100%; color: var(--fg); }
+  .search input::placeholder { color: var(--fg-subtle); }
+  .period { display: inline-flex; align-items: center; gap: 2px; height: 30px; padding: 0 4px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); }
+  .period-arrow { width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; color: var(--fg-muted); border-radius: 4px; cursor: pointer; }
+  .period-arrow:hover { background: var(--bg-hover); color: var(--fg); }
+  .period-label { padding: 0 8px; font-size: 13px; font-weight: 500; }
+  .fchip { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border-radius: 6px; font-size: 13px; color: var(--fg-muted); background: var(--bg); border: 1px solid var(--border); cursor: pointer; }
+  .fchip:hover { background: var(--bg-hover); color: var(--fg); }
+  .fchip-active { background: var(--accent-bg); border-color: var(--accent-border); color: #1d4ed8; }
+  .fchip-count { background: #1d4ed8; color: white; padding: 0 6px; border-radius: 999px; font-size: 11px; font-weight: 600; height: 16px; display: inline-flex; align-items: center; }
+  .toolbar-spacer { flex: 1; }
+  .toolbar-divider { width: 1px; height: 18px; background: var(--border); margin: 0 4px; }
+  .group-switch { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border-radius: 6px; font-size: 13px; color: var(--fg); background: var(--bg); border: 1px solid var(--border); cursor: pointer; }
+  .ghost-btn { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border-radius: 6px; font-size: 12.5px; color: var(--fg-muted); background: transparent; cursor: pointer; }
+  .ghost-btn:hover { background: var(--bg-hover); color: var(--fg); }
+
+  /* ---------- Grid scaffolding ---------- */
+  .grid-tm     { display: grid; grid-template-columns: 28px 20px 96px minmax(0,1fr) 96px 132px 76px 96px 160px 28px; align-items: center; }
+  .grid-ret    { display: grid; grid-template-columns: 28px 20px minmax(0,1fr) 96px 180px 96px 170px 28px; align-items: center; }
+  .grid-fixed  { display: grid; grid-template-columns: 20px minmax(0,1fr) 80px 80px 180px 170px 28px; align-items: center; }
+
+  .col-header { padding: 8px 18px; border-bottom: 1px solid var(--border); background: var(--bg); font-size: 11px; font-weight: 600; color: var(--fg-subtle); letter-spacing: 0.06em; text-transform: uppercase; }
+  .col-header > div { padding: 0 6px; }
+
+  .row { padding: 10px 18px; border-bottom: 1px solid var(--border); }
+  .row > div { padding: 0 6px; }
+  .row.section { background: var(--bg-subtle); cursor: pointer; }
+  .row.section:hover { background: var(--bg-hover); }
+  .row.task { background: var(--bg); cursor: pointer; }
+  .row.task:hover { background: var(--bg-hover); }
+  .row.entry { background: var(--bg-row-alt); padding: 8px 18px; cursor: pointer; }
+  .row.entry:hover { background: var(--bg-hover); }
+  .row.footer { background: var(--bg-row-alt); padding: 9px 18px; border-bottom: 1px solid var(--border-strong); }
+
+  .right { text-align: right; }
+  .muted { color: var(--fg-muted); }
+  .subtle { color: var(--fg-subtle); }
+  .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* ---------- Atoms ---------- */
+  .chev { width: 14px; height: 14px; color: var(--fg-subtle); transition: transform .12s; }
+  .chev.open { transform: rotate(90deg); }
+
+  .cb { width: 14px; height: 14px; border: 1.5px solid var(--border-strong); border-radius: 3px; background: var(--bg); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+  .cb:hover { border-color: var(--fg-muted); }
+  .cb.checked { background: var(--fg); border-color: var(--fg); color: white; }
+  .cb.indeterminate { background: var(--fg); border-color: var(--fg); color: white; }
+  .cb svg { width: 10px; height: 10px; display: none; }
+  .cb.checked svg, .cb.indeterminate svg { display: block; }
+
+  .pcolor { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+  .ptype  { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-subtle); font-weight: 600; }
+  .pname  { font-size: 13.5px; font-weight: 600; color: var(--fg); }
+  .pmeta  { font-size: 12.5px; color: var(--fg-muted); }
+
+  .avatar { width: 22px; height: 22px; border-radius: 999px; background: #e5e2db; color: var(--fg-muted); font-size: 10.5px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; letter-spacing: 0.02em; }
+
+  .date-cell { font-size: 12px; color: var(--fg-muted); font-variant-numeric: tabular-nums; }
+
+  /* Status pills (entry-level outlined) */
+  .pill { display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 8px; border-radius: 999px; font-size: 11.5px; font-weight: 500; line-height: 1; border: 1px solid transparent; white-space: nowrap; }
+  .pill-amber { color: var(--amber-text); background: var(--amber-bg); border-color: var(--amber-border); }
+  .pill-green { color: var(--green-text); background: var(--green-bg); border-color: var(--green-border); }
+  .pill-neutral { color: var(--fg-muted); background: var(--bg-hover); border-color: var(--border); }
+
+  /* Quiet pills (cycle / fixed level: text + dot, no fill, no border) */
+  .pill-quiet { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 500; }
+  .pill-quiet .dot { width: 6px; height: 6px; border-radius: 999px; }
+  .pq-neutral { color: var(--fg-muted); }
+  .pq-neutral .dot { background: var(--fg-subtle); }
+  .pq-amber { color: var(--amber-text); }
+  .pq-amber .dot { background: var(--amber-dot); }
+  .pq-green { color: var(--green-text); }
+  .pq-green .dot { background: var(--green-dot); }
+  .pq-red { color: var(--red-text); }
+  .pq-red .dot { background: var(--red-dot); }
+
+  /* Cadence text */
+  .cadence { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 500; white-space: nowrap; }
+  .cadence .dot { width: 6px; height: 6px; border-radius: 999px; }
+  .cad-recent { color: var(--fg-muted); }
+  .cad-warn   { color: var(--amber-text); }
+  .cad-warn .dot { background: var(--amber-dot); }
+  .cad-danger { color: var(--red-text); }
+  .cad-danger .dot { background: var(--red-dot); }
+  .cad-never  { color: var(--fg-subtle); font-style: italic; }
+
+  /* Aggregate task-rollup status text (T&M task row, status column) */
+  .agg { font-size: 12px; color: var(--fg-muted); white-space: nowrap; }
+  .agg .em { color: var(--amber-text); font-weight: 500; }
+
+  /* Progress bar */
+  .bar { height: 6px; border-radius: 3px; background: var(--bar-track); position: relative; overflow: hidden; }
+  .bar > .fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--bar-fill); }
+  .bar > .over { position: absolute; top: 0; bottom: 0; background: var(--bar-overage); }
+  .bar.on-track > .fill { background: var(--bar-on-track); }
+  .bar-row { display: flex; align-items: center; gap: 8px; }
+  .bar-meta { font-size: 11.5px; color: var(--fg-muted); font-variant-numeric: tabular-nums; }
+  .no-scope { font-size: 12px; color: var(--fg-subtle); font-style: italic; }
+
+  /* Project section row layout (T&M): cols 4-9 spanned */
+  .section-content {
+    grid-column: 4 / span 6;
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 0 6px;
+  }
+  .section-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .section-left .meta { display: flex; align-items: center; gap: 8px; min-width: 0; }
+
+  /* Footer (T&M): empty cols 1-3, span cols 4-9, menu col 10 empty */
+  .footer-content {
+    grid-column: 4 / span 6;
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 0 6px;
+  }
+  .footer-totals { font-size: 12.5px; color: var(--fg-muted); }
+  .footer-totals strong { color: var(--fg); font-weight: 600; }
+
+  /* Retainer footer: span cols 3-7 */
+  .ret-footer-content {
+    grid-column: 3 / span 5;
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 0 6px;
+  }
+  /* Fixed footer: span cols 2-6 */
+  .fix-footer-content {
+    grid-column: 2 / span 5;
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 0 6px;
+  }
+
+  /* Buttons */
+  .btn-primary { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border-radius: 6px; font-size: 12.5px; font-weight: 500; color: white; background: var(--fg); cursor: pointer; border: 1px solid var(--fg); }
+  .btn-primary:hover { background: #000; }
+  .btn-primary:disabled { background: #c7c4bd; border-color: #c7c4bd; cursor: not-allowed; }
+  .btn-ghost { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 6px; font-size: 12.5px; color: var(--fg-muted); background: transparent; cursor: pointer; }
+  .btn-ghost:hover { background: var(--bg-hover); color: var(--fg); }
+
+  /* Row menu */
+  .menu { width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; color: var(--fg-subtle); border-radius: 4px; cursor: pointer; }
+  .menu:hover { background: var(--bg-hover); color: var(--fg); }
+
+  /* Fee-due 0h amber edge strip */
+  .row.fee-due-strip { box-shadow: inset 2px 0 0 var(--amber-strip); }
+
+  /* Bulk action bar */
+  .bulk-bar {
+    position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
+    display: none; align-items: center; gap: 16px;
+    background: var(--fg); color: white;
+    border-radius: 10px; padding: 10px 14px;
+    box-shadow: 0 12px 28px -10px rgba(0,0,0,0.35), 0 4px 10px -4px rgba(0,0,0,0.2);
+    z-index: 30;
+  }
+  .bulk-bar.show { display: inline-flex; }
+  .bulk-bar .stat { font-size: 12.5px; color: rgba(255,255,255,0.78); }
+  .bulk-bar .stat strong { color: #fff; font-weight: 600; }
+  .bulk-bar .divider { width: 1px; height: 16px; background: rgba(255,255,255,0.2); }
+  .bulk-bar .btn-bulk { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border-radius: 6px; font-size: 12.5px; font-weight: 500; background: white; color: var(--fg); border: 0; cursor: pointer; }
+  .bulk-bar .btn-bulk:disabled { opacity: 0.55; cursor: not-allowed; }
+  .bulk-bar .btn-close { color: rgba(255,255,255,0.7); cursor: pointer; }
+  .bulk-bar .btn-close:hover { color: white; }
+
+  /* Tab content show/hide */
+  .tab-pane { display: none; }
+  .tab-pane.active { display: block; }
+
+  /* Misc */
+  .hidden-rows { display: none; }
+  .hidden-rows.open { display: block; }
+</style>
+</head>
+<body>
+
+<div class="flex min-h-screen">
+  <!-- ============== SIDEBAR ============== -->
+  <aside class="sidebar flex flex-col">
+    <div class="px-4 pt-4 pb-3 flex items-center gap-2">
+      <div class="w-7 h-7 rounded-md" style="background: linear-gradient(135deg,#1f1d1b,#3a3733);"></div>
+      <div class="leading-tight">
+        <div class="text-[13.5px] font-semibold">Konverted</div>
+        <div class="text-[11px]" style="color: var(--fg-subtle);">adam@konverted.io</div>
+      </div>
+    </div>
+
+    <nav class="px-2 pb-4 flex-1">
+      <div class="sb-section">Workspace</div>
+      <div class="nav-li"><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 12 12 3l9 9"/><path d="M5 10v10h14V10"/></svg>Dashboard</div>
+      <div class="nav-li"><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9"/></svg>Tasks</div>
+      <div class="nav-li"><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="8" r="4"/><path d="M3 21a9 9 0 0 1 18 0"/></svg>Clients</div>
+      <div class="nav-li"><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18"/></svg>Projects</div>
+      <div class="nav-li"><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 3v18h18"/><path d="M7 14l4-4 4 4 5-7"/></svg>Reports</div>
+
+      <div class="sb-section">Time</div>
+      <div class="nav-li"><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>My Time</div>
+      <div class="nav-li active">
+        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 6h18M3 12h18M3 18h12"/></svg>
+        Time Tracking
+        <span class="badge">19</span>
+      </div>
+
+      <div class="sb-section">Billing</div>
+      <div class="nav-li"><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 4h11l4 4v12a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z"/><path d="M8 13h8M8 17h5"/></svg>Invoices</div>
+      <div class="nav-li"><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M9 12h6M12 9v6"/></svg>Settings</div>
+    </nav>
+  </aside>
+
+  <!-- ============== MAIN ============== -->
+  <main class="flex-1 min-w-0">
+    <!-- Page header -->
+    <div class="page-header">
+      <div>
+        <div class="page-title">Time Tracking</div>
+      </div>
+      <div class="page-helper">Review only · <a href="#">log on My Time →</a></div>
+    </div>
+
+    <!-- Tab strip -->
+    <div class="tabs">
+      <div class="tab active" data-tab="tm" onclick="switchTab('tm')">T&amp;M <span class="tab-count">12</span></div>
+      <div class="tab" data-tab="retainer" onclick="switchTab('retainer')">Retainer <span class="tab-count">3</span><span class="tab-dot" title="Drift detected"></span></div>
+      <div class="tab" data-tab="fixed" onclick="switchTab('fixed')">Fixed <span class="tab-count">4</span></div>
+    </div>
+
+    <!-- ========================= T&M TAB ========================= -->
+    <div class="tab-pane active" data-pane="tm">
+      <!-- Toolbar -->
+      <div class="toolbar">
+        <div class="search">
+          <svg class="w-3.5 h-3.5" style="color: var(--fg-subtle);" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <input placeholder="Search task title, note…" />
+        </div>
+        <div class="period">
+          <span class="period-arrow"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m15 6-6 6 6 6"/></svg></span>
+          <span class="period-label">Apr 2026</span>
+          <span class="period-arrow"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m9 6 6 6-6 6"/></svg></span>
+        </div>
+        <div class="fchip">Member <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></div>
+        <div class="fchip">Client <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></div>
+        <div class="fchip fchip-active">Project <span class="fchip-count">2</span></div>
+        <div class="fchip">Billing status <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></div>
+        <div class="fchip">Category <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></div>
+        <div class="toolbar-spacer"></div>
+        <div class="ghost-btn">Collapse all</div>
+        <div class="ghost-btn">Expand all</div>
+        <div class="toolbar-divider"></div>
+        <div class="group-switch">
+          Group: <strong style="font-weight: 600; margin-left: 2px;">Project</strong>
+          <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+        </div>
+      </div>
+
+      <!-- Column header -->
+      <div class="grid-tm col-header">
+        <div></div>
+        <div></div>
+        <div>Date</div>
+        <div>Task</div>
+        <div>Category</div>
+        <div>Member</div>
+        <div class="right">Hours</div>
+        <div class="right">Billable</div>
+        <div>Status</div>
+        <div></div>
+      </div>
+
+      <!-- ========== Acme Website Redesign (expanded, amber cadence 38d) ========== -->
+      <div class="grid-tm row section" onclick="toggleSection(this)">
+        <div><span class="cb indeterminate" onclick="event.stopPropagation();toggleCb(this)"><svg viewBox="0 0 16 16" stroke="currentColor" stroke-width="2.5" fill="none"><path d="M3 8h10"/></svg></span></div>
+        <div><svg class="chev open" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 4 4 4-4 4"/></svg></div>
+        <div></div>
+        <div class="section-content">
+          <div class="section-left">
+            <span class="pcolor" style="background:#3b82f6;"></span>
+            <span class="pname truncate">Acme Website Redesign</span>
+            <span class="ptype">T&amp;M</span>
+            <span class="pmeta truncate">Acme Corp · USD</span>
+          </div>
+          <span class="cadence cad-warn"><span class="dot"></span>Last invoiced 38d ago</span>
+        </div>
+        <div></div>
+        <div><span class="menu"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg></span></div>
+      </div>
+
+      <!-- Task: Homepage redesign (expanded) -->
+      <div class="grid-tm row task" onclick="toggleTask(this)">
+        <div><span class="cb checked" onclick="event.stopPropagation();toggleCb(this)"><svg viewBox="0 0 16 16" stroke="currentColor" stroke-width="2.5" fill="none"><path d="m3 8 3 3 7-7"/></svg></span></div>
+        <div><svg class="chev open" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 4 4 4-4 4"/></svg></div>
+        <div></div>
+        <div class="truncate">Homepage redesign</div>
+        <div class="muted truncate">Design</div>
+        <div></div>
+        <div class="right num">18h 30m</div>
+        <div class="right num">$2,220</div>
+        <div><span class="agg"><span class="em">5 unbilled</span> · 2 billed</span></div>
+        <div><span class="menu"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg></span></div>
+      </div>
+
+      <!-- Entries under Homepage redesign -->
+      <div class="grid-tm row entry">
+        <div><span class="cb checked" onclick="toggleCb(this)"><svg viewBox="0 0 16 16" stroke="currentColor" stroke-width="2.5" fill="none"><path d="m3 8 3 3 7-7"/></svg></span></div>
+        <div></div>
+        <div class="date-cell">Apr 8</div>
+        <div class="muted truncate">Hero section explorations + 3 variants</div>
+        <div></div>
+        <div class="flex items-center gap-2"><span class="avatar">AT</span><span class="text-[12.5px]">Adam T.</span></div>
+        <div class="right num">3h 45m</div>
+        <div class="right num">$450</div>
+        <div><span class="pill pill-amber">Unbilled</span></div>
+        <div><span class="menu"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg></span></div>
+      </div>
+      <div class="grid-tm row entry">
+        <div><span class="cb checked" onclick="toggleCb(this)"><svg viewBox="0 0 16 16" stroke="currentColor" stroke-width="2.5" fill="none"><path d="m3 8 3 3 7-7"/></svg></span></div>
+        <div></div>
+        <div class="date-cell">Apr 11</div>
+        <div class="muted truncate">Above-the-fold copy review with client</div>
+        <div></div>
+        <div class="flex items-center gap-2"><span class="avatar">EM</span><span class="text-[12.5px]">Emma M.</span></div>
+        <div class="right num">1h 15m</div>
+        <div class="right num">$150</div>
+        <div><span class="pill pill-amber">Unbilled</span></div>
+        <div><span class="menu"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg></span></div>
+      </div>
+      <div class="grid-tm row entry">
+        <div><span class="cb checked" onclick="toggleCb(this)"><svg viewBox="0 0 16 16" stroke="currentColor" stroke-width="2.5" fill="none"><path d="m3 8 3 3 7-7"/></svg></span></div>
+        <div></div>
+        <div class="date-cell">Apr 14</div>
+        <div class="muted truncate">Polish — spacing, type scale, dark mode tokens</div>
+        <div></div>
+        <div class="flex items-center gap-2"><span class="avatar">AT</span><span class="text-[12.5px]">Adam T.</span></div>
+        <div class="right num">5h 00m</div>
+        <div class="right num">$600</div>
+        <div><span class="pill pill-amber">Unbilled</span></div>
+        <div><span class="menu"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg></span></div>
+      </div>
+      <div class="grid-tm row entry">
+        <div><span class="cb" onclick="toggleCb(this)"><svg viewBox="0 0 16 16" stroke="currentColor" stroke-width="2.5" fill="none"><path d="m3 8 3 3 7-7"/></svg></span></div>
+        <div></div>
+        <div class="date-cell">Mar 28</div>
+        <div class="muted truncate">Initial wireframes</div>
+        <div></div>
+        <div class="flex items-center gap-2"><span class="avatar">EM</span><span class="text-[12.5px]">Emma M.</span></div>
+        <div class="right num">4h 00m</div>
+        <div class="right num">$480</div>
+        <div><span class="pill pill-green">INV-038</span></div>
+        <div><span class="menu"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg></span></div>
+      </div>
+
+      <!-- Task: API integration (collapsed) -->
+      <div class="grid-tm row task" onclick="toggleTask(this)">
+        <div><span class="cb" onclick="event.stopPropagation();toggleCb(this)"><svg viewBox="0 0 16 16" stroke="currentColor" stroke-width="2.5" fill="none"><path d="m3 8 3 3 7-7"/></svg></span></div>
+        <div><svg class="chev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 4 4 4-4 4"/></svg></div>
+        <div></div>
+        <div class="truncate">API integration — payments</div>
+        <div class="muted truncate">Engineering</div>
+        <div></div>
+        <div class="right num">12h 00m</div>
+        <div class="right num">$1,800</div>
+        <div><span class="agg"><span class="em">4 unbilled</span></span></div>
+        <div><span class="menu"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg></span></div>
+      </div>
+
+      <!-- Task: Discovery (collapsed) -->
+      <div class="grid-tm row task" onclick="toggleTask(this)">
+        <div><span class="cb" onclick="event.stopPropagation();toggleCb(this)"><svg viewBox="0 0 16 16" stroke="currentColor" stroke-width="2.5" fill="none"><path d="m3 8 3 3 7-7"/></svg></span></div>
+        <div><svg class="chev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 4 4 4-4 4"/></svg></div>
+        <div></div>
+        <div class="truncate">Discovery &amp; client interviews</div>
+        <div class="muted truncate">Strategy</div>
+        <div></div>
+        <div class="right num">8h 00m</div>
+        <div class="right num">$960</div>
+        <div><span class="agg">All invoiced</span></div>
+        <div><span class="menu"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg></span></div>
+      </div>
+
+      <!-- Project footer -->
+      <div class="grid-tm row footer">
+        <div></div><div></div><div></div>
+        <div class="footer-content">
+          <div class="footer-totals">Total <strong class="num">38h 30m</strong> · Unbilled <strong class="num">$3,420</strong> <span class="subtle">(28h 30m)</span></div>
+          <button class="btn-primary">+ Invoice this period</button>
+        </div>
+        <div></div>
+      </div>
+
+      <!-- ========== Beta Co Mobile App (collapsed, RED 47d) ========== -->
+      <div class="grid-tm row section" onclick="toggleSection(this)">
+        <div><span class="cb" onclick="event.stopPropagation();toggleCb(this)"><svg viewBox="0 0 16 16" stroke="currentColor" stroke-width="2.5" fill="none"><path d="m3 8 3 3 7-7"/></svg></span></div>
+        <div><svg class="chev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 4 4 4-4 4"/></svg></div>
+        <div></div>
+        <div class="section-content">
+          <div class="section-left">
+            <span class="pcolor" style="background:#a855f7;"></span>
+            <span class="pname truncate">Beta Co Mobile App</span>
+            <span class="ptype">T&amp;M</span>
+            <span class="pmeta truncate">Beta Co · EUR</span>
+          </div>
+          <span class="cadence cad-danger"><span class="dot"></span>Last invoiced 47d ago</span>
+        </div>
+        <div></div>
+        <div><span class="menu"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg></span></div>
+      </div>
+
+      <!-- Footer for Beta (collapsed group still shows footer? PRD says "Renders directly below the last task row"—when collapsed, hide footer. Hide this one for fidelity.) -->
+
+      <!-- ========== Globex Marketing Site (collapsed, recent 12d) ========== -->
+      <div class="grid-tm row section" onclick="toggleSection(this)">
+        <div><span class="cb" onclick="event.stopPropagation();toggleCb(this)"><svg viewBox="0 0 16 16" stroke="currentColor" stroke-width="2.5" fill="none"><path d="m3 8 3 3 7-7"/></svg></span></div>
+        <div><svg class="chev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 4 4 4-4 4"/></svg></div>
+        <div></div>
+        <div class="section-content">
+          <div class="section-left">
+            <span class="pcolor" style="background:#10b981;"></span>
+            <span class="pname truncate">Globex Marketing Site</span>
+            <span class="ptype">T&amp;M</span>
+            <span class="pmeta truncate">Globex · USD</span>
+          </div>
+          <span class="cadence cad-recent">Last invoiced 12d ago</span>
+        </div>
+        <div></div>
+        <div><span class="menu"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg></span></div>
+      </div>
+
+      <!-- ========== Northwind Discovery (never invoiced) ========== -->
+      <div class="grid-tm row section" onclick="toggleSection(this)">
+        <div><span class="cb" onclick="event.stopPropagation();toggleCb(this)"><svg viewBox="0 0 16 16" stroke="currentColor" stroke-width="2.5" fill="none"><path d="m3 8 3 3 7-7"/></svg></span></div>
+        <div><svg class="chev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 4 4 4-4 4"/></svg></div>
+        <div></div>
+        <div class="section-content">
+          <div class="section-left">
+            <span class="pcolor" style="background:#f97316;"></span>
+            <span class="pname truncate">Northwind Discovery</span>
+            <span class="ptype">T&amp;M</span>
+            <span class="pmeta truncate">Northwind · USD</span>
+          </div>
+          <span class="cadence cad-never">Never invoiced</span>
+        </div>
+        <div></div>
+        <div><span class="menu"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg></span></div>
+      </div>
+    </div>
+
+    <!-- ========================= RETAINER TAB ========================= -->
+    <div class="tab-pane" data-pane="retainer">
+      <!-- Toolbar (no Group switcher; Cycle status chip instead of Billing status) -->
+      <div class="toolbar">
+        <div class="search">
+          <svg class="w-3.5 h-3.5" style="color: var(--fg-subtle);" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <input placeholder="Search task title, note…" />
+        </div>
+        <div class="period">
+          <span class="period-arrow"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m15 6-6 6 6 6"/></svg></span>
+          <span class="period-label">Apr 2026</span>
+          <span class="period-arrow"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m9 6 6 6-6 6"/></svg></span>
+        </div>
+        <div class="fchip">Member <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></div>
+        <div class="fchip">Client <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></div>
+        <div class="fchip">Project <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></div>
+        <div class="fchip fchip-active">Cycle status: All</div>
+        <div class="fchip">Category <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></div>
+        <div class="toolbar-spacer"></div>
+        <div class="ghost-btn">Collapse all</div>
+        <div class="ghost-btn">Expand all</div>
+      </div>
+
+      <!-- Column header -->
+      <div class="grid-ret col-header">
+        <div></div>
+        <div></div>
+        <div>Cycle</div>
+        <div class="right">Used</div>
+        <div>Progress</div>
+        <div class="right">Fee</div>
+        <div>Status</div>
+        <div></div>
+      </div>
+
+      <!-- Cycle: Acme Retainer · Apr 2026 (in progress) -->
+      <div class="grid-ret row section" onclick="toggleSection(this)">
+        <div><span class="cb" onclick="event.stopPropagation();toggleCb(this)"><svg viewBox="0 0 16 16" stroke="currentColor" stroke-width="2.5" fill="none"><path d="m3 8 3 3 7-7"/></svg></span></div>
+        <div><svg class="chev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 4 4 4-4 4"/></svg></div>
+        <div class="flex items-center gap-2 truncate">
+          <span class="pcolor" style="background:#3b82f6;"></span>
+          <span class="pname truncate">Acme Retainer</span>
+          <span class="pmeta">· Apr 2026</span>
+          <span class="ptype">Retainer</span>
+          <span class="pmeta truncate">Acme Corp · USD</span>
+        </div>
+        <div class="right num">28h <span class="subtle">/ 40h</span></div>
+        <div>
+          <div class="bar-row">
+            <div class="bar" style="flex:1;"><div class="fill" style="width:70%;"></div></div>
+            <div class="bar-meta">70%</div>
+          </div>
+        </div>
+        <div class="right num">$4,000</div>
+        <div><span class="pill-quiet pq-neutral"><span class="dot"></span>In progress</span></div>
+        <div><span class="menu"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg></span></div>
+      </div>
+
+      <!-- Cycle: Globex SEO · Apr 2026 (FEE DUE — 0h, amber edge strip) -->
+      <div class="grid-ret row section fee-due-strip" onclick="toggleSection(this)">
+        <div><span class="cb" onclick="event.stopPropagation();toggleCb(this)"><svg viewBox="0 0 16 16" stroke="currentColor" stroke-width="2.5" fill="none"><path d="m3 8 3 3 7-7"/></svg></span></div>
+        <div><svg class="chev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 4 4 4-4 4"/></svg></div>
+        <div class="flex items-center gap-2 truncate">
+          <span class="pcolor" style="background:#10b981;"></span>
+          <span class="pname truncate">Globex SEO</span>
+          <span class="pmeta">· Apr 2026</span>
+          <span class="ptype">Retainer</span>
+          <span class="pmeta truncate">Globex · USD</span>
+        </div>
+        <div class="right num">0h <span class="subtle">/ 40h</span></div>
+        <div>
+          <div class="bar-row">
+            <div class="bar" style="flex:1;"><div class="fill" style="width:0%;"></div></div>
+            <div class="bar-meta">0%</div>
+          </div>
+        </div>
+        <div class="right num">$4,000</div>
+        <div><span class="pill-quiet pq-amber"><span class="dot"></span>Fee due, no hours</span></div>
+        <div><span class="menu"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg></span></div>
+      </div>
+
+      <!-- Cycle: Konverted Monthly · Apr 2026 (ready, not yet invoiced) -->
+      <div class="grid-ret row section" onclick="toggleSection(this)">
+        <div><span class="cb" onclick="event.stopPropagation();toggleCb(this)"><svg viewBox="0 0 16 16" stroke="currentColor" stroke-width="2.5" fill="none"><path d="m3 8 3 3 7-7"/></svg></span></div>
+        <div><svg class="chev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 4 4 4-4 4"/></svg></div>
+        <div class="flex items-center gap-2 truncate">
+          <span class="pcolor" style="background:#f43f5e;"></span>
+          <span class="pname truncate">Konverted Monthly</span>
+          <span class="pmeta">· Apr 2026</span>
+          <span class="ptype">Retainer</span>
+          <span class="pmeta truncate">Konverted Inc · USD</span>
+        </div>
+        <div class="right num">36h <span class="subtle">/ 40h</span></div>
+        <div>
+          <div class="bar-row">
+            <div class="bar" style="flex:1;"><div class="fill" style="width:90%;"></div></div>
+            <div class="bar-meta">90%</div>
+          </div>
+        </div>
+        <div class="right num">$5,000</div>
+        <div><span class="pill-quiet pq-amber"><span class="dot"></span>Not yet invoiced</span></div>
+        <div><span class="menu"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg></span></div>
+      </div>
+
+      <!-- Cycle: Acme Retainer · Mar 2026 (INVOICED, OVERAGE, EXPANDED) -->
+      <div class="grid-ret row section" onclick="toggleSection(this)">
+        <div><span class="cb" onclick="event.stopPropagation();toggleCb(this)"><svg viewBox="0 0 16 16" stroke="currentColor" stroke-width="2.5" fill="none"><path d="m3 8 3 3 7-7"/></svg></span></div>
+        <div><svg class="chev open" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 4 4 4-4 4"/></svg></div>
+        <div class="flex items-center gap-2 truncate">
+          <span class="pcolor" style="background:#3b82f6;"></span>
+          <span class="pname truncate">Acme Retainer</span>
+          <span class="pmeta">· Mar 2026</span>
+          <span class="ptype">Retainer</span>
+          <span class="pmeta truncate">Acme Corp · USD</span>
+        </div>
+        <div class="right num">45h <span class="subtle">/ 40h</span></div>
+        <div>
+          <div class="bar-row">
+            <div class="bar" style="flex:1;">
+              <div class="fill" style="width:80%;"></div>
+              <div class="over" style="left:80%; width:20%;"></div>
+            </div>
+            <div class="bar-meta">112%</div>
+          </div>
+        </div>
+        <div class="right num">$4,000</div>
+        <div><span class="pill-quiet pq-green"><span class="dot"></span>Invoiced INV-051</span></div>
+        <div><span class="menu"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg></span></div>
+      </div>
+
+      <!-- Tasks under Mar 2026 cycle -->
+      <div class="grid-ret row task" onclick="toggleTask(this)">
+        <div></div>
+        <div><svg class="chev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 4 4 4-4 4"/></svg></div>
+        <div class="truncate" style="padding-left: 18px;">Monthly content production</div>
+        <div class="right num">22h 00m</div>
+        <div></div>
+        <div></div>
+        <div><span class="agg">All in cycle</span></div>
+        <div><span class="menu"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg></span></div>
+      </div>
+
+      <div class="grid-ret row task" onclick="toggleTask(this)">
+        <div></div>
+        <div><svg class="chev open" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 4 4 4-4 4"/></svg></div>
+        <div class="truncate" style="padding-left: 18px;">Performance optimization sprint</div>
+        <div class="right num">23h 00m</div>
+        <div></div>
+        <div></div>
+        <div><span class="agg">All in cycle</span></div>
+        <div><span class="menu"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg></span></div>
+      </div>
+
+      <!-- Entries under Performance optimization sprint -->
+      <div class="grid-ret row entry">
+        <div><span class="cb" onclick="toggleCb(this)"><svg viewBox="0 0 16 16" stroke="currentColor" stroke-width="2.5" fill="none"><path d="m3 8 3 3 7-7"/></svg></span></div>
+        <div></div>
+        <div class="flex items-center gap-3 truncate" style="padding-left: 18px;">
+          <span class="date-cell">Mar 12</span>
+          <span class="avatar">AT</span>
+          <span class="text-[12.5px] muted">Adam T.</span>
+          <span class="muted truncate">— LCP audit + image pipeline rewrite</span>
+        </div>
+        <div class="right num">6h 30m</div>
+        <div></div>
+        <div></div>
+        <div><span class="pill pill-green">In Mar 2026 · INV-051</span></div>
+        <div><span class="menu"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg></span></div>
+      </div>
+      <div class="grid-ret row entry">
+        <div><span class="cb" onclick="toggleCb(this)"><svg viewBox="0 0 16 16" stroke="currentColor" stroke-width="2.5" fill="none"><path d="m3 8 3 3 7-7"/></svg></span></div>
+        <div></div>
+        <div class="flex items-center gap-3 truncate" style="padding-left: 18px;">
+          <span class="date-cell">Mar 18</span>
+          <span class="avatar">EM</span>
+          <span class="text-[12.5px] muted">Emma M.</span>
+          <span class="muted truncate">— Cache headers + service worker tuning</span>
+        </div>
+        <div class="right num">8h 15m</div>
+        <div></div>
+        <div></div>
+        <div><span class="pill pill-green">In Mar 2026 · INV-051</span></div>
+        <div><span class="menu"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg></span></div>
+      </div>
+      <div class="grid-ret row entry">
+        <div><span class="cb" onclick="toggleCb(this)"><svg viewBox="0 0 16 16" stroke="currentColor" stroke-width="2.5" fill="none"><path d="m3 8 3 3 7-7"/></svg></span></div>
+        <div></div>
+        <div class="flex items-center gap-3 truncate" style="padding-left: 18px;">
+          <span class="date-cell">Mar 25</span>
+          <span class="avatar">AT</span>
+          <span class="text-[12.5px] muted">Adam T.</span>
+          <span class="muted truncate">— Lighthouse retest + report</span>
+        </div>
+        <div class="right num">8h 15m</div>
+        <div></div>
+        <div></div>
+        <div><span class="pill pill-green">In Mar 2026 · INV-051</span></div>
+        <div><span class="menu"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg></span></div>
+      </div>
+
+      <!-- Cycle footer (Mar 2026, finalized) -->
+      <div class="grid-ret row footer">
+        <div></div><div></div>
+        <div class="ret-footer-content">
+          <div class="footer-totals">Cycle finalized · <strong>INV-051</strong> · <strong class="num">$4,000</strong> sent on Apr 2, 2026</div>
+          <button class="btn-ghost">View invoice →</button>
+        </div>
+        <div></div>
+      </div>
+    </div>
+
+    <!-- ========================= FIXED TAB ========================= -->
+    <div class="tab-pane" data-pane="fixed">
+      <!-- Toolbar (no Group switcher; no Billing/Cycle status chips; no checkboxes) -->
+      <div class="toolbar">
+        <div class="search">
+          <svg class="w-3.5 h-3.5" style="color: var(--fg-subtle);" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <input placeholder="Search task title, note…" />
+        </div>
+        <div class="period">
+          <span class="period-arrow"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m15 6-6 6 6 6"/></svg></span>
+          <span class="period-label">Apr 2026</span>
+          <span class="period-arrow"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m9 6 6 6-6 6"/></svg></span>
+        </div>
+        <div class="fchip">Member <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></div>
+        <div class="fchip">Client <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></div>
+        <div class="fchip">Project <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></div>
+        <div class="fchip">Category <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></div>
+        <div class="toolbar-spacer"></div>
+        <div class="ghost-btn">Collapse all</div>
+        <div class="ghost-btn">Expand all</div>
+      </div>
+
+      <!-- Column header -->
+      <div class="grid-fixed col-header">
+        <div></div>
+        <div>Project</div>
+        <div class="right">Tracked</div>
+        <div class="right">Quoted</div>
+        <div>Progress</div>
+        <div>Status</div>
+        <div></div>
+      </div>
+
+      <!-- Beta Co · Brand Refresh (overage, EXPANDED) -->
+      <div class="grid-fixed row section" onclick="toggleSection(this)">
+        <div><svg class="chev open" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 4 4 4-4 4"/></svg></div>
+        <div class="flex items-center gap-2 truncate">
+          <span class="pcolor" style="background:#a855f7;"></span>
+          <span class="pname truncate">Beta Co · Brand Refresh</span>
+          <span class="ptype">Fixed</span>
+          <span class="pmeta truncate">Beta Co · EUR · €18,000 fee</span>
+        </div>
+        <div class="right num">87h</div>
+        <div class="right num">60h</div>
+        <div>
+          <div class="bar-row">
+            <div class="bar" style="flex:1;">
+              <div class="fill" style="width:69%;"></div>
+              <div class="over" style="left:69%; width:31%;"></div>
+            </div>
+            <div class="bar-meta">145%</div>
+          </div>
+        </div>
+        <div><span class="pill-quiet pq-amber"><span class="dot"></span>+27h over scope</span></div>
+        <div><span class="menu"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg></span></div>
+      </div>
+
+      <!-- Tasks under Beta -->
+      <div class="grid-fixed row task" onclick="toggleTask(this)">
+        <div><svg class="chev open" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 4 4 4-4 4"/></svg></div>
+        <div class="truncate" style="padding-left: 18px;">Logo system &amp; mark exploration</div>
+        <div class="right num">42h</div>
+        <div></div>
+        <div></div>
+        <div></div>
+        <div><span class="menu"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg></span></div>
+      </div>
+      <div class="grid-fixed row entry">
+        <div></div>
+        <div class="flex items-center gap-3 truncate" style="padding-left: 18px;">
+          <span class="date-cell">Apr 5</span>
+          <span class="avatar">EM</span>
+          <span class="text-[12.5px] muted">Emma M.</span>
+          <span class="muted truncate">— Sketches, 30 directions</span>
+        </div>
+        <div class="right num">8h 00m</div>
+        <div></div>
+        <div></div>
+        <div></div>
+        <div><span class="menu"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg></span></div>
+      </div>
+      <div class="grid-fixed row entry">
+        <div></div>
+        <div class="flex items-center gap-3 truncate" style="padding-left: 18px;">
+          <span class="date-cell">Apr 9</span>
+          <span class="avatar">AT</span>
+          <span class="text-[12.5px] muted">Adam T.</span>
+          <span class="muted truncate">— Vector refinement on 3 finalists</span>
+        </div>
+        <div class="right num">6h 30m</div>
+        <div></div>
+        <div></div>
+        <div></div>
+        <div><span class="menu"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg></span></div>
+      </div>
+
+      <div class="grid-fixed row task" onclick="toggleTask(this)">
+        <div><svg class="chev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 4 4 4-4 4"/></svg></div>
+        <div class="truncate" style="padding-left: 18px;">Brand guidelines document</div>
+        <div class="right num">28h</div>
+        <div></div>
+        <div></div>
+        <div></div>
+        <div><span class="menu"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg></span></div>
+      </div>
+      <div class="grid-fixed row task" onclick="toggleTask(this)">
+        <div><svg class="chev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 4 4 4-4 4"/></svg></div>
+        <div class="truncate" style="padding-left: 18px;">Stationery + email signature</div>
+        <div class="right num">17h</div>
+        <div></div>
+        <div></div>
+        <div></div>
+        <div><span class="menu"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg></span></div>
+      </div>
+
+      <!-- Beta footer -->
+      <div class="grid-fixed row footer">
+        <div></div>
+        <div class="fix-footer-content">
+          <div class="footer-totals">Tracked <strong class="num">87h</strong> · Quoted <strong class="num">60h</strong> · 2 milestones invoiced of 4</div>
+          <button class="btn-ghost">Open project →</button>
+        </div>
+        <div></div>
+      </div>
+
+      <!-- Northwind · Visual Identity (on track) -->
+      <div class="grid-fixed row section" onclick="toggleSection(this)">
+        <div><svg class="chev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 4 4 4-4 4"/></svg></div>
+        <div class="flex items-center gap-2 truncate">
+          <span class="pcolor" style="background:#f97316;"></span>
+          <span class="pname truncate">Northwind · Visual Identity</span>
+          <span class="ptype">Fixed</span>
+          <span class="pmeta truncate">Northwind · USD · $14,000 fee</span>
+        </div>
+        <div class="right num">43h</div>
+        <div class="right num">60h</div>
+        <div>
+          <div class="bar-row">
+            <div class="bar on-track" style="flex:1;"><div class="fill" style="width:71%;"></div></div>
+            <div class="bar-meta">71%</div>
+          </div>
+        </div>
+        <div><span class="pill-quiet pq-green"><span class="dot"></span>71% of scope · 17h left</span></div>
+        <div><span class="menu"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg></span></div>
+      </div>
+
+      <!-- Acme · Onboarding Video (no quote) -->
+      <div class="grid-fixed row section" onclick="toggleSection(this)">
+        <div><svg class="chev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 4 4 4-4 4"/></svg></div>
+        <div class="flex items-center gap-2 truncate">
+          <span class="pcolor" style="background:#3b82f6;"></span>
+          <span class="pname truncate">Acme · Onboarding Video</span>
+          <span class="ptype">Fixed</span>
+          <span class="pmeta truncate">Acme Corp · USD · $6,500 fee</span>
+        </div>
+        <div class="right num">23h</div>
+        <div class="right muted">—</div>
+        <div><span class="no-scope">no scope set</span></div>
+        <div><span class="pill-quiet pq-neutral"><span class="dot"></span>Tracked only</span></div>
+        <div><span class="menu"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg></span></div>
+      </div>
+
+      <!-- Globex · Pitch Deck (early stage) -->
+      <div class="grid-fixed row section" onclick="toggleSection(this)">
+        <div><svg class="chev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 4 4 4-4 4"/></svg></div>
+        <div class="flex items-center gap-2 truncate">
+          <span class="pcolor" style="background:#10b981;"></span>
+          <span class="pname truncate">Globex · Pitch Deck</span>
+          <span class="ptype">Fixed</span>
+          <span class="pmeta truncate">Globex · USD · $9,000 fee</span>
+        </div>
+        <div class="right num">14h</div>
+        <div class="right num">60h</div>
+        <div>
+          <div class="bar-row">
+            <div class="bar" style="flex:1;"><div class="fill" style="width:23%;"></div></div>
+            <div class="bar-meta">23%</div>
+          </div>
+        </div>
+        <div><span class="pill-quiet pq-neutral"><span class="dot"></span>23% of scope · 46h left</span></div>
+        <div><span class="menu"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg></span></div>
+      </div>
+    </div>
+
+    <!-- ============== FLOATING BULK BAR ============== -->
+    <div class="bulk-bar show" id="bulkBar">
+      <div class="stat"><strong id="bulkCount">3</strong> entries selected</div>
+      <div class="divider"></div>
+      <div class="stat">Project: <strong>Acme Website Redesign</strong></div>
+      <div class="divider"></div>
+      <div class="stat">Hours: <strong class="num">10h 00m</strong></div>
+      <div class="stat">Billable: <strong class="num">$1,200</strong></div>
+      <div class="divider"></div>
+      <button class="btn-bulk">+ Create invoice from selection</button>
+      <span class="btn-close" onclick="document.getElementById('bulkBar').classList.remove('show')">
+        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6 6 18"/></svg>
+      </span>
+    </div>
+
+    <div style="height: 80px;"></div>
+  </main>
+</div>
+
+<script>
+  function switchTab(name) {
+    document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+    document.querySelectorAll('.tab-pane').forEach(p => p.classList.toggle('active', p.dataset.pane === name));
+    // Bulk bar is T&M-only
+    document.getElementById('bulkBar').classList.toggle('show', name === 'tm');
+  }
+  function toggleSection(row) {
+    const chev = row.querySelector('.chev');
+    if (chev) chev.classList.toggle('open');
+  }
+  function toggleTask(row) {
+    const chev = row.querySelector('.chev');
+    if (chev) chev.classList.toggle('open');
+  }
+  function toggleCb(el) {
+    if (event) event.stopPropagation();
+    el.classList.toggle('checked');
+    el.classList.remove('indeterminate');
+  }
+</script>
+</body>
+</html>

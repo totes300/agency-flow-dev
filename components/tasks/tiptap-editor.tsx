@@ -254,7 +254,14 @@ export function TiptapEditor({
             attrs: { initialFileId: fileId },
           }).run()
         },
-        onPaste: (currentEditor, files) => {
+        onPaste: (currentEditor, files, htmlContent) => {
+          // If the clipboard also has HTML with <img> tags (e.g. paste from
+          // Gmail/Slack), skip insertion here. The default paste pipeline will
+          // insert the image from the HTML body, and `imageReuploadExtension`
+          // will swap its external URL with the uploaded file URL. Inserting
+          // again here would produce a duplicate.
+          if (htmlContent && /<img\b[^>]*\bsrc=/i.test(htmlContent)) return
+
           const imageFiles = files.filter((f) => f.type.startsWith("image/"))
           if (imageFiles.length === 0) return
           const fileId = crypto.randomUUID()

@@ -55,6 +55,11 @@ export function ProjectInvoices({
   const hasInvoices = invoices.length > 0
   const paidLifetime = metrics.paidLifetime.amount
   const uninvoicedMonths = metrics.uninvoicedMonths
+  // Retainer projects only invoice overage — the monthly fee runs through
+  // Stripe (see docs/invoicing-refactor.md). When every closed period is
+  // within budget, `uninvoicedMonths` is empty and there's nothing to bill.
+  const retainerHasNothingToBill =
+    billingType === "retainer" && uninvoicedMonths.length === 0
 
   // For retainer projects the retainer callout (below) carries period context.
   // The header "Create Invoice" button needs an explicit month — without one
@@ -64,7 +69,9 @@ export function ProjectInvoices({
     if (billingType === "retainer") {
       const next = uninvoicedMonths[0]
       if (!next) {
-        toast.info("No closed retainer periods available to invoice yet.")
+        toast.info(
+          "All closed periods are within budget — nothing to invoice. Download the monthly report instead.",
+        )
         return
       }
       void generate({
@@ -89,7 +96,11 @@ export function ProjectInvoices({
             </p>
           )}
         </div>
-        <Button size="sm" disabled={pending} onClick={handleCreate}>
+        <Button
+          size="sm"
+          disabled={pending || retainerHasNothingToBill}
+          onClick={handleCreate}
+        >
           <PlusIcon data-icon="inline-start" className="size-4" />
           Create Invoice
         </Button>
@@ -122,7 +133,7 @@ export function ProjectInvoices({
         <InvoicesEmptyState
           reason="project-no-invoices"
           billingType={billingType}
-          onCreateInvoice={handleCreate}
+          onCreateInvoice={retainerHasNothingToBill ? undefined : handleCreate}
         />
       )}
     </div>

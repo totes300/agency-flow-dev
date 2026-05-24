@@ -1,0 +1,1128 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Time Tracking V2 Prototype</title>
+  <style>
+    :root {
+      --page: #f5f4f1;
+      --surface: #ffffff;
+      --soft: #faf9f7;
+      --line: #e6e1d8;
+      --line-strong: #d7d0c4;
+      --text: #20201d;
+      --muted: #6d6a62;
+      --faint: #9a958b;
+      --ink: #22221f;
+      --green: #16833a;
+      --green-bg: #eaf7ee;
+      --amber: #b76400;
+      --amber-bg: #fff2d8;
+      --red: #b42318;
+      --red-bg: #fff0ed;
+      --blue: #285fd4;
+      --blue-bg: #eef4ff;
+      --shadow: 0 18px 48px rgba(25, 22, 18, 0.14);
+      --radius: 8px;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: var(--page); color: var(--text); }
+    body {
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 14px;
+      line-height: 1.45;
+    }
+    button, input, select, textarea { font: inherit; }
+    button { cursor: pointer; border: 0; }
+
+    .app {
+      display: grid;
+      grid-template-columns: 244px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    .sidebar {
+      border-right: 1px solid var(--line);
+      background: #fbfaf8;
+      padding: 18px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 760;
+      padding: 0 5px 8px;
+    }
+
+    .brand-mark {
+      width: 32px;
+      height: 32px;
+      border-radius: 7px;
+      background: #303236;
+      color: white;
+      display: grid;
+      place-items: center;
+      font-size: 11px;
+      font-weight: 800;
+    }
+
+    .side-search {
+      height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: white;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 12px;
+    }
+
+    .nav {
+      display: grid;
+      gap: 3px;
+    }
+
+    .nav-item {
+      height: 34px;
+      display: flex;
+      align-items: center;
+      padding: 0 10px;
+      border-radius: 7px;
+      color: var(--muted);
+      font-weight: 650;
+    }
+
+    .nav-item.active {
+      background: #efeee9;
+      color: var(--text);
+    }
+
+    .main {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .top {
+      height: 64px;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface);
+      padding: 0 28px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+    }
+
+    h1 { margin: 0; font-size: 20px; line-height: 1; }
+    .helper { color: var(--muted); font-size: 12.5px; margin-top: 5px; }
+
+    .btn, .chip, .icon-btn {
+      height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: white;
+      color: var(--text);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      padding: 0 12px;
+      font-weight: 720;
+      white-space: nowrap;
+    }
+
+    .btn.primary {
+      background: #129600;
+      border-color: #129600;
+      color: white;
+    }
+
+    .btn.dark {
+      background: var(--ink);
+      border-color: var(--ink);
+      color: white;
+    }
+
+    .btn.ghost {
+      background: transparent;
+      color: var(--muted);
+    }
+
+    .btn:disabled, .chip:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
+    .icon-btn { width: 36px; padding: 0; color: var(--muted); }
+
+    .tabs {
+      height: 52px;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface);
+      padding: 0 28px;
+      display: flex;
+      align-items: flex-end;
+      gap: 6px;
+    }
+
+    .tab {
+      height: 52px;
+      padding: 0 16px;
+      border-bottom: 2px solid transparent;
+      background: transparent;
+      color: var(--muted);
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 780;
+    }
+
+    .tab.active {
+      color: var(--text);
+      border-bottom-color: var(--text);
+    }
+
+    .count {
+      min-width: 22px;
+      height: 20px;
+      padding: 0 7px;
+      border-radius: 999px;
+      background: #efeee9;
+      color: var(--muted);
+      font-size: 12px;
+      display: grid;
+      place-items: center;
+    }
+
+    .toolbar {
+      min-height: 58px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.95);
+      backdrop-filter: blur(12px);
+      padding: 10px 28px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      position: sticky;
+      top: 0;
+      z-index: 20;
+    }
+
+    .search {
+      height: 36px;
+      width: 320px;
+      max-width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: white;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 0 12px;
+      color: var(--muted);
+    }
+
+    .search input {
+      min-width: 0;
+      width: 100%;
+      border: 0;
+      outline: 0;
+      background: transparent;
+      color: var(--text);
+    }
+
+    .toolbar-spacer { flex: 1; }
+
+    .view {
+      padding: 22px 28px 96px;
+      display: grid;
+      gap: 14px;
+    }
+
+    .summary {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .summary strong { color: var(--text); }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      overflow: hidden;
+    }
+
+    .section {
+      border-bottom: 1px solid var(--line-strong);
+    }
+
+    .section:last-child { border-bottom: 0; }
+
+    .section-head {
+      min-height: 58px;
+      padding: 0 16px;
+      background: #f8f7f4;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 16px;
+      align-items: center;
+    }
+
+    .section-title {
+      font-weight: 800;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      min-width: 0;
+    }
+
+    .dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 3px;
+      flex: 0 0 auto;
+    }
+
+    .section-meta {
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 12.5px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .section-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .task-table {
+      width: 100%;
+      min-width: 980px;
+      border-collapse: collapse;
+    }
+
+    .task-table th {
+      height: 36px;
+      padding: 0 14px;
+      text-align: left;
+      color: var(--faint);
+      font-size: 11px;
+      font-weight: 850;
+      text-transform: uppercase;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface);
+    }
+
+    .task-table td {
+      height: 46px;
+      padding: 0 14px;
+      border-bottom: 1px solid var(--line);
+      vertical-align: middle;
+    }
+
+    .task-table tr:last-child td { border-bottom: 0; }
+    .task-table tr:hover td { background: #fbfaf8; }
+
+    .num {
+      font-variant-numeric: tabular-nums;
+      text-align: right;
+      white-space: nowrap;
+    }
+
+    .muted { color: var(--muted); }
+    .faint { color: var(--faint); }
+    .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    .pill {
+      height: 22px;
+      border-radius: 999px;
+      padding: 0 8px;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 12px;
+      font-weight: 760;
+      white-space: nowrap;
+    }
+
+    .pill.green { color: var(--green); background: var(--green-bg); }
+    .pill.amber { color: var(--amber); background: var(--amber-bg); }
+    .pill.red { color: var(--red); background: var(--red-bg); }
+    .pill.blue { color: var(--blue); background: var(--blue-bg); }
+    .pill.neutral { color: var(--muted); background: #efeee9; }
+
+    .check {
+      width: 16px;
+      height: 16px;
+      border: 1.5px solid var(--line-strong);
+      border-radius: 4px;
+      background: white;
+      display: inline-grid;
+      place-items: center;
+      color: white;
+    }
+
+    .check.checked {
+      background: var(--ink);
+      border-color: var(--ink);
+    }
+
+    .check.checked:after {
+      content: "x";
+      font-size: 11px;
+    }
+
+    .bar {
+      height: 7px;
+      border-radius: 999px;
+      background: #ebe7de;
+      overflow: hidden;
+    }
+
+    .bar-fill {
+      height: 100%;
+      border-radius: 999px;
+      background: var(--green);
+    }
+
+    .bar-fill.amber { background: #f59e0b; }
+    .bar-fill.red { background: #dc2626; }
+
+    .retainer-layout {
+      display: grid;
+      grid-template-columns: 360px minmax(0, 1fr);
+      min-height: 660px;
+    }
+
+    .period-list {
+      border-right: 1px solid var(--line);
+      background: #fbfaf8;
+      overflow: auto;
+    }
+
+    .period-list-head {
+      padding: 15px 16px 11px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .eyebrow {
+      color: var(--faint);
+      font-size: 11px;
+      font-weight: 850;
+      text-transform: uppercase;
+    }
+
+    .period-card {
+      width: 100%;
+      border: 0;
+      border-bottom: 1px solid var(--line);
+      background: transparent;
+      padding: 14px 16px;
+      text-align: left;
+      display: grid;
+      gap: 9px;
+    }
+
+    .period-card:hover { background: #f3f1ec; }
+    .period-card.active {
+      background: white;
+      box-shadow: inset 3px 0 0 var(--ink);
+    }
+
+    .period-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: flex-start;
+    }
+
+    .period-title { font-weight: 820; }
+    .period-sub { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+
+    .period-metrics {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .detail {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      background: white;
+    }
+
+    .detail-head {
+      padding: 20px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      align-items: flex-start;
+    }
+
+    .detail-title { font-size: 19px; font-weight: 850; }
+    .detail-sub { color: var(--muted); margin-top: 3px; }
+
+    .metric-strip {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(110px, 1fr));
+      gap: 10px;
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfaf8;
+    }
+
+    .metric {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: white;
+      padding: 10px 12px;
+    }
+
+    .metric-label {
+      color: var(--faint);
+      font-size: 11px;
+      font-weight: 850;
+      text-transform: uppercase;
+    }
+
+    .metric-value {
+      margin-top: 4px;
+      font-size: 18px;
+      font-weight: 850;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .work {
+      padding: 18px 20px 22px;
+      display: grid;
+      gap: 14px;
+    }
+
+    .work-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: baseline;
+    }
+
+    .work-title { font-weight: 850; }
+
+    .task-stack {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+
+    .task-block { border-bottom: 1px solid var(--line); }
+    .task-block:last-child { border-bottom: 0; }
+
+    .task-summary {
+      min-height: 50px;
+      padding: 0 14px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 110px 90px;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .task-title { font-weight: 780; }
+
+    .entry-list {
+      background: #fbfaf8;
+      border-top: 1px solid var(--line);
+      overflow: auto;
+    }
+
+    .entry-list .task-table {
+      min-width: 980px;
+    }
+
+    .entry-list .task-table th,
+    .entry-list .task-table td {
+      height: 38px;
+      background: #fbfaf8;
+      font-size: 13px;
+    }
+
+    .bulk {
+      position: fixed;
+      left: 50%;
+      bottom: 22px;
+      transform: translateX(-50%) translateY(120px);
+      opacity: 0;
+      pointer-events: none;
+      min-width: 540px;
+      max-width: calc(100vw - 48px);
+      border-radius: 10px;
+      background: var(--ink);
+      color: white;
+      box-shadow: var(--shadow);
+      padding: 10px 12px 10px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      transition: all 160ms ease;
+      z-index: 60;
+    }
+
+    .bulk.show {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    .bulk .muted { color: #c8c4bb; }
+
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(19, 17, 14, 0.38);
+      display: none;
+      z-index: 80;
+    }
+
+    .modal-backdrop.open { display: block; }
+
+    .modal {
+      position: fixed;
+      inset: 0;
+      display: none;
+      place-items: center;
+      padding: 24px;
+      z-index: 90;
+    }
+
+    .modal.open { display: grid; }
+
+    .modal-card {
+      width: 640px;
+      max-width: calc(100vw - 48px);
+      max-height: calc(100vh - 48px);
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: white;
+      box-shadow: var(--shadow);
+    }
+
+    .modal-head {
+      min-height: 62px;
+      padding: 16px 18px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .modal-title { font-size: 17px; font-weight: 850; }
+    .modal-body { padding: 18px; display: grid; gap: 14px; }
+    .modal-foot {
+      padding: 14px 18px;
+      border-top: 1px solid var(--line);
+      background: #fbfaf8;
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    .invoice-lines {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+
+    .invoice-line {
+      min-height: 42px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 100px 116px;
+      gap: 10px;
+      align-items: center;
+      padding: 0 12px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .invoice-line:last-child { border-bottom: 0; }
+
+    .callout {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fbfaf8;
+      padding: 12px;
+      color: var(--muted);
+    }
+
+    .toast {
+      position: fixed;
+      right: 24px;
+      bottom: 24px;
+      background: var(--ink);
+      color: white;
+      border-radius: 9px;
+      padding: 12px 14px;
+      box-shadow: var(--shadow);
+      opacity: 0;
+      transform: translateY(80px);
+      transition: all 160ms ease;
+      z-index: 120;
+    }
+
+    .toast.show { opacity: 1; transform: translateY(0); }
+
+    @media (max-width: 980px) {
+      .app { grid-template-columns: 1fr; }
+      .sidebar { display: none; }
+      .retainer-layout { grid-template-columns: 1fr; }
+      .period-list { border-right: 0; border-bottom: 1px solid var(--line); max-height: 320px; }
+      .metric-strip { grid-template-columns: 1fr 1fr; }
+      .toolbar-spacer { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand"><div class="brand-mark">KO</div><div>Konverted</div></div>
+      <div class="side-search"><span>Search</span><span>Cmd K</span></div>
+      <nav class="nav">
+        <div class="nav-item">Home</div>
+        <div class="nav-item">Clients</div>
+        <div class="nav-item">Projects</div>
+        <div class="nav-item">Tasks</div>
+        <div class="nav-item active">Time Tracking</div>
+        <div class="nav-item">Invoices</div>
+        <div class="nav-item">Reports</div>
+      </nav>
+    </aside>
+
+    <main class="main">
+      <header class="top">
+        <div>
+          <h1>Time Tracking</h1>
+          <div class="helper">Review time, clean it up, and create invoice drafts.</div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="icon-btn">&gt;</button>
+          <button class="btn primary" id="addTime">+ Add Time</button>
+        </div>
+      </header>
+
+      <section class="tabs">
+        <button class="tab active" data-tab="tm">T&amp;M <span class="count">3</span></button>
+        <button class="tab" data-tab="retainer">Retainer <span class="count">5</span></button>
+        <button class="tab" data-tab="fixed">Fixed <span class="count">3</span></button>
+      </section>
+
+      <section class="toolbar">
+        <label class="search">Search <input id="search" placeholder="Task, project, client, note"></label>
+        <button class="chip" id="periodButton">This month</button>
+        <button class="chip" id="statusButton">All statuses</button>
+        <button class="chip" id="groupButton">Group: Project</button>
+        <div class="toolbar-spacer"></div>
+        <button class="chip" id="clearButton">Clear</button>
+      </section>
+
+      <section class="view">
+        <div class="summary" id="summary"></div>
+        <div class="panel" id="content"></div>
+      </section>
+    </main>
+  </div>
+
+  <div class="bulk" id="bulk">
+    <div><strong id="bulkTitle">0 selected</strong><span class="muted" id="bulkMeta"></span></div>
+    <div style="display:flex;gap:8px">
+      <button class="btn" id="bulkInvoice">Create invoice</button>
+      <button class="btn ghost" id="bulkClear" style="color:white;border-color:#555">Clear</button>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="backdrop"></div>
+  <section class="modal" id="invoiceModal">
+    <div class="modal-card">
+      <div class="modal-head">
+        <div>
+          <div class="modal-title" id="modalTitle">Create invoice</div>
+          <div class="helper" id="modalSub">Review before creating the draft.</div>
+        </div>
+        <button class="icon-btn" id="modalClose">x</button>
+      </div>
+      <div class="modal-body" id="modalBody"></div>
+      <div class="modal-foot">
+        <button class="btn ghost" id="modalCancel">Cancel</button>
+        <button class="btn primary" id="modalCreate">Create draft</button>
+      </div>
+    </div>
+  </section>
+  <div class="toast" id="toast">Saved</div>
+
+  <script>
+    const state = {
+      tab: "tm",
+      group: "Project",
+      query: "",
+      selected: new Set(),
+      activeRetainer: "r2"
+    };
+
+    const tm = [
+      { id: "tm1", project: "Acme Website Redesign", client: "Acme Corp", task: "Homepage wireframes", category: "Strategy", member: "Adam Toth", date: "May 8", note: "Reviewed hero variants", hours: 4.5, rate: 120, status: "Unbilled", color: "#2563eb" },
+      { id: "tm2", project: "Acme Website Redesign", client: "Acme Corp", task: "Homepage wireframes", category: "Design", member: "Ella Stone", date: "May 7", note: "Responsive cleanup", hours: 3.25, rate: 110, status: "Unbilled", color: "#2563eb" },
+      { id: "tm3", project: "Acme Website Redesign", client: "Acme Corp", task: "CMS setup", category: "Development", member: "Mark Lane", date: "May 6", note: "Schema edits", hours: 2, rate: 135, status: "Invoiced", color: "#2563eb" },
+      { id: "tm4", project: "Northwind Growth Sprint", client: "Northwind", task: "Campaign QA", category: "Ads", member: "Adam Toth", date: "May 5", note: "Budget review", hours: 5.75, rate: 125, status: "Unbilled", color: "#16a34a" },
+      { id: "tm5", project: "Northwind Growth Sprint", client: "Northwind", task: "Weekly report", category: "Reporting", member: "Ella Stone", date: "May 3", note: "Internal cleanup", hours: 1.5, rate: 0, status: "Non-billable", color: "#16a34a" }
+    ];
+
+    const retainers = [
+      { id: "r1", project: "Konverted Monthly Retainer", client: "Konverted", period: "May 2026", mode: "monthly", used: 28, included: 40, overage: 0, fee: 4000, status: "Open", color: "#16a34a", entries: 7 },
+      { id: "r2", project: "Konverted Monthly Retainer", client: "Konverted", period: "Apr 2026", mode: "monthly", used: 42, included: 40, overage: 300, fee: 4000, status: "Ready", color: "#16a34a", entries: 11 },
+      { id: "r3", project: "Acme Support Retainer", client: "Acme Corp", period: "Apr 2026", mode: "monthly", used: 0, included: 20, overage: 0, fee: 2500, status: "Ready", color: "#2563eb", entries: 0 },
+      { id: "r4", project: "Acme Support Retainer", client: "Acme Corp", period: "Q1 2026 cycle", mode: "3-month rollover", used: 126, included: 120, overage: 900, fee: 2500, status: "Ready", color: "#2563eb", entries: 24 },
+      { id: "r5", project: "Acme Support Retainer", client: "Acme Corp", period: "Q2 2026 cycle", mode: "3-month rollover", used: 18, included: 120, overage: 0, fee: 2500, status: "Open", color: "#2563eb", entries: 5 }
+    ];
+
+    const retainerWork = {
+      r1: [
+        task("Weekly optimization report", "Reporting", 12, [["May 6", "Adam Toth", "Performance summary", 4], ["May 13", "Adam Toth", "Recommendations", 8]]),
+        task("Landing page monitoring", "Optimization", 16, [["May 8", "Ella Stone", "QA notes", 6], ["May 15", "Mark Lane", "Tracking fixes", 10]])
+      ],
+      r2: [
+        task("Monthly analytics report", "Reporting", 18, [["Apr 5", "Adam Toth", "GA4 pull and commentary", 6], ["Apr 8", "Adam Toth", "Client-ready summary", 5], ["Apr 12", "Ella Stone", "Charts cleanup", 7]]),
+        task("Conversion fixes", "Optimization", 14, [["Apr 10", "Mark Lane", "Form event debugging", 6], ["Apr 17", "Mark Lane", "Hero test cleanup", 8]]),
+        task("Client strategy call", "Strategy", 10, [["Apr 22", "Adam Toth", "Prep and call", 4], ["Apr 23", "Adam Toth", "Follow-up plan", 6]])
+      ],
+      r3: [],
+      r4: [
+        task("Q1 support and reporting", "Reporting", 46, [["Jan 28", "Adam Toth", "January report", 12], ["Feb 26", "Adam Toth", "February report", 16], ["Mar 27", "Ella Stone", "March visuals", 18]]),
+        task("Growth experiments", "Optimization", 52, [["Feb 11", "Mark Lane", "Experiment setup", 20], ["Mar 12", "Mark Lane", "Test iteration", 18], ["Mar 20", "Ella Stone", "Variant QA", 14]]),
+        task("Strategic workshops", "Strategy", 28, [["Jan 15", "Adam Toth", "Roadmap workshop", 14], ["Mar 8", "Adam Toth", "Cycle close review", 14]])
+      ],
+      r5: [
+        task("April report", "Reporting", 8, [["Apr 30", "Adam Toth", "Monthly notes", 8]]),
+        task("Tracking maintenance", "Development", 10, [["May 4", "Mark Lane", "Pixel QA", 10]])
+      ]
+    };
+
+    const fixed = [
+      { id: "f1", project: "Brand Launch Fixed", client: "Northwind", category: "Design", task: "Visual identity system", actual: 87, estimate: 60, health: "Over budget", status: "Open", color: "#dc2626" },
+      { id: "f2", project: "Brand Launch Fixed", client: "Northwind", category: "Development", task: "Landing page build", actual: 34, estimate: 48, health: "On budget", status: "Open", color: "#dc2626" },
+      { id: "f3", project: "Acme Sales Deck", client: "Acme Corp", category: "Strategy", task: "Deck polish", actual: 18, estimate: 24, health: "On budget", status: "Ready", color: "#2563eb" },
+      { id: "f4", project: "Konverted Case Study", client: "Konverted", category: "Content", task: "Story outline", actual: 9, estimate: null, health: "No estimate", status: "Open", color: "#a855f7" }
+    ];
+
+    function task(name, category, hours, entries) {
+      return { name, category, hours, entries };
+    }
+
+    function h(n) {
+      const hour = Math.floor(n);
+      const min = Math.round((n - hour) * 60);
+      return hour + "h" + (min ? " " + min + "m" : "");
+    }
+
+    function money(n) {
+      return "EUR" + new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(n);
+    }
+
+    function statusClass(s) {
+      if (s === "Ready" || s === "Unbilled") return "amber";
+      if (s === "Invoiced" || s === "Done") return "green";
+      if (s === "Non-billable") return "neutral";
+      if (s === "Over budget") return "red";
+      return "neutral";
+    }
+
+    function matches(row) {
+      if (!state.query) return true;
+      return Object.values(row).join(" ").toLowerCase().includes(state.query.toLowerCase());
+    }
+
+    function groups(rows, key) {
+      const map = new Map();
+      rows.forEach((row) => {
+        const value = row[key] || "Other";
+        if (!map.has(value)) map.set(value, []);
+        map.get(value).push(row);
+      });
+      return [...map.entries()];
+    }
+
+    function render() {
+      document.querySelectorAll(".tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.tab === state.tab));
+      document.getElementById("groupButton").style.display = state.tab === "retainer" ? "none" : "inline-flex";
+      document.getElementById("search").value = state.query;
+      if (state.tab === "tm") renderTm();
+      if (state.tab === "retainer") renderRetainer();
+      if (state.tab === "fixed") renderFixed();
+      renderBulk();
+    }
+
+    function renderTm() {
+      const rows = tm.filter(matches);
+      const groupKey = state.group === "Member" ? "member" : state.group === "Task" ? "task" : "project";
+      const unbilled = rows.filter((r) => r.status === "Unbilled");
+      const amount = unbilled.reduce((sum, r) => sum + r.hours * r.rate, 0);
+      document.getElementById("summary").innerHTML = `<div><strong>${rows.length}</strong> rows - <strong>${h(rows.reduce((s, r) => s + r.hours, 0))}</strong> total - <strong>${money(amount)}</strong> unbilled</div><div class="muted">T&M invoices from selected unbilled time.</div>`;
+      document.getElementById("content").innerHTML = groups(rows, groupKey).map(([name, items]) => {
+        const groupAmount = items.filter((r) => r.status === "Unbilled").reduce((sum, r) => sum + r.hours * r.rate, 0);
+        return `<section class="section">
+          <div class="section-head">
+            <div>
+              <div class="section-title"><span class="dot" style="background:${items[0].color}"></span><span class="truncate">${name}</span></div>
+              <div class="section-meta">${items.length} rows - ${h(items.reduce((s, r) => s + r.hours, 0))} - ${money(groupAmount)} unbilled</div>
+            </div>
+            <div class="section-actions"><button class="btn" data-invoice-tm="${name}">Invoice group</button></div>
+          </div>
+          <div style="overflow:auto">
+            <table class="task-table">
+              <thead><tr><th></th><th>Date</th><th>Member</th><th>Project</th><th>Client</th><th>Task</th><th>Category</th><th>Billing</th><th>Status</th><th class="num">Hours</th><th class="num">Rate</th><th class="num">Amount</th></tr></thead>
+              <tbody>${items.map((row) => `
+                <tr>
+                  <td>${row.status === "Unbilled" ? `<span class="check ${state.selected.has(row.id) ? "checked" : ""}" data-select="${row.id}"></span>` : ""}</td>
+                  <td class="muted">${row.date}</td>
+                  <td>${row.member}</td>
+                  <td><strong>${row.project}</strong></td>
+                  <td class="muted">${row.client}</td>
+                  <td><strong>${row.task}</strong><div class="faint truncate">${row.note}</div></td>
+                  <td><span class="pill neutral">${row.category}</span></td>
+                  <td><span class="pill ${row.status === "Non-billable" ? "neutral" : "green"}">${row.status === "Non-billable" ? "Non-billable" : "Billable"}</span></td>
+                  <td><span class="pill ${statusClass(row.status)}">${row.status}</span></td>
+                  <td class="num">${h(row.hours)}</td>
+                  <td class="num">${row.rate ? money(row.rate) + "/h" : "-"}</td>
+                  <td class="num">${row.rate ? money(row.hours * row.rate) : "-"}</td>
+                </tr>`).join("")}</tbody>
+            </table>
+          </div>
+        </section>`;
+      }).join("");
+    }
+
+    function renderRetainer() {
+      const rows = retainers.filter(matches);
+      const ready = rows.filter((r) => r.status === "Ready");
+      let active = rows.find((r) => r.id === state.activeRetainer) || rows[0];
+      if (!active) {
+        document.getElementById("summary").innerHTML = `<div>No retainer periods match this view.</div>`;
+        document.getElementById("content").innerHTML = "";
+        return;
+      }
+      state.activeRetainer = active.id;
+      document.getElementById("summary").innerHTML = `<div><strong>${rows.length}</strong> periods/cycles - <strong>${ready.length}</strong> ready - <strong>${money(ready.reduce((s, r) => s + r.overage, 0))}</strong> overage due</div><div class="muted">Choose a period, then review its measured work.</div>`;
+      const work = retainerWork[active.id] || [];
+      const pct = active.included ? Math.min(100, Math.round(active.used / active.included * 100)) : 0;
+      const action = active.status === "Open" ? "No action yet" : active.overage > 0 ? "Create overage invoice" : "Open report";
+      document.getElementById("content").innerHTML = `<div class="retainer-layout">
+        <div class="period-list">
+          <div class="period-list-head"><div class="eyebrow">Retainer periods</div><div class="helper">Monthly retainers and rollover cycles.</div></div>
+          ${rows.map((row) => {
+            const rowPct = row.included ? Math.min(100, Math.round(row.used / row.included * 100)) : 0;
+            return `<button class="period-card ${row.id === active.id ? "active" : ""}" data-period="${row.id}">
+              <div class="period-top">
+                <div><div class="period-title">${row.project}</div><div class="period-sub">${row.period} - ${row.mode}</div></div>
+                <span class="pill ${statusClass(row.status)}">${row.status}</span>
+              </div>
+              <div class="bar"><div class="bar-fill ${row.used > row.included ? "amber" : ""}" style="width:${rowPct}%"></div></div>
+              <div class="period-metrics"><span>${h(row.used)} / ${h(row.included)}</span><strong>${row.overage ? money(row.overage) : "Report"}</strong></div>
+            </button>`;
+          }).join("")}
+        </div>
+        <div class="detail">
+          <div class="detail-head">
+            <div><div class="detail-title">${active.project}</div><div class="detail-sub">${active.client} - ${active.period} - ${active.mode}</div></div>
+            <div style="display:flex;gap:8px;align-items:center"><span class="pill ${statusClass(active.status)}">${active.status}</span><button class="btn" data-invoice-retainer="${active.id}" ${active.status === "Open" ? "disabled" : ""}>${action}</button></div>
+          </div>
+          <div class="metric-strip">
+            <div class="metric"><div class="metric-label">Used</div><div class="metric-value">${h(active.used)}</div></div>
+            <div class="metric"><div class="metric-label">Included</div><div class="metric-value">${h(active.included)}</div></div>
+            <div class="metric"><div class="metric-label">Overage</div><div class="metric-value">${active.overage ? money(active.overage) : "-"}</div></div>
+            <div class="metric"><div class="metric-label">Monthly fee</div><div class="metric-value">${money(active.fee)}/mo</div></div>
+          </div>
+          <div class="work">
+            <div class="work-head"><div><div class="work-title">Measured work in this ${active.mode.includes("rollover") ? "cycle" : "month"}</div><div class="helper">Tasks and entries scoped to the selected retainer period.</div></div><div class="muted">${active.entries} entries</div></div>
+            <div class="task-stack">${work.length ? work.map((item) => `<div class="task-block">
+              <div class="task-summary"><div><div class="task-title">${item.name}</div><div class="faint">${item.category}</div></div><div class="num"><strong>${h(item.hours)}</strong></div><div class="num muted">${item.entries.length} entries</div></div>
+              <div class="entry-list">
+                <table class="task-table">
+                  <thead><tr><th>Date</th><th>Member</th><th>Task</th><th>Category</th><th>Billing</th><th>Note</th><th class="num">Hours</th></tr></thead>
+                  <tbody>${item.entries.map((entry) => `<tr>
+                    <td class="muted">${entry[0]}</td>
+                    <td>${entry[1]}</td>
+                    <td><strong>${item.name}</strong></td>
+                    <td><span class="pill neutral">${item.category}</span></td>
+                    <td><span class="pill green">Billable</span></td>
+                    <td class="truncate muted">${entry[2]}</td>
+                    <td class="num">${h(entry[3])}</td>
+                  </tr>`).join("")}</tbody>
+                </table>
+              </div>
+            </div>`).join("") : `<div style="padding:32px;text-align:center;color:var(--muted)">No measured work in this period.</div>`}</div>
+          </div>
+        </div>
+      </div>`;
+    }
+
+    function renderFixed() {
+      const rows = fixed.filter(matches);
+      const groupKey = state.group === "Category" ? "category" : state.group === "Client" ? "client" : "project";
+      const over = rows.filter((r) => r.health === "Over budget");
+      document.getElementById("summary").innerHTML = `<div><strong>${rows.length}</strong> work rows - <strong>${h(rows.reduce((s, r) => s + r.actual, 0))}</strong> actual - <strong>${over.length}</strong> over budget</div><div class="muted">Fixed progress uses category/project estimates.</div>`;
+      document.getElementById("content").innerHTML = groups(rows, groupKey).map(([name, items]) => `<section class="section">
+        <div class="section-head">
+          <div><div class="section-title"><span class="dot" style="background:${items[0].color}"></span><span class="truncate">${name}</span></div><div class="section-meta">${h(items.reduce((s, r) => s + r.actual, 0))} actual - category/project budget</div></div>
+          <div class="section-actions"><button class="btn" data-invoice-fixed="${name}">Create fixed invoice</button></div>
+        </div>
+        <div style="overflow:auto"><table class="task-table">
+          <thead><tr><th></th><th>Project</th><th>Client</th><th>Category</th><th>Task evidence</th><th>Billing</th><th>Status</th><th>Health</th><th class="num">Actual</th><th class="num">Estimated</th><th>Progress</th></tr></thead>
+          <tbody>${items.map((row) => {
+            const pct = row.estimate ? Math.min(100, Math.round(row.actual / row.estimate * 100)) : 0;
+            return `<tr>
+              <td><span class="check ${state.selected.has(row.id) ? "checked" : ""}" data-select="${row.id}"></span></td>
+              <td><strong>${row.project}</strong></td>
+              <td class="muted">${row.client}</td>
+              <td>${row.category}</td>
+              <td><strong>${row.task}</strong><div class="faint">${row.project}</div></td>
+              <td><span class="pill green">Billable</span></td>
+              <td><span class="pill ${statusClass(row.status)}">${row.status}</span></td>
+              <td><span class="pill ${row.health === "Over budget" ? "red" : "neutral"}">${row.health}</span></td>
+              <td class="num">${h(row.actual)}</td>
+              <td class="num">${row.estimate ? h(row.estimate) : "-"}</td>
+              <td><div class="bar"><div class="bar-fill ${row.actual > (row.estimate || Infinity) ? "red" : ""}" style="width:${pct}%"></div></div></td>
+            </tr>`;
+          }).join("")}</tbody>
+        </table></div>
+      </section>`).join("");
+    }
+
+    function renderBulk() {
+      const selected = [...state.selected];
+      const el = document.getElementById("bulk");
+      if (!selected.length) {
+        el.classList.remove("show");
+        return;
+      }
+      const rows = [...tm, ...fixed].filter((r) => state.selected.has(r.id));
+      document.getElementById("bulkTitle").textContent = selected.length + " selected";
+      document.getElementById("bulkMeta").textContent = state.tab === "tm"
+        ? " - " + h(rows.reduce((s, r) => s + (r.hours || 0), 0)) + " - " + money(rows.reduce((s, r) => s + ((r.hours || 0) * (r.rate || 0)), 0))
+        : " - delivery evidence";
+      document.getElementById("bulkInvoice").textContent = state.tab === "tm" ? "Create invoice" : "Create fixed invoice";
+      el.classList.add("show");
+    }
+
+    function openInvoice(kind, target) {
+      document.getElementById("backdrop").classList.add("open");
+      document.getElementById("invoiceModal").classList.add("open");
+      const title = document.getElementById("modalTitle");
+      const sub = document.getElementById("modalSub");
+      const body = document.getElementById("modalBody");
+      if (kind === "tm") {
+        const rows = [...state.selected].length ? tm.filter((r) => state.selected.has(r.id)) : tm.filter((r) => r.project === target && r.status === "Unbilled");
+        const total = rows.reduce((s, r) => s + r.hours * r.rate, 0);
+        title.textContent = "Create T&M invoice";
+        sub.textContent = "Selected unbilled time prices this draft.";
+        body.innerHTML = invoiceLines(rows.map((r) => [r.task, h(r.hours), money(r.hours * r.rate)])) + `<div class="callout"><strong>Total ${money(total)}</strong><br>${rows.length} time entries will be linked to the draft.</div>`;
+      }
+      if (kind === "retainer") {
+        const row = retainers.find((r) => r.id === target) || retainers[1];
+        title.textContent = row.overage ? "Create retainer overage invoice" : "Open retainer report";
+        sub.textContent = row.project + " - " + row.period;
+        body.innerHTML = invoiceLines([
+          ["Usage", h(row.used) + " / " + h(row.included), row.overage ? "Over" : "Within"],
+          ["Overage", h(Math.max(row.used - row.included, 0)), row.overage ? money(row.overage) : "-"],
+          ["Monthly fee context", row.mode, money(row.fee) + "/mo"]
+        ]) + `<div class="callout">Time entries stay as report evidence. The row action decides whether this becomes an overage invoice or a report.</div>`;
+      }
+      if (kind === "fixed") {
+        title.textContent = "Create fixed invoice";
+        sub.textContent = String(target);
+        body.innerHTML = invoiceLines([
+          ["Selected evidence", "Tasks/time entries", "Included"],
+          ["Pricing", "Fixed or remaining amount", "Confirmed in draft"]
+        ]) + `<div class="callout">Fixed invoice amount is not calculated from time rates.</div>`;
+      }
+    }
+
+    function invoiceLines(lines) {
+      return `<div class="invoice-lines">${lines.map((line) => `<div class="invoice-line"><div class="truncate">${line[0]}</div><div class="num muted">${line[1]}</div><div class="num"><strong>${line[2]}</strong></div></div>`).join("")}</div>`;
+    }
+
+    function closeModal() {
+      document.getElementById("backdrop").classList.remove("open");
+      document.getElementById("invoiceModal").classList.remove("open");
+    }
+
+    function toast(text) {
+      const el = document.getElementById("toast");
+      el.textContent = text;
+      el.classList.add("show");
+      setTimeout(() => el.classList.remove("show"), 1600);
+    }
+
+    document.addEventListener("click", (event) => {
+      const t = event.target;
+      const tab = t.closest("[data-tab]");
+      if (tab) {
+        state.tab = tab.dataset.tab;
+        state.selected.clear();
+        render();
+      }
+      const check = t.closest("[data-select]");
+      if (check) {
+        const id = check.dataset.select;
+        state.selected.has(id) ? state.selected.delete(id) : state.selected.add(id);
+        render();
+      }
+      const period = t.closest("[data-period]");
+      if (period) {
+        state.activeRetainer = period.dataset.period;
+        render();
+      }
+      const tmInvoice = t.closest("[data-invoice-tm]");
+      if (tmInvoice) openInvoice("tm", tmInvoice.dataset.invoiceTm);
+      const retainerInvoice = t.closest("[data-invoice-retainer]");
+      if (retainerInvoice && !retainerInvoice.disabled) openInvoice("retainer", retainerInvoice.dataset.invoiceRetainer);
+      const fixedInvoice = t.closest("[data-invoice-fixed]");
+      if (fixedInvoice) openInvoice("fixed", fixedInvoice.dataset.invoiceFixed);
+      if (t.id === "bulkInvoice") openInvoice(state.tab === "fixed" ? "fixed" : "tm", "selection");
+      if (t.id === "bulkClear") { state.selected.clear(); render(); }
+      if (t.id === "groupButton") {
+        state.group = state.group === "Project" ? "Member" : state.group === "Member" ? "Task" : "Project";
+        t.textContent = "Group: " + state.group;
+        render();
+      }
+      if (t.id === "clearButton") { state.query = ""; state.selected.clear(); render(); }
+      if (t.id === "addTime") toast("Add Time modal would open");
+      if (t.id === "modalClose" || t.id === "modalCancel" || t.id === "backdrop") closeModal();
+      if (t.id === "modalCreate") { closeModal(); state.selected.clear(); render(); toast("Draft created"); }
+    });
+
+    document.getElementById("search").addEventListener("input", (event) => {
+      state.query = event.target.value;
+      render();
+    });
+
+    render();
+  </script>
+</body>
+</html>

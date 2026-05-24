@@ -234,8 +234,6 @@ export function TaskDetailDrawerContent({
             <TaskDetailTime
               taskId={task._id}
               isBillable={task.billable}
-              isDone={task.statusType === "done"}
-              totalMinutes={task.totalMinutes ?? 0}
             />
           </TabsContent>
 

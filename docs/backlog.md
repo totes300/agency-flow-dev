@@ -1522,3 +1522,119 @@ The lock guard covers all three write paths (`timeEntries.create`, `timer.commit
 - **`/reports` analytics view** (revenue mix, margin, utilization) — re-introduce with a defined scope when real cross-project demand emerges.
 - **Credit notes** — handled today by void + re-create. No `creditNotes` entity in MVP.
 - **Statement / report sent-tracking entity** (`sentReports` table) — reports are pure on-demand renders today (D4). Becomes a purely additive future change when auto-send ships.
+
+---
+
+## Phase 9 — Client Worksheet Export (CSV + AI summary)
+
+> **Goal**: A CSV companion to the work delivered in a given scope (a retainer month, a retainer cycle, an invoice's entry set, or an ad-hoc filtered range). AI-generated "What we did" column the user emails to the client alongside the invoice.
+>
+> **PRD**: `docs/phase-9-worksheet-export.md`
+>
+> **Mental model**: **Worksheet lives where the scope lives.** Each surface that defines a scope (retainer month row, cycle-close row, invoice row, project-header picker) gets a worksheet trigger. `InvoiceBanner` is explicitly NOT a worksheet surface — it has no defined scope until an invoice is generated.
+>
+> **Key decisions locked**:
+> - Trigger placement is scope-driven, not project-type-driven (see PRD §Trigger placement table)
+> - One row per task. No Rate column. Hours split into `Billable hours` / `Non-billable hours` / `Total hours` (no single `Billable=Y/N` flag)
+> - AI summary generated fresh on every export, no caching, no preview/edit
+> - AI via **Vercel AI Gateway** (`"anthropic/claude-sonnet-4-6"`); direct Anthropic SDK is fallback only
+> - Comments fed to AI are flattened by `createdAt`, text only — threading, reactions, attachments ignored
+> - `tasks.description` is JSON-stringified Tiptap → `JSON.parse` before `extractPlainText`; `comments.content` is already structured, pass direct
+> - Empty-content tasks fall back to `"Worked on {title}."` deterministically
+> - Per-task AI failure → `[summary unavailable]`; whole-batch failure → toast, no download
+> - UTF-8 with BOM (Excel-on-Windows safe)
+> - Admin only, strict `orgId` guard on every action
+> - No existing precedent in this repo for action→internalQuery — Slice 1 sets the pattern
+
+### Slice 1 — CSV infrastructure + retainer monthly export (no AI)
+
+- [ ] **CSV helpers**: `lib/csv.ts` — `escapeCsvField`, `joinCsvRows`, UTF-8 BOM prefix, formula-injection protection
+- [ ] **Slug helper**: `lib/format.ts` adds `slugify(name)` — 5-line helper used by every filename builder
+- [ ] **Action**: `convex/worksheets.ts` `exportMonth({ projectId, year, month })` → `{ csv, filename }`
+- [ ] **Internal query**: `convex/worksheetsHelpers.ts` `collectWorksheetData` — discriminated scope union, `requireAdmin` + `project.orgId === currentUser.orgId` guard, all DB reads
+- [ ] **Helpers**: `getTasksWithTimeInScope`, `buildSingleScopeCsv`
+- [ ] **Deterministic "What we did" fallback** (`Worked on {title}.`) — no AI in this slice
+- [ ] **Three-column hour split**: `Billable hours`, `Non-billable hours`, `Total hours` (`H:MM` format)
+- [ ] **First worked / last worked / entry count** columns
+- [ ] **Shared menu item**: `components/worksheet/worksheet-menu-item.tsx` — loading state, Blob+anchor download, error toast via `toastError`
+- [ ] **Wire trigger**: retainer monthly breakdown row `RowOverflow` in `monthly-breakdown-card.tsx:834`
+- [ ] **Filename**: `{client-slug}-{project-slug}-{YYYY-MM}-worksheet.csv`
+- [ ] **Verify**: `npx tsc --noEmit` clean, `npm run lint` clean, manual download → Excel / Sheets / Numbers all render UTF-8 with accented chars correctly
+- [ ] **Verify**: empty period → graceful toast, no broken download
+- [ ] **Verify**: current in-progress month → downloads logged work so far
+- [ ] **Verify**: mixed billable/non-billable task → hours split correctly across the three columns
+- [ ] **Verify**: field starting with `=SUM(...)` or `@...` opens in Excel/Sheets as text, not a formula
+- [ ] **Verify**: cross-org request → throws
+
+### Slice 2 — AI summaries wired in
+
+- [ ] **AI integration**: `summarizeTaskWithAI` in `convex/worksheetsHelpers.ts` — Vercel AI Gateway with `"anthropic/claude-sonnet-4-6"` provider string (direct Anthropic SDK is fallback)
+- [ ] **Input shape**: title + plain-text task description (`JSON.parse` then `extractPlainText` from `lib/tiptap-utils.ts`) + subtask titles & `statusType === "done"` flag + all comments flattened by `createdAt` text-only (no threading/reactions/attachments) + included entry notes
+- [ ] **Two AI fields**: `Task summary` (~180 char, 1 sentence) and `What we did` (~280 char, 1–3 sentences, past-tense, outcome-focused) — full prompts in PRD §AI summary spec
+- [ ] **Output handling**: trim, collapse newlines, strip quotes, post-response length cap with ellipsis (`Task summary` ~220, `What we did` ~320)
+- [ ] **Concurrency**: bounded parallelism across tasks
+- [ ] **Empty-content fallback preserved**: skip AI call, emit deterministic title-based lines
+- [ ] **Per-task error handling**: row reads `[summary unavailable]`, export continues
+- [ ] **Whole-batch failure**: throws → frontend toast, no partial download
+- [ ] **Env vars**: create `.env.example` (does not exist today); add `AI_GATEWAY_API_KEY` (primary) and `ANTHROPIC_API_KEY` (fallback)
+- [ ] **Update CLAUDE.md** Pre-deployment Checklist + Environment Variables sections
+- [ ] **Verify**: latency < 5 s for ≤ 30 tasks
+- [ ] **Verify**: mock failure by unsetting key → fallback rows render, no crash
+- [ ] **Verify**: comments + entry notes both demonstrably influence `What we did`
+- [ ] **Verify**: long task description → CSV contains concise `Task summary`, not raw description dump
+
+### Slice 3 — Full-cycle retainer export
+
+- [ ] **Action**: `convex/worksheets.ts` `exportCycle({ projectId, cycleStart })`
+- [ ] **CSV builder**: `buildFullCycleCsv` — per-month sections with subtotal + allocation (with rollover) + rollover-into-next / overage rows
+- [ ] **Reuse retainer helpers**: `convex/lib/retainerCycle.ts` (boundaries + overage context) AND `convex/lib/retainerUsage.ts:buildRetainerUsageRows` (per-month rollover ledger) — no new business logic
+- [ ] **Cycle total section** at end: total billable hours worked, total allocation, net overage
+- [ ] **Wire trigger**: cycle-close row variant of `RowOverflow` (`monthly-breakdown-card.tsx:772`)
+- [ ] **Filename**: `{client-slug}-{project-slug}-cycle-{YYYY-MM-DD}-worksheet.csv` (cycle start date)
+- [ ] **Interim-month export remains scoped to that month** — no behavior change in Slice 1's trigger
+- [ ] **Verify**: 1-month cycle exports identically from cycle-close row and from monthly row
+- [ ] **Verify**: 3-month cycle CSV opens cleanly, rollover math matches the project overview
+
+### Slice 4 — Invoice companion export
+
+- [ ] **Action**: `exportInvoice({ invoiceId })` — scopes entries by `invoiceLineItems.timeEntryIds` (canonical entry-set rule per `schema.ts:379`)
+- [ ] **Wire trigger**: `Download worksheet` `DropdownMenuItem` in `components/invoices/invoice-row-actions.tsx:214` `⋯` menu
+- [ ] **Works for any project type's invoice** — primary use case is T&M, where the invoice's `timeEntryIds` is the canonical scope
+- [ ] **Filename**: `{client-slug}-{project-slug}-invoice-{INV-…}-worksheet.csv`
+- [ ] **Verify**: multi-tenant + admin guards in this action path
+- [ ] **Verify**: T&M invoice with user-trimmed entry selection → worksheet rows match exactly the entries on the invoice
+- [ ] **Verify**: cross-org invoice id → throws
+
+### Slice 5 — Project-header ad-hoc export
+
+- [ ] **Picker modal**: `components/worksheet/ad-hoc-export-dialog.tsx` — period preset/custom + categories multi-select + billable-filter radio
+- [ ] **Period presets**: This month, Last month, This quarter, Last quarter, This year, Last year, All time, Custom range — resolved against `orgSettings.timezone`
+- [ ] **Categories filter**: multi-select from this org's `workCategories`; default = all
+- [ ] **Billable filter**: All / Billable only / Non-billable only; default = all
+- [ ] **Wire trigger**: `Download worksheet…` `DropdownMenuItem` in `components/projects/project-detail-header.tsx:125` `⋯` (one code path covers Fixed, T&M, Retainer)
+- [ ] **Action**: `exportAdHoc({ projectId, periodStart, periodEnd, categoryIds?, billableFilter? })`
+- [ ] **Renders flat** — no per-month subtotals, no rollover/overage rows, even if the range matches a cycle or month
+- [ ] **CSV header reflects active filters** (categories, billable filter)
+- [ ] **Filename**: `{client-slug}-{project-slug}-{period-slug}-worksheet.csv`. Examples: `2026-q1`, `2025-2026-all-time`, `2026-01-15-to-2026-04-30`. Filters do NOT affect filename.
+- [ ] **Empty result**: toast `"No time entries match these filters."` No download.
+- [ ] **Submit-disabled state**: until period is valid (custom range with start ≤ end)
+- [ ] **Verify**: each preset period resolves correctly against `orgSettings.timezone`
+- [ ] **Verify**: custom range crossing retainer cycle boundaries renders flat
+- [ ] **Verify**: category filter narrows the row set
+- [ ] **Verify**: billable filter changes both rows shown and total lines
+- [ ] **Verify**: available on Fixed, T&M, and Retainer project pages from one code path
+
+### TODOs deferred to later phases
+
+- **Cached AI summaries on the task** — adds schema + invalidation complexity. Revisit when token cost or latency hurts.
+- **Editable client-facing summary field per task** — couples worksheet to task detail UX. Revisit when a user actually edits an AI line.
+- **Excel / PDF output formats** — CSV covers the email-the-client use case. PDF only when clients ask directly.
+- **Non-billable internal-effort footer line** on single-scope CSV — today shown inline as `Non-billable hours` column. Promote to a summary line if visual noise hurts.
+- **Per-org style / tone instructions for the AI** — add `orgSettings.worksheetTone` when a second org gives opposing feedback.
+- **Per-row included-vs-overage flag** on cycle exports — today only at monthly subtotal level. Add per-row if accountants request it.
+- **Multi-language summaries** — English-only for v1. Follow `orgSettings.defaultCurrency` / `timezone` signal when added.
+- **Recording the export as an audit event** (`exports` table) — pure on-demand renders today. Add when compliance / sent-tracking matters.
+- **Per-row task selection on invoice-scoped worksheet** — today uses `lineItems.timeEntryIds` wholesale. Add row-level trimming if T&M users ask for it.
+- **Saved ad-hoc export presets per project** — each ad-hoc export is configured from scratch today. Add "save as preset" if owners run the same custom range monthly.
+- **Cross-project ad-hoc export** ("all our work in Q1") — today scoped per-project. Promote when portfolio-level reporting is requested.
+- **Comment thread structure / attachments in AI context** — today comments are flattened by `createdAt`, text only. Add threaded/attachment context if a client's most useful delivery detail starts hiding in attachments.

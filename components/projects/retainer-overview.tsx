@@ -36,13 +36,24 @@ function formatMonthList(months: Array<{ year: number; month: number }>): string
  * Pure helper — derives the banner state from `getRetainerData` output and
  * `getProjectInvoiceMetrics`. Returns `null` for the no-banner cases.
  *
- * Only the **monthly-settlement** path (rollover OFF) renders a banner: it
- * aggregates closed-uninvoiced months across the project history. Rollover
- * cycle invoicing lives on the cycle-end row of the Monthly Breakdown card
- * (PRD § User Story 4: single primary action per row). The previous
- * `retainer-cycle-closed` banner branch was dead code — it required
- * `cycleOffset === 0 && isCycleClosed`, which is mutually exclusive
- * (the cycle containing today is by definition not yet closed).
+ * Two banner variants for retainer:
+ *
+ *   - `retainer-monthly` (rollover OFF) — one entry per over-budget month
+ *     that isn't yet invoiced. `metrics.uninvoicedMonths` lists these.
+ *   - `retainer-cycle`   (rollover ON)  — one entry per over-budget cycle
+ *     that isn't yet invoiced. `metrics.uninvoicedMonths` returns the
+ *     cycle-END month for each (anchor convention from the Ready feed),
+ *     so the count = number of unbilled cycles.
+ *
+ * Both fire on the SAME urgency signal — money owed, awaiting a Generate
+ * action. The previous "rollover has no banner" rule was a Slice-4-era
+ * decision based on a flawed dead-branch removal; it left rollover overage
+ * cycles without the same cash-flow surfacing that non-rollover overage
+ * months get. Now both raise the same banner.
+ *
+ * The Monthly Breakdown card's row-level Generate button still exists for
+ * both modes — same duplication pattern as non-rollover (banner + row),
+ * which is intentional: top-of-page urgency + in-context action.
  */
 type RetainerData = NonNullable<FunctionReturnType<typeof api.projects.getRetainerData>>
 type Metrics = NonNullable<FunctionReturnType<typeof api.invoices.getProjectInvoiceMetrics>>
@@ -51,19 +62,37 @@ function computeRetainerBannerState(
   data: RetainerData,
   metrics: Metrics | undefined,
 ): InvoiceBannerState | null {
-  const { rolloverEnabled, overageDue } = data
-  if (rolloverEnabled) return null
-
   if (!metrics || metrics.uninvoicedMonths.length === 0) return null
+
   const ready = metrics.uninvoicedMonths
+  // PROJECT-scoped overage total — NOT `data.overageDue` (which is
+  // currently-viewed-cycle-scoped). The banner must show the amount the
+  // Generate action would actually invoice, regardless of which cycle
+  // the user is browsing. See `convex/invoices.ts:getProjectInvoiceMetrics`
+  // for the field definition.
+  const overageDue = metrics.uninvoicedOverageTotal
+  const target = ready[0]
+
+  if (data.rolloverEnabled) {
+    return {
+      kind: "retainer-cycle",
+      readyCycleCount: ready.length,
+      readyCyclesLabel: formatMonthList(ready),
+      overageDue,
+      lastInvoicedAt: metrics.lastInvoicedAt,
+      targetYear: target.year,
+      targetMonth: target.month,
+    }
+  }
+
   return {
     kind: "retainer-monthly",
     readyMonthCount: ready.length,
     readyMonthsLabel: formatMonthList(ready),
     overageDue,
     lastInvoicedAt: metrics.lastInvoicedAt,
-    targetYear: ready[0].year,
-    targetMonth: ready[0].month,
+    targetYear: target.year,
+    targetMonth: target.month,
   }
 }
 

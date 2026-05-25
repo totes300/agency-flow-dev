@@ -23,11 +23,29 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { MoreHorizontalIcon, Trash2Icon, PencilIcon } from "lucide-react"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+import {
+  LockIcon,
+  MoreHorizontalIcon,
+  Trash2Icon,
+  PencilIcon,
+} from "lucide-react"
 import { toast } from "sonner"
 import { toastError } from "@/lib/toast-helpers"
+import { entryStatus } from "@/convex/lib/entryStatus"
+import { formatLockedTooltip } from "@/lib/entry-tooltip"
 import type { Id } from "@/convex/_generated/dataModel"
 
+// Phase 8 Slice 4 — task-detail Time tab inherits the row-level lock
+// treatment from the project Time tab. The shape is wider than the
+// minimum: settlement + invoice fields are optional so any callers
+// still wiring through the older shape keep working with unlocked
+// rendering.
 type TimeEntry = {
   _id: Id<"timeEntries">
   userId: Id<"users">
@@ -37,6 +55,13 @@ type TimeEntry = {
   isBillable: boolean
   userName: string
   userImageUrl?: string
+  invoiceId?: Id<"invoices">
+  invoicePrefix?: string
+  invoiceNumber?: number
+  settledAt?: number
+  settledReason?: "invoiced" | "retainer_included" | "fixed_included"
+  settledPeriodStart?: string
+  settledPeriodEnd?: string
 }
 
 const COL = "grid-cols-[70px_120px_1fr_60px_18px_28px]"
@@ -127,8 +152,26 @@ export function TimeEntriesTable({
 
         {/* Rows */}
         {entries.map((entry) => {
-          const canEdit = isAdmin || (currentUserId && entry.userId === currentUserId)
+          const status = entryStatus(entry)
+          const isLocked = status === "draft" || status === "closed"
+          // Locked rows are not editable — the server's settlement guard
+          // would reject the patch anyway. Mirroring the table-level
+          // gate keeps the menu from offering Edit/Delete that would
+          // error.
+          const canEdit =
+            !isLocked &&
+            (isAdmin || (currentUserId && entry.userId === currentUserId))
           const isEditing = editingId === entry._id
+          const lockedTooltip = isLocked
+            ? formatLockedTooltip({
+                settledAt: entry.settledAt,
+                settledReason: entry.settledReason,
+                settledPeriodStart: entry.settledPeriodStart,
+                settledPeriodEnd: entry.settledPeriodEnd,
+                invoicePrefix: entry.invoicePrefix,
+                invoiceNumber: entry.invoiceNumber,
+              })
+            : null
 
           if (isEditing) {
             return (
@@ -202,7 +245,13 @@ export function TimeEntriesTable({
           return (
             <div
               key={entry._id}
-              className={`group/entry grid ${COL} items-center gap-x-2 px-3.5 h-[38px] border-b border-border/20 last:border-b-0 hover:bg-muted/20 transition-colors`}
+              data-locked={isLocked || undefined}
+              className={cn(
+                `group/entry grid ${COL} items-center gap-x-2 px-3.5 h-[38px] border-b border-border/20 last:border-b-0 hover:bg-muted/20 transition-colors`,
+                // Mirrors the project Time tab's locked treatment so a
+                // row reads identically across surfaces.
+                isLocked && "opacity-[0.72]",
+              )}
             >
               {/* Date */}
               <span className="text-[13px] text-foreground">{formatShortDate(entry.date)}</span>
@@ -227,12 +276,40 @@ export function TimeEntriesTable({
                 {formatMinutesDisplay(entry.durationMinutes)}
               </span>
 
-              {/* Billable dot */}
+              {/* Lock or billable dot — `🔒` wins when the row is
+                  locked (overrides the dot, since a locked entry's
+                  billability is no longer actionable from this row). */}
               <div className="flex items-center justify-center">
-                <div
-                  className={cn("size-1.5 rounded-full", entry.isBillable ? "bg-green-500" : "bg-border")}
-                  title={entry.isBillable ? "Billable" : "Non-billable"}
-                />
+                {isLocked ? (
+                  lockedTooltip ? (
+                    <TooltipProvider delayDuration={150}>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <LockIcon
+                            className="size-3 text-muted-foreground"
+                            aria-label="Locked"
+                          />
+                        </TooltipTrigger>
+                        <TooltipContent side="top">
+                          {lockedTooltip}
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  ) : (
+                    <LockIcon
+                      className="size-3 text-muted-foreground"
+                      aria-label="Locked"
+                    />
+                  )
+                ) : (
+                  <div
+                    className={cn(
+                      "size-1.5 rounded-full",
+                      entry.isBillable ? "bg-green-500" : "bg-border",
+                    )}
+                    title={entry.isBillable ? "Billable" : "Non-billable"}
+                  />
+                )}
               </div>
 
               {/* Actions */}

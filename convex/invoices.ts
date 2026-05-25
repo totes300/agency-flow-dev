@@ -787,6 +787,7 @@ export const getProjectInvoiceMetrics = query({
     // Retainer: compute uninvoiced closed months
     type UninvoicedMonth = { year: number; month: number; label: string };
     let uninvoicedMonths: UninvoicedMonth[] = [];
+    let uninvoicedOverageTotal = 0;
     if (project.billingType === "retainer") {
       const closedUninvoiced = await getClosedUninvoicedMonths(
         ctx,
@@ -800,6 +801,15 @@ export const getProjectInvoiceMetrics = query({
         month: m.month,
         label: m.label,
       }));
+      // Project-level overage total — the InvoiceBanner displays this so the
+      // amount stays stable across cycle navigation. Reading the
+      // currently-viewed cycle's overage instead (the pre-fix behavior)
+      // produced lying "$0.00 within budget" labels whenever the user was
+      // on a within-budget month while an over-budget month elsewhere
+      // remained unbilled. See `lib/invoice-banner-view.ts:retainer-monthly`.
+      uninvoicedOverageTotal = round2(
+        closedUninvoiced.reduce((sum, m) => sum + m.overageAmount, 0),
+      );
     }
 
     const currency = await getProjectCurrency(ctx, project);
@@ -823,6 +833,10 @@ export const getProjectInvoiceMetrics = query({
       // can hand the next billable period to `useGenerateInvoice` and
       // route directly to its draft.
       uninvoicedMonths,
+      // Project-level overage total across `uninvoicedMonths` (rounded once,
+      // currency = project currency by D1 invariant). The InvoiceBanner reads
+      // this so the amount it shows matches the action it would take.
+      uninvoicedOverageTotal,
       // Latest finalized issueDate as a UTC-midnight ms timestamp (or null).
       // Consumed by the InvoiceBanner subline via `formatLastInvoiced(..., { timezone })`.
       lastInvoicedAt: lastInvoicedYMD ? Date.parse(lastInvoicedYMD + "T00:00:00Z") : null,
@@ -881,7 +895,12 @@ export const getInvoicePreview = query({
             .filter((q) => q.eq(q.field("orgId"), orgId))
             .collect();
           return entries
-            .filter((e) => e.isBillable && !e.invoiceId && !e.settledAt)
+            .filter(
+              (e) =>
+                e.isBillable &&
+                e.invoiceId === undefined &&
+                e.settledAt === undefined,
+            )
             .map((e) => ({
               ...e,
               taskTitle: task.title,
@@ -1205,14 +1224,29 @@ async function getClosedUninvoicedMonths(
   // Build invoiceable periods, anchored to the row `createInvoice` keys on.
   // Rollover ON: one entry per closed over-budget cycle (cycle-end row).
   // Rollover OFF: one entry per closed over-budget month.
-  type Period = { year: number; month: number };
+  //
+  // Each period carries `overageAmount` (= |balance|/60 × overageRate). This
+  // is critical for the InvoiceBanner: the banner displays a project-level
+  // "ready to bill" total, which must NOT vary with the currently-viewed
+  // cycle. Before this field existed, the banner pulled `overageDue` from
+  // `getRetainerData` (cycle-view-scoped) and produced lying "$0.00 within
+  // budget" labels whenever the user navigated to a within-budget cycle.
+  type Period = { year: number; month: number; overageAmount: number };
   const invoiceablePeriods: Period[] = rolloverEnabled
     ? cycles
         .filter((c) => c.isCycleClosed && c.cycleBalance < 0)
-        .map((c) => ({ year: c.closingYear, month: c.closingMonth }))
+        .map((c) => ({
+          year: c.closingYear,
+          month: c.closingMonth,
+          overageAmount: round2((Math.abs(c.cycleBalance) / 60) * overageRate),
+        }))
     : closedMonths
         .filter((cm) => cm.endBalance < 0)
-        .map((cm) => ({ year: cm.year, month: cm.month }));
+        .map((cm) => ({
+          year: cm.year,
+          month: cm.month,
+          overageAmount: round2((Math.abs(cm.endBalance) / 60) * overageRate),
+        }));
 
   return invoiceablePeriods
     .filter((p) => !invoicedKeys.has(`${p.year}-${String(p.month).padStart(2, "0")}`))
@@ -1222,6 +1256,7 @@ async function getClosedUninvoicedMonths(
       label: monthLabel(`${p.year}-${String(p.month).padStart(2, "0")}-01`),
       startDate: `${p.year}-${String(p.month).padStart(2, "0")}-01`,
       endDate: `${p.year}-${String(p.month).padStart(2, "0")}-${String(new Date(p.year, p.month, 0).getDate()).padStart(2, "0")}`,
+      overageAmount: p.overageAmount,
     }));
 }
 
@@ -1359,7 +1394,12 @@ export const createInvoice = mutation({
             .filter((q) => q.eq(q.field("orgId"), orgId))
             .collect();
           return entries
-            .filter((e) => e.isBillable && !e.invoiceId && !e.settledAt)
+            .filter(
+              (e) =>
+                e.isBillable &&
+                e.invoiceId === undefined &&
+                e.settledAt === undefined,
+            )
             .map((e) => ({
               ...e,
               workCategoryId: e.snapshotCategoryId,
@@ -2455,7 +2495,13 @@ type TransitionResult = { ok: true } | { ok: false; reason: string };
  * Returns a result object rather than throwing — the single-row mutation
  * still throws on failure to preserve its existing contract.
  */
-async function applyStatusTransition(
+/**
+ * Exported for tests in `convex/__tests__/invoiceTransitions.test.ts` —
+ * production callers go through `changeInvoiceStatus` / `bulkChangeInvoiceStatus`
+ * / `markInvoicesPaid` / `undoMarkInvoicesPaid` which add auth + per-row
+ * skip handling on top.
+ */
+export async function applyStatusTransition(
   ctx: MutationCtx,
   orgId: string,
   invoice: Doc<"invoices">,
@@ -2505,11 +2551,12 @@ async function applyStatusTransition(
 
   if (draftBecameInvoiced) {
     // Resolve project.billingType to pick the right reason for Fixed.
-    // `invoice.projectId` is required; defensive guard kept so a bad
-    // legacy row can't crash the mutation.
-    const project = invoice.projectId
-      ? await ctx.db.get(invoice.projectId)
-      : null;
+    // `invoice.projectId` is `v.id("projects")` in the schema (non-
+    // optional), so the only way `ctx.db.get` returns `null` is if the
+    // project was deleted between read and write — treat as "non-Fixed"
+    // and let the entries settle with the default reason rather than
+    // throwing mid-transition.
+    const project = await ctx.db.get(invoice.projectId);
     const reason = project?.billingType === "fixed"
       ? "fixed_included"
       : "invoiced";
@@ -2652,11 +2699,22 @@ export const markInvoicesPaid = mutation({
       });
       updated += 1;
       if (outcome.kind === "patch") {
-        await ctx.db.patch(id, {
-          status: "paid",
-          paidAt: outcome.setPaidAt,
-          updatedAt: now,
-        });
+        // Route through applyStatusTransition so the Phase 8 settlement
+        // contract (invoiced → paid: no settlement change) is enforced by
+        // the same code path as `changeInvoiceStatus`. Today this is
+        // equivalent to a direct patch, but routing centrally means a
+        // future widening of classifyMarkPaid can't silently bypass
+        // settle/unsettle. `setPaidAt` is unused — applyStatusTransition
+        // computes `paidAt = now` from its own `now` (identical here).
+        const result = await applyStatusTransition(ctx, orgId, invoice, "paid");
+        if (!result.ok) {
+          // Should be unreachable — classifyMarkPaid only patches when
+          // current=invoiced, and invoiced → paid is in VALID_TRANSITIONS.
+          // Treat as skip rather than throw so the rest of the batch ships.
+          skipped.push({ id, reason: result.reason });
+          updated -= 1;
+          priorStates.pop();
+        }
       }
       // `noop`: counted in `updated`, no DB write.
     }
@@ -2709,14 +2767,36 @@ export const undoMarkInvoicesPaid = mutation({
         skipped.push({ id: snapshot.id, reason: outcome.reason });
         continue;
       }
-      // `paidAt: undefined` clears the field on the doc (Convex patch
-      // convention). Snapshot's `null` means "not paid" → unset the field.
-      const patch: Record<string, unknown> = {
-        status: outcome.setStatus,
-        updatedAt: now,
-      };
-      patch.paidAt = outcome.setPaidAt ?? undefined;
-      await ctx.db.patch(snapshot.id, patch);
+      // Route through applyStatusTransition so the Phase 8 settlement
+      // contract is enforced centrally. In practice undo only reverts
+      // paid → invoiced (snapshot.status is always "invoiced" given how
+      // classifyMarkPaid gates the mark side); applyStatusTransition's
+      // `paid → invoiced` branch clears paidAt to `undefined`, which
+      // matches snapshot.paidAt === null for that case. For the rare
+      // snapshot.status === "paid" case (idempotent mark — current and
+      // snapshot agree) the transition is paid → paid (not in
+      // VALID_TRANSITIONS) so we fall back to a direct paidAt restoration
+      // without changing status.
+      if (outcome.setStatus === invoice.status) {
+        // No status change — just restore paidAt from snapshot (covers
+        // the idempotent-mark noop revert case).
+        await ctx.db.patch(snapshot.id, {
+          paidAt: outcome.setPaidAt ?? undefined,
+          updatedAt: now,
+        });
+        reverted += 1;
+        continue;
+      }
+      const result = await applyStatusTransition(
+        ctx,
+        orgId,
+        invoice,
+        outcome.setStatus,
+      );
+      if (!result.ok) {
+        skipped.push({ id: snapshot.id, reason: result.reason });
+        continue;
+      }
       reverted += 1;
     }
 

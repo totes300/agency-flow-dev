@@ -1067,7 +1067,10 @@ export const getSummary = query({
     const startLabel = new Date(start + "T00:00:00").toLocaleDateString("en-US", { month: "short", year: "numeric" });
     const endLabel = new Date(end + "T00:00:00").toLocaleDateString("en-US", { month: "short", year: "numeric" });
     const rangeLabel = startLabel === endLabel ? startLabel : `${startLabel} – ${endLabel}`;
-    const subtitle = `${rangeLabel} · ${length}-month ${rolloverEnabled ? "rollover" : "monthly"}${isCycleClosed ? " (closed)" : ""}`;
+    // Phase 8 lexicon: `ended` = calendar (the cycle's last day has passed);
+    // `closed` is reserved for admin settlement (Close period / Close cycle).
+    // Never overload `closed` for both — same rule as Slice 2 Revision Pass #1.
+    const subtitle = `${rangeLabel} · ${length}-month ${rolloverEnabled ? "rollover" : "monthly"}${isCycleClosed ? " (ended)" : ""}`;
 
     return computeRetainerSummary({
       entries: cycleEntries,

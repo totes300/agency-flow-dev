@@ -13,7 +13,8 @@ import {
   groupTimeEntries,
   type TimeEntryGroupAxis,
 } from "@/lib/time-entry-grouping"
-import { CalendarIcon, ChevronDownIcon, ChevronRightIcon } from "lucide-react"
+import { deriveGroupReference, type GroupReference } from "@/lib/group-reference"
+import { CalendarIcon, ChevronDownIcon, ChevronRightIcon, LockIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 type SharedTableProps = Omit<ProjectTimeTableProps, "entries">
@@ -58,6 +59,12 @@ export function ProjectTimeGrouped({
     <div className="flex flex-col gap-2">
       {groups.map((g) => {
         const isCollapsed = collapsed.has(g.key)
+        // Slice 4 — the day-group header carries the "consolidated"
+        // reference (period range or invoice number) when every billable
+        // entry agrees. Mixed groups → null, falling back to per-row
+        // badges. Recomputed each render (cheap — pure pass over the
+        // group's entries).
+        const groupRef = deriveGroupReference(g.entries)
         return (
           <div key={g.key} className="flex flex-col">
             <GroupHeader
@@ -65,6 +72,7 @@ export function ProjectTimeGrouped({
               icon={g.icon}
               totalMinutes={g.totalMinutes}
               entryCount={g.entries.length}
+              groupRef={groupRef}
               collapsed={isCollapsed}
               onToggle={() => toggleGroup(g.key)}
             />
@@ -85,6 +93,7 @@ function GroupHeader({
   icon,
   totalMinutes,
   entryCount,
+  groupRef,
   collapsed,
   onToggle,
 }: {
@@ -92,6 +101,7 @@ function GroupHeader({
   icon: "calendar" | null
   totalMinutes: number
   entryCount: number
+  groupRef: GroupReference
   collapsed: boolean
   onToggle: () => void
 }) {
@@ -117,6 +127,23 @@ function GroupHeader({
       <span className="text-xs text-muted-foreground">
         · {entryCount} {entryCount === 1 ? "entry" : "entries"}
       </span>
+      {groupRef && (
+        <span
+          className={cn(
+            "ml-2 inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] font-medium",
+            // Closed (period or invoice) reads as a confirmed lock —
+            // muted but visible. Draft is still "in motion" → neutral.
+            groupRef.kind === "invoice" && groupRef.isDraft
+              ? "border-border bg-muted text-muted-foreground"
+              : "border-border bg-muted text-muted-foreground",
+          )}
+          // Aria-label spells out the abbreviation for screen readers.
+          aria-label={`This day's entries are ${groupRef.label}`}
+        >
+          <LockIcon aria-hidden className="size-3" />
+          {groupRef.label}
+        </span>
+      )}
       <span className="ml-auto tabular-nums text-sm font-medium">
         {formatHoursCompact(totalMinutes)}
       </span>

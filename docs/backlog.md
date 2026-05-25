@@ -1321,17 +1321,17 @@ In-editor rendering is unchanged — TaskItem's NodeView still drives the viewpo
 
 ---
 
-## Phase 8 — Time Entry Settlement
+## Phase 8 — Time Entry Settlement ✅ COMPLETE (2026-05-24)
 
 > **Goal**: Fix the reporting bug where within-budget retainer periods (and Fixed projects) leave time entries forever "open / not invoiced". Split *invoice linkage* from *client-facing work closure* via a lightweight settlement model on `timeEntries` + 2 new admin-action fields on `retainerPeriods`.
 >
 > **PRD**: `docs/phase-8-time-entry-settlement.md`
 >
 > **Slice plan**: 4 vertical slices. Slices 1 + 2 run in parallel; 3 blocks on both; 4 closes out the phase.
-> - `docs/phase-8-slice-1-settlement-foundation.md` — T&M + Fixed + void settlement end-to-end
+> - `docs/phase-8-slice-1-settlement-foundation.md` — T&M + Fixed + void settlement end-to-end ✅
 > - `docs/phase-8-slice-2-retainer-cycle-extraction.md` — refactor + `isMonthClosed` rename ✅
-> - `docs/phase-8-slice-3-period-close-reopen.md` — retainer within-budget close + write guard
-> - `docs/phase-8-slice-4-cycle-close-and-ui-polish.md` — rollover cycle close + drill-down + entry-list polish
+> - `docs/phase-8-slice-3-period-close-reopen.md` — retainer within-budget close + write guard ✅
+> - `docs/phase-8-slice-4-cycle-close-and-ui-polish.md` — rollover cycle close + drill-down + entry-list polish ✅
 
 ### Slice 1 — Settlement foundation + invoice transitions ✅ (2026-05-24)
 
@@ -1363,6 +1363,41 @@ Retainer within-budget close (the headline ❌ bug) stays for Slice 3 — Slice 
 - [x] 9 new tests for `entryStatus()`. All 99 retainer + settlement tests green (49 retainerBalance + 17 retainerCycle + 17 retainer-row-action + 7 projectOverview + 9 settleEntries = 99). Same 4 pre-existing failures (tiptap vendor / activity timestamp / task indicators) remain — untouched by this diff.
 - [x] `npx tsc --noEmit` clean. Lint clean on every touched file (2 pre-existing `any` errors at `convex/invoices.ts:1022, 1104` from commit `cd496708` April 19 are out of scope).
 
+#### Slice 1 review fixes (follow-up commit, 2026-05-24)
+
+Self-review of the initial Slice 1 commit surfaced several issues. All addressed:
+
+- [x] **C1 — Convex transition tests** (`convex/__tests__/invoiceTransitions.test.ts`, 7 tests) — installed `convex-test` + `@edge-runtime/vm`. Tests cover all 5 cases the PRD called for: T&M draft→invoiced, Fixed draft→invoiced (reason="fixed_included"), invoiced→void (unsettle + clear), invoiced→draft (unsettle + keep), and `timeEntries.update`/`remove` rejection on settled entries with the right error strings. Per-file `// @vitest-environment edge-runtime` keeps the rest of the suite on `jsdom`.
+- [x] **C2 — `markInvoicesPaid` / `undoMarkInvoicesPaid` routed through `applyStatusTransition`** — these previously did a direct `ctx.db.patch(id, {status, paidAt})`. Functionally safe today (the only transitions they fire are invoiced↔paid, neither of which changes settlement per the PRD table) but brittle: a future widening of `classifyMarkPaid` would silently bypass settle/unsettle. Now central.
+- [x] **C3 — projectOverview `draftMinutes/Amount` bucket added** — the PRD's strict 3-bucket model had no slot for billable entries on a draft invoice. My initial commit invented a "draft → invoiced bucket" rule, which inflated revenue figures. Fixed: now 4 buckets (open / draft / invoiced / settled), 1:1 with `entryStatus()`. New `billableOverviewBucket(e)` pure helper makes the routing testable without convex-test.
+- [x] **C4 — Backfill execution flagged as user action** — see "Action required" below.
+- [x] **H1 — projectOverview bucket math tested** — 6 new tests in `convex/lib/__tests__/settleEntries.test.ts` covering all four routing branches + a "settledReason wins over invoiceId" regression case + cross-mode invariants.
+- [x] **H2 — `fixedLineItemsAmount` rename flagged** — see callout below.
+- [x] **M1 — `backfillSettledFromInvoiceId` relocated to `convex/settleEntries.ts`** (top-level, not under `lib/`). Convention: `lib/` holds pure helpers; deployed mutations live at `convex/<domain>.ts`. PRD code sample placed it correctly; I had diverged. New run command: `npx convex run settleEntries:backfillSettledFromInvoiceId`.
+- [x] **M2 — `SettledReason` consolidated to one definition** — single `settledReasonValidator` (Convex `v.union`) exported from `convex/lib/settleEntries.ts`; `SettledReason` TS type derived via `Infer<typeof ...>`. The schema imports the validator instead of redefining it. Adding a future `"manual_close"` value means editing ONE place.
+- [x] **M3 — shared `EntrySettlementSnapshot` type in `convex/lib/types.ts`** — the four settlement fields previously lived in three duplicated definitions (schema, listProjectEntries `Row`, TimeEntryRow component type). Now defined once and referenced via type intersection.
+- [x] **M4 — `applyOverageRule` and `assertRetainerInvoiceable` reconciled via shared `isOverageDueForScope` predicate** — both `computeRetainerBalance` (invoice-side) and `applyOverageRule` (read-side) now call the SAME literal predicate exported from `retainerBalance.ts`. No more parallel implementations that can drift.
+- [x] **M5 + L1 + L2 — dead null-check removed, predicate forms standardized, docstring fixed** — `invoice.projectId ? ... : null` defensive check (schema requires the field) replaced with a comment explaining the only failure mode. Lock predicates standardized on `=== undefined` form across the 5 Slice 1 audit sites. `lib/retainer-row-action.ts` docstring no longer overloads "closed" colloquially.
+
+**⚠️ Action required — backfill not yet run**
+
+Existing finalized invoices in the dev dataset have entries with `invoiceId` set but no `settledAt`/`settledReason`. Until the backfill runs:
+- `projectOverview.settledMinutes` will read `0` for Fixed projects whose hours should appear as "covered".
+- `entryStatus()` will return `"draft"` instead of `"closed"` for those locked hours.
+- Reports + the upcoming Slice 4 drill-down will show wrong numbers on historical data.
+
+Run once against your dev deployment:
+
+```bash
+npx convex run settleEntries:backfillSettledFromInvoiceId
+```
+
+It's idempotent (skips already-settled entries) and logs the count of touched / skipped rows. Safe to re-run.
+
+**⚠️ Breaking-shape callout — `projectOverview.invoicedAmount` semantics changed**
+
+Before Slice 1 this field meant "sum of `lineType: 'fixed'` line items across this Fixed project's invoices" (line-item derived). After Slice 1 the SAME field name means "billable entry minutes × `billableRate` for entries with `settledReason: 'invoiced'`" (entry-derived). The old Fixed-specific value is preserved under the new name **`fixedLineItemsAmount`** — any client reading the old `invoicedAmount` for Fixed projects will now silently get a different number. Today's audit found zero consumers reading it, but anyone adding a new client-side reader should pick the correct field for their use case.
+
 ### Slice 2 — Retainer cycle extraction + `isMonthClosed` rename ✅ (2026-05-24)
 
 Behavior-preserving refactor that consolidates the cycle math and renames the overloaded `isMonthClosed` flag. No entries are settled by this slice — `closedAt`/`closedBy` ship as optional schema fields, populated by Slice 3/4. The 3-state pill (`In progress` / `Open` / `Closed`) renders the new lifecycle even though `Closed` won't fire on real data until Slice 3 lands a Close button.
@@ -1377,11 +1412,106 @@ Behavior-preserving refactor that consolidates the cycle math and renames the ov
 
 **Note**: pre-existing test failures in `lib/format-activity-timestamp.test.ts`, `convex/lib/__tests__/taskActivityIndicators.test.ts`, and `.reference/tiptap-docs/…` are unrelated to this slice (untouched files; failures predate this work).
 
-### TODOs deferred to later phases
-- **Settlement model + invoice transition wiring** (T&M / Fixed / void) — Slice 1 of this phase.
-- **Period close/reopen mutation + closed-period write guard** — Slice 3 of this phase.
-- **Rollover cycle close, period drill-down, time-entry list polish** — Slice 4 of this phase.
-- **`projectId` denormalization on `timeEntries`** — perf-driven follow-up; `closePeriod`/`reopenPeriod` use task fan-out (N+1 acknowledged). Trigger threshold: 10K+ entries/org or visible latency.
+### Slice 3 — Period close/reopen + backdated-entry guard ✅ (2026-05-24)
+
+Closes out the retainer-within-budget ❌ row of the parent PRD's Problem Statement (the headline bug — "entries appear open forever in stats and filters"). After this slice, an admin can review an ended within-budget month's report, confirm `Close period`, and the month's entries flip to `Closed` with `settledReason: "retainer_included"`. Reopen reverses just that month. Logging time into a closed period is rejected from all three write paths.
+
+Cycle-level close for rollover projects stays deferred to Slice 4 — this slice only handles single monthly periods. Rollover-monthly close is unblocked because rollover overage is cycle-level, not monthly.
+
+- [x] **`convex/retainerPeriods.ts → closePeriod`** — admin-only mutation, accepts the natural UI key `{ projectId, periodStart }`. Extracted `ensureRetainerPeriodInternal` upserts the row inside the handler so the UI can call close for any month visible in the Monthly Breakdown without pre-creating a `retainerPeriods` row (Revision Pass #8). Two-gate flow via pure `evaluateCloseGate`: (1) `computePeriodOverageContext` from Slice 2 rejects when `isOverageDue` (single source of truth with `assertRetainerInvoiceable`); (2) belt-and-suspenders `findConflictingInvoice` rejects when any non-void invoice's period overlaps the close range. Settles entries via task fan-out (acknowledged N+1, same pattern as `convex/lib/retainerCycle.ts:sumBillableMinutes`) with `shouldSettleEntry` as the per-entry inclusion rule. Patches the period row with `closedAt` + `closedBy`. Body extracted as `closePeriodInternal` so Slice 4's `closeRetainerCycle` will reuse it verbatim.
+- [x] **`convex/retainerPeriods.ts → reopenPeriod`** — same ensure-then-load flow. Reverses only entries whose `(settledReason, settledPeriodStart, settledPeriodEnd)` triple matches `("retainer_included", period.periodStart, period.periodEnd)` — the per-month-boundary criterion that makes per-month reopen unambiguous even after Slice 4 writes the same `closedAt` across N monthly periods of a rollover cycle. Clears `closedAt`/`closedBy` on the period row.
+- [x] **`convex/lib/settleGuards.ts` (new)** — `assertEntryDateOpen(ctx, project, date)` matches the parent PRD code sample verbatim: short-circuits on non-retainer, walks `retainerPeriods.by_projectId_periodStart` with an in-DB filter on `periodStart ≤ date ≤ periodEnd && closedAt !== undefined`, throws `ConvexError("Cannot log time in a closed retainer period. Reopen the period first.")` if any match. Exports a pure `pickClosedCoveringPeriod` for unit testing the date-coverage rule.
+- [x] **Guard wired into all three write paths** (Revision Pass #3a): `convex/timeEntries.ts:create` after the date is derived from `startedAt`; `convex/timer.ts:commitEntry` after its own date derivation (the path the original PRD missed); `convex/timeEntries.ts:update` when `date` OR `taskId` changes (target project resolved via the same-project invariant). The T&M / Fixed "covered by finalized invoice" arm is intentionally NOT built (Revision Pass #3b — invoice totals are frozen line-item snapshots, so backdated T&M/Fixed entries simply roll onto the next invoice).
+- [x] **`components/projects/close-period-modal.tsx` (new)** — confirm modal. Embeds `<MonthlyReportDocument>` reading `api.statements.getRetainerStatement` so the preview matches `/projects/[id]/reports/[period]` exactly (Revision Pass #2 — no persisted statement entity, no statement number, no `sentAt`). Calm reversibility line in the footer ("You can reopen this month anytime if you need to make changes.") per Principle #4. Confirm label: `Close period`. Content-aware skeleton mirrors the document's header / parties / usage layout per CLAUDE.md. Query is `"skip"`-gated when the modal is closed.
+- [x] **`components/projects/reopen-period-dialog.tsx` (new)** — admin-only AlertDialog. Body states the consequence ("The N hours of closed hours in this month become editable again. Download a fresh report if you change anything.") with `N` from `month.workedMinutes` so no extra query is needed.
+- [x] **`components/projects/monthly-breakdown-card.tsx`** — ActionCell rewrite per Principles #1 / #2:
+  - `open` + admin → primary `Close` opens the modal; `⋯` overflow includes `Download report` (the existing report link as the non-close path).
+  - `open` + member → primary `↓ Report` (read-only; close is admin-only).
+  - `closed` → primary `↓ Report` (or invoice link if a non-void invoice covers); `⋯` overflow includes `Reopen period` (admin-only) opening the AlertDialog.
+  - `open` + overage → unchanged (`Bill overage` Generate stays primary; `⋯` deferred to Slice 4).
+  - `in_progress` → unchanged standalone Preview; no `⋯` this slice (Slice 4 adds `View entries`).
+- [x] **Amount column renamed `Billed here`** with header tooltip ("Only overage billed through this tool. The retainer monthly fee is charged separately (currently via Stripe).") per Principle #6. `TooltipProvider` wraps the table body so per-row tooltips render in the right portal.
+- [x] **Pure-predicate tests (Slice 3 scope)** — 41 new tests across two files in `convex/lib/__tests__/`:
+  - `settleGuards.test.ts` (10) — `pickClosedCoveringPeriod` covers inclusive boundaries, open/closed mix, and the "open period covering same date must not short-circuit" case.
+  - `retainerPeriods.test.ts` (31) — `periodBoundsFromStart` (leap year, year < 2000, malformed), `evaluateCloseGate` (overage gate, draft-invoice gate, overage-wins precedence), `findConflictingInvoice` (exact match, partial overlap, multi-month rollover invoice, void ignored, no-period legacy invoice), `shouldSettleEntry` (range bounds, already-settled, has-invoiceId), `shouldReopenEntry` (boundary triple match, never reopens `invoiced` / `fixed_included`, Feb ≠ Mar boundary).
+  - All 819 existing tests stay green (same 4 pre-existing failures in untouched files remain).
+- [x] `npx tsc --noEmit` clean. Lint clean on every file touched by this slice.
+
+### Slice 4 — Cycle close + period drill-down + entry list polish ✅ (2026-05-24)
+
+Closes out Phase 8. The remaining surface area lands: rollover cycle close (thin wrapper over Slice 3's `closePeriodInternal`), the period drill-down — the only UI surface where `Closed` splits back into "Covered by retainer" vs "Invoiced overage" via `settledReason` — and the time-entry list polish that makes the new settlement model visible to anyone browsing entries.
+
+After this slice, every settlement path (T&M invoice, Fixed invoice, retainer within-budget close, rollover cycle close, void) has a working mutation, a visible UI, and a way to read it back out at any precision the user needs.
+
+- [x] **`convex/retainerPeriods.ts → closeRetainerCycle`** — admin-only mutation, accepts `{ projectId, cycleStart }`. Resolves the N monthly periods via `getCyclePeriods` (Slice 2). Two-gate flow via new `evaluateCycleCloseGate` (sibling to `evaluateCloseGate`, with cycle-scoped wording): `computeCycleOverageContext` rejects when cycle aggregate is over budget; `findConflictingInvoice` rejects when any non-void invoice overlaps the cycle range. Bulk-closes by reusing `closePeriodInternal` (extracted in Slice 3) for each monthly period — all N receive identical `closedAt` (the cycle-close fingerprint). Each entry retains its **monthly** boundary on `settledPeriodStart/End`, NOT the cycle boundary, so per-month `reopenPeriod` stays unambiguous after a cycle close. `closePeriodInternal` gained an optional shared-`now` parameter to enable this.
+- [x] **`convex/lib/entryStatus.ts` (new)** — extracted `entryStatus()` from `convex/lib/settleEntries.ts` into a pure file so client components can import it without dragging `internalMutation` (server runtime) into the browser bundle. `settleEntries.ts` re-exports for any existing server-side callers.
+- [x] **`lib/retainer-row-action.ts → decideRetainerRowCloseAction`** — pure helper for the close axis of the Monthly Breakdown row (parallel to the existing billing axis). Returns `"close-month"` | `"close-cycle"` | `null` based on rollover mode, cycle-position, overage state, admin role, and the row's own `isClosed`. The cycle-end row of a within-budget rollover cycle gets the cycle variant; monthly close is allowed mid-cycle on rollover (Slice 3 behavior preserved).
+- [x] **`components/projects/close-cycle-modal.tsx` (new)** — sibling of `ClosePeriodModal`. Embeds the live `MonthlyReportDocument` for the cycle-end month (rollover statements already aggregate cycle-to-date totals). Plural reversibility line ("reopen any month in this cycle anytime") because per-month reopen still works after a cycle close. Same Revision Pass #2 contract — no `send`/`delivery`/persisted-statement language.
+- [x] **`components/projects/period-detail-sheet.tsx` (new)** — the drill-down (Principle #5). Right-side `Sheet`, opens on row click OR `⋯ → View entries`. Reads `api.timeEntries.listProjectEntries` constrained to the period's date range — no new query, no new schema, just a client-side `groupBySettledReason` pure aggregator. Renders the three buckets (`Covered by retainer`, `Invoiced overage`, `Covered by fixed price`) only when non-empty. Invoice-link chips de-duplicated, multiple-invoice periods supported. The drill-down also surfaces an `Open / draft` section when a reopened-period mid-edit has unsettled entries.
+- [x] **`components/projects/monthly-breakdown-card.tsx` — close axis + drill-down wired in:**
+  - New `closeActionByMonthKey` derived map (parallel to billing-axis `actionByMonthKey`) consumed by ActionCell.
+  - Row label is now a `<button>` opening the drill-down sheet — clicking anywhere in the row's content area answers "what was logged here?" before any action.
+  - ActionCell dispatch: when `closeAction === "close-cycle"`, primary button reads `Close cycle` and opens `CloseCycleModal`; when `"close-month"`, opens `ClosePeriodModal` (Slice 3 behavior); otherwise existing primary (Generate / invoice link / Report) stays.
+  - `⋯` overflow now includes `View entries` on **every** row state (in_progress, open + overage, closed-with-invoice, …) — completing the matrix the parent PRD spec's row table calls out. Slice 3 left this deferred; Slice 4 wires it.
+- [x] **`components/billing-status-badge.tsx` — vocabulary aligned with `entryStatus()`:** state now `"open" | "draft" | "closed" | "non_billable"` (was `"non_billable" | "uninvoiced"`). Locked states (Draft + Closed) carry a `LockIcon` marker; Closed uses the green tone. Old `"uninvoiced"` string maps to `"open"` for backwards compat so any straggler caller renders correctly.
+- [x] **`components/projects/project-time-table.tsx` polish:** `BillingStatusCell` simplified to a single chip derived from `entryStatus()` — invoice status no longer leaks onto the row (it lives on the day-group header and in the `Open invoice INV-…` overflow item). Locked rows render at ~72% opacity per spec. New `RowActionsMenu` branches for locked retainer-closed rows: `View report` (links to `/projects/[id]/reports/[period]`) + admin `Reopen period` (reuses `ReopenPeriodDialog`). Hover tooltip on locked badge formatted by the shared `formatLockedTooltip`.
+- [x] **`lib/entry-tooltip.ts` (new) → `formatLockedTooltip`:** "Closed {settledAt} · included in retainer | covered by fixed price | invoiced · {settledPeriodStart}–{settledPeriodEnd}". Draft rows get "On draft invoice INV-038". Wording switches on `settledReason` per parent PRD spec.
+- [x] **`lib/group-reference.ts` (new) → `deriveGroupReference`:** day-group header consolidation. When every billable entry in a day-group shares the same retainer period boundary → header subtitle reads `Closed · Mar 1–31`. When all share the same invoice → `Closed · INV-038` (or `Draft · INV-038` when any entry is still draft). Mixed groups → no consolidated reference, fall back to per-row badges. `ProjectTimeGrouped.GroupHeader` renders the chip with a `LockIcon`.
+- [x] **`components/tasks/time-entries-table.tsx` polish:** task-detail Time tab inherits the same locked-row treatment — 72% opacity, `LockIcon` (replacing the billable dot on locked rows), `formatLockedTooltip` on hover. `canEdit` now also returns false on locked rows so the dropdown menu's Edit/Delete items are hidden.
+- [x] **`components/projects/project-time-stats.tsx` — top summary gains `Open` figure** (parent PRD § UI Changes → Top summary). Retainer projects show `Total / Billable / Non-billable / Open`; T&M keeps `Open Hours / Open Amount` (the money-shaped variant for billers). Derivation calls `entryStatus()` so the number matches what the filter dropdown would return when set to `open`.
+- [x] **Invoices tab lexicon audit (Principle #3) — no drift.** Invoice-side surfaces use `Draft / Invoiced / Paid / Past due / Void` (verified in `invoice-status-badge.tsx` and `invoices-metric-cards.tsx`); time-side surfaces use `Open / Closed`. The lone amber `Uninvoiced` pill on the retainer summary card is the cycle-level "you have revenue to bill" signal, not a row state — it's accurate and doesn't collide with the row lexicon.
+- [x] **Project Finances card unchanged** (explicit no-op per spec) — the existing donut and Billable/Non-billable rows stay; the bucket split lives in the drill-down and reports, not the overview.
+- [x] **Tests — 50 new (`107` Phase 8 tests total, 41 from Slice 3 + 50 from Slice 4 + 16 from Slices 1/2):**
+  - `lib/retainer-row-action.test.ts` (Slice 4 extension) — `decideRetainerRowCloseAction` covering all guards (member, already-closed, in-progress, invoice-wins), monthly variant (within-budget / over-budget / overageRate=0), rollover monthly mid-cycle, rollover cycle-end with all four gate outcomes.
+  - `convex/lib/__tests__/retainerPeriods.test.ts` (Slice 4 extension) — `evaluateCycleCloseGate` (4 cases: overage rejects with cycle wording, invoice rejects with cycle wording, allows when both pass, overage wins precedence).
+  - `components/projects/period-detail-sheet.test.ts` — `groupBySettledReason` covering empty input, each single-bucket split (retainer / invoiced / fixed-included / draft / open / non-billable), the mixed-period headline case (20h covered + 5h overage), invoice de-duplication, multiple-invoice support, totals contract.
+  - `lib/entry-tooltip.test.ts` — three settled variants + missing-boundary fallback + draft invoice wording + null case.
+  - `lib/group-reference.test.ts` — period reference (same boundary), Feb-vs-Mar straddle, invoice ref (Closed vs Draft when any entry draft), different-invoice case, non-billable-only, mixed open + closed.
+  - `components/billing-status-badge.test.tsx` — labels for all four states + legacy `uninvoiced` mapping + lock-icon presence on Draft/Closed only.
+  - `components/projects/project-time-stats.test.tsx` — Open counts only `entryStatus() === "open"` entries, excludes Draft/Closed, T&M variant shows `Open Hours` + `Open Amount`.
+- [x] `npx tsc --noEmit` clean. Lint clean on every file touched by this slice (warnings in untouched files unchanged).
+
+**Note on test approach:** the spec's "Convex test:" entries for `closeRetainerCycle` integration paths are met by extracting pure predicates and testing those (same pattern Slices 1–3 used). The repo has no `convex-test` framework; the full DB-roundtrip integration test would require adding `@convex-dev/test` (out of scope for this slice).
+
+---
+
+## Phase 8 — ✅ COMPLETE (all four slices landed)
+
+Headline bug fixed (parent PRD § Problem Statement, retainer within-budget ❌ row): time entries on within-budget retainer months no longer appear "open forever" in stats and filters. The whole settlement matrix is wired:
+
+| Path | Settles entries with | UI to trigger | UI to read |
+|---|---|---|---|
+| T&M invoice | `invoiced` | Generate (existing) | Day-group header `Closed · INV-…`, drill-down |
+| Fixed invoice | `fixed_included` | Generate (existing) | Day-group header `Closed · INV-…`, drill-down |
+| Retainer within-budget close | `retainer_included` | Slice 3 `Close period` | Drill-down `Covered by retainer` section |
+| Rollover cycle close | `retainer_included` × N months | Slice 4 `Close cycle` | Drill-down on any month in cycle |
+| Retainer overage invoice | `invoiced` | Existing Generate | Drill-down `Invoiced overage` section |
+| Void | clears `settledAt` + `invoiceId` | Existing void flow | Entry returns to `Open` |
+
+The lock guard covers all three write paths (`timeEntries.create`, `timer.commitEntry`, `timeEntries.update`) and is scoped to closed retainer periods only — T&M / Fixed backdated entries continue to roll onto the next invoice (Revision Pass #3b decision preserved).
+
+### TODOs deferred — mirrored from parent PRD § TODOs Deferred to Later Phases
+
+| Item | Deferred to |
+|---|---|
+| `projectId` denormalization on `timeEntries` + new indexes | A perf-driven follow-up phase, no PRD yet. Trigger: 10K+ entries/org or visible latency in `closePeriod` / `closeRetainerCycle` / drill-down. |
+| Auto-close on project completion (`settledReason: "manual_close"`) | Requires a project status / completion field that does not exist yet — a separate project lifecycle phase. |
+| Period-scoped audit event log | `docs/billing-periods-monthly-close-prd.md` |
+| Unified statement + invoice document editor | `docs/billing-periods-monthly-close-prd.md` |
+| Document line item edits decoupled from time entries | `docs/billing-periods-monthly-close-prd.md` |
+| `billingPeriods` ledger table replacing `invoiceId` as canonical lock | `docs/billing-periods-monthly-close-prd.md`. Triggers: first compliance audit request, repeated statement editing pain, or 3rd parallel duplication bug. |
+| `reopenPeriod` requiring a written reason for audit trail | `docs/billing-periods-monthly-close-prd.md` |
+| Convex cron auto-suggesting periods ready to close | Out of scope — Monthly Close queue lives in the big PRD |
+| Convex-test integration tests for `closePeriod` / `closeRetainerCycle` / write-guard wiring | Would require adding `@convex-dev/test`. The pure-predicate tests cover the gating + per-entry rules; the wrappers themselves are thin compositions. |
+| Period locking when reports are downloaded or sent | Today reports are always live truth; back-dated edits re-render on next view (D7). |
+| Cross-client global "monthly reports queue" view | `/reports` page was removed; per-project hunting is the MVP workflow. Re-introduce when the workflow demonstrably hurts. |
+| Pro-rated included budget for partial months | Partial-month projects currently get the full bucket (D12). |
+| Stripe webhook for payment-date display + payment reconciliation | Disclaimer text only today. |
+| `/reports` analytics view (revenue mix, margin, utilization) | Re-introduce with a defined scope when real cross-project demand emerges. |
+| Credit notes | Handled today by void + re-create. No `creditNotes` entity in MVP. |
+| Statement / report sent-tracking entity (`sentReports` table) | Reports are pure on-demand renders today (D4). |
+
+### TODOs deferred to later phases (legacy section — superseded by the Phase 8 ✅ COMPLETE table above; entries below predate Phase 8 and remain out of scope)
 - **Project-completion auto-close** (`settledReason: "manual_close"`) — requires a project status field that doesn't exist yet. Separate project-lifecycle phase.
 - **`billingPeriods` ledger table replacing `invoiceId` as canonical lock** — escalation path documented in `docs/billing-periods-monthly-close-prd.md`. Triggers: first compliance audit request, repeated statement editing pain, or 3rd parallel duplication bug.
 - **Period-scoped audit event log + reopen with reason** — `billing-periods-monthly-close-prd.md`.

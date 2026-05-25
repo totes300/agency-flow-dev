@@ -1,4 +1,22 @@
 import type { Doc } from "../_generated/dataModel";
+import type { SettledReason } from "./settleEntries";
+
+/**
+ * Phase 8 — the four settlement fields that ride along with a time entry
+ * from the listProjectEntries Row, through the project Time-tab table,
+ * into the entry-edit modal. Defined once here so adding a field (or
+ * tightening a type) propagates without three coordinated edits.
+ *
+ * `undefined` not `null` — matches Convex's `v.optional` storage shape so
+ * a row with no settlement reads `{ settledAt: undefined, ... }` without
+ * a per-field nullish coalesce.
+ */
+export type EntrySettlementSnapshot = {
+  settledAt: number | undefined;
+  settledReason: SettledReason | undefined;
+  settledPeriodStart: string | undefined;
+  settledPeriodEnd: string | undefined;
+};
 
 /**
  * A `projects` document with denormalized client fields resolved at query

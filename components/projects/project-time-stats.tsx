@@ -5,9 +5,24 @@ import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { formatCurrencyPrecise, formatHoursCompact } from "@/lib/format"
 import type { TimeEntryRow } from "@/components/projects/project-time-table"
+import { entryStatus } from "@/convex/lib/entryStatus"
 
 type Stat = { label: string; value: string }
 
+/**
+ * Phase 8 Slice 4 — top summary on the project Time tab.
+ *
+ * Per parent PRD § UI Changes → Top summary: the existing
+ * `Total / Billable / Non-billable` trio gains exactly ONE additional
+ * figure — `Open` — counting hours where `entryStatus() === "open"`.
+ * No further micro-breakdown belongs here; the open/invoiced/settled
+ * split lives in the period drill-down (Slice 4 PeriodDetailSheet) and
+ * in reports.
+ *
+ * T&M projects keep their billing-specific `Unbilled Hours / Unbilled
+ * Amount` stats (those reflect "ready to invoice" revenue, which is
+ * the same `Open` bucket but money-shaped for T&M billers).
+ */
 function computeStats(
   entries: TimeEntryRow[],
   billingType: string,
@@ -15,16 +30,17 @@ function computeStats(
 ): Stat[] {
   let total = 0
   let billable = 0
-  let unbilledMinutes = 0
+  let openMinutes = 0
   let unbilledAmount = 0
   for (const e of entries) {
     total += e.durationMinutes
     if (e.isBillable) billable += e.durationMinutes
-    // Phase 8 — "unbilled" is open billable: not on an invoice AND not
-    // settled by a period close. A retainer-included entry is covered by
-    // the monthly fee and should not appear in the unbilled stat.
-    if (e.isBillable && !e.invoiceId && !e.settledAt) {
-      unbilledMinutes += e.durationMinutes
+    // `Open` is the single source of truth used everywhere — same
+    // derivation `entryStatus()` and `listProjectEntries.billingStatus`
+    // use, so the stat number always matches what the filter would
+    // return.
+    if (entryStatus(e) === "open") {
+      openMinutes += e.durationMinutes
       unbilledAmount += (e.durationMinutes / 60) * e.billableRate
     }
   }
@@ -33,8 +49,8 @@ function computeStats(
     return [
       { label: "Total Hours", value: formatHoursCompact(total) },
       { label: "Billable Hours", value: formatHoursCompact(billable) },
-      { label: "Unbilled Hours", value: formatHoursCompact(unbilledMinutes) },
-      { label: "Unbilled Amount", value: formatCurrencyPrecise(unbilledAmount, currency) },
+      { label: "Open Hours", value: formatHoursCompact(openMinutes) },
+      { label: "Open Amount", value: formatCurrencyPrecise(unbilledAmount, currency) },
     ]
   }
 
@@ -42,6 +58,7 @@ function computeStats(
     { label: "Total Hours", value: formatHoursCompact(total) },
     { label: "Billable Hours", value: formatHoursCompact(billable) },
     { label: "Non-billable", value: formatHoursCompact(total - billable) },
+    { label: "Open", value: formatHoursCompact(openMinutes) },
   ]
 }
 

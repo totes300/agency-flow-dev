@@ -7,6 +7,7 @@ import { computeElapsedMs, totalElapsedMs, msToMinutes, getDateInTimezone, ORG_T
 import { roundMinutes } from "./lib/rounding";
 import { getOrgSettings, resolveRateSnapshot } from "./lib/orgHelpers";
 import { assertValidDateString } from "./lib/dateValidation";
+import { assertEntryDateOpen } from "./lib/settleGuards";
 
 const MAX_TIMER_MS = 16 * 60 * 60 * 1000; // 16 hours
 const STALE_THRESHOLD_MS = 8 * 60 * 60 * 1000; // 8 hours
@@ -309,6 +310,12 @@ export const commitEntry = mutation({
         `date (${args.date}) does not match startedAt's day (${date}).`,
       );
     }
+
+    // Phase 8 — closed-retainer-period guard (Slice 3 / Revision Pass #3a).
+    // Timer commits land here, NOT through `timeEntries.create`, so the
+    // guard has to fire on this path too. No-op for non-retainer projects.
+    await assertEntryDateOpen(ctx, project, date);
+
     const entryId = await ctx.db.insert("timeEntries", {
       orgId,
       taskId: args.taskId,

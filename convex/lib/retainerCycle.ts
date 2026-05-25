@@ -27,6 +27,7 @@
 
 import type { GenericMutationCtx, GenericQueryCtx } from "convex/server";
 import type { DataModel, Doc } from "../_generated/dataModel";
+import { isOverageDueForScope } from "./retainerBalance";
 
 // ─── Cycle boundary (pure) ──────────────────────────────────────────────────
 
@@ -215,8 +216,11 @@ function round2(n: number): number {
 }
 
 /**
- * Pure overage rule. Extracted so the period and cycle helpers — and any
- * future caller — apply identical logic.
+ * Pure overage rule. Maps the read-side `mode` enum onto the same shared
+ * predicate (`isOverageDueForScope`) that the invoice-side
+ * `computeRetainerBalance` consumes. Centralising the rule means the
+ * read path and the write path cannot disagree about whether a given
+ * scope owes overage.
  *
  * `mode` distinguishes the financial unit:
  *   - "monthly-isolated": one calendar month is its own billing unit
@@ -232,10 +236,16 @@ function applyOverageRule(input: {
   overageRate: number;
 }): OverageContext {
   const endBalance = input.budgetMinutes - input.workedMinutes;
-  const isNegative = endBalance < 0;
 
-  const isOverageDue =
-    input.mode === "rollover-monthly" ? false : isNegative;
+  const isOverageDue = isOverageDueForScope({
+    endBalance,
+    rolloverEnabled: input.mode !== "monthly-isolated",
+    // For rollover-monthly we're explicitly NOT the closing scope (the
+    // cycle helper handles that); for rollover-cycle we ARE the closing
+    // scope (we're looking at the cycle aggregate). For monthly-isolated
+    // the flag is ignored by the predicate.
+    isClosingScope: input.mode === "rollover-cycle",
+  });
 
   const overageMinutes = isOverageDue ? Math.abs(endBalance) : 0;
   const overageAmount = isOverageDue

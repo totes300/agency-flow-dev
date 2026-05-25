@@ -1,5 +1,6 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
+import { settledReasonValidator } from "./lib/settleEntries";
 
 export default defineSchema({
   // ─── Users (synced from Clerk) ─────────────────────────────────────────────
@@ -372,13 +373,7 @@ export default defineSchema({
     // (period-anchored settlement, Slice 3). See parent PRD § Derived
     // Status for the row-level `entryStatus()` derivation.
     settledAt: v.optional(v.number()),         // event timestamp (ms)
-    settledReason: v.optional(
-      v.union(
-        v.literal("invoiced"),                  // billed hourly — T&M direct OR retainer overage line
-        v.literal("retainer_included"),         // covered by retainer monthly fee (within-budget close)
-        v.literal("fixed_included"),            // covered by fixed project price (Fixed invoice close)
-      ),
-    ),
+    settledReason: v.optional(settledReasonValidator),
     settledPeriodStart: v.optional(v.string()), // YYYY-MM-DD
     settledPeriodEnd: v.optional(v.string()),   // YYYY-MM-DD
     // No new index — settle helpers walk via `invoiceLineItems.by_invoiceId`.

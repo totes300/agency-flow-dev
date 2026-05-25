@@ -5,6 +5,8 @@ import { useRef, useState } from "react"
 import { useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
+import type { EntrySettlementSnapshot } from "@/convex/lib/types"
+import { entryStatus } from "@/convex/lib/entryStatus"
 import {
   Table,
   TableHeader,
@@ -32,10 +34,17 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { CategoryBadge } from "@/components/category-badge"
 import { UserAvatar } from "@/components/user-avatar"
-import { InvoiceStatusBadge } from "@/components/invoices/invoice-status-badge"
 import { BillingStatusBadge } from "@/components/billing-status-badge"
+import { ReopenPeriodDialog } from "@/components/projects/reopen-period-dialog"
+import { formatLockedTooltip } from "@/lib/entry-tooltip"
 import {
   formatCurrency,
   formatDateToUS,
@@ -49,12 +58,17 @@ import {
   ArrowUpRightIcon,
   BanIcon,
   DollarSignIcon,
+  DownloadIcon,
   MoreHorizontalIcon,
   PencilIcon,
+  RotateCcwIcon,
   Trash2Icon,
 } from "lucide-react"
 
-export type TimeEntryRow = {
+// Settlement fields come from the shared `EntrySettlementSnapshot` so the
+// schema, the Convex Row type, and this component-side row stay in
+// lock-step. Adding a settlement field means editing `lib/types.ts` only.
+export type TimeEntryRow = EntrySettlementSnapshot & {
   _id: Id<"timeEntries">
   taskId: Id<"tasks">
   taskTitle: string
@@ -78,16 +92,6 @@ export type TimeEntryRow = {
   invoiceNumber: number | undefined
   invoiceStatus: "draft" | "invoiced" | "paid" | "void" | undefined
   invoiceDueDate: string | undefined
-  // Phase 8 — settlement snapshot. Used by selection-toolbar / stats /
-  // edit-modal lock gating, and by Slice 4's tooltips / drill-down.
-  settledAt: number | undefined
-  settledReason:
-    | "invoiced"
-    | "retainer_included"
-    | "fixed_included"
-    | undefined
-  settledPeriodStart: string | undefined
-  settledPeriodEnd: string | undefined
 }
 
 /** T&M billable + uninvoiced entries are the only rows that can be selected. */
@@ -114,6 +118,8 @@ export type ProjectTimeTableProps = {
   currency: string
   timezone: string
   isAdmin: boolean
+  /** Used by the reopen-period dialog on Closed retainer rows. */
+  projectId: Id<"projects">
   currentUserId: Id<"users"> | undefined
   onEdit: (entryId: Id<"timeEntries">) => void
 }
@@ -126,8 +132,13 @@ export function ProjectTimeTable({
   selectable,
   showAmounts,
   currency,
-  timezone,
+  // `timezone` is part of the shared prop bag for the table's callers
+  // but Slice 4 dropped the only consumer (the InvoiceStatusBadge that
+  // computed Overdue against today). Kept on the props type so the
+  // grouped + flat call sites can spread `sharedTableProps` without
+  // having to fork.
   isAdmin,
+  projectId,
   currentUserId,
   onEdit,
 }: ProjectTimeTableProps) {
@@ -174,8 +185,9 @@ export function ProjectTimeTable({
             selectable={selectable}
             showAmounts={showAmounts}
             currency={currency}
-            timezone={timezone}
             canEdit={isAdmin || row.userId === currentUserId}
+            isAdmin={isAdmin}
+            projectId={projectId}
             onEdit={onEdit}
           />
         ))}
@@ -191,8 +203,9 @@ function TimeEntryTableRow({
   selectable,
   showAmounts,
   currency,
-  timezone,
   canEdit,
+  isAdmin,
+  projectId,
   onEdit,
 }: {
   row: TimeEntryRow
@@ -201,18 +214,32 @@ function TimeEntryTableRow({
   selectable: boolean
   showAmounts: boolean
   currency: string
-  timezone: string
   canEdit: boolean
+  isAdmin: boolean
+  projectId: Id<"projects">
   onEdit: (entryId: Id<"timeEntries">) => void
 }) {
   const rowSelectable = isSelectable(row, selectable)
   const amount = (row.durationMinutes / 60) * row.billableRate
-  const isInvoiced = !!row.invoiceId
+  // Phase 8 Slice 4 — row state via `entryStatus()` (single source of
+  // truth, same derivation `listProjectEntries` filters on). Locked
+  // rows (Draft + Closed) get a unified visual treatment — 72% opacity
+  // + 🔒 marker on the badge — so the eye can skip them when scanning
+  // for actionable work.
+  const status = entryStatus(row)
+  const isLocked = status === "draft" || status === "closed"
 
   return (
     <TableRow
-      className={cn(rowSelectable && "cursor-pointer")}
+      className={cn(
+        rowSelectable && "cursor-pointer",
+        // 72% opacity per parent PRD § UI Changes → Time entry list.
+        // The dropdown menu portal stays at full opacity so the action
+        // menu remains readable when the user reaches for it.
+        isLocked && "opacity-[0.72]",
+      )}
       data-selectable={rowSelectable || undefined}
+      data-locked={isLocked || undefined}
       onClick={() => {
         if (rowSelectable) onToggle(row)
       }}
@@ -256,7 +283,7 @@ function TimeEntryTableRow({
         )}
       </TableCell>
       <TableCell onClick={(e) => e.stopPropagation()}>
-        <BillingStatusCell row={row} timezone={timezone} />
+        <BillingStatusCell row={row} status={status} />
       </TableCell>
       <TableCell className="text-right tabular-nums">
         {formatMinutes(row.durationMinutes)}
@@ -275,7 +302,9 @@ function TimeEntryTableRow({
         {canEdit && (
           <RowActionsMenu
             row={row}
-            isInvoiced={isInvoiced}
+            status={status}
+            isAdmin={isAdmin}
+            projectId={projectId}
             onEdit={() => onEdit(row._id)}
           />
         )}
@@ -286,17 +315,22 @@ function TimeEntryTableRow({
 
 function RowActionsMenu({
   row,
-  isInvoiced,
+  status,
+  isAdmin,
+  projectId,
   onEdit,
 }: {
   row: TimeEntryRow
-  isInvoiced: boolean
+  status: "open" | "draft" | "closed" | "non_billable"
+  isAdmin: boolean
+  projectId: Id<"projects">
   onEdit: () => void
 }) {
   const updateEntry = useMutation(api.timeEntries.update)
   const removeEntry = useMutation(api.timeEntries.remove)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
+  const [reopenDialogOpen, setReopenDialogOpen] = useState(false)
   const toggleInFlightRef = useRef(false)
 
   async function runToggle(target: boolean): Promise<boolean> {
@@ -310,7 +344,9 @@ function RowActionsMenu({
   }
 
   async function handleToggleBillable() {
-    if (isInvoiced || toggleInFlightRef.current) return
+    if (status === "draft" || status === "closed" || toggleInFlightRef.current) {
+      return
+    }
     toggleInFlightRef.current = true
     const target = !row.isBillable
     const current = row.isBillable
@@ -341,34 +377,87 @@ function RowActionsMenu({
     }
   }
 
-  // Invoiced rows are locked: rather than rendering a menu of greyed-out
-  // items that require a tooltip to explain why, we show a single useful
-  // action — "Open invoice INV-…" — which itself communicates the lock.
-  // Uninvoiced rows get the full edit/toggle/delete menu.
-  if (isInvoiced && row.invoicePrefix && row.invoiceNumber != null) {
-    const invoiceNumber = formatInvoiceNumber(row.invoicePrefix, row.invoiceNumber)
+  // Locked rows (Draft + Closed) get a slim "view-only" menu per parent
+  // PRD § UI Changes → Time entry list. Edit/Delete would error at the
+  // server's settlement guard anyway, so we hide them and surface the
+  // useful action instead.
+  //
+  // Three locked-row shapes:
+  //   - Draft (on a draft invoice)           → `Open invoice INV-…`
+  //   - Closed by an invoice (any reason)    → `Open invoice INV-…`
+  //   - Closed by retainer-period close      → `View report` + admin Reopen
+  if (status === "draft" || status === "closed") {
+    const hasInvoiceLink =
+      row.invoicePrefix && row.invoiceNumber != null && row.invoiceId
+    const invoiceNumber =
+      hasInvoiceLink && row.invoicePrefix && row.invoiceNumber != null
+        ? formatInvoiceNumber(row.invoicePrefix, row.invoiceNumber)
+        : null
+    // Retainer period close populates `settledPeriodStart/End` AND the
+    // period boundary is monthly (YYYY-MM-01 .. last-of-month). Used both
+    // to build the View report link and to wire the Reopen dialog.
+    const reopenable =
+      status === "closed" &&
+      row.settledReason === "retainer_included" &&
+      row.settledPeriodStart !== undefined &&
+      row.settledPeriodEnd !== undefined
+    const reportPeriodToken = row.settledPeriodStart?.slice(0, 7)
+
     return (
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            aria-label="Row actions"
-            className="size-7 text-muted-foreground"
-          >
-            <MoreHorizontalIcon aria-hidden className="size-4" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-52">
-          <DropdownMenuItem asChild>
-            <Link href={`/invoices/${invoiceNumber}`}>
-              <ArrowUpRightIcon aria-hidden className="size-3.5" />
-              Open invoice {invoiceNumber}
-            </Link>
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+      <>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label="Row actions"
+              className="size-7 text-muted-foreground"
+            >
+              <MoreHorizontalIcon aria-hidden className="size-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-56">
+            {invoiceNumber && (
+              <DropdownMenuItem asChild>
+                <Link href={`/invoices/${invoiceNumber}`}>
+                  <ArrowUpRightIcon aria-hidden className="size-3.5" />
+                  Open invoice {invoiceNumber}
+                </Link>
+              </DropdownMenuItem>
+            )}
+            {reopenable && reportPeriodToken && (
+              <DropdownMenuItem asChild>
+                <Link
+                  href={`/projects/${projectId}/reports/${reportPeriodToken}`}
+                  target="_blank"
+                  rel="noopener"
+                >
+                  <DownloadIcon aria-hidden className="size-3.5" />
+                  View report
+                </Link>
+              </DropdownMenuItem>
+            )}
+            {reopenable && isAdmin && (
+              <DropdownMenuItem onSelect={() => setReopenDialogOpen(true)}>
+                <RotateCcwIcon aria-hidden className="size-3.5" />
+                Reopen period
+              </DropdownMenuItem>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
+
+        {reopenable && row.settledPeriodStart && (
+          <ReopenPeriodDialog
+            open={reopenDialogOpen}
+            onOpenChange={setReopenDialogOpen}
+            projectId={projectId}
+            periodStart={row.settledPeriodStart}
+            periodLabel={formatPeriodMonth(row.settledPeriodStart)}
+            workedMinutes={row.durationMinutes}
+          />
+        )}
+      </>
     )
   }
 
@@ -445,26 +534,56 @@ function RowActionsMenu({
 }
 
 /**
- * Status cell shows only the state chip. For invoiced rows the jump-to-invoice
- * lives in the row action menu as "Open invoice INV-…", keeping this cell
- * narrow and scannable.
+ * Status cell — one chip per row, derived from `entryStatus()`. The
+ * financial reason (retainer-included vs invoiced vs fixed-included)
+ * lives in the period drill-down (Slice 4), never on the row. The
+ * invoice's own state (Draft → Invoiced → Paid → Void) lives on the
+ * Invoices tab and on day-group headers; for closed-by-invoice rows the
+ * invoice number itself surfaces in the `⋯` menu's `Open invoice INV-…`
+ * link. Wraps the chip in a tooltip when the row is locked so admins
+ * can see WHEN/HOW it was settled without leaving the table.
  */
 function BillingStatusCell({
   row,
-  timezone,
+  status,
 }: {
   row: TimeEntryRow
-  timezone: string
+  status: "open" | "draft" | "closed" | "non_billable"
 }) {
-  if (!row.isBillable) return <BillingStatusBadge state="non_billable" />
-  if (row.invoiceId && row.invoiceStatus) {
-    return (
-      <InvoiceStatusBadge
-        status={row.invoiceStatus}
-        dueDate={row.invoiceDueDate}
-        timezone={timezone}
-      />
-    )
-  }
-  return <BillingStatusBadge state="uninvoiced" />
+  const tooltip =
+    status === "draft" || status === "closed"
+      ? formatLockedTooltip({
+          settledAt: row.settledAt,
+          settledReason: row.settledReason,
+          settledPeriodStart: row.settledPeriodStart,
+          settledPeriodEnd: row.settledPeriodEnd,
+          invoicePrefix: row.invoicePrefix,
+          invoiceNumber: row.invoiceNumber,
+        })
+      : null
+
+  const badge = <BillingStatusBadge state={status} />
+  if (!tooltip) return badge
+  return (
+    <TooltipProvider delayDuration={150}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="cursor-default">{badge}</span>
+        </TooltipTrigger>
+        <TooltipContent side="top">{tooltip}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  )
+}
+
+/**
+ * YYYY-MM-01 → "March 2026". Used by the reopen dialog on locked rows so
+ * the consequence message names the period in human terms.
+ */
+function formatPeriodMonth(periodStart: string): string {
+  const [y, m] = periodStart.split("-").map(Number)
+  return new Date(y, (m ?? 1) - 1, 1).toLocaleDateString("en-US", {
+    month: "long",
+    year: "numeric",
+  })
 }

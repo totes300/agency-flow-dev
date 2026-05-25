@@ -2,14 +2,13 @@
  * Pure copy/layout derivation for `<InvoiceBanner>`. Lives outside the
  * component so the wording can be unit-tested without React or Convex.
  *
- * Returns the rendered strings + tone hints for the 3 banner kinds. The
+ * Returns the rendered strings + tone hints for the 4 banner kinds. The
  * component itself only handles layout, icon, modal, and click handling.
  *
- * Rollover retainer cycles intentionally have no banner — the cycle's
- * billing action lives on the Monthly Breakdown card's cycle-end row per
- * PRD § User Story 4 ("single primary action per row"). The previous
- * `retainer-cycle-closed` branch existed but never fired (its preconditions
- * were mutually exclusive); it was removed during the Issue #01 follow-up.
+ * The retainer banner has TWO kinds — `retainer-monthly` (non-rollover, per-
+ * month overage) and `retainer-cycle` (rollover, per-cycle overage). They
+ * share the visual treatment but use different vocabulary so the title
+ * matches the unit of billing (a month vs. a cycle).
  */
 
 import { formatCurrencyPrecise, formatLastInvoiced, formatMinutes } from "@/lib/format"
@@ -37,6 +36,24 @@ export type InvoiceBannerState =
       readyMonthsLabel: string
       overageDue: number
       lastInvoicedAt: number | null
+      targetYear: number
+      targetMonth: number
+    }
+  | {
+      kind: "retainer-cycle"
+      readyCycleCount: number
+      // Cycle-end month labels of every ready cycle, joined by " & " or ", ".
+      // Example: "Apr 2026" or "Apr 2026 & Jul 2026". The cycle-end month
+      // identifies the cycle; the user reads context from the project type
+      // (subtitle says "3-month rollover").
+      readyCyclesLabel: string
+      overageDue: number
+      lastInvoicedAt: number | null
+      // Target = cycle-end month (the row `createInvoice` keys on for cycle
+      // invoices). Same target shape as `retainer-monthly` so the click
+      // handler's `generate({ retainerYear, retainerMonth })` works
+      // identically — the backend resolves "this month" vs "this cycle"
+      // from the project's rolloverEnabled.
       targetYear: number
       targetMonth: number
     }
@@ -86,17 +103,60 @@ export function deriveInvoiceBannerView(
       }
 
     case "retainer-monthly": {
-      const hasOverage = state.overageDue > 0
+      // Invariant: the banner only fires when there are uninvoiced over-budget
+      // months — `metrics.uninvoicedMonths` is filtered to `endBalance < 0`
+      // (`convex/invoices.ts:getClosedUninvoicedMonths`) and the caller
+      // returns null on empty. By construction `overageDue` is therefore
+      // > 0 here. We keep a defensive log in dev because if it ever flips
+      // to 0, the banner is structurally lying — `Generate invoice` would
+      // create a $0 draft and confuse the admin. There is no "within
+      // budget" branch: a within-budget period is NOT something to bill,
+      // it's something to close (and close lives on the Monthly Breakdown
+      // row, not in a banner — closes aren't time-sensitive, cash flow is).
+      if (process.env.NODE_ENV !== "production" && state.overageDue <= 0) {
+        console.error(
+          `[InvoiceBanner] retainer-monthly state has overageDue=${state.overageDue}. ` +
+            `Banner should only fire for over-budget uninvoiced months. ` +
+            `Check getClosedUninvoicedMonths filtering and metrics plumbing.`,
+        )
+      }
       return {
         title:
           state.readyMonthCount === 1
             ? "1 month ready to bill"
             : `${state.readyMonthCount} months ready to bill`,
         subline: join([lastInvoicedSubline(state.lastInvoicedAt), `${state.readyMonthsLabel} ready`]),
-        amount: formatCurrencyPrecise(hasOverage ? state.overageDue : 0, currency),
-        amountLabel: hasOverage ? "overage" : "within budget",
-        amountTone: hasOverage ? "warn" : "neutral",
-        labelTone: hasOverage ? "muted" : "ok",
+        amount: formatCurrencyPrecise(state.overageDue, currency),
+        amountLabel: "overage",
+        amountTone: "warn",
+        labelTone: "muted",
+      }
+    }
+
+    case "retainer-cycle": {
+      // Mirrors `retainer-monthly` — same invariant (banner only fires when
+      // cycleBalance < 0 across the cycle), same dev-build invariant log,
+      // same visual treatment. Difference: the unit is the CYCLE, so the
+      // title says "cycle" instead of "month". A rollover overage cycle is
+      // exactly as billable-attention-worthy as a non-rollover overage
+      // month — same cash-flow urgency, same Generate flow.
+      if (process.env.NODE_ENV !== "production" && state.overageDue <= 0) {
+        console.error(
+          `[InvoiceBanner] retainer-cycle state has overageDue=${state.overageDue}. ` +
+            `Banner should only fire for over-budget uninvoiced cycles. ` +
+            `Check getClosedUninvoicedMonths (rollover branch) and metrics plumbing.`,
+        )
+      }
+      return {
+        title:
+          state.readyCycleCount === 1
+            ? "1 cycle ready to bill"
+            : `${state.readyCycleCount} cycles ready to bill`,
+        subline: join([lastInvoicedSubline(state.lastInvoicedAt), `${state.readyCyclesLabel} ready`]),
+        amount: formatCurrencyPrecise(state.overageDue, currency),
+        amountLabel: "overage",
+        amountTone: "warn",
+        labelTone: "muted",
       }
     }
 

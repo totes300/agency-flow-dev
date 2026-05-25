@@ -197,7 +197,10 @@ export function computeTmSummary(args: {
       // Phase 8 — "billed" for T&M summary purposes means either
       // invoice-anchored OR settled (period-closed). A retainer-included
       // hour is no longer "unbilled" — it's covered by the monthly fee.
-      if (e.invoiceId || e.settledAt) {
+      const isBilled =
+        (e.invoiceId !== undefined && e.invoiceId !== null) ||
+        (e.settledAt !== undefined && e.settledAt !== null);
+      if (isBilled) {
         billedMinutes += e.durationMinutes;
         billedAmount += amount;
       } else {

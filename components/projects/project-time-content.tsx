@@ -301,6 +301,7 @@ export function ProjectTimeContent({
     currency: project.currency,
     timezone,
     isAdmin,
+    projectId,
     currentUserId: currentUser?._id,
     onEdit: setEditEntryId,
   }

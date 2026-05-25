@@ -45,6 +45,34 @@ function roundMinutesUp(minutes: number, roundTo: number): number {
   return Math.ceil(minutes / roundTo) * roundTo;
 }
 
+/**
+ * The one rule that decides "is this scope's balance billable as overage?"
+ *
+ * Shared by:
+ *   - `computeRetainerBalance` (invoice-side, this file) — passes
+ *     `isClosingScope = positionInCycle === cycleLength - 1` so cycle
+ *     invoices bill the cycle aggregate while mid-cycle months do not.
+ *   - `applyOverageRule` (read-side, `convex/lib/retainerCycle.ts`) —
+ *     maps its `mode` enum onto the same flags: `rollover-monthly` sets
+ *     `isClosingScope = false` (overage settles at cycle end), while
+ *     `rollover-cycle` sets `isClosingScope = true` (we're looking at the
+ *     cycle aggregate).
+ *
+ * Centralising the predicate kills the "two implementations of the same
+ * rule that can drift" failure mode the senior review flagged.
+ */
+export function isOverageDueForScope(input: {
+  endBalance: number;
+  rolloverEnabled: boolean;
+  /** True iff this scope is the billing unit (cycle-end month for
+   *  rollover, any month for non-rollover). For non-rollover, ignored. */
+  isClosingScope: boolean;
+}): boolean {
+  if (input.endBalance >= 0) return false;
+  if (!input.rolloverEnabled) return true;
+  return input.isClosingScope;
+}
+
 export function computeRetainerBalance(
   input: RetainerComputeInput,
 ): RetainerComputeResult {
@@ -55,16 +83,17 @@ export function computeRetainerBalance(
 
   const endBalance = input.startBalance + input.includedMinutes - usedMinutes;
 
-  let isOverageDue = false;
-  if (endBalance < 0) {
-    if (!input.rolloverEnabled) {
-      isOverageDue = true;
-    } else {
-      isOverageDue =
-        input.positionInCycle >= 0 &&
-        input.positionInCycle === input.cycleLength - 1;
-    }
-  }
+  // Single rule for "is this overage due?" — see `isOverageDueForScope`.
+  // `positionInCycle < 0` (unknown position) is treated as "not the
+  // closing month" — the same conservative behavior the previous inline
+  // code had.
+  const isOverageDue = isOverageDueForScope({
+    endBalance,
+    rolloverEnabled: input.rolloverEnabled,
+    isClosingScope:
+      input.positionInCycle >= 0 &&
+      input.positionInCycle === input.cycleLength - 1,
+  });
 
   let overageMinutes = 0;
   let overageHours = 0;

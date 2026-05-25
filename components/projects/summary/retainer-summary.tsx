@@ -60,10 +60,15 @@ export function RetainerSummaryCard({ summary }: { summary: RetainerSummary }) {
       )}
 
       {profitability ? (
-        <SummaryColumn title="Cycle Profitability">
+        // "Profitability" / "Earned Revenue" without the "Cycle" qualifier —
+        // non-rollover retainer projects have no cycle (each month is the
+        // billing unit), and the T&M / Fixed summary cards already use the
+        // unqualified labels. The period this number covers is shown in the
+        // subtitle and via the cycle navigator.
+        <SummaryColumn title="Profitability">
           <MetricGroup>
             <MetricRow
-              label="Earned Cycle Revenue"
+              label="Earned Revenue"
               value={formatCurrencyPrecise(profitability.revenue, currency)}
             />
             <MetricRow
@@ -83,7 +88,7 @@ export function RetainerSummaryCard({ summary }: { summary: RetainerSummary }) {
           </MetricGroup>
         </SummaryColumn>
       ) : (
-        <RoleGatedColumn title="Cycle Profitability" />
+        <RoleGatedColumn title="Profitability" />
       )}
     </SummaryCardShell>
   )

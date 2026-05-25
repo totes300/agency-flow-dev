@@ -215,7 +215,9 @@ export function buildTmReadyRows(opts: {
   type Bucket = { year: number; month: number; minutes: number; amount: number };
   const buckets = new Map<string, Bucket>();
   for (const e of entries) {
-    if (!e.isBillable || e.invoiceId || e.settledAt) continue;
+    if (!e.isBillable) continue;
+    if (e.invoiceId !== undefined && e.invoiceId !== null) continue;
+    if (e.settledAt !== undefined && e.settledAt !== null) continue;
     const ymKey = e.date.slice(0, 7); // YYYY-MM
     const [y, m] = ymKey.split("-").map(Number);
     // Skip current month — only closed periods feed the Inbox.

@@ -29,7 +29,11 @@ export type { InvoiceBannerState } from "@/lib/invoice-banner-view"
 const ICON_BY_KIND: Record<InvoiceBannerState["kind"], LucideIcon> = {
   fixed: ReceiptIcon,
   tm: TimerIcon,
+  // Both retainer kinds share the same visual identity (RepeatIcon +
+  // emerald tint). The user pattern-matches the surface to "retainer
+  // billing" regardless of whether it's monthly or cycle-based.
   "retainer-monthly": RepeatIcon,
+  "retainer-cycle": RepeatIcon,
 }
 
 // Subtle category-token tints per billing type so users pattern-match the
@@ -38,6 +42,8 @@ const TINT_BY_KIND: Record<InvoiceBannerState["kind"], string> = {
   fixed: "bg-violet-100 text-violet-700 dark:bg-violet-950/40 dark:text-violet-300",
   tm: "bg-sky-100 text-sky-700 dark:bg-sky-950/40 dark:text-sky-300",
   "retainer-monthly":
+    "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300",
+  "retainer-cycle":
     "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300",
 }
 
@@ -65,10 +71,19 @@ export function InvoiceBanner({
     state.daysSinceLastInvoice !== null &&
     state.daysSinceLastInvoice >= CADENCE_THRESHOLD_DAYS
 
+  // Both retainer kinds carry `targetYear`/`targetMonth`. For monthly the
+  // target is the over-budget month; for cycle the target is the cycle-end
+  // month (the row `createInvoice` keys on). Either way `useGenerateInvoice`
+  // hands them to `createInvoice`, which resolves "month vs cycle" from the
+  // project's `rolloverEnabled` flag.
   const retainerYear =
-    state.kind === "retainer-monthly" ? state.targetYear : undefined
+    state.kind === "retainer-monthly" || state.kind === "retainer-cycle"
+      ? state.targetYear
+      : undefined
   const retainerMonth =
-    state.kind === "retainer-monthly" ? state.targetMonth : undefined
+    state.kind === "retainer-monthly" || state.kind === "retainer-cycle"
+      ? state.targetMonth
+      : undefined
 
   function handleGenerate() {
     void generate({

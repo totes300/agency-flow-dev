@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { entryStatus } from "../settleEntries";
+import { entryStatus, billableOverviewBucket } from "../settleEntries";
 import type { Id } from "../../_generated/dataModel";
 
 /**
@@ -54,6 +54,118 @@ describe("entryStatus — open / draft / closed (billable)", () => {
         invoiceId: fakeInvoiceId,
         settledAt: 1,
       }),
+    ).toBe("closed");
+  });
+});
+
+// ─── projectOverview bucket math ────────────────────────────────────────────
+
+describe("billableOverviewBucket — four-bucket routing", () => {
+  it("settledReason='invoiced' → invoiced (revenue)", () => {
+    expect(
+      billableOverviewBucket({
+        invoiceId: fakeInvoiceId,
+        settledAt: 1,
+        settledReason: "invoiced",
+      }),
+    ).toBe("invoiced");
+  });
+
+  it("settledReason='retainer_included' → settled (covered)", () => {
+    expect(
+      billableOverviewBucket({
+        settledAt: 1,
+        settledReason: "retainer_included",
+      }),
+    ).toBe("settled");
+  });
+
+  it("settledReason='fixed_included' → settled (covered)", () => {
+    expect(
+      billableOverviewBucket({
+        invoiceId: fakeInvoiceId,
+        settledAt: 1,
+        settledReason: "fixed_included",
+      }),
+    ).toBe("settled");
+  });
+
+  it("draft (invoiceId set, no settledReason) → draft", () => {
+    expect(
+      billableOverviewBucket({ invoiceId: fakeInvoiceId }),
+    ).toBe("draft");
+  });
+
+  it("plain billable (nothing set) → open", () => {
+    expect(billableOverviewBucket({})).toBe("open");
+  });
+
+  it("settledReason wins over invoiceId — retainer-overage entry on an invoice still routes by reason", () => {
+    // A retainer overage entry has BOTH invoiceId AND settledReason='invoiced'.
+    // Without the reason-first check, it could land in `draft` instead of
+    // `invoiced` if the predicate ordering was wrong.
+    expect(
+      billableOverviewBucket({
+        invoiceId: fakeInvoiceId,
+        settledReason: "invoiced",
+      }),
+    ).toBe("invoiced");
+  });
+});
+
+describe("billableOverviewBucket — invariants", () => {
+  it("buckets are mutually exclusive across the full input cube", () => {
+    // Iterate every meaningful combination of (invoiceId, settledAt, settledReason).
+    const reasons = [
+      undefined,
+      "invoiced",
+      "retainer_included",
+      "fixed_included",
+    ] as const;
+    const invIds = [undefined, fakeInvoiceId];
+    const settledAts = [undefined, 1];
+
+    for (const invoiceId of invIds) {
+      for (const settledAt of settledAts) {
+        for (const settledReason of reasons) {
+          const bucket = billableOverviewBucket({
+            invoiceId,
+            settledAt,
+            settledReason,
+          });
+          expect(["open", "draft", "invoiced", "settled"]).toContain(bucket);
+        }
+      }
+    }
+  });
+
+  it("matches entryStatus 1:1 for the four billable states", () => {
+    // open
+    expect(billableOverviewBucket({})).toBe("open");
+    expect(entryStatus({ isBillable: true })).toBe("open");
+    // draft
+    expect(
+      billableOverviewBucket({ invoiceId: fakeInvoiceId }),
+    ).toBe("draft");
+    expect(
+      entryStatus({ isBillable: true, invoiceId: fakeInvoiceId }),
+    ).toBe("draft");
+    // invoiced (collapses to "closed" in entryStatus)
+    expect(
+      billableOverviewBucket({ settledAt: 1, settledReason: "invoiced" }),
+    ).toBe("invoiced");
+    expect(
+      entryStatus({ isBillable: true, settledAt: 1 }),
+    ).toBe("closed");
+    // settled (also collapses to "closed" in entryStatus)
+    expect(
+      billableOverviewBucket({
+        settledAt: 1,
+        settledReason: "retainer_included",
+      }),
+    ).toBe("settled");
+    expect(
+      entryStatus({ isBillable: true, settledAt: 1 }),
     ).toBe("closed");
   });
 });

@@ -7,6 +7,9 @@ import { getDateInTimezone, ORG_TIMEZONE_FALLBACK } from "./lib/timer";
 import { getOrgSettings, resolveRateSnapshot } from "./lib/orgHelpers";
 import { validateAssignees } from "./lib/task_helpers";
 import { assertValidDateString } from "./lib/dateValidation";
+import { assertEntryDateOpen } from "./lib/settleGuards";
+import type { EntrySettlementSnapshot } from "./lib/types";
+import { billableOverviewBucket } from "./lib/settleEntries";
 import { logActivity } from "./activityLog";
 
 function formatDurationHHMM(minutes: number): string {
@@ -236,6 +239,12 @@ export const create = mutation({
       );
     }
 
+    // Phase 8 — closed-retainer-period guard (Slice 3). No-op for non-retainer
+    // projects. Runs after the date is resolved so it sees the actual day the
+    // entry will file under (not the user-supplied `args.date`, which may
+    // disagree with `startedAt` and is rejected above).
+    await assertEntryDateOpen(ctx, project, date);
+
     // Determine billable before rate resolution — non-billable entries skip rate enforcement
     const isBillable = args.isBillable ?? task.billable;
 
@@ -338,11 +347,12 @@ export const update = mutation({
 
     // Invariant (see create): date === getDateInTimezone(startedAt, orgTz).
     // Server doesn't re-anchor; clients call reanchorStartedAt and send both.
+    let nextDate = entry.date;
     if (args.date !== undefined || args.startedAt !== undefined) {
       const orgSettings = await getOrgSettings(ctx, orgId);
       const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
       const nextStartedAt = args.startedAt ?? entry.startedAt;
-      const nextDate = args.date ?? entry.date;
+      nextDate = args.date ?? entry.date;
       const derivedDate = getDateInTimezone(nextStartedAt, timezone);
       if (nextDate !== derivedDate) {
         throw new ConvexError(
@@ -386,6 +396,30 @@ export const update = mutation({
       }
       updates.taskId = task._id;
       updates.snapshotCategoryId = task.workCategoryId;
+    }
+
+    // Phase 8 — closed-retainer-period guard on date OR task changes
+    // (Slice 3 / Revision Pass #3a). The same-project invariant above
+    // means the target project is always the entry's existing project, so
+    // we resolve the project once from the entry's task. The guard is a
+    // no-op for non-retainer projects.
+    //
+    // We run AFTER the same-project check so a task swap that would have
+    // been rejected for other reasons fails first with its own clearer
+    // error. Date-only changes also run through here so a backdated edit
+    // into a closed month is rejected with the same hint message as a
+    // backdated create.
+    const dateChanged = nextDate !== entry.date;
+    if (dateChanged || taskChanged) {
+      const sourceTask = taskChanged
+        ? await loadTargetTask()
+        : await ctx.db.get(entry.taskId);
+      if (sourceTask?.projectId) {
+        const guardProject = await ctx.db.get(sourceTask.projectId);
+        if (guardProject) {
+          await assertEntryDateOpen(ctx, guardProject, nextDate);
+        }
+      }
     }
 
     if (args.isBillable !== undefined) {
@@ -662,8 +696,10 @@ export const listProjectEntries = query({
         .map((inv) => [inv._id.toString(), inv]),
     );
 
-    // Build rows.
-    type Row = {
+    // Build rows. Settlement fields ride along via the shared
+    // `EntrySettlementSnapshot` type so the row, the component-side
+    // TimeEntryRow type, and the schema validator all evolve together.
+    type Row = EntrySettlementSnapshot & {
       _id: Id<"timeEntries">;
       taskId: Id<"tasks">;
       taskTitle: string;
@@ -687,16 +723,6 @@ export const listProjectEntries = query({
       invoiceNumber: number | undefined;
       invoiceStatus: "draft" | "invoiced" | "paid" | "void" | undefined;
       invoiceDueDate: string | undefined;
-      // Phase 8 — settlement snapshot. Slice 4's period drill-down + entry
-      // tooltips read these directly so the UI never has to re-fetch.
-      settledAt: number | undefined;
-      settledReason:
-        | "invoiced"
-        | "retainer_included"
-        | "fixed_included"
-        | undefined;
-      settledPeriodStart: string | undefined;
-      settledPeriodEnd: string | undefined;
     };
 
     let rows: Row[] = visible.map((e) => {
@@ -843,12 +869,24 @@ export const projectOverview = query({
     let totalNonBillableMinutes = 0;
     let thisMonthBillableMinutes = 0;
     let totalActualCost = 0;
-    // Phase 8 — three buckets over billable entries, mirroring `entryStatus()`:
-    //   open      → still actionable, needs billing or closure
-    //   invoiced  → on a finalized invoice with rate-driven revenue
-    //   settled   → covered by retainer fee or fixed price (no extra revenue)
+    // Phase 8 — FOUR buckets over billable entries, in lock-step with
+    // `entryStatus()` so the data shape matches the row display:
+    //   open      → !invoiceId && !settledAt (needs billing or closure)
+    //   draft     → invoiceId && !settledAt  (reserved by a draft invoice;
+    //                                          revenue not yet realized)
+    //   invoiced  → settledReason === "invoiced" (billed hourly — revenue)
+    //   settled   → settledReason ∈ {retainer_included, fixed_included}
+    //                                          (covered, no extra revenue)
+    //
+    // The draft bucket is deliberate: a draft invoice has reserved hours
+    // but no finalized revenue. Lumping draft into invoiced would inflate
+    // T&M "billed" totals before the invoice is sent; lumping into open
+    // would falsely surface those hours in the Ready feed. Distinct bucket
+    // keeps reports honest and matches what the row badge already shows.
     let openMinutes = 0;
     let openAmount = 0;
+    let draftMinutes = 0;
+    let draftAmount = 0;
     let invoicedMinutes = 0;
     let invoicedAmount = 0;
     let settledMinutes = 0;
@@ -883,37 +921,33 @@ export const projectOverview = query({
       // Labor cost from costRate (all project types)
       totalActualCost += (e.durationMinutes / 60) * (e.costRate ?? 0);
 
-      // Phase 8 — three-way split over billable entries:
-      //
-      //   settledReason === "invoiced"            → invoiced bucket (revenue)
-      //   settledReason ∈ {retainer_included,     → settled bucket (covered,
-      //                    fixed_included}            no extra revenue)
-      //   settledAt unset, invoiceId set          → invoiced bucket (draft —
-      //                                              still bound to an invoice
-      //                                              that hasn't finalized yet,
-      //                                              counts as "in progress")
-      //   neither settled nor invoiced            → open bucket
+      // Phase 8 — four-way split over billable entries via the shared
+      // `billableOverviewBucket` classifier. Pure helper so the rule is
+      // testable without convex-test and stays in lock-step with the row
+      // badge (`entryStatus()`).
       //
       // Retainer entries within budget have billableRate=0 today — they
       // contribute to the bucket's minutes but $0 to its amount, which is
       // correct (retainer revenue lives in `getRetainerData`'s cycle math).
       if (e.isBillable) {
         const amount = (e.durationMinutes / 60) * (e.billableRate ?? 0);
-        if (e.settledReason === "invoiced") {
-          invoicedMinutes += e.durationMinutes;
-          invoicedAmount += amount;
-        } else if (e.settledReason !== undefined) {
-          // retainer_included or fixed_included
-          settledMinutes += e.durationMinutes;
-          settledAmount += amount;
-        } else if (e.invoiceId !== undefined) {
-          // Draft invoice — entry is reserved for the draft, treat as
-          // invoiced-pending so it doesn't show in the "ready to bill" feed.
-          invoicedMinutes += e.durationMinutes;
-          invoicedAmount += amount;
-        } else {
-          openMinutes += e.durationMinutes;
-          openAmount += amount;
+        switch (billableOverviewBucket(e)) {
+          case "invoiced":
+            invoicedMinutes += e.durationMinutes;
+            invoicedAmount += amount;
+            break;
+          case "settled":
+            settledMinutes += e.durationMinutes;
+            settledAmount += amount;
+            break;
+          case "draft":
+            draftMinutes += e.durationMinutes;
+            draftAmount += amount;
+            break;
+          case "open":
+            openMinutes += e.durationMinutes;
+            openAmount += amount;
+            break;
         }
       }
 
@@ -976,12 +1010,15 @@ export const projectOverview = query({
       totalActualCost,
       // ─── Phase 8 — entry-derived billing buckets ────────────────────────
       // Time-based figures from the entry ledger (hours × billableRate
-      // snapshot). For the Invoices tab "Total Invoiced" money figure
-      // (which includes manual/overage lines), use api.invoices.getProjectInvoiceMetrics
+      // snapshot). Four buckets, lock-step with `entryStatus()`.
+      // For the Invoices tab "Total Invoiced" money figure (which includes
+      // manual/overage lines), use api.invoices.getProjectInvoiceMetrics
       // instead — that one is invoice-derived, not entry-derived.
-      openMinutes,     // was `uninvoicedMinutes`
+      openMinutes,     // was `uninvoicedMinutes`     — !invoiceId && !settledAt
       openAmount,      // was `uninvoicedAmount`
-      invoicedMinutes, // was `invoicedBillableMinutes` — billed hourly (T&M, overage)
+      draftMinutes,    // NEW — invoiceId && !settledAt (reserved by draft)
+      draftAmount,     // NEW
+      invoicedMinutes, // was `invoicedBillableMinutes` — settledReason === "invoiced"
       invoicedAmount,  // was `invoicedBillableAmount`
       settledMinutes,  // NEW — settledReason ∈ {retainer_included, fixed_included}
       settledAmount,   // NEW

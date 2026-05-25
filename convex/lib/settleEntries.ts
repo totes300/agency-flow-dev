@@ -24,14 +24,25 @@
  *     and is therefore untouched.
  */
 
+import { v, type Infer } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
-import { internalMutation } from "../_generated/server";
 
-export type SettledReason =
-  | "invoiced"           // billed hourly — T&M direct or retainer overage line
-  | "retainer_included"  // covered by retainer monthly fee (period-close, Slice 3)
-  | "fixed_included";    // covered by fixed price (Fixed invoice settlement)
+/**
+ * Settlement reason — single source of truth, consumed by BOTH:
+ *   - the schema validator in `convex/schema.ts` (via `settledReasonValidator`)
+ *   - the TypeScript code in this module + callers (via `SettledReason`)
+ *
+ * Adding a new reason (e.g. the deferred `"manual_close"` for the
+ * project-completion flow) means editing this one place — TypeScript
+ * inference propagates everywhere downstream.
+ */
+export const settledReasonValidator = v.union(
+  v.literal("invoiced"),          // billed hourly — T&M direct or retainer overage line
+  v.literal("retainer_included"), // covered by retainer monthly fee (period-close, Slice 3)
+  v.literal("fixed_included"),    // covered by fixed price (Fixed invoice settlement)
+);
+export type SettledReason = Infer<typeof settledReasonValidator>;
 
 async function getEntriesForInvoice(
   ctx: MutationCtx,
@@ -131,114 +142,48 @@ export async function unsettleInvoiceEntries(
 }
 
 // ─── Derived per-entry display status ───────────────────────────────────────
+//
+// Moved to `convex/lib/entryStatus.ts` in Slice 4 so client components can
+// import the derivation without pulling this file's `internalMutation`
+// runtime symbol into the browser bundle. Re-exported here for any existing
+// server-side callers that already import from this module.
+export {
+  entryStatus,
+  type EntryDisplayStatus,
+  type EntryShape,
+} from "./entryStatus";
+
+// ─── projectOverview bucket classifier ─────────────────────────────────────
 
 /**
- * Row-level display vocabulary. Collapses the three financial reasons
- * (`invoiced` / `retainer_included` / `fixed_included`) into a single
- * `closed` so the row badge stays one axis — the financial split lives in
- * the period drill-down (Slice 4) and reports, both of which read
- * `settledReason` directly.
+ * Bucket vocabulary used by `projectOverview` to aggregate per-entry
+ * minutes/amounts. Mirrors `entryStatus()` but splits the `closed` bucket
+ * by `settledReason` so reports can distinguish revenue ("invoiced") from
+ * coverage ("settled"). Non-billable entries are excluded from the
+ * billable rollup entirely (the caller tracks them via
+ * `totalNonBillableMinutes`).
  *
- * Note: a SETTLED non-billable entry still displays as `non_billable`,
- * not `closed` — billability is the more informative axis for that row.
- * The edit/delete guard keys on `settledAt`/`invoiceId` independently of
- * the badge, so the row is still locked.
+ *   open      → !invoiceId && !settledAt           (needs billing/closure)
+ *   draft     → invoiceId set, settledAt unset     (reserved by a draft)
+ *   invoiced  → settledReason === "invoiced"        (revenue, billed hourly)
+ *   settled   → settledReason ∈ {retainer_included, (covered, no revenue)
+ *                                fixed_included}
  */
-export type EntryDisplayStatus = "open" | "draft" | "closed" | "non_billable";
+export type OverviewBucket = "open" | "draft" | "invoiced" | "settled";
 
-type EntryShape = {
-  isBillable: boolean;
+type BillableBucketInput = {
   invoiceId?: Id<"invoices">;
   settledAt?: number;
+  settledReason?: SettledReason;
 };
 
-export function entryStatus(e: EntryShape): EntryDisplayStatus {
-  if (!e.isBillable) return "non_billable";
-  if (e.invoiceId && e.settledAt === undefined) return "draft";
-  if (e.settledAt !== undefined) return "closed";
+export function billableOverviewBucket(e: BillableBucketInput): OverviewBucket {
+  if (e.settledReason === "invoiced") return "invoiced";
+  if (e.settledReason !== undefined) return "settled";
+  if (e.invoiceId !== undefined) return "draft";
   return "open";
 }
 
-// ─── Backfill (one-shot) ────────────────────────────────────────────────────
-
-/**
- * Walk every time entry and, for those linked to a finalized invoice
- * (`status ∈ {invoiced, paid}`) but missing `settledAt`, write the
- * settlement snapshot the new model expects:
- *
- *   - `settledAt`        = `invoice.issueDate` (parsed to ms) or `now`.
- *   - `settledReason`    = `"fixed_included"` for Fixed projects, else `"invoiced"`.
- *   - `settledPeriodStart/End` = the invoice's period.
- *
- * Idempotent: re-running is a no-op for already-settled rows because the
- * `settledAt === undefined` guard skips them. Safe to run multiple times.
- *
- * Project `billingType` lookups are cached so a project with N invoices
- * only triggers one `ctx.db.get(project)` call.
- *
- * Run once after deploy:
- *   npx convex run lib/settleEntries:backfillSettledFromInvoiceId
- *
- * Per [[project_mvp_dummy_data]], the dataset is dummy and no production
- * obligation exists. Backfill is for consistency so the new bucket fields
- * on `projectOverview` reflect history immediately, not just future
- * invoices.
- */
-export const backfillSettledFromInvoiceId = internalMutation({
-  args: {},
-  handler: async (ctx) => {
-    const now = Date.now();
-    const all = await ctx.db.query("timeEntries").collect();
-
-    const projectTypeCache = new Map<
-      string,
-      "fixed" | "retainer" | "t_and_m" | "non_billable"
-    >();
-
-    let touched = 0;
-    let skippedNoInvoice = 0;
-    let skippedNotFinalized = 0;
-
-    for (const e of all) {
-      if (e.invoiceId === undefined || e.settledAt !== undefined) {
-        if (e.invoiceId === undefined) skippedNoInvoice++;
-        continue;
-      }
-      const invoice = await ctx.db.get(e.invoiceId);
-      if (!invoice) continue;
-      if (invoice.status !== "invoiced" && invoice.status !== "paid") {
-        skippedNotFinalized++;
-        continue;
-      }
-
-      const projectKey = invoice.projectId.toString();
-      let billingType = projectTypeCache.get(projectKey);
-      if (!billingType) {
-        const project = await ctx.db.get(invoice.projectId);
-        if (!project) continue;
-        billingType = project.billingType;
-        projectTypeCache.set(projectKey, billingType);
-      }
-
-      const reason: SettledReason =
-        billingType === "fixed" ? "fixed_included" : "invoiced";
-      const settledAt = invoice.issueDate
-        ? new Date(invoice.issueDate).getTime()
-        : now;
-
-      await ctx.db.patch(e._id, {
-        settledAt,
-        settledReason: reason,
-        settledPeriodStart: invoice.periodStart,
-        settledPeriodEnd: invoice.periodEnd,
-        updatedAt: now,
-      });
-      touched++;
-    }
-
-    console.log(
-      `Backfilled ${touched} settled entries (skipped: ${skippedNoInvoice} no-invoice, ${skippedNotFinalized} not-finalized)`,
-    );
-    return { touched, skippedNoInvoice, skippedNotFinalized };
-  },
-});
+// The one-shot `backfillSettledFromInvoiceId` deployed mutation lives at
+// `convex/settleEntries.ts` (top-level). `lib/` is helpers-only — keeping
+// the deployment-target separate keeps the file boundary honest.

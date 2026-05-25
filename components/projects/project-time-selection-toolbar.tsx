@@ -54,10 +54,10 @@ export function ProjectTimeSelectionToolbar({
   // UI filters for consistency so the count badge never promises an action
   // the backend will reject.
   const flippableToBillable = selectedEntries.filter(
-    (e) => !e.isBillable && !e.invoiceId && !e.settledAt,
+    (e) => !e.isBillable && e.invoiceId === undefined && e.settledAt === undefined,
   )
   const flippableToNonBillable = selectedEntries.filter(
-    (e) => e.isBillable && !e.invoiceId && !e.settledAt,
+    (e) => e.isBillable && e.invoiceId === undefined && e.settledAt === undefined,
   )
 
   async function runBulk(
@@ -93,7 +93,10 @@ export function ProjectTimeSelectionToolbar({
   function handleCreate() {
     if (count === 0) return
     const billableOpen = selectedEntries
-      .filter((e) => e.isBillable && !e.invoiceId && !e.settledAt)
+      .filter(
+        (e) =>
+          e.isBillable && e.invoiceId === undefined && e.settledAt === undefined,
+      )
       .map((e) => e._id as Id<"timeEntries">)
     if (billableOpen.length === 0) {
       toast.error("Selection has no open billable entries.")

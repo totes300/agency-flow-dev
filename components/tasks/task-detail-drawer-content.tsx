@@ -172,6 +172,8 @@ export function TaskDetailDrawerContent({
                 content={descriptionContent}
                 onUpdate={handleDescriptionUpdate}
                 variant="document"
+                taskAssigneeIds={task.assigneeIds}
+                taskId={task._id}
               />
             </div>
 

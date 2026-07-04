@@ -107,7 +107,7 @@ export async function getDefaultStatusId(
 
 /**
  * Cascade-delete all related data for a single task (not subtasks — call separately for those).
- * Removes: time entries, activity log, comments (+ reactions + attachments), attachments, read receipts.
+ * Removes: time entries, activity log, comments (+ reactions + attachments), attachments, read receipts, notifications, task mutes.
  */
 export async function cascadeDeleteTaskData(ctx: MutationCtx, taskId: Id<"tasks">) {
   // Time entries
@@ -164,6 +164,20 @@ export async function cascadeDeleteTaskData(ctx: MutationCtx, taskId: Id<"tasks"
     .withIndex("by_task", (q) => q.eq("taskId", taskId))
     .collect();
   for (const r of receipts) await ctx.db.delete(r._id);
+
+  // Notifications
+  const notifications = await ctx.db
+    .query("notifications")
+    .withIndex("by_task", (q) => q.eq("taskId", taskId))
+    .collect();
+  for (const n of notifications) await ctx.db.delete(n._id);
+
+  // Task mutes
+  const mutes = await ctx.db
+    .query("taskMutes")
+    .withIndex("by_task", (q) => q.eq("taskId", taskId))
+    .collect();
+  for (const m of mutes) await ctx.db.delete(m._id);
 }
 
 // ─── Enrichment ──────────────────────────────────────────────────────────────────

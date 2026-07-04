@@ -7,15 +7,20 @@ import type { Id } from "@/convex/_generated/dataModel"
 
 // ─── URL helpers ────────────────────────────────────────────────────────────────
 
+/** Search param carrying a comment deep-link alongside `detail`. */
+export const COMMENT_PARAM = "comment"
+
 /**
  * Build a URL search string with the detail param set.
- * Preserves existing params (tab, filters, etc).
+ * Preserves existing params (tab, filters, etc). The comment deep-link param
+ * is always dropped — it is only meaningful for the navigation that set it.
  */
 export function buildDetailUrl(
   currentParams: URLSearchParams,
   taskId: Id<"tasks"> | null
 ): string {
   const params = new URLSearchParams(currentParams.toString())
+  params.delete(COMMENT_PARAM)
   if (taskId) {
     params.set("detail", taskId)
   } else {
@@ -23,6 +28,27 @@ export function buildDetailUrl(
   }
   const str = params.toString()
   return str ? `?${str}` : ""
+}
+
+/**
+ * Absolute deep link to a task's detail drawer on /tasks, optionally
+ * anchored to a comment (inbox row click).
+ */
+export function buildTaskDeepLink(
+  taskId: string,
+  commentId?: string | null
+): string {
+  const params = new URLSearchParams()
+  params.set("detail", taskId)
+  if (commentId) params.set(COMMENT_PARAM, commentId)
+  return `/tasks?${params.toString()}`
+}
+
+/** Extract the comment deep-link id, or null. */
+export function parseCommentParam(searchParams: URLSearchParams): string | null {
+  const value = searchParams.get(COMMENT_PARAM)
+  if (!value || !value.trim()) return null
+  return value.trim()
 }
 
 /**

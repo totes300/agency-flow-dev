@@ -3,6 +3,7 @@
 import * as React from "react"
 import { useOrganization } from "@clerk/nextjs"
 
+import { InboxButton } from "@/components/inbox/inbox-button"
 import { NavMain } from "@/components/nav-main"
 import { NavUser } from "@/components/nav-user"
 import { TeamSwitcher } from "@/components/team-switcher"
@@ -27,6 +28,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     <Sidebar collapsible="icon" {...props}>
       <SidebarHeader>
         <TeamSwitcher />
+        <InboxButton />
       </SidebarHeader>
       <SidebarContent>
         <NavMain groups={navigation} isAdmin={isAdmin} />

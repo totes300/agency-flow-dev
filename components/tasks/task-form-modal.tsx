@@ -193,6 +193,17 @@ export function TaskFormModal({
               onUpdate={setDescription}
               placeholder="Add description..."
               autoFocus
+              taskAssigneeIds={assigneeIds}
+              // Create form: mentioning someone outside the current selection
+              // auto-adds them as assignee (visible chip, removable) so the
+              // mention notifies once the task is created.
+              onNoAccessMention={(user) => {
+                const userId = user.id as Id<"users">
+                setAssigneeIds((prev) =>
+                  prev.includes(userId) ? prev : [...prev, userId],
+                )
+                toast.info(`${user.label} hozzáadva assignee-ként, hogy értesüljön az említésről`)
+              }}
             />
           ) : (
             <button

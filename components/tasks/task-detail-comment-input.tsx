@@ -15,6 +15,7 @@ import { CommentToolbar } from "@/components/tasks/editor-toolbar"
 import { EmojiPickerPopover } from "@/components/emoji-picker-popover"
 import { CommentAttachmentChip } from "@/components/comment-attachment-chip"
 import { useMentionSuggestion } from "@/components/tasks/use-mention-suggestion"
+import { useMentionAccessGuard } from "@/components/tasks/use-mention-access-guard"
 import { toastError } from "@/lib/toast-helpers"
 import { cn } from "@/lib/utils"
 import {
@@ -57,7 +58,10 @@ export function TaskDetailCommentInput({
   const [hasContent, setHasContent] = useState(false)
   const [showToolbar, setShowToolbar] = useState(false)
 
-  const { mentionExtension, mentionOpenRef, renderMentionDropdown } = useMentionSuggestion()
+  const { guardMentionAccess, renderMentionAccessDialog, taskAssigneeIds } =
+    useMentionAccessGuard(taskId)
+  const { mentionExtension, mentionOpenRef, renderMentionDropdown } =
+    useMentionSuggestion({ taskAssigneeIds })
 
   const createComment = useMutation(api.comments.create)
   const generateUploadUrl = useMutation(api.commentAttachments.generateUploadUrl)
@@ -67,6 +71,7 @@ export function TaskDetailCommentInput({
   const fileInputRef = useRef<HTMLInputElement>(null)
   const lastTypingRef = useRef(0)
   const suppressTypingRef = useRef(false)
+  const editorRef = useRef<ReturnType<typeof useEditor>>(null)
 
   const editor = useEditor({
     immediatelyRender: false,
@@ -101,20 +106,28 @@ export function TaskDetailCommentInput({
       },
       handleKeyDown: (_view, event) => {
         if (event.key === "Enter" && !event.shiftKey && !event.metaKey && !event.ctrlKey) {
-          if (!editor) return false
+          // Read the editor through a ref: this closure is captured at editor
+          // CREATION time, when the `editor` state variable is still null —
+          // reading it directly makes this branch silently swallow Enter.
+          const ed = editorRef.current
+          if (!ed) return false
           // Let mention/suggestion plugins handle Enter when their dropdown is open
           if (mentionOpenRef.current) return false
-          if (editor.isActive("listItem") || editor.isActive("taskItem") || editor.isActive("codeBlock")) {
+          if (ed.isActive("listItem") || ed.isActive("taskItem") || ed.isActive("codeBlock")) {
             return false
           }
           event.preventDefault()
-          handleSubmitRef.current()
+          handleSubmitRef.current?.()
           return true
         }
         return false
       },
     },
   }, [mentionExtension])
+
+  useEffect(() => {
+    editorRef.current = editor
+  }, [editor])
 
   useEffect(() => {
     if (replyContext && editor) editor.commands.focus()
@@ -178,16 +191,28 @@ export function TaskDetailCommentInput({
   const hasPendingUploads = pendingFiles.some((f) => f.uploading)
 
   // ─── Submit ──────────────────────────────────────────────────────────────
-  const handleSubmit = useCallback(async () => {
+  const handleSubmit = useCallback(async (opts?: { skipMentionGuard?: boolean }) => {
     if (!editor || isSubmitting || hasPendingUploads) return
     if (editor.isEmpty && pendingFiles.length === 0) return
+
+    const content = editor.getJSON()
+    // Mentioned member without task access → confirm dialog; confirming adds
+    // them as assignees and re-enters here with the guard bypassed.
+    if (
+      !opts?.skipMentionGuard &&
+      !guardMentionAccess(content, () =>
+        void handleSubmitRef.current?.({ skipMentionGuard: true }),
+      )
+    ) {
+      return
+    }
 
     setIsSubmitting(true)
     let commentId: Id<"comments"> | undefined
     try {
       commentId = await createComment({
         taskId,
-        content: editor.getJSON(),
+        content,
         parentCommentId: replyContext?.commentId as Id<"comments"> | undefined,
       })
     } catch (err) {
@@ -222,10 +247,15 @@ export function TaskDetailCommentInput({
 
     setPendingFiles([])
     setIsSubmitting(false)
-  }, [editor, isSubmitting, hasPendingUploads, createComment, taskId, replyContext, pendingFiles, saveAttachment, onClearReply, clearTypingMutation])
+  }, [editor, isSubmitting, hasPendingUploads, guardMentionAccess, createComment, taskId, replyContext, pendingFiles, saveAttachment, onClearReply, clearTypingMutation])
 
-  const handleSubmitRef = useRef(handleSubmit)
-  handleSubmitRef.current = handleSubmit
+  const handleSubmitRef = useRef<typeof handleSubmit | null>(null)
+  useEffect(() => {
+    // Latest-ref pattern: useEditor's config closure (Enter-to-send) must
+    // stay stable across renders while still calling the current handler.
+    // eslint-disable-next-line react-hooks/immutability
+    handleSubmitRef.current = handleSubmit
+  })
 
   if (!editor) return null
 
@@ -286,6 +316,7 @@ export function TaskDetailCommentInput({
         />
 
         {renderMentionDropdown()}
+        {renderMentionAccessDialog()}
       </div>
     </Tiptap>
   )

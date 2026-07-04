@@ -1807,3 +1807,123 @@ Senior review items #1+#2 (Stripe-style numbering + paid immutability).
 - Ready rows: row-level click target (or hover cursor signaling button-only).
 - Monthly Breakdown 6-pill legend → shrink to states actually present
   (part of the deferred terminology pass).
+
+---
+
+## Notification Inbox (@mentions) — 2026-07-04 ✅ COMPLETE
+
+Notion-style inbox in the sidebar (plan: [docs/mentions-plan.md](docs/mentions-plan.md)).
+Five triggers (`mention_comment`, `mention_description`, `assigned`, `comment`
+participants model, `comment_reply`), 4-state row machine
+(unread/read/archived/snoozed), real-time badge, week-grouped overlay panel,
+comment deep-link, task mute, mention-access guard. In-app only; schema stays
+email-extensible.
+
+### Shipped (tracer-bullet chunks 1–6)
+
+- [x] **Schema**: `notifications` (index `by_recipient_org_state` — every hot
+  query is one bounded slice) + `taskMutes` ([convex/schema.ts](convex/schema.ts)).
+- [x] **Fan-out** `createNotifications` ([convex/notifications.ts](convex/notifications.ts)):
+  validation ladder per event (normalizeId → self-skip → deleted-user skip →
+  org membership via `by_orgId_clerkUserId` → task access → mute check for
+  comment family → unread dedupe for `assigned`/`mention_description`); any
+  failure skips the event silently. Hooks: `comments.create` (mention > reply
+  > participant priority, one row per recipient), `tasks.create/update/
+  updateDescription/createSubtask/bulkUpdate` (all three assignee branches);
+  `cascadeDeleteTaskData` deletes notifications + mutes.
+- [x] **Pure logic** ([convex/lib/notificationEvents.ts](convex/lib/notificationEvents.ts)):
+  `computeCommentRecipients`, `diffMentionIds` (only newly ADDED mentions
+  notify), `safeParseDoc`, `truncatePreview`; the mention walker
+  `extractMentionIds` lives in [lib/tiptap-utils.ts](lib/tiptap-utils.ts),
+  shared verbatim by server fan-out and the client access guard.
+- [x] **API**: `listInbox`/`listArchived` (enriched, task-deleted rows dropped,
+  departed actors → "Former member"), `unreadCount` (`isCapped` → "99+"),
+  `markRead`/`markUnread` (doubles as unarchive)/`archive`/`markAllRead`,
+  `snooze` (array form + one `until`; one scheduled `wake` per row with an
+  `expectedUntil` guard token — archive/read/re-snooze makes stale wakes
+  no-op, no scheduler.cancel), `muteTask`/`unmuteTask`/`isTaskMuted`.
+- [x] **Honest badge**: `markTaskNotificationsRead` wired into
+  `taskViewReceipts.markViewed` — opening a task via ANY path clears that
+  task's unread rows ([convex/taskViewReceipts.ts](convex/taskViewReceipts.ts)).
+- [x] **UI** ([components/inbox/](components/inbox/)): sidebar `InboxButton` +
+  live badge (mobile → Sheet), panel with week sections ("This week"/"Last
+  week"/date-range, org-tz bucketing via [lib/inbox.ts](lib/inbox.ts)
+  `groupInbox`), group rows (stacked avatars max 3 + "+N", latest preview,
+  blue dot), hover actions (read/unread, archive, snooze presets from
+  [lib/inbox-snooze.ts](lib/inbox-snooze.ts) — DST-tested Europe/Budapest,
+  mute in overflow), mark-all-read, client-side unread-only filter, archived
+  view, content-aware skeleton, empty states.
+- [x] **Comment deep-link**: row click → `/tasks?detail=<id>&comment=<id>`;
+  `useCommentDeepLink` in ActivityFeed (drawer AND modal) scrolls, replays
+  the Notion-style background-wash highlight, strips the param; deleted
+  comment → silent no-op.
+- [x] **Mention-access UX** (Notion rule: mention never grants access, and
+  is never silently dropped — one guard, three surfaces,
+  [components/tasks/use-mention-access-guard.tsx](components/tasks/use-mention-access-guard.tsx)):
+  no-access hint in every suggestion dropdown ("Nincs hozzáférése ehhez a
+  taskhoz"); **comments** → pre-submit ConfirmDialog (confirm adds the
+  members as assignees via `tasks.update`, then posts; cancel keeps
+  editing); **description on an existing task** (autosaved, no submit
+  moment) → SELECTION-time dialog — confirm adds as assignee (assignment
+  fan-out guarantees they're notified regardless of autosave timing),
+  cancel REMOVES the just-inserted mention, so a saved description mention
+  always implies access; **create-task form** → mentioning someone outside
+  the assignee selection auto-adds them to the form's picker (visible
+  chip, removable) with an info toast. Server-side filter remains the
+  security boundary.
+
+### Verification
+
+- Unit: [convex/lib/__tests__/notificationEvents.test.ts](convex/lib/__tests__/notificationEvents.test.ts)
+  (extraction/diff/recipient matrix), [lib/inbox.test.ts](lib/inbox.test.ts)
+  (week boundaries with injected now, org-tz bucketing, unread aggregation,
+  actor stacking), [lib/inbox-snooze.test.ts](lib/inbox-snooze.test.ts)
+  (9 AM wall-clock across both 2026 DST transitions).
+- Integration: [convex/__tests__/notifications.test.ts](convex/__tests__/notifications.test.ts)
+  — 27 tests through the real public mutations with Clerk-shaped identities:
+  fan-out per trigger, priority collapse, mute breakthrough, dedupe, access
+  filter, state machine, foreign-row rejection, snooze/wake/stale-wake,
+  markViewed scoping, cascade delete, Former-member + capped-badge
+  enrichment.
+- Manual two-user walkthrough: all five triggers, live badge, deep-link
+  scroll+flash, organic-open clears dots, mute, access dialog both paths.
+- Gates: `npx tsc --noEmit` = 0 errors; vitest green (4 pre-existing
+  failures elsewhere: `lib/format-activity-timestamp.test.ts` ×3 stale
+  assertions, `taskActivityIndicators` ×1, plus vendored `.reference/`
+  tiptap tests picked up by the glob — none related); ESLint clean on all
+  files touched by this feature (repo-wide baseline noise predates it).
+
+### TODOs deferred (user-reviewed scope decisions)
+
+- **Pasted description mentions bypass the selection-time guard** — a
+  mention node arriving via paste (not the dropdown) is still silently
+  filtered server-side; would need a save-time diff check in the editor.
+- **Mentions added by comment EDITS don't notify** — fan-out hooks
+  `comments.create` only; `comments.update` would need `diffMentionIds`.
+- **Access-grant flow double-notifies** — "add as assignee & mention"
+  produces both an `assigned` and a `mention_comment` row; merge later.
+- **Recipient loses task access while holding unread rows** (review delta 6)
+  — badge counts them; row actions (read/archive/snooze) work since they
+  check ownership only; row click opens the drawer whose ErrorBoundary
+  shows the access error. Dismissible, documented, acceptable v1.
+- **Dedupe scan cost** (review delta 8) — `take(100)` unread scan per
+  `assigned`/`mention_description` event; bulkUpdate worst case 50×100 row
+  reads. Bounded, fine at MVP scale; revisit with a per-(recipient,task)
+  index if it ever shows in Convex insights.
+- **Snooze resurface ordering** — woken rows sort by original `createdAt`
+  (may resurface below newer items); Notion floats them to top.
+- **No custom snooze date picker** — three presets only.
+- **Inline reply from the inbox panel** (Notion mini-composer) — deep-link
+  + drawer composer covers v1.
+- **Email digest / channels** — schema ready (`emailedAt`/`channels` are
+  additive), no sending.
+- **Due-date reminders** ("due tomorrow", org-tz 9 AM) — reuse the snooze
+  scheduler infra.
+- **Status-change notifications** (e.g. task done → notify creator).
+- **Per-user notification preferences** (Settings section, per-type toggles).
+- **@task / @project mentions** in the editor (Notion @-page-style linking).
+- **Full keyboard scheme in the panel** (↑↓/Enter/E/U roving focus) — v1
+  ships Esc + focus-ring reachability only.
+- **Hover task-preview card** on notification rows.
+- **Mention-grants-visibility** stays rejected by design (Notion pattern);
+  revisit only if the access model itself changes.

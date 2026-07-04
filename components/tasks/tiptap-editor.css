@@ -455,13 +455,17 @@
 
 /* ─── Comment highlight animation (reply scroll-to) ─────────────────────────── */
 
+/* Notion-style: soft background wash that holds, then slowly fades out —
+   no outline/ring. */
 @keyframes comment-flash {
-  0% { box-shadow: 0 0 0 2px oklch(0.65 0.15 250 / 0.3); }
-  100% { box-shadow: 0 0 0 2px transparent; }
+  0% { background-color: oklch(0.65 0.15 250 / 0.1); }
+  55% { background-color: oklch(0.65 0.15 250 / 0.1); }
+  100% { background-color: transparent; }
 }
 
 .comment-highlight {
-  animation: comment-flash 1.5s ease-out forwards;
+  animation: comment-flash 2.4s ease-in-out forwards;
+  border-radius: 8px;
 }
 
 /* ─── Comment editor ─────────────────────────────────────────────────────────── */

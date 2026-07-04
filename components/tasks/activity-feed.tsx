@@ -9,6 +9,7 @@ import { mergeActivityFeed, type FeedItem } from "@/lib/task-detail"
 import { groupFeedForCommentsView, computeMessageGrouping, getDayLabel, type GroupedFeedItem, type AuditBatch } from "@/lib/activity-grouping"
 import { firstName } from "@/lib/format"
 import { ActivityBatch } from "@/components/tasks/activity-batch"
+import { useCommentDeepLink } from "@/components/tasks/use-comment-deep-link"
 import type { Id } from "@/convex/_generated/dataModel"
 import { toastError } from "@/lib/toast-helpers"
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip"
@@ -33,6 +34,9 @@ interface ActivityFeedProps {
 
 export function ActivityFeed({ taskId, isAdmin, scrollRef, replyContext, onReplyContextChange, onCommentCounts }: ActivityFeedProps) {
   const { isAuthenticated } = useConvexAuth()
+
+  // Inbox → comment deep-link: scroll + highlight once the card renders
+  useCommentDeepLink()
 
   const currentUser = useQuery(api.users.current, isAuthenticated ? {} : "skip")
   const activities = useQuery(api.activityLog.byTask, isAuthenticated ? { taskId } : "skip")

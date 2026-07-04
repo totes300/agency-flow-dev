@@ -6,8 +6,15 @@ import { getAuthContext, requireAdmin, validateStringLength } from "./lib/auth";
 import { logActivity } from "./activityLog";
 import { STATUS_TYPES } from "./lib/constants";
 import type { StatusType } from "./lib/constants";
-import { isTiptapEmpty } from "../lib/tiptap-utils";
+import { isTiptapEmpty, extractPlainText } from "../lib/tiptap-utils";
 import { computeTaskIndicatorState } from "./lib/taskActivityIndicators";
+import { createNotifications } from "./notifications";
+import {
+  extractMentionIds,
+  diffMentionIds,
+  safeParseDoc,
+  truncatePreview,
+} from "./lib/notificationEvents";
 import {
   TAB_STATUS_TYPE,
   isVisibleTopLevelTask,
@@ -300,6 +307,22 @@ export const createSubtask = mutation({
       type: "subtask_created",
       metadata: { subtaskId, title },
     });
+
+    // Notification fan-out: assignment (incl. inherited + default assignee;
+    // actor self-assign is excluded in createNotifications)
+    const createdSubtask = await ctx.db.get(subtaskId);
+    if (createdSubtask && assigneeIds.length > 0) {
+      await createNotifications(ctx, {
+        orgId,
+        actorId: userId,
+        task: createdSubtask,
+        events: assigneeIds.map((recipientId) => ({
+          recipientId,
+          type: "assigned" as const,
+          previewText: title,
+        })),
+      });
+    }
 
     return subtaskId;
   },
@@ -1057,6 +1080,26 @@ export const create = mutation({
 
     await logActivity(ctx, { taskId, orgId, userId, type: "task_created", metadata: {} });
 
+    // Notification fan-out: assignment (incl. default-assignee; actor
+    // self-assign is excluded in createNotifications) + description mentions.
+    const createdTask = await ctx.db.get(taskId);
+    if (createdTask) {
+      const events: Parameters<typeof createNotifications>[1]["events"] = assigneeIds.map(
+        (recipientId) => ({ recipientId, type: "assigned" as const, previewText: title })
+      );
+      const descDoc = safeParseDoc(createdTask.description);
+      const descMentions = extractMentionIds(descDoc);
+      if (descMentions.length > 0) {
+        const preview = truncatePreview(extractPlainText(descDoc));
+        for (const recipientId of descMentions) {
+          events.push({ recipientId, type: "mention_description", previewText: preview });
+        }
+      }
+      if (events.length > 0) {
+        await createNotifications(ctx, { orgId, actorId: userId, task: createdTask, events });
+      }
+    }
+
     return taskId;
   },
 });
@@ -1209,6 +1252,41 @@ export const update = mutation({
     if (args.billable !== undefined && args.billable !== task.billable) {
       await logActivity(ctx, { ...logCtx, type: "billable_changed", metadata: { from: task.billable, to: args.billable } });
     }
+
+    // ── Notification fan-out ─────────────────────────────────────────────
+    // Assignment: newly added ids (explicit diff + auto-assign path).
+    // Description: only newly ADDED mentions notify (diff vs old content).
+    const notifEvents: Parameters<typeof createNotifications>[1]["events"] = [];
+    const taskTitle = (updates.title as string | undefined) ?? task.title;
+    if (args.assigneeIds !== undefined) {
+      const oldSet = new Set(task.assigneeIds.map(String));
+      for (const uid of args.assigneeIds) {
+        if (!oldSet.has(uid.toString())) {
+          notifEvents.push({ recipientId: uid, type: "assigned", previewText: taskTitle });
+        }
+      }
+    }
+    if (autoAssignedUserId) {
+      notifEvents.push({ recipientId: autoAssignedUserId, type: "assigned", previewText: taskTitle });
+    }
+    if (args.description !== undefined) {
+      const newDoc = safeParseDoc(nextDescription);
+      const addedMentions = diffMentionIds(safeParseDoc(task.description), newDoc);
+      if (addedMentions.length > 0) {
+        const preview = truncatePreview(extractPlainText(newDoc));
+        for (const recipientId of addedMentions) {
+          notifEvents.push({ recipientId, type: "mention_description", previewText: preview });
+        }
+      }
+    }
+    if (notifEvents.length > 0) {
+      // Re-read: the access check must see the NEW assignee list, or the
+      // just-added assignee would be filtered out as "no task access".
+      const updatedTask = await ctx.db.get(args.id);
+      if (updatedTask) {
+        await createNotifications(ctx, { orgId, actorId: userId, task: updatedTask, events: notifEvents });
+      }
+    }
   },
 });
 
@@ -1236,6 +1314,24 @@ export const updateDescription = mutation({
       description: nextDescription,
       updatedAt: Date.now(),
     });
+
+    // Notification fan-out: only newly ADDED mentions (diff absorbs autosave
+    // churn; the unread dedupe in createNotifications absorbs re-adds).
+    const newDoc = safeParseDoc(nextDescription);
+    const addedMentions = diffMentionIds(safeParseDoc(task.description), newDoc);
+    if (addedMentions.length > 0) {
+      const preview = truncatePreview(extractPlainText(newDoc));
+      await createNotifications(ctx, {
+        orgId,
+        actorId: userId,
+        task,
+        events: addedMentions.map((recipientId) => ({
+          recipientId,
+          type: "mention_description" as const,
+          previewText: preview,
+        })),
+      });
+    }
   },
 });
 
@@ -1418,9 +1514,16 @@ export const bulkUpdate = mutation({
         }
         case "addAssignee": {
           if (!task.assigneeIds.includes(args.action.userId)) {
-            await ctx.db.patch(taskId, { assigneeIds: [...task.assigneeIds, args.action.userId], updatedAt: now });
+            const nextAssignees = [...task.assigneeIds, args.action.userId];
+            await ctx.db.patch(taskId, { assigneeIds: nextAssignees, updatedAt: now });
             const user = await ctx.db.get(args.action.userId);
             await logActivity(ctx, { taskId, orgId, userId, type: "assignee_added", metadata: { userId: args.action.userId, userName: user?.name ?? "Unknown" } });
+            // Access check needs the NEW assignee list; unread dedupe absorbs repeats
+            await createNotifications(ctx, {
+              orgId, actorId: userId,
+              task: { ...task, assigneeIds: nextAssignees },
+              events: [{ recipientId: args.action.userId, type: "assigned", previewText: task.title }],
+            });
           }
           updated++;
           break;
@@ -1448,8 +1551,14 @@ export const bulkUpdate = mutation({
             const newCat = await ctx.db.get(args.action.workCategoryId);
             await logActivity(ctx, { taskId, orgId, userId, type: "category_changed", metadata: { from: oldCat?.name ?? "None", to: newCat?.name ?? "Unknown" } });
             if (catPatch.assigneeIds) {
-              const autoUser = await ctx.db.get((catPatch.assigneeIds as Id<"users">[])[0]);
-              await logActivity(ctx, { taskId, orgId, userId, type: "assignee_added", metadata: { userId: (catPatch.assigneeIds as Id<"users">[])[0], userName: autoUser?.name ?? "Unknown", reason: "default_assignee", categoryName: newCat?.name ?? "Unknown" } });
+              const autoAssignee = (catPatch.assigneeIds as Id<"users">[])[0];
+              const autoUser = await ctx.db.get(autoAssignee);
+              await logActivity(ctx, { taskId, orgId, userId, type: "assignee_added", metadata: { userId: autoAssignee, userName: autoUser?.name ?? "Unknown", reason: "default_assignee", categoryName: newCat?.name ?? "Unknown" } });
+              await createNotifications(ctx, {
+                orgId, actorId: userId,
+                task: { ...task, assigneeIds: catPatch.assigneeIds as Id<"users">[] },
+                events: [{ recipientId: autoAssignee, type: "assigned", previewText: task.title }],
+              });
             }
           }
           updated++;
@@ -1469,9 +1578,15 @@ export const bulkUpdate = mutation({
           }
           await ctx.db.patch(taskId, projPatch);
           if (projPatch.assigneeIds) {
-            const autoUser = await ctx.db.get((projPatch.assigneeIds as Id<"users">[])[0]);
+            const autoAssignee = (projPatch.assigneeIds as Id<"users">[])[0];
+            const autoUser = await ctx.db.get(autoAssignee);
             const cat = task.workCategoryId ? await ctx.db.get(task.workCategoryId) : null;
-            await logActivity(ctx, { taskId, orgId, userId, type: "assignee_added", metadata: { userId: (projPatch.assigneeIds as Id<"users">[])[0], userName: autoUser?.name ?? "Unknown", reason: "default_assignee", categoryName: cat?.name ?? "Unknown" } });
+            await logActivity(ctx, { taskId, orgId, userId, type: "assignee_added", metadata: { userId: autoAssignee, userName: autoUser?.name ?? "Unknown", reason: "default_assignee", categoryName: cat?.name ?? "Unknown" } });
+            await createNotifications(ctx, {
+              orgId, actorId: userId,
+              task: { ...task, assigneeIds: projPatch.assigneeIds as Id<"users">[] },
+              events: [{ recipientId: autoAssignee, type: "assigned", previewText: task.title }],
+            });
           }
           updated++;
           break;

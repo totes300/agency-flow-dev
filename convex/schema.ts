@@ -548,6 +548,49 @@ export default defineSchema({
     .index("by_user_task", ["userId", "taskId"])
     .index("by_orgId", ["orgId"]),
 
+  // ─── Notifications (inbox — mentions, assignments, comments) ─────────────
+  notifications: defineTable({
+    orgId: v.string(),
+    recipientId: v.id("users"),
+    actorId: v.id("users"),
+    type: v.union(
+      v.literal("mention_comment"),
+      v.literal("mention_description"),
+      v.literal("assigned"),
+      v.literal("comment"),
+      v.literal("comment_reply"),
+    ),
+    taskId: v.id("tasks"),
+    commentId: v.optional(v.id("comments")),
+    // Plain-text snapshot at fan-out time (survives comment edits/deletes)
+    previewText: v.string(),
+    inboxState: v.union(
+      v.literal("unread"),
+      v.literal("read"),
+      v.literal("archived"),
+      v.literal("snoozed"),
+    ),
+    readAt: v.optional(v.number()),
+    archivedAt: v.optional(v.number()),
+    snoozedUntil: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_recipient_org_state", ["recipientId", "orgId", "inboxState", "createdAt"])
+    .index("by_task", ["taskId"])
+    .index("by_orgId", ["orgId"]),
+
+  // ─── Task mutes (per user — silences comment/reply notifications) ────────
+  taskMutes: defineTable({
+    orgId: v.string(),
+    taskId: v.id("tasks"),
+    userId: v.id("users"),
+    createdAt: v.number(),
+  })
+    .index("by_user_task", ["userId", "taskId"])
+    .index("by_task", ["taskId"])
+    .index("by_orgId", ["orgId"]),
+
   // ─── Link previews (OG metadata cache, global) ────────────────────────────
   linkPreviews: defineTable({
     url: v.string(),

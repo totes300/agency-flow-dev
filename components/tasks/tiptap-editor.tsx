@@ -28,11 +28,36 @@ import { api } from "@/convex/_generated/api"
 import { DescriptionToolbar, BubbleToolbar } from "@/components/tasks/editor-toolbar"
 import { useSlashCommand } from "@/components/tasks/slash-command"
 import { useMentionSuggestion } from "@/components/tasks/use-mention-suggestion"
+import { useMentionAccessGuard } from "@/components/tasks/use-mention-access-guard"
 import { toastError } from "@/lib/toast-helpers"
 import { cn } from "@/lib/utils"
+import type { Editor } from "@tiptap/react"
+import type { Id } from "@/convex/_generated/dataModel"
 import "./tiptap-editor.css"
 
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024 // 10MB
+
+/**
+ * Delete the LAST mention node of `userId` from the doc — undoes the
+ * insertion when the user declines to grant task access.
+ */
+function removeLastMentionOf(editor: Editor | null, userId: string): void {
+  if (!editor) return
+  let found: { pos: number; size: number } | null = null
+  editor.state.doc.descendants((node, pos) => {
+    if (node.type.name === "mention" && node.attrs.id === userId) {
+      found = { pos, size: node.nodeSize }
+    }
+  })
+  const target = found as { pos: number; size: number } | null
+  if (target) {
+    editor
+      .chain()
+      .focus()
+      .deleteRange({ from: target.pos, to: target.pos + target.size })
+      .run()
+  }
+}
 
 type TiptapEditorProps = {
   content: unknown
@@ -41,6 +66,19 @@ type TiptapEditorProps = {
   editable?: boolean
   autoFocus?: boolean
   variant?: "default" | "document"
+  /** Current task assignees — enables the mention no-access hint. */
+  taskAssigneeIds?: string[]
+  /**
+   * Existing task context. Enables the selection-time access dialog: picking
+   * a no-access member opens "add as assignee / remove mention" — a saved
+   * description mention must always notify.
+   */
+  taskId?: Id<"tasks">
+  /**
+   * Custom no-access handling (create-task form: auto-add the member to the
+   * form's assignee selection). Takes precedence over the taskId dialog.
+   */
+  onNoAccessMention?: (user: { id: string; label: string }) => void
 }
 
 export function TiptapEditor({
@@ -50,9 +88,25 @@ export function TiptapEditor({
   editable = true,
   autoFocus = false,
   variant = "default",
+  taskAssigneeIds,
+  taskId,
+  onNoAccessMention,
 }: TiptapEditorProps) {
   const { slashExtension, renderSlashDropdown } = useSlashCommand()
-  const { mentionExtension, renderMentionDropdown } = useMentionSuggestion()
+  const { guardMentionInsert, renderMentionAccessDialog } = useMentionAccessGuard(taskId)
+  const editorForGuardRef = useRef<Editor | null>(null)
+  const { mentionExtension, renderMentionDropdown } = useMentionSuggestion({
+    taskAssigneeIds,
+    onNoAccessSelect:
+      onNoAccessMention ??
+      (taskId
+        ? (user) =>
+            guardMentionInsert(
+              { _id: user.id as Id<"users">, name: user.label },
+              () => removeLastMentionOf(editorForGuardRef.current, user.id),
+            )
+        : undefined),
+  })
   const generateUploadUrl = useMutation(api.attachments.generateUploadUrl)
   const reuploadFromUrl = useAction(api.attachments.reuploadFromUrl)
   const convexSiteUrl = process.env.NEXT_PUBLIC_CONVEX_URL!.replace(".cloud", ".site")
@@ -298,6 +352,11 @@ export function TiptapEditor({
     },
   }, [extensions])
 
+  // Editor handle for the mention-access cancel path (event-time access only)
+  useEffect(() => {
+    editorForGuardRef.current = editor
+  }, [editor])
+
   // Sync external content changes (date switch, edits from another tab, etc.).
   // Tiptap is an uncontrolled editor — `content` only takes effect on mount.
   // We re-apply when the prop diverges, but ONLY while the editor is unfocused.
@@ -418,6 +477,7 @@ export function TiptapEditor({
 
         {renderSlashDropdown()}
         {renderMentionDropdown()}
+        {renderMentionAccessDialog()}
       </div>
     </Tiptap>
   )

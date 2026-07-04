@@ -22,6 +22,7 @@ const TiptapEditor = dynamic(
 type TaskOverviewData = {
   _id: Id<"tasks">
   description?: unknown
+  assigneeIds?: Id<"users">[]
 }
 
 export function TaskDetailOverview({
@@ -88,6 +89,8 @@ export function TaskDetailOverview({
         content={descriptionContent}
         onUpdate={handleDescriptionUpdate}
         variant="document"
+        taskAssigneeIds={task.assigneeIds}
+        taskId={task._id}
       />
     </section>
   )

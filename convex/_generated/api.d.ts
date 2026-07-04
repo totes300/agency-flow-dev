@@ -33,6 +33,7 @@ import type * as lib_invoiceCreation from "../lib/invoiceCreation.js";
 import type * as lib_invoiceIdentifier from "../lib/invoiceIdentifier.js";
 import type * as lib_markPaid from "../lib/markPaid.js";
 import type * as lib_myTaskHelpers from "../lib/myTaskHelpers.js";
+import type * as lib_notificationEvents from "../lib/notificationEvents.js";
 import type * as lib_orgHelpers from "../lib/orgHelpers.js";
 import type * as lib_projectSummary from "../lib/projectSummary.js";
 import type * as lib_rates from "../lib/rates.js";
@@ -58,6 +59,7 @@ import type * as migrations_seedInvoicingScenarios from "../migrations/seedInvoi
 import type * as migrations_wipeAllTimeEntries from "../migrations/wipeAllTimeEntries.js";
 import type * as migrations_wipeInvoicingForRefactor from "../migrations/wipeInvoicingForRefactor.js";
 import type * as myTasks from "../myTasks.js";
+import type * as notifications from "../notifications.js";
 import type * as orgMembers from "../orgMembers.js";
 import type * as orgSettings from "../orgSettings.js";
 import type * as projectCategoryEstimates from "../projectCategoryEstimates.js";
@@ -112,6 +114,7 @@ declare const fullApi: ApiFromModules<{
   "lib/invoiceIdentifier": typeof lib_invoiceIdentifier;
   "lib/markPaid": typeof lib_markPaid;
   "lib/myTaskHelpers": typeof lib_myTaskHelpers;
+  "lib/notificationEvents": typeof lib_notificationEvents;
   "lib/orgHelpers": typeof lib_orgHelpers;
   "lib/projectSummary": typeof lib_projectSummary;
   "lib/rates": typeof lib_rates;
@@ -137,6 +140,7 @@ declare const fullApi: ApiFromModules<{
   "migrations/wipeAllTimeEntries": typeof migrations_wipeAllTimeEntries;
   "migrations/wipeInvoicingForRefactor": typeof migrations_wipeInvoicingForRefactor;
   myTasks: typeof myTasks;
+  notifications: typeof notifications;
   orgMembers: typeof orgMembers;
   orgSettings: typeof orgSettings;
   projectCategoryEstimates: typeof projectCategoryEstimates;

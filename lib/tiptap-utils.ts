@@ -29,6 +29,40 @@ export function extractPlainText(
 }
 
 /**
+ * Recursively walk Tiptap JSON and collect `attrs.id` of every
+ * `{ type: "mention" }` node. Deduped, document order preserved.
+ * Tolerates malformed input (non-objects, missing attrs) — returns [].
+ * Used by the server-side notification fan-out AND the client-side
+ * mention-access guard — keep it dependency-free.
+ */
+export function extractMentionIds(content: unknown): string[] {
+  const ids: string[] = []
+  const seen = new Set<string>()
+
+  function walk(node: unknown): void {
+    if (!node || typeof node !== "object") return
+    if (Array.isArray(node)) {
+      for (const child of node) walk(child)
+      return
+    }
+    const n = node as TiptapNodeLike
+    if (n.type === "mention") {
+      const id = n.attrs?.id
+      if (typeof id === "string" && id && !seen.has(id)) {
+        seen.add(id)
+        ids.push(id)
+      }
+    }
+    if (Array.isArray(n.content)) {
+      for (const child of n.content) walk(child)
+    }
+  }
+
+  walk(content)
+  return ids
+}
+
+/**
  * Check if Tiptap JSON content is effectively empty.
  * An empty Tiptap doc is { type: "doc", content: [{ type: "paragraph" }] }
  * or { type: "doc", content: [] }.

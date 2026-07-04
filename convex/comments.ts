@@ -3,6 +3,11 @@ import { query, mutation } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
 import { getAuthContext } from "./lib/auth";
 import { logActivity } from "./activityLog";
+import { createNotifications } from "./notifications";
+import {
+  extractMentionIds,
+  computeCommentRecipients,
+} from "./lib/notificationEvents";
 
 // ─── Query ──────────────────────────────────────────────────────────────────────
 
@@ -99,11 +104,13 @@ export const create = mutation({
     }
 
     // Validate parent comment if replying
+    let parentAuthorId: Id<"users"> | undefined;
     if (args.parentCommentId) {
       const parent = await ctx.db.get(args.parentCommentId);
       if (!parent || parent.taskId !== args.taskId) {
         throw new ConvexError("Parent comment not found");
       }
+      parentAuthorId = parent.userId;
 
       // Auto re-open: find root comment and unresolve if resolved
       let root = parent;
@@ -137,6 +144,37 @@ export const create = mutation({
       type: "comment_added",
       metadata: { commentId },
     });
+
+    // Notification fan-out: @mentions + reply-to-author + task participants
+    // (assignees ∪ prior commenters). Mention ids come from client-controlled
+    // Tiptap JSON — createNotifications validates each recipient.
+    const priorComments = await ctx.db
+      .query("comments")
+      .withIndex("by_task", (q) => q.eq("taskId", args.taskId))
+      .take(200);
+    const participantIds = [...new Set(priorComments.map((c) => c.userId))];
+
+    const recipients = computeCommentRecipients({
+      actorId: userId,
+      assigneeIds: task.assigneeIds,
+      mentionIds: extractMentionIds(args.content),
+      participantIds,
+      parentAuthorId,
+    });
+    if (recipients.length > 0) {
+      const preview = extractContentPreview(args.content, 140);
+      await createNotifications(ctx, {
+        orgId,
+        actorId: userId,
+        task,
+        events: recipients.map((r) => ({
+          recipientId: r.userId,
+          type: r.type,
+          commentId,
+          previewText: preview,
+        })),
+      });
+    }
 
     return commentId;
   },

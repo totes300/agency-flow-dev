@@ -275,8 +275,9 @@ export const getRetainerStatement = query({
     const includedMinutes = project.includedMinutesPerMonth ?? 0;
     const monthlyFee = project.monthlyFee ?? 0;
     const overageRate = project.overageRate ?? 0;
-    const rolloverEnabled = project.rolloverEnabled ?? true;
-    const cycleLength = project.cycleLength ?? 3;
+    // Defaults mirror `projects.create` (cycleLength 1 → monthly, no rollover).
+    const rolloverEnabled = project.rolloverEnabled ?? false;
+    const cycleLength = project.cycleLength ?? 1;
 
     // Balance numbers are computed RAW from time entries — no rounding, no
     // reading from the invoice's frozen snapshot. Per

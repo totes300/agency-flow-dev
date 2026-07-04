@@ -13,7 +13,7 @@ import { InvoiceDocument } from "@/components/invoices/invoice-document"
 import { InvoiceSidebar } from "@/components/invoices/invoice-sidebar"
 import { InvoiceEditorSkeleton } from "@/components/invoices/invoice-editor-skeleton"
 import { InvoiceDeletedState } from "@/components/invoices/invoice-deleted-state"
-import { formatInvoiceNumber } from "@/lib/format"
+import { formatInvoiceIdentifier } from "@/lib/format"
 import { useBreadcrumbTitle } from "@/lib/hooks/use-breadcrumb-title"
 
 export default function InvoiceEditorPage() {
@@ -30,7 +30,7 @@ export default function InvoiceEditorPage() {
   const printRequested = searchParams.get("print") === "1"
   const breadcrumbTitle =
     data && data !== null
-      ? formatInvoiceNumber(data.invoice.prefix, data.invoice.number)
+      ? formatInvoiceIdentifier(data.invoice.prefix, data.invoice.number)
       : null
   useBreadcrumbTitle(breadcrumbTitle)
 
@@ -134,6 +134,7 @@ export default function InvoiceEditorPage() {
               backHref={backHref}
               fixedBilled={fixedBilled}
               onPrint={() => window.print()}
+              brandMissing={!brand?.brandName}
             />
           </div>
         </div>

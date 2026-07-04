@@ -9,10 +9,37 @@ export const get = query({
     const authCtx = await getAuthContextOptional(ctx);
     if (!authCtx) return null;
 
-    return await ctx.db
+    const row = await ctx.db
       .query("orgSettings")
       .withIndex("by_orgId", (q) => q.eq("orgId", authCtx.orgId))
       .unique();
+    if (!row) return null;
+
+    // Phase 9 BYOK: strip every AI-key field before returning to the
+    // client. The ciphertext is non-negotiable — leaking it lets a future
+    // KEK compromise retroactively recover keys. The mask + audit fields
+    // (mask, configured-at/by, removed-at/by) are technically safe to
+    // expose, but `orgSettings.get` is called from 15+ member-visible
+    // surfaces. The Integrations tab uses the dedicated, admin-gated
+    // `api.aiIntegration.getStatus` query for everything it renders, so
+    // there's no caller of `orgSettings.get` that needs these fields —
+    // stripping them keeps the concerns properly isolated.
+    const {
+      aiAnthropicKeyCiphertext: _ct,
+      aiAnthropicKeyMask: _mask,
+      aiKeyConfiguredAt: _cfgAt,
+      aiKeyConfiguredBy: _cfgBy,
+      aiKeyRemovedAt: _rmAt,
+      aiKeyRemovedBy: _rmBy,
+      ...safe
+    } = row;
+    void _ct;
+    void _mask;
+    void _cfgAt;
+    void _cfgBy;
+    void _rmAt;
+    void _rmBy;
+    return safe;
   },
 });
 

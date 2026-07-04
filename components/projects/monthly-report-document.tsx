@@ -2,11 +2,10 @@
 
 import type { FunctionReturnType } from "convex/server"
 import type { api } from "@/convex/_generated/api"
-import { DocumentParties } from "@/components/document/parties"
 import { DocumentPaymentSummary } from "@/components/document/payment-summary"
 import { RetainerUsageTable } from "@/components/document/retainer-usage-table"
 import { ColoredPillBadge } from "@/components/ui/colored-pill-badge"
-import { formatCurrency, formatInvoiceNumber, formatMinutes } from "@/lib/format"
+import { formatCurrency, formatInvoiceIdentifier, formatMinutes } from "@/lib/format"
 import { getRetainerUsageLabels } from "@/lib/retainerLabels"
 
 type MonthlyReport = NonNullable<FunctionReturnType<typeof api.statements.getRetainerStatement>>
@@ -25,7 +24,6 @@ export function MonthlyReportDocument({ report }: { report: MonthlyReport }) {
     billing,
     project,
     client,
-    brand,
     billableCategoryGroups,
     linkedInvoice,
   } = report
@@ -53,7 +51,9 @@ export function MonthlyReportDocument({ report }: { report: MonthlyReport }) {
             Monthly Report
           </p>
           <h1 className="mt-1 text-2xl font-semibold">{period.label}</h1>
-          <p className="mt-1 text-sm text-muted-foreground">{project.name}</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {client.name} · {project.name}
+          </p>
         </div>
 
         <DocumentPaymentSummary
@@ -67,7 +67,7 @@ export function MonthlyReportDocument({ report }: { report: MonthlyReport }) {
               <>
                 Pay{" "}
                 <span className="font-mono">
-                  {formatInvoiceNumber(linkedInvoice.prefix, linkedInvoice.number)}
+                  {formatInvoiceIdentifier(linkedInvoice.prefix, linkedInvoice.number)}
                 </span>{" "}
                 because this {project.rolloverEnabled ? "cycle" : "month"} closed over budget.
               </>
@@ -87,7 +87,9 @@ export function MonthlyReportDocument({ report }: { report: MonthlyReport }) {
         </DocumentPaymentSummary>
       </div>
 
-      <DocumentParties brand={brand} client={client} />
+      {/* No From/To parties block — a report carries no financial settlement,
+          so addresses / tax numbers are invoice-only concerns. The client is
+          named in the subtitle; the payload is the work + the balance. */}
 
       <div className="flex flex-wrap items-center gap-6 border-y py-4">
         <div>

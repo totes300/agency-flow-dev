@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react"
 import Link from "next/link"
+import { useAction } from "convex/react"
 import type { FunctionReturnType } from "convex/server"
 import { useOrganization } from "@clerk/nextjs"
 import {
@@ -10,6 +11,7 @@ import {
   DownloadIcon,
   ExternalLinkIcon,
   EyeIcon,
+  FileSpreadsheetIcon,
   InfoIcon,
   MoreHorizontalIcon,
   RotateCcwIcon,
@@ -40,13 +42,15 @@ import { ClosePeriodModal } from "@/components/projects/close-period-modal"
 import { CloseCycleModal } from "@/components/projects/close-cycle-modal"
 import { ReopenPeriodDialog } from "@/components/projects/reopen-period-dialog"
 import { PeriodDetailSheet } from "@/components/projects/period-detail-sheet"
+import { WorksheetMenuItem } from "@/components/worksheet/worksheet-menu-item"
 import { useGenerateInvoice } from "@/lib/hooks/use-generate-invoice"
 import {
   formatCurrency,
   formatCycleLabel,
-  formatInvoiceNumber,
+  formatInvoiceIdentifier,
   formatMinutes,
   formatShortDate,
+  invoiceUrlSegment,
 } from "@/lib/format"
 import {
   decideRetainerRowAction,
@@ -567,6 +571,8 @@ function MonthRow({
           cycleEndYear={cycleEndYear}
           cycleEndMonth={cycleEndMonth}
           cycleLabel={cycleLabel}
+          isRollover={isRollover}
+          isCycleEndRow={isCycleEndRow}
         />
       </li>
       <PeriodDetailSheet
@@ -676,6 +682,8 @@ function ActionCell({
   cycleEndYear,
   cycleEndMonth,
   cycleLabel,
+  isRollover,
+  isCycleEndRow,
 }: {
   action: RetainerRowAction
   closeAction: RetainerRowCloseAction
@@ -691,6 +699,8 @@ function ActionCell({
   cycleEndYear: number
   cycleEndMonth: number
   cycleLabel: string
+  isRollover: boolean
+  isCycleEndRow: boolean
 }) {
   // Modal/dialog state lives at the cell level — each row has its own
   // instance so the modal anchors visually to the row that triggered it
@@ -698,6 +708,41 @@ function ActionCell({
   const [closeMonthOpen, setCloseMonthOpen] = useState(false)
   const [closeCycleOpen, setCloseCycleOpen] = useState(false)
   const [reopenDialogOpen, setReopenDialogOpen] = useState(false)
+
+  // Slice 1 — every monthly row gets a `Download worksheet` overflow item.
+  // The action is admin-gated server-side (`requireAdmin`); we mirror the
+  // gate in the UI so members never see a control they can't use.
+  // `useAction` returns a stable function; the `WorksheetMenuItem` owns the
+  // loading state, Blob download, and error toast.
+  const exportMonth = useAction(api.worksheets.exportMonth)
+  const exportCycle = useAction(api.worksheets.exportCycle)
+  const worksheetItem = isAdmin ? (
+    <WorksheetMenuItem
+      label="Download worksheet"
+      icon={<FileSpreadsheetIcon className="size-3.5" aria-hidden />}
+      run={() =>
+        exportMonth({
+          projectId,
+          year: month.year,
+          month: month.month,
+        })
+      }
+    />
+  ) : null
+
+  // Slice 3 — full-cycle export. Available only on the cycle-end row of
+  // rollover retainer projects (per PRD §Trigger placement table). On
+  // 1-month cycles every row is a cycle-end row, so this item ALSO appears
+  // there — the verification explicitly calls for "1-month cycle exports
+  // identically from cycle-close row and from monthly row".
+  const cycleWorksheetItem =
+    isAdmin && isRollover && isCycleEndRow ? (
+      <WorksheetMenuItem
+        label="Download cycle worksheet"
+        icon={<FileSpreadsheetIcon className="size-3.5" aria-hidden />}
+        run={() => exportCycle({ projectId, cycleStart })}
+      />
+    ) : null
 
   const viewEntriesItem = (
     <DropdownMenuItem onSelect={onOpenDrillDown}>
@@ -711,13 +756,15 @@ function ActionCell({
     return (
       <div className="flex items-center justify-end gap-1">
         <Link
-          href={`/invoices/${formatInvoiceNumber(invoice.prefix, invoice.number)}?from=project&projectId=${projectId}&tab=invoices`}
+          href={`/invoices/${invoiceUrlSegment({ _id: invoice.id, prefix: invoice.prefix, number: invoice.number })}?from=project&projectId=${projectId}&tab=invoices`}
           className="inline-flex items-center gap-1 font-mono text-xs text-foreground/80 hover:text-foreground hover:underline"
         >
-          {formatInvoiceNumber(invoice.prefix, invoice.number)}
+          {formatInvoiceIdentifier(invoice.prefix, invoice.number)}
           <ExternalLinkIcon className="size-3" />
         </Link>
         <RowOverflow ariaLabel={`More actions for ${month.label}`}>
+          {worksheetItem}
+          {cycleWorksheetItem}
           {viewEntriesItem}
         </RowOverflow>
       </div>
@@ -732,6 +779,8 @@ function ActionCell({
           Generate
         </Button>
         <RowOverflow ariaLabel={`More actions for ${month.label}`}>
+          {worksheetItem}
+          {cycleWorksheetItem}
           {viewEntriesItem}
         </RowOverflow>
       </div>
@@ -744,6 +793,8 @@ function ActionCell({
       <div className="flex items-center justify-end gap-1">
         <ReportLink projectId={projectId} month={month} />
         <RowOverflow ariaLabel={`More actions for ${month.label}`}>
+          {worksheetItem}
+          {cycleWorksheetItem}
           {isAdmin && (
             <DropdownMenuItem onSelect={() => setReopenDialogOpen(true)}>
               <RotateCcwIcon className="size-3.5" aria-hidden />
@@ -782,6 +833,8 @@ function ActionCell({
           {isCycleVariant ? "Close cycle" : "Close"}
         </Button>
         <RowOverflow ariaLabel={`More actions for ${month.label}`}>
+          {worksheetItem}
+          {cycleWorksheetItem}
           <DropdownMenuItem asChild>
             <Link
               href={`/projects/${projectId}/reports/${periodToken(month)}`}
@@ -824,6 +877,8 @@ function ActionCell({
     <div className="flex items-center justify-end gap-1">
       <ReportLink projectId={projectId} month={month} />
       <RowOverflow ariaLabel={`More actions for ${month.label}`}>
+        {worksheetItem}
+        {cycleWorksheetItem}
         {viewEntriesItem}
       </RowOverflow>
     </div>

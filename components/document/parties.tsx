@@ -1,5 +1,7 @@
 "use client"
 
+import Link from "next/link"
+
 type PartyInfo = {
   name?: string
   address?: string
@@ -52,16 +54,30 @@ export function DocumentParties({
 }) {
   return (
     <div className="grid grid-cols-2 gap-8">
-      <PartyBlock
-        label="From"
-        info={{
-          name: brand?.brandName,
-          address: brand?.brandAddress,
-          taxId: brand?.brandTaxId,
-          email: brand?.brandEmail,
-          phone: brand?.brandPhone,
-        }}
-      />
+      <div className="flex flex-col gap-1.5">
+        <PartyBlock
+          label="From"
+          info={{
+            name: brand?.brandName,
+            address: brand?.brandAddress,
+            taxId: brand?.brandTaxId,
+            email: brand?.brandEmail,
+            phone: brand?.brandPhone,
+          }}
+        />
+        {/* Fix-path for the "No name set" placeholder: without a seller
+            name the invoice can't be marked as invoiced (server gate), so
+            the document points straight at the form that unblocks it.
+            Hidden in print — it's chrome, not document content. */}
+        {!brand?.brandName && (
+          <Link
+            href="/settings"
+            className="text-sm font-medium text-primary hover:underline print:hidden"
+          >
+            Add your company details →
+          </Link>
+        )}
+      </div>
       <PartyBlock
         label="To"
         info={{

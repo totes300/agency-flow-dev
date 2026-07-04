@@ -17,6 +17,7 @@ import {
 import { ConfirmDialog } from "@/components/confirm-dialog"
 import { BillingTypeBadge } from "@/components/billing-type-badge"
 import { RetainerStatusBadge } from "@/components/retainer-status-badge"
+import { AdHocExportDialog } from "@/components/worksheet/ad-hoc-export-dialog"
 import { toast } from "sonner"
 import { toastError } from "@/lib/toast-helpers"
 import { formatShortDate, formatMinutes } from "@/lib/format"
@@ -24,6 +25,7 @@ import {
   MoreHorizontalIcon,
   ArchiveIcon,
   ArchiveRestoreIcon,
+  FileSpreadsheetIcon,
   Trash2Icon,
 } from "lucide-react"
 
@@ -37,6 +39,7 @@ type ProjectHeaderProps = {
     billingType: "fixed" | "retainer" | "t_and_m" | "non_billable"
     retainerStatus?: string
     includedMinutesPerMonth?: number
+    startDate?: string
     archivedAt?: number
   }
   lastLoggedDate?: string
@@ -54,6 +57,7 @@ export function ProjectDetailHeader({
   const restoreProject = useMutation(api.projects.restore)
   const removeProject = useMutation(api.projects.remove)
   const [deleteOpen, setDeleteOpen] = useState(false)
+  const [adHocExportOpen, setAdHocExportOpen] = useState(false)
 
   async function handleArchive() {
     try {
@@ -129,6 +133,10 @@ export function ProjectDetailHeader({
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => setAdHocExportOpen(true)}>
+                  <FileSpreadsheetIcon /> Download worksheet…
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
                 {project.archivedAt ? (
                   <DropdownMenuItem onClick={handleRestore}>
                     <ArchiveRestoreIcon /> Restore
@@ -159,6 +167,13 @@ export function ProjectDetailHeader({
         confirmLabel="Delete"
         variant="destructive"
         onConfirm={handleDelete}
+      />
+
+      <AdHocExportDialog
+        open={adHocExportOpen}
+        onOpenChange={setAdHocExportOpen}
+        projectId={projectId}
+        projectStartDate={project.startDate}
       />
     </>
   )

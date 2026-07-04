@@ -61,6 +61,21 @@ export default defineSchema({
     defaultPaymentTermsDays: v.optional(v.number()),
     paymentInstructions: v.optional(v.string()),
     invoiceMessageTemplate: v.optional(v.string()),
+    // AI integration — BYOK Anthropic key (Phase 9). Ciphertext is
+    // AES-GCM-encrypted with `AI_KEY_ENCRYPTION_KEK` env var; see
+    // `convex/lib/secretCrypto.ts`. The mask (e.g. `sk-ant-a…wxyz`) is
+    // the only piece safe to send to the client — orgSettings.get must
+    // strip the ciphertext before returning.
+    //
+    // The ciphertext carries a version prefix (`v1:` etc.) so we can change
+    // the cipher / KDF later without ambiguity. Removed-key audit fields
+    // persist across re-adds so we always know who last removed a key.
+    aiAnthropicKeyCiphertext: v.optional(v.string()),
+    aiAnthropicKeyMask: v.optional(v.string()),
+    aiKeyConfiguredAt: v.optional(v.number()),
+    aiKeyConfiguredBy: v.optional(v.id("users")),
+    aiKeyRemovedAt: v.optional(v.number()),
+    aiKeyRemovedBy: v.optional(v.id("users")),
     // Base
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -245,7 +260,12 @@ export default defineSchema({
     orgId: v.string(),
     projectId: v.id("projects"),
     clientId: v.id("clients"),
-    number: v.number(),
+    // Allocated at FINALIZATION (draft → invoiced), not at draft creation —
+    // Stripe-style. Drafts have no number, so deleting a draft never burns a
+    // sequence number and the issued series stays gapless (a NAV/EU
+    // requirement). Once allocated, a number is never removed — voided
+    // invoices keep theirs as part of the audit trail.
+    number: v.optional(v.number()),
     prefix: v.string(),
     subject: v.optional(v.string()),
     status: v.union(

@@ -129,14 +129,17 @@ export function SettingsRetainer({
     if (!canSave) return
     setSaving(true)
     try {
+      const newCycleLength = parseInt(cycleLength) || 3
       await updateRetainer({
         id: projectId,
         includedMinutesPerMonth: Math.round(parsedHours * 60),
         monthlyFee: parsedFee,
         overageRate: parsedOverageRate,
         startDate: startDate ? formatDateToYMD(startDate) : undefined,
-        cycleLength: parseInt(cycleLength) || 3,
-        rolloverEnabled,
+        cycleLength: newCycleLength,
+        // Rollover only exists across multi-month cycles (server enforces
+        // the same rule) — a 1-month cycle always saves as monthly.
+        rolloverEnabled: newCycleLength >= 2 ? rolloverEnabled : false,
         confirmed: true,
       })
       toast.success("Retainer settings saved")
@@ -277,23 +280,32 @@ export function SettingsRetainer({
             </div>
           </div>
 
-          {/* Rollover */}
-          <div className="flex items-start justify-between gap-4 rounded-lg border p-3">
-            <div className="space-y-0.5">
-              <p className="text-sm font-medium">Rollover unused hours</p>
-              <p className="text-xs text-muted-foreground">
-                {rolloverEnabled
-                  ? "Unused hours carry forward within each cycle. Forfeited at cycle end."
-                  : "Each month is independent. Overage billed monthly."}
-              </p>
+          {/* Rollover — only meaningful across multi-month cycles; hidden for
+              1-month cycles (same rule the creation form applies, and the
+              server forces rollover off below 2 months). */}
+          {(parseInt(cycleLength) || 1) >= 2 ? (
+            <div className="flex items-start justify-between gap-4 rounded-lg border p-3">
+              <div className="space-y-0.5">
+                <p className="text-sm font-medium">Rollover unused hours</p>
+                <p className="text-xs text-muted-foreground">
+                  {rolloverEnabled
+                    ? "Unused hours carry forward within each cycle. Forfeited at cycle end."
+                    : "Each month is independent. Overage billed monthly."}
+                </p>
+              </div>
+              <Switch
+                id="ret-rollover"
+                checked={rolloverEnabled}
+                onCheckedChange={setRolloverEnabled}
+                className="shrink-0"
+              />
             </div>
-            <Switch
-              id="ret-rollover"
-              checked={rolloverEnabled}
-              onCheckedChange={setRolloverEnabled}
-              className="shrink-0"
-            />
-          </div>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              1-month cycle — each month settles independently. Rollover is
+              available for cycles of 2+ months.
+            </p>
+          )}
 
           <p className="text-xs text-muted-foreground">
             Changes retroactively affect the current billing cycle.

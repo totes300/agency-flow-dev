@@ -1,8 +1,15 @@
 "use client"
 
 import { useState } from "react"
-import { useMutation } from "convex/react"
-import { Ban, DownloadIcon, MoreHorizontal, Trash2, Undo2 } from "lucide-react"
+import { useAction, useMutation } from "convex/react"
+import {
+  Ban,
+  DownloadIcon,
+  FileSpreadsheetIcon,
+  MoreHorizontal,
+  Trash2,
+  Undo2,
+} from "lucide-react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { toast } from "sonner"
@@ -16,6 +23,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { WorksheetMenuItem } from "@/components/worksheet/worksheet-menu-item"
 import type { InvoiceStatus } from "@/components/invoices/invoice-status-badge"
 
 type StatusAction = {
@@ -69,12 +77,13 @@ const PRIMARY_ACTION: Record<
  * deliberate, second-thought action.
  */
 const SECONDARY_ACTIONS: Record<InvoiceStatus, SecondaryAction[]> = {
+  // Drafts are unnumbered and unissued — the discard path is Delete, which
+  // frees the period without burning a sequence number.
   draft: [
     {
-      kind: "status",
-      label: "Void",
-      icon: <Ban className="size-3.5" />,
-      target: "void",
+      kind: "delete",
+      label: "Delete",
+      icon: <Trash2 className="size-3.5" />,
       destructive: true,
     },
   ],
@@ -93,6 +102,9 @@ const SECONDARY_ACTIONS: Record<InvoiceStatus, SecondaryAction[]> = {
       destructive: true,
     },
   ],
+  // Paid invoices are immutable records: no revert-to-draft, no delete
+  // (lifecycle-tightening, 2026-07-04). "Mark as unpaid" undoes a
+  // mis-click; everything further flows through invoiced → void → re-bill.
   paid: [
     {
       kind: "download",
@@ -101,15 +113,9 @@ const SECONDARY_ACTIONS: Record<InvoiceStatus, SecondaryAction[]> = {
     },
     {
       kind: "status",
-      label: "Revert to draft",
+      label: "Mark as unpaid",
       icon: <Undo2 className="size-3.5" />,
-      target: "draft",
-    },
-    {
-      kind: "delete",
-      label: "Delete",
-      icon: <Trash2 className="size-3.5" />,
-      destructive: true,
+      target: "invoiced",
     },
   ],
   void: [],
@@ -134,15 +140,18 @@ export function InvoiceRowActions({
 }) {
   const changeStatus = useMutation(api.invoices.changeInvoiceStatus)
   const deleteInvoice = useMutation(api.invoices.deleteInvoice)
+  // Phase 9 Slice 4 — worksheet companion. Available for draft / invoiced /
+  // paid (every status with line items); skipped for `void` because the
+  // component short-circuits to null below before the menu renders.
+  const exportInvoice = useAction(api.worksheets.exportInvoice)
   const [open, setOpen] = useState(false)
-  const [confirmAction, setConfirmAction] = useState<"delete" | "draft" | null>(
-    null,
-  )
+  const [confirmAction, setConfirmAction] = useState<"delete" | null>(null)
 
   const primary = PRIMARY_ACTION[status]
   const secondary = SECONDARY_ACTIONS[status]
 
   if (!primary && secondary.length === 0) return null
+  const showWorksheet = status !== "void"
 
   async function run(target: InvoiceStatus) {
     try {
@@ -182,10 +191,6 @@ export function InvoiceRowActions({
       setConfirmAction("delete")
       return
     }
-    if (status === "paid" && action.target === "draft") {
-      setConfirmAction("draft")
-      return
-    }
     void run(action.target)
   }
 
@@ -203,7 +208,7 @@ export function InvoiceRowActions({
           </Button>
         )}
 
-        {secondary.length > 0 && (
+        {(secondary.length > 0 || showWorksheet) && (
           <div
             className={
               status === "paid"
@@ -226,6 +231,18 @@ export function InvoiceRowActions({
                 align="end"
                 onClick={(e) => e.stopPropagation()}
               >
+                {showWorksheet && (
+                  <WorksheetMenuItem
+                    label="Download worksheet"
+                    icon={
+                      <FileSpreadsheetIcon className="size-3.5" aria-hidden />
+                    }
+                    run={() => exportInvoice({ invoiceId })}
+                  />
+                )}
+                {showWorksheet && regularActions.length > 0 && (
+                  <DropdownMenuSeparator />
+                )}
                 {regularActions.map((action) => (
                   <DropdownMenuItem
                     key={action.label}
@@ -255,19 +272,11 @@ export function InvoiceRowActions({
       </div>
 
       <ConfirmDialog
-        open={confirmAction === "draft"}
-        onOpenChange={(next) => setConfirmAction(next ? "draft" : null)}
-        title="Revert paid invoice to draft?"
-        description="This clears the paid date and moves the invoice back to draft so it can be edited before sending again."
-        confirmLabel="Revert to draft"
-        onConfirm={() => void run("draft")}
-      />
-      <ConfirmDialog
         open={confirmAction === "delete"}
         onOpenChange={(next) => setConfirmAction(next ? "delete" : null)}
-        title="Delete paid invoice?"
-        description="This removes the invoice and releases its linked time entries so the period can be billed again."
-        confirmLabel="Delete invoice"
+        title="Delete draft?"
+        description="This removes the draft and releases its linked time entries so the period can be billed again. No invoice number is affected — drafts are unnumbered."
+        confirmLabel="Delete draft"
         variant="destructive"
         onConfirm={() => void runDelete()}
       />

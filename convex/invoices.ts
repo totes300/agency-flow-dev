@@ -21,7 +21,8 @@ import {
   buildRetainerMonthlyReadyRows,
   buildTmReadyRows,
   enumerateRetainerCycleState,
-  isInvoiceable,
+  isCloseRow,
+  shouldAppearInInbox,
   sortReadyRows,
   type ReadyRow,
 } from "./lib/readyToInvoice";
@@ -230,7 +231,12 @@ export const listAllInvoices = query({
     const searchTerm = args.search?.trim().toLowerCase();
     if (searchTerm) {
       invoices = invoices.filter((inv) => {
-        const formatted = formatInvoiceNumber(inv.prefix, inv.number).toLowerCase();
+        // Unnumbered drafts match the literal term "draft" instead of a
+        // formatted number.
+        const formatted =
+          inv.number != null
+            ? formatInvoiceNumber(inv.prefix, inv.number).toLowerCase()
+            : "draft";
         return (
           formatted.includes(searchTerm) ||
           (inv.subject?.toLowerCase().includes(searchTerm) ?? false)
@@ -375,6 +381,7 @@ export const getInboxEmptyStateContext = query({
     let last: Doc<"invoices"> | null = null;
     for (const inv of invoices) {
       if (inv.status === "draft" || inv.status === "void") continue;
+      if (inv.number == null) continue; // finalized invoices are numbered; belt-and-suspenders
       if (last === null || inv.issueDate > last.issueDate) last = inv;
     }
 
@@ -386,7 +393,7 @@ export const getInboxEmptyStateContext = query({
       issueDateTimestamp: number;
       clientName: string;
     } | null = null;
-    if (last !== null) {
+    if (last !== null && last.number != null) {
       const client = await ctx.db.get(last.clientId);
       const clientName =
         client && client.orgId === orgId ? client.name : "Unknown";
@@ -591,22 +598,46 @@ async function enumerateReadyRows(
         billableByMonth.set(key, (billableByMonth.get(key) ?? 0) + e.durationMinutes);
       }
 
+      // Read-path defaults mirror `projects.create`: `cycleLength ?? 1` and
+      // rollover only meaningful for multi-month cycles. (Previously `?? true`
+      // / `?? 3` here silently treated a misconfigured retainer as a 3-month
+      // rollover — inconsistent with what creation writes.)
       const { closedMonths, cycles } = enumerateRetainerCycleState({
         startDate: project.startDate,
         todayStr,
         includedMinutes: project.includedMinutesPerMonth ?? 0,
-        cycleLength: project.cycleLength ?? 3,
-        rolloverEnabled: project.rolloverEnabled ?? true,
+        cycleLength: project.cycleLength ?? 1,
+        rolloverEnabled: project.rolloverEnabled ?? false,
         billableByMonth,
       });
 
-      if (project.rolloverEnabled ?? true) {
+      // Admin-settlement state — a month with a `closedAt`-stamped
+      // `retainerPeriods` row no longer needs a "Close & report" inbox row.
+      const periodRows = await ctx.db
+        .query("retainerPeriods")
+        .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
+        .filter((q) => q.eq(q.field("orgId"), orgId))
+        .collect();
+      const closedPeriodStarts = new Set(
+        periodRows.filter((p) => p.closedAt !== undefined).map((p) => p.periodStart),
+      );
+      const monthStart = (y: number, m: number) =>
+        `${y}-${String(m).padStart(2, "0")}-01`;
+
+      if (project.rolloverEnabled ?? false) {
         allRows.push(
           ...buildRetainerCycleReadyRows({
             project: projectInput,
             client: clientInput,
             invoices: invoiceInputs,
-            cycles,
+            cycles: cycles.map((c) => ({
+              ...c,
+              // Cycle close stamps every month in the cycle, so the closing
+              // month's period row is a sufficient "cycle settled" signal.
+              isAdminClosed: closedPeriodStarts.has(
+                monthStart(c.closingYear, c.closingMonth),
+              ),
+            })),
           }),
         );
       } else {
@@ -615,17 +646,22 @@ async function enumerateReadyRows(
             project: projectInput,
             client: clientInput,
             invoices: invoiceInputs,
-            monthBalances: closedMonths,
+            monthBalances: closedMonths.map((cm) => ({
+              ...cm,
+              isAdminClosed: closedPeriodStarts.has(
+                monthStart(cm.year, cm.month),
+              ),
+            })),
           }),
         );
       }
     }
   }
 
-  // Drop rows that wouldn't produce a billable invoice ($0 retainer months).
-  // Those surface on the project page as downloadable statements instead —
-  // see `convex/lib/readyToInvoice.ts:isInvoiceable` for the invariant.
-  return sortReadyRows(allRows.filter(isInvoiceable));
+  // Keep every row with a pending action: money-bearing Generate rows,
+  // config-issue rows (over budget but no overage rate — must not vanish),
+  // and within-budget Close rows. See `shouldAppearInInbox`.
+  return sortReadyRows(allRows.filter(shouldAppearInInbox));
 }
 
 /**
@@ -689,8 +725,15 @@ export const getInvoicingNavSignals = query({
     // query bodies; both queries materialize from the same in-memory pass
     // when both are subscribed (the typical "open /invoices" flow).
     const rows = await enumerateReadyRows(ctx, orgId, todayStr);
+    const toCloseCount = rows.filter((r) => isCloseRow(r.kind)).length;
 
-    return { toGenerateCount: rows.length, overdueCount };
+    return {
+      toGenerateCount: rows.length - toCloseCount,
+      // Within-budget "Close & report" actions — part of the badge total so
+      // the sidebar surfaces every month-end task, not just the invoiced ones.
+      toCloseCount,
+      overdueCount,
+    };
   },
 });
 
@@ -1196,8 +1239,9 @@ async function getClosedUninvoicedMonths(
     billableByMonth.set(key, (billableByMonth.get(key) ?? 0) + e.durationMinutes);
   }
 
-  const rolloverEnabled = project.rolloverEnabled ?? true;
-  const cycleLength = project.cycleLength ?? 3;
+  // Defaults mirror `projects.create` (cycleLength 1 → monthly, no rollover).
+  const rolloverEnabled = project.rolloverEnabled ?? false;
+  const cycleLength = project.cycleLength ?? 1;
   const { closedMonths, cycles } = enumerateRetainerCycleState({
     startDate,
     todayStr,
@@ -1349,7 +1393,7 @@ export const createInvoice = mutation({
           invoiceId: resume.invoice._id,
           resumed: true,
           prefix: resume.invoice.prefix,
-          number: resume.invoice.number,
+          number: resume.invoice.number ?? null,
         };
       }
     } else if (billingType === "t_and_m" && args.timeEntryIds === undefined) {
@@ -1364,7 +1408,7 @@ export const createInvoice = mutation({
           invoiceId: resume.invoice._id,
           resumed: true,
           prefix: resume.invoice.prefix,
-          number: resume.invoice.number,
+          number: resume.invoice.number ?? null,
         };
       }
     }
@@ -1464,7 +1508,7 @@ export const createInvoice = mutation({
           invoiceId: resumeRetainer.invoice._id,
           resumed: true,
           prefix: resumeRetainer.invoice.prefix,
-          number: resumeRetainer.invoice.number,
+          number: resumeRetainer.invoice.number ?? null,
         };
       }
       if (resumeRetainer.kind === "blocked-duplicate") {
@@ -1589,10 +1633,12 @@ export const createInvoice = mutation({
       }
     }
 
-    // 6. Read org settings for numbering + payment terms
+    // 6. Read org settings for prefix + payment terms. The invoice NUMBER is
+    // NOT allocated here — drafts are unnumbered; the sequence number is
+    // claimed at finalization (draft → invoiced, see `applyStatusTransition`)
+    // so deleted/abandoned drafts never leave gaps in the issued series.
     const orgSettings = await getOrgSettings(ctx, orgId);
     const prefix = orgSettings?.invoicePrefix ?? "INV-";
-    const nextNumber = orgSettings?.nextInvoiceNumber ?? 1;
     const paymentTermsDays = orgSettings?.defaultPaymentTermsDays ?? 30;
 
     // 7. Compute issue date and due date
@@ -1798,7 +1844,6 @@ export const createInvoice = mutation({
       orgId,
       projectId: args.projectId,
       clientId: project.clientId,
-      number: nextNumber,
       prefix,
       subject,
       status: "draft",
@@ -1830,18 +1875,6 @@ export const createInvoice = mutation({
       invoiceData.retainerCycleLength = project.cycleLength ?? 3;
     }
 
-    // 10a. Allocate invoice number BEFORE the invoice insert. Convex mutations
-    // are transactional — patch + insert either both commit or both roll back —
-    // but claiming the number first makes the ordering self-documenting and
-    // avoids reasoning about partial state if a future refactor splits work
-    // across mutations.
-    if (orgSettings) {
-      await ctx.db.patch(orgSettings._id, {
-        nextInvoiceNumber: nextNumber + 1,
-        updatedAt: now,
-      });
-    }
-
     const invoiceId = await ctx.db.insert("invoices", invoiceData as never);
 
     // 11. Create line items
@@ -1870,7 +1903,9 @@ export const createInvoice = mutation({
       await ctx.db.patch(e._id, { invoiceId, updatedAt: now });
     }
 
-    return { invoiceId, resumed: false, prefix, number: nextNumber };
+    // `number: null` — drafts are unnumbered; callers build the draft URL
+    // from `invoiceId` (getInvoice accepts a doc ID as identifier).
+    return { invoiceId, resumed: false, prefix, number: null };
   },
 });
 
@@ -2464,17 +2499,22 @@ export const removeInvoiceLineItem = mutation({
  *
  *   draft    → invoiced | void
  *   invoiced → paid | draft | void
- *   paid     → invoiced | draft         (reversal; correction paths)
+ *   paid     → invoiced                 (undo mark-paid only)
  *   void     → —                        (terminal; retainer chain already re-opened)
  *
  * `paid → void` is intentionally disallowed: a settled invoice is reconciled
  * with an external payment. Reversing it is "refund / credit note" territory,
  * not a plain void, and should flow through a correction state if ever needed.
+ *
+ * `paid → draft` is likewise disallowed (lifecycle-tightening, 2026-07-04):
+ * a paid invoice re-entering the editable draft state breaks the audit
+ * trail. Correction path: paid → invoiced (undo the payment mark) → void →
+ * re-bill.
  */
 const VALID_TRANSITIONS: Record<string, string[]> = {
   draft: ["invoiced", "void"],
   invoiced: ["paid", "draft", "void"],
-  paid: ["invoiced", "draft"],
+  paid: ["invoiced"],
   void: [],
 };
 
@@ -2482,7 +2522,7 @@ const VALID_TRANSITIONS: Record<string, string[]> = {
  * Change invoice status following the state machine:
  *   draft → invoiced → paid
  *   invoiced → draft (revert)
- *   paid → invoiced | draft (revert)
+ *   paid → invoiced (undo mark-paid)
  */
 type InvoiceStatus = "draft" | "invoiced" | "paid" | "void";
 type TransitionResult = { ok: true } | { ok: false; reason: string };
@@ -2525,6 +2565,42 @@ export async function applyStatusTransition(
   if (newStatus === "paid") patch.paidAt = now;
   if (invoice.status === "paid" && newStatus !== "paid") patch.paidAt = undefined;
 
+  if (invoice.status === "draft" && newStatus === "invoiced") {
+    const orgSettings = await getOrgSettings(ctx, orgId);
+
+    // Seller-identity gate: an issued invoice must name its seller. Stripe
+    // applies the same rule (no finalize without account details). The
+    // company name is set in Settings → General → Company details; address
+    // and tax ID are nudged in the UI but don't block.
+    if (!orgSettings?.brandName?.trim()) {
+      return {
+        ok: false,
+        reason:
+          "Add your company details (Settings → General → Company details) " +
+          "before issuing — an invoice needs a seller name.",
+      };
+    }
+
+    // Allocate the sequence number at FINALIZATION. Drafts are unnumbered
+    // (see `createInvoice`), so the issued series is gapless: only invoices
+    // that actually reach `invoiced` consume a number. Idempotent — an
+    // invoice that was reverted to draft keeps its number, so re-finalizing
+    // does not claim a second one. The prefix is also refreshed here so the
+    // issued document reflects the org's prefix at issue time, not at draft
+    // time. Bulk transitions are safe: Convex mutations read their own
+    // writes, so sequential allocations inside one mutation see the bumped
+    // counter.
+    if (invoice.number == null) {
+      const nextNumber = orgSettings.nextInvoiceNumber ?? 1;
+      patch.number = nextNumber;
+      patch.prefix = orgSettings.invoicePrefix ?? invoice.prefix;
+      await ctx.db.patch(orgSettings._id, {
+        nextInvoiceNumber: nextNumber + 1,
+        updatedAt: now,
+      });
+    }
+  }
+
   await ctx.db.patch(invoice._id, patch);
 
   // ─── Phase 8 — settlement side-effects ────────────────────────────────
@@ -2538,7 +2614,7 @@ export async function applyStatusTransition(
   //   invoiced → paid        no settlement change       (already settled)
   //   invoiced → void        unsettle + clear invoiceId
   //   paid → invoiced        no settlement change
-  //   paid → draft           unsettle, keep invoiceId
+  //   (paid → draft removed from VALID_TRANSITIONS — 2026-07-04)
   //
   // `paid → void` is in `VALID_TRANSITIONS[invoice.status]` only when
   // `invoice.status === "void"` (terminal) — never reached here.
@@ -2805,10 +2881,16 @@ export const undoMarkInvoicesPaid = mutation({
 });
 
 /**
- * Delete an invoice:
+ * Delete a DRAFT invoice:
  * 1. Unlink time entries (clear invoiceId) — must happen BEFORE deleting line items
  * 2. Delete all line items
  * 3. Delete the invoice
+ *
+ * Drafts only (lifecycle-tightening, 2026-07-04). A finalized invoice has a
+ * sequence number and represents an issued document — hard-deleting one
+ * destroys the audit trail and punches a hole in the gapless series. The
+ * correction path for issued invoices is: (paid →) invoiced → void, which
+ * keeps the numbered record and frees the period for re-billing.
  *
  * No LIFO retainer-chain guard after the invoicing refactor
  * (`docs/invoicing-refactor.md` D5): every retainer invoice starts from a 0
@@ -2825,6 +2907,12 @@ export const deleteInvoice = mutation({
     const invoice = await ctx.db.get(args.id);
     if (!invoice || invoice.orgId !== orgId) {
       throw new ConvexError("Invoice not found.");
+    }
+    if (invoice.status !== "draft") {
+      throw new ConvexError(
+        "Only draft invoices can be deleted. Void a finalized invoice instead — " +
+          "that keeps the numbered record and frees the period for re-billing.",
+      );
     }
 
     // 1. Unlink + unsettle time entries via the shared helper. Same

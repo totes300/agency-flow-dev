@@ -235,26 +235,26 @@ describe("decideRetainerRowCloseAction — monthly (non-rollover)", () => {
 });
 
 describe("decideRetainerRowCloseAction — rollover monthly (non-cycle-end rows)", () => {
-  it("returns close-month for a mid-cycle ended row", () => {
-    // Rollover monthly close is allowed mid-cycle (Slice 3) so admins
-    // can lock prior months without waiting for the cycle to finish.
+  it("returns null for a mid-cycle ended row (rollover closes at cycle level only)", () => {
+    // Slice 4 revision: mid-cycle monthly close on a rollover project would
+    // settle entries as `retainer_included` and hide them from the cycle's
+    // overage computation — `closePeriod` rejects it (Gate -1), so the UI
+    // must never offer it.
     expect(
       decideRetainerRowCloseAction(
         month({ cyclePosition: 1, endBalance: 60 }),
         { ...rolloverCloseCtx, isCycleClosed: false, allCycleMonthsEnded: false },
       ),
-    ).toBe("close-month");
+    ).toBeNull();
   });
 
-  it("returns close-month even when cycleHasOverage is true on a non-cycle-end row", () => {
-    // Cycle-level overage gates the CYCLE button only — it doesn't block
-    // an admin from monthly-closing an earlier month inside the cycle.
+  it("returns null even when cycleHasOverage is true on a non-cycle-end row", () => {
     expect(
       decideRetainerRowCloseAction(
         month({ cyclePosition: 1, endBalance: 60 }),
         { ...rolloverCloseCtx, cycleHasOverage: true, isCycleClosed: false, allCycleMonthsEnded: false },
       ),
-    ).toBe("close-month");
+    ).toBeNull();
   });
 });
 
@@ -267,27 +267,25 @@ describe("decideRetainerRowCloseAction — rollover cycle-end row", () => {
     ).toBe("close-cycle");
   });
 
-  it("falls back to close-month when the cycle hasn't ended yet", () => {
-    // A cycle-end row that's calendar-ended but lives inside an
-    // in-progress cycle (one of its later months hasn't ended) should
-    // still allow monthly close — `getRetainerData` only ever exposes
-    // months from the targeted cycle so this path is the safety net
-    // when an admin opens a previous cycle with the navigator.
+  it("returns null when the cycle hasn't ended yet (no monthly fallback)", () => {
+    // Slice 4 revision: there is no monthly-close fallback on rollover
+    // projects — the only close path is `closeRetainerCycle`, and it needs
+    // the whole cycle to be calendar-ended first.
     expect(
       decideRetainerRowCloseAction(cycleEndMonth, {
         ...rolloverCloseCtx,
         isCycleClosed: false,
       }),
-    ).toBe("close-month");
+    ).toBeNull();
   });
 
-  it("falls back to close-month when a sibling month is still in progress", () => {
+  it("returns null when a sibling month is still in progress", () => {
     expect(
       decideRetainerRowCloseAction(cycleEndMonth, {
         ...rolloverCloseCtx,
         allCycleMonthsEnded: false,
       }),
-    ).toBe("close-month");
+    ).toBeNull();
   });
 
   it("returns null when the cycle has overage (Generate must run first)", () => {

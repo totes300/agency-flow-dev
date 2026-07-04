@@ -1,5 +1,5 @@
 import { ConvexError } from "convex/values";
-import { QueryCtx, MutationCtx } from "../_generated/server";
+import { internalQuery, QueryCtx, MutationCtx } from "../_generated/server";
 import { Doc, Id } from "../_generated/dataModel";
 
 export type AuthContext = {
@@ -110,3 +110,27 @@ export async function requireAdmin(
   }
   return authCtx;
 }
+
+/**
+ * Auth bridge for Convex actions.
+ *
+ * Actions cannot call `requireAdmin` directly because it needs DB access
+ * (which only QueryCtx / MutationCtx provide). They can, however, invoke
+ * this internal query via `ctx.runQuery(internal.lib.auth.requireAdminForAction, {})`
+ * and receive a slim, serializable subset of the auth context.
+ *
+ * Why a slim return: `AuthContext` includes `Doc<"users">`, which carries
+ * Convex `_id`/`_creationTime` fields; those round-trip fine but the
+ * function is called frequently and we don't want to bloat the action's
+ * argument list. Add fields as new callers need them.
+ */
+export const requireAdminForAction = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const authCtx = await requireAdmin(ctx);
+    return {
+      userId: authCtx.userId,
+      orgId: authCtx.orgId,
+    };
+  },
+});

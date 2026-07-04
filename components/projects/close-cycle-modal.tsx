@@ -79,6 +79,19 @@ export function CloseCycleModal({
           : `Closed ${cycleLabel} — ${closedPeriods} ${
               closedPeriods === 1 ? "month" : "months"
             }.`,
+        {
+          // Cycle statements render on the cycle-end month's report page
+          // (it includes the cycle-to-date aggregates). Direct path matters
+          // most when closing from the Invoices inbox.
+          action: {
+            label: "View report",
+            onClick: () =>
+              window.open(
+                `/projects/${projectId}/reports/${cycleEndYear}-${String(cycleEndMonth).padStart(2, "0")}`,
+                "_blank",
+              ),
+          },
+        },
       )
       onOpenChange(false)
     } catch (err) {

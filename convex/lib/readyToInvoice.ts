@@ -58,12 +58,27 @@ export type TimeEntryInput = {
 
 // ─── Output shape ───────────────────────────────────────────────────────────────
 
-export type ReadyRowKind = "retainer-monthly" | "retainer-cycle" | "fixed" | "tm";
+export type ReadyRowKind =
+  | "retainer-monthly"
+  | "retainer-cycle"
+  | "fixed"
+  | "tm"
+  // Billing-inbox close rows: the period ended within budget, so the pending
+  // action is an admin "Close & report" (settle + Monthly Report), not an
+  // invoice. Surfacing these here makes the Ready tab the single queue for
+  // ALL month-end billing actions — before, within-budget closes were only
+  // discoverable on each project's Monthly Breakdown card.
+  | "retainer-close"
+  | "retainer-cycle-close";
+
+/** Rows whose pending action is an admin Close (report), not an invoice. */
+export function isCloseRow(kind: ReadyRowKind): boolean {
+  return kind === "retainer-close" || kind === "retainer-cycle-close";
+}
+
 /**
- * Kept for backward-compatibility with downstream consumers (UI badges, etc.).
- * After the invoicing refactor (`docs/invoicing-refactor.md`) the Ready feed
- * never emits within-budget retainer rows, so every retainer row's badge is
- * `over-budget`. Fixed/T&M rows continue to set `null`.
+ * `over-budget` on generate rows; `within-budget` on close rows. Fixed/T&M
+ * rows continue to set `null`.
  */
 export type BadgeKind = "within-budget" | "over-budget";
 
@@ -94,11 +109,28 @@ export type ReadyRow = {
   /** Most recent finalized issue date timestamp (excludes drafts and voids). */
   lastInvoicedAt: number | null;
   /**
-   * Cycle length in months. Set only for `retainer-cycle` rows so callers can
-   * render the full cycle range ("Apr–Jun") via `formatCycleLabel` without
-   * needing a second project fetch. Undefined for retainer-monthly / Fixed / T&M.
+   * Cycle length in months. Set for `retainer-cycle` / `retainer-cycle-close`
+   * rows so callers can render the full cycle range ("Apr–Jun") via
+   * `formatCycleLabel` without needing a second project fetch. Undefined for
+   * retainer-monthly / Fixed / T&M.
    */
   cycleLengthMonths?: number;
+  /**
+   * Natural key for the close mutations. `periodStart` (YYYY-MM-01) is set on
+   * `retainer-close` rows and feeds `retainerPeriods.closePeriod`;
+   * `cycleStart` (first month of the cycle, YYYY-MM-01) is set on
+   * `retainer-cycle-close` rows and feeds `retainerPeriods.closeRetainerCycle`.
+   */
+  periodStart?: string;
+  cycleStart?: string;
+  /**
+   * Set when the row represents real money owed but the project is missing
+   * the config needed to price it. Previously these rows were silently
+   * dropped (`amount <= 0` filter) — an over-budget month vanished from the
+   * inbox exactly when the admin most needed to act. The UI routes the row's
+   * action to project settings instead of Generate.
+   */
+  configIssue?: "missing-overage-rate";
 };
 
 // ─── Shared helpers ─────────────────────────────────────────────────────────────
@@ -255,20 +287,31 @@ export function buildTmReadyRows(opts: {
 // ─── Retainer monthly (rollover OFF) ────────────────────────────────────────────
 
 /**
- * Retainer with `rolloverEnabled === false` → one row per closed-uninvoiced
- * **over-budget** month. Within-budget months never appear in the Ready feed
- * after the invoicing refactor (`docs/invoicing-refactor.md`) — they render
- * as Monthly Reports on the project page instead.
+ * Retainer with `rolloverEnabled === false` → one row per calendar-ended,
+ * uninvoiced month:
+ *
+ *   - over budget → a Generate row (`retainer-monthly`). When the project
+ *     has no `overageRate` the row is still emitted with `configIssue` set —
+ *     silently dropping it hid real billable overage from the inbox.
+ *   - within budget, not yet admin-closed → a Close row (`retainer-close`).
+ *     The month's pending action is "Close & report"; once an admin closes
+ *     it the row disappears.
  *
  * `monthBalances` shape: one entry per CLOSED month chronological, with
- * `endBalance` (positive = within budget, negative = over budget). The shim
+ * `endBalance` (positive = within budget, negative = over budget) and
+ * `isAdminClosed` (a `retainerPeriods` row with `closedAt` exists). The shim
  * computes these from the same logic as `getRetainerData`.
  */
 export function buildRetainerMonthlyReadyRows(opts: {
   project: ProjectInput;
   client: ClientInput;
   invoices: InvoiceInput[];
-  monthBalances: Array<{ year: number; month: number; endBalance: number }>;
+  monthBalances: Array<{
+    year: number;
+    month: number;
+    endBalance: number;
+    isAdminClosed?: boolean;
+  }>;
 }): ReadyRow[] {
   const { project, client, invoices, monthBalances } = opts;
   if (project.billingType !== "retainer") return [];
@@ -282,24 +325,37 @@ export function buildRetainerMonthlyReadyRows(opts: {
   for (const m of monthBalances) {
     const key = `${m.year}-${String(m.month).padStart(2, "0")}`;
     if (invoiced.has(key)) continue;
-    const overMinutes = m.endBalance < 0 ? Math.abs(m.endBalance) : 0;
-    if (overMinutes <= 0) continue; // within budget → Monthly Report, not invoice
-    const overHours = overMinutes / 60;
-    const amount = overHours * overageRate;
-    if (amount <= 0) continue; // pathological config: no overageRate → no row
-    out.push({
-      kind: "retainer-monthly",
+    const base = {
       projectId: project._id,
       projectName: project.name,
       clientId: client._id,
       clientName: client.name,
       period: { year: m.year, month: m.month },
       sortKey: `${key}/${client.name.toLowerCase()}`,
-      amount: roundCents(amount),
       currency: client.currency,
+      lastInvoicedAt,
+    };
+    const overMinutes = m.endBalance < 0 ? Math.abs(m.endBalance) : 0;
+    if (overMinutes <= 0) {
+      if (m.isAdminClosed) continue; // settled — nothing pending
+      out.push({
+        ...base,
+        kind: "retainer-close",
+        amount: 0,
+        badgeKind: "within-budget",
+        periodStart: `${key}-01`,
+      });
+      continue;
+    }
+    const overHours = overMinutes / 60;
+    const amount = overHours * overageRate;
+    out.push({
+      ...base,
+      kind: "retainer-monthly",
+      amount: roundCents(amount),
       badgeKind: "over-budget",
       overageHours: overHours,
-      lastInvoicedAt,
+      ...(amount <= 0 ? { configIssue: "missing-overage-rate" as const } : {}),
     });
   }
   return out;
@@ -433,13 +489,21 @@ export function enumerateRetainerCycleState(
 // ─── Retainer cycle (rollover ON) ───────────────────────────────────────────────
 
 /**
- * Retainer with `rolloverEnabled === true` → one row per closed-uninvoiced
- * cycle. The cycle is the billing unit; the row points at the cycle's closing
- * month (which is what `createInvoice` keys on).
+ * Retainer with `rolloverEnabled === true` → one row per calendar-ended,
+ * uninvoiced cycle. The cycle is the billing unit; the row points at the
+ * cycle's closing month (which is what `createInvoice` keys on).
  *
- * `cycles` shape: chronological list of cycles, each with `isCycleClosed`,
- * `cycleBalance` (positive within / negative over), and the closing month's
- * `{year, month}`. Caller derives these from `getRetainerData`-style math.
+ *   - over budget → a Generate row (`retainer-cycle`), with `configIssue`
+ *     instead of a silent drop when `overageRate` is missing.
+ *   - within budget, not yet admin-closed → a Close row
+ *     (`retainer-cycle-close`) carrying `cycleStart` for
+ *     `closeRetainerCycle`.
+ *
+ * `cycles` shape: chronological list of cycles, each with `isCycleClosed`
+ * (calendar), `isAdminClosed` (closing month's `retainerPeriods` row has
+ * `closedAt`), `cycleBalance` (positive within / negative over), and the
+ * closing month's `{year, month}`. Caller derives these from
+ * `getRetainerData`-style math.
  */
 export function buildRetainerCycleReadyRows(opts: {
   project: ProjectInput;
@@ -450,6 +514,7 @@ export function buildRetainerCycleReadyRows(opts: {
     closingMonth: number; // 1-12
     cycleBalance: number; // minutes (positive = within budget)
     isCycleClosed: boolean;
+    isAdminClosed?: boolean;
   }>;
 }): ReadyRow[] {
   const { project, client, invoices, cycles } = opts;
@@ -466,28 +531,57 @@ export function buildRetainerCycleReadyRows(opts: {
     if (!c.isCycleClosed) continue; // mid-cycle excluded
     const key = `${c.closingYear}-${String(c.closingMonth).padStart(2, "0")}`;
     if (invoiced.has(key)) continue; // already invoiced
-    const overMinutes = c.cycleBalance < 0 ? Math.abs(c.cycleBalance) : 0;
-    if (overMinutes <= 0) continue; // within budget → Monthly Report, not invoice
-    const overHours = overMinutes / 60;
-    const amount = overHours * overageRate;
-    if (amount <= 0) continue; // pathological config: no overageRate → no row
-    out.push({
-      kind: "retainer-cycle",
+    const base = {
       projectId: project._id,
       projectName: project.name,
       clientId: client._id,
       clientName: client.name,
       period: { year: c.closingYear, month: c.closingMonth },
       sortKey: `${key}/${client.name.toLowerCase()}`,
-      amount: roundCents(amount),
       currency: client.currency,
-      badgeKind: "over-budget",
-      overageHours: overHours,
       lastInvoicedAt,
       cycleLengthMonths,
+    };
+    const overMinutes = c.cycleBalance < 0 ? Math.abs(c.cycleBalance) : 0;
+    if (overMinutes <= 0) {
+      if (c.isAdminClosed) continue; // settled — nothing pending
+      out.push({
+        ...base,
+        kind: "retainer-cycle-close",
+        amount: 0,
+        badgeKind: "within-budget",
+        cycleStart: cycleStartFromClosing(
+          c.closingYear,
+          c.closingMonth,
+          cycleLengthMonths ?? 1,
+        ),
+      });
+      continue;
+    }
+    const overHours = overMinutes / 60;
+    const amount = overHours * overageRate;
+    out.push({
+      ...base,
+      kind: "retainer-cycle",
+      amount: roundCents(amount),
+      badgeKind: "over-budget",
+      overageHours: overHours,
+      ...(amount <= 0 ? { configIssue: "missing-overage-rate" as const } : {}),
     });
   }
   return out;
+}
+
+/** First month of the cycle whose closing month is (year, month). */
+function cycleStartFromClosing(
+  year: number,
+  month: number, // 1-12
+  cycleLength: number,
+): string {
+  const idx = year * 12 + (month - 1) - (Math.max(1, cycleLength) - 1);
+  const y = Math.floor(idx / 12);
+  const m = (idx % 12) + 1;
+  return `${y}-${String(m).padStart(2, "0")}-01`;
 }
 
 // ─── Invoiceability ────────────────────────────────────────────────────────────
@@ -509,19 +603,33 @@ export function isInvoiceable(row: ReadyRow): boolean {
   return row.amount > 0;
 }
 
+/**
+ * Should this row appear in the billing inbox (Ready tab + sidebar badge)?
+ *
+ *   - Close rows always appear — the pending action is "Close & report",
+ *     which is deliberately worth surfacing even though no money moves.
+ *   - Generate rows appear when they'd charge something (`isInvoiceable`)
+ *     OR when they carry a `configIssue` — an over-budget month with no
+ *     overage rate must not silently vanish from the queue.
+ */
+export function shouldAppearInInbox(row: ReadyRow): boolean {
+  if (isCloseRow(row.kind)) return true;
+  return isInvoiceable(row) || row.configIssue !== undefined;
+}
+
 // ─── Batch eligibility ─────────────────────────────────────────────────────────
 
 /**
- * Filter the unified Ready feed down to rows that should appear in the
- * action queue. Today this is "anything with money owed" — €0 retainer
- * rows have moved to the project page as downloadable statements (see
- * `isInvoiceable` and the project Statements path).
+ * Filter the unified Ready feed down to rows eligible for batch invoice
+ * generation — money-bearing Generate rows only. Close rows and
+ * config-issue rows appear in the inbox (`shouldAppearInInbox`) but are
+ * never batch-invoiceable.
  *
  * Pure so the decision is testable without convex-test; callers stay thin
  * loops around mutations.
  */
 export function selectBatchEligibleRows(rows: ReadyRow[]): ReadyRow[] {
-  return rows.filter(isInvoiceable);
+  return rows.filter((row) => !isCloseRow(row.kind) && isInvoiceable(row));
 }
 
 // ─── Sort ───────────────────────────────────────────────────────────────────────

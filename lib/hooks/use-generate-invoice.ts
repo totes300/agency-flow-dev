@@ -55,7 +55,7 @@ export function useGenerateInvoice(): {
     if (pending) return
     setPending(true)
     try {
-      const { resumed, prefix, number } = await createInvoice({
+      const { invoiceId, resumed, prefix, number } = await createInvoice({
         projectId: args.projectId,
         retainerYear: args.retainerYear,
         retainerMonth: args.retainerMonth,
@@ -64,15 +64,22 @@ export function useGenerateInvoice(): {
         timeEntryIds: args.timeEntryIds,
         roundingMinutes: args.roundingMinutes ?? 0,
       })
-      const identifier = formatInvoiceNumber(prefix, number)
+      // Drafts are unnumbered (number allocated at finalization) — their URL
+      // segment is the doc ID; `getInvoice` accepts both forms.
+      const identifier =
+        number != null ? formatInvoiceNumber(prefix, number) : invoiceId
       const target = args.navigateTo
         ? args.navigateTo(identifier)
         : `/invoices/${identifier}?from=project&projectId=${args.projectId}&tab=invoices`
       router.push(target)
       if (resumed) {
-        toast.info(`Resuming draft ${formatInvoiceNumber(prefix, number)}`)
+        toast.info(
+          number != null
+            ? `Resuming draft ${formatInvoiceNumber(prefix, number)}`
+            : "Resuming existing draft",
+        )
       } else {
-        toast.success("Invoice created")
+        toast.success("Draft created")
       }
     } catch (err) {
       toast.error(extractErrorMessage(err, "Failed to create invoice"))

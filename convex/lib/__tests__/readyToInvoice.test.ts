@@ -238,16 +238,34 @@ describe("enumerateRetainerCycleState", () => {
 // ─── Retainer monthly (rollover OFF) ──────────────────────────────────────────
 
 describe("buildRetainerMonthlyReadyRows", () => {
-  // Contract after the invoicing refactor (`docs/invoicing-refactor.md`):
-  //   - within-budget months never appear; they render as Monthly Reports.
-  //   - over-budget months emit one row whose `amount = overageHours × rate`.
-  //   - the previous `invoiceTotal = monthlyFee + overage` field is gone.
-  it("emits NO row for a within-budget closed month", () => {
+  // Billing-inbox contract:
+  //   - within-budget ended months emit a `retainer-close` row until an
+  //     admin closes them (Close & report); admin-closed months disappear.
+  //   - over-budget months emit one Generate row whose
+  //     `amount = overageHours × rate`; a missing rate flags `configIssue`
+  //     instead of silently dropping the row.
+  it("emits a Close row for a within-budget ended month", () => {
     const rows = buildRetainerMonthlyReadyRows({
       project: makeProject({ rolloverEnabled: false, overageRate: 100 }),
       client: makeClient(),
       invoices: [],
       monthBalances: [{ year: 2026, month: 3, endBalance: 120 }],
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].kind).toBe("retainer-close");
+    expect(rows[0].badgeKind).toBe("within-budget");
+    expect(rows[0].amount).toBe(0);
+    expect(rows[0].periodStart).toBe("2026-03-01");
+  });
+
+  it("emits NO row for a within-budget month the admin already closed", () => {
+    const rows = buildRetainerMonthlyReadyRows({
+      project: makeProject({ rolloverEnabled: false, overageRate: 100 }),
+      client: makeClient(),
+      invoices: [],
+      monthBalances: [
+        { year: 2026, month: 3, endBalance: 120, isAdminClosed: true },
+      ],
     });
     expect(rows).toEqual([]);
   });
@@ -300,15 +318,19 @@ describe("buildRetainerMonthlyReadyRows", () => {
     expect(rows).toHaveLength(1);
   });
 
-  it("emits no row when over-budget but overageRate is 0 (pathological config)", () => {
+  it("flags configIssue when over-budget but overageRate is 0", () => {
     const rows = buildRetainerMonthlyReadyRows({
       project: makeProject({ rolloverEnabled: false, overageRate: 0 }),
       client: makeClient(),
       invoices: [],
       monthBalances: [{ year: 2026, month: 3, endBalance: -60 }],
     });
-    // No row: amount would be 0 → never bill.
-    expect(rows).toEqual([]);
+    // The row stays visible — real overage exists, it just can't be priced
+    // until the admin sets a rate. Silently dropping it hid the debt.
+    expect(rows).toHaveLength(1);
+    expect(rows[0].kind).toBe("retainer-monthly");
+    expect(rows[0].amount).toBe(0);
+    expect(rows[0].configIssue).toBe("missing-overage-rate");
   });
 
   it("returns nothing when rolloverEnabled is true (cycle handles it)", () => {
@@ -329,7 +351,7 @@ describe("buildRetainerCycleReadyRows", () => {
   // emit a row. Within-budget cycles render as Monthly Reports. The row's
   // period anchors to the cycle's CLOSING month — `cycleLengthMonths` lets
   // the UI render the full range ("Jan–Mar") without a second project fetch.
-  it("emits NO row for a within-budget closed cycle", () => {
+  it("emits a Close row for a within-budget ended cycle", () => {
     const rows = buildRetainerCycleReadyRows({
       project: makeProject({ rolloverEnabled: true, overageRate: 100, cycleLength: 3 }),
       client: makeClient(),
@@ -343,7 +365,48 @@ describe("buildRetainerCycleReadyRows", () => {
         },
       ],
     });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].kind).toBe("retainer-cycle-close");
+    expect(rows[0].badgeKind).toBe("within-budget");
+    expect(rows[0].amount).toBe(0);
+    // Jan–Mar cycle closing in March → cycleStart = January.
+    expect(rows[0].cycleStart).toBe("2026-01-01");
+    expect(rows[0].cycleLengthMonths).toBe(3);
+  });
+
+  it("emits NO row for a within-budget cycle the admin already closed", () => {
+    const rows = buildRetainerCycleReadyRows({
+      project: makeProject({ rolloverEnabled: true, overageRate: 100, cycleLength: 3 }),
+      client: makeClient(),
+      invoices: [],
+      cycles: [
+        {
+          closingYear: 2026,
+          closingMonth: 3,
+          cycleBalance: 300,
+          isCycleClosed: true,
+          isAdminClosed: true,
+        },
+      ],
+    });
     expect(rows).toEqual([]);
+  });
+
+  it("cycleStart crosses a year boundary correctly (Nov–Jan cycle)", () => {
+    const rows = buildRetainerCycleReadyRows({
+      project: makeProject({ rolloverEnabled: true, overageRate: 100, cycleLength: 3 }),
+      client: makeClient(),
+      invoices: [],
+      cycles: [
+        {
+          closingYear: 2026,
+          closingMonth: 1,
+          cycleBalance: 300,
+          isCycleClosed: true,
+        },
+      ],
+    });
+    expect(rows[0].cycleStart).toBe("2025-11-01");
   });
 
   it("emits one row per closed over-budget cycle (cycle-end period anchor)", () => {

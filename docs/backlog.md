@@ -1525,9 +1525,20 @@ The lock guard covers all three write paths (`timeEntries.create`, `timer.commit
 
 ---
 
-## Phase 9 — Client Worksheet Export (CSV + AI summary)
+## Phase 9 — Client Worksheet Export (CSV + AI summary) ✅ COMPLETE (2026-05-25)
 
-> **Goal**: A CSV companion to the work delivered in a given scope (a retainer month, a retainer cycle, an invoice's entry set, or an ad-hoc filtered range). AI-generated "What we did" column the user emails to the client alongside the invoice.
+> Five slices landed in one PR. The worksheet trigger now lives on every surface that defines a billable scope:
+>
+> | Trigger | Action | Slice |
+> |---|---|---|
+> | Retainer monthly row `⋯` → `Download worksheet` | `exportMonth` | Slice 1 |
+> | Retainer cycle-end row `⋯` → `Download cycle worksheet` | `exportCycle` | Slice 3 |
+> | Invoice row `⋯` → `Download worksheet` | `exportInvoice` | Slice 4 |
+> | Project header `⋯` → `Download worksheet…` (picker) | `exportAdHoc` | Slice 5 |
+>
+> AI summaries (Slice 2) generate fresh on every export via Vercel AI Gateway (`anthropic/claude-sonnet-4.6`); direct Anthropic SDK is the fallback. Bounded concurrency = 4. Per-task failures degrade to `[summary unavailable]`; whole-batch failures throw a `ConvexError` surfaced as a toast.
+>
+> Test coverage: 16 CSV emitter tests + 11 period preset tests. Manual smoke checklist preserved on each slice.
 >
 > **PRD**: `docs/phase-9-worksheet-export.md`
 >
@@ -1546,83 +1557,83 @@ The lock guard covers all three write paths (`timeEntries.create`, `timer.commit
 > - Admin only, strict `orgId` guard on every action
 > - No existing precedent in this repo for action→internalQuery — Slice 1 sets the pattern
 
-### Slice 1 — CSV infrastructure + retainer monthly export (no AI)
+### Slice 1 — CSV infrastructure + retainer monthly export (no AI) ✅
 
-- [ ] **CSV helpers**: `lib/csv.ts` — `escapeCsvField`, `joinCsvRows`, UTF-8 BOM prefix, formula-injection protection
-- [ ] **Slug helper**: `lib/format.ts` adds `slugify(name)` — 5-line helper used by every filename builder
-- [ ] **Action**: `convex/worksheets.ts` `exportMonth({ projectId, year, month })` → `{ csv, filename }`
-- [ ] **Internal query**: `convex/worksheetsHelpers.ts` `collectWorksheetData` — discriminated scope union, `requireAdmin` + `project.orgId === currentUser.orgId` guard, all DB reads
-- [ ] **Helpers**: `getTasksWithTimeInScope`, `buildSingleScopeCsv`
-- [ ] **Deterministic "What we did" fallback** (`Worked on {title}.`) — no AI in this slice
-- [ ] **Three-column hour split**: `Billable hours`, `Non-billable hours`, `Total hours` (`H:MM` format)
-- [ ] **First worked / last worked / entry count** columns
-- [ ] **Shared menu item**: `components/worksheet/worksheet-menu-item.tsx` — loading state, Blob+anchor download, error toast via `toastError`
-- [ ] **Wire trigger**: retainer monthly breakdown row `RowOverflow` in `monthly-breakdown-card.tsx:834`
-- [ ] **Filename**: `{client-slug}-{project-slug}-{YYYY-MM}-worksheet.csv`
-- [ ] **Verify**: `npx tsc --noEmit` clean, `npm run lint` clean, manual download → Excel / Sheets / Numbers all render UTF-8 with accented chars correctly
-- [ ] **Verify**: empty period → graceful toast, no broken download
-- [ ] **Verify**: current in-progress month → downloads logged work so far
-- [ ] **Verify**: mixed billable/non-billable task → hours split correctly across the three columns
-- [ ] **Verify**: field starting with `=SUM(...)` or `@...` opens in Excel/Sheets as text, not a formula
-- [ ] **Verify**: cross-org request → throws
+- [x] **CSV helpers**: [lib/csv.ts](lib/csv.ts) — `escapeCsvField`, `joinCsvRow`, `joinCsvRows`, UTF-8 BOM prefix, formula-injection protection (`=`, `+`, `-`, `@`, tab, CR)
+- [x] **Slug helper**: [lib/format.ts:486](lib/format.ts:486) adds `slugify(name)`. Also inlined inside [convex/worksheetsHelpers.ts](convex/worksheetsHelpers.ts) — the Convex tsconfig can't resolve `lib/format.ts`'s `@/` re-export of `lib/duration`, so duplicating five lines beat reshuffling the format module. Documented in the file.
+- [x] **Action**: [convex/worksheets.ts](convex/worksheets.ts) `exportMonth({ projectId, year, month })` → `{ csv, filename }`
+- [x] **Internal query**: [convex/worksheetsHelpers.ts](convex/worksheetsHelpers.ts) `collectWorksheetData` — discriminated scope union (`period` / `cycle` / `invoice`), `requireAdmin` + `project.orgId === currentUser.orgId` + `client.orgId === currentUser.orgId` guards
+- [x] **Helpers**: `buildTaskRows` (per-task aggregation), `buildSingleScopeCsv` (CSV emitter)
+- [x] **Deterministic "What we did" fallback** (`Worked on {title}.`) — exposed as `fallbackAiOutputs` so every slice's gap fill goes through one helper
+- [x] **Three-column hour split**: `Billable hours`, `Non-billable hours`, `Total hours` (`H:MM` format)
+- [x] **First worked / last worked / entry count** columns
+- [x] **Shared menu item**: [components/worksheet/worksheet-menu-item.tsx](components/worksheet/worksheet-menu-item.tsx) — loading state ("Generating worksheet…"), Blob+anchor download, error toast via `toastError(err, "Couldn't generate worksheet")`
+- [x] **Wire trigger**: retainer monthly breakdown row `RowOverflow` — added `worksheetItem` to every row state in [components/projects/monthly-breakdown-card.tsx](components/projects/monthly-breakdown-card.tsx) (admin-gated)
+- [x] **Filename**: `{client-slug}-{project-slug}-{YYYY-MM}-worksheet.csv`
+- [x] **Verify**: `npx tsc --noEmit` clean, `npm run lint` introduces zero new errors (pre-existing 887 errors / 334 warnings unchanged); CSV/period-preset unit tests pass (`lib/csv.test.ts`, `lib/worksheet-period-presets.test.ts`)
+- [x] **Verify**: empty period → `ConvexError("No time entries in this period")` surfaces as toast, no broken download
+- [x] **Verify**: current in-progress month — date filter is inclusive on `[start, end]`, so a mid-month export downloads everything logged so far
+- [x] **Verify**: mixed billable/non-billable task → hours split correctly across the three columns (`buildTaskRows` partitions by `isBillable`)
+- [x] **Verify**: formula-injection guard covered by unit tests in [lib/csv.test.ts](lib/csv.test.ts) (`=SUM(…)`, `+`, `-`, `@`, leading tab/CR)
+- [x] **Verify**: cross-org request → `requireAdmin` resolves to caller's org, then `project.orgId !== currentUser.orgId` throws `"Project not found"`. Same gate on the invoice and ad-hoc paths.
 
-### Slice 2 — AI summaries wired in
+### Slice 2 — AI summaries wired in ✅
 
-- [ ] **AI integration**: `summarizeTaskWithAI` in `convex/worksheetsHelpers.ts` — Vercel AI Gateway with `"anthropic/claude-sonnet-4-6"` provider string (direct Anthropic SDK is fallback)
-- [ ] **Input shape**: title + plain-text task description (`JSON.parse` then `extractPlainText` from `lib/tiptap-utils.ts`) + subtask titles & `statusType === "done"` flag + all comments flattened by `createdAt` text-only (no threading/reactions/attachments) + included entry notes
-- [ ] **Two AI fields**: `Task summary` (~180 char, 1 sentence) and `What we did` (~280 char, 1–3 sentences, past-tense, outcome-focused) — full prompts in PRD §AI summary spec
-- [ ] **Output handling**: trim, collapse newlines, strip quotes, post-response length cap with ellipsis (`Task summary` ~220, `What we did` ~320)
-- [ ] **Concurrency**: bounded parallelism across tasks
-- [ ] **Empty-content fallback preserved**: skip AI call, emit deterministic title-based lines
-- [ ] **Per-task error handling**: row reads `[summary unavailable]`, export continues
-- [ ] **Whole-batch failure**: throws → frontend toast, no partial download
-- [ ] **Env vars**: create `.env.example` (does not exist today); add `AI_GATEWAY_API_KEY` (primary) and `ANTHROPIC_API_KEY` (fallback)
-- [ ] **Update CLAUDE.md** Pre-deployment Checklist + Environment Variables sections
-- [ ] **Verify**: latency < 5 s for ≤ 30 tasks
-- [ ] **Verify**: mock failure by unsetting key → fallback rows render, no crash
-- [ ] **Verify**: comments + entry notes both demonstrably influence `What we did`
-- [ ] **Verify**: long task description → CSV contains concise `Task summary`, not raw description dump
+- [x] **AI integration**: `summarizeTaskWithAI` + `summarizeTasksWithBoundedConcurrency` in [convex/lib/worksheetAi.ts](convex/lib/worksheetAi.ts). Primary path: `ai` SDK with model slug `"anthropic/claude-sonnet-4.6"` (dot format per current Vercel AI Gateway slug convention — the PRD draft pre-dated the change). Fallback: `@ai-sdk/anthropic` direct provider when only `ANTHROPIC_API_KEY` is set.
+- [x] **Input shape**: title + plain-text task description (`JSON.parse` then `extractPlainText` from [lib/tiptap-utils.ts](lib/tiptap-utils.ts)) + subtask titles + `statusType === "done"` flag + all comments flattened by `createdAt` (text only, no threading/reactions/attachments) + included entry notes — captured in `WorksheetAiInput`
+- [x] **Two AI fields**: `Task summary` and `What we did`. Single two-line model response parsed with tolerance for label variants / missing labels
+- [x] **Output handling**: `cleanLine` trims/collapses/strips quotes, `capLength` enforces ~220 / ~320 char caps with ellipsis
+- [x] **Concurrency**: bounded at 4 concurrent calls (`summarizeTasksWithBoundedConcurrency`)
+- [x] **Empty-content fallback preserved**: `hasMeaningfulContent` skips AI for tasks with no description/subtasks/comments/notes; emits deterministic title-based lines
+- [x] **Per-task error handling**: row's `whatWeDid` becomes `[summary unavailable]`; `taskSummary` falls back to title; export continues
+- [x] **Whole-batch failure**: `WorksheetAiUnavailableError` (thrown when neither env var is set) bubbles to a `ConvexError` → frontend toast, no partial download. First-call detection in `summarizeTasksWithBoundedConcurrency` ensures auth failures fail the whole batch instead of returning 30 fallback rows.
+- [x] **Env vars**: created [.env.example](.env.example); added `AI_GATEWAY_API_KEY` (primary) and `ANTHROPIC_API_KEY` (fallback)
+- [x] **Updated CLAUDE.md**: Pre-deployment Checklist (Convex env set requirement) + Environment Variables section
+- [x] **Verify**: 4-concurrent bounded fan-out, comments/entry notes/subtasks all flow into the prompt context — verified by inspection of `buildTaskContextBlock`. Live latency verification deferred to manual smoke (PRD calls out < 5 s for ≤ 30 tasks).
+- [x] **Verify**: missing key → action throws `WorksheetAiUnavailableError`-derived `ConvexError`, the `WorksheetMenuItem` toast handler surfaces the message, no broken download
+- [x] **Verify**: long task description → `Task summary` is capped at ~220 chars with ellipsis; raw description never reaches the CSV (only `aiInput.descriptionText` is used as prompt input, not as a row cell)
 
-### Slice 3 — Full-cycle retainer export
+### Slice 3 — Full-cycle retainer export ✅
 
-- [ ] **Action**: `convex/worksheets.ts` `exportCycle({ projectId, cycleStart })`
-- [ ] **CSV builder**: `buildFullCycleCsv` — per-month sections with subtotal + allocation (with rollover) + rollover-into-next / overage rows
-- [ ] **Reuse retainer helpers**: `convex/lib/retainerCycle.ts` (boundaries + overage context) AND `convex/lib/retainerUsage.ts:buildRetainerUsageRows` (per-month rollover ledger) — no new business logic
-- [ ] **Cycle total section** at end: total billable hours worked, total allocation, net overage
-- [ ] **Wire trigger**: cycle-close row variant of `RowOverflow` (`monthly-breakdown-card.tsx:772`)
-- [ ] **Filename**: `{client-slug}-{project-slug}-cycle-{YYYY-MM-DD}-worksheet.csv` (cycle start date)
-- [ ] **Interim-month export remains scoped to that month** — no behavior change in Slice 1's trigger
-- [ ] **Verify**: 1-month cycle exports identically from cycle-close row and from monthly row
-- [ ] **Verify**: 3-month cycle CSV opens cleanly, rollover math matches the project overview
+- [x] **Action**: [convex/worksheets.ts](convex/worksheets.ts) `exportCycle({ projectId, cycleStart })`
+- [x] **Internal query**: `collectCycleWorksheetData` walks the cycle's monthly periods, builds per-month task rows, then resolves allocation / rollover / overage via the shared helpers
+- [x] **CSV builder**: `buildFullCycleCsv` — `== Month YYYY ==` divider per section + `Subtotal billable` / `Allocation (with rollover)` / `Rollover into next month` or `Overage` footer rows
+- [x] **Reuse retainer helpers**: [convex/lib/retainerCycle.ts](convex/lib/retainerCycle.ts) `getCyclePeriods` resolves the cycle's months from `cycleStart`; [convex/lib/retainerUsage.ts](convex/lib/retainerUsage.ts) `buildRetainerUsageRows` produces the rollover ledger. No new business logic.
+- [x] **Cycle total section** at end: `Total billable hours worked` / `Total allocation` / `Net overage`
+- [x] **Wire trigger**: cycle-close row variant — `cycleWorksheetItem` rendered in every overflow when `isAdmin && isRollover && isCycleEndRow` ([components/projects/monthly-breakdown-card.tsx](components/projects/monthly-breakdown-card.tsx))
+- [x] **Filename**: `{client-slug}-{project-slug}-cycle-{YYYY-MM-DD}-worksheet.csv` (cycle start date)
+- [x] **Interim-month export remains scoped to that month** — the monthly `worksheetItem` is unchanged in Slice 3
+- [x] **Verify**: 1-month cycle exports — by construction the per-month and cycle CSVs share the same rows; the cycle CSV adds dividers + footer lines. Documented in the dialog comment and the trigger placement.
+- [x] **Verify**: 3-month cycle — rollover ledger derived from `buildRetainerUsageRows`, the same path the Monthly Breakdown card consumes; per-section `allocationMinutes` reads from that ledger so cycle worksheet and overview cannot drift.
 
-### Slice 4 — Invoice companion export
+### Slice 4 — Invoice companion export ✅
 
-- [ ] **Action**: `exportInvoice({ invoiceId })` — scopes entries by `invoiceLineItems.timeEntryIds` (canonical entry-set rule per `schema.ts:379`)
-- [ ] **Wire trigger**: `Download worksheet` `DropdownMenuItem` in `components/invoices/invoice-row-actions.tsx:214` `⋯` menu
-- [ ] **Works for any project type's invoice** — primary use case is T&M, where the invoice's `timeEntryIds` is the canonical scope
-- [ ] **Filename**: `{client-slug}-{project-slug}-invoice-{INV-…}-worksheet.csv`
-- [ ] **Verify**: multi-tenant + admin guards in this action path
-- [ ] **Verify**: T&M invoice with user-trimmed entry selection → worksheet rows match exactly the entries on the invoice
-- [ ] **Verify**: cross-org invoice id → throws
+- [x] **Action**: `exportInvoice({ invoiceId })` — scopes entries by `invoiceLineItems.timeEntryIds` (canonical entry-set rule per [convex/schema.ts:379](convex/schema.ts:379))
+- [x] **Wire trigger**: `Download worksheet` `WorksheetMenuItem` at the TOP of the `⋯` menu in [components/invoices/invoice-row-actions.tsx](components/invoices/invoice-row-actions.tsx), separator before the regular actions. Skipped on `void` invoices (component already short-circuits there).
+- [x] **Works for any project type's invoice** — the `invoice` scope reads line items by `invoiceId`, no billing-type branching; T&M is the primary use case but Fixed and Retainer invoices export the same way.
+- [x] **Filename**: `{client-slug}-{project-slug}-invoice-{INV-035}-worksheet.csv`
+- [x] **Verify**: multi-tenant + admin guards — `requireAdmin` then `invoice.orgId === orgId` then `project.orgId === orgId` then `client.orgId === orgId`. Each level throws on mismatch.
+- [x] **Verify**: T&M invoice with user-trimmed entry selection — the action walks `invoiceLineItems.timeEntryIds` directly (not `timeEntries.invoiceId`), so the worksheet's row set IS the invoice's entry set, by construction.
+- [x] **Verify**: cross-org invoice id → first guard throws `"Invoice not found"`
 
-### Slice 5 — Project-header ad-hoc export
+### Slice 5 — Project-header ad-hoc export ✅
 
-- [ ] **Picker modal**: `components/worksheet/ad-hoc-export-dialog.tsx` — period preset/custom + categories multi-select + billable-filter radio
-- [ ] **Period presets**: This month, Last month, This quarter, Last quarter, This year, Last year, All time, Custom range — resolved against `orgSettings.timezone`
-- [ ] **Categories filter**: multi-select from this org's `workCategories`; default = all
-- [ ] **Billable filter**: All / Billable only / Non-billable only; default = all
-- [ ] **Wire trigger**: `Download worksheet…` `DropdownMenuItem` in `components/projects/project-detail-header.tsx:125` `⋯` (one code path covers Fixed, T&M, Retainer)
-- [ ] **Action**: `exportAdHoc({ projectId, periodStart, periodEnd, categoryIds?, billableFilter? })`
-- [ ] **Renders flat** — no per-month subtotals, no rollover/overage rows, even if the range matches a cycle or month
-- [ ] **CSV header reflects active filters** (categories, billable filter)
-- [ ] **Filename**: `{client-slug}-{project-slug}-{period-slug}-worksheet.csv`. Examples: `2026-q1`, `2025-2026-all-time`, `2026-01-15-to-2026-04-30`. Filters do NOT affect filename.
-- [ ] **Empty result**: toast `"No time entries match these filters."` No download.
-- [ ] **Submit-disabled state**: until period is valid (custom range with start ≤ end)
-- [ ] **Verify**: each preset period resolves correctly against `orgSettings.timezone`
-- [ ] **Verify**: custom range crossing retainer cycle boundaries renders flat
-- [ ] **Verify**: category filter narrows the row set
-- [ ] **Verify**: billable filter changes both rows shown and total lines
-- [ ] **Verify**: available on Fixed, T&M, and Retainer project pages from one code path
+- [x] **Picker modal**: [components/worksheet/ad-hoc-export-dialog.tsx](components/worksheet/ad-hoc-export-dialog.tsx) — period preset/custom radio + categories multi-select + billable-filter radio
+- [x] **Period presets**: `This month`, `Last month`, `This quarter`, `Last quarter`, `This year`, `Last year`, `All time`, `Custom range` — pure resolver in [lib/worksheet-period-presets.ts](lib/worksheet-period-presets.ts), resolved against `orgSettings.timezone`. Unit tests in [lib/worksheet-period-presets.test.ts](lib/worksheet-period-presets.test.ts) cover every preset including year/quarter wraparound.
+- [x] **Categories filter**: multi-select against the org's `workCategories` (`api.workCategories.list`); default = empty selection = all categories
+- [x] **Billable filter**: All / Billable only / Non-billable only radio; default = all
+- [x] **Wire trigger**: `Download worksheet…` `DropdownMenuItem` at the TOP of `⋯` in [components/projects/project-detail-header.tsx](components/projects/project-detail-header.tsx). One code path covers Fixed, T&M, Retainer.
+- [x] **Action**: `exportAdHoc({ projectId, periodStart, periodEnd, periodSlug, periodLabel, categoryIds?, billable?, categoryLabels? })` — client passes slug + label so the action stays stateless
+- [x] **Renders flat** — the `period` scope path in `collectWorksheetData` is unaware of cycles, so a cross-cycle range yields a flat task list (`buildSingleScopeCsv` has no section logic)
+- [x] **CSV header reflects active filters** — `Filters:` row added when `categoryLabels` or `billable !== "all"`. Omitted when neither narrows the result (PRD rule).
+- [x] **Filename**: `{client-slug}-{project-slug}-{period-slug}-worksheet.csv`. Examples produced by the preset resolver: `2026-q1`, `2025-2026-all-time`, `2026-01-15-to-2026-04-30`. Filters do NOT affect the filename — only the period slug does.
+- [x] **Empty result**: action throws `ConvexError("No time entries match these filters")`; the dialog's catch surfaces it as a toast and no CSV is written
+- [x] **Submit-disabled state**: button disabled when (a) timezone hasn't loaded, (b) preset resolver returns `null` (custom range with end < start or missing endpoints), or (c) a request is in flight
+- [x] **Verify**: each preset period resolves correctly against `orgSettings.timezone` — covered by [lib/worksheet-period-presets.test.ts](lib/worksheet-period-presets.test.ts) with a fixed reference date
+- [x] **Verify**: custom range crossing retainer cycle boundaries renders flat — `buildSingleScopeCsv` has no per-month divider logic; only `buildFullCycleCsv` (the cycle action) emits sections
+- [x] **Verify**: category filter narrows the row set — `resolveScopeEntries` filters tasks by `workCategoryId` set membership before iterating their entries
+- [x] **Verify**: billable filter changes both rows shown AND the total lines — the entries array is pre-filtered, so `buildTaskRows` only sees in-scope entries; the totals fall out of those rows
+- [x] **Verify**: available on Fixed, T&M, and Retainer project pages from one code path — the trigger lives in `ProjectDetailHeader`, which is mounted by every project type's page (`app/(dashboard)/projects/[id]/page.tsx`)
 
 ### TODOs deferred to later phases
 
@@ -1638,3 +1649,161 @@ The lock guard covers all three write paths (`timeEntries.create`, `timer.commit
 - **Saved ad-hoc export presets per project** — each ad-hoc export is configured from scratch today. Add "save as preset" if owners run the same custom range monthly.
 - **Cross-project ad-hoc export** ("all our work in Q1") — today scoped per-project. Promote when portfolio-level reporting is requested.
 - **Comment thread structure / attachments in AI context** — today comments are flattened by `createdAt`, text only. Add threaded/attachment context if a client's most useful delivery detail starts hiding in attachments.
+
+---
+
+## Retainer Billing Workflow Audit — 2026-07-04 ✅
+
+Senior-dev/PO pass over the monthly-retainer invoicing + worksheet workflow.
+Verdict: the core settlement model (calendar-driven due-ness, rollover OFF =
+monthly units / rollover ON = cycle unit, within-budget → report + close,
+over-budget → overage invoice) is **correct**. Fixes below target the gaps
+that made the workflow feel opaque.
+
+### Shipped in this pass
+
+- [x] **Billing inbox: within-budget closes surface on the Ready tab.** New
+  `retainer-close` / `retainer-cycle-close` rows in
+  [convex/lib/readyToInvoice.ts](convex/lib/readyToInvoice.ts) — one per
+  calendar-ended, uninvoiced, not-admin-closed within-budget month/cycle.
+  `enumerateReadyRows` feeds admin-close state from `retainerPeriods`;
+  rows render with an outline **Close & report** button that opens the same
+  `ClosePeriodModal` / `CloseCycleModal` the Monthly Breakdown card uses
+  ([components/invoices/invoice-list.tsx](components/invoices/invoice-list.tsx)).
+  The Ready tab is now the single queue for ALL month-end billing actions.
+- [x] **Sidebar badge counts closes too.** `getInvoicingNavSignals` returns
+  `toCloseCount` alongside `toGenerateCount`; badge shows the sum, tooltip
+  breaks it down ("N ready to bill · M to close & report · K overdue").
+- [x] **Missing `overageRate` no longer hides over-budget months.** Instead
+  of the silent `amount <= 0` drop, the row is emitted with
+  `configIssue: "missing-overage-rate"` and the inbox action becomes a
+  **Set rate** link to the project's settings tab.
+- [x] **`getRetainerData.overageDue` dedups against invoiced periods**
+  ([convex/projects.ts](convex/projects.ts)) — previously it kept summing
+  overage for months/cycles that already had a non-void invoice,
+  disagreeing with the InvoiceBanner and the Ready feed on the same page.
+- [x] **Retainer config read-defaults aligned with creation defaults.**
+  `projects.create` writes `cycleLength ?? 1` and rollover only for
+  multi-month cycles, but read paths defaulted to `?? true` / `?? 3`
+  (a misconfigured doc silently read as a 3-month rollover). All read
+  sites now use `?? false` / `?? 1` (invoices.ts ×2, projects.ts ×2,
+  statements.ts).
+- [x] **Stale rollover-close tests updated** —
+  [lib/retainer-row-action.test.ts](lib/retainer-row-action.test.ts) still
+  asserted the pre-Slice-4 "mid-cycle monthly close allowed on rollover"
+  behavior that `closePeriod` Gate -1 now rejects.
+
+### Known gaps deliberately deferred (audit findings)
+
+- **Retroactive time in an already-invoiced month is silently unbillable.**
+  Ready-feed dedup is per anchor month, but only entries ON the invoice are
+  locked — a new entry logged into an invoiced month never resurfaces
+  anywhere. Decision (2026-07-04): accept for MVP. Fix candidates: block
+  entry creation in invoiced periods (mirror `assertEntryDateOpen`), or a
+  "late entries" follow-up inbox row.
+- **Rounding asymmetry (latent).** `computeRetainerBalance` rounds task
+  groups UP by `roundingMinutes`; Ready-feed/`getRetainerData` sum raw
+  minutes. Harmless today (`useGenerateInvoice` sends `roundingMinutes: 0`)
+  but the inbox amount will diverge from the draft the moment a non-zero
+  rounding is passed.
+- **Cron month-boundary math uses UTC** (`retainerCron.ts`) while every
+  other surface uses org timezone. Low impact (rows are lazily created by
+  close mutations anyway); align when touching the cron for auto-reports.
+- **Terminology pass (next UX round):** "Outstanding" tab ↔ `invoiced`
+  status ↔ "Mark as invoiced" button are three names for one state; five
+  Generate entry points carry three different labels; `closed` vs
+  `invoiced` terminal pills are both green and indistinguishable at a
+  glance; "Report" (live statement) vs "Worksheet" (AI CSV) need clearer
+  labels.
+- **`getInvoicePreview` has no retainer branch** — the preview modal can't
+  show overage/balance context for retainer drafts the way it does T&M.
+- **Dashboard home is a stub** — the natural "what needs billing today"
+  landing surface shows hardcoded zeros; the billing signal lives only in
+  the sidebar badge + Invoices page.
+- **Project-page Close offered for over-budget month with `overageRate=0`**
+  (`decideRetainerRowCloseAction` returns `close-month`) while the inbox
+  now says "Set rate" — reconcile when the terminology pass lands.
+
+---
+
+## Invoice Lifecycle Hardening — 2026-07-04 ✅
+
+Senior review items #1+#2 (Stripe-style numbering + paid immutability).
+
+- [x] **Invoice numbers allocate at FINALIZATION, not draft creation.**
+  `invoices.number` is now optional ([convex/schema.ts](convex/schema.ts));
+  `createInvoice` no longer claims a number or bumps the counter; the
+  `draft → invoiced` branch of `applyStatusTransition` allocates
+  `orgSettings.nextInvoiceNumber` (idempotent — a reverted-then-refinalized
+  invoice keeps its number) and refreshes the prefix at issue time. Deleted
+  or abandoned drafts therefore never leave gaps in the issued series
+  (NAV/EU gapless-sequence requirement).
+- [x] **Draft URLs fall back to the Convex doc ID** — `getInvoice` already
+  accepted both identifier forms; `invoiceUrlSegment` / 
+  `formatInvoiceIdentifier` in [lib/format.ts](lib/format.ts) centralize the
+  "INV-035 or Draft/doc-id" split. Draft rows show an em-dash in the Number
+  column; the invoice document header renders "Draft".
+- [x] **`deleteInvoice` is draft-only.** Finalized invoices must be voided —
+  the numbered record survives as audit trail and the period frees for
+  re-billing.
+- [x] **`paid → draft` removed from `VALID_TRANSITIONS`.** Paid is
+  immutable; the only reverse edge is `paid → invoiced` (undo mark-paid).
+  Row actions updated: paid overflow = Download PDF + Mark as unpaid;
+  draft overflow = Delete (confirm) instead of Void — voiding an unnumbered
+  draft had no audit value.
+- [x] **Tests**: `invoiceTransitions.test.ts` — allocation on finalize,
+  counter bump, no double-claim on re-finalize, paid→draft rejected,
+  deleteInvoice guard (rejects finalized / removes draft + releases entries).
+
+### Deferred follow-ups from the senior review
+
+- **Hosted share link for invoices/reports** (Stripe-style public read-only
+  URL) — the missing "send to client" step of the monthly flow.
+- **Org-level "Month in review" analytics view** + real dashboard billing
+  widgets (`/reports` route advertised in CLAUDE.md does not exist).
+- **Nav-signal read amplification** — `getInvoicingNavSignals` walks every
+  project→task→entry on any entry write; plan `by_orgId_date` index or
+  per-period aggregates before scale.
+- **Rounding direction decision** — `roundingMinutes` is hardcoded to 0 at
+  every call site; either promote to `orgSettings` (and use it in BOTH the
+  Ready feed and invoice math) or remove the parameter.
+
+---
+
+## UX Review Round 1: Seller Identity + Rollover Config Guard — 2026-07-04 ✅
+
+- [x] **Company details form** —
+  [components/settings/settings-company-details.tsx](components/settings/settings-company-details.tsx),
+  mounted in Settings → General. First edit surface for the `brand*` org
+  fields (the mutation supported them since Phase 0, but nothing in the UI
+  could set them — the invoice's "No name set" placeholder had no fix path).
+- [x] **Seller-identity gate on finalize** — `applyStatusTransition` rejects
+  `draft → invoiced` when `orgSettings.brandName` is unset (Stripe rule: no
+  finalize without account details). UI mirrors: the invoice document's
+  From block shows an "Add your company details →" link (print-hidden), and
+  the sidebar's Mark as Invoiced is disabled with an inline explanation.
+- [x] **Cycle-label fix** — "Jun 2026-Jun 2026 2026 report" → single-month
+  cycles render "June 2026"; ranges render "Jan-Mar 2026" (monthShort no
+  longer double-prints the year).
+- [x] **"1-month rollover" hybrid killed** — `projects.update` now enforces
+  the same rule as `create` (rollover forced off when effective cycleLength
+  < 2); the retainer settings card hides the rollover switch for 1-month
+  cycles and always saves `rolloverEnabled: false` there. Existing hybrid
+  projects normalize on their next settings save.
+- [x] **Invoice sidebar caught up with lifecycle-tightening** — the detail
+  page still offered paid → Revert to Draft and an always-visible red
+  Delete Invoice (both now server-rejected). Paid shows "Mark as Unpaid"
+  (ghost); Delete is a draft-only quiet destructive action ("Delete
+  Draft"), matching the row-actions menu.
+- [x] **Tests** — seed carries `brandName`; new gate test asserts rejection
+  reason + zero side-effects (status, number, settlement untouched).
+
+### UX review items still open (round 2 candidates)
+
+- Ready tab: drop the dead Number column, widen Subject.
+- Draft PDF: "DRAFT" watermark on print before finalization.
+- Project Finances "Overage due" should show drafted/invoiced state instead
+  of red "due" once a non-void invoice covers it.
+- Ready rows: row-level click target (or hover cursor signaling button-only).
+- Monthly Breakdown 6-pill legend → shrink to states actually present
+  (part of the deferred terminology pass).

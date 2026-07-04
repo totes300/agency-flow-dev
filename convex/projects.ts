@@ -468,6 +468,18 @@ export const updateRetainer = mutation({
       updates.rolloverEnabled = args.rolloverEnabled;
     }
 
+    // Same rule `create` enforces: rollover is only meaningful across a
+    // multi-month cycle. Without this, a settings edit could produce a
+    // "1-month rollover" hybrid — monthly billing forced through the
+    // cycle-close flow, with degenerate "Apr–Apr cycle" labels everywhere.
+    {
+      const effectiveCycleLength =
+        (updates.cycleLength as number | undefined) ?? project.cycleLength ?? 1;
+      if (effectiveCycleLength < 2) {
+        updates.rolloverEnabled = false;
+      }
+    }
+
     if (args.overageRate !== undefined) {
       if (args.overageRate <= 0) throw new ConvexError("Overage rate must be greater than 0");
       updates.overageRate = args.overageRate;
@@ -503,8 +515,10 @@ export const getRetainerData = query({
       includedMinutesPerMonth = 0,
       monthlyFee = 0,
       startDate,
-      rolloverEnabled = true,
-      cycleLength = 3,
+      // Defaults mirror `projects.create` (cycleLength 1 → monthly, no
+      // rollover) so a doc missing these fields reads the same everywhere.
+      rolloverEnabled = false,
+      cycleLength = 1,
     } = project;
 
     // Get currency from client
@@ -653,7 +667,8 @@ export const getRetainerData = query({
     };
     type MonthInvoice = {
       id: Doc<"invoices">["_id"];
-      number: number;
+      /** Undefined while the linked invoice is an unnumbered draft. */
+      number: number | undefined;
       prefix: string;
       status: Doc<"invoices">["status"];
     };
@@ -773,13 +788,25 @@ export const getRetainerData = query({
     const cycleBalance = cycleBudget - cycleWorked;
     const utilization = cycleBudget > 0 ? (cycleWorked / cycleBudget) * 100 : 0;
 
-    // Overage calculation
+    // Overage calculation. "Due" means STILL owed — months/cycles whose
+    // overage already sits on a non-void invoice are excluded, mirroring the
+    // Ready feed's `invoicedMonthKeys` dedup. Without this exclusion the
+    // project page kept summing overage for periods that were already
+    // invoiced or even paid, disagreeing with the InvoiceBanner and the
+    // Invoices inbox on the same screen.
     const projectOverageRate = project.overageRate ?? 0;
     let overageMinutes = 0;
     let overageDue = 0;
     if (rolloverEnabled) {
-      // Rollover: overage only at end of closed cycle
-      if (isCycleClosed && cycleBalance < 0) {
+      // Rollover: overage only at end of closed cycle, and only while the
+      // cycle's anchor month (its closing month) is uninvoiced.
+      const closingMonth = monthlyData[monthlyData.length - 1];
+      const closingKey = closingMonth
+        ? `${closingMonth.year}-${String(closingMonth.month).padStart(2, "0")}`
+        : null;
+      const cycleInvoiced =
+        closingKey !== null && invoiceByMonthKey.has(closingKey);
+      if (isCycleClosed && cycleBalance < 0 && !cycleInvoiced) {
         overageMinutes = Math.abs(cycleBalance);
         overageDue = (overageMinutes / 60) * projectOverageRate;
       }
@@ -788,7 +815,7 @@ export const getRetainerData = query({
       // `periodEnded` (not `isClosed`) gates due-ness, so an unbilled
       // overage month still shows due even before an admin clicks Close.
       for (const m of monthlyData) {
-        if (m.periodEnded && m.endBalance < 0) {
+        if (m.periodEnded && m.endBalance < 0 && m.invoice === null) {
           const monthOverage = Math.abs(m.endBalance);
           overageMinutes += monthOverage;
           overageDue += (monthOverage / 60) * projectOverageRate;
@@ -977,7 +1004,7 @@ export const getSummary = query({
       monthlyFee = 0,
       overageRate = 0,
       startDate,
-      rolloverEnabled = true,
+      rolloverEnabled = false,
       cycleLength = 1,
     } = project;
 

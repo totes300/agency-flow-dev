@@ -4,8 +4,10 @@ import dynamic from "next/dynamic"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { SettingsGeneral } from "@/components/settings/settings-general"
+import { SettingsCompanyDetails } from "@/components/settings/settings-company-details"
 import { SettingsInvoicing } from "@/components/settings/settings-invoicing"
 import { SettingsMyTasksDefaults } from "@/components/settings/settings-my-tasks-defaults"
+import { SettingsIntegrations } from "@/components/settings/settings-integrations"
 
 // ─── Content-aware loading skeletons ────────────────────────────────────────────
 
@@ -156,10 +158,14 @@ export default function SettingsPage() {
           <TabsTrigger value="statuses">Statuses</TabsTrigger>
           <TabsTrigger value="work-categories">Work Categories</TabsTrigger>
           <TabsTrigger value="user-rates">User Rates</TabsTrigger>
+          <TabsTrigger value="integrations">Integrations</TabsTrigger>
         </TabsList>
 
         <TabsContent value="general" className="mt-6 space-y-10">
           <SettingsGeneral />
+          <div className="border-t pt-8">
+            <SettingsCompanyDetails />
+          </div>
           <div className="border-t pt-8">
             <SettingsInvoicing />
           </div>
@@ -182,6 +188,10 @@ export default function SettingsPage() {
 
         <TabsContent value="user-rates" className="mt-6">
           <SettingsUserRates />
+        </TabsContent>
+
+        <TabsContent value="integrations" className="mt-6">
+          <SettingsIntegrations />
         </TabsContent>
       </Tabs>
     </div>

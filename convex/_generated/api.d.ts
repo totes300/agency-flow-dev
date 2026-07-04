@@ -9,6 +9,7 @@
  */
 
 import type * as activityLog from "../activityLog.js";
+import type * as aiIntegration from "../aiIntegration.js";
 import type * as attachments from "../attachments.js";
 import type * as categoryRates from "../categoryRates.js";
 import type * as clientContacts from "../clientContacts.js";
@@ -41,6 +42,7 @@ import type * as lib_retainerBalance from "../lib/retainerBalance.js";
 import type * as lib_retainerCycle from "../lib/retainerCycle.js";
 import type * as lib_retainerUsage from "../lib/retainerUsage.js";
 import type * as lib_rounding from "../lib/rounding.js";
+import type * as lib_secretCrypto from "../lib/secretCrypto.js";
 import type * as lib_settleEntries from "../lib/settleEntries.js";
 import type * as lib_settleGuards from "../lib/settleGuards.js";
 import type * as lib_taskActivityIndicators from "../lib/taskActivityIndicators.js";
@@ -49,6 +51,7 @@ import type * as lib_timer from "../lib/timer.js";
 import type * as lib_types from "../lib/types.js";
 import type * as lib_url from "../lib/url.js";
 import type * as lib_validators from "../lib/validators.js";
+import type * as lib_worksheetAi from "../lib/worksheetAi.js";
 import type * as linkPreviews from "../linkPreviews.js";
 import type * as migrations_deleteLegacyTimeEntries from "../migrations/deleteLegacyTimeEntries.js";
 import type * as migrations_seedInvoicingScenarios from "../migrations/seedInvoicingScenarios.js";
@@ -74,6 +77,8 @@ import type * as userRates from "../userRates.js";
 import type * as users from "../users.js";
 import type * as workCategories from "../workCategories.js";
 import type * as workday from "../workday.js";
+import type * as worksheets from "../worksheets.js";
+import type * as worksheetsHelpers from "../worksheetsHelpers.js";
 
 import type {
   ApiFromModules,
@@ -83,6 +88,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   activityLog: typeof activityLog;
+  aiIntegration: typeof aiIntegration;
   attachments: typeof attachments;
   categoryRates: typeof categoryRates;
   clientContacts: typeof clientContacts;
@@ -115,6 +121,7 @@ declare const fullApi: ApiFromModules<{
   "lib/retainerCycle": typeof lib_retainerCycle;
   "lib/retainerUsage": typeof lib_retainerUsage;
   "lib/rounding": typeof lib_rounding;
+  "lib/secretCrypto": typeof lib_secretCrypto;
   "lib/settleEntries": typeof lib_settleEntries;
   "lib/settleGuards": typeof lib_settleGuards;
   "lib/taskActivityIndicators": typeof lib_taskActivityIndicators;
@@ -123,6 +130,7 @@ declare const fullApi: ApiFromModules<{
   "lib/types": typeof lib_types;
   "lib/url": typeof lib_url;
   "lib/validators": typeof lib_validators;
+  "lib/worksheetAi": typeof lib_worksheetAi;
   linkPreviews: typeof linkPreviews;
   "migrations/deleteLegacyTimeEntries": typeof migrations_deleteLegacyTimeEntries;
   "migrations/seedInvoicingScenarios": typeof migrations_seedInvoicingScenarios;
@@ -148,6 +156,8 @@ declare const fullApi: ApiFromModules<{
   users: typeof users;
   workCategories: typeof workCategories;
   workday: typeof workday;
+  worksheets: typeof worksheets;
+  worksheetsHelpers: typeof worksheetsHelpers;
 }>;
 
 /**

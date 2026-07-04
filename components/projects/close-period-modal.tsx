@@ -76,6 +76,18 @@ export function ClosePeriodModal({
               settledCount === 1 ? "entry" : "entries"
             } settled.`
           : `Closed ${periodLabel}.`,
+        {
+          // Direct path to the live report — matters most when closing from
+          // the Invoices inbox, where no report link exists on the page.
+          action: {
+            label: "View report",
+            onClick: () =>
+              window.open(
+                `/projects/${projectId}/reports/${year}-${String(month).padStart(2, "0")}`,
+                "_blank",
+              ),
+          },
+        },
       )
       onOpenChange(false)
     } catch (err) {

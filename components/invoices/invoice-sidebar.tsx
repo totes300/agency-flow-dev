@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useRef } from "react"
+import Link from "next/link"
 import { useMutation } from "convex/react"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
@@ -24,6 +25,7 @@ export function InvoiceSidebar({
   backHref,
   fixedBilled,
   onPrint,
+  brandMissing = false,
 }: {
   invoice: Doc<"invoices">
   project: { name: string; billingType: string; fixedPrice?: number } | null
@@ -32,6 +34,11 @@ export function InvoiceSidebar({
   backHref: string
   fixedBilled?: number
   onPrint?: () => void
+  /**
+   * Seller identity (company name) not set yet — mirrors the server-side
+   * finalize gate so the button explains itself instead of failing.
+   */
+  brandMissing?: boolean
 }) {
   const router = useRouter()
   const updateInvoice = useMutation(api.invoices.updateInvoice)
@@ -229,12 +236,23 @@ export function InvoiceSidebar({
       {/* Action buttons */}
       <div className="flex flex-col gap-2">
         {invoice.status === "draft" && (
-          <Button
-            onClick={() => setConfirmAction("markInvoiced")}
-            disabled={actionLoading}
-          >
-            Mark as Invoiced
-          </Button>
+          <>
+            <Button
+              onClick={() => setConfirmAction("markInvoiced")}
+              disabled={actionLoading || brandMissing}
+            >
+              Mark as Invoiced
+            </Button>
+            {brandMissing && (
+              <p className="text-xs text-muted-foreground">
+                Invoices need a seller name.{" "}
+                <Link href="/settings" className="font-medium text-foreground hover:underline">
+                  Add your company details
+                </Link>{" "}
+                to issue this invoice.
+              </p>
+            )}
+          </>
         )}
 
         {onPrint && (
@@ -265,24 +283,34 @@ export function InvoiceSidebar({
           </>
         )}
 
+        {/* Paid is immutable (lifecycle-tightening 2026-07-04): the only
+            reverse edge is undoing the payment mark. No revert-to-draft,
+            no delete — corrections flow through invoiced → void. */}
         {invoice.status === "paid" && (
           <Button
             variant="ghost"
             className="text-muted-foreground"
-            onClick={() => setConfirmAction("revertToDraft")}
+            onClick={() => {
+              void handleStatusChange("invoiced", "Invoice marked as unpaid")
+            }}
             disabled={actionLoading}
           >
-            Revert to Draft
+            Mark as Unpaid
           </Button>
         )}
 
-        <Button
-          variant="destructive"
-          onClick={() => setConfirmAction("delete")}
-          disabled={actionLoading}
-        >
-          Delete Invoice
-        </Button>
+        {/* Drafts are unnumbered and unissued — deleting one never burns a
+            sequence number. Finalized invoices can only be voided. */}
+        {invoice.status === "draft" && (
+          <Button
+            variant="ghost"
+            className="text-destructive hover:text-destructive"
+            onClick={() => setConfirmAction("delete")}
+            disabled={actionLoading}
+          >
+            Delete Draft
+          </Button>
+        )}
       </div>
 
       {/* Confirm: Mark as Invoiced */}
@@ -309,13 +337,13 @@ export function InvoiceSidebar({
         }}
       />
 
-      {/* Confirm: Delete */}
+      {/* Confirm: Delete (drafts only) */}
       <ConfirmDialog
         open={confirmAction === "delete"}
         onOpenChange={(open) => { if (!open) setConfirmAction(null) }}
-        title="Delete Invoice"
-        description="This will permanently delete this invoice and unlink all associated time entries. This action cannot be undone."
-        confirmLabel="Delete Invoice"
+        title="Delete draft?"
+        description="This removes the draft and releases its linked time entries so the period can be billed again. No invoice number is affected — drafts are unnumbered."
+        confirmLabel="Delete draft"
         variant="destructive"
         onConfirm={handleDelete}
       />

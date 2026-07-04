@@ -76,7 +76,12 @@ type SeedResult = {
  */
 async function seed(
   t: ReturnType<typeof convexTest>,
-  opts: { billingType: "t_and_m" | "fixed"; invoiceStatus?: "draft" | "invoiced" | "paid" },
+  opts: {
+    billingType: "t_and_m" | "fixed";
+    invoiceStatus?: "draft" | "invoiced" | "paid";
+    /** Seed the invoice WITHOUT a number — the post-2026-07-04 draft shape. */
+    unnumbered?: boolean;
+  },
 ): Promise<SeedResult> {
   return await t.run(async (ctx) => {
     const now = Date.now();
@@ -102,6 +107,10 @@ async function seed(
       defaultCurrency: "EUR",
       timezone: "UTC",
       roundingMinutes: 1,
+      // Seller-identity gate (2026-07-04): draft → invoiced requires a
+      // company name. Seeded so transition tests pass the gate; the gate
+      // itself has a dedicated test below.
+      brandName: "Test Agency",
       createdAt: now,
       updatedAt: now,
       createdBy: userId,
@@ -151,7 +160,7 @@ async function seed(
       orgId: ORG_ID,
       projectId,
       clientId,
-      number: 1,
+      ...(opts.unnumbered ? {} : { number: 1 }),
       prefix: "INV-",
       status: opts.invoiceStatus ?? "draft",
       currency: "EUR",
@@ -336,6 +345,153 @@ describe("applyStatusTransition — invoiced → draft", () => {
 });
 
 // ─── 5. timeEntries.update/remove reject settled entries ────────────────────
+
+// ─── Numbering at finalization (2026-07-04) ─────────────────────────────────
+
+describe("applyStatusTransition — number allocation at finalization", () => {
+  it("allocates the next sequence number on draft → invoiced", async () => {
+    const t = convexTest(schema, modules);
+    const ids = await seed(t, { billingType: "t_and_m", unnumbered: true });
+
+    await t.run(async (ctx) => {
+      const invoice = await ctx.db.get(ids.invoiceId);
+      expect(invoice?.number).toBeUndefined();
+      const result = await applyStatusTransition(ctx, ORG_ID, invoice!, "invoiced");
+      expect(result.ok).toBe(true);
+    });
+
+    const invoice = await t.run(async (ctx) => ctx.db.get(ids.invoiceId));
+    expect(invoice?.number).toBe(1);
+    // Counter bumped so the next finalization gets 2.
+    const settings = await t.run(async (ctx) =>
+      ctx.db
+        .query("orgSettings")
+        .withIndex("by_orgId", (q) => q.eq("orgId", ORG_ID))
+        .first(),
+    );
+    expect(settings?.nextInvoiceNumber).toBe(2);
+  });
+
+  it("re-finalizing a reverted draft keeps its original number (no double-claim)", async () => {
+    const t = convexTest(schema, modules);
+    const ids = await seed(t, { billingType: "t_and_m", unnumbered: true });
+
+    await t.run(async (ctx) => {
+      let invoice = await ctx.db.get(ids.invoiceId);
+      await applyStatusTransition(ctx, ORG_ID, invoice!, "invoiced");
+      invoice = await ctx.db.get(ids.invoiceId);
+      await applyStatusTransition(ctx, ORG_ID, invoice!, "draft");
+      invoice = await ctx.db.get(ids.invoiceId);
+      // Number survives the revert — issued identity is permanent.
+      expect(invoice?.number).toBe(1);
+      await applyStatusTransition(ctx, ORG_ID, invoice!, "invoiced");
+    });
+
+    const invoice = await t.run(async (ctx) => ctx.db.get(ids.invoiceId));
+    expect(invoice?.number).toBe(1);
+    const settings = await t.run(async (ctx) =>
+      ctx.db
+        .query("orgSettings")
+        .withIndex("by_orgId", (q) => q.eq("orgId", ORG_ID))
+        .first(),
+    );
+    // Only one number consumed across finalize → revert → re-finalize.
+    expect(settings?.nextInvoiceNumber).toBe(2);
+  });
+});
+
+describe("applyStatusTransition — seller-identity gate", () => {
+  it("rejects draft → invoiced when the org has no company name", async () => {
+    const t = convexTest(schema, modules);
+    const ids = await seed(t, { billingType: "t_and_m", unnumbered: true });
+    // Clear the seeded brand name to simulate a fresh org.
+    await t.run(async (ctx) => {
+      const settings = await ctx.db
+        .query("orgSettings")
+        .withIndex("by_orgId", (q) => q.eq("orgId", ORG_ID))
+        .first();
+      await ctx.db.patch(settings!._id, { brandName: undefined });
+    });
+
+    const result = await t.run(async (ctx) => {
+      const invoice = await ctx.db.get(ids.invoiceId);
+      return applyStatusTransition(ctx, ORG_ID, invoice!, "invoiced");
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toMatch(/company details/);
+    }
+
+    // Nothing was mutated: still a draft, no number claimed, entry unsettled.
+    const invoice = await t.run(async (ctx) => ctx.db.get(ids.invoiceId));
+    expect(invoice?.status).toBe("draft");
+    expect(invoice?.number).toBeUndefined();
+    const entry = await t.run(async (ctx) => ctx.db.get(ids.entryId));
+    expect(entry?.settledAt).toBeUndefined();
+  });
+});
+
+// ─── Lifecycle tightening (2026-07-04) ──────────────────────────────────────
+
+describe("lifecycle tightening — paid immutability", () => {
+  it("rejects paid → draft", async () => {
+    const t = convexTest(schema, modules);
+    const ids = await seed(t, { billingType: "t_and_m", invoiceStatus: "paid" });
+
+    const result = await t.run(async (ctx) => {
+      const invoice = await ctx.db.get(ids.invoiceId);
+      return applyStatusTransition(ctx, ORG_ID, invoice!, "draft");
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toMatch(/Cannot transition from "paid" to "draft"/);
+    }
+  });
+
+  it("deleteInvoice rejects a finalized invoice", async () => {
+    const t = convexTest(schema, modules);
+    const ids = await seed(t, {
+      billingType: "t_and_m",
+      invoiceStatus: "invoiced",
+    });
+
+    await expect(
+      t
+        .withIdentity({
+          subject: "user_test",
+          tokenIdentifier: "test|user_test",
+          org_id: ORG_ID,
+          // `requireAdmin` normalizes the Clerk role literal "org:admin";
+          // plain "admin" parses as member and fails before the guard.
+          org_role: "org:admin",
+        } as never)
+        .mutation(api.invoices.deleteInvoice, { id: ids.invoiceId }),
+    ).rejects.toThrow(/Only draft invoices can be deleted/);
+  });
+
+  it("deleteInvoice removes a draft and releases its entries", async () => {
+    const t = convexTest(schema, modules);
+    const ids = await seed(t, { billingType: "t_and_m" }); // status: draft
+
+    await t
+      .withIdentity({
+        subject: "user_test",
+        tokenIdentifier: "test|user_test",
+        org_id: ORG_ID,
+        org_role: "org:admin",
+      } as never)
+      .mutation(api.invoices.deleteInvoice, { id: ids.invoiceId });
+
+    const [invoice, entry, lineItem] = await t.run(async (ctx) => [
+      await ctx.db.get(ids.invoiceId),
+      await ctx.db.get(ids.entryId),
+      await ctx.db.get(ids.lineItemId),
+    ]);
+    expect(invoice).toBeNull();
+    expect(lineItem).toBeNull();
+    expect(entry?.invoiceId).toBeUndefined();
+  });
+});
 
 describe("timeEntries.update / remove — settled-entry guards", () => {
   it("update rejects when settledAt is set, with the period-reopen hint", async () => {

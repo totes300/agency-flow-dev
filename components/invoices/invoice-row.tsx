@@ -1,5 +1,6 @@
 "use client"
 
+import Link from "next/link"
 import { TableRow, TableCell } from "@/components/ui/table"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Button } from "@/components/ui/button"
@@ -11,7 +12,8 @@ import {
   buildCycleMonths,
   formatCurrency,
   formatInvoiceDate,
-  formatInvoiceNumber,
+  formatInvoiceIdentifier,
+  invoiceUrlSegment,
 } from "@/lib/format"
 import { getYMDInTimezone } from "@/lib/workday"
 import type { Id } from "@/convex/_generated/dataModel"
@@ -78,11 +80,15 @@ export function InvoiceRowItem({
               onSelect(invoice._id as Id<"invoices">, true)
             }
           }}
-          aria-label={`Select invoice ${formatInvoiceNumber(invoice.prefix, invoice.number)}`}
+          aria-label={`Select invoice ${formatInvoiceIdentifier(invoice.prefix, invoice.number)}`}
         />
       </TableCell>
-      <TableCell className="font-medium">
-        {formatInvoiceNumber(invoice.prefix, invoice.number)}
+      <TableCell
+        className={invoice.number == null ? "text-muted-foreground" : "font-medium"}
+      >
+        {invoice.number == null
+          ? "—"
+          : formatInvoiceIdentifier(invoice.prefix, invoice.number)}
       </TableCell>
       <TableCell className="max-w-0 truncate text-muted-foreground">
         {invoice.subject ?? "—"}
@@ -132,7 +138,7 @@ export function InvoiceRowItem({
       >
         <InvoiceRowActions
           invoiceId={invoice._id as Id<"invoices">}
-          identifier={formatInvoiceNumber(invoice.prefix, invoice.number)}
+          identifier={invoiceUrlSegment(invoice)}
           status={invoice.status}
         />
       </TableCell>
@@ -143,11 +149,20 @@ export function InvoiceRowItem({
 // ─── Ready row ─────────────────────────────────────────────────────────────
 
 /**
- * "Ready to be generated" row — same column grammar as `InvoiceRowItem` but
- * rendering pre-issuance state. Number and Due cells em-dash because those
- * values don't exist yet. The Status column carries the readiness pill
+ * Billing-inbox row — same column grammar as `InvoiceRowItem` but rendering
+ * pre-issuance state. Number and Due cells em-dash because those values
+ * don't exist yet. The Status column carries the readiness pill
  * (within budget / over by Xh / blank for fixed+T&M) — the eye reads the
  * column position consistently with invoice rows below.
+ *
+ * Three action shapes:
+ *   - Generate rows (over-budget retainer, Fixed, T&M) → primary "Generate".
+ *   - Close rows (within-budget retainer month/cycle)  → outline
+ *     "Close & report", which opens the same review modal the project's
+ *     Monthly Breakdown card uses.
+ *   - Config-issue rows (over budget, no overage rate) → "Set rate" link to
+ *     the project's settings tab; there is nothing billable until the rate
+ *     exists, but the pending money must stay visible in the queue.
  */
 export function ReadyRowItem({
   row,
@@ -158,6 +173,7 @@ export function ReadyRowItem({
   selected,
   onSelect,
   onGenerate,
+  onClose,
 }: {
   row: ReadyRow
   showProject: boolean
@@ -167,7 +183,9 @@ export function ReadyRowItem({
   selected: boolean
   onSelect: (shiftKey: boolean) => void
   onGenerate: () => void
+  onClose: () => void
 }) {
+  const isClose = row.kind === "retainer-close" || row.kind === "retainer-cycle-close"
   return (
     <TableRow
       className={cn("group", selected && "bg-muted/40")}
@@ -216,18 +234,48 @@ export function ReadyRowItem({
           row.amount === 0 ? "text-muted-foreground" : "font-medium",
         )}
       >
-        {formatCurrency(row.amount, row.currency)}
+        {/* Close rows carry no billable amount — an em-dash reads "nothing
+            owed", where $0.00 would read "a zero-value invoice". */}
+        {isClose ? "—" : formatCurrency(row.amount, row.currency)}
       </TableCell>
       {showDate && <TableCell className="text-muted-foreground">—</TableCell>}
       <TableCell
         className="w-44 pl-0 text-right"
         onClick={(e) => e.stopPropagation()}
       >
-        <Button size="sm" onClick={onGenerate}>
-          Generate
-        </Button>
+        <ReadyRowAction row={row} onGenerate={onGenerate} onClose={onClose} />
       </TableCell>
     </TableRow>
+  )
+}
+
+function ReadyRowAction({
+  row,
+  onGenerate,
+  onClose,
+}: {
+  row: ReadyRow
+  onGenerate: () => void
+  onClose: () => void
+}) {
+  if (row.kind === "retainer-close" || row.kind === "retainer-cycle-close") {
+    return (
+      <Button size="sm" variant="outline" onClick={onClose}>
+        Close &amp; report
+      </Button>
+    )
+  }
+  if (row.configIssue === "missing-overage-rate") {
+    return (
+      <Button size="sm" variant="outline" asChild>
+        <Link href={`/projects/${row.projectId}?tab=settings`}>Set rate</Link>
+      </Button>
+    )
+  }
+  return (
+    <Button size="sm" onClick={onGenerate}>
+      Generate
+    </Button>
   )
 }
 
@@ -243,6 +291,9 @@ function ReadinessBadge({ row }: { row: ReadyRow }) {
   if (row.badgeKind === "within-budget") {
     return <ColoredPillBadge tone="green" label="within budget" />
   }
+  if (row.configIssue === "missing-overage-rate") {
+    return <ColoredPillBadge tone="amber" label="no overage rate" />
+  }
   // over-budget: pill carries hours, e.g. "2h over". One concrete number is
   // intentional here (the user wants to know magnitude before clicking).
   const hours = row.overageHours ?? 0
@@ -257,6 +308,8 @@ function billingTypeForKind(kind: ReadyRow["kind"]): string {
   switch (kind) {
     case "retainer-monthly":
     case "retainer-cycle":
+    case "retainer-close":
+    case "retainer-cycle-close":
       return "retainer"
     case "fixed":
       return "fixed"
@@ -271,6 +324,14 @@ function readySubject(row: ReadyRow): string {
   }
   if (row.kind === "retainer-cycle" && row.period) {
     return `${cycleSubjectLabelFor(row)} overage`
+  }
+  // Close rows: the deliverable is the Monthly Report, not an invoice — the
+  // subject says so, since the Status pill column is hidden on the Ready tab.
+  if (row.kind === "retainer-close" && row.period) {
+    return `${monthLong(row.period)} report — within budget`
+  }
+  if (row.kind === "retainer-cycle-close" && row.period) {
+    return `${cycleSubjectLabelFor(row)} report — within budget`
   }
   if (row.kind === "tm" && row.period) {
     return monthLong(row.period)
@@ -288,20 +349,20 @@ function monthLong(p: { year: number; month: number }): string {
 function monthShort(p: { year: number; month: number }): string {
   return new Date(p.year, p.month - 1, 1).toLocaleDateString("en-US", {
     month: "short",
-    year: "numeric",
   })
 }
 
 function cycleSubjectLabelFor(row: ReadyRow): string {
   if (!row.period) return ""
   const cycleLen = row.cycleLengthMonths
-  if (!cycleLen || cycleLen < 1) return monthLong(row.period)
+  // Single-month cycles read as a plain month, not a degenerate range
+  // ("June 2026", never "Jun-Jun 2026").
+  if (!cycleLen || cycleLen <= 1) return monthLong(row.period)
   const months = buildCycleMonths(row.period.year, row.period.month, cycleLen)
   const first = months[0]
   const last = months[months.length - 1]
   if (!first || !last) return monthLong(row.period)
-  const firstMonth = monthShort(first)
-  const lastMonth = monthShort(last)
-  if (first.year === last.year) return `${firstMonth}-${lastMonth} ${last.year}`
-  return `${firstMonth} ${first.year}-${lastMonth} ${last.year}`
+  if (first.year === last.year)
+    return `${monthShort(first)}-${monthShort(last)} ${last.year}`
+  return `${monthShort(first)} ${first.year}-${monthShort(last)} ${last.year}`
 }

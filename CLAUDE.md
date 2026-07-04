@@ -78,6 +78,23 @@ Copy `.env.example` to `.env.local` and fill in values. Required:
 - `CLERK_JWT_ISSUER_DOMAIN` — Clerk Frontend API URL (for Convex auth)
 - `CLERK_WEBHOOK_SECRET` — Svix webhook secret (for Clerk → Convex user sync)
 
+Required to enable Phase 9 BYOK AI summaries (on **Convex**, not Vercel):
+- `AI_KEY_ENCRYPTION_KEK` — base64-encoded 32-byte key used to encrypt
+  customer-provided Anthropic keys at rest. Generate with
+  `openssl rand -base64 32` and set via `npx convex env set` (and `--prod`).
+
+Operator dev/staff fallback (used only when no per-org key is set in
+Settings → Integrations):
+- `AI_GATEWAY_API_KEY` — Vercel AI Gateway. Routes the
+  `anthropic/claude-sonnet-4.6` call through the gateway.
+- `ANTHROPIC_API_KEY` — direct Anthropic call when `AI_GATEWAY_API_KEY`
+  is unset (e.g. local dev without a linked Vercel project).
+
+Customer-facing path: each org sets their own Anthropic key in Settings →
+Integrations. Without either an org key OR an operator fallback, the
+worksheet export action surfaces a "configure AI in Settings" toast; the
+rest of the app keeps working.
+
 ## Routes
 - `/` — Landing page (public, auth-aware)
 - `/sign-in`, `/sign-up` — Clerk auth pages (public)
@@ -91,6 +108,8 @@ Copy `.env.example` to `.env.local` and fill in values. Required:
 
 ## Pre-deployment Checklist
 - **Remove Agentation toolbar** — `app/layout.tsx` includes `<Agentation endpoint="http://localhost:4747" />` wrapped in a `NODE_ENV === "development"` check. Remove the `<Agentation>` component and its `import { Agentation } from "agentation"` before deploying to production, as it is a dev-only design annotation tool.
+- **AI BYOK encryption key** — generate `AI_KEY_ENCRYPTION_KEK` with `openssl rand -base64 32` and set it on **both** Convex environments via `npx convex env set AI_KEY_ENCRYPTION_KEK <value>` and again with `--prod`. Without this, the Integrations settings tab cannot store customer keys and AI summaries fall back to the operator's env-var keys (if set) or error out cleanly. **Never rotate this without a coordinated re-paste plan — rotating invalidates every customer's stored key.**
+- **Optional operator AI fallback** — only if you want AI summaries to work for orgs that haven't connected their own key yet (e.g. demo orgs). Set `AI_GATEWAY_API_KEY` or `ANTHROPIC_API_KEY` on the Convex deployment via `npx convex env set`. Production-grade B2B SaaS deployments should leave these unset so customers must BYOK.
 
 ## Git safety in multi-agent worktrees
 

@@ -17,7 +17,7 @@ import {
   formatCurrency,
   formatDateToYMDOrUndefined,
   formatInvoiceDate,
-  formatInvoiceNumber,
+  formatInvoiceIdentifier,
   parseYMDToLocalDate,
 } from "@/lib/format"
 import { getDocumentBillingType } from "@/lib/documentBillingType"
@@ -79,7 +79,7 @@ export function InvoiceDocument({
   const billingType = project?.billingType ?? "t_and_m"
   const showAmounts = billingType === "t_and_m"
   const hasBillingSummary = billingType === "fixed" || billingType === "retainer"
-  const invoiceNumber = formatInvoiceNumber(invoice.prefix, invoice.number)
+  const invoiceNumber = formatInvoiceIdentifier(invoice.prefix, invoice.number)
   const billingTypeLabel = getDocumentBillingType({
     billingType,
     retainerRolloverEnabled: invoice.retainerRolloverEnabled,

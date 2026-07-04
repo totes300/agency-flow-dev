@@ -143,6 +143,31 @@ export function formatInvoiceNumber(prefix: string, number: number): string {
 }
 
 /**
+ * Display label for an invoice that may not have a number yet. Numbers are
+ * allocated at finalization (draft → invoiced), so drafts render as "Draft"
+ * wherever a formatted number would appear.
+ */
+export function formatInvoiceIdentifier(
+  prefix: string,
+  number: number | null | undefined,
+): string {
+  return number == null ? "Draft" : formatInvoiceNumber(prefix, number)
+}
+
+/**
+ * URL segment for an invoice detail link. Numbered invoices use the friendly
+ * form ("INV-035"); unnumbered drafts fall back to the Convex doc ID, which
+ * `getInvoice` accepts as an identifier.
+ */
+export function invoiceUrlSegment(inv: {
+  _id: string
+  prefix: string
+  number?: number | null
+}): string {
+  return inv.number == null ? inv._id : formatInvoiceNumber(inv.prefix, inv.number)
+}
+
+/**
  * Format a Date object as YYYY-MM-DD string.
  */
 export function formatDateToYMD(date: Date): string {
@@ -475,6 +500,24 @@ export function formatBatchTimeRange(startMs: number, endMs: number): string {
 /** Return the client's prefix or full name depending on the `usePrefix` setting. */
 export function getClientDisplayName(client: { name: string; prefix?: string; usePrefix?: boolean }): string {
   return client.usePrefix && client.prefix ? client.prefix : client.name
+}
+
+/**
+ * URL/filename-safe slug from a free-text name. Lowercases, strips accents,
+ * replaces non-alphanumeric runs with `-`, trims leading/trailing `-`. Used
+ * by every worksheet filename builder (Phase 9). `""` (empty input) returns
+ * `""` — callers compose multiple slugs with `-` and trim again if needed.
+ */
+export function slugify(name: string): string {
+  return name
+    .normalize("NFKD")
+    // Strip combining diacritical marks (U+0300–U+036F). NFKD splits
+    // "é" into "e" + combining acute; this removes the mark so the slug
+    // contains only ASCII letters.
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
 }
 
 // Re-export duration formatters for discoverability

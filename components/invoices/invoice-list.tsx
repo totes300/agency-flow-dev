@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
 import {
   Table,
@@ -17,12 +17,15 @@ import {
 } from "@/components/invoices/invoice-row"
 import { useGenerateInvoice } from "@/lib/hooks/use-generate-invoice"
 import { InvoiceBulkBar } from "@/components/invoices/invoice-bulk-bar"
+import { ClosePeriodModal } from "@/components/projects/close-period-modal"
+import { CloseCycleModal } from "@/components/projects/close-cycle-modal"
 import { type ListRow, type ReadyRow } from "@/lib/invoices/list-rows"
-import { formatInvoiceNumber } from "@/lib/format"
+import { buildCycleMonths, invoiceUrlSegment } from "@/lib/format"
 
 export type InvoiceRow = {
   _id: string
-  number: number
+  /** Undefined on unnumbered drafts — the number is allocated at finalization. */
+  number?: number
   prefix: string
   subject?: string
   status: "draft" | "invoiced" | "paid" | "void"
@@ -85,6 +88,9 @@ export function InvoiceList({
 }) {
   const router = useRouter()
   const { generate, pending } = useGenerateInvoice()
+  // Within-budget close rows open the same review-then-confirm modals the
+  // project's Monthly Breakdown card uses — one close flow everywhere.
+  const [closeTarget, setCloseTarget] = useState<ReadyRow | null>(null)
 
   // Memoize visible keys so `useRowSelection`'s range + header-state logic
   // stays stable across unrelated re-renders.
@@ -111,7 +117,7 @@ export function InvoiceList({
     const params = fromProject
       ? `?from=project&projectId=${fromProject.projectId}&tab=invoices`
       : ""
-    router.push(`/invoices/${formatInvoiceNumber(invoice.prefix, invoice.number)}${params}`)
+    router.push(`/invoices/${invoiceUrlSegment(invoice)}${params}`)
   }
 
   function handleGenerate(row: ReadyRow) {
@@ -199,6 +205,7 @@ export function InvoiceList({
                     selection.toggle(row.key, { shiftKey })
                   }
                   onGenerate={() => handleGenerate(row.ready)}
+                  onClose={() => setCloseTarget(row.ready)}
                 />
               )
             }
@@ -228,6 +235,66 @@ export function InvoiceList({
         selectedInvoices={selectedInvoices}
         onClear={selection.clear}
       />
+
+      {closeTarget?.kind === "retainer-close" &&
+        closeTarget.period &&
+        closeTarget.periodStart && (
+          <ClosePeriodModal
+            open
+            onOpenChange={(next) => {
+              if (!next) setCloseTarget(null)
+            }}
+            projectId={closeTarget.projectId}
+            year={closeTarget.period.year}
+            month={closeTarget.period.month}
+            periodStart={closeTarget.periodStart}
+            periodLabel={monthLabel(closeTarget.period)}
+          />
+        )}
+      {closeTarget?.kind === "retainer-cycle-close" &&
+        closeTarget.period &&
+        closeTarget.cycleStart && (
+          <CloseCycleModal
+            open
+            onOpenChange={(next) => {
+              if (!next) setCloseTarget(null)
+            }}
+            projectId={closeTarget.projectId}
+            cycleStart={closeTarget.cycleStart}
+            cycleEndYear={closeTarget.period.year}
+            cycleEndMonth={closeTarget.period.month}
+            cycleLabel={cycleRangeLabel(
+              closeTarget.period,
+              closeTarget.cycleLengthMonths ?? 1,
+            )}
+          />
+        )}
     </>
   )
+}
+
+function monthLabel(p: { year: number; month: number }): string {
+  return new Date(p.year, p.month - 1, 1).toLocaleDateString("en-US", {
+    month: "long",
+    year: "numeric",
+  })
+}
+
+/** "Jan-Mar 2026" style range label for a cycle ending at `closing`. */
+function cycleRangeLabel(
+  closing: { year: number; month: number },
+  cycleLength: number,
+): string {
+  if (cycleLength <= 1) return monthLabel(closing)
+  const months = buildCycleMonths(closing.year, closing.month, cycleLength)
+  const first = months[0]
+  const last = months[months.length - 1]
+  if (!first || !last) return monthLabel(closing)
+  const fmt = (p: { year: number; month: number }) =>
+    new Date(p.year, p.month - 1, 1).toLocaleDateString("en-US", {
+      month: "short",
+    })
+  if (first.year === last.year)
+    return `${fmt(first)}-${fmt(last)} ${last.year}`
+  return `${fmt(first)} ${first.year}-${fmt(last)} ${last.year}`
 }

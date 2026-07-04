@@ -53,11 +53,15 @@ function InvoicesNavSignals() {
     isAuthenticated ? {} : "skip",
   )
   if (!signals) return null
-  const { toGenerateCount, overdueCount } = signals
-  if (toGenerateCount === 0 && overdueCount === 0) return null
+  const { toGenerateCount, toCloseCount = 0, overdueCount } = signals
+  // Billing inbox total: invoices to generate + within-budget months to
+  // close & report. Both are month-end actions the admin must clear.
+  const inboxCount = toGenerateCount + toCloseCount
+  if (inboxCount === 0 && overdueCount === 0) return null
 
   const tooltipParts: string[] = []
   if (toGenerateCount > 0) tooltipParts.push(`${toGenerateCount} ready to bill`)
+  if (toCloseCount > 0) tooltipParts.push(`${toCloseCount} to close & report`)
   if (overdueCount > 0) tooltipParts.push(`${overdueCount} overdue`)
   const tooltip = tooltipParts.join(" · ")
 
@@ -74,7 +78,7 @@ function InvoicesNavSignals() {
           {overdueCount > 0 && (
             <CalendarClockIcon className="size-3.5" aria-hidden />
           )}
-          {toGenerateCount > 0 && <span>{toGenerateCount}</span>}
+          {inboxCount > 0 && <span>{inboxCount}</span>}
         </SidebarMenuBadge>
       </TooltipTrigger>
       <TooltipContent side="right">{tooltip}</TooltipContent>

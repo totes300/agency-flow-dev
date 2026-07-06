@@ -36,7 +36,7 @@ import type { InlineCreatedTask } from "@/components/tasks/inline-created-task-r
 // Checkbox is positioned absolutely in the left margin (Notion-style alignment).
 // Only Task is flexible (1fr). Everything else is fixed width.
 // Task 1fr | Comments 52 | Status 112 | Category 104 | Project 160 | Assignee 88 | Due 92 | Time 96 | Menu 32
-export const TASK_GRID_COLS = "grid-cols-[1fr_52px_112px_104px_160px_88px_92px_96px_32px]"
+export const TASK_GRID_COLS = "grid-cols-[1fr_52px_112px_104px_160px_88px_92px_96px_64px]"
 // Fixed columns total = 736px + 8 gaps × 24px = 928px. With 1fr min ~168px → ~1096px.
 export const TASK_TABLE_MIN_W = "min-w-[1096px]"
 

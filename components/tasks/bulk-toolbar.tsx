@@ -30,6 +30,7 @@ import {
   ArchiveIcon,
   ArchiveRestoreIcon,
   Trash2Icon,
+  SunIcon,
   XIcon,
 } from "lucide-react"
 import type { Id } from "@/convex/_generated/dataModel"
@@ -86,7 +87,8 @@ export function BulkToolbar({
           </>
         ) : (
           <>
-            {/* Normal tabs: Status, Assignee, Category, Archive, Delete */}
+            {/* Normal tabs: Today, Status, Assignee, Category, Archive, Delete */}
+            <AddToTodayAction taskIds={taskIds} />
             <StatusAction taskIds={taskIds} isAdmin={isAdmin} />
             <AssigneeAction taskIds={taskIds} type="add" />
             <AssigneeAction taskIds={taskIds} type="remove" />
@@ -108,6 +110,38 @@ export function BulkToolbar({
 }
 
 // ─── Actions ────────────────────────────────────────────────────────────────
+
+function AddToTodayAction({ taskIds }: { taskIds: Id<"tasks">[] }) {
+  const bulkAddToToday = useMutation(api.planner.bulkAddToToday)
+
+  async function handleClick() {
+    try {
+      const r = await bulkAddToToday({ taskIds })
+      if (r.added > 0) {
+        toast.success(`${r.added} added to today`)
+      } else if (r.alreadyPlanned > 0) {
+        toast.info("Already in today")
+      }
+      if (r.skippedArchived > 0) {
+        toast.info(`${r.skippedArchived} archived ${r.skippedArchived === 1 ? "task" : "tasks"} skipped`)
+      }
+    } catch (err) {
+      toastError(err, "Failed to add to today")
+    }
+  }
+
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      className="h-8 gap-1.5 text-xs"
+      onClick={handleClick}
+    >
+      <SunIcon className="size-3.5" />
+      Add to Today
+    </Button>
+  )
+}
 
 function StatusAction({ taskIds, isAdmin }: { taskIds: Id<"tasks">[]; isAdmin: boolean }) {
   const [open, setOpen] = useState(false)

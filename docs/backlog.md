@@ -2729,11 +2729,27 @@ status and becomes a derived, per-user daily plan computed from
       Live in Chrome: inline-add → In progress + assigned + planned today;
       Earlier "Move to today" → fresh segment + toast, old segment kept
 
-### Slice 04 — Triage everywhere (pending)
+### Slice 04 — Triage everywhere ✅ (2026-07-06)
 
-- [ ] Sun on `/tasks` rows + "Add to Today" bulk action
-- [ ] Task detail Plan section: today-highlight, member self-service,
-      Add to Today affordance
+- [x] Backend: `myTodayTaskIds` query (caller's covering-today task ids, one
+      index-backed read for row sun state) + `bulkAddToToday` mutation
+      (self-scoped, idempotent, archived-skipped, honest counts) +
+      `taskSegments` enriched → `{ segments (isMine, coversToday),
+      canAddToToday }`
+- [x] `/tasks` rows: `AddToTodayButton` in the action cluster (grid last col
+      widened 32→64px), hover-revealed / filled-persistent when in Today
+- [x] Bulk toolbar: quiet "Add to Today" action (sun), toast reports the
+      real added count
+- [x] Plan section (drawer + modal): today-covering segments highlighted
+      (amber tint + sun), member self-service unschedule for own segments
+      (server admin-or-self, UI gate via `isMine`), dashed "Add to today"
+      affordance when `canAddToToday`
+- [x] Tests: bulkAddToToday mixed selection (added/alreadyPlanned/archived,
+      idempotent, per-user) + myTodayTaskIds (dedupe, per-user); planner
+      taskSegments tests updated to the object shape
+      Live in Chrome: row sun add → filled + toast + badge; bulk add 2 →
+      both filled + badge +2; Plan section Jul-6 highlight; "Add to today"
+      affordance on an unscheduled task
 
 ### Slice 06 — Planner member self-editing (pending · cuttable)
 

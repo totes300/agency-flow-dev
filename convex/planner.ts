@@ -21,6 +21,8 @@ import {
   planRemovalOps,
   summarizeRemovalOps,
   segmentCoversDate,
+  addDaysToDateString,
+  SEGMENT_SCAN_WINDOW_DAYS,
 } from "./lib/todayPlan";
 import { getOrgSettings } from "./lib/orgHelpers";
 import { getDateInTimezone, ORG_TIMEZONE_FALLBACK } from "./lib/timer";
@@ -412,20 +414,36 @@ export type TaskPlanSegment = {
   endDate: string;
   partIndex: number;
   partCount: number;
+  /** This segment belongs to the caller (member self-service gating). */
+  isMine: boolean;
+  /** This segment covers "today" (org tz) — highlighted in the Plan section. */
+  coversToday: boolean;
+};
+
+export type TaskPlanData = {
+  segments: TaskPlanSegment[];
+  /** True when the caller can still add today (task active + no covering segment of mine). */
+  canAddToToday: boolean;
 };
 
 /**
  * All sittings of one task, for the task drawer's "Plan" section. Readable
  * by every org member (the plan is a shared board); sorted by start date
- * with the same part ranking the grid badges use.
+ * with the same part ranking the grid badges use. Each segment carries
+ * `isMine` (member self-service gating) and `coversToday` (today highlight);
+ * `canAddToToday` drives the Add-to-Today affordance.
  */
 export const taskSegments = query({
   args: { taskId: v.id("tasks") },
-  handler: async (ctx, args): Promise<TaskPlanSegment[]> => {
-    const { orgId } = await getAuthContext(ctx);
+  handler: async (ctx, args): Promise<TaskPlanData> => {
+    const { orgId, userId } = await getAuthContext(ctx);
 
     const task = await ctx.db.get(args.taskId);
     if (!task || task.orgId !== orgId) throw new ConvexError("Task not found");
+
+    const orgSettings = await getOrgSettings(ctx, orgId);
+    const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
+    const today = getDateInTimezone(Date.now(), timezone);
 
     const segments = await ctx.db
       .query("planSegments")
@@ -445,7 +463,7 @@ export const taskSegments = query({
       if (u) nameById.set(u._id.toString(), u.name);
     });
 
-    return segments
+    const enriched = segments
       .map((s) => ({
         _id: s._id,
         userId: s.userId,
@@ -454,12 +472,53 @@ export const taskSegments = query({
         endDate: s.endDate,
         partIndex: rank.get(s._id.toString())?.partIndex ?? 1,
         partCount: rank.get(s._id.toString())?.partCount ?? 1,
+        isMine: s.userId === userId,
+        coversToday: segmentCoversDate(s, today),
       }))
       .sort(
         (a, b) =>
           a.startDate.localeCompare(b.startDate) ||
           a.endDate.localeCompare(b.endDate),
       );
+
+    const canAddToToday =
+      !task.archivedAt && !enriched.some((s) => s.isMine && s.coversToday);
+
+    return { segments: enriched, canAddToToday };
+  },
+});
+
+/**
+ * The caller's task ids that have a segment of theirs covering today — the
+ * set of "in my Today" tasks. Powers the sun state on every `/tasks` row in
+ * one index-backed read (correct on first paint, live on segment changes).
+ */
+export const myTodayTaskIds = query({
+  args: {},
+  handler: async (ctx): Promise<Id<"tasks">[]> => {
+    const { orgId, userId } = await getAuthContext(ctx);
+
+    const orgSettings = await getOrgSettings(ctx, orgId);
+    const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
+    const today = getDateInTimezone(Date.now(), timezone);
+    const scanFloor = addDaysToDateString(today, -SEGMENT_SCAN_WINDOW_DAYS);
+
+    const segments = await ctx.db
+      .query("planSegments")
+      .withIndex("by_orgId_userId_startDate", (q) =>
+        q
+          .eq("orgId", orgId)
+          .eq("userId", userId)
+          .gte("startDate", scanFloor)
+          .lte("startDate", today),
+      )
+      .collect();
+
+    const ids = new Set<string>();
+    for (const s of segments) {
+      if (segmentCoversDate(s, today)) ids.add(s.taskId.toString());
+    }
+    return [...ids] as Id<"tasks">[];
   },
 });
 
@@ -721,6 +780,70 @@ export const addToToday = mutation({
       createdBy: userId,
     });
     return { added: true };
+  },
+});
+
+/**
+ * Bulk sun-add for the `/tasks` selection toolbar: plan every selected task
+ * for me today. Self-scoped and idempotent per task (mirrors addToToday);
+ * archived tasks are skipped, not planned. Returns honest counts so the
+ * toolbar can report "N added to today" without lying.
+ */
+export const bulkAddToToday = mutation({
+  args: { taskIds: v.array(v.id("tasks")) },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{ added: number; alreadyPlanned: number; skippedArchived: number; notFound: number }> => {
+    const { orgId, userId } = await getAuthContext(ctx);
+
+    const orgSettings = await getOrgSettings(ctx, orgId);
+    const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
+    const today = getDateInTimezone(Date.now(), timezone);
+    const now = Date.now();
+
+    let added = 0;
+    let alreadyPlanned = 0;
+    let skippedArchived = 0;
+    let notFound = 0;
+
+    for (const taskId of args.taskIds) {
+      const task = await ctx.db.get(taskId);
+      if (!task || task.orgId !== orgId) {
+        notFound++;
+        continue;
+      }
+      if (task.archivedAt) {
+        skippedArchived++;
+        continue;
+      }
+
+      const segs = await ctx.db
+        .query("planSegments")
+        .withIndex("by_orgId_taskId", (q) => q.eq("orgId", orgId).eq("taskId", taskId))
+        .collect();
+      const alreadyToday = segs.some(
+        (s) => s.userId === userId && segmentCoversDate(s, today),
+      );
+      if (alreadyToday) {
+        alreadyPlanned++;
+        continue;
+      }
+
+      await ctx.db.insert("planSegments", {
+        orgId,
+        taskId,
+        userId,
+        startDate: today,
+        endDate: today,
+        createdAt: now,
+        updatedAt: now,
+        createdBy: userId,
+      });
+      added++;
+    }
+
+    return { added, alreadyPlanned, skippedArchived, notFound };
   },
 });
 

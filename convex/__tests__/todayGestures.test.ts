@@ -503,6 +503,74 @@ describe("myTasks.myTasksCount", () => {
   });
 });
 
+// ─── bulkAddToToday + myTodayTaskIds (slice 04 triage surfaces) ───────────────
+
+describe("planner.bulkAddToToday", () => {
+  it("mixed selection: adds fresh, skips already-planned + archived, reports honest counts", async () => {
+    const t = createT();
+    const s = await seed(t);
+    const asMember = t.withIdentity(identityFor("clerk_member", "member"));
+
+    // taskB already has the member's covering-today segment (seed);
+    // taskA is fresh; archivedTask must be skipped.
+    const r = await asMember.mutation(api.planner.bulkAddToToday, {
+      taskIds: [s.taskA, s.taskB, s.archivedTask],
+    });
+    expect(r).toEqual({ added: 1, alreadyPlanned: 1, skippedArchived: 1, notFound: 0 });
+
+    // taskA now has exactly one member segment covering today
+    const segs = await segmentsOf(t, s.taskA, s.member);
+    expect(segs).toHaveLength(1);
+    expect([segs[0].startDate, segs[0].endDate]).toEqual([TODAY, TODAY]);
+  });
+
+  it("is idempotent — re-running creates no duplicates", async () => {
+    const t = createT();
+    const s = await seed(t);
+    const asMember = t.withIdentity(identityFor("clerk_member", "member"));
+
+    await asMember.mutation(api.planner.bulkAddToToday, { taskIds: [s.taskA] });
+    const r2 = await asMember.mutation(api.planner.bulkAddToToday, { taskIds: [s.taskA] });
+    expect(r2.added).toBe(0);
+    expect(r2.alreadyPlanned).toBe(1);
+    expect(await segmentsOf(t, s.taskA, s.member)).toHaveLength(1);
+  });
+
+  it("plans only for the caller, never a teammate", async () => {
+    const t = createT();
+    const s = await seed(t);
+    const asAdmin = t.withIdentity(identityFor("clerk_admin", "admin"));
+
+    await asAdmin.mutation(api.planner.bulkAddToToday, { taskIds: [s.taskB] });
+    // admin gained a segment on taskB; the member's is untouched
+    expect(await segmentsOf(t, s.taskB, s.admin)).toHaveLength(1);
+    expect(await segmentsOf(t, s.taskB, s.member)).toHaveLength(1);
+  });
+});
+
+describe("planner.myTodayTaskIds", () => {
+  it("returns the caller's tasks covered today, deduped, per-user", async () => {
+    const t = createT();
+    const s = await seed(t);
+    const asMember = t.withIdentity(identityFor("clerk_member", "member"));
+    const asAdmin = t.withIdentity(identityFor("clerk_admin", "admin"));
+
+    // Seed: member covers taskB today; admin covers taskA today
+    const memberIds = await asMember.query(api.planner.myTodayTaskIds, {});
+    expect(memberIds).toEqual([s.taskB]);
+
+    const adminIds = await asAdmin.query(api.planner.myTodayTaskIds, {});
+    expect(adminIds).toEqual([s.taskA]);
+
+    // A second covering segment on the same task must not duplicate it
+    await asMember.mutation(api.planner.createSegment, {
+      taskId: s.taskB, userId: s.member, startDate: TODAY, endDate: TOMORROW,
+    });
+    const after = await asMember.query(api.planner.myTodayTaskIds, {});
+    expect(after).toEqual([s.taskB]);
+  });
+});
+
 // ─── Move to today (Earlier → fresh segment, old stays as history) ────────────
 
 describe("Move to today leaves the old segment untouched", () => {

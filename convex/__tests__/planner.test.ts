@@ -352,9 +352,10 @@ describe("planner.taskSegments", () => {
     const asMember = t.withIdentity(identityFor("clerk_member", "member"));
 
     // taskA lives on the ADMIN's row — a member must still read its plan.
-    const sittings = await asMember.query(api.planner.taskSegments, {
+    const plan = await asMember.query(api.planner.taskSegments, {
       taskId: s.taskA,
     });
+    const sittings = plan.segments;
 
     expect(sittings).toHaveLength(2);
     expect(sittings.map((seg) => seg.startDate)).toEqual([
@@ -366,9 +367,11 @@ describe("planner.taskSegments", () => {
       [2, 2],
     ]);
     expect(sittings[0].userName).toBe("Admin A");
+    // taskA's sittings belong to the admin → not the member's; no self-service
+    expect(sittings.every((seg) => seg.isMine === false)).toBe(true);
   });
 
-  it("returns an empty list for an unscheduled task", async () => {
+  it("returns an empty list + canAddToToday for an unscheduled task", async () => {
     const t = createT();
     const s = await seed(t);
     const asAdmin = t.withIdentity(identityFor("clerk_admin", "admin"));
@@ -377,10 +380,11 @@ describe("planner.taskSegments", () => {
     const segId = await firstSegmentId(t, s.taskB);
     await asAdmin.mutation(api.planner.removeSegment, { id: segId });
 
-    const sittings = await asAdmin.query(api.planner.taskSegments, {
+    const plan = await asAdmin.query(api.planner.taskSegments, {
       taskId: s.taskB,
     });
-    expect(sittings).toEqual([]);
+    expect(plan.segments).toEqual([]);
+    expect(plan.canAddToToday).toBe(true);
   });
 
   it("rejects another org's task", async () => {

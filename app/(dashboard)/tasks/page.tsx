@@ -185,6 +185,17 @@ export default function TasksPage() {
       : "skip",
   )
 
+  // Sun state per row: the caller's tasks with a segment covering today. One
+  // index-backed query, correct on first paint, live on segment changes.
+  const myTodayTaskIds = useQuery(
+    api.planner.myTodayTaskIds,
+    isAuthenticated ? {} : "skip",
+  )
+  const inTodaySet = useMemo(
+    () => new Set(myTodayTaskIds ?? []),
+    [myTodayTaskIds],
+  )
+
   // Ref for stable callback — avoid re-creating when searchParams change
   const searchParamsRef = useRef(searchParams)
   searchParamsRef.current = searchParams
@@ -313,9 +324,10 @@ export default function TasksPage() {
         activity={activityMap?.[task._id]}
         isArchivedView={isArchivedView}
         isDetailOpen={viewPref === "drawer" && detailId === task._id}
+        inToday={inTodaySet.has(task._id)}
       />
     )
-  }, [isAdmin, selectedIds, handleSelect, handleArchive, handleRestore, handleOpenDetail, handleDismissDraft, handleRetryDraft, timeMap, activityMap, isArchivedView, viewPref, detailId])
+  }, [isAdmin, selectedIds, handleSelect, handleArchive, handleRestore, handleOpenDetail, handleDismissDraft, handleRetryDraft, timeMap, activityMap, isArchivedView, viewPref, detailId, inTodaySet])
 
   // Initial load — skeleton only on first render, never on tab switch
   if (!isAuthenticated || counts === undefined || displayGroups === undefined) {

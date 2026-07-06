@@ -29,6 +29,7 @@ import { TaskPreviewPopover } from "@/components/tasks/task-preview-popover"
 import { SubtaskHoverPopover } from "@/components/tasks/subtask-hover-popover"
 import { CommentHoverPopover } from "@/components/tasks/comment-hover-popover"
 import { CommentPill, InlineSubtaskRing } from "@/components/tasks/activity-indicators"
+import { AddToTodayButton } from "@/components/add-to-today-button"
 import type { TaskWithJoins } from "@/components/tasks/tasks-table"
 import type { Id } from "@/convex/_generated/dataModel"
 
@@ -65,6 +66,7 @@ export const TaskRow = memo(function TaskRow({
   activity,
   isArchivedView = false,
   isDetailOpen = false,
+  inToday = false,
 }: {
   task: TaskWithJoins
   isAdmin: boolean
@@ -79,6 +81,8 @@ export const TaskRow = memo(function TaskRow({
   activity?: ActivityIndicator
   isArchivedView?: boolean
   isDetailOpen?: boolean
+  /** True when this task has a segment of mine covering today (sun state). */
+  inToday?: boolean
 }) {
   const duplicateTask = useMutation(api.tasks.duplicate)
   const isDone = task.statusType === "done"
@@ -232,11 +236,17 @@ export const TaskRow = memo(function TaskRow({
         <InlineTimeCell taskId={task._id} totalMinutes={totalMinutes} isDone={isDone} isBillable={task.billable} />
       </div>
 
-      {/* 10. Action menu */}
-      <div className={cn(
-        "flex justify-end transition-opacity",
-        hasSelection || isSelected ? "opacity-100" : "opacity-0 group-hover/row:opacity-100",
-      )}>
+      {/* 10. Sun (add/remove today) + action menu */}
+      <div className="flex items-center justify-end gap-0.5">
+        {/* Sun: hover-revealed on add rows, persistent (filled) when in Today.
+            Hidden in the archived view (archived tasks can't be planned). */}
+        {!isArchivedView ? (
+          <AddToTodayButton taskId={task._id as Id<"tasks">} inToday={inToday} />
+        ) : null}
+        <div className={cn(
+          "flex justify-end transition-opacity",
+          hasSelection || isSelected ? "opacity-100" : "opacity-0 group-hover/row:opacity-100",
+        )}>
         <RowActionMenu>
           {isArchivedView ? (
             <>
@@ -286,6 +296,7 @@ export const TaskRow = memo(function TaskRow({
             </>
           )}
         </RowActionMenu>
+        </div>
       </div>
       </div>
     </div>

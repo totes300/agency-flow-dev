@@ -278,6 +278,93 @@ describe("groupByStatus", () => {
   });
 });
 
+// ─── groupByStatus: Today suppression ────────────────────────────────────────
+
+describe("groupByStatus — Today suppression", () => {
+  it("suppresses Today tasks from their status group and counts them in inTodayCount", () => {
+    const inToday = makeTask({ statusId: STATUS_IN_PROGRESS._id, statusType: "in_progress" });
+    const notInToday = makeTask({ statusId: STATUS_IN_PROGRESS._id, statusType: "in_progress" });
+    const todaySet = new Set([inToday._id as string]);
+
+    const groups = groupByStatus(
+      [inToday, notInToday],
+      ALL_STATUSES,
+      [STATUS_IN_PROGRESS._id],
+      TODAY_DATE,
+      "UTC",
+      todaySet,
+    );
+    const group = groups.find((g) => g.statusId === STATUS_IN_PROGRESS._id)!;
+    expect(group.tasks.map((t) => t._id)).toEqual([notInToday._id]);
+    expect(group.count).toBe(1);
+    expect(group.inTodayCount).toBe(1);
+  });
+
+  it("a task is in exactly one of Today / status group / completed_today", () => {
+    // Today member (suppressed from status group), a plain status task,
+    // and a completed-today task — no overlap anywhere.
+    const todayTask = makeTask({ statusId: STATUS_NEXT_UP._id, statusType: "in_progress" });
+    const statusTask = makeTask({ statusId: STATUS_NEXT_UP._id, statusType: "in_progress" });
+    const completedTask = makeTask({
+      statusId: STATUS_ADMIN_REVIEW._id,
+      statusType: "review",
+      updatedAt: TODAY_TS,
+    });
+    const todaySet = new Set([todayTask._id as string]);
+
+    // Review status NOT in the visible set — mirrors the default config
+    // (completed-today done/review tasks in a VISIBLE status group still
+    // dual-appear, a deliberate pre-existing behavior).
+    const groups = groupByStatus(
+      [todayTask, statusTask, completedTask],
+      ALL_STATUSES,
+      [STATUS_NEXT_UP._id],
+      TODAY_DATE,
+      "UTC",
+      todaySet,
+    );
+
+    const appearances = new Map<string, number>();
+    for (const g of groups) {
+      for (const t of g.tasks) {
+        appearances.set(t._id as string, (appearances.get(t._id as string) ?? 0) + 1);
+      }
+    }
+    // Today member appears in NO group here (it renders in the derived Today group)
+    expect(appearances.get(todayTask._id as string)).toBeUndefined();
+    expect(appearances.get(statusTask._id as string)).toBe(1);
+    expect(appearances.get(completedTask._id as string)).toBe(1);
+    const completed = groups.find((g) => g.key === "completed_today")!;
+    expect(completed.tasks.map((t) => t._id)).toEqual([completedTask._id]);
+  });
+
+  it("keeps an empty status group visible when all its tasks are in Today", () => {
+    const a = makeTask({ statusId: STATUS_NEXT_UP._id, statusType: "in_progress" });
+    const b = makeTask({ statusId: STATUS_NEXT_UP._id, statusType: "in_progress" });
+    const todaySet = new Set([a._id as string, b._id as string]);
+
+    const groups = groupByStatus(
+      [a, b],
+      ALL_STATUSES,
+      [STATUS_NEXT_UP._id],
+      TODAY_DATE,
+      "UTC",
+      todaySet,
+    );
+    const group = groups.find((g) => g.statusId === STATUS_NEXT_UP._id)!;
+    expect(group.tasks).toHaveLength(0);
+    expect(group.inTodayCount).toBe(2);
+  });
+
+  it("without a today set, behaves exactly as before", () => {
+    const task = makeTask({ statusId: STATUS_IN_PROGRESS._id, statusType: "in_progress" });
+    const groups = groupByStatus([task], ALL_STATUSES, [STATUS_IN_PROGRESS._id], TODAY_DATE, "UTC");
+    const group = groups.find((g) => g.statusId === STATUS_IN_PROGRESS._id)!;
+    expect(group.tasks).toHaveLength(1);
+    expect(group.inTodayCount).toBe(0);
+  });
+});
+
 // ─── countHiddenTasks ────────────────────────────────────────────────────────
 
 describe("countHiddenTasks", () => {
@@ -297,6 +384,19 @@ describe("countHiddenTasks", () => {
     ];
     const hidden = countHiddenTasks(tasks, [], TODAY_DATE, "UTC");
     expect(hidden).toBe(0);
+  });
+
+  it("does not count Today-group tasks as hidden even when their status is not visible", () => {
+    const inToday = makeTask({ statusId: STATUS_STUCK._id, statusType: "blocked" });
+    const notInToday = makeTask({ statusId: STATUS_STUCK._id, statusType: "blocked" });
+    const hidden = countHiddenTasks(
+      [inToday, notInToday],
+      [STATUS_TODAY._id],
+      TODAY_DATE,
+      "UTC",
+      new Set([inToday._id as string]),
+    );
+    expect(hidden).toBe(1);
   });
 });
 

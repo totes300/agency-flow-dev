@@ -11,6 +11,9 @@ export function MyTasksGroup({
   count,
   statusType,
   statusColor,
+  icon,
+  hint,
+  inTodayCount,
   children,
   defaultOpen = true,
 }: {
@@ -19,6 +22,12 @@ export function MyTasksGroup({
   count: number
   statusType: StatusType
   statusColor: string
+  /** Overrides the status icon (e.g. the sun glyph on the Today group). */
+  icon?: React.ReactNode
+  /** Muted explainer after the count (e.g. "the Planner's plan for today"). */
+  hint?: string
+  /** Suppressed-into-Today count for the "· N in Today" header note. */
+  inTodayCount?: number
   children: React.ReactNode
   defaultOpen?: boolean
 }) {
@@ -32,9 +41,19 @@ export function MyTasksGroup({
         onClick={() => setOpen(!open)}
         className="flex w-full items-center gap-2 border-b border-border/40 px-3 py-2 text-sm font-medium hover:bg-muted/30"
       >
-        <StatusIcon type={statusType} color={statusColor} size={16} />
+        {icon ?? <StatusIcon type={statusType} color={statusColor} size={16} />}
         <span>{label}</span>
         <span className="text-xs text-muted-foreground/60">{count}</span>
+        {hint ? (
+          <span className="truncate text-xs font-normal text-muted-foreground/50">
+            {hint}
+          </span>
+        ) : null}
+        {inTodayCount && inTodayCount > 0 ? (
+          <span className="text-xs font-normal text-muted-foreground/50">
+            · {inTodayCount} in Today
+          </span>
+        ) : null}
         <span className="ml-auto">
           {open ? (
             <ChevronDownIcon className="size-3.5 text-muted-foreground/50" />
@@ -48,4 +67,3 @@ export function MyTasksGroup({
     </div>
   )
 }
-

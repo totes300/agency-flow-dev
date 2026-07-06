@@ -41,6 +41,8 @@ export type MyTasksGroup<T extends MinimalTask = MinimalTask> = {
   statusId?: Id<"statuses">;
   tasks: T[];
   count: number;
+  /** Tasks of this status suppressed into the Today group ("· N in Today" hint). */
+  inTodayCount?: number;
 };
 
 // ─── filterMyTasks ──────────────────────────────────────────────────────────────
@@ -68,6 +70,8 @@ export function filterMyTasks<T extends MinimalTask>(
 /**
  * Group tasks by individual status for the My Tasks view.
  *
+ * - Tasks in todayTaskIds → suppressed from status groups (they render in the
+ *   derived Today group instead); their would-be group gets inTodayCount++
  * - Tasks whose statusId is in visibleStatusIds → one group per status
  * - Tasks with done/review type updated today → "completed_today" group (always shown)
  * - Everything else → hidden (counted separately)
@@ -76,6 +80,7 @@ export function filterMyTasks<T extends MinimalTask>(
  * @param statuses - all active statuses (for label/sort lookup)
  * @param todayDateStr - YYYY-MM-DD string for "completed today" filtering
  * @param timezone - org timezone for converting updatedAt to date string
+ * @param todayTaskIds - task IDs in the derived Today group (suppressed here)
  */
 export function groupByStatus<T extends MinimalTask>(
   tasks: T[],
@@ -83,6 +88,7 @@ export function groupByStatus<T extends MinimalTask>(
   visibleStatusIds: Id<"statuses">[],
   todayDateStr: string,
   timezone: string,
+  todayTaskIds: Set<string> = new Set(),
 ): MyTasksGroup<T>[] {
   const statusMap = new Map(statuses.map((s) => [s._id as string, s]));
   const visibleSet = new Set(visibleStatusIds.map((id) => id as string));
@@ -97,21 +103,27 @@ export function groupByStatus<T extends MinimalTask>(
   ): MyTasksGroup<T> => {
     let group = groupMap.get(key);
     if (!group) {
-      group = { key, label, statusType, statusId, tasks: [], count: 0 };
+      group = { key, label, statusType, statusId, tasks: [], count: 0, inTodayCount: 0 };
       groupMap.set(key, group);
     }
     return group;
   };
 
   for (const task of tasks) {
-    // 1. Status group: if the task's status is visible → its own group
+    // 1. Status group: if the task's status is visible → its own group.
+    // Tasks in the derived Today group are suppressed (never shown twice on
+    // one page) but counted for the "· N in Today" header hint.
     if (visibleSet.has(task.statusId as string)) {
       const status = statusMap.get(task.statusId as string);
       const key = `status_${task.statusId}`;
       const label = status?.name ?? "Unknown";
       const group = getOrCreateGroup(key, label, task.statusType, task.statusId);
-      group.tasks.push(task);
-      group.count++;
+      if (todayTaskIds.has(task._id as string)) {
+        group.inTodayCount = (group.inTodayCount ?? 0) + 1;
+      } else {
+        group.tasks.push(task);
+        group.count++;
+      }
     }
 
     // 2. Completed today: done/review tasks updated today ALWAYS appear here too
@@ -182,17 +194,21 @@ export function sortWithinGroup<T extends MinimalTask>(tasks: T[]): T[] {
 
 /**
  * Count tasks that are filtered out by the current view settings.
- * "completed_today" tasks are never hidden.
+ * "completed_today" tasks are never hidden; tasks in the derived Today
+ * group are visible there, so they are never hidden either.
  */
 export function countHiddenTasks<T extends MinimalTask>(
   tasks: T[],
   visibleStatusIds: Id<"statuses">[],
   todayDateStr: string,
   timezone: string,
+  todayTaskIds: Set<string> = new Set(),
 ): number {
   const visibleSet = new Set(visibleStatusIds.map((id) => id as string));
 
   return tasks.filter((task) => {
+    // Tasks in the Today group are visible there
+    if (todayTaskIds.has(task._id as string)) return false;
     // Completed today tasks are always shown
     if (task.statusType === "done" || task.statusType === "review") {
       const taskDate = getDateInTimezone(task.updatedAt, timezone);

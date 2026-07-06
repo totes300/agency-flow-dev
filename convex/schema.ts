@@ -643,5 +643,9 @@ export default defineSchema({
     createdBy: v.id("users"),
   })
     .index("by_orgId_taskId", ["orgId", "taskId"])
-    .index("by_orgId_startDate", ["orgId", "startDate"]),
+    .index("by_orgId_startDate", ["orgId", "startDate"])
+    // Covering-today lookup for the derived My Tasks Today group. Queries
+    // bound startDate below by today − SEGMENT_SCAN_WINDOW_DAYS as a scan
+    // guard (see convex/lib/todayPlan.ts).
+    .index("by_orgId_userId_startDate", ["orgId", "userId", "startDate"]),
 });

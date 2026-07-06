@@ -8,7 +8,16 @@ import {
   groupByStatus,
   sortWithinGroup,
   countHiddenTasks,
+  type MyTasksGroup,
 } from "./lib/myTaskHelpers";
+import {
+  partitionMyDay,
+  isCompletedToday,
+  segmentCoversDate,
+  addDaysToDateString,
+  SEGMENT_SCAN_WINDOW_DAYS,
+} from "./lib/todayPlan";
+import type { TaskWithJoins } from "./lib/task_helpers";
 import type { Doc, Id } from "./_generated/dataModel";
 
 // ─── resolveVisibleStatusIds ─────────────────────────────────────────────────
@@ -84,15 +93,53 @@ export const listMyTasks = query({
       .collect();
     const myTasks = filterMyTasks(allTasks, userId);
 
+    // 3b. Load my plan segments in the scan window (segments starting after
+    // today cannot cover today; ones older than the guard are noise).
+    const scanFloor = addDaysToDateString(todayDateStr, -SEGMENT_SCAN_WINDOW_DAYS);
+    const mySegments = await ctx.db
+      .query("planSegments")
+      .withIndex("by_orgId_userId_startDate", (q) =>
+        q
+          .eq("orgId", orgId)
+          .eq("userId", userId)
+          .gte("startDate", scanFloor)
+          .lte("startDate", todayDateStr),
+      )
+      .collect();
+
+    // The plan wins over assignment: Today candidates come from segment
+    // taskIds, not from the assigned set. Subtasks are excluded to match
+    // My Tasks semantics (the Planner only schedules top-level tasks).
+    const taskById = new Map(allTasks.map((t) => [t._id.toString(), t]));
+    const segmentTaskIds = [...new Set(mySegments.map((s) => s.taskId.toString()))];
+    const segmentTasks = segmentTaskIds
+      .map((id) => taskById.get(id))
+      .filter((t): t is Doc<"tasks"> => t !== undefined && !t.parentTaskId);
+
+    const { todayTaskIds } = partitionMyDay(
+      segmentTasks,
+      mySegments,
+      todayDateStr,
+      timezone,
+    );
+    const todaySet = new Set(todayTaskIds.map((id) => id.toString()));
+
+    // Tasks needing enrichment: mine (assigned) + planned-for-today ones
+    const enrichSet = new Map(myTasks.map((t) => [t._id.toString(), t]));
+    for (const t of segmentTasks) {
+      if (!enrichSet.has(t._id.toString())) enrichSet.set(t._id.toString(), t);
+    }
+    const tasksToEnrich = [...enrichSet.values()];
+
     // 4. Batch-load related entities for enrichment
-    const statusIds = new Set(myTasks.map((t) => t.statusId.toString()));
+    const statusIds = new Set(tasksToEnrich.map((t) => t.statusId.toString()));
     const projectIds = new Set(
-      myTasks.map((t) => t.projectId?.toString()).filter(Boolean) as string[],
+      tasksToEnrich.map((t) => t.projectId?.toString()).filter(Boolean) as string[],
     );
     const categoryIds = new Set(
-      myTasks.map((t) => t.workCategoryId?.toString()).filter(Boolean) as string[],
+      tasksToEnrich.map((t) => t.workCategoryId?.toString()).filter(Boolean) as string[],
     );
-    const userIds = new Set(myTasks.flatMap((t) => t.assigneeIds.map((id) => id.toString())));
+    const userIds = new Set(tasksToEnrich.flatMap((t) => t.assigneeIds.map((id) => id.toString())));
 
     const [statusDocs, projectDocs, categoryDocs, userDocs] = await Promise.all([
       Promise.all([...statusIds].map((id) => ctx.db.get(id as Doc<"statuses">["_id"]))),
@@ -116,16 +163,82 @@ export const listMyTasks = query({
     const userMap = new Map(userDocs.filter(Boolean).map((u) => [u!._id.toString(), u!]));
 
     const enrichTask = createTaskEnricher({ statusMap, projectMap, clientMap, categoryMap, userMap });
-    const enrichedTasks = myTasks.map(enrichTask);
+    const enrichedById = new Map(
+      tasksToEnrich.map((t) => [t._id.toString(), enrichTask(t)]),
+    );
+    const enrichedTasks = myTasks.map((t) => enrichedById.get(t._id.toString())!);
 
-    // 5. Group and sort
-    const groups = groupByStatus(enrichedTasks, activeStatuses, visibleStatusIds, todayDateStr, timezone);
+    // 5. Build the derived Today group (arrival order from partitionMyDay —
+    // do NOT re-sort with sortWithinGroup).
+    const todayGroup: MyTasksGroup<TaskWithJoins> = {
+      key: "today",
+      label: "Today",
+      statusType: "today",
+      tasks: todayTaskIds.map((id) => enrichedById.get(id.toString())!),
+      count: todayTaskIds.length,
+    };
 
-    for (const group of groups) {
+    // 6. Status groups (Today members suppressed, counted per group) + sort
+    const statusGroups = groupByStatus(
+      enrichedTasks,
+      activeStatuses,
+      visibleStatusIds,
+      todayDateStr,
+      timezone,
+      todaySet,
+    );
+
+    for (const group of statusGroups) {
       group.tasks = sortWithinGroup(group.tasks);
     }
 
-    const hiddenCount = countHiddenTasks(myTasks, visibleStatusIds, todayDateStr, timezone);
+    // 6b. A task planned for me today but assigned to someone else still
+    // burns down into Completed today when I finish it (it was on my Today
+    // list; vanishing on completion would read as data loss).
+    const segmentsByTask = new Map<string, typeof mySegments>();
+    for (const seg of mySegments) {
+      const key = seg.taskId.toString();
+      const list = segmentsByTask.get(key);
+      if (list) list.push(seg);
+      else segmentsByTask.set(key, [seg]);
+    }
+    const plannedCompletedToday = segmentTasks.filter(
+      (t) =>
+        !t.archivedAt &&
+        !t.assigneeIds.includes(userId) &&
+        isCompletedToday(t, todayDateStr, timezone) &&
+        (segmentsByTask.get(t._id.toString()) ?? []).some((s) =>
+          segmentCoversDate(s, todayDateStr),
+        ),
+    );
+    if (plannedCompletedToday.length > 0) {
+      let completedGroup = statusGroups.find((g) => g.key === "completed_today");
+      if (!completedGroup) {
+        completedGroup = {
+          key: "completed_today",
+          label: "Completed today",
+          statusType: "done",
+          tasks: [],
+          count: 0,
+        };
+        statusGroups.push(completedGroup);
+      }
+      for (const t of plannedCompletedToday) {
+        completedGroup.tasks.push(enrichedById.get(t._id.toString())!);
+        completedGroup.count++;
+      }
+      completedGroup.tasks = sortWithinGroup(completedGroup.tasks);
+    }
+
+    const groups = [todayGroup, ...statusGroups];
+
+    const hiddenCount = countHiddenTasks(
+      myTasks,
+      visibleStatusIds,
+      todayDateStr,
+      timezone,
+      todaySet,
+    );
 
     return { groups, hiddenCount, visibleStatusIds: visibleStatusIds.map(String) };
   },

@@ -7,6 +7,9 @@ import { InlineTimeCell } from "@/components/tasks/inline-time-cell"
 import { CommentPill } from "@/components/tasks/activity-indicators"
 import { getCategoryColor } from "@/convex/lib/constants"
 import { CommentHoverPopover } from "@/components/tasks/comment-hover-popover"
+import { StatusBadge } from "@/components/status-badge"
+import { UserAvatar } from "@/components/user-avatar"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 import { getClientDisplayName } from "@/lib/format"
 import type { TaskWithJoins } from "@/convex/lib/task_helpers"
@@ -23,11 +26,45 @@ function formatDueDate(dueDate: string): string {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric" })
 }
 
+/**
+ * Quiet assignment-mismatch indicator for Today rows: the plan wins over
+ * assignment, so a task planned for me but assigned elsewhere shows the
+ * actual assignee's dimmed avatar (dashed empty circle when unassigned).
+ */
+function AssignmentMismatchIndicator({ assignees }: { assignees: TaskWithJoins["assignees"] }) {
+  const assignee = assignees[0]
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="flex shrink-0 items-center">
+          {assignee ? (
+            <UserAvatar
+              name={assignee.name}
+              imageUrl={assignee.imageUrl}
+              size="sm"
+              className="size-5 opacity-50"
+            />
+          ) : (
+            <span className="size-5 rounded-full border border-dashed border-muted-foreground/40" />
+          )}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>
+        {assignee
+          ? `Assigned to ${assignee.name} — planned for you today`
+          : "Unassigned — planned for you today"}
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
 export const MyTaskRow = memo(function MyTaskRow({
   task,
   totalMinutes,
   activity,
   isCompletedToday,
+  isTodayRow,
+  currentUserId,
   onOpenDetail,
   onComplete,
   defaultStatusId,
@@ -37,13 +74,21 @@ export const MyTaskRow = memo(function MyTaskRow({
   totalMinutes?: number
   activity?: ActivityIndicator
   isCompletedToday?: boolean
+  /** Row rendered inside the derived Today group (status badge + mismatch indicator). */
+  isTodayRow?: boolean
+  currentUserId?: Id<"users">
   onOpenDetail?: (taskId: string) => void
   onComplete?: (taskId: string, statusId: Id<"statuses">, coords?: { x: number; y: number }) => void
   defaultStatusId?: Id<"statuses">
   isDetailOpen?: boolean
 }) {
   const isCompleted = isCompletedToday ?? false
-  const hasMetadata = task.project || task.dueDate || task.category
+  const showStatusBadge = (isTodayRow ?? false) && task.status !== null
+  const assignmentMismatch =
+    (isTodayRow ?? false) &&
+    currentUserId !== undefined &&
+    !task.assigneeIds.includes(currentUserId)
+  const hasMetadata = task.project || task.dueDate || task.category || showStatusBadge
   const hasUnseen = activity?.hasUnseen ?? false
   const minutes = totalMinutes ?? 0
 
@@ -87,6 +132,11 @@ export const MyTaskRow = memo(function MyTaskRow({
 
         {/* Right columns — fixed widths, always present */}
         <div className="col-start-3 row-start-1 flex shrink-0 items-center gap-2" onClick={(e) => e.stopPropagation()}>
+          {/* Assignment mismatch — Today rows where the plan wins over assignment */}
+          {assignmentMismatch ? (
+            <AssignmentMismatchIndicator assignees={task.assignees} />
+          ) : null}
+
           {/* Comments column — fixed width (hidden for completed tasks) */}
           <div className="flex w-14 items-center justify-end">
             {!isCompleted && activity && activity.commentCount > 0 ? (
@@ -119,6 +169,16 @@ export const MyTaskRow = memo(function MyTaskRow({
         {/* Metadata row — starts under the title column and doesn't affect divider placement */}
         {hasMetadata ? (
           <div className="col-start-2 col-end-4 flex min-w-0 items-center gap-2 text-[11px] text-muted-foreground">
+            {/* Status badge on Today rows — plan membership and workflow state are independent facts */}
+            {showStatusBadge && task.status ? (
+              <StatusBadge
+                name={task.status.name}
+                color={task.status.color}
+                type={task.status.type}
+                className="shrink-0"
+              />
+            ) : null}
+
             {task.project ? (
               <span className="truncate">
                 {task.client ? `${getClientDisplayName(task.client)} · ` : ""}

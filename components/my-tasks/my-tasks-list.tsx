@@ -15,12 +15,13 @@ const DRAG_SENSORS = [
     ],
   }),
 ]
+import { SunIcon } from "lucide-react"
 import { useTaskReferenceData } from "@/components/tasks/task-reference-data"
 import { MyTasksSortableRow } from "./my-tasks-sortable-row"
 import { MyTasksGroup } from "./my-tasks-group"
 import { MyTaskRow } from "./my-task-row"
 import { MyTasksInlineAdd } from "./my-tasks-inline-add"
-import { MyTasksEmptyState, TodayAllDoneState } from "./my-tasks-empty-state"
+import { MyTasksEmptyState, TodayAllDoneState, TodayEmptyState } from "./my-tasks-empty-state"
 import type { TaskWithJoins } from "@/convex/lib/task_helpers"
 import type { MyTasksGroup as MyTasksGroupType } from "@/convex/lib/myTaskHelpers"
 import { findNeighborKeys } from "@/lib/reorder"
@@ -153,10 +154,57 @@ export function MyTasksList({
 
   return (
     <>
-      {displayGroups.map((group, groupIdx) => {
+      {displayGroups.map((group) => {
         const isCompleted = group.key === "completed_today"
-        const isFirstGroup = groupIdx === 0 && !isCompleted
+        const isToday = group.key === "today"
         const completedGroup = groups.find((g) => g.key === "completed_today")
+
+        // Derived Today group: sun header + hint, rows with status badge and
+        // assignment-mismatch indicator, no inline add / reorder yet (slices
+        // 02–03 add the gestures). Arrival order comes from the server.
+        if (isToday) {
+          const completedCount = completedGroup?.count ?? 0
+          return (
+            <MyTasksGroup
+              key={group.key}
+              groupKey={group.key}
+              label={group.label}
+              count={group.count}
+              statusType="in_progress"
+              statusColor="gray"
+              icon={<SunIcon className="size-4 text-amber-500" />}
+              hint="the Planner's plan for today"
+            >
+              {group.tasks.length === 0 &&
+                (completedCount > 0 ? (
+                  <TodayAllDoneState completedCount={completedCount} />
+                ) : (
+                  <TodayEmptyState />
+                ))}
+              {group.tasks.map((task) => (
+                // Mirrors MyTasksSortableRow geometry (size-6 handle slot)
+                // without drag — within-Today reorder arrives in slice 03.
+                <li key={task._id} className="flex w-full list-none items-start rounded-lg transition-colors hover:bg-muted/70">
+                  <span className="size-6 shrink-0" aria-hidden />
+                  <div className="min-w-0 flex-1">
+                    <MyTaskRow
+                      task={task}
+                      totalMinutes={timeMap?.[task._id]}
+                      activity={activityMap?.[task._id]}
+                      isTodayRow
+                      currentUserId={currentUserId}
+                      onOpenDetail={onOpenDetail}
+                      onComplete={onComplete}
+                      defaultStatusId={defaultStatusId}
+                      isDetailOpen={detailId === task._id}
+                    />
+                  </div>
+                </li>
+              ))}
+            </MyTasksGroup>
+          )
+        }
+
         return (
           <MyTasksGroup
             key={group.key}
@@ -169,12 +217,9 @@ export function MyTasksList({
                 ? (statusColorMap.get(group.statusId as string) ?? "gray")
                 : group.key === "completed_today" ? "teal" : "gray"
             }
+            inTodayCount={group.inTodayCount}
             defaultOpen={!isCompleted || group.count <= 10}
           >
-            {/* Celebration when primary group is empty and there are completed tasks */}
-            {isFirstGroup && group.tasks.length === 0 && (completedGroup?.count ?? 0) > 0 && (
-              <TodayAllDoneState completedCount={completedGroup?.count ?? 0} />
-            )}
             <DragDropProvider
               sensors={DRAG_SENSORS}
               onDragEnd={(event) => {

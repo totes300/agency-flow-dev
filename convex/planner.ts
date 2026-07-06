@@ -5,7 +5,6 @@ import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import {
   getAuthContext,
-  requireAdmin,
   validateStringLength,
   assertCanManagePlanFor,
 } from "./lib/auth";
@@ -642,7 +641,12 @@ export const createTaskWithSegment = mutation({
     endDate: v.string(),
   },
   handler: async (ctx, args) => {
-    const { orgId, userId: createdBy } = await requireAdmin(ctx);
+    // Draw-to-create is a self-scheduling gesture: a member may create a
+    // task + segment on their OWN row; admins on anyone's (admin-or-self,
+    // same rule as createSegment — slice 06).
+    const auth = await getAuthContext(ctx);
+    const { orgId, userId: createdBy } = auth;
+    assertCanManagePlanFor(auth, args.userId);
 
     const title = args.title.trim();
     if (!title) throw new ConvexError("Task title is required");

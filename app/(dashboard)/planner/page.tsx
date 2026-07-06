@@ -49,6 +49,10 @@ export default function PlannerPage() {
   const { isAuthenticated } = useConvexAuth()
   const isAdmin = useIsAdmin() === true
 
+  // The viewer's own user id — their Planner row is self-editable (slice 06).
+  const currentUser = useQuery(api.users.current, isAuthenticated ? {} : "skip")
+  const viewerUserId = currentUser?._id ?? null
+
   const searchParams = useSearchParams()
   const router = useRouter()
   const pathname = usePathname()
@@ -218,9 +222,13 @@ export default function PlannerPage() {
   const scrollRef = useRef<HTMLDivElement | null>(null)
 
   // Drag engine — owned by the page: the grid renders its state, the Tasks
-  // panel starts card drags into it (admin only; members get an inert board).
+  // panel starts card drags into it. Enabled for everyone; per-row gating in
+  // the grid restricts members to their own row, and canReassign=false keeps
+  // their moves horizontal and same-row (no cross-user reassignment).
   const engine = usePlannerDrag({
-    enabled: isAdmin,
+    enabled: isAdmin || viewerUserId !== null,
+    canReassign: isAdmin,
+    ownRowUserId: viewerUserId,
     days,
     dayPx,
     railPx: PLANNER_RAIL_PX,
@@ -295,6 +303,7 @@ export default function PlannerPage() {
               todayYMD={todayYMD}
               zoom={zoom}
               isAdmin={isAdmin}
+              viewerUserId={viewerUserId}
               anchorYmd={anchorYmd}
               scrollRef={scrollRef}
               engine={engine}

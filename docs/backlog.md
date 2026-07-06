@@ -2751,10 +2751,35 @@ status and becomes a derived, per-user daily plan computed from
       both filled + badge +2; Plan section Jul-6 highlight; "Add to today"
       affordance on an unscheduled task
 
-### Slice 06 — Planner member self-editing (pending · cuttable)
+### Slice 06 — Planner member self-editing ✅ (2026-07-06)
 
-- [ ] Members edit own row (draw/drag/resize/delete); others read-only
-- [ ] Completed tasks' bars dimmed with check
+- [x] Per-row editability predicate `canEditRow = isAdmin || row === me`
+      threaded through `PlannerGrid` (viewerUserId prop): `canDrag`,
+      draw-to-create canvas pointer-down, and Delete/Backspace unschedule
+      all gate on it; `PlannerRow` only wires bar move-pointerdown on
+      editable rows
+- [x] Drag engine `canReassign` (=isAdmin): member moves clamp to the source
+      row and null the lane — horizontal-only, no cross-user reassign, no
+      vertical restack; `ownRowUserId` restricts panel-card drops to the
+      member's own row
+- [x] Engine `enabled` widened to any authenticated viewer (per-row gating
+      does the restricting); page passes viewerUserId + canReassign +
+      ownRowUserId
+- [x] `createTaskWithSegment` widened admin-only → admin-or-self (draw-to-
+      create is a self-scheduling gesture); `requireAdmin` import dropped
+- [x] Completed bars already dimmed (opacity) + leading check glyph in
+      `PlannerBar` (isDone) — verified live on a done task's bars
+- [x] Tests: createTaskWithSegment admin-or-self (member own row allowed,
+      another rejected, empty/cross-org rejected)
+      Live in Chrome (admin): board fully interactive, completed "Pot jonker"
+      bars render dimmed with ✓. Member-view gating enforced by server
+      permission tests + the canEditRow/canReassign UI predicate (member
+      login not exercised live this session).
+
+**Feature complete** — all six slices (01–06) landed. "Today" is a derived
+per-user plan from `planSegments`; My Tasks and the Planner are two lenses
+over one dataset with zero sync. Earlier redesigned as its own section
+below Today (owner feedback, 2026-07-06).
 
 ### Verification (slices 01–02–05)
 

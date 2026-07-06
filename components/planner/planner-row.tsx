@@ -294,7 +294,11 @@ export function PlannerRow({
                     : null,
                 )
               }
-              onPointerDown={onBarPointerDown(b.seg, row.user._id)}
+              // Move/resize only start on editable rows; on read-only rows the
+              // bar is click-to-open only (canDrag false → no grab, no handles).
+              onPointerDown={
+                canDrag ? onBarPointerDown(b.seg, row.user._id) : undefined
+              }
               onResizePointerDown={onResizePointerDown(b.seg, row.user._id)}
             />
           )

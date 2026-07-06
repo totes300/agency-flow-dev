@@ -1,6 +1,7 @@
 "use client"
 
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -110,6 +111,7 @@ export function PlannerGrid({
   todayYMD,
   zoom,
   isAdmin,
+  viewerUserId,
   anchorYmd,
   scrollRef,
   engine,
@@ -127,6 +129,8 @@ export function PlannerGrid({
   todayYMD: string
   zoom: PlannerZoom
   isAdmin: boolean
+  /** The viewer's own user id — their row is self-editable (slice 06). */
+  viewerUserId: Id<"users"> | null
   /** Monday to scroll to on first render. */
   anchorYmd: string
   /** Owned by the page so the toolbar can drive smooth scrolling. */
@@ -153,6 +157,14 @@ export function PlannerGrid({
 }) {
   const [hovered, setHovered] = useState<SegmentRef | null>(null)
   const [selected, setSelected] = useState<SegmentRef | null>(null)
+
+  // Per-row editability: admins edit every row; a member only their own.
+  // Server enforces admin-or-self regardless (slice 02).
+  const canEditRow = useCallback(
+    (rowUserId: Id<"users">) =>
+      isAdmin || (viewerUserId !== null && rowUserId === viewerUserId),
+    [isAdmin, viewerUserId],
+  )
 
   const dayPx = PLANNER_DAY_PX[zoom]
   const dayCount = days.length
@@ -182,9 +194,14 @@ export function PlannerGrid({
     }
   }, [dragActive])
 
-  // Delete/Backspace unschedules the selected segment (admin only).
+  // Delete/Backspace unschedules the selected segment — only when its row is
+  // editable by the viewer (admin, or a member on their own row).
   useEffect(() => {
-    if (!selected || !isAdmin) return
+    if (!selected) return
+    const selectedRow = data.rows.find((r) =>
+      r.segments.some((s) => s._id === selected.segmentId),
+    )
+    if (!selectedRow || !canEditRow(selectedRow.user._id)) return
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== "Delete" && e.key !== "Backspace") return
       const target = e.target as HTMLElement | null
@@ -195,7 +212,7 @@ export function PlannerGrid({
     }
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [selected, isAdmin, onRemoveSegment])
+  }, [selected, canEditRow, data.rows, onRemoveSegment])
 
   // ── Scroll engine refs ────────────────────────────────────────────────
   const didInitRef = useRef(false)
@@ -397,7 +414,7 @@ export function PlannerGrid({
               highlightTaskId={dragActive ? null : highlight?.taskId ?? null}
               highlightAnchorId={highlight?.segmentId ?? null}
               selectedSegmentId={selected?.segmentId ?? null}
-              canDrag={isAdmin}
+              canDrag={canEditRow(row.user._id)}
               dragActive={dragActive}
               // ⌥-copy keeps the original visible (the ghost is the NEW
               // sitting); move and resize hide it and show the preview.
@@ -451,7 +468,9 @@ export function PlannerGrid({
               onBarPointerDown={onBarPointerDown}
               onResizePointerDown={onResizePointerDown}
               onCanvasPointerDown={
-                isAdmin ? onCanvasPointerDown(row.user._id) : undefined
+                canEditRow(row.user._id)
+                  ? onCanvasPointerDown(row.user._id)
+                  : undefined
               }
             />
           ))}

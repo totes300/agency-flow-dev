@@ -776,20 +776,33 @@ describe("createTaskWithSegment", () => {
     expect(orphan).toBeNull();
   });
 
-  it("rejects non-admins, empty titles, and cross-org target users", async () => {
+  it("admin-or-self: member draws on OWN row, not another's; empties + cross-org rejected", async () => {
     const t = createT();
     const s = await seed(t);
 
+    // Member draw-to-create on their OWN row → allowed (slice 06)
     const asMember = t.withIdentity(identityFor("clerk_member", "member"));
+    const { taskId } = await asMember.mutation(api.planner.createTaskWithSegment, {
+      title: "Member draw",
+      userId: s.member,
+      startDate: "2026-07-15",
+      endDate: "2026-07-15",
+    });
+    const created = await t.run(async (ctx) => await ctx.db.get(taskId));
+    expect(created?.title).toBe("Member draw");
+    expect(created?.assigneeIds).toEqual([]); // Planner never auto-assigns
+
+    // Member drawing on ANOTHER user's row → rejected
     await expect(
       asMember.mutation(api.planner.createTaskWithSegment, {
-        title: "Member draw",
-        userId: s.member,
+        title: "For the admin",
+        userId: s.admin,
         startDate: "2026-07-15",
         endDate: "2026-07-15",
       }),
-    ).rejects.toThrow(ConvexError);
+    ).rejects.toThrow("You can only manage your own plan");
 
+    // Empty title + cross-org target still rejected (admin)
     const asAdmin = t.withIdentity(identityFor("clerk_admin", "admin"));
     await expect(
       asAdmin.mutation(api.planner.createTaskWithSegment, {

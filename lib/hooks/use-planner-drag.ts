@@ -119,6 +119,8 @@ const SETTLE_MS = 150
  */
 export function usePlannerDrag({
   enabled,
+  canReassign = true,
+  ownRowUserId = null,
   days,
   dayPx,
   railPx,
@@ -129,6 +131,20 @@ export function usePlannerDrag({
   onDrawComplete,
 }: {
   enabled: boolean
+  /**
+   * Whether a move drag may cross rows (reassign) and restack lanes
+   * (vertical). Admins: true. Members self-scheduling their own row: false —
+   * the move is clamped to the source row and horizontal-only (no cross-user
+   * reassignment, no vertical restack). The server enforces admin-or-self
+   * regardless (slice 02); this keeps the UI honest.
+   */
+  canReassign?: boolean
+  /**
+   * The viewer's own row user id — when `canReassign` is false, panel-card
+   * drops are restricted to this row (members self-schedule onto their own
+   * row only). Null/undefined + canReassign=false disables panel drops.
+   */
+  ownRowUserId?: Id<"users"> | null
   days: string[]
   dayPx: number
   railPx: number
@@ -296,15 +312,19 @@ export function usePlannerDrag({
             dayCount: dayList.length,
           })
           const startDate = dayList[startIdx]
-          const userId =
-            rowUserIdFromY(clientY) ??
-            dragRef.current?.target.userId ??
-            pending.sourceUserId
+          // Members (canReassign=false) stay pinned to their own row with no
+          // vertical restack — horizontal move only. Admins hit-test the row
+          // under the pointer (cross-row reassign) and the lane (restack).
+          const userId = canReassign
+            ? rowUserIdFromY(clientY) ??
+              dragRef.current?.target.userId ??
+              pending.sourceUserId
+            : pending.sourceUserId
           return {
             userId,
             startDate,
             endDate: addDaysYmd(startDate, span - 1),
-            lane: laneFromY(userId, clientY),
+            lane: canReassign ? laneFromY(userId, clientY) : null,
           }
         }
         // Resize: the opposite edge stays anchored, the row never changes.
@@ -434,7 +454,7 @@ export function usePlannerDrag({
         window.removeEventListener("keyup", onKeyUp, true)
       }
     },
-    [enabled, pointerDayIdx, rowUserIdFromY, laneFromY, onCommitMove, onCommitCopy, teardown],
+    [enabled, canReassign, pointerDayIdx, rowUserIdFromY, laneFromY, onCommitMove, onCommitCopy, teardown],
   )
 
   const onBarPointerDown = useCallback(
@@ -527,6 +547,8 @@ export function usePlannerDrag({
         if (!overGrid(clientX, clientY)) return null
         const userId = rowUserIdFromY(clientY)
         if (!userId) return null
+        // Members (canReassign=false) may only drop onto their own row.
+        if (!canReassign && userId !== ownRowUserId) return null
         const pending = pendingPanelRef.current!
         const dayList = daysRef.current
         // The card has no grab-day: the pointer day is the start day
@@ -647,6 +669,8 @@ export function usePlannerDrag({
     },
     [
       enabled,
+      canReassign,
+      ownRowUserId,
       overGrid,
       pointerDayIdx,
       rowUserIdFromY,

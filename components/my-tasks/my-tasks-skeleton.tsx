@@ -40,17 +40,22 @@ function GroupSkeleton({
         <Skeleton className="h-3.5 w-5" />
         {isToday && <Skeleton className="h-3 w-36" />}
       </div>
-      {/* Task rows */}
-      {Array.from({ length: rows }, (_, i) => (
-        <RowSkeleton key={i} withStatusBadge={isToday} />
-      ))}
-      {/* Inline add (status groups only) */}
-      {!isToday && (
-        <div className="flex items-center gap-1.5 px-3 py-1.5">
+      {/* Earlier subsection header (Today group only) */}
+      {isToday && (
+        <div className="flex items-center gap-1.5 px-3 py-1.5 pl-9">
           <Skeleton className="size-3 rounded-sm" />
           <Skeleton className="h-3 w-16" />
         </div>
       )}
+      {/* Task rows */}
+      {Array.from({ length: rows }, (_, i) => (
+        <RowSkeleton key={i} withStatusBadge={isToday} />
+      ))}
+      {/* Inline add */}
+      <div className="flex items-center gap-1.5 px-3 py-1.5">
+        <Skeleton className="size-3 rounded-sm" />
+        <Skeleton className="h-3 w-16" />
+      </div>
     </div>
   )
 }

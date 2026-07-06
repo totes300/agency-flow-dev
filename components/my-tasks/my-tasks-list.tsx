@@ -21,6 +21,7 @@ import { MyTasksSortableRow } from "./my-tasks-sortable-row"
 import { MyTasksGroup } from "./my-tasks-group"
 import { MyTaskRow } from "./my-task-row"
 import { MyTasksInlineAdd } from "./my-tasks-inline-add"
+import { TodayEarlierSection } from "./today-earlier-section"
 import { MyTasksEmptyState, TodayAllDoneState, TodayEmptyState } from "./my-tasks-empty-state"
 import type { TaskWithJoins } from "@/convex/lib/task_helpers"
 import type { MyTasksGroup as MyTasksGroupType } from "@/convex/lib/myTaskHelpers"
@@ -28,6 +29,9 @@ import { findNeighborKeys } from "@/lib/reorder"
 import { getStatusColor } from "@/lib/status-colors"
 import type { ActivityIndicator } from "@/components/tasks/task-row"
 import type { Id } from "@/convex/_generated/dataModel"
+
+/** Today-group rows carry their effective manual ordering key (slice 03). */
+type TodayTask = TaskWithJoins & { todaySortKey?: string }
 
 export function MyTasksList({
   groups,
@@ -50,7 +54,11 @@ export function MyTasksList({
 }) {
   const { statuses } = useTaskReferenceData()
   const reorderTask = useMutation(api.tasks.reorderTask)
-  const hasAnyTasks = groups.some((g) => g.tasks.length > 0)
+  const reorderTodayTask = useMutation(api.planner.reorderTodayTask)
+  const todayGroup = groups.find((g) => g.key === "today")
+  const hasAnyTasks =
+    groups.some((g) => g.tasks.length > 0) ||
+    (todayGroup?.earlierTasks?.length ?? 0) > 0
 
   // Status color lookup for group headers (resolve semantic names to hex)
   const statusColorMap = useMemo(() => {
@@ -137,15 +145,30 @@ export function MyTasksList({
       }))
       pendingGroupRef.current = groupKey
 
-      const { beforeKey, afterKey } = findNeighborKeys(reordered, toIndex)
+      // Today reorders write todaySortKey on the caller's own segments;
+      // status groups write the task's manualSortKey. Both use the same
+      // fractional-key neighbor computation, just over a different field.
+      if (groupKey === "today") {
+        const neighbors = (reordered as TodayTask[]).map((t) => ({
+          manualSortKey: t.todaySortKey,
+        }))
+        const { beforeKey, afterKey } = findNeighborKeys(neighbors, toIndex)
+        reorderTodayTask({
+          taskId: taskId as Id<"tasks">,
+          beforeKey,
+          afterKey,
+        }).catch((err: unknown) => toastError(err, "Failed to reorder task"))
+        return
+      }
 
+      const { beforeKey, afterKey } = findNeighborKeys(reordered, toIndex)
       reorderTask({
         taskId: taskId as Id<"tasks">,
         beforeKey,
         afterKey,
       }).catch((err: unknown) => toastError(err, "Failed to reorder task"))
     },
-    [displayGroups, reorderTask],
+    [displayGroups, reorderTask, reorderTodayTask],
   )
 
   if (!hasAnyTasks) {
@@ -159,11 +182,14 @@ export function MyTasksList({
         const isToday = group.key === "today"
         const completedGroup = groups.find((g) => g.key === "completed_today")
 
-        // Derived Today group: sun header + hint, rows with status badge and
-        // assignment-mismatch indicator, no inline add / reorder yet (slices
-        // 02–03 add the gestures). Arrival order comes from the server.
+        // Derived Today group: sun header + hint, Earlier leftovers on top,
+        // drag-reorderable rows (within-Today manual order), inline-add that
+        // creates + plans in one gesture. Order comes from the server
+        // (todaySortKey → arrival).
         if (isToday) {
           const completedCount = completedGroup?.count ?? 0
+          const earlierTasks = (group.earlierTasks ?? []) as TaskWithJoins[]
+          const isEmpty = group.tasks.length === 0 && earlierTasks.length === 0
           return (
             <MyTasksGroup
               key={group.key}
@@ -175,18 +201,29 @@ export function MyTasksList({
               icon={<SunIcon className="size-4 text-amber-500" />}
               hint="the Planner's plan for today"
             >
-              {group.tasks.length === 0 &&
+              {/* Earlier leftovers first — settle yesterday before today */}
+              <TodayEarlierSection tasks={earlierTasks} onOpenDetail={onOpenDetail} />
+
+              {isEmpty &&
                 (completedCount > 0 ? (
                   <TodayAllDoneState completedCount={completedCount} />
                 ) : (
                   <TodayEmptyState />
                 ))}
-              {group.tasks.map((task) => (
-                // Mirrors MyTasksSortableRow geometry (size-6 handle slot)
-                // without drag — within-Today reorder arrives in slice 03.
-                <li key={task._id} className="flex w-full list-none items-start rounded-lg transition-colors hover:bg-muted/70">
-                  <span className="size-6 shrink-0" aria-hidden />
-                  <div className="min-w-0 flex-1">
+
+              <DragDropProvider
+                sensors={DRAG_SENSORS}
+                onDragEnd={(event) => {
+                  if (event.canceled) return
+                  const { source } = event.operation
+                  if (!isSortable(source)) return
+                  const { initialIndex, index } = source
+                  if (initialIndex === index) return
+                  handleReorder(group.key, String(source.id), initialIndex, index)
+                }}
+              >
+                {group.tasks.map((task, idx) => (
+                  <MyTasksSortableRow key={task._id} id={task._id} index={idx}>
                     <MyTaskRow
                       task={task}
                       totalMinutes={timeMap?.[task._id]}
@@ -198,9 +235,12 @@ export function MyTasksList({
                       defaultStatusId={defaultStatusId}
                       isDetailOpen={detailId === task._id}
                     />
-                  </div>
-                </li>
-              ))}
+                  </MyTasksSortableRow>
+                ))}
+              </DragDropProvider>
+
+              {/* Inline-add: create + plan-for-today in one gesture */}
+              <MyTasksInlineAdd currentUserId={currentUserId} today />
             </MyTasksGroup>
           )
         }

@@ -372,3 +372,164 @@ describe("planner.removeFromToday", () => {
     expect(await segmentsOf(t, s.taskA, s.admin)).toHaveLength(1);
   });
 });
+
+// ─── reorderTodayTask ─────────────────────────────────────────────────────────
+
+describe("planner.reorderTodayTask", () => {
+  it("writes todaySortKey onto the caller's covering segment(s)", async () => {
+    const t = createT();
+    const s = await seed(t);
+    const asMember = t.withIdentity(identityFor("clerk_member", "member"));
+
+    // taskB has the member's covering segment (from seed)
+    await asMember.mutation(api.planner.reorderTodayTask, {
+      taskId: s.taskB,
+      beforeKey: "a1",
+      afterKey: "a3",
+    });
+    const [seg] = await segmentsOf(t, s.taskB, s.member);
+    expect(seg.todaySortKey).toBeDefined();
+    expect(seg.todaySortKey! > "a1" && seg.todaySortKey! < "a3").toBe(true);
+  });
+
+  it("rejects a task not in the caller's today", async () => {
+    const t = createT();
+    const s = await seed(t);
+    const asMember = t.withIdentity(identityFor("clerk_member", "member"));
+
+    await expect(
+      asMember.mutation(api.planner.reorderTodayTask, { taskId: s.taskA }),
+    ).rejects.toThrow("not in your today plan");
+  });
+
+  it("writes no activity-log events", async () => {
+    const t = createT();
+    const s = await seed(t);
+    const asMember = t.withIdentity(identityFor("clerk_member", "member"));
+
+    await asMember.mutation(api.planner.reorderTodayTask, { taskId: s.taskB });
+    expect(await activityCount(t, s.taskB)).toBe(0);
+  });
+});
+
+// ─── createTodayTask (inline-add in the Today group) ──────────────────────────
+
+describe("planner.createTodayTask", () => {
+  it("creates an In progress task assigned to me, planned for today, in one gesture", async () => {
+    const t = createT();
+    const s = await seed(t);
+    const asMember = t.withIdentity(identityFor("clerk_member", "member"));
+
+    const { taskId, segmentId } = await asMember.mutation(api.planner.createTodayTask, {
+      title: "  Ship the thing  ",
+    });
+
+    const task = await t.run(async (ctx) => await ctx.db.get(taskId));
+    expect(task?.title).toBe("Ship the thing"); // trimmed
+    expect(task?.statusType).toBe("in_progress");
+    expect(task?.assigneeIds).toEqual([s.member]);
+
+    const seg = await t.run(async (ctx) => await ctx.db.get(segmentId));
+    expect(seg?.userId).toBe(s.member);
+    expect(seg?.startDate).toBe(TODAY);
+    expect(seg?.endDate).toBe(TODAY);
+  });
+
+  it("rejects an empty title", async () => {
+    const t = createT();
+    await seed(t);
+    const asMember = t.withIdentity(identityFor("clerk_member", "member"));
+    await expect(
+      asMember.mutation(api.planner.createTodayTask, { title: "   " }),
+    ).rejects.toThrow("title is required");
+  });
+
+  it("logs the task_created event (but not the segment)", async () => {
+    const t = createT();
+    const s = await seed(t);
+    const asMember = t.withIdentity(identityFor("clerk_member", "member"));
+
+    const { taskId } = await asMember.mutation(api.planner.createTodayTask, {
+      title: "New today task",
+    });
+    // Exactly one activity event: task_created (segment insert is never logged)
+    expect(await activityCount(t, taskId)).toBe(1);
+  });
+});
+
+// ─── myTasksCount (remaining Today count) ─────────────────────────────────────
+
+describe("myTasks.myTasksCount", () => {
+  it("counts the caller's remaining (uncompleted) Today tasks", async () => {
+    const t = createT();
+    const s = await seed(t);
+    const asMember = t.withIdentity(identityFor("clerk_member", "member"));
+
+    // Seed: member has taskB covering today → count 1
+    expect(await asMember.query(api.myTasks.myTasksCount, {})).toBe(1);
+
+    // Plan taskA too → count 2
+    await asMember.mutation(api.planner.addToToday, { taskId: s.taskA });
+    expect(await asMember.query(api.myTasks.myTasksCount, {})).toBe(2);
+  });
+
+  it("excludes completed-today tasks and is per-user", async () => {
+    const t = createT();
+    const s = await seed(t);
+    const asMember = t.withIdentity(identityFor("clerk_member", "member"));
+
+    // Mark taskB done today → drops out of the remaining count
+    await t.run(async (ctx) => {
+      const done = await ctx.db
+        .query("statuses")
+        .withIndex("by_orgId", (q) => q.eq("orgId", ORG_ID))
+        .collect();
+      // Reuse the seed's in_progress status id but flip the task to a
+      // done-type status created inline.
+      const doneStatus = await ctx.db.insert("statuses", {
+        orgId: ORG_ID, name: "Done", type: "done", color: "green",
+        sortOrder: 9, createdAt: Date.now(), updatedAt: Date.now(), createdBy: s.admin,
+      });
+      void done;
+      await ctx.db.patch(s.taskB, {
+        statusId: doneStatus, statusType: "done", updatedAt: Date.now(),
+      });
+    });
+    expect(await asMember.query(api.myTasks.myTasksCount, {})).toBe(0);
+
+    // The admin's own today (taskA covers today on the admin's row) is separate
+    const asAdmin = t.withIdentity(identityFor("clerk_admin", "admin"));
+    expect(await asAdmin.query(api.myTasks.myTasksCount, {})).toBe(1);
+  });
+});
+
+// ─── Move to today (Earlier → fresh segment, old stays as history) ────────────
+
+describe("Move to today leaves the old segment untouched", () => {
+  it("addTotoday creates a fresh segment without disturbing an earlier one", async () => {
+    const t = createT();
+    const s = await seed(t);
+    const asMember = t.withIdentity(identityFor("clerk_member", "member"));
+
+    // Give the member an Earlier leftover on taskA (ended yesterday)
+    const earlierId = await t.run(async (ctx) => {
+      const now = Date.now();
+      return await ctx.db.insert("planSegments", {
+        orgId: ORG_ID, taskId: s.taskA, userId: s.member,
+        startDate: addDaysToDateString(TODAY, -3), endDate: YESTERDAY,
+        createdAt: now, updatedAt: now, createdBy: s.member,
+      });
+    });
+
+    await asMember.mutation(api.planner.addToToday, { taskId: s.taskA });
+
+    const segs = await segmentsOf(t, s.taskA, s.member);
+    expect(segs).toHaveLength(2);
+    // Old segment unchanged
+    const old = segs.find((seg) => seg._id === earlierId)!;
+    expect(old.endDate).toBe(YESTERDAY);
+    // Fresh one-day segment for today
+    const fresh = segs.find((seg) => seg._id !== earlierId)!;
+    expect([fresh.startDate, fresh.endDate]).toEqual([TODAY, TODAY]);
+  });
+});

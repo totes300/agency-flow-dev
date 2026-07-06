@@ -112,11 +112,15 @@ export default function MyTasksPage() {
     return myTasks.groups as MyTasksGroup<TaskWithJoins>[]
   }, [myTasks])
 
-  // Batch time query for all visible tasks
+  // Batch time query for all visible tasks (incl. Earlier leftovers, so the
+  // detail drawer can open + navigate them)
   const allVisibleTaskIds = useMemo(() => {
     if (!myTasks) return []
     return myTasks.groups
-      .flatMap((g: MyTasksGroup<TaskWithJoins>) => g.tasks.map((t: TaskWithJoins) => t._id))
+      .flatMap((g: MyTasksGroup<TaskWithJoins>) => [
+        ...g.tasks.map((t: TaskWithJoins) => t._id),
+        ...(g.earlierTasks ?? []).map((t: TaskWithJoins) => t._id),
+      ])
       .sort()
   }, [myTasks])
 

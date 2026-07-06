@@ -2707,13 +2707,27 @@ status and becomes a derived, per-user daily plan computed from
 - [x] Test fixtures renamed (STATUS_TODAY → STATUS_TRIAGE); no remaining
       code/copy references a "Today" *status*
 
-### Slice 03 — Today experience complete (pending)
+### Slice 03 — Today experience complete ✅ (2026-07-06)
 
-- [ ] Earlier subsection (14d leftovers, expanded default, Move to today)
-- [ ] Within-Today manual reorder (per-user sort key, fractional midpoints)
-- [ ] Inline-add in Today (In progress status + self-assign + today segment)
-- [ ] Confetti re-key: Today empty + completed > 0; sidebar badge = Today
-      remaining count, hidden at zero
+- [x] `planSegments.todaySortKey` (fractional string key) — manual Today
+      ordering; `partitionMyDay` honours it (min across covering segments)
+      before the createdAt arrival fallback, returns the per-task effective
+      key + the Earlier list as a nested Today-group payload
+- [x] `reorderTodayTask` (self-scoped, writes todaySortKey on the caller's
+      covering segments) + `createTodayTask` (inline-add: first In progress
+      status + self-assign + one-day today segment, one atomic gesture)
+- [x] `myTasksCount` reworked → caller's remaining (uncompleted) Today
+      count via the same partition; sidebar badge hidden at zero
+- [x] Earlier subsection (`TodayEarlierSection`): 14d leftovers, expanded
+      by default, collapsible, dimmed rows + status badge, "Move to today"
+      → fresh one-day segment (old segment stays as history)
+- [x] Within-Today drag reorder (reuses MyTasksSortableRow + optimistic
+      pattern, targets reorderTodayTask); inline-add wired; skeleton +
+      confetti re-key (TodayAllDoneState fires on Today empty + completed)
+- [x] Tests: todaySortKey ordering (manual beats createdAt, min-across,
+      unkeyed appends); reorder/create/count/move-to-today convex tests
+      Live in Chrome: inline-add → In progress + assigned + planned today;
+      Earlier "Move to today" → fresh segment + toast, old segment kept
 
 ### Slice 04 — Triage everywhere (pending)
 

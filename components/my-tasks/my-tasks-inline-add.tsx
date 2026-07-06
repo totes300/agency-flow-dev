@@ -11,21 +11,33 @@ import type { Id } from "@/convex/_generated/dataModel"
 export function MyTasksInlineAdd({
   statusId,
   currentUserId,
+  today = false,
 }: {
   statusId?: Id<"statuses">
   currentUserId: Id<"users">
+  /**
+   * Today-group variant: creates the task with the org's first In progress
+   * status, assigned to me, AND planned for today (one atomic gesture —
+   * "I'll also do this today"). Ignores `statusId`.
+   */
+  today?: boolean
 }) {
   const createTask = useMutation(api.tasks.create)
+  const createTodayTask = useMutation(api.planner.createTodayTask)
 
   const { active, title, setTitle, inputRef, activate, handleKeyDown, handleBlur } =
     useInlineAdd(async (trimmed) => {
       try {
-        await createTask({
-          title: trimmed,
-          statusId,
-          assigneeIds: [currentUserId],
-          billable: true,
-        })
+        if (today) {
+          await createTodayTask({ title: trimmed })
+        } else {
+          await createTask({
+            title: trimmed,
+            statusId,
+            assigneeIds: [currentUserId],
+            billable: true,
+          })
+        }
       } catch (err) {
         toastError(err, "Failed to create task")
       }

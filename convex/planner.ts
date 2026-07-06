@@ -774,6 +774,123 @@ export const removeFromToday = mutation({
   },
 });
 
+/**
+ * Manual reorder within the My Tasks Today group. Self-scoped: writes
+ * `todaySortKey` onto the CALLER's covering segment(s) of the task —
+ * ordering is per person, like the plan itself. Neighbor keys come from
+ * the effective keys the list query returned (lib/reorder pattern).
+ */
+export const reorderTodayTask = mutation({
+  args: {
+    taskId: v.id("tasks"),
+    beforeKey: v.optional(v.string()),
+    afterKey: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const { myCoveringToday } = await getMyTaskPlanContext(ctx, args.taskId);
+    if (myCoveringToday.length === 0) {
+      throw new ConvexError("Task is not in your today plan");
+    }
+
+    const newKey = generateKeyBetween(args.beforeKey ?? null, args.afterKey ?? null);
+    const now = Date.now();
+    for (const seg of myCoveringToday) {
+      await ctx.db.patch(seg._id, { todaySortKey: newKey, updatedAt: now });
+    }
+  },
+});
+
+/**
+ * Inline-add inside the Today group: "I'll also do this today" as ONE
+ * atomic gesture — the task is created with the org's first In progress
+ * status (by sortOrder), assigned to the creator, and planned for today
+ * (one-day segment). Member-callable; self-scoped by construction.
+ *
+ * Mirrors createTaskWithSegment's task defaults otherwise (billable,
+ * appended manual sort key, task_created activity entry — the segment
+ * itself is never logged).
+ */
+export const createTodayTask = mutation({
+  args: {
+    title: v.string(),
+    projectId: v.optional(v.id("projects")),
+  },
+  handler: async (ctx, args) => {
+    const { orgId, userId } = await getAuthContext(ctx);
+
+    const title = args.title.trim();
+    if (!title) throw new ConvexError("Task title is required");
+    validateStringLength(title, 500, "Task title");
+
+    if (args.projectId) {
+      const project = await ctx.db.get(args.projectId);
+      if (!project || project.orgId !== orgId) {
+        throw new ConvexError("Project not found");
+      }
+    }
+
+    // Typing a task into today's plan means I'm on it → first In progress
+    // status by sortOrder (PRD story 17).
+    const statuses = await ctx.db
+      .query("statuses")
+      .withIndex("by_orgId_type", (q) => q.eq("orgId", orgId).eq("type", "in_progress"))
+      .collect();
+    const status = statuses
+      .filter((s) => !s.archivedAt)
+      .sort((a, b) => a.sortOrder - b.sortOrder)[0];
+    if (!status) throw new ConvexError("No in-progress status found for org");
+
+    const orgSettings = await getOrgSettings(ctx, orgId);
+    const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
+    const today = getDateInTimezone(Date.now(), timezone);
+
+    const lastSorted = await ctx.db
+      .query("tasks")
+      .withIndex("by_orgId_manualSortKey", (q) => q.eq("orgId", orgId))
+      .order("desc")
+      .first();
+    const manualSortKey = generateKeyBetween(
+      lastSorted?.manualSortKey ?? null,
+      null,
+    );
+
+    const now = Date.now();
+    const taskId = await ctx.db.insert("tasks", {
+      orgId,
+      title,
+      statusId: status._id,
+      statusType: status.type,
+      projectId: args.projectId,
+      assigneeIds: [userId],
+      billable: true,
+      manualSortKey,
+      createdAt: now,
+      updatedAt: now,
+      createdBy: userId,
+    });
+    await logActivity(ctx, {
+      taskId,
+      orgId,
+      userId,
+      type: "task_created",
+      metadata: {},
+    });
+
+    const segmentId = await ctx.db.insert("planSegments", {
+      orgId,
+      taskId,
+      userId,
+      startDate: today,
+      endDate: today,
+      createdAt: now,
+      updatedAt: now,
+      createdBy: userId,
+    });
+
+    return { taskId, segmentId };
+  },
+});
+
 // ─── Dev seed ─────────────────────────────────────────────────────────────────
 
 function ymdFromUtcMs(t: number): string {

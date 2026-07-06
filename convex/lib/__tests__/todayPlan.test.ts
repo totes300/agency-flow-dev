@@ -37,8 +37,9 @@ function makeSegment(
   startDate: string,
   endDate: string,
   createdAt = 1000,
+  todaySortKey?: string,
 ): MinimalSegment {
-  return { taskId, startDate, endDate, createdAt };
+  return { taskId, startDate, endDate, createdAt, todaySortKey };
 }
 
 function partition(
@@ -184,6 +185,52 @@ describe("partitionMyDay — Today membership", () => {
     );
     expect(todayTaskIds).toEqual([planned._id]);
     expect(earlierTaskIds).toEqual([]);
+  });
+});
+
+// ─── partitionMyDay: manual Today ordering (todaySortKey) ─────────────────────
+
+describe("partitionMyDay — todaySortKey ordering", () => {
+  it("manual todaySortKey wins over createdAt arrival order", () => {
+    const a = makeTask();
+    const b = makeTask();
+    const c = makeTask();
+    // Arrival order would be a, b, c (by createdAt); keys force c, a, b.
+    const segments = [
+      makeSegment(a._id, TODAY, TODAY, 100, "a2"),
+      makeSegment(b._id, TODAY, TODAY, 200, "a3"),
+      makeSegment(c._id, TODAY, TODAY, 300, "a1"),
+    ];
+    const { todayTaskIds, todaySortKeys } = partition([a, b, c], segments);
+    expect(todayTaskIds).toEqual([c._id, a._id, b._id]);
+    expect(todaySortKeys.get(a._id as string)).toBe("a2");
+    expect(todaySortKeys.get(c._id as string)).toBe("a1");
+  });
+
+  it("unkeyed tasks sort by arrival (createdAt); keyed vs unkeyed falls back to createdAt", () => {
+    const keyed = makeTask();
+    const unkeyed = makeTask();
+    const segments = [
+      makeSegment(keyed._id, TODAY, TODAY, 300, "a5"),
+      makeSegment(unkeyed._id, TODAY, TODAY, 100),
+    ];
+    // One side lacks a key → comparator falls back to createdAt (100 < 300)
+    const { todayTaskIds } = partition([keyed, unkeyed], segments);
+    expect(todayTaskIds).toEqual([unkeyed._id, keyed._id]);
+  });
+
+  it("uses the MIN key across a task's covering segments", () => {
+    const task = makeTask();
+    const other = makeTask();
+    const segments = [
+      makeSegment(task._id, TODAY, TODAY, 100, "a9"),
+      makeSegment(task._id, "2026-07-04", "2026-07-08", 50, "a1"),
+      makeSegment(other._id, TODAY, TODAY, 200, "a5"),
+    ];
+    const { todayTaskIds, todaySortKeys } = partition([task, other], segments);
+    // task's effective key is "a1" (min) → sorts before other's "a5"
+    expect(todaySortKeys.get(task._id as string)).toBe("a1");
+    expect(todayTaskIds).toEqual([task._id, other._id]);
   });
 });
 

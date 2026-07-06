@@ -638,6 +638,10 @@ export default defineSchema({
     // screen). Unset = createdAt; written when the owner drags a bar
     // above/below another. Float midpoints — fine at MVP scale.
     laneOrder: v.optional(v.number()),
+    // Manual ordering within the My Tasks Today group (fractional string
+    // key, same mechanism as tasks.manualSortKey). Unset = segment
+    // createdAt (arrival order, new entrants append at the bottom).
+    todaySortKey: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
     createdBy: v.id("users"),

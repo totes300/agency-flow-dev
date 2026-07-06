@@ -43,6 +43,8 @@ export type MyTasksGroup<T extends MinimalTask = MinimalTask> = {
   count: number;
   /** Tasks of this status suppressed into the Today group ("· N in Today" hint). */
   inTodayCount?: number;
+  /** Today group only: planned-but-unfinished leftovers (Earlier subsection). */
+  earlierTasks?: T[];
 };
 
 // ─── resolveVisibleStatusIds ────────────────────────────────────────────────────

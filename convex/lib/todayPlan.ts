@@ -34,6 +34,8 @@ export type MinimalSegment = {
   startDate: string; // YYYY-MM-DD inclusive
   endDate: string;   // YYYY-MM-DD inclusive
   createdAt: number;
+  /** Manual Today ordering (fractional key); unset = arrival order. */
+  todaySortKey?: string;
 };
 
 /** Minimal task shape needed to partition (subset of MinimalTask). */
@@ -45,8 +47,15 @@ export type TodayPartitionTask = {
 };
 
 export type MyDayPartition = {
-  /** Tasks planned for today, arrival order (earliest covering-segment createdAt first). */
+  /**
+   * Tasks planned for today. Manual `todaySortKey` (min across covering
+   * segments, code-point compare) wins between two keyed tasks; otherwise
+   * arrival order (earliest covering-segment createdAt — new entrants
+   * append at the bottom). Same comparator contract as sortWithinGroup.
+   */
   todayTaskIds: Id<"tasks">[];
+  /** The effective manual sort key per today task (for reorder neighbors). */
+  todaySortKeys: Map<string, string | undefined>;
   /** Planned-but-unfinished leftovers from the Earlier window, newest-ended first. */
   earlierTaskIds: Id<"tasks">[];
 };
@@ -191,7 +200,7 @@ export function partitionMyDay(
 
   const earlierFloor = addDaysToDateString(todayStr, -earlierWindowDays);
 
-  const today: { taskId: Id<"tasks">; sortKey: number }[] = [];
+  const today: { taskId: Id<"tasks">; manualKey?: string; createdAt: number }[] = [];
   const earlier: { taskId: Id<"tasks">; sortKey: string }[] = [];
 
   for (const task of tasks) {
@@ -202,9 +211,14 @@ export function partitionMyDay(
     const covering = segments.filter((s) => segmentCoversDate(s, todayStr));
     if (covering.length > 0) {
       if (isCompletedToday(task, todayStr, timezone)) continue;
+      const keys = covering
+        .map((s) => s.todaySortKey)
+        .filter((k): k is string => k != null);
       today.push({
         taskId: task._id,
-        sortKey: Math.min(...covering.map((s) => s.createdAt)),
+        // Min by code-point order (fractional-indexing contract)
+        manualKey: keys.length > 0 ? keys.reduce((a, b) => (b < a ? b : a)) : undefined,
+        createdAt: Math.min(...covering.map((s) => s.createdAt)),
       });
       continue;
     }
@@ -221,11 +235,20 @@ export function partitionMyDay(
     }
   }
 
-  today.sort((a, b) => a.sortKey - b.sortKey);
+  today.sort((a, b) => {
+    // Both manually keyed → code-point order (required by fractional-indexing)
+    if (a.manualKey != null && b.manualKey != null) {
+      if (a.manualKey < b.manualKey) return -1;
+      if (a.manualKey > b.manualKey) return 1;
+    }
+    // Fallback: arrival order (new entrants append at the bottom)
+    return a.createdAt - b.createdAt;
+  });
   earlier.sort((a, b) => b.sortKey.localeCompare(a.sortKey));
 
   return {
     todayTaskIds: today.map((t) => t.taskId),
+    todaySortKeys: new Map(today.map((t) => [t.taskId as string, t.manualKey])),
     earlierTaskIds: earlier.map((t) => t.taskId),
   };
 }

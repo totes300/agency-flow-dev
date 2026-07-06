@@ -93,7 +93,7 @@ export const listMyTasks = query({
       .map((id) => taskById.get(id))
       .filter((t): t is Doc<"tasks"> => t !== undefined && !t.parentTaskId);
 
-    const { todayTaskIds } = partitionMyDay(
+    const { todayTaskIds, todaySortKeys, earlierTaskIds } = partitionMyDay(
       segmentTasks,
       mySegments,
       todayDateStr,
@@ -145,14 +145,21 @@ export const listMyTasks = query({
     );
     const enrichedTasks = myTasks.map((t) => enrichedById.get(t._id.toString())!);
 
-    // 5. Build the derived Today group (arrival order from partitionMyDay —
-    // do NOT re-sort with sortWithinGroup).
-    const todayGroup: MyTasksGroup<TaskWithJoins> = {
+    // 5. Build the derived Today group (ordering from partitionMyDay —
+    // manual todaySortKey, then arrival order; do NOT re-sort with
+    // sortWithinGroup). Rows carry their effective todaySortKey so the
+    // client can compute reorder neighbor keys; Earlier leftovers nest
+    // inside the group (consumed by the Earlier subsection).
+    const todayGroup: MyTasksGroup<TaskWithJoins & { todaySortKey?: string }> = {
       key: "today",
       label: "Today",
       statusType: "today",
-      tasks: todayTaskIds.map((id) => enrichedById.get(id.toString())!),
+      tasks: todayTaskIds.map((id) => ({
+        ...enrichedById.get(id.toString())!,
+        todaySortKey: todaySortKeys.get(id.toString()),
+      })),
       count: todayTaskIds.length,
+      earlierTasks: earlierTaskIds.map((id) => enrichedById.get(id.toString())!),
     };
 
     // 6. Status groups (Today members suppressed, counted per group) + sort
@@ -223,38 +230,51 @@ export const listMyTasks = query({
 
 // ─── myTasksCount ─────────────────────────────────────────────────────────────
 
+/**
+ * Sidebar badge: the caller's REMAINING Today count — the size of today's
+ * plan, burning down as tasks complete. Derived with the same todayPlan
+ * partition as the list (completed-today and archived tasks excluded);
+ * the badge disappears entirely at zero (client renders nothing on 0).
+ */
 export const myTasksCount = query({
   args: {},
   handler: async (ctx) => {
     const { userId, orgId } = await getAuthContext(ctx);
-    const user = await ctx.db.get(userId);
-
-    const statuses = await ctx.db
-      .query("statuses")
-      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
-      .collect();
-    const activeStatuses = statuses.filter((s) => !s.archivedAt);
 
     const orgSettings = await getOrgSettings(ctx, orgId);
-    const visibleStatusIds = resolveVisibleStatusIds(user, orgSettings, activeStatuses);
+    const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
+    const todayDateStr = getDateInTimezone(Date.now(), timezone);
 
-    if (visibleStatusIds.length === 0) return 0;
+    const scanFloor = addDaysToDateString(todayDateStr, -SEGMENT_SCAN_WINDOW_DAYS);
+    const mySegments = await ctx.db
+      .query("planSegments")
+      .withIndex("by_orgId_userId_startDate", (q) =>
+        q
+          .eq("orgId", orgId)
+          .eq("userId", userId)
+          .gte("startDate", scanFloor)
+          .lte("startDate", todayDateStr),
+      )
+      .collect();
 
-    // Count tasks in visible statuses assigned to me
-    let count = 0;
-    for (const statusId of visibleStatusIds) {
-      const tasks = await ctx.db
-        .query("tasks")
-        .withIndex("by_orgId_statusId", (q) =>
-          q.eq("orgId", orgId).eq("statusId", statusId),
-        )
-        .collect();
+    const coveringToday = mySegments.filter((s) =>
+      segmentCoversDate(s, todayDateStr),
+    );
+    const taskIds = [...new Set(coveringToday.map((s) => s.taskId.toString()))];
+    const tasks = await Promise.all(
+      taskIds.map((id) => ctx.db.get(id as Id<"tasks">)),
+    );
+    const candidates = tasks.filter(
+      (t): t is Doc<"tasks"> =>
+        t !== null && t.orgId === orgId && !t.parentTaskId,
+    );
 
-      count += tasks.filter(
-        (t) => !t.archivedAt && !t.parentTaskId && t.assigneeIds.includes(userId),
-      ).length;
-    }
-
-    return count;
+    const { todayTaskIds } = partitionMyDay(
+      candidates,
+      coveringToday,
+      todayDateStr,
+      timezone,
+    );
+    return todayTaskIds.length;
   },
 });

@@ -4,10 +4,10 @@ import {
   groupByStatus,
   sortWithinGroup,
   countHiddenTasks,
+  resolveVisibleStatusIds,
   type MinimalTask,
   type MinimalStatus,
 } from "../myTaskHelpers";
-import type { Id } from "../../_generated/dataModel";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -25,7 +25,7 @@ function makeTask(overrides: Partial<MinimalTask> = {}): MinimalTask {
   idCounter++;
   return {
     _id: `task_${idCounter}` as unknown as MinimalTask["_id"],
-    statusId: "status_today" as unknown as MinimalTask["statusId"],
+    statusId: "status_triage" as unknown as MinimalTask["statusId"],
     statusType: "backlog",
     assigneeIds: [USER_A],
     parentTaskId: undefined,
@@ -54,7 +54,9 @@ function makeStatus(
   };
 }
 
-const STATUS_TODAY = makeStatus("Today", "backlog", "status_today");
+// A second backlog status (the retired "Today" status used to fill this
+// slot in the fixtures — statuses no longer name time).
+const STATUS_TRIAGE = makeStatus("Triage", "backlog", "status_triage");
 const STATUS_INBOX = makeStatus("Inbox", "backlog", "status_inbox");
 const STATUS_IN_PROGRESS = makeStatus("In progress", "in_progress", "status_in_progress");
 const STATUS_NEXT_UP = makeStatus("Next up", "in_progress", "status_next_up");
@@ -64,7 +66,7 @@ const STATUS_STUCK = makeStatus("Stuck", "blocked", "status_stuck");
 
 const ALL_STATUSES = [
   STATUS_INBOX,
-  STATUS_TODAY,
+  STATUS_TRIAGE,
   STATUS_NEXT_UP,
   STATUS_IN_PROGRESS,
   STATUS_ADMIN_REVIEW,
@@ -72,9 +74,65 @@ const ALL_STATUSES = [
   STATUS_DONE,
 ];
 
-function asId(s: string): Id<"statuses"> {
-  return s as unknown as Id<"statuses">;
-}
+// ─── resolveVisibleStatusIds ──────────────────────────────────────────────────
+
+describe("resolveVisibleStatusIds", () => {
+  it("uses a valid user preference as-is", () => {
+    const result = resolveVisibleStatusIds(
+      [STATUS_NEXT_UP._id as string, STATUS_STUCK._id as string],
+      undefined,
+      ALL_STATUSES,
+    );
+    expect(result).toEqual([STATUS_NEXT_UP._id, STATUS_STUCK._id]);
+  });
+
+  it("preference referencing a deleted status falls back to org default", () => {
+    // e.g. the retired "Today" status deleted in Settings — its ID dangles
+    const result = resolveVisibleStatusIds(
+      ["status_deleted_today", STATUS_NEXT_UP._id as string],
+      [STATUS_IN_PROGRESS._id as string],
+      ALL_STATUSES,
+    );
+    expect(result).toEqual([STATUS_IN_PROGRESS._id]);
+  });
+
+  it("preference of ONLY deleted IDs with no org default falls back to first in_progress", () => {
+    const result = resolveVisibleStatusIds(
+      ["status_deleted_today"],
+      undefined,
+      ALL_STATUSES,
+    );
+    // Next up sorts before In progress in the fixtures? Both sortOrder 0 —
+    // fixture order decides; assert it is an in_progress status.
+    const winner = ALL_STATUSES.find((s) => s._id === result[0])!;
+    expect(result).toHaveLength(1);
+    expect(winner.type).toBe("in_progress");
+  });
+
+  it("org default containing only deleted IDs falls through to first in_progress (never blank)", () => {
+    const result = resolveVisibleStatusIds(
+      undefined,
+      ["status_deleted_today"],
+      ALL_STATUSES,
+    );
+    expect(result).toHaveLength(1);
+    const winner = ALL_STATUSES.find((s) => s._id === result[0])!;
+    expect(winner.type).toBe("in_progress");
+  });
+
+  it("old type-key preference format falls back (not valid IDs)", () => {
+    const result = resolveVisibleStatusIds(
+      ["in_progress", "backlog"],
+      [STATUS_STUCK._id as string],
+      ALL_STATUSES,
+    );
+    expect(result).toEqual([STATUS_STUCK._id]);
+  });
+
+  it("returns empty only when there are no statuses at all", () => {
+    expect(resolveVisibleStatusIds(undefined, undefined, [])).toEqual([]);
+  });
+});
 
 // ─── filterMyTasks ────────────────────────────────────────────────────────────
 
@@ -117,10 +175,10 @@ describe("filterMyTasks", () => {
 describe("groupByStatus", () => {
   it("shows tasks whose statusId is in visibleStatusIds", () => {
     const tasks = [
-      makeTask({ statusId: STATUS_TODAY._id, statusType: "backlog" }),
+      makeTask({ statusId: STATUS_TRIAGE._id, statusType: "backlog" }),
     ];
-    const groups = groupByStatus(tasks, ALL_STATUSES, [STATUS_TODAY._id], TODAY_DATE, "UTC");
-    const todayGroup = groups.find((g) => g.statusId === STATUS_TODAY._id);
+    const groups = groupByStatus(tasks, ALL_STATUSES, [STATUS_TRIAGE._id], TODAY_DATE, "UTC");
+    const todayGroup = groups.find((g) => g.statusId === STATUS_TRIAGE._id);
     expect(todayGroup).toBeDefined();
     expect(todayGroup!.tasks).toHaveLength(1);
   });
@@ -150,7 +208,7 @@ describe("groupByStatus", () => {
     const tasks = [
       makeTask({ statusId: STATUS_ADMIN_REVIEW._id, statusType: "review", updatedAt: YESTERDAY_TS }),
     ];
-    const groups = groupByStatus(tasks, ALL_STATUSES, [STATUS_TODAY._id], TODAY_DATE, "UTC");
+    const groups = groupByStatus(tasks, ALL_STATUSES, [STATUS_TRIAGE._id], TODAY_DATE, "UTC");
     // Only the empty Today group should exist
     const keys = groups.map((g) => g.key);
     expect(keys).not.toContain("completed_today");
@@ -160,9 +218,9 @@ describe("groupByStatus", () => {
   it("puts done-type tasks updated today into 'completed_today' group", () => {
     const tasks = [
       makeTask({ statusId: STATUS_DONE._id, statusType: "done", updatedAt: TODAY_TS }),
-      makeTask({ statusId: STATUS_TODAY._id, statusType: "backlog" }),
+      makeTask({ statusId: STATUS_TRIAGE._id, statusType: "backlog" }),
     ];
-    const groups = groupByStatus(tasks, ALL_STATUSES, [STATUS_TODAY._id], TODAY_DATE, "UTC");
+    const groups = groupByStatus(tasks, ALL_STATUSES, [STATUS_TRIAGE._id], TODAY_DATE, "UTC");
     const completed = groups.find((g) => g.key === "completed_today");
     expect(completed).toBeDefined();
     expect(completed!.tasks).toHaveLength(1);
@@ -186,7 +244,7 @@ describe("groupByStatus", () => {
 
   it("empty visibleStatusIds shows only completed_today", () => {
     const tasks = [
-      makeTask({ statusId: STATUS_TODAY._id, statusType: "backlog" }),
+      makeTask({ statusId: STATUS_TRIAGE._id, statusType: "backlog" }),
       makeTask({ statusId: STATUS_IN_PROGRESS._id, statusType: "in_progress" }),
       makeTask({ statusId: STATUS_ADMIN_REVIEW._id, statusType: "review", updatedAt: TODAY_TS }),
       makeTask({ statusId: STATUS_INBOX._id, statusType: "backlog" }),
@@ -199,7 +257,7 @@ describe("groupByStatus", () => {
 
   it("only shows groups for statuses that are in visibleStatusIds", () => {
     const tasks = [
-      makeTask({ statusId: STATUS_TODAY._id, statusType: "backlog" }),
+      makeTask({ statusId: STATUS_TRIAGE._id, statusType: "backlog" }),
       makeTask({ statusId: STATUS_IN_PROGRESS._id, statusType: "in_progress" }),
       makeTask({ statusId: STATUS_STUCK._id, statusType: "blocked" }),
       makeTask({ statusId: STATUS_ADMIN_REVIEW._id, statusType: "review", updatedAt: TODAY_TS }),
@@ -215,7 +273,7 @@ describe("groupByStatus", () => {
     expect(keys).toContain("completed_today");
     expect(groups.find((g) => g.statusId === STATUS_IN_PROGRESS._id)).toBeDefined();
     expect(groups.find((g) => g.statusId === STATUS_STUCK._id)).toBeUndefined();
-    expect(groups.find((g) => g.statusId === STATUS_TODAY._id)).toBeUndefined();
+    expect(groups.find((g) => g.statusId === STATUS_TRIAGE._id)).toBeUndefined();
   });
 
   it("done tasks completed today appear in BOTH status group and completed_today", () => {
@@ -245,7 +303,7 @@ describe("groupByStatus", () => {
 
   it("completed_today is always last", () => {
     const tasks = [
-      makeTask({ statusId: STATUS_TODAY._id, statusType: "backlog" }),
+      makeTask({ statusId: STATUS_TRIAGE._id, statusType: "backlog" }),
       makeTask({ statusId: STATUS_IN_PROGRESS._id, statusType: "in_progress" }),
       makeTask({ statusId: STATUS_STUCK._id, statusType: "blocked" }),
       makeTask({ statusId: STATUS_ADMIN_REVIEW._id, statusType: "review", updatedAt: TODAY_TS }),
@@ -253,7 +311,7 @@ describe("groupByStatus", () => {
     const groups = groupByStatus(
       tasks,
       ALL_STATUSES,
-      [STATUS_TODAY._id, STATUS_IN_PROGRESS._id, STATUS_STUCK._id],
+      [STATUS_TRIAGE._id, STATUS_IN_PROGRESS._id, STATUS_STUCK._id],
       TODAY_DATE,
       "UTC",
     );
@@ -263,12 +321,12 @@ describe("groupByStatus", () => {
 
   it("creates empty groups for visible statuses with no matching tasks", () => {
     const tasks = [
-      makeTask({ statusId: STATUS_TODAY._id, statusType: "backlog" }),
+      makeTask({ statusId: STATUS_TRIAGE._id, statusType: "backlog" }),
     ];
     const groups = groupByStatus(
       tasks,
       ALL_STATUSES,
-      [STATUS_TODAY._id, STATUS_IN_PROGRESS._id],
+      [STATUS_TRIAGE._id, STATUS_IN_PROGRESS._id],
       TODAY_DATE,
       "UTC",
     );
@@ -370,11 +428,11 @@ describe("groupByStatus — Today suppression", () => {
 describe("countHiddenTasks", () => {
   it("counts tasks not in visible statuses", () => {
     const tasks = [
-      makeTask({ statusId: STATUS_TODAY._id, statusType: "backlog" }),
+      makeTask({ statusId: STATUS_TRIAGE._id, statusType: "backlog" }),
       makeTask({ statusId: STATUS_IN_PROGRESS._id, statusType: "in_progress" }),
       makeTask({ statusId: STATUS_STUCK._id, statusType: "blocked" }),
     ];
-    const hidden = countHiddenTasks(tasks, [STATUS_TODAY._id], TODAY_DATE, "UTC");
+    const hidden = countHiddenTasks(tasks, [STATUS_TRIAGE._id], TODAY_DATE, "UTC");
     expect(hidden).toBe(2);
   });
 
@@ -391,7 +449,7 @@ describe("countHiddenTasks", () => {
     const notInToday = makeTask({ statusId: STATUS_STUCK._id, statusType: "blocked" });
     const hidden = countHiddenTasks(
       [inToday, notInToday],
-      [STATUS_TODAY._id],
+      [STATUS_TRIAGE._id],
       TODAY_DATE,
       "UTC",
       new Set([inToday._id as string]),

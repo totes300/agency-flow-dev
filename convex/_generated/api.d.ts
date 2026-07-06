@@ -59,6 +59,7 @@ import type * as lib_validators from "../lib/validators.js";
 import type * as lib_worksheetAi from "../lib/worksheetAi.js";
 import type * as linkPreviews from "../linkPreviews.js";
 import type * as migrations_deleteLegacyTimeEntries from "../migrations/deleteLegacyTimeEntries.js";
+import type * as migrations_retireTodayStatus from "../migrations/retireTodayStatus.js";
 import type * as migrations_seedInvoicingScenarios from "../migrations/seedInvoicingScenarios.js";
 import type * as migrations_wipeAllTimeEntries from "../migrations/wipeAllTimeEntries.js";
 import type * as migrations_wipeInvoicingForRefactor from "../migrations/wipeInvoicingForRefactor.js";
@@ -145,6 +146,7 @@ declare const fullApi: ApiFromModules<{
   "lib/worksheetAi": typeof lib_worksheetAi;
   linkPreviews: typeof linkPreviews;
   "migrations/deleteLegacyTimeEntries": typeof migrations_deleteLegacyTimeEntries;
+  "migrations/retireTodayStatus": typeof migrations_retireTodayStatus;
   "migrations/seedInvoicingScenarios": typeof migrations_seedInvoicingScenarios;
   "migrations/wipeAllTimeEntries": typeof migrations_wipeAllTimeEntries;
   "migrations/wipeInvoicingForRefactor": typeof migrations_wipeInvoicingForRefactor;

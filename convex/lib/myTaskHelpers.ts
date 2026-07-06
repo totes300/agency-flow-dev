@@ -45,6 +45,49 @@ export type MyTasksGroup<T extends MinimalTask = MinimalTask> = {
   inTodayCount?: number;
 };
 
+// ─── resolveVisibleStatusIds ────────────────────────────────────────────────────
+
+/**
+ * Resolve which status IDs to show in My Tasks.
+ * Fallback chain: user preference → org default → first in_progress status.
+ * Filters out archived/deleted statuses silently — a deleted status ID in a
+ * saved preference (e.g. the retired "Today" status) can never blank the view.
+ */
+export function resolveVisibleStatusIds(
+  userPref: string[] | undefined,
+  orgDefault: string[] | undefined,
+  activeStatuses: MinimalStatus[],
+): Id<"statuses">[] {
+  const activeIds = new Set(activeStatuses.map((s) => s._id as string));
+
+  // 1. User preference (skip if it contains old type-key strings or IDs of
+  //    statuses that no longer exist)
+  if (userPref && userPref.length > 0) {
+    const isNewFormat = userPref.every((id) => activeIds.has(id));
+    if (isNewFormat) {
+      return userPref.filter((id) => activeIds.has(id)) as Id<"statuses">[];
+    }
+    // Old format or dangling IDs detected — fall through to org default
+  }
+
+  // 2. Org default
+  if (orgDefault && orgDefault.length > 0) {
+    const valid = orgDefault.filter((id) => activeIds.has(id)) as Id<"statuses">[];
+    if (valid.length > 0) return valid;
+  }
+
+  // 3. Final fallback: first in_progress status by sortOrder
+  const firstInProgress = activeStatuses
+    .filter((s) => s.type === "in_progress")
+    .sort((a, b) => a.sortOrder - b.sortOrder)[0];
+  if (firstInProgress) {
+    return [firstInProgress._id];
+  }
+
+  // No statuses at all — return empty
+  return [];
+}
+
 // ─── filterMyTasks ──────────────────────────────────────────────────────────────
 
 /**

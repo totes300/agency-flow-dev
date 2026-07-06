@@ -8,6 +8,7 @@ import {
   groupByStatus,
   sortWithinGroup,
   countHiddenTasks,
+  resolveVisibleStatusIds as resolveVisibleStatusIdsHelper,
   type MyTasksGroup,
 } from "./lib/myTaskHelpers";
 import {
@@ -23,44 +24,20 @@ import type { Doc, Id } from "./_generated/dataModel";
 // ─── resolveVisibleStatusIds ─────────────────────────────────────────────────
 
 /**
- * Resolve which status IDs to show in My Tasks.
- * Fallback chain: user preference → org default → first in_progress status.
- * Filters out archived/deleted statuses silently.
+ * Thin ctx-shaped adapter over the pure helper (convex/lib/myTaskHelpers.ts)
+ * — the fallback chain itself is tested there, including saved preferences
+ * that reference a deleted status (e.g. the retired "Today" status).
  */
 function resolveVisibleStatusIds(
   user: Doc<"users"> | null,
   orgSettings: Doc<"orgSettings"> | null,
   activeStatuses: Doc<"statuses">[],
 ): Id<"statuses">[] {
-  const activeIds = new Set(activeStatuses.map((s) => s._id as string));
-
-  // 1. User preference (skip if it contains old type-key strings)
-  const userPref = user?.todayVisibleStatuses;
-  if (userPref && userPref.length > 0) {
-    // Detect old format: type keys like "in_progress" are not valid Convex IDs
-    const isNewFormat = userPref.every((id) => activeIds.has(id));
-    if (isNewFormat) {
-      return userPref.filter((id) => activeIds.has(id)) as Id<"statuses">[];
-    }
-    // Old format detected — fall through to org default
-  }
-
-  // 2. Org default
-  const orgDefault = orgSettings?.defaultMyTasksStatusIds;
-  if (orgDefault && orgDefault.length > 0) {
-    return orgDefault.filter((id) => activeIds.has(id as string));
-  }
-
-  // 3. Final fallback: first in_progress status by sortOrder
-  const firstInProgress = activeStatuses
-    .filter((s) => s.type === "in_progress")
-    .sort((a, b) => a.sortOrder - b.sortOrder)[0];
-  if (firstInProgress) {
-    return [firstInProgress._id];
-  }
-
-  // No statuses at all — return empty
-  return [];
+  return resolveVisibleStatusIdsHelper(
+    user?.todayVisibleStatuses,
+    orgSettings?.defaultMyTasksStatusIds?.map(String),
+    activeStatuses,
+  );
 }
 
 // ─── listMyTasks ──────────────────────────────────────────────────────────────

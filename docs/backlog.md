@@ -2648,3 +2648,100 @@ Schedule→Planned from `+ Filter` → reopening shows the PROPERTY PICKER
 (with Schedule hidden while active); chip `Schedule: Planned` → clicking
 the active option removes it (`?sched=all`); reopening `+ Filter` offers
 Schedule again.
+
+## Today × Planner Unification — 2026-07-06 (in progress)
+
+PRD: `docs/today-planner-prd.md` (supersedes `docs/today-tab-prd.md`, banner
+in place). Slices: `docs/today-planner-issues/`. "Today" stops being a
+status and becomes a derived, per-user daily plan computed from
+`planSegments` — My Tasks and the Planner are two lenses over one dataset.
+
+### Slice 01 — Tracer: Planner plan appears in My Tasks Today ✅ (2026-07-06)
+
+- [x] `planSegments` index `by_orgId_userId_startDate` (covering-today
+      lookup, scan-guarded to today − 60d)
+- [x] Pure helpers `convex/lib/todayPlan.ts`: `segmentCoversDate`,
+      `partitionMyDay` (Today + Earlier contract, arrival ordering by
+      covering-segment createdAt, 14-day Earlier window constant)
+- [x] `listMyTasks` rework: derived Today group first (membership from
+      segment taskIds — the plan wins over assignment), suppression from
+      status groups with per-group `inTodayCount`, `hiddenCount` respects
+      Today visibility, planned-but-unassigned completions land in
+      Completed today
+- [x] UI: Today group (sun header + "the Planner's plan for today" hint),
+      status badge on Today rows, assignment-mismatch dimmed avatar
+      (dashed circle when unassigned) + tooltip, `· N in Today` header
+      notes, TodayEmptyState, content-aware skeleton update
+- [x] Tests: todayPlan suite (boundaries, dedupe, archived, windowing,
+      ordering) + myTasks suppression/inTodayCount
+
+### Slice 02 — Sun gestures + admin-or-self permissions ✅ (2026-07-06)
+
+- [x] `planRemovalOps` + `summarizeRemovalOps` (delete / trim-start /
+      trim-end / split; split remainder inherits laneOrder — stable lanes)
+- [x] `addToToday` (idempotent one-day segment, archived rejected) and
+      `removeFromToday` (surgery on ALL covering segments) — self-scoped,
+      member-callable, zero activity-log writes
+- [x] `createSegment`/`updateSegment`/`removeSegment` widened admin-only →
+      admin-or-self (`assertCanManagePlanFor`): members own-row only, no
+      reassigning to others; server-enforced
+- [x] Shared `components/add-to-today-button.tsx`: ghost sun, hover-reveal
+      desktop / muted always-visible touch (`pointer-coarse:`), filled
+      amber active, plan-term toasts; wired into MyTaskRow
+- [x] Tests: removal-op branches; permission matrix + idempotency +
+      surgery in `convex/__tests__/todayGestures.test.ts`
+
+### Slice 05 — Today status retirement + seed + docs ✅ (2026-07-06)
+
+- [x] `DEFAULT_STATUSES`: "Today" removed, sortOrder renumbered (Inbox →
+      Next up → In progress → Admin review → Client review → Stuck → Done)
+- [x] `resolveVisibleStatusIds` moved to `lib/myTaskHelpers.ts` (pure,
+      tested) + hardening: org default that filters to empty now falls
+      through to first in_progress instead of returning a blank view
+- [x] Fallback tests: preference referencing a deleted status → org
+      default → first in_progress; old type-key format; never blank
+- [x] Dev data: `npx convex run migrations/retireTodayStatus '{}'` (dev
+      helper in the established migrations/ one-off pattern — NOT a
+      production migration, per the PRD's recorded no-migration decision)
+      re-statused 2 tasks and deleted the status in the dev org
+- [x] Test fixtures renamed (STATUS_TODAY → STATUS_TRIAGE); no remaining
+      code/copy references a "Today" *status*
+
+### Slice 03 — Today experience complete (pending)
+
+- [ ] Earlier subsection (14d leftovers, expanded default, Move to today)
+- [ ] Within-Today manual reorder (per-user sort key, fractional midpoints)
+- [ ] Inline-add in Today (In progress status + self-assign + today segment)
+- [ ] Confetti re-key: Today empty + completed > 0; sidebar badge = Today
+      remaining count, hidden at zero
+
+### Slice 04 — Triage everywhere (pending)
+
+- [ ] Sun on `/tasks` rows + "Add to Today" bulk action
+- [ ] Task detail Plan section: today-highlight, member self-service,
+      Add to Today affordance
+
+### Slice 06 — Planner member self-editing (pending · cuttable)
+
+- [ ] Members edit own row (draw/drag/resize/delete); others read-only
+- [ ] Completed tasks' bars dimmed with check
+
+### Verification (slices 01–02–05)
+
+`npx tsc --noEmit` 0 errors after every slice; todayPlan + myTasks +
+todayGestures + planner suites green (only pre-existing unrelated failures
+in the full run). Live in Chrome: Planner bar ↔ My Tasks Today derivation
+both directions, sun add/remove round-trip with Planner bar
+appearing/disappearing, suppression hints, status deletion with no blank
+My Tasks (fallback chain exercised on a real dangling preference).
+
+### TODOs deferred to later phases (PRD § Out of Scope)
+
+- Cross-group drag (sun icon is the sole membership gesture in v1)
+- "Include due today" view toggle (due ≠ plan by default)
+- Tabs/lenses layout for My Tasks; an "Upcoming" group
+- Auto-carry / auto-reschedule of leftovers — never (Earlier + one click)
+- Capacity indicators / overbooking warnings (standing decision)
+- Per-row keyboard shortcut for Add to Today
+- Subtask planning; plan-vs-actual reporting UI; plan-change notifications
+- Renaming the `todayVisibleStatuses` preference field (naming debt)

@@ -77,12 +77,14 @@ export const DEFAULT_STATUSES: Array<{
   color: StatusColorName;
   sortOrder: number;
 }> = [
+  // No "Today" status — "today" is a derived per-user plan computed from
+  // planSegments (docs/today-planner-prd.md); "Next up" is the triage
+  // destination. Statuses describe workflow state only.
   { name: "Inbox", type: "backlog", color: "gray", sortOrder: 0 },
-  { name: "Today", type: "backlog", color: "blue", sortOrder: 1 },
-  { name: "Next up", type: "in_progress", color: "blue", sortOrder: 2 },
-  { name: "In progress", type: "in_progress", color: "amber", sortOrder: 3 },
-  { name: "Admin review", type: "review", color: "purple", sortOrder: 4 },
-  { name: "Client review", type: "review", color: "coral", sortOrder: 5 },
-  { name: "Stuck", type: "blocked", color: "red", sortOrder: 6 },
-  { name: "Done", type: "done", color: "green", sortOrder: 7 },
+  { name: "Next up", type: "in_progress", color: "blue", sortOrder: 1 },
+  { name: "In progress", type: "in_progress", color: "amber", sortOrder: 2 },
+  { name: "Admin review", type: "review", color: "purple", sortOrder: 3 },
+  { name: "Client review", type: "review", color: "coral", sortOrder: 4 },
+  { name: "Stuck", type: "blocked", color: "red", sortOrder: 5 },
+  { name: "Done", type: "done", color: "green", sortOrder: 6 },
 ];

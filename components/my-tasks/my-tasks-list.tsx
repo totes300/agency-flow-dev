@@ -21,7 +21,7 @@ import { MyTasksSortableRow } from "./my-tasks-sortable-row"
 import { MyTasksGroup } from "./my-tasks-group"
 import { MyTaskRow } from "./my-task-row"
 import { MyTasksInlineAdd } from "./my-tasks-inline-add"
-import { TodayEarlierSection } from "./today-earlier-section"
+import { TodayEarlierSection, type EarlierTask } from "./today-earlier-section"
 import { MyTasksEmptyState, TodayAllDoneState, TodayEmptyState } from "./my-tasks-empty-state"
 import type { TaskWithJoins } from "@/convex/lib/task_helpers"
 import type { MyTasksGroup as MyTasksGroupType } from "@/convex/lib/myTaskHelpers"
@@ -39,6 +39,7 @@ export function MyTasksList({
   activityMap,
   detailId,
   currentUserId,
+  todayStr,
   onOpenDetail,
   onComplete,
   defaultStatusId,
@@ -48,6 +49,7 @@ export function MyTasksList({
   activityMap?: Record<string, ActivityIndicator>
   detailId: string | null
   currentUserId: Id<"users">
+  todayStr: string
   onOpenDetail: (taskId: string) => void
   onComplete: (taskId: string, statusId: Id<"statuses">, coords?: { x: number; y: number }) => void
   defaultStatusId?: Id<"statuses">
@@ -182,66 +184,77 @@ export function MyTasksList({
         const isToday = group.key === "today"
         const completedGroup = groups.find((g) => g.key === "completed_today")
 
-        // Derived Today group: sun header + hint, Earlier leftovers on top,
-        // drag-reorderable rows (within-Today manual order), inline-add that
-        // creates + plans in one gesture. Order comes from the server
-        // (todaySortKey → arrival).
+        // Derived Today group: sun header + hint, drag-reorderable rows
+        // (within-Today manual order), inline-add that creates + plans in one
+        // gesture. Earlier leftovers render as their OWN section right below
+        // (so today's plan stays visually primary). Order comes from the
+        // server (todaySortKey → arrival).
         if (isToday) {
           const completedCount = completedGroup?.count ?? 0
-          const earlierTasks = (group.earlierTasks ?? []) as TaskWithJoins[]
-          const isEmpty = group.tasks.length === 0 && earlierTasks.length === 0
+          const earlierTasks = (group.earlierTasks ?? []) as EarlierTask[]
+          const isEmpty = group.tasks.length === 0
           return (
-            <MyTasksGroup
-              key={group.key}
-              groupKey={group.key}
-              label={group.label}
-              count={group.count}
-              statusType="in_progress"
-              statusColor="gray"
-              icon={<SunIcon className="size-4 text-amber-500" />}
-              hint="the Planner's plan for today"
-            >
-              {/* Earlier leftovers first — settle yesterday before today */}
-              <TodayEarlierSection tasks={earlierTasks} onOpenDetail={onOpenDetail} />
-
-              {isEmpty &&
-                (completedCount > 0 ? (
-                  <TodayAllDoneState completedCount={completedCount} />
-                ) : (
-                  <TodayEmptyState />
-                ))}
-
-              <DragDropProvider
-                sensors={DRAG_SENSORS}
-                onDragEnd={(event) => {
-                  if (event.canceled) return
-                  const { source } = event.operation
-                  if (!isSortable(source)) return
-                  const { initialIndex, index } = source
-                  if (initialIndex === index) return
-                  handleReorder(group.key, String(source.id), initialIndex, index)
-                }}
+            <div key={group.key}>
+              <MyTasksGroup
+                groupKey={group.key}
+                label={group.label}
+                count={group.count}
+                statusType="in_progress"
+                statusColor="gray"
+                icon={<SunIcon className="size-4 text-amber-500" />}
+                hint="the Planner's plan for today"
               >
-                {group.tasks.map((task, idx) => (
-                  <MyTasksSortableRow key={task._id} id={task._id} index={idx}>
-                    <MyTaskRow
-                      task={task}
-                      totalMinutes={timeMap?.[task._id]}
-                      activity={activityMap?.[task._id]}
-                      isTodayRow
-                      currentUserId={currentUserId}
-                      onOpenDetail={onOpenDetail}
-                      onComplete={onComplete}
-                      defaultStatusId={defaultStatusId}
-                      isDetailOpen={detailId === task._id}
-                    />
-                  </MyTasksSortableRow>
-                ))}
-              </DragDropProvider>
+                {isEmpty &&
+                  (completedCount > 0 ? (
+                    <TodayAllDoneState completedCount={completedCount} />
+                  ) : (
+                    <TodayEmptyState />
+                  ))}
 
-              {/* Inline-add: create + plan-for-today in one gesture */}
-              <MyTasksInlineAdd currentUserId={currentUserId} today />
-            </MyTasksGroup>
+                <DragDropProvider
+                  sensors={DRAG_SENSORS}
+                  onDragEnd={(event) => {
+                    if (event.canceled) return
+                    const { source } = event.operation
+                    if (!isSortable(source)) return
+                    const { initialIndex, index } = source
+                    if (initialIndex === index) return
+                    handleReorder(group.key, String(source.id), initialIndex, index)
+                  }}
+                >
+                  {group.tasks.map((task, idx) => (
+                    <MyTasksSortableRow key={task._id} id={task._id} index={idx}>
+                      <MyTaskRow
+                        task={task}
+                        totalMinutes={timeMap?.[task._id]}
+                        activity={activityMap?.[task._id]}
+                        isTodayRow
+                        currentUserId={currentUserId}
+                        onOpenDetail={onOpenDetail}
+                        onComplete={onComplete}
+                        defaultStatusId={defaultStatusId}
+                        isDetailOpen={detailId === task._id}
+                      />
+                    </MyTasksSortableRow>
+                  ))}
+                </DragDropProvider>
+
+                {/* Inline-add: create + plan-for-today in one gesture */}
+                <MyTasksInlineAdd currentUserId={currentUserId} today />
+              </MyTasksGroup>
+
+              {/* Earlier leftovers — separate section directly under Today */}
+              <TodayEarlierSection
+                tasks={earlierTasks}
+                todayStr={todayStr}
+                timeMap={timeMap}
+                activityMap={activityMap}
+                detailId={detailId}
+                onOpenDetail={onOpenDetail}
+                onComplete={onComplete}
+                defaultStatusId={defaultStatusId}
+              />
+            </div>
           )
         }
 

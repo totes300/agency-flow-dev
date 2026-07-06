@@ -58,6 +58,8 @@ export type MyDayPartition = {
   todaySortKeys: Map<string, string | undefined>;
   /** Planned-but-unfinished leftovers from the Earlier window, newest-ended first. */
   earlierTaskIds: Id<"tasks">[];
+  /** Per Earlier task, the newest segment endDate that qualified it (for the "Nd ago" chip). */
+  earlierEndDates: Map<string, string>;
 };
 
 // ─── Date string math ───────────────────────────────────────────────────────
@@ -250,5 +252,7 @@ export function partitionMyDay(
     todayTaskIds: today.map((t) => t.taskId),
     todaySortKeys: new Map(today.map((t) => [t.taskId as string, t.manualKey])),
     earlierTaskIds: earlier.map((t) => t.taskId),
+    // sortKey IS the newest qualifying endDate (see the earlier push above)
+    earlierEndDates: new Map(earlier.map((t) => [t.taskId as string, t.sortKey])),
   };
 }

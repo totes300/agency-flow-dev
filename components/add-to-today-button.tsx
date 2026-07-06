@@ -30,15 +30,24 @@ const REMOVAL_TOASTS: Record<"deleted" | "trimmed" | "split", string> = {
 export function AddToTodayButton({
   taskId,
   inToday,
+  moveToToday = false,
   className,
 }: {
   taskId: Id<"tasks">
   inToday: boolean
+  /**
+   * Earlier-row variant: the add path is framed as "move to today" (the old
+   * segment stays as history). Only affects copy — the mutation is the same
+   * idempotent addToToday.
+   */
+  moveToToday?: boolean
   className?: string
 }) {
   const addToToday = useMutation(api.planner.addToToday)
   const removeFromToday = useMutation(api.planner.removeFromToday)
   const [pending, setPending] = useState(false)
+
+  const addLabel = moveToToday ? "Move to today" : "Add to today"
 
   const handleClick = (e: React.MouseEvent) => {
     e.stopPropagation()
@@ -51,13 +60,17 @@ export function AddToTodayButton({
         })
       : addToToday({ taskId }).then((result) => {
           if (result.added) {
-            toast.success("Added to today — visible in your Planner row")
+            toast.success(
+              moveToToday
+                ? "Moved to today — yesterday's plan stays in the record"
+                : "Added to today — visible in your Planner row",
+            )
           }
         })
 
     void action
       .catch((err: unknown) =>
-        toastError(err, inToday ? "Failed to remove from today" : "Failed to add to today"),
+        toastError(err, inToday ? "Failed to remove from today" : `Failed to ${addLabel.toLowerCase()}`),
       )
       .finally(() => setPending(false))
   }
@@ -67,8 +80,8 @@ export function AddToTodayButton({
       type="button"
       onClick={handleClick}
       disabled={pending}
-      aria-label={inToday ? "Remove from today" : "Add to today"}
-      title={inToday ? "Remove from today" : "Add to today"}
+      aria-label={inToday ? "Remove from today" : addLabel}
+      title={inToday ? "Remove from today" : addLabel}
       className={cn(
         "flex size-6 shrink-0 items-center justify-center rounded-md outline-hidden transition-[color,opacity] hover:bg-muted focus-visible:opacity-100",
         inToday

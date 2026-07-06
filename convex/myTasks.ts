@@ -93,12 +93,8 @@ export const listMyTasks = query({
       .map((id) => taskById.get(id))
       .filter((t): t is Doc<"tasks"> => t !== undefined && !t.parentTaskId);
 
-    const { todayTaskIds, todaySortKeys, earlierTaskIds } = partitionMyDay(
-      segmentTasks,
-      mySegments,
-      todayDateStr,
-      timezone,
-    );
+    const { todayTaskIds, todaySortKeys, earlierTaskIds, earlierEndDates } =
+      partitionMyDay(segmentTasks, mySegments, todayDateStr, timezone);
     const todaySet = new Set(todayTaskIds.map((id) => id.toString()));
 
     // Tasks needing enrichment: mine (assigned) + planned-for-today ones
@@ -159,7 +155,10 @@ export const listMyTasks = query({
         todaySortKey: todaySortKeys.get(id.toString()),
       })),
       count: todayTaskIds.length,
-      earlierTasks: earlierTaskIds.map((id) => enrichedById.get(id.toString())!),
+      earlierTasks: earlierTaskIds.map((id) => ({
+        ...enrichedById.get(id.toString())!,
+        plannedEndDate: earlierEndDates.get(id.toString()),
+      })),
     };
 
     // 6. Status groups (Today members suppressed, counted per group) + sort
@@ -224,7 +223,12 @@ export const listMyTasks = query({
       todaySet,
     );
 
-    return { groups, hiddenCount, visibleStatusIds: visibleStatusIds.map(String) };
+    return {
+      groups,
+      hiddenCount,
+      visibleStatusIds: visibleStatusIds.map(String),
+      todayStr: todayDateStr,
+    };
   },
 });
 

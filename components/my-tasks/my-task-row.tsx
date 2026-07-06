@@ -65,6 +65,8 @@ export const MyTaskRow = memo(function MyTaskRow({
   activity,
   isCompletedToday,
   isTodayRow,
+  isEarlierRow,
+  earlierAgeLabel,
   currentUserId,
   onOpenDetail,
   onComplete,
@@ -77,6 +79,10 @@ export const MyTaskRow = memo(function MyTaskRow({
   isCompletedToday?: boolean
   /** Row rendered inside the derived Today group (status badge + mismatch indicator). */
   isTodayRow?: boolean
+  /** Row rendered in the Earlier section (dimmed, status badge, sun = "move to today"). */
+  isEarlierRow?: boolean
+  /** e.g. "2d" — how long ago this leftover was last planned. */
+  earlierAgeLabel?: string
   currentUserId?: Id<"users">
   onOpenDetail?: (taskId: string) => void
   onComplete?: (taskId: string, statusId: Id<"statuses">, coords?: { x: number; y: number }) => void
@@ -84,7 +90,9 @@ export const MyTaskRow = memo(function MyTaskRow({
   isDetailOpen?: boolean
 }) {
   const isCompleted = isCompletedToday ?? false
-  const showStatusBadge = (isTodayRow ?? false) && task.status !== null
+  const earlier = isEarlierRow ?? false
+  // Status badge reads as an independent fact on both Today and Earlier rows.
+  const showStatusBadge = ((isTodayRow ?? false) || earlier) && task.status !== null
   const assignmentMismatch =
     (isTodayRow ?? false) &&
     currentUserId !== undefined &&
@@ -108,6 +116,9 @@ export const MyTaskRow = memo(function MyTaskRow({
         "group/row relative flex w-full flex-col px-3 py-2.5 text-left transition-colors",
         "after:pointer-events-none after:absolute after:bottom-0 after:left-3 after:right-3 after:border-b after:border-border/40 after:content-['']",
         "cursor-pointer",
+        // Earlier leftovers read as demoted: dimmed until hovered, so today's
+        // plan stays visually primary.
+        earlier && "opacity-55 transition-opacity hover:opacity-100",
         isDetailOpen && "bg-muted/40",
       )}
     >
@@ -133,9 +144,21 @@ export const MyTaskRow = memo(function MyTaskRow({
 
         {/* Right columns — fixed widths, always present */}
         <div className="col-start-3 row-start-1 flex shrink-0 items-center gap-2" onClick={(e) => e.stopPropagation()}>
-          {/* Sun gesture: add on status-group rows, remove (filled) on Today rows */}
+          {/* Relative-age hint on Earlier rows (how stale the leftover is) */}
+          {earlier && earlierAgeLabel ? (
+            <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/50">
+              {earlierAgeLabel}
+            </span>
+          ) : null}
+
+          {/* Sun gesture: add on status rows, remove (filled) on Today rows,
+              "move to today" on Earlier rows */}
           {!isCompleted ? (
-            <AddToTodayButton taskId={task._id as Id<"tasks">} inToday={isTodayRow ?? false} />
+            <AddToTodayButton
+              taskId={task._id as Id<"tasks">}
+              inToday={isTodayRow ?? false}
+              moveToToday={earlier}
+            />
           ) : null}
 
           {/* Assignment mismatch — Today rows where the plan wins over assignment */}

@@ -237,13 +237,15 @@ describe("partitionMyDay — todaySortKey ordering", () => {
 // ─── partitionMyDay: Earlier ──────────────────────────────────────────────────
 
 describe("partitionMyDay — Earlier", () => {
-  it("includes a task whose newest segment ended before today", () => {
+  it("includes a task whose newest segment ended before today, with its end date", () => {
     const task = makeTask();
-    const { earlierTaskIds } = partition(
+    const { earlierTaskIds, earlierEndDates } = partition(
       [task],
       [makeSegment(task._id, "2026-07-03", "2026-07-05")],
     );
     expect(earlierTaskIds).toEqual([task._id]);
+    // earlierEndDates carries the newest qualifying endDate (for the "Nd" chip)
+    expect(earlierEndDates.get(task._id as string)).toBe("2026-07-05");
   });
 
   it("windowing: includes at exactly 14 days back, excludes at 15", () => {

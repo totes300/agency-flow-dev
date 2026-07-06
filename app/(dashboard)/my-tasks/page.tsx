@@ -260,6 +260,7 @@ export default function MyTasksPage() {
               activityMap={activityMap ?? undefined}
               detailId={detailId}
               currentUserId={currentUser._id}
+              todayStr={myTasks.todayStr}
               onOpenDetail={handleOpenDetail}
               onComplete={handleComplete}
               defaultStatusId={completionDefaultStatusId}
@@ -298,6 +299,7 @@ export default function MyTasksPage() {
               activityMap={activityMap ?? undefined}
               detailId={detailId}
               currentUserId={currentUser._id}
+              todayStr={myTasks.todayStr}
               onOpenDetail={handleOpenDetail}
               onComplete={handleComplete}
               defaultStatusId={completionDefaultStatusId}

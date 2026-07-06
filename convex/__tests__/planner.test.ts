@@ -431,18 +431,36 @@ describe("updateSegment", () => {
     });
   });
 
-  it("rejects non-admin members", async () => {
+  it("admin-or-self: member updates own segment, not another user's", async () => {
     const t = createT();
     const s = await seed(t);
     const asMember = t.withIdentity(identityFor("clerk_member", "member"));
-    const segId = await firstSegmentId(t, s.taskB);
 
+    // Own segment (taskB lives on the member's row) → allowed
+    const ownSegId = await firstSegmentId(t, s.taskB);
+    await asMember.mutation(api.planner.updateSegment, {
+      id: ownSegId,
+      startDate: "2026-07-08",
+    });
+    const own = await t.run(async (ctx) => await ctx.db.get(ownSegId));
+    expect(own?.startDate).toBe("2026-07-08");
+
+    // Another user's segment (taskA lives on the admin's row) → rejected
+    const adminSegId = await firstSegmentId(t, s.taskA);
     await expect(
       asMember.mutation(api.planner.updateSegment, {
-        id: segId,
-        startDate: "2026-07-14",
+        id: adminSegId,
+        startDate: "2026-07-07",
       }),
-    ).rejects.toThrow(ConvexError);
+    ).rejects.toThrow("You can only manage your own plan");
+
+    // Reassigning own segment to another user → rejected
+    await expect(
+      asMember.mutation(api.planner.updateSegment, {
+        id: ownSegId,
+        userId: s.admin,
+      }),
+    ).rejects.toThrow("You can only manage your own plan");
   });
 
   it("rejects another org's segment and another org's target user", async () => {
@@ -548,19 +566,30 @@ describe("createSegment", () => {
     expect(badges).toContainEqual([2, 2]);
   });
 
-  it("rejects non-admin members", async () => {
+  it("admin-or-self: member creates for themselves, not for another user", async () => {
     const t = createT();
     const s = await seed(t);
     const asMember = t.withIdentity(identityFor("clerk_member", "member"));
 
+    // Own row → allowed
+    const segId = await asMember.mutation(api.planner.createSegment, {
+      taskId: s.taskB,
+      userId: s.member,
+      startDate: "2026-07-15",
+      endDate: "2026-07-16",
+    });
+    const stored = await t.run(async (ctx) => await ctx.db.get(segId));
+    expect(stored?.userId).toBe(s.member);
+
+    // Another user's row → rejected
     await expect(
       asMember.mutation(api.planner.createSegment, {
         taskId: s.taskB,
-        userId: s.member,
+        userId: s.admin,
         startDate: "2026-07-15",
         endDate: "2026-07-16",
       }),
-    ).rejects.toThrow(ConvexError);
+    ).rejects.toThrow("You can only manage your own plan");
   });
 
   it("rejects another org's task and another org's target user", async () => {
@@ -792,20 +821,27 @@ describe("removeSegment", () => {
     expect(task).not.toBeNull();
   });
 
-  it("rejects non-admins and other orgs", async () => {
+  it("admin-or-self: member removes own segment, not another's; other orgs rejected", async () => {
     const t = createT();
     const s = await seed(t);
-    const segId = await firstSegmentId(t, s.taskB);
-
     const asMember = t.withIdentity(identityFor("clerk_member", "member"));
-    await expect(
-      asMember.mutation(api.planner.removeSegment, { id: segId }),
-    ).rejects.toThrow(ConvexError);
 
+    // Another user's segment (admin's row) → rejected
+    const adminSegId = await firstSegmentId(t, s.taskA);
+    await expect(
+      asMember.mutation(api.planner.removeSegment, { id: adminSegId }),
+    ).rejects.toThrow("You can only manage your own plan");
+
+    // Another org can't see the segment at all
+    const ownSegId = await firstSegmentId(t, s.taskB);
     const asOther = t.withIdentity(identityFor("clerk_other", "admin", OTHER_ORG_ID));
     await expect(
-      asOther.mutation(api.planner.removeSegment, { id: segId }),
+      asOther.mutation(api.planner.removeSegment, { id: ownSegId }),
     ).rejects.toThrow(ConvexError);
+
+    // Own segment → allowed
+    await asMember.mutation(api.planner.removeSegment, { id: ownSegId });
+    expect(await t.run(async (ctx) => await ctx.db.get(ownSegId))).toBeNull();
   });
 });
 

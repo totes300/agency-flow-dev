@@ -112,6 +112,21 @@ export async function requireAdmin(
 }
 
 /**
+ * Admin-or-self guard for plan segment mutations: admins manage every row;
+ * members only their own (`targetUserId` must be the caller). Enforced
+ * server-side regardless of what the UI shows — a member may neither touch
+ * another user's segment nor reassign one to another user.
+ */
+export function assertCanManagePlanFor(
+  auth: AuthContext,
+  targetUserId: Id<"users">,
+): void {
+  if (auth.isAdmin) return;
+  if (auth.userId === targetUserId) return;
+  throw new ConvexError("You can only manage your own plan");
+}
+
+/**
  * Auth bridge for Convex actions.
  *
  * Actions cannot call `requireAdmin` directly because it needs DB access

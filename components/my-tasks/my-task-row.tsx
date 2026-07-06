@@ -9,6 +9,7 @@ import { getCategoryColor } from "@/convex/lib/constants"
 import { CommentHoverPopover } from "@/components/tasks/comment-hover-popover"
 import { StatusBadge } from "@/components/status-badge"
 import { UserAvatar } from "@/components/user-avatar"
+import { AddToTodayButton } from "@/components/add-to-today-button"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 import { getClientDisplayName } from "@/lib/format"
@@ -132,6 +133,11 @@ export const MyTaskRow = memo(function MyTaskRow({
 
         {/* Right columns — fixed widths, always present */}
         <div className="col-start-3 row-start-1 flex shrink-0 items-center gap-2" onClick={(e) => e.stopPropagation()}>
+          {/* Sun gesture: add on status-group rows, remove (filled) on Today rows */}
+          {!isCompleted ? (
+            <AddToTodayButton taskId={task._id as Id<"tasks">} inToday={isTodayRow ?? false} />
+          ) : null}
+
           {/* Assignment mismatch — Today rows where the plan wins over assignment */}
           {assignmentMismatch ? (
             <AssignmentMismatchIndicator assignees={task.assignees} />

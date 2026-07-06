@@ -8,10 +8,9 @@ import { move } from "@dnd-kit/helpers"
 import { api } from "@/convex/_generated/api"
 import { SubtaskRow } from "@/components/tasks/subtask-row"
 import { SubtaskInlineCreate } from "@/components/tasks/subtask-inline-create"
-import { ConfirmDialog } from "@/components/confirm-dialog"
+import { DeleteTaskDialog } from "@/components/tasks/delete-task-dialog"
 import { computeSubtaskProgress } from "@/lib/task-detail"
-import { toast } from "sonner"
-import { toastError } from "@/lib/toast-helpers"
+import { toastArchiveSuccess, toastError } from "@/lib/toast-helpers"
 import { SUBTASK_GRID_COLS } from "@/components/tasks/subtask-constants"
 import type { Id } from "@/convex/_generated/dataModel"
 
@@ -39,7 +38,6 @@ export function SubtaskList({
   )
   const reorderSubtasks = useMutation(api.tasks.reorderSubtasks)
   const archiveTask = useMutation(api.tasks.archive)
-  const removeTask = useMutation(api.tasks.remove)
   const [deleteTargetId, setDeleteTargetId] = useState<Id<"tasks"> | null>(null)
 
   const handleDragEnd = useCallback(
@@ -66,20 +64,14 @@ export function SubtaskList({
 
   async function handleArchive(taskId: string) {
     try {
-      await archiveTask({ id: taskId as Id<"tasks"> })
+      const result = await archiveTask({ id: taskId as Id<"tasks"> })
+      // Silent on plain success (inline row action), loud when a running
+      // timer was rescued or couldn't be saved.
+      if (result.autoSavedTimers.length > 0 || result.timerSaveFailures.length > 0) {
+        toastArchiveSuccess(result, "Subtask archived")
+      }
     } catch (err) {
       toastError(err, "Failed to archive subtask")
-    }
-  }
-
-  async function handleDelete() {
-    if (!deleteTargetId) return
-    try {
-      await removeTask({ id: deleteTargetId })
-      setDeleteTargetId(null)
-      toast.success("Subtask deleted")
-    } catch (err) {
-      toastError(err, "Failed to delete subtask")
     }
   }
 
@@ -149,14 +141,11 @@ export function SubtaskList({
         parentAssigneeIds={parentAssigneeIds}
       />
 
-      <ConfirmDialog
+      <DeleteTaskDialog
+        taskId={deleteTargetId}
         open={!!deleteTargetId}
         onOpenChange={(open) => { if (!open) setDeleteTargetId(null) }}
-        title="Delete subtask"
-        description="This will permanently delete this subtask. This cannot be undone."
-        confirmLabel="Delete"
-        variant="destructive"
-        onConfirm={handleDelete}
+        entityLabel="subtask"
       />
     </div>
   )

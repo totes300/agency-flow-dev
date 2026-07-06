@@ -20,21 +20,25 @@ export type TimerState = {
 
 export type StopResult = {
   taskId: Id<"tasks">
+  /** The entry created at stop (create-at-stop model) — null when discarded. */
+  entryId: Id<"timeEntries"> | null
+  /** True when nothing was saved (under 30s / dangling timer). */
+  discarded: boolean
   elapsedMs: number
   roundedMinutes: number
+  date?: string
   taskName: string
   projectName: string | null
   clientName: string | null
   isBillable: boolean
   isStale: boolean
-  rateSnapshot: Record<string, number | undefined>
 }
 
 // Stable context — actions + state that changes rarely
 export type TimerActionsValue = {
   timerState: TimerState
   startTimer: (taskId: Id<"tasks">) => Promise<void>
-  stopTimer: () => Promise<StopResult | null>
+  stopTimer: (args?: { overrideMinutes?: number; note?: string }) => Promise<StopResult | null>
   pauseTimer: () => Promise<void>
   resumeTimer: () => Promise<void>
   discardTimer: () => Promise<void>
@@ -113,8 +117,8 @@ export function TimerProvider({ children }: { children: React.ReactNode }) {
     await startMutation({ taskId })
   }, [startMutation])
 
-  const stopTimer = useCallback(async () => {
-    const result = await stopMutation()
+  const stopTimer = useCallback(async (args?: { overrideMinutes?: number; note?: string }) => {
+    const result = await stopMutation(args ?? {})
     return result as StopResult
   }, [stopMutation])
 

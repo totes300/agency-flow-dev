@@ -3,6 +3,7 @@ import {
   bucketKey,
   bucketLabel,
   mondayOfWeek,
+  monthBounds,
   resolveDateRangePreset,
   todayInTimezone,
 } from "./date-buckets"
@@ -145,5 +146,19 @@ describe("todayInTimezone", () => {
     const now = new Date("2026-04-19T23:30:00Z")
     expect(todayInTimezone("UTC", now)).toBe("2026-04-19")
     expect(todayInTimezone("Asia/Tokyo", now)).toBe("2026-04-20")
+  })
+})
+
+// ─── monthBounds ─────────────────────────────────────────────────────────────
+
+describe("monthBounds", () => {
+  it("returns first and last day of a 31-day month", () => {
+    expect(monthBounds(2026, 9)).toEqual({ start: "2026-09-01", end: "2026-09-30" })
+    expect(monthBounds(2026, 12)).toEqual({ start: "2026-12-01", end: "2026-12-31" })
+  })
+
+  it("handles February in leap and non-leap years", () => {
+    expect(monthBounds(2028, 2)).toEqual({ start: "2028-02-01", end: "2028-02-29" })
+    expect(monthBounds(2026, 2)).toEqual({ start: "2026-02-01", end: "2026-02-28" })
   })
 })

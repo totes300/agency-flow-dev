@@ -84,6 +84,19 @@ export function prevDay(date: string): string {
   return utcYmd(d)
 }
 
+/** First and last day of a calendar month as YYYY-MM-DD strings. */
+export function monthBounds(
+  year: number,
+  monthOneIndexed: number,
+): { start: string; end: string } {
+  const lastDay = new Date(Date.UTC(year, monthOneIndexed, 0)).getUTCDate()
+  const mm = pad2(monthOneIndexed)
+  return {
+    start: `${year}-${mm}-01`,
+    end: `${year}-${mm}-${pad2(lastDay)}`,
+  }
+}
+
 /**
  * Stable, unambiguous bucket key.
  *   day   → "2026-04-06"

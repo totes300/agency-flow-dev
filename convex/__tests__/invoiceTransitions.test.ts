@@ -528,29 +528,43 @@ describe("timeEntries.update / remove — settled-entry guards", () => {
     ).rejects.toThrow(/Cannot edit a settled time entry — reopen the period first/);
   });
 
-  it("update rejects when invoiceId is set, with the void-invoice hint", async () => {
+  it("update rejects when invoiceId is set, with a status-aware hint", async () => {
     const t = convexTest(schema, modules);
     const ids = await seed(t, { billingType: "t_and_m" });
     // Default seed entry has invoiceId set but no settledAt — the
-    // invoice-linked branch of the guard.
+    // invoice-linked branch of the guard. The hint depends on the invoice's
+    // status: a draft can't be voided, so the message must not say "void".
+    const identity = {
+      subject: "user_test",
+      tokenIdentifier: "test|user_test",
+      // Clerk surfaces the org via `org_id` in the JWT; getAuthContext
+      // reads it directly. Without this `requireAdmin` throws
+      // "No organization selected" before the guard ever fires.
+      org_id: ORG_ID,
+      org_role: "admin",
+    } as never;
 
+    // Draft invoice → "remove it from the draft" hint
     await expect(
-      t
-        .withIdentity({
-          subject: "user_test",
-          tokenIdentifier: "test|user_test",
-          // Clerk surfaces the org via `org_id` in the JWT; getAuthContext
-          // reads it directly. Without this `requireAdmin` throws
-          // "No organization selected" before the guard ever fires.
-          org_id: ORG_ID,
-          org_role: "admin",
-        } as never)
-        .mutation(api.timeEntries.update, {
-          id: ids.entryId,
-          durationMinutes: 90,
-        }),
+      t.withIdentity(identity).mutation(api.timeEntries.update, {
+        id: ids.entryId,
+        durationMinutes: 90,
+      }),
     ).rejects.toThrow(
-      /Cannot edit a time entry linked to an invoice — delete or void the invoice first/,
+      /Cannot edit a time entry that's on a draft invoice — remove it from the draft \(or delete the draft\) first/,
+    );
+
+    // Finalized invoice → "void the invoice" hint
+    await t.run(async (ctx) => {
+      await ctx.db.patch(ids.invoiceId, { status: "invoiced", updatedAt: Date.now() });
+    });
+    await expect(
+      t.withIdentity(identity).mutation(api.timeEntries.update, {
+        id: ids.entryId,
+        durationMinutes: 90,
+      }),
+    ).rejects.toThrow(
+      /Cannot edit a time entry linked to an invoice — void the invoice first/,
     );
   });
 

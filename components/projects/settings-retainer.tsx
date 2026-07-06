@@ -68,8 +68,8 @@ export function SettingsRetainer({
   const [startDate, setStartDate] = useState<Date | undefined>(
     project.startDate ? new Date(project.startDate + "T00:00:00") : undefined
   )
-  const [cycleLength, setCycleLength] = useState(String(project.cycleLength ?? 3))
-  const [rolloverEnabled, setRolloverEnabled] = useState(project.rolloverEnabled ?? true)
+  const [cycleLength, setCycleLength] = useState(String(project.cycleLength ?? 1))
+  const [rolloverEnabled, setRolloverEnabled] = useState(project.rolloverEnabled ?? false)
   const [saving, setSaving] = useState(false)
 
   // Confirmation dialogs
@@ -95,8 +95,8 @@ export function SettingsRetainer({
     setMonthlyFee(project.monthlyFee !== undefined ? String(project.monthlyFee) : "")
     setOverageRate(project.overageRate !== undefined ? String(project.overageRate) : "")
     setStartDate(project.startDate ? new Date(project.startDate + "T00:00:00") : undefined)
-    setCycleLength(String(project.cycleLength ?? 3))
-    setRolloverEnabled(project.rolloverEnabled ?? true)
+    setCycleLength(String(project.cycleLength ?? 1))
+    setRolloverEnabled(project.rolloverEnabled ?? false)
   }, [project.includedMinutesPerMonth, project.monthlyFee, project.overageRate, project.startDate, project.cycleLength, project.rolloverEnabled])
 
   // Determine if any config fields differ from the saved project state
@@ -105,14 +105,14 @@ export function SettingsRetainer({
     const newFee = parsedFee
     const newOverageRate = parsedOverageRate
     const newStartDate = startDate ? formatDateToYMD(startDate) : undefined
-    const newCycleLength = parseInt(cycleLength) || 3
+    const newCycleLength = parseInt(cycleLength) || 1
     return (
       newMinutes !== project.includedMinutesPerMonth ||
       newFee !== project.monthlyFee ||
       newOverageRate !== project.overageRate ||
       newStartDate !== project.startDate ||
-      newCycleLength !== (project.cycleLength ?? 3) ||
-      rolloverEnabled !== (project.rolloverEnabled ?? true)
+      newCycleLength !== (project.cycleLength ?? 1) ||
+      rolloverEnabled !== (project.rolloverEnabled ?? false)
     )
   }
 
@@ -129,7 +129,7 @@ export function SettingsRetainer({
     if (!canSave) return
     setSaving(true)
     try {
-      const newCycleLength = parseInt(cycleLength) || 3
+      const newCycleLength = parseInt(cycleLength) || 1
       await updateRetainer({
         id: projectId,
         includedMinutesPerMonth: Math.round(parsedHours * 60),

@@ -187,6 +187,13 @@ async function sumBillableMinutes(
   project: RetainerProjectFields,
   periodStart: string,
   periodEnd: string,
+  /**
+   * Optional per-(task, category) group ceil. Retainer budget math is RAW
+   * everywhere (2026-07-05 decision — meters, gates, promises and the
+   * invoice must agree on one number), so current callers all use the
+   * default. Kept parameterized for future hourly-style consumers. 1 = raw.
+   */
+  roundingMinutes = 1,
 ): Promise<number> {
   const tasks = await ctx.db
     .query("tasks")
@@ -195,7 +202,7 @@ async function sumBillableMinutes(
     )
     .collect();
 
-  let total = 0;
+  const groups = new Map<string, number>();
   for (const task of tasks) {
     const entries = await ctx.db
       .query("timeEntries")
@@ -205,8 +212,17 @@ async function sumBillableMinutes(
       if (e.orgId !== project.orgId) continue;
       if (!e.isBillable) continue;
       if (e.date < periodStart || e.date > periodEnd) continue;
-      total += e.durationMinutes;
+      const key = `${e.snapshotCategoryId ?? "none"}::${task._id}`;
+      groups.set(key, (groups.get(key) ?? 0) + e.durationMinutes);
     }
+  }
+
+  let total = 0;
+  for (const minutes of groups.values()) {
+    total +=
+      roundingMinutes <= 1
+        ? minutes
+        : Math.ceil(minutes / roundingMinutes) * roundingMinutes;
   }
   return total;
 }
@@ -280,12 +296,14 @@ export async function computePeriodOverageContext(
   ctx: AnyCtx,
   project: RetainerProjectFields,
   period: { periodStart: string; periodEnd: string },
+  roundingMinutes = 1,
 ): Promise<OverageContext> {
   const workedMinutes = await sumBillableMinutes(
     ctx,
     project,
     period.periodStart,
     period.periodEnd,
+    roundingMinutes,
   );
   return applyOverageRule({
     mode: project.rolloverEnabled
@@ -310,14 +328,29 @@ export async function computeCycleOverageContext(
   ctx: AnyCtx,
   project: RetainerProjectFields,
   periods: { periodStart: string; periodEnd: string }[],
+  roundingMinutes = 1,
 ): Promise<OverageContext> {
+  // Single pass over the full contiguous range (cycle months are adjacent):
+  // one scan instead of N, and — decisive for rounding — per-(task,
+  // category) groups span the WHOLE cycle, matching how `createInvoice`
+  // groups its line items. Per-month rounding would over-round tasks that
+  // span months.
   let workedMinutes = 0;
-  for (const p of periods) {
-    workedMinutes += await sumBillableMinutes(
+  if (periods.length > 0) {
+    const start = periods.reduce(
+      (min, p) => (p.periodStart < min ? p.periodStart : min),
+      periods[0].periodStart,
+    );
+    const end = periods.reduce(
+      (max, p) => (p.periodEnd > max ? p.periodEnd : max),
+      periods[0].periodEnd,
+    );
+    workedMinutes = await sumBillableMinutes(
       ctx,
       project,
-      p.periodStart,
-      p.periodEnd,
+      start,
+      end,
+      roundingMinutes,
     );
   }
   const budgetMinutes =

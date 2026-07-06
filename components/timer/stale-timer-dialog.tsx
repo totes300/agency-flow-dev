@@ -18,14 +18,16 @@ import {
 } from "@/components/ui/alert-dialog"
 
 const STALE_THRESHOLD_MS = 8 * 60 * 60 * 1000 // 8 hours
+const MAX_TIMER_MS = 16 * 60 * 60 * 1000 // mirror of server cap (convex/lib/timer.ts)
 
 export function StaleTimerDialog() {
-  const { timerState, elapsedMs, stopTimer, commitEntry, discardTimer } = useTimer()
+  const { timerState, elapsedMs, stopTimer, discardTimer } = useTimer()
   const [dismissed, setDismissed] = useState(false)
   const [durationStr, setDurationStr] = useState("")
   const [note, setNote] = useState("")
   const [saving, setSaving] = useState(false)
   const lastTaskIdRef = useRef<string | null>(null)
+  const wasOpenRef = useRef(false)
 
   // Reset dismissed flag when timer changes to a different task
   if (timerState?.taskId !== lastTaskIdRef.current) {
@@ -36,6 +38,18 @@ export function StaleTimerDialog() {
   // Derive open state during render — no effect needed
   const isStale = !!(timerState && elapsedMs >= STALE_THRESHOLD_MS)
   const open = isStale && !dismissed
+
+  // Prefill the duration with the measured elapsed on open — an editable
+  // anchor beats an empty field the user has to guess into (Harvest does
+  // the same). Render-time sync, same idiom as the task-change reset above.
+  if (open && !wasOpenRef.current) {
+    wasOpenRef.current = true
+    // Prefill the CAPPED measurement — the plain stop path would refuse to
+    // record more than 16h, so the dialog's default must not exceed it either.
+    setDurationStr(formatDuration(Math.floor(Math.min(elapsedMs, MAX_TIMER_MS) / 60000)))
+  } else if (!open && wasOpenRef.current) {
+    wasOpenRef.current = false
+  }
 
   if (!open || !timerState) return null
 
@@ -50,18 +64,13 @@ export function StaleTimerDialog() {
       return
     }
     // Capture before async calls to avoid stale closure
-    const taskId = timerState!.taskId
     const taskName = timerState!.taskName
-    const isBillable = timerState!.isBillable
     setSaving(true)
     try {
-      await stopTimer()
-      await commitEntry({
-        taskId,
-        durationMinutes: minutes,
-        note: note.trim() || undefined,
-        isBillable,
-      })
+      // Single atomic stop-with-override: the server stops the timer AND
+      // writes the entry with the user-supplied duration in one mutation —
+      // no window where the measured time exists only in this dialog.
+      await stopTimer({ overrideMinutes: minutes, note: note.trim() || undefined })
       toast.success(`${formatDuration(minutes)} logged on "${taskName}"`)
       setDismissed(true)
     } catch (err) {

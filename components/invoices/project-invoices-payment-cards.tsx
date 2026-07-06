@@ -10,6 +10,8 @@ export type ProjectInvoicesMetrics = {
   paidLifetime: Bucket
   fixedPrice: number
   fixedBilled: number
+  /** Billed beyond the fee (manual lines on finalized invoices). */
+  fixedExtraBilled: number
   fixedRemaining: number
   fixedPercentInvoiced: number
 }
@@ -68,6 +70,7 @@ export function ProjectInvoicesPaymentCards({
         key="budget"
         billed={metrics.fixedBilled}
         budget={metrics.fixedPrice}
+        extraBilled={metrics.fixedExtraBilled}
         currency={currency}
       />,
     )

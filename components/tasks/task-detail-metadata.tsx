@@ -27,6 +27,7 @@ import {
 import { useMutation, useQuery } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { InlineTimeCell } from "@/components/tasks/inline-time-cell"
+import { TaskPlanSection } from "@/components/planner/task-plan-section"
 import { formatDuration, parseDuration } from "@/lib/duration"
 import { isOverdue } from "@/lib/format"
 import { toastError } from "@/lib/toast-helpers"
@@ -198,6 +199,11 @@ export function TaskDetailMetadata({
               </div>
             </MetadataRow>
           </div>
+
+          {/* Plan section — the task's Planner sittings (Phase 10) */}
+          <div className="col-span-2 mt-2 border-t border-border/50 pt-2">
+            <TaskPlanSection taskId={task._id} isAdmin={isAdmin} variant="inline" />
+          </div>
         </div>
       ) : (
         <div className="flex flex-col">
@@ -243,7 +249,12 @@ export function TaskDetailMetadata({
             </MetadataRow>
           </div>
 
-          {/* Group 4: Created by, Created on */}
+          {/* Group 4: Plan — the task's Planner sittings (Phase 10) */}
+          <div className="mb-4 border-b border-border/40 pb-4">
+            <TaskPlanSection taskId={task._id} isAdmin={isAdmin} variant="stacked" />
+          </div>
+
+          {/* Group 5: Created by, Created on */}
           <div>
             {task.createdByUser && (
               <MetadataRow icon={UserIcon} label="Created by" variant="stacked">

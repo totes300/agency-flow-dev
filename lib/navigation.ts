@@ -8,6 +8,7 @@ import {
   ClockIcon,
   ReceiptIcon,
   CalendarDaysIcon,
+  CalendarRangeIcon,
   type LucideIcon,
 } from "lucide-react"
 
@@ -54,6 +55,7 @@ export const navigation: NavGroup[] = [
     label: "Insights",
     items: [
       { title: "Workday", url: "/workday", icon: CalendarDaysIcon },
+      { title: "Planner", url: "/planner", icon: CalendarRangeIcon },
     ],
   },
   {

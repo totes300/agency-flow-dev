@@ -37,10 +37,11 @@ export const COMMON_TIMEZONES = [
 ] as const
 
 export const ROUNDING_LABELS: Record<number, string> = {
-  1: "1 minute (exact)",
+  1: "Exact — to the minute",
   5: "5 minutes",
-  6: "6 minutes (1/10 hour)",
+  6: "6 minutes (1/10 hour)", // legacy value, no longer offered
   15: "15 minutes (1/4 hour)",
+  30: "30 minutes (1/2 hour)",
 }
 
 export const TYPE_LABELS: Record<StatusType, string> = {

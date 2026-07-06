@@ -4,6 +4,7 @@ import { UserAvatar } from "@/components/user-avatar"
 import { NotificationRowActions } from "@/components/inbox/notification-row-actions"
 import { formatRelativeTime } from "@/lib/format"
 import { formatActorNames, groupVerb, type InboxGroup, type InboxRowBase } from "@/lib/inbox"
+import { cn } from "@/lib/utils"
 import type { Id } from "@/convex/_generated/dataModel"
 
 const MAX_STACKED_AVATARS = 3
@@ -15,10 +16,13 @@ const MAX_STACKED_AVATARS = 3
 export function NotificationRow<R extends InboxRowBase>({
   group,
   view,
+  isActive = false,
   onOpen,
 }: {
   group: InboxGroup<R>
   view: "inbox" | "archived"
+  /** The group's task is currently open in the detail drawer/modal. */
+  isActive?: boolean
   onOpen: (group: InboxGroup<R>) => void
 }) {
   const shownActors = group.actors.slice(0, MAX_STACKED_AVATARS)
@@ -29,7 +33,10 @@ export function NotificationRow<R extends InboxRowBase>({
       <button
         type="button"
         onClick={() => onOpen(group)}
-        className="flex w-full items-start gap-3 rounded-md p-2 text-left hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className={cn(
+          "flex w-full items-start gap-3 rounded-md p-2 text-left hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          isActive && "bg-accent",
+        )}
       >
         <div className="flex shrink-0 -space-x-2 pt-0.5">
           {shownActors.map((actor) => (

@@ -93,6 +93,12 @@ export async function settleInvoiceEntries(
   const entries = await getEntriesForInvoice(ctx, invoiceId, orgId);
   const now = Date.now();
   for (const e of entries) {
+    // Period-close settlement is MORE precise than invoice settlement and
+    // must survive finalization: a `retainer_included` entry riding a cycle
+    // overage invoice was covered by the monthly fee, not billed hourly —
+    // re-stamping it "invoiced" would misclassify fee-covered hours as
+    // rate-driven revenue in every report (2026-07-05 review F1/F7).
+    if (e.settledReason === "retainer_included") continue;
     await ctx.db.patch(e._id, {
       settledAt: now,
       settledReason: reason,
@@ -128,15 +134,58 @@ export async function unsettleInvoiceEntries(
 ): Promise<number> {
   const entries = await getEntriesForInvoice(ctx, invoiceId, orgId);
   const now = Date.now();
+  if (entries.length === 0) return 0;
+
+  // Period-truth invariant (2026-07-05, deadlock fix follow-up): since
+  // retainer invoices now carry `retainer_included` entries from
+  // admin-closed months, releasing an invoice (delete draft / void /
+  // revert) must NOT strip those months' period settlement — the period
+  // row still has `closedAt`, and "closed period ⇒ its entries are
+  // settled by the period" must survive the invoice's lifecycle. Entries
+  // covered by a still-closed period are RE-STAMPED `retainer_included`
+  // instead of cleared; everything else clears as before.
+  const invoice = await ctx.db.get(invoiceId);
+  let closedPeriods: Array<{ periodStart: string; periodEnd: string }> = [];
+  if (invoice) {
+    const project = await ctx.db.get(invoice.projectId);
+    if (
+      project &&
+      project.orgId === orgId &&
+      project.billingType === "retainer"
+    ) {
+      const periodRows = await ctx.db
+        .query("retainerPeriods")
+        .withIndex("by_projectId", (q) => q.eq("projectId", invoice.projectId))
+        .collect();
+      closedPeriods = periodRows.filter(
+        (p) => p.orgId === orgId && p.closedAt !== undefined,
+      );
+    }
+  }
+
   for (const e of entries) {
-    await ctx.db.patch(e._id, {
-      settledAt: undefined,
-      settledReason: undefined,
-      settledPeriodStart: undefined,
-      settledPeriodEnd: undefined,
-      ...(options.clearInvoiceId ? { invoiceId: undefined } : {}),
-      updatedAt: now,
-    });
+    const covering = closedPeriods.find(
+      (p) => p.periodStart <= e.date && e.date <= p.periodEnd,
+    );
+    if (covering) {
+      await ctx.db.patch(e._id, {
+        settledAt: now,
+        settledReason: "retainer_included" as const,
+        settledPeriodStart: covering.periodStart,
+        settledPeriodEnd: covering.periodEnd,
+        ...(options.clearInvoiceId ? { invoiceId: undefined } : {}),
+        updatedAt: now,
+      });
+    } else {
+      await ctx.db.patch(e._id, {
+        settledAt: undefined,
+        settledReason: undefined,
+        settledPeriodStart: undefined,
+        settledPeriodEnd: undefined,
+        ...(options.clearInvoiceId ? { invoiceId: undefined } : {}),
+        updatedAt: now,
+      });
+    }
   }
   return entries.length;
 }

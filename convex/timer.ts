@@ -3,14 +3,14 @@ import { query, mutation } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { getAuthContext } from "./lib/auth";
-import { computeElapsedMs, totalElapsedMs, msToMinutes, getDateInTimezone, ORG_TIMEZONE_FALLBACK } from "./lib/timer";
+import { computeElapsedMs, totalElapsedMs, msToMinutes, getDateInTimezone, MAX_TIMER_MS, ORG_TIMEZONE_FALLBACK } from "./lib/timer";
 import { roundMinutes } from "./lib/rounding";
 import { getOrgSettings, resolveRateSnapshot } from "./lib/orgHelpers";
 import { assertValidDateString } from "./lib/dateValidation";
-import { assertEntryDateOpen } from "./lib/settleGuards";
+import { insertTimerEntry } from "./lib/timerEntry";
 
-const MAX_TIMER_MS = 16 * 60 * 60 * 1000; // 16 hours
 const STALE_THRESHOLD_MS = 8 * 60 * 60 * 1000; // 8 hours
+const MAX_OVERRIDE_MINUTES = 24 * 60; // sanity ceiling for stale-dialog input
 
 // ─── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -138,13 +138,40 @@ export const previewRateForTask = query({
   },
 });
 
+/**
+ * Stop the timer AND persist the entry in one transaction (create-at-stop,
+ * Toggl model). The measured time exists in the database the moment this
+ * mutation returns — a tab close, crash or forgotten form can never lose
+ * it. The commit form that follows EDITS the created entry (or deletes it).
+ *
+ * - Duration is the SERVER's measurement, not a client-supplied number.
+ *   `overrideMinutes` exists for the stale-timer dialog, where the whole
+ *   point is that the measurement is wrong and the user supplies the truth.
+ * - If entry creation fails (e.g. a rate was deleted mid-session), the
+ *   whole mutation rolls back and the timer KEEPS RUNNING — fix the config,
+ *   stop again. Nothing is lost either way.
+ * - Under 30 seconds (and no override): nothing worth saving — the timer is
+ *   cleared and `discarded: true` is returned so the client can say so.
+ */
 export const stop = mutation({
-  args: {},
-  handler: async (ctx) => {
+  args: {
+    overrideMinutes: v.optional(v.number()),
+    note: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
     const { userId, orgId, user } = await getAuthContext(ctx);
 
     if (!user.timerTaskId || !user.timerStatus) {
       throw new ConvexError("No active timer");
+    }
+    if (args.overrideMinutes !== undefined && args.overrideMinutes <= 0) {
+      throw new ConvexError("Duration must be greater than 0");
+    }
+    if (
+      args.overrideMinutes !== undefined &&
+      args.overrideMinutes > MAX_OVERRIDE_MINUTES
+    ) {
+      throw new ConvexError("Duration cannot exceed 24 hours for one session.");
     }
 
     const now = Date.now();
@@ -156,52 +183,78 @@ export const stop = mutation({
         ? totalElapsedMs(startedAt, now, accumulated)
         : accumulated;
     const elapsedMs = Math.min(rawElapsedMs, MAX_TIMER_MS);
-
     const isStale = elapsedMs >= STALE_THRESHOLD_MS;
 
-    // Get org settings for rounding
-    const orgSettings = await getOrgSettings(ctx, orgId);
-    const roundingMinutes = orgSettings?.roundingMinutes ?? 1;
-
-    const rawMinutes = msToMinutes(elapsedMs);
-    const roundedMinutes = roundMinutes(rawMinutes, roundingMinutes);
-
-    // Get task + project + client for response
+    // Task/project must exist to persist an entry. They should (task delete
+    // and archive clear timers), but if a data race left a dangling timer,
+    // clear it and report instead of throwing forever.
     const task = await ctx.db.get(user.timerTaskId);
     const project = task?.projectId ? await ctx.db.get(task.projectId) : null;
-    const client = project ? await ctx.db.get(project.clientId) : null;
+    if (!task || task.orgId !== orgId || !project) {
+      await clearTimerFields(ctx, userId);
+      return {
+        taskId: user.timerTaskId,
+        entryId: null,
+        discarded: true as const,
+        elapsedMs,
+        roundedMinutes: 0,
+        taskName: task?.title ?? "Unknown",
+        projectName: null,
+        clientName: null,
+        isBillable: false,
+        isStale,
+      };
+    }
+    const client = await ctx.db.get(project.clientId);
 
-    // Compute rate snapshot preview — non-blocking
-    let rateSnapshot: { costRate?: number; billableRate?: number; rateCurrency?: string } = {};
-    const isBillable = task?.billable ?? false;
-    if (task && project) {
-      try {
-        const snapshot = await resolveRateSnapshot(ctx, {
-          userId,
-          orgId,
-          task,
-          project,
-          isBillable,
-        });
-        rateSnapshot = snapshot;
-      } catch {
-        // Rate preview failure is non-blocking
-      }
+    // Under 30s with no explicit override: not worth an entry.
+    if (args.overrideMinutes === undefined && elapsedMs < 30_000) {
+      await clearTimerFields(ctx, userId);
+      return {
+        taskId: task._id,
+        entryId: null,
+        discarded: true as const,
+        elapsedMs,
+        roundedMinutes: 0,
+        taskName: task.title,
+        projectName: project.name,
+        clientName: client?.name ?? null,
+        isBillable: task.billable,
+        isStale,
+      };
     }
 
-    // Clear timer
+    const orgSettings = await getOrgSettings(ctx, orgId);
+    const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
+
+    const { entryId, durationMinutes, date } = await insertTimerEntry(ctx, {
+      orgId,
+      ownerId: userId,
+      createdBy: userId,
+      task,
+      project,
+      rawMinutes: args.overrideMinutes ?? msToMinutes(elapsedMs),
+      sessionStartedAt:
+        user.timerStatus === "running" ? user.timerStartedAt : undefined,
+      note: args.note,
+      isBillable: task.billable,
+      timezone,
+    });
+
     await clearTimerFields(ctx, userId);
 
     return {
-      taskId: user.timerTaskId,
+      taskId: task._id,
+      entryId,
+      discarded: false as const,
       elapsedMs,
-      roundedMinutes,
-      taskName: task?.title ?? "Unknown",
-      projectName: project?.name ?? null,
+      roundedMinutes: durationMinutes,
+      date,
+      taskName: task.title,
+      projectName: project.name,
       clientName: client?.name ?? null,
-      isBillable,
+      isBillable: task.billable,
       isStale,
-      rateSnapshot,
     };
   },
 });
@@ -258,13 +311,24 @@ export const discard = mutation({
   },
 });
 
+/**
+ * Escape-hatch entry creation for timer flows that bypass `stop`'s
+ * server-measured duration (the under-30s "Save as 1m" toast action).
+ * Normal stops persist via `stop` itself — see create-at-stop above.
+ *
+ * Hardened (2026-07-05 review): archived-task guard (manual create has it;
+ * this path was a bypass) and the date is anchored so a long duration can
+ * never silently file the entry under yesterday — `insertTimerEntry` clamps
+ * to today whenever the synthetic start day would be settled, and here the
+ * caller has no date control, so we always anchor within today.
+ */
 export const commitEntry = mutation({
   args: {
     taskId: v.id("tasks"),
     durationMinutes: v.number(),
     note: v.optional(v.string()),
     isBillable: v.boolean(),
-    date: v.optional(v.string()), // YYYY-MM-DD, defaults to today in org timezone
+    date: v.optional(v.string()), // YYYY-MM-DD, must be today in org timezone
   },
   handler: async (ctx, args) => {
     const { userId, orgId } = await getAuthContext(ctx);
@@ -277,62 +341,44 @@ export const commitEntry = mutation({
 
     const task = await ctx.db.get(args.taskId);
     if (!task || task.orgId !== orgId) throw new ConvexError("Task not found");
+    if (task.archivedAt) {
+      throw new ConvexError(
+        "This task was archived — restore it to save time on it.",
+      );
+    }
     if (!task.projectId) throw new ConvexError("Task must have a project");
 
     const project = await ctx.db.get(task.projectId);
-    if (!project) throw new ConvexError("Project not found");
+    if (!project || project.orgId !== orgId) throw new ConvexError("Project not found");
 
-    // Get org settings
     const orgSettings = await getOrgSettings(ctx, orgId);
     const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
-    const roundingMinutes = orgSettings?.roundingMinutes ?? 1;
 
-    // Round duration
-    const rounded = roundMinutes(args.durationMinutes, roundingMinutes);
-
-    // Rate snapshot (new model)
-    const rateSnapshot = await resolveRateSnapshot(ctx, {
-      userId,
-      orgId,
-      task,
-      project,
-      isBillable: args.isBillable,
-    });
-
-    // Synthetic startedAt — the timer flow doesn't thread the real session
-    // start through stop→commit (acceptable per v1 PRD). Sessions that cross
-    // midnight file under their start day, matching Toggl/Harvest.
     const now = Date.now();
-    const startedAt = now - rounded * 60_000;
-    const date = getDateInTimezone(startedAt, timezone);
-    if (args.date !== undefined && args.date !== date) {
+    const today = getDateInTimezone(now, timezone);
+    if (args.date !== undefined && args.date !== today) {
       throw new ConvexError(
-        `date (${args.date}) does not match startedAt's day (${date}).`,
+        `Timer entries are saved for today (${today}). Use manual time logging for other dates.`,
       );
     }
 
-    // Phase 8 — closed-retainer-period guard (Slice 3 / Revision Pass #3a).
-    // Timer commits land here, NOT through `timeEntries.create`, so the
-    // guard has to fire on this path too. No-op for non-retainer projects.
-    await assertEntryDateOpen(ctx, project, date);
+    // Anchor within today: a duration longer than the time since org-tz
+    // midnight must not push the entry into yesterday.
+    const synthetic = now - roundMinutes(args.durationMinutes, 1) * 60_000;
+    const sessionStartedAt =
+      getDateInTimezone(synthetic, timezone) === today ? synthetic : now;
 
-    const entryId = await ctx.db.insert("timeEntries", {
+    const { entryId } = await insertTimerEntry(ctx, {
       orgId,
-      taskId: args.taskId,
-      userId,
-      date,
-      startedAt,
-      durationMinutes: rounded,
-      note: args.note?.trim() || undefined,
-      isBillable: args.isBillable,
-      method: "timer",
-      costRate: rateSnapshot.costRate,
-      billableRate: rateSnapshot.billableRate,
-      rateCurrency: rateSnapshot.rateCurrency,
-      snapshotCategoryId: task.workCategoryId,
-      createdAt: now,
-      updatedAt: now,
+      ownerId: userId,
       createdBy: userId,
+      task,
+      project,
+      rawMinutes: args.durationMinutes,
+      sessionStartedAt,
+      note: args.note,
+      isBillable: args.isBillable,
+      timezone,
     });
 
     return entryId;

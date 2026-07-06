@@ -21,6 +21,7 @@ import { ClosePeriodModal } from "@/components/projects/close-period-modal"
 import { CloseCycleModal } from "@/components/projects/close-cycle-modal"
 import { type ListRow, type ReadyRow } from "@/lib/invoices/list-rows"
 import { buildCycleMonths, invoiceUrlSegment } from "@/lib/format"
+import { monthBounds } from "@/lib/date-buckets"
 
 export type InvoiceRow = {
   _id: string
@@ -122,12 +123,19 @@ export function InvoiceList({
 
   function handleGenerate(row: ReadyRow) {
     if (pending) return
+    // T&M month rows MUST send their month's boundaries: the row promises
+    // one month's amount, and a bound-less createInvoice would sweep every
+    // open entry (other closed months + the in-progress month) onto a draft
+    // labeled with this month. Retainer rows send year/month so the server
+    // takes the retainer code path; fixed rows sweep everything by design.
+    const tmBounds =
+      row.kind === "tm" && row.period
+        ? monthBounds(row.period.year, row.period.month)
+        : null
     void generate({
       projectId: row.projectId,
-      // Retainer rows carry the period; T&M rows carry the month for context
-      // but the server resolves the date range from uninvoiced entries when
-      // we omit it. Send retainer year/month only for retainer rows so the
-      // server takes the retainer code path.
+      startDate: tmBounds?.start,
+      endDate: tmBounds?.end,
       retainerYear:
         row.kind === "retainer-monthly" || row.kind === "retainer-cycle"
           ? row.period?.year

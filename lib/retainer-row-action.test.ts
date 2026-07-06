@@ -221,16 +221,18 @@ describe("decideRetainerRowCloseAction — monthly (non-rollover)", () => {
     ).toBeNull();
   });
 
-  it("returns close-month on an ended over-budget row when overageRate=0 (no billing path)", () => {
-    // overageRate=0 means there's nothing to bill; close-month becomes
-    // the right action so the admin can lock the report without first
-    // creating a $0 invoice.
+  it("returns null on an ended over-budget row when overageRate=0 (server always rejects close)", () => {
+    // The server's overage gate (`isOverageDueForScope`) blocks closing ANY
+    // over-budget month regardless of whether an overage rate is set —
+    // offering Close here was a dead-end loop (Close errored, Generate
+    // unavailable). The config-issue inbox row routes the admin to set the
+    // rate instead.
     expect(
       decideRetainerRowCloseAction(
         month({ endBalance: -60 }),
         { ...monthlyCloseCtx, overageRate: 0 },
       ),
-    ).toBe("close-month");
+    ).toBe(null);
   });
 });
 

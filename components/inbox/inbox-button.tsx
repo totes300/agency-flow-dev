@@ -11,17 +11,13 @@ import {
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
 import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover"
-import {
   Sheet,
   SheetContent,
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet"
 import { InboxPanel } from "@/components/inbox/inbox-panel"
+import { useInboxSidebar } from "@/components/inbox/inbox-sidebar-context"
 import { useIsMobile } from "@/lib/hooks/use-is-mobile"
 
 function InboxBadge() {
@@ -38,48 +34,47 @@ function InboxBadge() {
   )
 }
 
+/**
+ * Sidebar entry point. Desktop: toggles the persistent inbox panel (the nav
+ * collapses to its icon rail while the panel is open). Mobile: opens the
+ * inbox in a left Sheet.
+ */
 export function InboxButton() {
-  const [open, setOpen] = useState(false)
+  const [sheetOpen, setSheetOpen] = useState(false)
   const isMobile = useIsMobile()
-
-  const trigger = (
-    <SidebarMenuButton tooltip="Inbox">
-      <InboxIcon />
-      <span>Inbox</span>
-    </SidebarMenuButton>
-  )
+  const { inboxOpen, toggleInbox } = useInboxSidebar()
 
   return (
     <SidebarMenu>
       <SidebarMenuItem>
         {isMobile ? (
-          <Sheet open={open} onOpenChange={setOpen}>
-            <SheetTrigger asChild>{trigger}</SheetTrigger>
+          <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
+            <SheetTrigger asChild>
+              <SidebarMenuButton tooltip="Inbox">
+                <InboxIcon />
+                <span>Inbox</span>
+              </SidebarMenuButton>
+            </SheetTrigger>
             <SheetContent
               side="left"
               className="flex w-[min(100vw-3rem,400px)] flex-col gap-0 overflow-hidden p-0"
               onOpenAutoFocus={(e) => e.preventDefault()}
             >
               <SheetTitle className="sr-only">Inbox</SheetTitle>
-              <InboxPanel onClose={() => setOpen(false)} />
+              <InboxPanel variant="sheet" onClose={() => setSheetOpen(false)} />
             </SheetContent>
           </Sheet>
         ) : (
-          <Popover open={open} onOpenChange={setOpen}>
-            <PopoverTrigger asChild>{trigger}</PopoverTrigger>
-            <PopoverContent
-              side="right"
-              align="start"
-              sideOffset={12}
-              collisionPadding={16}
-              className="flex h-[min(calc(100vh-2rem),44rem)] w-[400px] flex-col overflow-hidden p-0"
-              // Don't auto-focus the first header button on open — the
-              // focused Tooltip would pop instantly under the header.
-              onOpenAutoFocus={(e) => e.preventDefault()}
-            >
-              <InboxPanel onClose={() => setOpen(false)} />
-            </PopoverContent>
-          </Popover>
+          <SidebarMenuButton
+            tooltip="Inbox"
+            isActive={inboxOpen}
+            aria-expanded={inboxOpen}
+            aria-controls="inbox-sidebar-panel"
+            onClick={toggleInbox}
+          >
+            <InboxIcon />
+            <span>Inbox</span>
+          </SidebarMenuButton>
         )}
         <InboxBadge />
       </SidebarMenuItem>

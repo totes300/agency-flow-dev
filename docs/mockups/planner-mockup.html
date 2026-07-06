@@ -1,0 +1,1230 @@
+<title>Planner — Agency Flow proposal</title>
+<style>
+  *,*::before,*::after{box-sizing:border-box}
+  :root{
+    --pagebg:#f7f7f5;
+    --card:#ffffff;
+    --fg:#26251f;
+    --muted-fg:#807e74;
+    --border:#e8e8e6;
+    --border-faint:#f0f0ee;
+    --muted:#f6f6f4;
+    --primary:#3b7ce0;
+    --warn:#d97706;
+    --danger:#dc2626;
+    --radius:10px;
+    --rail:200px;
+    --sans:Inter,-apple-system,"Segoe UI",system-ui,sans-serif;
+    --mono:ui-monospace,"Geist Mono","SF Mono",Menlo,monospace;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --pagebg:#141416; --card:#1c1d20; --fg:#ececea; --muted-fg:#9d9c94;
+      --border:#2c2d31; --border-faint:#232428; --muted:#212226; --primary:#5b95ec;
+      --warn:#f0a24a; --danger:#f87171;
+    }
+  }
+  :root[data-theme="dark"]{
+    --pagebg:#141416; --card:#1c1d20; --fg:#ececea; --muted-fg:#9d9c94;
+    --border:#2c2d31; --border-faint:#232428; --muted:#212226; --primary:#5b95ec;
+    --warn:#f0a24a; --danger:#f87171;
+  }
+  :root[data-theme="light"]{
+    --pagebg:#f7f7f5; --card:#ffffff; --fg:#26251f; --muted-fg:#807e74;
+    --border:#e8e8e6; --border-faint:#f0f0ee; --muted:#f6f6f4; --primary:#3b7ce0;
+    --warn:#d97706; --danger:#dc2626;
+  }
+  html{background:var(--pagebg)}
+  body{font-family:var(--sans);color:var(--fg);line-height:1.55;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1300px;margin:0 auto;padding:56px 32px 96px}
+  @media(max-width:720px){.wrap{padding:32px 16px 64px}}
+
+  /* ---------- intro ---------- */
+  .eyebrow{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted-fg);font-weight:600}
+  h1{font-size:30px;font-weight:650;letter-spacing:-.02em;margin:8px 0 10px;text-wrap:balance}
+  .intro p{max-width:64ch;color:var(--fg);margin:0 0 6px}
+  .intro .sub{color:var(--muted-fg);font-size:14px}
+  .hints{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0 26px}
+  .hint{font-size:12px;color:var(--muted-fg);background:var(--card);border:1px solid var(--border);border-radius:999px;padding:4px 11px}
+  .hint b{color:var(--fg);font-weight:600}
+
+  /* ---------- app frame ---------- */
+  .frame{background:var(--card);border:1px solid var(--border);border-radius:16px;overflow:hidden;box-shadow:0 1px 2px rgb(0 0 0 / .04),0 8px 28px -12px rgb(0 0 0 / .08)}
+  .tb{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--border);flex-wrap:wrap}
+  .tb .title{font-weight:650;font-size:15px;margin-right:6px}
+  .navgrp{display:flex;align-items:center;border:1px solid var(--border);border-radius:8px;overflow:hidden}
+  .navgrp button{all:unset;cursor:pointer;padding:5px 10px;font-size:13px;color:var(--fg)}
+  .navgrp button:hover{background:var(--muted)}
+  .navgrp button:focus-visible{outline:2px solid var(--primary);outline-offset:-2px}
+  .navgrp .tdy{border-left:1px solid var(--border);border-right:1px solid var(--border);font-weight:600;font-size:12.5px}
+  .range{font-size:13px;font-weight:600;font-variant-numeric:tabular-nums;color:var(--fg);min-width:150px}
+  .zoom{display:flex;border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-left:4px}
+  .zoom button{all:unset;cursor:pointer;padding:5px 12px;font-size:12.5px;color:var(--muted-fg)}
+  .zoom button.on{background:var(--muted);color:var(--fg);font-weight:600}
+  .zoom button:focus-visible{outline:2px solid var(--primary);outline-offset:-2px}
+  .spacer{flex:1}
+  .avatars{display:flex;align-items:center}
+  .avatars .av{margin-left:-6px;border:2px solid var(--card)}
+  .av{width:26px;height:26px;border-radius:50%;background:var(--muted);color:var(--muted-fg);display:flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:650;flex:none}
+  .sidebtn{all:unset;cursor:pointer;display:flex;align-items:center;gap:7px;border:1px solid var(--border);border-radius:8px;padding:5px 11px;font-size:12.5px;font-weight:600;color:var(--fg)}
+  .sidebtn:hover{background:var(--muted)}
+  .sidebtn:focus-visible{outline:2px solid var(--primary);outline-offset:-2px}
+  .sidebtn .cnt{background:var(--primary);color:#fff;font-size:10.5px;font-weight:650;border-radius:999px;padding:1px 7px;font-variant-numeric:tabular-nums}
+  .newtask{all:unset;cursor:pointer;background:var(--primary);color:#fff;font-size:13px;font-weight:600;padding:6px 14px;border-radius:8px}
+  .newtask:focus-visible{outline:2px solid var(--fg);outline-offset:2px}
+
+  /* ---------- filter chips (task panel only) ---------- */
+  .fbar{display:flex;align-items:center;gap:6px;padding:0 14px 10px;flex-wrap:wrap}
+  .fchip{position:relative}
+  .fchip>button{all:unset;cursor:pointer;display:flex;align-items:center;gap:5px;border:1px dashed var(--border);border-radius:999px;padding:3px 10px;font-size:11.5px;color:var(--muted-fg)}
+  .fchip>button:hover{background:var(--muted)}
+  .fchip>button:focus-visible{outline:2px solid var(--primary)}
+  .fchip>button::after{content:"▾";font-size:9px;opacity:.7}
+  .fchip.active>button{border-style:solid;border-color:color-mix(in srgb,var(--primary) 45%,var(--border));color:var(--fg);font-weight:600;background:color-mix(in srgb,var(--primary) 6%,transparent)}
+  .fmenu{position:absolute;top:calc(100% + 6px);right:0;z-index:70;background:var(--card);border:1px solid var(--border);border-radius:10px;box-shadow:0 10px 30px -10px rgb(0 0 0 / .25);min-width:165px;padding:6px;display:none;max-height:260px;overflow-y:auto}
+  .fchip.open .fmenu{display:block}
+  .fmenu label{display:flex;align-items:center;gap:8px;padding:6px 9px;border-radius:6px;font-size:12.5px;cursor:pointer;white-space:nowrap}
+  .fmenu label:hover{background:var(--muted)}
+  .fmenu input{accent-color:var(--primary);margin:0}
+  .fmenu .fdot{width:8px;height:8px;border-radius:50%;flex:none}
+  .fclear{all:unset;cursor:pointer;font-size:12px;color:var(--muted-fg);padding:4px 8px;border-radius:6px;display:none}
+  .fclear:hover{background:var(--muted);color:var(--fg)}
+  .fbar.filtered .fclear{display:inline}
+
+  .fbody{display:flex;align-items:stretch;min-height:0}
+  .main{flex:1;min-width:0}
+  .frame.noside .side{display:none}
+
+  /* ---------- grid ---------- */
+  .scroll{overflow-x:auto}
+  .gridmin{min-width:860px}
+  .cal{display:grid}
+  .corner{position:sticky;left:0;z-index:6;background:var(--card);border-right:1px solid var(--border);display:flex;align-items:flex-end;padding:8px 14px 7px;font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted-fg);font-weight:600}
+  .dayh{text-align:center;padding:7px 0 6px;border-left:1px solid var(--border-faint);font-size:12px;color:var(--muted-fg);font-variant-numeric:tabular-nums;position:relative}
+  .dayh .m{display:block;font-size:9.5px;letter-spacing:.08em;font-weight:650;color:var(--primary);text-transform:uppercase;line-height:1}
+  .dayh .d{font-weight:600}
+  .dayh.wknd{color:color-mix(in srgb,var(--muted-fg) 55%,transparent)}
+  .dayh.today .d{background:var(--primary);color:#fff;border-radius:999px;padding:1px 8px}
+  .prow{display:grid;border-top:1px solid var(--border)}
+  .rail{position:sticky;left:0;z-index:5;background:var(--card);border-right:1px solid var(--border);padding:10px 14px;display:flex;align-items:center;gap:10px;min-width:0}
+  .rail .who{min-width:0;flex:1}
+  .rail .nm{font-size:13px;font-weight:600;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .rail .rl{font-size:11px;color:var(--muted-fg);white-space:nowrap}
+  .load{width:54px;flex:none;text-align:right}
+  .load .n{font-family:var(--mono);font-size:10.5px;color:var(--muted-fg)}
+  .load .track{height:3px;border-radius:2px;background:var(--border-faint);margin-top:4px;overflow:hidden}
+  .load .fill{height:100%;border-radius:2px;background:var(--primary)}
+  .load.over .fill{background:var(--warn)}
+  .load.over .n{color:var(--warn)}
+  .canvas{grid-column:2/-1;position:relative}
+  .stripe{position:absolute;top:0;bottom:0;border-left:1px solid var(--border-faint);pointer-events:none}
+  .stripe.wknd{background:color-mix(in srgb,var(--fg) 2.5%,transparent)}
+  .stripe.today{background:color-mix(in srgb,var(--primary) 4%,transparent)}
+
+  /* ---------- bars (two-line) ---------- */
+  .bar{position:absolute;height:46px;border-radius:6px;display:flex;flex-direction:column;justify-content:center;gap:1px;padding:5px 10px;font-size:12.5px;cursor:grab;user-select:none;-webkit-user-select:none;touch-action:none;background:color-mix(in srgb,var(--c) 15%,transparent);color:color-mix(in srgb,var(--c) 52%,var(--fg));overflow:hidden}
+  .bar:hover{background:color-mix(in srgb,var(--c) 22%,transparent)}
+  .bar .r1{display:flex;align-items:center;gap:7px;min-width:0}
+  .bar .dot{width:8px;height:8px;border-radius:50%;background:var(--c);flex:none}
+  .bar .t{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+  .bar .part{font-family:var(--mono);font-size:10px;flex:none;background:color-mix(in srgb,var(--c) 18%,transparent);border-radius:4px;padding:1px 5px}
+  .bar .dur{margin-left:auto;font-family:var(--mono);font-size:10.5px;opacity:.75;flex:none}
+  .bar .r2{font-size:11px;line-height:1.25;color:color-mix(in srgb,var(--c) 34%,var(--muted-fg));white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-left:15px}
+  .bar.slim .part,.bar.slim .dur{display:none}
+  .bar.clip-l{border-top-left-radius:0;border-bottom-left-radius:0}
+  .bar.clip-r{border-top-right-radius:0;border-bottom-right-radius:0}
+  .bar.sel{box-shadow:0 0 0 2px color-mix(in srgb,var(--c) 65%,transparent)}
+  .bar.sib{outline:1.5px dashed color-mix(in srgb,var(--c) 55%,transparent);outline-offset:1px}
+  .bar .h{position:absolute;top:0;bottom:0;width:9px;cursor:ew-resize}
+  .bar .hl{left:0}.bar .hr{right:0}
+  .bar:hover .h::after{content:"";position:absolute;top:13px;bottom:13px;width:3px;border-radius:2px;background:color-mix(in srgb,var(--c) 55%,transparent)}
+  .bar .hl::after{left:3px}.bar .hr::after{right:3px}
+  .bar.lift{opacity:.35;cursor:grabbing}
+  .bar.hide{visibility:hidden}
+  .bar.ghost{pointer-events:none;z-index:10;background:color-mix(in srgb,var(--c) 20%,var(--card));box-shadow:0 6px 16px -8px rgb(0 0 0 / .35)}
+  .fly{position:fixed;z-index:60;pointer-events:none;margin:0;box-shadow:0 8px 22px -8px rgb(0 0 0 / .3);transition:opacity .08s ease}
+  .titem.fly{background:var(--card);border:1px solid var(--border);border-radius:8px;width:230px;padding:7px 10px}
+  .fly.off{opacity:0}
+  .fly.settle{transition:transform .14s cubic-bezier(.2,.8,.3,1),opacity .14s ease}
+  body.dragging,body.dragging *{cursor:grabbing !important}
+  body.dragging.copying,body.dragging.copying *{cursor:copy !important}
+
+  /* ---------- task panel ---------- */
+  .side{width:288px;flex:none;border-left:1px solid var(--border);display:flex;flex-direction:column;min-height:0;background:var(--card)}
+  .sh{display:flex;align-items:baseline;gap:8px;padding:12px 14px 8px}
+  .sh b{font-size:13px;font-weight:650}
+  .sh span{font-size:11.5px;color:var(--muted-fg)}
+  .ssearch{padding:0 14px 10px}
+  .ssearch input{width:100%;font:inherit;font-size:12.5px;color:var(--fg);background:var(--muted);border:1px solid var(--border);border-radius:8px;padding:6px 10px;outline:none}
+  .ssearch input:focus{border-color:var(--primary)}
+  .ssearch input::placeholder{color:var(--muted-fg)}
+  .stabs{display:flex;gap:2px;padding:0 14px 10px}
+  .stabs button{all:unset;cursor:pointer;font-size:12px;color:var(--muted-fg);padding:4px 10px;border-radius:6px}
+  .stabs button.on{background:var(--muted);color:var(--fg);font-weight:600}
+  .stabs button:focus-visible{outline:2px solid var(--primary)}
+  .tlist{flex:1;overflow-y:auto;min-height:0;padding:10px 12px 12px;border-top:1px solid var(--border-faint);background:color-mix(in srgb,var(--fg) 1.5%,var(--card))}
+  .titem{display:flex;align-items:flex-start;gap:8px;padding:9px 11px;border-radius:10px;border:1px solid var(--border);background:var(--card);box-shadow:0 1px 2px rgb(0 0 0 / .05);margin-bottom:8px;cursor:grab;user-select:none;-webkit-user-select:none;touch-action:none;transition:box-shadow .12s ease,border-color .12s ease}
+  .titem:hover{border-color:color-mix(in srgb,var(--fg) 15%,var(--border));box-shadow:0 3px 10px -4px rgb(0 0 0 / .15)}
+  .titem .dot{width:8px;height:8px;border-radius:50%;background:var(--c);flex:none;margin-top:4.5px}
+  .titem .ti{min-width:0;flex:1}
+  .titem .tt{display:block;font-size:12.5px;font-weight:600;line-height:1.35}
+  .titem .tm{display:block;font-size:11px;color:var(--muted-fg);line-height:1.3;margin-top:1px}
+  .titem .chk{font-size:10.5px;color:var(--muted-fg);flex:none;margin-top:3px}
+  .titem.done{opacity:.62}
+  .titem.lift{opacity:.35}
+  .tlist .none{font-size:12.5px;color:var(--muted-fg);font-style:italic;padding:14px 8px}
+  /* quick-add composer (panel) */
+  .qadd{border:1px dashed color-mix(in srgb,var(--primary) 50%,var(--border));border-radius:10px;padding:9px 11px;margin-bottom:10px;display:flex;flex-direction:column;gap:6px;background:color-mix(in srgb,var(--primary) 4%,transparent)}
+  .qadd input,.qadd select,.qc input,.qc select{width:100%;font:inherit;font-size:12.5px;color:var(--fg);background:var(--card);border:1px solid var(--border);border-radius:7px;padding:5px 9px;outline:none}
+  .qadd input:focus,.qc input:focus{border-color:var(--primary)}
+  .qhint{font-size:10.5px;color:var(--muted-fg)}
+  /* draw-to-create popover (timeline) */
+  .qc{position:absolute;z-index:30;width:232px;background:var(--card);border:1px solid var(--border);border-radius:10px;box-shadow:0 12px 32px -10px rgb(0 0 0 / .3);padding:9px;display:flex;flex-direction:column;gap:6px}
+  .canvas{cursor:crosshair}
+  @media(max-width:900px){
+    .fbody{flex-direction:column}
+    .side{width:auto;border-left:0;border-top:1px solid var(--border)}
+    .tlist{max-height:300px}
+  }
+
+  /* ---------- task drawer (mirrors components/tasks/task-detail-drawer.tsx) ---------- */
+  .drawer-bd{position:fixed;inset:0;background:rgb(0 0 0 / .18);z-index:80;opacity:0;pointer-events:none;transition:opacity .15s ease}
+  .drawer{position:fixed;top:0;right:0;bottom:0;width:54vw;min-width:560px;max-width:94vw;background:var(--card);border-left:1px solid var(--border);z-index:81;transform:translateX(102%);display:flex;flex-direction:column;box-shadow:-8px 0 24px -12px rgb(0 0 0 / .12);transition:transform .2s ease-out}
+  @media(max-width:640px){.drawer{min-width:0;width:94vw}}
+  body.drawer-open .drawer{transform:none}
+  body.drawer-open .drawer-bd{opacity:1;pointer-events:auto}
+  .dhdr{display:flex;align-items:center;gap:6px;height:44px;padding:0 10px;border-bottom:1px solid var(--border-faint);flex:none}
+  .ib{all:unset;cursor:pointer;width:26px;height:26px;display:flex;align-items:center;justify-content:center;border-radius:6px;color:var(--muted-fg)}
+  .ib:hover{background:var(--muted);color:var(--fg)}
+  .ib svg{width:15px;height:15px}
+  .dsep{width:1px;height:16px;background:var(--border);flex:none}
+  .dcrumb{font-size:12.5px;color:var(--muted-fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+  .dcrumb b{color:var(--fg);font-weight:600}
+  .dhdr .sp{flex:1}
+  .dtime{font-family:var(--mono);font-size:11.5px;color:var(--muted-fg);padding:0 4px}
+  .dwrap{display:flex;flex:1;min-height:0}
+  .dmain{flex:1;min-width:0;overflow-y:auto;padding:24px 28px}
+  .dtitle{font-size:20px;font-weight:650;margin:0 0 16px;line-height:1.3;text-wrap:balance}
+  .ddesc{font-size:13.5px;line-height:1.6;color:var(--fg);margin:0 0 24px}
+  .dsech{font-size:12px;font-weight:650;color:var(--fg);margin:0 0 4px;display:flex;align-items:center;gap:6px}
+  .dsech span{color:var(--muted-fg);font-weight:500}
+  .strow{display:flex;align-items:center;gap:9px;padding:7px 2px;border-bottom:1px solid var(--border-faint);font-size:13px}
+  .stc{width:15px;height:15px;border:1.5px solid var(--border);border-radius:50%;flex:none}
+  .strow.stdone .stc{background:var(--primary);border-color:var(--primary)}
+  .strow.stdone{color:var(--muted-fg);text-decoration:line-through}
+  .dcomment{margin-top:26px;border:1px solid var(--border);border-radius:10px;padding:10px 12px;font-size:13px;color:var(--muted-fg)}
+  .dprops{width:240px;flex:none;border-left:1px solid var(--border-faint);overflow-y:auto;padding:12px 16px}
+  .prow{padding:7px 0}
+  .plabel{font-size:11px;font-weight:550;color:var(--muted-fg);letter-spacing:.01em;display:block}
+  .pval{margin-top:4px;font-size:13px;display:flex;align-items:center;gap:7px;flex-wrap:wrap;min-height:20px}
+  .pval .av{width:20px;height:20px;font-size:8.5px}
+  .sicon{width:13px;height:13px;border-radius:50%;border:1.5px solid var(--sc);position:relative;flex:none}
+  .sicon::after{content:"";position:absolute;inset:2px;border-radius:50%;background:var(--sc);opacity:.55}
+  .cbadge{display:inline-flex;align-items:center;gap:6px;background:color-mix(in srgb,var(--c) 13%,transparent);color:color-mix(in srgb,var(--c) 55%,var(--fg));border-radius:999px;padding:2px 10px;font-size:11.5px;font-weight:600}
+  .cbadge i{width:7px;height:7px;border-radius:50%;background:var(--c)}
+  .due-over{color:var(--danger);font-weight:600}
+  .sw{width:28px;height:16px;border-radius:999px;background:var(--primary);position:relative;flex:none}
+  .sw::after{content:"";position:absolute;top:2px;right:2px;width:12px;height:12px;border-radius:50%;background:#fff}
+  .phr{border-top:1px solid var(--border-faint);margin:10px -16px;padding:0}
+  .pseg{display:flex;align-items:center;gap:7px;font-size:12px;padding:5px 0;color:var(--fg)}
+  .pseg b{font-weight:600;font-variant-numeric:tabular-nums}
+  .pseg span{color:var(--muted-fg)}
+  .pseg .dx{all:unset;cursor:pointer;color:var(--muted-fg);padding:0 5px;border-radius:4px;margin-left:auto;font-size:13px}
+  .pseg .dx:hover{background:var(--muted);color:var(--danger)}
+  .pnone{font-size:12px;color:var(--muted-fg);font-style:italic}
+
+  /* ---------- notes ---------- */
+  .notes{max-width:72ch;margin:64px auto 0}
+  .notes h2{font-size:20px;font-weight:650;letter-spacing:-.01em;margin:44px 0 10px;text-wrap:balance}
+  .notes h2:first-child{margin-top:0}
+  .notes p{margin:0 0 12px;color:var(--fg)}
+  .notes p.dim,.notes li.dim{color:var(--muted-fg)}
+  .notes ul,.notes ol{margin:0 0 14px;padding-left:22px}
+  .notes li{margin-bottom:7px}
+  .notes li::marker{color:var(--muted-fg)}
+  .notes strong{font-weight:650}
+  .notes code{font-family:var(--mono);font-size:.86em;background:var(--muted);border:1px solid var(--border-faint);border-radius:5px;padding:1px 5px}
+  .notes pre{background:var(--muted);border:1px solid var(--border);border-radius:10px;padding:16px 18px;overflow-x:auto;font-family:var(--mono);font-size:12.5px;line-height:1.6;margin:0 0 16px}
+  .notes pre code{background:none;border:0;padding:0}
+  .verdict{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:14px 0 18px}
+  @media(max-width:640px){.verdict{grid-template-columns:1fr}}
+  .vcard{border:1px solid var(--border);border-radius:12px;padding:14px 16px;background:var(--card)}
+  .vcard.win{border-color:color-mix(in srgb,var(--primary) 45%,var(--border))}
+  .vcard .tag{font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;font-weight:650;color:var(--muted-fg)}
+  .vcard.win .tag{color:var(--primary)}
+  .vcard h4{font-size:14px;font-weight:650;margin:4px 0 6px}
+  .vcard p{font-size:13px;color:var(--muted-fg);margin:0}
+  .itable{width:100%;border-collapse:collapse;font-size:13.5px;margin:0 0 16px}
+  .itable th{text-align:left;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted-fg);font-weight:650;padding:0 12px 8px 0;border-bottom:1px solid var(--border)}
+  .itable td{padding:9px 12px 9px 0;border-bottom:1px solid var(--border-faint);vertical-align:top}
+  .itable td:first-child{font-weight:600;white-space:nowrap}
+  .itable td:last-child{color:var(--muted-fg)}
+  kbd{font-family:var(--mono);font-size:.85em;background:var(--muted);border:1px solid var(--border);border-bottom-width:2px;border-radius:5px;padding:1px 5px}
+  @media (prefers-reduced-motion: no-preference){
+    .bar{transition:background .12s ease,box-shadow .12s ease}
+    .bar.ghost{transition:left .1s ease,top .12s ease,width .1s ease}
+    .bar.snapping{transition:left .1s ease,width .1s ease}
+    body.dragging .bar{transition:top .12s ease}
+    body.dragging .canvas{transition:height .12s ease}
+  }
+</style>
+
+<div class="wrap">
+  <header class="intro">
+    <div class="eyebrow">Agency Flow · Design proposal · v3</div>
+    <h1>Planner — who works on what, and when</h1>
+    <p>A people-first timeline in the Toggl Plan mold: rows are teammates, columns are days, and a task is a bar you drag into place. It reuses the Workday grid's skeleton and visual language — Workday shows what <em>happened</em>, Planner shows what <em>should happen</em>.</p>
+    <p class="sub">This mockup is live. New in v3: task drawer on click, filters, two-line bars, and live lane reflow while dragging.</p>
+    <div class="hints">
+      <span class="hint"><b>Drag from the Tasks panel</b> onto any row to schedule</span>
+      <span class="hint"><b>⌥-drag a bar</b> to split it — continue the same task later, anywhere</span>
+      <span class="hint"><b>Click a bar</b> to open the task drawer with all its sittings</span>
+      <span class="hint"><b>Filters</b> narrow the board by project, client, category, or due date</span>
+    </div>
+  </header>
+
+  <section class="frame" id="frame" aria-label="Planner mockup">
+    <div class="tb">
+      <span class="title">Planner</span>
+      <div class="navgrp">
+        <button id="prev" aria-label="Previous week">‹</button>
+        <button id="tdy" class="tdy">Today</button>
+        <button id="next" aria-label="Next week">›</button>
+      </div>
+      <span class="range" id="range"></span>
+      <div class="zoom" role="group" aria-label="Zoom">
+        <button id="z7">Week</button>
+        <button id="z14" class="on">2 weeks</button>
+      </div>
+      <div class="spacer"></div>
+      <div class="avatars" id="tbAvatars"></div>
+      <button class="sidebtn" id="sideBtn">Tasks <span class="cnt" id="unschedCnt">0</span></button>
+      <button class="newtask">+ New task</button>
+    </div>
+    <div class="fbody">
+      <div class="main">
+        <div class="scroll">
+          <div class="gridmin">
+            <div class="cal" id="cal"></div>
+            <div id="rows"></div>
+          </div>
+        </div>
+      </div>
+      <aside class="side" id="side" aria-label="Tasks panel">
+        <div class="sh"><b>Tasks</b><span>drag onto the timeline</span></div>
+        <div class="ssearch"><input id="q" type="search" placeholder="Search tasks or projects…" aria-label="Search tasks"></div>
+        <div class="stabs" role="tablist">
+          <button id="tabU" class="on">Unscheduled</button>
+          <button id="tabA">All</button>
+        </div>
+        <div class="fbar" id="fbar">
+          <div class="fchip" data-f="proj"><button type="button">Project</button><div class="fmenu"></div></div>
+          <div class="fchip" data-f="client"><button type="button">Client</button><div class="fmenu"></div></div>
+          <div class="fchip" data-f="cat"><button type="button">Category</button><div class="fmenu"></div></div>
+          <div class="fchip" data-f="due"><button type="button">Due</button><div class="fmenu"></div></div>
+          <button class="fclear" id="fclear">Clear</button>
+        </div>
+        <div class="tlist" id="tlist"></div>
+      </aside>
+    </div>
+  </section>
+
+  <div class="drawer-bd" id="drawerBd"></div>
+  <aside class="drawer" id="drawer" aria-label="Task details"></aside>
+
+  <section class="notes">
+    <h2>Why this view, not a day-column Kanban</h2>
+    <div class="verdict">
+      <div class="vcard win">
+        <div class="tag">Recommended</div>
+        <h4>People × days timeline</h4>
+        <p>Multi-day tasks are native — a bar just spans. Capacity is visible per person per day. And it mirrors the Workday grid you already ship, so the plan-vs-actual pairing is one mental model, not two.</p>
+      </div>
+      <div class="vcard">
+        <div class="tag">Rejected</div>
+        <h4>Kanban with days as columns</h4>
+        <p>A card lives in exactly one column, so a three-day task must be duplicated, faked with spans, or squeezed to one day. It also hides <em>who</em> is overloaded — the one thing a planner exists to show.</p>
+      </div>
+    </div>
+
+    <h2>Data model: a separate <code>planSegments</code> table</h2>
+    <p>Don't put planned dates on the task itself. The plan is a relation, not a task field:</p>
+<pre><code>planSegments: defineTable({
+  orgId: v.string(),
+  taskId: v.id("tasks"),
+  userId: v.id("users"),        // one segment = one person's bar
+  startDate: v.string(),        // "YYYY-MM-DD", same convention as timeEntries
+  endDate: v.string(),          // inclusive
+  createdAt: v.number(),
+  updatedAt: v.number(),
+})
+  .index("by_orgId_userId_startDate", ["orgId", "userId", "startDate"])
+  .index("by_orgId_taskId", ["orgId", "taskId"])</code></pre>
+    <ul>
+      <li><strong>One task, many segments.</strong> Splitting a task across weeks or people is just extra rows — no duplication.</li>
+      <li><strong>Deleting a plan never touches the task.</strong> Unscheduling is a segment delete; the task keeps its status, assignees, and history.</li>
+      <li><strong>Bar color = work category color</strong> (<code>workCategories.color</code> via <code>getCategoryColor()</code>) — the same tint formula as the Workday boxes and <code>CategoryBadge</code>. No new color field, and the Planner reads consistently with the rest of the app.</li>
+      <li><strong><code>dueDate</code> stays what it is</strong> — a deadline; it powers the Due filter and shows in the drawer, renderable later as a marker on the bar.</li>
+      <li class="dim">MVP-stage dummy data means the table can be added directly — no migration needed.</li>
+    </ul>
+
+    <h2>One task, many sittings — splitting without duplicating</h2>
+    <p>The common reality: you start a task, get interrupted, and pick it up again a week later — sometimes with a different person. The segment model handles this exactly the way you need:</p>
+    <ul>
+      <li><strong>A bar is a reference, not a copy.</strong> Every segment points at the same <code>taskId</code>, so the timer, comments, links, subtasks, and time entries all accumulate in <em>one</em> place — the task. Click any bar and the drawer proves it: one task, all its sittings listed together.</li>
+      <li><strong><kbd>⌥</kbd>-drag to split</strong> (Toggl Plan's gesture): hold Option while dragging a bar and you drop a <em>continuation</em> of the same task wherever you release. Or just drag the same task from the panel again — each drop adds another sitting.</li>
+      <li><strong>Part badges + sibling highlight.</strong> Split tasks show <code>1/2</code>, <code>2/2</code>… on their bars, and hovering or selecting one outlines its siblings.</li>
+    </ul>
+
+    <h2>The Tasks panel and filters — planning from your real backlog</h2>
+    <ul>
+      <li><strong>Built for hundreds of tasks: newest first.</strong> A flat list ordered by creation date, descending — the tasks you just captured are at the top, ready to place. No grouping ceremony; search and filters do the narrowing.</li>
+      <li><strong>Cards say what matters: task + client.</strong> Title on top, client below, category as the colored dot. No estimate line — that field isn't filled in practice, so it earns no pixels.</li>
+      <li><strong>Filters are panel-scoped.</strong> Project, client, category, due date (overdue / next 7 days / none) narrow the <em>picker</em>, never the timeline — the board always shows the whole team's real plan. Stored in URL params via <code>nuqs</code> so a filtered picker survives refresh.</li>
+      <li><strong>Unscheduled by default.</strong> The default tab is the to-plan inbox; the toolbar badge is its count. The <em>All</em> tab keeps every task reachable for adding another sitting.</li>
+    </ul>
+
+    <h2>Creating tasks without leaving the Planner</h2>
+    <ul>
+      <li><strong>Draw on empty days.</strong> Press and drag across empty cells in a person's row: a bar sketches out day-by-day, and on release a small popover asks for the title and project. Enter creates the task <em>and</em> its segment in one motion — try it above.</li>
+      <li><strong>+ New task</strong> opens a quick-add composer at the top of the panel (title + project); the task lands unscheduled, at the top of the list, ready to drag. Enter keeps the composer open for rapid capture.</li>
+      <li class="dim">In the real build both paths call the existing <code>tasks.create</code> mutation with the same defaults as the /tasks inline add (default status, no category), plus a <code>planSegments.create</code> when drawn onto the grid.</li>
+    </ul>
+
+    <h2>Interaction spec</h2>
+    <table class="itable">
+      <tr><th>Action</th><th>Gesture</th><th>Mutation</th></tr>
+      <tr><td>Schedule</td><td>Drag a task from the panel onto a row; default span = remaining estimate</td><td><code>planSegments.create</code></td></tr>
+      <tr><td>Move</td><td>Drag the bar; it snaps day-by-day, and neighbouring bars reflow live into lanes — no overlap ever shown</td><td><code>planSegments.update</code> (dates)</td></tr>
+      <tr><td>Resize</td><td>Drag either edge; the bar itself snaps to day boundaries; minimum one day</td><td><code>planSegments.update</code> (dates)</td></tr>
+      <tr><td>Reassign</td><td>Drag the bar to another person's row</td><td><code>planSegments.update</code> (userId)</td></tr>
+      <tr><td>Split / continue</td><td><kbd>⌥</kbd>-drag a bar, or drag the same task from the panel again</td><td><code>planSegments.create</code> (same <code>taskId</code>)</td></tr>
+      <tr><td>Unschedule</td><td>Per-segment × in the drawer, or select + <kbd>⌫</kbd></td><td><code>planSegments.remove</code></td></tr>
+      <tr><td>Open task</td><td>Click a bar (or a panel row) → the existing task detail drawer slides in, listing every sitting</td><td>—</td></tr>
+      <tr><td>Quick-create</td><td>Drag across empty days on a row → snapped bar + title popover; or <em>+ New task</em> → panel composer (lands unscheduled)</td><td><code>tasks.create</code> (+ <code>planSegments.create</code> when drawn)</td></tr>
+    </table>
+
+    <h2>Execution plan (four slices)</h2>
+    <ol>
+      <li><strong>Read-only grid.</strong> <code>planSegments</code> schema + <code>api.planner.weekGrid</code> query mirroring <code>convex/workday.ts</code>. New route <code>/planner</code>, components in <code>components/planner/</code>, lane-packing + date math in <code>lib/planner.ts</code>. Seed segments (including a split task) to verify rendering, clipping at range edges, part badges, today tint.</li>
+      <li><strong>Drag: move, resize, reassign.</strong> The feel target is what this mockup now does: everything snaps to whole days (segments are date-granular — half days don't exist in the data, so the UI never suggests them), and neighbouring bars reflow into lanes live during the drag. Two viable stacks, decided at implementation time with fresh Context7 docs: (a) custom pointer events + <code>motion</code> (already installed) for the reflow/settle animation, or (b) <code>dnd-timeline</code> — headless, dnd-kit-based rows/spans/resize/snap. Either way: optimistic Convex updates with rollback-on-error toasts. Avoid packaged Gantt widgets (Bryntum, Syncfusion, react-calendar-timeline) — commercial or aging, and they'd fight the design system.</li>
+      <li><strong>Tasks panel, filters, splitting.</strong> Searchable, project-grouped panel with Unscheduled/All tabs; filter row (project, client, category, due) in URL params; drag-to-schedule with remaining-estimate default; <kbd>⌥</kbd>-drag duplication; part badges and sibling highlight. This slice is the daily-driver loop: open Planner Monday morning, drain the Unscheduled tab.</li>
+      <li><strong>Polish.</strong> Week/2-week zoom, weekend toggle (Workday already has one), capacity heat in the rail, <code>dueDate</code> markers on bars, content-aware skeleton.</li>
+    </ol>
+
+    <h2>What gets reused</h2>
+    <ul>
+      <li><strong>Grid skeleton</strong> — the <code>200px + repeat(days, 1fr)</code> layout, sticky rail, today tint (<code>color-mix</code> with <code>--primary</code>) from <code>components/workday/</code>.</li>
+      <li><strong>Task detail drawer</strong> — clicking a bar opens the <em>existing</em> task drawer/modal from <code>components/tasks/</code>, extended with a "Plan" section listing the task's segments. One task surface everywhere in the app.</li>
+      <li><strong>Visual language</strong> — category tint formula (<code>color-mix</code> ~13–15% background, ~52–72% text), <code>CategoryDot</code>, <code>CategoryBadge</code>, <code>UserAvatar</code>.</li>
+      <li><strong>Conventions</strong> — <code>YYYY-MM-DD</code> date strings like <code>timeEntries</code>, week-picker component, member filter, URL-persisted filters via <code>nuqs</code>.</li>
+    </ul>
+  </section>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  var now = new Date();
+  var dow = (now.getDay() + 6) % 7;
+  var epoch = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dow);
+  var todayAbs = dow;
+  var MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  var DOWS = ["M","T","W","T","F","S","S"];
+  var LANE = 52, PAD = 7;
+
+  var CATS = { design:"#a855f7", dev:"#3b82f6", content:"#ec4899", mtg:"#f59e0b", none:"#6b7280" };
+  var CAT_LABELS = { design:"Design", dev:"Development", content:"Content", mtg:"Meetings", none:"No category" };
+  var PROJ_CLIENTS = {
+    "Atlas":"Atlas Sports", "Mallard":"Atlas Sports",
+    "Opus":"Opus Group", "Pragmatico":"Opus Group",
+    "AB Medical":"AB Medical", "Numa":"Numa Cosmetics",
+    "WTP":"WTP Retail", "Koffer":"Koffer Travel",
+    "Deglon":"Maison Deglon", "HP":"HP Interiors", "Internal":"Konverted"
+  };
+
+  var people = [
+    { id:"reni",  name:"Reni",  role:"Designer" },
+    { id:"csabi", name:"Csabi", role:"Developer" },
+    { id:"kata",  name:"Kata",  role:"Content" },
+    { id:"adam",  name:"Adam",  role:"PM" }
+  ];
+
+  var tasks = [
+    { id:"T1",  title:"Atlas CUP hero design",   proj:"Atlas",      cat:"design",  est:3, due:3 },
+    { id:"T2",  title:"Opus rebrand concepts",   proj:"Opus",       cat:"design",  est:2 },
+    { id:"T3",  title:"HP banner set",           proj:"HP",         cat:"design",  est:1 },
+    { id:"T4",  title:"AB Medical UI kit",       proj:"AB Medical", cat:"design",  est:4, due:13 },
+    { id:"T5",  title:"Atlas CUP build",         proj:"Atlas",      cat:"dev",     est:5, due:11 },
+    { id:"T6",  title:"WTP fixes",               proj:"WTP",        cat:"dev",     est:1 },
+    { id:"T7",  title:"Mallard build",           proj:"Mallard",    cat:"dev",     est:3 },
+    { id:"T8",  title:"Maison Deglon copy",      proj:"Deglon",     cat:"content", est:3, due:4 },
+    { id:"T9",  title:"Numa social kit",         proj:"Numa",       cat:"content", est:2 },
+    { id:"T10", title:"Client reviews",          proj:"Internal",   cat:"mtg",     est:1 },
+    { id:"T11", title:"Sprint planning",         proj:"Internal",   cat:"mtg",     est:1 },
+    { id:"T12", title:"Pragmatico kickoff",      proj:"Pragmatico", cat:"mtg",     est:1 },
+    { id:"T13", title:"Koffer landing QA",       proj:"Koffer",     cat:"dev",     est:1 },
+    { id:"T14", title:"Opus icon set",           proj:"Opus",       cat:"design",  est:2 },
+    { id:"T15", title:"AB Medical wireframes",   proj:"AB Medical", cat:"design",  est:3, due:9 },
+    { id:"T16", title:"Numa dev handoff",        proj:"Numa",       cat:"mtg",     est:1 },
+    { id:"T17", title:"Pragmatico build",        proj:"Pragmatico", cat:"dev",     est:2, due:12 },
+    { id:"T18", title:"WTP dark mode",           proj:"WTP",        cat:"dev",     est:2 },
+    { id:"T19", title:"Deglon photo retouch",    proj:"Deglon",     cat:"design",  est:1 },
+    { id:"T20", title:"HP campaign report",      proj:"HP",         cat:"content", est:1, due:6 }
+  ];
+
+  var segs = [
+    { id:"s1",  taskId:"T1",  personId:"reni",  start:0,  span:3 },
+    { id:"s2",  taskId:"T2",  personId:"reni",  start:3,  span:2 },
+    { id:"s3",  taskId:"T3",  personId:"reni",  start:7,  span:1 },
+    { id:"s4",  taskId:"T4",  personId:"reni",  start:8,  span:4 },
+    { id:"s5",  taskId:"T5",  personId:"csabi", start:0,  span:3 },
+    { id:"s5b", taskId:"T5",  personId:"csabi", start:7,  span:2 },
+    { id:"s6",  taskId:"T6",  personId:"csabi", start:1,  span:1 },
+    { id:"s7",  taskId:"T7",  personId:"csabi", start:9,  span:3 },
+    { id:"s8",  taskId:"T8",  personId:"kata",  start:2,  span:3 },
+    { id:"s9",  taskId:"T9",  personId:"kata",  start:8,  span:2 },
+    { id:"s10", taskId:"T10", personId:"adam",  start:4,  span:1 },
+    { id:"s11", taskId:"T11", personId:"adam",  start:7,  span:1 },
+    { id:"s12", taskId:"T12", personId:"adam",  start:9,  span:1 }
+  ];
+
+  tasks.forEach(function(t, i){ t.ci = i; });  /* creation order — panel lists newest first */
+
+  var off = 0, N = 14, selected = null, uid = 100, tab = "u", query = "";
+  var filters = { proj:new Set(), client:new Set(), cat:new Set(), due:"all" };
+  var drawerTask = null;
+  var composerOpen = false, focusComposer = false;
+  var qcPending = null, qcEl = null;
+
+  var calEl = document.getElementById("cal");
+  var rowsEl = document.getElementById("rows");
+  var listEl = document.getElementById("tlist");
+  var rangeEl = document.getElementById("range");
+  var drawerEl = document.getElementById("drawer");
+
+  function taskOf(id){ return tasks.find(function(t){ return t.id === id; }); }
+  function personOf(id){ return people.find(function(p){ return p.id === id; }); }
+  function segsOf(tid){ return segs.filter(function(s){ return s.taskId === tid; }); }
+  function plannedDays(tid){ return segsOf(tid).reduce(function(a,s){ return a + s.span; }, 0); }
+  function remainingOf(t){ return Math.max(1, t.est - plannedDays(t.id)); }
+  function dateOf(abs){ return new Date(epoch.getFullYear(), epoch.getMonth(), epoch.getDate() + abs); }
+  function isWknd(abs){ var w = ((abs % 7) + 7) % 7; return w >= 5; }
+  function fmtShort(d){ return MONTHS[d.getMonth()] + " " + d.getDate(); }
+  function initials(n){ return n.slice(0,2).toUpperCase(); }
+  function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
+
+  function passes(t){
+    if (filters.proj.size && !filters.proj.has(t.proj)) return false;
+    if (filters.client.size && !filters.client.has(PROJ_CLIENTS[t.proj])) return false;
+    if (filters.cat.size && !filters.cat.has(t.cat)) return false;
+    if (filters.due === "overdue" && !(t.due !== undefined && t.due < todayAbs)) return false;
+    if (filters.due === "week" && !(t.due !== undefined && t.due >= todayAbs && t.due < todayAbs + 7)) return false;
+    if (filters.due === "none" && t.due !== undefined) return false;
+    return true;
+  }
+
+  /* NOTE: filters are panel-scoped by design — the timeline always shows the full plan */
+  function rowVisibleSegs(pid, excludeId){
+    return segs.filter(function(s){
+      return s.personId === pid && s.id !== excludeId &&
+        s.start + s.span > off && s.start < off + N;
+    });
+  }
+
+  function packLanes(list){
+    var sorted = list.slice().sort(function(a,b){ return a.start - b.start || b.span - a.span; });
+    var lanes = [];
+    sorted.forEach(function(s){
+      for (var i = 0; ; i++){
+        if (lanes[i] === undefined || s.start >= lanes[i]){ s._lane = i; lanes[i] = s.start + s.span; break; }
+      }
+    });
+    return lanes.length;
+  }
+
+  function partLabel(seg){
+    var sib = segsOf(seg.taskId);
+    if (sib.length < 2) return "";
+    var order = sib.slice().sort(function(a,b){ return a.start - b.start; });
+    return (order.indexOf(seg) + 1) + "/" + sib.length;
+  }
+
+  function barHTML(t, span, part, visSpan, copyGlyph){
+    return '<span class="r1"><span class="dot"></span><span class="t">' + (copyGlyph ? "⧉ " : "") + t.title + '</span>' +
+      (part && visSpan >= 2 ? '<span class="part">' + part + '</span>' : '') +
+      (visSpan >= 2 ? '<span class="dur">' + span + 'd</span>' : '') +
+      '</span><span class="r2">' + t.proj + '</span>';
+  }
+
+  function render(){
+    var cols = "var(--rail) repeat(" + N + ", 1fr)";
+    var a = dateOf(off), b = dateOf(off + N - 1);
+    rangeEl.textContent = fmtShort(a) + " – " + fmtShort(b);
+
+    /* header */
+    calEl.style.gridTemplateColumns = cols;
+    var h = '<div class="corner">Team</div>';
+    for (var i = 0; i < N; i++){
+      var abs = off + i, d = dateOf(abs);
+      var cls = "dayh" + (isWknd(abs) ? " wknd" : "") + (abs === todayAbs ? " today" : "");
+      var m = (i === 0 || d.getDate() === 1) ? '<span class="m">' + MONTHS[d.getMonth()] + '</span>' : '<span class="m">&nbsp;</span>';
+      h += '<div class="' + cls + '">' + m + DOWS[((abs % 7) + 7) % 7] + ' <span class="d">' + d.getDate() + '</span></div>';
+    }
+    calEl.innerHTML = h;
+
+    var selSeg = segs.find(function(s){ return s.id === selected; });
+    var selTask = selSeg ? selSeg.taskId : null;
+
+    /* rows */
+    var workdays = 0;
+    for (var w = 0; w < N; w++){ if (!isWknd(off + w)) workdays++; }
+    rowsEl.innerHTML = "";
+    people.forEach(function(p){
+      var mine = rowVisibleSegs(p.id, null);
+      var laneCount = Math.max(1, packLanes(mine));
+      var planned = mine.reduce(function(acc, s){
+        return acc + (Math.min(s.start + s.span, off + N) - Math.max(s.start, off));
+      }, 0);
+
+      var row = document.createElement("div");
+      row.className = "prow";
+      row.style.gridTemplateColumns = cols;
+
+      var over = planned > workdays;
+      var pct = clamp(planned / workdays * 100, 0, 100);
+      var rail = document.createElement("div");
+      rail.className = "rail";
+      rail.innerHTML =
+        '<span class="av">' + initials(p.name) + '</span>' +
+        '<span class="who"><span class="nm">' + p.name + '</span><br><span class="rl">' + p.role + '</span></span>' +
+        '<span class="load' + (over ? " over" : "") + '"><span class="n">' + planned + 'd/' + workdays + 'd</span>' +
+        '<span class="track"><span class="fill" style="width:' + pct + '%"></span></span></span>';
+      row.appendChild(rail);
+
+      var cv = document.createElement("div");
+      cv.className = "canvas";
+      cv.dataset.person = p.id;
+      cv.style.height = (laneCount * LANE + 10) + "px";
+      for (var i = 0; i < N; i++){
+        var abs = off + i;
+        var st = document.createElement("div");
+        st.className = "stripe" + (isWknd(abs) ? " wknd" : "") + (abs === todayAbs ? " today" : "");
+        st.style.left = (i / N * 100) + "%";
+        st.style.width = (100 / N) + "%";
+        cv.appendChild(st);
+      }
+      mine.forEach(function(s){
+        var t = taskOf(s.taskId);
+        var vs = Math.max(s.start - off, 0);
+        var ve = Math.min(s.start + s.span - off, N);
+        var el = document.createElement("div");
+        el.className = "bar" +
+          (ve - vs < 2 ? " slim" : "") +
+          (s.start < off ? " clip-l" : "") +
+          (s.start + s.span > off + N ? " clip-r" : "") +
+          (selected === s.id ? " sel" : "") +
+          (selTask && s.taskId === selTask && s.id !== selected ? " sib" : "");
+        el.style.setProperty("--c", CATS[t.cat]);
+        el.style.left = "calc(" + (vs / N * 100) + "% + 2px)";
+        el.style.width = "calc(" + ((ve - vs) / N * 100) + "% - 4px)";
+        el.style.top = (PAD + s._lane * LANE) + "px";
+        el.dataset.id = s.id;
+        el.dataset.task = s.taskId;
+        el.innerHTML = barHTML(t, s.span, partLabel(s), ve - vs) + '<i class="h hl"></i><i class="h hr"></i>';
+        cv.appendChild(el);
+      });
+      row.appendChild(cv);
+      rowsEl.appendChild(row);
+    });
+
+    document.getElementById("tbAvatars").innerHTML = people.map(function(p){
+      return '<span class="av">' + initials(p.name) + '</span>';
+    }).join("");
+    document.getElementById("unschedCnt").textContent =
+      tasks.filter(function(t){ return plannedDays(t.id) === 0; }).length;
+
+    renderPanel();
+    updateChips();
+    if (drawerTask) renderDrawer();
+  }
+
+  function renderPanel(){
+    var q = query.trim().toLowerCase();
+    var vis = tasks.filter(function(t){
+      if (!passes(t)) return false;
+      if (tab === "u" && plannedDays(t.id) > 0) return false;
+      if (q && (t.title + " " + t.proj + " " + PROJ_CLIENTS[t.proj]).toLowerCase().indexOf(q) === -1) return false;
+      return true;
+    }).sort(function(a, b){ return b.ci - a.ci; });  /* newest first */
+
+    listEl.innerHTML = "";
+
+    if (composerOpen){
+      var qa = document.createElement("div");
+      qa.className = "qadd";
+      qa.innerHTML = '<input id="qtitle" type="text" placeholder="Task name…">' +
+        '<select id="qproj">' + Object.keys(PROJ_CLIENTS).sort().map(function(p){
+          return '<option value="' + p + '">' + p + ' · ' + PROJ_CLIENTS[p] + '</option>';
+        }).join("") + '</select>' +
+        '<span class="qhint">↵ add · esc cancel</span>';
+      listEl.appendChild(qa);
+      var qt = qa.querySelector("#qtitle");
+      qt.addEventListener("keydown", function(e){
+        if (e.key === "Enter" && this.value.trim()){
+          tasks.push({ id:"T" + uid, title: this.value.trim(), proj: qa.querySelector("#qproj").value, cat:"none", ci: uid });
+          uid++;
+          focusComposer = true;
+          render();
+        } else if (e.key === "Escape"){
+          composerOpen = false;
+          renderPanel();
+        }
+      });
+      if (focusComposer){ focusComposer = false; qt.focus(); }
+    }
+
+    if (!vis.length && !composerOpen){
+      listEl.innerHTML += '<div class="none">' +
+        (q || filters.proj.size || filters.client.size || filters.cat.size || filters.due !== "all"
+          ? "No tasks match." : "Everything is planned. Nice.") + '</div>';
+      return;
+    }
+    vis.forEach(function(t){
+      var pd = plannedDays(t.id);
+      var el = document.createElement("div");
+      el.className = "titem" + (tab === "a" && pd > 0 ? " done" : "");
+      el.style.setProperty("--c", CATS[t.cat]);
+      el.dataset.task = t.id;
+      el.innerHTML = '<span class="dot"></span><span class="ti"><span class="tt">' + t.title +
+        '</span><span class="tm">' + PROJ_CLIENTS[t.proj] + '</span></span>' +
+        (tab === "a" && pd > 0 ? '<span class="chk">✓ planned</span>' : '');
+      listEl.appendChild(el);
+    });
+  }
+
+  /* ---------- filters ---------- */
+  var FBASE = { proj:"Project", client:"Client", cat:"Category", due:"Due" };
+  var DUE_OPTS = [["all","All"],["overdue","Overdue"],["week","Due in 7 days"],["none","No due date"]];
+
+  function buildMenus(){
+    var uniq = function(arr){ return Array.from(new Set(arr)).sort(); };
+    var fill = function(key, values, dots){
+      var menu = document.querySelector('.fchip[data-f="' + key + '"] .fmenu');
+      menu.innerHTML = values.map(function(v){
+        var val = v[0] !== undefined && Array.isArray(v) ? v[0] : v;
+        var label = Array.isArray(v) ? v[1] : v;
+        return '<label><input type="' + (key === "due" ? "radio" : "checkbox") + '" name="f-' + key +
+          '" value="' + val + '"' + (key === "due" && val === "all" ? " checked" : "") + '>' +
+          (dots ? '<span class="fdot" style="background:' + CATS[val] + '"></span>' : "") +
+          '<span>' + label + '</span></label>';
+      }).join("");
+    };
+    fill("proj", uniq(tasks.map(function(t){ return t.proj; })));
+    fill("client", uniq(tasks.map(function(t){ return PROJ_CLIENTS[t.proj]; })));
+    fill("cat", Object.keys(CATS).map(function(k){ return [k, CAT_LABELS[k]]; }), true);
+    fill("due", DUE_OPTS);
+  }
+
+  function updateChips(){
+    var any = false;
+    document.querySelectorAll(".fchip").forEach(function(chip){
+      var key = chip.dataset.f, btn = chip.querySelector("button"), label = FBASE[key];
+      var active = false;
+      if (key === "due"){
+        if (filters.due !== "all"){
+          active = true;
+          label = DUE_OPTS.find(function(o){ return o[0] === filters.due; })[1];
+        }
+      } else if (filters[key].size){
+        active = true;
+        label = FBASE[key] + " · " + filters[key].size;
+      }
+      btn.textContent = label;
+      chip.classList.toggle("active", active);
+      if (active) any = true;
+    });
+    document.getElementById("fbar").classList.toggle("filtered", any);
+  }
+
+  document.getElementById("fbar").addEventListener("click", function(e){
+    var chip = e.target.closest(".fchip");
+    if (chip && e.target.closest("button") && !e.target.closest(".fmenu")){
+      var wasOpen = chip.classList.contains("open");
+      document.querySelectorAll(".fchip.open").forEach(function(c){ c.classList.remove("open"); });
+      if (!wasOpen) chip.classList.add("open");
+    }
+  });
+  document.getElementById("fbar").addEventListener("change", function(e){
+    var chip = e.target.closest(".fchip");
+    if (!chip) return;
+    var key = chip.dataset.f;
+    if (key === "due"){ filters.due = e.target.value; }
+    else {
+      if (e.target.checked) filters[key].add(e.target.value);
+      else filters[key].delete(e.target.value);
+    }
+    render();
+  });
+  document.addEventListener("click", function(e){
+    if (!e.target.closest(".fchip")){
+      document.querySelectorAll(".fchip.open").forEach(function(c){ c.classList.remove("open"); });
+    }
+  });
+  document.getElementById("fclear").addEventListener("click", function(){
+    filters = { proj:new Set(), client:new Set(), cat:new Set(), due:"all" };
+    buildMenus();
+    render();
+  });
+
+  /* ---------- drawer ---------- */
+  function openDrawer(tid){
+    drawerTask = tid;
+    renderDrawer();
+    document.body.classList.add("drawer-open");
+  }
+  function closeDrawer(){
+    drawerTask = null;
+    document.body.classList.remove("drawer-open");
+  }
+  /* Faithful mock of the existing TaskDetailDrawer (header + content + properties).
+     In the real build we simply open that component — this only demos the behaviour. */
+  var ICONS = {
+    chevrons:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 17 5-5-5-5"/><path d="m13 17 5-5-5-5"/></svg>',
+    full:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>',
+    panel:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M15 3v18"/></svg>',
+    more:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg>'
+  };
+  var STATUS_COLORS = { backlog:"#9ca3af", in_progress:"#eab308" };
+
+  function renderDrawer(){
+    var t = taskOf(drawerTask);
+    if (!t) return;
+    var mySegs = segsOf(t.id).sort(function(a,b){ return a.start - b.start; });
+    var pd = plannedDays(t.id);
+    var statusType = pd > 0 ? "in_progress" : "backlog";
+    var statusName = pd > 0 ? "In Progress" : "Backlog";
+    var assignees = [];
+    mySegs.forEach(function(s){
+      var p = personOf(s.personId);
+      if (assignees.indexOf(p) === -1) assignees.push(p);
+    });
+    var dueHTML = t.due === undefined ? '—'
+      : '<span class="' + (t.due < todayAbs ? "due-over" : "") + '">' + fmtShort(dateOf(t.due)) + '</span>';
+    var planRows = mySegs.length ? mySegs.map(function(s, i){
+      var p = personOf(s.personId);
+      return '<div class="pseg"><b>' + fmtShort(dateOf(s.start)) + ' – ' + fmtShort(dateOf(s.start + s.span - 1)) + '</b>' +
+        '<span>' + p.name + ' · ' + s.span + 'd' + (mySegs.length > 1 ? " · " + (i + 1) + "/" + mySegs.length : "") + '</span>' +
+        '<button class="dx" data-seg="' + s.id + '" title="Unschedule this segment">×</button></div>';
+    }).join("") : '<p class="pnone">Not scheduled — drag it onto the timeline.</p>';
+
+    drawerEl.style.setProperty("--c", CATS[t.cat]);
+    drawerEl.innerHTML =
+      '<div class="dhdr">' +
+        '<button class="ib" id="dclose" aria-label="Close drawer (Esc)">' + ICONS.chevrons + '</button>' +
+        '<span class="dsep"></span>' +
+        '<span class="dcrumb">' + PROJ_CLIENTS[t.proj] + ' / ' + t.proj + ' › <b>' + t.title + '</b></span>' +
+        '<span class="sp"></span>' +
+        '<span class="dtime">' + (pd > 0 ? pd + "d planned" : "0h") + '</span>' +
+        '<button class="ib" title="Mock only">' + ICONS.full + '</button>' +
+        '<button class="ib" title="Mock only">' + ICONS.panel + '</button>' +
+        '<button class="ib" title="Mock only">' + ICONS.more + '</button>' +
+      '</div>' +
+      '<div class="dwrap">' +
+        '<div class="dmain">' +
+          '<h3 class="dtitle">' + t.title + '</h3>' +
+          '<p class="ddesc">Scope and references live here as rich text — same Tiptap editor as everywhere else. The planner adds nothing new to this surface.</p>' +
+          '<p class="dsech">Subtasks <span>· 1/3</span></p>' +
+          '<div class="strow stdone"><span class="stc"></span>Collect brand assets</div>' +
+          '<div class="strow"><span class="stc"></span>First round internally reviewed</div>' +
+          '<div class="strow"><span class="stc"></span>Client hand-off package</div>' +
+          '<div class="dcomment">Write a comment…</div>' +
+        '</div>' +
+        '<div class="dprops">' +
+          '<div class="prow"><span class="plabel">Status</span><span class="pval"><span class="sicon" style="--sc:' + STATUS_COLORS[statusType] + '"></span>' + statusName + '</span></div>' +
+          '<div class="prow"><span class="plabel">Assignees</span><span class="pval">' +
+            (assignees.length ? assignees.map(function(p){ return '<span class="av">' + initials(p.name) + '</span><span>' + p.name + '</span>'; }).join("") : "—") +
+          '</span></div>' +
+          '<div class="prow"><span class="plabel">Project</span><span class="pval">' + t.proj + '</span></div>' +
+          '<div class="prow"><span class="plabel">Category</span><span class="pval"><span class="cbadge"><i></i>' + CAT_LABELS[t.cat] + '</span></span></div>' +
+          '<div class="prow"><span class="plabel">Due date</span><span class="pval">' + dueHTML + '</span></div>' +
+          '<div class="prow"><span class="plabel">Estimate</span><span class="pval">' + t.est + 'd</span></div>' +
+          '<div class="prow"><span class="plabel">Billable</span><span class="pval"><span class="sw"></span></span></div>' +
+          '<div class="phr"></div>' +
+          '<div class="prow"><span class="plabel">Plan · ' + mySegs.length + ' sitting' + (mySegs.length === 1 ? "" : "s") + '</span>' + planRows + '</div>' +
+        '</div>' +
+      '</div>';
+  }
+  drawerEl.addEventListener("click", function(e){
+    if (e.target.closest("#dclose")){ closeDrawer(); return; }
+    var dx = e.target.closest(".dx");
+    if (dx){
+      var sid = dx.dataset.seg;
+      segs = segs.filter(function(s){ return s.id !== sid; });
+      if (selected === sid) selected = null;
+      render();
+    }
+  });
+  document.getElementById("drawerBd").addEventListener("click", closeDrawer);
+
+  /* ---------- drag ---------- */
+  var drag = null, ghost = null;
+
+  function hitCanvas(x, y){
+    var list = rowsEl.querySelectorAll(".canvas");
+    for (var i = 0; i < list.length; i++){
+      var r = list[i].getBoundingClientRect();
+      if (y >= r.top && y <= r.bottom) return { cv: list[i], rect: r };
+    }
+    return null;
+  }
+  function dayAt(rect, x){
+    return off + clamp(Math.floor((x - rect.left) / (rect.width / N)), 0, N - 1);
+  }
+  function showGhost(cv, startAbs, span, cat, html){
+    if (!ghost){ ghost = document.createElement("div"); ghost.className = "bar ghost"; }
+    var vs = Math.max(startAbs - off, 0);
+    var ve = Math.min(startAbs + span - off, N);
+    if (ve <= vs){ hideGhost(); return; }
+    ghost.style.setProperty("--c", cat);
+    ghost.style.left = "calc(" + (vs / N * 100) + "% + 2px)";
+    ghost.style.width = "calc(" + ((ve - vs) / N * 100) + "% - 4px)";
+    ghost.innerHTML = html;
+    if (ghost.parentNode !== cv){ ghost.style.top = PAD + "px"; cv.appendChild(ghost); }
+  }
+  function hideGhost(){ if (ghost && ghost.parentNode) ghost.parentNode.removeChild(ghost); }
+
+  /* live lane reflow while dragging — bars break under/over immediately */
+  function reflowPreview(target){
+    if (!drag) return;
+    var affected = {};
+    if (drag.seg) affected[drag.seg.personId] = true;
+    if (drag.lastPerson) affected[drag.lastPerson] = true;
+    if (target) affected[target.personId] = true;
+    var excl = drag.seg && ((drag.mode === "move" && !drag.copy) || drag.mode === "l" || drag.mode === "r") ? drag.seg.id : null;
+    Object.keys(affected).forEach(function(pid){
+      var cv = rowsEl.querySelector('.canvas[data-person="' + pid + '"]');
+      if (!cv) return;
+      var list = rowVisibleSegs(pid, excl);
+      var extra = null;
+      if (target && target.personId === pid){
+        extra = { start: target.start, span: target.span };
+        list = list.concat([extra]);
+      }
+      var lanes = Math.max(1, packLanes(list));
+      cv.style.height = (lanes * LANE + 10) + "px";
+      list.forEach(function(s){
+        var top = (PAD + s._lane * LANE) + "px";
+        if (s === extra){
+          if (drag.mode === "l" || drag.mode === "r") drag.el.style.top = top;
+          else if (ghost) ghost.style.top = top;
+        } else {
+          var b = cv.querySelector('.bar[data-id="' + s.id + '"]');
+          if (b) b.style.top = top;
+        }
+      });
+    });
+    drag.lastPerson = target ? target.personId : null;
+  }
+
+  function beginVisuals(){
+    document.body.classList.add("dragging");
+    if (drag.mode === "create") return;
+    if (drag.mode === "task"){
+      var r = drag.origRect;
+      var fly = drag.el.cloneNode(true);
+      fly.classList.add("fly");
+      fly.style.left = r.left + "px";
+      fly.style.top = r.top + "px";
+      document.body.appendChild(fly);
+      drag.fly = fly;
+      drag.el.classList.add("lift");
+    } else if (drag.mode === "move"){
+      if (!drag.copy) drag.el.classList.add("hide");
+    } else {
+      drag.el.classList.add("snapping");
+    }
+  }
+
+  function endDrag(commit){
+    var was = drag; drag = null;
+    document.body.classList.remove("dragging");
+    document.body.classList.remove("copying");
+    was.el.classList.remove("lift");
+    was.el.classList.remove("hide");
+    was.el.classList.remove("snapping");
+
+    var done = function(){
+      if (was.fly && was.fly.parentNode) was.fly.parentNode.removeChild(was.fly);
+      hideGhost();
+      commit(was);
+      render();
+    };
+
+    if (was.moved && was.mode === "task" && !was.prop && was.fly){
+      was.fly.classList.remove("off");
+      was.fly.classList.add("settle");
+      was.fly.style.transform = "translate(0px,0px)";
+      was.fly.style.opacity = "0.35";
+      window.setTimeout(done, 145);
+      return;
+    }
+    done();
+  }
+
+  document.addEventListener("pointerdown", function(e){
+    if (qcPending && !(e.target.closest && e.target.closest(".qc"))) cancelQc();
+    if (e.button !== 0 || drag) return;
+    var bar = e.target.closest ? e.target.closest(".bar") : null;
+    var item = e.target.closest ? e.target.closest(".titem") : null;
+    if (bar && !bar.classList.contains("ghost")){
+      var seg = segs.find(function(s){ return s.id === bar.dataset.id; });
+      if (!seg) return;
+      var mode = e.target.classList.contains("hl") ? "l" : e.target.classList.contains("hr") ? "r" : "move";
+      var cv = bar.closest(".canvas");
+      var rect = cv.getBoundingClientRect();
+      drag = { mode: mode, seg: seg, el: bar, cv: cv, copy: e.altKey,
+               grab: dayAt(rect, e.clientX) - seg.start,
+               origRect: bar.getBoundingClientRect(), lastPerson: null, key: "",
+               x: e.clientX, y: e.clientY, moved: false, prop: null, fly: null };
+      e.preventDefault();
+    } else if (item){
+      var t = taskOf(item.dataset.task);
+      if (!t) return;
+      drag = { mode: "task", task: t, el: item, span: remainingOf(t),
+               origRect: item.getBoundingClientRect(), lastPerson: null, key: "",
+               x: e.clientX, y: e.clientY, moved: false, prop: null, fly: null };
+      e.preventDefault();
+    } else if (e.target.classList && e.target.classList.contains("canvas")){
+      /* draw a new task on empty cells */
+      var cvE = e.target;
+      drag = { mode: "create", cv: cvE, el: cvE,
+               anchor: dayAt(cvE.getBoundingClientRect(), e.clientX), lastPerson: null, key: "",
+               x: e.clientX, y: e.clientY, moved: false, prop: null, fly: null };
+      e.preventDefault();
+    }
+  });
+
+  document.addEventListener("pointermove", function(e){
+    if (!drag) return;
+    if (!drag.moved){
+      if (Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 4) return;
+      drag.moved = true;
+      beginVisuals();
+    }
+    if (drag.fly){
+      drag.fly.style.transform = "translate(" + (e.clientX - drag.x) + "px," + (e.clientY - drag.y) + "px)";
+    }
+    var s, t, d, key;
+    if (drag.mode === "l" || drag.mode === "r"){
+      /* the bar itself snaps day-by-day */
+      s = drag.seg; t = taskOf(s.taskId);
+      var cvr = drag.cv.getBoundingClientRect();
+      d = dayAt(cvr, e.clientX);
+      var start, span;
+      if (drag.mode === "l"){ start = Math.min(d, s.start + s.span - 1); span = s.start + s.span - start; }
+      else { start = s.start; span = Math.max(1, d - s.start + 1); }
+      key = s.personId + "|" + start + "|" + span;
+      if (key === drag.key) return;
+      drag.key = key;
+      drag.prop = { personId: s.personId, start: start, span: span };
+      var vs = Math.max(start - off, 0);
+      var ve = Math.min(start + span - off, N);
+      drag.el.style.left = "calc(" + (vs / N * 100) + "% + 2px)";
+      drag.el.style.width = "calc(" + ((ve - vs) / N * 100) + "% - 4px)";
+      var durEl = drag.el.querySelector(".dur");
+      if (durEl) durEl.textContent = span + "d";
+      reflowPreview(drag.prop);
+    } else if (drag.mode === "create"){
+      var crect = drag.cv.getBoundingClientRect();
+      d = dayAt(crect, e.clientX);
+      var cs = Math.min(drag.anchor, d), csp = Math.abs(d - drag.anchor) + 1;
+      key = cs + "|" + csp;
+      if (key === drag.key) return;
+      drag.key = key;
+      drag.prop = { personId: drag.cv.dataset.person, start: cs, span: csp };
+      showGhost(drag.cv, cs, csp, CATS.none,
+        '<span class="r1"><span class="dot"></span><span class="t">New task</span>' +
+        (csp >= 2 ? '<span class="dur">' + csp + 'd</span>' : '') + '</span><span class="r2">release to name it</span>');
+      reflowPreview(drag.prop);
+    } else {
+      var hit = hitCanvas(e.clientX, e.clientY);
+      if (!hit){
+        drag.prop = null; drag.key = "";
+        hideGhost();
+        if (drag.fly) drag.fly.classList.remove("off");
+        reflowPreview(null);
+        return;
+      }
+      d = dayAt(hit.rect, e.clientX);
+      if (drag.mode === "move"){
+        s = drag.seg; t = taskOf(s.taskId);
+        var copyNow = e.altKey;
+        if (copyNow !== drag.copy){
+          drag.copy = copyNow;
+          document.body.classList.toggle("copying", copyNow);
+          drag.el.classList.toggle("hide", !copyNow);
+          drag.key = "";
+        }
+        var prop = { personId: hit.cv.dataset.person, start: d - drag.grab, span: s.span };
+        key = prop.personId + "|" + prop.start + "|" + prop.span;
+        if (key === drag.key) return;
+        drag.key = key;
+        drag.prop = prop;
+        showGhost(hit.cv, prop.start, s.span, CATS[t.cat], barHTML(t, s.span, null, s.span, drag.copy));
+        reflowPreview(prop);
+      } else {
+        t = drag.task;
+        drag.fly.classList.add("off");
+        var prop2 = { personId: hit.cv.dataset.person, start: d, span: drag.span };
+        key = prop2.personId + "|" + prop2.start;
+        if (key === drag.key) return;
+        drag.key = key;
+        drag.prop = prop2;
+        showGhost(hit.cv, d, drag.span, CATS[t.cat], barHTML(t, drag.span, null, drag.span));
+        reflowPreview(prop2);
+      }
+    }
+  });
+
+  /* draw-to-create: name the drawn bar in a small popover */
+  function openQc(prop){
+    qcPending = prop;
+    var cv = rowsEl.querySelector('.canvas[data-person="' + prop.personId + '"]');
+    if (!cv || !ghost || !ghost.parentNode){ qcPending = null; hideGhost(); render(); return; }
+    qcEl = document.createElement("div");
+    qcEl.className = "qc";
+    qcEl.innerHTML = '<input class="qct" type="text" placeholder="Task name…">' +
+      '<select class="qcp">' + Object.keys(PROJ_CLIENTS).sort().map(function(p){
+        return '<option value="' + p + '">' + p + ' · ' + PROJ_CLIENTS[p] + '</option>';
+      }).join("") + '</select>' +
+      '<span class="qhint">↵ create · esc cancel</span>';
+    qcEl.style.left = ghost.style.left;
+    qcEl.style.top = (ghost.offsetTop + 52) + "px";
+    cv.appendChild(qcEl);
+    var input = qcEl.querySelector(".qct");
+    input.addEventListener("keydown", function(e){
+      if (e.key === "Enter" && this.value.trim()) confirmQc(this.value.trim());
+      else if (e.key === "Escape") cancelQc();
+      e.stopPropagation();
+    });
+    input.focus();
+  }
+  function confirmQc(title){
+    var p = qcPending;
+    tasks.push({ id:"T" + uid, title: title, proj: qcEl.querySelector(".qcp").value, cat:"none", ci: uid });
+    segs.push({ id:"n" + uid, taskId:"T" + uid, personId: p.personId, start: p.start, span: p.span });
+    uid++;
+    qcPending = null;
+    if (qcEl && qcEl.parentNode) qcEl.parentNode.removeChild(qcEl);
+    qcEl = null;
+    hideGhost();
+    render();
+  }
+  function cancelQc(){
+    qcPending = null;
+    if (qcEl && qcEl.parentNode) qcEl.parentNode.removeChild(qcEl);
+    qcEl = null;
+    hideGhost();
+  }
+
+  document.addEventListener("pointerup", function(){
+    if (!drag) return;
+    if (drag.mode === "create"){
+      var wasC = drag; drag = null;
+      document.body.classList.remove("dragging");
+      if (!wasC.moved || !wasC.prop){ hideGhost(); return; }
+      openQc(wasC.prop);   /* ghost stays as the pending bar */
+      return;
+    }
+    endDrag(function(was){
+      if (!was.moved){
+        if (was.seg){ selected = was.seg.id; openDrawer(was.seg.taskId); }
+        else if (was.task){ openDrawer(was.task.id); }
+        return;
+      }
+      if (!was.prop) return;
+      if (was.mode === "task"){
+        segs.push({ id: "n" + (uid++), taskId: was.task.id, personId: was.prop.personId,
+                    start: was.prop.start, span: was.prop.span });
+      } else if (was.mode === "move" && was.copy){
+        segs.push({ id: "n" + (uid++), taskId: was.seg.taskId, personId: was.prop.personId,
+                    start: was.prop.start, span: was.prop.span });
+      } else {
+        was.seg.personId = was.prop.personId;
+        was.seg.start = was.prop.start;
+        was.seg.span = was.prop.span;
+      }
+    });
+  });
+
+  document.addEventListener("pointercancel", function(){
+    if (drag) endDrag(function(){});
+  });
+
+  /* sibling highlight on hover */
+  rowsEl.addEventListener("mouseover", function(e){
+    if (drag) return;
+    var bar = e.target.closest ? e.target.closest(".bar") : null;
+    if (!bar || !bar.dataset.task) return;
+    rowsEl.querySelectorAll('.bar[data-task="' + bar.dataset.task + '"]').forEach(function(b){
+      if (b !== bar) b.classList.add("sib");
+    });
+  });
+  rowsEl.addEventListener("mouseout", function(e){
+    var bar = e.target.closest ? e.target.closest(".bar") : null;
+    if (!bar) return;
+    var selSeg = segs.find(function(s){ return s.id === selected; });
+    rowsEl.querySelectorAll(".bar.sib").forEach(function(b){
+      if (!(selSeg && b.dataset.task === selSeg.taskId && b.dataset.id !== selected)) b.classList.remove("sib");
+    });
+  });
+
+  document.addEventListener("keydown", function(e){
+    if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+    if (e.key === "Escape"){
+      if (qcPending){ cancelQc(); render(); return; }
+      if (drawerTask){ closeDrawer(); return; }
+      if (selected){ selected = null; render(); }
+      return;
+    }
+    if ((e.key === "Backspace" || e.key === "Delete") && selected){
+      segs = segs.filter(function(x){ return x.id !== selected; });
+      selected = null;
+      render();
+      e.preventDefault();
+    }
+  });
+
+  document.getElementById("prev").addEventListener("click", function(){ off -= 7; render(); });
+  document.getElementById("next").addEventListener("click", function(){ off += 7; render(); });
+  document.getElementById("tdy").addEventListener("click", function(){ off = 0; render(); });
+  document.getElementById("z7").addEventListener("click", function(){
+    N = 7; this.classList.add("on"); document.getElementById("z14").classList.remove("on"); render();
+  });
+  document.getElementById("z14").addEventListener("click", function(){
+    N = 14; this.classList.add("on"); document.getElementById("z7").classList.remove("on"); render();
+  });
+  document.getElementById("sideBtn").addEventListener("click", function(){
+    document.getElementById("frame").classList.toggle("noside");
+  });
+  document.querySelector(".newtask").addEventListener("click", function(){
+    document.getElementById("frame").classList.remove("noside");
+    composerOpen = true;
+    focusComposer = true;
+    renderPanel();
+  });
+  document.getElementById("q").addEventListener("input", function(){
+    query = this.value; renderPanel();
+  });
+  document.getElementById("tabU").addEventListener("click", function(){
+    tab = "u"; this.classList.add("on"); document.getElementById("tabA").classList.remove("on"); renderPanel();
+  });
+  document.getElementById("tabA").addEventListener("click", function(){
+    tab = "a"; this.classList.add("on"); document.getElementById("tabU").classList.remove("on"); renderPanel();
+  });
+
+  buildMenus();
+  render();
+})();
+</script>

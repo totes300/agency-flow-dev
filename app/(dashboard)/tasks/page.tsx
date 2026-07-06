@@ -27,10 +27,10 @@ import { TasksEmptyState } from "@/components/tasks/tasks-empty-state"
 import { TaskCard } from "@/components/tasks/task-card"
 import { TasksListSkeleton } from "@/components/tasks/tasks-list-skeleton"
 import { Button } from "@/components/ui/button"
-import { ConfirmDialog } from "@/components/confirm-dialog"
+import { DeleteTaskDialog } from "@/components/tasks/delete-task-dialog"
 import { PlusIcon } from "lucide-react"
 import { toast } from "sonner"
-import { toastError } from "@/lib/toast-helpers"
+import { toastArchiveSuccess, toastError } from "@/lib/toast-helpers"
 import type { Id } from "@/convex/_generated/dataModel"
 import type { TaskListItem } from "@/components/tasks/tasks-table"
 
@@ -69,7 +69,6 @@ export default function TasksPage() {
 
   const archiveTask = useMutation(api.tasks.archive)
   const restoreTask = useMutation(api.tasks.restore)
-  const removeTask = useMutation(api.tasks.remove)
   const reorderTask = useMutation(api.tasks.reorderTask)
   const { trigger: triggerUndo } = useUndoAction()
 
@@ -263,7 +262,12 @@ export default function TasksPage() {
       key: taskId,
       message: "Task archived",
       action: async () => {
-        await archiveTask({ id: taskId as Id<"tasks"> })
+        const result = await archiveTask({ id: taskId as Id<"tasks"> })
+        // The undo toast already says "Task archived" — only add noise when
+        // a running timer was rescued (or couldn't be).
+        if (result.autoSavedTimers.length > 0 || result.timerSaveFailures.length > 0) {
+          toastArchiveSuccess(result, "Task archived")
+        }
       },
       onUndo: async () => {
         await restoreTask({ id: taskId as Id<"tasks"> })
@@ -280,18 +284,6 @@ export default function TasksPage() {
       toastError(err, "Failed to restore task")
     }
   }, [restoreTask])
-
-  // Delete with confirmation
-  async function handleDelete() {
-    if (!deleteTargetId) return
-    try {
-      await removeTask({ id: deleteTargetId as Id<"tasks"> })
-      setDeleteTargetId(null)
-      toast.success("Task deleted")
-    } catch (err) {
-      toastError(err, "Failed to delete task")
-    }
-  }
 
   const renderItem = useCallback((item: TaskListItem) => {
     if (item.kind === "draft") {
@@ -433,14 +425,10 @@ export default function TasksPage() {
 
       <TaskFormModal open={createModalOpen} onOpenChange={setCreateModalOpen} />
 
-      <ConfirmDialog
+      <DeleteTaskDialog
+        taskId={deleteTargetId as Id<"tasks"> | null}
         open={!!deleteTargetId}
         onOpenChange={(open) => { if (!open) setDeleteTargetId(null) }}
-        title="Delete task"
-        description="This will permanently delete this task including all subtasks, time entries, comments, and attachments. This cannot be undone."
-        confirmLabel="Delete"
-        variant="destructive"
-        onConfirm={handleDelete}
       />
 
       {viewPref === "drawer" ? (

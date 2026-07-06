@@ -1,5 +1,9 @@
 # My Tasks — Personal Focus View
 
+> ⚠️ **SUPERSEDED (2026-07-06)** by `docs/today-planner-prd.md` — "Today" is no longer a
+> status; it is a derived per-user daily plan computed from Planner `planSegments`.
+> This document remains for historical context on the original My Tasks design.
+
 > **Goal**: A personal, distraction-free view of all tasks assigned to you. Default: daily focus checklist (only "Today" status tasks). Expandable via ⚙ to a full "My Tasks" view grouped by status.
 >
 > **Route**: `/my-tasks` — standalone page, own sidebar menu item

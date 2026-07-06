@@ -7,6 +7,7 @@ import { generateNextProjectCode, ensureUniqueProjectCode } from "./lib/helpers"
 import { validateAssignees } from "./lib/task_helpers";
 import { getDateInTimezone, ORG_TIMEZONE_FALLBACK } from "./lib/timer";
 import { getOrgSettings, getProjectCurrency } from "./lib/orgHelpers";
+import { getFixedBilledFinalized } from "./lib/fixedBilling";
 import {
   getInvoiceAnchorMonthKey,
   invoiceCoversMonth,
@@ -348,6 +349,14 @@ export const update = mutation({
       }
       if (args.fixedPrice <= 0) {
         throw new ConvexError("Fixed fee must be greater than zero");
+      }
+      // Never below what's already been invoiced — the next generate would
+      // otherwise emit a negative fixed line / negative-total invoice.
+      const billed = await getFixedBilledFinalized(ctx, orgId, args.id);
+      if (args.fixedPrice < billed) {
+        throw new ConvexError(
+          `Fixed fee cannot be lower than the amount already invoiced (${billed}). Void the affected invoices first.`,
+        );
       }
       updates.fixedPrice = args.fixedPrice;
     }
@@ -1099,12 +1108,25 @@ export const getSummary = query({
     // Never overload `closed` for both — same rule as Slice 2 Revision Pass #1.
     const subtitle = `${rangeLabel} · ${length}-month ${rolloverEnabled ? "rollover" : "monthly"}${isCycleClosed ? " (ended)" : ""}`;
 
+    // Overage is only DUE for ended months (same rule as getRetainerData's
+    // `periodEnded` gate and the billing inbox) — an in-progress month must
+    // not flip the Summary card to "overage due" mid-month (review M2).
+    const endedMonthBillableMinutes = new Map<string, number>();
+    for (const [monthKey, minutes] of monthBillableMinutes) {
+      const [my, mm] = monthKey.split("-").map(Number);
+      const lastDay = new Date(my, mm, 0).getDate();
+      const monthEnd = `${monthKey}-${String(lastDay).padStart(2, "0")}`;
+      if (monthEnd < todayStr) endedMonthBillableMinutes.set(monthKey, minutes);
+    }
+
     return computeRetainerSummary({
       entries: cycleEntries,
       monthlyFee,
       overageRate,
       includedMinutesPerMonth,
       cycle: cycleForSummary,
+      rolloverEnabled,
+      monthBillableMinutes: endedMonthBillableMinutes,
       currency,
       subtitle,
       isAdmin,
@@ -1183,6 +1205,25 @@ export const remove = mutation({
         .first();
       if (hasEntries) {
         throw new ConvexError("Cannot delete a project with time entries — archive it instead");
+      }
+    }
+
+    // Block on running timers too. Deleting the project would leave the
+    // timer dangling — its stop would silently discard the measured hours
+    // (and an auto-save is impossible: entry creation is exactly what the
+    // entries-guard above forbids on delete).
+    const projectTaskIds = new Set(projectTasks.map((t) => t._id.toString()));
+    const projectMembers = await ctx.db
+      .query("orgMembers")
+      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+      .collect();
+    for (const member of projectMembers) {
+      if (!member.userId) continue;
+      const memberUser = await ctx.db.get(member.userId);
+      if (memberUser?.timerTaskId && projectTaskIds.has(memberUser.timerTaskId.toString())) {
+        throw new ConvexError(
+          `${memberUser.name} has a running timer on this project — it must be stopped or discarded first.`,
+        );
       }
     }
 

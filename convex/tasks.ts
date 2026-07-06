@@ -3,6 +3,8 @@ import { generateKeyBetween } from "fractional-indexing";
 import { query, mutation } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { getAuthContext, requireAdmin, validateStringLength } from "./lib/auth";
+import { autoSaveTimersForTasks } from "./lib/timerEntry";
+import { MAX_TIMER_MS } from "./lib/timer";
 import { logActivity } from "./activityLog";
 import { STATUS_TYPES } from "./lib/constants";
 import type { StatusType } from "./lib/constants";
@@ -22,6 +24,7 @@ import {
   validateWorkCategory,
   getDefaultStatusId,
   cascadeDeleteTaskData,
+  taskHasTimeEntries,
   createTaskEnricher,
   resolveDefaultAssignee,
 } from "./lib/task_helpers";
@@ -1353,17 +1356,18 @@ export const archive = mutation({
       if (!sub.archivedAt) await ctx.db.patch(sub._id, { archivedAt: now, updatedAt: now });
     }
 
-    // Stop active timers on affected tasks
+    // Running timers on affected tasks: auto-save the measured time as
+    // entries instead of wiping it (returned so the caller's toast can say
+    // whose time was saved / left running).
     const affectedTaskIds = new Set([args.id.toString(), ...subtasks.map((s) => s._id.toString())]);
-    const orgMembers = await ctx.db.query("orgMembers").withIndex("by_orgId", (q) => q.eq("orgId", orgId)).collect();
-    for (const member of orgMembers) {
-      if (!member.userId) continue;
-      const user = await ctx.db.get(member.userId);
-      if (user?.timerTaskId && affectedTaskIds.has(user.timerTaskId.toString())) {
-        await ctx.db.patch(member.userId, { timerTaskId: undefined, timerStartedAt: undefined, timerAccumulatedMs: undefined, timerStatus: undefined });
-      }
-    }
+    const timerRescue = await autoSaveTimersForTasks(ctx, {
+      orgId,
+      actorUserId: userId,
+      taskIds: affectedTaskIds,
+      noteLabel: "Auto-saved when the task was archived",
+    });
 
+    return { autoSavedTimers: timerRescue.saved, timerSaveFailures: timerRescue.failed };
   },
 });
 
@@ -1388,8 +1392,83 @@ export const restore = mutation({
   },
 });
 
-export const remove = mutation({
+/**
+ * What deleting this task (and its subtasks) would destroy. Powers the
+ * delete-confirmation dialog so the user gets the resolution (archive /
+ * delete-with-entries) in place instead of a dead-end error.
+ */
+export const deleteImpact = query({
   args: { id: v.id("tasks") },
+  handler: async (ctx, args) => {
+    const { orgId } = await getAuthContext(ctx);
+    const task = await ctx.db.get(args.id);
+    if (!task || task.orgId !== orgId) return null;
+
+    const subtasks = await ctx.db.query("tasks")
+      .withIndex("by_orgId_parentTaskId", (q) => q.eq("orgId", orgId).eq("parentTaskId", args.id))
+      .collect();
+
+    let entryCount = 0;
+    let totalMinutes = 0;
+    let lockedCount = 0;
+    let lockedMinutes = 0;
+    for (const t of [task, ...subtasks]) {
+      const entries = await ctx.db.query("timeEntries")
+        .withIndex("by_taskId", (q) => q.eq("taskId", t._id))
+        .collect();
+      for (const e of entries) {
+        entryCount++;
+        totalMinutes += e.durationMinutes;
+        if (e.invoiceId || e.settledAt) {
+          lockedCount++;
+          lockedMinutes += e.durationMinutes;
+        }
+      }
+    }
+
+    // Running/paused timers on the tree: deleting the task discards them
+    // (an entry can't outlive its task), so the dialog must say so.
+    const affectedIds = new Set([task._id.toString(), ...subtasks.map((s) => s._id.toString())]);
+    const members = await ctx.db.query("orgMembers")
+      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+      .collect();
+    let runningTimerCount = 0;
+    let runningTimerMinutes = 0;
+    const now = Date.now();
+    for (const member of members) {
+      if (!member.userId) continue;
+      const u = await ctx.db.get(member.userId);
+      if (!u?.timerTaskId || !affectedIds.has(u.timerTaskId.toString())) continue;
+      const accumulated = u.timerAccumulatedMs ?? 0;
+      const elapsedMs = Math.min(
+        u.timerStatus === "running" && u.timerStartedAt
+          ? now - u.timerStartedAt + accumulated
+          : accumulated,
+        MAX_TIMER_MS,
+      );
+      runningTimerCount++;
+      runningTimerMinutes += Math.round(elapsedMs / 60_000);
+    }
+
+    return {
+      entryCount,
+      totalMinutes,
+      lockedCount,
+      lockedMinutes,
+      subtaskCount: subtasks.length,
+      runningTimerCount,
+      runningTimerMinutes,
+    };
+  },
+});
+
+export const remove = mutation({
+  args: {
+    id: v.id("tasks"),
+    // Explicit consent to delete unlocked time entries along with the task.
+    // Invoiced/settled entries can never be deleted this way.
+    deleteEntries: v.optional(v.boolean()),
+  },
   handler: async (ctx, args) => {
     const { orgId } = await requireAdmin(ctx);
     const task = await ctx.db.get(args.id);
@@ -1398,6 +1477,30 @@ export const remove = mutation({
     const subtasks = await ctx.db.query("tasks")
       .withIndex("by_orgId_parentTaskId", (q) => q.eq("orgId", orgId).eq("parentTaskId", args.id))
       .collect();
+
+    // Time entries are ledger records. Invoiced/settled ones are immutable
+    // (same protection as timeEntries.remove); free ones require explicit
+    // consent so a task delete can't silently destroy logged hours.
+    let hasEntries = false;
+    for (const t of [task, ...subtasks]) {
+      const entries = await ctx.db.query("timeEntries")
+        .withIndex("by_taskId", (q) => q.eq("taskId", t._id))
+        .collect();
+      for (const e of entries) {
+        if (e.invoiceId || e.settledAt) {
+          throw new ConvexError(
+            "This task has invoiced or settled time entries. Archive it instead to keep billing records intact.",
+          );
+        }
+        hasEntries = true;
+      }
+    }
+    if (hasEntries && !args.deleteEntries) {
+      throw new ConvexError(
+        "This task has logged time. Archive it instead, or confirm deleting the time entries with it.",
+      );
+    }
+
     for (const sub of subtasks) {
       await cascadeDeleteTaskData(ctx, sub._id);
       await ctx.db.delete(sub._id);
@@ -1479,6 +1582,8 @@ export const bulkUpdate = mutation({
 
     const now = Date.now();
     let updated = 0;
+    const autoSavedTimers: Array<{ userName: string; minutes: number }> = [];
+    const timerSaveFailures: Array<{ userName: string; reason: string }> = [];
     const skipped: Array<{ taskId: Id<"tasks">; title: string; reason: string }> = [];
 
     for (const taskId of args.taskIds) {
@@ -1596,16 +1701,16 @@ export const bulkUpdate = mutation({
             await ctx.db.patch(taskId, { archivedAt: now, updatedAt: now });
             const subs = await ctx.db.query("tasks").withIndex("by_orgId_parentTaskId", (q) => q.eq("orgId", orgId).eq("parentTaskId", taskId)).collect();
             for (const sub of subs) { if (!sub.archivedAt) await ctx.db.patch(sub._id, { archivedAt: now, updatedAt: now }); }
-            // Stop active timers on affected tasks
+            // Running timers on affected tasks: auto-save instead of wipe.
             const affectedIds = new Set([taskId.toString(), ...subs.map((s) => s._id.toString())]);
-            const archiveMembers = await ctx.db.query("orgMembers").withIndex("by_orgId", (q) => q.eq("orgId", orgId)).collect();
-            for (const member of archiveMembers) {
-              if (!member.userId) continue;
-              const user = await ctx.db.get(member.userId);
-              if (user?.timerTaskId && affectedIds.has(user.timerTaskId.toString())) {
-                await ctx.db.patch(member.userId, { timerTaskId: undefined, timerStartedAt: undefined, timerAccumulatedMs: undefined, timerStatus: undefined });
-              }
-            }
+            const rescue = await autoSaveTimersForTasks(ctx, {
+              orgId,
+              actorUserId: userId,
+              taskIds: affectedIds,
+              noteLabel: "Auto-saved when the task was archived",
+            });
+            autoSavedTimers.push(...rescue.saved);
+            timerSaveFailures.push(...rescue.failed);
           }
           updated++;
           break;
@@ -1613,6 +1718,12 @@ export const bulkUpdate = mutation({
         case "delete": {
           if (!isAdmin) { skipped.push({ taskId, title: task.title, reason: "Only admins can delete tasks" }); continue; }
           const delSubs = await ctx.db.query("tasks").withIndex("by_orgId_parentTaskId", (q) => q.eq("orgId", orgId).eq("parentTaskId", taskId)).collect();
+          // Time entries are ledger records — same rule as projects.remove.
+          let hasLoggedTime = false;
+          for (const t of [task, ...delSubs]) {
+            if (await taskHasTimeEntries(ctx, t._id)) { hasLoggedTime = true; break; }
+          }
+          if (hasLoggedTime) { skipped.push({ taskId, title: task.title, reason: "Task has logged time — archive it instead" }); continue; }
           // Stop active timers on affected tasks
           const delAffectedIds = new Set([taskId.toString(), ...delSubs.map((s) => s._id.toString())]);
           const delMembers = await ctx.db.query("orgMembers").withIndex("by_orgId", (q) => q.eq("orgId", orgId)).collect();
@@ -1640,7 +1751,7 @@ export const bulkUpdate = mutation({
       }
     }
 
-    return { updated, skipped };
+    return { updated, skipped, autoSavedTimers, timerSaveFailures };
   },
 });
 

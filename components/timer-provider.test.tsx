@@ -35,6 +35,8 @@ function makeTimerState(overrides: Partial<NonNullable<TimerState>> = {}): NonNu
 function makeStopResult(overrides: Partial<StopResult> = {}): StopResult {
   return {
     taskId: TASK_A,
+    entryId: "entry_1" as Id<"timeEntries">,
+    discarded: false,
     elapsedMs: 120000,
     roundedMinutes: 2,
     taskName: "Design homepage",
@@ -42,7 +44,6 @@ function makeStopResult(overrides: Partial<StopResult> = {}): StopResult {
     clientName: "Acme Corp",
     isBillable: true,
     isStale: false,
-    rateSnapshot: {},
     ...overrides,
   }
 }

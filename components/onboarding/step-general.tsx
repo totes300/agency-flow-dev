@@ -64,7 +64,11 @@ export function StepGeneral({
       </div>
 
       <div className="space-y-2">
-        <Label>Time rounding</Label>
+        <Label>Invoice rounding</Label>
+        <p className="text-xs text-muted-foreground">
+          New invoices round each line&apos;s time up to this increment.
+          Timesheets always keep exact time. You can change it per invoice.
+        </p>
         <RadioGroup
           value={String(rounding)}
           onValueChange={(v) => onRoundingChange(Number(v) as RoundingMinutes)}

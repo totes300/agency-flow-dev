@@ -472,6 +472,9 @@ describe("computeRetainerSummary", () => {
     overageRate: 150,
     includedMinutesPerMonth: 600, // 10 hours
     cycle,
+    // Pooled-cycle math (the pre-2026-07-05 behavior all tests below
+    // assert). Non-rollover per-month overage has its own cases at the end.
+    rolloverEnabled: true,
   };
 
   it("empty cycle — revenue = fee only, cost 0, no overage", () => {
@@ -577,6 +580,42 @@ describe("computeRetainerSummary", () => {
     expect(result.cycle.number).toBe(1);
     expect(result.overage).toBeUndefined();
     expect(result.profitability).toBeUndefined();
+  });
+
+  it("non-rollover multi-month: overage sums per-month excess (idle months don't absorb)", () => {
+    // 3-month cycle, 10h/month budget. Month 1 works 20h (10h over),
+    // months 2–3 idle. Pooled math would report 0 overage (20h < 30h
+    // budget) — the bug this fixes. Per-month math reports 10h.
+    const threeMonthCycle: RetainerCycleContext = {
+      ...cycle,
+      end: "2026-06-30",
+      length: 3,
+    };
+    const result = computeRetainerSummary({
+      ...defaultArgs,
+      cycle: threeMonthCycle,
+      rolloverEnabled: false,
+      monthBillableMinutes: new Map([["2026-04", 1200]]),
+      entries: [entry({ durationMinutes: 1200, isBillable: true })],
+    });
+    expect(result.overage?.overBudgetMinutes).toBe(600);
+    expect(result.overage?.overageDueAmount).toBe((600 / 60) * 150);
+  });
+
+  it("rollover multi-month: same shape stays pooled (no overage under aggregate budget)", () => {
+    const threeMonthCycle: RetainerCycleContext = {
+      ...cycle,
+      end: "2026-06-30",
+      length: 3,
+    };
+    const result = computeRetainerSummary({
+      ...defaultArgs,
+      cycle: threeMonthCycle,
+      rolloverEnabled: true,
+      monthBillableMinutes: new Map([["2026-04", 1200]]),
+      entries: [entry({ durationMinutes: 1200, isBillable: true })],
+    });
+    expect(result.overage?.overBudgetMinutes).toBe(0);
   });
 });
 

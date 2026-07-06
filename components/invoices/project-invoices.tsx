@@ -60,6 +60,11 @@ export function ProjectInvoices({
   // within budget, `uninvoicedMonths` is empty and there's nothing to bill.
   const retainerHasNothingToBill =
     billingType === "retainer" && uninvoicedMonths.length === 0
+  // Fixed projects: once the finalized fixed lines reach the fee there is
+  // nothing left to bill — the server rejects creation too; the button must
+  // agree with the Ready feed and banner (which already hide at ≤ 0).
+  const fixedFullyBilled =
+    billingType === "fixed" && metrics.fixedRemaining <= 0
 
   // For retainer projects the retainer callout (below) carries period context.
   // The header "Create Invoice" button needs an explicit month — without one
@@ -98,7 +103,8 @@ export function ProjectInvoices({
         </div>
         <Button
           size="sm"
-          disabled={pending || retainerHasNothingToBill}
+          disabled={pending || retainerHasNothingToBill || fixedFullyBilled}
+          title={fixedFullyBilled ? "The fixed fee is fully invoiced" : undefined}
           onClick={handleCreate}
         >
           <PlusIcon data-icon="inline-start" className="size-4" />

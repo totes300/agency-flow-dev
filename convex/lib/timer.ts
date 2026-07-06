@@ -6,6 +6,14 @@
 export const ORG_TIMEZONE_FALLBACK = "America/New_York";
 
 /**
+ * Hard ceiling on a single timer session. EVERY path that converts timer
+ * state into ledger minutes must apply it — `timer.stop`, the archive
+ * auto-save, and impact reporting — otherwise a forgotten weekend timer
+ * mints fabricated billable hours.
+ */
+export const MAX_TIMER_MS = 16 * 60 * 60 * 1000; // 16 hours
+
+/**
  * Compute elapsed milliseconds for a single running segment.
  * Returns 0 if result would be negative.
  */

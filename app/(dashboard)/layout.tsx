@@ -1,5 +1,7 @@
-import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar"
+import { SidebarInset, SidebarTrigger } from "@/components/ui/sidebar"
 import { AppSidebar } from "@/components/app-sidebar"
+import { InboxSidebar } from "@/components/inbox/inbox-sidebar"
+import { InboxSidebarProvider } from "@/components/inbox/inbox-sidebar-context"
 import { Separator } from "@/components/ui/separator"
 import { DashboardBreadcrumb } from "@/components/dashboard-breadcrumb"
 import { OnboardingGate } from "@/components/onboarding-gate"
@@ -15,9 +17,16 @@ export default function DashboardLayout({
   children: React.ReactNode
 }) {
   return (
-    <SidebarProvider>
+    // InboxSidebarProvider renders SidebarProvider in controlled mode —
+    // it owns the inbox ⇄ nav-rail choreography
+    <InboxSidebarProvider>
       <AppSidebar />
-      <SidebarInset>
+      <InboxSidebar />
+      {/* min-w-0: SidebarInset is a horizontal flex item; without it, a page
+          whose content has a large intrinsic width (e.g. the Planner's day
+          canvas) blocks shrinking and pushes the whole inset past the
+          viewport instead of scrolling internally. */}
+      <SidebarInset className="min-w-0">
         <BreadcrumbTitleProvider>
           <header className="flex h-16 shrink-0 items-center gap-2 transition-[width,height] ease-linear group-has-data-[collapsible=icon]/sidebar-wrapper:h-12">
             <div className="flex items-center gap-2 px-4">
@@ -41,6 +50,6 @@ export default function DashboardLayout({
         </BreadcrumbTitleProvider>
       </SidebarInset>
       <Toaster />
-    </SidebarProvider>
+    </InboxSidebarProvider>
   )
 }

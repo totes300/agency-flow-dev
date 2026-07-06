@@ -1927,3 +1927,724 @@ email-extensible.
 - **Hover task-preview card** on notification rows.
 - **Mention-grants-visibility** stays rejected by design (Notion pattern);
   revisit only if the access model itself changes.
+
+## Phase 10: Planner
+
+Plan: `docs/toggle-plan/` (PRD + 9 tracer-bullet slices). Design reference:
+`docs/mockups/planner-mockup.html`.
+
+### Slice 1 — Tracer bullet: first bar on the board ✅ (2026-07-05)
+
+- [x] `planSegments` table (`orgId`, `taskId`, `userId`, `startDate`,
+      `endDate`, `createdAt`, `updatedAt`, `createdBy`) with indexes
+      `by_orgId_taskId` + `by_orgId_startDate` (`convex/schema.ts`)
+- [x] Write-time invariant `endDate >= startDate` via shared
+      `assertSegmentRange` guard (`convex/planner.ts`) — every future write
+      path (slice 3 mutations) must reuse it
+- [x] `planner.weekGrid` query — Workday args contract (`startDate`/`endDate`
+      inclusive, optional `userIds`); rows for ALL org members incl. for
+      non-admins (deliberate Workday difference); org-scoped everywhere;
+      archived tasks' segments hidden (not deleted); joined task title /
+      project name / category color key / statusType
+- [x] Task hard-delete cascade: `cascadeDeleteTaskData` now removes
+      `planSegments` (covers `tasks.remove` + `tasks.bulkUpdate` delete)
+- [x] `/planner` route (all members) + nav entry in `lib/navigation.ts`
+      (Insights group, `CalendarRangeIcon`); page is a thin orchestrator
+- [x] Minimal grid: `200px + repeat(days, 1fr)`, sticky people rail under
+      horizontal scroll, day headers (month marks, weekend muted, today
+      pill), weekend/today column tinting, two-line category-tinted bars
+      (mockup formula: 15% bg / 52% text `color-mix`), squared clip edges,
+      naive first-fit lanes (`lib/planner.ts`), fixed current-2-weeks range
+- [x] Fullscreen board (owner feedback, Toggl Plan mold): page reclaims the
+      dashboard layout padding and fills the remaining viewport; the grid
+      scrolls both axes internally with sticky day header + sticky rail;
+      day stripes extend below the last row via a flex filler
+      (`planner-day-stripes.tsx` shared by rows + filler)
+- [x] Content-aware skeleton (`planner-grid-skeleton.tsx` + route
+      `loading.tsx`) and members-empty state
+- [x] Dev seed: `npx convex run planner:seedDemo` (internal mutation;
+      optional `{ orgId }`) — split task (2 segments), overlapping bars
+      (lane stacking), weekend-spanning bar; wipes org segments on re-run
+
+**Verification:** `convex/__tests__/planner.test.ts` — 8 tests: invariant
+rejection (inverted + malformed dates), all-rows visibility for members,
+cross-org isolation (both directions), archived-segment exclusion +
+retention, range-overlap filtering, inverted-range rejection, delete
+cascade. `npx tsc --noEmit` clean. Full vitest run: only pre-existing
+failures unrelated to Planner (`format-activity-timestamp`,
+`taskActivityIndicators`, vendored tiptap reference tests).
+
+**TODOs deferred to later slices:**
+- Proper lane packing + capacity math + part badges (`1/2`) with unit tests
+  in `lib/planner.ts` — slice 2 (naive first-fit shipped now)
+- Week nav / zoom (7/14) / member filter in URL; org-tz week anchor (page
+  currently derives Monday from browser-local date) — slice 2
+- Click bar → task drawer — slice 5; drag engine — slices 3–4
+- `seedDemo` is dev-only scaffolding; remove or gate before production
+  (slice 9 hardening)
+- Done-task dimming + check mark on bars — slice 2/9 polish
+
+### Slice 2 — Complete read-only grid ✅ approved (2026-07-05)
+
+- [x] Pure math in `lib/planner.ts`, unit-tested (`lib/planner.test.ts`,
+      19 tests): greedy first-fit lane packing (order-independent, inclusive
+      day indexes, freed-lane reuse, touch=overlap), range clamp (both-edge
+      clipping), inclusive span, workday counting across week boundaries,
+      row capacity (weekend cells excluded from planned AND available;
+      overlaps double-count; clamped to view; `over` flag)
+- [x] Part badges: `weekGrid` returns `partIndex`/`partCount` ranked across
+      ALL of the task's segments (off-screen + other-row siblings included)
+      via pure `rankTaskSegments` (`convex/lib/plannerMath.ts`); badge shows
+      only when count > 1 and the visible span ≥ 2 days (mockup rule)
+- [x] Bars: day-count label (`4d`), done tasks dimmed (0.62) with check
+      icon replacing the category dot, squared clip edges, hover tint
+      15%→22%, selection ring (click; Esc/blank-click clears), dashed
+      sibling outline on hover/selection of any segment of the same task
+- [x] ~~Rail capacity~~ — **REMOVED by owner decision (2026-07-05 review)**:
+      the planned/available counter + track was judged noise ("I can see the
+      bars; overbooking is my call, the app doesn't need to comment").
+      PRD user story 8 is dropped; `rowCapacity`/`countWorkdays` deleted
+      from `lib/planner.ts` with their tests
+- [x] URL state (`lib/hooks/use-planner-query-args.ts`, workday hook
+      pattern — no nuqs): `week` ISO anchor (dropped on current week),
+      `zoom=1w` (2w default dropped), `users` CSV (replace-mode writes);
+      back button + shareable links work
+- [x] Toolbar (mockup `tb` layout): Planner title, ‹ Today ›, range label,
+      Week/2-weeks segmented zoom, member filter right-aligned
+- [x] Member filter promoted to shared `components/member-filter.tsx`
+      (Workday + Planner both use it; workday file re-exports old names);
+      available to every org member on the Planner (shared board), unlike
+      Workday's admin-only filter
+- [x] No-plan empty state overlay (admin vs member copy) + no-members empty
+      state; skeleton updated (toolbar, capacity block in rail)
+
+**Verification:** 29 planner tests green (19 lib + 10 Convex incl. two new
+part-badge cases), `npx tsc --noEmit` clean, full suite unchanged (same 4
+pre-existing unrelated failures).
+
+**TODOs deferred:**
+- Drag engine (move/resize/reassign/⌥-split), selection + Delete — slice 3
+- Click bar currently selects only; drawer opens in slice 5
+- Done-bar check styling is our design call (mockup has no done-bar spec) —
+  revisit in slice 9 polish if needed
+
+### Slice 2 addendum — Month zoom (owner request at review, 2026-07-05)
+
+- [x] Third zoom option: `Week | 2 weeks | Month` — true calendar month
+      (Jul 1–31), not a rolling 4 weeks; nav shifts by month, Today jumps
+      to the current month
+- [x] URL: `zoom=1m` + `month=YYYY-MM` anchor (current month dropped);
+      week zooms keep the `week` anchor — only the anchor matching the
+      active zoom stays in the URL. Zoom switches carry position (week →
+      month containing its Monday; month → week containing its 1st);
+      multi-param writes batched into one history entry (`writeParams`)
+- [x] Density: 42px/day minimum in month zoom (~1500px total, fits a
+      laptop), single-letter day names, bar labels gated by a pixel-based
+      threshold (`MIN_LABEL_PX / minDayPx` → 2 days in week zooms, 4 in
+      month), Monday columns get a stronger left border for week
+      orientation (header + stripes)
+- [x] `monthRange` + `isMondayYmd` in `lib/planner.ts`, unit-tested (leap
+      February, 30/31-day months, year end)
+- [x] No backend change — `weekGrid` already takes arbitrary ranges
+
+**Verification:** 27 planner tests green, `npx tsc --noEmit` clean.
+
+### Slice 2 addendum 2 — Continuous timeline (owner request, 2026-07-05)
+
+Structural change: paged prev/next replaced with a Toggl Plan-style
+continuous canvas — trackpad gestures pan time freely.
+
+- [x] Loaded day window as state (init 12 weeks around the URL anchor),
+      grows ±4 weeks when panning within 14 days of an edge; left-extension
+      compensates `scrollLeft` in a layout effect so the view never jumps;
+      `overscroll-x-contain` stops macOS back-swipe hijack
+- [x] Zoom became a pure density preset: fixed day widths 160/96/44px
+      (`PLANNER_DAY_PX`), bar-label threshold derived from px width; zoom
+      switch re-anchors scroll to keep the leftmost day in place; the
+      `month=YYYY-MM` param from addendum 1 is gone (obsolete in a
+      continuous world — `week` is the only anchor for all zooms)
+- [x] URL sync: visible-span changes debounce 400ms → `week` anchor
+      replace-write (current week dropped); toolbar range label follows the
+      actually visible span; ‹ › buttons smooth-scroll ±1 week (±4 in month
+      zoom), Today smooth-scrolls to the current Monday
+- [x] `useDeferredValue` holds the last grid across window-extension
+      refetches (no skeleton flash / scroll loss mid-pan, Workday pattern)
+- [x] `mondayOfYmd` + `ymdToLocalDate` in `lib/planner.ts` (tested);
+      `monthRange` removed with its tests (dead after the pivot)
+
+**Verification:** 27 planner tests green, `npx tsc --noEmit` clean.
+**Deferred:** popstate (back-button) repositioning mid-session — links load
+at the right week, but pressing back after long panning doesn't re-scroll
+(replace-mode writes keep history clean, so this is rare); day-column
+virtualization if very long sessions accumulate thousands of columns.
+
+### Slice 3 — Drag core: move, reassign, unschedule ✅ approved (2026-07-05)
+
+- [x] `planner.updateSegment` (partial: dates and/or userId; merged range
+      re-validated) + `planner.removeSegment` — `requireAdmin`, segment org
+      ownership, target-user org membership (`assertOrgMember`, collect-all
+      memberships so multi-org users can't confuse the check), invariant via
+      shared `assertSegmentRange`
+- [x] 6 new Convex tests: admin move/resize/reassign happy path, non-admin
+      rejection (both mutations), cross-org segment + cross-org target user
+      rejection, merged-range inversion rejection, remove keeps the task
+- [x] Drag engine `lib/hooks/use-planner-drag.ts` (deep module, custom
+      pointer events per PRD — no dnd-kit): 4px click/drag threshold,
+      window-level listeners, day snapping via pure `proposeMovePlacement`
+      (unit-tested: grab-offset, both edge clamps, over-wide span), row
+      hit-testing against registered row elements (nearest-row snap above/
+      below the board), Escape + pointercancel cancel, body grabbing cursor
+      + user-select lock, unmount listener safety. Targets are DATES so
+      mid-drag window extension can't shift the proposal
+- [x] Single solid snapped preview (mockup ruling): original bar hidden
+      from lane packing, ghost bar (20% tint over card + shadow) rendered
+      at the snapped target; vertical drag = reassign, same gesture
+- [x] Live lane reflow: ghost participates in `assignLanes` for the target
+      row, neighbours animate `top` (120ms) and rows animate height while
+      dragging; overlap is never rendered
+- [x] Selection ring + Delete/Backspace unschedules (admin, editable-target
+      guard), Escape deselects; click suppression after a real drag
+- [x] Optimistic commits via Convex `withOptimisticUpdate` on the weekGrid
+      cache (move across rows re-sorted; remove filtered) — automatic
+      rollback + `toastError` on rejection
+- [x] Read-only members: engine disabled (no grab cursor, no drag, no
+      delete) AND server rejects independently (tested)
+- [x] Bars/stripes switched from %-based to px-based positioning (fixed
+      `dayPx` columns) — drag math and slice 6/8 pointer math stay trivial
+
+**Verification:** 37 planner tests green (21 lib + 16 Convex),
+`npx tsc --noEmit` clean, full suite unchanged (same 4 pre-existing
+unrelated failures).
+
+**TODOs deferred:**
+- ~~Resize handles + ⌥-split~~ — done in slice 4
+- Auto-scroll when dragging near the container edge — slice 9 polish
+  (continuous canvas makes long moves possible via trackpad pan mid-drag)
+- ~~Drawer opens on click~~ — done in slice 5
+
+### Slice 4 — Resize + ⌥-split ✅ (2026-07-05)
+
+- [x] `planner.createSegment` mutation — `requireAdmin`, task org ownership,
+      archived-task rejection (can't schedule what the board hides), target
+      user via `assertOrgMember`, invariant via shared `assertSegmentRange`;
+      `createdBy` from the authed admin
+- [x] 4 new Convex tests: split happy path (2 sittings, task NOT duplicated,
+      part badges 1/2+2/2 on next read), non-admin rejection, cross-org task
+      + cross-org target user, inverted range + archived task rejection
+- [x] Resize: 9px edge handles on both bar ends (hover shows the mockup's
+      3px pill affordance), pointer-down enters `resize-start`/`resize-end`
+      mode; the BAR ITSELF snaps day-by-day (solid preview replaces the
+      original — no ghost, mockup ruling), 100ms left/width transition
+      (mockup `.snapping`), day-count label live-updates, `ew-resize` body
+      cursor; vertical movement never reassigns during resize
+- [x] Minimum one day enforced by the pure `proposeResizePlacement` reducer
+      (moving edge can never cross the anchor) — 4 unit tests incl. negative
+      anchor indexes for segments clipped by the loaded window
+- [x] ⌥-split: Alt during a move switches to copy mode live (pointer
+      `altKey` on move + window keydown/keyup for stationary toggling) —
+      original bar stays at full opacity, ghost gets the mockup's ⧉ glyph,
+      body cursor `copy`; release calls `createSegment` (same taskId,
+      never a duplicate task); toggling Alt mid-drag switches modes both
+      directions
+- [x] Optimistic split: weekGrid cache gains the new sitting (display fields
+      cloned from the cached source segment, temp UUID id, partCount bumped
+      on every sibling) → badges + sibling highlight update instantly;
+      automatic rollback + `toastError` on rejection. Resize commits through
+      the existing optimistic `updateSegment` path
+
+**Verification:** 45 planner tests green (25 lib + 20 Convex),
+`npx tsc --noEmit` clean.
+
+**TODOs deferred:**
+- Panel drag-to-schedule reuses `createSegment` — slice 6
+- Done-bar resize/split interaction audit — slice 9 polish
+
+### Slice 5 — Task drawer integration ✅ (2026-07-05)
+
+- [x] `planner.taskSegments` query — every sitting of one task for the
+      drawer's Plan section: user name joined, `partIndex`/`partCount` via
+      the shared `rankTaskSegments`, sorted by start date; readable by every
+      org member (shared board), org-scoped task check. 3 new Convex tests:
+      member reads another row's sittings sorted + ranked, empty list after
+      unschedule, cross-org task rejection
+- [x] `components/planner/task-plan-section.tsx` — shared "Plan" section:
+      each sitting as *date range · person · duration (`3d`) · part `n/m`*,
+      hover-revealed × unschedule (admin only; members never see it) via
+      `removeSegment` + `toastError`; "Not scheduled" empty state; renders
+      wherever the metadata component is used (drawer AND modal), the board
+      behind updates live through the weekGrid subscription
+- [x] `formatSegmentRange` in `lib/planner.ts` (pure, unit-tested ×4):
+      "Jul 6", "Jul 6 – 8", "Jul 30 – Aug 2", years only across a year
+      boundary
+- [x] `TaskDetailMetadata` extended in BOTH layouts below the existing
+      fields with a hairline separator: grid (modal) gets a full-width
+      row under the two columns, stack (drawer) gets its own group before
+      Created by/on
+- [x] Planner page mounts the EXISTING `TaskDetailDrawer` / `TaskDetailModal`
+      per the user's `taskDetailView` preference (mobile → modal, /tasks
+      rule), wrapped in `TaskReferenceDataProvider`; the drawer's reference
+      data (statuses/categories/projects) subscribes only while `?detail=`
+      is open so the board stays light
+- [x] Bar click = select + open (`?detail=<taskId>` via `buildDetailUrl`,
+      same URL mechanism as /tasks; direct links + refresh work); selection
+      ring stays visible behind the overlay; Escape closes the drawer first
+      (its document-level handler stops propagation before the grid's
+      window-level selection handler), second Escape deselects
+- [x] Prev/next (J/K) walks tasks in board order: row order, then each
+      task's first visible segment (dedup on first appearance)
+
+**Verification:** 52 planner tests green (29 lib + 23 Convex),
+`npx tsc --noEmit` clean, full suite unchanged (same pre-existing
+unrelated failures: format-activity-timestamp ×3, taskActivityIndicators
+×1, vendored tiptap reference test).
+
+**TODOs deferred:**
+- Panel card click → drawer — slice 6 (panel doesn't exist yet)
+- Drawer `?detail=` deep link with a task that has zero visible segments
+  works (drawer opens, board unaffected) — no J/K neighbors in that case,
+  matches /tasks behavior with filtered-out tasks
+
+### Slice 5 post-review fixes — flaky drawer opening (2026-07-06)
+
+Owner report: opening sometimes needed two clicks; with a task open,
+clicking another bar didn't switch. Root causes + fixes:
+
+- [x] **Modal dismissal swallowed bar clicks (primary).** The page followed
+      the /tasks drawer/modal preference; the default is MODAL — a
+      fullscreen Radix Dialog whose `onPointerDownOutside` closes it, so
+      the first click on another bar dismissed the modal and never reached
+      the bar (→ "click twice", "other task won't open"). **Deviation from
+      the slice spec (owner ruling):** the Planner now always uses the
+      drawer on desktop — the board must stay visible and clickable behind
+      an open task (mockup behavior); mobile keeps the modal. The
+      `users.current` viewPref subscription was removed from the page.
+- [x] **Stale click suppression in the drag engine.** `suppressClickRef`
+      armed at the 4px threshold but was only cleared by a bar click —
+      after a real drag the dragged bar unmounts (preview replaces it), no
+      click event ever fires, and the flag silently ate the NEXT legitimate
+      click. Fix: every new press resets the flag (a fresh press = a fresh
+      click cycle).
+- [x] **Hardening:** `window blur` mid-drag now cancels cleanly (missed
+      pointerup no longer leaves ghost listeners/state; new presses also
+      defensively drop leaked listeners); `pointerup.preventDefault()` now
+      only fires when a drag was actually active, so plain clicks keep
+      fully native semantics.
+
+**Verification:** `npx tsc --noEmit` clean, 52 planner tests green; lint
+on planner files shows only the repo-wide pre-existing `react-hooks/refs`
+pattern flags (same "latest-value ref" convention as /tasks, 17 hits
+there), no new rule classes.
+
+### Slice 6 — Tasks panel + drag-to-schedule ✅ (2026-07-06)
+
+- [x] `planner.taskPanel` query — every active (non-archived) TOP-LEVEL
+      task with card fields (title, project/client names, category color,
+      statusType, estimate, `plannedDays` = summed day-spans, `segmentCount`,
+      createdAt), newest first; org-scoped hydration for projects → clients
+      → categories; one bounded segments read grouped per task (no N+1).
+      **Decision:** subtasks excluded — they are planned via their parent.
+      2 new Convex tests: rollups + org/archive scoping; project/client/
+      category joins + subtask exclusion + newest-first order
+- [x] **PRD Open Question 1 resolved:** `tasks.estimate` is MINUTES (the
+      estimate cell edits via `parseDuration`). Default span rule =
+      `max(1, ceil(estimate/480) − plannedDays)`, 1 when unset — pure
+      `defaultSpanDays` in `lib/planner.ts`, 3 unit tests (`segmentSpanDays`
+      server twin in `convex/lib/plannerMath.ts`)
+- [x] Panel UI (mockup `side` spec): 288px right sidebar inside the page
+      frame, collapses below the grid < md (300px max-height list);
+      header, search box (URL-debounced `q` param, matches title + project
+      + client), Unscheduled/All tabs (`ptab` URL param, unscheduled
+      default); open/closed in `panel` URL param (open default); toolbar
+      "Tasks" button with primary-pill unscheduled-count badge
+- [x] `PlannerTaskCard` shared visual: category dot + title + client name
+      (NO estimate text per owner design ruling), done tasks dimmed, All
+      tab shows "✓ planned" on scheduled ones; card-shaped panel skeleton;
+      empty copy distinguishes no-match vs everything-planned
+- [x] Drag-to-schedule in the ENGINE (panel mode, admins only): floating
+      card follows the cursor (imperative transform — pointer moves don't
+      re-render the board), morphs into the snapped ghost bar over the grid
+      (synthetic segment runs the normal clamp → lane → bar pipeline, live
+      reflow included), drop calls `createSegment`, outside drop flies the
+      card back (140ms settle) and creates nothing; Alt has no meaning here;
+      Escape/blur cancel; card click (< 4px) opens the task drawer for
+      everyone
+- [x] Optimistic panel create: display fields cloned from any cached
+      sitting, falling back to the card data stashed in a ref (unscheduled
+      tasks have no cached sitting); part counts bumped; rollback + toast
+- [x] Engine lifted from the grid to the page (grid + panel share one
+      instance via the `PlannerDragEngine` prop); plan mutations extracted
+      to `lib/hooks/use-planner-mutations.ts` — the page dropped back to
+      ~310 lines
+
+**Verification:** 57 planner tests green (33 lib + 24 Convex),
+`npx tsc --noEmit` clean, full suite unchanged (same pre-existing
+unrelated failures).
+
+**TODOs deferred:**
+- Filter chips (project/client/category/due) — slice 7
+- Quick-add composer + draw-to-create — slice 8
+- Panel drag auto-pan near grid edges — slice 9 polish (same item as bar
+  drag auto-scroll)
+
+### Slice 6 post-review fix — page-wide horizontal overflow (2026-07-06)
+
+Owner report: the Tasks panel (and the toolbar's right side, including the
+panel toggle) hung off-screen; the whole page scrolled horizontally.
+
+- [x] **Root cause:** the classic flexbox `min-width: auto` trap at the
+      shadcn `SidebarInset` (`flex w-full flex-1`, a horizontal flex item
+      with no `min-w-0`). Slice 6's board+panel flex row let the Planner
+      canvas's huge intrinsic width propagate up; the inset refused to
+      shrink below it and grew past the viewport.
+- [x] Fix at the choke point: `<SidebarInset className="min-w-0">` in
+      `app/(dashboard)/layout.tsx` (canonical shadcn fix; shrink-only, safe
+      for every page) + defense-in-depth `min-w-0` on the Planner page root
+      and the board+panel flex row.
+- [x] Verified in Chrome via devtools MCP at 1440px and 700px:
+      `scrollWidth === clientWidth` (zero page overflow), panel fully
+      visible, toolbar "Tasks 20" toggle reachable and working both ways
+      (`?panel=0` URL round-trip), narrow viewport stacks the panel below
+      the grid. The panel toggle itself already shipped with slice 6 — it
+      was simply off-screen.
+
+**Verification:** `npx tsc --noEmit` clean; no behavioral code changes
+beyond three CSS classes.
+
+### Slice 6 addendum — Tasks toggle de-slopped (owner feedback, 2026-07-06)
+
+- [x] The toolbar "Tasks" toggle was a hand-rolled bordered pill with a
+      blue primary count badge — owner called it "AI slop" (2nd occurrence
+      of this feedback class; saved to memory as a standing rule). Rebuilt
+      as a quiet shadcn `Button variant="ghost"` matching the MemberFilter
+      trigger: `PanelRight` icon + label, count as plain muted
+      `tabular-nums` text (hidden at 0), active state = soft `bg-muted`.
+
+### Slice 7 — Panel filters ✅ (2026-07-06)
+
+- [x] `taskPanel` items extended with filter identities: `projectId`,
+      `clientId`, `categoryId`, `categoryName`, `dueDate` (URL filters
+      store stable ids, never display names)
+- [x] Pure filter predicate `passesPanelFilters` in `lib/planner.ts`
+      (7 unit tests): options OR within a chip, chips AND together;
+      uncategorized maps to the `"none"` category key; due semantics per
+      mockup — overdue = `due < today`, week = `today ≤ due < today+7`
+      (string math on the ORG-TIMEZONE today passed down from the page),
+      none = no deadline; missing project/client never matches an active
+      chip
+- [x] URL state in `lib/hooks/use-planner-panel-filters.ts` (hand-rolled
+      convention): `projects`/`clients`/`cats` CSV ids (+ `none` token) and
+      `due=overdue|week|none`; defaults dropped; id-pattern validated
+- [x] `components/planner/planner-panel-filters.tsx` — chip row between
+      tabs and list (mockup `fbar`): Project/Client/Category as
+      multi-select checkbox dropdowns (shadcn DropdownMenu, stays open
+      while toggling), Due as radio; options derived from the panel's own
+      task list (only actionable choices), categories with color dots +
+      "No category"; dashed idle pills → solid primary-tinted active state
+      with `Project · 2` count or the Due option label; Clear appears only
+      when something is active and resets all four chips at once
+- [x] Panel-scoped by design: filter params never reach the `weekGrid`
+      query args, so the timeline is untouched; filters compose with
+      search + tabs; empty state distinguishes "No tasks match." (narrowed)
+      from "Everything is planned"
+
+**Verification:** 64 planner tests green (40 lib + 24 Convex),
+`npx tsc --noEmit` clean, full suite unchanged (same 4 pre-existing
+unrelated failures). Live-verified in Chrome (devtools MCP): Client chip →
+`Client · 1` + `?clients=<id>`, list narrows to that client only; reload
+restores the exact panel state; Due=Overdue composes
+(`?clients=…&due=overdue`); Clear → clean URL, button disappears; board
+bars unaffected throughout.
+
+**TODOs deferred:**
+- Quick-add composer + draw-to-create — slice 8
+- Category options derive from tasks in the panel (not the full org
+  category list) — revisit only if a filter for empty categories is ever
+  needed
+
+### Slice 7 redesign — Notion-style faceted filters (owner feedback, 2026-07-06)
+
+Owner rejected the four always-visible chips ("gagyi"): they didn't fit
+288px, and menus ignored other selections (all projects listed under an
+active client filter). Approved redesign, built same day:
+
+- [x] **Notion three-step flow:** idle state is a single quiet `+ Filter`
+      affordance; it opens a two-step popover — property picker
+      (`Filter by…` search + Project/Client/Category/Due date with icons),
+      then the value list in the SAME popover. Each active filter renders
+      as a compact chip (`Client: Arlow`, single value by name, multiple as
+      a count) that reopens its value menu directly; already-active
+      properties disappear from the picker
+- [x] **Faceted (cross-filtered) menus:** pure `derivePanelFacets` in
+      `lib/planner.ts` (4 unit tests) — each property's options come from
+      tasks passing all OTHER chips + the active tab, with right-aligned
+      muted match counts; zero-match options drop out unless selected
+      (must stay untickable); "No category" appended only when relevant;
+      Due options carry counts too. Free-text search deliberately does not
+      feed facets
+- [x] Value lists get a search input at ≥8 options (hundreds of projects);
+      Due is single-select and closes on pick; per-menu "Clear selection"
+      empties the property (chip auto-disappears); row-level Clear resets
+      everything
+- [x] Visual language per the no-pill-badges rule: quiet `bg-muted` chips,
+      muted property prefix + medium value, ghost `+ Filter`; Popover +
+      Checkbox rows (member-filter precedent), no hand-rolled dropdown
+- [x] URL schema unchanged (`projects`/`clients`/`cats`/`due`) — slice 7
+      acceptance criteria (round-trip, panel-scoped, org-tz due) remain
+      satisfied
+
+**Verification:** 68 planner tests green (44 lib + 24 Convex),
+`npx tsc --noEmit` clean, full suite unchanged (same 4 pre-existing
+unrelated failures). Live-verified in Chrome: property picker lists all
+four; Client value list shows counts (Arlow 6, Pragmatico 6…); selecting
+Arlow → `Client: Arlow` chip + `?clients=<id>`; the Project menu then
+offers ONLY "Arlow monthly retainer (6)"; chips + `+ Filter` + Clear fit
+one row; zero console errors.
+
+### Slice 7 redesign addendum — tabs folded into the filter system (owner, 2026-07-06)
+
+Owner: "Unscheduled/All should be the same kind of filter as the rest, not
+a separate thing." The tab row is gone; scheduling state is now a regular
+filter property.
+
+- [x] `PlannerPanelFilters` gained `schedule: all|unscheduled|planned`
+      (single-select **Schedule** property, `CalendarCheck` icon, first in
+      the picker); predicate + facets extended — schedule cross-filters
+      and gets counts like every other property (`Unscheduled 17 /
+      Planned 8`); "planned" is a NEW capability (only scheduled tasks)
+- [x] The default view stays the to-plan inbox: a clean URL pre-applies a
+      fully regular `Schedule: Unscheduled` chip (changeable/removable
+      like any other). URL: `sched` param — absent = unscheduled (default
+      dropped), `sched=planned`, `sched=all` (Clear resets to the truly
+      empty state, which is therefore WRITTEN to the URL)
+- [x] `ptab` param + tab UI + `PlannerPanelTab` type removed
+      (`use-planner-query-args` slimmed); `isUnscheduledTask` moved to
+      `lib/planner.ts` (panel + toolbar badge share one definition);
+      "✓ planned" mark now shows on any scheduled card wherever visible
+- [x] Global Clear appears only when the view differs from the default
+      inbox (the pre-applied chip alone is not "something to clear") —
+      keeps the default filter row to one line
+
+**Verification:** 71 planner tests green (47 lib incl. schedule predicate
++ facet cases), `npx tsc --noEmit` clean, full suite unchanged.
+Live-verified: default = `Schedule: Unscheduled` + `+ Filter` one-liner,
+no tab row; chip menu shows counts; switching to Planned → `?sched=planned`
++ all 8 cards carry the planned mark; untoggling → `?sched=all`, chip
+disappears; reload restores each state.
+
+### Slice 8 — In-place task creation ✅ (2026-07-06)
+
+- [x] `planner.createTaskWithSegment` mutation — ATOMIC draw-to-create: one
+      transaction creates the task AND its first segment; every referenced
+      id is validated before any write, so a failure (bad project,
+      cross-org user, inverted range) leaves no half-created task. Task
+      defaults deliberately identical to /tasks inline-add (default backlog
+      status via `getDefaultStatusId`, appended fractional sort key on the
+      same index, `billable: true`, no category/due/description, empty
+      `assigneeIds` — `resolveDefaultAssignee` needs a category to match,
+      planner tasks never have one; the row's user is NOT assigned per PRD:
+      segments carry their own userId). `task_created` activity logged;
+      `requireAdmin` + `assertOrgMember` + shared `assertSegmentRange`
+- [x] 4 new Convex tests: defaults equivalence against a twin task created
+      through `api.tasks.create` (status/sort-key/flags field-by-field +
+      trimmed title + activity log), project accepted + cross-org project
+      rejected, ATOMICITY (failing segment leaves no orphan task),
+      non-admin + empty title + cross-org target user rejection
+- [x] Draw-to-create in the drag engine (new mode alongside move/resize/
+      panel): crosshair cursor on empty row cells (admins), press + drag
+      sketches a neutral-gray "New task" ghost snapped day-by-day in BOTH
+      directions (pure `proposeDrawPlacement` reducer in `lib/planner.ts`,
+      3 unit tests), day-count label, live lane reflow (the ghost runs the
+      normal clamp → lanes → bar pipeline), Escape/blur/pointercancel
+      cancel mid-draw; the sketch never leaves its row (mockup rule);
+      anchor stored as a DATE so mid-drag window extension can't shift it;
+      bar presses now stop propagation so they never start a draw
+- [x] Release → title popover (mockup `qc`) anchored below the pending
+      ghost INSIDE the row canvas (pans with the timeline): pending state
+      lives on the page so it survives board re-renders; Enter or the
+      button creates atomically, Escape/outside-pointerdown cancels and
+      removes the ghost; a rejected create keeps the popover + typed title
+      and toasts (PRD 35). Commit is deliberately pessimistic — an
+      optimistic bar would double-render next to the pending ghost, and
+      Convex applies the mutation's query updates before resolving, so
+      success can't flash a gap
+- [x] Quick-add composer (mockup `qadd`): "+ New task" toolbar button
+      (admins; primary CTA per mockup) opens the panel + mounts the
+      composer at the top of the list, autofocused (repeat click remounts
+      via a nonce key → refocuses). Enter/button creates an UNSCHEDULED
+      task through the canonical `tasks.create` (server resolves the same
+      defaults), clears the title, keeps focus for rapid capture; the new
+      card lands on top (newest-first) and the unscheduled badge ticks up;
+      Escape closes; failure restores the cleared title + toasts
+- [x] Shared `PlannerCreateForm` (one form behind popover + composer):
+      title input + project picker + submit button; subscribes to
+      `projects.list` itself so the board only pays for it while a form is
+      open
+- [x] Members: engine disabled → no crosshair/draw (canvas handler and
+      cursor are admin-gated), no "+ New task" button, no composer; the
+      server rejects `createTaskWithSegment` independently (tested)
+
+**Owner feedback applied mid-slice (2026-07-06):** the first cut's plain
+`<select>` failed live review — (1) after picking a project, Enter did
+nothing (focus was stuck on the select); (2) hundreds of clients made an
+unsearchable list unusable; (3) Enter-only submit was undiscoverable.
+Redesign: searchable Popover+Command project picker (inline-add project
+cell pattern — grouped by client, search matches project AND client
+names), picking returns focus to the title input so Enter always works,
+and both forms gained an explicit primary **Create task / Add task**
+button (disabled while the title is empty) with an "esc to cancel" hint.
+No delete button — outside click already cancels (owner-confirmed).
+
+**Verification:** 78 planner tests green (49 lib incl. 3 new
+draw-placement + 29 Convex incl. 4 new createTaskWithSegment tests, one
+of which covers 2 rejection cases), `npx tsc --noEmit` clean, full suite
+unchanged (same 4 pre-existing unrelated failures). Live-verified in
+Chrome (devtools MCP, admin): crosshair on empty cells; draw Mon 13 →
+Wed 15 on a teammate's row → snapped 3d ghost + popover; picker search
+"arlow" narrows grouped options; picking returns focus to the title;
+Enter → "Slice 8 draw demo · Arlow monthly retainer" bar on the board at
+the drawn range; mid-draw Escape cancels the sketch; outside pointerdown
+cancels an open popover + ghost; "+ New task" → composer autofocused, two
+rapid Enter captures land on top of the panel (badge 16 → 18), input
+clears + refocuses each time, Escape closes; zero console errors/warnings.
+
+**TODOs deferred:**
+- Draw/panel-drag auto-pan near grid edges — slice 9 polish (existing item)
+- Demo artifacts on the dev org ("Slice 8 draw demo", "Composer capture
+  1/2") left in place as dummy data — wipe with the next `seedDemo` run if
+  noise
+- A shared searchable project-combobox component (this form + inline-add
+  cell now implement the same pattern twice) — extraction candidate for
+  slice 9 / a later cleanup pass, deliberately not refactoring /tasks
+  files inside a planner slice
+
+### Slice 8 addendum — crosshair replaced with Notion-style hover "+" cell (owner feedback, 2026-07-06)
+
+Owner rejected the crosshair cursor ("Notion sohasem használna ilyet");
+approved option: hover-ghost "+" cell.
+
+- [x] Crosshair removed everywhere: empty cells keep the normal arrow, and
+      the body cursor during an active draw is locked to `default` (stops
+      bar grab-cursor flicker while the sketch sweeps under bars)
+- [x] Notion Calendar / Toggl Plan affordance instead: hovering an empty
+      cell (admins) shows a faint rounded day placeholder with a small `+`
+      (`border-border/60`, 3% foreground tint, muted PlusIcon) in the
+      first lane free at that day; drawing works exactly as before
+- [x] Placeholder hides over bars/handles, during any drag/preview/pending
+      popover, and on days whose every existing lane is occupied (the row
+      must never grow on hover); `pointer-events-none` so it can't
+      intercept the press; per-day state updates only on day change
+
+**Verification:** `npx tsc --noEmit` clean; live in Chrome: arrow cursor
+on empty cells, "+" placeholder follows the hovered day, disappears the
+moment a draw starts (ghost takes over, body cursor stays arrow), draw →
+popover flow unchanged; zero console errors.
+
+### Slice 8 addendum 2 — stable lane packing (owner bug report, 2026-07-06)
+
+Owner: resizing a bar made neighbours jump above/below it ("majd én
+átrendezem, amikor akarom — ne ugráljon a sorrend"). Root cause: lane
+packing sorted by (startIdx, endIdx), so editing a bar's dates changed its
+packing PRIORITY and reshuffled the whole row.
+
+- [x] `assignLanes` now packs by a stable `order` key (segment
+      `createdAt`) instead of dates: a bar's lane never depends on its own
+      dates, so resize/move can't reshuffle neighbours. Collisions resolve
+      deterministically — older bars stay anchored, newer ones cascade
+      below, and they pop back up when the collision ends. Stability makes
+      lanes non-contiguous, so packing tracks occupied intervals per lane
+      (the old single-running-end trick assumed date order); may cost one
+      extra lane vs. optimal — accepted trade
+- [x] `weekGrid` bars carry `createdAt`; move/resize previews inherit the
+      dragged segment's priority (the held bar keeps its lane), ⌥-copy +
+      panel-drop + draw ghosts and the optimistic panel-create use
+      newest-possible priority (always pack below real bars)
+- [x] 3 new `assignLanes` tests: priority-over-dates, the exact
+      resize-jump repro (neighbour must not move), freed-gap reclamation
+      between older bars; existing lane tests migrated to the `order` key
+
+One-time effect: rows re-sorted once from date order to creation order on
+deploy; from then on the vertical order is stable. Manual vertical
+reordering (persisted rank, /tasks `manualSortKey` pattern) is the natural
+follow-up if the owner wants full control — deferred until asked.
+
+**Verification:** 81 planner tests green (52 lib + 29 Convex),
+`npx tsc --noEmit` clean, full suite unchanged (same 4 pre-existing
+unrelated failures). Live in Chrome: stretched the "Test" bar over three
+newer bars — the held bar stayed in its lane, the newer ones cascaded down
+one lane each, the oldest top bar never moved; Escape restored the exact
+original layout; zero console errors.
+
+### Slice 8 addendum 3 — manual restack: drag a bar above/below another (owner request, 2026-07-06)
+
+Owner: within one person's row, dragging a bar over another must let him
+choose which goes on top ("húzom fölé → kerüljön fölé, szneppeljen be").
+The stable packing (addendum 2) made order deterministic; this makes it
+OWNED.
+
+- [x] Schema: `planSegments.laneOrder` (optional float) — manual vertical
+      stacking priority, lower = higher on screen; unset falls back to
+      `createdAt` (no migration, MVP dummy data). `weekGrid` bars expose
+      the effective priority as `laneOrder`; `updateSegment` accepts and
+      persists it (restack rides the same admin-gated mutation as
+      move/resize/reassign, dates optional)
+- [x] Pure `proposeLaneOrder` in `lib/planner.ts` (6 unit tests): packs
+      the target row (dragged bar excluded), splits its collision set at
+      the pointer lane, returns the midpoint between the above-group max
+      and below-group min (−1/+1 past the ends); null when nothing
+      collides OR the current order already satisfies the constraints —
+      dropping a bar back where it was writes nothing
+- [x] Engine: move targets now carry the pointer's visual lane in the
+      target row (`laneFromY` against the registered row elements);
+      `pressLane` recorded at press so a same-row/same-dates/same-lane
+      drop stays a no-op; vertical-only drops within a row commit
+- [x] Live preview: the move ghost's packing priority is the SAME
+      `proposeLaneOrder` result the drop will commit — the ghost snaps
+      above/below neighbours while dragging, so what you see is exactly
+      what lands. Resize previews keep the bar's own priority (resize
+      never restacks); ⌥-copy/panel/draw ghosts still pack below all
+- [x] Commit path: `usePlannerMutations` takes the displayed grid + day
+      window (via ref, callbacks stay stable), resolves lane → laneOrder,
+      skips true no-ops, and the optimistic weekGrid update applies the
+      new order instantly; `lane` is stripped from every mutation payload
+      (Convex rejects unknown args)
+- [x] Cross-row drops respect the pointer lane too (reassign + restack in
+      one gesture); 1 new Convex test: laneOrder persists via
+      updateSegment and weekGrid falls back to createdAt when unset
+
+**Verification:** 88 planner tests green (58 lib + 30 Convex),
+`npx tsc --noEmit` clean, full suite unchanged (same 4 pre-existing
+unrelated failures). Live in Chrome: dragged "fafse" one lane up over
+"Ez egy development" (same dates) — the ghost previewed the swap mid-drag,
+the drop committed it, and the order survived a full page reload; dates
+untouched; zero console errors.
+
+**Deferred:** float-midpoint precision re-spread (only relevant after ~50
+restacks between the same two bars — MVP non-issue).
+
+### Filter popover state-leak fix + back navigation (owner bug report, 2026-07-06)
+
+Owner repro: after picking a single-select value (Schedule) via `+ Filter`,
+the button forever reopened on that value list (no header, no way back)
+and the whole system felt broken/undeletable.
+
+- [x] **Root cause:** the add-flow's two-step `property` state was only
+      reset in Radix `onOpenChange` — but single-select picks close the
+      popover PROGRAMMATICALLY (`setOpen(false)`), which does not fire
+      `onOpenChange`, so the step state leaked. Fix: one `close()` path
+      (close + reset always travel together); every exit route — outside
+      click, Escape, single-select pick — funnels through it. Value lists
+      also get `key={property}` so per-property search state can never
+      bleed
+- [x] **Back navigation added** (was in the approved design, dropped in
+      the first implementation): value lists inside the `+ Filter` flow
+      get a `‹ PropertyName` header that steps back to the property
+      picker — also fixes the "anonymous menu" discoverability problem in
+      the owner's screenshot. Chip popovers stay headerless (direct value
+      access)
+
+**Verification:** `npx tsc --noEmit` clean, 71 planner tests green, full
+suite unchanged. Live repro of the exact bug sequence in Chrome: pick
+Schedule→Planned from `+ Filter` → reopening shows the PROPERTY PICKER
+(with Schedule hidden while active); chip `Schedule: Planned` → clicking
+the active option removes it (`?sched=all`); reopening `+ Filter` offers
+Schedule again.

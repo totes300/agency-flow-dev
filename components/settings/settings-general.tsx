@@ -183,7 +183,13 @@ function SettingsGeneralForm({
         </Field>
 
         <Field orientation="horizontal">
-          <FieldLabel className="pt-0.5">Time rounding</FieldLabel>
+          <FieldLabel className="pt-0.5">
+            Invoice rounding
+            <span className="mt-0.5 block text-xs font-normal text-muted-foreground">
+              New invoices round each line&apos;s time up to this increment.
+              Timesheets always keep exact time.
+            </span>
+          </FieldLabel>
           <RadioGroup
             value={String(rounding)}
             onValueChange={(v) => setRounding(Number(v) as RoundingMinutes)}

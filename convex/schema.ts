@@ -326,10 +326,12 @@ export default defineSchema({
     unitPrice: v.number(),
     amount: v.number(),
     amountOverridden: v.optional(v.boolean()),
-    // Source-of-truth minutes on time rows, set at creation from the summed
-    // time-entry minutes. `quantity` (hours) is the display/billing unit.
-    // Retainer recalc reads `quantityMinutes` to avoid hours→minutes rounding
-    // drift. Mirrors the pattern used by Harvest, Bonsai, and Toggl.
+    // Source-of-truth minutes on time rows: the RAW summed time-entry
+    // minutes (2026-07-05 rounding rework — the ledger is never rounded).
+    // `quantity` (hours) and `amount` are DERIVED using the invoice's
+    // `roundingMinutes`, so the draft's rounding picker can re-round
+    // losslessly. A manual hours edit overrides it (quantity × 60).
+    // Mirrors the pattern used by Harvest, Bonsai, and Toggl.
     quantityMinutes: v.optional(v.number()),
     workCategoryId: v.optional(v.id("workCategories")),
     timeEntryIds: v.optional(v.array(v.id("timeEntries"))),
@@ -621,4 +623,25 @@ export default defineSchema({
   })
     .index("by_task", ["taskId"])
     .index("by_task_user", ["taskId", "userId"]),
+
+  // ─── Plan segments (Planner: one bar = one person × one date range) ───────
+  // A task can have many segments (split sittings) across days and people.
+  // Segments reference the task; the task's assigneeIds are NOT used for row
+  // placement. Invariant `endDate >= startDate` is enforced at write time.
+  planSegments: defineTable({
+    orgId: v.string(),
+    taskId: v.id("tasks"),
+    userId: v.id("users"),
+    startDate: v.string(),  // "YYYY-MM-DD" inclusive (same convention as timeEntries.date)
+    endDate: v.string(),    // "YYYY-MM-DD" inclusive
+    // Manual vertical stacking priority within a row (lower = higher on
+    // screen). Unset = createdAt; written when the owner drags a bar
+    // above/below another. Float midpoints — fine at MVP scale.
+    laneOrder: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    createdBy: v.id("users"),
+  })
+    .index("by_orgId_taskId", ["orgId", "taskId"])
+    .index("by_orgId_startDate", ["orgId", "startDate"]),
 });

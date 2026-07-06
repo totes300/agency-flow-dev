@@ -18,6 +18,23 @@ function formatDurationHHMM(minutes: number): string {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
+/**
+ * Truthful lock message for an entry linked to an invoice. A draft can't be
+ * voided — telling the user to "void the invoice" was a dead end; the unblock
+ * path depends on the invoice's status.
+ */
+async function invoiceLockMessage(
+  ctx: { db: { get: (id: Id<"invoices">) => Promise<Doc<"invoices"> | null> } },
+  invoiceId: Id<"invoices">,
+  action: "edit" | "delete",
+): Promise<string> {
+  const invoice = await ctx.db.get(invoiceId);
+  if (invoice?.status === "draft") {
+    return `Cannot ${action} a time entry that's on a draft invoice — remove it from the draft (or delete the draft) first`;
+  }
+  return `Cannot ${action} a time entry linked to an invoice — void the invoice first`;
+}
+
 // ─── Queries ────────────────────────────────────────────────────────────────────
 
 export const listByTask = query({
@@ -225,10 +242,11 @@ export const create = mutation({
     // Get org settings
     const orgSettings = await getOrgSettings(ctx, auth.orgId);
     const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
-    const roundingMinutes = orgSettings?.roundingMinutes ?? 1;
 
-    // Round duration
-    const rounded = roundMinutes(args.durationMinutes, roundingMinutes);
+    // RAW LEDGER (2026-07-05 rounding-policy decision): store the duration
+    // as entered, whole-minute ceil only. The workspace rounding setting is
+    // an invoice-time rule and never mutates the ledger.
+    const rounded = roundMinutes(args.durationMinutes, 1);
     if (rounded <= 0) throw new ConvexError("Duration must be greater than 0");
 
     // Invariant: date === getDateInTimezone(startedAt, orgTz). startedAt wins.
@@ -319,9 +337,7 @@ export const update = mutation({
     // populates without an invoice). Distinct messages so the unblock path
     // is obvious to the user.
     if (entry.invoiceId !== undefined) {
-      throw new ConvexError(
-        "Cannot edit a time entry linked to an invoice — delete or void the invoice first",
-      );
+      throw new ConvexError(await invoiceLockMessage(ctx, entry.invoiceId, "edit"));
     }
     if (entry.settledAt !== undefined) {
       throw new ConvexError(
@@ -334,9 +350,8 @@ export const update = mutation({
     const updates: Record<string, unknown> = { updatedAt: Date.now() };
 
     if (args.durationMinutes !== undefined) {
-      const orgSettings = await getOrgSettings(ctx, orgId);
-      const roundingMinutes = orgSettings?.roundingMinutes ?? 1;
-      const rounded = roundMinutes(args.durationMinutes, roundingMinutes);
+      // Raw ledger: whole-minute ceil only (see create above).
+      const rounded = roundMinutes(args.durationMinutes, 1);
       if (rounded <= 0) throw new ConvexError("Duration must be greater than 0");
       updates.durationMinutes = rounded;
     }
@@ -484,9 +499,7 @@ export const remove = mutation({
 
     // Phase 8 — settlement guard (same rule as `update`).
     if (entry.invoiceId !== undefined) {
-      throw new ConvexError(
-        "Cannot delete a time entry linked to an invoice — delete or void the invoice first",
-      );
+      throw new ConvexError(await invoiceLockMessage(ctx, entry.invoiceId, "delete"));
     }
     if (entry.settledAt !== undefined) {
       throw new ConvexError(
@@ -885,6 +898,12 @@ export const projectOverview = query({
     // keeps reports honest and matches what the row badge already shows.
     let openMinutes = 0;
     let openAmount = 0;
+    // Promise = invoice: `openAmount` (the "ready to bill" number on the
+    // banner/overview) runs the SAME math as createInvoice — grouped by
+    // (category, task, rate), rounded up with the workspace default — so
+    // generating the invoice produces exactly the promised total.
+    const defaultRounding = orgSettings?.roundingMinutes ?? 1;
+    const openGroups = new Map<string, { minutes: number; rate: number }>();
     let draftMinutes = 0;
     let draftAmount = 0;
     let invoicedMinutes = 0;
@@ -944,10 +963,15 @@ export const projectOverview = query({
             draftMinutes += e.durationMinutes;
             draftAmount += amount;
             break;
-          case "open":
+          case "open": {
             openMinutes += e.durationMinutes;
-            openAmount += amount;
+            const rate = e.billableRate ?? 0;
+            const gKey = `${e.snapshotCategoryId ?? "none"}::${e.taskId}::${rate}`;
+            const g = openGroups.get(gKey) ?? { minutes: 0, rate };
+            g.minutes += e.durationMinutes;
+            openGroups.set(gKey, g);
             break;
+          }
         }
       }
 
@@ -961,6 +985,12 @@ export const projectOverview = query({
         const monthKey = e.date.slice(0, 7);
         billableByMonth[monthKey] = (billableByMonth[monthKey] ?? 0) + e.durationMinutes;
       }
+    }
+
+    // Materialize the open promise with invoice-identical rounding.
+    for (const g of openGroups.values()) {
+      const roundedMinutes = roundMinutes(g.minutes, defaultRounding);
+      openAmount += Math.round((roundedMinutes / 60) * g.rate * 100) / 100;
     }
 
     // Last 3 billable months: compute the 3 calendar months ending with current month

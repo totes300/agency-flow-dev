@@ -4,7 +4,7 @@ import { useState } from "react"
 import { useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { Button } from "@/components/ui/button"
-import { ConfirmDialog } from "@/components/confirm-dialog"
+import { DeleteTaskDialog } from "@/components/tasks/delete-task-dialog"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { InlineTimeCell } from "@/components/tasks/inline-time-cell"
 import { toast } from "sonner"
-import { toastError } from "@/lib/toast-helpers"
+import { toastArchiveSuccess, toastError } from "@/lib/toast-helpers"
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -62,7 +62,6 @@ export function TaskDetailHeader({
   const updateView = useMutation(api.users.updateTaskDetailView)
   const duplicateTask = useMutation(api.tasks.duplicate)
   const archiveTask = useMutation(api.tasks.archive)
-  const removeTask = useMutation(api.tasks.remove)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
 
   async function handleCopyLink() {
@@ -89,9 +88,9 @@ export function TaskDetailHeader({
   async function handleArchive() {
     if (!task) return
     try {
-      await archiveTask({ id: task._id })
+      const result = await archiveTask({ id: task._id })
       onClose()
-      toast.success("Task archived")
+      toastArchiveSuccess(result, "Task archived")
     } catch (err) {
       toastError(err, "Failed to archive")
     }
@@ -229,23 +228,11 @@ export function TaskDetailHeader({
         </Button>
       </div>
 
-      <ConfirmDialog
+      <DeleteTaskDialog
+        taskId={task?._id ?? null}
         open={showDeleteConfirm}
         onOpenChange={setShowDeleteConfirm}
-        title="Delete task"
-        description="Permanently delete this task and all subtasks? This cannot be undone."
-        confirmLabel="Delete"
-        variant="destructive"
-        onConfirm={async () => {
-          if (!task) return
-          try {
-            await removeTask({ id: task._id })
-            onClose()
-            toast.success("Task deleted")
-          } catch (err) {
-            toastError(err, "Failed to delete")
-          }
-        }}
+        onDeleted={onClose}
       />
     </div>
   )

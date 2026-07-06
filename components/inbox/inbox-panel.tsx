@@ -1,9 +1,9 @@
 "use client"
 
 import { useState } from "react"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import { useQuery, useMutation, useConvexAuth } from "convex/react"
-import { ArchiveIcon, CheckCheckIcon, ListFilterIcon } from "lucide-react"
+import { ArchiveIcon, CheckCheckIcon, ListFilterIcon, XIcon } from "lucide-react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -12,7 +12,7 @@ import { InboxEmptyState } from "@/components/inbox/inbox-empty-state"
 import { NotificationRow } from "@/components/inbox/notification-row"
 import { InboxActionButton } from "@/components/inbox/notification-row-actions"
 import { groupInbox, type InboxGroup, type InboxRowBase } from "@/lib/inbox"
-import { buildTaskDeepLink } from "@/lib/task-detail"
+import { buildTaskDeepLink, parseDetailParam } from "@/lib/task-detail"
 import { useOrgTimezone } from "@/lib/hooks/use-org-timezone"
 import { toastError } from "@/lib/toast-helpers"
 import { cn } from "@/lib/utils"
@@ -35,17 +35,37 @@ function InboxSkeleton() {
   )
 }
 
-export function InboxPanel({ onClose }: { onClose: () => void }) {
+/**
+ * Inbox content — hosted by the desktop InboxSidebar panel or the mobile
+ * Sheet.
+ *
+ * variant "sidebar": persistent panel. Row clicks navigate but the panel
+ * STAYS OPEN (sequential triage; the panel doubles as a live monitor);
+ * the header shows an explicit close button, and the row whose task is
+ * currently open gets an active highlight.
+ *
+ * variant "sheet": overlay. Row clicks also close it (mobile behavior).
+ */
+export function InboxPanel({
+  variant = "sheet",
+  onClose,
+  now,
+}: {
+  variant?: "sidebar" | "sheet"
+  onClose: () => void
+  /** Week-bucket anchor; defaults to mount time (the Sheet remounts per open). */
+  now?: number
+}) {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const { isAuthenticated } = useConvexAuth()
   const { timezone } = useOrgTimezone()
 
-  // Ephemeral UI state — the popover isn't a route, so no URL persistence
+  // Ephemeral UI state — the panel isn't a route, so no URL persistence
   const [view, setView] = useState<"inbox" | "archived">("inbox")
   const [unreadOnly, setUnreadOnly] = useState(false)
-  // Week-bucket anchor. The panel remounts on every open, so mount time is
-  // fresh enough — and render stays pure (no Date.now() per render).
-  const [openedAt] = useState(() => Date.now())
+  const [mountedAt] = useState(() => Date.now())
+  const bucketAnchor = now ?? mountedAt
 
   const inboxRows = useQuery(
     api.notifications.listInbox,
@@ -60,9 +80,10 @@ export function InboxPanel({ onClose }: { onClose: () => void }) {
 
   const rows = view === "inbox" ? inboxRows : archivedRows
   const hasUnread = (inboxRows ?? []).some((r) => r.inboxState === "unread")
+  const activeTaskId = parseDetailParam(searchParams)
 
   const sections =
-    rows === undefined ? undefined : groupInbox(rows, timezone, openedAt)
+    rows === undefined ? undefined : groupInbox(rows, timezone, bucketAnchor)
   const visibleSections = sections
     ?.map((section) => ({
       ...section,
@@ -79,7 +100,7 @@ export function InboxPanel({ onClose }: { onClose: () => void }) {
         (err) => toastError(err, "Failed to mark notification as read"),
       )
     }
-    onClose()
+    if (variant === "sheet") onClose()
     router.push(
       buildTaskDeepLink(
         group.taskId,
@@ -121,6 +142,14 @@ export function InboxPanel({ onClose }: { onClose: () => void }) {
           >
             <ArchiveIcon className="size-4" />
           </InboxActionButton>
+          {variant === "sidebar" && (
+            <>
+              <Separator orientation="vertical" className="mx-1 data-vertical:h-4" />
+              <InboxActionButton label="Close inbox" onClick={onClose}>
+                <XIcon className="size-4" />
+              </InboxActionButton>
+            </>
+          )}
         </div>
       </div>
       <Separator />
@@ -143,6 +172,7 @@ export function InboxPanel({ onClose }: { onClose: () => void }) {
                     key={group.key}
                     group={group}
                     view={view}
+                    isActive={variant === "sidebar" && group.taskId === activeTaskId}
                     onOpen={handleOpen}
                   />
                 ))}

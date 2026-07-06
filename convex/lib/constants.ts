@@ -7,7 +7,11 @@ export const CURRENCIES = [
 
 export type Currency = (typeof CURRENCIES)[number];
 
-export const ROUNDING_OPTIONS = [1, 5, 6, 15] as const;
+// Offered increments. 6m (0.1h) was dropped 2026-07-05 — it's a legal/
+// accounting convention, noise for agencies; legacy orgs that stored 6 are
+// still accepted by the validator below.
+export const ROUNDING_OPTIONS = [1, 5, 15, 30] as const;
+export const LEGACY_ROUNDING_OPTIONS = [6] as const;
 
 export type RoundingMinutes = (typeof ROUNDING_OPTIONS)[number];
 

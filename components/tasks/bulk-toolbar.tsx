@@ -21,7 +21,7 @@ import { UserAvatar } from "@/components/user-avatar"
 import { cn } from "@/lib/utils"
 import { Separator } from "@/components/ui/separator"
 import { toast } from "sonner"
-import { toastError } from "@/lib/toast-helpers"
+import { toastArchiveSuccess, toastError } from "@/lib/toast-helpers"
 import {
   CircleDashedIcon,
   UserPlusIcon,
@@ -265,7 +265,7 @@ function ArchiveAction({ taskIds, onDeselectAll }: { taskIds: Id<"tasks">[]; onD
         action: { type: "archive" },
       })
       onDeselectAll()
-      toast.success(`${result.updated} tasks archived`)
+      toastArchiveSuccess(result, `${result.updated} tasks archived`)
     } catch (err) {
       toastError(err, "Failed to archive")
     }
@@ -332,7 +332,7 @@ function DeleteAction({ taskIds, onDeselectAll }: { taskIds: Id<"tasks">[]; onDe
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
         title={`Permanently delete ${taskIds.length} tasks?`}
-        description="This will permanently delete these tasks including all subtasks, time entries, comments, and attachments. This cannot be undone."
+        description="This will permanently delete these tasks including all subtasks, comments, and attachments. Tasks with logged time are skipped — archive those instead. This cannot be undone."
         confirmLabel="Delete"
         variant="destructive"
         onConfirm={handleDelete}

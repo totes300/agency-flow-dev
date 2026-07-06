@@ -106,10 +106,41 @@ export async function getDefaultStatusId(
 // ─── Cascade delete ──────────────────────────────────────────────────────────────
 
 /**
+ * True if the task has at least one time entry. Time entries are financial
+ * ledger records — a task carrying any (even unbilled ones, which are future
+ * revenue) must be archived, not deleted. Mirrors the projects.remove rule.
+ */
+export async function taskHasTimeEntries(ctx: QueryCtx, taskId: Id<"tasks">): Promise<boolean> {
+  const entry = await ctx.db
+    .query("timeEntries")
+    .withIndex("by_taskId", (q) => q.eq("taskId", taskId))
+    .first();
+  return entry !== null;
+}
+
+/**
  * Cascade-delete all related data for a single task (not subtasks — call separately for those).
- * Removes: time entries, activity log, comments (+ reactions + attachments), attachments, read receipts, notifications, task mutes.
+ * Removes: time entries, activity log, comments (+ reactions + attachments), attachments, read receipts, notifications, task mutes, plan segments.
+ *
+ * Callers MUST check `taskHasTimeEntries` on the whole task tree first — this
+ * function deletes entries unconditionally and would otherwise destroy
+ * invoiced/settled ledger rows that every entry-level mutation protects.
  */
 export async function cascadeDeleteTaskData(ctx: MutationCtx, taskId: Id<"tasks">) {
+  // Plan segments — a Planner bar must never outlive its task. The task doc
+  // still exists at every call site (rows are deleted after this cascade),
+  // so its orgId is available for the org-scoped index.
+  const task = await ctx.db.get(taskId);
+  if (task) {
+    const planSegments = await ctx.db
+      .query("planSegments")
+      .withIndex("by_orgId_taskId", (q) =>
+        q.eq("orgId", task.orgId).eq("taskId", taskId),
+      )
+      .collect();
+    for (const s of planSegments) await ctx.db.delete(s._id);
+  }
+
   // Time entries
   const timeEntries = await ctx.db
     .query("timeEntries")

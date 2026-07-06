@@ -1,6 +1,8 @@
 "use client"
 
-import Link from "next/link"
+import { useState } from "react"
+
+import { CompanyDetailsDialog } from "@/components/invoices/company-details-dialog"
 
 type PartyInfo = {
   name?: string
@@ -67,16 +69,9 @@ export function DocumentParties({
         />
         {/* Fix-path for the "No name set" placeholder: without a seller
             name the invoice can't be marked as invoiced (server gate), so
-            the document points straight at the form that unblocks it.
+            the fix opens right here instead of bouncing to Settings.
             Hidden in print — it's chrome, not document content. */}
-        {!brand?.brandName && (
-          <Link
-            href="/settings"
-            className="text-sm font-medium text-primary hover:underline print:hidden"
-          >
-            Add your company details →
-          </Link>
-        )}
+        {!brand?.brandName && <AddCompanyDetailsAction />}
       </div>
       <PartyBlock
         label="To"
@@ -92,5 +87,21 @@ export function DocumentParties({
         }}
       />
     </div>
+  )
+}
+
+function AddCompanyDetailsAction() {
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="text-sm font-medium text-primary hover:underline print:hidden"
+      >
+        Add your company details →
+      </button>
+      <CompanyDetailsDialog open={open} onOpenChange={setOpen} />
+    </>
   )
 }

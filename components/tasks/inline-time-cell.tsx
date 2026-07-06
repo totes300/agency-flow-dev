@@ -137,13 +137,24 @@ const TimerCircle = React.forwardRef<
 
 /** Only this component subscribes to the tick context (re-renders every second) */
 function RunningTimeCell({ variant = "inline", align = "start" }: { variant?: "inline" | "sidebar" | "header"; align?: "start" | "end" }) {
-  const { stopTimer } = useTimerActions()
+  const { stopTimer, setPendingStopResult } = useTimerActions()
   const { formattedTime } = useTimerTick()
 
   async function handleStopClick(e: React.MouseEvent) {
     e.stopPropagation()
     try {
-      await stopTimer()
+      // Create-at-stop: this click WRITES a ledger entry — never silent.
+      // Route the result into the floating widget's adjust form (same as
+      // the task-switch path) so the user sees what was saved.
+      const result = await stopTimer()
+      if (result && !result.discarded && result.entryId) {
+        setPendingStopResult(result)
+        toast.info(`${formatDuration(result.roundedMinutes)} saved on "${result.taskName}"`, {
+          description: "Adjust it in the floating widget if needed",
+        })
+      } else if (result?.discarded) {
+        toast.info("Timer was under 30 seconds — nothing saved")
+      }
     } catch (err) {
       toastError(err, "Failed to stop timer")
     }
@@ -241,12 +252,13 @@ function IdleTimeCell({
 
     if (isTimerOnAnotherTask) {
       try {
+        // Create-at-stop: the previous task's time is already persisted as
+        // an entry here — the widget form only offers adjustments.
         const result = await stopTimer()
-        if (result && result.roundedMinutes > 0) {
-          // Store result so floating widget can show commit form
+        if (result && !result.discarded && result.entryId) {
           setPendingStopResult(result)
-          toast.info(`Timer stopped on "${result.taskName}" — ${formatDuration(result.roundedMinutes)}`, {
-            description: "Review and save in the floating widget",
+          toast.info(`${formatDuration(result.roundedMinutes)} saved on "${result.taskName}"`, {
+            description: "Adjust it in the floating widget if needed",
           })
         }
       } catch (err) {

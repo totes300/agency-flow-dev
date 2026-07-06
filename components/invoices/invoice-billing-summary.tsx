@@ -85,6 +85,9 @@ export function InvoiceBillingSummary({
           {billingItems.map((li) => {
             const isManual = li.lineType === "manual"
             const editable = !readOnly && isManual
+            // The fixed line's amount IS editable server-side (partial
+            // billing), but its edit surface is the sidebar's Fixed fee
+            // control — the document canvas stays chrome-free.
 
             return (
               <tr key={li._id} className="group border-b">

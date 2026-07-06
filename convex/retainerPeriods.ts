@@ -120,7 +120,7 @@ const CYCLE_OVERAGE_BLOCK_MESSAGE =
 
 const DRAFT_INVOICE_BLOCK_MESSAGE =
   "An invoice already covers this period. " +
-  "Void or finalize that invoice before closing the period.";
+  "Void that invoice before closing the period.";
 
 const CYCLE_DRAFT_INVOICE_BLOCK_MESSAGE =
   "An invoice already covers part of this cycle. " +
@@ -459,6 +459,11 @@ export const closePeriod = mutation({
     // rollover-vs-non-rollover rule (Slice 2): rollover monthly is NEVER
     // overage-due at the monthly level, so this gate passes mid-cycle. The
     // cycle-level gate is Slice 4's `closeRetainerCycle`.
+    // Gate math = invoice math = meter math: retainer budget consumption is
+    // RAW everywhere (createInvoice bills retainer overage from exact
+    // minutes; the balance badges and ready rows sum exact minutes).
+    // Rounding any single side reintroduces the close/generate dead-end at
+    // the rounding boundary (2026-07-05 review H1).
     const overageContext = await computePeriodOverageContext(
       ctx,
       project,
@@ -520,6 +525,23 @@ export const reopenPeriod = mutation({
     );
     if (period.closedAt === undefined) {
       throw new ConvexError("Period is not closed.");
+    }
+
+    // A non-void invoice covering this period owns its entries' settlement
+    // (retainer cycle invoices carry the closed months' entries since the
+    // 2026-07-05 deadlock fix). Reopening underneath it would unsettle
+    // entries that sit on a live document. Void the invoice first — that
+    // path restores period settlement and THEN reopen works.
+    const reopenInvoices = await ctx.db
+      .query("invoices")
+      .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
+      .filter((q) => q.eq(q.field("orgId"), authCtx.orgId))
+      .collect();
+    const coveringInvoice = findConflictingInvoice(reopenInvoices, period);
+    if (coveringInvoice) {
+      throw new ConvexError(
+        "This period is billed on an invoice. Void that invoice first, then reopen the period.",
+      );
     }
 
     const tasks = await ctx.db
@@ -666,6 +688,7 @@ export const closeRetainerCycle = mutation({
     // Gate 1 — cycle-level overage. Per `computeCycleOverageContext`
     // (Slice 2), the rollover-cycle mode returns `isOverageDue: true` iff
     // the cycle's aggregate worked minutes exceed its aggregate budget.
+    // Raw budget math — same rule as closePeriod's gate above.
     const overageContext = await computeCycleOverageContext(
       ctx,
       project,

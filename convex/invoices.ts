@@ -27,6 +27,7 @@ import {
   type ReadyRow,
 } from "./lib/readyToInvoice";
 import { getInvoiceAnchorMonthKey } from "./lib/invoiceAnchor";
+import { getFixedBilledFinalized } from "./lib/fixedBilling";
 import {
   settleInvoiceEntries,
   unsettleInvoiceEntries,
@@ -449,6 +450,12 @@ async function enumerateReadyRows(
     .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
     .collect();
 
+  // Promise = invoice: T&M row amounts use the workspace default rounding
+  // (the same math createInvoice runs), so a "$1,200 ready" row generates
+  // a $1,200 draft. See the 2026-07-05 rounding-policy decision.
+  const readySettings = await getOrgSettings(ctx, orgId);
+  const defaultRounding = readySettings?.roundingMinutes ?? 1;
+
   // Cache clients once — many projects may share one.
   const clientCache = new Map<string, Doc<"clients"> | null>();
   async function getClient(clientId: Id<"clients">) {
@@ -557,6 +564,8 @@ async function enumerateReadyRows(
         invoiceId: e.invoiceId,
         settledAt: e.settledAt ?? null,
         billableRate: e.billableRate,
+        taskId: e.taskId.toString(),
+        workCategoryId: e.snapshotCategoryId?.toString() ?? null,
       }));
       const rows = buildTmReadyRows({
         project: projectInput,
@@ -564,6 +573,7 @@ async function enumerateReadyRows(
         invoices: invoiceInputs,
         entries: entryInputs,
         todayStr,
+        roundingMinutes: defaultRounding,
       });
       allRows.push(...rows);
       continue;
@@ -809,7 +819,13 @@ export const getProjectInvoiceMetrics = query({
     // Fixed Fee: compute billed amount from lineType:"fixed" items only
     // (excludes manual rows so remaining balance stays accurate).
     // Only finalized invoices count — drafts are provisional.
+    // `fixedExtraBilled` tracks everything billed BEYOND the fee on those
+    // same invoices (manual lines — extra work, adjustments; time lines are
+    // $0 on fixed invoices). Two axes: the fee's progress and the extras on
+    // top — the Budget card shows both so "100% of fee" can never hide a
+    // higher invoiced total.
     let fixedBilled = 0;
+    let fixedExtraBilled = 0;
     if (project.billingType === "fixed") {
       for (const inv of orgInvoices) {
         // Drafts are provisional; voids are historical. Neither counts as billed.
@@ -820,9 +836,11 @@ export const getProjectInvoiceMetrics = query({
           .collect();
         for (const item of items) {
           if (item.lineType === "fixed") fixedBilled += item.amount;
+          else fixedExtraBilled += item.amount;
         }
       }
       fixedBilled = round2(fixedBilled);
+      fixedExtraBilled = round2(fixedExtraBilled);
     }
 
     const fixedPrice = project.fixedPrice ?? 0;
@@ -868,6 +886,7 @@ export const getProjectInvoiceMetrics = query({
       // Fixed Fee specific
       fixedPrice,
       fixedBilled,
+      fixedExtraBilled,
       fixedRemaining: round2(fixedPrice - fixedBilled),
       fixedPercentInvoiced: fixedPrice > 0
         ? Math.round((fixedBilled / fixedPrice) * 100)
@@ -887,151 +906,9 @@ export const getProjectInvoiceMetrics = query({
   },
 });
 
-/**
- * Live preview for invoice creation modal.
- * Returns computed totals reacting to date range and rounding changes.
- * Supports T&M (hours × rate) and Fixed (remaining balance).
- */
-export const getInvoicePreview = query({
-  args: {
-    projectId: v.id("projects"),
-    startDate: v.optional(v.string()),
-    endDate: v.optional(v.string()),
-    roundingMinutes: v.number(),
-    // Selection mode (T&M only): preview aggregates totals over an explicit
-    // id list instead of a date range. Mutually exclusive with startDate/endDate.
-    timeEntryIds: v.optional(v.array(v.id("timeEntries"))),
-  },
-  handler: async (ctx, args) => {
-    const { orgId } = await requireAdmin(ctx);
+// (getInvoicePreview was deleted 2026-07-05 — dead code with no UI caller,
+// already divergent from createInvoice's math. The draft page IS the preview.)
 
-    const project = await ctx.db.get(args.projectId);
-    if (!project || project.orgId !== orgId) return null;
-
-    // Contract-mirror guard: `createInvoice` only accepts `timeEntryIds` for
-    // T&M projects — preview must match so callers can't preview a state
-    // that would fail to materialize.
-    if (args.timeEntryIds !== undefined && project.billingType !== "t_and_m") {
-      throw new ConvexError(
-        "Selecting specific time entries is only supported for Time & Materials projects.",
-      );
-    }
-
-    // Get all tasks for this project
-    const tasks = await ctx.db
-      .query("tasks")
-      .withIndex("by_orgId_projectId", (q) =>
-        q.eq("orgId", orgId).eq("projectId", args.projectId),
-      )
-      .collect();
-
-    // Fetch all billable entries that are NOT yet locked. Phase 8 — both
-    // `invoiceId` (legacy) and `settledAt` (period-close) lock an entry;
-    // either makes it ineligible for inclusion on a new invoice (a
-    // retainer-included entry must not be re-billed as overage).
-    const allEntries = (
-      await Promise.all(
-        tasks.map(async (task) => {
-          const entries = await ctx.db
-            .query("timeEntries")
-            .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
-            .filter((q) => q.eq(q.field("orgId"), orgId))
-            .collect();
-          return entries
-            .filter(
-              (e) =>
-                e.isBillable &&
-                e.invoiceId === undefined &&
-                e.settledAt === undefined,
-            )
-            .map((e) => ({
-              ...e,
-              taskTitle: task.title,
-              workCategoryId: e.snapshotCategoryId,
-            }));
-        }),
-      )
-    ).flat();
-
-    // Build filtered set — either from explicit ids or date range.
-    let filtered: typeof allEntries;
-    if (args.timeEntryIds !== undefined) {
-      const wanted = new Set(args.timeEntryIds.map((id) => id.toString()));
-      filtered = allEntries.filter((e) => wanted.has(e._id.toString()));
-    } else {
-      filtered = allEntries.filter((e) => {
-        if (args.startDate && e.date < args.startDate) return false;
-        if (args.endDate && e.date > args.endDate) return false;
-        return true;
-      });
-    }
-
-    // Group entries — same grouping logic as createInvoice
-    // T&M: by (workCategoryId, taskId, billableRate). Fixed: by (workCategoryId, taskId) only.
-    const groups = new Map<string, { minutes: number; rate: number }>();
-    for (const e of filtered) {
-      const key = project.billingType === "fixed"
-        ? `${e.workCategoryId ?? "none"}::${e.taskId}`
-        : `${e.workCategoryId ?? "none"}::${e.taskId}::${e.billableRate}`;
-      const existing = groups.get(key);
-      if (existing) {
-        existing.minutes += e.durationMinutes;
-      } else {
-        groups.set(key, { minutes: e.durationMinutes, rate: e.billableRate });
-      }
-    }
-
-    // Apply per-task-total rounding and compute totals
-    let totalMinutes = 0;
-    let totalAmount = 0;
-    for (const group of groups.values()) {
-      const rounded = roundMinutesUp(group.minutes, args.roundingMinutes);
-      totalMinutes += rounded;
-      if (project.billingType === "t_and_m") {
-        totalAmount += round2((rounded / 60) * group.rate);
-      }
-    }
-
-    // Fixed Fee: billing amount = fixedPrice - alreadyInvoiced
-    // Only finalized invoices count against the remaining balance.
-    // Drafts are provisional; if we counted them, deleting a draft would leave
-    // its sibling's snapshot plus a freshly-pre-filled remaining on the next
-    // invoice, over-billing the project.
-    let billingAmount: number | undefined;
-    if (project.billingType === "fixed") {
-      const fixedPrice = project.fixedPrice ?? 0;
-      const existingInvoices = await ctx.db
-        .query("invoices")
-        .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
-        .filter((q) => q.eq(q.field("orgId"), orgId))
-        .collect();
-
-      let alreadyInvoiced = 0;
-      for (const inv of existingInvoices) {
-        if (inv.status === "draft" || inv.status === "void") continue;
-        const items = await ctx.db
-          .query("invoiceLineItems")
-          .withIndex("by_invoiceId", (q) => q.eq("invoiceId", inv._id))
-          .collect();
-        for (const item of items) {
-          if (item.lineType === "fixed") alreadyInvoiced += item.amount;
-        }
-      }
-      billingAmount = round2(fixedPrice - alreadyInvoiced);
-    }
-
-    const currency = await getProjectCurrency(ctx, project);
-
-    return {
-      totalMinutes,
-      totalAmount: round2(totalAmount),
-      billingAmount,
-      entryCount: filtered.length,
-      currency,
-      billingType: project.billingType,
-    };
-  },
-});
 
 // ─── Shared Retainer Math ─────────────────────────────────────────────────────
 //
@@ -1081,14 +958,15 @@ async function recalcRetainerBalance(
 ) {
   const items: Doc<"invoiceLineItems">[] = await ctx.db
     .query("invoiceLineItems")
-    .withIndex("by_invoiceId", (q: any) => q.eq("invoiceId", invoiceId))
+    .withIndex("by_invoiceId", (q) => q.eq("invoiceId", invoiceId))
     .collect();
 
   // Build task minutes map from time line items. `quantityMinutes` is the
-  // source of truth (stamped at creation from summed entry minutes, kept in
-  // sync on manual hours edits). Fall back to `quantity × 60` for legacy rows
-  // created before the field existed. Items are already rounded at creation,
-  // so we pass roundingMinutes=0 to computeRetainerBalance.
+  // source of truth — RAW summed entry minutes since the 2026-07-05 rounding
+  // rework (kept in sync on manual hours edits, where an explicit hours edit
+  // overrides it). Fall back to `quantity × 60` for legacy rows created
+  // before the field existed. Rounding is applied here per row via the
+  // invoice's own `roundingMinutes` snapshot — same math as creation.
   const taskMinutesMap = new Map<string, number>();
   for (const item of items) {
     if (item._id === excludeLineItemId) continue;
@@ -1103,9 +981,9 @@ async function recalcRetainerBalance(
   // stable if the admin toggles `rolloverEnabled` or changes `cycleLength`
   // mid-cycle. Legacy drafts without snapshots fall back to live project.
   const cycleLength =
-    invoice.retainerCycleLength ?? project.cycleLength ?? 3;
+    invoice.retainerCycleLength ?? project.cycleLength ?? 1;
   const rolloverEnabled =
-    invoice.retainerRolloverEnabled ?? project.rolloverEnabled ?? true;
+    invoice.retainerRolloverEnabled ?? project.rolloverEnabled ?? false;
 
   const positionInCycle = getRetainerRecalcCyclePosition({
     rolloverEnabled,
@@ -1114,7 +992,7 @@ async function recalcRetainerBalance(
 
   const result = computeRetainerBalance({
     taskMinutesMap,
-    roundingMinutes: 0, // Items are already rounded from creation
+    roundingMinutes: invoice.roundingMinutes ?? 0,
     startBalance: invoice.retainerStartBalanceMinutes ?? 0,
     includedMinutes: invoice.retainerIncludedMinutes ?? 0,
     monthlyFee: invoice.retainerMonthlyFee ?? 0,
@@ -1163,7 +1041,7 @@ async function recalcRetainerBalance(
   // Recalculate subtotal/total from all billing items
   const updatedItems: Doc<"invoiceLineItems">[] = await ctx.db
     .query("invoiceLineItems")
-    .withIndex("by_invoiceId", (q: any) => q.eq("invoiceId", invoiceId))
+    .withIndex("by_invoiceId", (q) => q.eq("invoiceId", invoiceId))
     .collect();
   let subtotal = 0;
   for (const item of updatedItems) {
@@ -1333,7 +1211,9 @@ export const createInvoice = mutation({
     projectId: v.id("projects"),
     startDate: v.optional(v.string()),
     endDate: v.optional(v.string()),
-    roundingMinutes: v.number(),
+    // Invoice-time rounding increment. Omitted → workspace default
+    // (orgSettings.roundingMinutes). The ledger itself is always raw.
+    roundingMinutes: v.optional(v.number()),
     // Retainer-specific: month to invoice
     retainerYear: v.optional(v.number()),
     retainerMonth: v.optional(v.number()), // 1-12
@@ -1442,7 +1322,18 @@ export const createInvoice = mutation({
               (e) =>
                 e.isBillable &&
                 e.invoiceId === undefined &&
-                e.settledAt === undefined,
+                // Retainer: entries settled by a PERIOD CLOSE
+                // (retainer_included) still belong to this cycle's story —
+                // excluding them made the invoice's used-minutes disagree
+                // with the close gate's (which counts ALL billable work)
+                // and produced the reopen deadlock: "close blocked: overage"
+                // vs "invoice blocked: no overage". Including them means the
+                // invoice bills the true cycle aggregate and the document
+                // shows the full cycle's work. Entries on another DOCUMENT
+                // (invoiceId set / settledReason "invoiced") stay excluded.
+                (e.settledAt === undefined ||
+                  (billingType === "retainer" &&
+                    e.settledReason === "retainer_included")),
             )
             .map((e) => ({
               ...e,
@@ -1467,8 +1358,12 @@ export const createInvoice = mutation({
       }
       const y = args.retainerYear;
       const m = args.retainerMonth;
-      const rolloverEnabled = project.rolloverEnabled ?? true;
-      const cycleLength = project.cycleLength ?? 3;
+      // Creation-consistent defaults (`projects.create` writes ?? 1 /
+      // rollover only for multi-month cycles). `?? true / ?? 3` here would
+      // bill a misconfigured retainer as a 3-month rollover while every
+      // screen shows it as monthly.
+      const rolloverEnabled = project.rolloverEnabled ?? false;
+      const cycleLength = project.cycleLength ?? 1;
 
       if (rolloverEnabled) {
         // Cycle invoice — must be cycle-end. Positions 0…cycleLength-1; only
@@ -1640,6 +1535,17 @@ export const createInvoice = mutation({
     const orgSettings = await getOrgSettings(ctx, orgId);
     const prefix = orgSettings?.invoicePrefix ?? "INV-";
     const paymentTermsDays = orgSettings?.defaultPaymentTermsDays ?? 30;
+    // Rounding policy (2026-07-05): the workspace setting is the DEFAULT
+    // invoice rounding; a caller-provided value (the draft picker) wins.
+    // RETAINER is always raw (exact minutes): its budget math must be ONE
+    // number across meters, close gates, ready-feed promises and the
+    // invoice — rounding any single side reintroduces the close/generate
+    // dead-end at the rounding boundary (review H1). Rounding stays an
+    // hourly-line presentation for T&M.
+    const effectiveRounding =
+      billingType === "retainer"
+        ? 1
+        : args.roundingMinutes ?? orgSettings?.roundingMinutes ?? 1;
 
     // 7. Compute issue date and due date
     const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
@@ -1682,12 +1588,16 @@ export const createInvoice = mutation({
     // stamped `quantityMinutes` field on each line item (read back by
     // `recalcRetainerBalance`); no running total needs to be tracked here.
     for (const group of groupMap.values()) {
-      const roundedMinutes = roundMinutesUp(group.minutes, args.roundingMinutes);
+      // `quantityMinutes` stays RAW (true source of truth — summed entry
+      // minutes); `quantity`/`amount` are DERIVED with the invoice's
+      // rounding so the draft picker can re-round losslessly later.
+      // Amount is computed from minutes, not from the 2-decimal display
+      // hours — one precision path from ledger to document.
+      const roundedMinutes = roundMinutesUp(group.minutes, effectiveRounding);
       const hours = round2(roundedMinutes / 60);
 
       if (billingType === "t_and_m") {
-        // T&M: hours × rate = billable amount
-        const amount = round2(hours * group.rate);
+        const amount = round2((roundedMinutes / 60) * group.rate);
         subtotal += amount;
         lineItems.push({
           lineType: "time",
@@ -1695,7 +1605,7 @@ export const createInvoice = mutation({
           quantity: hours,
           unitPrice: group.rate,
           amount,
-          quantityMinutes: roundedMinutes,
+          quantityMinutes: group.minutes,
           workCategoryId: group.workCategoryId,
           entryIds: group.entryIds,
         });
@@ -1707,7 +1617,7 @@ export const createInvoice = mutation({
           quantity: hours,
           unitPrice: 0,
           amount: 0,
-          quantityMinutes: roundedMinutes,
+          quantityMinutes: group.minutes,
           workCategoryId: group.workCategoryId,
           entryIds: group.entryIds,
         });
@@ -1723,8 +1633,8 @@ export const createInvoice = mutation({
     let retainerOverageRate = 0;
 
     if (billingType === "retainer") {
-      const rolloverEnabled = project.rolloverEnabled ?? true;
-      const cycleLength = project.cycleLength ?? 3;
+      const rolloverEnabled = project.rolloverEnabled ?? false;
+      const cycleLength = project.cycleLength ?? 1;
 
       retainerFee = project.monthlyFee ?? 0;
       retainerOverageRate = project.overageRate ?? 0;
@@ -1754,7 +1664,7 @@ export const createInvoice = mutation({
 
       const retainerResult = computeRetainerBalance({
         taskMinutesMap,
-        roundingMinutes: args.roundingMinutes,
+        roundingMinutes: effectiveRounding,
         startBalance: retainerStartBalance,
         includedMinutes: retainerIncluded,
         monthlyFee: retainerFee,
@@ -1793,32 +1703,20 @@ export const createInvoice = mutation({
     if (billingType === "fixed") {
       const fixedPrice = project.fixedPrice ?? 0;
 
-      // Calculate already invoiced: sum of lineType:"fixed" amounts across
-      // finalized project invoices only. Drafts are provisional — counting
-      // them would let a delete-then-recreate cycle over-bill the project.
-      const projectInvoiceIds = projectInvoices
-        .filter(
-          (inv) =>
-            inv.orgId === orgId &&
-            inv.status !== "draft" &&
-            inv.status !== "void",
-        )
-        .map((inv) => inv._id);
-
-      let alreadyInvoiced = 0;
-      for (const invId of projectInvoiceIds) {
-        const items = await ctx.db
-          .query("invoiceLineItems")
-          .withIndex("by_invoiceId", (q) => q.eq("invoiceId", invId))
-          .collect();
-        for (const item of items) {
-          if (item.lineType === "fixed") {
-            alreadyInvoiced += item.amount;
-          }
-        }
-      }
+      const alreadyInvoiced = await getFixedBilledFinalized(
+        ctx,
+        orgId,
+        args.projectId,
+      );
 
       const remaining = round2(fixedPrice - alreadyInvoiced);
+      // Fully billed (or fee lowered): never mint a zero/negative invoice —
+      // each finalized invoice consumes a gapless sequence number.
+      if (remaining <= 0) {
+        throw new ConvexError(
+          "This project's fixed fee is fully invoiced — there is nothing left to bill.",
+        );
+      }
       subtotal = remaining;
       lineItems.push({
         lineType: "fixed",
@@ -1854,7 +1752,7 @@ export const createInvoice = mutation({
       dueDate,
       periodStart,
       periodEnd,
-      roundingMinutes: args.roundingMinutes,
+      roundingMinutes: effectiveRounding,
       createdAt: now,
       updatedAt: now,
       createdBy: userId,
@@ -1871,8 +1769,8 @@ export const createInvoice = mutation({
       invoiceData.retainerEndBalanceMinutes = retainerEndBalance;
       invoiceData.retainerMonthlyFee = retainerFee;
       invoiceData.retainerOverageRate = retainerOverageRate;
-      invoiceData.retainerRolloverEnabled = project.rolloverEnabled ?? true;
-      invoiceData.retainerCycleLength = project.cycleLength ?? 3;
+      invoiceData.retainerRolloverEnabled = project.rolloverEnabled ?? false;
+      invoiceData.retainerCycleLength = project.cycleLength ?? 1;
     }
 
     const invoiceId = await ctx.db.insert("invoices", invoiceData as never);
@@ -1906,6 +1804,322 @@ export const createInvoice = mutation({
     // `number: null` — drafts are unnumbered; callers build the draft URL
     // from `invoiceId` (getInvoice accepts a doc ID as identifier).
     return { invoiceId, resumed: false, prefix, number: null };
+  },
+});
+
+/**
+ * Change a draft's time-rounding increment. Re-derives every non-overridden
+ * time line's `quantity`/`amount` from its RAW `quantityMinutes`, then
+ * recomputes totals (retainer: full balance recalc). Lossless in both
+ * directions because the ledger minutes are never rounded.
+ */
+export const updateInvoiceRounding = mutation({
+  args: {
+    invoiceId: v.id("invoices"),
+    roundingMinutes: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const { orgId } = await requireAdmin(ctx);
+
+    const allowedIncrements = [0, 1, 5, 6, 15, 30];
+    if (!allowedIncrements.includes(args.roundingMinutes)) {
+      throw new ConvexError("Invalid rounding increment.");
+    }
+
+    const invoice = await ctx.db.get(args.invoiceId);
+    if (!invoice || invoice.orgId !== orgId) {
+      throw new ConvexError("Invoice not found.");
+    }
+    if (invoice.status !== "draft") {
+      throw new ConvexError("Only draft invoices can change rounding.");
+    }
+    const project = await ctx.db.get(invoice.projectId);
+    if (!project || project.orgId !== orgId) {
+      throw new ConvexError("Project not found.");
+    }
+    if (project.billingType === "retainer") {
+      // Retainer budget math is raw everywhere (see createInvoice) —
+      // rounding a retainer draft would desync it from the close gates
+      // and the balance meters.
+      throw new ConvexError("Retainer invoices bill exact time and cannot be rounded.");
+    }
+
+    const now = Date.now();
+    await ctx.db.patch(invoice._id, {
+      roundingMinutes: args.roundingMinutes,
+      updatedAt: now,
+    });
+
+    const items = await ctx.db
+      .query("invoiceLineItems")
+      .withIndex("by_invoiceId", (q) => q.eq("invoiceId", invoice._id))
+      .collect();
+
+    let subtotal = 0;
+    for (const item of items) {
+      if (item.lineType !== "time") {
+        subtotal += item.amount;
+        continue;
+      }
+      // Manually-edited rows keep the admin's numbers; rounding only steers
+      // derived rows.
+      if (item.amountOverridden) {
+        subtotal += item.amount;
+        continue;
+      }
+      const rawMinutes = item.quantityMinutes ?? Math.round(item.quantity * 60);
+      const roundedMinutes = roundMinutesUp(rawMinutes, args.roundingMinutes);
+      const hours = round2(roundedMinutes / 60);
+      const amount =
+        item.unitPrice > 0 ? round2((roundedMinutes / 60) * item.unitPrice) : 0;
+      await ctx.db.patch(item._id, {
+        quantity: hours,
+        amount,
+        updatedAt: now,
+      });
+      subtotal += amount;
+    }
+
+    // Retainer drafts are rejected up front (raw budget math) — the F6
+    // "$0 retainer invoice via rounding" hazard is unreachable by design.
+    await ctx.db.patch(invoice._id, {
+      subtotal: round2(subtotal),
+      total: round2(subtotal),
+      updatedAt: now,
+    });
+  },
+});
+
+// ─── Draft refresh (stale-draft reconciliation) ──────────────────────────────
+
+/**
+ * Entries that WOULD be swept onto this draft if it were generated right now
+ * but aren't on it: billable, unstamped, unsettled, on the invoice's project
+ * — and, for retainer + T&M, inside the invoice's stored period (a cycle or
+ * month invoice must never grow past its period; leftover T&M time rolls
+ * onto the next invoice). Fixed drafts are periodless sweeps: their time
+ * lines are a $0 work report, so refresh considers ALL open entries and the
+ * period widens accordingly.
+ *
+ * Shared by `getInvoice` (staleness signal), `refreshInvoiceDraft` (the
+ * one-click fix) and the retainer finalize gate — one definition, no drift.
+ */
+async function collectRefreshableEntries(
+  ctx: QueryCtx,
+  orgId: string,
+  invoice: Doc<"invoices">,
+  billingType: string,
+): Promise<{ entries: Doc<"timeEntries">[]; taskMap: Map<string, Doc<"tasks">> }> {
+  const tasks = await ctx.db
+    .query("tasks")
+    .withIndex("by_orgId_projectId", (q) =>
+      q.eq("orgId", orgId).eq("projectId", invoice.projectId),
+    )
+    .collect();
+  const taskMap = new Map(tasks.map((t) => [t._id.toString(), t]));
+
+  const open = (
+    await Promise.all(
+      tasks.map(async (task) => {
+        const entries = await ctx.db
+          .query("timeEntries")
+          .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
+          .filter((q) => q.eq(q.field("orgId"), orgId))
+          .collect();
+        return entries.filter(
+          (e) =>
+            e.isBillable &&
+            e.invoiceId === undefined &&
+            e.settledAt === undefined,
+        );
+      }),
+    )
+  ).flat();
+
+  // Period scope: retainer AND T&M drafts are bound to their stored period
+  // — the inbox month rows promise ONE month, so a one-click refresh must
+  // never widen a "June" draft with July work (2026-07-05 review F4).
+  // Leftover T&M time simply rolls onto the next invoice. Fixed drafts stay
+  // periodless: their time lines are a $0 work report and should show all
+  // work delivered up to finalization.
+  const periodBound = billingType === "retainer" || billingType === "t_and_m";
+  const entries = periodBound
+    ? open.filter(
+        (e) =>
+          (!invoice.periodStart || e.date >= invoice.periodStart) &&
+          (!invoice.periodEnd || e.date <= invoice.periodEnd),
+      )
+    : open;
+  return { entries, taskMap };
+}
+
+/**
+ * Pull entries logged since this draft was created onto the draft.
+ *
+ * Append-only: fresh entries become NEW time lines (grouped the same way as
+ * `createInvoice`); existing lines — including relabeled descriptions,
+ * manual rows and a partially-billed fixed amount — are never touched.
+ * Retainer drafts recompute their balance/overage afterwards.
+ */
+export const refreshInvoiceDraft = mutation({
+  args: { invoiceId: v.id("invoices") },
+  handler: async (ctx, args) => {
+    const { orgId } = await requireAdmin(ctx);
+
+    const invoice = await ctx.db.get(args.invoiceId);
+    if (!invoice || invoice.orgId !== orgId) {
+      throw new ConvexError("Invoice not found.");
+    }
+    if (invoice.status !== "draft") {
+      throw new ConvexError("Only draft invoices can be refreshed.");
+    }
+    const project = await ctx.db.get(invoice.projectId);
+    if (!project || project.orgId !== orgId) {
+      throw new ConvexError("Project not found.");
+    }
+    const billingType = project.billingType;
+
+    const { entries: fresh, taskMap } = await collectRefreshableEntries(
+      ctx,
+      orgId,
+      invoice,
+      billingType,
+    );
+    if (fresh.length === 0) {
+      return { added: 0, addedMinutes: 0 };
+    }
+
+    // Group exactly like createInvoice: T&M splits by rate, Fixed/Retainer
+    // don't (their time rows are $0 work-report rows).
+    type FreshGroup = {
+      taskTitle: string;
+      workCategoryId: Id<"workCategories"> | undefined;
+      rate: number;
+      minutes: number;
+      entryIds: Id<"timeEntries">[];
+    };
+    const groupMap = new Map<string, FreshGroup>();
+    for (const e of fresh) {
+      const cat = e.snapshotCategoryId;
+      const key =
+        billingType === "t_and_m"
+          ? `${cat ?? "none"}::${e.taskId}::${e.billableRate}`
+          : `${cat ?? "none"}::${e.taskId}`;
+      const existing = groupMap.get(key);
+      if (existing) {
+        existing.minutes += e.durationMinutes;
+        existing.entryIds.push(e._id);
+      } else {
+        groupMap.set(key, {
+          taskTitle: taskMap.get(e.taskId.toString())?.title ?? "Unknown task",
+          workCategoryId: cat,
+          rate: e.billableRate,
+          minutes: e.durationMinutes,
+          entryIds: [e._id],
+        });
+      }
+    }
+
+    const existingItems = await ctx.db
+      .query("invoiceLineItems")
+      .withIndex("by_invoiceId", (q) => q.eq("invoiceId", invoice._id))
+      .collect();
+    let sortOrder =
+      existingItems.reduce((max, li) => Math.max(max, li.sortOrder), -1) + 1;
+
+    const rounding = invoice.roundingMinutes ?? 0;
+    const now = Date.now();
+    const isTm = billingType === "t_and_m";
+    for (const group of groupMap.values()) {
+      // MERGE into the matching existing line when possible. Appending a
+      // duplicate line for the same (category, task, rate) group would make
+      // per-line rounding fire twice for one group — over-billing vs a
+      // freshly generated draft (2026-07-05 review F2). Relabeled or
+      // manually-overridden lines never match, so admin edits stay safe.
+      const groupRate = isTm ? group.rate : 0;
+      const target = existingItems.find(
+        (li) =>
+          li.lineType === "time" &&
+          !li.amountOverridden &&
+          li.description === group.taskTitle &&
+          li.unitPrice === groupRate &&
+          (li.workCategoryId?.toString() ?? "none") ===
+            (group.workCategoryId?.toString() ?? "none"),
+      );
+
+      if (target) {
+        const mergedRaw =
+          (target.quantityMinutes ?? Math.round(target.quantity * 60)) +
+          group.minutes;
+        const mergedRounded = roundMinutesUp(mergedRaw, rounding);
+        await ctx.db.patch(target._id, {
+          quantityMinutes: mergedRaw,
+          quantity: round2(mergedRounded / 60),
+          amount: isTm ? round2((mergedRounded / 60) * group.rate) : 0,
+          timeEntryIds: [...(target.timeEntryIds ?? []), ...group.entryIds],
+          updatedAt: now,
+        });
+        continue;
+      }
+
+      const roundedMinutes = roundMinutesUp(group.minutes, rounding);
+      await ctx.db.insert("invoiceLineItems", {
+        orgId,
+        invoiceId: invoice._id,
+        sortOrder,
+        lineType: "time",
+        description: group.taskTitle,
+        quantity: round2(roundedMinutes / 60),
+        unitPrice: groupRate,
+        amount: isTm ? round2((roundedMinutes / 60) * group.rate) : 0,
+        quantityMinutes: group.minutes,
+        workCategoryId: group.workCategoryId,
+        timeEntryIds: group.entryIds,
+        createdAt: now,
+        updatedAt: now,
+      });
+      sortOrder++;
+    }
+
+    // Stamp the fresh entries onto this draft.
+    for (const e of fresh) {
+      await ctx.db.patch(e._id, { invoiceId: invoice._id, updatedAt: now });
+    }
+
+    // Recompute totals + (T&M/Fixed) widen the stored period to the new
+    // entry span. Retainer keeps its period and recomputes balance/overage
+    // from the updated time lines.
+    if (billingType === "retainer") {
+      await recalcRetainerBalance(ctx, invoice._id, invoice, project);
+    } else {
+      const items = await ctx.db
+        .query("invoiceLineItems")
+        .withIndex("by_invoiceId", (q) => q.eq("invoiceId", invoice._id))
+        .collect();
+      const subtotal = round2(items.reduce((sum, li) => sum + li.amount, 0));
+      const patch: Record<string, unknown> = {
+        subtotal,
+        total: subtotal,
+        updatedAt: now,
+      };
+      let periodStart = invoice.periodStart;
+      let periodEnd = invoice.periodEnd;
+      // Only Fixed drafts are periodless (see collectRefreshableEntries);
+      // T&M entries are pre-filtered to the stored period, so this widening
+      // can only fill in missing bounds, never move a month boundary.
+      for (const e of fresh) {
+        if (!periodStart || e.date < periodStart) periodStart = e.date;
+        if (!periodEnd || e.date > periodEnd) periodEnd = e.date;
+      }
+      if (periodStart !== invoice.periodStart) patch.periodStart = periodStart;
+      if (periodEnd !== invoice.periodEnd) patch.periodEnd = periodEnd;
+      await ctx.db.patch(invoice._id, patch);
+    }
+
+    return {
+      added: fresh.length,
+      addedMinutes: fresh.reduce((sum, e) => sum + e.durationMinutes, 0),
+    };
   },
 });
 
@@ -2057,9 +2271,9 @@ export const getInvoice = query({
       invoice.retainerEndBalanceMinutes != null
     ) {
       const rolloverEnabled =
-        invoice.retainerRolloverEnabled ?? project.rolloverEnabled ?? true;
+        invoice.retainerRolloverEnabled ?? project.rolloverEnabled ?? false;
       const cycleLength =
-        invoice.retainerCycleLength ?? project.cycleLength ?? 3;
+        invoice.retainerCycleLength ?? project.cycleLength ?? 1;
       const months = invoiceMonthRange(invoice.periodStart, invoice.periodEnd);
       const effectiveMonths: YearMonth[] =
         months.length > 0
@@ -2124,6 +2338,23 @@ export const getInvoice = query({
       };
     }
 
+    // Staleness signal: entries that would be swept onto this draft if it
+    // were generated now but aren't on it (logged after draft creation).
+    // Powers the "Refresh draft" callout + the finalize confirmation.
+    let staleEntries: { count: number; totalMinutes: number } | null = null;
+    if (invoice.status === "draft" && project && project.billingType !== "non_billable") {
+      const { entries } = await collectRefreshableEntries(
+        ctx,
+        orgId,
+        invoice,
+        project.billingType,
+      );
+      staleEntries = {
+        count: entries.length,
+        totalMinutes: entries.reduce((sum, e) => sum + e.durationMinutes, 0),
+      };
+    }
+
     return {
       invoice,
       lineItems,
@@ -2131,6 +2362,7 @@ export const getInvoice = query({
       orgInvoiceCount: orgInvoiceSample.length,
       fixedBilled,
       retainerUsage,
+      staleEntries,
       project: project
         ? { name: project.name, billingType: project.billingType, fixedPrice: project.fixedPrice }
         : null,
@@ -2286,16 +2518,25 @@ export const updateInvoiceLineItem = mutation({
       throw new ConvexError("Only draft invoices can be edited.");
     }
 
-    // Derived line types (`fixed`, `overage`) are anchored to project/invoice
-    // snapshots (fixedPrice, retainerOverageRate, etc.). Editing their numeric
-    // fields would silently desync the total from the snapshot.
-    // Discounts/adjustments must be expressed as a manual line.
-    // Description stays editable so admins can relabel.
+    // Derived line types are anchored to project/invoice snapshots
+    // (retainerOverageRate etc.) — editing their numeric fields would silently
+    // desync the total from the snapshot. Discounts/adjustments must be
+    // expressed as a manual line. Description stays editable so admins can
+    // relabel. ONE exception: the `fixed` line's AMOUNT is editable on drafts
+    // — that's how partial/milestone billing works (50% deposit etc., per
+    // docs/invoicing-prd.md §fixed). It's clamped to the unbilled remainder
+    // below, so the finalized series can never exceed the fee.
     if (lineItem.lineType !== "time" && lineItem.lineType !== "manual") {
+      const isFixedAmountEdit =
+        lineItem.lineType === "fixed" &&
+        args.amount !== undefined &&
+        args.quantity === undefined &&
+        args.unitPrice === undefined;
       if (
-        args.quantity !== undefined ||
-        args.unitPrice !== undefined ||
-        args.amount !== undefined
+        !isFixedAmountEdit &&
+        (args.quantity !== undefined ||
+          args.unitPrice !== undefined ||
+          args.amount !== undefined)
       ) {
         throw new ConvexError(
           "This line is derived from the project and its amount cannot be edited. Add a manual adjustment line instead.",
@@ -2315,6 +2556,27 @@ export const updateInvoiceLineItem = mutation({
       throw new ConvexError("Amount cannot be negative.");
     }
 
+    // Fixed-fee partial billing bounds: the edited amount must stay within
+    // the project's unbilled remainder (fee − finalized fixed lines), so no
+    // sequence of drafts can ever over-bill the fee.
+    if (lineItem.lineType === "fixed" && args.amount !== undefined) {
+      const fixedProject = await ctx.db.get(invoice.projectId);
+      if (!fixedProject || fixedProject.orgId !== orgId) {
+        throw new ConvexError("Project not found.");
+      }
+      const billed = await getFixedBilledFinalized(ctx, orgId, invoice.projectId);
+      const remaining = round2((fixedProject.fixedPrice ?? 0) - billed);
+      const nextAmount = round2(args.amount);
+      if (nextAmount <= 0) {
+        throw new ConvexError("Amount must be greater than zero.");
+      }
+      if (nextAmount > remaining) {
+        throw new ConvexError(
+          `Amount exceeds the unbilled remainder of the fixed fee (${remaining} ${invoice.currency}).`,
+        );
+      }
+    }
+
     const patch: Record<string, unknown> = { updatedAt: Date.now() };
     if (args.description !== undefined) patch.description = args.description;
     if (args.quantity !== undefined) patch.quantity = args.quantity;
@@ -2324,8 +2586,12 @@ export const updateInvoiceLineItem = mutation({
     // with `quantity`. A manual hours edit decouples the row from its source
     // time entries; re-derive minutes from the new hours so retainer recalc
     // sees the right value without hours→minutes reconstruction drift.
+    // The edit also takes manual ownership of the row (`amountOverridden`),
+    // so the draft's rounding picker won't re-derive hours the admin
+    // explicitly typed (2026-07-05 review F5).
     if (args.quantity !== undefined && lineItem.lineType === "time") {
       patch.quantityMinutes = Math.max(0, Math.round(args.quantity * 60));
+      patch.amountOverridden = true;
     }
 
     // Amount computation rules:
@@ -2335,7 +2601,15 @@ export const updateInvoiceLineItem = mutation({
     //     qty/rate edits resume auto-compute.
     //   - Qty/price changed without an amount arg: auto-compute as long as the
     //     row isn't locked by a prior override.
-    if (args.amount !== undefined) {
+    if (args.amount !== undefined && lineItem.lineType === "fixed") {
+      // Partial fixed billing: keep the row internally coherent
+      // (1 × amount = amount) and flag the manual choice.
+      const nextAmount = round2(args.amount);
+      patch.amount = nextAmount;
+      patch.unitPrice = nextAmount;
+      patch.quantity = 1;
+      patch.amountOverridden = true;
+    } else if (args.amount !== undefined) {
       const qty = args.quantity ?? lineItem.quantity;
       const price = args.unitPrice ?? lineItem.unitPrice;
       const computed = round2(qty * price);
@@ -2449,6 +2723,24 @@ export const removeInvoiceLineItem = mutation({
       throw new ConvexError(
         "This line item is derived from the project and cannot be removed.",
       );
+    }
+
+    // Retainer drafts bill the WHOLE period: removing a time line would
+    // free its entries, the finalize stale-gate would then block with a
+    // misleading "logged after the draft" message, and the only offered
+    // remediation (Refresh) would re-add exactly what was removed — an
+    // unwinnable loop (2026-07-05 review M1). Fix the underlying entries
+    // instead: delete the draft, edit the time, regenerate.
+    if (
+      lineItem.lineType === "time" &&
+      (lineItem.timeEntryIds?.length ?? 0) > 0
+    ) {
+      const lineProject = await ctx.db.get(invoice.projectId);
+      if (lineProject?.billingType === "retainer") {
+        throw new ConvexError(
+          "A retainer invoice bills the whole period, so time lines can't be removed. To exclude time: delete this draft, edit or delete the entries, then generate again.",
+        );
+      }
     }
 
     // Clear invoiceId on linked time entries so they become available for future invoicing
@@ -2579,6 +2871,71 @@ export async function applyStatusTransition(
           "Add your company details (Settings → General → Company details) " +
           "before issuing — an invoice needs a seller name.",
       };
+    }
+
+    // Fixed-fee stale-draft gate: the fee or sibling invoices may have
+    // changed since this draft was created. Never let the finalized series
+    // exceed `fixedPrice` — recheck the fixed line against the live remainder.
+    const transitionProject = await ctx.db.get(invoice.projectId);
+    if (
+      transitionProject &&
+      transitionProject.orgId === orgId &&
+      transitionProject.billingType === "fixed"
+    ) {
+      const draftItems = await ctx.db
+        .query("invoiceLineItems")
+        .withIndex("by_invoiceId", (q) => q.eq("invoiceId", invoice._id))
+        .collect();
+      const fixedAmount = draftItems
+        .filter((li) => li.lineType === "fixed")
+        .reduce((sum, li) => sum + li.amount, 0);
+      if (fixedAmount > 0) {
+        const billed = await getFixedBilledFinalized(
+          ctx,
+          orgId,
+          invoice.projectId,
+        );
+        const remaining = round2((transitionProject.fixedPrice ?? 0) - billed);
+        if (round2(fixedAmount) > remaining) {
+          return {
+            ok: false,
+            reason:
+              `The fixed-fee line (${fixedAmount} ${invoice.currency}) exceeds the ` +
+              `project's unbilled remainder (${remaining} ${invoice.currency}). ` +
+              "Update the draft's amount first.",
+          };
+        }
+      }
+    }
+
+    // Retainer stale-draft gate: entries logged in the period AFTER the
+    // draft was created are not on it. Finalizing would strand them forever
+    // (the period becomes invoice-covered and unreachable) and undercount
+    // the overage — hard-block until the draft is refreshed. T&M/Fixed get
+    // a soft client-side confirmation instead (their leftovers stay
+    // billable / are report-only).
+    if (
+      transitionProject &&
+      transitionProject.orgId === orgId &&
+      transitionProject.billingType === "retainer"
+    ) {
+      const { entries: stale } = await collectRefreshableEntries(
+        ctx,
+        orgId,
+        invoice,
+        "retainer",
+      );
+      if (stale.length > 0) {
+        const staleMinutes = stale.reduce((sum, e) => sum + e.durationMinutes, 0);
+        const hours = Math.round((staleMinutes / 60) * 100) / 100;
+        return {
+          ok: false,
+          reason:
+            `${stale.length} ${stale.length === 1 ? "entry was" : "entries were"} logged in this period ` +
+            `after the draft was created (${hours}h). Refresh the draft so they're included, ` +
+            "then finalize.",
+        };
+      }
     }
 
     // Allocate the sequence number at FINALIZATION. Drafts are unnumbered

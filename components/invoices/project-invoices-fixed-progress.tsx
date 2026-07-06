@@ -5,8 +5,15 @@ import { formatCurrency } from "@/lib/format"
 /**
  * Fixed-price projects' type-specific third card.
  *
+ * Two axes, never conflated:
+ *   - the FEE's billing progress (percent + bar — fixed lines only)
+ *   - EXTRAS billed on top of the fee (manual lines: extra work,
+ *     adjustments) — surfaced as a pill + "total invoiced" so "100% of
+ *     fee" can never hide a higher invoiced total.
+ *
  *   under budget   → neutral tone, progress bar up to %
  *   over budget    → red tone, bar capped at 100% with an "Over by $Z" pill
+ *     (legacy data only — fixed lines are clamped to the fee since 2026-07)
  *
  * Over-budget is the card's *only* color signal — we don't also turn
  * "Past due" red for the same reason, since that tracks collections risk
@@ -15,15 +22,20 @@ import { formatCurrency } from "@/lib/format"
 export function ProjectInvoicesFixedProgress({
   billed,
   budget,
+  extraBilled = 0,
   currency,
 }: {
   billed: number
   budget: number
+  /** Non-fixed line amounts on finalized invoices (billed beyond the fee). */
+  extraBilled?: number
   currency: string
 }) {
   const hasBudget = budget > 0
   const overBy = billed - budget
   const isOver = hasBudget && overBy > 0
+  const hasExtras = extraBilled > 0
+  const totalInvoiced = billed + extraBilled
 
   const percent = hasBudget
     ? Math.round((billed / budget) * 100)
@@ -35,11 +47,15 @@ export function ProjectInvoicesFixedProgress({
       <CardContent>
         <div className="flex items-start justify-between gap-2">
           <p className="text-xs text-muted-foreground">Budget</p>
-          {isOver && (
+          {isOver ? (
             <span className="inline-flex items-center rounded-[5px] border border-destructive/30 bg-destructive/10 px-1.5 py-0.5 text-[11px] font-medium text-destructive tabular-nums">
               Over by {formatCurrency(overBy, currency)}
             </span>
-          )}
+          ) : hasExtras ? (
+            <span className="inline-flex items-center rounded-[5px] border border-border bg-muted px-1.5 py-0.5 text-[11px] font-medium text-foreground tabular-nums">
+              +{formatCurrency(extraBilled, currency)} extras
+            </span>
+          ) : null}
         </div>
         <p
           className={cn(
@@ -52,6 +68,7 @@ export function ProjectInvoicesFixedProgress({
         <div className="mt-0.5 text-xs text-muted-foreground tabular-nums">
           {formatCurrency(billed, currency)}
           {hasBudget ? ` of ${formatCurrency(budget, currency)}` : " billed"}
+          {hasExtras && <> · {formatCurrency(totalInvoiced, currency)} total invoiced</>}
         </div>
 
         {hasBudget && (

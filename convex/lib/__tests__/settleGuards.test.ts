@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { pickClosedCoveringPeriod, type PeriodLike } from "../settleGuards";
+import {
+  pickClosedCoveringPeriod,
+  pickCoveringFinalizedInvoice,
+  type InvoicePeriodLike,
+  type PeriodLike,
+} from "../settleGuards";
 
 /**
  * Phase 8 Slice 3 — `assertEntryDateOpen` predicate tests.
@@ -87,3 +92,56 @@ describe("pickClosedCoveringPeriod — mixed open/closed lists", () => {
     expect(pickClosedCoveringPeriod([first, second], "2026-03-15")).toBe(first);
   });
 });
+
+// ─── pickCoveringFinalizedInvoice ───────────────────────────────────────────
+
+describe("pickCoveringFinalizedInvoice", () => {
+  const inv = (
+    status: InvoicePeriodLike["status"],
+    periodStart?: string,
+    periodEnd?: string,
+    number?: number | null,
+  ): InvoicePeriodLike => ({ status, periodStart, periodEnd, prefix: "INV-", number })
+
+  it("matches an invoiced invoice covering the date", () => {
+    const covering = inv("invoiced", "2026-01-01", "2026-03-31", 42)
+    expect(pickCoveringFinalizedInvoice([covering], "2026-03-30")).toBe(covering)
+  })
+
+  it("matches a paid invoice covering the date", () => {
+    const covering = inv("paid", "2026-03-01", "2026-03-31", 42)
+    expect(pickCoveringFinalizedInvoice([covering], "2026-03-15")).toBe(covering)
+  })
+
+  it("never matches drafts (stale-draft refresh owns that case)", () => {
+    expect(
+      pickCoveringFinalizedInvoice([inv("draft", "2026-03-01", "2026-03-31")], "2026-03-15"),
+    ).toBeNull()
+  })
+
+  it("never matches voided invoices (period is re-billable)", () => {
+    expect(
+      pickCoveringFinalizedInvoice([inv("void", "2026-03-01", "2026-03-31", 42)], "2026-03-15"),
+    ).toBeNull()
+  })
+
+  it("ignores invoices without a stored period", () => {
+    expect(
+      pickCoveringFinalizedInvoice([inv("invoiced", undefined, undefined, 42)], "2026-03-15"),
+    ).toBeNull()
+  })
+
+  it("treats period boundaries as inclusive", () => {
+    const covering = inv("invoiced", "2026-01-01", "2026-03-31", 42)
+    expect(pickCoveringFinalizedInvoice([covering], "2026-01-01")).toBe(covering)
+    expect(pickCoveringFinalizedInvoice([covering], "2026-03-31")).toBe(covering)
+    expect(pickCoveringFinalizedInvoice([covering], "2025-12-31")).toBeNull()
+    expect(pickCoveringFinalizedInvoice([covering], "2026-04-01")).toBeNull()
+  })
+
+  it("skips a non-covering finalized invoice but finds the covering one", () => {
+    const feb = inv("invoiced", "2026-02-01", "2026-02-28", 41)
+    const march = inv("invoiced", "2026-03-01", "2026-03-31", 42)
+    expect(pickCoveringFinalizedInvoice([feb, march], "2026-03-15")).toBe(march)
+  })
+})

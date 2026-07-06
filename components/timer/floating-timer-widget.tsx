@@ -26,8 +26,10 @@ import {
 export function FloatingTimerWidget() {
   const {
     timerState,
+    elapsedMs,
     formattedTime,
     stopTimer,
+    commitEntry,
     pauseTimer,
     resumeTimer,
     discardTimer,
@@ -64,13 +66,33 @@ export function FloatingTimerWidget() {
 
   async function handleCommit() {
     try {
+      // Create-at-stop: the entry is persisted server-side the moment the
+      // timer stops. The form that follows edits (or deletes) that entry —
+      // closing the tab keeps the measured time.
       const result = await stopTimer()
       if (result) {
-        if (result.roundedMinutes <= 0) {
-          toast.info("Timer was under 30 seconds", {
+        if (result.discarded) {
+          // Discards are sub-30s stops — except the defensive dangling-timer
+          // branch (task/project vanished), which must not lie about it.
+          if (result.elapsedMs >= 30_000) {
+            toastError(
+              new Error("The timer's task no longer exists"),
+              "Couldn't save the tracked time",
+            )
+            return
+          }
+          toast.info("Timer was under 30 seconds — nothing saved", {
             action: {
               label: "Save as 1m",
-              onClick: () => setCommitData({ ...result, roundedMinutes: 1 }),
+              onClick: () => {
+                void commitEntry({
+                  taskId: result.taskId,
+                  durationMinutes: 1,
+                  isBillable: result.isBillable,
+                })
+                  .then(() => toast.success(`1m logged on "${result.taskName}"`))
+                  .catch((err) => toastError(err, "Failed to save time entry"))
+              },
             },
           })
           return
@@ -163,7 +185,7 @@ export function FloatingTimerWidget() {
           <AlertDialogHeader>
             <AlertDialogTitle>Discard timer?</AlertDialogTitle>
             <AlertDialogDescription>
-              {formatDuration(Math.floor((timerState?.accumulatedMs ?? 0) / 60000) || 1)} of tracked time on &ldquo;{timerState?.taskName}&rdquo; will be permanently lost.
+              {formatDuration(Math.floor(elapsedMs / 60000) || 1)} of tracked time on &ldquo;{timerState?.taskName}&rdquo; will be permanently lost.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { CURRENCIES, ROUNDING_OPTIONS, STATUS_TYPES, CATEGORY_COLOR_NAMES, STATUS_COLOR_NAMES } from "./constants";
+import { CURRENCIES, ROUNDING_OPTIONS, LEGACY_ROUNDING_OPTIONS, STATUS_TYPES, CATEGORY_COLOR_NAMES, STATUS_COLOR_NAMES } from "./constants";
 
 // ─── Reusable Convex validators ────────────────────────────────────────────────
 
@@ -8,7 +8,8 @@ export const currencyValidator = v.union(
 );
 
 export const roundingValidator = v.union(
-  ...ROUNDING_OPTIONS.map((r) => v.literal(r))
+  ...ROUNDING_OPTIONS.map((r) => v.literal(r)),
+  ...LEGACY_ROUNDING_OPTIONS.map((r) => v.literal(r)),
 );
 
 export const statusTypeValidator = v.union(

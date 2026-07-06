@@ -23,7 +23,7 @@ type GenerateArgs = {
   endDate?: string
   /** T&M selection mode — explicit time-entry ids. */
   timeEntryIds?: Id<"timeEntries">[]
-  /** Server-side rounding bucket. Defaults to 0; the draft page is the edit surface. */
+  /** Invoice rounding increment. Omitted → workspace default (server-side). */
   roundingMinutes?: number
   /**
    * Optional override for the post-create navigation target. Receives the
@@ -62,7 +62,7 @@ export function useGenerateInvoice(): {
         startDate: args.startDate,
         endDate: args.endDate,
         timeEntryIds: args.timeEntryIds,
-        roundingMinutes: args.roundingMinutes ?? 0,
+        roundingMinutes: args.roundingMinutes,
       })
       // Drafts are unnumbered (number allocated at finalization) — their URL
       // segment is the doc ID; `getInvoice` accepts both forms.

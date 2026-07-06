@@ -234,17 +234,38 @@ export function buildTmReadyRows(opts: {
   project: ProjectInput;
   client: ClientInput;
   invoices: InvoiceInput[];
-  entries: Array<TimeEntryInput & { billableRate?: number }>;
+  entries: Array<
+    TimeEntryInput & {
+      billableRate?: number;
+      taskId?: string;
+      workCategoryId?: string | null;
+    }
+  >;
   todayStr: string;
+  /**
+   * Workspace default invoice rounding. Row amounts run the SAME math as
+   * `createInvoice` (per (category, task, rate) group, rounded up) so the
+   * promised amount equals the generated draft's total.
+   */
+  roundingMinutes?: number;
 }): ReadyRow[] {
   const { project, client, invoices, entries, todayStr } = opts;
+  const rounding = opts.roundingMinutes ?? 1;
   if (project.billingType !== "t_and_m") return [];
   if (project.archivedAt) return [];
 
-  // Bucket open billable entries by YYYY-MM. Phase 8 — `settledAt` joins
-  // `invoiceId` as a lock signal so a Fixed-included or retainer-included
-  // hour can't bubble back into the Ready feed.
-  type Bucket = { year: number; month: number; minutes: number; amount: number };
+  // Bucket open billable entries by YYYY-MM, then group inside each month
+  // exactly like invoice line items — (category, task, rate) — so rounding
+  // applies per line group. Phase 8 — `settledAt` joins `invoiceId` as a
+  // lock signal so a Fixed-included or retainer-included hour can't bubble
+  // back into the Ready feed.
+  type LineGroup = { minutes: number; rate: number };
+  type Bucket = {
+    year: number;
+    month: number;
+    minutes: number;
+    groups: Map<string, LineGroup>;
+  };
   const buckets = new Map<string, Bucket>();
   for (const e of entries) {
     if (!e.isBillable) continue;
@@ -257,9 +278,15 @@ export function buildTmReadyRows(opts: {
     const mEnd = `${y}-${String(m).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
     if (mEnd >= todayStr) continue;
 
-    const b = buckets.get(ymKey) ?? { year: y, month: m, minutes: 0, amount: 0 };
+    const b =
+      buckets.get(ymKey) ??
+      { year: y, month: m, minutes: 0, groups: new Map<string, LineGroup>() };
     b.minutes += e.durationMinutes;
-    b.amount += (e.durationMinutes / 60) * (e.billableRate ?? 0);
+    const rate = e.billableRate ?? 0;
+    const gKey = `${e.workCategoryId ?? "none"}::${e.taskId ?? "none"}::${rate}`;
+    const g = b.groups.get(gKey) ?? { minutes: 0, rate };
+    g.minutes += e.durationMinutes;
+    b.groups.set(gKey, g);
     buckets.set(ymKey, b);
   }
 
@@ -267,6 +294,11 @@ export function buildTmReadyRows(opts: {
   const out: ReadyRow[] = [];
   for (const b of buckets.values()) {
     if (b.minutes === 0) continue;
+    let monthAmount = 0;
+    for (const g of b.groups.values()) {
+      const roundedMinutes = roundMinutesUpTo(g.minutes, rounding);
+      monthAmount += roundCents((roundedMinutes / 60) * g.rate);
+    }
     out.push({
       kind: "tm",
       projectId: project._id,
@@ -275,7 +307,7 @@ export function buildTmReadyRows(opts: {
       clientName: client.name,
       period: { year: b.year, month: b.month },
       sortKey: `${b.year}-${String(b.month).padStart(2, "0")}/${client.name.toLowerCase()}`,
-      amount: roundCents(b.amount),
+      amount: roundCents(monthAmount),
       currency: client.currency,
       badgeKind: null,
       lastInvoicedAt,
@@ -648,6 +680,11 @@ export function sortReadyRows(rows: ReadyRow[]): ReadyRow[] {
 }
 
 // ─── Misc ───────────────────────────────────────────────────────────────────────
+
+function roundMinutesUpTo(minutes: number, roundTo: number): number {
+  if (roundTo <= 1) return minutes;
+  return Math.ceil(minutes / roundTo) * roundTo;
+}
 
 function roundCents(n: number): number {
   return Math.round(n * 100) / 100;

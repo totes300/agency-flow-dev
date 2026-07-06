@@ -160,8 +160,12 @@ export function decideRetainerRowCloseAction(
     return "close-cycle";
   }
 
-  // Non-rollover within-budget ended month → monthly close. (Overage
-  // months already returned "generate" via the billing axis above.)
-  if (month.endBalance < 0 && ctx.overageRate > 0) return null;
+  // Non-rollover within-budget ended month → monthly close. Over-budget
+  // months NEVER get a Close affordance: the server's overage gate rejects
+  // close regardless of whether an overage rate is set (`isOverageDueForScope`
+  // ignores the rate), so offering the button without a rate was a dead-end
+  // loop — Close always errored and Generate was unavailable. The
+  // config-issue inbox row routes the user to set the rate instead.
+  if (month.endBalance < 0) return null;
   return "close-month";
 }

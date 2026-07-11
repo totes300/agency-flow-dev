@@ -30,6 +30,7 @@
 import { useState, type ReactNode } from "react"
 import { Loader2Icon } from "lucide-react"
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu"
+import { downloadCsv } from "@/lib/download"
 import {
   runExportWithToast,
   type WorksheetExportResult,
@@ -47,28 +48,6 @@ export type WorksheetMenuItemProps = {
    * pre-date the telemetry are flagged by TypeScript.
    */
   run: () => Promise<WorksheetExportResult>
-}
-
-/**
- * Trigger a browser file download for a UTF-8 CSV string. Uses a transient
- * Object URL so the file streams from memory instead of staying live for
- * the page lifetime.
- */
-function downloadCsv(csv: string, filename: string): void {
-  // text/csv with explicit utf-8 — Excel-on-Windows needs the BOM (already
-  // embedded by the server) AND the charset hint to render accents reliably.
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" })
-  const url = URL.createObjectURL(blob)
-  const anchor = document.createElement("a")
-  anchor.href = url
-  anchor.download = filename
-  // Some browsers (Safari) require the anchor to be in the document to
-  // dispatch the click reliably.
-  document.body.appendChild(anchor)
-  anchor.click()
-  document.body.removeChild(anchor)
-  // Revoke after the click so the browser has a chance to read the blob.
-  setTimeout(() => URL.revokeObjectURL(url), 0)
 }
 
 export function WorksheetMenuItem({ label, icon, run }: WorksheetMenuItemProps) {

@@ -5,6 +5,7 @@ import { TextBlock } from "@/components/agents/blocks/text-block"
 import { ReasoningBlock } from "@/components/agents/blocks/reasoning-block"
 import { ToolCallBlock } from "@/components/agents/blocks/tool-call-block"
 import { TableBlock } from "@/components/agents/blocks/table-block"
+import { ArtifactBlock } from "@/components/agents/blocks/artifact-block"
 
 /**
  * The block vocabulary's single dispatch point (PRD renderer contract):
@@ -30,5 +31,13 @@ export function BlockRenderer({ block }: { block: AgentBlock }) {
       )
     case "table":
       return <TableBlock table={block.table} />
+    case "artifact":
+      return (
+        <ArtifactBlock
+          artifactId={block.artifactId}
+          name={block.name}
+          artifactKind={block.artifactKind}
+        />
+      )
   }
 }

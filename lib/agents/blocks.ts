@@ -32,7 +32,33 @@ export type AgentBlock =
       output: unknown;
       errorText: string | null;
     }
-  | { kind: "table"; table: AgentTable };
+  | { kind: "table"; table: AgentTable }
+  | {
+      kind: "artifact";
+      artifactId: string;
+      name: string;
+      artifactKind: string;
+    };
+
+/** Reference a tool output carries when it persisted a canvas artifact. */
+type ArtifactRef = { artifactId: string; name: string; artifactKind: string };
+
+/** Pull an artifact reference off a tool output, if present + well-formed. */
+function extractArtifactRef(output: unknown): ArtifactRef | null {
+  if (typeof output !== "object" || output === null) return null;
+  const ref = (output as { artifact?: unknown }).artifact;
+  if (typeof ref !== "object" || ref === null) return null;
+  const r = ref as Record<string, unknown>;
+  if (typeof r.artifactId !== "string" || typeof r.name !== "string") {
+    return null;
+  }
+  return {
+    artifactId: r.artifactId,
+    name: r.name,
+    artifactKind:
+      typeof r.artifactKind === "string" ? r.artifactKind : "artifact",
+  };
+}
 
 /** Structural view of an AI-SDK UIMessage part — keeps this module pure. */
 export type MessagePartLike = { type: string } & Record<string, unknown>;
@@ -87,12 +113,22 @@ export function classifyParts(parts: MessagePartLike[]): AgentBlock[] {
     const block = classifyPart(part);
     if (block === null) continue;
     blocks.push(block);
-    if (
-      block.kind === "tool" &&
-      block.phase === "done" &&
-      isAgentTableOutput(block.output)
-    ) {
-      blocks.push({ kind: "table", table: block.output.table });
+    if (block.kind === "tool" && block.phase === "done") {
+      // A finished tool call expands into its result blocks in order: the
+      // in-chat table, then the artifact chip that opens the same data in the
+      // canvas. The model authors neither — tools do (D1).
+      if (isAgentTableOutput(block.output)) {
+        blocks.push({ kind: "table", table: block.output.table });
+      }
+      const artifact = extractArtifactRef(block.output);
+      if (artifact) {
+        blocks.push({
+          kind: "artifact",
+          artifactId: artifact.artifactId,
+          name: artifact.name,
+          artifactKind: artifact.artifactKind,
+        });
+      }
     }
   }
   return blocks;

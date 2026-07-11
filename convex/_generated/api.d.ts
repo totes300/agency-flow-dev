@@ -9,6 +9,7 @@
  */
 
 import type * as activityLog from "../activityLog.js";
+import type * as agentArtifacts from "../agentArtifacts.js";
 import type * as agentRunner from "../agentRunner.js";
 import type * as agentThreads from "../agentThreads.js";
 import type * as agents from "../agents.js";
@@ -104,6 +105,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   activityLog: typeof activityLog;
+  agentArtifacts: typeof agentArtifacts;
   agentRunner: typeof agentRunner;
   agentThreads: typeof agentThreads;
   agents: typeof agents;

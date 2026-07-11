@@ -28,12 +28,21 @@ import { cn } from "@/lib/utils"
  * cell is spot-checkable, all in the shared determinism treatment
  * (tabular-nums, via the table tokens).
  */
-export function TableBlock({ table }: { table: AgentTable }) {
+export function TableBlock({
+  table,
+  showTitle = true,
+}: {
+  table: AgentTable
+  /** Hidden in the canvas, where the panel header already shows the name. */
+  showTitle?: boolean
+}) {
   return (
     <div className="my-1">
-      <div className="mb-1.5 text-xs font-medium text-muted-foreground">
-        {table.title}
-      </div>
+      {showTitle && (
+        <div className="mb-1.5 text-xs font-medium text-muted-foreground">
+          {table.title}
+        </div>
+      )}
       <div className="overflow-x-auto rounded-md border">
         <Table>
           <TableHeader>

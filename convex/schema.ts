@@ -769,4 +769,34 @@ export default defineSchema({
   })
     .index("by_orgId", ["orgId"])
     .index("by_threadId", ["threadId"]),
+
+  // Big code-authored outputs a run produces (PRD Module 5 · canvas). One
+  // row per artifact; the chat carries a lightweight `artifact` block that
+  // references it, and the docked canvas renders it as a sheet. Wave 1 is
+  // CSV-only (the Timesheet agent): `sheetJson` is the AgentTable payload the
+  // canvas renders, `csv` is the ready-to-download body (BOM + injection
+  // guard applied at build time) — BOTH code-authored from the same row data,
+  // never re-serialized through the model (D1).
+  agentArtifacts: defineTable({
+    orgId: v.string(),
+    threadId: v.id("agentThreads"),
+    // The run that produced it, when known — audit only; the canvas keys off
+    // arrival, not run identity.
+    runId: v.optional(v.id("agentRuns")),
+    // Owner = thread owner at creation. Read access is owner OR org admin.
+    userId: v.id("users"),
+    kind: v.literal("timesheet_csv"),
+    name: v.string(),
+    // JSON-encoded AgentTable (lib/agents/table). Parsed + guarded on read;
+    // stored as a string so the wire contract stays the single source of
+    // truth instead of a parallel Convex validator that could drift. The CSV
+    // is derived from THIS on the client at export time (same format helpers
+    // the sheet renders with → the download matches the grid cell-for-cell);
+    // Convex code must not touch `lib/format` (it re-exports an `@/` alias
+    // the Convex typecheck can't resolve — see worksheetsHelpers).
+    sheetJson: v.string(),
+    createdAt: v.number(),
+  })
+    .index("by_orgId", ["orgId"])
+    .index("by_threadId", ["threadId"]),
 });

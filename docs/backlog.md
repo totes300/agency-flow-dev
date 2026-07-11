@@ -3181,3 +3181,79 @@ task, the deterministic/prose visual split, and the no-key degradation path
 - Summarize runs inside the tool call, so its latency sits inside the run's
   tool step (no separate progress affordance beyond the ghost row); a
   streamed "summarizing…" affordance is a later polish call
+
+### Slice 06 — CSV artifact + canvas ✅ (2026-07-11)
+
+The artifact pipeline end-to-end: the timesheet run persists its sheet as an
+`agentArtifacts` record, emits an `artifact` block in the chat, and the docked
+right canvas renders it as a full sheet with an Export CSV action. Every
+payload is code-authored from the same rows the in-chat table used — the CSV
+is derived on the client at export time from the stored sheet, using the same
+format helpers the grid renders with, so the download matches cell-for-cell
+(D1; BOM + formula-injection guard via the existing `lib/csv` helpers).
+
+- [x] `agentArtifacts` table (schema): orgId, threadId, runId?, userId, kind
+      (`timesheet_csv`), name, `sheetJson` (JSON AgentTable), createdAt;
+      `by_orgId` + `by_threadId`. Sheet stored as JSON string so the wire
+      contract stays the single source of truth (no parallel validator).
+      **No `csv` column** — deriving on export keeps one serializer and dodges
+      the `lib/format`→`@/lib/duration` alias the Convex typecheck can't
+      resolve (documented in worksheetsHelpers)
+- [x] `convex/agentArtifacts.ts`: `createForThread` internal mutation
+      (resolves the app thread from the tool's `componentThreadId`, inherits
+      orgId + owner — an artifact can't be mis-scoped); `getForCanvas` query
+      (owner OR admin, orgId-scoped, parses + re-guards the sheet via
+      `isAgentTableOutput`, 404s without leaking); `listByThread` query
+      (owner-only, for auto-open detection)
+- [x] Artifact assembly in the timesheet tool: after `buildTimesheetTable`,
+      persist the sheet + reference it (`ctx.threadId` → createForThread);
+      result carries `{ artifact: { artifactId, name, artifactKind } }`
+- [x] Block vocabulary (`lib/agents/blocks.ts`): new `artifact` block kind +
+      `extractArtifactRef`; `classifyParts` expands a finished tool call into
+      ghost row → table → artifact chip (in order; each independent)
+- [x] `lib/agents/table-csv.ts` (pure, client): `agentTableToCsv(table)` —
+      per-kind cell formatting (HH:MM / short date / prose sentinels via
+      `classifyProseCell`) + `lib/csv` escaping + BOM. Unit-tested incl. the
+      `=SUM`-title injection guard
+- [x] `lib/download.ts`: extracted `downloadCsv` (was inline in
+      worksheet-menu-item) — now shared by the worksheet export + the canvas
+- [x] `useAgentCanvas` hook: canvas open/expand state in the URL
+      (`?artifact=<id>`, `?canvas=wide`) via `router.replace`, preserving
+      other params — one source of truth shared by the artifact block (opens)
+      and the canvas (reads/closes/expands); survives refresh + revisit
+- [x] `ArtifactBlock` renderer: quiet bordered chip (sheet icon, name, kind
+      meta, Open/Viewing) → opens the canvas
+- [x] `AgentCanvas` (docked flex-sibling in the workspace shell, Suspense-
+      wrapped): auto-opens the FIRST freshly-produced artifact of a run once
+      (seeds "seen" on arrival so revisits don't auto-open), manual after;
+      Expand-to-wide toggle, Esc/X close, does NOT collapse the rail (narrows
+      the chat); content-aware sheet skeleton; reuses `TableBlock`
+      (`showTitle={false}`) for the grid; Export CSV → derive + download.
+      Mobile = full-screen sheet
+- [x] Tests: `table-csv` (BOM, HH:MM/date match, prose sentinels, injection
+      guard, no-totals) + artifact block expansion in `table.test.ts`
+
+### Verification (slice 06)
+
+`npx tsc --noEmit` 0 errors (incl. the Convex `tsc` typecheck via codegen —
+which caught the `lib/format` alias reach and drove the derive-on-export
+design); eslint clean on all touched files; `npm run build` succeeds (/agents
+compiles, canvas Suspense boundary OK); vitest 86/86 green across the agent
+suites. Live artifact→canvas walkthrough (auto-open, Expand, Esc, Export
+matches, close/reopen, rail stays put) queued for the signed-in gate
+alongside slice 05 — the MCP browser was attached to Adam's live session so I
+did not drive it. `devSeedAgents` re-run + a run with time entries needed to
+produce the first artifact.
+
+### TODOs deferred to later slices (06)
+
+- Auto-open fires once per thread mount (first fresh artifact), not once per
+  run — a second run's artifact in the same visit opens manually. Matches
+  "canvas is a viewer, not a mode"; revisit if reviewers want per-run auto-open
+- Artifact kind is `timesheet_csv` only (Wave 1). The block/canvas are
+  kind-generic; new kinds (sheet variants, XLSX is a non-goal) slot in via the
+  `KIND_META` map + a renderer branch
+- Admin audit read path: `getForCanvas` already allows admins, but the audit
+  VIEW that lists other users' threads/artifacts is slice 11
+- No canvas history/back-forward affordance beyond the URL param; switching
+  artifacts is via each block's Open. A canvas artifact switcher is later polish

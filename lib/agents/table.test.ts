@@ -161,4 +161,47 @@ describe("classifyParts table expansion", () => {
       ]).map((b) => b.kind),
     ).toEqual(["tool"]);
   });
+
+  it("expands into ghost row + table + artifact when the output carries one", () => {
+    const output = {
+      ...validOutput(),
+      artifact: {
+        artifactId: "art123",
+        name: "Timesheet — Pragmatico — June 2026",
+        artifactKind: "timesheet_csv",
+      },
+    };
+    const blocks = classifyParts([
+      {
+        type: "tool-collectTimesheetData",
+        state: "output-available",
+        input: {},
+        output,
+      },
+    ]);
+    expect(blocks.map((b) => b.kind)).toEqual(["tool", "table", "artifact"]);
+    expect(blocks[2]).toMatchObject({
+      artifactId: "art123",
+      name: "Timesheet — Pragmatico — June 2026",
+      artifactKind: "timesheet_csv",
+    });
+  });
+
+  it("emits an artifact block even when the output has no table", () => {
+    const blocks = classifyParts([
+      {
+        type: "tool-collectTimesheetData",
+        state: "output-available",
+        input: {},
+        output: {
+          artifact: {
+            artifactId: "art9",
+            name: "Report",
+            artifactKind: "timesheet_csv",
+          },
+        },
+      },
+    ]);
+    expect(blocks.map((b) => b.kind)).toEqual(["tool", "artifact"]);
+  });
 });

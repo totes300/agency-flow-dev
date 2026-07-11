@@ -143,6 +143,15 @@ type CollectTimesheetResult =
       flaggedCount: number;
       /** True when no AI key was reachable; prose columns show unavailable. */
       aiUnavailable: boolean;
+      /**
+       * The stored artifact this run produced (slice 06). The classifier
+       * expands it into an `artifact` block; the canvas opens it as a sheet.
+       */
+      artifact?: {
+        artifactId: string;
+        name: string;
+        artifactKind: "timesheet_csv";
+      };
       note: string;
     };
 
@@ -320,6 +329,30 @@ const collectTimesheetDataTool = createTool({
       note,
     });
 
+    // Slice 06: persist the sheet as an artifact and reference it from the
+    // result — the classifier expands it into an `artifact` block, the canvas
+    // opens it and derives the CSV from this same sheet at export time. The
+    // sheet is code-authored from the same rows the table used (D1).
+    let artifact:
+      | { artifactId: string; name: string; artifactKind: "timesheet_csv" }
+      | undefined;
+    if (ctx.threadId) {
+      const artifactId = await ctx.runMutation(
+        internal.agentArtifacts.createForThread,
+        {
+          componentThreadId: ctx.threadId,
+          kind: "timesheet_csv",
+          name: table.title,
+          sheetJson: JSON.stringify(table),
+        },
+      );
+      artifact = {
+        artifactId,
+        name: table.title,
+        artifactKind: "timesheet_csv",
+      };
+    }
+
     return {
       block: AGENT_TABLE_MARKER,
       table,
@@ -328,6 +361,7 @@ const collectTimesheetDataTool = createTool({
       summarizedCount: summarized.summarizedCount,
       flaggedCount: summarized.flaggedCount,
       aiUnavailable: summarized.aiUnavailable,
+      ...(artifact ? { artifact } : {}),
       note:
         "The table above is rendered to the user verbatim from the " +
         "database, INCLUDING the Requested and Delivered columns, which are " +

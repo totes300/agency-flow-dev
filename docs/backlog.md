@@ -2800,3 +2800,51 @@ My Tasks (fallback chain exercised on a real dangling preference).
 - Per-row keyboard shortcut for Add to Today
 - Subtask planning; plan-vs-actual reporting UI; plan-change notifications
 - Renaming the `todayVisibleStatuses` preference field (naming debt)
+
+## Agentic Platform — Wave 1 (PRD: docs/agentic-platform/prd-v1.md) — in progress
+
+Slice plan: `docs/agentic-platform/prd-issues/` (00–11, tracer-bullet strategy).
+
+### Slice 00 — Shell split + workspace switch + empty rail ✅ (2026-07-11)
+
+- [x] Route split: `/agents` lives at `app/agents/` OUTSIDE the `(dashboard)`
+      route group — own full-screen layout (`app/agents/layout.tsx`), no
+      dashboard header/breadcrumb/`md:px-12` padding; three-zone skeleton
+      (rail | center, canvas arrives in a later slice)
+- [x] `components/workspace-switch.tsx` — compact two-icon segmented toggle
+      (App ⇄ Agents), rendered symmetrically at the top of BOTH shells:
+      above the TeamSwitcher in `AppSidebar` and at the top of the workspace
+      rail. Returning to App resumes the last dashboard route (sessionStorage);
+      stacks vertically in the sidebar's icon-collapsed mode. Layout chrome —
+      `lib/navigation.ts` untouched, never inside modals/drawers
+- [x] `components/agents/workspace-rail.tsx` — Agents section + Recent
+      threads section, each with a dedicated rail-scale empty-state component
+      (`agents-rail-empty-state.tsx`, `threads-rail-empty-state.tsx`;
+      "No threads yet — pick an agent to start.")
+- [x] Center pane empty state via shared `EmptyState`
+      (`components/agents/workspace-empty-state.tsx`)
+- [x] Content-aware skeletons: `workspace-skeleton.tsx` (auth boot, mirrors
+      rail sections + center empty-state shape) + `app/agents/loading.tsx`
+      (center pane route loading)
+
+### Verification (slice 00)
+
+`npx tsc --noEmit` 0 errors (after `npx next typegen` for the new route).
+Live in Chrome: /agents renders full-height with rail + empty states; switch
+flips both ways (tasks → Agents → App returns to /tasks via sessionStorage);
+dashboard spot-check unchanged (dashboard, tasks, planner, invoices,
+settings); icon-collapsed sidebar stacks the switch vertically.
+
+### TODOs deferred to later slices
+
+- Rail: agent list, thread list, title search, "Manage agents" footer entry
+  (slices 01, 04, 09); org/onboarding gating inside the workspace (01)
+- Center pane: agent-identity first-run empty state with example-prompt
+  chips (01/02)
+- Canvas panel (06); mobile drawer/read-mostly posture (post-V1 polish)
+- ~~`.next-docs/` missing~~ — resolved 2026-07-11 the better way: switched to
+  the official 16.2+ mechanism — docs are bundled version-matched at
+  `node_modules/next/dist/docs/` (auto-updates on `next` upgrades, no codemod
+  re-runs). CLAUDE.md's stale `.next-docs` index block replaced with the
+  `nextjs-agent-rules` block; same block added to AGENTS.md; `.next-docs/`
+  snapshot deleted (gitignore entry kept, harmless)

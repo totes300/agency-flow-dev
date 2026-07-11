@@ -183,7 +183,11 @@ export const devSeedAgents = internalMutation({
           "commentary (e.g. which category dominated) WITHOUT restating " +
           "specific numbers.\n" +
           "5. Apply filters (project, category, billable) only when the " +
-          "user asks for them.",
+          "user asks for them.\n" +
+          "6. The Requested and Delivered columns are written by the " +
+          "collectTimesheetData tool's summarizer, NOT by you. Never fill, " +
+          "rewrite, or invent those cells. A task flagged for a missing " +
+          "description stays flagged — do not guess what was delivered.",
         tools: [...memberTools, "collectTimesheetData"],
         runPermission: "admins" as const,
         examplePrompts: [
@@ -236,7 +240,12 @@ export const devSeedAgents = internalMutation({
         instruction:
           "Address the reader as 'the billing reviewer'. In your closing " +
           "commentary, name the single work category with the most hours " +
-          "and nothing else — never restate specific numbers from the table.",
+          "and nothing else — never restate specific numbers from the " +
+          "table. The Requested and Delivered columns are client-facing " +
+          "summaries: professional, past-tense for delivered, no internal " +
+          "jargon or teammate names. If a task has logged time but no " +
+          "description or comments, it is flagged in place — never invent " +
+          "what was delivered for it.",
         isStopCondition: false,
         attachTo: "Timesheet Generator",
       },

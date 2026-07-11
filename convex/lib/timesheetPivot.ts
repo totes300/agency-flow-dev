@@ -24,6 +24,13 @@ export type TimesheetPivotRow = {
   firstWorked: string; // YYYY-MM-DD
   lastWorked: string; // YYYY-MM-DD
   totalMinutes: number;
+  /**
+   * AI prose (slice 05). Present only when the table is built with
+   * `aiColumns` — the summarize step fills these; a sentinel string signals
+   * the flagged / unavailable states (see lib/agents/table). Never a number.
+   */
+  requested?: string | null;
+  delivered?: string | null;
 };
 
 /**
@@ -31,14 +38,22 @@ export type TimesheetPivotRow = {
  * categories present in the rows, ordered by the org's category order
  * (workCategories.sortOrder), then alphabetically for names not in the
  * order list; Uncategorized is always the last category column.
+ *
+ * `aiColumns` inserts the two AI prose columns (Requested / Delivered)
+ * right after Project — the model-authored half of the timesheet (slice
+ * 05). Every numeric cell still comes straight from collector minutes.
  */
 export function buildTimesheetTable(input: {
   title: string;
   rows: TimesheetPivotRow[];
   /** Org category names in display order (workCategories.sortOrder). */
   categoryOrder: string[];
+  /** Emit the AI Requested/Delivered prose columns (slice 05). */
+  aiColumns?: boolean;
+  /** Deterministic caption under the table (e.g. AI-unavailable notice). */
+  note?: string;
 }): AgentTable {
-  const { title, rows, categoryOrder } = input;
+  const { title, rows, categoryOrder, aiColumns = false, note } = input;
 
   const present = new Set<string>(
     rows.map((r) => r.categoryName ?? UNCATEGORIZED_LABEL),
@@ -60,6 +75,12 @@ export function buildTimesheetTable(input: {
   const columns: AgentTableColumn[] = [
     { key: "task", label: "Task", kind: "text" },
     { key: "project", label: "Project", kind: "text" },
+    ...(aiColumns
+      ? ([
+          { key: "requested", label: "Requested", kind: "prose" },
+          { key: "delivered", label: "Delivered", kind: "prose" },
+        ] as AgentTableColumn[])
+      : []),
     { key: "firstWorked", label: "First worked", kind: "date" },
     { key: "lastWorked", label: "Last worked", kind: "date" },
     ...categories.map(
@@ -90,6 +111,10 @@ export function buildTimesheetTable(input: {
       lastWorked: row.lastWorked,
       total: row.totalMinutes,
     };
+    if (aiColumns) {
+      values.requested = row.requested ?? null;
+      values.delivered = row.delivered ?? null;
+    }
     for (const name of categories) {
       const isRowCategory = (row.categoryName ?? UNCATEGORIZED_LABEL) === name;
       values[categoryKey(name)] = isRowCategory ? row.totalMinutes : null;
@@ -104,13 +129,18 @@ export function buildTimesheetTable(input: {
     lastWorked: null,
     total: sorted.reduce((sum, r) => sum + r.totalMinutes, 0),
   };
+  if (aiColumns) {
+    // Prose columns have no meaningful total — leave the footer cells empty.
+    totals.requested = null;
+    totals.delivered = null;
+  }
   for (const name of categories) {
     totals[categoryKey(name)] = sorted
       .filter((r) => (r.categoryName ?? UNCATEGORIZED_LABEL) === name)
       .reduce((sum, r) => sum + r.totalMinutes, 0);
   }
 
-  return { title, columns, rows: tableRows, totals };
+  return { title, columns, rows: tableRows, totals, ...(note ? { note } : {}) };
 }
 
 /**

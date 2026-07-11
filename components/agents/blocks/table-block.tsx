@@ -1,5 +1,6 @@
 "use client"
 
+import { FlagIcon } from "lucide-react"
 import {
   Table,
   TableBody,
@@ -9,10 +10,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import type {
-  AgentTable,
-  AgentTableColumn,
-  AgentTableRowValues,
+import {
+  classifyProseCell,
+  type AgentTable,
+  type AgentTableColumn,
+  type AgentTableRowValues,
 } from "@/lib/agents/table"
 import { formatMinutes, formatShortDate } from "@/lib/format"
 import { CELL_KEY, CELL_PRIMARY, CELL_SECONDARY, TABLE_HEAD } from "@/lib/table-tokens"
@@ -57,11 +59,15 @@ export function TableBlock({ table }: { table: AgentTable }) {
                   <TableCell
                     key={col.key}
                     className={cn(
-                      "px-3 py-2",
+                      "px-3 py-2 align-top",
                       cellClass(col, colIndex),
                     )}
                   >
-                    {formatCell(col, row[col.key])}
+                    {col.kind === "prose" ? (
+                      <ProseCell value={row[col.key]} />
+                    ) : (
+                      formatCell(col, row[col.key])
+                    )}
                   </TableCell>
                 ))}
               </TableRow>
@@ -87,13 +93,42 @@ export function TableBlock({ table }: { table: AgentTable }) {
           )}
         </Table>
       </div>
+      {table.note && (
+        <div className="mt-1.5 text-xs text-muted-foreground">{table.note}</div>
+      )}
     </div>
+  )
+}
+
+/**
+ * AI-written cell (slice 05). Standard prose styling — NO tabular-nums — so
+ * the model's Requested/Delivered columns read as prose next to the
+ * deterministic tabular figures (the determinism visual split). Flagged /
+ * unavailable states render muted, never as invented text.
+ */
+function ProseCell({ value }: { value: AgentTableRowValues[string] }) {
+  const { text, tone } = classifyProseCell(value)
+  if (tone === "flagged") {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs text-amber-600 dark:text-amber-500">
+        <FlagIcon className="size-3 shrink-0" strokeWidth={1.5} />
+        {text}
+      </span>
+    )
+  }
+  if (tone === "unavailable") {
+    return <span className="text-xs italic text-muted-foreground/70">{text}</span>
+  }
+  return (
+    <span className="text-sm leading-relaxed text-foreground">{text}</span>
   )
 }
 
 function cellClass(col: AgentTableColumn, colIndex: number): string {
   if (col.kind === "minutes") return cn(CELL_SECONDARY, "text-right")
   if (col.kind === "date") return cn(CELL_SECONDARY, "whitespace-nowrap")
+  // Prose columns wrap and take a comfortable reading width; text-sm plain.
+  if (col.kind === "prose") return "min-w-[14rem] max-w-[22rem] whitespace-normal"
   return colIndex === 0 ? CELL_PRIMARY : CELL_SECONDARY
 }
 

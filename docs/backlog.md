@@ -3109,3 +3109,75 @@ alongside slice 02/03.
   a softer "guardrail fired" treatment is a design-gate call
 - `timesheet-format` seed is a generic tone SOP; the PRD's richer
   requested/delivered stop-condition lands with the AI columns in slice 05
+
+### Slice 05 — Timesheet AI columns + timesheet-format skill ✅ (2026-07-11)
+
+First real-output HITL gate: completes the Timesheet agent with the two
+AI-written prose columns (Requested / Delivered), reusing the Phase 9
+bounded-concurrency summarizer over the per-task `aiInput` already collected
+in slice 03. The orchestrating agent still authors zero numbers — the
+summarizer writes only prose; code merges it into the deterministic table (D1).
+
+- [x] Prose column contract (`lib/agents/table.ts`): new `"prose"` cell kind
+      (visual counterpart to the tabular `minutes`/`date`/`text` — the
+      slice-02 determinism split); optional `AgentTable.note` caption; two
+      sentinels + `classifyProseCell(value) → { text, tone }` mapping
+      `[summary unavailable]` → unavailable and `[no description logged]` →
+      flagged (any other prose value = genuine AI text)
+- [x] Pivot builder (`convex/lib/timesheetPivot.ts`): `buildTimesheetTable`
+      gains `aiColumns` (inserts Requested/Delivered right after Project;
+      prose totals stay empty) + `note`; `TimesheetPivotRow` carries optional
+      `requested`/`delivered`. Default shape (deterministic-only) unchanged
+- [x] Summarize step lives in the tool (`convex/lib/agentToolRegistry.ts`,
+      same action runtime as `worksheets.exportMonth`): `summarizeTimesheetRows`
+      splits rows by `hasMeaningfulAiInput`, loads the org BYOK key via
+      `loadDecryptedKeyForRun`, runs `summarizeTasksWithBoundedConcurrency`,
+      merges prose into the rows, then `buildTimesheetTable({ aiColumns:true })`.
+      Returns `summarizedCount`/`flaggedCount`/`aiUnavailable` stats
+- [x] Degradation: whole-batch `WorksheetAiUnavailableError` → deterministic
+      table still ships, every prose cell `[summary unavailable]`, and a
+      muted `note` caption explains why (Settings → Integrations). Per-task
+      failures degrade the single cell, not the run
+- [x] Flag, never invent: a task with time but no description/comments is
+      excluded from the AI call and rendered as a flagged cell (amber flag
+      icon), never fabricated prose — the timesheet-format skill's per-row rule
+- [x] Shared eligibility rule: `hasMeaningfulAiInput(WorksheetAiInput)` pulled
+      out of `worksheets.ts` into `worksheetAi.ts` and reused by both the CSV
+      export and the agent tool so the rule can never drift
+- [x] Renderer (`components/agents/blocks/table-block.tsx`): `ProseCell`
+      renders standard prose (no tabular-nums) for AI columns, amber flag for
+      flagged, muted italic for unavailable; `table.note` renders as the
+      caption. Ghost-row stream summary now reads "N tasks · summarized M"
+      (`lib/agents/blocks.ts`, both counts code-authored)
+- [x] Seed (`convex/agents.ts`): `timesheet-format` skill instruction extended
+      with client-facing tone + the flag rule; Timesheet Generator gains rule 6
+      ("Requested/Delivered are written by the tool's summarizer, not you —
+      never fill/rewrite/invent them")
+- [x] Tests: pivot AI-columns (order/totals/note/guard) + default-shape
+      guard; `classifyProseCell` tones; prose-column guard acceptance;
+      `hasMeaningfulAiInput` eligibility
+
+### Verification (slice 05)
+
+`npx tsc --noEmit` 0 errors; eslint clean on all touched files; vitest
+slice-05 suites 63/63 green across pivot/table/blocks/registry/worksheetAi
+(the 4 unrelated pre-existing date-relative/vendored failures remain
+untouched). **Exit gate PENDING (signed-in):** Adam reviews the first real
+client timesheet output — prose accuracy, the flag cell on a content-less
+task, the deterministic/prose visual split, and the no-key degradation path
+(remove the org key → deterministic table + `[summary unavailable]` + note).
+`devSeedAgents` re-run needed to pick up the extended skill/agent instructions.
+
+### TODOs deferred to later slices (05)
+
+- Prose columns widen the in-chat table; the CSV/expandable canvas that gives
+  them room is slice 06. In-chat they scroll horizontally for now
+- Per-task AI failures inside a working batch collapse both prose cells to
+  `[summary unavailable]` (no title-restated fallback like the CSV export) —
+  simpler and matches the AC; revisit if reviewers want the softer fallback
+- Flag detection is deterministic (content-less input); the timesheet-format
+  skill only documents the policy in prose. A skill that could tune the flag
+  threshold is out of scope
+- Summarize runs inside the tool call, so its latency sits inside the run's
+  tool step (no separate progress affordance beyond the ghost row); a
+  streamed "summarizing…" affordance is a later polish call

@@ -26,10 +26,26 @@
 
 import { z } from "zod";
 import type { Tool } from "ai";
-import { createTool } from "@convex-dev/agent";
+import { createTool, type ToolCtx } from "@convex-dev/agent";
 import { api, internal } from "../_generated/api";
-import { AGENT_TABLE_MARKER, type AgentTable } from "../../lib/agents/table";
-import { formatTimesheetPeriodLabel, monthBounds } from "./timesheetPivot";
+import type { WorksheetAiInput } from "../worksheetsHelpers";
+import {
+  AGENT_TABLE_MARKER,
+  PROSE_FLAGGED_NO_CONTENT,
+  PROSE_SUMMARY_UNAVAILABLE,
+  type AgentTable,
+} from "../../lib/agents/table";
+import {
+  buildTimesheetTable,
+  formatTimesheetPeriodLabel,
+  monthBounds,
+  type TimesheetPivotRow,
+} from "./timesheetPivot";
+import {
+  hasMeaningfulAiInput,
+  summarizeTasksWithBoundedConcurrency,
+  WorksheetAiUnavailableError,
+} from "./worksheetAi";
 
 export type AgentToolScope = "member" | "admin";
 export type AgentToolKind = "read" | "propose" | "connector";
@@ -121,17 +137,108 @@ type CollectTimesheetResult =
       table: AgentTable;
       taskCount: number;
       grandTotalMinutes: number;
+      /** Tasks the summarizer wrote prose for (slice 05 stream summary). */
+      summarizedCount: number;
+      /** Tasks with time but no content — flagged, never invented. */
+      flaggedCount: number;
+      /** True when no AI key was reachable; prose columns show unavailable. */
+      aiUnavailable: boolean;
       note: string;
     };
+
+/**
+ * Run the summarize step over the collected rows: fill the two AI prose
+ * columns (Requested / Delivered) via the Phase 9 bounded-concurrency
+ * summarizer, flag content-less rows, and degrade cleanly when no AI key is
+ * reachable. Returns rows augmented for `buildTimesheetTable` plus the
+ * deterministic stats the tool surfaces. The model authors ONLY the two
+ * prose strings; every number stays in the deterministic columns (D1).
+ */
+async function summarizeTimesheetRows(
+  ctx: ToolCtx,
+  rows: Array<TimesheetPivotRow & { aiInput: WorksheetAiInput }>,
+): Promise<{
+  rows: TimesheetPivotRow[];
+  summarizedCount: number;
+  flaggedCount: number;
+  aiUnavailable: boolean;
+}> {
+  // Split: rows worth summarizing vs. content-less rows we flag instead of
+  // inventing prose for (timesheet-format skill's per-row rule).
+  const eligible: number[] = [];
+  const flagged = new Set<number>();
+  rows.forEach((row, i) => {
+    if (hasMeaningfulAiInput(row.aiInput)) eligible.push(i);
+    else flagged.add(i);
+  });
+
+  const requested = new Array<string>(rows.length);
+  const delivered = new Array<string>(rows.length);
+  for (const i of flagged) {
+    requested[i] = PROSE_FLAGGED_NO_CONTENT;
+    delivered[i] = PROSE_FLAGGED_NO_CONTENT;
+  }
+
+  let summarizedCount = 0;
+  let aiUnavailable = false;
+
+  if (eligible.length > 0) {
+    const apiKey = await ctx.runQuery(
+      internal.aiIntegration.loadDecryptedKeyForRun,
+      {},
+    );
+    try {
+      const results = await summarizeTasksWithBoundedConcurrency(
+        eligible.map((i) => rows[i].aiInput),
+        { apiKey },
+      );
+      eligible.forEach((rowIndex, k) => {
+        const r = results[k];
+        if (r) {
+          requested[rowIndex] = r.taskSummary;
+          delivered[rowIndex] = r.whatWeDid;
+          summarizedCount++;
+        } else {
+          // Per-task failure inside an otherwise-working batch.
+          requested[rowIndex] = PROSE_SUMMARY_UNAVAILABLE;
+          delivered[rowIndex] = PROSE_SUMMARY_UNAVAILABLE;
+        }
+      });
+    } catch (err) {
+      // Whole-batch failure (no key, encryption disabled, network down).
+      // The deterministic table still ships; prose columns degrade.
+      if (!(err instanceof WorksheetAiUnavailableError)) throw err;
+      aiUnavailable = true;
+      for (const i of eligible) {
+        requested[i] = PROSE_SUMMARY_UNAVAILABLE;
+        delivered[i] = PROSE_SUMMARY_UNAVAILABLE;
+      }
+    }
+  }
+
+  return {
+    rows: rows.map((row, i) => ({
+      ...row,
+      requested: requested[i],
+      delivered: delivered[i],
+    })),
+    summarizedCount,
+    flaggedCount: flagged.size,
+    aiUnavailable,
+  };
+}
 
 const collectTimesheetDataTool = createTool({
   description:
     "Generate a client timesheet for a period: per-task rows with hours " +
     "pivoted into work-category columns, plus totals — computed verbatim " +
-    "from the time-tracking database. Provide EITHER month (YYYY-MM) OR " +
-    "startDate+endDate (YYYY-MM-DD). Optional filters: projectIds (from " +
-    "listProjects), categoryNames, billable. The resulting table is shown " +
-    "to the user automatically — never re-type its numbers.",
+    "from the time-tracking database. Also fills two AI-written prose " +
+    "columns (Requested / Delivered) via the summarizer; a task with time " +
+    "but no description is flagged, never invented. Provide EITHER month " +
+    "(YYYY-MM) OR startDate+endDate (YYYY-MM-DD). Optional filters: " +
+    "projectIds (from listProjects), categoryNames, billable. The resulting " +
+    "table is shown to the user automatically — never re-type its numbers " +
+    "or rewrite its prose columns.",
   inputSchema: z.object({
     clientId: z.string().describe("Client id from the listClients tool"),
     month: z
@@ -189,20 +296,44 @@ const collectTimesheetDataTool = createTool({
     });
 
     // Empty period → prose answer, never an empty table (slice 03 AC).
-    if (!data.table) {
+    if (data.rows.length === 0) {
       return {
         message: `No time entries found for ${data.client.name} in ${data.periodLabel}.`,
       };
     }
+
+    // Slice 05: the summarize step writes the two AI prose columns; the
+    // deterministic table build then merges them next to the hours cells.
+    const summarized = await summarizeTimesheetRows(ctx, data.rows);
+    const note = summarized.aiUnavailable
+      ? "AI summaries are unavailable — no Anthropic key is configured for " +
+        "this organization. The table shows deterministic hours only; the " +
+        "Requested and Delivered columns are marked unavailable. Connect a " +
+        "key in Settings → Integrations to enable them."
+      : undefined;
+
+    const table = buildTimesheetTable({
+      title: `Timesheet — ${data.client.name} — ${data.periodLabel}`,
+      rows: summarized.rows,
+      categoryOrder: data.categoryOrder,
+      aiColumns: true,
+      note,
+    });
+
     return {
       block: AGENT_TABLE_MARKER,
-      table: data.table,
+      table,
       taskCount: data.rows.length,
       grandTotalMinutes: data.rows.reduce((sum, r) => sum + r.totalMinutes, 0),
+      summarizedCount: summarized.summarizedCount,
+      flaggedCount: summarized.flaggedCount,
+      aiUnavailable: summarized.aiUnavailable,
       note:
         "The table above is rendered to the user verbatim from the " +
-        "database. Do not repeat or restate its numbers — add brief " +
-        "commentary only.",
+        "database, INCLUDING the Requested and Delivered columns, which are " +
+        "written by this tool's summarizer — not by you. Do not repeat, " +
+        "restate, rewrite, or fill any of its cells. Add at most brief " +
+        "commentary.",
     };
   },
 });

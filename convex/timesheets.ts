@@ -24,13 +24,11 @@ import {
   type WorksheetTaskRow,
 } from "./worksheetsHelpers";
 import {
-  buildTimesheetTable,
   formatTimesheetPeriodLabel,
   type TimesheetPivotRow,
 } from "./lib/timesheetPivot";
-import type { AgentTable } from "../lib/agents/table";
 
-/** Full row: pivot fields + the Phase 9 AI input (slice 05 consumes it). */
+/** Full row: pivot fields + the Phase 9 AI input (slice 05 summarizes it). */
 export type TimesheetRow = TimesheetPivotRow & {
   projectId: Id<"projects">;
   billableMinutes: number;
@@ -45,8 +43,12 @@ export type TimesheetData = {
   periodStart: string;
   periodEnd: string;
   rows: TimesheetRow[];
-  /** Pivoted table payload; null when the period has no entries. */
-  table: AgentTable | null;
+  /**
+   * Org category names in display order (workCategories.sortOrder). The tool
+   * builds the pivot table from this + `rows` after the summarize step, so
+   * the AI prose columns and deterministic columns land in one table.
+   */
+  categoryOrder: string[];
 };
 
 export const collectTimesheetData = internalQuery({
@@ -174,14 +176,7 @@ export const collectTimesheetData = internalQuery({
       periodStart: args.periodStart,
       periodEnd: args.periodEnd,
       rows,
-      table:
-        rows.length === 0
-          ? null
-          : buildTimesheetTable({
-              title: `Timesheet — ${client.name} — ${periodLabel}`,
-              rows,
-              categoryOrder,
-            }),
+      categoryOrder,
     };
   },
 });

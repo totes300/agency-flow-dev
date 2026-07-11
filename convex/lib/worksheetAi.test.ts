@@ -8,9 +8,36 @@
  */
 
 import { describe, expect, it } from "vitest"
-import { parseResponse } from "./worksheetAi"
+import { hasMeaningfulAiInput, parseResponse } from "./worksheetAi"
+import type { WorksheetAiInput } from "../worksheetsHelpers"
 
 const TITLE = "Homepage hero redesign"
+
+describe("hasMeaningfulAiInput — summarize eligibility (slice 05)", () => {
+  const empty: WorksheetAiInput = {
+    title: "Untitled",
+    descriptionText: "   ",
+    subtasks: [],
+    commentTexts: [],
+    entryNotes: [],
+  }
+
+  it("flags a task with time but no content as not summarizable", () => {
+    expect(hasMeaningfulAiInput(empty)).toBe(false)
+  })
+
+  it("is meaningful when any one content source is present", () => {
+    expect(hasMeaningfulAiInput({ ...empty, descriptionText: "Do the thing" })).toBe(true)
+    expect(hasMeaningfulAiInput({ ...empty, subtasks: [{ title: "a", done: false }] })).toBe(true)
+    expect(hasMeaningfulAiInput({ ...empty, commentTexts: ["ping"] })).toBe(true)
+    expect(
+      hasMeaningfulAiInput({
+        ...empty,
+        entryNotes: [{ date: "2026-06-01", minutes: 30, isBillable: true, note: "n" }],
+      }),
+    ).toBe(true)
+  })
+})
 
 describe("parseResponse — happy path", () => {
   it("extracts both labels from the canonical format", () => {

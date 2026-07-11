@@ -121,6 +121,72 @@ describe("buildTimesheetTable", () => {
     });
     expect(isAgentTableOutput({ block: AGENT_TABLE_MARKER, table })).toBe(true);
   });
+
+  it("omits AI columns by default (deterministic-only shape)", () => {
+    const table = buildTimesheetTable({
+      title: "T",
+      rows: [row({})],
+      categoryOrder: CATEGORY_ORDER,
+    });
+    expect(table.columns.map((c) => c.key)).not.toContain("requested");
+    expect(table.columns.map((c) => c.key)).not.toContain("delivered");
+    expect(table.note).toBeUndefined();
+  });
+});
+
+describe("buildTimesheetTable — AI columns (slice 05)", () => {
+  it("inserts the two prose columns right after Project", () => {
+    const table = buildTimesheetTable({
+      title: "T",
+      rows: [
+        row({
+          title: "Homepage",
+          requested: "Redesign the homepage hero.",
+          delivered: "Shipped the new hero with updated copy.",
+        }),
+      ],
+      categoryOrder: CATEGORY_ORDER,
+      aiColumns: true,
+    });
+    expect(table.columns.map((c) => c.label).slice(0, 4)).toEqual([
+      "Task",
+      "Project",
+      "Requested",
+      "Delivered",
+    ]);
+    const [requested, delivered] = ["requested", "delivered"].map(
+      (k) => table.columns.find((c) => c.key === k),
+    );
+    expect(requested?.kind).toBe("prose");
+    expect(delivered?.kind).toBe("prose");
+    expect(table.rows[0]).toMatchObject({
+      requested: "Redesign the homepage hero.",
+      delivered: "Shipped the new hero with updated copy.",
+    });
+  });
+
+  it("leaves prose totals empty and passes the note through", () => {
+    const table = buildTimesheetTable({
+      title: "T",
+      rows: [row({ requested: "a", delivered: "b" })],
+      categoryOrder: CATEGORY_ORDER,
+      aiColumns: true,
+      note: "AI summaries are unavailable.",
+    });
+    expect(table.totals?.requested).toBeNull();
+    expect(table.totals?.delivered).toBeNull();
+    expect(table.note).toBe("AI summaries are unavailable.");
+  });
+
+  it("still verifies against the table-block guard with prose columns", () => {
+    const table = buildTimesheetTable({
+      title: "T",
+      rows: [row({ requested: "a", delivered: "b" })],
+      categoryOrder: CATEGORY_ORDER,
+      aiColumns: true,
+    });
+    expect(isAgentTableOutput({ block: AGENT_TABLE_MARKER, table })).toBe(true);
+  });
 });
 
 describe("monthBounds", () => {

@@ -130,11 +130,20 @@ const TOOL_DISPLAY: Record<string, ToolDisplay> = {
   collectTimesheetData: {
     runningLabel: "Collecting timesheet data",
     doneLabel: "Collected timesheet data",
-    // Count comes from the deterministic table payload, not model text.
-    summarize: (output) =>
-      isAgentTableOutput(output)
-        ? `${output.table.rows.length} task${output.table.rows.length === 1 ? "" : "s"}`
-        : null,
+    // Counts come from the deterministic tool payload, not model text: the
+    // task count from the table, the "summarized N" from the summarize step
+    // (slice 05). Both are code-authored numbers.
+    summarize: (output) => {
+      if (!isAgentTableOutput(output)) return null;
+      const taskCount = output.table.rows.length;
+      const tasks = `${taskCount} task${taskCount === 1 ? "" : "s"}`;
+      const raw = output as unknown as { summarizedCount?: unknown };
+      const summarized =
+        typeof raw.summarizedCount === "number" ? raw.summarizedCount : null;
+      return summarized !== null
+        ? `${tasks} · summarized ${summarized}`
+        : tasks;
+    },
   },
   // The skill stop-condition tool (slice 04) — when it fires, a skill halted
   // the run. The explanatory block is run-derived; this is just its ghost row.

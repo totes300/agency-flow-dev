@@ -42,6 +42,7 @@ import {
 import { getDateInTimezone } from "./lib/timer";
 import {
   WorksheetAiUnavailableError,
+  hasMeaningfulAiInput,
   summarizeTasksWithBoundedConcurrency,
 } from "./lib/worksheetAi";
 
@@ -61,12 +62,7 @@ function monthBounds(year: number, month: number): { start: string; end: string 
 
 /** Is a row's AI input substantive enough to warrant an AI call? */
 function hasMeaningfulContent(row: WorksheetTaskRow): boolean {
-  const ai = row.aiInput;
-  if (ai.descriptionText.trim().length > 0) return true;
-  if (ai.subtasks.length > 0) return true;
-  if (ai.commentTexts.length > 0) return true;
-  if (ai.entryNotes.length > 0) return true;
-  return false;
+  return hasMeaningfulAiInput(row.aiInput);
 }
 
 /**

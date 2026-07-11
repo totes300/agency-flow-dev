@@ -1,8 +1,10 @@
 import { v, ConvexError } from "convex/values";
-import { gateway, type LanguageModel } from "ai";
+import { z } from "zod";
+import { gateway, type LanguageModel, type Tool } from "ai";
 import {
   Agent,
   abortStream,
+  createTool,
   listStreams,
   saveMessage,
   stepCountIs,
@@ -12,12 +14,20 @@ import {
   internalMutation,
   internalQuery,
   mutation,
+  type MutationCtx,
 } from "./_generated/server";
 import { components, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { getAuthContext } from "./lib/auth";
 import { requireOwnedThread, UNTITLED_THREAD } from "./agentThreads";
 import { getToolsForAgent } from "./lib/agentToolRegistry";
+import {
+  assembleSkillPrompt,
+  matchClientForRun,
+  resolveSkills,
+  STOP_CONDITION_TOOL_NAME,
+  type ResolvableSkill,
+} from "../lib/agents/skills";
 import {
   resolveModel,
   WorksheetAiUnavailableError,
@@ -88,6 +98,39 @@ export const beginRun = internalMutation({
       throw new ConvexError("You don't have permission to run this agent");
     }
 
+    // ─── Skills (slice 04) ───────────────────────────────────────────────
+    // Resolve the agent's attached skills for THIS run: global skills always
+    // load; client-scoped skills load only when the opening message names
+    // their client. Ordering + prompt assembly are the pure lib/agents/skills.
+    const skills = await loadAgentSkills(ctx, auth.orgId, agent.skillIds ?? []);
+    let clientId: string | null = null;
+    if (skills.some((s) => s.scope === "client")) {
+      const clients = await ctx.db
+        .query("clients")
+        .withIndex("by_orgId", (q) => q.eq("orgId", auth.orgId))
+        .collect();
+      clientId = matchClientForRun(
+        args.message,
+        clients
+          .filter((c) => !c.archivedAt)
+          .map((c) => ({ _id: c._id, name: c.name, prefix: c.prefix })),
+      );
+    }
+    const resolved = resolveSkills(skills, clientId);
+    const skillPrompt = assembleSkillPrompt(resolved);
+    const instructions = skillPrompt
+      ? `${agent.instructions}\n\n${skillPrompt}`
+      : agent.instructions;
+
+    // Save the user message FIRST, so its component _creationTime precedes the
+    // run's startedAt — the "skill loaded" notes then sort AFTER the question
+    // and before the answer in the thread timeline.
+    const { messageId } = await saveMessage(ctx, components.agent, {
+      threadId: thread.componentThreadId,
+      userId: auth.userId,
+      prompt: args.message,
+    });
+
     const now = Date.now();
     const runId = await ctx.db.insert("agentRuns", {
       orgId: auth.orgId,
@@ -96,6 +139,14 @@ export const beginRun = internalMutation({
       userId: auth.userId,
       status: "running",
       startedAt: now,
+      ...(resolved.loaded.length > 0
+        ? {
+            loadedSkills: resolved.loaded.map((s) => ({
+              name: s.name,
+              isStopCondition: s.isStopCondition,
+            })),
+          }
+        : {}),
     });
     await ctx.db.patch(thread._id, {
       status: "running",
@@ -106,12 +157,6 @@ export const beginRun = internalMutation({
         : {}),
     });
 
-    const { messageId } = await saveMessage(ctx, components.agent, {
-      threadId: thread.componentThreadId,
-      userId: auth.userId,
-      prompt: args.message,
-    });
-
     return {
       runId,
       promptMessageId: messageId,
@@ -120,19 +165,111 @@ export const beginRun = internalMutation({
       isAdmin: auth.isAdmin,
       agent: {
         name: agent.name,
-        instructions: agent.instructions,
+        instructions,
         tools: agent.tools,
       },
+      // The runner adds the stop tool + honours halts only when a loaded skill
+      // declares a stop-condition.
+      hasStopConditions: resolved.stopConditions.length > 0,
     };
   },
 });
 
-/** Cooperative-cancel flag, read by the loop between steps. */
-export const isCancelRequested = internalQuery({
+/**
+ * Fetch an agent's attached skills as resolver input (slice 04). Skips any
+ * archived or cross-org id defensively — an attachment must never smuggle a
+ * foreign or dead skill into a run's prompt.
+ */
+async function loadAgentSkills(
+  ctx: MutationCtx,
+  orgId: string,
+  skillIds: Id<"skills">[],
+): Promise<ResolvableSkill[]> {
+  const skills: ResolvableSkill[] = [];
+  for (const skillId of skillIds) {
+    const skill = await ctx.db.get(skillId);
+    if (!skill || skill.orgId !== orgId || skill.archivedAt) continue;
+    skills.push({
+      _id: skill._id,
+      name: skill.name,
+      instruction: skill.instruction,
+      scope: skill.scope,
+      clientId: skill.clientId ?? null,
+      isStopCondition: skill.isStopCondition,
+      createdAt: skill.createdAt,
+    });
+  }
+  return skills;
+}
+
+/**
+ * The stop tool, built per-run so its `execute` closes over the run id (the
+ * component's tool ctx exposes the thread, not the run). The model calls it
+ * when a loaded stop-condition fires; it records the halt on the run row and
+ * the loop aborts at the next step boundary (see `getRunControl`).
+ */
+function makeStopConditionTool(runId: Id<"agentRuns">): Tool {
+  return createTool({
+    description:
+      "Halt this run because a loaded stop-condition skill was met. Call this " +
+      "the moment a stop-condition applies; provide the skill's name and a " +
+      "one-sentence reason. The run stops immediately — do NOT also write a " +
+      "summary, a table, or any other output.",
+    inputSchema: z.object({
+      skillName: z
+        .string()
+        .describe("The name of the stop-condition skill that fired"),
+      reason: z
+        .string()
+        .describe("One sentence: why the stop-condition applies"),
+    }),
+    execute: async (toolCtx, input): Promise<{ halted: true }> => {
+      await toolCtx.runMutation(internal.agentRunner.raiseStopCondition, {
+        runId,
+        skillName: input.skillName,
+        reason: input.reason,
+      });
+      return { halted: true };
+    },
+  });
+}
+
+/**
+ * Run control flags read by the loop between steps: the user-Stop flag and
+ * the skill stop-condition (set by `raiseStopCondition`). Either aborts the
+ * stream before the next model call; the two settle to different statuses.
+ */
+export const getRunControl = internalQuery({
   args: { runId: v.id("agentRuns") },
   handler: async (ctx, args) => {
     const run = await ctx.db.get(args.runId);
-    return run?.cancelRequested === true;
+    return {
+      cancelRequested: run?.cancelRequested === true,
+      stoppedBySkill: run?.stoppedBySkill ?? null,
+    };
+  },
+});
+
+/**
+ * Record a skill stop-condition hit on the run (called by the flagStopCondition
+ * tool during a step). The loop reads it in onStepFinish and aborts; the run
+ * settles as `stopped_by_skill`. No-op if the run already left "running".
+ */
+export const raiseStopCondition = internalMutation({
+  args: {
+    runId: v.id("agentRuns"),
+    skillName: v.string(),
+    reason: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const run = await ctx.db.get(args.runId);
+    if (!run || run.status !== "running" || run.stoppedBySkill) return;
+    await ctx.db.patch(args.runId, {
+      stoppedBySkill: {
+        skillName: args.skillName.slice(0, 120),
+        reason: args.reason.slice(0, 500),
+      },
+    });
   },
 });
 
@@ -163,6 +300,7 @@ export const finishRun = internalMutation({
       v.literal("succeeded"),
       v.literal("failed"),
       v.literal("cancelled"),
+      v.literal("stopped_by_skill"),
     ),
     error: v.optional(v.string()),
     errorHint: v.optional(v.string()),
@@ -213,8 +351,8 @@ export const startRun = action({
     // aborts the component's delta stream, which the DeltaStreamer detects
     // on its next write and aborts this same signal.
     const cancel = new AbortController();
-    const checkCancelled = () =>
-      ctx.runQuery(internal.agentRunner.isCancelRequested, {
+    const checkControl = () =>
+      ctx.runQuery(internal.agentRunner.getRunControl, {
         runId: run.runId,
       });
 
@@ -241,11 +379,19 @@ export const startRun = action({
         );
       }
 
+      // The stop tool exists only when a loaded skill declares a
+      // stop-condition — otherwise the model has no way (and no reason) to
+      // halt the run itself.
+      const agentTools: Record<string, Tool> = { ...tools };
+      if (run.hasStopConditions) {
+        agentTools[STOP_CONDITION_TOOL_NAME] = makeStopConditionTool(run.runId);
+      }
+
       const agent = new Agent(components.agent, {
         name: run.agent.name,
         languageModel,
         instructions: run.agent.instructions,
-        tools,
+        tools: agentTools,
         stopWhen: stepCountIs(MAX_STEPS),
         usageHandler: async (handlerCtx, { usage }) => {
           await handlerCtx.runMutation(internal.agentRunner.recordUsage, {
@@ -266,9 +412,9 @@ export const startRun = action({
           // Runs AFTER the component saved the step's messages — partial
           // output is already persisted when we pull the plug here.
           onStepFinish: async () => {
-            if (!cancel.signal.aborted && (await checkCancelled())) {
-              cancel.abort();
-            }
+            if (cancel.signal.aborted) return;
+            const ctl = await checkControl();
+            if (ctl.cancelRequested || ctl.stoppedBySkill) cancel.abort();
           },
         },
         { saveStreamDeltas: true },
@@ -278,19 +424,27 @@ export const startRun = action({
       await result.consumeStream();
 
       // The mid-prose stop path aborts the streamer, not our signal — ask
-      // the DB, not the controller, whether this run was stopped.
-      const cancelled = cancel.signal.aborted || (await checkCancelled());
+      // the DB, not the controller, how this run ended. A skill stop-condition
+      // outranks a user Stop when both somehow raced.
+      const ctl = await checkControl();
+      const status = ctl.stoppedBySkill
+        ? "stopped_by_skill"
+        : cancel.signal.aborted || ctl.cancelRequested
+          ? "cancelled"
+          : "succeeded";
       await ctx.runMutation(internal.agentRunner.finishRun, {
         runId: run.runId,
-        status: cancelled ? "cancelled" : "succeeded",
+        status,
       });
       return { runId: run.runId };
     } catch (err) {
-      // An abort that escapes as an exception is still a user stop.
-      if (await checkCancelled()) {
+      // An abort that escapes as an exception is a deliberate halt — a skill
+      // stop-condition or a user Stop, not a failure.
+      const ctl = await checkControl();
+      if (ctl.stoppedBySkill || ctl.cancelRequested) {
         await ctx.runMutation(internal.agentRunner.finishRun, {
           runId: run.runId,
-          status: "cancelled",
+          status: ctl.stoppedBySkill ? "stopped_by_skill" : "cancelled",
         });
         return { runId: run.runId };
       }

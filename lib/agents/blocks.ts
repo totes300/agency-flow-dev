@@ -8,6 +8,7 @@
  */
 
 import { isAgentTableOutput, type AgentTable } from "./table";
+import { STOP_CONDITION_TOOL_NAME } from "./skills";
 
 /**
  * Determinism visual token (US 19), decided here per the PRD: AI prose
@@ -134,6 +135,13 @@ const TOOL_DISPLAY: Record<string, ToolDisplay> = {
       isAgentTableOutput(output)
         ? `${output.table.rows.length} task${output.table.rows.length === 1 ? "" : "s"}`
         : null,
+  },
+  // The skill stop-condition tool (slice 04) — when it fires, a skill halted
+  // the run. The explanatory block is run-derived; this is just its ghost row.
+  [STOP_CONDITION_TOOL_NAME]: {
+    runningLabel: "Checking stop-condition",
+    doneLabel: "Stop-condition met",
+    summarize: () => null,
   },
 };
 

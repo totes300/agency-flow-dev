@@ -4,7 +4,7 @@ import { useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { useQuery } from "convex/react"
 import { useOrganization } from "@clerk/nextjs"
-import { BotIcon, PlusIcon, SearchIcon } from "lucide-react"
+import { BotIcon, PlusIcon, SearchIcon, SparklesIcon } from "lucide-react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { Input } from "@/components/ui/input"
@@ -55,6 +55,7 @@ export function WorkspaceRail() {
   const searchParams = useSearchParams()
   const activeThreadId = searchParams.get("thread")
   const activeAgentId = searchParams.get("agent")
+  const activeView = searchParams.get("view")
 
   const { membership } = useOrganization()
   const isAdmin = membership?.role === "org:admin"
@@ -158,7 +159,18 @@ export function WorkspaceRail() {
         </section>
       </div>
       {isAdmin && (
-        <div className="border-t p-2">
+        <div className="flex flex-col gap-0.5 border-t p-2">
+          <button
+            type="button"
+            onClick={() => router.push("/agents?view=skills")}
+            className={cn(
+              railRowClass,
+              activeView === "skills" && "bg-sidebar-accent font-medium",
+            )}
+          >
+            <SparklesIcon className="size-4 shrink-0 text-sidebar-foreground/60" />
+            Skills
+          </button>
           {/* Placeholder affordance — the builder page lands in slice 09. */}
           <button
             type="button"

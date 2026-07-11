@@ -655,7 +655,7 @@ export default defineSchema({
 
   // ─── Agentic Platform (PRD: docs/agentic-platform/prd-v1.md) ───────────────
   // Agents are configuration, not code: instructions + a whitelist of
-  // tool-registry names + run permission. `skills`, `agentProposals`,
+  // tool-registry names + run permission. `agentProposals`,
   // `agentArtifacts`, `connectors` arrive in their own slices.
   agents: defineTable({
     orgId: v.string(),
@@ -665,6 +665,9 @@ export default defineSchema({
     // Names from the code-side tool registry (convex/lib/agentToolRegistry.ts).
     // Unknown names are dropped at runtime, never executed.
     tools: v.array(v.string()),
+    // Attached skills (plain-English SOPs; slice 04). Resolved per run:
+    // global first, then the run's client-scoped ones (convex/lib skills).
+    skillIds: v.optional(v.array(v.id("skills"))),
     runPermission: v.union(v.literal("admins"), v.literal("everyone")),
     // Clickable chips on the first-run empty state; pre-fill the composer.
     examplePrompts: v.optional(v.array(v.string())),
@@ -677,6 +680,29 @@ export default defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
   }).index("by_orgId", ["orgId"]),
+
+  // Skills (PRD D2, Module 7) — plain-English SOPs, global or per-client,
+  // attached to agents by id. They steer judgment (grouping, tone, when to
+  // stop); they NEVER change how a total is computed. A skill may declare a
+  // hard stop-condition the runner enforces (the model calls a stop tool,
+  // the run halts with an explanatory block). Resolution ordering lives in
+  // the pure `lib/agents/skills.ts` (global first, then client-specific).
+  skills: defineTable({
+    orgId: v.string(),
+    name: v.string(),
+    instruction: v.string(),
+    scope: v.union(v.literal("global"), v.literal("client")),
+    // Present only for scope "client"; the run auto-loads it when its
+    // opening message names this client.
+    clientId: v.optional(v.id("clients")),
+    isStopCondition: v.boolean(),
+    archivedAt: v.optional(v.number()),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_orgId", ["orgId"])
+    .index("by_orgId_clientId", ["orgId", "clientId"]),
 
   // App-side thread metadata. Message storage lives in the @convex-dev/agent
   // component; this table maps component threads to org/agent/owner for
@@ -713,11 +739,26 @@ export default defineSchema({
       v.literal("succeeded"),
       v.literal("failed"),
       v.literal("cancelled"),
+      // A loaded skill's stop-condition fired (slice 04) — distinct from a
+      // user Stop (cancelled) and a failure; the thread stays continuable.
+      v.literal("stopped_by_skill"),
     ),
     startedAt: v.number(),
     finishedAt: v.optional(v.number()),
     // Cooperative Stop: set by stopRun, checked by the loop between steps.
     cancelRequested: v.optional(v.boolean()),
+    // Skills loaded into this run's system prompt (slice 04) — surfaced as
+    // "skill loaded" system blocks at run start.
+    loadedSkills: v.optional(
+      v.array(
+        v.object({ name: v.string(), isStopCondition: v.boolean() }),
+      ),
+    ),
+    // Set by the flagStopCondition tool when a stop-condition fires; the loop
+    // halts and settles as `stopped_by_skill` with an explanatory block.
+    stoppedBySkill: v.optional(
+      v.object({ skillName: v.string(), reason: v.string() }),
+    ),
     // Accumulated across the run's model calls (usageHandler fires per step).
     inputTokens: v.optional(v.number()),
     outputTokens: v.optional(v.number()),

@@ -143,6 +143,10 @@ export const listRuns = query({
       finishedAt: r.finishedAt ?? null,
       error: r.error ?? null,
       errorHint: r.errorHint ?? null,
+      // "Skill loaded" notes (slice 04), shown at run start.
+      loadedSkills: r.loadedSkills ?? [],
+      // Set when a skill stop-condition halted the run — its explanatory block.
+      stoppedBySkill: r.stoppedBySkill ?? null,
     }));
   },
 });

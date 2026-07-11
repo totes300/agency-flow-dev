@@ -48,8 +48,35 @@ export function ThreadView({ threadId }: { threadId: string }) {
       node: <MessageRow message={message} />,
     }))
   for (const run of runs ?? []) {
+    // "Skill loaded" notes anchor to run start, so they sort right after the
+    // triggering user message and above the agent's response (slice 04).
+    for (const skill of run.loadedSkills) {
+      timeline.push({
+        key: `${run._id}-skill-${skill.name}`,
+        at: run.startedAt,
+        node: (
+          <SystemBlock>
+            Skill loaded: {skill.name}
+            {skill.isStopCondition && " · stop-condition"}
+          </SystemBlock>
+        ),
+      })
+    }
     if (run.finishedAt === null) continue
-    if (run.status === "failed" && run.error) {
+    if (run.stoppedBySkill) {
+      // A stop-condition fired — the run halted deliberately. Explain which
+      // skill stopped it and why, in the error block's message+hint shape.
+      timeline.push({
+        key: run._id,
+        at: run.finishedAt,
+        node: (
+          <ErrorBlock
+            message={`Stopped by the “${run.stoppedBySkill.skillName}” skill`}
+            hint={run.stoppedBySkill.reason}
+          />
+        ),
+      })
+    } else if (run.status === "failed" && run.error) {
       timeline.push({
         key: run._id,
         at: run.finishedAt,

@@ -3037,3 +3037,75 @@ visual review.
   the billable filter scope)
 - A client whose work category is literally named "Uncategorized" would
   merge with the null bucket (accepted edge, documented in code)
+
+### Slice 04 — Skills system ✅ (2026-07-11)
+
+- [x] Schema: `skills` table (orgId, name, instruction, scope global|client
+      + clientId, isStopCondition, archivedAt, createdBy/At) indexed
+      by_orgId + by_orgId_clientId; `agents.skillIds` attachment array;
+      `agentRuns.loadedSkills` (name + isStopCondition) + `stoppedBySkill`
+      ({skillName, reason}) + new run status literal `stopped_by_skill`
+- [x] Pure resolution `lib/agents/skills.ts` (I/O-free, unit-tested):
+      `resolveSkills(skills, clientId)` — global-first then client-specific,
+      deterministic order (createdAt → name → id), returns ordered `loaded`
+      + `stopConditions`; client-scoped skills load ONLY when the run's
+      client matches (other clients' never leak); `assembleSkillPrompt`
+      builds the system-prompt addendum + stop-condition protocol pointing
+      at the `flagStopCondition` tool; `matchClientForRun(message, clients)`
+      — deterministic name (≥3 chars, substring) / prefix (standalone token)
+      match, most-specific (longest name) wins
+- [x] Runner integration (`convex/agentRunner.ts`): `beginRun` loads the
+      agent's active skills, derives client context from the opening message
+      (only when client-scoped skills exist), resolves + augments the system
+      prompt, and records `loadedSkills` on the run; user message saved
+      BEFORE the run insert so "skill loaded" notes sort after the question
+- [x] Stop-condition enforcement: per-run `flagStopCondition` tool (added
+      only when a stop-condition is loaded) records `stoppedBySkill`; the
+      loop reads it in `onStepFinish` (via the unified `getRunControl`
+      query, replacing `isCancelRequested`) and aborts before the next model
+      call; the run settles as `stopped_by_skill` (thread stays idle/
+      continuable) — a skill stop outranks a user Stop if they race
+- [x] Stream blocks: "Skill loaded: <name> · stop-condition" system lines at
+      run start; a stop-condition halt renders the run-derived error block
+      (`Stopped by the "<skill>" skill` + reason); `flagStopCondition` gets
+      a quiet ghost-row display ("Checking stop-condition" → "Stop-condition
+      met") in `lib/agents/blocks.ts`
+- [x] Admin CRUD (`convex/skills.ts`, all `requireAdmin`, orgId-scoped):
+      list (with client names), create/update (scope↔clientId validation),
+      archive (also detaches from every agent); attachment via
+      `agents.setSkills` + `agents.listWithSkills`
+- [x] UI surface: `?view=skills` (admin-gated, members degrade) reached from
+      a rail-footer "Skills" entry — skill cards (name, scope, stop-condition
+      marker, instruction, edit/archive) + per-skill "Used by" agent toggles;
+      `SkillFormModal` (effect-free: keyed body mounts on open, seeds from
+      props); loading/empty/content flow with content-aware skeletons
+- [x] Seed: `devSeedAgents` upserts two global skills — `timesheet-format`
+      (tone/grouping, ATTACHED to Timesheet Generator → AC 2 out of the box)
+      and `empty-period-stop` (stop-condition, seeded DETACHED so default
+      empty-period prose is preserved; attach to demo AC 4)
+- [x] Tests: `lib/agents/skills.test.ts` (16) — ordering/scoping/stop
+      collection, prompt assembly (with/without stop protocol), client
+      match (name/prefix/specificity/short-name guards)
+
+### Verification (slice 04)
+
+`npx tsc --noEmit` 0 errors; eslint clean on all touched files; vitest
+agent suites 45/45 green (skills 16 + pivot/table/registry; the 4 unrelated
+pre-existing failures elsewhere remain untouched). `npx convex codegen`
+pushed the schema to the dev deployment (accepted) and `devSeedAgents`
+re-seeded both agents + both skills + the attachment. Live walkthrough
+(skill visibly steers a run, "skill loaded" block, per-client auto-apply,
+stop-condition halt) queued for the next signed-in design-gate sitting
+alongside slice 02/03.
+
+### TODOs deferred to later slices (04)
+
+- Client-context is derived from the OPENING message only; a client the
+  agent discovers mid-run via a tool is not retro-injected (accepted tracer
+  scope — the timesheet flow names the client up front)
+- Full agent builder (name/tools/model/skills in one form) → slice 09; the
+  slice-04 attachment UI (per-skill agent toggles) is the interim surface
+- Stop-condition halt currently reuses the destructive `ErrorBlock` styling;
+  a softer "guardrail fired" treatment is a design-gate call
+- `timesheet-format` seed is a generic tone SOP; the PRD's richer
+  requested/delivered stop-condition lands with the AI columns in slice 05

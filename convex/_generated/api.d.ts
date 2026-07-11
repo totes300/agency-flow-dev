@@ -80,6 +80,7 @@ import type * as projects from "../projects.js";
 import type * as retainerCron from "../retainerCron.js";
 import type * as retainerPeriods from "../retainerPeriods.js";
 import type * as settleEntries from "../settleEntries.js";
+import type * as skills from "../skills.js";
 import type * as statements from "../statements.js";
 import type * as statuses from "../statuses.js";
 import type * as taskViewReceipts from "../taskViewReceipts.js";
@@ -174,6 +175,7 @@ declare const fullApi: ApiFromModules<{
   retainerCron: typeof retainerCron;
   retainerPeriods: typeof retainerPeriods;
   settleEntries: typeof settleEntries;
+  skills: typeof skills;
   statements: typeof statements;
   statuses: typeof statuses;
   taskViewReceipts: typeof taskViewReceipts;

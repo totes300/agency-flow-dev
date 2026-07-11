@@ -1,7 +1,8 @@
-import { v } from "convex/values";
-import { internalMutation, query } from "./_generated/server";
-import { getAuthContext } from "./lib/auth";
+import { v, ConvexError } from "convex/values";
+import { internalMutation, mutation, query } from "./_generated/server";
+import { getAuthContext, requireAdmin } from "./lib/auth";
 import { agentToolRegistry } from "./lib/agentToolRegistry";
+import type { Id } from "./_generated/dataModel";
 
 // ─── Queries ────────────────────────────────────────────────────────────────
 
@@ -56,6 +57,59 @@ export const get = query({
       description: agent.description,
       examplePrompts: agent.examplePrompts ?? [],
     };
+  },
+});
+
+/**
+ * All org agents with their attached skill ids (admin-only) — powers the
+ * skills surface's per-skill attachment toggles until the full builder
+ * (slice 09) lands. Includes admin-only agents (admins manage them all).
+ */
+export const listWithSkills = query({
+  args: {},
+  handler: async (ctx) => {
+    const auth = await requireAdmin(ctx);
+    const agents = await ctx.db
+      .query("agents")
+      .withIndex("by_orgId", (q) => q.eq("orgId", auth.orgId))
+      .collect();
+    return agents
+      .filter((a) => !a.archivedAt)
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((a) => ({
+        _id: a._id,
+        name: a.name,
+        skillIds: a.skillIds ?? [],
+      }));
+  },
+});
+
+/**
+ * Replace an agent's attached skills (admin-only). Minimal attachment surface
+ * for slice 04 — the full builder (name/tools/model/etc.) arrives in slice 09.
+ * Validates every skill belongs to the org and is active, so an agent can
+ * never reference a foreign or archived skill.
+ */
+export const setSkills = mutation({
+  args: { agentId: v.id("agents"), skillIds: v.array(v.id("skills")) },
+  handler: async (ctx, args) => {
+    const auth = await requireAdmin(ctx);
+    const agent = await ctx.db.get(args.agentId);
+    if (!agent || agent.orgId !== auth.orgId || agent.archivedAt) {
+      throw new ConvexError("Agent not found");
+    }
+    const unique = [...new Set(args.skillIds)];
+    for (const skillId of unique) {
+      const skill = await ctx.db.get(skillId);
+      if (!skill || skill.orgId !== auth.orgId || skill.archivedAt) {
+        throw new ConvexError("Skill not found");
+      }
+    }
+    await ctx.db.patch(args.agentId, {
+      skillIds: unique,
+      updatedAt: Date.now(),
+    });
+    return null;
   },
 });
 
@@ -147,25 +201,95 @@ export const devSeedAgents = internalMutation({
       .collect();
 
     const now = Date.now();
+    const agentIdByName = new Map<string, Id<"agents">>();
     const ids = [];
     for (const seed of seeds) {
       const config = { ...seed, trigger: "manual" as const };
       const current = existing.find((a) => a.name === seed.name);
       if (current) {
         await ctx.db.patch(current._id, { ...config, updatedAt: now });
+        agentIdByName.set(seed.name, current._id);
         ids.push(current._id);
       } else {
-        ids.push(
-          await ctx.db.insert("agents", {
-            orgId,
-            ...config,
-            createdBy: creator._id,
-            createdAt: now,
-            updatedAt: now,
-          }),
-        );
+        const id = await ctx.db.insert("agents", {
+          orgId,
+          ...config,
+          createdBy: creator._id,
+          createdAt: now,
+          updatedAt: now,
+        });
+        agentIdByName.set(seed.name, id);
+        ids.push(id);
       }
     }
+
+    // ─── Skills (slice 04) ───────────────────────────────────────────────
+    // Two global skills seeded idempotently by name:
+    //  - "timesheet-format" — tone/grouping SOP; ATTACHED to the Timesheet
+    //    Generator so a skill visibly steers behavior out of the box (AC 2).
+    //  - "empty-period-stop" — a stop-condition; seeded but LEFT DETACHED so
+    //    the default empty-period prose behavior is preserved. Attach it in
+    //    the skills surface to demonstrate stop-condition enforcement (AC 4).
+    const skillSeeds = [
+      {
+        name: "timesheet-format",
+        instruction:
+          "Address the reader as 'the billing reviewer'. In your closing " +
+          "commentary, name the single work category with the most hours " +
+          "and nothing else — never restate specific numbers from the table.",
+        isStopCondition: false,
+        attachTo: "Timesheet Generator",
+      },
+      {
+        name: "empty-period-stop",
+        instruction:
+          "If the timesheet tool reports no time entries for the requested " +
+          "period, stop the run via the stop tool instead of answering — do " +
+          "not guess, and do not ask the user to check the period.",
+        isStopCondition: true,
+        attachTo: null as string | null,
+      },
+    ];
+
+    const existingSkills = await ctx.db
+      .query("skills")
+      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+      .collect();
+
+    const skillIdByAttachTarget = new Map<string, Id<"skills">[]>();
+    for (const seed of skillSeeds) {
+      const config = {
+        name: seed.name,
+        instruction: seed.instruction,
+        scope: "global" as const,
+        isStopCondition: seed.isStopCondition,
+      };
+      const current = existingSkills.find((s) => s.name === seed.name);
+      let skillId: Id<"skills">;
+      if (current) {
+        await ctx.db.patch(current._id, { ...config, updatedAt: now });
+        skillId = current._id;
+      } else {
+        skillId = await ctx.db.insert("skills", {
+          orgId,
+          ...config,
+          createdBy: creator._id,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+      if (seed.attachTo) {
+        const list = skillIdByAttachTarget.get(seed.attachTo) ?? [];
+        list.push(skillId);
+        skillIdByAttachTarget.set(seed.attachTo, list);
+      }
+    }
+
+    for (const [agentName, skillIds] of skillIdByAttachTarget) {
+      const agentId = agentIdByName.get(agentName);
+      if (agentId) await ctx.db.patch(agentId, { skillIds, updatedAt: now });
+    }
+
     return ids;
   },
 });

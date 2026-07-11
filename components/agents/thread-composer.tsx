@@ -1,35 +1,37 @@
 "use client"
 
 import { useState } from "react"
-import { useAction } from "convex/react"
-import { SendIcon } from "lucide-react"
+import { useAction, useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
-import { Button } from "@/components/ui/button"
-import { Textarea } from "@/components/ui/textarea"
+import type { Id } from "@/convex/_generated/dataModel"
+import { AgentComposer } from "@/components/agents/composer"
 import { toastError } from "@/lib/toast-helpers"
 
 /**
- * Bare tracer composer (plain textarea). The Tiptap composer with paste/
- * upload/mentions replaces this in slice 07; Stop-button run ergonomics
- * arrive in slice 02.
+ * Thread-mode composer wiring: send → startRun on the bound thread,
+ * Stop → stopRun on the active run. Post-start failures settle as
+ * in-thread error blocks (the action resolves), so only pre-start
+ * validation errors toast + restore the draft.
  */
 export function ThreadComposer({
   threadId,
   agentName,
   isRunning,
+  activeRun,
 }: {
   threadId: string
   agentName: string
   isRunning: boolean
+  activeRun: { _id: Id<"agentRuns">; cancelRequested: boolean } | null
 }) {
   const [message, setMessage] = useState("")
   // Covers the gap between the action call and the thread's reactive
   // status flip to "running".
   const [sending, setSending] = useState(false)
   const startRun = useAction(api.agentRunner.startRun)
+  const stopRun = useMutation(api.agentRunner.stopRun)
 
   const busy = isRunning || sending
-  const canSend = !busy && message.trim().length > 0
 
   function send() {
     const text = message.trim()
@@ -44,34 +46,23 @@ export function ThreadComposer({
       .finally(() => setSending(false))
   }
 
+  function stop() {
+    if (!activeRun || activeRun.cancelRequested) return
+    void stopRun({ runId: activeRun._id }).catch((err) =>
+      toastError(err, "Couldn't stop the run"),
+    )
+  }
+
   return (
-    <div className="shrink-0 border-t p-4">
-      <div className="mx-auto flex max-w-2xl items-end gap-2">
-        <Textarea
-          value={message}
-          onChange={(e) => setMessage(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault()
-              send()
-            }
-          }}
-          placeholder={
-            busy ? `${agentName} is working…` : `Message ${agentName}…`
-          }
-          rows={3}
-          className="max-h-40 resize-none"
-        />
-        <Button
-          type="button"
-          size="icon"
-          onClick={send}
-          disabled={!canSend}
-          aria-label="Send"
-        >
-          <SendIcon className="size-4" />
-        </Button>
-      </div>
-    </div>
+    <AgentComposer
+      agentName={agentName}
+      value={message}
+      onChange={setMessage}
+      onSend={send}
+      running={busy}
+      onStop={stop}
+      // No run row yet (action still settling) or stop already requested.
+      stopDisabled={!activeRun || activeRun.cancelRequested}
+    />
   )
 }

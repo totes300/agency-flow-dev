@@ -2904,3 +2904,72 @@ row); unauthed users never reach /agents (proxy).
 - Per-agent model override wiring in the runner (09, with the builder)
 - Thread title search in the rail (post-01 rail polish)
 - MAX_STEPS=5 tracer cap — revisit per-agent when real agents land
+
+### Slice 02 — Stream & run UX ⏳ awaiting HITL design gate (built 2026-07-11)
+
+- [x] Pure block layer `lib/agents/blocks.ts`: part→block classification
+      guards (text/reasoning/tool; step-start/source/file/data dropped),
+      tool verb + deterministic result-summary map (counts computed from
+      raw output, never model-written — D1 at render level), thoughtLabel,
+      and the **determinism visual token decided here: AI prose = standard
+      message styling, deterministic values = `DETERMINISTIC_VALUE_CLASS`
+      (`tabular-nums`)** — consumed by slice 03's table renderer
+- [x] Block renderers `components/agents/blocks/` (one renderer per type,
+      shared by all agents, dispatched by `block-renderer.tsx`):
+      `text` (useSmoothText prose), `reasoning` (streams muted → auto-
+      collapses to "Thought for Ns" measured client-side, re-expandable),
+      `tool-call` (quiet ghost row: filled icon + verb + summary, expands
+      to raw args/result — no card/border/pill), `error` (message + hint),
+      `system` (quiet one-liner)
+- [x] Stop: `agentRuns.cancelRequested` flag + `stopRun` mutation (owner-
+      only; also aborts the component's live delta stream so mid-prose
+      halts on the next delta write); runner checks the flag in
+      onStepFinish (after the step's messages are saved) and aborts before
+      the next model call; cancelled runs settle as `cancelled`, partial
+      output stays, thread returns to idle and stays continuable
+- [x] Error model: post-start failures settle as in-thread error blocks
+      (run row `error` + `errorHint`, rendered via `agentThreads.listRuns`
+      interleaved by finish time) instead of rejected promises; missing AI
+      key → "configure in Settings → Integrations" hint block; pre-start
+      validation still toasts + restores the draft
+- [x] User message saved in `beginRun` (transactional with the run row,
+      via component `saveMessage` + `promptMessageId`) — appears
+      instantly, survives key failures, keeps the question above its
+      error block
+- [x] Run-state composer: shared presentational `AgentComposer` (agent
+      chip above input, send ⇄ Stop in-place swap, Stop shows settling
+      state while cancel propagates), `ThreadComposer` wires start/stop
+- [x] New-chat flow: agent click → `?agent=` (thread created only on first
+      send — no empty threads in the rail); `NewChatView` = agent identity
+      empty state + example-prompt chips (pre-fill + focus composer);
+      `agents.examplePrompts` schema field + seeded on Flow Assistant;
+      `agents.get` returns null for stale/foreign ids (graceful degrade)
+- [x] Rail final form: title-search input above Recent threads (client-
+      side, ephemeral chrome), quiet "No matching threads." state, admin-
+      only "+ New agent" placeholder affordance in the footer (builder
+      lands in 09)
+- [x] Tests: `lib/agents/blocks.test.ts` (14) — classification guards,
+      phase mapping, unknown-part dropping, verb/summary determinism,
+      thought labels
+
+### Verification (slice 02)
+
+`npx tsc --noEmit` 0 errors; eslint clean on all touched files; vitest
+blocks suite 14/14 green (4 pre-existing failures elsewhere in the repo —
+relative-time boundary tests + a .reference tiptap test — untouched by
+this slice). Convex dev deploy accepted the schema; seed re-run OK.
+**Exit gate open: design review with Adam** (stream density, collapse
+behavior, ghost rows, chips) — plus live Stop/error-block walkthrough in
+a signed-in session.
+
+### TODOs deferred to later slices (02)
+
+- `table`/`proposal`/`artifact` block renderers (03/08/06) — vocabulary
+  slots exist, classifyPart drops their parts until then
+- "Skill loaded" system blocks (04); scheduled-run system notes (Wave 4)
+- Reasoning duration for historical messages (only measured live; old
+  threads show bare "Thought")
+- Stuck-run janitor (action crash without catch leaves thread "running")
+  — revisit with the audit view (11)
+- Rail search stays client-side/local state (PRD choice); admin audit
+  view gets URL-persisted filters instead (11)

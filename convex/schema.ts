@@ -666,6 +666,8 @@ export default defineSchema({
     // Unknown names are dropped at runtime, never executed.
     tools: v.array(v.string()),
     runPermission: v.union(v.literal("admins"), v.literal("everyone")),
+    // Clickable chips on the first-run empty state; pre-fill the composer.
+    examplePrompts: v.optional(v.array(v.string())),
     // Per-agent model override (registry default when unset).
     model: v.optional(v.string()),
     // Schema-ready for Wave 4 scheduled runs — no migration needed then.
@@ -714,11 +716,15 @@ export default defineSchema({
     ),
     startedAt: v.number(),
     finishedAt: v.optional(v.number()),
+    // Cooperative Stop: set by stopRun, checked by the loop between steps.
+    cancelRequested: v.optional(v.boolean()),
     // Accumulated across the run's model calls (usageHandler fires per step).
     inputTokens: v.optional(v.number()),
     outputTokens: v.optional(v.number()),
     totalTokens: v.optional(v.number()),
     error: v.optional(v.string()),
+    // Actionable next step shown under the error block (e.g. settings hint).
+    errorHint: v.optional(v.string()),
   })
     .index("by_orgId", ["orgId"])
     .index("by_threadId", ["threadId"]),

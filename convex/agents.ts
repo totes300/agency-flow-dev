@@ -30,6 +30,35 @@ export const listRunnable = query({
   },
 });
 
+/**
+ * One runnable agent — the new-chat empty state (identity line +
+ * example-prompt chips). Same visibility rules as `listRunnable`.
+ * Returns null (not an error) for unknown/forbidden ids so a stale
+ * `?agent=` URL degrades to the generic empty state instead of crashing.
+ */
+export const get = query({
+  args: { agentId: v.string() },
+  handler: async (ctx, args) => {
+    const auth = await getAuthContext(ctx);
+    // Plain string — arrives from the URL (?agent=); garbage → null.
+    const id = ctx.db.normalizeId("agents", args.agentId);
+    if (!id) return null;
+    const agent = await ctx.db.get(id);
+    if (!agent || agent.orgId !== auth.orgId || agent.archivedAt) {
+      return null;
+    }
+    if (agent.runPermission === "admins" && !auth.isAdmin) {
+      return null; // don't leak existence
+    }
+    return {
+      _id: agent._id,
+      name: agent.name,
+      description: agent.description,
+      examplePrompts: agent.examplePrompts ?? [],
+    };
+  },
+});
+
 // ─── Dev seed ───────────────────────────────────────────────────────────────
 
 /**
@@ -65,6 +94,12 @@ export const devSeedTracerAgent = internalMutation({
         "short and concrete.",
       tools: Object.keys(agentToolRegistry),
       runPermission: "everyone" as const,
+      examplePrompts: [
+        "Which clients do we have?",
+        "List our active projects",
+        "Which projects are retainers?",
+        "Do we have any archived clients?",
+      ],
       trigger: "manual" as const,
     };
 

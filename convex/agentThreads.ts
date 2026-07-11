@@ -87,6 +87,21 @@ export const get = query({
     if (!id) throw new ConvexError("Thread not found");
     const thread = await requireOwnedThread(ctx, auth, id);
     const agent = await ctx.db.get(thread.agentId);
+
+    // The in-flight run, if any — the composer's Stop button target.
+    // Newest-first so a stale stuck row can't shadow the live one.
+    const activeRun =
+      thread.status === "running"
+        ? (
+            await ctx.db
+              .query("agentRuns")
+              .withIndex("by_threadId", (q) => q.eq("threadId", thread._id))
+              .filter((q) => q.eq(q.field("orgId"), auth.orgId))
+              .order("desc")
+              .collect()
+          ).find((r) => r.status === "running")
+        : undefined;
+
     return {
       _id: thread._id,
       componentThreadId: thread.componentThreadId,
@@ -94,7 +109,41 @@ export const get = query({
       status: thread.status,
       agentId: thread.agentId,
       agentName: agent?.name ?? "Agent",
+      activeRun: activeRun
+        ? {
+            _id: activeRun._id,
+            cancelRequested: activeRun.cancelRequested === true,
+          }
+        : null,
     };
+  },
+});
+
+/**
+ * Run outcomes for one thread — the source of the stream's `error` and
+ * `system` blocks (failed → error block with hint, cancelled → "run
+ * stopped" line), interleaved with messages by timestamp in the UI.
+ */
+export const listRuns = query({
+  args: { threadId: v.string() },
+  handler: async (ctx, args) => {
+    const auth = await getAuthContext(ctx);
+    const id = ctx.db.normalizeId("agentThreads", args.threadId);
+    if (!id) throw new ConvexError("Thread not found");
+    const thread = await requireOwnedThread(ctx, auth, id);
+    const runs = await ctx.db
+      .query("agentRuns")
+      .withIndex("by_threadId", (q) => q.eq("threadId", thread._id))
+      .filter((q) => q.eq(q.field("orgId"), auth.orgId))
+      .collect();
+    return runs.map((r) => ({
+      _id: r._id,
+      status: r.status,
+      startedAt: r.startedAt,
+      finishedAt: r.finishedAt ?? null,
+      error: r.error ?? null,
+      errorHint: r.errorHint ?? null,
+    }));
   },
 });
 

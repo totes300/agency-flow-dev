@@ -1,16 +1,18 @@
 "use client"
 
+import { useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
-import { useMutation, useQuery } from "convex/react"
-import { BotIcon } from "lucide-react"
+import { useQuery } from "convex/react"
+import { useOrganization } from "@clerk/nextjs"
+import { BotIcon, PlusIcon, SearchIcon } from "lucide-react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
+import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import { WorkspaceSwitch } from "@/components/workspace-switch"
 import { AgentsRailEmptyState } from "@/components/agents/agents-rail-empty-state"
 import { ThreadsRailEmptyState } from "@/components/agents/threads-rail-empty-state"
 import { formatRelativeTime } from "@/lib/format"
-import { toastError } from "@/lib/toast-helpers"
 import { cn } from "@/lib/utils"
 
 function RailSectionLabel({ children }: { children: React.ReactNode }) {
@@ -40,24 +42,34 @@ const railRowClass =
   "text-sidebar-foreground hover:bg-sidebar-accent transition-colors"
 
 /**
- * Workspace left rail — the primary navigation of the Agents workspace:
- * workspace switch on top, pinned Agents section (runnable-only per user),
- * then the user's Recent threads, newest activity first. Thread selection
- * persists in the URL (`?thread=`), per the app's URL-state convention.
+ * Workspace left rail (final form, slice 02): workspace switch on top,
+ * pinned Agents section (runnable-only per user), title-search over the
+ * user's Recent threads, and an admin-only "+ New agent" placeholder in
+ * the footer (the builder page arrives in slice 09). Clicking an agent
+ * opens the new-chat state (`?agent=`); threads are only created on the
+ * first send. Selection persists in the URL per the app convention;
+ * the search text is ephemeral rail chrome, so it stays local.
  */
 export function WorkspaceRail() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const activeThreadId = searchParams.get("thread")
+  const activeAgentId = searchParams.get("agent")
+
+  const { membership } = useOrganization()
+  const isAdmin = membership?.role === "org:admin"
 
   const agents = useQuery(api.agents.listRunnable)
   const threads = useQuery(api.agentThreads.listMine)
-  const createThread = useMutation(api.agentThreads.create)
 
-  function startChat(agentId: Id<"agents">) {
-    void createThread({ agentId })
-      .then((threadId) => router.push(`/agents?thread=${threadId}`))
-      .catch((err) => toastError(err, "Couldn't start a new chat"))
+  const [search, setSearch] = useState("")
+  const query = search.trim().toLowerCase()
+  const filteredThreads = threads?.filter(
+    (t) => query === "" || t.title.toLowerCase().includes(query),
+  )
+
+  function openAgent(agentId: Id<"agents">) {
+    router.push(`/agents?agent=${agentId}`)
   }
 
   return (
@@ -78,8 +90,13 @@ export function WorkspaceRail() {
                 <button
                   key={agent._id}
                   type="button"
-                  onClick={() => startChat(agent._id)}
-                  className={railRowClass}
+                  onClick={() => openAgent(agent._id)}
+                  className={cn(
+                    railRowClass,
+                    agent._id === activeAgentId &&
+                      !activeThreadId &&
+                      "bg-sidebar-accent font-medium",
+                  )}
                   title={agent.description}
                 >
                   <BotIcon className="size-4 shrink-0 text-sidebar-foreground/60" />
@@ -91,36 +108,69 @@ export function WorkspaceRail() {
         </section>
         <section>
           <RailSectionLabel>Recent threads</RailSectionLabel>
-          {threads === undefined ? (
+          {threads === undefined || filteredThreads === undefined ? (
             <RailRowSkeletons count={4} />
           ) : threads.length === 0 ? (
             <ThreadsRailEmptyState />
           ) : (
-            <div className="flex flex-col gap-0.5">
-              {threads.map((thread) => (
-                <button
-                  key={thread._id}
-                  type="button"
-                  onClick={() => router.push(`/agents?thread=${thread._id}`)}
-                  className={cn(
-                    railRowClass,
-                    thread._id === activeThreadId &&
-                      "bg-sidebar-accent font-medium",
-                  )}
-                >
-                  <BotIcon className="size-4 shrink-0 text-sidebar-foreground/60" />
-                  <span className="min-w-0 flex-1 truncate">
-                    {thread.title}
-                  </span>
-                  <span className="shrink-0 text-xs text-sidebar-foreground/50">
-                    {formatRelativeTime(thread.lastActivityAt)}
-                  </span>
-                </button>
-              ))}
-            </div>
+            <>
+              <div className="relative mb-1">
+                <SearchIcon className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-sidebar-foreground/40" />
+                <Input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search threads…"
+                  className="h-7 border-none bg-sidebar-accent/50 pl-7 text-sm shadow-none placeholder:text-sidebar-foreground/40"
+                />
+              </div>
+              {filteredThreads.length === 0 ? (
+                <p className="px-2 py-1.5 text-sm text-sidebar-foreground/50">
+                  No matching threads.
+                </p>
+              ) : (
+                <div className="flex flex-col gap-0.5">
+                  {filteredThreads.map((thread) => (
+                    <button
+                      key={thread._id}
+                      type="button"
+                      onClick={() =>
+                        router.push(`/agents?thread=${thread._id}`)
+                      }
+                      className={cn(
+                        railRowClass,
+                        thread._id === activeThreadId &&
+                          "bg-sidebar-accent font-medium",
+                      )}
+                    >
+                      <BotIcon className="size-4 shrink-0 text-sidebar-foreground/60" />
+                      <span className="min-w-0 flex-1 truncate">
+                        {thread.title}
+                      </span>
+                      <span className="shrink-0 text-xs text-sidebar-foreground/50">
+                        {formatRelativeTime(thread.lastActivityAt)}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </>
           )}
         </section>
       </div>
+      {isAdmin && (
+        <div className="border-t p-2">
+          {/* Placeholder affordance — the builder page lands in slice 09. */}
+          <button
+            type="button"
+            disabled
+            title="The agent builder is coming soon"
+            className="flex w-full cursor-default items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-sidebar-foreground/50"
+          >
+            <PlusIcon className="size-4 shrink-0" />
+            New agent
+          </button>
+        </div>
+      )}
     </aside>
   )
 }

@@ -204,7 +204,7 @@ export function parseResponse(
  * scopes the call to that explicit key — no chance of accidentally
  * reading the operator's env-var key when a customer key is set.
  */
-function resolveModel(apiKey?: string | null): string | ReturnType<typeof anthropic> {
+export function resolveModel(apiKey?: string | null): string | ReturnType<typeof anthropic> {
   if (apiKey) {
     return createAnthropic({ apiKey })(DIRECT_MODEL_ID);
   }

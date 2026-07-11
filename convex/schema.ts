@@ -652,4 +652,74 @@ export default defineSchema({
     // bound startDate below by today − SEGMENT_SCAN_WINDOW_DAYS as a scan
     // guard (see convex/lib/todayPlan.ts).
     .index("by_orgId_userId_startDate", ["orgId", "userId", "startDate"]),
+
+  // ─── Agentic Platform (PRD: docs/agentic-platform/prd-v1.md) ───────────────
+  // Agents are configuration, not code: instructions + a whitelist of
+  // tool-registry names + run permission. `skills`, `agentProposals`,
+  // `agentArtifacts`, `connectors` arrive in their own slices.
+  agents: defineTable({
+    orgId: v.string(),
+    name: v.string(),
+    description: v.string(),
+    instructions: v.string(),
+    // Names from the code-side tool registry (convex/lib/agentToolRegistry.ts).
+    // Unknown names are dropped at runtime, never executed.
+    tools: v.array(v.string()),
+    runPermission: v.union(v.literal("admins"), v.literal("everyone")),
+    // Per-agent model override (registry default when unset).
+    model: v.optional(v.string()),
+    // Schema-ready for Wave 4 scheduled runs — no migration needed then.
+    trigger: v.union(v.literal("manual"), v.literal("scheduled")),
+    archivedAt: v.optional(v.number()),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_orgId", ["orgId"]),
+
+  // App-side thread metadata. Message storage lives in the @convex-dev/agent
+  // component; this table maps component threads to org/agent/owner for
+  // tenancy, rail listing, and audit. One thread = one continuable
+  // multi-turn conversation with one agent.
+  agentThreads: defineTable({
+    orgId: v.string(),
+    componentThreadId: v.string(),
+    agentId: v.id("agents"),
+    // Owner — rail lists own threads only; admin audit view comes later.
+    userId: v.id("users"),
+    title: v.string(),
+    status: v.union(
+      v.literal("idle"),
+      v.literal("running"),
+      v.literal("error"),
+    ),
+    lastActivityAt: v.number(),
+    createdAt: v.number(),
+  })
+    .index("by_orgId_userId", ["orgId", "userId"])
+    .index("by_orgId_agentId", ["orgId", "agentId"])
+    .index("by_componentThreadId", ["componentThreadId"]),
+
+  // One row per agent response cycle — the audit unit (who ran which agent,
+  // when, outcome, token usage).
+  agentRuns: defineTable({
+    orgId: v.string(),
+    threadId: v.id("agentThreads"),
+    agentId: v.id("agents"),
+    userId: v.id("users"),
+    status: v.union(
+      v.literal("running"),
+      v.literal("succeeded"),
+      v.literal("failed"),
+      v.literal("cancelled"),
+    ),
+    startedAt: v.number(),
+    finishedAt: v.optional(v.number()),
+    // Accumulated across the run's model calls (usageHandler fires per step).
+    inputTokens: v.optional(v.number()),
+    outputTokens: v.optional(v.number()),
+    totalTokens: v.optional(v.number()),
+    error: v.optional(v.string()),
+  })
+    .index("by_orgId", ["orgId"])
+    .index("by_threadId", ["threadId"]),
 });

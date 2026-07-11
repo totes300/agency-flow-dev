@@ -2848,3 +2848,59 @@ settings); icon-collapsed sidebar stacks the switch vertically.
   re-runs). CLAUDE.md's stale `.next-docs` index block replaced with the
   `nextjs-agent-rules` block; same block added to AGENTS.md; `.next-docs/`
   snapshot deleted (gitignore entry kept, harmless)
+
+### Slice 01 — Tracer: minimal agent chat loop ✅ HITL gate signed off by Adam (2026-07-11)
+
+- [x] `@convex-dev/agent` 0.6.4 installed + `convex/convex.config.ts`; API
+      verified via context7 (v0.6: `inputSchema`/`execute`, per-call model
+      override, `saveStreamDeltas` + `syncStreams` + `useUIMessages`)
+- [x] Schema: `agents` (tools whitelist, runPermission, trigger from day
+      one), `agentThreads` (componentThreadId mapping, owner, status,
+      auto-title), `agentRuns` (audit: status, timings, token usage) — all
+      orgId-scoped with PRD indexes
+- [x] Tool registry `convex/lib/agentToolRegistry.ts`: typed catalog
+      (name, humanDescription, scope, kind) + `getToolsForAgent` (scope
+      filtering, unknown-name dropping); seed read tools `listClients`,
+      `listProjects` wrapping the existing org-scoped queries verbatim
+- [x] Runner `convex/agentRunner.ts`: PUBLIC ACTION `startRun` (client-
+      invoked so ctx.auth carries the running user through every tool call
+      — D6 structurally); beginRun re-validates ownership/permission/
+      concurrency in-transaction; usageHandler accumulates tokens onto the
+      run row; finishRun settles thread status; Phase 9 BYOK chain reused
+      (`resolveModel` exported from worksheetAi + gateway() wrap;
+      `loadDecryptedKeyForRun` member-scoped internal variant, documented)
+- [x] Threads `convex/agentThreads.ts`: create (permission-gated), listMine
+      (rail), get, listMessages (listUIMessages + syncStreams, owner-only,
+      404-shaped denials)
+- [x] Minimal UI: rail lists runnable agents + my threads (skeleton/empty/
+      content per convention, `?thread=` URL state); ThreadView with
+      useUIMessages(stream:true) + useSmoothText; bare textarea composer
+      (Enter sends, disabled while running, failed send restores the draft)
+- [x] Tests: agentToolRegistry (6) — scope filtering, unknown-drop,
+      read/propose classification, registry integrity
+- [x] Dev seed: `npx convex run agents:devSeedTracerAgent '{"email":…}'` —
+      "Flow Assistant" (everyone, manual, both read tools)
+
+### Verification (slice 01)
+
+`npx tsc --noEmit` 0 errors; vitest agentToolRegistry 6/6 green. Live in
+Chrome: "Which clients do we have?" → tool call → streamed answer listing
+the real client rows (Pragmatico, Arlow, 5 SEED clients — verbatim from
+clients.list); multi-turn follow-up used thread context; a third prompt
+called BOTH tools in one cycle; second browser window on the same thread
+received the user message + streaming answer live and was captured
+MID-STREAM (visible growth) with the composer in "working…" state;
+agentRuns rows carry status/timings/tokens (e.g. 2002 in / 192 out);
+thread auto-titled from first message in the rail. No-org/unauthed runs
+rejected server-side by getAuthContext in beginRun (ConvexError, no run
+row); unauthed users never reach /agents (proxy).
+
+### TODOs deferred to later slices
+
+- Stop button + run-state ergonomics (02); typed block renderers —
+  reasoning, tool rows, tables (02+); proposals (08); artifacts/canvas (06)
+- Tiptap composer with paste/upload/mentions (07); skills (04); admin
+  builder + real seeded Timesheet agent (05/09); admin audit view (11)
+- Per-agent model override wiring in the runner (09, with the builder)
+- Thread title search in the rail (post-01 rail polish)
+- MAX_STEPS=5 tracer cap — revisit per-agent when real agents land

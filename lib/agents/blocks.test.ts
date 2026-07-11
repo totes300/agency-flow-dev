@@ -93,9 +93,7 @@ describe("tool display", () => {
   });
 
   it("humanizes unknown tool names", () => {
-    expect(toolLabel("collectTimesheetData", "done")).toBe(
-      "Collect timesheet data",
-    );
+    expect(toolLabel("sendClientReport", "done")).toBe("Send client report");
     expect(humanizeToolName("close_period")).toBe("Close period");
     expect(humanizeToolName("")).toBe("Tool call");
   });

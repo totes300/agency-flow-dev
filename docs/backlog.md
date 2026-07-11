@@ -2973,3 +2973,67 @@ a signed-in session.
   — revisit with the audit view (11)
 - Rail search stays client-side/local state (PRD choice); admin audit
   view gets URL-persisted filters instead (11)
+
+### Slice 03 — Timesheet deterministic tool + table block ✅ (2026-07-11)
+
+- [x] `table` block contract `lib/agents/table.ts`: marker-discriminated
+      tool-output shape (columns with text/minutes/date kinds, raw cell
+      values, optional totals row) + strict structural guard — malformed
+      or EMPTY tables never reach the renderer (empty periods must answer
+      in prose)
+- [x] Classifier expansion: a finished tool call whose output carries the
+      table contract emits ghost row + `table` block (model never
+      "writes" a table — tools do, D1)
+- [x] `table` block renderer `components/agents/blocks/table-block.tsx`:
+      shadcn Table over the shared `lib/table-tokens.ts` (CELL_PRIMARY /
+      CELL_SECONDARY / CELL_KEY — tabular-nums built in, the slice-02
+      determinism token); minutes formatted via `formatMinutes` (the
+      project-overview HH:MM convention → spot-checkable), dates via
+      `formatShortDate`; totals row on TableFooter; horizontal scroll
+      container per convention
+- [x] Pivot `convex/lib/timesheetPivot.ts` (pure, billing-grade):
+      category→columns pivot with per-row/per-category/grand totals;
+      column order = org `workCategories.sortOrder`, unknown names after,
+      Uncategorized last; only categories present get columns;
+      deterministic row order (project → firstWorked → title); plus
+      `monthBounds` + `formatTimesheetPeriodLabel`
+- [x] `convex/timesheets.ts` `collectTimesheetData` internalQuery:
+      `requireAdmin` with the RUNNING user's identity (D6), loops the
+      client's projects over the EXPORTED existing worksheet collector
+      helpers (`resolveScopeEntries` + `buildTaskRows`) in one
+      transaction; category-name filters resolve against org categories
+      (unknown → error listing valid names so the agent self-corrects);
+      project-id filter validated against the client; rows carry the
+      Phase 9 `aiInput` payload for slice 05 (stripped from the tool
+      output)
+- [x] Registry: `collectTimesheetData` admin-scoped read tool (month XOR
+      date-range validation, table output + deterministic taskCount/
+      grandTotal + "never re-type the numbers" note); tool ghost-row
+      display (verb + "N tasks" from the table payload) + per-icon
+      fill-flag (grid icons stay stroked)
+- [x] Seed: `devSeedAgents` (renamed from devSeedTracerAgent) upserts
+      Flow Assistant (member tools, everyone) + **Timesheet Generator**
+      (admins-only, D1-heavy instructions, example chips)
+- [x] Tests: pivot/totals/order/labels (9), table guard + classify
+      expansion (9), registry admin-scope explicit case — all green
+
+### Verification (slice 03)
+
+`npx tsc --noEmit` 0 errors; eslint clean on touched files; vitest
+agent+pivot suites 41/41 green (the 4 unrelated pre-existing failures
+remain untouched). Convex dev deploy accepted; `devSeedAgents` seeded
+both agents. Live spot-check of hour cells against the project overview
+(AC 2) and the member-permission walkthrough need a signed-in session —
+queued for the next design-gate sitting with Adam alongside slice 02's
+visual review.
+
+### TODOs deferred to later slices (03)
+
+- AI columns (requested/delivered) + timesheet-format skill → slice 05
+  (aiInput already flows through `TimesheetRow`)
+- CSV artifact + canvas sheet for the timesheet → slice 06
+- Billable/non-billable split columns in the pivot if Adam wants them
+  after seeing the single-total version (cells currently sum both within
+  the billable filter scope)
+- A client whose work category is literally named "Uncategorized" would
+  merge with the null bucket (accepted edge, documented in code)

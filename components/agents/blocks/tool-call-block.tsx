@@ -4,6 +4,7 @@ import { useState } from "react"
 import {
   FolderIcon,
   Loader2Icon,
+  TableIcon,
   UsersIcon,
   WrenchIcon,
   type LucideIcon,
@@ -15,10 +16,15 @@ import {
 } from "@/lib/agents/blocks"
 import { cn } from "@/lib/utils"
 
-/** Per-tool filled icon (Linear-style); registry names, wrench fallback. */
-const TOOL_ICONS: Record<string, LucideIcon> = {
-  listClients: UsersIcon,
-  listProjects: FolderIcon,
+/**
+ * Per-tool icon (Linear-style filled where the glyph stays legible as a
+ * silhouette; line icons like grids keep their strokes). Registry names,
+ * wrench fallback.
+ */
+const TOOL_ICONS: Record<string, { Icon: LucideIcon; filled: boolean }> = {
+  listClients: { Icon: UsersIcon, filled: true },
+  listProjects: { Icon: FolderIcon, filled: true },
+  collectTimesheetData: { Icon: TableIcon, filled: false },
 }
 
 /**
@@ -40,7 +46,10 @@ export function ToolCallBlock({
   errorText: string | null
 }) {
   const [expanded, setExpanded] = useState(false)
-  const Icon = TOOL_ICONS[toolName] ?? WrenchIcon
+  const { Icon, filled } = TOOL_ICONS[toolName] ?? {
+    Icon: WrenchIcon,
+    filled: true,
+  }
   const summary = phase === "done" ? toolResultSummary(toolName, output) : null
 
   return (
@@ -55,7 +64,8 @@ export function ToolCallBlock({
         ) : (
           <Icon
             className={cn(
-              "size-3.5 shrink-0 fill-current",
+              "size-3.5 shrink-0",
+              filled && "fill-current",
               phase === "error" && "text-destructive",
             )}
             strokeWidth={1.5}

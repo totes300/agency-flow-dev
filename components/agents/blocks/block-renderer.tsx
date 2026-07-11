@@ -4,6 +4,7 @@ import type { AgentBlock } from "@/lib/agents/blocks"
 import { TextBlock } from "@/components/agents/blocks/text-block"
 import { ReasoningBlock } from "@/components/agents/blocks/reasoning-block"
 import { ToolCallBlock } from "@/components/agents/blocks/tool-call-block"
+import { TableBlock } from "@/components/agents/blocks/table-block"
 
 /**
  * The block vocabulary's single dispatch point (PRD renderer contract):
@@ -27,5 +28,7 @@ export function BlockRenderer({ block }: { block: AgentBlock }) {
           errorText={block.errorText}
         />
       )
+    case "table":
+      return <TableBlock table={block.table} />
   }
 }

@@ -27,7 +27,9 @@
 import { z } from "zod";
 import type { Tool } from "ai";
 import { createTool } from "@convex-dev/agent";
-import { api } from "../_generated/api";
+import { api, internal } from "../_generated/api";
+import { AGENT_TABLE_MARKER, type AgentTable } from "../../lib/agents/table";
+import { formatTimesheetPeriodLabel, monthBounds } from "./timesheetPivot";
 
 export type AgentToolScope = "member" | "admin";
 export type AgentToolKind = "read" | "propose" | "connector";
@@ -109,6 +111,102 @@ const listProjectsTool = createTool({
   },
 });
 
+// ─── Timesheet tool (slice 03 — deterministic half of the Timesheet agent) ──
+
+/** What the model (and the table renderer) receives back. */
+type CollectTimesheetResult =
+  | { message: string }
+  | {
+      block: typeof AGENT_TABLE_MARKER;
+      table: AgentTable;
+      taskCount: number;
+      grandTotalMinutes: number;
+      note: string;
+    };
+
+const collectTimesheetDataTool = createTool({
+  description:
+    "Generate a client timesheet for a period: per-task rows with hours " +
+    "pivoted into work-category columns, plus totals — computed verbatim " +
+    "from the time-tracking database. Provide EITHER month (YYYY-MM) OR " +
+    "startDate+endDate (YYYY-MM-DD). Optional filters: projectIds (from " +
+    "listProjects), categoryNames, billable. The resulting table is shown " +
+    "to the user automatically — never re-type its numbers.",
+  inputSchema: z.object({
+    clientId: z.string().describe("Client id from the listClients tool"),
+    month: z
+      .string()
+      .regex(/^\d{4}-\d{2}$/)
+      .optional()
+      .describe('Calendar month, e.g. "2026-06". Use this OR the date range.'),
+    startDate: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/)
+      .optional()
+      .describe("Range start (YYYY-MM-DD); requires endDate"),
+    endDate: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/)
+      .optional()
+      .describe("Range end (YYYY-MM-DD); requires startDate"),
+    projectIds: z
+      .array(z.string())
+      .optional()
+      .describe("Limit to these project ids (from listProjects)"),
+    categoryNames: z
+      .array(z.string())
+      .optional()
+      .describe("Limit to these work-category names"),
+    billable: z
+      .enum(["all", "billable", "nonBillable"])
+      .optional()
+      .describe("Billability filter (default all)"),
+  }),
+  execute: async (ctx, input): Promise<CollectTimesheetResult> => {
+    if (!input.month && !(input.startDate && input.endDate)) {
+      throw new Error(
+        "Provide either month (YYYY-MM) or both startDate and endDate.",
+      );
+    }
+    if (input.month && (input.startDate || input.endDate)) {
+      throw new Error("Provide month OR a date range, not both.");
+    }
+    const { periodStart, periodEnd } = input.month
+      ? monthBounds(input.month)
+      : { periodStart: input.startDate!, periodEnd: input.endDate! };
+    if (periodEnd < periodStart) {
+      throw new Error("endDate must not be before startDate.");
+    }
+
+    const data = await ctx.runQuery(internal.timesheets.collectTimesheetData, {
+      clientId: input.clientId,
+      periodStart,
+      periodEnd,
+      periodLabel: formatTimesheetPeriodLabel(input),
+      projectIds: input.projectIds,
+      categoryNames: input.categoryNames,
+      billable: input.billable,
+    });
+
+    // Empty period → prose answer, never an empty table (slice 03 AC).
+    if (!data.table) {
+      return {
+        message: `No time entries found for ${data.client.name} in ${data.periodLabel}.`,
+      };
+    }
+    return {
+      block: AGENT_TABLE_MARKER,
+      table: data.table,
+      taskCount: data.rows.length,
+      grandTotalMinutes: data.rows.reduce((sum, r) => sum + r.totalMinutes, 0),
+      note:
+        "The table above is rendered to the user verbatim from the " +
+        "database. Do not repeat or restate its numbers — add brief " +
+        "commentary only.",
+    };
+  },
+});
+
 // ─── Registry ───────────────────────────────────────────────────────────────
 
 export const agentToolRegistry: Record<string, AgentToolEntry> = {
@@ -125,6 +223,16 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
     scope: "member",
     kind: "read",
     tool: listProjectsTool,
+  },
+  collectTimesheetData: {
+    name: "collectTimesheetData",
+    humanDescription:
+      "Generate a client timesheet (per-task hours pivoted by work category).",
+    // The underlying worksheet collector is admin-gated; the tool must
+    // not soften that — members don't even see it in their tool set.
+    scope: "admin",
+    kind: "read",
+    tool: collectTimesheetDataTool,
   },
 };
 

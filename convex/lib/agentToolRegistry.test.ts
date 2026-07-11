@@ -38,26 +38,27 @@ describe("getToolsForAgent", () => {
   });
 
   it("omits admin-scoped tools for members (absent, not erroring)", () => {
-    // Simulate a future admin-scoped entry without mutating the real
-    // registry: current registry has none, so assert via a member run
-    // over every registry name — nothing may be scope-dropped silently
-    // into `dropped` (scope omission and unknown-drop are distinct).
     const names = Object.keys(agentToolRegistry);
     const member = getToolsForAgent(names, false);
     const admin = getToolsForAgent(names, true);
-    // Member set ⊆ admin set; both drop nothing (all names known).
+    // Member set ⊆ admin set; both drop nothing (all names known —
+    // scope omission and unknown-drop are distinct).
     expect(member.dropped).toEqual([]);
     expect(admin.dropped).toEqual([]);
     for (const name of Object.keys(member.tools)) {
       expect(admin.tools[name]).toBeDefined();
     }
-    // Every admin-only entry (none today; guards the invariant when added)
-    // must be missing from the member set.
+    // Every admin-only entry must be missing from the member set.
     for (const [name, entry] of Object.entries(agentToolRegistry)) {
       if (entry.scope === "admin") {
         expect(member.tools[name]).toBeUndefined();
       }
     }
+    // The timesheet collector is the first admin-scoped tool (slice 03):
+    // members must not even see it; admins must.
+    expect(agentToolRegistry.collectTimesheetData.scope).toBe("admin");
+    expect(member.tools.collectTimesheetData).toBeUndefined();
+    expect(admin.tools.collectTimesheetData).toBeDefined();
   });
 
   it("empty whitelist yields an empty tool set", () => {

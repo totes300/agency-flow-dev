@@ -251,7 +251,11 @@ function formatInvoiceScopeLabel(
 
 // ─── Scope resolution ───────────────────────────────────────────────────────
 
-async function resolveScopeEntries(
+// Exported for the agent timesheet collector (convex/timesheets.ts), which
+// loops a client's projects over the same per-project period logic in one
+// transaction. Auth stays with the CALLER — these helpers assume orgId was
+// already derived from an authenticated context.
+export async function resolveScopeEntries(
   ctx: QueryCtx,
   scope: WorksheetScope,
   orgId: string,
@@ -351,7 +355,8 @@ async function resolveScopeEntries(
 
 // ─── Task-row aggregation ───────────────────────────────────────────────────
 
-async function buildTaskRows(
+// Exported for convex/timesheets.ts — see resolveScopeEntries note above.
+export async function buildTaskRows(
   ctx: QueryCtx,
   project: Doc<"projects">,
   entries: Doc<"timeEntries">[],

@@ -57,6 +57,7 @@ import type * as lib_taskActivityIndicators from "../lib/taskActivityIndicators.
 import type * as lib_task_helpers from "../lib/task_helpers.js";
 import type * as lib_timer from "../lib/timer.js";
 import type * as lib_timerEntry from "../lib/timerEntry.js";
+import type * as lib_timesheetPivot from "../lib/timesheetPivot.js";
 import type * as lib_todayPlan from "../lib/todayPlan.js";
 import type * as lib_types from "../lib/types.js";
 import type * as lib_url from "../lib/url.js";
@@ -85,6 +86,7 @@ import type * as taskViewReceipts from "../taskViewReceipts.js";
 import type * as tasks from "../tasks.js";
 import type * as timeEntries from "../timeEntries.js";
 import type * as timer from "../timer.js";
+import type * as timesheets from "../timesheets.js";
 import type * as typingIndicators from "../typingIndicators.js";
 import type * as userRates from "../userRates.js";
 import type * as users from "../users.js";
@@ -149,6 +151,7 @@ declare const fullApi: ApiFromModules<{
   "lib/task_helpers": typeof lib_task_helpers;
   "lib/timer": typeof lib_timer;
   "lib/timerEntry": typeof lib_timerEntry;
+  "lib/timesheetPivot": typeof lib_timesheetPivot;
   "lib/todayPlan": typeof lib_todayPlan;
   "lib/types": typeof lib_types;
   "lib/url": typeof lib_url;
@@ -177,6 +180,7 @@ declare const fullApi: ApiFromModules<{
   tasks: typeof tasks;
   timeEntries: typeof timeEntries;
   timer: typeof timer;
+  timesheets: typeof timesheets;
   typingIndicators: typeof typingIndicators;
   userRates: typeof userRates;
   users: typeof users;

@@ -7,6 +7,8 @@
  * No React, no Convex — unit-tested in blocks.test.ts.
  */
 
+import { isAgentTableOutput, type AgentTable } from "./table";
+
 /**
  * Determinism visual token (US 19), decided here per the PRD: AI prose
  * renders in standard message styling; deterministic values (counts in
@@ -17,7 +19,7 @@
  */
 export const DETERMINISTIC_VALUE_CLASS = "tabular-nums";
 
-/** The renderable subset of the block vocabulary present at slice 02. */
+/** The renderable subset of the block vocabulary (slices 02–03). */
 export type AgentBlock =
   | { kind: "text"; text: string; streaming: boolean }
   | { kind: "reasoning"; text: string; streaming: boolean }
@@ -28,7 +30,8 @@ export type AgentBlock =
       input: unknown;
       output: unknown;
       errorText: string | null;
-    };
+    }
+  | { kind: "table"; table: AgentTable };
 
 /** Structural view of an AI-SDK UIMessage part — keeps this module pure. */
 export type MessagePartLike = { type: string } & Record<string, unknown>;
@@ -71,11 +74,27 @@ export function classifyPart(part: MessagePartLike): AgentBlock | null {
   };
 }
 
-/** All renderable blocks of a message, in part order. */
+/**
+ * All renderable blocks of a message, in part order. A finished tool
+ * call whose output carries the table contract expands into TWO blocks:
+ * the quiet ghost row, then the table itself — the model never "writes"
+ * a table, tools do (D1).
+ */
 export function classifyParts(parts: MessagePartLike[]): AgentBlock[] {
-  return parts
-    .map(classifyPart)
-    .filter((block): block is AgentBlock => block !== null);
+  const blocks: AgentBlock[] = [];
+  for (const part of parts) {
+    const block = classifyPart(part);
+    if (block === null) continue;
+    blocks.push(block);
+    if (
+      block.kind === "tool" &&
+      block.phase === "done" &&
+      isAgentTableOutput(block.output)
+    ) {
+      blocks.push({ kind: "table", table: block.output.table });
+    }
+  }
+  return blocks;
 }
 
 // ─── Tool display (verb + deterministic result summary) ────────────────────
@@ -106,6 +125,15 @@ const TOOL_DISPLAY: Record<string, ToolDisplay> = {
     runningLabel: "Reading project list",
     doneLabel: "Read project list",
     summarize: countOf("project"),
+  },
+  collectTimesheetData: {
+    runningLabel: "Collecting timesheet data",
+    doneLabel: "Collected timesheet data",
+    // Count comes from the deterministic table payload, not model text.
+    summarize: (output) =>
+      isAgentTableOutput(output)
+        ? `${output.table.rows.length} task${output.table.rows.length === 1 ? "" : "s"}`
+        : null,
   },
 };
 

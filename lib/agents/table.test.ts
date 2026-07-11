@@ -124,6 +124,8 @@ describe("classifyParts table expansion", () => {
     expect(blocks.map((b) => b.kind)).toEqual(["tool", "table"]);
     expect(blocks[1]).toMatchObject({
       table: { title: "Timesheet — Pragmatico — June 2026" },
+      // No artifact ref on the output → the inline sheet has nothing to open.
+      artifactId: null,
     });
   });
 
@@ -180,6 +182,9 @@ describe("classifyParts table expansion", () => {
       },
     ]);
     expect(blocks.map((b) => b.kind)).toEqual(["tool", "table", "artifact"]);
+    // The table block carries the same artifact ref, so the inline sheet's
+    // "Open full sheet" can open the canvas without the sibling chip.
+    expect(blocks[1]).toMatchObject({ artifactId: "art123" });
     expect(blocks[2]).toMatchObject({
       artifactId: "art123",
       name: "Timesheet — Pragmatico — June 2026",

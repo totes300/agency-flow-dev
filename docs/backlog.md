@@ -3257,3 +3257,62 @@ produce the first artifact.
   VIEW that lists other users' threads/artifacts is slice 11
 - No canvas history/back-forward affordance beyond the URL param; switching
   artifacts is via each block's Open. A canvas artifact switcher is later polish
+
+### Sheet rendering v2 — spreadsheet-grade table treatment ✅ (2026-07-11)
+
+Design-driven rebuild of the agent table render layer after Adam rejected the
+plain shadcn-Table look ("AI slop" vs Comet/Codex references). Design locked
+via two reviewed mockups (v1 → v2; summary strip explicitly REJECTED as
+inauthentic — totals live only in the sticky footer, like a real sheet).
+Pure render change: the `table` contract, `agentTableToCsv`, and the
+determinism split are untouched.
+
+- [x] `lib/agents/sheet.ts` (pure, 14 tests): `sortTableRows` (minutes
+      numeric, empties last in BOTH directions, prose/unknown keys refuse),
+      `countFlaggedRows`/`isFlaggedRow` (flagged sentinel in any prose cell),
+      `categoryShares` (per-category share of the grand total from the totals
+      row), `grandTotalColumnKey` (pivot convention: LAST minutes column),
+      `inlinePreviewColumns` (first text + first prose + all minutes; dates
+      and secondary columns stay in the canvas)
+- [x] `components/agents/sheet/sheet-grid.tsx` — one shared renderer, two
+      variants. **Canvas**: full gridlines (inner `border/50`, structural
+      `border`), 46px row-number gutter (no A/B/C letters — read-only),
+      frozen first column with scroll-conditional shadow, sticky header +
+      sticky totals footer, 40px rows with 2-line prose clamp, click/Enter/
+      Space row-expand (`aria-expanded`), read-only sort (real buttons,
+      hover-only glyphs, `aria-sort`, live renumbering), amber gutter
+      edge-mark on flagged rows, faint `–` in empty minute cells (empty ≠
+      zero), 2px category share bars under footer sums (the one aesthetic
+      risk). **Inline**: column subset + first 4 rows + explicit "+N more
+      rows" affordance (fade-out rejected as dishonest), footer with grand
+      total, amber flag count, "Open full sheet →" (opens the canvas via the
+      artifact ref)
+- [x] `sheet-cell.tsx`: deterministic cell text via the same shared format
+      helpers the CSV export uses (zero-padded HH:MM per `formatMinutes` —
+      grid and export match cell-for-cell); ProseCellContent (flag / muted
+      italic unavailable / clamped prose with native title tooltip)
+- [x] Block contract: `table` block now carries `artifactId` (the artifact
+      ref from the same tool output) so the inline sheet can open the canvas
+      without depending on the sibling artifact chip; classifier + tests
+      updated
+- [x] Rewired: `TableBlock` → thin wrapper on SheetGrid inline;
+      `AgentCanvas` → SheetGrid canvas variant, sheet flush in the panel
+      owning its scroll container (sticky/frozen mechanics)
+
+### Verification (sheet v2)
+
+`npx tsc --noEmit` 0 errors; eslint clean on all touched files; vitest 65/65
+green across the agent lib suites (14 new in sheet.test.ts); `npm run build`
+succeeds. Visual walkthrough (gridlines both themes, frozen-pane shadow only
+when scrolled, sort + renumber, row expand, flagged edge-mark, share bars,
+inline "+N more" → canvas) queued for the signed-in gate with slices 05+06.
+
+### TODOs deferred (sheet v2)
+
+- Density toggle (comfortable/compact) — mockup marked it optional; not built
+- Sorting is per-mount UI state, deliberately NOT in the URL (a transient
+  view preference on a read-only sheet, unlike list-page filters)
+- Sticky-column hover uses solid `bg-muted` (translucent hovers bleed through
+  sticky cells); revisit only if the hover reads too strong in review
+- Inline preview drops date columns by design; if reviewers miss them, the
+  subset rule lives in one place (`inlinePreviewColumns`)

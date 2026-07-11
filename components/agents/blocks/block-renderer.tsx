@@ -30,7 +30,7 @@ export function BlockRenderer({ block }: { block: AgentBlock }) {
         />
       )
     case "table":
-      return <TableBlock table={block.table} />
+      return <TableBlock table={block.table} artifactId={block.artifactId} />
     case "artifact":
       return (
         <ArtifactBlock

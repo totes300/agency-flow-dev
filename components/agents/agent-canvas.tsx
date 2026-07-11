@@ -12,7 +12,7 @@ import {
 import { api } from "@/convex/_generated/api"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
-import { TableBlock } from "@/components/agents/blocks/table-block"
+import { SheetGrid } from "@/components/agents/sheet/sheet-grid"
 import { useAgentCanvas } from "@/lib/hooks/use-agent-canvas"
 import { agentTableToCsv } from "@/lib/agents/table-csv"
 import { downloadCsv } from "@/lib/download"
@@ -139,13 +139,17 @@ function CanvasPanel({ artifactId }: { artifactId: string }) {
           <XIcon className="size-4" />
         </Button>
       </header>
-      <div className="min-h-0 flex-1 overflow-auto p-4">
+      <div className="flex min-h-0 flex-1 flex-col">
         {artifact === undefined ? (
-          <CanvasSkeleton />
+          <div className="p-4">
+            <CanvasSkeleton />
+          </div>
         ) : artifact === null ? (
           <CanvasEmpty />
         ) : (
-          <TableBlock table={artifact.table} showTitle={false} />
+          // The sheet sits flush in the panel and owns its scroll container,
+          // so the sticky header/footer and frozen column work (slice-06 v2).
+          <SheetGrid variant="canvas" table={artifact.table} />
         )}
       </div>
     </aside>
@@ -174,7 +178,7 @@ function CanvasSkeleton() {
 
 function CanvasEmpty() {
   return (
-    <div className="flex h-full items-center justify-center px-6 text-center text-sm text-muted-foreground">
+    <div className="flex flex-1 items-center justify-center px-6 text-center text-sm text-muted-foreground">
       This artifact is no longer available.
     </div>
   )

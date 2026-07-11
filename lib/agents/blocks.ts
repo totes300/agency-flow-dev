@@ -32,7 +32,16 @@ export type AgentBlock =
       output: unknown;
       errorText: string | null;
     }
-  | { kind: "table"; table: AgentTable }
+  | {
+      kind: "table";
+      table: AgentTable;
+      /**
+       * The stored artifact produced by the same tool call, when there is
+       * one — lets the inline sheet's "Open full sheet" affordance open the
+       * canvas without depending on the sibling artifact block.
+       */
+      artifactId: string | null;
+    }
   | {
       kind: "artifact";
       artifactId: string;
@@ -117,10 +126,14 @@ export function classifyParts(parts: MessagePartLike[]): AgentBlock[] {
       // A finished tool call expands into its result blocks in order: the
       // in-chat table, then the artifact chip that opens the same data in the
       // canvas. The model authors neither — tools do (D1).
-      if (isAgentTableOutput(block.output)) {
-        blocks.push({ kind: "table", table: block.output.table });
-      }
       const artifact = extractArtifactRef(block.output);
+      if (isAgentTableOutput(block.output)) {
+        blocks.push({
+          kind: "table",
+          table: block.output.table,
+          artifactId: artifact?.artifactId ?? null,
+        });
+      }
       if (artifact) {
         blocks.push({
           kind: "artifact",

@@ -267,7 +267,13 @@ export const devSeedAgents = internalMutation({
       const current = existingSkills.find((s) => s.name === seed.name);
       let skillId: Id<"skills">;
       if (current) {
-        await ctx.db.patch(current._id, { ...config, updatedAt: now });
+        // Re-seed restores the canonical active state — clears a prior archive
+        // so the demo skills reappear (un-archive is otherwise out of scope).
+        await ctx.db.patch(current._id, {
+          ...config,
+          archivedAt: undefined,
+          updatedAt: now,
+        });
         skillId = current._id;
       } else {
         skillId = await ctx.db.insert("skills", {

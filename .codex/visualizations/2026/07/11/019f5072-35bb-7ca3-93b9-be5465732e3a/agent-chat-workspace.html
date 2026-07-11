@@ -1,0 +1,393 @@
+<div id="agent-chat-workspace">
+  <style>
+    #agent-chat-workspace {
+      color: var(--foreground);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      background: var(--background);
+    }
+    #agent-chat-workspace .workspace {
+      display: grid;
+      grid-template-columns: 156px minmax(270px, 1fr) 252px;
+      min-height: 650px;
+    }
+    #agent-chat-workspace .rail,
+    #agent-chat-workspace .chat,
+    #agent-chat-workspace .inspector { min-width: 0; }
+    #agent-chat-workspace .rail {
+      border-right: 1px solid var(--border);
+      padding: 12px 9px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      background: color-mix(in srgb, var(--muted) 44%, var(--background));
+    }
+    #agent-chat-workspace .brand-row,
+    #agent-chat-workspace .topbar,
+    #agent-chat-workspace .artifact-head,
+    #agent-chat-workspace .composer-actions,
+    #agent-chat-workspace .file-head,
+    #agent-chat-workspace .total-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    #agent-chat-workspace .brand-row { padding: 0 5px; }
+    #agent-chat-workspace .rail-section { display: grid; gap: 4px; }
+    #agent-chat-workspace .rail-label {
+      padding: 0 6px 3px;
+      text-transform: uppercase;
+      letter-spacing: .07em;
+    }
+    #agent-chat-workspace .rail .btn {
+      width: 100%;
+      justify-content: flex-start;
+      text-align: left;
+    }
+    #agent-chat-workspace .rail .btn span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #agent-chat-workspace .rail .bottom { margin-top: auto; }
+    #agent-chat-workspace .chat {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+    }
+    #agent-chat-workspace .topbar {
+      min-height: 52px;
+      padding: 8px 14px;
+      border-bottom: 1px solid var(--border);
+    }
+    #agent-chat-workspace .topbar-title { min-width: 0; }
+    #agent-chat-workspace .topbar-title strong,
+    #agent-chat-workspace .topbar-title span { display: block; }
+    #agent-chat-workspace .messages {
+      padding: 18px 20px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    #agent-chat-workspace .user-message {
+      align-self: flex-end;
+      max-width: 82%;
+      padding: 10px 12px;
+      border-radius: 14px 14px 3px 14px;
+      background: var(--muted);
+      color: var(--foreground);
+    }
+    #agent-chat-workspace .agent-message { display: grid; gap: 10px; }
+    #agent-chat-workspace .agent-label {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+    #agent-chat-workspace .agent-mark,
+    #agent-chat-workspace .file-icon {
+      width: 26px;
+      height: 26px;
+      border-radius: 7px;
+      display: grid;
+      place-items: center;
+      background: var(--primary);
+      color: var(--primary-foreground);
+      flex: 0 0 auto;
+    }
+    #agent-chat-workspace details {
+      border-left: 2px solid var(--border);
+      padding-left: 11px;
+    }
+    #agent-chat-workspace summary { cursor: pointer; }
+    #agent-chat-workspace .run-log {
+      display: grid;
+      gap: 7px;
+      margin-top: 10px;
+    }
+    #agent-chat-workspace .log-row {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 8px;
+      align-items: start;
+    }
+    #agent-chat-workspace .log-check { color: var(--viz-series-1); }
+    #agent-chat-workspace .log-ai { color: var(--viz-series-3); }
+    #agent-chat-workspace .artifact-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    #agent-chat-workspace .artifact-button {
+      text-align: left;
+      white-space: normal;
+      display: grid;
+      gap: 8px;
+      min-width: 0;
+    }
+    #agent-chat-workspace .artifact-button strong,
+    #agent-chat-workspace .artifact-button span { display: block; }
+    #agent-chat-workspace .artifact-button strong {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #agent-chat-workspace .composer {
+      margin: 0 16px 14px;
+      padding: 10px 11px;
+      border: 1px solid var(--input);
+      border-radius: 13px;
+      display: grid;
+      gap: 8px;
+      background: var(--background);
+    }
+    #agent-chat-workspace .composer textarea {
+      min-height: 45px;
+      border: 0;
+      padding: 0;
+      resize: none;
+      background: transparent;
+      color: var(--foreground);
+      width: 100%;
+    }
+    #agent-chat-workspace .inspector {
+      border-left: 1px solid var(--border);
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+    }
+    #agent-chat-workspace .inspector-top {
+      min-height: 52px;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex-wrap: wrap;
+    }
+    #agent-chat-workspace .file-tabs {
+      padding: 8px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 5px;
+      border-bottom: 1px solid var(--border);
+    }
+    #agent-chat-workspace .file-tabs .btn {
+      min-width: 0;
+      justify-content: flex-start;
+    }
+    #agent-chat-workspace .file-tabs .btn span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #agent-chat-workspace .preview {
+      display: none;
+      padding: 11px;
+      align-content: start;
+    }
+    #agent-chat-workspace .preview.is-active { display: grid; gap: 11px; }
+    #agent-chat-workspace .document { display: grid; gap: 13px; }
+    #agent-chat-workspace .doc-brand {
+      text-transform: uppercase;
+      letter-spacing: .08em;
+    }
+    #agent-chat-workspace .doc-parties {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    #agent-chat-workspace .doc-lines,
+    #agent-chat-workspace .sheet-table { border-top: 1px solid var(--border); }
+    #agent-chat-workspace .doc-line,
+    #agent-chat-workspace .sheet-row {
+      display: grid;
+      gap: 7px;
+      padding: 7px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    #agent-chat-workspace .doc-line { grid-template-columns: minmax(0, 1fr) auto; }
+    #agent-chat-workspace .sheet-row { grid-template-columns: minmax(0, 1.3fr) .7fr .55fr; }
+    #agent-chat-workspace .sheet-row.header { color: var(--muted-foreground); }
+    #agent-chat-workspace .verified {
+      border-left: 3px solid var(--viz-series-1);
+      padding-left: 10px;
+    }
+    #agent-chat-workspace .ai-note {
+      border-left: 3px solid var(--viz-series-3);
+      padding-left: 10px;
+    }
+    #agent-chat-workspace .preview-actions {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 6px;
+    }
+    #agent-chat-workspace .activity-status { min-height: 18px; }
+    @media (max-width: 760px) {
+      #agent-chat-workspace .workspace { grid-template-columns: 132px minmax(250px, 1fr); }
+      #agent-chat-workspace .inspector {
+        grid-column: 1 / -1;
+        border-left: 0;
+        border-top: 1px solid var(--border);
+      }
+      #agent-chat-workspace .preview { min-height: 300px; }
+    }
+    @media (max-width: 470px) {
+      #agent-chat-workspace .workspace { grid-template-columns: 1fr; }
+      #agent-chat-workspace .rail { border-right: 0; border-bottom: 1px solid var(--border); }
+      #agent-chat-workspace .rail .bottom { margin-top: 0; }
+      #agent-chat-workspace .artifact-grid { grid-template-columns: 1fr; }
+      #agent-chat-workspace .doc-parties { grid-template-columns: 1fr; }
+    }
+  </style>
+
+  <div class="workspace">
+    <aside class="rail" aria-label="Agents and conversations">
+      <div class="brand-row"><strong>Agency Flow</strong><button class="btn btn-ghost" type="button" aria-label="Workspace settings"><i data-lucide="settings-2" aria-hidden="true"></i></button></div>
+      <button class="btn btn-primary" type="button"><i data-lucide="square-pen" aria-hidden="true"></i><span>New task</span></button>
+
+      <nav class="rail-section" aria-label="Agent workspace navigation">
+        <button class="btn btn-ghost" type="button"><i data-lucide="inbox" aria-hidden="true"></i><span>Review</span><span class="viz-badge">2</span></button>
+        <button class="btn btn-ghost" type="button"><i data-lucide="calendar-clock" aria-hidden="true"></i><span>Scheduled</span></button>
+        <button class="btn btn-ghost" type="button"><i data-lucide="blocks" aria-hidden="true"></i><span>Skills</span></button>
+      </nav>
+
+      <div class="rail-section">
+        <span class="rail-label text-small text-muted">Agents</span>
+        <button class="btn is-selected" type="button"><i data-lucide="receipt-text" aria-hidden="true"></i><span>Invoice Agent</span></button>
+        <button class="btn btn-ghost" type="button"><i data-lucide="file-chart-column" aria-hidden="true"></i><span>Report Agent</span></button>
+        <button class="btn btn-ghost" type="button"><i data-lucide="scan-search" aria-hidden="true"></i><span>Timesheet Auditor</span></button>
+      </div>
+
+      <div class="rail-section">
+        <span class="rail-label text-small text-muted">Recent</span>
+        <button class="btn is-selected" type="button"><span>Acme June billing</span></button>
+        <button class="btn btn-ghost" type="button"><span>Northstar rate issue</span></button>
+        <button class="btn btn-ghost" type="button"><span>May client reports</span></button>
+      </div>
+
+      <div class="rail-section bottom">
+        <button class="btn btn-ghost" type="button"><i data-lucide="circle-help" aria-hidden="true"></i><span>Help</span></button>
+      </div>
+    </aside>
+
+    <main class="chat">
+      <header class="topbar">
+        <div class="topbar-title"><strong>Acme June billing</strong><span class="text-small text-muted">Invoice Agent · exact financial mode</span></div>
+        <span class="viz-badge">Ready for review</span>
+      </header>
+
+      <div class="messages">
+        <div class="user-message">Készítsd el az Acme júniusi invoice draftját és a hozzá tartozó timesheetet.</div>
+
+        <article class="agent-message">
+          <div class="agent-label"><span class="agent-mark"><i data-lucide="receipt-text" aria-hidden="true"></i></span><strong>Invoice Agent</strong></div>
+          <p>Összegyűjtöttem az időszak lezárt, billable munkáit. A pénzügyi motor kiszámolta a tételeket és lefuttatta az ellenőrzéseket.</p>
+          <details open>
+            <summary><strong>Run log</strong> <span class="text-small text-muted">7 completed steps</span></summary>
+            <div class="run-log">
+              <div class="log-row"><i class="log-check" data-lucide="check" aria-hidden="true"></i><span><strong>System query:</strong> 42 invoiceable time entry found</span></div>
+              <div class="log-row"><i class="log-check" data-lucide="check" aria-hidden="true"></i><span><strong>System calculation:</strong> 148h 00m verified</span></div>
+              <div class="log-row"><i class="log-check" data-lucide="check" aria-hidden="true"></i><span><strong>Billing engine:</strong> 3 saved rate rules applied</span></div>
+              <div class="log-row"><i class="log-check" data-lucide="check" aria-hidden="true"></i><span><strong>Validation:</strong> no duplicates, one currency, totals reconcile</span></div>
+              <div class="log-row"><i class="log-ai" data-lucide="sparkles" aria-hidden="true"></i><span><strong>AI interpretation:</strong> grouped work into 3 client-readable categories</span></div>
+            </div>
+          </details>
+
+          <p>Két ellenőrizhető output készült. Az invoice még draft; semmi nem lett finalizálva vagy kiküldve.</p>
+          <div class="artifact-grid">
+            <button class="btn artifact-button is-selected" type="button" data-file="invoice">
+              <span class="artifact-head"><span class="file-icon"><i data-lucide="file-text" aria-hidden="true"></i></span><span class="viz-badge">Draft</span></span>
+              <span><strong>Acme-June-Invoice</strong><span class="text-small text-muted">€14,320 · verified totals</span></span>
+            </button>
+            <button class="btn artifact-button" type="button" data-file="timesheet">
+              <span class="artifact-head"><span class="file-icon"><i data-lucide="sheet" aria-hidden="true"></i></span><span class="viz-badge">XLSX</span></span>
+              <span><strong>Acme-June-Timesheet</strong><span class="text-small text-muted">42 entries · 148 hours</span></span>
+            </button>
+          </div>
+        </article>
+      </div>
+
+      <div class="composer">
+        <label class="sr-only" for="agent-follow-up">Ask a follow-up</label>
+        <textarea id="agent-follow-up" placeholder="Ask a follow-up…"></textarea>
+        <div class="composer-actions">
+          <button class="btn btn-ghost" type="button"><i data-lucide="plus" aria-hidden="true"></i> Add context</button>
+          <button class="btn btn-primary" type="button" aria-label="Send message"><i data-lucide="arrow-up" aria-hidden="true"></i></button>
+        </div>
+      </div>
+    </main>
+
+    <aside class="inspector" aria-label="Generated files and evidence">
+      <div class="inspector-top">
+        <button class="btn is-selected" type="button">Files</button>
+        <button class="btn btn-ghost" type="button">Evidence</button>
+        <button class="btn btn-ghost" type="button">Checks</button>
+      </div>
+      <div class="file-tabs" role="group" aria-label="Generated files">
+        <button class="btn is-selected" type="button" data-file="invoice"><i data-lucide="file-text" aria-hidden="true"></i><span>Invoice</span></button>
+        <button class="btn" type="button" data-file="timesheet"><i data-lucide="sheet" aria-hidden="true"></i><span>Timesheet</span></button>
+      </div>
+
+      <section class="preview is-active" data-preview="invoice">
+        <div class="card document">
+          <div class="file-head"><span class="doc-brand text-small text-muted">Agency Flow</span><span class="viz-badge">Draft</span></div>
+          <div><h3>Invoice</h3><span class="text-small text-muted">June 1–30, 2026</span></div>
+          <div class="doc-parties text-small"><span><span class="text-muted">From</span><br>North Studio</span><span><span class="text-muted">Bill to</span><br>Acme Studio</span></div>
+          <div class="doc-lines">
+            <div class="doc-line"><span>Product design<br><span class="text-small text-muted">64h × €95</span></span><strong>€6,080</strong></div>
+            <div class="doc-line"><span>Development<br><span class="text-small text-muted">72h × €100</span></span><strong>€7,200</strong></div>
+            <div class="doc-line"><span>Project management<br><span class="text-small text-muted">12h × €86.67</span></span><strong>€1,040</strong></div>
+          </div>
+          <div class="total-row"><strong>Total</strong><strong>€14,320</strong></div>
+          <div class="verified"><strong>System verified</strong><div class="text-small">42 entries · rates found · EUR only · totals reconcile</div></div>
+          <div class="preview-actions">
+            <button class="btn btn-primary btn-block" type="button" id="approve-invoice">Approve draft</button>
+            <button class="btn btn-block" type="button">Open full invoice</button>
+          </div>
+          <div id="invoice-status" class="activity-status text-small text-muted" aria-live="polite">Not finalized or sent.</div>
+        </div>
+      </section>
+
+      <section class="preview" data-preview="timesheet">
+        <div class="card document">
+          <div class="file-head"><span class="doc-brand text-small text-muted">Acme · June 2026</span><span class="viz-badge">XLSX</span></div>
+          <div><h3>Timesheet</h3><span class="text-small text-muted">Rendered spreadsheet preview</span></div>
+          <div class="sheet-table text-small">
+            <div class="sheet-row header"><span>Task</span><span>Person</span><span>Hours</span></div>
+            <div class="sheet-row"><span>Design system</span><span>Anna</span><strong>32.0</strong></div>
+            <div class="sheet-row"><span>Mobile screens</span><span>Anna</span><strong>32.0</strong></div>
+            <div class="sheet-row"><span>Frontend build</span><span>Márk</span><strong>72.0</strong></div>
+            <div class="sheet-row"><span>Coordination</span><span>Ádám</span><strong>12.0</strong></div>
+            <div class="sheet-row"><strong>Total</strong><span></span><strong>148.0</strong></div>
+          </div>
+          <div class="verified"><strong>System generated</strong><div class="text-small">Values come directly from locked time-entry records.</div></div>
+          <div class="ai-note"><strong>AI contribution</strong><div class="text-small">Only the client-readable category labels were interpreted.</div></div>
+          <div class="preview-actions">
+            <button class="btn btn-primary btn-block" type="button">Export .xlsx</button>
+            <button class="btn btn-block" type="button">View 42 source entries</button>
+          </div>
+        </div>
+      </section>
+    </aside>
+  </div>
+
+  <script>
+    (() => {
+      const root = document.getElementById('agent-chat-workspace');
+      const fileButtons = root.querySelectorAll('[data-file]');
+      const previews = root.querySelectorAll('[data-preview]');
+
+      function showFile(name) {
+        previews.forEach((preview) => preview.classList.toggle('is-active', preview.dataset.preview === name));
+        fileButtons.forEach((button) => button.classList.toggle('is-selected', button.dataset.file === name));
+      }
+
+      fileButtons.forEach((button) => button.addEventListener('click', () => showFile(button.dataset.file)));
+      root.querySelector('#approve-invoice').addEventListener('click', (event) => {
+        event.currentTarget.textContent = 'Approved';
+        event.currentTarget.disabled = true;
+        root.querySelector('#invoice-status').textContent = 'Draft approved. Finalization and sending remain separate actions.';
+      });
+    })();
+  </script>
+</div>

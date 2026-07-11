@@ -140,6 +140,18 @@ export const MyTaskRow = memo(function MyTaskRow({
           <span className={cn("truncate text-sm font-medium", isCompleted && "line-through text-muted-foreground/60")}>
             {task.title}
           </span>
+          {/* Day-planning toggle — inline by the title, unified across the app.
+              In the Today group it stays hidden until hover (the header already
+              says "Today", so no redundant per-row badge); on status rows it is
+              the dashed "Add to today", on Earlier rows "Move to today". */}
+          {!isCompleted ? (
+            <AddToTodayButton
+              taskId={task._id as Id<"tasks">}
+              inToday={isTodayRow ?? false}
+              moveToToday={earlier}
+              todayImplied={isTodayRow ?? false}
+            />
+          ) : null}
         </div>
 
         {/* Right columns — fixed widths, always present */}
@@ -149,16 +161,6 @@ export const MyTaskRow = memo(function MyTaskRow({
             <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/50">
               {earlierAgeLabel}
             </span>
-          ) : null}
-
-          {/* Sun gesture: add on status rows, remove (filled) on Today rows,
-              "move to today" on Earlier rows */}
-          {!isCompleted ? (
-            <AddToTodayButton
-              taskId={task._id as Id<"tasks">}
-              inToday={isTodayRow ?? false}
-              moveToToday={earlier}
-            />
           ) : null}
 
           {/* Assignment mismatch — Today rows where the plan wins over assignment */}

@@ -6,6 +6,7 @@ import { SunIcon } from "lucide-react"
 import { api } from "@/convex/_generated/api"
 import { toast } from "sonner"
 import { toastError } from "@/lib/toast-helpers"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 import type { Id } from "@/convex/_generated/dataModel"
 
@@ -16,31 +17,40 @@ const REMOVAL_TOASTS: Record<"deleted" | "trimmed" | "split", string> = {
 }
 
 /**
- * The sun gesture — the single shared control for personal day-planning.
+ * The single shared day-planning affordance — a small inline chip that sits
+ * next to the task title (where the eye lands), same everywhere it appears.
  *
- * States:
- * - default (not in Today): ghost outline sun; hover-revealed on desktop via
- *   the parent's `group/row`, always visible muted on touch (no hover there)
- * - active (in Today): filled amber sun, always visible — removal is the
- *   mirror image of adding
- * - pending: dimmed while a mutation round-trips (no optimistic flip in v1)
- *
- * Toasts speak in plan terms so the mental model teaches itself.
+ * States (the chip never repeats what its container already says):
+ * - not in today → hover-revealed DASHED "Add to today" (or "Move to today"
+ *   on Earlier rows). Quiet until you hover the row — non-intrusive.
+ * - in today → SOLID amber "Today" chip. Persistent by default so it is
+ *   spottable in a mixed list (/tasks). When `todayImplied` is set (the My
+ *   Tasks "Today" group, whose header already says Today), the redundant
+ *   badge is dropped entirely — hover reveals only a bare amber remove-sun.
+ * - pending → dimmed while the mutation round-trips (no optimistic flip).
  */
 export function AddToTodayButton({
   taskId,
   inToday,
   moveToToday = false,
+  todayImplied = false,
   className,
 }: {
   taskId: Id<"tasks">
   inToday: boolean
   /**
-   * Earlier-row variant: the add path is framed as "move to today" (the old
-   * segment stays as history). Only affects copy — the mutation is the same
+   * Earlier-row framing: the add path reads as "move to today" (the old
+   * segment stays as history). Copy only — the mutation is the same
    * idempotent addToToday.
    */
   moveToToday?: boolean
+  /**
+   * The surrounding container already communicates "today" (e.g. the My Tasks
+   * "Today" group). When true, the in-today chip is NOT shown persistently —
+   * it reveals on hover only, as the quick "remove from today" affordance, so
+   * the state is not redundantly repeated on every row.
+   */
+  todayImplied?: boolean
   className?: string
 }) {
   const addToToday = useMutation(api.planner.addToToday)
@@ -48,6 +58,12 @@ export function AddToTodayButton({
   const [pending, setPending] = useState(false)
 
   const addLabel = moveToToday ? "Move to today" : "Add to today"
+  const label = inToday ? "Remove from today" : addLabel
+
+  // In today AND the container already says so (the My Tasks "Today" group):
+  // drop the redundant badge entirely — hover reveals a bare "remove from
+  // today" sun, no repeated "Today" label.
+  const isRemoveOnly = inToday && todayImplied
 
   const handleClick = (e: React.MouseEvent) => {
     e.stopPropagation()
@@ -76,22 +92,36 @@ export function AddToTodayButton({
   }
 
   return (
-    <button
-      type="button"
-      onClick={handleClick}
-      disabled={pending}
-      aria-label={inToday ? "Remove from today" : addLabel}
-      title={inToday ? "Remove from today" : addLabel}
-      className={cn(
-        "flex size-6 shrink-0 items-center justify-center rounded-md outline-hidden transition-[color,opacity] hover:bg-muted focus-visible:opacity-100",
-        inToday
-          ? "text-amber-500 hover:text-amber-600"
-          : "text-muted-foreground/60 hover:text-foreground opacity-0 group-hover/row:opacity-100 pointer-coarse:opacity-60",
-        pending && "opacity-40",
-        className,
-      )}
-    >
-      <SunIcon className={cn("size-4", inToday && "fill-amber-500/90")} />
-    </button>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          onClick={handleClick}
+          disabled={pending}
+          aria-label={label}
+          className={cn(
+            "flex shrink-0 items-center rounded-md outline-hidden transition-[color,background-color,border-color,opacity]",
+            isRemoveOnly
+              ? // Today group: no persistent badge, no redundant word — hover
+                // reveals a bare amber remove-sun.
+                "size-6 justify-center text-amber-500 hover:bg-muted opacity-0 focus-visible:opacity-100 group-hover/row:opacity-100 pointer-coarse:opacity-100"
+              : cn(
+                  "gap-1 border px-1.5 py-0.5 text-[11px] font-medium leading-none",
+                  inToday
+                    ? "border-transparent bg-amber-500/10 text-amber-600 hover:bg-amber-500/15"
+                    : "border-dashed border-border/70 text-muted-foreground/70 opacity-0 hover:border-amber-500/50 hover:text-foreground focus-visible:opacity-100 group-hover/row:opacity-100 pointer-coarse:opacity-100",
+                ),
+            pending && "opacity-40",
+            className,
+          )}
+        >
+          <SunIcon
+            className={cn(isRemoveOnly ? "size-4" : "size-3", inToday && "fill-amber-500/90")}
+          />
+          {isRemoveOnly ? null : inToday ? "Today" : addLabel}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
   )
 }

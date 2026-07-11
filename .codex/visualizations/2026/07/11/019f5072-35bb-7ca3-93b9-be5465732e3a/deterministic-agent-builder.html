@@ -1,0 +1,282 @@
+<div id="deterministic-agent-builder">
+  <style>
+    #deterministic-agent-builder {
+      color: var(--foreground);
+      display: grid;
+      gap: 20px;
+    }
+    #deterministic-agent-builder .core-rule {
+      border-left: 4px solid var(--viz-series-1);
+      padding-left: 14px;
+    }
+    #deterministic-agent-builder .core-rule p { margin: 4px 0 0; }
+    #deterministic-agent-builder .template-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+    #deterministic-agent-builder .template-grid .btn {
+      min-height: 70px;
+      text-align: left;
+      white-space: normal;
+    }
+    #deterministic-agent-builder .builder-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 22px;
+      align-items: start;
+    }
+    #deterministic-agent-builder .form-stack,
+    #deterministic-agent-builder .preview-stack {
+      display: grid;
+      gap: 14px;
+    }
+    #deterministic-agent-builder textarea { min-height: 92px; resize: vertical; }
+    #deterministic-agent-builder .mode-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    #deterministic-agent-builder .mode-row .btn {
+      white-space: normal;
+      text-align: left;
+    }
+    #deterministic-agent-builder .flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 18px;
+      align-items: stretch;
+    }
+    #deterministic-agent-builder .flow-step {
+      position: relative;
+      padding: 10px;
+      background: color-mix(in srgb, var(--viz-series-1) 10%, transparent);
+      min-width: 0;
+    }
+    #deterministic-agent-builder .flow-step:not(:last-child)::after {
+      content: "→";
+      position: absolute;
+      right: -15px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--muted-foreground);
+    }
+    #deterministic-agent-builder .flow-step strong,
+    #deterministic-agent-builder .flow-step span { display: block; }
+    #deterministic-agent-builder .flow-step span { margin-top: 3px; }
+    #deterministic-agent-builder .blueprint {
+      border-left: 3px solid var(--border);
+      padding-left: 12px;
+      display: grid;
+      gap: 8px;
+    }
+    #deterministic-agent-builder .blueprint-row {
+      display: grid;
+      grid-template-columns: 90px minmax(0, 1fr);
+      gap: 8px;
+    }
+    #deterministic-agent-builder .result {
+      padding: 12px;
+      background: var(--muted);
+      color: var(--foreground);
+    }
+    #deterministic-agent-builder .warning {
+      color: var(--destructive);
+    }
+    #deterministic-agent-builder .safe {
+      color: var(--foreground);
+    }
+    @media (max-width: 620px) {
+      #deterministic-agent-builder .template-grid,
+      #deterministic-agent-builder .builder-grid,
+      #deterministic-agent-builder .mode-row { grid-template-columns: 1fr; }
+      #deterministic-agent-builder .flow { grid-template-columns: 1fr; }
+      #deterministic-agent-builder .flow-step:not(:last-child)::after {
+        content: "↓";
+        right: auto;
+        left: 50%;
+        top: auto;
+        bottom: -18px;
+        transform: translateX(-50%);
+      }
+    }
+  </style>
+
+  <section class="core-rule" aria-label="Core design rule">
+    <strong>To get the same answer 10 out of 10 times, the saved agent must become a fixed recipe.</strong>
+    <p class="text-muted">You may describe the recipe in plain language while creating it. When it runs, exact filters, calculations, and templates do the work.</p>
+  </section>
+
+  <section aria-labelledby="job-heading">
+    <h3 id="job-heading">1. Choose a job</h3>
+    <div class="template-grid" role="group" aria-label="Agent job templates">
+      <button class="btn is-selected" type="button" data-template="summary" aria-pressed="true">Client work summary<br><span class="text-small text-muted">Read work and report hours</span></button>
+      <button class="btn" type="button" data-template="invoice" aria-pressed="false">Monthly invoices<br><span class="text-small text-muted">Find billable work and create drafts</span></button>
+      <button class="btn" type="button" data-template="tasks" aria-pressed="false">Conversation to tasks<br><span class="text-small text-muted">Extract proposed tasks for review</span></button>
+    </div>
+  </section>
+
+  <div class="builder-grid">
+    <section class="form-stack" aria-labelledby="setup-heading">
+      <h3 id="setup-heading">2. Define the recipe</h3>
+
+      <label class="form-label">Agent name
+        <input id="agent-name" class="form-control" type="text" value="Client Summary Agent">
+      </label>
+
+      <label class="form-label">Which information can it use?
+        <select id="agent-scope" class="form-select">
+          <option>All clients</option>
+          <option>Selected clients</option>
+          <option>One client</option>
+        </select>
+      </label>
+
+      <label class="form-label">Instructions
+        <textarea id="agent-instructions" class="form-control">Every Friday, find completed work for the selected period. Include task titles, delivered work, team members and exact logged hours. Group the result by client.</textarea>
+      </label>
+
+      <div>
+        <span class="form-label">How should it produce the result?</span>
+        <div class="mode-row" role="group" aria-label="Output mode">
+          <button id="fixed-mode" class="btn is-selected" type="button" aria-pressed="true"><strong>Exact mode</strong><br><span class="text-small text-muted">Fixed rules and wording</span></button>
+          <button id="ai-mode" class="btn" type="button" aria-pressed="false"><strong>AI writing mode</strong><br><span class="text-small text-muted">More natural, not guaranteed identical</span></button>
+        </div>
+      </div>
+    </section>
+
+    <section class="preview-stack" aria-labelledby="blueprint-heading">
+      <h3 id="blueprint-heading">3. Saved agent blueprint</h3>
+      <div class="blueprint">
+        <div class="blueprint-row"><span class="text-muted">Agent</span><strong id="preview-name">Client Summary Agent</strong></div>
+        <div class="blueprint-row"><span class="text-muted">Access</span><span id="preview-access">Can read all client, project, task, comment and time data</span></div>
+        <div class="blueprint-row"><span class="text-muted">Can do</span><span id="preview-action">Create a saved summary</span></div>
+        <div class="blueprint-row"><span class="text-muted">Cannot do</span><span id="preview-limit">Change tasks, rates, invoices or send messages</span></div>
+        <div class="blueprint-row"><span class="text-muted">Output</span><span id="preview-output">Fixed summary template</span></div>
+      </div>
+
+      <div id="guarantee" class="result safe" role="status">
+        <strong>Same input → same result</strong><br>
+        <span class="text-small">Hours and included records are calculated by app rules. The wording comes from a fixed template.</span>
+      </div>
+
+      <button id="simulate" class="btn btn-primary btn-block" type="button">Run this agent</button>
+      <div id="run-result" class="text-small text-muted" aria-live="polite">Ready to run.</div>
+    </section>
+  </div>
+
+  <section aria-labelledby="flow-heading">
+    <h3 id="flow-heading">What happens when it runs</h3>
+    <div class="flow" aria-label="Agent execution flow">
+      <div class="flow-step"><strong>1. Trigger</strong><span class="text-small text-muted" id="flow-trigger">Every Friday</span></div>
+      <div class="flow-step"><strong>2. Select</strong><span class="text-small text-muted" id="flow-select">Completed work</span></div>
+      <div class="flow-step"><strong>3. Calculate</strong><span class="text-small text-muted" id="flow-calculate">Exact work hours</span></div>
+      <div class="flow-step"><strong>4. Format</strong><span class="text-small text-muted" id="flow-format">Fixed summary</span></div>
+      <div class="flow-step"><strong>5. Result</strong><span class="text-small text-muted" id="flow-result">Saved report</span></div>
+    </div>
+  </section>
+
+  <script>
+    (() => {
+      const root = document.getElementById('deterministic-agent-builder');
+      const nameInput = root.querySelector('#agent-name');
+      const scopeInput = root.querySelector('#agent-scope');
+      const instructionsInput = root.querySelector('#agent-instructions');
+      const fixedButton = root.querySelector('#fixed-mode');
+      const aiButton = root.querySelector('#ai-mode');
+      const templates = root.querySelectorAll('[data-template]');
+      let selectedTemplate = 'summary';
+      let exactMode = true;
+
+      const presets = {
+        summary: {
+          name: 'Client Summary Agent',
+          instructions: 'Every Friday, find completed work for the selected period. Include task titles, delivered work, team members and exact logged hours. Group the result by client.',
+          access: 'Can read all client, project, task, comment and time data',
+          action: 'Create a saved summary',
+          limit: 'Change tasks, rates, invoices or send messages',
+          trigger: 'Every Friday', select: 'Completed work', calculate: 'Exact work hours', format: 'Fixed summary', result: 'Saved report'
+        },
+        invoice: {
+          name: 'Monthly Invoice Agent',
+          instructions: 'On the first day of each month, find all uninvoiced billable work from last month. Apply the saved rates and billing rules. Create draft invoices for review.',
+          access: 'Can read all client, project, billing, rate and time data',
+          action: 'Create draft invoices',
+          limit: 'Finalize, send, mark paid or change billing rules',
+          trigger: 'First day monthly', select: 'Uninvoiced work', calculate: 'Rates and totals', format: 'Invoice rules', result: 'Draft invoices'
+        },
+        tasks: {
+          name: 'Task Extraction Agent',
+          instructions: 'Read the conversation, identify requested actions and create a proposed task list. Keep the source sentence with every proposed task. Never create tasks without review.',
+          access: 'Can read the transcript and matching client/project data',
+          action: 'Create task proposals',
+          limit: 'Create or assign tasks without human approval',
+          trigger: 'Transcript added', select: 'Action requests', calculate: 'Due dates if explicit', format: 'Task proposal schema', result: 'Review queue'
+        }
+      };
+
+      function updatePreview() {
+        const preset = presets[selectedTemplate];
+        root.querySelector('#preview-name').textContent = nameInput.value.trim() || preset.name;
+        root.querySelector('#preview-access').textContent = preset.access + ' · ' + scopeInput.value;
+        root.querySelector('#preview-action').textContent = preset.action;
+        root.querySelector('#preview-limit').textContent = preset.limit;
+        root.querySelector('#preview-output').textContent = exactMode ? preset.format : 'AI-written narrative';
+        root.querySelector('#flow-trigger').textContent = preset.trigger;
+        root.querySelector('#flow-select').textContent = preset.select;
+        root.querySelector('#flow-calculate').textContent = preset.calculate;
+        root.querySelector('#flow-format').textContent = exactMode ? preset.format : 'AI writes wording';
+        root.querySelector('#flow-result').textContent = preset.result;
+
+        const guarantee = root.querySelector('#guarantee');
+        if (exactMode) {
+          guarantee.className = 'result safe';
+          guarantee.innerHTML = '<strong>Same input → same result</strong><br><span class="text-small">Records and calculations follow app rules. Wording comes from a fixed template.</span>';
+        } else {
+          guarantee.className = 'result warning';
+          guarantee.innerHTML = '<strong>Facts stay exact; wording may change</strong><br><span class="text-small">AI can make the text more natural, but identical output cannot be guaranteed—even with the same instructions.</span>';
+        }
+      }
+
+      function setMode(nextExact) {
+        exactMode = nextExact;
+        fixedButton.classList.toggle('is-selected', exactMode);
+        aiButton.classList.toggle('is-selected', !exactMode);
+        fixedButton.setAttribute('aria-pressed', String(exactMode));
+        aiButton.setAttribute('aria-pressed', String(!exactMode));
+        updatePreview();
+      }
+
+      templates.forEach((button) => {
+        button.addEventListener('click', () => {
+          selectedTemplate = button.dataset.template;
+          templates.forEach((candidate) => {
+            const active = candidate === button;
+            candidate.classList.toggle('is-selected', active);
+            candidate.setAttribute('aria-pressed', String(active));
+          });
+          const preset = presets[selectedTemplate];
+          nameInput.value = preset.name;
+          instructionsInput.value = preset.instructions;
+          updatePreview();
+          root.querySelector('#run-result').textContent = 'Ready to run.';
+        });
+      });
+
+      nameInput.addEventListener('input', updatePreview);
+      scopeInput.addEventListener('change', updatePreview);
+      instructionsInput.addEventListener('input', updatePreview);
+      fixedButton.addEventListener('click', () => setMode(true));
+      aiButton.addEventListener('click', () => setMode(false));
+      root.querySelector('#simulate').addEventListener('click', () => {
+        const result = root.querySelector('#run-result');
+        const preset = presets[selectedTemplate];
+        result.textContent = exactMode
+          ? `Completed: ${preset.result}. Running again with unchanged data will produce the identical result.`
+          : `Completed: ${preset.result}. All numbers remain exact, but the written sentences may differ on another run.`;
+      });
+
+      updatePreview();
+    })();
+  </script>
+</div>

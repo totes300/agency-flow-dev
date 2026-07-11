@@ -19,6 +19,7 @@ import type * as commentReactions from "../commentReactions.js";
 import type * as comments from "../comments.js";
 import type * as crons from "../crons.js";
 import type * as dailyNotes from "../dailyNotes.js";
+import type * as devSeedInbox from "../devSeedInbox.js";
 import type * as http from "../http.js";
 import type * as invoices from "../invoices.js";
 import type * as lib_auth from "../lib/auth.js";
@@ -106,6 +107,7 @@ declare const fullApi: ApiFromModules<{
   comments: typeof comments;
   crons: typeof crons;
   dailyNotes: typeof dailyNotes;
+  devSeedInbox: typeof devSeedInbox;
   http: typeof http;
   invoices: typeof invoices;
   "lib/auth": typeof lib_auth;

@@ -21,7 +21,6 @@ import {
   ArchiveIcon,
   ArchiveRestoreIcon,
   Trash2Icon,
-  MessageCircleIcon,
   FileTextIcon,
 } from "lucide-react"
 import { InlineTimeCell } from "@/components/tasks/inline-time-cell"
@@ -121,12 +120,8 @@ export const TaskRow = memo(function TaskRow({
       </div>
 
       <div className={`grid ${TASK_GRID_COLS} items-center gap-x-6 pr-3 py-2.5 [&>*]:min-w-0 [&>*]:overflow-hidden`}>
-      {/* 1. Task name + subtitle + inline icons */}
-      <button
-        type="button"
-        className="cursor-pointer text-left"
-        onClick={() => onOpenDetail?.(task._id)}
-      >
+      {/* 1. Task name + subtitle + inline icons + today affordance */}
+      <div className="min-w-0">
         <div className="flex items-center gap-1.5">
           {hasUnseen ? (
             <span className="size-1.5 shrink-0 rounded-full bg-primary" />
@@ -137,11 +132,13 @@ export const TaskRow = memo(function TaskRow({
             updatedAt={task.updatedAt}
             onOpenDetail={onOpenDetail}
           >
-            <span className={cn(
-              "truncate text-sm font-semibold",
-            )}>
+            <button
+              type="button"
+              onClick={() => onOpenDetail?.(task._id)}
+              className="min-w-0 cursor-pointer truncate text-left text-sm font-semibold"
+            >
               {task.title}
-            </span>
+            </button>
           </TaskPreviewPopover>
           {hasDescription ? (
             <TaskPreviewPopover
@@ -176,11 +173,24 @@ export const TaskRow = memo(function TaskRow({
               </span>
             </SubtaskHoverPopover>
           ) : null}
+          {/* Add-to-today — inline, right after the title where the eye lands
+              (Notion pattern): hover-revealed dashed chip when unplanned,
+              persistent amber chip when it's already in today. */}
+          {!isArchivedView ? (
+            <AddToTodayButton
+              taskId={task._id as Id<"tasks">}
+              inToday={inToday}
+            />
+          ) : null}
         </div>
-        <div className="truncate text-[11px] text-muted-foreground/85">
+        <button
+          type="button"
+          onClick={() => onOpenDetail?.(task._id)}
+          className="block w-full cursor-pointer truncate text-left text-[11px] text-muted-foreground/85"
+        >
           {subtitle}
-        </div>
-      </button>
+        </button>
+      </div>
 
       {/* 3. Comments */}
       {activity ? (
@@ -236,13 +246,9 @@ export const TaskRow = memo(function TaskRow({
         <InlineTimeCell taskId={task._id} totalMinutes={totalMinutes} isDone={isDone} isBillable={task.billable} />
       </div>
 
-      {/* 10. Sun (add/remove today) + action menu */}
-      <div className="flex items-center justify-end gap-0.5">
-        {/* Sun: hover-revealed on add rows, persistent (filled) when in Today.
-            Hidden in the archived view (archived tasks can't be planned). */}
-        {!isArchivedView ? (
-          <AddToTodayButton taskId={task._id as Id<"tasks">} inToday={inToday} />
-        ) : null}
+      {/* 10. Action menu (the add-to-today affordance now lives inline by the
+          title — column 1 — where it is actually seen). */}
+      <div className="flex items-center justify-end">
         <div className={cn(
           "flex justify-end transition-opacity",
           hasSelection || isSelected ? "opacity-100" : "opacity-0 group-hover/row:opacity-100",

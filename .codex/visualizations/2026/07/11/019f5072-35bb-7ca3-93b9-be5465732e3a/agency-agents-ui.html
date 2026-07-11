@@ -1,0 +1,423 @@
+<div id="agency-agents-ui">
+  <style>
+    #agency-agents-ui {
+      color: var(--foreground);
+      display: grid;
+      gap: 18px;
+    }
+    #agency-agents-ui .app-bar,
+    #agency-agents-ui .page-head,
+    #agency-agents-ui .row-between,
+    #agency-agents-ui .agent-title,
+    #agency-agents-ui .status-line,
+    #agency-agents-ui .action-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    #agency-agents-ui .brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    #agency-agents-ui .brand-mark {
+      width: 28px;
+      height: 28px;
+      display: grid;
+      place-items: center;
+      background: var(--primary);
+      color: var(--primary-foreground);
+      border-radius: 7px;
+    }
+    #agency-agents-ui .view-tabs {
+      display: flex;
+      gap: 4px;
+      flex-wrap: wrap;
+    }
+    #agency-agents-ui .view { display: none; }
+    #agency-agents-ui .view.is-active {
+      display: grid;
+      gap: 18px;
+      animation: ui-view-in 160ms ease-out;
+    }
+    @keyframes ui-view-in {
+      from { transform: translateY(3px); opacity: .7; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+    #agency-agents-ui .kicker {
+      text-transform: uppercase;
+      letter-spacing: .08em;
+    }
+    #agency-agents-ui .page-head h2,
+    #agency-agents-ui .page-head p,
+    #agency-agents-ui .section-title,
+    #agency-agents-ui .item-main p { margin: 0; }
+    #agency-agents-ui .page-head p { margin-top: 4px; }
+    #agency-agents-ui .split {
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(260px, .65fr);
+      gap: 20px;
+      align-items: start;
+    }
+    #agency-agents-ui .builder-split {
+      display: grid;
+      grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr);
+      gap: 22px;
+      align-items: start;
+    }
+    #agency-agents-ui .stack {
+      display: grid;
+      gap: 12px;
+    }
+    #agency-agents-ui .item-list {
+      display: grid;
+      border-top: 1px solid var(--border);
+    }
+    #agency-agents-ui .item-row {
+      width: 100%;
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+      padding: 13px 2px;
+      border: 0;
+      border-bottom: 1px solid var(--border);
+      background: transparent;
+      color: var(--foreground);
+      text-align: left;
+    }
+    #agency-agents-ui button.item-row { cursor: pointer; }
+    #agency-agents-ui button.item-row:hover { background: var(--accent); color: var(--accent-foreground); }
+    #agency-agents-ui .item-icon {
+      width: 30px;
+      height: 30px;
+      display: grid;
+      place-items: center;
+      background: color-mix(in srgb, var(--viz-series-1) 12%, transparent);
+      color: var(--foreground);
+      border-radius: 8px;
+    }
+    #agency-agents-ui .item-main { min-width: 0; }
+    #agency-agents-ui .item-main strong,
+    #agency-agents-ui .item-main span { display: block; }
+    #agency-agents-ui .item-meta { text-align: right; }
+    #agency-agents-ui .dot {
+      width: 7px;
+      height: 7px;
+      display: inline-block;
+      border-radius: 50%;
+      background: var(--viz-series-1);
+      margin-right: 5px;
+    }
+    #agency-agents-ui .dot.waiting { background: var(--viz-series-3); }
+    #agency-agents-ui .dot.blocked { background: var(--destructive); }
+    #agency-agents-ui .review-card { display: grid; gap: 9px; }
+    #agency-agents-ui .review-card + .review-card {
+      padding-top: 13px;
+      border-top: 1px solid var(--border);
+    }
+    #agency-agents-ui .mini-progress {
+      height: 4px;
+      background: var(--muted);
+      overflow: hidden;
+      border-radius: 999px;
+    }
+    #agency-agents-ui .mini-progress span {
+      display: block;
+      height: 100%;
+      background: var(--viz-series-1);
+    }
+    #agency-agents-ui .form-stack { display: grid; gap: 14px; }
+    #agency-agents-ui textarea { min-height: 112px; resize: vertical; }
+    #agency-agents-ui .permission-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px 14px;
+    }
+    #agency-agents-ui .recipe {
+      display: grid;
+      gap: 0;
+      border-top: 1px solid var(--border);
+    }
+    #agency-agents-ui .recipe-step {
+      display: grid;
+      grid-template-columns: 84px minmax(0, 1fr);
+      gap: 12px;
+      padding: 11px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    #agency-agents-ui .recipe-key {
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      color: var(--muted-foreground);
+    }
+    #agency-agents-ui .mode-note {
+      border-left: 3px solid var(--viz-series-1);
+      padding-left: 12px;
+    }
+    #agency-agents-ui .run-summary {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+    #agency-agents-ui .run-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.15fr) minmax(230px, .85fr);
+      gap: 20px;
+      align-items: start;
+    }
+    #agency-agents-ui .check-row {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    #agency-agents-ui .check-pass { color: var(--viz-series-1); }
+    #agency-agents-ui .check-stop { color: var(--destructive); }
+    #agency-agents-ui .evidence {
+      border-left: 3px solid var(--border);
+      padding-left: 12px;
+      display: grid;
+      gap: 7px;
+    }
+    #agency-agents-ui .invoice-lines {
+      display: grid;
+      border-top: 1px solid var(--border);
+    }
+    #agency-agents-ui .invoice-line {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      padding: 9px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    #agency-agents-ui .toast-line { min-height: 20px; }
+    @media (max-width: 650px) {
+      #agency-agents-ui .split,
+      #agency-agents-ui .builder-split,
+      #agency-agents-ui .run-grid,
+      #agency-agents-ui .run-summary,
+      #agency-agents-ui .permission-grid { grid-template-columns: 1fr; }
+      #agency-agents-ui .item-meta { text-align: left; }
+      #agency-agents-ui .recipe-step { grid-template-columns: 72px minmax(0, 1fr); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      #agency-agents-ui .view.is-active { animation: none; }
+    }
+  </style>
+
+  <header class="app-bar">
+    <div class="brand">
+      <span class="brand-mark"><i data-lucide="blocks" aria-hidden="true"></i></span>
+      <div><strong>Agency Flow</strong><div class="text-small text-muted">Operations workspace</div></div>
+    </div>
+    <nav class="view-tabs" aria-label="Agent UI views">
+      <button class="btn is-selected" type="button" data-view-target="control" aria-pressed="true">Control Center</button>
+      <button class="btn" type="button" data-view-target="builder" aria-pressed="false">Agent Builder</button>
+      <button class="btn" type="button" data-view-target="review" aria-pressed="false">Review Run</button>
+    </nav>
+  </header>
+
+  <section class="view is-active" data-view="control">
+    <div class="page-head">
+      <div>
+        <div class="kicker text-small text-muted">Agents</div>
+        <h2>Everything that works while you don’t</h2>
+        <p class="text-muted">See what is running, what stopped, and what needs your decision.</p>
+      </div>
+      <button class="btn btn-primary" type="button" data-open-builder><i data-lucide="plus" aria-hidden="true"></i> New agent</button>
+    </div>
+
+    <div class="viz-grid">
+      <div class="card viz-stat"><span class="text-muted">Waiting for review</span><span class="viz-stat-value">3</span><span class="text-small">Two financial, one report</span></div>
+      <div class="card viz-stat"><span class="text-muted">Running now</span><span class="viz-stat-value">2</span><span class="text-small">June close and daily brief</span></div>
+      <div class="card viz-stat"><span class="text-muted">Active agents</span><span class="viz-stat-value">5</span><span class="text-small">All healthy</span></div>
+    </div>
+
+    <div class="split">
+      <section class="stack" aria-labelledby="your-agents">
+        <div class="row-between"><h3 id="your-agents" class="section-title">Your agents</h3><button class="btn btn-ghost" type="button">Manage skills</button></div>
+        <div class="item-list">
+          <button class="item-row" type="button" data-open-review>
+            <span class="item-icon"><i data-lucide="receipt-text" aria-hidden="true"></i></span>
+            <span class="item-main"><strong>Monthly Invoice Agent</strong><span class="text-small text-muted">Creates draft invoices · exact mode</span></span>
+            <span class="item-meta text-small"><span><i class="dot"></i>Active</span><span class="text-muted">Next: Aug 1</span></span>
+          </button>
+          <button class="item-row" type="button">
+            <span class="item-icon"><i data-lucide="file-chart-column" aria-hidden="true"></i></span>
+            <span class="item-main"><strong>Client Work Summary</strong><span class="text-small text-muted">Verified data + reviewed narrative</span></span>
+            <span class="item-meta text-small"><span><i class="dot"></i>Active</span><span class="text-muted">Friday 17:00</span></span>
+          </button>
+          <button class="item-row" type="button">
+            <span class="item-icon"><i data-lucide="scan-search" aria-hidden="true"></i></span>
+            <span class="item-main"><strong>Timesheet Auditor</strong><span class="text-small text-muted">Finds gaps, overlaps and conflicts</span></span>
+            <span class="item-meta text-small"><span><i class="dot waiting"></i>Review</span><span class="text-muted">4 warnings</span></span>
+          </button>
+          <button class="item-row" type="button">
+            <span class="item-icon"><i data-lucide="message-square-text" aria-hidden="true"></i></span>
+            <span class="item-main"><strong>Client Reply Agent</strong><span class="text-small text-muted">Drafts completion messages</span></span>
+            <span class="item-meta text-small"><span><i class="dot"></i>Active</span><span class="text-muted">On task completion</span></span>
+          </button>
+        </div>
+      </section>
+
+      <aside class="card stack" aria-labelledby="needs-you">
+        <div class="row-between"><h3 id="needs-you" class="section-title">Needs you</h3><span class="viz-badge">3 items</span></div>
+        <button class="review-card btn btn-ghost" type="button" data-open-review>
+          <span class="status-line"><strong>Acme June invoice</strong><span class="viz-badge">Ready</span></span>
+          <span class="text-small text-muted">€14,320 · 148h · all checks passed</span>
+        </button>
+        <button class="review-card btn btn-ghost" type="button">
+          <span class="status-line"><strong>Northstar invoice</strong><span class="viz-badge">Blocked</span></span>
+          <span class="text-small text-muted">Missing billable rate for Design</span>
+        </button>
+        <button class="review-card btn btn-ghost" type="button">
+          <span class="status-line"><strong>Weekly client report</strong><span class="viz-badge">Draft</span></span>
+          <span class="text-small text-muted">Narrative ready for review</span>
+        </button>
+      </aside>
+    </div>
+  </section>
+
+  <section class="view" data-view="builder">
+    <div class="page-head">
+      <div>
+        <div class="kicker text-small text-muted">Agent Builder</div>
+        <h2>Monthly Invoice Agent</h2>
+        <p class="text-muted">Describe the job. Agency Flow turns it into an inspectable Skill.</p>
+      </div>
+      <span class="viz-badge">Draft</span>
+    </div>
+
+    <div class="builder-split">
+      <section class="form-stack" aria-labelledby="describe-job">
+        <h3 id="describe-job" class="section-title">Describe the job</h3>
+        <label class="form-label">Agent name
+          <input class="form-control" id="builder-name" type="text" value="Monthly Invoice Agent">
+        </label>
+        <label class="form-label">Template
+          <select class="form-select" id="builder-template">
+            <option>Invoice preparation</option>
+            <option>Client work summary</option>
+            <option>Timesheet audit</option>
+          </select>
+        </label>
+        <label class="form-label">Instructions
+          <textarea class="form-control" id="builder-instructions">On the first day of every month, find all uninvoiced billable work from the previous month. Apply each project's billing rules and create one draft invoice per client. Stop if a rate or billing detail is missing.</textarea>
+        </label>
+        <div>
+          <span class="form-label">Permissions</span>
+          <div class="permission-grid">
+            <label class="form-check"><input class="form-check-input" type="checkbox" checked><span class="form-check-label">Read billing data</span></label>
+            <label class="form-check"><input class="form-check-input" type="checkbox" checked><span class="form-check-label">Read time entries</span></label>
+            <label class="form-check"><input class="form-check-input" type="checkbox" checked><span class="form-check-label">Create invoice drafts</span></label>
+            <label class="form-check"><input class="form-check-input" type="checkbox"><span class="form-check-label">Finalize invoices</span></label>
+          </div>
+        </div>
+        <div class="action-row">
+          <button class="btn" type="button">Save draft</button>
+          <button class="btn btn-primary" type="button" id="test-agent"><i data-lucide="play" aria-hidden="true"></i> Test on June</button>
+        </div>
+        <div id="test-result" class="toast-line text-small text-muted" aria-live="polite">No test run yet.</div>
+      </section>
+
+      <section class="stack" aria-labelledby="compiled-skill">
+        <div class="row-between"><h3 id="compiled-skill" class="section-title">Compiled Skill</h3><span class="viz-badge">Exact mode</span></div>
+        <div class="mode-note"><strong>Financial logic is locked</strong><div class="text-small text-muted">AI may explain exceptions, but it cannot select rates, change totals or bypass stop rules.</div></div>
+        <div class="recipe">
+          <div class="recipe-step"><span class="recipe-key text-small">When</span><span>First day of every month</span></div>
+          <div class="recipe-step"><span class="recipe-key text-small">Scope</span><span>All active clients</span></div>
+          <div class="recipe-step"><span class="recipe-key text-small">Select</span><span>Previous month · billable · not yet invoiced</span></div>
+          <div class="recipe-step"><span class="recipe-key text-small">Calculate</span><span>Saved project rates, rounding and billing rules</span></div>
+          <div class="recipe-step"><span class="recipe-key text-small">Create</span><span>One draft invoice per client</span></div>
+          <div class="recipe-step"><span class="recipe-key text-small">Stop</span><span>Missing rate, mixed currency, incomplete billing data or duplicate entry</span></div>
+          <div class="recipe-step"><span class="recipe-key text-small">Approval</span><span>Admin must approve before finalization</span></div>
+        </div>
+      </section>
+    </div>
+  </section>
+
+  <section class="view" data-view="review">
+    <div class="page-head">
+      <div>
+        <div class="kicker text-small text-muted">Review Run · June 2026</div>
+        <h2>Monthly Invoice Agent</h2>
+        <p class="text-muted">The work is finished. You are reviewing the evidence, not repeating the work.</p>
+      </div>
+      <span id="review-status" class="viz-badge">Ready for review</span>
+    </div>
+
+    <div class="run-summary">
+      <div class="card viz-stat"><span class="text-muted">Draft invoices</span><span class="viz-stat-value">5</span><span class="text-small">One client blocked</span></div>
+      <div class="card viz-stat"><span class="text-muted">Verified time</span><span class="viz-stat-value">148h</span><span class="text-small">42 source entries</span></div>
+      <div class="card viz-stat"><span class="text-muted">Draft total</span><span class="viz-stat-value">€14,320</span><span class="text-small">EUR only</span></div>
+    </div>
+
+    <div class="run-grid">
+      <section class="stack" aria-labelledby="draft-output">
+        <div class="row-between"><h3 id="draft-output" class="section-title">Acme Studio · Draft invoice</h3><span class="viz-badge">All checks passed</span></div>
+        <div class="invoice-lines">
+          <div class="invoice-line"><span><strong>Product design</strong><span class="text-small text-muted">64h · €95/hour</span></span><strong>€6,080</strong></div>
+          <div class="invoice-line"><span><strong>Development</strong><span class="text-small text-muted">72h · €100/hour</span></span><strong>€7,200</strong></div>
+          <div class="invoice-line"><span><strong>Project management</strong><span class="text-small text-muted">12h · €86.67/hour</span></span><strong>€1,040</strong></div>
+          <div class="invoice-line"><strong>Total</strong><strong>€14,320</strong></div>
+        </div>
+        <div class="evidence">
+          <strong>Source evidence</strong>
+          <span class="text-small">42 time entries · 8 completed tasks · 3 contributors · period June 1–30</span>
+          <span class="text-small text-muted">Every invoice line links back to its time entries and tasks.</span>
+        </div>
+      </section>
+
+      <aside class="card stack" aria-labelledby="automatic-checks">
+        <h3 id="automatic-checks" class="section-title">Automatic checks</h3>
+        <div>
+          <div class="check-row"><i class="check-pass" data-lucide="circle-check" aria-hidden="true"></i><span>No duplicate entries</span><span class="text-small text-muted">Passed</span></div>
+          <div class="check-row"><i class="check-pass" data-lucide="circle-check" aria-hidden="true"></i><span>Rates found</span><span class="text-small text-muted">Passed</span></div>
+          <div class="check-row"><i class="check-pass" data-lucide="circle-check" aria-hidden="true"></i><span>Single currency</span><span class="text-small text-muted">Passed</span></div>
+          <div class="check-row"><i class="check-pass" data-lucide="circle-check" aria-hidden="true"></i><span>Totals reconcile</span><span class="text-small text-muted">Passed</span></div>
+          <div class="check-row"><i class="check-stop" data-lucide="octagon-alert" aria-hidden="true"></i><span>Northstar missing rate</span><span class="text-small">Blocked</span></div>
+        </div>
+        <button class="btn btn-primary btn-block" type="button" id="approve-run">Approve 5 drafts</button>
+        <button class="btn btn-block" type="button">Send back with note</button>
+        <div id="approval-result" class="toast-line text-small text-muted" aria-live="polite">Nothing has been finalized or sent.</div>
+      </aside>
+    </div>
+  </section>
+
+  <script>
+    (() => {
+      const root = document.getElementById('agency-agents-ui');
+      const views = root.querySelectorAll('[data-view]');
+      const tabs = root.querySelectorAll('[data-view-target]');
+
+      function showView(name) {
+        views.forEach((view) => view.classList.toggle('is-active', view.dataset.view === name));
+        tabs.forEach((tab) => {
+          const active = tab.dataset.viewTarget === name;
+          tab.classList.toggle('is-selected', active);
+          tab.setAttribute('aria-pressed', String(active));
+        });
+      }
+
+      tabs.forEach((tab) => tab.addEventListener('click', () => showView(tab.dataset.viewTarget)));
+      root.querySelectorAll('[data-open-builder]').forEach((button) => button.addEventListener('click', () => showView('builder')));
+      root.querySelectorAll('[data-open-review]').forEach((button) => button.addEventListener('click', () => showView('review')));
+
+      root.querySelector('#test-agent').addEventListener('click', () => {
+        root.querySelector('#test-result').textContent = 'Test complete: 5 drafts ready, 1 client blocked, 0 financial check failures.';
+      });
+
+      root.querySelector('#approve-run').addEventListener('click', (event) => {
+        event.currentTarget.disabled = true;
+        event.currentTarget.textContent = 'Approved';
+        root.querySelector('#review-status').textContent = 'Approved';
+        root.querySelector('#approval-result').textContent = 'Five invoice drafts were created. Nothing was finalized or sent.';
+      });
+    })();
+  </script>
+</div>

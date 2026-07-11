@@ -79,7 +79,10 @@ export function InboxPanel({
   const markAllRead = useMutation(api.notifications.markAllRead)
 
   const rows = view === "inbox" ? inboxRows : archivedRows
-  const hasUnread = (inboxRows ?? []).some((r) => r.inboxState === "unread")
+  const unreadCount = (inboxRows ?? []).filter(
+    (r) => r.inboxState === "unread",
+  ).length
+  const hasUnread = unreadCount > 0
   const activeTaskId = parseDetailParam(searchParams)
 
   const sections =
@@ -112,8 +115,13 @@ export function InboxPanel({
   return (
     <>
       <div className="flex items-center justify-between px-4 py-2.5">
-        <h2 className="text-sm font-semibold">
+        <h2 className="flex items-baseline gap-1.5 text-sm font-semibold">
           {view === "archived" ? "Archived" : "Inbox"}
+          {view === "inbox" && unreadCount > 0 && (
+            <span className="text-xs font-medium tabular-nums text-muted-foreground">
+              {unreadCount}
+            </span>
+          )}
         </h2>
         <div className="flex items-center gap-0.5">
           <InboxActionButton

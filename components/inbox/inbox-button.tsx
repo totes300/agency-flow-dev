@@ -6,7 +6,6 @@ import { InboxIcon } from "lucide-react"
 import { api } from "@/convex/_generated/api"
 import {
   SidebarMenu,
-  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
@@ -16,10 +15,13 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet"
+import { SidebarCountBadge } from "@/components/sidebar-count-badge"
 import { InboxPanel } from "@/components/inbox/inbox-panel"
 import { useInboxSidebar } from "@/components/inbox/inbox-sidebar-context"
 import { useIsMobile } from "@/lib/hooks/use-is-mobile"
+import { cn } from "@/lib/utils"
 
+/** Right-aligned red unread badge — the shared sidebar count treatment. */
 function InboxBadge() {
   const { isAuthenticated } = useConvexAuth()
   const unread = useQuery(
@@ -28,11 +30,18 @@ function InboxBadge() {
   )
   if (!unread || unread.count === 0) return null
   return (
-    <SidebarMenuBadge>
-      {unread.isCapped ? "99+" : unread.count}
-    </SidebarMenuBadge>
+    <SidebarCountBadge
+      count={unread.count}
+      isCapped={unread.isCapped}
+      aria-label={`${unread.isCapped ? "99+" : unread.count} unread notifications`}
+    />
   )
 }
+
+// Persistent subtle fill marks the Inbox as the sidebar's command center — a
+// resting pill, not one more link. Applied only when the panel is closed;
+// while open, the button's own active state carries the full accent fill.
+const inboxRestingFill = "bg-sidebar-accent/60 hover:bg-sidebar-accent"
 
 /**
  * Sidebar entry point. Desktop: toggles the persistent inbox panel (the nav
@@ -50,9 +59,13 @@ export function InboxButton() {
         {isMobile ? (
           <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
             <SheetTrigger asChild>
-              <SidebarMenuButton tooltip="Inbox">
+              <SidebarMenuButton
+                tooltip="Inbox"
+                className={cn("font-medium", inboxRestingFill)}
+              >
                 <InboxIcon />
                 <span>Inbox</span>
+                <InboxBadge />
               </SidebarMenuButton>
             </SheetTrigger>
             <SheetContent
@@ -71,12 +84,13 @@ export function InboxButton() {
             aria-expanded={inboxOpen}
             aria-controls="inbox-sidebar-panel"
             onClick={toggleInbox}
+            className={cn("font-medium", !inboxOpen && inboxRestingFill)}
           >
             <InboxIcon />
             <span>Inbox</span>
+            <InboxBadge />
           </SidebarMenuButton>
         )}
-        <InboxBadge />
       </SidebarMenuItem>
     </SidebarMenu>
   )

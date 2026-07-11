@@ -17,6 +17,7 @@ import {
   SidebarHeader,
   SidebarMenu,
   SidebarRail,
+  SidebarSeparator,
 } from "@/components/ui/sidebar"
 import { BookmarkIcon } from "lucide-react"
 
@@ -29,6 +30,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       <SidebarHeader>
         <TeamSwitcher />
         <InboxButton />
+        <SidebarSeparator className="mt-1" />
       </SidebarHeader>
       <SidebarContent>
         <NavMain groups={navigation} isAdmin={isAdmin} />

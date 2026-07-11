@@ -4,14 +4,12 @@ import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { useQuery } from "convex/react"
 import { useConvexAuth } from "convex/react"
-import { CalendarClockIcon } from "lucide-react"
 import { api } from "@/convex/_generated/api"
 import type { NavGroup } from "@/lib/navigation"
 import {
   SidebarGroup,
   SidebarGroupLabel,
   SidebarMenu,
-  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
@@ -20,7 +18,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import { cn } from "@/lib/utils"
+import { SidebarCountBadge } from "@/components/sidebar-count-badge"
 
 function MyTasksBadge() {
   const { isAuthenticated } = useConvexAuth()
@@ -29,22 +27,24 @@ function MyTasksBadge() {
     isAuthenticated ? {} : "skip",
   )
   if (!count) return null
-  return <SidebarMenuBadge>{count}</SidebarMenuBadge>
+  return <SidebarCountBadge count={count} aria-label={`${count} tasks assigned to you`} />
 }
 
 /**
- * Sidebar signal block on the `Invoices` row — count badge + calendar-clock
- * icon for overdue, with a hover tooltip explaining both.
+ * Sidebar signal block on the `Invoices` row — the shared red count badge,
+ * with a hover tooltip that breaks the number down (ready to bill / to close /
+ * overdue). The badge itself stays visually identical to every other sidebar
+ * count; the tooltip carries the detail that used to need a separate icon.
  *
  * Render rules (PRD US 1–4):
- *   - `toGenerateCount === 0 && overdueCount === 0` → render nothing (clean
- *     state is silent — the absence is the signal).
- *   - `toGenerateCount > 0` → numeric badge (right-aligned, primary tint).
- *   - `overdueCount > 0` → calendar-clock icon next to the badge, red tint.
+ *   - `inboxCount === 0 && overdueCount === 0` → render nothing (clean state is
+ *     silent — the absence is the signal).
+ *   - otherwise → red count badge; number is the billing-inbox total, falling
+ *     back to the overdue count when there's nothing new to bill.
  *   - Hover (mouse or focus) → tooltip with the count breakdown.
  *
- * Composition: `SidebarMenuBadge` owns position + collapsed-state hiding;
- * `pointer-events-auto` re-enables hover so the Tooltip trigger fires.
+ * `pointer-events-auto` re-enables hover (the base badge is pointer-events-none)
+ * so the Tooltip trigger fires.
  */
 function InvoicesNavSignals() {
   const { isAuthenticated } = useConvexAuth()
@@ -68,18 +68,11 @@ function InvoicesNavSignals() {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <SidebarMenuBadge
+        <SidebarCountBadge
+          count={inboxCount > 0 ? inboxCount : overdueCount}
           aria-label={tooltip}
-          className={cn(
-            "pointer-events-auto gap-1",
-            overdueCount > 0 && "text-red-700 dark:text-red-300",
-          )}
-        >
-          {overdueCount > 0 && (
-            <CalendarClockIcon className="size-3.5" aria-hidden />
-          )}
-          {inboxCount > 0 && <span>{inboxCount}</span>}
-        </SidebarMenuBadge>
+          className="pointer-events-auto"
+        />
       </TooltipTrigger>
       <TooltipContent side="right">{tooltip}</TooltipContent>
     </Tooltip>
@@ -117,10 +110,10 @@ export function NavMain({
                     <Link href={item.url}>
                       <item.icon />
                       <span>{item.title}</span>
+                      {item.url === "/my-tasks" && <MyTasksBadge />}
+                      {item.url === "/invoices" && <InvoicesNavSignals />}
                     </Link>
                   </SidebarMenuButton>
-                  {item.url === "/my-tasks" && <MyTasksBadge />}
-                  {item.url === "/invoices" && <InvoicesNavSignals />}
                 </SidebarMenuItem>
               ))}
             </SidebarMenu>

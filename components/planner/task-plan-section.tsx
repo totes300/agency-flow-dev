@@ -5,6 +5,7 @@ import { XIcon, CalendarRangeIcon, SunIcon } from "lucide-react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { MetadataRow } from "@/components/tasks/task-detail-metadata"
+import { Skeleton } from "@/components/ui/skeleton"
 import { formatSegmentRange, spanDays } from "@/lib/planner"
 import { toast } from "sonner"
 import { toastError } from "@/lib/toast-helpers"
@@ -54,8 +55,8 @@ export function TaskPlanSection({
   return (
     <MetadataRow icon={CalendarRangeIcon} label="Plan" variant={variant}>
       {plan === undefined || segments === undefined ? (
-        <div className="space-y-1.5 py-0.5">
-          <div className="h-4 w-3/4 animate-pulse rounded bg-muted" />
+        <div className="py-0.5">
+          <Skeleton className="h-4 w-3/4" />
         </div>
       ) : segments.length === 0 ? (
         <div className="flex items-center gap-2 py-0.5">

@@ -4,7 +4,14 @@ import { useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { useQuery } from "convex/react"
 import { useOrganization } from "@clerk/nextjs"
-import { BotIcon, PlusIcon, SearchIcon, SparklesIcon } from "lucide-react"
+import {
+  BotIcon,
+  ClipboardListIcon,
+  PlugIcon,
+  PlusIcon,
+  SearchIcon,
+  SparklesIcon,
+} from "lucide-react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { Input } from "@/components/ui/input"
@@ -84,7 +91,13 @@ export function WorkspaceRail() {
           {agents === undefined ? (
             <RailRowSkeletons count={2} />
           ) : agents.length === 0 ? (
-            <AgentsRailEmptyState />
+            <AgentsRailEmptyState
+              onCreate={
+                isAdmin
+                  ? () => router.push("/agents?view=agents&edit=new")
+                  : undefined
+              }
+            />
           ) : (
             <div className="flex flex-col gap-0.5">
               {agents.map((agent) => (
@@ -158,31 +171,66 @@ export function WorkspaceRail() {
           )}
         </section>
       </div>
-      {isAdmin && (
-        <div className="flex flex-col gap-0.5 border-t p-2">
-          <button
-            type="button"
-            onClick={() => router.push("/agents?view=skills")}
-            className={cn(
-              railRowClass,
-              activeView === "skills" && "bg-sidebar-accent font-medium",
-            )}
-          >
-            <SparklesIcon className="size-4 shrink-0 text-sidebar-foreground/60" />
-            Skills
-          </button>
-          {/* Placeholder affordance — the builder page lands in slice 09. */}
-          <button
-            type="button"
-            disabled
-            title="The agent builder is coming soon"
-            className="flex w-full cursor-default items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-sidebar-foreground/50"
-          >
-            <PlusIcon className="size-4 shrink-0" />
-            New agent
-          </button>
-        </div>
-      )}
+      {/* Footer: Connectors is per-user (everyone); the builder/skills
+          entries are admin-only. */}
+      <div className="flex flex-col gap-0.5 border-t p-2">
+        <button
+          type="button"
+          onClick={() => router.push("/agents?view=connectors")}
+          className={cn(
+            railRowClass,
+            activeView === "connectors" && "bg-sidebar-accent font-medium",
+          )}
+        >
+          <PlugIcon className="size-4 shrink-0 text-sidebar-foreground/60" />
+          Connectors
+        </button>
+        {isAdmin && (
+          <>
+            <button
+              type="button"
+              onClick={() => router.push("/agents?view=agents")}
+              className={cn(
+                railRowClass,
+                activeView === "agents" && "bg-sidebar-accent font-medium",
+              )}
+            >
+              <BotIcon className="size-4 shrink-0 text-sidebar-foreground/60" />
+              Manage agents
+            </button>
+            <button
+              type="button"
+              onClick={() => router.push("/agents?view=skills")}
+              className={cn(
+                railRowClass,
+                activeView === "skills" && "bg-sidebar-accent font-medium",
+              )}
+            >
+              <SparklesIcon className="size-4 shrink-0 text-sidebar-foreground/60" />
+              Skills
+            </button>
+            <button
+              type="button"
+              onClick={() => router.push("/agents?view=audit")}
+              className={cn(
+                railRowClass,
+                activeView === "audit" && "bg-sidebar-accent font-medium",
+              )}
+            >
+              <ClipboardListIcon className="size-4 shrink-0 text-sidebar-foreground/60" />
+              Audit
+            </button>
+            <button
+              type="button"
+              onClick={() => router.push("/agents?view=agents&edit=new")}
+              className={railRowClass}
+            >
+              <PlusIcon className="size-4 shrink-0 text-sidebar-foreground/60" />
+              New agent
+            </button>
+          </>
+        )}
+      </div>
     </aside>
   )
 }

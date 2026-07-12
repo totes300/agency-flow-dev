@@ -100,7 +100,10 @@ export type WorksheetAiInput = {
   subtasks: Array<{ title: string; done: boolean }>;
   /** Comments flattened by `createdAt`, text only (Tiptap → text). */
   commentTexts: string[];
-  /** Notes from the entries IN scope only — same order as `entries`. */
+  /**
+   * Notes from every current time entry on the task, across its full
+   * lifecycle. Worksheet hours remain scoped separately on the row.
+   */
   entryNotes: Array<{ date: string; minutes: number; isBillable: boolean; note: string }>;
 };
 
@@ -130,6 +133,27 @@ export type WorksheetData = {
     scopeLabel: string;
   };
 };
+
+/**
+ * Group repeated worksheet rows for one task into a single AI call. Full-cycle
+ * exports can render the same task in multiple month sections, but lifecycle
+ * evidence and its client-facing summary are task-level.
+ */
+export function groupWorksheetRowsByTaskId(
+  rows: WorksheetTaskRow[],
+): Array<{ row: WorksheetTaskRow; occurrenceCount: number }> {
+  const grouped = new Map<
+    string,
+    { row: WorksheetTaskRow; occurrenceCount: number }
+  >();
+  for (const row of rows) {
+    const key = row.taskId as unknown as string;
+    const existing = grouped.get(key);
+    if (existing) existing.occurrenceCount++;
+    else grouped.set(key, { row, occurrenceCount: 1 });
+  }
+  return [...grouped.values()];
+}
 
 // ─── Internal query ─────────────────────────────────────────────────────────
 
@@ -440,6 +464,22 @@ export async function buildTaskRows(
       }
     }
 
+    // Summary evidence intentionally has a wider scope than the worksheet's
+    // financial row. Hours, dates and entryCount above still come exclusively
+    // from `taskEntries` (the selected period / invoice entry set), while the
+    // AI receives every current non-empty time-entry note on this task. This
+    // lets a closing/invoice summary describe the task's full lifecycle
+    // without changing a single billing number.
+    const lifecycleEntries: Doc<"timeEntries">[] = [];
+    for await (const entry of ctx.db
+      .query("timeEntries")
+      .withIndex("by_taskId", (q) => q.eq("taskId", task._id))) {
+      if (entry.orgId === orgId) lifecycleEntries.push(entry);
+    }
+    lifecycleEntries.sort((a, b) =>
+      a.date < b.date ? -1 : a.date > b.date ? 1 : a.startedAt - b.startedAt,
+    );
+
     rows.push({
       taskId: task._id,
       title: task.title,
@@ -455,7 +495,7 @@ export async function buildTaskRows(
         descriptionText,
         subtasks,
         commentTexts,
-        entryNotes: taskEntries
+        entryNotes: lifecycleEntries
           .filter((e) => (e.note ?? "").trim().length > 0)
           .map((e) => ({
             date: e.date,

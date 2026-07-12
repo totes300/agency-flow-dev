@@ -14,6 +14,7 @@ import {
   internalMutation,
   internalQuery,
   mutation,
+  type ActionCtx,
   type MutationCtx,
 } from "./_generated/server";
 import { components, internal } from "./_generated/api";
@@ -28,10 +29,49 @@ import {
   STOP_CONDITION_TOOL_NAME,
   type ResolvableSkill,
 } from "../lib/agents/skills";
+import { PLATFORM_FORMATTING_PROMPT } from "../lib/agents/platformPrompt";
 import {
   resolveModel,
   WorksheetAiUnavailableError,
 } from "./lib/worksheetAi";
+import {
+  ATTACHMENT_TOTAL_CHAR_LIMIT,
+  buildComposerContext,
+  capAttachmentText,
+  isSupportedAttachment,
+  serializeMentionToken,
+  type ExtractedAttachment,
+  type MentionRef,
+  type MentionType,
+} from "../lib/agents/composer";
+
+/** Wire validators for a composer @-mention reference. */
+const mentionTypeValidator = v.union(
+  v.literal("task"),
+  v.literal("project"),
+  v.literal("client"),
+  v.literal("user"),
+);
+const mentionRefValidator = v.object({
+  type: mentionTypeValidator,
+  id: v.string(),
+  label: v.string(),
+});
+/** A composer attachment reference on the wire (storage id + metadata). */
+const attachmentRefValidator = v.object({
+  storageId: v.id("_storage"),
+  name: v.string(),
+  mimeType: v.string(),
+  size: v.number(),
+});
+
+/** Which table backs each mention type (for server-side re-resolution). */
+const MENTION_TABLE: Record<MentionType, "tasks" | "projects" | "clients" | "users"> = {
+  task: "tasks",
+  project: "projects",
+  client: "clients",
+  user: "users",
+};
 
 /**
  * Agent Runtime (PRD module 1) — everything between "user sends a message"
@@ -48,8 +88,13 @@ import {
  * (+ `useUIMessages`), so nothing depends on this action's return value.
  */
 
-/** Max tool-loop steps per response cycle (tracer-scale; revisit later). */
-const MAX_STEPS = 5;
+/**
+ * Max tool-loop steps per response cycle. Raised 5 → 12 with the read-tool
+ * expansion round (owner decision 2026-07-12): collectors are batch-shaped
+ * so loops stay server-side, but resolve-ids → collect → cross-check →
+ * createSheet chains plus error retries need the headroom.
+ */
+const MAX_STEPS = 12;
 
 const TITLE_MAX_LEN = 60;
 
@@ -78,6 +123,14 @@ export const beginRun = internalMutation({
     // Plain string — arrives from the URL via the composer; normalized here.
     threadId: v.string(),
     message: v.string(),
+    // Composer @-mentions (slice 07) — re-resolved + injected as authoritative
+    // context so the model uses exact ids, never client-typed names.
+    mentions: v.optional(v.array(mentionRefValidator)),
+    // Text already extracted from uploaded files by the action (storage blobs
+    // aren't readable inside a mutation).
+    attachments: v.optional(
+      v.array(v.object({ name: v.string(), text: v.string() })),
+    ),
   },
   handler: async (ctx, args) => {
     const auth = await getAuthContext(ctx);
@@ -118,9 +171,32 @@ export const beginRun = internalMutation({
     }
     const resolved = resolveSkills(skills, clientId);
     const skillPrompt = assembleSkillPrompt(resolved);
-    const instructions = skillPrompt
-      ? `${agent.instructions}\n\n${skillPrompt}`
-      : agent.instructions;
+    // Agent identity first, then the platform's rendering-surface
+    // capabilities (markdown/tables), then per-run skill prompts.
+    const baseInstructions = [
+      agent.instructions,
+      PLATFORM_FORMATTING_PROMPT,
+      skillPrompt,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+
+    // ─── Composer context (slice 07) ─────────────────────────────────────
+    // Re-resolve @-mentions to verified refs + fold in extracted file text,
+    // then append one authoritative block below the skills. Empty when the
+    // message carried neither, so a plain run's prompt is unchanged.
+    const resolvedMentions = await resolveMentions(
+      ctx,
+      auth.orgId,
+      args.mentions ?? [],
+    );
+    const composerContext = buildComposerContext({
+      mentions: resolvedMentions,
+      attachments: args.attachments ?? [],
+    });
+    const instructions = composerContext
+      ? `${baseInstructions}\n\n${composerContext}`
+      : baseInstructions;
 
     // Save the user message FIRST, so its component _creationTime precedes the
     // run's startedAt — the "skill loaded" notes then sort AFTER the question
@@ -130,6 +206,15 @@ export const beginRun = internalMutation({
       userId: auth.userId,
       prompt: args.message,
     });
+
+    // Flag tool names the registry no longer knows (renamed/removed in code)
+    // for THIS runner: recorded on the run row so the thread surfaces a
+    // `system` block, and dropped again at model-call time (getToolsForAgent
+    // in the action is the single source of truth — never executed).
+    const { dropped: droppedTools } = getToolsForAgent(
+      agent.tools,
+      auth.isAdmin,
+    );
 
     const now = Date.now();
     const runId = await ctx.db.insert("agentRuns", {
@@ -147,6 +232,7 @@ export const beginRun = internalMutation({
             })),
           }
         : {}),
+      ...(droppedTools.length > 0 ? { droppedTools } : {}),
     });
     await ctx.db.patch(thread._id, {
       status: "running",
@@ -200,6 +286,67 @@ async function loadAgentSkills(
     });
   }
   return skills;
+}
+
+/**
+ * Re-resolve composer @-mentions server-side (slice 07). The client sends
+ * {type,id,label}; we trust NEITHER the id (could point cross-tenant) NOR the
+ * label (could be stale) and re-read each record org-scoped, dropping anything
+ * invalid. Users are validated against org membership (they carry no orgId).
+ * The result feeds the authoritative-context block, so the model always uses
+ * verified ids and canonical names — never a name the client typed.
+ */
+async function resolveMentions(
+  ctx: MutationCtx,
+  orgId: string,
+  refs: { type: MentionType; id: string; label: string }[],
+): Promise<MentionRef[]> {
+  if (refs.length === 0) return [];
+
+  // Org membership set — loaded once, only when a user is mentioned.
+  let memberUserIds: Set<string> | null = null;
+  const loadMembers = async () => {
+    if (memberUserIds) return memberUserIds;
+    const memberships = await ctx.db
+      .query("orgMembers")
+      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+      .collect();
+    memberUserIds = new Set(
+      memberships.map((m) => m.userId?.toString()).filter(Boolean) as string[],
+    );
+    return memberUserIds;
+  };
+
+  const resolved: MentionRef[] = [];
+  const seen = new Set<string>();
+  for (const ref of refs) {
+    const key = `${ref.type}:${ref.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    const id = ctx.db.normalizeId(MENTION_TABLE[ref.type], ref.id);
+    if (!id) continue;
+
+    if (ref.type === "user") {
+      const members = await loadMembers();
+      if (!members.has(ref.id)) continue;
+      const user = await ctx.db.get(id as Id<"users">);
+      if (!user || user.deletedAt) continue;
+      resolved.push({ type: "user", id: ref.id, label: user.name });
+      continue;
+    }
+
+    const doc = await ctx.db.get(id);
+    // Every domain table here carries orgId + a name/title — verify tenancy.
+    if (!doc || (doc as { orgId?: string }).orgId !== orgId) continue;
+    if ((doc as { archivedAt?: number }).archivedAt) continue;
+    const label =
+      ref.type === "task"
+        ? (doc as { title: string }).title
+        : (doc as { name: string }).name;
+    resolved.push({ type: ref.type, id: ref.id, label });
+  }
+  return resolved;
 }
 
 /**
@@ -331,10 +478,31 @@ export const startRun = action({
   args: {
     threadId: v.string(),
     message: v.string(),
+    mentions: v.optional(v.array(mentionRefValidator)),
+    attachments: v.optional(v.array(attachmentRefValidator)),
   },
   handler: async (ctx, args): Promise<{ runId: Id<"agentRuns"> }> => {
     const trimmed = args.message.trim();
-    if (!trimmed) throw new ConvexError("Message is empty");
+    // A message is optional when files/mentions carry the intent (e.g. "here's
+    // the transcript" is the attachment itself). Require at least one signal.
+    const hasAttachments = (args.attachments?.length ?? 0) > 0;
+    const hasMentions = (args.mentions?.length ?? 0) > 0;
+    if (!trimmed && !hasAttachments && !hasMentions) {
+      throw new ConvexError("Message is empty");
+    }
+
+    // Extract attachment text HERE (storage blobs are unreadable in a
+    // mutation). Unsupported types were rejected client-side; re-check
+    // defensively and skip anything unreadable rather than failing the run.
+    const attachmentTexts = args.attachments
+      ? await extractAttachmentTexts(ctx, args.attachments)
+      : [];
+
+    // An attachment/mention-only send needs a non-empty prompt so the saved
+    // user message (and the model's prompt) isn't blank — synthesize one from
+    // the mention tokens + file names. Mentions keep their inline token form so
+    // the sent bubble still styles them.
+    const message = trimmed || synthesizePrompt(args.mentions, attachmentTexts);
 
     // Permission gate + run row + user message + thread status, all in one
     // transaction. Validation failures throw BEFORE anything is recorded —
@@ -342,7 +510,9 @@ export const startRun = action({
     // in-thread error block instead of a rejected promise.
     const run = await ctx.runMutation(internal.agentRunner.beginRun, {
       threadId: args.threadId,
-      message: trimmed,
+      message,
+      mentions: args.mentions,
+      attachments: attachmentTexts,
     });
 
     // Cooperative Stop (PRD error/stop model): stopRun sets a flag on the
@@ -468,6 +638,68 @@ export const startRun = action({
     }
   },
 });
+
+/**
+ * Read each uploaded file's text from storage and cap it (slice 07). Runs in
+ * the action because `ctx.storage.get` only yields a Blob there. Per-file and
+ * running-total char caps keep a huge paste from blowing the model context or
+ * the mutation arg size; anything unsupported or unreadable is skipped, never
+ * fatal — the run proceeds with whatever extracted cleanly.
+ */
+async function extractAttachmentTexts(
+  ctx: ActionCtx,
+  attachments: {
+    storageId: Id<"_storage">;
+    name: string;
+    mimeType: string;
+    size: number;
+  }[],
+): Promise<ExtractedAttachment[]> {
+  const out: ExtractedAttachment[] = [];
+  let total = 0;
+  for (const att of attachments) {
+    if (total >= ATTACHMENT_TOTAL_CHAR_LIMIT) break;
+    if (!isSupportedAttachment(att.name, att.mimeType)) continue;
+    let raw: string;
+    try {
+      const blob = await ctx.storage.get(att.storageId);
+      if (!blob) continue;
+      raw = await blob.text();
+    } catch {
+      continue; // unreadable/binary — skip rather than fail the whole run
+    }
+    const capped = capAttachmentText(raw);
+    let text = capped.text;
+    if (total + text.length > ATTACHMENT_TOTAL_CHAR_LIMIT) {
+      text = text.slice(0, ATTACHMENT_TOTAL_CHAR_LIMIT - total);
+    }
+    total += text.length;
+    out.push({
+      name: att.name,
+      text: capped.truncated ? `${text}\n…[truncated]` : text,
+    });
+  }
+  return out;
+}
+
+/**
+ * Build a stand-in prompt when the user sent only mentions/files and no text,
+ * so the saved message and model prompt aren't blank. Mentions keep their
+ * inline `@[label](type:id)` token so the bubble renders them as chips.
+ */
+function synthesizePrompt(
+  mentions: { type: MentionType; id: string; label: string }[] | undefined,
+  attachments: ExtractedAttachment[],
+): string {
+  const parts: string[] = [];
+  if (mentions && mentions.length > 0) {
+    parts.push(mentions.map(serializeMentionToken).join(" "));
+  }
+  if (attachments.length > 0) {
+    parts.push(`(attached: ${attachments.map((a) => a.name).join(", ")})`);
+  }
+  return parts.join(" ").trim() || "(no message)";
+}
 
 /**
  * Stop the active run (owner-only). Two levers, per the PRD's cooperative

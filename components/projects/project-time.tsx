@@ -17,8 +17,8 @@ import { EmptyStateBanner } from "@/components/projects/empty-state-banner"
 import { Button } from "@/components/ui/button"
 import { useIsAdmin } from "@/lib/hooks/use-is-admin"
 import {
+  parseDateRangePreset,
   resolveDateRangePreset,
-  type DateRangePreset,
 } from "@/lib/date-buckets"
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -28,42 +28,8 @@ type ProjectLite = {
   billingType: string
   currency: string
   teamMembers?: Id<"users">[]
-}
-
-// Phase 8 — Vocabulary aligned with `entryStatus()` in
-// `convex/lib/settleEntries.ts`. Old values (`billable_uninvoiced`,
-// `invoiced`) were renamed; `invoiced` collapses into the broader
-// `closed` bucket because the row badge no longer splits invoiced /
-// settled (that detail lives in the period drill-down — Slice 4).
-type BillingStatusFilter = "all" | "open" | "draft" | "closed" | "non_billable"
-
-const DEFAULT_DATE_RANGE: DateRangePreset = "all"
-
-function parseBillingStatus(value: string | null): BillingStatusFilter | undefined {
-  if (
-    value === "open" ||
-    value === "draft" ||
-    value === "closed" ||
-    value === "non_billable"
-  ) {
-    return value
-  }
-  return undefined
-}
-
-function parseDateRangePreset(value: string | null): DateRangePreset {
-  if (
-    value === "all" ||
-    value === "this_week" ||
-    value === "last_week" ||
-    value === "this_month" ||
-    value === "last_month" ||
-    value === "this_year" ||
-    value === "custom"
-  ) {
-    return value
-  }
-  return DEFAULT_DATE_RANGE
+  /** `YYYY-MM-DD` — lower bound for all-time worksheet exports. */
+  startDate?: string
 }
 
 // ─── Component ──────────────────────────────────────────────────────────────
@@ -101,8 +67,9 @@ export function ProjectTime({
   const isAdmin = useIsAdmin() ?? false
   const searchParams = useSearchParams()
 
-  const memberId = (searchParams.get("member") || undefined) as Id<"users"> | undefined
-  const billingStatus = parseBillingStatus(searchParams.get("billingStatus"))
+  // Member / category / billing-status facets are applied client-side in
+  // ProjectTimeContent (`applyTimeEntryFilters`) — the query narrows only
+  // by project + date range + search.
   const search = searchParams.get("search") || undefined
   const dateRangePreset = parseDateRangePreset(searchParams.get("dateRange"))
   const customFrom = searchParams.get("from") || undefined
@@ -142,9 +109,7 @@ export function ProjectTime({
 
   const data = useQuery(
     api.timeEntries.listProjectEntries,
-    isAuthenticated
-      ? { projectId, memberId, billingStatus, search, fromDate, toDate }
-      : "skip",
+    isAuthenticated ? { projectId, search, fromDate, toDate } : "skip",
   )
 
   // Add-Time modal state lives here so both empty + content branches share
@@ -152,33 +117,26 @@ export function ProjectTime({
   // own modal (the previous duplication is gone).
   const [isAddOpen, setIsAddOpen] = useState(false)
 
-  // Same "any filter active?" signal Content uses — kept in sync with the
-  // helper there. Drives the empty-vs-no-match copy decision below.
-  const hasFilters = Boolean(
-    memberId ||
-      billingStatus ||
-      search ||
-      dateRangePreset !== DEFAULT_DATE_RANGE,
-  )
-
   // ─── Phase 1: Loading ──────────────────────────────────────────────────
   if (data === undefined) return <ProjectTimeSkeleton />
 
   const entries = data.entries as TimeEntryRow[]
   const availableMembers = data.availableMembers
 
-  // ─── Phase 2: Empty (no data, no filters) ──────────────────────────────
-  // The "no entries match filters" copy is rendered INSIDE Content (it
-  // needs the filter UI to be visible so the user can clear filters). This
-  // branch is only the truly-empty state: project has zero logged time.
-  if (entries.length === 0 && !hasFilters) {
+  // ─── Phase 2: Empty (project has zero logged time) ─────────────────────
+  // `availableMembers` derives from ALL project entries visible to the
+  // caller, BEFORE date/search narrowing — so an empty list means the
+  // project truly has no time yet, even though the default range is
+  // "this month". The "no entries match filters" copy is rendered INSIDE
+  // Content (it needs the filter UI visible so the user can widen it).
+  if (availableMembers.length === 0) {
     return (
       <>
         <div className="flex flex-col gap-4">
           <div className="flex items-center justify-end">
             <Button onClick={() => setIsAddOpen(true)}>
               <PlusIcon data-icon="inline-start" className="size-4" />
-              Add Time
+              Add time
             </Button>
           </div>
           <EmptyStateBanner

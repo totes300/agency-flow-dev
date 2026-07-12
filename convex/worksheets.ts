@@ -33,6 +33,7 @@ import {
   filenameForInvoice,
   filenameForMonth,
   formatMonthScopeLabel,
+  groupWorksheetRowsByTaskId,
   type WorksheetAiOutputs,
   type WorksheetCycleData,
   type WorksheetData,
@@ -129,18 +130,21 @@ async function resolveAiOutputs(
   apiKey: string | null,
 ): Promise<{ outputs: WorksheetAiOutputs; stats: WorksheetStats }> {
   const outputs: WorksheetAiOutputs = new Map();
-  const eligible: Array<{ row: WorksheetTaskRow }> = [];
+  const eligible: Array<{
+    row: WorksheetTaskRow;
+    occurrenceCount: number;
+  }> = [];
   let aiSkipped = 0;
 
-  for (const row of rows) {
+  for (const { row, occurrenceCount } of groupWorksheetRowsByTaskId(rows)) {
     if (hasMeaningfulContent(row)) {
-      eligible.push({ row });
+      eligible.push({ row, occurrenceCount });
     } else {
       outputs.set(row.taskId as unknown as string, {
         taskSummary: `${row.title}.`,
         whatWeDid: `Worked on ${row.title}.`,
       });
-      aiSkipped++;
+      aiSkipped += occurrenceCount;
     }
   }
 
@@ -159,17 +163,17 @@ async function resolveAiOutputs(
   let aiSucceeded = 0;
   let aiFailed = 0;
   for (let i = 0; i < eligible.length; i++) {
-    const { row } = eligible[i];
+    const { row, occurrenceCount } = eligible[i];
     const r = results[i];
     if (r) {
       outputs.set(row.taskId as unknown as string, r);
-      aiSucceeded++;
+      aiSucceeded += occurrenceCount;
     } else {
       outputs.set(row.taskId as unknown as string, {
         taskSummary: `${row.title}.`,
         whatWeDid: "[summary unavailable]",
       });
-      aiFailed++;
+      aiFailed += occurrenceCount;
     }
   }
 

@@ -28,6 +28,13 @@ import {
   deterministicCellText,
   ProseCellContent,
 } from "@/components/agents/sheet/sheet-cell"
+import {
+  SHEET_FRAME,
+  SHEET_LINE,
+  SHEET_TABLE,
+  SHEET_TD,
+  SHEET_TH,
+} from "@/components/agents/sheet/sheet-tokens"
 import { formatMinutes } from "@/lib/format"
 import { useAgentCanvas } from "@/lib/hooks/use-agent-canvas"
 import { cn } from "@/lib/utils"
@@ -72,7 +79,7 @@ const FRZ_WIDTH = "min-w-[186px] max-w-[186px]"
 /** Frozen-pane shadow — applied only once the grid is actually scrolled. */
 const FRZ_SHADOW = "shadow-[6px_0_8px_-8px_rgba(0,0,0,0.25)]"
 /** Inner gridline vs the structural (header/footer/frozen-edge) line. */
-const LINE = "border-border/50"
+const LINE = SHEET_LINE
 
 function CanvasSheet({ table }: { table: AgentTable }) {
   const [sort, setSort] = useState<{ key: string; dir: SheetSortDir } | null>(
@@ -424,20 +431,19 @@ function InlineSheet({
   const showFooter = totalValue !== null || flagged > 0 || artifactId !== null
 
   return (
-    <div className="overflow-hidden rounded-lg border bg-background shadow-sm">
+    <div className={SHEET_FRAME}>
       <div className="px-3 pb-1.5 pt-2 text-xs text-muted-foreground">
         {table.title}
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full border-separate border-spacing-0 text-xs">
+        <table className={SHEET_TABLE}>
           <thead>
             <tr>
               {cols.map((col) => (
                 <th
                   key={col.key}
                   className={cn(
-                    "whitespace-nowrap border-b border-r bg-muted/50 px-2.5 py-1.5 text-left text-[11px] font-medium text-muted-foreground last:border-r-0",
-                    LINE,
+                    SHEET_TH,
                     col.kind === "minutes" && "text-right",
                   )}
                 >
@@ -543,10 +549,7 @@ function InlineCell({
   value: AgentTableRowValues[string] | undefined
   isFirst: boolean
 }) {
-  const base = cn(
-    "border-b border-r px-2.5 py-1.5 align-top last:border-r-0",
-    LINE,
-  )
+  const base = SHEET_TD
   if (col.kind === "prose") {
     return (
       <td className={cn(base, "max-w-[280px]")}>

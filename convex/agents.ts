@@ -1,8 +1,26 @@
 import { v, ConvexError } from "convex/values";
-import { internalMutation, mutation, query } from "./_generated/server";
+import {
+  internalMutation,
+  mutation,
+  query,
+  type MutationCtx,
+} from "./_generated/server";
 import { getAuthContext, requireAdmin } from "./lib/auth";
-import { agentToolRegistry } from "./lib/agentToolRegistry";
+import {
+  agentToolRegistry,
+  getToolCatalog,
+  isKnownTool,
+} from "./lib/agentToolRegistry";
+import {
+  normalizeExamplePrompts,
+  validateAgentDraft,
+} from "../lib/agents/builder";
 import type { Id } from "./_generated/dataModel";
+
+const runPermissionValidator = v.union(
+  v.literal("admins"),
+  v.literal("everyone"),
+);
 
 // ─── Queries ────────────────────────────────────────────────────────────────
 
@@ -113,14 +131,231 @@ export const setSkills = mutation({
   },
 });
 
+// ─── Admin builder (slice 09) ────────────────────────────────────────────────
+
+/**
+ * The vetted tool catalog for the builder's checklist (admin-only). Static
+ * code data, but gated so only the builder surface fetches it. Grouping and
+ * stale-ref detection over these rows are the pure `lib/agents/builder`.
+ */
+export const toolCatalog = query({
+  args: {},
+  handler: async (ctx) => {
+    await requireAdmin(ctx);
+    return getToolCatalog();
+  },
+});
+
+/**
+ * Every org agent — INCLUDING archived — for the manage-agents list
+ * (admin-only). Archived agents disappear from runners' rails (`listRunnable`)
+ * but must stay visible and restorable here. Newest activity first.
+ */
+export const listAll = query({
+  args: {},
+  handler: async (ctx) => {
+    const auth = await requireAdmin(ctx);
+    const agents = await ctx.db
+      .query("agents")
+      .withIndex("by_orgId", (q) => q.eq("orgId", auth.orgId))
+      .collect();
+    return agents
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .map((a) => ({
+        _id: a._id,
+        name: a.name,
+        description: a.description,
+        runPermission: a.runPermission,
+        toolCount: a.tools.length,
+        skillCount: a.skillIds?.length ?? 0,
+        archived: Boolean(a.archivedAt),
+      }));
+  },
+});
+
+/**
+ * One agent's full config for the edit form (admin-only). Returns null for an
+ * unknown/foreign id so a stale URL degrades to the list instead of crashing.
+ * The form flags stale tool refs itself via the catalog + pure builder helper.
+ */
+export const getForEdit = query({
+  args: { agentId: v.string() },
+  handler: async (ctx, args) => {
+    const auth = await requireAdmin(ctx);
+    const id = ctx.db.normalizeId("agents", args.agentId);
+    if (!id) return null;
+    const agent = await ctx.db.get(id);
+    if (!agent || agent.orgId !== auth.orgId) return null;
+    return {
+      _id: agent._id,
+      name: agent.name,
+      description: agent.description,
+      instructions: agent.instructions,
+      tools: agent.tools,
+      skillIds: agent.skillIds ?? [],
+      runPermission: agent.runPermission,
+      model: agent.model ?? null,
+      examplePrompts: agent.examplePrompts ?? [],
+      archived: Boolean(agent.archivedAt),
+    };
+  },
+});
+
+/**
+ * Validate + normalize the mutable config an agent's create/edit form submits.
+ * Shared by `create` and `update`: enforces the pure draft rules, rejects any
+ * tool name the registry doesn't know (the checklist can ONLY reference vetted
+ * entries — US 47), and verifies every skill belongs to the org and is active
+ * so an agent can never smuggle a foreign or dead skill into a run.
+ */
+async function normalizeAgentConfig(
+  ctx: MutationCtx,
+  orgId: string,
+  args: {
+    name: string;
+    description: string;
+    instructions: string;
+    tools: string[];
+    skillIds: Id<"skills">[];
+    runPermission: "admins" | "everyone";
+    model?: string;
+    examplePrompts?: string[];
+  },
+) {
+  const draftError = validateAgentDraft({
+    name: args.name,
+    description: args.description,
+    instructions: args.instructions,
+  });
+  if (draftError) throw new ConvexError(draftError);
+
+  const tools = [...new Set(args.tools)];
+  const unknown = tools.filter((name) => !isKnownTool(name));
+  if (unknown.length > 0) {
+    throw new ConvexError(`Unknown tools: ${unknown.join(", ")}`);
+  }
+
+  const skillIds = [...new Set(args.skillIds)];
+  for (const skillId of skillIds) {
+    const skill = await ctx.db.get(skillId);
+    if (!skill || skill.orgId !== orgId || skill.archivedAt) {
+      throw new ConvexError("Skill not found");
+    }
+  }
+
+  const model = args.model?.trim();
+  return {
+    name: args.name.trim(),
+    description: args.description.trim(),
+    instructions: args.instructions.trim(),
+    tools,
+    skillIds,
+    runPermission: args.runPermission,
+    model: model ? model : undefined,
+    examplePrompts: normalizeExamplePrompts(args.examplePrompts ?? []),
+  };
+}
+
+export const create = mutation({
+  args: {
+    name: v.string(),
+    description: v.string(),
+    instructions: v.string(),
+    tools: v.array(v.string()),
+    skillIds: v.array(v.id("skills")),
+    runPermission: runPermissionValidator,
+    model: v.optional(v.string()),
+    examplePrompts: v.optional(v.array(v.string())),
+  },
+  handler: async (ctx, args) => {
+    const auth = await requireAdmin(ctx);
+    const config = await normalizeAgentConfig(ctx, auth.orgId, args);
+    const now = Date.now();
+    return await ctx.db.insert("agents", {
+      orgId: auth.orgId,
+      ...config,
+      trigger: "manual",
+      createdBy: auth.userId,
+      createdAt: now,
+      updatedAt: now,
+    });
+  },
+});
+
+export const update = mutation({
+  args: {
+    agentId: v.id("agents"),
+    name: v.string(),
+    description: v.string(),
+    instructions: v.string(),
+    tools: v.array(v.string()),
+    skillIds: v.array(v.id("skills")),
+    runPermission: runPermissionValidator,
+    model: v.optional(v.string()),
+    examplePrompts: v.optional(v.array(v.string())),
+  },
+  handler: async (ctx, args) => {
+    const auth = await requireAdmin(ctx);
+    const agent = await ctx.db.get(args.agentId);
+    if (!agent || agent.orgId !== auth.orgId) {
+      throw new ConvexError("Agent not found");
+    }
+    const config = await normalizeAgentConfig(ctx, auth.orgId, args);
+    // `model` clears when empty (patch with undefined removes the field).
+    await ctx.db.patch(args.agentId, { ...config, updatedAt: Date.now() });
+    return null;
+  },
+});
+
+/**
+ * Archive an agent: it vanishes from runners' rails and can't start new runs,
+ * but its historical threads stay readable (US 46). Reversible via `restore`.
+ */
+export const archive = mutation({
+  args: { agentId: v.id("agents") },
+  handler: async (ctx, args) => {
+    const auth = await requireAdmin(ctx);
+    const agent = await ctx.db.get(args.agentId);
+    if (!agent || agent.orgId !== auth.orgId) {
+      throw new ConvexError("Agent not found");
+    }
+    if (agent.archivedAt) return null;
+    const now = Date.now();
+    await ctx.db.patch(args.agentId, { archivedAt: now, updatedAt: now });
+    return null;
+  },
+});
+
+export const restore = mutation({
+  args: { agentId: v.id("agents") },
+  handler: async (ctx, args) => {
+    const auth = await requireAdmin(ctx);
+    const agent = await ctx.db.get(args.agentId);
+    if (!agent || agent.orgId !== auth.orgId) {
+      throw new ConvexError("Agent not found");
+    }
+    await ctx.db.patch(args.agentId, {
+      archivedAt: undefined,
+      updatedAt: Date.now(),
+    });
+    return null;
+  },
+});
+
 // ─── Dev seed ───────────────────────────────────────────────────────────────
 
 /**
  * DEV-ONLY seed, idempotent (upsert by name). Seeds:
  *  - "Flow Assistant" — slice-01 tracer, member read tools, everyone.
+ *  - "Task Drafter" — slice-08 proposal-engine exerciser, everyone.
  *  - "Timesheet Generator" — the PRD's first real agent (slice 03+),
  *    admin-only: its collector tool is admin-gated anyway.
+ *  - "Agency Copilot" — the general do-everything agent (read-tool
+ *    expansion round, owner decision 2026-07-12): full registry minus the
+ *    dev echo connector, admin-only. Month close, retainer health, finance
+ *    snapshots, task drafting via proposals.
  *
+ * Tool lists derive from the registry, so RESEED after adding tools:
  * Run:  npx convex run agents:devSeedAgents '{"email":"you@example.com"}'
  */
 export const devSeedAgents = internalMutation({
@@ -138,6 +373,11 @@ export const devSeedAgents = internalMutation({
     const memberTools = Object.entries(agentToolRegistry)
       .filter(([, entry]) => entry.scope === "member")
       .map(([name]) => name);
+    // Everything except the dev echo connector — future registry additions
+    // flow into the Copilot automatically on reseed.
+    const copilotTools = Object.keys(agentToolRegistry).filter(
+      (name) => name !== "echo",
+    );
 
     const seeds = [
       {
@@ -158,6 +398,45 @@ export const devSeedAgents = internalMutation({
           "List our active projects",
           "Which projects are retainers?",
           "Do we have any archived clients?",
+        ],
+      },
+      {
+        // Dev-only write agent (slice 08) — exists to exercise the proposal
+        // engine end-to-end before Wave 2's Monthly Closing consumes it.
+        name: "Task Drafter",
+        description:
+          "Drafts task proposals from a pasted list or email — nothing is " +
+          "created until you approve each card.",
+        instructions:
+          "You are Task Drafter inside Agency Flow, a project management " +
+          "tool for digital agencies. You turn pasted lists, emails and " +
+          "notes into task PROPOSALS the user reviews and approves.\n\n" +
+          "Rules you must never break:\n" +
+          "1. You cannot create, change or archive anything yourself. Your " +
+          "only write path is proposing: proposeCreateTasks for new tasks, " +
+          "proposeArchiveTask for archiving. The user approves or discards " +
+          "each card — never claim something was created or archived.\n" +
+          "2. One proposal per distinct task in the source material. Keep " +
+          "titles short and imperative; put supporting detail in the " +
+          "description as plain text.\n" +
+          "3. Use exact ids only: resolve project names via listProjects; " +
+          "take assignee or task ids only from @-mentions in the user's " +
+          "message. If you don't have an exact id, leave the field empty — " +
+          "the user can fill it on the card. Never guess ids.\n" +
+          "4. Set a due date only when the source states one.\n" +
+          "5. After proposing, add at most one short sentence — do not " +
+          "restate the proposed items or ask the user to approve.",
+        tools: [
+          "listClients",
+          "listProjects",
+          "proposeCreateTasks",
+          "proposeArchiveTask",
+        ],
+        runPermission: "everyone" as const,
+        examplePrompts: [
+          "Create 3 tasks: fix the header logo, update pricing page copy, add cookie banner",
+          "Turn this email into tasks: …",
+          "Draft tasks from these meeting notes with due dates",
         ],
       },
       {
@@ -195,6 +474,56 @@ export const devSeedAgents = internalMutation({
           "Show this month's timesheet for our biggest client",
           "Billable-only timesheet for Arlow, May 2026",
           "Timesheet for Pragmatico from June 1 to June 15",
+        ],
+      },
+      {
+        // The general agent (read-tool expansion round). One persona with
+        // the full vetted read surface + createSheet + the proposal tools —
+        // month close, retainer health, utilization, finance snapshots,
+        // task drafting. Admin-only: most of its collectors are admin-gated
+        // anyway, and scope filtering would silently degrade member runs.
+        name: "Agency Copilot",
+        description:
+          "The all-round agency agent: month-close sweeps, retainer " +
+          "health, utilization and finance reports, task drafting.",
+        instructions:
+          "You are Agency Copilot inside Agency Flow, a project management " +
+          "tool for digital agencies. You answer operational and financial " +
+          "questions and assemble reports for the agency owner.\n\n" +
+          "Rules you must never break:\n" +
+          "1. Every number comes from a tool. NEVER compute, estimate, add " +
+          "up, convert or re-type minutes, hours or amounts yourself — " +
+          "copy tool values verbatim.\n" +
+          "2. Resolve names to ids first (listClients, listProjects, " +
+          "listTeamMembers, listStatuses, listWorkCategories). If a name " +
+          "is ambiguous, ask instead of guessing. Never invent ids.\n" +
+          "3. Prefer ONE batch collector over looping: " +
+          "collectRetainerHealth for all retainers in a month, " +
+          "collectClientMonthlyTotals for a month range, collectTeamTime " +
+          "for the whole team, collectOrgFinanceSnapshot for org-wide " +
+          "finance. Loop only when no batch tool covers the ask.\n" +
+          "4. Deliverable-style tables and exports go through createSheet " +
+          "with values copied verbatim from tool results; small quick " +
+          "comparisons may be plain Markdown tables. Never restate a " +
+          "rendered table's contents.\n" +
+          "5. Money stays per currency — never sum across currencies. " +
+          "Retainer hours carry a 0 hourly amount by design; retainer " +
+          "money comes from the retainer/cycle/invoice tools.\n" +
+          "6. Your only write path is proposing (proposeCreateTasks, " +
+          "proposeArchiveTask) — cards the user approves. Never claim " +
+          "anything was created or changed; after proposing, add at most " +
+          "one short sentence.\n" +
+          "7. If a tool reports an empty period or no matching data, say " +
+          "so plainly — do not fabricate rows or pad reports.\n" +
+          "8. Around tables and reports, add at most two short sentences " +
+          "of commentary without restating specific numbers.",
+        tools: copilotTools,
+        runPermission: "admins" as const,
+        examplePrompts: [
+          "How did every client's retainer end up last month? Table, please.",
+          "How many hours did we work and how much did we invoice this month?",
+          "Collect Anna's June time — which projects, how many hours?",
+          "Monthly breakdown for Pragmatico for the whole year, as a sheet",
         ],
       },
     ];

@@ -3316,3 +3316,840 @@ inline "+N more" → canvas) queued for the signed-in gate with slices 05+06.
   sticky cells); revisit only if the hover reads too strong in review
 - Inline preview drops date columns by design; if reviewers miss them, the
   subset rule lives in one place (`inlinePreviewColumns`)
+
+### Agent markdown rendering — universal tabular expression ✅ (2026-07-12)
+
+Decision (discussed with Adam, "how would Stripe/Notion do it"): the agent
+gets tables as an always-available expression form via **markdown-first, two
+layers** — NOT a `renderTable` tool. Layer 1: assistant prose renders as GFM
+(Streamdown) so the model can present any self-assembled aggregation as a
+table by just writing one (its trained default — no prompt tax, streams
+progressively). Layer 2: deterministic data keeps the `table@1` block path
+(tool-authored, D1: model never types the numbers) with totals/canvas/CSV.
+One visual system, two provenance channels; the difference stays semantic,
+never visual.
+
+- [x] `streamdown@2.5` installed; Tailwind v4 `@source` for its dist added to
+      `app/globals.css` (default classes for unoverridden elements)
+- [x] `components/agents/sheet/sheet-tokens.ts` — the sheet design's shared
+      class tokens (frame, table, gridline, th, td) extracted from
+      `sheet-grid.tsx`; SheetGrid refactored onto them (pure refactor, no
+      visual change)
+- [x] `components/agents/markdown.tsx` — `AgentMarkdown`: Streamdown wrapper,
+      `mode` streaming/static per block state, hover controls OFF (chat
+      affordances are ours), GFM tables styled with the sheet tokens,
+      right-aligned (`---:`) columns get `tabular-nums` + `text-right`,
+      headings scaled to chat (h1/h2 → text-base), last body row drops its
+      bottom border against the card frame
+- [x] `text-block.tsx` → renders through `AgentMarkdown` (`useSmoothText`
+      kept); user bubbles + reasoning stay plain text deliberately
+- [x] `lib/agents/platformPrompt.ts` — `PLATFORM_FORMATTING_PROMPT`, appended
+      to EVERY agent's instructions in `beginRun` (platform owns
+      rendering-surface facts, agent authors never repeat them): markdown
+      renders; hand-written tables only from verbatim tool values; keep them
+      ≤ ~15 rows; NEVER re-type tool-rendered tables
+- [x] `components/agents/markdown.test.tsx` — 5 tests: sheet classes on
+      th/td, tabular-nums on right-aligned cells only, chat-scale headings,
+      half-streamed table doesn't throw, lists/strong render (Streamdown
+      renders `**strong**` as `span[data-streamdown="strong"]`)
+
+### Verification (agent markdown)
+
+`npx tsc --noEmit` 0 errors; eslint clean on all touched files; vitest: 5/5
+new markdown tests + all agent suites green (4 unrelated pre-existing
+failures: time-sensitive `format-activity-timestamp`/`taskActivityIndicators`
+tests + a vendored `.reference/tiptap` suite picked up by the glob). Visual
+walkthrough (streamed table mid-flight, dark theme, mixed prose+table answer)
+queued for the signed-in gate.
+
+### TODOs deferred (agent markdown)
+
+- Code blocks render unhighlighted (core Streamdown); add `@streamdown/code`
+  (shiki) only if agents start emitting code — bundle cost not worth it now
+- Link safety modal is Streamdown's default; restyle via `renderModal` if it
+  clashes with the design system once agents actually emit external links
+- Markdown tables have no copy/CSV affordance (controls disabled); if users
+  ask, add our own hover action reusing the sheet-tokens header row
+- User composer messages + reasoning blocks stay plain text; revisit user-side
+  markdown only if Adam asks (Notion renders it, Linear doesn't)
+
+### Slice 07 — Composer: Tiptap + @-mentions + upload ✅ (2026-07-12)
+
+Replaced the tracer's plain textarea with the designed composer: a Tiptap
+editor with @-mentions across the four domain entities (tasks / projects /
+clients / people) and txt/csv attachments. Mentions serialize to **typed
+entity references** — the runner re-resolves the ids server-side and injects an
+authoritative "the user referenced these exact records, don't name-guess"
+block into the run's instructions. This is the determinism win of US 16: the
+agent's tool calls carry the exact mentioned ids, never a name it inferred.
+
+- [x] `lib/agents/composer.ts` (pure, 19 tests): the shared vocabulary for
+      both the client composer and the Convex runner (safe to import from
+      both; never touches `lib/format`). Mention token `@[label](type:id)`
+      (`serializeMentionToken`) + `parseMentionText` round-trip (bubble
+      re-styles refs from the message text alone — no side table, survives
+      reload); `sanitizeMentionLabel` (strips token-breaking chars);
+      `isSupportedAttachment` / `attachmentRejectionMessage` (txt/csv accepted
+      by extension or `text/*` MIME; PDF gets its own deferral message);
+      `capAttachmentText` + `buildComposerContext` (the authoritative
+      mentions + fenced-file block, empty when nothing was attached)
+- [x] `convex/agentMentions.ts` `list` query: the four entity types org-scoped
+      from the authed session (not admin-gated — everyone runs permitted
+      agents), lightweight display fields only (id + label + context sublabel,
+      never rates); tasks capped to the 400 most-recently-touched with a
+      `tasksTruncated` flag; client filters in-memory (matches the comment
+      mention precedent)
+- [x] `convex/agentAttachments.ts` `generateUploadUrl`: authed upload URL;
+      files go straight to storage, the storageId rides `startRun`, text is
+      extracted at run time (no persisted attachment record — ephemeral run
+      input, deferral noted below)
+- [x] Runner (`convex/agentRunner.ts`): `startRun` gains `mentions` +
+      `attachments` args. The action extracts each file's text from storage
+      (`ctx.storage.get(...).text()` — blobs are unreadable in a mutation),
+      per-file + running-total char caps, unsupported/unreadable skipped not
+      fatal. `beginRun` re-resolves every mention id org-scoped (users vs org
+      membership; domain rows vs orgId + archived), dropping anything invalid,
+      and appends `buildComposerContext(...)` below the skills. An
+      attachment/mention-only send synthesizes a non-blank prompt so the saved
+      message + model prompt aren't empty (mentions keep their inline token so
+      the bubble still styles them)
+- [x] `components/agents/use-agent-mentions.tsx`: the four-type picker hook —
+      one `Mention` extension (extended with a typed `entityType` attribute)
+      built ONCE, reading its item list through a ref so a mention-data update
+      never rebuilds the editor mid-message; per-type icons + context
+      sublabels in the reused `SuggestionDropdown`; `collectMentions(editor)`
+      walks the doc into a deduped `MentionRef[]`
+- [x] `components/agents/composer.tsx` rewrite: `AgentComposer` is now a
+      Tiptap editor (forwardRef imperative handle: `prefill`/`focus`/`clear`).
+      Enter sends, Shift+Enter newline, Escape blurs, mention-dropdown Enter
+      picks; send→Stop swaps in place during a run and the editor stays
+      typable (slice-02 ergonomics preserved). Attachment chips with a remove
+      affordance + upload spinner; file input `accept`-scoped with a
+      client-side type guard that rejects unsupported files inline before any
+      run (US 17). `agent-composer.css` for the mention chips (per-type tints)
+      + placeholder
+- [x] `components/agents/user-message.tsx`: the sent bubble parses the stored
+      message's mention tokens back into styled reference chips (US 16 — chips
+      in the input AND styled refs in the sent message); wired into
+      `thread-view`. `thread-composer` + `new-chat-view` pass the structured
+      `ComposerSubmission` to `startRun`; example-prompt chips prefill via the
+      imperative handle
+- [x] Tiptap/`@tiptap/extension-mention` v3 API verified via context7
+      (`addAttributes` for `entityType`, `renderText` for token serialization,
+      the repo's `<Tiptap editor>` + `<Tiptap.Content />` provider pattern)
+
+### Verification (slice 07)
+
+`npx tsc --noEmit` 0 errors; Convex `tsc` via `npx convex codegen` clean (the
+stricter check — the pure `lib/agents/composer` module stays off the
+`lib/format` alias so the bundler resolves it from both client and runner);
+eslint clean on all touched files; `npm run build` succeeds (`/agents`
+compiles with the Tiptap composer, SSR `immediatelyRender:false`); vitest 84/84
+green across the agent lib suites (19 new in `composer.test.ts`). The 4
+repo-wide failures are the same pre-existing, unrelated ones (time-sensitive
+`format-activity-timestamp` / `taskActivityIndicators` + the vendored
+`.reference/tiptap` suite the glob picks up). Live walkthrough (type `@` →
+picker across all four types, mention → chip, send → styled bubble, tool call
+uses the exact id, paste a multi-paragraph email, attach a .txt, reject a
+.pdf, Stop mid-run) queued for the signed-in gate. `devSeedAgents` +
+signed-in org with tasks/projects/clients needed to exercise the picker.
+
+### TODOs deferred to later slices (07)
+
+- **PDF extraction (PRD Open Q1)** is deferred: PDFs are rejected inline with
+  a clear message. The `isSupportedAttachment` interface is where a
+  Convex-action-compatible extractor slots in when chosen — the rest of the
+  pipeline (upload → storageId → extract → context block) is format-agnostic
+- Attachments are ephemeral run input — no persisted `agentAttachments`
+  record, so a thread's history doesn't show which files a past run used.
+  Persisting them (+ an audit surface) is a slice-11 concern
+- The mention picker preloads up to 400 recent tasks and filters client-side
+  (matches the comment precedent; MVP dummy-data scale). A server-backed
+  search over the `search_title` index is the upgrade path when boards grow
+- Mentions don't support spaces mid-query (Tiptap `allowSpaces:false`), so a
+  task is found by typing a few chars then picking — never the full title with
+  spaces. Standard mention UX; revisit only if it trips users
+- User-bubble mention tints are a single primary shade (per-type color lives
+  in the composer chips only); richen the bubble tints if the distinction
+  matters in review
+
+### createSheet — model-assembled deliverable sheets ✅ (2026-07-12)
+
+Follow-up to the markdown-first decision, closing Adam's actual goal: a
+"kimutatás" the agent assembles must be a REAL artifact (chat preview →
+full-sheet canvas → CSV export), not just a chat-rendered markdown table.
+The earlier `renderTable` rejection stands for *display*; this tool exists
+for *persistence + export*, which markdown structurally cannot provide
+(Claude.ai pattern: markdown in chat, Artifacts for take-away output). D1
+does NOT hold for these sheets — the model types the cells into the tool
+input — so every model sheet carries a code-authored provenance caption and
+strict, retryable validation.
+
+- [x] `lib/agents/modelSheet.ts` (pure, 10 tests): `buildModelSheet` —
+      validates model-authored input into the `AgentTable` contract
+      (unique keys, cells only under declared columns, minutes = raw
+      non-negative integers, dates = YYYY-MM-DD, caps: 12 cols / 200 rows /
+      500-char cells; totals row validated per-kind with a free-form label
+      under the first column; empty data → "answer in prose" error). No
+      `prose` kind — that marks summarizer output, meaningless here. Always
+      stamps `MODEL_SHEET_NOTE` ("Composed by the assistant from tool
+      results.") so a model sheet can never masquerade as DB-verbatim
+- [x] `agentToolRegistry.ts` — `createSheet` (member scope, new kind
+      `artifact`: persists a rendering artifact, never domain data). Zod
+      input mirrors the contract; execute = buildModelSheet → persist via
+      `agentArtifacts.createForThread` (kind `sheet_csv`) → return
+      `table@1` marker + artifact ref + "already rendered, don't restate"
+      note. Classifier, inline sheet preview, "+N more rows", Open full
+      sheet, canvas and CSV export all reuse unchanged
+- [x] Schema: `agentArtifacts.kind` widened to
+      `timesheet_csv | sheet_csv`; `getForCanvas` return type follows
+- [x] `artifact-block.tsx` KIND_META + `blocks.ts` TOOL_DISPLAY
+      ("Creating sheet" / "Created sheet" / deterministic "N rows")
+- [x] Platform prompt routing: deliverable/export-worthy table →
+      `createSheet`; quick in-conversation comparison → markdown table
+
+### Verification (createSheet)
+
+`npx tsc --noEmit` 0 errors after `npx convex codegen`; eslint clean on all
+touched files; vitest 628 green across lib/agents + components/agents +
+convex/lib (10 new modelSheet + registry/blocks additions; 1 unrelated
+pre-existing `taskActivityIndicators` failure). `npm run build` green.
+**Reseed required:** `npx convex run agents:devSeedAgents '{"email":…}'` so
+the seeded agents' tool lists pick up `createSheet` (memberTools filter
+includes it automatically).
+
+### TODOs deferred (createSheet)
+
+- No dedupe: re-asking for the same sheet creates a second artifact (same as
+  re-running the timesheet tool). Artifact management/cleanup is later polish
+- The canvas labels both kinds "CSV spreadsheet"; provenance shows only via
+  the table's note caption. A distinct visual provenance treatment (e.g.
+  muted "assembled by AI" chip) is a review-round decision
+- Totals are model-supplied verbatim (never code-summed) — by design under
+  the "values verbatim from tools" rule; a code-side recompute would need
+  column semantics the platform can't know
+
+### Intermediate-fetch collapse — only the final table renders inline ✅ (2026-07-12)
+
+Adam's live-test feedback on the multi-client aggregation: every per-client
+timesheet rendered its full inline grid before the final summary sheet — at
+hundreds of clients the chat would drown. General rule (Claude/Codex
+pattern): show WHAT was checked while working, render only the DELIVERABLE.
+
+- [x] `classifyParts` (pure): within one message, only the LAST table block
+      renders inline; earlier tables collapse to their ghost row
+      ("Collected timesheet data · N tasks · summarized M") + artifact chip
+      (name, period, Open) — every intermediate sheet stays one click away
+      in the canvas. A message whose only table IS the answer is unaffected.
+      Deterministic — no reliance on the model choosing a render mode
+- [x] `collectTimesheetData` note reworded so the model never says "the
+      table above" about a collapsed intermediate
+- [x] 3 new classifyParts tests (single table inline; multi-table keeps only
+      the last + all chips survive; last table without artifact still renders)
+
+### Verification (intermediate collapse)
+
+tsc 0 errors, eslint clean, 98 lib/agents tests green. Streaming behavior:
+the newest table renders inline while the run progresses and collapses when
+the next arrives — reads as live activity, deterministic re-render.
+
+### TODOs deferred (intermediate collapse)
+
+- The rule is per-UIMessage (one response cycle). If a future runner change
+  splits steps across messages, revisit with a cross-message pass
+- If the final answer is prose-only after several fetches, the last fetched
+  table stays inline (it is usually the answer's basis); tighten to
+  "collapse all when a later text block exists" only if this trips reviewers
+
+### Slice 08 — Proposal engine ✅ (2026-07-12)
+
+The only path from agent intent to domain writes, end-to-end (PRD Module 3,
+US 21–28): a propose-kind registry tool inserts an `agentProposals` row and
+returns its id — never touching domain tables; the chat renders the row as an
+editable card; approval validates the (possibly edited) payload against
+CURRENT data and executes the real domain mutation via `ctx.runMutation(api.…)`
+— so the wrapped function's own auth runs with the APPROVING USER's identity
+(D6) and the activity log shows the human, never the agent. Wave 1 proves the
+engine on a dev-seeded write agent so Wave 2 (Monthly Closing) lands on a
+tested chassis.
+
+- [x] `lib/agents/proposals.ts` (pure, 24 tests): the kind union
+      (`createTask` + the dev-only DESTRUCTIVE `archiveTask` exercising the
+      confirm flow ahead of closePeriod/closeCycle); `PROPOSAL_KIND_META`
+      (label, destructive flag, approve-scope, per-kind inline-editable field
+      whitelist — destructive kinds expose none); `validateProposalPayload`
+      (structural: shapes/lengths/date format — reference existence is
+      deliberately approve-time only); `mergeEditedPayload` (whitelisted merge,
+      kind immutable, "" clears a field = unassign); the
+      `agency-flow/proposals@1` tool-output marker + guard;
+      `plainTextToTiptapDoc` (descriptions are Tiptap JSON — a raw string
+      would silently render as empty in the task detail)
+- [x] Schema `agentProposals`: orgId/threadId/runId?/userId (thread owner),
+      `payload` (kind-discriminated union validator in
+      `convex/lib/proposalValidators.ts`; ids inside payloads are plain
+      strings by design — model-authored drafts normalize at approve time),
+      `editedPayload` (original intent stays auditable next to what was
+      committed), status pending|approved|discarded|failed, failureReason,
+      committedRef, decidedBy/At; indexes `by_orgId`, `by_threadId_status`
+- [x] `convex/agentProposals.ts`: `createFromTool` (internal — resolves the
+      app thread via `by_componentThreadId`, inherits orgId/owner like
+      artifacts; archiveTask snapshots the task title so the card renders
+      even after deletion); `listForCards` (reactive card DTOs: effective
+      payload + resolved project/assignee display names; owner or org admin;
+      pending cards persist across close/reopen because cards read RECORDS,
+      not the message); `approve` (permission miss on an admin-only kind →
+      THROWS, row STAYS pending; destructive without `confirmDestructive` →
+      throws — server-enforced, not just UI; stale/rejected reference →
+      settles `failed` + human reason, retryable; success → `approved` +
+      committedRef); `updateDraft` (inline edits persist on blur/change so
+      they survive reopen AND Approve-all commits what the human typed);
+      `discard`; `approveAll` (oldest-first, per-item outcomes, no
+      all-or-nothing rollback; destructive kinds and member-blocked admin
+      kinds are SKIPPED and stay pending)
+- [x] Registry write-intent kind (`propose`): `proposeCreateTasks` (member;
+      ≤25 drafts; exact ids only — projectId via listProjects, assigneeId
+      only from @-mentions; unknown fields stay empty for the human) and
+      `proposeArchiveTask` (admin-scoped at run time AND approve time). Both
+      return the marker + a "cards already rendered, nothing committed, don't
+      restate/claim" note. Registry tests extended
+- [x] Blocks: `proposal` block kind; `classifyParts` expands a finished
+      propose-call into ONE batch block; TOOL_DISPLAY ("Proposed tasks · N
+      proposals awaiting review"); propose-tool ghost-row icons
+- [x] `components/agents/blocks/proposal-block.tsx`: the create-task card
+      uses the app's ONE task-draft language (Adam's review call — the first
+      cut hand-rolled boxed Input/Select/DatePicker rows, rejected as
+      duplicate UI): borderless title, quiet "Add description" affordance
+      (plain-text, wrapped to Tiptap at approve), and the property-pill
+      pickers **extracted from `task-form-modal.tsx` into the shared
+      `components/tasks/task-property-pickers.tsx`** (Project / multi
+      Assignee / Category / Status + a new pill-language `DueDatePicker`;
+      the modal imports them back unchanged, 479→250 lines). Reference data
+      comes from the same member-accessible queries `/tasks` feeds its
+      provider with; ids resolve to display values client-side (server DTO
+      slimmed). Payload widened accordingly: `assigneeIds[]` (legacy single
+      `assigneeId` kept in the stored validator and folded on every read so
+      existing dev rows survive the schema push) + `workCategoryId` — both
+      reference-validated at approve. Proposal chrome on top: per-card
+      Approve + Discard footer; sticky "Approve all (N)" (caption calls out
+      destructive cards needing individual confirmation); the destructive
+      two-step confirm (Archive… → Confirm archive, `variant=destructive`);
+      committed row ("Task created · title · Open task" deep link); failed
+      cards show inline reason + Retry (a stale project also warns inline
+      BEFORE approving); discarded rows dashed + strikethrough;
+      content-aware skeleton; every mutation `.catch(toastError)`
+- [x] Dev-seeded "Task Drafter" agent (`devSeedAgents`): everyone-runnable,
+      instructions forbid claiming anything was created and forbid guessed
+      ids; tools = listClients/listProjects + both propose tools (members
+      simply never receive the admin-scoped archive tool — scope filtering)
+
+### Verification (slice 08)
+
+`npx tsc --noEmit` 0 errors; eslint clean on all touched files; vitest 133
+green across lib/agents + convex/lib (proposals suite + classifier/registry
+additions); `npm run build` green after the card rework. The 4 repo-wide failures are the same pre-existing, unrelated
+ones (time-sensitive `format-activity-timestamp` / `taskActivityIndicators`
++ the vendored `.reference/tiptap` suite) — byte-identical to HEAD, untouched
+by this slice. **Reseed required:** `npx convex run agents:devSeedAgents
+'{"email":…}'` to create Task Drafter. Live walkthrough queued for the
+signed-in gate: "create 3 tasks: …" → 3 editable cards → edit title/assignee/
+due → approve one (task exists, activity log shows the human) → Approve all →
+archive proposal demands its confirm → discard → delete a referenced project
+then approve → failed + reason → Retry; close/reopen keeps pending cards.
+
+### TODOs deferred to later slices (08)
+
+- **Wave 2 kinds** (`closePeriod`, `closeCycle`, `postComment`,
+  `createSegment`) slot into the same union + `PROPOSAL_KIND_META` + one
+  `executePayload` branch each — the lifecycle, cards, batch mechanics and
+  confirm flow are done
+- The member permission-error path (AC: member approving an admin-only kind)
+  is enforced and toast-surfaced, but reaching it live needs an admin-run
+  thread demoted mid-review or a member-visible admin kind — naturally
+  exercised when Wave 2's Monthly Closing (admins-only agent, admin-only
+  kinds) lands
+- `runId` on proposals is schema-ready but unset — the component tool ctx
+  exposes the thread, not the run (same gap as artifacts); wire it when the
+  audit view (slice 11-ish) needs per-run grouping
+- ~~Project display-only on the card~~ resolved in the rework: project,
+  assignees (multi), category and due date are all editable via the shared
+  task-draft pickers. Status is the one field the card doesn't expose —
+  proposed tasks land in the org's default status (same as the modal's
+  default); add the shared `StatusPicker` if review wants it
+- Proposal batches cap at 25/call, `approveAll` at 100/thread — generous for
+  the paste-a-list flow; revisit with Wave 3's email-driven batches
+- `archiveTask` is dev-only scaffolding; retire or keep behind the builder
+  when Wave 2's real destructive kinds arrive
+
+### Slice 09 — Admin builder ✅ (2026-07-12)
+
+Agents become data anyone (admin) can author (PRD Module 8, US 43–47): a
+full-page, single-column form inside the workspace layout — not a Settings tab,
+not a modal — reached from the rail footer. The seeded agents (Flow Assistant,
+Task Drafter, Timesheet Generator) appear here and edit like any other; the
+skills CRUD from slice 04 keeps its own footer entry. Everything is
+server-enforced admin-only; the tool checklist can only reference vetted
+registry entries; a stale ref degrades visibly (form flag + runtime system
+block), never crashes.
+
+- [x] `lib/agents/builder.ts` (pure, 12 tests): `validateAgentDraft`
+      (name/description/instructions required + length caps, trim-aware);
+      `groupToolCatalog` (member group first, then admin, empty groups dropped);
+      `findStaleToolRefs` (names an agent references that the registry no longer
+      knows, deduped in order); `normalizeExamplePrompts` (trim/dedupe/clamp/cap
+      at 6); the field caps + `AgentRunPermission`/`ToolCatalogEntry` types
+- [x] Registry (`convex/lib/agentToolRegistry.ts`): `getToolCatalog()` — the
+      registry as plain serializable rows (no non-serializable AI-SDK tool
+      objects) a query can return; `isKnownTool(name)` — the create/update
+      save-gate. Both covered by the registry test.
+- [x] `convex/agents.ts` CRUD (all `requireAdmin`, orgId-scoped): `toolCatalog`
+      (gated static catalog); `listAll` (every agent incl. archived, newest
+      activity first — archived stay visible/restorable here while vanishing
+      from `listRunnable`); `getForEdit` (full config, null for unknown/foreign
+      id); `create`/`update` (share `normalizeAgentConfig` → pure draft rules +
+      reject unknown tool names + verify every skill is org-scoped & active);
+      `archive`/`restore` (reversible `archivedAt` toggle). Kept `listWithSkills`
+      /`setSkills` (still power the Skills surface's attachment toggles).
+- [x] Stale-tool system block: `agentRuns.droppedTools` recorded in `beginRun`
+      (`getToolsForAgent`, the same drop the action re-applies at model-call
+      time — single source of truth, never executed), surfaced via
+      `agentThreads.listRuns`, rendered as a quiet `SystemBlock` at run start in
+      `thread-view.tsx` ("Unavailable tool(s) skipped: …") — matching the
+      slice-04 skill-loaded note pattern.
+- [x] UI: `components/agents/builder/agents-builder-view.tsx` (admin gate →
+      list ↔ `?edit=<id|new>` form via URL; list shows run-permission/tool/skill
+      meta, archived section dimmed at the bottom, archive-confirm dialog,
+      restore) + `agent-builder-form.tsx` (single-column: name, description,
+      instructions, run-permission segmented control, scope-grouped tool
+      checklist with per-row human description + scope, flagged
+      "Unavailable tools" section, skills multi-select, example-prompt list,
+      model override; keyed mount so it inits from real values with no effect
+      sync; client validates for instant feedback, mutation re-validates).
+      Routed in `thread-pane.tsx` (`view === "agents"`).
+- [x] Rail (`workspace-rail.tsx`): admin footer now has "Manage agents"
+      (`?view=agents`) + an enabled "New agent" (`?view=agents&edit=new`); the
+      first-run `AgentsRailEmptyState` gains an admin-only "+ New agent"
+      affordance routing to the builder (PRD "the + New agent affordance … now
+      routes here").
+
+### Verification (slice 09)
+
+`npx tsc --noEmit` 0 errors; eslint clean on every touched file; the new
+builder + registry tests pass (18 across `lib/agents/builder` +
+`convex/lib/agentToolRegistry`), full suite 1375 green. The 4 repo-wide
+failures are the same pre-existing, unrelated ones (time-sensitive
+`format-activity-timestamp` / `taskActivityIndicators` `lastSeenAt` + the
+vendored `.reference/tiptap` suite) — untouched by this slice. Live gate
+queued for the signed-in review: create "Client Overview" with only the read
+tools → it runs with exactly those tools; a member sees no Manage-agents entry
+and can't call the CRUD (server-enforced); flip an agent admins-only →
+disappears from a member's rail, flip back → reappears; edit the Timesheet
+agent's instructions → next run reflects it; archive → gone from rails, old
+thread still opens/readable; hand-edit an agent's `tools` to a bogus name →
+form flags it + a run shows the "Unavailable tool skipped" system block.
+
+### TODOs deferred to later slices (09)
+
+- **Model override is a free-text gateway slug** — only Sonnet 4.6 is wired
+  today, so a curated model picker waits until there's more than one real
+  option; the field stores + honors whatever slug is entered.
+- **Archived-agent threads are read-blocked-continuable, not soft-continuable**
+  — history opens and reads fine, but a send throws a clean "This agent has
+  been archived" from `beginRun` (surfaced as a toast). A dedicated in-composer
+  "this agent is archived" banner is a polish item, not a correctness gap.
+- **Scheduled `trigger`** stays `"manual"` on every builder-created agent — the
+  field is schema-ready for Wave 4 scheduled runs; the form doesn't expose it
+  yet (no trigger UI until the scheduler lands).
+- **Reseed not required** for this slice — no seed changes; the existing seeded
+  agents surface in the builder automatically.
+
+### Slice 10 — Connector framework ✅ (2026-07-12)
+
+The extensible connector chassis — everything except a real provider (Gmail is
+Wave 3), so provider work later is pure addition, not surgery (PRD Module 4,
+US 37–40, 42). A connector authenticates the **running user's own** account
+(strictly per-user in V1); connector-backed tools resolve THAT user's live
+connection at run time, and when it's absent/expired/errored the tool returns a
+self-explaining message the agent relays — the run never crashes. One dev/mock
+connector ("Echo" — trivial token auth, one tool) exercises the whole
+connect → resolve → disconnect lifecycle with no external OAuth. Credentials
+reuse the existing AES-GCM/KEK crypto (`convex/lib/secretCrypto.ts`); ciphertext
+never leaves the server, and the model/client only ever see the mask.
+
+- [x] `connectors` table (`convex/schema.ts`): orgId + userId, `type`, status
+      (`connected`/`expired`/`error`/`revoked`), optional `credentialsCiphertext`
+      (AES-GCM of `JSON.stringify(credentials)`, cleared on disconnect) +
+      `credentialMask`, `scopes`, `connectedAt`/`lastUsedAt`/`updatedAt`.
+      Indexes `by_orgId`, `by_orgId_userId`, `by_orgId_userId_type` (the unique
+      per-user key — at most one row per (org, user, type); reconnect upserts).
+- [x] Pure catalog + resolution logic (`lib/agents/connectors.ts`, framework-
+      agnostic, imported by both Convex and the UI): `CONNECTOR_CATALOG` (code,
+      not data — one `echo` entry: display name, `authKind: "token"`, tool set,
+      default scopes); `classifyConnection` (the ONE law — only `connected` is
+      usable; `null` → distinct `missing` reason) shared by the resolver and the
+      badge so they can't disagree; `connectorGuidanceMessage` (the self-
+      explaining "connect X in the Connectors panel" text, per failure reason).
+- [x] `convex/connectors.ts`: `list` (per-user query — catalog joined to the
+      caller's own state, mask only, never ciphertext); `connect` (token-auth
+      mutation — validate, `encryptSecret`, upsert `connected`, maps
+      `SecretCryptoUnavailableError` to a clean message); `disconnect` (wipe
+      ciphertext + flip `revoked`, idempotent); `resolveForRun` (internalQuery —
+      identity from the run's auth context, no `userId` arg per Convex
+      guidelines, so user A's run can never pick up user B's connection;
+      decrypts server-side, degrades a corrupt/undecryptable credential to
+      `error`); `touchConnector`/`markStatus` (internal — bump `lastUsedAt`,
+      persist the `error` flip so surface + tool behavior agree).
+- [x] Registry integration (`convex/lib/agentToolRegistry.ts`): the `echo`
+      tool (`kind: "connector"`, member scope) — ALWAYS present in the set
+      (connector tools aren't scope-filtered; they resolve at execute time),
+      returns `connected:false` + guidance when unresolved (persisting an
+      `error` flip on decrypt failure) or echoes the input via the resolved
+      connection otherwise (returns only the masked token, never the secret).
+- [x] Connectors surface (`components/agents/connectors/connectors-view.tsx`,
+      `?view=connectors`): per-user (NOT admin-gated), lists each catalog
+      connector with the caller's status badge (connected / expired·error /
+      not-connected), mask + timestamps, Connect/Reconnect (paste-token dialog,
+      cleared on close) + Disconnect (confirm). Content-aware skeleton. Routed
+      in `thread-pane.tsx`; rail footer (`workspace-rail.tsx`) now shows a
+      Connectors entry to everyone, with the admin builder/skills entries below.
+- [x] Vitest: `lib/agents/connectors.test.ts` (catalog integrity, `classify`
+      status logic incl. `missing`, guidance-message wording per reason) +
+      registry test extended (echo is a member connector tool; connector tools
+      stay in the set). Encryption round-trip rides the existing `secretCrypto`
+      coverage (PRD testing decision).
+
+### Verification (slice 10)
+
+`npx tsc --noEmit` 0 errors; eslint clean on every touched file; the new
+connector tests + extended registry tests pass (21 across
+`lib/agents/connectors` + `convex/lib/agentToolRegistry`). Live gate queued for
+the signed-in review: add `echo` to a member-runnable agent's tools → a user
+who hasn't connected gets the exact "connect the Echo connector in the
+Connectors panel" message mid-conversation (run stays alive); connect Echo in
+the Connectors panel (status → Connected) → the same prompt now echoes;
+disconnect (status → Not connected) → back to the guidance; verify with two
+accounts that user B's run never uses user A's connection; corrupt the stored
+ciphertext (or rotate KEK) → next resolve flips the surface to Error and the
+tool self-explains.
+
+### TODOs deferred to later slices (10)
+
+- **Gmail (real provider)** is Wave 3 — the OAuth `authKind` is wired through
+  the catalog, surface, schema, and resolution, but no redirect-callback action
+  exists yet; `connect` only handles the `token` auth kind. The `expired` status
+  is schema/surface/resolution-ready but only an OAuth token refresh produces it
+  (the Echo dev connector can only reach `error`).
+- **Per-org (shared) connectors** are explicitly out of scope (PRD) — V1 is
+  strictly per-user. The `by_orgId` index exists for a future admin audit view,
+  not shared credentials.
+- **No connector seed** — the catalog is code; there's nothing to seed, and no
+  connection exists until a user connects one.
+
+### Slice 11 — Permissions, audit & hardening ✅ (2026-07-12) — closes Wave 1
+
+The closing sweep that turns the assembled platform into a shippable V1: the
+admin audit view, admin-read (owner-only-write) thread access, and the
+visibility/error-handling verification pass (PRD Permissions/visibility,
+US 6/51/52/54).
+
+- [x] **Read vs write split** (`convex/agentThreads.ts`): new
+      `requireReadableThread` (owner OR org admin) backs the three thread READ
+      queries (`get`, `listRuns`, `listMessages`); `requireOwnedThread`
+      (owner-only) stays the gate for every WRITE (`create`, the runner's
+      `beginRun`/`stopRun`). `get` now returns `viewerIsOwner` so a non-owner
+      admin's view is read-only in the UI — but the security gate is the
+      server-side owner check on every mutation, not the flag.
+- [x] **Read-only ThreadView** (`thread-view.tsx` → `block-renderer.tsx` →
+      `proposal-block.tsx`): when `viewerIsOwner === false` the composer is
+      replaced by a quiet "read-only" notice and proposal cards render as
+      compact, inert status rows (no editors, no Approve/Discard/Approve-all).
+      Every proposal decision mutation is owner-only server-side regardless.
+- [x] **Admin audit query** (`convex/agentAudit.ts`): `listRuns` (admin-only)
+      — all org runs newest-first with server-side filters (agent / user /
+      status / date range), joined to agent name + user name + thread title
+      (batched, one read per distinct id), full accounting (timings, duration,
+      token counts, error). Bounded scan (1000) + result cap (500) for MVP
+      scale. Separate from the owner-only rail (`listMine` unchanged).
+- [x] **Audit view UI** (`components/agents/audit/agent-audit-view.tsx`,
+      `?view=audit`): admin-gated table with URL-persisted filters (namespaced
+      `runAgent`/`runUser`/`runStatus`/`from`/`to` so they never collide with
+      the pane-routing `agent`/`thread`/`view` params), quiet status text (no
+      pills — muted/destructive only), content-aware skeleton + dedicated empty
+      state (filtered vs never-run). A row opens the thread read-only. Routed
+      in `thread-pane.tsx`; admin rail footer gains an "Audit" entry.
+- [x] **Sweeps**: every agent-component mutation/action call already
+      `.catch(toastError)` (or try/catch) — grep-verified, no new unhandled
+      paths added. No stream-level pill/bordered-card regressions (audit is an
+      admin table surface; read-only proposal rows reuse the existing compact
+      committed/discarded row treatment).
+
+### Verification (slice 11)
+
+`npx tsc --noEmit` 0 errors; eslint clean on every touched file; the agent
+suites stay green (154 across `lib/agents` + `convex/lib/agentToolRegistry`).
+No unit tests are added — this slice is integration/visibility-shaped, covered
+by the acceptance checklist per the PRD's testing decisions; the pure logic it
+leans on (proposals, registry, connectors, skills) is already covered.
+
+Live acceptance gate queued for the signed-in review (the PRD's V1 checklist):
+member account sees only permitted agents + only own threads, and a direct
+`?thread=` URL to another user's thread 404s server-side; an admin opens the
+Audit view, filters by agent/user/status/date (filters survive refresh + back),
+and opens any thread read-only (composer replaced by the notice, proposal cards
+inert); every run shows complete accounting (user, agent, timings, tokens,
+outcome); the Timesheet path still holds (cells equal the deterministic query,
+CSV matches, no model-produced number, orgId scoping everywhere); Stop mid-run
+still keeps partial output and the thread continues.
+
+### TODOs deferred (11 · post-Wave-1 waves)
+
+- **Monthly Closing agent** → Wave 2 (first real consumer of the proposal
+  engine's destructive `closePeriod`/`closeCycle` kinds).
+- **Gmail connector + Task Creator agent** → Wave 3 (the connector framework +
+  proposal batches are live and waiting).
+- **Scheduled runs** → Wave 4 (the `trigger` field is schema-ready; the audit
+  view already lists runs regardless of how they were triggered).
+- **Audit polish deferred**: no CSV export of the run log, no per-run drill-in
+  panel (the row opens the full thread instead), no pagination beyond the
+  500-row cap — all fine at MVP scale, revisit if run volume grows.
+- **PDF composer extraction** remains txt/csv-only behind the same interface
+  (PRD open question 1) — unchanged by this slice.
+
+### Slice 12 — Read-tool expansion: agency-owner reporting packages ✅ (2026-07-12)
+
+The registry grows from 7 → 27 entries so agents can produce real reports,
+answers and breakdowns across most of the app (owner workflows: month-close
+retainer sweeps, per-employee utilization, full-year client breakdowns,
+financial KPIs). READ tools only — every write still goes through the
+proposal engine. Design doc: the approved plan (packages A–G, workflows
+W1–W10). Owner decisions 2026-07-12: MAX_STEPS 5 → 12; tool scope mirrors the
+wrapped query's own auth (D6); one general seeded agent.
+
+Key architectural rule: collectors are **batch-shaped** — "loop over all
+clients / months" runs server-side inside ONE query (`collectRetainerHealth`,
+`collectClientMonthlyTotals`, `collectTeamTime`, `collectOrgFinanceSnapshot`),
+never as a model-side tool loop (D1: code loops and sums). Aggregates are
+never truncated — over-cap scans throw a model-actionable "narrow the period"
+error instead of returning a silently-wrong sum.
+
+- [x] **Pure aggregation core** (`convex/lib/agentReportCore.ts` + tests):
+      `aggregateTimeByMember` (zero-fills idle members), `aggregateClientMonths`
+      (zero-fills idle months), `classifyRetainerMonth`
+      (no_activity/overage/used_up/underspent/on_track — descriptive; due-ness
+      is separate), `aggregateOrgFinance` (per-currency partitioning, raw
+      minutes, 2dp money), month-key helpers.
+- [x] **Pure view layer** (`lib/agents/taskFilters.ts`,
+      `lib/agents/reportViews.ts` + tests): flat filter façade over
+      `tasks.list` (model never sees op/value wire shapes), flatteners for
+      projectOverview / monthlyBreakdown / retainerData / statement / invoice
+      metrics / invoice detail / ready rows, `formatInvoiceRef`,
+      Tiptap-description → plain text.
+- [x] **Batch collectors** (`convex/agentReports.ts`, internalQueries — auth
+      runs with the running user per D6): `timeByMember` (getAuthContext,
+      non-admins force-scoped to self — weekGrid rule), `clientMonthlySummary`
+      (requireAdmin, ≤24 months), `retainerHealthForMonth` (requireAdmin, one
+      row per retainer with statement-consistent month/cycle math +
+      invoice-aware overage due-ness), `orgFinanceSnapshot` (requireAdmin,
+      entry-ledger + invoices-issued-in-period, per currency).
+- [x] **20 registry tools** (`convex/lib/agentToolRegistry.ts`), scopes mirror
+      underlying auth — member: listTeamMembers, listWorkCategories,
+      listStatuses, findTasks, getTaskDetail, countTasksByStatus,
+      collectMemberTime, getProjectTimeSummary, getProjectMonthlyBreakdown,
+      getRetainerCycleReport, getProjectFinanceSummary (query strips money for
+      members itself); admin: collectTeamTime, collectClientMonthlyTotals,
+      getRetainerStatement, collectRetainerHealth, listReadyToInvoice,
+      findInvoices, getInvoiceMetrics, getInvoiceDetail,
+      collectOrgFinanceSnapshot. Registry test extended with a scope/kind
+      table for all 20.
+- [x] **MAX_STEPS 5 → 12** (`convex/agentRunner.ts`) — headroom for
+      resolve-ids → collect → cross-check → createSheet chains.
+- [x] **"Agency Copilot" seeded agent** (`convex/agents.ts` devSeedAgents):
+      admin-only general agent with the full registry minus `echo` (derived
+      dynamically — future tools flow in on reseed), house-style determinism
+      rules (batch-collectors-over-loops, per-currency money, proposals as the
+      only write path). Flow Assistant auto-inherits the new member tools.
+      **RESEED REQUIRED**: `npx convex run agents:devSeedAgents
+      '{"email":"you@example.com"}'`.
+
+### Verification (slice 12)
+
+`npx tsc --noEmit` 0 errors; eslint clean on every touched file;
+`npm run build` green; 31 new tests green (agentReportCore 10, taskFilters 6,
+reportViews 14, registry +1 scope/kind table over all 20 entries) — full
+vitest run: the
+only failures are pre-existing on files this slice never touched
+(`lib/format-activity-timestamp.test.ts` "ago"-suffix drift,
+`taskActivityIndicators` unseen-flag case, and the vendored
+`.reference/tiptap-docs` suite that can't resolve `@tiptap/core`).
+
+Live gate queued for the signed-in review: reseed, then run Agency Copilot on
+the owner's four example prompts (retainer sweep → table, hours vs invoiced
+this month, member June time, client full-year breakdown → sheet) and check
+every number against the corresponding app screen (retainer page, invoices
+metrics, workday, project monthly card); member-run Flow Assistant must not
+see any admin tool in builder or at run time.
+
+### TODOs deferred (12)
+
+- **Propose-write expansion** (proposeUpdateTask/status/assignee,
+  proposeCreateClient/Project, proposeTimeEntry, proposeInvoiceDraft) —
+  next dedicated round; `proposeInvoiceDraft` is the highest-value candidate
+  (month-close sweep → draft invoices as approval cards).
+- **Email→task ingestion** — connector round (Gmail, Wave 3); the read-side
+  duplicate pre-check (`findTasks`) ships now.
+- **Comments/activity/notification readers** (PRD Wave-4 mention digest) —
+  needs the net-new "mentions since" query; low report value today.
+- **Day-granular team wrapper** (weekGrid) — `collectTeamTime` covers
+  utilization; add day granularity only when a real prompt needs it.
+- **Rate-card readers** (userRates/categoryRates/projectRateOverrides) —
+  sensitive config, little report value; profitability arrives pre-computed.
+- **Pagination/cursors on tool outputs** — caps + `truncated` flags (lists)
+  and throw-on-overflow (aggregates) are right for a 12-step loop at MVP
+  scale; revisit if orgs outgrow the 20k-entry scan cap.
+- **Read amplification note**: `retainerHealthForMonth` fans out
+  tasks→entries per retainer project (statements-style N+1) — fine at MVP
+  dummy-data scale; a future `timeEntries.projectId` denormalization (already
+  flagged in the retainer PRD) would collapse it.
+- **Cross-currency consolidation (FX)** — never; money stays per-currency by
+  design everywhere.
+
+## Project Time tab — task side peek (2026-07-12)
+
+Task titles across the project detail page now open the task detail
+(`?detail=taskId`) in place — no more round-trip to /tasks to edit a task
+seen in the time list.
+
+- [x] Shared `components/task-title-button.tsx` — quiet clickable title
+      (hover ↗ hint, focus ring, optional note line, click never bubbles
+      to the row). Used by the Time tab table and the Overview month table.
+- [x] `project-time-table.tsx` — Task cell clickable (flat + grouped views);
+      `Open task` added to both row `⋯` menus (locked rows included — the
+      settlement lock guards money, not task data); rows of the open task
+      get `bg-muted/50` + `data-active` while the peek is up.
+- [x] `project-time-content.tsx` — wires `useTaskDetailNav()` +
+      `parseDetailParam` into the shared table props.
+- [x] `projects/[id]/page.tsx` — respects the per-user `taskDetailView`
+      preference (drawer vs modal, mobile forces modal), same as /tasks.
+- [x] `month-task-table.tsx` — swapped its inline title button for the
+      shared component.
+
+Verification: `npx tsc --noEmit` clean; eslint clean on touched files;
+vitest — 4 failures are pre-existing and unrelated (format-activity-timestamp,
+taskActivityIndicators, .reference tiptap copy).
+
+TODOs deferred: none. J/K navigation in the peek follows the page-level
+task list (monthly breakdown order), not the Time tab's current filter —
+acceptable; revisit only if it feels wrong in use.
+
+## Project Time tab — month-first UX + one-click worksheet + inline hours (2026-07-12)
+
+Owner feedback: the Time tab's real job is reviewing a month (usually the
+last one) and sending the client a worksheet from exactly that view; both
+took too many clicks, and adjusting hours meant a drawer + modal round-trip.
+
+- [x] **Default grouping = By Month** — `parseGrouping` fallback flipped
+      from `day` to `month` (`project-time-content.tsx`); toolbar select
+      fallback + param-clearing updated to match (`project-time-filters.tsx`).
+      Date range default stays **All time** (no-silent-date-filter rule).
+- [x] **Date range promoted to the toolbar** — first-class one-click Select
+      (`All time · This/Last week · This/Last month · Last 90 days · This
+      year · Custom…`) with inline from/to pickers for Custom; removed from
+      the Filter popover (member + billing status remain; badge count no
+      longer includes the range). New `last_90_days` preset in
+      `lib/date-buckets.ts`; shared `parseDateRangePreset` moved there too.
+- [x] **One-click Worksheet button on the Time tab** —
+      `components/worksheet/worksheet-export-button.tsx` downloads the CSV
+      immediately using the current view's URL filters via
+      `lib/worksheet-view-export.ts` (period from the active date range,
+      billing status → billable/nonBillable; member + search intentionally
+      NOT forwarded — client-facing doc covers the full team). Tooltip
+      previews the resolved period. The header's "Download worksheet…"
+      dialog stays for custom picks (categories, quarters).
+- [x] **Inline-editable Hours cell** —
+      `components/projects/time-entry-hours-cell.tsx`: click the value →
+      input (accepts `1:30`, `1.5`, `90`, `1h 30m` via existing
+      `parseDuration`), Enter/blur commits `timeEntries.update`, Esc
+      cancels, invalid input flags the field, errors toast. Locked
+      (Draft/Closed) and non-editable rows render plain text; click on
+      those still toggles row selection.
+
+Verification: `npx tsc --noEmit` clean; eslint clean on all touched files;
+vitest green — new suites `lib/worksheet-view-export.test.ts` (12 tests:
+preset↔period mapping incl. all-time anchor, custom fallbacks, billable
+mapping) and `last_90_days` cases in `lib/date-buckets.test.ts`. Browser
+walkthrough pending owner sign-in (Clerk session unavailable to the agent).
+
+TODOs deferred:
+- Billing-status → billable export mapping is lossy by design (open/draft/
+  closed all export as "billable" — the CSV has no lifecycle column);
+  revisit only if a lifecycle-scoped worksheet becomes a real ask.
+- Inline edit is Hours-only per owner decision; Note/Date/Category stay in
+  the edit modal.
+
+### Revision after owner review (same day)
+
+Fresh-eyes feedback on v1: default should be **By Task** (the tab answers
+"which entries hit which task"), the default period should be **This
+month**, and a one-facet Filter popover wasn't worth its button.
+
+- [x] **Default grouping = By Task** (was By Month for a few hours).
+- [x] **Default date range = This month** — allowed despite the
+      no-default-filter rule because the range is a first-class visible
+      toolbar control AND the truly-empty state now derives from
+      `availableMembers` (computed from ALL project entries pre-filter),
+      so an empty month shows "No entries match your filters → Show all
+      time", never a false "No time logged yet". Memory file updated with
+      the owner override. `DEFAULT_TIME_DATE_RANGE` in `lib/date-buckets.ts`.
+- [x] **Filter popover replaced with the tasks page's Notion-style
+      "+ Filter" engine** (`components/ui/filters.tsx` reuse):
+      - `components/projects/project-time-filter-bar.tsx` — trigger +
+        editable pills row, facets: Member, Category, Billing status
+        (status no longer T&M-gated — retainer/fixed rows have the same
+        open/draft/closed lifecycle).
+      - `lib/time-entry-filters.ts` — URL codec (`?filters=member.any.u1,u2;
+        status.not.closed`) + client-side `applyTimeEntryFilters` (facets
+        run in the browser over the loaded slice; the query narrows only by
+        project + date range + search — `memberId`/`billingStatus` args no
+        longer sent, backend unchanged).
+      - `lib/hooks/use-project-time-filters.ts` — URL-backed
+        `Dispatch<SetStateAction<Filter[]>>` for the shared engine.
+      - Stats bar, selection visible/hidden split, and empty state all key
+        off the facet-filtered rows.
+
+Verification: tsc 0 errors; eslint clean on touched files; vitest green —
+`lib/time-entry-filters.test.ts` (11 tests: codec round-trip, malformed-URL
+tolerance, include/exclude semantics per facet, AND across facets) +
+`parseDateRangePreset` default tests.
+
+TODOs deferred:
+- Facet menus don't show cross-filtered counts yet (Notion pattern's
+  counts) — engine parity with the tasks page; add to both when it lands.
+- "No category" option in the category facet (entries without category
+  can't be isolated) — add when someone actually needs it.
+
+### Design-review round (Notion-lens, same day)
+
+Owner approved packages 2–4 of the before/after mockup
+(claude.ai/code/artifact/7df005c4-…); package 1 (grouped-table
+restructure: hide grouped column, single header row, flat group rows,
+short dates, hover-reveal ⋯) was NOT selected — parked, do not build
+without a fresh ask.
+
+- [x] **Toolbar** — "Invoice unbilled hours" renders only on T&M projects
+      (`isTmProject` gate in `project-time-content.tsx`); on retainer/fixed
+      it could never enable and was pure noise. Button copy moved to
+      sentence case ("Add time", "Invoice unbilled hours") on this tab.
+- [x] **Row ⋯ menu** — Edit first (entry's primary action), then Mark
+      non-billable, then Open task (navigation), Delete last behind the
+      separator (`project-time-table.tsx`).
+- [x] **Add time modal** (`time-entry-modal.tsx`):
+      - Task field: plain Select → searchable Popover+Command combobox
+        (same pattern as planner-create-form); Radix's initial dialog
+        focus now lands on it in create mode.
+      - Duration: format hint moved into the placeholder; QUICK_DURATIONS
+        chips (15m…8h) fill the input on click; autoFocus only in edit mode.
+      - `size="xl"` → `"md"`; `FormModalHeader align="start"` (scoped —
+        the shared FormModal default stays centered app-wide).
+      - Titles "Add time" / "Edit time entry".
+
+Verification: tsc 0 errors, eslint clean on touched files. Visual pass
+pending owner (agent has no Clerk session).

@@ -13,6 +13,9 @@ import { cn } from "@/lib/utils"
  */
 const KIND_META: Record<string, { label: string }> = {
   timesheet_csv: { label: "CSV spreadsheet" },
+  // Model-assembled sheet (createSheet tool) — same canvas/CSV pipeline,
+  // labelled identically; provenance shows via the table's own note.
+  sheet_csv: { label: "CSV spreadsheet" },
 }
 
 export function ArtifactBlock({

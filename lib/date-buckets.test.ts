@@ -4,6 +4,7 @@ import {
   bucketLabel,
   mondayOfWeek,
   monthBounds,
+  parseDateRangePreset,
   resolveDateRangePreset,
   todayInTimezone,
 } from "./date-buckets"
@@ -137,6 +138,29 @@ describe("resolveDateRangePreset", () => {
   it("this_year returns Jan 1 to Dec 31", () => {
     const r = resolveDateRangePreset("this_year", tz, new Date("2026-04-19T12:00Z"))
     expect(r).toEqual({ from: "2026-01-01", to: "2026-12-31" })
+  })
+
+  it("last_90_days is a 90-day inclusive window ending today", () => {
+    const r = resolveDateRangePreset("last_90_days", tz, new Date("2026-07-12T12:00Z"))
+    expect(r).toEqual({ from: "2026-04-14", to: "2026-07-12" })
+  })
+
+  it("last_90_days crosses a year boundary", () => {
+    const r = resolveDateRangePreset("last_90_days", tz, new Date("2026-02-01T12:00Z"))
+    expect(r).toEqual({ from: "2025-11-04", to: "2026-02-01" })
+  })
+})
+
+describe("parseDateRangePreset", () => {
+  it("passes through valid presets", () => {
+    expect(parseDateRangePreset("all")).toBe("all")
+    expect(parseDateRangePreset("last_90_days")).toBe("last_90_days")
+    expect(parseDateRangePreset("custom")).toBe("custom")
+  })
+
+  it("defaults to this_month for missing/unknown values", () => {
+    expect(parseDateRangePreset(null)).toBe("this_month")
+    expect(parseDateRangePreset("bogus")).toBe("this_month")
   })
 })
 

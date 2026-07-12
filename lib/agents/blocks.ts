@@ -8,6 +8,7 @@
  */
 
 import { isAgentTableOutput, type AgentTable } from "./table";
+import { isProposalRefsOutput } from "./proposals";
 import { STOP_CONDITION_TOOL_NAME } from "./skills";
 
 /**
@@ -47,6 +48,16 @@ export type AgentBlock =
       artifactId: string;
       name: string;
       artifactKind: string;
+    }
+  | {
+      kind: "proposal";
+      /**
+       * The batch a single propose-tool call emitted. Cards render from the
+       * LIVE proposal records (reactive query), not from this message — so
+       * pending cards persist across thread close/reopen and status flips
+       * (approved/discarded/failed) update in place (slice 08).
+       */
+      proposalIds: string[];
     };
 
 /** Reference a tool output carries when it persisted a canvas artifact. */
@@ -115,6 +126,15 @@ export function classifyPart(part: MessagePartLike): AgentBlock | null {
  * call whose output carries the table contract expands into TWO blocks:
  * the quiet ghost row, then the table itself — the model never "writes"
  * a table, tools do (D1).
+ *
+ * Intermediate-fetch rule: within one message, only the LAST table renders
+ * inline. Earlier tables are working material the model gathered on the way
+ * to its answer (e.g. per-client timesheets feeding a summary sheet) —
+ * rendering them all would bury the chat under N grids on an N-client
+ * aggregation. They collapse to their ghost row (what was checked, with
+ * deterministic counts) + artifact chip (name, period, Open) — every sheet
+ * stays one click away in the canvas, the stream stays scannable. A message
+ * whose only table IS the answer is unaffected.
  */
 export function classifyParts(parts: MessagePartLike[]): AgentBlock[] {
   const blocks: AgentBlock[] = [];
@@ -142,9 +162,15 @@ export function classifyParts(parts: MessagePartLike[]): AgentBlock[] {
           artifactKind: artifact.artifactKind,
         });
       }
+      // A propose-kind tool's batch expands into ONE proposal block — the
+      // cards themselves are live records, referenced by id (slice 08).
+      if (isProposalRefsOutput(block.output)) {
+        blocks.push({ kind: "proposal", proposalIds: block.output.proposalIds });
+      }
     }
   }
-  return blocks;
+  const lastTable = blocks.findLastIndex((b) => b.kind === "table");
+  return blocks.filter((b, i) => b.kind !== "table" || i === lastTable);
 }
 
 // ─── Tool display (verb + deterministic result summary) ────────────────────
@@ -193,6 +219,32 @@ const TOOL_DISPLAY: Record<string, ToolDisplay> = {
         ? `${tasks} · summarized ${summarized}`
         : tasks;
     },
+  },
+  createSheet: {
+    runningLabel: "Creating sheet",
+    doneLabel: "Created sheet",
+    // Deterministic count from the validated table payload, not model text.
+    summarize: (output) => {
+      if (!isAgentTableOutput(output)) return null
+      const rows = output.table.rows.length
+      return `${rows} row${rows === 1 ? "" : "s"}`
+    },
+  },
+  proposeCreateTasks: {
+    runningLabel: "Drafting task proposals",
+    doneLabel: "Proposed tasks",
+    // Count from the deterministic tool payload (batch size), never model text.
+    summarize: (output) => {
+      if (!isProposalRefsOutput(output)) return null;
+      const n = output.proposalIds.length;
+      return `${n} proposal${n === 1 ? "" : "s"} awaiting review`;
+    },
+  },
+  proposeArchiveTask: {
+    runningLabel: "Drafting archive proposal",
+    doneLabel: "Proposed archiving a task",
+    summarize: (output) =>
+      isProposalRefsOutput(output) ? "awaiting confirmation" : null,
   },
   // The skill stop-condition tool (slice 04) — when it fires, a skill halted
   // the run. The explanatory block is run-derived; this is just its ghost row.

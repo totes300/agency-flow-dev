@@ -2,7 +2,9 @@
 
 import { useState } from "react"
 import {
+  ArchiveIcon,
   FolderIcon,
+  ListPlusIcon,
   Loader2Icon,
   TableIcon,
   UsersIcon,
@@ -25,6 +27,9 @@ const TOOL_ICONS: Record<string, { Icon: LucideIcon; filled: boolean }> = {
   listClients: { Icon: UsersIcon, filled: true },
   listProjects: { Icon: FolderIcon, filled: true },
   collectTimesheetData: { Icon: TableIcon, filled: false },
+  // Propose-kind tools (slice 08) — line icons; the cards carry the weight.
+  proposeCreateTasks: { Icon: ListPlusIcon, filled: false },
+  proposeArchiveTask: { Icon: ArchiveIcon, filled: false },
 }
 
 /**

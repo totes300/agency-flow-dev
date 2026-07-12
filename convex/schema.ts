@@ -1,6 +1,10 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import { settledReasonValidator } from "./lib/settleEntries";
+import {
+  proposalPayloadValidator,
+  proposalStatusValidator,
+} from "./lib/proposalValidators";
 
 export default defineSchema({
   // ─── Users (synced from Clerk) ─────────────────────────────────────────────
@@ -759,6 +763,10 @@ export default defineSchema({
     stoppedBySkill: v.optional(
       v.object({ skillName: v.string(), reason: v.string() }),
     ),
+    // Tool names this agent references that the registry no longer knows
+    // (renamed/removed in code). Dropped before the model call and surfaced as
+    // a `system` block so a stale ref degrades visibly instead of crashing.
+    droppedTools: v.optional(v.array(v.string())),
     // Accumulated across the run's model calls (usageHandler fires per step).
     inputTokens: v.optional(v.number()),
     outputTokens: v.optional(v.number()),
@@ -785,7 +793,9 @@ export default defineSchema({
     runId: v.optional(v.id("agentRuns")),
     // Owner = thread owner at creation. Read access is owner OR org admin.
     userId: v.id("users"),
-    kind: v.literal("timesheet_csv"),
+    // `timesheet_csv` = deterministic tool pivot (D1); `sheet_csv` = a sheet
+    // the model assembled via the createSheet tool (carries a provenance note).
+    kind: v.union(v.literal("timesheet_csv"), v.literal("sheet_csv")),
     name: v.string(),
     // JSON-encoded AgentTable (lib/agents/table). Parsed + guarded on read;
     // stored as a string so the wire contract stays the single source of
@@ -799,4 +809,72 @@ export default defineSchema({
   })
     .index("by_orgId", ["orgId"])
     .index("by_threadId", ["threadId"]),
+
+  // Proposal engine (PRD Module 3 · slice 08) — the ONLY path from agent
+  // intent to domain writes. A propose-kind tool inserts a row here and
+  // returns its id; the chat renders it as an editable card; approval
+  // validates the (possibly edited) payload against CURRENT data and
+  // executes the mapped domain mutation AS THE APPROVING USER (D6 — the
+  // activity log shows the human, never the agent). Kind union + payload
+  // shapes: convex/lib/proposalValidators.ts / lib/agents/proposals.ts.
+  agentProposals: defineTable({
+    orgId: v.string(),
+    threadId: v.id("agentThreads"),
+    // The run that proposed it, when known — audit only.
+    runId: v.optional(v.id("agentRuns")),
+    // Thread owner at propose time; the only user who can decide the card.
+    userId: v.id("users"),
+    // The agent's draft (kind-discriminated). Never mutated after insert —
+    // human edits land in editedPayload so the original intent stays
+    // auditable next to what was actually committed.
+    payload: proposalPayloadValidator,
+    editedPayload: v.optional(proposalPayloadValidator),
+    // pending → approved | discarded | failed. `failed` (stale reference,
+    // domain-mutation rejection) is retryable — approve may run again.
+    status: proposalStatusValidator,
+    failureReason: v.optional(v.string()),
+    // Id of the created/affected record once approved (e.g. the task id).
+    committedRef: v.optional(v.string()),
+    decidedBy: v.optional(v.id("users")),
+    decidedAt: v.optional(v.number()),
+    createdAt: v.number(),
+  })
+    .index("by_orgId", ["orgId"])
+    .index("by_threadId_status", ["threadId", "status"]),
+
+  // Connector framework (PRD Module 4 · slice 10) — the extensible chassis for
+  // external accounts. STRICTLY PER-USER in V1: a connector authenticates the
+  // running user's own account, so a tool resolves the connection of whoever
+  // is running the agent and never another user's (US 38). Wave 1 ships the
+  // framework + one dev/mock connector ("echo"); Gmail is Wave 3.
+  //
+  // Credentials are AES-GCM-encrypted with the SAME KEK as the AI key
+  // (`convex/lib/secretCrypto.ts`) — the plaintext never crosses the client
+  // boundary and never reaches the model (US 42). `credentialsCiphertext` is
+  // cleared when the user disconnects (status → `revoked`); the row itself
+  // survives so the surface can show the disconnected/errored state and a
+  // reconnect upserts in place (by_orgId_userId_type is the unique key).
+  connectors: defineTable({
+    orgId: v.string(),
+    userId: v.id("users"),
+    // Catalog type from the code-side catalog (lib/agents/connectors.ts).
+    type: v.string(),
+    status: v.union(
+      v.literal("connected"),
+      v.literal("expired"),
+      v.literal("error"),
+      v.literal("revoked"),
+    ),
+    // AES-GCM(JSON.stringify(credentials)); absent once revoked. The only
+    // piece safe for the client is `credentialMask`.
+    credentialsCiphertext: v.optional(v.string()),
+    credentialMask: v.optional(v.string()),
+    scopes: v.array(v.string()),
+    connectedAt: v.number(),
+    lastUsedAt: v.optional(v.number()),
+    updatedAt: v.number(),
+  })
+    .index("by_orgId", ["orgId"])
+    .index("by_orgId_userId", ["orgId", "userId"])
+    .index("by_orgId_userId_type", ["orgId", "userId", "type"]),
 });

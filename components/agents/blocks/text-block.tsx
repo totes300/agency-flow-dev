@@ -1,8 +1,13 @@
 "use client"
 
 import { useSmoothText } from "@convex-dev/agent/react"
+import { AgentMarkdown } from "@/components/agents/markdown"
 
-/** `text` block — streamed prose in standard message styling (AI voice). */
+/**
+ * `text` block — streamed prose in standard message styling (AI voice),
+ * rendered as GFM markdown so the model's tables/headings/lists display
+ * with full styling instead of raw syntax.
+ */
 export function TextBlock({
   text,
   streaming,
@@ -12,9 +17,5 @@ export function TextBlock({
 }) {
   const [visibleText] = useSmoothText(text, { startStreaming: streaming })
   if (!visibleText) return null
-  return (
-    <div className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">
-      {visibleText}
-    </div>
-  )
+  return <AgentMarkdown text={visibleText} streaming={streaming} />
 }

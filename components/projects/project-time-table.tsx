@@ -41,6 +41,8 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { CategoryBadge } from "@/components/category-badge"
+import { TaskTitleButton } from "@/components/task-title-button"
+import { TimeEntryHoursCell } from "@/components/projects/time-entry-hours-cell"
 import { UserAvatar } from "@/components/user-avatar"
 import { BillingStatusBadge } from "@/components/billing-status-badge"
 import { ReopenPeriodDialog } from "@/components/projects/reopen-period-dialog"
@@ -49,7 +51,6 @@ import {
   formatCurrency,
   formatDateToUS,
   formatInvoiceNumber,
-  formatMinutes,
 } from "@/lib/format"
 import { toastError } from "@/lib/toast-helpers"
 import { toast } from "sonner"
@@ -60,6 +61,7 @@ import {
   DollarSignIcon,
   DownloadIcon,
   MoreHorizontalIcon,
+  PanelRightOpenIcon,
   PencilIcon,
   RotateCcwIcon,
   Trash2Icon,
@@ -122,6 +124,10 @@ export type ProjectTimeTableProps = {
   projectId: Id<"projects">
   currentUserId: Id<"users"> | undefined
   onEdit: (entryId: Id<"timeEntries">) => void
+  /** Opens the task detail (?detail=taskId drawer/modal) for the row's task. */
+  onOpenTask: (taskId: Id<"tasks">) => void
+  /** Task currently open in the detail view — its rows get a subtle highlight. */
+  activeTaskId?: string | null
 }
 
 export function ProjectTimeTable({
@@ -141,6 +147,8 @@ export function ProjectTimeTable({
   projectId,
   currentUserId,
   onEdit,
+  onOpenTask,
+  activeTaskId,
 }: ProjectTimeTableProps) {
   const selectableRows = entries.filter((r) => isSelectable(r, selectable))
   const allSelected =
@@ -189,6 +197,8 @@ export function ProjectTimeTable({
             isAdmin={isAdmin}
             projectId={projectId}
             onEdit={onEdit}
+            onOpenTask={onOpenTask}
+            isActive={activeTaskId != null && row.taskId === activeTaskId}
           />
         ))}
       </TableBody>
@@ -207,6 +217,8 @@ function TimeEntryTableRow({
   isAdmin,
   projectId,
   onEdit,
+  onOpenTask,
+  isActive,
 }: {
   row: TimeEntryRow
   selected: boolean
@@ -218,6 +230,8 @@ function TimeEntryTableRow({
   isAdmin: boolean
   projectId: Id<"projects">
   onEdit: (entryId: Id<"timeEntries">) => void
+  onOpenTask: (taskId: Id<"tasks">) => void
+  isActive: boolean
 }) {
   const rowSelectable = isSelectable(row, selectable)
   const amount = (row.durationMinutes / 60) * row.billableRate
@@ -237,9 +251,13 @@ function TimeEntryTableRow({
         // The dropdown menu portal stays at full opacity so the action
         // menu remains readable when the user reaches for it.
         isLocked && "opacity-[0.72]",
+        // Rows of the task currently open in the detail view stay marked so
+        // the eye keeps its anchor while editing in the side peek.
+        isActive && "bg-muted/50",
       )}
       data-selectable={rowSelectable || undefined}
       data-locked={isLocked || undefined}
+      data-active={isActive || undefined}
       onClick={() => {
         if (rowSelectable) onToggle(row)
       }}
@@ -265,12 +283,11 @@ function TimeEntryTableRow({
         </span>
       </TableCell>
       <TableCell>
-        <span className="truncate text-sm font-medium">{row.taskTitle}</span>
-        {row.note && (
-          <span className="block truncate text-xs text-muted-foreground">
-            {row.note}
-          </span>
-        )}
+        <TaskTitleButton
+          title={row.taskTitle}
+          note={row.note}
+          onClick={() => onOpenTask(row.taskId)}
+        />
       </TableCell>
       <TableCell>
         {row.workCategoryName && row.workCategoryColor ? (
@@ -285,8 +302,17 @@ function TimeEntryTableRow({
       <TableCell onClick={(e) => e.stopPropagation()}>
         <BillingStatusCell row={row} status={status} />
       </TableCell>
-      <TableCell className="text-right tabular-nums">
-        {formatMinutes(row.durationMinutes)}
+      {/* stopPropagation only when the cell is interactive — on locked /
+          read-only rows a click should still toggle row selection. */}
+      <TableCell
+        className="text-right tabular-nums"
+        onClick={canEdit && !isLocked ? (e) => e.stopPropagation() : undefined}
+      >
+        <TimeEntryHoursCell
+          entryId={row._id}
+          durationMinutes={row.durationMinutes}
+          editable={canEdit && !isLocked}
+        />
       </TableCell>
       {showAmounts && (
         <TableCell className="text-right tabular-nums text-muted-foreground">
@@ -306,6 +332,7 @@ function TimeEntryTableRow({
             isAdmin={isAdmin}
             projectId={projectId}
             onEdit={() => onEdit(row._id)}
+            onOpenTask={() => onOpenTask(row.taskId)}
           />
         )}
       </TableCell>
@@ -319,12 +346,14 @@ function RowActionsMenu({
   isAdmin,
   projectId,
   onEdit,
+  onOpenTask,
 }: {
   row: TimeEntryRow
   status: "open" | "draft" | "closed" | "non_billable"
   isAdmin: boolean
   projectId: Id<"projects">
   onEdit: () => void
+  onOpenTask: () => void
 }) {
   const updateEntry = useMutation(api.timeEntries.update)
   const removeEntry = useMutation(api.timeEntries.remove)
@@ -418,6 +447,10 @@ function RowActionsMenu({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56">
+            <DropdownMenuItem onSelect={onOpenTask}>
+              <PanelRightOpenIcon aria-hidden className="size-3.5" />
+              Open task
+            </DropdownMenuItem>
             {invoiceNumber && (
               <DropdownMenuItem asChild>
                 <Link href={`/invoices/${invoiceNumber}`}>
@@ -478,6 +511,8 @@ function RowActionsMenu({
             <MoreHorizontalIcon aria-hidden className="size-4" />
           </Button>
         </DropdownMenuTrigger>
+        {/* Entry actions first (Edit is the menu's primary — this menu sits
+            on a time entry), navigation after, destructive last. */}
         <DropdownMenuContent align="end" className="w-44">
           <DropdownMenuItem onSelect={onEdit}>
             <PencilIcon aria-hidden className="size-3.5" />
@@ -491,6 +526,10 @@ function RowActionsMenu({
           >
             <ToggleIcon aria-hidden className="size-3.5" />
             {toggleLabel}
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={onOpenTask}>
+            <PanelRightOpenIcon aria-hidden className="size-3.5" />
+            Open task
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem

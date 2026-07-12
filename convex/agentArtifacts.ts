@@ -33,7 +33,7 @@ export const createForThread = internalMutation({
   args: {
     componentThreadId: v.string(),
     runId: v.optional(v.id("agentRuns")),
-    kind: v.literal("timesheet_csv"),
+    kind: v.union(v.literal("timesheet_csv"), v.literal("sheet_csv")),
     name: v.string(),
     sheetJson: v.string(),
   },
@@ -75,7 +75,7 @@ export const getForCanvas = query({
     _id: string;
     threadId: string;
     name: string;
-    kind: "timesheet_csv";
+    kind: "timesheet_csv" | "sheet_csv";
     table: AgentTable;
   } | null> => {
     const auth = await getAuthContext(ctx);

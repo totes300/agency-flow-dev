@@ -30,10 +30,14 @@ export function SuggestionDropdown<T>({
   const listRef = useRef<HTMLDivElement>(null)
   const activeIndex = Math.min(selectedIndex, Math.max(items.length - 1, 0))
 
-  // Reset selection to first item when the list changes (e.g. user types to filter)
-  useEffect(() => {
+  // Reset selection to the first item when the list changes (e.g. the user
+  // types to filter). Adjust-state-during-render (React's blessed pattern for
+  // deriving from a changed prop) instead of a sync effect.
+  const [prevItems, setPrevItems] = useState(items)
+  if (items !== prevItems) {
+    setPrevItems(items)
     setSelectedIndex(0)
-  }, [items])
+  }
 
   useEffect(() => {
     const list = listRef.current
@@ -72,12 +76,22 @@ export function SuggestionDropdown<T>({
   if (!rect) return null
   if (typeof document === "undefined") return null
 
+  // Flip upward when the caret is close enough to the bottom edge that a
+  // downward-opening menu would overflow the viewport — the composer sits at
+  // the bottom of the screen, so this is the common case there.
+  const maxHeight = 288 // matches max-h-72
+  const spaceBelow = window.innerHeight - rect.bottom
+  const openAbove = spaceBelow < maxHeight + DROPDOWN_OFFSET && rect.top > spaceBelow
+  const style: React.CSSProperties = openAbove
+    ? { bottom: window.innerHeight - rect.top + DROPDOWN_OFFSET, left: rect.left }
+    : { top: rect.bottom + DROPDOWN_OFFSET, left: rect.left }
+
   return createPortal(
     <div
       ref={listRef}
       role="listbox"
       className="fixed z-50 max-h-72 overflow-y-auto rounded-lg border border-border bg-popover p-1 shadow-md"
-      style={{ top: rect.bottom + DROPDOWN_OFFSET, left: rect.left }}
+      style={style}
       onMouseDown={(e) => e.preventDefault()}
     >
       {items.map((item, index) => (

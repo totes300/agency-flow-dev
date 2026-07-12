@@ -21,8 +21,14 @@ import { ProjectTimeSelectionToolbar } from "@/components/projects/project-time-
 import { ProjectTimeStats } from "@/components/projects/project-time-stats"
 import { ProjectTimeHiddenSelectionBanner } from "@/components/projects/project-time-hidden-selection-banner"
 import { TimeEntryModal } from "@/components/projects/time-entry-modal"
+import { WorksheetExportButton } from "@/components/worksheet/worksheet-export-button"
 import { EmptyStateBanner } from "@/components/projects/empty-state-banner"
 import { useGenerateInvoice } from "@/lib/hooks/use-generate-invoice"
+import { useProjectTimeFilters } from "@/lib/hooks/use-project-time-filters"
+import { applyTimeEntryFilters } from "@/lib/time-entry-filters"
+import { parseDateRangePreset } from "@/lib/date-buckets"
+import { useTaskDetailNav } from "@/lib/hooks/use-task-detail-nav"
+import { parseDetailParam } from "@/lib/task-detail"
 import type { Id as IdType } from "@/convex/_generated/dataModel"
 import { Button } from "@/components/ui/button"
 import {
@@ -46,6 +52,8 @@ type ProjectLite = {
   billingType: string
   currency: string
   teamMembers?: Id<"users">[]
+  /** `YYYY-MM-DD` — lower bound for all-time worksheet exports. */
+  startDate?: string
 }
 
 // Derive from the query return type so the shape can never drift from what
@@ -56,27 +64,20 @@ type ProjectEntriesData = NonNullable<
 type AvailableMember = ProjectEntriesData["availableMembers"][number]
 
 /**
- * Disabled-state + tooltip for the "Invoice Unbilled Hours" header button.
- * The button always renders so non-admins and non-T&M projects can see why
- * invoicing-from-time isn't available here — a silent hide just makes the
- * feature undiscoverable.
+ * Disabled-state + tooltip for the "Invoice unbilled hours" header button.
+ * The button renders ONLY on T&M projects — on retainer/fixed it could
+ * never become enabled, and a permanently-dead control is toolbar noise
+ * (invoicing lives on the Invoices tab there). Within T&M, transient
+ * states (non-admin, nothing to bill) keep the disabled+tooltip treatment.
  *
  * Lives here (not in the orchestrator) because `unbilledCount` is content-
  * phase-only and the button itself is a header action of the content view.
  */
 function getInvoiceButtonState(
   isAdmin: boolean,
-  billingType: string,
   unbilledCount: number,
 ): { disabled: boolean; tooltip: string | null } {
   if (!isAdmin) return { disabled: true, tooltip: "Only admins can create invoices" }
-  if (billingType === "non_billable") return { disabled: true, tooltip: "This project is non-billable" }
-  if (billingType === "fixed") {
-    return { disabled: true, tooltip: "Fixed-price project — create invoices from the Invoices tab" }
-  }
-  if (billingType === "retainer") {
-    return { disabled: true, tooltip: "Retainer project — create invoices from the Invoices tab" }
-  }
   if (unbilledCount === 0) return { disabled: true, tooltip: "No unbilled hours" }
   return { disabled: false, tooltip: null }
 }
@@ -130,6 +131,12 @@ export function ProjectTimeContent({
   const isTmProject = project.billingType === "t_and_m"
   const selectionEnabled = isAdmin && isTmProject
 
+  // Task side peek — clicking a task title opens ?detail=taskId (handled by
+  // the drawer/modal mounted on the project page). The open task's rows stay
+  // highlighted while the peek is up.
+  const openTaskDetail = useTaskDetailNav()
+  const activeTaskId = parseDetailParam(searchParams)
+
   // ─── State ────────────────────────────────────────────────────────────────
 
   // Selection stored as Map (id → row) so rows hidden by the current filter
@@ -141,6 +148,14 @@ export function ProjectTimeContent({
 
   const [editEntryId, setEditEntryId] = useState<Id<"timeEntries"> | null>(null)
   const { generate, pending: isGenerating } = useGenerateInvoice()
+
+  // Notion-style facets (member / category / billing status) — state in the
+  // URL, applied client-side over the server's project+range+search slice.
+  const { filters } = useProjectTimeFilters()
+  const filteredEntries = useMemo(
+    () => applyTimeEntryFilters(entries, filters),
+    [entries, filters],
+  )
 
   function handleGenerateAll() {
     void generate({ projectId })
@@ -186,12 +201,14 @@ export function ProjectTimeContent({
 
   // Visible vs. hidden selection. Convex returns a fresh `entries` ref on
   // every backend tick — without this useMemo, every websocket update
-  // rebuilds these collections O(N+M).
+  // rebuilds these collections O(N+M). "Visible" means after the client-
+  // side facets too, so facet changes surface the hidden-selection banner
+  // the same way server filters do.
   const { selectedEntries, hiddenSelectedEntries, selectedIds } = useMemo(() => {
-    const visibleIds = new Set<string>(entries.map((e) => e._id))
+    const visibleIds = new Set<string>(filteredEntries.map((e) => e._id))
     const sel: TimeEntryRow[] = []
     const hidden: TimeEntryRow[] = []
-    for (const e of entries) {
+    for (const e of filteredEntries) {
       if (selection.has(e._id)) sel.push(e)
     }
     for (const [id, entry] of selection) {
@@ -205,7 +222,7 @@ export function ProjectTimeContent({
       hiddenSelectedEntries: hidden,
       selectedIds: new Set(selection.keys()),
     }
-  }, [entries, selection])
+  }, [filteredEntries, selection])
 
   // Within-group secondary sort key — server pre-sorts by (date desc,
   // createdAt desc); index-from-end preserves that order when grouped view
@@ -250,8 +267,7 @@ export function ProjectTimeContent({
 
   function switchToInvoicesTab() {
     const params = new URLSearchParams(searchParams.toString())
-    params.delete("member")
-    params.delete("billingStatus")
+    params.delete("filters")
     params.delete("search")
     params.set("tab", "invoices")
     router.push(`${pathname}?${params.toString()}`)
@@ -260,34 +276,41 @@ export function ProjectTimeContent({
 
   // ─── Render ───────────────────────────────────────────────────────────────
 
-  const invoiceBtn = getInvoiceButtonState(isAdmin, project.billingType, unbilledCount)
+  const invoiceBtn = getInvoiceButtonState(isAdmin, unbilledCount)
   const editEntryRow = editEntryId ? entries.find((e) => e._id === editEntryId) : undefined
 
   const headerActions = (
     <>
-      <TooltipProvider>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            {/* span needed so the tooltip tracks hover even when the button is disabled */}
-            <span>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-9"
-                disabled={invoiceBtn.disabled || isGenerating}
-                onClick={handleGenerateAll}
-              >
-                <ReceiptIcon data-icon="inline-start" className="size-4" />
-                Invoice Unbilled Hours
-              </Button>
-            </span>
-          </TooltipTrigger>
-          {invoiceBtn.tooltip && <TooltipContent>{invoiceBtn.tooltip}</TooltipContent>}
-        </Tooltip>
-      </TooltipProvider>
+      <WorksheetExportButton
+        projectId={projectId}
+        projectStartDate={project.startDate}
+        timezone={timezone}
+      />
+      {isTmProject && (
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              {/* span needed so the tooltip tracks hover even when the button is disabled */}
+              <span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-9"
+                  disabled={invoiceBtn.disabled || isGenerating}
+                  onClick={handleGenerateAll}
+                >
+                  <ReceiptIcon data-icon="inline-start" className="size-4" />
+                  Invoice unbilled hours
+                </Button>
+              </span>
+            </TooltipTrigger>
+            {invoiceBtn.tooltip && <TooltipContent>{invoiceBtn.tooltip}</TooltipContent>}
+          </Tooltip>
+        </TooltipProvider>
+      )}
       <Button size="sm" className="h-9" onClick={onOpenAdd}>
         <PlusIcon data-icon="inline-start" className="size-4" />
-        Add Time
+        Add time
       </Button>
     </>
   )
@@ -304,19 +327,21 @@ export function ProjectTimeContent({
     projectId,
     currentUserId: currentUser?._id,
     onEdit: setEditEntryId,
+    onOpenTask: openTaskDetail,
+    activeTaskId,
   }
 
   return (
     <div className="flex flex-col gap-4">
       <ProjectTimeStats
-        entries={entries}
+        entries={filteredEntries}
         billingType={project.billingType}
         currency={project.currency}
       />
 
       <ProjectTimeFilters
         availableMembers={availableMembers}
-        billingType={project.billingType}
+        categories={categories ?? undefined}
         actions={headerActions}
       />
 
@@ -339,25 +364,25 @@ export function ProjectTimeContent({
         />
       )}
 
-      {entries.length === 0 ? (
+      {filteredEntries.length === 0 ? (
         <EmptyStateBanner
           icon={ClipboardListIcon}
           title="No entries match your filters"
-          description="Try removing a filter or adjusting your search."
+          description="Try a wider date range, or remove a filter."
           action={
             <Link
-              href={pathname + "?tab=time"}
+              href={pathname + "?tab=time&dateRange=all"}
               className="text-sm font-medium text-primary hover:underline"
             >
-              Clear filters
+              Show all time
             </Link>
           }
         />
       ) : groupBy === "none" ? (
-        <ProjectTimeTable entries={entries} {...sharedTableProps} />
+        <ProjectTimeTable entries={filteredEntries} {...sharedTableProps} />
       ) : (
         <ProjectTimeGrouped
-          entries={entries}
+          entries={filteredEntries}
           grouping={groupBy}
           createdAtMap={createdAtMap}
           {...sharedTableProps}
@@ -410,29 +435,29 @@ export function ProjectTimeContent({
 function parseGrouping(value: string | null): Grouping {
   if (
     value === "none" ||
+    value === "day" ||
     value === "week" ||
     value === "month" ||
-    value === "member" ||
-    value === "task"
+    value === "member"
   ) {
     return value
   }
-  return "day"
+  // Default grouping is By Task — the tab's primary job is reviewing which
+  // entries were logged against each task in the period. Must match the
+  // toolbar's `activeGroupBy` fallback in `project-time-filters.tsx`.
+  return "task"
 }
 
 /**
- * Whether ANY filter is active. Drives the "all invoiced" banner suppression
- * (we don't celebrate inbox-zero when the user is just looking at a filtered
- * view). The orchestrator computes the same signal for its empty branch —
- * keep both implementations in sync if one changes.
+ * Whether the view is narrowed at all. Drives the "all invoiced" banner
+ * suppression (we don't celebrate inbox-zero unless the user is looking at
+ * everything). The default date range is "this month", so the banner only
+ * appears once the user explicitly widens to All time.
  */
 function useHasFilters(): boolean {
   const searchParams = useSearchParams()
-  const memberId = searchParams.get("member")
-  const billingStatus = searchParams.get("billingStatus")
+  const facetFilters = searchParams.get("filters")
   const search = searchParams.get("search")
-  const dateRange = searchParams.get("dateRange")
-  return Boolean(
-    memberId || billingStatus || search || (dateRange && dateRange !== "all"),
-  )
+  const dateRange = parseDateRangePreset(searchParams.get("dateRange"))
+  return Boolean(facetFilters || search || dateRange !== "all")
 }

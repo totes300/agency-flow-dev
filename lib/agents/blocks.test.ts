@@ -82,6 +82,124 @@ describe("classifyParts", () => {
     ]);
     expect(blocks.map((b) => b.kind)).toEqual(["reasoning", "tool", "text"]);
   });
+
+  const tableOutput = (title: string, artifactId?: string) => ({
+    block: "agency-flow/table@1",
+    table: {
+      title,
+      columns: [{ key: "task", label: "Task", kind: "text" }],
+      rows: [{ task: "x" }],
+    },
+    ...(artifactId
+      ? { artifact: { artifactId, name: title, artifactKind: "sheet_csv" } }
+      : {}),
+  });
+
+  it("renders a message's only table inline (it is the answer)", () => {
+    const blocks = classifyParts([
+      {
+        type: "tool-collectTimesheetData",
+        state: "output-available",
+        output: tableOutput("Timesheet — Arlow", "a1"),
+      },
+    ]);
+    expect(blocks.map((b) => b.kind)).toEqual(["tool", "table", "artifact"]);
+  });
+
+  it("collapses intermediate tables: only the LAST table renders inline, every ghost row and artifact chip stays", () => {
+    const blocks = classifyParts([
+      {
+        type: "tool-collectTimesheetData",
+        state: "output-available",
+        output: tableOutput("Timesheet — Pragmatico", "a1"),
+      },
+      {
+        type: "tool-collectTimesheetData",
+        state: "output-available",
+        output: tableOutput("Timesheet — Arlow", "a2"),
+      },
+      {
+        type: "tool-createSheet",
+        state: "output-available",
+        output: tableOutput("Hours by client", "a3"),
+      },
+      { type: "text", text: "Done." },
+    ]);
+    expect(blocks.map((b) => b.kind)).toEqual([
+      "tool",
+      "artifact",
+      "tool",
+      "artifact",
+      "tool",
+      "table",
+      "artifact",
+      "text",
+    ]);
+    const table = blocks.find((b) => b.kind === "table");
+    expect(table).toMatchObject({ table: { title: "Hours by client" } });
+    // Intermediate sheets stay reachable: their chips survive the collapse.
+    expect(
+      blocks.filter((b) => b.kind === "artifact").map((b) => b.artifactId),
+    ).toEqual(["a1", "a2", "a3"]);
+  });
+
+  it("collapse never drops a table that has no artifact fallback when it is last", () => {
+    const blocks = classifyParts([
+      {
+        type: "tool-collectTimesheetData",
+        state: "output-available",
+        output: tableOutput("Timesheet — Pragmatico", "a1"),
+      },
+      {
+        type: "tool-collectTimesheetData",
+        state: "output-available",
+        output: tableOutput("Timesheet — Arlow"),
+      },
+    ]);
+    expect(blocks.map((b) => b.kind)).toEqual([
+      "tool",
+      "artifact",
+      "tool",
+      "table",
+    ]);
+  });
+
+  it("expands a finished propose-tool call into one proposal block carrying the batch ids", () => {
+    const blocks = classifyParts([
+      {
+        type: "tool-proposeCreateTasks",
+        state: "output-available",
+        output: {
+          block: "agency-flow/proposals@1",
+          proposalIds: ["p1", "p2", "p3"],
+          count: 3,
+        },
+      },
+      { type: "text", text: "Review the cards above." },
+    ]);
+    expect(blocks.map((b) => b.kind)).toEqual(["tool", "proposal", "text"]);
+    expect(blocks[1]).toEqual({
+      kind: "proposal",
+      proposalIds: ["p1", "p2", "p3"],
+    });
+  });
+
+  it("emits no proposal block while the propose tool is still running or errored", () => {
+    expect(
+      classifyParts([
+        { type: "tool-proposeCreateTasks", state: "input-available" },
+      ]).map((b) => b.kind),
+    ).toEqual(["tool"]);
+    expect(
+      classifyParts([
+        {
+          type: "tool-proposeCreateTasks",
+          state: "output-error",
+          errorText: "boom",
+        },
+      ]).map((b) => b.kind),
+    ).toEqual(["tool"]);
+  });
 });
 
 describe("tool display", () => {
@@ -107,6 +225,40 @@ describe("tool display", () => {
     // …and stay silent for non-array outputs (no invented numbers).
     expect(toolResultSummary("listClients", { rows: 5 })).toBeNull();
     expect(toolResultSummary("somethingNew", "ok")).toBeNull();
+  });
+
+  it("summarizes createSheet from the validated table payload", () => {
+    const output = {
+      block: "agency-flow/table@1",
+      table: {
+        title: "Hours by client",
+        columns: [{ key: "client", label: "Client", kind: "text" }],
+        rows: [{ client: "Arlow" }, { client: "Pragmatico" }],
+      },
+    };
+    expect(toolResultSummary("createSheet", output)).toBe("2 rows");
+    // Malformed output → silence, never an invented count.
+    expect(toolResultSummary("createSheet", { rows: 2 })).toBeNull();
+  });
+
+  it("summarizes propose tools from the batch size, never model text", () => {
+    const output = {
+      block: "agency-flow/proposals@1",
+      proposalIds: ["p1", "p2"],
+    };
+    expect(toolResultSummary("proposeCreateTasks", output)).toBe(
+      "2 proposals awaiting review",
+    );
+    expect(
+      toolResultSummary("proposeCreateTasks", {
+        block: "agency-flow/proposals@1",
+        proposalIds: ["p1"],
+      }),
+    ).toBe("1 proposal awaiting review");
+    expect(toolResultSummary("proposeCreateTasks", { count: 5 })).toBeNull();
+    expect(toolResultSummary("proposeArchiveTask", output)).toBe(
+      "awaiting confirmation",
+    );
   });
 });
 

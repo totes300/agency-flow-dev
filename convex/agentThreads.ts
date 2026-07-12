@@ -21,9 +21,10 @@ import { getAuthContext, type AuthContext } from "./lib/auth";
 export const UNTITLED_THREAD = "New chat";
 
 /**
- * Owner-only access check shared by every thread-scoped function.
- * Admin-sees-all arrives with the audit view (slice 11) as a SEPARATE
- * query — the rail and chat surfaces are always owner-only (US 51).
+ * Owner-only access check shared by every thread-scoped WRITE (create a run,
+ * stop a run). Ownership is non-negotiable for mutations: an admin may READ
+ * any thread (audit) but may never act inside one they don't own — sends stay
+ * owner-only server-side (US 51, D6).
  */
 export async function requireOwnedThread(
   ctx: QueryCtx,
@@ -38,6 +39,30 @@ export async function requireOwnedThread(
     throw new ConvexError("Thread not found"); // don't leak existence
   }
   return thread;
+}
+
+/**
+ * Read access for thread-scoped QUERIES: the owner always, plus an org admin
+ * (admin-sees-all, US 52 — powers the audit view's read-only thread open).
+ * Returns `isOwner` so the caller can gate interactivity: a non-owner admin
+ * views the transcript but the composer and proposal controls are inert
+ * (and the underlying mutations reject them anyway). A foreign-tenant or
+ * garbage id 404s without leaking existence.
+ */
+export async function requireReadableThread(
+  ctx: QueryCtx,
+  auth: AuthContext,
+  threadId: Id<"agentThreads">,
+): Promise<{ thread: Doc<"agentThreads">; isOwner: boolean }> {
+  const thread = await ctx.db.get(threadId);
+  if (!thread || thread.orgId !== auth.orgId) {
+    throw new ConvexError("Thread not found");
+  }
+  const isOwner = thread.userId === auth.userId;
+  if (!isOwner && !auth.isAdmin) {
+    throw new ConvexError("Thread not found"); // don't leak existence
+  }
+  return { thread, isOwner };
 }
 
 // ─── Queries ────────────────────────────────────────────────────────────────
@@ -85,7 +110,7 @@ export const get = query({
     const auth = await getAuthContext(ctx);
     const id = ctx.db.normalizeId("agentThreads", args.threadId);
     if (!id) throw new ConvexError("Thread not found");
-    const thread = await requireOwnedThread(ctx, auth, id);
+    const { thread, isOwner } = await requireReadableThread(ctx, auth, id);
     const agent = await ctx.db.get(thread.agentId);
 
     // The in-flight run, if any — the composer's Stop button target.
@@ -109,6 +134,9 @@ export const get = query({
       status: thread.status,
       agentId: thread.agentId,
       agentName: agent?.name ?? "Agent",
+      // Non-owner admins view read-only (audit): the UI hides the composer and
+      // renders proposal cards inert. Every write path is owner-checked too.
+      viewerIsOwner: isOwner,
       activeRun: activeRun
         ? {
             _id: activeRun._id,
@@ -130,7 +158,7 @@ export const listRuns = query({
     const auth = await getAuthContext(ctx);
     const id = ctx.db.normalizeId("agentThreads", args.threadId);
     if (!id) throw new ConvexError("Thread not found");
-    const thread = await requireOwnedThread(ctx, auth, id);
+    const { thread } = await requireReadableThread(ctx, auth, id);
     const runs = await ctx.db
       .query("agentRuns")
       .withIndex("by_threadId", (q) => q.eq("threadId", thread._id))
@@ -147,6 +175,8 @@ export const listRuns = query({
       loadedSkills: r.loadedSkills ?? [],
       // Set when a skill stop-condition halted the run — its explanatory block.
       stoppedBySkill: r.stoppedBySkill ?? null,
+      // Stale tool refs dropped at runtime (slice 09) → a "system" block.
+      droppedTools: r.droppedTools ?? [],
     }));
   },
 });
@@ -167,7 +197,7 @@ export const listMessages = query({
     const auth = await getAuthContext(ctx);
     const id = ctx.db.normalizeId("agentThreads", args.threadId);
     if (!id) throw new ConvexError("Thread not found");
-    const thread = await requireOwnedThread(ctx, auth, id);
+    const { thread } = await requireReadableThread(ctx, auth, id);
     const paginated = await listUIMessages(ctx, components.agent, {
       threadId: thread.componentThreadId,
       paginationOpts: args.paginationOpts,

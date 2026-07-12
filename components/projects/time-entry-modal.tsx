@@ -30,15 +30,37 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover"
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command"
 import { UserAvatar } from "@/components/user-avatar"
 import { CategoryBadge } from "@/components/category-badge"
-import { parseDuration, formatMinutesDisplay } from "@/lib/duration"
+import {
+  parseDuration,
+  formatMinutesDisplay,
+  QUICK_DURATIONS,
+} from "@/lib/duration"
 import { formatDateToYMD, parseYMDToLocalDate } from "@/lib/format"
 import { anchorStartedAt, reanchorStartedAt, getYMDInTimezone } from "@/lib/workday"
 import { useOrgTimezone } from "@/lib/hooks/use-org-timezone"
 import { extractErrorMessage, toastError } from "@/lib/toast-helpers"
 import { toast } from "sonner"
-import { LoaderIcon, PlusIcon } from "lucide-react"
+import {
+  CheckIcon,
+  ChevronsUpDownIcon,
+  LoaderIcon,
+  PlusIcon,
+} from "lucide-react"
 
 type Mode = "create" | "edit"
 
@@ -128,11 +150,11 @@ export function TimeEntryModal({
       key={formKey}
       open={open}
       onOpenChange={onOpenChange}
-      size="xl"
+      size="lg"
     >
-      <FormModalHeader>
+      <FormModalHeader align="start">
         <FormModalTitle>
-          {mode === "create" ? "Add Time" : "Edit Time Entry"}
+          {mode === "create" ? "Add time" : "Edit time entry"}
         </FormModalTitle>
         <FormModalDescription>
           {mode === "create"
@@ -234,6 +256,7 @@ function TimeEntryModalForm({
   const [taskId, setTaskId] = useState<Id<"tasks"> | undefined>(
     editEntry?.taskId,
   )
+  const [taskPickerOpen, setTaskPickerOpen] = useState(false)
   // For create mode, date defaults to org-tz today (not browser-local) so a
   // cross-tz user doesn't silently book entries to the wrong org day. We
   // initialize with `undefined` and resolve during render against the live
@@ -492,28 +515,66 @@ function TimeEntryModalForm({
 
         <Field>
           <FieldLabel htmlFor="entry-task">Task</FieldLabel>
-          <Select
-            value={taskId ?? ""}
-            onValueChange={(v) => handleTaskChange(v as Id<"tasks">)}
-            disabled={
-              isLocked ||
-              projectTasks === undefined ||
-              projectTasks.length === 0
-            }
-          >
-            <SelectTrigger id="entry-task" className="w-full">
-              <SelectValue placeholder="Select a task" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                {(projectTasks ?? []).map((t) => (
-                  <SelectItem key={t._id} value={t._id}>
-                    {t.title}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
+          {/* Searchable combobox (Popover+Command), not a plain Select —
+              projects accumulate dozens of tasks and this is the form's
+              primary field. Radix focuses it first on open (create mode),
+              so type-to-find is the very first interaction. */}
+          <Popover open={taskPickerOpen} onOpenChange={setTaskPickerOpen}>
+            <PopoverTrigger asChild>
+              <Button
+                type="button"
+                id="entry-task"
+                variant="outline"
+                role="combobox"
+                aria-expanded={taskPickerOpen}
+                disabled={
+                  isLocked ||
+                  projectTasks === undefined ||
+                  projectTasks.length === 0
+                }
+                className="h-10 w-full justify-between px-3 font-normal"
+              >
+                {selectedTask ? (
+                  <span className="truncate">{selectedTask.title}</span>
+                ) : (
+                  <span className="text-muted-foreground">Select a task</span>
+                )}
+                <ChevronsUpDownIcon
+                  aria-hidden
+                  className="size-4 shrink-0 text-muted-foreground"
+                />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent
+              className="w-[var(--radix-popover-trigger-width)] p-0"
+              align="start"
+            >
+              <Command>
+                <CommandInput placeholder="Search tasks…" />
+                <CommandList>
+                  <CommandEmpty>No tasks found.</CommandEmpty>
+                  <CommandGroup>
+                    {(projectTasks ?? []).map((t) => (
+                      <CommandItem
+                        key={t._id}
+                        value={t._id}
+                        keywords={[t.title]}
+                        onSelect={() => {
+                          handleTaskChange(t._id)
+                          setTaskPickerOpen(false)
+                        }}
+                      >
+                        <span className="truncate">{t.title}</span>
+                        {taskId === t._id && (
+                          <CheckIcon aria-hidden className="ml-auto size-4" />
+                        )}
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                </CommandList>
+              </Command>
+            </PopoverContent>
+          </Popover>
           {inheritedCategory && (
             <FieldDescription>
               Category:{" "}
@@ -535,33 +596,51 @@ function TimeEntryModalForm({
           )}
         </Field>
 
-        <div className="grid grid-cols-2 gap-4">
-          <Field>
-            <FieldLabel htmlFor="entry-date">Date</FieldLabel>
-            <DatePicker
-              id="entry-date"
-              value={effectiveDate}
-              onChange={setDate}
-              disabled={isLocked || !timezoneReady}
-            />
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="entry-duration">Duration</FieldLabel>
-            <Input
-              id="entry-duration"
-              value={durationInput}
-              onChange={(e) => setDurationInput(e.target.value)}
-              placeholder="01:30"
-              disabled={isLocked}
-              inputMode="text"
-              aria-describedby="entry-duration-help"
-              autoFocus={!isLocked && !hasNoTasks}
-            />
-            <FieldDescription id="entry-duration-help">
-              Formats: 1:30, 1h 30m, 90m, 1.5, 90.
-            </FieldDescription>
-          </Field>
-        </div>
+        {/* Single-column layout — Date and Duration stack full-width so the
+            quick chips sit in one calm row instead of wrapping in a half
+            column. */}
+        <Field>
+          <FieldLabel htmlFor="entry-date">Date</FieldLabel>
+          <DatePicker
+            id="entry-date"
+            value={effectiveDate}
+            onChange={setDate}
+            disabled={isLocked || !timezoneReady}
+          />
+        </Field>
+
+        <Field>
+          <FieldLabel htmlFor="entry-duration">Duration</FieldLabel>
+          <Input
+            id="entry-duration"
+            value={durationInput}
+            onChange={(e) => setDurationInput(e.target.value)}
+            // The placeholder doubles as the format hint — the old helper
+            // line below the field moved here; the quick chips cover the
+            // common values without typing at all.
+            placeholder="1:30, 1h 30m, 90…"
+            disabled={isLocked}
+            inputMode="text"
+            // Create mode leaves initial focus on the task picker (the
+            // first empty required field); edit mode jumps straight to
+            // the duration — that's what the user came to change.
+            autoFocus={mode === "edit" && !isLocked}
+          />
+          {!isLocked && (
+            <div className="flex flex-wrap gap-1.5 pt-1.5">
+              {QUICK_DURATIONS.map((d) => (
+                <button
+                  key={d.label}
+                  type="button"
+                  onClick={() => setDurationInput(d.label)}
+                  className="rounded-full border border-border px-3 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                >
+                  {d.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </Field>
 
         <div className="flex items-center justify-between rounded-md border px-3 py-2">
           <div>

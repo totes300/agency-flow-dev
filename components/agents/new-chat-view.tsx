@@ -5,9 +5,14 @@ import { useRouter } from "next/navigation"
 import { useAction, useMutation, useQuery } from "convex/react"
 import { BotIcon } from "lucide-react"
 import { api } from "@/convex/_generated/api"
+import type { Id } from "@/convex/_generated/dataModel"
 import { EmptyState } from "@/components/empty-state"
 import { Skeleton } from "@/components/ui/skeleton"
-import { AgentComposer } from "@/components/agents/composer"
+import {
+  AgentComposer,
+  type AgentComposerHandle,
+  type ComposerSubmission,
+} from "@/components/agents/composer"
 import { WorkspaceEmptyState } from "@/components/agents/workspace-empty-state"
 import { toastError } from "@/lib/toast-helpers"
 
@@ -23,27 +28,37 @@ export function NewChatView({ agentId }: { agentId: string }) {
   const createThread = useMutation(api.agentThreads.create)
   const startRun = useAction(api.agentRunner.startRun)
 
-  const [draft, setDraft] = useState("")
   const [starting, setStarting] = useState(false)
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const composerRef = useRef<AgentComposerHandle>(null)
 
   if (agent === undefined) return <NewChatViewSkeleton />
   // Stale/foreign ?agent= URL — degrade to the generic workspace state.
   if (agent === null) return <WorkspaceEmptyState />
 
-  function send() {
-    if (agent === null || agent === undefined) return
-    const text = draft.trim()
-    if (!text || starting) return
+  function send(submission: ComposerSubmission) {
+    if (agent === null || agent === undefined || starting) return
+    const { text, mentions, attachments } = submission
+    if (!text && mentions.length === 0 && attachments.length === 0) return
     setStarting(true)
     void createThread({ agentId: agent._id })
       .then((threadId) => {
         // Fire the run, then jump into the thread — post-start failures
         // surface there as error blocks, so no catch-toast needed beyond
         // pre-start validation.
-        void startRun({ threadId, message: text }).catch((err) =>
-          toastError(err, "The agent run failed"),
-        )
+        void startRun({
+          threadId,
+          message: text,
+          mentions: mentions.length > 0 ? mentions : undefined,
+          attachments:
+            attachments.length > 0
+              ? attachments.map((a) => ({
+                  storageId: a.storageId as Id<"_storage">,
+                  name: a.name,
+                  mimeType: a.mimeType,
+                  size: a.size,
+                }))
+              : undefined,
+        }).catch((err) => toastError(err, "The agent run failed"))
         router.push(`/agents?thread=${threadId}`)
       })
       .catch((err) => {
@@ -53,8 +68,7 @@ export function NewChatView({ agentId }: { agentId: string }) {
   }
 
   function pickPrompt(prompt: string) {
-    setDraft(prompt)
-    textareaRef.current?.focus()
+    composerRef.current?.prefill(prompt)
   }
 
   return (
@@ -89,13 +103,11 @@ export function NewChatView({ agentId }: { agentId: string }) {
         />
       </div>
       <AgentComposer
+        ref={composerRef}
         agentName={agent.name}
-        value={draft}
-        onChange={setDraft}
         onSend={send}
         running={starting}
         stopDisabled
-        textareaRef={textareaRef}
       />
     </div>
   )

@@ -4,12 +4,14 @@ import { useEffect, useRef } from "react"
 import { useQuery } from "convex/react"
 import { useUIMessages } from "@convex-dev/agent/react"
 import type { UIMessage } from "@convex-dev/agent/react"
+import { EyeIcon } from "lucide-react"
 import { api } from "@/convex/_generated/api"
 import { Skeleton } from "@/components/ui/skeleton"
 import { ThreadComposer } from "@/components/agents/thread-composer"
 import { BlockRenderer } from "@/components/agents/blocks/block-renderer"
 import { ErrorBlock } from "@/components/agents/blocks/error-block"
 import { SystemBlock } from "@/components/agents/blocks/system-block"
+import { UserMessage } from "@/components/agents/user-message"
 import { classifyParts, type MessagePartLike } from "@/lib/agents/blocks"
 
 /**
@@ -39,13 +41,18 @@ export function ThreadView({ threadId }: { threadId: string }) {
     return <ThreadViewSkeleton />
   }
 
+  // A non-owner admin views the thread read-only (audit): the composer is
+  // replaced with a notice and proposal cards render inert. Every write path
+  // is owner-checked server-side too, so this is UX, not the security gate.
+  const readOnly = thread.viewerIsOwner === false
+
   // One timeline: messages by creation time + settled-run outcomes by
   // finish time, so an error/stop note lands under the run it closes.
   const timeline: { key: string; at: number; node: React.ReactNode }[] =
     messages.map((message) => ({
       key: message.key,
       at: message._creationTime,
-      node: <MessageRow message={message} />,
+      node: <MessageRow message={message} readOnly={readOnly} />,
     }))
   for (const run of runs ?? []) {
     // "Skill loaded" notes anchor to run start, so they sort right after the
@@ -58,6 +65,21 @@ export function ThreadView({ threadId }: { threadId: string }) {
           <SystemBlock>
             Skill loaded: {skill.name}
             {skill.isStopCondition && " · stop-condition"}
+          </SystemBlock>
+        ),
+      })
+    }
+    // A tool the agent references no longer exists in the registry — dropped
+    // before the model call, flagged here instead of failing the run (slice 09).
+    if (run.droppedTools.length > 0) {
+      timeline.push({
+        key: `${run._id}-dropped-tools`,
+        at: run.startedAt,
+        node: (
+          <SystemBlock>
+            {run.droppedTools.length === 1
+              ? `Unavailable tool skipped: ${run.droppedTools[0]}`
+              : `Unavailable tools skipped: ${run.droppedTools.join(", ")}`}
           </SystemBlock>
         ),
       })
@@ -110,30 +132,39 @@ export function ThreadView({ threadId }: { threadId: string }) {
           <div ref={bottomRef} />
         </div>
       </div>
-      <ThreadComposer
-        threadId={threadId}
-        agentName={thread.agentName}
-        isRunning={thread.status === "running"}
-        activeRun={thread.activeRun}
-      />
+      {readOnly ? (
+        <div className="flex items-center justify-center gap-2 border-t px-4 py-3 text-xs text-muted-foreground">
+          <EyeIcon className="size-3.5" aria-hidden />
+          Viewing another member&apos;s thread — read-only.
+        </div>
+      ) : (
+        <ThreadComposer
+          threadId={threadId}
+          agentName={thread.agentName}
+          isRunning={thread.status === "running"}
+          activeRun={thread.activeRun}
+        />
+      )}
     </div>
   )
 }
 
-function MessageRow({ message }: { message: UIMessage }) {
+function MessageRow({
+  message,
+  readOnly,
+}: {
+  message: UIMessage
+  readOnly: boolean
+}) {
   if (message.role === "user") {
-    return (
-      <div className="ml-12 self-end whitespace-pre-wrap rounded-lg bg-muted px-3 py-2 text-sm leading-relaxed">
-        {message.text}
-      </div>
-    )
+    return <UserMessage text={message.text} />
   }
   const blocks = classifyParts(message.parts as unknown as MessagePartLike[])
   if (blocks.length === 0) return null
   return (
     <div className="flex flex-col gap-2">
       {blocks.map((block, i) => (
-        <BlockRenderer key={i} block={block} />
+        <BlockRenderer key={i} block={block} readOnly={readOnly} />
       ))}
     </div>
   )

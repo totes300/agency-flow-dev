@@ -13,6 +13,7 @@ import {
   invoiceCoversMonth,
 } from "./lib/invoiceAnchor";
 import { getCyclePeriods } from "./lib/retainerCycle";
+import { autoSaveTimersForTasks } from "./lib/timerEntry";
 import type {
   ResolvedProjectListItem,
   ResolvedProjectDetail,
@@ -368,36 +369,31 @@ export const update = mutation({
 export const archive = mutation({
   args: { id: v.id("projects") },
   handler: async (ctx, args) => {
-    const { orgId } = await requireAdmin(ctx);
+    const { orgId, userId } = await requireAdmin(ctx);
     const project = await ctx.db.get(args.id);
     if (!project || project.orgId !== orgId) throw new ConvexError("Project not found");
 
-    // Stop running timers on this project's tasks
+    // Running timers on this project's tasks: auto-save the measured time as
+    // entries instead of wiping it (identical rescue to tasks.archive — the
+    // 2026-07-05 hardening). Returned so the caller's toast can report whose
+    // time was saved / left running.
     const projectTasks = await ctx.db
       .query("tasks")
       .withIndex("by_orgId_projectId", (q) => q.eq("orgId", orgId).eq("projectId", args.id))
       .collect();
     const projectTaskIds = new Set(projectTasks.map((t) => t._id.toString()));
 
-    const orgMembers = await ctx.db
-      .query("orgMembers")
-      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
-      .collect();
-    for (const member of orgMembers) {
-      if (!member.userId) continue;
-      const user = await ctx.db.get(member.userId);
-      if (user?.timerTaskId && projectTaskIds.has(user.timerTaskId.toString())) {
-        await ctx.db.patch(member.userId, {
-          timerTaskId: undefined,
-          timerStartedAt: undefined,
-          timerAccumulatedMs: undefined,
-          timerStatus: undefined,
-        });
-      }
-    }
+    const timerRescue = await autoSaveTimersForTasks(ctx, {
+      orgId,
+      actorUserId: userId,
+      taskIds: projectTaskIds,
+      noteLabel: "Auto-saved when the project was archived",
+    });
 
     const now = Date.now();
     await ctx.db.patch(args.id, { archivedAt: now, updatedAt: now });
+
+    return { autoSavedTimers: timerRescue.saved, timerSaveFailures: timerRescue.failed };
   },
 });
 

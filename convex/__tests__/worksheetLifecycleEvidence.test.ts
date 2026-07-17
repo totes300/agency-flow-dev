@@ -75,11 +75,34 @@ async function seed(
       createdBy: userId,
     });
 
+    // Two work categories: a task's in-scope entries can now carry different
+    // snapshot categories (entry-level billing category feature), so the
+    // worksheet row's categoryName must list every snapshot it covers.
+    const designCat = await ctx.db.insert("workCategories", {
+      orgId: ORG_ID,
+      name: "Design",
+      color: "#111",
+      sortOrder: 0,
+      createdAt: now,
+      updatedAt: now,
+      createdBy: userId,
+    });
+    const devCat = await ctx.db.insert("workCategories", {
+      orgId: ORG_ID,
+      name: "Development",
+      color: "#222",
+      sortOrder: 1,
+      createdAt: now,
+      updatedAt: now,
+      createdBy: userId,
+    });
+
     async function insertEntry(input: {
       date: string;
       startedAt: number;
       durationMinutes: number;
       note: string;
+      snapshotCategoryId?: Id<"workCategories">;
     }): Promise<Id<"timeEntries">> {
       return await ctx.db.insert("timeEntries", {
         orgId: ORG_ID,
@@ -94,6 +117,9 @@ async function seed(
         costRate: 50,
         billableRate: 100,
         rateCurrency: "EUR",
+        ...(input.snapshotCategoryId
+          ? { snapshotCategoryId: input.snapshotCategoryId }
+          : {}),
         createdAt: now,
         updatedAt: now,
         createdBy: userId,
@@ -105,12 +131,14 @@ async function seed(
       startedAt: Date.UTC(2026, 0, 15, 9),
       durationMinutes: 90,
       note: "Completed discovery and approved the implementation plan",
+      snapshotCategoryId: designCat,
     });
     const juneId = await insertEntry({
       date: "2026-06-20",
       startedAt: Date.UTC(2026, 5, 20, 9),
       durationMinutes: 120,
       note: "Shipped the final implementation to production",
+      snapshotCategoryId: devCat,
     });
 
     return {
@@ -162,5 +190,26 @@ describe("worksheet lifecycle evidence", () => {
     ]);
     expect(summaryGroups).toHaveLength(1);
     expect(summaryGroups[0].occurrenceCount).toBe(2);
+  });
+
+  it("lists every snapshot category when a task's in-scope entries span two", async () => {
+    const t = convexTest(schema, modules);
+    const seeded = await seed(t);
+
+    // Both entries belong to one task but carry different snapshot categories
+    // (January = Design, June = Development). The worksheet row must label the
+    // task with both, in date order — the same attribution rule Monthly Report
+    // uses, so subtotals bucket identically.
+    const [row] = await t.run(async (ctx) =>
+      buildTaskRows(
+        ctx,
+        seeded.project,
+        [seeded.januaryEntry, seeded.juneEntry],
+        ORG_ID,
+      ),
+    );
+
+    expect(row.categoryName).toBe("Design, Development");
+    expect(row.entryCount).toBe(2);
   });
 });

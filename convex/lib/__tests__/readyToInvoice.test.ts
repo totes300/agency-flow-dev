@@ -283,6 +283,21 @@ describe("buildRetainerMonthlyReadyRows", () => {
     expect(rows[0].amount).toBe(200); // 2h × $100
   });
 
+  it("emits NO row for an admin-closed month even when it looks over budget", () => {
+    // A late/unsettled entry can push a settled month's naive usage over
+    // budget; the closed month must still not re-emit (the entry carries into
+    // the first open period per I1). Regression for the Close-queue dead-end.
+    const rows = buildRetainerMonthlyReadyRows({
+      project: makeProject({ rolloverEnabled: false, overageRate: 100 }),
+      client: makeClient(),
+      invoices: [],
+      monthBalances: [
+        { year: 2026, month: 3, endBalance: -120, isAdminClosed: true },
+      ],
+    });
+    expect(rows).toEqual([]);
+  });
+
   it("skips months that already have a non-void invoice", () => {
     const rows = buildRetainerMonthlyReadyRows({
       project: makeProject({ rolloverEnabled: false, overageRate: 100 }),
@@ -384,6 +399,26 @@ describe("buildRetainerCycleReadyRows", () => {
           closingYear: 2026,
           closingMonth: 3,
           cycleBalance: 300,
+          isCycleClosed: true,
+          isAdminClosed: true,
+        },
+      ],
+    });
+    expect(rows).toEqual([]);
+  });
+
+  it("emits NO row for an admin-closed cycle even when it looks over budget", () => {
+    // Same dead-end guard as the monthly builder: a settled (admin-closed)
+    // cycle must never re-emit, over budget or not.
+    const rows = buildRetainerCycleReadyRows({
+      project: makeProject({ rolloverEnabled: true, overageRate: 100, cycleLength: 3 }),
+      client: makeClient(),
+      invoices: [],
+      cycles: [
+        {
+          closingYear: 2026,
+          closingMonth: 3,
+          cycleBalance: -120, // 2h over
           isCycleClosed: true,
           isAdminClosed: true,
         },
@@ -673,6 +708,35 @@ describe("buildTmReadyRows", () => {
           durationMinutes: 60,
           isBillable: true,
           invoiceId: id<"invoices">("inv_x"),
+          billableRate: 150,
+        },
+      ],
+      todayStr: TODAY,
+    });
+    expect(rows).toEqual([]);
+  });
+
+  it("excludes an open billable entry whose month is already invoice-covered", () => {
+    // A straggler open entry in a month a (partial) invoice covers must not
+    // anchor a row in that month — it carries into the first open period (I1),
+    // matching billingScope. Regression for the Close-queue dead-end.
+    const rows = buildTmReadyRows({
+      project: tmProject(),
+      client: makeClient(),
+      invoices: [
+        inv({
+          status: "invoiced",
+          periodStart: "2026-03-03",
+          periodEnd: "2026-03-13",
+        }),
+      ],
+      entries: [
+        {
+          _id: id<"timeEntries">("e1"),
+          date: "2026-03-20", // open, billable, but March is covered
+          durationMinutes: 120,
+          isBillable: true,
+          invoiceId: null,
           billableRate: 150,
         },
       ],

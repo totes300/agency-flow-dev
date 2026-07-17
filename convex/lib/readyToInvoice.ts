@@ -266,12 +266,25 @@ export function buildTmReadyRows(opts: {
     minutes: number;
     groups: Map<string, LineGroup>;
   };
+  // Months already covered by a non-void invoice (keyed by the invoice's
+  // periodEnd month, matching `billingScope`'s `invoicedAnchorMonths`). An open
+  // billable entry that lands in a covered month is a straggler — per I1 it
+  // carries into the first open period, so it must not anchor a row in its own
+  // (covered) month. Mirrors the retainer builders' `invoiced.has` guard.
+  const coveredMonths = new Set<string>();
+  for (const inv of invoices) {
+    if (inv.status === "void") continue;
+    const key = getInvoiceAnchorMonthKey(inv);
+    if (key) coveredMonths.add(key);
+  }
+
   const buckets = new Map<string, Bucket>();
   for (const e of entries) {
     if (!e.isBillable) continue;
     if (e.invoiceId !== undefined && e.invoiceId !== null) continue;
     if (e.settledAt !== undefined && e.settledAt !== null) continue;
     const ymKey = e.date.slice(0, 7); // YYYY-MM
+    if (coveredMonths.has(ymKey)) continue; // covered month — carries forward (I1)
     const [y, m] = ymKey.split("-").map(Number);
     // Skip current month — only closed periods feed the Inbox.
     const lastDay = new Date(y, m, 0).getDate();
@@ -357,6 +370,11 @@ export function buildRetainerMonthlyReadyRows(opts: {
   for (const m of monthBalances) {
     const key = `${m.year}-${String(m.month).padStart(2, "0")}`;
     if (invoiced.has(key)) continue;
+    // An admin-closed month is settled — it must never re-emit a row, even if a
+    // late/unsettled entry has since pushed its naive usage over budget (that
+    // entry carries into the first open period per I1; billingScope owns it).
+    // Guard both branches, not just within-budget.
+    if (m.isAdminClosed) continue;
     const base = {
       projectId: project._id,
       projectName: project.name,
@@ -369,7 +387,6 @@ export function buildRetainerMonthlyReadyRows(opts: {
     };
     const overMinutes = m.endBalance < 0 ? Math.abs(m.endBalance) : 0;
     if (overMinutes <= 0) {
-      if (m.isAdminClosed) continue; // settled — nothing pending
       out.push({
         ...base,
         kind: "retainer-close",
@@ -563,6 +580,8 @@ export function buildRetainerCycleReadyRows(opts: {
     if (!c.isCycleClosed) continue; // mid-cycle excluded
     const key = `${c.closingYear}-${String(c.closingMonth).padStart(2, "0")}`;
     if (invoiced.has(key)) continue; // already invoiced
+    // Admin-closed cycle is settled — never re-emit (mirrors the monthly guard).
+    if (c.isAdminClosed) continue;
     const base = {
       projectId: project._id,
       projectName: project.name,
@@ -576,7 +595,6 @@ export function buildRetainerCycleReadyRows(opts: {
     };
     const overMinutes = c.cycleBalance < 0 ? Math.abs(c.cycleBalance) : 0;
     if (overMinutes <= 0) {
-      if (c.isAdminClosed) continue; // settled — nothing pending
       out.push({
         ...base,
         kind: "retainer-cycle-close",

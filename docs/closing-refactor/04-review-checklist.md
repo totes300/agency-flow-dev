@@ -20,16 +20,20 @@ is fixed the callout flips to "All clear — ready to close."
 
 ## Acceptance criteria
 
-- [ ] Callout renders all v1 flags with correct severity presentation (warnings amber-iconed;
-      carried lines muted/informational; blocking items visually distinct).
-- [ ] Clicking an item scrolls to and flash-highlights the target row.
-- [ ] Flags resolve live as edits fix them (note added, duration reduced, rate configured); the
-      "All clear — ready to close" state appears when no warnings remain (info lines may persist).
-- [ ] Running-timer flag is warning-only (its blocking/non-blocking behaviour at commit is slice
-      06's concern).
-- [ ] Majority-carried group-header promotion works; per-row labels suppressed in that case.
-- [ ] Flag derivation stays in the pure `closeFlags` module — the UI only renders.
-- [ ] `npx tsc --noEmit` clean.
+- [x] Callout renders all v1 flags with correct severity presentation (warnings amber `TriangleAlert`;
+      blocking red `CircleAlert` + "Set rate" link; carried lines muted dot/informational).
+- [x] Clicking an item scrolls to (`scrollIntoView`) and flash-highlights (amber bg, 1.6s) the
+      target row via a stable DOM id (`CLOSE_ENTRY_DOM_ID`).
+- [x] Flags resolve live as edits fix them; the "All clear — ready to close" state (green
+      `CheckCircle2`) appears when no warning/blocker remains. Browser-verified: 3→2 (reduced the
+      long entry) → All clear (added the two missing notes); info lines would persist.
+- [x] Running-timer flag is warning-only (`loadRunningTimers` date-gated to the period; never a
+      blocker — commit behaviour is slice 06).
+- [x] Majority-carried group-header promotion works; per-row labels suppressed in that case (built
+      in slice 02, unchanged).
+- [x] Flag derivation stays in the pure `closeFlags` module — computed server-side in
+      `getCloseWorkspace` and returned; the UI only renders + formats.
+- [x] `npx tsc --noEmit` clean; eslint clean.
 
 ## Blocked by
 

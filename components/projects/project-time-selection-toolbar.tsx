@@ -10,7 +10,7 @@ import { Separator } from "@/components/ui/separator"
 import { toast } from "sonner"
 import { toastError } from "@/lib/toast-helpers"
 import { formatCurrency, formatMinutes } from "@/lib/format"
-import { BanIcon, DollarSignIcon, LoaderIcon, PlusIcon, XIcon } from "lucide-react"
+import { BanIcon, DollarSignIcon, LoaderIcon, ReceiptIcon, XIcon } from "lucide-react"
 import type { TimeEntryRow } from "@/components/projects/project-time-table"
 
 /**
@@ -30,10 +30,10 @@ export function ProjectTimeSelectionToolbar({
   currency: string
   onDeselectAll: () => void
   /**
-   * Generates a draft invoice from the selected time entries via
-   * `useGenerateInvoice` (the parent owns the hook). Receives the ids to
-   * invoice and how many of the selected rows were skipped (non-billable /
-   * already invoiced) so the parent can show "N of M".
+   * Routes the admin to the Billing → Close queue to review the period before
+   * invoicing (PRD slice 08 — no one-click draft from an arbitrary selection;
+   * scope rule I2 governs which entries bill). Receives the billable-open ids
+   * and how many selected rows were skipped, kept for the parent's discretion.
    */
   onCreateInvoice: (ids: Id<"timeEntries">[], skipped: number) => void
 }) {
@@ -172,8 +172,8 @@ export function ProjectTimeSelectionToolbar({
             )}
 
             <Button size="sm" onClick={handleCreate} className="ml-1">
-              <PlusIcon data-icon="inline-start" className="size-3.5" />
-              Create Invoice
+              <ReceiptIcon data-icon="inline-start" className="size-3.5" />
+              Review to invoice
             </Button>
           </div>
         </motion.div>

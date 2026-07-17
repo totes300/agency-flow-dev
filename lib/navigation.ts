@@ -61,7 +61,7 @@ export const navigation: NavGroup[] = [
   {
     label: "Finance",
     items: [
-      { title: "Invoices", url: "/invoices", icon: ReceiptIcon, adminOnly: true },
+      { title: "Billing", url: "/billing", icon: ReceiptIcon, adminOnly: true },
       { title: "My Time", url: "/my-time", icon: ClockIcon },
     ],
   },

@@ -142,8 +142,8 @@ function sortCurrenciesDesc(map: Record<string, number>): string[] {
 function countNounForTab(tab: InvoiceStatusTab, count: number): string {
   const single = count === 1
   switch (tab) {
-    case "ready":
-      // The Ready tab mixes Generate rows with within-budget "Close &
+    case "close":
+      // The Close tab mixes Generate rows with within-budget "Close &
       // report" rows, so the noun is action-neutral.
       return single ? "billing action" : "billing actions"
     case "draft":

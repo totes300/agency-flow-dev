@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react"
 import { useParams, useSearchParams } from "next/navigation"
-import { useQuery } from "convex/react"
+import { useAction, useQuery } from "convex/react"
 import { useConvexAuth } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { ArrowLeftIcon, InfoIcon, XIcon } from "lucide-react"
@@ -13,6 +13,7 @@ import { InvoiceDocument } from "@/components/invoices/invoice-document"
 import { InvoiceSidebar } from "@/components/invoices/invoice-sidebar"
 import { InvoiceEditorSkeleton } from "@/components/invoices/invoice-editor-skeleton"
 import { InvoiceDeletedState } from "@/components/invoices/invoice-deleted-state"
+import { WorksheetDownloadButton } from "@/components/worksheet/worksheet-download-button"
 import { formatInvoiceIdentifier } from "@/lib/format"
 import { useBreadcrumbTitle } from "@/lib/hooks/use-breadcrumb-title"
 
@@ -27,6 +28,7 @@ export default function InvoiceEditorPage() {
   const [nudgeDismissed, setNudgeDismissed] = useState(false)
 
   const data = useQuery(api.invoices.getInvoice, isAuthenticated ? { identifier: invoiceIdentifier } : "skip")
+  const exportInvoice = useAction(api.worksheets.exportInvoice)
   const printRequested = searchParams.get("print") === "1"
   const breadcrumbTitle =
     data && data !== null
@@ -82,6 +84,15 @@ export default function InvoiceEditorPage() {
             <ArrowLeftIcon className="size-4" />
           </Link>
         </Button>
+        {/* The client-facing worksheet is the primary post-close deliverable —
+            scoped by this invoice's exact line-item membership, so it always
+            reflects the committed close (skips excluded, carried-ins included,
+            every edit made during review). */}
+        <div className="ml-auto">
+          <WorksheetDownloadButton
+            run={() => exportInvoice({ invoiceId: invoice._id })}
+          />
+        </div>
       </nav>
 
       {showBrandNudge && (

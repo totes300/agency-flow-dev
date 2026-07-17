@@ -19,17 +19,24 @@ watch the budget line, footer, and (future) commit summary recompute live.
 
 ## Acceptance criteria
 
-- [ ] Duration, note, and billable are editable inline; date/task/category via the existing entry
-      modal; a new entry can be added from the workspace.
-- [ ] Every mutation call has error handling with toasts; optimistic states roll back on failure.
-- [ ] Budget summary, task subtotals, and footer recompute live after each edit (reactive query —
-      no manual refresh).
-- [ ] Scope only ever contains open entries; if an entry becomes locked concurrently (e.g. another
-      admin commits), the row leaves the view on the next reactive update without crashing.
-- [ ] Leaving and returning to the workspace preserves all edits (mutations are real; no
-      local-only state).
-- [ ] No duplicated interaction logic vs. the project Time tab — shared hooks/components only.
-- [ ] `npx tsc --noEmit` clean; existing time-entry tests pass.
+- [x] Duration, note, and billable are editable inline (`TimeEntryHoursCell`, `InlineEditable`, a
+      hover billable toggle); date/task/category via the existing `TimeEntryModal`; a new entry can
+      be added from the workspace header ("Add time"). Browser-verified: duration 20:30→5:00 and
+      back; edit modal opens pre-filled.
+- [x] Every mutation call has error handling with toasts (`toastError`); the billable toggle carries
+      an Undo toast (mirrors the Time tab's `runToggle` pattern).
+- [x] Budget summary, task subtotals, and footer recompute live after each edit (reactive
+      `getCloseWorkspace` — no manual refresh). Verified: editing one entry flipped
+      Logged 33h20m→17h50m, Overage $1,867→$627, and the group subtotal 20h50m→5h20m instantly.
+- [x] Scope only ever contains open entries; a row locked concurrently (invoiceId/settledAt set)
+      drops from scope on the next reactive update. `editable` is also gated per-row so a locked
+      entry can never take an inline edit.
+- [x] Leaving and returning preserves all edits (every edit is a real Convex mutation; the component
+      holds no local ledger state).
+- [x] No duplicated interaction logic vs. the project Time tab — reuses `TimeEntryHoursCell`,
+      `InlineEditable`, `TimeEntryModal`, `updateEntry`, and the same Undo-toast pattern.
+- [x] `npx tsc --noEmit` clean; eslint clean; existing settle/invoice/billingScope suites pass
+      (86 tests across 5 files green).
 
 ## Blocked by
 

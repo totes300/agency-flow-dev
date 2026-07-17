@@ -73,7 +73,19 @@ export type WorksheetScope =
       projectId: Id<"projects">;
       cycleStart: string; // first month's `YYYY-MM-01`
     }
-  | { kind: "invoice"; invoiceId: Id<"invoices"> };
+  | { kind: "invoice"; invoiceId: Id<"invoices"> }
+  | {
+      /**
+       * A CLOSED retainer period, selected by settlement stamp — the same
+       * membership the Monthly Report renders (I4-stable): a carried-in May
+       * entry stamped into June appears in June's worksheet, and an entry
+       * skipped out of June does not. Date-range scopes can't express this,
+       * which is why post-close exports must never use `period`.
+       */
+      kind: "settledPeriod";
+      projectId: Id<"projects">;
+      periodStart: string; // the closed period's `YYYY-MM-01`
+    };
 
 /** Row shape passed from `collectWorksheetData` to the CSV builders. */
 export type WorksheetTaskRow = {
@@ -198,6 +210,11 @@ export const collectWorksheetData = internalQuery({
         cycleStart: v.string(),
       }),
       v.object({ kind: v.literal("invoice"), invoiceId: v.id("invoices") }),
+      v.object({
+        kind: v.literal("settledPeriod"),
+        projectId: v.id("projects"),
+        periodStart: v.string(),
+      }),
     ),
   },
   handler: async (ctx, args): Promise<WorksheetData> => {
@@ -312,13 +329,40 @@ export async function resolveScopeEntries(
     return { project, entries };
   }
 
-  // `period` and `cycle` both walk the project's task fan-out. Cycle uses
-  // its first month → last month range; the caller (Slice 3) calls this
-  // internalQuery per-month and concatenates, so the cycle branch here
-  // returns the union for the entire cycle in one go.
+  // `period`, `cycle`, and `settledPeriod` all walk the project's task
+  // fan-out. Cycle uses its first month → last month range; the caller
+  // (Slice 3) calls this internalQuery per-month and concatenates, so the
+  // cycle branch here returns the union for the entire cycle in one go.
   const project = await ctx.db.get(scope.projectId);
   if (!project || project.orgId !== orgId) {
     throw new ConvexError("Project not found");
+  }
+
+  // Closed-period scope: membership comes from settlement stamps, NOT the
+  // entry date — carried-in work (stamped into this period from an earlier
+  // month) belongs here, skipped-out work doesn't. This is what keeps the
+  // post-close worksheet in exact agreement with the Monthly Report.
+  if (scope.kind === "settledPeriod") {
+    const tasks = await ctx.db
+      .query("tasks")
+      .withIndex("by_orgId_projectId", (q) =>
+        q.eq("orgId", orgId).eq("projectId", project._id),
+      )
+      .collect();
+    const entries: Doc<"timeEntries">[] = [];
+    for (const task of tasks) {
+      const taskEntries = await ctx.db
+        .query("timeEntries")
+        .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
+        .collect();
+      for (const e of taskEntries) {
+        if (e.orgId !== orgId) continue;
+        if (e.settledAt === undefined) continue;
+        if (e.settledPeriodStart !== scope.periodStart) continue;
+        entries.push(e);
+      }
+    }
+    return { project, entries };
   }
 
   let periodStart: string;
@@ -354,14 +398,6 @@ export async function resolveScopeEntries(
 
   const entries: Doc<"timeEntries">[] = [];
   for (const task of tasks) {
-    // Category filter operates on the TASK (not the entry's snapshot) —
-    // matches the ClickUp-style "filter by task category" mental model
-    // and avoids excluding entries whose snapshot drifted after a category
-    // rename. The PRD §Ad-hoc range export Picker UI describes filters as
-    // task-level facets.
-    if (allowedCategoryIds && !(task.workCategoryId && allowedCategoryIds.has(task.workCategoryId as unknown as string))) {
-      continue;
-    }
     const taskEntries = await ctx.db
       .query("timeEntries")
       .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
@@ -369,6 +405,17 @@ export async function resolveScopeEntries(
     for (const e of taskEntries) {
       if (e.orgId !== orgId) continue;
       if (e.date < periodStart || e.date > periodEnd) continue;
+      // Category filter operates on the entry's SNAPSHOT category — the same
+      // attribution rule as the Monthly Report / invoice grouping
+      // (statements.ts `snapshotCategoryId`), so a category-filtered
+      // worksheet selects the same hours as the report's category bucket
+      // even after a task was re-categorized over existing history.
+      if (
+        allowedCategoryIds &&
+        !(e.snapshotCategoryId && allowedCategoryIds.has(e.snapshotCategoryId as unknown as string))
+      ) {
+        continue;
+      }
       if (billableFilter === "billable" && !e.isBillable) continue;
       if (billableFilter === "nonBillable" && e.isBillable) continue;
       entries.push(e);
@@ -480,10 +527,24 @@ export async function buildTaskRows(
       a.date < b.date ? -1 : a.date > b.date ? 1 : a.startedAt - b.startedAt,
     );
 
+    // Category label from the in-scope entries' snapshot categories (deduped,
+    // date order) — the report/invoice attribution rule. A task whose
+    // category changed mid-history lists every snapshot name it carries, so
+    // worksheet and Monthly Report subtotals bucket the same hours the same
+    // way instead of relabeling old hours under the task's current category.
+    const snapshotCategoryNames: string[] = [];
+    for (const e of taskEntries) {
+      const name = await categoryName(e.snapshotCategoryId);
+      if (name && !snapshotCategoryNames.includes(name)) {
+        snapshotCategoryNames.push(name);
+      }
+    }
+
     rows.push({
       taskId: task._id,
       title: task.title,
-      categoryName: await categoryName(task.workCategoryId),
+      categoryName:
+        snapshotCategoryNames.length > 0 ? snapshotCategoryNames.join(", ") : null,
       firstWorked: taskEntries[0].date,
       lastWorked: taskEntries[taskEntries.length - 1].date,
       entryCount: taskEntries.length,

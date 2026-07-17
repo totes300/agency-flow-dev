@@ -23,13 +23,11 @@ import { ProjectTimeHiddenSelectionBanner } from "@/components/projects/project-
 import { TimeEntryModal } from "@/components/projects/time-entry-modal"
 import { WorksheetExportButton } from "@/components/worksheet/worksheet-export-button"
 import { EmptyStateBanner } from "@/components/projects/empty-state-banner"
-import { useGenerateInvoice } from "@/lib/hooks/use-generate-invoice"
 import { useProjectTimeFilters } from "@/lib/hooks/use-project-time-filters"
 import { applyTimeEntryFilters } from "@/lib/time-entry-filters"
 import { parseDateRangePreset } from "@/lib/date-buckets"
 import { useTaskDetailNav } from "@/lib/hooks/use-task-detail-nav"
 import { parseDetailParam } from "@/lib/task-detail"
-import type { Id as IdType } from "@/convex/_generated/dataModel"
 import { Button } from "@/components/ui/button"
 import {
   Tooltip,
@@ -147,7 +145,6 @@ export function ProjectTimeContent({
   )
 
   const [editEntryId, setEditEntryId] = useState<Id<"timeEntries"> | null>(null)
-  const { generate, pending: isGenerating } = useGenerateInvoice()
 
   // Notion-style facets (member / category / billing status) — state in the
   // URL, applied client-side over the server's project+range+search slice.
@@ -157,16 +154,16 @@ export function ProjectTimeContent({
     [entries, filters],
   )
 
-  function handleGenerateAll() {
-    void generate({ projectId })
+  // T&M invoicing now flows through the Close workspace (PRD slice 08) — never
+  // a one-click draft. Both the "Invoice unbilled hours" button and the
+  // bulk-selection path route to the Billing → Close queue, where the admin
+  // reviews the period before generating, so scope rule I2 has no bypass.
+  function handleReviewToInvoice() {
+    router.push("/billing")
   }
 
-  function handleGenerateSelection(ids: IdType<"timeEntries">[]) {
-    void generate({
-      projectId,
-      timeEntryIds: ids,
-      navigateTo: (identifier) => `/invoices/${identifier}`,
-    })
+  function handleGenerateSelection() {
+    router.push("/billing")
     setSelection(new Map())
   }
 
@@ -296,8 +293,8 @@ export function ProjectTimeContent({
                   variant="outline"
                   size="sm"
                   className="h-9"
-                  disabled={invoiceBtn.disabled || isGenerating}
-                  onClick={handleGenerateAll}
+                  disabled={invoiceBtn.disabled}
+                  onClick={handleReviewToInvoice}
                 >
                   <ReceiptIcon data-icon="inline-start" className="size-4" />
                   Invoice unbilled hours
@@ -341,7 +338,9 @@ export function ProjectTimeContent({
 
       <ProjectTimeFilters
         availableMembers={availableMembers}
-        categories={categories ?? undefined}
+        // Facet options stay active-only — the incoming list now includes
+        // archived categories for display lookups (entry rows, edit modal).
+        categories={categories?.filter((c) => !c.archivedAt) ?? undefined}
         actions={headerActions}
       />
 
@@ -394,7 +393,7 @@ export function ProjectTimeContent({
           selectedEntries={selectedEntries}
           currency={project.currency}
           onDeselectAll={clearSelection}
-          onCreateInvoice={(ids) => handleGenerateSelection(ids)}
+          onCreateInvoice={() => handleGenerateSelection()}
         />
       )}
 
@@ -412,6 +411,7 @@ export function ProjectTimeContent({
             invoiceId: editEntryRow.invoiceId,
             settledAt: editEntryRow.settledAt,
             userId: editEntryRow.userId,
+            snapshotCategoryId: editEntryRow.workCategoryId,
           }}
           open={editEntryId !== null}
           onOpenChange={(o) => {

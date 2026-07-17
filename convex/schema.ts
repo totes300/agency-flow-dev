@@ -34,6 +34,11 @@ export default defineSchema({
     userId: v.optional(v.id("users")),
     role: v.union(v.literal("admin"), v.literal("member")),
     joinedAt: v.number(),
+    // Per-member default billing category. Resolved at entry creation via the
+    // member-first chain in resolveEntryCategory (explicit ?? member default ??
+    // task category). Optional: a member without a default gets the task's
+    // category, i.e. pre-feature behavior.
+    defaultWorkCategoryId: v.optional(v.id("workCategories")),
   })
     .index("by_orgId", ["orgId"])
     .index("by_orgId_clerkUserId", ["orgId", "clerkUserId"])
@@ -376,6 +381,10 @@ export default defineSchema({
     costRate: v.number(),
     billableRate: v.number(),
     rateCurrency: v.string(),
+    // Billing category for this entry, resolved at creation via the member-
+    // default chain (resolveEntryCategory: explicit ?? owner default ?? task
+    // category). Sticky: changed only by an explicit category edit, never
+    // re-derived on task move. Every financial reader groups by this field.
     snapshotCategoryId: v.optional(v.id("workCategories")),
     invoiceId: v.optional(v.id("invoices")),
     createdAt: v.number(),
@@ -402,6 +411,20 @@ export default defineSchema({
     settledReason: v.optional(settledReasonValidator),
     settledPeriodStart: v.optional(v.string()), // YYYY-MM-DD
     settledPeriodEnd: v.optional(v.string()),   // YYYY-MM-DD
+
+    // ─── Month-Close — skip-to-next-close stamp ──────────────────────────
+    //
+    // A period-end date (YYYY-MM-DD). Semantics (PRD § Definitions): "exclude
+    // this entry from every close whose period end is ≤ this date." Set/cleared
+    // only by the admin-only `skipEntries` mutation (Slice 05); read only by
+    // the pure `billingScope` module (Slice 01) which resolves an open entry's
+    // effective period as
+    //   max(naturalPeriod(date), periodAfter(skippedThrough), firstOpenPeriod).
+    // Only meaningful on OPEN entries — locking (invoiceId / settledAt) wins,
+    // and the skip mutation rejects locked entries. No index: membership is
+    // always derived over an already-fetched project entry set, never queried
+    // by this field.
+    skippedThrough: v.optional(v.string()),    // YYYY-MM-DD (a period end)
     // No new index — settle helpers walk via `invoiceLineItems.by_invoiceId`.
     // Canonical-set rule: "entries settled by invoice X" = the union of
     // line-item `timeEntryIds` arrays, NOT every entry that happens to

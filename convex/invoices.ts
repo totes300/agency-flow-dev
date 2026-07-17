@@ -44,6 +44,11 @@ import {
   type YearMonth,
 } from "./lib/retainerUsage";
 import { resolveInvoiceByIdentifier } from "./lib/invoiceIdentifier";
+import {
+  computeCommitScope,
+  selectCommitEntries,
+  isWholeCalendarMonth,
+} from "./lib/commitScope";
 import type { Doc, Id } from "./_generated/dataModel";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -440,7 +445,7 @@ export const getInboxEmptyStateContext = query({
  * trail by client+project name). Multi-currency rows are NOT aggregated —
  * each row carries its own currency.
  */
-async function enumerateReadyRows(
+export async function enumerateReadyRows(
   ctx: QueryCtx,
   orgId: string,
   todayStr: string,
@@ -1472,6 +1477,44 @@ export const createInvoice = mutation({
       });
     }
 
+    // ── Month-Close: route entry selection through `billingScope` (I1/I2). ──
+    // For retainer (period = month/cycle) and for T&M when the requested window
+    // is a whole calendar month (the Close workspace / Ready-feed path), the
+    // in-scope set is re-derived server-side: skipped entries drop out, and
+    // carried-in entries (skipped/logged-late from other months) join. With no
+    // skip stamps and no late entries this is identical to the date-range
+    // filter above (slice-01 baseline). Path B (explicit ids) and ad-hoc T&M
+    // ranges keep the date-range selection.
+    const routeThroughScope =
+      effectiveStart !== undefined &&
+      (billingType === "retainer" ||
+        (billingType === "t_and_m" &&
+          args.timeEntryIds === undefined &&
+          isWholeCalendarMonth(effectiveStart, effectiveEnd)));
+    if (routeThroughScope && effectiveStart) {
+      const scopeSettings = await getOrgSettings(ctx, orgId);
+      const scopeTz = scopeSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
+      const scopeTodayStr = getDateInTimezone(Date.now(), scopeTz);
+      const { scope } = await computeCommitScope(ctx, {
+        orgId,
+        project,
+        targetPeriodStart: effectiveStart,
+        todayStr: scopeTodayStr,
+        // Selection is by membership, not amount — rounding is irrelevant here.
+        roundingMinutes: 1,
+      });
+      // Oldest-first (I3): only the first open, elapsed period can be committed.
+      if (scope.issues.includes("not-earliest-open")) {
+        throw new ConvexError(
+          "An earlier period is still open. Close it before billing this one.",
+        );
+      }
+      const invoiceEntryIds = selectCommitEntries(scope).invoiceEntryIds;
+      filtered = allEntries.filter((e) =>
+        invoiceEntryIds.has(e._id.toString()),
+      );
+    }
+
     // T&M requires entries; Fixed/Retainer allow zero entries
     if (billingType === "t_and_m" && filtered.length === 0) {
       throw new ConvexError("No uninvoiced time entries found for this period.");
@@ -1514,8 +1557,11 @@ export const createInvoice = mutation({
     // 5. Compute period
     let periodStart: string | undefined;
     let periodEnd: string | undefined;
-    if (billingType === "retainer") {
-      // Retainer: period = exact month boundaries
+    if (billingType === "retainer" || routeThroughScope) {
+      // Retainer / scope-routed T&M: period = the close period (month/cycle),
+      // NOT the min/max of `filtered` — carried-in entries are dated in earlier
+      // months, but the invoice still covers this period (they surface in a
+      // "Carried over from <month>" group on the document, slice 07).
       periodStart = effectiveStart;
       periodEnd = effectiveEnd;
     } else if (filtered.length > 0) {
@@ -1936,6 +1982,16 @@ async function collectRefreshableEntries(
     )
   ).flat();
 
+  // Month-Close (slice 06) — a skip stamp that covers this draft's period
+  // means the owner deliberately deferred the entry to a later close; the
+  // one-click refresh MUST NOT pull it back onto the draft (PRD § Scope and
+  // money). Skip semantics: excluded from every close whose period end is ≤
+  // `skippedThrough`, so exclude when the stamp reaches the draft's periodEnd.
+  const notSkippedOut = (e: Doc<"timeEntries">) =>
+    !e.skippedThrough ||
+    !invoice.periodEnd ||
+    e.skippedThrough < invoice.periodEnd;
+
   // Period scope: retainer AND T&M drafts are bound to their stored period
   // — the inbox month rows promise ONE month, so a one-click refresh must
   // never widen a "June" draft with July work (2026-07-05 review F4).
@@ -1943,13 +1999,15 @@ async function collectRefreshableEntries(
   // periodless: their time lines are a $0 work report and should show all
   // work delivered up to finalization.
   const periodBound = billingType === "retainer" || billingType === "t_and_m";
-  const entries = periodBound
-    ? open.filter(
-        (e) =>
-          (!invoice.periodStart || e.date >= invoice.periodStart) &&
-          (!invoice.periodEnd || e.date <= invoice.periodEnd),
-      )
-    : open;
+  const entries = (
+    periodBound
+      ? open.filter(
+          (e) =>
+            (!invoice.periodStart || e.date >= invoice.periodStart) &&
+            (!invoice.periodEnd || e.date <= invoice.periodEnd),
+        )
+      : open
+  ).filter(notSkippedOut);
   return { entries, taskMap };
 }
 

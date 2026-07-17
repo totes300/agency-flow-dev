@@ -36,6 +36,8 @@ import { getOrgSettings } from "./lib/orgHelpers";
 import { ORG_TIMEZONE_FALLBACK, getDateInTimezone } from "./lib/timer";
 import { classifyReportPeriod } from "./lib/reportPeriod";
 import { invoiceCoversMonth } from "./lib/invoiceAnchor";
+import { computeReportMonths } from "./lib/reportMembership";
+import { toScopeProjectInput, toScopeEntryInput } from "./lib/commitScope";
 import {
   getRetainerCyclePosition,
   getRetainerCycleStartMonth,
@@ -208,17 +210,52 @@ export const getRetainerStatement = query({
       )
     ).flat();
 
-    // Statement reflects all logged work in the period regardless of invoice
-    // status — voided invoice entries count too (they were really worked).
-    const allEntries = allTaskEntries.filter(
-      (e) => e.date >= periodStart && e.date <= periodEnd,
-    );
-    const billableEntries = allEntries.filter((e) => e.isBillable);
-    const nonBillableEntries = allEntries.filter((e) => !e.isBillable);
+    // Month-Close (slice 07) — membership by REPORT MONTH, not raw date:
+    // closed months read from settlement stamps (I4 — stable), open months
+    // from `billingScope`, and skipped / logged-late entries land on the
+    // RECEIVING month. This makes each entry appear on exactly one client
+    // document, and keeps a delivered (closed) report immutable.
+    const closedPeriodRows = await ctx.db
+      .query("retainerPeriods")
+      .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
+      .filter((q) => q.eq(q.field("orgId"), orgId))
+      .collect();
+    const projectInvoices = await ctx.db
+      .query("invoices")
+      .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
+      .filter((q) => q.eq(q.field("orgId"), orgId))
+      .collect();
 
-    // Categories for the project, used by both groupings.
+    const reportMonths = computeReportMonths({
+      project: toScopeProjectInput(project),
+      entries: allTaskEntries.map(toScopeEntryInput),
+      closedPeriods: closedPeriodRows.map((p) => ({
+        periodStart: p.periodStart,
+        periodEnd: p.periodEnd,
+        closedAt: p.closedAt ?? null,
+      })),
+      invoices: projectInvoices.map((inv) => ({
+        status: inv.status,
+        periodStart: inv.periodStart,
+        periodEnd: inv.periodEnd,
+      })),
+      todayStr,
+    });
+    const currentMonthKey = `${args.year}-${String(args.month).padStart(2, "0")}`;
+
+    // Members of THIS report month. Split into in-period (dated in the month)
+    // and carried-in (dated earlier, deferred/late into this month).
+    const memberEntries = allTaskEntries.filter(
+      (e) => reportMonths.get(e._id.toString()) === currentMonthKey,
+    );
+    const inPeriodEntries = memberEntries.filter((e) => e.date >= periodStart);
+    const carriedEntries = memberEntries.filter((e) => e.date < periodStart);
+    const billableEntries = inPeriodEntries.filter((e) => e.isBillable);
+    const nonBillableEntries = inPeriodEntries.filter((e) => !e.isBillable);
+
+    // Categories for every member (in-period + carried), used by all groupings.
     const catIds = new Set<string>();
-    for (const e of allEntries) {
+    for (const e of memberEntries) {
       const cid = e.snapshotCategoryId;
       if (cid) catIds.add(cid.toString());
     }
@@ -230,41 +267,63 @@ export const getRetainerStatement = query({
       }
     }
 
-    const billableEntryRows: EntryRow[] = billableEntries.map((e) => ({
+    const toRow = (e: Doc<"timeEntries">): EntryRow => ({
       _id: e._id,
       taskId: e.taskId,
       workCategoryId: e.snapshotCategoryId ?? undefined,
       durationMinutes: e.durationMinutes,
       date: e.date,
-    }));
-    const nonBillableEntryRows: EntryRow[] = nonBillableEntries.map((e) => ({
-      _id: e._id,
-      taskId: e.taskId,
-      workCategoryId: e.snapshotCategoryId ?? undefined,
-      durationMinutes: e.durationMinutes,
-      date: e.date,
-    }));
+    });
 
     const billableCategoryGroups = groupByCategory(
-      billableEntryRows,
+      billableEntries.map(toRow),
       taskMap,
       catMap,
     );
     const nonBillableCategoryGroups = groupByCategory(
-      nonBillableEntryRows,
+      nonBillableEntries.map(toRow),
       taskMap,
       catMap,
     );
+
+    // "Carried over from <month>" groups — one per origin month, with the
+    // entries' TRUE dates (PRD story 31). v1 copy: a single label per origin
+    // month regardless of skipped-vs-logged-late (open question — copy-only).
+    const carriedByMonth = new Map<string, Doc<"timeEntries">[]>();
+    for (const e of carriedEntries) {
+      const k = e.date.slice(0, 7);
+      const bucket = carriedByMonth.get(k);
+      if (bucket) bucket.push(e);
+      else carriedByMonth.set(k, [e]);
+    }
+    const carriedGroups = [...carriedByMonth.entries()]
+      .sort((a, b) => (a[0] < b[0] ? -1 : 1))
+      .map(([monthKey, entries]) => {
+        const [cy, cm] = monthKey.split("-").map(Number);
+        return {
+          monthKey,
+          monthLabel: new Date(cy, cm - 1, 1).toLocaleDateString("en-US", {
+            month: "long",
+            year: "numeric",
+          }),
+          totalMinutes: entries.reduce((s, e) => s + e.durationMinutes, 0),
+          billableCategoryGroups: groupByCategory(
+            entries.filter((e) => e.isBillable).map(toRow),
+            taskMap,
+            catMap,
+          ),
+          nonBillableCategoryGroups: groupByCategory(
+            entries.filter((e) => !e.isBillable).map(toRow),
+            taskMap,
+            catMap,
+          ),
+        };
+      });
 
     // Find any non-void invoice covering this month so the report can show
     // a "Billed via INV-X" pointer. `invoiceCoversMonth` handles both
     // monthly (single-month period) and rollover (cycle-spanning period)
     // invoices uniformly — see `convex/lib/invoiceAnchor.ts`.
-    const projectInvoices = await ctx.db
-      .query("invoices")
-      .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
-      .filter((q) => q.eq(q.field("orgId"), orgId))
-      .collect();
     const linkedInvoice =
       projectInvoices.find(
         (inv) =>
@@ -284,10 +343,12 @@ export const getRetainerStatement = query({
     // `feedback_no_rounding_on_reporting.md`: rounding lives at invoice
     // generation; reporting/overview surfaces are always raw ledger. Reports
     // and invoices may differ by the rounding bucket, by design.
-    const usedMinutes = billableEntries.reduce(
-      (s, e) => s + e.durationMinutes,
-      0,
-    );
+    // Usage = billable minutes of every member of this month (in-period AND
+    // carried-in), so the balance reflects the receiving-period rule and stays
+    // stable from settlement stamps once closed.
+    const usedMinutes = memberEntries
+      .filter((e) => e.isBillable)
+      .reduce((s, e) => s + e.durationMinutes, 0);
     // Every retainer invoice now starts from a 0 balance per refactor D1
     // (`getRetainerStartBalance()`); reports mirror that.
     const startBalanceMinutes = 0;
@@ -317,11 +378,12 @@ export const getRetainerStatement = query({
     let paymentOverageMinutes = 0;
     let paymentAmountDue = 0;
 
-    const currentMonthKey = `${args.year}-${String(args.month).padStart(2, "0")}`;
+    // Cycle usage per month buckets by REPORT month (stamps/scope), not raw
+    // date — so a carried-in entry counts toward its receiving month here too.
     const usedMinutesByMonth = new Map<string, number>();
     for (const entry of allTaskEntries) {
       if (!entry.isBillable) continue;
-      const key = entry.date.slice(0, 7);
+      const key = reportMonths.get(entry._id.toString()) ?? entry.date.slice(0, 7);
       usedMinutesByMonth.set(
         key,
         (usedMinutesByMonth.get(key) ?? 0) + entry.durationMinutes,
@@ -447,7 +509,12 @@ export const getRetainerStatement = query({
         monthlyIncludedMinutes: includedMinutes,
         rows: usageRows,
         total: {
-          availableMinutes: usageRows.reduce((sum, row) => sum + row.availableMinutes, 0),
+          // Contractual allocation for the months shown (monthly included ×
+          // month count) — NOT the sum of the per-row "available" column,
+          // whose rows each re-count the rollover carryover. Matches the
+          // invoice footer's frozen `retainerIncludedMinutes` at cycle end,
+          // and keeps the footer identity available − used = balance.
+          availableMinutes: includedMinutes * usageRows.length,
           usedMinutes: usageRows.reduce((sum, row) => sum + row.usedMinutes, 0),
           balanceMinutes: usageRows[usageRows.length - 1]?.balanceMinutes ?? 0,
           overageMinutes: paymentOverageMinutes,
@@ -482,6 +549,7 @@ export const getRetainerStatement = query({
         : null,
       billableCategoryGroups,
       nonBillableCategoryGroups,
+      carriedGroups,
       linkedInvoice: linkedInvoice
         ? {
             id: linkedInvoice._id,

@@ -2,7 +2,7 @@
 
 import { useParams } from "next/navigation"
 import Link from "next/link"
-import { useQuery } from "convex/react"
+import { useAction, useQuery } from "convex/react"
 import { useConvexAuth } from "convex/react"
 import { notFound } from "next/navigation"
 import { ArrowLeftIcon, PrinterIcon } from "lucide-react"
@@ -11,6 +11,7 @@ import type { Id } from "@/convex/_generated/dataModel"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { MonthlyReportDocument } from "@/components/projects/monthly-report-document"
+import { WorksheetDownloadButton } from "@/components/worksheet/worksheet-download-button"
 import { useBreadcrumbTitle } from "@/lib/hooks/use-breadcrumb-title"
 
 /**
@@ -41,6 +42,8 @@ export default function ProjectMonthlyReportPage() {
   )
   useBreadcrumbTitle(report ? `Report · ${report.period.label}` : null)
 
+  const exportSettledPeriod = useAction(api.worksheets.exportSettledPeriod)
+
   if (!parsed) notFound()
   if (report === undefined) return <ReportSkeleton />
   if (report === null) notFound()
@@ -59,14 +62,31 @@ export default function ProjectMonthlyReportPage() {
             <ArrowLeftIcon className="size-4" />
           </Link>
         </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => window.print()}
-        >
-          <PrinterIcon data-icon="inline-start" className="size-3.5" />
-          Save as PDF
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => window.print()}
+          >
+            <PrinterIcon data-icon="inline-start" className="size-3.5" />
+            Save as PDF
+          </Button>
+          {/* Post-close worksheet — settlement-stamp scoped, so it matches
+              this report's membership exactly (carried-ins included, skips
+              excluded). Only offered once the period is closed; an open
+              month has no stamps yet. */}
+          {!report.inProgress && (
+            <WorksheetDownloadButton
+              run={() =>
+                exportSettledPeriod({
+                  projectId,
+                  year: parsed.year,
+                  month: parsed.month,
+                })
+              }
+            />
+          )}
+        </div>
       </nav>
 
       <MonthlyReportDocument report={report} />

@@ -82,9 +82,12 @@ export function ProjectTime({
     api.orgMembers.listOrgMembers,
     isAuthenticated ? {} : "skip",
   )
+  // includeArchived: entries stamped under a since-archived category must
+  // still display its name (modal + rows). Options/filters re-filter to
+  // active client-side.
   const categories = useQuery(
     api.workCategories.list,
-    isAuthenticated ? {} : "skip",
+    isAuthenticated ? { includeArchived: true } : "skip",
   )
 
   // Tz fallback must match the server-side fallback so date-range queries

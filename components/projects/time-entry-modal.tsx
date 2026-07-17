@@ -87,6 +87,9 @@ type EditEntryLite = {
   // the edit form should be read-only just as it is for invoiced entries.
   settledAt: number | undefined
   userId: Id<"users">
+  // Entry-level billing category (sticky). The edit form shows this and an
+  // explicit change re-resolves the rate server-side.
+  snapshotCategoryId: Id<"workCategories"> | undefined
 }
 
 type EditProps = {
@@ -98,6 +101,8 @@ type OrgMember = {
   _id: Id<"users">
   name: string
   imageUrl: string | undefined
+  // Per-member default billing category — drives the create-form pre-fill.
+  defaultWorkCategoryId?: Id<"workCategories"> | undefined
 }
 
 export type TimeEntryModalSharedProps = {
@@ -241,6 +246,7 @@ function TimeEntryModalForm({
     isBillable: boolean
     note?: string
     userId?: Id<"users">
+    workCategoryId?: Id<"workCategories">
   }) => Promise<Id<"timeEntries">>
   onSubmitUpdate: (args: {
     id: Id<"timeEntries">
@@ -250,6 +256,7 @@ function TimeEntryModalForm({
     startedAt?: number
     isBillable?: boolean
     note?: string | null
+    workCategoryId?: Id<"workCategories">
   }) => Promise<unknown>
 }) {
   // ── Form state ─────────────────────────────────────────────────────────
@@ -274,6 +281,12 @@ function TimeEntryModalForm({
   const [isBillable, setIsBillable] = useState<boolean>(
     editEntry?.isBillable ?? true,
   )
+  // Explicit billing-category selection. Create: undefined means "let the
+  // server resolve via the member-default chain" — the select still displays
+  // the resolved pre-fill below. Edit: seeded with the entry's sticky category.
+  const [categoryId, setCategoryId] = useState<Id<"workCategories"> | undefined>(
+    editEntry?.snapshotCategoryId,
+  )
   const [note, setNote] = useState<string>(editEntry?.note ?? "")
   const [memberId, setMemberId] = useState<Id<"users"> | undefined>(
     editEntry?.userId ?? currentUserId,
@@ -297,6 +310,15 @@ function TimeEntryModalForm({
   const hasNoTasks = projectTasks !== undefined && projectTasks.length === 0
   const selectedTask = projectTasks?.find((t) => t._id === taskId)
 
+  // The `categories` prop includes archived ones so an entry stamped under a
+  // since-archived category still displays its name (parity with the project
+  // table, which resolves names server-side). Only ACTIVE categories are
+  // offered as options — archived ones are display-only.
+  const activeCategories = useMemo(
+    () => (categories ?? []).filter((c) => !c.archivedAt),
+    [categories],
+  )
+
   // When the task changes in create mode, default the billable switch to
   // the task's own `billable` setting — matches the server's default.
   function handleTaskChange(nextId: Id<"tasks">) {
@@ -307,11 +329,38 @@ function TimeEntryModalForm({
     }
   }
 
-  // Category is task-inherited and not editable (decision #18)
-  const inheritedCategory = useMemo(() => {
-    if (!selectedTask || !categories) return undefined
-    return categories.find((c) => c._id === selectedTask.workCategoryId)
-  }, [selectedTask, categories])
+  // Billing category is now an entry property (entry-billing-category-spec).
+  // Create pre-fill mirrors the server chain: the entry OWNER's default, else
+  // the task's category. The owner is the selected member (admin-on-behalf) or
+  // the current user. An explicit pick (`categoryId`) overrides the pre-fill.
+  const ownerId = isAdmin ? memberId : currentUserId
+  const ownerDefaultCategoryId = useMemo(
+    () => orgMembers?.find((m) => m._id === ownerId)?.defaultWorkCategoryId,
+    [orgMembers, ownerId],
+  )
+  const selectedTaskCategoryId = selectedTask?.workCategoryId
+  const prefillCategoryId =
+    mode === "create"
+      ? (ownerDefaultCategoryId ?? selectedTaskCategoryId)
+      : editEntry?.snapshotCategoryId
+  const effectiveCategoryId = categoryId ?? prefillCategoryId
+  const effectiveCategory = useMemo(
+    () =>
+      categories?.find((c) => c._id === effectiveCategoryId) ?? undefined,
+    [categories, effectiveCategoryId],
+  )
+  const taskCategory = useMemo(
+    () => categories?.find((c) => c._id === selectedTaskCategoryId) ?? undefined,
+    [categories, selectedTaskCategoryId],
+  )
+  // Muted hint when the create pre-fill came from the owner's default and it
+  // differs from the task's category — so the user sees the divergence.
+  const showDefaultDivergenceHint =
+    mode === "create" &&
+    !!ownerDefaultCategoryId &&
+    effectiveCategoryId === ownerDefaultCategoryId &&
+    !!taskCategory &&
+    ownerDefaultCategoryId !== selectedTaskCategoryId
 
   // Member picker: project-team-first (default), "Show all" appends the rest.
   const { teamMembersInOrg, otherOrgMembers } = useMemo(() => {
@@ -390,6 +439,9 @@ function TimeEntryModalForm({
           isBillable,
           note: note.trim() || undefined,
           userId: isAdmin && memberId ? memberId : undefined,
+          // Only send an EXPLICIT selection; an untouched form lets the server
+          // resolve via the member-default chain.
+          workCategoryId: categoryId,
         })
         toast.success("Time logged")
       } else {
@@ -405,6 +457,9 @@ function TimeEntryModalForm({
           args.startedAt = reanchorStartedAt(editEntry!.startedAt, dateStr, timezone)
         }
         if (isBillable !== editEntry!.isBillable) args.isBillable = isBillable
+        if (categoryId !== undefined && categoryId !== editEntry!.snapshotCategoryId) {
+          args.workCategoryId = categoryId
+        }
         const trimmedNote = note.trim()
         const currentNote = editEntry!.note ?? ""
         if (trimmedNote !== currentNote) {
@@ -455,7 +510,7 @@ function TimeEntryModalForm({
                     </SelectTrigger>
                     <SelectContent>
                       <SelectGroup>
-                        {(categories ?? []).map((c) => (
+                        {activeCategories.map((c) => (
                           <SelectItem key={c._id} value={c._id}>
                             <CategoryBadge name={c.name} color={c.color} />
                           </SelectItem>
@@ -575,23 +630,42 @@ function TimeEntryModalForm({
               </Command>
             </PopoverContent>
           </Popover>
-          {inheritedCategory && (
+        </Field>
+
+        {/* Billing category — an entry property (defaults to the owner's
+            default, else the task's category). It decides the billable rate. */}
+        <Field>
+          <FieldLabel htmlFor="entry-category">Category</FieldLabel>
+          <Select
+            value={effectiveCategoryId ?? ""}
+            onValueChange={(v) =>
+              setCategoryId(v ? (v as Id<"workCategories">) : undefined)
+            }
+            disabled={isLocked}
+          >
+            <SelectTrigger id="entry-category" className="w-full">
+              <SelectValue placeholder="Select a category">
+                {effectiveCategory ? (
+                  <CategoryBadge
+                    name={effectiveCategory.name}
+                    color={effectiveCategory.color}
+                  />
+                ) : null}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                {activeCategories.map((c) => (
+                  <SelectItem key={c._id} value={c._id}>
+                    <CategoryBadge name={c.name} color={c.color} />
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+          {showDefaultDivergenceHint && taskCategory && (
             <FieldDescription>
-              Category:{" "}
-              <span className="inline-flex align-middle">
-                <CategoryBadge
-                  name={inheritedCategory.name}
-                  color={inheritedCategory.color}
-                />
-              </span>
-              {mode === "edit" &&
-                editEntry &&
-                selectedTask &&
-                selectedTask._id !== editEntry.taskId && (
-                  <span className="ml-1 text-xs text-muted-foreground">
-                    · will update to this category on save
-                  </span>
-                )}
+              Your default · task is {taskCategory.name}
             </FieldDescription>
           )}
         </Field>

@@ -25,6 +25,7 @@ export function MonthlyReportDocument({ report }: { report: MonthlyReport }) {
     project,
     client,
     billableCategoryGroups,
+    carriedGroups,
     linkedInvoice,
   } = report
 
@@ -160,6 +161,30 @@ export function MonthlyReportDocument({ report }: { report: MonthlyReport }) {
           </table>
         </section>
       )}
+
+      {/* Carried over from earlier months — entries deferred (skipped) or
+          logged after those months closed, shown with their true dates so the
+          client sees each piece of work exactly once (PRD story 31). */}
+      {carriedGroups.map((cg) => (
+        <section key={cg.monthKey}>
+          <h2 className="mb-3 text-sm font-semibold">
+            Carried over from {cg.monthLabel}
+          </h2>
+          <table className="w-full text-sm">
+            <thead className="border-b text-xs uppercase tracking-wider text-muted-foreground">
+              <tr>
+                <th className="px-3 py-2 text-left font-medium">Category / Task</th>
+                <th className="px-3 py-2 text-right font-medium">Hours</th>
+              </tr>
+            </thead>
+            <tbody>
+              {cg.billableCategoryGroups.map((cat) => (
+                <CategorySection key={cat.categoryName} cat={cat} />
+              ))}
+            </tbody>
+          </table>
+        </section>
+      ))}
 
       {(billing.monthlyFee > 0 || billing.overageAmount > 0) && (
         <section className="rounded-md border bg-muted/30 px-4 py-3 text-xs text-muted-foreground">

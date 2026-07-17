@@ -5,6 +5,7 @@
 export const adminRoutePatterns: string[] = [
   "/clients(.*)",
   "/projects(.*)",
+  "/billing(.*)",
   "/invoices(.*)",
   "/settings(.*)",
 ]

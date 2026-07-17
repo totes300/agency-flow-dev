@@ -18,6 +18,7 @@ import {
   ProjectTimeActiveFilters,
 } from "@/components/projects/project-time-filter-bar"
 import { useUrlDebouncedParam } from "@/lib/hooks/use-url-debounced-param"
+import type { TimeEntryFacet } from "@/lib/time-entry-filters"
 import { CalendarIcon, LayoutGridIcon, SearchIcon } from "lucide-react"
 import {
   DATE_RANGE_PRESET_LABELS,
@@ -70,11 +71,17 @@ export function ProjectTimeFilters({
   availableMembers,
   categories,
   actions,
+  showDateRange = true,
+  facets,
 }: {
   availableMembers: Member[]
   categories: Doc<"workCategories">[] | undefined
   /** Right-aligned action buttons (Worksheet, Invoice Unbilled Hours, Add Time). */
   actions?: React.ReactNode
+  /** The Close workspace hides the date range — its period IS the scope. */
+  showDateRange?: boolean
+  /** Facet subset for "+ Filter" (defaults to all facets). */
+  facets?: readonly TimeEntryFacet[]
 }) {
   const searchParams = useSearchParams()
   const router = useRouter()
@@ -175,25 +182,27 @@ export function ProjectTimeFilters({
           />
         </div>
 
-        <Select value={activeDateRange} onValueChange={handleDateRangeChange}>
-          <SelectTrigger size="sm" className="w-[150px]" aria-label="Date range">
-            <span className="flex items-center gap-2">
-              <CalendarIcon aria-hidden className="size-3.5 text-muted-foreground" />
-              <SelectValue placeholder="Date range" />
-            </span>
-          </SelectTrigger>
-          <SelectContent>
-            <SelectGroup>
-              {DATE_RANGE_ORDER.map((p) => (
-                <SelectItem key={p} value={p}>
-                  {DATE_RANGE_PRESET_LABELS[p]}
-                </SelectItem>
-              ))}
-            </SelectGroup>
-          </SelectContent>
-        </Select>
+        {showDateRange && (
+          <Select value={activeDateRange} onValueChange={handleDateRangeChange}>
+            <SelectTrigger size="sm" className="w-[150px]" aria-label="Date range">
+              <span className="flex items-center gap-2">
+                <CalendarIcon aria-hidden className="size-3.5 text-muted-foreground" />
+                <SelectValue placeholder="Date range" />
+              </span>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                {DATE_RANGE_ORDER.map((p) => (
+                  <SelectItem key={p} value={p}>
+                    {DATE_RANGE_PRESET_LABELS[p]}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+        )}
 
-        {activeDateRange === "custom" && (
+        {showDateRange && activeDateRange === "custom" && (
           <div className="flex items-center gap-1.5">
             <DatePicker
               value={parseYMDToLocalDate(customFrom)}
@@ -213,6 +222,7 @@ export function ProjectTimeFilters({
         <ProjectTimeFilterButton
           availableMembers={availableMembers}
           categories={categories}
+          facets={facets}
         />
 
         <Select
@@ -246,6 +256,7 @@ export function ProjectTimeFilters({
       <ProjectTimeActiveFilters
         availableMembers={availableMembers}
         categories={categories}
+        facets={facets}
       />
     </div>
   )

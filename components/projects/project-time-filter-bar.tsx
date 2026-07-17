@@ -43,6 +43,7 @@ import Filters, {
 } from "@/components/ui/filters"
 import { getCategoryColor } from "@/convex/lib/constants"
 import { useProjectTimeFilters } from "@/lib/hooks/use-project-time-filters"
+import { TIME_ENTRY_FACETS, type TimeEntryFacet } from "@/lib/time-entry-filters"
 
 type Member = {
   id: string
@@ -61,6 +62,7 @@ const STATUS_OPTIONS: FilterOption[] = [
 function useTimeEntryFilterConfigs(
   availableMembers: Member[],
   categories: Doc<"workCategories">[] | undefined,
+  facets: readonly TimeEntryFacet[],
 ): FilterTypeConfig[] {
   return useMemo(() => {
     const memberOptions: FilterOption[] = availableMembers.map((m) => ({
@@ -83,7 +85,7 @@ function useTimeEntryFilterConfigs(
       }
     })
 
-    return [
+    const all: Array<FilterTypeConfig & { key: TimeEntryFacet }> = [
       {
         key: "member",
         label: "Member",
@@ -103,18 +105,22 @@ function useTimeEntryFilterConfigs(
         options: STATUS_OPTIONS,
       },
     ]
-  }, [availableMembers, categories])
+    return all.filter((config) => facets.includes(config.key))
+  }, [availableMembers, categories, facets])
 }
 
 export function ProjectTimeFilterButton({
   availableMembers,
   categories,
+  facets = TIME_ENTRY_FACETS,
 }: {
   availableMembers: Member[]
   categories: Doc<"workCategories">[] | undefined
+  /** Facets offered in the picker — the close ledger omits `status`. */
+  facets?: readonly TimeEntryFacet[]
 }) {
   const { filters, setFilters } = useProjectTimeFilters()
-  const configs = useTimeEntryFilterConfigs(availableMembers, categories)
+  const configs = useTimeEntryFilterConfigs(availableMembers, categories, facets)
   const [open, setOpen] = useState(false)
   const [selectedType, setSelectedType] = useState<string | null>(null)
   const [commandInput, setCommandInput] = useState("")
@@ -234,12 +240,15 @@ export function ProjectTimeFilterButton({
 export function ProjectTimeActiveFilters({
   availableMembers,
   categories,
+  facets = TIME_ENTRY_FACETS,
 }: {
   availableMembers: Member[]
   categories: Doc<"workCategories">[] | undefined
+  /** Must match the button's facet set so pills render for every active facet. */
+  facets?: readonly TimeEntryFacet[]
 }) {
   const { filters, setFilters } = useProjectTimeFilters()
-  const configs = useTimeEntryFilterConfigs(availableMembers, categories)
+  const configs = useTimeEntryFilterConfigs(availableMembers, categories, facets)
 
   if (filters.length === 0) return null
 

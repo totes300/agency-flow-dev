@@ -126,7 +126,7 @@ export function InvoicesEmptyState({
         <EmptyState
           icon={FilePenIcon}
           title="No drafts"
-          description="Generate an invoice from the Ready tab to save it as a draft before sending."
+          description="Review a period on the Close tab and generate its invoice to save a draft before sending."
         />
       )}
 

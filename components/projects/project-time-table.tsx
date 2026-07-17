@@ -5,6 +5,7 @@ import { useRef, useState } from "react"
 import { useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
+import type { CarriedReason } from "@/convex/lib/billingScope"
 import type { EntrySettlementSnapshot } from "@/convex/lib/types"
 import { entryStatus } from "@/convex/lib/entryStatus"
 import {
@@ -40,7 +41,9 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { CarriedLabel } from "@/components/carried-label"
 import { CategoryBadge } from "@/components/category-badge"
+import { InlineEditable } from "@/components/inline-editable"
 import { TaskTitleButton } from "@/components/task-title-button"
 import { TimeEntryHoursCell } from "@/components/projects/time-entry-hours-cell"
 import { UserAvatar } from "@/components/user-avatar"
@@ -58,6 +61,7 @@ import { cn } from "@/lib/utils"
 import {
   ArrowUpRightIcon,
   BanIcon,
+  CornerUpRightIcon,
   DollarSignIcon,
   DownloadIcon,
   MoreHorizontalIcon,
@@ -70,7 +74,11 @@ import {
 // Settlement fields come from the shared `EntrySettlementSnapshot` so the
 // schema, the Convex Row type, and this component-side row stay in
 // lock-step. Adding a settlement field means editing `lib/types.ts` only.
-export type TimeEntryRow = EntrySettlementSnapshot & {
+//
+// `ProjectTimeTableRow` is the table's OWN structural contract — only fields
+// the table actually renders or derives from. Callers with richer rows
+// (`TimeEntryRow`, `CloseWorkspaceRow`) satisfy it without fabricating data.
+export type ProjectTimeTableRow = EntrySettlementSnapshot & {
   _id: Id<"timeEntries">
   taskId: Id<"tasks">
   taskTitle: string
@@ -85,7 +93,6 @@ export type TimeEntryRow = EntrySettlementSnapshot & {
   note: string | undefined
   isBillable: boolean
   billableRate: number
-  costRate: number
   workCategoryId: Id<"workCategories"> | undefined
   workCategoryName: string | undefined
   workCategoryColor: string | undefined
@@ -94,26 +101,66 @@ export type TimeEntryRow = EntrySettlementSnapshot & {
   invoiceNumber: number | undefined
   invoiceStatus: "draft" | "invoiced" | "paid" | "void" | undefined
   invoiceDueDate: string | undefined
+  // ── Close-workspace extras (present only on close-ledger rows) ──────────
+  /** Server-computed billable amount. When present the Amount cell renders
+   *  THIS instead of rate × duration — the close ledger must agree with the
+   *  server's commit totals to the cent (rounding happens server-side). */
+  amount?: number | null
+  carried?: boolean
+  carriedReason?: CarriedReason
+  originMonthLabel?: string
+  /** Entry skipped OUT of the close period — renders as a muted undo row. */
+  skipped?: boolean
+  skippedToLabel?: string | null
+}
+
+/** Project Time tab row — the table contract plus Time-tab-only fields. */
+export type TimeEntryRow = ProjectTimeTableRow & {
+  costRate: number
+}
+
+/**
+ * Close-workspace behavior bundle. One cohesive object (never loose flags):
+ * when present, rows gain a stable DOM anchor + checklist flash highlight,
+ * skip/unskip actions (hover shortcut + ⋯ menu item), skipped-row rendering,
+ * the carried label, and optional inline note editing. Mutually exclusive
+ * with `selectable` — the close ledger has no row selection.
+ */
+export type CloseTableConfig = {
+  /** Label of the next open period ("July 2026") — null hides skip actions. */
+  nextPeriodLabel: string | null
+  onSkip: (entryIds: Id<"timeEntries">[], nextLabel: string) => void
+  onUnskip: (entryIds: Id<"timeEntries">[]) => void
+  /** Row currently flash-highlighted by a review-checklist jump. */
+  highlightId: Id<"timeEntries"> | null
+  /** Stable DOM id per row so the checklist can scroll it into view. */
+  rowDomId: (entryId: Id<"timeEntries">) => string
+  /** Edit notes in place (InlineEditable) instead of static note text. */
+  inlineNoteEdit: boolean
+  /** Suppress per-row carried labels (the group header carries a promoted one). */
+  hideCarriedLabels?: boolean
 }
 
 /** T&M billable + uninvoiced entries are the only rows that can be selected. */
-function isSelectable(row: TimeEntryRow, selectable: boolean): boolean {
+function isSelectable(row: ProjectTimeTableRow, selectable: boolean): boolean {
   return selectable && row.isBillable && !row.invoiceId
 }
 
-export type ProjectTimeTableProps = {
-  entries: TimeEntryRow[]
+export type ProjectTimeTableProps<
+  T extends ProjectTimeTableRow = ProjectTimeTableRow,
+> = {
+  entries: T[]
   selectedIds: Set<string>
   /** Receives the full row, not just the id, so the parent can stash the
    *  row data alongside the selection — lets the Time tab keep a row selected
    *  even after the current filter hides it. */
-  onToggle: (row: TimeEntryRow) => void
+  onToggle: (row: T) => void
   /**
    * Toggle every selectable row in `entries` (this table's own slice — in
    * grouped view that's one group). The parent owns the Set and folds these
    * rows in/out without touching rows from other groups.
    */
-  onSelectAllVisible: (selectAll: boolean, rows: TimeEntryRow[]) => void
+  onSelectAllVisible: (selectAll: boolean, rows: T[]) => void
   /** True when checkboxes should render (admin + T&M). */
   selectable: boolean
   showAmounts: boolean
@@ -128,9 +175,13 @@ export type ProjectTimeTableProps = {
   onOpenTask: (taskId: Id<"tasks">) => void
   /** Task currently open in the detail view — its rows get a subtle highlight. */
   activeTaskId?: string | null
+  /** Hide the Status column (close ledger: every in-scope row is "open"). */
+  statusColumn?: boolean
+  /** Close-workspace behavior bundle — see `CloseTableConfig`. */
+  closeMode?: CloseTableConfig
 }
 
-export function ProjectTimeTable({
+export function ProjectTimeTable<T extends ProjectTimeTableRow>({
   entries,
   selectedIds,
   onToggle,
@@ -149,7 +200,15 @@ export function ProjectTimeTable({
   onEdit,
   onOpenTask,
   activeTaskId,
-}: ProjectTimeTableProps) {
+  statusColumn = true,
+  closeMode,
+}: ProjectTimeTableProps<T>) {
+  if (process.env.NODE_ENV !== "production" && closeMode && selectable) {
+    throw new Error(
+      "ProjectTimeTable: `closeMode` and `selectable` are mutually exclusive — the close ledger has no row selection.",
+    )
+  }
+
   const selectableRows = entries.filter((r) => isSelectable(r, selectable))
   const allSelected =
     selectableRows.length > 0 && selectableRows.every((r) => selectedIds.has(r._id))
@@ -176,37 +235,120 @@ export function ProjectTimeTable({
           <TableHead className="w-40">Member</TableHead>
           <TableHead>Task</TableHead>
           <TableHead className="w-40">Category</TableHead>
-          <TableHead className="w-32">Status</TableHead>
+          {statusColumn && <TableHead className="w-32">Status</TableHead>}
           <TableHead className="w-20 text-right">Hours</TableHead>
           {showAmounts && <TableHead className="w-20 text-right">Rate</TableHead>}
           {showAmounts && <TableHead className="w-24 text-right">Amount</TableHead>}
-          <TableHead className="w-10" aria-label="Row actions" />
+          <TableHead
+            className={closeMode ? "w-16" : "w-10"}
+            aria-label="Row actions"
+          />
         </TableRow>
       </TableHeader>
       <TableBody>
-        {entries.map((row) => (
-          <TimeEntryTableRow
-            key={row._id}
-            row={row}
-            selected={selectedIds.has(row._id)}
-            onToggle={onToggle}
-            selectable={selectable}
-            showAmounts={showAmounts}
-            currency={currency}
-            canEdit={isAdmin || row.userId === currentUserId}
-            isAdmin={isAdmin}
-            projectId={projectId}
-            onEdit={onEdit}
-            onOpenTask={onOpenTask}
-            isActive={activeTaskId != null && row.taskId === activeTaskId}
-          />
-        ))}
+        {entries.map((row) =>
+          closeMode && row.skipped ? (
+            <SkippedEntryRow
+              key={row._id}
+              row={row}
+              closeMode={closeMode}
+              showAmounts={showAmounts}
+              statusColumn={statusColumn}
+            />
+          ) : (
+            <TimeEntryTableRow
+              key={row._id}
+              row={row}
+              selected={selectedIds.has(row._id)}
+              onToggle={onToggle}
+              selectable={selectable}
+              showAmounts={showAmounts}
+              currency={currency}
+              canEdit={isAdmin || row.userId === currentUserId}
+              isAdmin={isAdmin}
+              projectId={projectId}
+              onEdit={onEdit}
+              onOpenTask={onOpenTask}
+              isActive={activeTaskId != null && row.taskId === activeTaskId}
+              statusColumn={statusColumn}
+              closeMode={closeMode}
+            />
+          ),
+        )}
       </TableBody>
     </Table>
   )
 }
 
-function TimeEntryTableRow({
+/**
+ * Skipped-out entry inside the close ledger — deferred to a later period.
+ * Renders muted with an inline Undo; column layout mirrors the live rows so
+ * the table grid never shifts. Only reachable when `closeMode` is set.
+ */
+function SkippedEntryRow({
+  row,
+  closeMode,
+  showAmounts,
+  statusColumn,
+}: {
+  row: ProjectTimeTableRow
+  closeMode: CloseTableConfig
+  showAmounts: boolean
+  statusColumn: boolean
+}) {
+  return (
+    <TableRow
+      id={closeMode.rowDomId(row._id)}
+      data-skipped
+      className="text-muted-foreground"
+    >
+      <TableCell className="tabular-nums">{formatDateToUS(row.date)}</TableCell>
+      <TableCell>
+        <span className="flex items-center gap-2 opacity-60">
+          <UserAvatar name={row.userName} imageUrl={row.userImageUrl} size="sm" />
+          <span className="truncate text-sm">{row.userName}</span>
+        </span>
+      </TableCell>
+      <TableCell>
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="min-w-0 truncate text-sm">{row.taskTitle}</span>
+          <span className="inline-flex shrink-0 items-center gap-1 text-xs">
+            <CornerUpRightIcon aria-hidden className="size-3.5" />
+            skipped → {row.skippedToLabel}
+          </span>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-6 px-2 text-xs text-primary"
+            onClick={() => closeMode.onUnskip([row._id])}
+          >
+            Undo
+          </Button>
+        </div>
+        {row.note && (
+          <span className="block truncate text-xs italic">{row.note}</span>
+        )}
+      </TableCell>
+      <TableCell>
+        <span className="text-xs">—</span>
+      </TableCell>
+      {statusColumn && <TableCell />}
+      <TableCell className="text-right tabular-nums line-through">
+        <TimeEntryHoursCell
+          entryId={row._id}
+          durationMinutes={row.durationMinutes}
+          editable={false}
+        />
+      </TableCell>
+      {showAmounts && <TableCell />}
+      {showAmounts && <TableCell />}
+      <TableCell />
+    </TableRow>
+  )
+}
+
+function TimeEntryTableRow<T extends ProjectTimeTableRow>({
   row,
   selected,
   onToggle,
@@ -219,10 +361,12 @@ function TimeEntryTableRow({
   onEdit,
   onOpenTask,
   isActive,
+  statusColumn,
+  closeMode,
 }: {
-  row: TimeEntryRow
+  row: T
   selected: boolean
-  onToggle: (row: TimeEntryRow) => void
+  onToggle: (row: T) => void
   selectable: boolean
   showAmounts: boolean
   currency: string
@@ -232,9 +376,13 @@ function TimeEntryTableRow({
   onEdit: (entryId: Id<"timeEntries">) => void
   onOpenTask: (taskId: Id<"tasks">) => void
   isActive: boolean
+  statusColumn: boolean
+  closeMode: CloseTableConfig | undefined
 }) {
   const rowSelectable = isSelectable(row, selectable)
-  const amount = (row.durationMinutes / 60) * row.billableRate
+  // Close rows carry the server-computed amount (rounding parity with commit);
+  // Time-tab rows compute display-only amounts from the rate.
+  const amount = row.amount ?? (row.durationMinutes / 60) * row.billableRate
   // Phase 8 Slice 4 — row state via `entryStatus()` (single source of
   // truth, same derivation `listProjectEntries` filters on). Locked
   // rows (Draft + Closed) get a unified visual treatment — 72% opacity
@@ -243,9 +391,13 @@ function TimeEntryTableRow({
   const status = entryStatus(row)
   const isLocked = status === "draft" || status === "closed"
 
+  const highlighted = closeMode != null && closeMode.highlightId === row._id
+
   return (
     <TableRow
+      id={closeMode?.rowDomId(row._id)}
       className={cn(
+        "group/row",
         rowSelectable && "cursor-pointer",
         // 72% opacity per parent PRD § UI Changes → Time entry list.
         // The dropdown menu portal stays at full opacity so the action
@@ -254,6 +406,10 @@ function TimeEntryTableRow({
         // Rows of the task currently open in the detail view stay marked so
         // the eye keeps its anchor while editing in the side peek.
         isActive && "bg-muted/50",
+        // Checklist-jump flash (close mode) — the long transition lets the
+        // amber wash fade out smoothly when `highlightId` clears.
+        closeMode && "transition-colors duration-500",
+        highlighted && "bg-amber-100/70 dark:bg-amber-500/15",
       )}
       data-selectable={rowSelectable || undefined}
       data-locked={isLocked || undefined}
@@ -283,11 +439,40 @@ function TimeEntryTableRow({
         </span>
       </TableCell>
       <TableCell>
-        <TaskTitleButton
-          title={row.taskTitle}
-          note={row.note}
-          onClick={() => onOpenTask(row.taskId)}
-        />
+        {closeMode ? (
+          <div className="flex min-w-0 flex-col">
+            <TaskTitleButton
+              title={row.taskTitle}
+              onClick={() => onOpenTask(row.taskId)}
+            />
+            <div className="flex min-w-0 items-center gap-2">
+              {closeMode.inlineNoteEdit && canEdit && !isLocked ? (
+                <InlineNoteCell entryId={row._id} note={row.note} />
+              ) : (
+                row.note && (
+                  <span className="truncate text-xs text-muted-foreground">
+                    {row.note}
+                  </span>
+                )
+              )}
+              {row.carried &&
+                row.carriedReason &&
+                row.originMonthLabel &&
+                !closeMode.hideCarriedLabels && (
+                  <CarriedLabel
+                    reason={row.carriedReason}
+                    monthLabel={row.originMonthLabel}
+                  />
+                )}
+            </div>
+          </div>
+        ) : (
+          <TaskTitleButton
+            title={row.taskTitle}
+            note={row.note}
+            onClick={() => onOpenTask(row.taskId)}
+          />
+        )}
       </TableCell>
       <TableCell>
         {row.workCategoryName && row.workCategoryColor ? (
@@ -299,9 +484,11 @@ function TimeEntryTableRow({
           <span className="text-xs text-muted-foreground">—</span>
         )}
       </TableCell>
-      <TableCell onClick={(e) => e.stopPropagation()}>
-        <BillingStatusCell row={row} status={status} />
-      </TableCell>
+      {statusColumn && (
+        <TableCell onClick={(e) => e.stopPropagation()}>
+          <BillingStatusCell row={row} status={status} />
+        </TableCell>
+      )}
       {/* stopPropagation only when the cell is interactive — on locked /
           read-only rows a click should still toggle row selection. */}
       <TableCell
@@ -325,18 +512,75 @@ function TimeEntryTableRow({
         </TableCell>
       )}
       <TableCell onClick={(e) => e.stopPropagation()}>
-        {canEdit && (
-          <RowActionsMenu
-            row={row}
-            status={status}
-            isAdmin={isAdmin}
-            projectId={projectId}
-            onEdit={() => onEdit(row._id)}
-            onOpenTask={() => onOpenTask(row.taskId)}
-          />
-        )}
+        <div className="flex items-center justify-end gap-0.5">
+          {/* Skip is the close's signature action — hover shortcut on the row
+              in addition to the ⋯ menu item, so triaging many rows doesn't
+              cost a menu hop each. */}
+          {closeMode?.nextPeriodLabel && canEdit && !isLocked && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-7 text-muted-foreground opacity-0 transition-opacity focus-visible:opacity-100 group-hover/row:opacity-100"
+              aria-label={`Skip to ${closeMode.nextPeriodLabel}`}
+              title={`Skip → ${closeMode.nextPeriodLabel}`}
+              onClick={() =>
+                closeMode.onSkip([row._id], closeMode.nextPeriodLabel!)
+              }
+            >
+              <CornerUpRightIcon aria-hidden className="size-4" />
+            </Button>
+          )}
+          {canEdit && (
+            <RowActionsMenu
+              row={row}
+              status={status}
+              isAdmin={isAdmin}
+              projectId={projectId}
+              onEdit={() => onEdit(row._id)}
+              onOpenTask={() => onOpenTask(row.taskId)}
+              skipAction={
+                closeMode?.nextPeriodLabel && !isLocked
+                  ? {
+                      label: `Skip → ${closeMode.nextPeriodLabel}`,
+                      onSelect: () =>
+                        closeMode.onSkip([row._id], closeMode.nextPeriodLabel!),
+                    }
+                  : undefined
+              }
+            />
+          )}
+        </div>
       </TableCell>
     </TableRow>
+  )
+}
+
+/**
+ * Inline note editor for close-ledger rows — the "missing note" checklist
+ * flow is jump → type → done, so notes must be fixable without the modal.
+ * Same mutation the modal uses; the reactive workspace query refreshes flags
+ * and totals on save.
+ */
+function InlineNoteCell({
+  entryId,
+  note,
+}: {
+  entryId: Id<"timeEntries">
+  note: string | undefined
+}) {
+  const updateEntry = useMutation(api.timeEntries.update)
+  return (
+    <InlineEditable
+      value={note ?? ""}
+      onSave={async (next) => {
+        await updateEntry({ id: entryId, note: next.length ? next : null })
+      }}
+      ariaLabel="Edit note"
+      placeholder="Add a note"
+      errorMessage="Couldn't update note"
+      className="min-w-0 flex-1 text-xs text-muted-foreground"
+    />
   )
 }
 
@@ -347,13 +591,16 @@ function RowActionsMenu({
   projectId,
   onEdit,
   onOpenTask,
+  skipAction,
 }: {
-  row: TimeEntryRow
+  row: ProjectTimeTableRow
   status: "open" | "draft" | "closed" | "non_billable"
   isAdmin: boolean
   projectId: Id<"projects">
   onEdit: () => void
   onOpenTask: () => void
+  /** Close-mode "Skip → <next period>" item — omitted outside the close. */
+  skipAction?: { label: string; onSelect: () => void }
 }) {
   const updateEntry = useMutation(api.timeEntries.update)
   const removeEntry = useMutation(api.timeEntries.remove)
@@ -527,6 +774,12 @@ function RowActionsMenu({
             <ToggleIcon aria-hidden className="size-3.5" />
             {toggleLabel}
           </DropdownMenuItem>
+          {skipAction && (
+            <DropdownMenuItem onSelect={skipAction.onSelect}>
+              <CornerUpRightIcon aria-hidden className="size-3.5" />
+              {skipAction.label}
+            </DropdownMenuItem>
+          )}
           <DropdownMenuItem onSelect={onOpenTask}>
             <PanelRightOpenIcon aria-hidden className="size-3.5" />
             Open task
@@ -586,7 +839,7 @@ function BillingStatusCell({
   row,
   status,
 }: {
-  row: TimeEntryRow
+  row: ProjectTimeTableRow
   status: "open" | "draft" | "closed" | "non_billable"
 }) {
   const tooltip =

@@ -111,7 +111,7 @@ export function NavMain({
                       <item.icon />
                       <span>{item.title}</span>
                       {item.url === "/my-tasks" && <MyTasksBadge />}
-                      {item.url === "/invoices" && <InvoicesNavSignals />}
+                      {item.url === "/billing" && <InvoicesNavSignals />}
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>

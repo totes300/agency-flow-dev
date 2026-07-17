@@ -238,6 +238,66 @@ export const exportMonth = action({
   },
 });
 
+// ─── Action: exportSettledPeriod ────────────────────────────────────────────
+
+/**
+ * Worksheet for a CLOSED retainer period, scoped by settlement stamps (I4) —
+ * the post-close export. Unlike `exportMonth` (raw date range), this selects
+ * exactly the entries the close committed: carried-in work included,
+ * skipped-out work excluded, later edits impossible (the ledger is locked).
+ * It therefore always agrees with the Monthly Report for the same period.
+ */
+export const exportSettledPeriod = action({
+  args: {
+    projectId: v.id("projects"),
+    year: v.number(),
+    month: v.number(),
+  },
+  handler: async (ctx, args): Promise<WorksheetExportResult> => {
+    const { start } = monthBounds(args.year, args.month);
+
+    const data: WorksheetData = await ctx.runQuery(
+      internal.worksheetsHelpers.collectWorksheetData,
+      {
+        scope: {
+          kind: "settledPeriod",
+          projectId: args.projectId,
+          periodStart: start,
+        },
+      },
+    );
+
+    if (data.rows.length === 0) {
+      throw new ConvexError("No settled time entries in this period");
+    }
+
+    const apiKey = await ctx.runQuery(
+      internal.aiIntegration.loadDecryptedKey,
+      {},
+    );
+    const ai = await summarizeAndFillGaps(data.rows, apiKey);
+
+    const generatedDate = getDateInTimezone(Date.now(), data.timezone);
+    const csv = buildSingleScopeCsv({
+      meta: {
+        client: data.client.name,
+        project: data.project.name,
+        scopeKey: "Period",
+        scopeValue: `${formatMonthScopeLabel(args.year, args.month)} (closed)`,
+        generatedDate,
+      },
+      rows: data.rows,
+      ai: ai.outputs,
+    });
+
+    return {
+      csv,
+      filename: filenameForMonth(data.slugs, args.year, args.month),
+      stats: ai.stats,
+    };
+  },
+});
+
 // ─── Action: exportInvoice ──────────────────────────────────────────────────
 
 export const exportInvoice = action({

@@ -20,18 +20,27 @@ totals shrink live; open the July workspace and see them arrive as carried-in wi
 
 ## Acceptance criteria
 
-- [ ] Mutation guards enforced and unit-tested: non-admin rejected; locked (invoiced/settled)
-      entries rejected with a clear message; invalid target date rejected; batch is atomic.
-- [ ] Skip never modifies `date`; only `skippedThrough` (verified by test).
-- [ ] Skipped entries leave the current scope and appear in the next period's scope as carried-in
-      with reason `skipped` (billingScope already proves this; here the UI round-trip is demoed).
-- [ ] Task-level skip = same mutation with the task's visible in-scope entry ids; collapsed header
-      row with Undo per UX Decisions.
-- [ ] Undo clears the stamp; for a carried entry whose origin period has since closed, clearing
-      still resolves forward to the first open period (I1) — asserted by test and reflected in UI.
-- [ ] Totals, flags, and carried lines recompute live on skip/undo.
-- [ ] Skips persist across sessions/devices (server state, not client state).
-- [ ] `npx tsc --noEmit` clean.
+- [x] Mutation guards enforced and unit-tested (`convex/lib/skipGuards.ts` +
+      `__tests__/skipGuards.test.ts`): non-admin rejected by `requireAdmin`; locked
+      (invoiced/settled) entries reject the whole batch with a clear message; batch is
+      all-or-nothing. Skip target is server-derived (never client-supplied), so an invalid
+      target date can't occur.
+- [x] Skip never modifies `date`; the mutation only patches `skippedThrough` (billingScope
+      scenario 2 asserts carried entries keep their true date; the mutation touches no date field).
+- [x] Skipped entries leave the current scope and appear in the next period as carried-in with
+      reason `skipped`. **Browser-verified round-trip**: skipped a June entry → left June scope,
+      collapsed with Undo; opened July → arrived as "carried · June 2026" with the checklist line
+      "Carried in · Skipped from June 2026".
+- [x] Task-level skip = same mutation with the task's in-scope entry ids; a fully-skipped task
+      collapses to one line ("skipped → July 2026 · Undo all"). Browser-verified.
+- [x] Undo clears the stamp; for a carried entry whose origin period has since closed, I1 still
+      resolves it forward structurally (billingScope scenario 6 — story 22). Per-entry + task-level
+      Undo both browser-verified to restore the entries.
+- [x] Totals, flags, and carried lines recompute live on skip/undo (reactive query — verified
+      Logged/Overage/checklist all updated instantly).
+- [x] Skips persist across sessions/devices — `skippedThrough` is server state; verified by
+      navigating away and back (the skipped row and carried arrival survived reload).
+- [x] `npx tsc --noEmit` clean; eslint clean; 110 tests green across 7 suites.
 
 ## Blocked by
 

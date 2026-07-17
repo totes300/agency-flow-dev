@@ -3,11 +3,8 @@ import { query, mutation } from "./_generated/server";
 import type { GenericMutationCtx } from "convex/server";
 import type { DataModel, Doc, Id } from "./_generated/dataModel";
 import { type AuthContext, getAuthContext, requireAdmin } from "./lib/auth";
-import {
-  computeCycleOverageContext,
-  computePeriodOverageContext,
-  getCyclePeriods,
-} from "./lib/retainerCycle";
+import { getCyclePeriods } from "./lib/retainerCycle";
+import { computeCommitScope, selectCommitEntries } from "./lib/commitScope";
 import { getOrgSettings } from "./lib/orgHelpers";
 import { ORG_TIMEZONE_FALLBACK, getDateInTimezone } from "./lib/timer";
 
@@ -292,6 +289,15 @@ export async function closePeriodInternal(
   authCtx: AuthContext,
   period: Doc<"retainerPeriods">,
   /**
+   * The exact set of entry ids to settle into this monthly period, derived
+   * server-side from `billingScope` by the caller (Month-Close slice 06). This
+   * is what makes skip stamps and carried-in entries flow correctly: a skipped
+   * entry is absent from the set; a carried-in entry (dated in another month)
+   * is present and gets THIS period's boundary stamped — the receiving-period
+   * rule (I2/I4). Entries are still guarded as open before stamping.
+   */
+  settleEntryIds: Set<string>,
+  /**
    * Optional shared timestamp. `closeRetainerCycle` passes one value to
    * close all N monthly periods so they end up with identical `closedAt`
    * (the cycle-close fingerprint per parent PRD § "Rollover cycle close").
@@ -316,7 +322,10 @@ export async function closePeriodInternal(
     for (const e of entries) {
       // Tenancy belt — `by_taskId` doesn't narrow by orgId.
       if (e.orgId !== authCtx.orgId) continue;
-      if (!shouldSettleEntry(e, period)) continue;
+      if (!settleEntryIds.has(e._id.toString())) continue;
+      // Defensive open-guard — `billingScope` only yields open entries, but a
+      // concurrent commit could have locked one between scope + settle.
+      if (e.settledAt !== undefined || e.invoiceId !== undefined) continue;
 
       await ctx.db.patch(e._id, {
         settledAt: now,
@@ -444,31 +453,42 @@ export const closePeriod = mutation({
     // stamp every same-month entry `retainer_included` and any new entry
     // inside the (now-closed) range would be rejected by
     // `assertEntryDateOpen`. Recovery is a per-month manual reopen — costly.
-    {
-      const orgSettings = await getOrgSettings(ctx, authCtx.orgId);
-      const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
-      const todayStr = getDateInTimezone(Date.now(), timezone);
-      if (period.periodEnd >= todayStr) {
-        throw new ConvexError(
-          "This period hasn't ended yet. Wait until the month closes before locking it.",
-        );
-      }
+    const orgSettings = await getOrgSettings(ctx, authCtx.orgId);
+    const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
+    const todayStr = getDateInTimezone(Date.now(), timezone);
+    if (period.periodEnd >= todayStr) {
+      throw new ConvexError(
+        "This period hasn't ended yet. Wait until the month closes before locking it.",
+      );
     }
 
-    // Gate 1 — overage. `computePeriodOverageContext` encodes the
-    // rollover-vs-non-rollover rule (Slice 2): rollover monthly is NEVER
-    // overage-due at the monthly level, so this gate passes mid-cycle. The
-    // cycle-level gate is Slice 4's `closeRetainerCycle`.
-    // Gate math = invoice math = meter math: retainer budget consumption is
-    // RAW everywhere (createInvoice bills retainer overage from exact
-    // minutes; the balance badges and ready rows sum exact minutes).
-    // Rounding any single side reintroduces the close/generate dead-end at
-    // the rounding boundary (2026-07-05 review H1).
-    const overageContext = await computePeriodOverageContext(
-      ctx,
+    // Month-Close (slice 06) — entry SELECTION and the overage gate both route
+    // through `billingScope`: the month's usage now respects skip stamps
+    // (deferred entries excluded) and carried-in entries (skipped/logged-late
+    // from earlier months, settled into THIS period). Budget math stays RAW.
+    const { scope } = await computeCommitScope(ctx, {
+      orgId: authCtx.orgId,
       project,
-      period,
-    );
+      targetPeriodStart: period.periodStart,
+      todayStr,
+      roundingMinutes: 1,
+    });
+
+    // Oldest-first (I3).
+    if (scope.issues.includes("not-earliest-open")) {
+      throw new ConvexError(
+        "An earlier period is still open. Close it before closing this one.",
+      );
+    }
+
+    // Gate 1 — overage. An over-budget month must be INVOICED, not closed as
+    // "covered by fee". `billingScope` already applied the raw budget math.
+    if (!scope.withinBudget) {
+      throw new ConvexError(
+        "This period has overage that must be invoiced before it can be closed. " +
+          "Create the overage invoice first.",
+      );
+    }
 
     // Gate 2 — non-void invoice overlapping the period range.
     const projectInvoices = await ctx.db
@@ -477,16 +497,15 @@ export const closePeriod = mutation({
       .filter((q) => q.eq(q.field("orgId"), authCtx.orgId))
       .collect();
     const conflictingInvoice = findConflictingInvoice(projectInvoices, period);
-
-    const gate = evaluateCloseGate({
-      isOverageDue: overageContext.isOverageDue,
-      conflictingInvoice,
-    });
-    if (!gate.allowed) {
-      throw new ConvexError(gate.message);
+    if (conflictingInvoice !== null) {
+      throw new ConvexError(
+        "An invoice already covers this period. " +
+          "Void that invoice before closing the period.",
+      );
     }
 
-    return await closePeriodInternal(ctx, authCtx, period);
+    const settleEntryIds = selectCommitEntries(scope).settleEntryIds;
+    return await closePeriodInternal(ctx, authCtx, period, settleEntryIds);
   },
 });
 
@@ -685,20 +704,33 @@ export const closeRetainerCycle = mutation({
       );
     }
 
-    // Gate 1 — cycle-level overage. Per `computeCycleOverageContext`
-    // (Slice 2), the rollover-cycle mode returns `isOverageDue: true` iff
-    // the cycle's aggregate worked minutes exceed its aggregate budget.
-    // Raw budget math — same rule as closePeriod's gate above.
-    const overageContext = await computeCycleOverageContext(
-      ctx,
+    // Month-Close (slice 06) — cycle SELECTION + overage gate route through
+    // `billingScope` (cycle grid). Usage respects skip stamps and carried-in
+    // entries; the budget math is the same raw cycle aggregate as before.
+    const { scope } = await computeCommitScope(ctx, {
+      orgId: authCtx.orgId,
       project,
-      cycle.periods,
-    );
+      targetPeriodStart: cycle.cycleStart,
+      todayStr,
+      roundingMinutes: 1,
+    });
+
+    // Oldest-first (I3).
+    if (scope.issues.includes("not-earliest-open")) {
+      throw new ConvexError(
+        "An earlier cycle is still open. Close it before closing this one.",
+      );
+    }
+
+    // Gate 1 — cycle-level overage. An over-budget cycle must be invoiced, not
+    // closed as fee-covered.
+    if (!scope.withinBudget) {
+      throw new ConvexError(
+        "This cycle has overage that must be invoiced before it can be closed.",
+      );
+    }
 
     // Gate 2 — non-void invoice overlapping ANY month in the cycle.
-    // Reuses the monthly overlap predicate against the full cycle range
-    // so a draft retainer invoice spanning the cycle (or a one-off
-    // invoice covering one month inside it) blocks the close.
     const projectInvoices = await ctx.db
       .query("invoices")
       .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
@@ -708,13 +740,28 @@ export const closeRetainerCycle = mutation({
       periodStart: cycle.cycleStart,
       periodEnd: cycle.cycleEnd,
     });
+    if (conflictingInvoice !== null) {
+      throw new ConvexError(
+        "An invoice already covers part of this cycle. " +
+          "Void or finalize that invoice before closing the cycle.",
+      );
+    }
 
-    const gate = evaluateCycleCloseGate({
-      isOverageDue: overageContext.isOverageDue,
-      conflictingInvoice,
-    });
-    if (!gate.allowed) {
-      throw new ConvexError(gate.message);
+    // Assign each in-scope entry to a month of the cycle for settlement:
+    // entries dated within the cycle → their natural month; carried-in entries
+    // (dated in an earlier month, skipped/late) → the cycle's FIRST month (the
+    // receiving-period rule / budget bucketing, PRD § Scope and money). Each
+    // month is stamped with its OWN boundary so per-month `reopenPeriod` stays
+    // unambiguous after a cycle close.
+    const settleIdsByMonth = new Map<string, Set<string>>();
+    for (const se of scope.entries) {
+      const month =
+        cycle.periods.find(
+          (p) => se.date >= p.periodStart && se.date <= p.periodEnd,
+        ) ?? cycle.periods[0];
+      const set = settleIdsByMonth.get(month.periodStart) ?? new Set<string>();
+      set.add(se.entryId.toString());
+      settleIdsByMonth.set(month.periodStart, set);
     }
 
     // Shared `now` so all N monthly periods receive identical `closedAt`
@@ -732,11 +779,11 @@ export const closeRetainerCycle = mutation({
       );
       // Skip months that are already admin-closed (idempotent re-runs +
       // partial-recovery scenarios where an earlier cycle-close attempt
-      // closed some months before erroring). `closePeriodInternal` itself
-      // is a no-op on already-closed entries, but skipping the patch on
-      // an already-closed period row avoids bumping its `updatedAt`.
+      // closed some months before erroring).
       if (period.closedAt !== undefined) continue;
-      const result = await closePeriodInternal(ctx, authCtx, period, now);
+      const monthIds =
+        settleIdsByMonth.get(monthlyPeriod.periodStart) ?? new Set<string>();
+      const result = await closePeriodInternal(ctx, authCtx, period, monthIds, now);
       settledCount += result.settledCount;
     }
 

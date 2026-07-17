@@ -29,6 +29,7 @@ import {
   ListFilterIcon,
 } from "lucide-react"
 import { toast } from "sonner"
+import { toastArchiveSuccess } from "@/lib/toast-helpers"
 import type { Doc } from "@/convex/_generated/dataModel"
 
 type SortBy = "name" | "client"
@@ -113,7 +114,12 @@ export default function ProjectsPage() {
       key: projectId,
       message: `"${project.name}" archived`,
       action: async () => {
-        await archiveProject({ id: projectId })
+        const result = await archiveProject({ id: projectId })
+        // The undo toast already says "<name>" archived — only add noise when
+        // a running timer was rescued (or couldn't be).
+        if (result.autoSavedTimers.length > 0 || result.timerSaveFailures.length > 0) {
+          toastArchiveSuccess(result, `"${project.name}" archived`)
+        }
         unhide()
       },
       onUndo: unhide,

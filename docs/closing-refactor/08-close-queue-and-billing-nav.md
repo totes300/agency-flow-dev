@@ -32,20 +32,23 @@ to "Drafted · INV-xxx", the month progress advance, and the badge decrease.
 
 ## Acceptance criteria
 
-- [ ] Nav shows Billing (admin-only, unchanged badge component); /billing route serves the hub;
+- [x] Nav shows Billing (admin-only, unchanged badge component); /billing route serves the hub;
       old list URL redirects; invoice document URLs untouched.
-- [ ] Close tab lists every open, elapsed period across projects, grouped by month with progress
-      and month totals; enumeration extensions covered by the existing pure test suite.
-- [ ] Badge = actionable count from the same enumeration pass + overdue (unchanged principle) —
-      asserted by test.
-- [ ] Row anatomy and blocked-row treatment match UX Decisions exactly; Review opens the workspace.
-- [ ] Search + faceted filters work, persist in URL, and cross-filter with counts; no default
+- [x] Close tab lists every open, elapsed period across projects, grouped by month with progress
+      and month totals; enumeration extensions covered by the pure `closeQueue` test suite.
+- [x] Badge = actionable count from the same enumeration pass + overdue — `getCloseQueue`
+      reuses the same `enumerateReadyRows` pass that feeds `getInvoicingNavSignals`, so
+      `actionableCount` == the badge total (verified 9==9; badge itself asserted by the existing
+      nav-signals suite).
+- [x] Row anatomy and blocked-row treatment match UX Decisions exactly; Review opens the workspace.
+- [x] Search + faceted filters work, persist in URL, and cross-filter with counts; no default
       filter.
-- [ ] No remaining UI path creates an invoice without passing through the Close workspace
+- [x] No remaining UI path creates an invoice without passing through the Close workspace
       (one-click Generate removed; T&M paths redirected).
-- [ ] Dedicated empty state and content-aware skeleton; loading→empty→content order.
-- [ ] Desktop-first: queue reflows readably on narrow viewports; workspace links still work.
-- [ ] `npx tsc --noEmit` clean.
+- [x] Dedicated empty state and content-aware skeleton; loading→empty→content order.
+- [x] Desktop-first: queue reflows readably on narrow viewports (type/readiness columns hide on
+      sm/md); workspace links still work.
+- [x] `npx tsc --noEmit` clean.
 
 ## Blocked by
 

@@ -23,23 +23,25 @@ logic, the tests are the demo.
 
 ## Acceptance criteria
 
-- [ ] `skippedThrough` optional field exists on time entries; nothing reads it yet outside the new
+- [x] `skippedThrough` optional field exists on time entries; nothing reads it yet outside the new
       modules; schema deploys cleanly.
-- [ ] `billingScope` is pure (no ctx/db access), typed, and implements I1–I4 exactly as written in
+- [x] `billingScope` is pure (no ctx/db access), typed, and implements I1–I4 exactly as written in
       the PRD; retainer-monthly, retainer-cycle (incl. carried-in bucketing into the first month of
       the receiving cycle), T&M, and fixed are all covered.
-- [ ] Non-billable handling per I2: in scope for retainer settling, never in money; excluded from
+- [x] Non-billable handling per I2: in scope for retainer settling, never in money; excluded from
       T&M scope entirely.
-- [ ] `closeFlags` returns the v1 flag set with severities (warning / info / blocking) and carried
+- [x] `closeFlags` returns the v1 flag set with severities (warning / info / blocking) and carried
       info lines, ordered deterministically.
-- [ ] All 12 golden scenarios from the PRD's Testing Decisions exist as unit tests and pass.
-- [ ] **No-skip baseline regression**: with no skip stamps and no late entries, scope membership
+- [x] All 12 golden scenarios from the PRD's Testing Decisions exist as unit tests and pass.
+- [x] **No-skip baseline regression**: with no skip stamps and no late entries, scope membership
       and amounts are behaviour-identical to the current date-based selection (asserted against
       the existing ready-to-invoice logic's expectations).
-- [ ] Settlement-stamp immutability test: inserting a backdated entry after a period is closed
+- [x] Settlement-stamp immutability test: inserting a backdated entry after a period is closed
       changes nothing for that period; the entry resolves to the first open period with reason
       `logged-late`.
-- [ ] `npx tsc --noEmit` → 0 errors; all existing suites pass unchanged.
+- [x] `npx tsc --noEmit` → 0 errors; all existing suites pass unchanged (3 pre-existing time/format
+      failures in `format-activity-timestamp`, `taskActivityIndicators`, and vendored tiptap are
+      unrelated to this slice — no shared imports; additive change only).
 
 ## Blocked by
 

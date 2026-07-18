@@ -42,9 +42,7 @@ const EMPTY_CREATED_MAP = new Map<string, number>()
  *     entries;
  *   - majority-carried promotion lifts the "carried · May 2026" label to the
  *     header and suppresses the per-row copies;
- *   - a fully-skipped group collapses to a single undo line;
- *   - `revealEntryId` force-expands the group holding that entry so a
- *     review-checklist jump can scroll to a row inside a collapsed group.
+ *   - a fully-skipped group collapses to a single undo line.
  *
  * Group order: chronological ascending on date axes (a close reads like the
  * story of the month — same direction as the rows), alpha on member/task.
@@ -60,7 +58,6 @@ export function CloseEntryGroups({
   onEdit,
   onOpenTask,
   closeMode,
-  revealEntryId,
 }: {
   entries: CloseWorkspaceRow[]
   grouping: TimeEntryGroupAxis
@@ -73,8 +70,6 @@ export function CloseEntryGroups({
   onOpenTask: (taskId: Id<"tasks">) => void
   /** Base close config — per-group tables add `hideCarriedLabels` on promotion. */
   closeMode: CloseTableConfig
-  /** Entry a checklist jump is heading to — its group is force-expanded. */
-  revealEntryId?: Id<"timeEntries"> | null
 }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   // Reset collapse state whenever the grouping axis changes — old keys are
@@ -98,23 +93,6 @@ export function CloseEntryGroups({
       return { ...g, entries: sorted, meta: deriveCloseGroupMeta(sorted) }
     })
   }, [entries, grouping, timezone])
-
-  // Checklist jump into a collapsed group — expand it (render-time state
-  // adjustment, same pattern as the grouping reset above) so the row's DOM
-  // node exists for the parent's scroll-and-flash effect. The group stays
-  // expanded after the jump target clears.
-  const [lastReveal, setLastReveal] = useState<Id<"timeEntries"> | null>(null)
-  if (revealEntryId && revealEntryId !== lastReveal) {
-    setLastReveal(revealEntryId)
-    const target = groups.find((g) =>
-      g.entries.some((e) => e._id === revealEntryId),
-    )
-    if (target && collapsed.has(target.key)) {
-      const next = new Set(collapsed)
-      next.delete(target.key)
-      setCollapsed(next)
-    }
-  }
 
   function toggleGroup(key: string) {
     setCollapsed((prev) => {

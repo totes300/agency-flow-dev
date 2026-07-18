@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useMemo, useState } from "react"
 import Link from "next/link"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { useQuery, useConvexAuth, useMutation } from "convex/react"
@@ -30,6 +30,10 @@ import {
   type TimeEntryFacet,
 } from "@/lib/time-entry-filters"
 import type { TimeEntryGroupAxis } from "@/lib/time-entry-grouping"
+import {
+  summarizeCloseFlags,
+  type CloseFlagKind,
+} from "@/convex/lib/closeFlags"
 import type { CloseWorkspaceData, CloseWorkspaceRow } from "@/convex/close"
 
 const BILLING_TYPE_LABEL: Record<
@@ -39,11 +43,6 @@ const BILLING_TYPE_LABEL: Record<
   retainer: "Retainer",
   t_and_m: "T&M",
   fixed: "Fixed",
-}
-
-/** Stable DOM id for a ledger row, so the review checklist can scroll to it. */
-export function CLOSE_ENTRY_DOM_ID(entryId: Id<"timeEntries">): string {
-  return `close-entry-${entryId}`
 }
 
 /** The close offers member + category facets — never status (every in-scope
@@ -71,9 +70,11 @@ type ModalState =
  * labels, the checklist jump, the budget line, commit — stay here.
  *
  * View narrowing (search, member/category facets, group axis) is URL-state
- * applied client-side over the server's scope. Narrowing NEVER changes what
- * commit covers: totals, flags, and the footer always reflect the full scope,
- * and a visible hint says so whenever rows are hidden.
+ * applied client-side over the server's scope; the review checklist adds a
+ * transient issue lens on top (click "26 entries are missing a note" → the
+ * ledger shows exactly those rows). Narrowing NEVER changes what commit
+ * covers: totals, flags, and the footer always reflect the full scope, and a
+ * visible hint says so whenever rows are hidden.
  *
  * Every number is server-derived from `billingScope`; this component never
  * does date or money math. Editing is disabled for closed periods (the I4
@@ -119,20 +120,64 @@ export function CloseWorkspace({
     }
   }
 
+  // ── Review-issue filter (checklist click-to-filter) ─────────────────────
+  // Local, transient state — a review lens, not a saved view. Auto-degrades:
+  // once every entry of the selected kind is fixed, the summary line
+  // disappears and the lens clears itself.
+  const [issueFilter, setIssueFilter] = useState<CloseFlagKind | null>(null)
+  const flagSummaries = useMemo(
+    () => summarizeCloseFlags(data.flags),
+    [data.flags],
+  )
+  const activeIssue = useMemo(() => {
+    if (!issueFilter) return null
+    const summary = flagSummaries.find((s) => s.kind === issueFilter)
+    return summary && summary.entryIds.length > 0 ? issueFilter : null
+  }, [issueFilter, flagSummaries])
+  const issueEntryIds = useMemo(() => {
+    if (!activeIssue) return null
+    const summary = flagSummaries.find((s) => s.kind === activeIssue)
+    return new Set<string>(summary?.entryIds ?? [])
+  }, [activeIssue, flagSummaries])
+
+  // Warning markers for ledger rows (missing note / long entry) — the amber
+  // dot next to the note, so flagged rows are spottable while scrolling.
+  const rowWarnings = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const summary of flagSummaries) {
+      if (summary.severity !== "warning") continue
+      const label =
+        summary.kind === "missing-note"
+          ? "Missing note"
+          : summary.kind === "long-entry"
+            ? "Over 8h — check for a forgotten timer"
+            : null
+      if (!label) continue
+      for (const id of summary.entryIds) {
+        const existing = map.get(id.toString())
+        map.set(id.toString(), existing ? `${existing} · ${label}` : label)
+      }
+    }
+    return map
+  }, [flagSummaries])
+
   // ── View narrowing — URL state, applied client-side over the scope ──────
   const groupBy = parseGrouping(searchParams.get("groupBy"))
   const { filters } = useProjectTimeFilters()
   const search = (searchParams.get("search") ?? "").trim().toLowerCase()
 
   const filteredEntries = useMemo(() => {
-    const faceted = applyTimeEntryFilters(data.entries, filters)
-    if (!search) return faceted
-    return faceted.filter(
-      (row) =>
-        row.taskTitle.toLowerCase().includes(search) ||
-        (row.note ?? "").toLowerCase().includes(search),
-    )
-  }, [data.entries, filters, search])
+    let rows = applyTimeEntryFilters(data.entries, filters)
+    if (search) {
+      rows = rows.filter(
+        (row) =>
+          row.taskTitle.toLowerCase().includes(search) ||
+          (row.note ?? "").toLowerCase().includes(search),
+      )
+    }
+    if (issueEntryIds) rows = rows.filter((row) => issueEntryIds.has(row._id))
+    return rows
+  }, [data.entries, filters, search, issueEntryIds])
 
   // Facet options derive from the scope itself — they can't drift from it.
   const availableMembers = useMemo(() => {
@@ -164,40 +209,6 @@ export function CloseWorkspace({
     const query = params.toString()
     router.replace(query ? `${pathname}?${query}` : pathname)
   }
-
-  // ── Checklist jump (PRD story 13) ───────────────────────────────────────
-  // A jump must never silently fail: if the target row is filtered out, the
-  // filters clear first (announced), the target's group force-expands
-  // (`revealEntryId`), and the scroll waits until the row's DOM node exists.
-  const [highlightId, setHighlightId] = useState<Id<"timeEntries"> | null>(null)
-  const [, setJumpNonce] = useState(0)
-  const pendingJumpRef = useRef<Id<"timeEntries"> | null>(null)
-  const highlightTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  function jumpToEntry(entryId: Id<"timeEntries">) {
-    if (!filteredEntries.some((e) => e._id === entryId)) {
-      clearViewNarrowing()
-      toast("Filters cleared to show this entry")
-    }
-    pendingJumpRef.current = entryId
-    setHighlightId(entryId)
-    // Guarantees a render even when the id is already highlighted, so the
-    // scroll effect below re-runs.
-    setJumpNonce((n) => n + 1)
-  }
-
-  // Runs after every render while a jump is pending — the row may only
-  // appear once cleared filters / expanded groups have rendered.
-  useEffect(() => {
-    const id = pendingJumpRef.current
-    if (!id) return
-    const el = document.getElementById(CLOSE_ENTRY_DOM_ID(id))
-    if (!el) return
-    pendingJumpRef.current = null
-    el.scrollIntoView({ behavior: "smooth", block: "center" })
-    if (highlightTimer.current) clearTimeout(highlightTimer.current)
-    highlightTimer.current = setTimeout(() => setHighlightId(null), 1600)
-  })
 
   // ── Reference data ──────────────────────────────────────────────────────
   // includeArchived: an entry under a since-archived category must keep
@@ -232,8 +243,7 @@ export function CloseWorkspace({
     nextPeriodLabel: editable ? data.nextPeriodLabel : null,
     onSkip,
     onUnskip,
-    highlightId,
-    rowDomId: CLOSE_ENTRY_DOM_ID,
+    rowWarnings,
     inlineNoteEdit: editable,
   }
 
@@ -320,7 +330,10 @@ export function CloseWorkspace({
           <CloseReviewChecklist
             flags={data.flags}
             projectId={data.project.id}
-            onJump={jumpToEntry}
+            activeFilter={activeIssue}
+            onToggleFilter={(kind) =>
+              setIssueFilter((prev) => (prev === kind ? null : kind))
+            }
           />
         )}
 
@@ -352,7 +365,14 @@ export function CloseWorkspace({
                 title="No entries match your filters"
                 description="The close still covers every in-scope entry."
                 action={
-                  <Button variant="link" size="sm" onClick={clearViewNarrowing}>
+                  <Button
+                    variant="link"
+                    size="sm"
+                    onClick={() => {
+                      setIssueFilter(null)
+                      clearViewNarrowing()
+                    }}
+                  >
                     Show all entries
                   </Button>
                 }
@@ -387,7 +407,6 @@ export function CloseWorkspace({
                 onEdit={handleEditById}
                 onOpenTask={openTask}
                 closeMode={closeMode}
-                revealEntryId={highlightId}
               />
             )}
 

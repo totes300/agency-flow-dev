@@ -10,26 +10,36 @@ import type { Id } from "@/convex/_generated/dataModel"
 import {
   hasBlockingOrWarning,
   reviewFlagCount,
+  summarizeCloseFlags,
   type CloseFlag,
+  type CloseFlagKind,
+  type CloseFlagSummary,
 } from "@/convex/lib/closeFlags"
 import { cn } from "@/lib/utils"
 
 /**
  * Review checklist callout (PRD stories 13–15) — turns closing into a finite
- * checklist. Renders the pure `closeFlags` output: blocking + warnings first
- * (each jumps to and flash-highlights its row), then informational carried-in
- * lines. When no warning/blocker remains it flips to "All clear — ready to
- * close" (info carried lines may persist). This component only renders — all
- * derivation lives in `closeFlags`.
+ * checklist. One line PER FLAG KIND with a count (never one row per entry):
+ * thirty missing notes read as "30 entries are missing a note", and clicking
+ * the line filters the ledger to exactly those rows (click again — or "Show
+ * all" — to clear). Non-entry flags keep their own affordances: the blocking
+ * overage-rate line links to Settings, the running-timer line is informational.
+ * When no warning/blocker remains it flips to "All clear — ready to close".
+ *
+ * All derivation lives in the pure `closeFlags` module; this component only
+ * renders `summarizeCloseFlags` output.
  */
 export function CloseReviewChecklist({
   flags,
   projectId,
-  onJump,
+  activeFilter,
+  onToggleFilter,
 }: {
   flags: CloseFlag[]
   projectId: Id<"projects">
-  onJump: (entryId: Id<"timeEntries">) => void
+  /** Flag kind the ledger is currently filtered to — null when unfiltered. */
+  activeFilter: CloseFlagKind | null
+  onToggleFilter: (kind: CloseFlagKind) => void
 }) {
   if (flags.length === 0) {
     return (
@@ -39,6 +49,7 @@ export function CloseReviewChecklist({
     )
   }
 
+  const summaries = summarizeCloseFlags(flags)
   const count = reviewFlagCount(flags)
   const allClear = !hasBlockingOrWarning(flags)
 
@@ -51,13 +62,14 @@ export function CloseReviewChecklist({
           {count} {count === 1 ? "thing" : "things"} to review
         </p>
       )}
-      <ul className="mt-2 flex flex-col gap-1.5">
-        {flags.map((flag, i) => (
-          <FlagRow
-            key={`${flag.kind}-${flag.entryId ?? i}`}
-            flag={flag}
+      <ul className="mt-2 flex flex-col gap-0.5">
+        {summaries.map((summary) => (
+          <SummaryRow
+            key={summary.kind}
+            summary={summary}
             projectId={projectId}
-            onJump={onJump}
+            active={activeFilter === summary.kind}
+            onToggleFilter={onToggleFilter}
           />
         ))}
       </ul>
@@ -78,33 +90,36 @@ function AllClearHeader() {
   )
 }
 
-function FlagRow({
-  flag,
+function SummaryRow({
+  summary,
   projectId,
-  onJump,
+  active,
+  onToggleFilter,
 }: {
-  flag: CloseFlag
+  summary: CloseFlagSummary
   projectId: Id<"projects">
-  onJump: (entryId: Id<"timeEntries">) => void
+  active: boolean
+  onToggleFilter: (kind: CloseFlagKind) => void
 }) {
-  const jumpable = flag.entryId !== undefined
+  // Only entry-backed lines can filter the ledger; the overage-rate and
+  // running-timer lines have no rows to show.
+  const filterable = summary.entryIds.length > 0
 
   const content = (
     <span className="flex min-w-0 items-center gap-2">
-      <FlagIcon severity={flag.severity} />
+      <FlagIcon severity={summary.severity} />
       <span
         className={cn(
           "truncate text-sm",
-          flag.severity === "info" && "text-muted-foreground",
+          summary.severity === "info" && "text-muted-foreground",
         )}
       >
-        {flagLabel(flag)}
+        {summaryLabel(summary)}
       </span>
-      {flag.kind === "missing-overage-rate" && (
+      {summary.kind === "missing-overage-rate" && (
         <Link
           href={`/projects/${projectId}?tab=settings`}
           className="shrink-0 text-sm font-medium text-primary underline-offset-2 hover:underline"
-          onClick={(e) => e.stopPropagation()}
         >
           Set rate
         </Link>
@@ -112,22 +127,36 @@ function FlagRow({
     </span>
   )
 
-  if (!jumpable) return <li>{content}</li>
+  if (!filterable) return <li className="px-1 py-0.5">{content}</li>
 
   return (
     <li>
       <button
         type="button"
-        onClick={() => onJump(flag.entryId!)}
-        className="flex w-full min-w-0 rounded px-1 py-0.5 text-left hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+        onClick={() => onToggleFilter(summary.kind)}
+        aria-pressed={active}
+        className={cn(
+          "group flex w-full min-w-0 items-center justify-between gap-3 rounded px-1 py-0.5 text-left",
+          "hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+          active && "bg-accent/60",
+        )}
       >
         {content}
+        <span className="shrink-0 text-xs text-muted-foreground">
+          {active ? (
+            <span className="font-medium text-foreground">Show all</span>
+          ) : (
+            <span className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
+              Show only
+            </span>
+          )}
+        </span>
       </button>
     </li>
   )
 }
 
-function FlagIcon({ severity }: { severity: CloseFlag["severity"] }) {
+function FlagIcon({ severity }: { severity: CloseFlagSummary["severity"] }) {
   if (severity === "blocking") {
     return <CircleAlertIcon className="size-4 shrink-0 text-destructive" />
   }
@@ -144,32 +173,26 @@ function FlagIcon({ severity }: { severity: CloseFlag["severity"] }) {
   )
 }
 
-function flagLabel(flag: CloseFlag): string {
-  switch (flag.kind) {
+function summaryLabel(summary: CloseFlagSummary): string {
+  const n = summary.count
+  switch (summary.kind) {
     case "missing-overage-rate":
       return "Over budget with no overage rate"
     case "running-timer":
-      return "A timer is still running in this period"
+      return n === 1
+        ? "A timer is still running in this period"
+        : `${n} timers are still running in this period`
     case "long-entry":
-      return "Entry over 8h — check for a forgotten timer"
+      return n === 1
+        ? "1 entry over 8h — check for a forgotten timer"
+        : `${n} entries over 8h — check for forgotten timers`
     case "missing-note":
-      return "Entry is missing a note"
-    case "carried-in": {
-      const month = flag.carried ? monthLabel(flag.carried.originMonthKey) : ""
-      const reason =
-        flag.carried?.reason === "logged-late"
-          ? `Logged after ${month} closed`
-          : `Skipped from ${month}`
-      return `Carried in · ${reason}`
-    }
+      return n === 1
+        ? "1 entry is missing a note"
+        : `${n} entries are missing a note`
+    case "carried-in":
+      return n === 1
+        ? "1 entry carried in from an earlier month"
+        : `${n} entries carried in from earlier months`
   }
-}
-
-/** "2026-05" → "May 2026". */
-function monthLabel(monthKey: string): string {
-  const [y, m] = monthKey.split("-").map(Number)
-  return new Date(y, (m ?? 1) - 1, 1).toLocaleDateString("en-US", {
-    month: "long",
-    year: "numeric",
-  })
 }

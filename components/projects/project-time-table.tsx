@@ -121,20 +121,18 @@ export type TimeEntryRow = ProjectTimeTableRow & {
 
 /**
  * Close-workspace behavior bundle. One cohesive object (never loose flags):
- * when present, rows gain a stable DOM anchor + checklist flash highlight,
- * skip/unskip actions (hover shortcut + ⋯ menu item), skipped-row rendering,
- * the carried label, and optional inline note editing. Mutually exclusive
- * with `selectable` — the close ledger has no row selection.
+ * when present, rows gain skip/unskip actions (hover shortcut + ⋯ menu item),
+ * skipped-row rendering, the carried label, review-warning markers, and
+ * optional inline note editing. Mutually exclusive with `selectable` — the
+ * close ledger has no row selection.
  */
 export type CloseTableConfig = {
   /** Label of the next open period ("July 2026") — null hides skip actions. */
   nextPeriodLabel: string | null
   onSkip: (entryIds: Id<"timeEntries">[], nextLabel: string) => void
   onUnskip: (entryIds: Id<"timeEntries">[]) => void
-  /** Row currently flash-highlighted by a review-checklist jump. */
-  highlightId: Id<"timeEntries"> | null
-  /** Stable DOM id per row so the checklist can scroll it into view. */
-  rowDomId: (entryId: Id<"timeEntries">) => string
+  /** entryId → reason text; flagged rows show an amber dot next to the note. */
+  rowWarnings?: Map<string, string>
   /** Edit notes in place (InlineEditable) instead of static note text. */
   inlineNoteEdit: boolean
   /** Suppress per-row carried labels (the group header carries a promoted one). */
@@ -297,11 +295,7 @@ function SkippedEntryRow({
   statusColumn: boolean
 }) {
   return (
-    <TableRow
-      id={closeMode.rowDomId(row._id)}
-      data-skipped
-      className="text-muted-foreground"
-    >
+    <TableRow data-skipped className="text-muted-foreground">
       <TableCell className="tabular-nums">{formatDateToUS(row.date)}</TableCell>
       <TableCell>
         <span className="flex items-center gap-2 opacity-60">
@@ -391,11 +385,8 @@ function TimeEntryTableRow<T extends ProjectTimeTableRow>({
   const status = entryStatus(row)
   const isLocked = status === "draft" || status === "closed"
 
-  const highlighted = closeMode != null && closeMode.highlightId === row._id
-
   return (
     <TableRow
-      id={closeMode?.rowDomId(row._id)}
       className={cn(
         "group/row",
         rowSelectable && "cursor-pointer",
@@ -406,10 +397,6 @@ function TimeEntryTableRow<T extends ProjectTimeTableRow>({
         // Rows of the task currently open in the detail view stay marked so
         // the eye keeps its anchor while editing in the side peek.
         isActive && "bg-muted/50",
-        // Checklist-jump flash (close mode) — the long transition lets the
-        // amber wash fade out smoothly when `highlightId` clears.
-        closeMode && "transition-colors duration-500",
-        highlighted && "bg-amber-100/70 dark:bg-amber-500/15",
       )}
       data-selectable={rowSelectable || undefined}
       data-locked={isLocked || undefined}
@@ -446,6 +433,18 @@ function TimeEntryTableRow<T extends ProjectTimeTableRow>({
               onClick={() => onOpenTask(row.taskId)}
             />
             <div className="flex min-w-0 items-center gap-2">
+              {/* Review-warning marker — spot flagged rows while scrolling;
+                  the reason lives in the tooltip. */}
+              {closeMode.rowWarnings?.has(row._id) && (
+                <span
+                  title={closeMode.rowWarnings.get(row._id)}
+                  className="size-1.5 shrink-0 rounded-full bg-amber-500/80"
+                >
+                  <span className="sr-only">
+                    {closeMode.rowWarnings.get(row._id)}
+                  </span>
+                </span>
+              )}
               {closeMode.inlineNoteEdit && canEdit && !isLocked ? (
                 <InlineNoteCell entryId={row._id} note={row.note} />
               ) : (

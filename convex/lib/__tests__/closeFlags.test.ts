@@ -3,6 +3,7 @@ import {
   computeCloseFlags,
   hasBlockingOrWarning,
   reviewFlagCount,
+  summarizeCloseFlags,
   LONG_ENTRY_MINUTES,
 } from "../closeFlags";
 import type { BillingScopeReport, ScopeEntry } from "../billingScope";
@@ -162,5 +163,62 @@ describe("computeCloseFlags", () => {
     });
     // missing-overage-rate + missing-note + running-timer = 3.
     expect(reviewFlagCount(flags)).toBe(3);
+  });
+});
+
+describe("summarizeCloseFlags", () => {
+  it("aggregates to one line per kind with counts and entry ids", () => {
+    const flags = computeCloseFlags({
+      scope: report({
+        entries: [
+          scopeEntry({ entryId: id<"timeEntries">("e_1"), note: "" }),
+          scopeEntry({ entryId: id<"timeEntries">("e_2"), note: "  " }),
+          scopeEntry({ entryId: id<"timeEntries">("e_3"), note: "" }),
+          scopeEntry({
+            entryId: id<"timeEntries">("e_4"),
+            note: "long day",
+            durationMinutes: LONG_ENTRY_MINUTES,
+          }),
+        ],
+      }),
+    });
+    const summaries = summarizeCloseFlags(flags);
+    expect(summaries.map((s) => [s.kind, s.count])).toEqual([
+      ["long-entry", 1],
+      ["missing-note", 3],
+    ]);
+    expect(summaries[1].entryIds).toHaveLength(3);
+    expect(summaries[1].entryIds).toContain(id<"timeEntries">("e_2"));
+  });
+
+  it("orders blocking before warnings before info, non-entry flags keep empty entryIds", () => {
+    const flags = computeCloseFlags({
+      scope: report({
+        issues: ["missing-overage-rate"],
+        entries: [
+          scopeEntry({
+            entryId: id<"timeEntries">("e_1"),
+            note: "",
+            carried: true,
+            carriedReason: "skipped",
+          }),
+        ],
+      }),
+      runningTimers: [{ userId: id<"users">("u_1") }],
+    });
+    const summaries = summarizeCloseFlags(flags);
+    expect(summaries.map((s) => s.kind)).toEqual([
+      "missing-overage-rate",
+      "running-timer",
+      "missing-note",
+      "carried-in",
+    ]);
+    expect(summaries[0].entryIds).toHaveLength(0);
+    expect(summaries[1].entryIds).toHaveLength(0);
+    expect(summaries[3].entryIds).toEqual([id<"timeEntries">("e_1")]);
+  });
+
+  it("returns an empty list for no flags", () => {
+    expect(summarizeCloseFlags([])).toEqual([]);
   });
 });

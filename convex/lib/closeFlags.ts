@@ -105,6 +105,38 @@ export function computeCloseFlags(input: CloseFlagsInput): CloseFlag[] {
   return sortFlags(flags);
 }
 
+/**
+ * One checklist LINE per flag kind — the display aggregation. Thirty
+ * missing-note flags are one fact ("30 entries are missing a note"), not
+ * thirty rows; the checklist stays a handful of lines no matter how messy
+ * the month is, and `entryIds` powers the click-to-filter on the ledger.
+ */
+export type CloseFlagSummary = {
+  kind: CloseFlagKind;
+  severity: CloseFlagSeverity;
+  count: number;
+  /** Entries behind this line (empty for non-entry flags like overage rate). */
+  entryIds: Id<"timeEntries">[];
+};
+
+export function summarizeCloseFlags(flags: CloseFlag[]): CloseFlagSummary[] {
+  const byKind = new Map<CloseFlagKind, CloseFlagSummary>();
+  for (const f of flags) {
+    let summary = byKind.get(f.kind);
+    if (!summary) {
+      summary = { kind: f.kind, severity: f.severity, count: 0, entryIds: [] };
+      byKind.set(f.kind, summary);
+    }
+    summary.count++;
+    if (f.entryId) summary.entryIds.push(f.entryId);
+  }
+  return [...byKind.values()].sort((a, b) => {
+    const sr = SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity];
+    if (sr !== 0) return sr;
+    return KIND_RANK[a.kind] - KIND_RANK[b.kind];
+  });
+}
+
 /** True when a review warning or blocker remains (info carried lines don't count). */
 export function hasBlockingOrWarning(flags: CloseFlag[]): boolean {
   return flags.some((f) => f.severity === "blocking" || f.severity === "warning");

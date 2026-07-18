@@ -25,12 +25,14 @@ export function WorksheetDownloadButton({
   label = "Download worksheet",
   variant = "default",
   size = "sm",
+  className,
 }: {
   /** Calls the Convex export action (`exportInvoice`, `exportSettledPeriod`, …). */
   run: () => Promise<WorksheetExportResult>
   label?: string
   variant?: React.ComponentProps<typeof Button>["variant"]
   size?: React.ComponentProps<typeof Button>["size"]
+  className?: string
 }) {
   const [pending, setPending] = useState(false)
 
@@ -55,6 +57,7 @@ export function WorksheetDownloadButton({
       type="button"
       variant={variant}
       size={size}
+      className={className}
       disabled={pending}
       onClick={() => void handleClick()}
     >

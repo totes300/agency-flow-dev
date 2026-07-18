@@ -1,13 +1,14 @@
 "use client"
 
 import { useState, useRef } from "react"
-import { useMutation } from "convex/react"
+import { useAction, useMutation } from "convex/react"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import { api } from "@/convex/_generated/api"
 import type { Doc, Id } from "@/convex/_generated/dataModel"
 import { InvoiceStatusBadge } from "@/components/invoices/invoice-status-badge"
 import { CompanyDetailsDialog } from "@/components/invoices/company-details-dialog"
+import { WorksheetDownloadButton } from "@/components/worksheet/worksheet-download-button"
 import { ConfirmDialog } from "@/components/confirm-dialog"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -62,6 +63,7 @@ export function InvoiceSidebar({
   const updateInvoice = useMutation(api.invoices.updateInvoice)
   const changeStatus = useMutation(api.invoices.changeInvoiceStatus)
   const deleteInvoiceMutation = useMutation(api.invoices.deleteInvoice)
+  const exportInvoiceWorksheet = useAction(api.worksheets.exportInvoice)
 
   // Note editing — always-visible textarea with autosave on blur.
   //
@@ -350,6 +352,17 @@ export function InvoiceSidebar({
             </Button>
           ))}
 
+        {/* Document outputs, grouped under the status action — worksheet
+            first (the client-facing deliverable), PDF second. Exactly one
+            primary lives in this stack: the status transition above. */}
+        {invoice.status !== "void" && (
+          <WorksheetDownloadButton
+            variant="outline"
+            size="default"
+            className="w-full"
+            run={() => exportInvoiceWorksheet({ invoiceId: invoice._id })}
+          />
+        )}
         {onPrint && (
           <Button variant="outline" onClick={onPrint}>
             <PrinterIcon data-icon="inline-start" className="size-3.5" />

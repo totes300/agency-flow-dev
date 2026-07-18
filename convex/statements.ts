@@ -331,6 +331,27 @@ export const getRetainerStatement = query({
           invoiceCoversMonth(inv, args.year, args.month),
       ) ?? null;
 
+    // Whether this month's ledger is FINAL — settled by a month/cycle close
+    // (closed retainerPeriods row; cycle closes write one per month) or by a
+    // FINALIZED invoice covering it. Drives the report's two modes: a final
+    // statement is the immutable client deliverable (worksheet export
+    // available — stamps exist); anything else renders as an explicitly-live
+    // progress view. One ceremony per cycle: an elapsed mid-cycle month of an
+    // open rollover cycle stays non-final until the whole cycle closes. A
+    // draft invoice does NOT finalize — it's still editable.
+    const isFinal =
+      !inProgress &&
+      (closedPeriodRows.some(
+        (p) =>
+          p.periodStart === periodStart && (p.closedAt ?? null) !== null,
+      ) ||
+        projectInvoices.some(
+          (inv) =>
+            inv.status !== "void" &&
+            inv.status !== "draft" &&
+            invoiceCoversMonth(inv, args.year, args.month),
+        ));
+
     const includedMinutes = project.includedMinutesPerMonth ?? 0;
     const monthlyFee = project.monthlyFee ?? 0;
     const overageRate = project.overageRate ?? 0;
@@ -479,6 +500,7 @@ export const getRetainerStatement = query({
 
     return {
       inProgress,
+      isFinal,
       period: {
         year: args.year,
         month: args.month,

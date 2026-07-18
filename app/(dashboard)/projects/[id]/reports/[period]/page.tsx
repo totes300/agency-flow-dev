@@ -43,6 +43,7 @@ export default function ProjectMonthlyReportPage() {
   useBreadcrumbTitle(report ? `Report · ${report.period.label}` : null)
 
   const exportSettledPeriod = useAction(api.worksheets.exportSettledPeriod)
+  const exportCycle = useAction(api.worksheets.exportCycle)
 
   if (!parsed) notFound()
   if (report === undefined) return <ReportSkeleton />
@@ -71,11 +72,25 @@ export default function ProjectMonthlyReportPage() {
             <PrinterIcon data-icon="inline-start" className="size-3.5" />
             Save as PDF
           </Button>
-          {/* Post-close worksheet — settlement-stamp scoped, so it matches
-              this report's membership exactly (carried-ins included, skips
-              excluded). Only offered once the period is closed; an open
-              month has no stamps yet. */}
-          {!report.inProgress && (
+          {/* Worksheets exist only for FINAL statements — the ledger is
+              settled, so the stamp-scoped export matches this report
+              exactly. Non-final months are live previews with nothing
+              immutable to export (one ceremony per cycle: a mid-cycle
+              month stays non-final until the whole cycle closes). */}
+          {report.isFinal && report.cycleToDate?.positionInCycle ===
+            report.project.cycleLength && (
+            <WorksheetDownloadButton
+              variant="outline"
+              label="Cycle worksheet"
+              run={() =>
+                exportCycle({
+                  projectId,
+                  cycleStart: report.cycleToDate!.cycleStart,
+                })
+              }
+            />
+          )}
+          {report.isFinal && (
             <WorksheetDownloadButton
               run={() =>
                 exportSettledPeriod({
@@ -88,6 +103,23 @@ export default function ProjectMonthlyReportPage() {
           )}
         </div>
       </nav>
+
+      {/* Preview mode — the Stripe "upcoming invoice" pattern: mid-cycle and
+          unclosed months are explicitly live, never mistakable for the final
+          record. Chrome-only (print:hidden), the document stays clean. */}
+      {!report.isFinal && (
+        <p className="-mt-3 text-xs text-muted-foreground print:hidden">
+          {report.cycleToDate
+            ? `Cycle in progress${
+                report.cycleToDate.cycleLabel
+                  ? ` (${report.cycleToDate.cycleLabel})`
+                  : ""
+              } — figures update live until the cycle closes.`
+            : report.inProgress
+              ? "Month in progress — figures update live."
+              : "Period not closed yet — figures update until you close it."}
+        </p>
+      )}
 
       <MonthlyReportDocument report={report} />
     </div>

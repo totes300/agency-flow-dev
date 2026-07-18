@@ -1,7 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
   computeCloseFlags,
-  hasBlockingOrWarning,
   reviewFlagCount,
   summarizeCloseFlags,
   LONG_ENTRY_MINUTES,
@@ -136,7 +135,7 @@ describe("computeCloseFlags", () => {
     ]);
   });
 
-  it("hasBlockingOrWarning ignores info-only checklists (All clear)", () => {
+  it("info-only checklists count zero review items (All clear)", () => {
     const infoOnly = computeCloseFlags({
       scope: report({
         entries: [
@@ -144,11 +143,7 @@ describe("computeCloseFlags", () => {
         ],
       }),
     });
-    expect(hasBlockingOrWarning(infoOnly)).toBe(false);
     expect(reviewFlagCount(infoOnly)).toBe(0);
-
-    const empty = computeCloseFlags({ scope: report() });
-    expect(hasBlockingOrWarning(empty)).toBe(false);
   });
 
   it("reviewFlagCount counts warnings + blockers only", () => {

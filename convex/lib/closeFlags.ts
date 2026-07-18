@@ -137,11 +137,6 @@ export function summarizeCloseFlags(flags: CloseFlag[]): CloseFlagSummary[] {
   });
 }
 
-/** True when a review warning or blocker remains (info carried lines don't count). */
-export function hasBlockingOrWarning(flags: CloseFlag[]): boolean {
-  return flags.some((f) => f.severity === "blocking" || f.severity === "warning");
-}
-
 /** Count of review items surfaced on a queue row ("N to review") — excludes info. */
 export function reviewFlagCount(flags: CloseFlag[]): number {
   return flags.filter((f) => f.severity !== "info").length;

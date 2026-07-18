@@ -16,7 +16,10 @@ import { TimeEntryModal } from "@/components/projects/time-entry-modal"
 import { CloseBudgetSummary } from "@/components/billing/close-budget-summary"
 import { CloseCommitButton } from "@/components/billing/close-commit-button"
 import { CloseEntryGroups } from "@/components/billing/close-entry-groups"
-import { CloseReviewChecklist } from "@/components/billing/close-review-checklist"
+import {
+  CloseBlockingAlert,
+  CloseReviewChips,
+} from "@/components/billing/close-review-chips"
 import { CloseWorkspaceFooter } from "@/components/billing/close-workspace-footer"
 import { EmptyStateBanner } from "@/components/projects/empty-state-banner"
 import { ProjectTimeFilters } from "@/components/projects/project-time-filters"
@@ -324,17 +327,10 @@ export function CloseWorkspace({
 
         <CloseBudgetSummary data={data} />
 
-        {/* Closed periods are immutable history — no review checklist ("ready
-            to close" would be nonsense on an already-committed period). */}
+        {/* Loud only when it must be: the blocking overage-rate condition.
+            Everything else about review state lives as quiet toolbar chips. */}
         {editable && (
-          <CloseReviewChecklist
-            flags={data.flags}
-            projectId={data.project.id}
-            activeFilter={activeIssue}
-            onToggleFilter={(kind) =>
-              setIssueFilter((prev) => (prev === kind ? null : kind))
-            }
-          />
+          <CloseBlockingAlert flags={data.flags} projectId={data.project.id} />
         )}
 
         {isEmpty ? (
@@ -348,6 +344,19 @@ export function CloseWorkspace({
               categories={categories?.filter((c) => !c.archivedAt) ?? undefined}
               showDateRange={false}
               facets={CLOSE_FACETS}
+              // Review chips ride in the toolbar's right slot — review state
+              // is a filtering tool here, so it lives with the other tools.
+              actions={
+                editable ? (
+                  <CloseReviewChips
+                    flags={data.flags}
+                    activeFilter={activeIssue}
+                    onToggleFilter={(kind) =>
+                      setIssueFilter((prev) => (prev === kind ? null : kind))
+                    }
+                  />
+                ) : undefined
+              }
             />
 
             {hiddenInScopeCount > 0 && (

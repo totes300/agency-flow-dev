@@ -1,3 +1,10 @@
+import { InfoIcon } from "lucide-react"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { formatHoursCompact, formatCurrency } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import type { CloseWorkspaceData } from "@/convex/close"
@@ -22,17 +29,30 @@ export function CloseBudgetSummary({ data }: { data: CloseWorkspaceData }) {
         {data.billingType === "retainer" && <RetainerSummary data={data} />}
         {data.billingType === "t_and_m" && <TmSummary data={data} />}
         {data.billingType === "fixed" && <FixedSummary data={data} />}
+        {/* Reassurance copy on demand, not as a permanent line — the money
+            numbers are the content here; the explanation is a tool. */}
+        {!data.fromSettlementStamps && (
+          <TooltipProvider delayDuration={150}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <InfoIcon
+                  aria-label="About these numbers"
+                  className="size-3.5 shrink-0 translate-y-0.5 cursor-default text-muted-foreground/70"
+                />
+              </TooltipTrigger>
+              <TooltipContent side="right" className="max-w-64">
+                Raw hours — nothing is rounded here, and nothing locks until
+                you commit.
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        )}
       </div>
-      {/* The reviewing-is-safe reassurance only makes sense while the period
-          is still open — a closed period is already committed history. */}
-      {data.fromSettlementStamps ? (
+      {/* A closed period keeps its one-line state marker — it's the only
+          signal that this view is committed history. */}
+      {data.fromSettlementStamps && (
         <p className="text-xs text-muted-foreground">
           Closed period — the ledger below is the committed record.
-        </p>
-      ) : (
-        <p className="text-xs text-muted-foreground">
-          Raw hours — nothing is rounded here, and nothing locks until you
-          commit.
         </p>
       )}
     </div>

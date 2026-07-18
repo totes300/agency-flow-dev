@@ -108,8 +108,9 @@ export function CloseCommitButton({ data }: { data: CloseWorkspaceData }) {
     : `Generate invoice draft · ${formatCurrency(data.amount, data.currency)}`
 
   return (
+    // Default size, not sm — this is the page's single primary action and
+    // must survive visually next to the money line and toolbar.
     <Button
-      size="sm"
       className="shrink-0"
       disabled={pending || !data.committable}
       title={disabledReason ?? undefined}

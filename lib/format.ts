@@ -119,6 +119,16 @@ export function formatHoursCompact(minutes: number): string {
 }
 
 /**
+ * "+4h 20m" / "-1h 50m" / "0h 0m" — `formatHoursCompact` with an explicit
+ * plus, for running-balance ledgers where the sign carries the arithmetic.
+ */
+export function formatSignedHours(minutes: number): string {
+  return minutes > 0
+    ? `+${formatHoursCompact(minutes)}`
+    : formatHoursCompact(minutes)
+}
+
+/**
  * Format minutes as HH:MM display string.
  * e.g., 630 → "10:30", 90 → "01:30", 0 → "00:00"
  */

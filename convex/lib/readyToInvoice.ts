@@ -54,6 +54,8 @@ export type TimeEntryInput = {
   // Phase 8 — period-close settlement lock. Either field being set
   // disqualifies the entry from the Ready feed (and from re-billing).
   settledAt?: number | null;
+  /** Skip-to-next-close stamp (period end) — shifts the entry's owned month. */
+  skippedThrough?: string | null;
 };
 
 // ─── Output shape ───────────────────────────────────────────────────────────────
@@ -283,12 +285,23 @@ export function buildTmReadyRows(opts: {
     if (!e.isBillable) continue;
     if (e.invoiceId !== undefined && e.invoiceId !== null) continue;
     if (e.settledAt !== undefined && e.settledAt !== null) continue;
-    const ymKey = e.date.slice(0, 7); // YYYY-MM
-    if (coveredMonths.has(ymKey)) continue; // covered month — carries forward (I1)
+    // Effective owned month — MUST mirror `billingScope.firstOpenPeriod`'s
+    // T&M ownership rule (F1, 2026-07-19): max(naturalMonth,
+    // monthAfter(skippedThrough)), advanced past invoice-covered months. A
+    // skipped entry buckets into its RECEIVING month (so an all-skipped month
+    // emits no row and the receiving month's row carries the work); a late
+    // entry in a covered month advances instead of being dropped (so a month
+    // whose only work is carried-in still surfaces).
+    let abs = absMonthIndex(e.date);
+    if (e.skippedThrough) {
+      abs = Math.max(abs, absMonthIndex(e.skippedThrough) + 1);
+    }
+    while (coveredMonths.has(monthKeyFromIndex(abs))) abs += 1;
+    const ymKey = monthKeyFromIndex(abs);
     const [y, m] = ymKey.split("-").map(Number);
     // Skip current month — only closed periods feed the Inbox.
     const lastDay = new Date(y, m, 0).getDate();
-    const mEnd = `${y}-${String(m).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+    const mEnd = `${ymKey}-${String(lastDay).padStart(2, "0")}`;
     if (mEnd >= todayStr) continue;
 
     const b =
@@ -664,6 +677,14 @@ export function isInvoiceable(row: ReadyRow): boolean {
  */
 export function shouldAppearInInbox(row: ReadyRow): boolean {
   if (isCloseRow(row.kind)) return true;
+  // T&M rows surface even at $0 (F2, 2026-07-19): the month owns open
+  // billable work, which makes it the project's first open period and blocks
+  // every later month under oldest-first (I3). Hiding it turned a zero-rate
+  // month into an invisible blocker — later rows hinted "Close earlier period
+  // first" at a row that didn't exist. The row's action is still Review (fix
+  // rates / skip the work), never batch generation (`selectBatchEligibleRows`
+  // keeps its `isInvoiceable` gate).
+  if (row.kind === "tm") return true;
   return isInvoiceable(row) || row.configIssue !== undefined;
 }
 
@@ -698,6 +719,18 @@ export function sortReadyRows(rows: ReadyRow[]): ReadyRow[] {
 }
 
 // ─── Misc ───────────────────────────────────────────────────────────────────────
+
+/** Absolute month index (year*12 + month0) for a YYYY-MM(-DD) string. */
+function absMonthIndex(ymd: string): number {
+  return Number(ymd.slice(0, 4)) * 12 + (Number(ymd.slice(5, 7)) - 1);
+}
+
+/** YYYY-MM key for an absolute month index. */
+function monthKeyFromIndex(abs: number): string {
+  const y = Math.floor(abs / 12);
+  const m = (abs % 12) + 1;
+  return `${y}-${String(m).padStart(2, "0")}`;
+}
 
 function roundMinutesUpTo(minutes: number, roundTo: number): number {
   if (roundTo <= 1) return minutes;

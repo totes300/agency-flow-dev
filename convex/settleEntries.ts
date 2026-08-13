@@ -8,7 +8,10 @@
  */
 
 import { internalMutation } from "./_generated/server";
-import type { SettledReason } from "./lib/settleEntries";
+import {
+  monthlySettlementPeriod,
+  type SettledReason,
+} from "./lib/settleEntries";
 
 /**
  * Walk every time entry and, for those linked to a finalized invoice
@@ -18,7 +21,9 @@ import type { SettledReason } from "./lib/settleEntries";
  *   - `settledAt`         = `invoice.issueDate` (parsed to ms) or `now`.
  *   - `settledReason`     = `"fixed_included"` for Fixed projects, else
  *                           `"invoiced"`.
- *   - `settledPeriodStart`/`End` = the invoice's period.
+ *   - `settledPeriodStart`/`End` = the entry's MONTHLY bucket within the
+ *     invoice's period (`monthlySettlementPeriod` — the stamp invariant in
+ *     `convex/lib/settleEntries.ts`), never the raw multi-month period.
  *
  * Idempotent: re-running is a no-op for already-settled rows because the
  * `settledAt === undefined` guard skips them. Safe to run multiple times.
@@ -79,11 +84,18 @@ export const backfillSettledFromInvoiceId = internalMutation({
         ? new Date(invoice.issueDate).getTime()
         : now;
 
+      const bucket =
+        invoice.periodStart !== undefined && invoice.periodEnd !== undefined
+          ? monthlySettlementPeriod(e.date, {
+              periodStart: invoice.periodStart,
+              periodEnd: invoice.periodEnd,
+            })
+          : { periodStart: undefined, periodEnd: undefined };
       await ctx.db.patch(e._id, {
         settledAt,
         settledReason: reason,
-        settledPeriodStart: invoice.periodStart,
-        settledPeriodEnd: invoice.periodEnd,
+        settledPeriodStart: bucket.periodStart,
+        settledPeriodEnd: bucket.periodEnd,
         updatedAt: now,
       });
       touched++;

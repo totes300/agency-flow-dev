@@ -409,8 +409,12 @@ export default defineSchema({
     // Status for the row-level `entryStatus()` derivation.
     settledAt: v.optional(v.number()),         // event timestamp (ms)
     settledReason: v.optional(settledReasonValidator),
-    settledPeriodStart: v.optional(v.string()), // YYYY-MM-DD
-    settledPeriodEnd: v.optional(v.string()),   // YYYY-MM-DD
+    // Stamp invariant (2026-07-19): `settledPeriodStart/End` is the entry's
+    // MONTHLY settlement bucket — always exactly one calendar month, never a
+    // multi-month document period (that lives on the invoice, via
+    // `invoiceId`). See `lib/settleEntries.ts:monthlySettlementPeriod`.
+    settledPeriodStart: v.optional(v.string()), // YYYY-MM-01
+    settledPeriodEnd: v.optional(v.string()),   // YYYY-MM-DD (last of month)
 
     // ─── Month-Close — skip-to-next-close stamp ──────────────────────────
     //

@@ -5,10 +5,17 @@ import Link from "next/link"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { useQuery, useConvexAuth, useMutation } from "convex/react"
 import { toast } from "sonner"
-import { ArrowLeftIcon, ClipboardListIcon, MonitorIcon, PlusIcon } from "lucide-react"
+import {
+  ArrowLeftIcon,
+  ClipboardListIcon,
+  InfoIcon,
+  MonitorIcon,
+  PlusIcon,
+} from "lucide-react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { toastError } from "@/lib/toast-helpers"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { useTaskDetailNav } from "@/lib/hooks/use-task-detail-nav"
 import { TaskDetailDrawer } from "@/components/tasks/task-detail-drawer"
@@ -46,6 +53,30 @@ const BILLING_TYPE_LABEL: Record<
   retainer: "Retainer",
   t_and_m: "T&M",
   fixed: "Fixed",
+}
+
+/**
+ * Retainer mode is always stated — "am I in rollover?" must never be inferred
+ * from the period label alone. In-progress cycles also say where the cycle
+ * stands ("month 2 of 3"), which pre-empts the "why is my balance negative,
+ * we're only halfway" read of a mid-cycle number.
+ */
+function billingModeLabel(data: CloseWorkspaceData): string {
+  if (data.project.billingType !== "retainer") {
+    return BILLING_TYPE_LABEL[data.project.billingType]
+  }
+  const months = data.monthlyBalances.length
+  if (months <= 1) {
+    return data.project.rolloverEnabled
+      ? "Retainer · monthly"
+      : "Retainer · monthly, no rollover"
+  }
+  let label = `Retainer · rollover · ${months}-month cycle`
+  if (!data.periodElapsed && !data.fromSettlementStamps) {
+    const started = data.monthlyBalances.filter((row) => !row.pending).length
+    label += ` · month ${Math.max(1, started)} of ${months}`
+  }
+  return label
 }
 
 /** The close offers member + category facets — never status (every in-scope
@@ -123,6 +154,24 @@ export function CloseWorkspace({
     }
   }
 
+  // ── Rollover breakdown (cycle retainers) ────────────────────────────────
+  // Open/closed state lives in the URL so it survives drawer round-trips;
+  // the month lens is a transient review tool like the checklist filter.
+  const breakdownOpen = searchParams.get("balance") === "open"
+  const [monthLens, setMonthLens] = useState<string | null>(null)
+  function setBreakdownOpen(open: boolean) {
+    // Closing the breakdown must drop its lens — otherwise the ledger stays
+    // filtered with the only indicator (the highlighted row) hidden.
+    if (!open) setMonthLens(null)
+    const params = new URLSearchParams(searchParams.toString())
+    if (open) params.set("balance", "open")
+    else params.delete("balance")
+    const query = params.toString()
+    router.replace(query ? `${pathname}?${query}` : pathname, {
+      scroll: false,
+    })
+  }
+
   // ── Review-issue filter (checklist click-to-filter) ─────────────────────
   // Local, transient state — a review lens, not a saved view. Auto-degrades:
   // once every entry of the selected kind is fixed, the summary line
@@ -179,8 +228,17 @@ export function CloseWorkspace({
       )
     }
     if (issueEntryIds) rows = rows.filter((row) => issueEntryIds.has(row._id))
+    if (monthLens) {
+      rows = rows.filter(
+        (row) =>
+          !row.skipped &&
+          (monthLens === "carried"
+            ? row.carried
+            : !row.carried && row.date.slice(0, 7) === monthLens),
+      )
+    }
     return rows
-  }, [data.entries, filters, search, issueEntryIds])
+  }, [data.entries, filters, search, issueEntryIds, monthLens])
 
   // Facet options derive from the scope itself — they can't drift from it.
   const availableMembers = useMemo(() => {
@@ -300,7 +358,7 @@ export function CloseWorkspace({
                 <span aria-hidden className="text-muted-foreground/40">·</span>
                 <span>{data.client.name}</span>
                 <span aria-hidden className="text-muted-foreground/40">·</span>
-                <span>{BILLING_TYPE_LABEL[data.project.billingType]}</span>
+                <span>{billingModeLabel(data)}</span>
                 <span className="text-xs text-muted-foreground/70">
                   {data.project.code}
                 </span>
@@ -325,12 +383,37 @@ export function CloseWorkspace({
           )}
         </div>
 
-        <CloseBudgetSummary data={data} />
+        <CloseBudgetSummary
+          data={data}
+          breakdownOpen={breakdownOpen}
+          onBreakdownOpenChange={setBreakdownOpen}
+          monthLens={monthLens}
+          onMonthLensChange={setMonthLens}
+        />
 
         {/* Loud only when it must be: the blocking overage-rate condition.
             Everything else about review state lives as quiet toolbar chips. */}
         {editable && (
           <CloseBlockingAlert flags={data.flags} projectId={data.project.id} />
+        )}
+
+        {/* F5 — the period reads as closed because a DRAFT covers it; the
+            entries live on the draft, not in settlement stamps, so this
+            ledger would render blank. Route to the draft instead. */}
+        {!editable && data.coveringDraft && (
+          <Alert>
+            <InfoIcon />
+            <AlertDescription>
+              This period is on a draft invoice — its entries are locked to
+              the draft and appear there until it finalizes or is deleted.{" "}
+              <Link
+                href={`/invoices/${data.coveringDraft.id}`}
+                className="font-medium underline underline-offset-2"
+              >
+                Open draft
+              </Link>
+            </AlertDescription>
+          </Alert>
         )}
 
         {isEmpty ? (
@@ -379,6 +462,7 @@ export function CloseWorkspace({
                     size="sm"
                     onClick={() => {
                       setIssueFilter(null)
+                      setMonthLens(null)
                       clearViewNarrowing()
                     }}
                   >

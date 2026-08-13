@@ -11,7 +11,10 @@ import { TaskReferenceDataProvider } from "@/components/tasks/task-reference-dat
 import { TaskDetailDrawer } from "@/components/tasks/task-detail-drawer"
 import { TaskDetailModal } from "@/components/tasks/task-detail-modal"
 import { MyTasksHeader } from "@/components/my-tasks/my-tasks-header"
-import { MyTasksList } from "@/components/my-tasks/my-tasks-list"
+// PROTOTYPE (wayfinder ticket 01): variant gate + switcher wrap MyTasksList;
+// remove these two imports and restore MyTasksList when the prototype is done.
+import { MyTasksListWithPrototype } from "@/components/my-tasks/prototype/my-tasks-layout-variants"
+import { PrototypeSwitcher } from "@/components/my-tasks/prototype/prototype-switcher"
 import { MyTasksSkeleton } from "@/components/my-tasks/my-tasks-skeleton"
 import { MobileFab } from "@/components/my-tasks/mobile-fab"
 import { DailyNotesPanel } from "@/components/my-tasks/daily-notes-panel"
@@ -254,7 +257,7 @@ export default function MyTasksPage() {
               orgDefaultStatusIds={orgSettings?.defaultMyTasksStatusIds?.map(String)}
             />
 
-            <MyTasksList
+            <MyTasksListWithPrototype
               groups={filteredGroups}
               timeMap={timeMap ?? undefined}
               activityMap={activityMap ?? undefined}
@@ -293,7 +296,7 @@ export default function MyTasksPage() {
               orgDefaultStatusIds={orgSettings?.defaultMyTasksStatusIds?.map(String)}
             />
 
-            <MyTasksList
+            <MyTasksListWithPrototype
               groups={filteredGroups}
               timeMap={timeMap ?? undefined}
               activityMap={activityMap ?? undefined}
@@ -336,6 +339,9 @@ export default function MyTasksPage() {
         todayStatusId={primaryStatusId}
         currentUserId={currentUser._id}
       />
+
+      {/* PROTOTYPE: floating variant switcher (dev-only) */}
+      <PrototypeSwitcher />
 
       {confettiPortal}
     </TaskReferenceDataProvider>

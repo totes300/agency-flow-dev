@@ -119,6 +119,22 @@ export const getDetail = query({
   },
 });
 
+/**
+ * Minimal read for the time-log form's category pre-fill: the task's own
+ * category id (the last step of the entry-category default chain). Tolerant —
+ * returns null instead of throwing so a display-only lookup can never crash
+ * a task row for a member who isn't an assignee (unlike getDetail).
+ */
+export const getWorkCategoryId = query({
+  args: { taskId: v.id("tasks") },
+  handler: async (ctx, args) => {
+    const { orgId } = await getAuthContext(ctx);
+    const task = await ctx.db.get(args.taskId);
+    if (!task || task.orgId !== orgId) return null;
+    return task.workCategoryId ?? null;
+  },
+});
+
 // ─── Subtask Queries & Mutations ─────────────────────────────────────────────────
 
 export const getSubtasks = query({

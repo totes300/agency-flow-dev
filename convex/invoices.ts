@@ -568,6 +568,7 @@ export async function enumerateReadyRows(
         isBillable: e.isBillable,
         invoiceId: e.invoiceId,
         settledAt: e.settledAt ?? null,
+        skippedThrough: e.skippedThrough ?? null,
         billableRate: e.billableRate,
         taskId: e.taskId.toString(),
         workCategoryId: e.snapshotCategoryId?.toString() ?? null,

@@ -1,11 +1,26 @@
-import { InfoIcon } from "lucide-react"
+"use client"
+
+import { ChevronDownIcon, InfoIcon } from "lucide-react"
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible"
 import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import { formatHoursCompact, formatCurrency } from "@/lib/format"
+import {
+  CloseCycleBreakdown,
+  type CycleMonthLens,
+} from "@/components/billing/close-cycle-breakdown"
+import {
+  formatHoursCompact,
+  formatSignedHours,
+  formatCurrency,
+} from "@/lib/format"
 import { cn } from "@/lib/utils"
 import type { CloseWorkspaceData } from "@/convex/close"
 
@@ -15,20 +30,63 @@ import type { CloseWorkspaceData } from "@/convex/close"
  * comes from the server `billingScope` report; this component only formats.
  *
  * Shape adapts by billing type:
- *   - retainer: Included · Logged · Balance ( · Overage × rate = amount )
+ *   - retainer (monthly): Included · Logged · Balance ( · Overage × rate = amount )
+ *   - retainer (rollover cycle): Included (N × Xh) · Logged · Balance to date /
+ *     Ending balance ( · Overage tail ) + a collapsible month-by-month balance
+ *     ladder (`CloseCycleBreakdown`) — the full rollover story on demand.
  *   - T&M:      Logged · Billable amount
  *   - fixed:    Remaining fee
  *
  * Raw ledger note (PRD story 8) states explicitly that nothing is rounded and
  * nothing locks until commit — so the owner trusts that reviewing is safe.
  */
-export function CloseBudgetSummary({ data }: { data: CloseWorkspaceData }) {
+export function CloseBudgetSummary({
+  data,
+  breakdownOpen = false,
+  onBreakdownOpenChange,
+  monthLens = null,
+  onMonthLensChange,
+}: {
+  data: CloseWorkspaceData
+  breakdownOpen?: boolean
+  onBreakdownOpenChange?: (open: boolean) => void
+  monthLens?: CycleMonthLens | null
+  onMonthLensChange?: (lens: CycleMonthLens | null) => void
+}) {
+  const isCycle =
+    data.billingType === "retainer" && data.monthlyBalances.length > 1
   return (
-    <div className="flex flex-col gap-1.5">
+    <Collapsible
+      open={isCycle && breakdownOpen}
+      onOpenChange={onBreakdownOpenChange}
+      className="flex flex-col gap-1.5"
+    >
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm">
-        {data.billingType === "retainer" && <RetainerSummary data={data} />}
+        {data.billingType === "retainer" && (
+          <RetainerSummary data={data} isCycle={isCycle} />
+        )}
         {data.billingType === "t_and_m" && <TmSummary data={data} />}
         {data.billingType === "fixed" && <FixedSummary data={data} />}
+        {isCycle && (
+          <>
+            <Sep />
+            <CollapsibleTrigger asChild>
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 text-[13px] text-muted-foreground transition-colors hover:text-foreground"
+              >
+                {breakdownOpen ? "Hide breakdown" : "How this balance builds"}
+                <ChevronDownIcon
+                  aria-hidden
+                  className={cn(
+                    "size-3.5 transition-transform",
+                    breakdownOpen && "rotate-180",
+                  )}
+                />
+              </button>
+            </CollapsibleTrigger>
+          </>
+        )}
         {/* Reassurance copy on demand, not as a permanent line — the money
             numbers are the content here; the explanation is a tool. */}
         {!data.fromSettlementStamps && (
@@ -55,7 +113,16 @@ export function CloseBudgetSummary({ data }: { data: CloseWorkspaceData }) {
           Closed period — the ledger below is the committed record.
         </p>
       )}
-    </div>
+      {isCycle && (
+        <CollapsibleContent className="pt-1.5">
+          <CloseCycleBreakdown
+            data={data}
+            activeLens={monthLens}
+            onLensChange={onMonthLensChange}
+          />
+        </CollapsibleContent>
+      )}
+    </Collapsible>
   )
 }
 
@@ -88,18 +155,50 @@ function Sep() {
   return <span aria-hidden className="text-muted-foreground/40">·</span>
 }
 
-function RetainerSummary({ data }: { data: CloseWorkspaceData }) {
+/** "10h" for whole hours, "7h 30m" otherwise — the (N × Xh) parenthetical. */
+function perMonthShort(minutes: number): string {
+  return minutes % 60 === 0
+    ? `${minutes / 60}h`
+    : formatHoursCompact(minutes)
+}
+
+function RetainerSummary({
+  data,
+  isCycle,
+}: {
+  data: CloseWorkspaceData
+  isCycle: boolean
+}) {
   const over = !data.withinBudget
+  // Cycle: the honest running number ("Ending balance" once the cycle is over,
+  // "Balance to date" while months are still pending). Monthly: unchanged.
+  const balance = isCycle ? data.balanceToDateMinutes : data.balanceMinutes
+  const balanceLabel = !isCycle
+    ? "Balance"
+    : data.periodElapsed || data.fromSettlementStamps
+      ? "Ending balance"
+      : "Balance to date"
   return (
     <>
-      <Stat label="Included" value={formatHoursCompact(data.includedMinutes)} />
+      <span className="inline-flex items-baseline gap-1">
+        <span className="text-muted-foreground">Included</span>
+        <span className="font-medium tabular-nums">
+          {formatHoursCompact(data.includedMinutes)}
+        </span>
+        {isCycle && data.project.includedMinutesPerMonth != null && (
+          <span className="tabular-nums text-muted-foreground">
+            ({data.monthlyBalances.length} ×{" "}
+            {perMonthShort(data.project.includedMinutesPerMonth)})
+          </span>
+        )}
+      </span>
       <Sep />
       <Stat label="Logged" value={formatHoursCompact(data.usageMinutes)} />
       <Sep />
       <Stat
-        label="Balance"
-        value={formatHoursCompact(data.balanceMinutes)}
-        tone={over ? "over" : "within"}
+        label={balanceLabel}
+        value={isCycle ? formatSignedHours(balance) : formatHoursCompact(balance)}
+        tone={balance < 0 ? "over" : "within"}
       />
       {over && (
         <>

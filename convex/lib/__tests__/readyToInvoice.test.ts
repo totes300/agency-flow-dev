@@ -8,6 +8,7 @@ import {
   enumerateRetainerCycleState,
   isInvoiceable,
   selectBatchEligibleRows,
+  shouldAppearInInbox,
   sortReadyRows,
   type ClientInput,
   type InvoiceInput,
@@ -716,10 +717,11 @@ describe("buildTmReadyRows", () => {
     expect(rows).toEqual([]);
   });
 
-  it("excludes an open billable entry whose month is already invoice-covered", () => {
+  it("advances a straggler in an invoice-covered month to the receiving month", () => {
     // A straggler open entry in a month a (partial) invoice covers must not
-    // anchor a row in that month — it carries into the first open period (I1),
-    // matching billingScope. Regression for the Close-queue dead-end.
+    // anchor a row in that month — per I1 it carries into the next open month,
+    // and since the F1 fix (2026-07-19) the walker buckets it THERE instead of
+    // dropping it, so a month whose only work is carried-in still surfaces.
     const rows = buildTmReadyRows({
       project: tmProject(),
       client: makeClient(),
@@ -734,6 +736,68 @@ describe("buildTmReadyRows", () => {
         {
           _id: id<"timeEntries">("e1"),
           date: "2026-03-20", // open, billable, but March is covered
+          durationMinutes: 120,
+          isBillable: true,
+          invoiceId: null,
+          billableRate: 150,
+        },
+      ],
+      todayStr: TODAY,
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].period).toEqual({ year: 2026, month: 4 }); // April, not March
+    expect(rows[0].amount).toBe(300); // the carried 2h × 150 stays billable
+  });
+
+  it("buckets skipped entries into their receiving month (F1)", () => {
+    // Every March entry skipped → no March row (nothing to commit there), one
+    // April row carrying the work — mirrors billingScope's firstOpenPeriod.
+    const rows = buildTmReadyRows({
+      project: tmProject(),
+      client: makeClient(),
+      invoices: [],
+      entries: [
+        {
+          _id: id<"timeEntries">("e1"),
+          date: "2026-03-10",
+          durationMinutes: 60,
+          isBillable: true,
+          invoiceId: null,
+          billableRate: 150,
+          skippedThrough: "2026-03-31",
+        },
+        {
+          _id: id<"timeEntries">("e2"),
+          date: "2026-03-20",
+          durationMinutes: 30,
+          isBillable: true,
+          invoiceId: null,
+          billableRate: 150,
+          skippedThrough: "2026-03-31",
+        },
+      ],
+      todayStr: TODAY,
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].period).toEqual({ year: 2026, month: 4 });
+    expect(rows[0].amount).toBe(225); // 1.5h × 150
+  });
+
+  it("a straggler advancing into the current month emits no row (mid-month rule)", () => {
+    // March AND April covered → the entry's owned month advances to May (the
+    // current month) → excluded until it ends, exactly like fresh current-month
+    // work. No row, no dead-end anchor.
+    const rows = buildTmReadyRows({
+      project: tmProject(),
+      client: makeClient(),
+      invoices: [
+        inv({ status: "invoiced", periodStart: "2026-03-01", periodEnd: "2026-03-31" }),
+        inv({ status: "invoiced", periodStart: "2026-04-01", periodEnd: "2026-04-30" }),
+      ],
+      entries: [
+        {
+          _id: id<"timeEntries">("e1"),
+          date: "2026-03-20",
           durationMinutes: 120,
           isBillable: true,
           invoiceId: null,
@@ -925,5 +989,31 @@ describe("sortReadyRows", () => {
     });
     const merged = [...usdRow, ...eurRow];
     expect(merged.map((r) => r.currency).sort()).toEqual(["EUR", "USD"]);
+  });
+});
+
+// ─── F2 (2026-07-19) — $0 T&M months must surface, never invisibly block ──────
+
+describe("shouldAppearInInbox — zero-value T&M months", () => {
+  const tmRow = (amount: number): ReadyRow => ({
+    kind: "tm",
+    projectId: id<"projects">("p"),
+    projectName: "P",
+    clientId: id<"clients">("c"),
+    clientName: "C",
+    period: { year: 2026, month: 3 },
+    sortKey: "2026-03/c",
+    amount,
+    currency: "EUR",
+    badgeKind: null,
+    lastInvoicedAt: null,
+  });
+
+  it("a $0 T&M row still appears (it blocks oldest-first — hiding it made an invisible blocker)", () => {
+    expect(shouldAppearInInbox(tmRow(0))).toBe(true);
+  });
+
+  it("a $0 T&M row is still never batch-invoiceable", () => {
+    expect(selectBatchEligibleRows([tmRow(0), tmRow(150)])).toHaveLength(1);
   });
 });

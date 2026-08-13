@@ -5,7 +5,7 @@ import type { Id } from "./_generated/dataModel";
 import { getAuthContext } from "./lib/auth";
 import { computeElapsedMs, totalElapsedMs, msToMinutes, getDateInTimezone, MAX_TIMER_MS, ORG_TIMEZONE_FALLBACK } from "./lib/timer";
 import { roundMinutes } from "./lib/rounding";
-import { getOrgSettings, resolveRateSnapshot } from "./lib/orgHelpers";
+import { getOrgSettings, resolveRateSnapshot, resolveEntryCategory } from "./lib/orgHelpers";
 import { assertValidDateString } from "./lib/dateValidation";
 import { insertTimerEntry } from "./lib/timerEntry";
 
@@ -79,10 +79,17 @@ export const start = mutation({
     // spending time, not when they try to commit the entry.
     const project = await ctx.db.get(task.projectId);
     if (!project) throw new ConvexError("Project not found");
+    // Pre-check the rate for the category that will actually apply at stop
+    // (the timer owner's default chain), not the task's raw category.
+    const workCategoryId = await resolveEntryCategory(ctx, {
+      ownerUserId: userId,
+      orgId,
+      task,
+    });
     await resolveRateSnapshot(ctx, {
       userId,
       orgId,
-      task,
+      workCategoryId,
       project,
       isBillable: task.billable,
     });
@@ -119,10 +126,15 @@ export const previewRateForTask = query({
     if (!project) return { ok: false as const, reason: "Project not found" };
 
     try {
+      const workCategoryId = await resolveEntryCategory(ctx, {
+        ownerUserId: userId,
+        orgId,
+        task,
+      });
       const snapshot = await resolveRateSnapshot(ctx, {
         userId,
         orgId,
-        task,
+        workCategoryId,
         project,
         isBillable: task.billable,
       });
@@ -227,19 +239,20 @@ export const stop = mutation({
     const orgSettings = await getOrgSettings(ctx, orgId);
     const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
 
-    const { entryId, durationMinutes, date } = await insertTimerEntry(ctx, {
-      orgId,
-      ownerId: userId,
-      createdBy: userId,
-      task,
-      project,
-      rawMinutes: args.overrideMinutes ?? msToMinutes(elapsedMs),
-      sessionStartedAt:
-        user.timerStatus === "running" ? user.timerStartedAt : undefined,
-      note: args.note,
-      isBillable: task.billable,
-      timezone,
-    });
+    const { entryId, durationMinutes, date, snapshotCategoryId } =
+      await insertTimerEntry(ctx, {
+        orgId,
+        ownerId: userId,
+        createdBy: userId,
+        task,
+        project,
+        rawMinutes: args.overrideMinutes ?? msToMinutes(elapsedMs),
+        sessionStartedAt:
+          user.timerStatus === "running" ? user.timerStartedAt : undefined,
+        note: args.note,
+        isBillable: task.billable,
+        timezone,
+      });
 
     await clearTimerFields(ctx, userId);
 
@@ -255,6 +268,7 @@ export const stop = mutation({
       clientName: client?.name ?? null,
       isBillable: task.billable,
       isStale,
+      snapshotCategoryId,
     };
   },
 });

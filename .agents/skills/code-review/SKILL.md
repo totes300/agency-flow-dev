@@ -1,110 +1,89 @@
 ---
 name: code-review
-description: Perform a language-agnostic first-pass code review covering
-  logic errors, bad practices, operation ordering, magic strings, pattern
-  improvements, strict type checking, and SQL injection. Use when asked to
-  review code, audit a file, or check a diff. Accepts a single file, a diff
-  with multiple hunks, or can explore the repo when needed to resolve
-  external references. If no input is provided, ask the user to share a
-  file or diff before proceeding.
+description: Review the changes since a fixed point (commit, branch, tag, or merge-base) along two axes — Standards (does the code follow this repo's documented coding standards?) and Spec (does the code match what the originating issue/PRD asked for?). Runs both reviews in parallel sub-agents and reports them side by side. Use when the user wants to review a branch, a PR, work-in-progress changes, or asks to "review since X".
 ---
 
-# Code review
+Two-axis review of the diff between `HEAD` and a fixed point the user supplies:
 
-## Quick start
+- **Standards** — does the code conform to this repo's documented coding standards?
+- **Spec** — does the code faithfully implement the originating issue / PRD / spec?
 
-If the user has not provided a file or diff, ask:
-> "Please share the code you'd like reviewed — paste it directly, upload a
-> file, or provide a git diff."
+Both axes run as **parallel sub-agents** so they don't pollute each other's context, then this skill aggregates their findings.
 
-This is a first-pass, language-agnostic review. It surfaces issues common
-across all languages before any in-depth language-specific analysis.
+The issue tracker should have been provided to you — run `/setup-matt-pocock-skills` if `docs/agents/issue-tracker.md` is missing.
 
-## Input handling
+## Process
 
-| Input type | How to handle |
-|------------|---------------|
-| Single file | Review the full file |
-| Git diff (one or more hunks) | Review changed lines and their surrounding context |
-| Ambiguous reference (e.g. call to external method) | Explore the repo only as needed to verify whether the reference exists and what it does; do not read files unrelated to the finding |
+### 1. Pin the fixed point
 
-## Review passes
+Whatever the user said is the fixed point — a commit SHA, branch name, tag, `main`, `HEAD~5`, etc. If they didn't specify one, ask for it.
 
-Run all six passes on every review. Report findings grouped by severity.
+Capture the diff command once: `git diff <fixed-point>...HEAD` (three-dot, so the comparison is against the merge-base). Also note the list of commits via `git log <fixed-point>..HEAD --oneline`.
 
-### 1. Logic errors
-- Infinite or unreachable loops (missing exit condition, invariant that
-  never changes)
-- Off-by-one errors in indices, ranges, or pagination
-- Null / undefined dereferences that can crash at runtime
-- Dead code that can never be reached
-- Incorrect boolean logic (de Morgan violations, short-circuit mistakes)
-- Race conditions or incorrect execution-order assumptions
+Before going further, confirm the fixed point resolves (`git rev-parse <fixed-point>`) and the diff is non-empty. A bad ref or empty diff should fail here — not inside two parallel sub-agents.
 
-### 2. Operation ordering
-Flag sequences where order creates correctness or reliability risk:
-- Side effects before guards (e.g. sending an email before committing a
-  DB transaction, charging a card before persisting the order)
-- Mutations or writes before validation of input
-- Resource acquisition without matching release in all exit paths
-  (locks, file handles, connections)
-- Audit logging placed after the action it should record
+### 2. Identify the spec source
 
-### 3. Bad practices
-- Raw request / user input used without sanitisation or validation
-- Overly broad exception handling that silently swallows errors
-- Missing error handling on I/O, network, or DB calls
-- Unsafe type coercion or implicit casting between incompatible types
-- Strict equality not enforced where type safety matters
-  (e.g. `==` instead of `===` in JS/TS, or comparing values of
-  different types without explicit conversion)
-- Functions with hidden side effects or unclear single responsibility
+Look for the originating spec, in this order:
 
-### 4. Security
-- SQL injection: string concatenation or interpolation used to build
-  queries instead of parameterised queries / prepared statements
-- Hardcoded secrets, credentials, tokens, or environment-specific values
-- Exposed sensitive data in logs, error messages, or API responses
+1. Issue references in the commit messages (`#123`, `Closes #45`, GitLab `!67`, etc.) — fetch via the workflow in `docs/agents/issue-tracker.md`.
+2. A path the user passed as an argument.
+3. A PRD/spec file under `docs/`, `specs/`, or `.scratch/` matching the branch name or feature.
+4. If nothing is found, ask the user where the spec is. If they say there isn't one, the **Spec** sub-agent will skip and report "no spec available".
 
-### 5. Magic strings and values
-- Unnamed string or numeric literals used inline instead of named
-  constants (e.g. `status === "active"`, `retries > 3`, `role === "admin"`)
-- Duplicated literals that should share a single source of truth
-- Suggest extracting to a constant, enum, or config value with a
-  descriptive name
+### 3. Identify the standards sources
 
-### 6. Pattern improvements
-Flag cases where a well-known pattern would meaningfully reduce coupling,
-improve testability, or clarify intent. Suggest only when the improvement
-is concrete and actionable — do not suggest patterns for their own sake:
-- Hard-coded dependencies that could use dependency injection (class
-  instantiates its own collaborators, making unit testing difficult)
-- Repeated conditional chains that could be replaced with a strategy or
-  map lookup
-- Procedural code that obscures a domain concept a named abstraction
-  would clarify
-- When exploring the repo reveals that a dependency is always used in the
-  same way, note if a factory or builder would remove duplication
+Anything in the repo that documents how code should be written, such as `CODING_STANDARDS.md` or `CONTRIBUTING.md`.
 
-## Output format
+On top of whatever the repo documents, the Standards axis always carries the **smell baseline** below — a fixed set of Fowler code smells (_Refactoring_, ch.3) that applies even when a repo documents nothing. Two rules bind it:
 
-For each finding:
-- **Location** — file name and line number, or function / block if
-  unavailable
-- **Severity** — critical / high / medium / low
-- **Pass** — which of the six passes caught it
-- **Description** — what the problem is and why it matters
-- **Fix** — a corrected snippet or concrete actionable suggestion
+- **The repo overrides.** A documented repo standard always wins; where it endorses something the baseline would flag, suppress the smell.
+- **Always a judgement call.** Each smell is a labelled heuristic ("possible Feature Envy"), never a hard violation — and, like any standard here, skip anything tooling already enforces.
 
-Group all findings by severity (critical first). End with a short summary
-of overall quality and the top 1–3 issues to address immediately.
+Each smell reads *what it is* → *how to fix*; match it against the diff:
 
-## Severity guide
+- **Mysterious Name** — a function, variable, or type whose name doesn't reveal what it does or holds. → rename it; if no honest name comes, the design's murky.
+- **Duplicated Code** — the same logic shape appears in more than one hunk or file in the change. → extract the shared shape, call it from both.
+- **Feature Envy** — a method that reaches into another object's data more than its own. → move the method onto the data it envies.
+- **Data Clumps** — the same few fields or params keep travelling together (a type wanting to be born). → bundle them into one type, pass that.
+- **Primitive Obsession** — a primitive or string standing in for a domain concept that deserves its own type. → give the concept its own small type.
+- **Repeated Switches** — the same `switch`/`if`-cascade on the same type recurs across the change. → replace with polymorphism, or one map both sites share.
+- **Shotgun Surgery** — one logical change forces scattered edits across many files in the diff. → gather what changes together into one module.
+- **Divergent Change** — one file or module is edited for several unrelated reasons. → split so each module changes for one reason.
+- **Speculative Generality** — abstraction, parameters, or hooks added for needs the spec doesn't have. → delete it; inline back until a real need shows.
+- **Message Chains** — long `a.b().c().d()` navigation the caller shouldn't depend on. → hide the walk behind one method on the first object.
+- **Middle Man** — a class or function that mostly just delegates onward. → cut it, call the real target direct.
+- **Refused Bequest** — a subclass or implementer that ignores or overrides most of what it inherits. → drop the inheritance, use composition.
 
-| Severity | Meaning |
-|----------|---------|
-| Critical | Data loss, security breach, or crash in production |
-| High     | Likely bug or incorrect behaviour under normal use |
-| Medium   | Subtle risk or meaningful maintainability concern |
-| Low      | Best-practice deviation with minor practical impact |
+### 4. Spawn both sub-agents in parallel
 
+Send a single message with two `Agent` tool calls. Use the `general-purpose` subagent for both.
+
+**Standards sub-agent prompt** — include:
+
+- The full diff command and commit list.
+- The list of standards-source files you found in step 3, **plus the smell baseline from step 3** pasted in full — the sub-agent has no other access to it.
+- The brief: "Report — per file/hunk where relevant — (a) every place the diff violates a documented standard: cite the standard (file + the rule); and (b) any baseline smell you spot: name it and quote the hunk. Distinguish hard violations from judgement calls — documented-standard breaches can be hard, but baseline smells are always judgement calls, and a documented repo standard overrides the baseline. Skip anything tooling enforces. Under 400 words."
+
+**Spec sub-agent prompt** — include:
+
+- The diff command and commit list.
+- The path or fetched contents of the spec.
+- The brief: "Report: (a) requirements the spec asked for that are missing or partial; (b) behaviour in the diff that wasn't asked for (scope creep); (c) requirements that look implemented but where the implementation looks wrong. Quote the spec line for each finding. Under 400 words."
+
+If the spec is missing, skip the Spec sub-agent and note this in the final report.
+
+### 5. Aggregate
+
+Present the two reports under `## Standards` and `## Spec` headings, verbatim or lightly cleaned. Do **not** merge or rerank findings — the two axes are deliberately separate (see _Why two axes_).
+
+End with a one-line summary: total findings per axis, and the worst issue _within each axis_ (if any). Don't pick a single winner across axes — that's the reranking the separation exists to prevent.
+
+## Why two axes
+
+A change can pass one axis and fail the other:
+
+- Code that follows every standard but implements the wrong thing → **Standards pass, Spec fail.**
+- Code that does exactly what the issue asked but breaks the project's conventions → **Spec pass, Standards fail.**
+
+Reporting them separately stops one axis from masking the other.

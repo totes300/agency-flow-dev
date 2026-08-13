@@ -1,5 +1,5 @@
-import { query, internalMutation } from "./_generated/server";
-import { v } from "convex/values";
+import { query, mutation, internalMutation } from "./_generated/server";
+import { v, ConvexError } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { getAuthContext } from "./lib/auth";
 
@@ -28,6 +28,7 @@ export const listOrgMembers = query({
           email: user.email,
           imageUrl: user.imageUrl,
           role: m.role,
+          defaultWorkCategoryId: m.defaultWorkCategoryId,
         };
       })
     );
@@ -38,7 +39,48 @@ export const listOrgMembers = query({
       email: string | undefined;
       imageUrl: string | undefined;
       role: "admin" | "member";
+      defaultWorkCategoryId: Id<"workCategories"> | undefined;
     }>;
+  },
+});
+
+/**
+ * Set (or clear) a member's default billing category — the motor of the
+ * entry-level category feature. New entries owned by this member resolve their
+ * category to this default when no explicit selection is made.
+ *
+ * Authorization (server-derived, never client orgId): an org admin may set it
+ * for any member; a member may set it for themselves only. `memberUserId`
+ * identifies the TARGET member, not the caller's identity.
+ */
+export const setDefaultWorkCategory = mutation({
+  args: {
+    memberUserId: v.id("users"),
+    workCategoryId: v.optional(v.id("workCategories")), // undefined = clear
+  },
+  handler: async (ctx, args) => {
+    const { userId, orgId, isAdmin } = await getAuthContext(ctx);
+
+    if (!isAdmin && args.memberUserId !== userId) {
+      throw new ConvexError("You can only set your own default category");
+    }
+
+    // Validate the category belongs to this org before storing it.
+    if (args.workCategoryId !== undefined) {
+      const cat = await ctx.db.get(args.workCategoryId);
+      if (!cat || cat.orgId !== orgId) throw new ConvexError("Category not found");
+    }
+
+    const member = await ctx.db
+      .query("orgMembers")
+      .withIndex("by_userId", (q) => q.eq("userId", args.memberUserId))
+      .filter((q) => q.eq(q.field("orgId"), orgId))
+      .first();
+    if (!member) throw new ConvexError("Member not found");
+
+    await ctx.db.patch(member._id, {
+      defaultWorkCategoryId: args.workCategoryId,
+    });
   },
 });
 

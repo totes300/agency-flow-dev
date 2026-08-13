@@ -4153,3 +4153,475 @@ without a fresh ask.
 
 Verification: tsc 0 errors, eslint clean on touched files. Visual pass
 pending owner (agent has no Clerk session).
+
+---
+
+## Month-Close Workflow (Billing hub · Close workspace · Skip-to-next-close)
+
+PRD: `docs/prd-month-close.md` (invariants I1–I4 binding). Slice plan:
+`docs/closing-refactor/README.md` (slices 01–08). Visual reference: prototype
+`skip-to-next-close`. Tracer-bullet order — slice 01 carries all financial risk
+(pure + exhaustively tested); later slices only consume it.
+
+### Slice 01 — billingScope core (pure scope + flags + golden suite) ✅
+
+- [x] **Schema** — `timeEntries.skippedThrough` optional `v.string()` (a
+      period-end YYYY-MM-DD). Direct-narrow, MVP dummy-data, no migration. Only
+      `billingScope` reads it; only the future `skipEntries` mutation (slice 05)
+      writes it. Schema deployed cleanly (convex codegen registered the two new
+      lib modules in `api.d.ts`).
+- [x] **`convex/lib/billingScope.ts`** — pure module (no ctx/db). Realizes
+      I1 (effective period = max(natural, periodAfter(skip), firstOpen)),
+      I2 (open-period scope + carried `skipped`/`logged-late`; non-billable in
+      retainer scope but never in money; T&M billable-only), I3 (oldest-first
+      committability + `not-earliest-open` issue), I4 (closed periods read from
+      settlement stamps, never dates). Handles retainer-monthly, retainer-cycle
+      (grid anchored to `startDate`; carried-in buckets into the cycle's first
+      month via `usageByMonth`), T&M (amount mirrors createInvoice per-(cat,
+      task,rate) rounding), and fixed (remaining-fee bucket). `missing-overage-
+      rate` typed issue when over-budget with no rate.
+- [x] **`convex/lib/closeFlags.ts`** — pure v1 flag set: missing-note (warning),
+      long-entry ≥480min (warning), running-timer (warning), missing-overage-
+      rate (blocking), carried-in (info). Deterministic order
+      (severity → kind → entryId). `hasBlockingOrWarning` /`reviewFlagCount`
+      helpers for the "All clear" state and "N to review" row signal.
+- [x] **Tests** — `convex/lib/__tests__/billingScope.test.ts` (25) +
+      `closeFlags.test.ts` (8). All 12 PRD golden scenarios, the no-skip
+      baseline regression (asserted equal to a naive date-filter selection for
+      monthly/cycle/T&M), and settlement-stamp immutability (backdated post-close
+      entry changes nothing for the closed period; resolves to first open period
+      as `logged-late`).
+
+**Verification**: `npx tsc --noEmit` → 0 errors. `vitest run` on the two new
+suites → 33/33 green. Full suite: 1480 passing; the 3 pre-existing failing files
+(`lib/format-activity-timestamp.test.ts`, `convex/lib/__tests__/
+taskActivityIndicators.test.ts`, vendored `.reference/tiptap`) are unrelated —
+they share no imports with this additive change and fail independently of it.
+
+**TODOs deferred to later slices**:
+- No index on `skippedThrough` (membership always derived over an already-fetched
+  project entry set). Revisit only if entry volume grows past MVP dummy scale.
+- Fixed-project scope is intentionally minimal (all open entries + remaining
+  fee); slice 06 refines fixed commit routing if needed.
+- `billingScope` has no consumers yet — the queue, workspace, and money
+  mutations route through it in slices 02/06. Until then it is dead-but-tested
+  code by design (tracer-bullet slice 01).
+
+### Slices 02–08 — not started
+
+02 close-workspace-readonly · 03 workspace-editing · 04 review-checklist ·
+05 skip-to-next-close · 06 commit-integration · 07 client-documents ·
+08 close-queue-and-billing-nav. See `docs/closing-refactor/` slice files.
+
+### Slice 02 — Close workspace, read-only tracer ✅
+
+- [x] **Query `convex/close.ts:getCloseWorkspace`** — admin-only, args
+      `{ projectId, period }` (period = "YYYY-MM" or the "fixed" sentinel).
+      Fetches project/client/tasks/entries/retainerPeriods/invoices, composes
+      the pure `billingScope` server-side, and returns an enriched UI-ready
+      report: entries grouped by task with member + category joins, budget
+      summary numbers, per-entry T&M amount, carried info, majority-carried
+      label promotion, and the typed issues. Returns `null` for
+      missing/foreign/non-billable project or malformed period (route 404s).
+- [x] **Route** `app/(dashboard)/invoices/close/[projectId]/[period]/page.tsx`
+      — thin orchestrator (parse → subscribe → skeleton → 404 → render). Deep-
+      linkable; back → /invoices (Billing list). Slice 08 renames the hub.
+- [x] **Components** under `components/billing/`: `close-workspace` (composition
+      + header dot+muted-meta + zero-scope callout + desktop-first notice +
+      task-peek mount), `close-budget-summary` (Included · Logged · Balance ·
+      Overage × rate = amount / T&M Logged · Billable / Fixed remaining + raw-
+      ledger note), `close-task-group` (task title → peek, subtotal),
+      `close-entry-row` (lean row: date, category dot, note, avatar, duration,
+      amount; `CarriedLabel` dot+muted, never a pill), `close-workspace-footer`
+      (calc-row total + over/within verdict), `close-workspace-skeleton`.
+
+**Verification**: `npx tsc --noEmit` 0 errors; eslint clean on all new files;
+slice-01 suites still 33/33. **Browser-verified** on live seed data across all
+four billing types — retainer over-budget (Arlow June $1,867), T&M open
+(Pragmatico May $200, matches Ready feed exactly), T&M closed (I4 renders the
+settled ledger read-only), Fixed ($3,750 remaining, matches Ready), plus
+zero-scope callout, content-aware skeleton, and task peek opening from titles.
+
+**TODOs deferred to later slices**:
+- Read-only only: inline duration edit, billable toggle, skip actions, review
+  checklist, and the commit top-bar button land in slices 03/04/05/06.
+- Fixed-project scope shows only open entries (settled hours excluded); the
+  headline is the remaining fee. Slice 06 refines fixed commit routing.
+- Closed periods are openable by URL and render the historical settled ledger
+  (I4); once slice 08 builds the queue, closed periods simply won't be linked
+  from it (they've left the Close tab), so this stays a deep-link-only path.
+
+### Slice 03 — Workspace editing (live ledger corrections) ✅
+
+- [x] **Query** `convex/close.ts` — extended each entry with `taskId`, `userId`,
+      `startedAt`, and the `invoiceId`/`settledAt` lock signals (feed the shared
+      edit modal); added `project.teamMembers` (assignee scoping).
+- [x] **`close-entry-row.tsx`** now a client component: inline duration
+      (`TimeEntryHoursCell`), inline note (`InlineEditable` → `updateEntry`
+      note), hover billable toggle (`updateEntry` isBillable + Undo toast), and
+      a hover "Edit entry" pencil. `editable` false for locked/closed-period
+      rows (renders read-only).
+- [x] **`close-workspace.tsx`** owns the modal state + the modal's reference
+      queries (`workCategories.list`, `orgMembers.listOrgMembers`,
+      `users.current`) and renders the shared `TimeEntryModal` in create
+      ("Add time" header button) and edit modes. `editable = !fromSettlementStamps`.
+- [x] **`close-task-group.tsx`** threads `editable` + `onEditEntry` down.
+
+**Verification**: `npx tsc --noEmit` 0 errors; eslint clean; 86 existing
+settle/invoice/billingScope tests green. **Browser-verified** on Arlow June:
+inline duration 20:30→5:00 recomputed Logged 33h20m→17h50m, Overage
+$1,867→$627, and the task subtotal 20h50m→5h20m live (reactive query, no
+refresh); shared edit modal opened pre-filled with task/category/date/duration/
+billable/member; value restored to 20:30 afterward (dummy seed left intact).
+
+**TODOs deferred to later slices**:
+- No forked editing logic — everything routes through the existing
+  `timeEntries.update` mutation and the shared modal/cell/inline components.
+- Skip → next-close row/task actions (slice 05), the review checklist (slice
+  04), and the commit top-bar primary button (slice 06) are not built yet; the
+  header currently shows only "Add time".
+
+### Slice 04 — Review checklist (flags callout) ✅
+
+- [x] **Query** `convex/close.ts` — computes the pure `closeFlags` output
+      server-side from the same scope report + a new `loadRunningTimers`
+      helper (active timers whose task is in the project and whose
+      `timerStartedAt` date falls in the period → `running-timer` warning; no
+      flags on a closed period). Returns `flags: CloseFlag[]`.
+- [x] **`close-review-checklist.tsx`** — gray callout: "N things to review" (or
+      "All clear — ready to close" with a green check when no warning/blocker
+      remains). Blocking (red `CircleAlert` + "Set rate" → project settings),
+      warnings (amber `TriangleAlert`), carried info (muted dot). Each
+      entry-anchored item is a button that jumps to + flash-highlights its row.
+- [x] **`close-workspace.tsx`** — owns the highlight state; `jumpToEntry`
+      scrolls (`CLOSE_ENTRY_DOM_ID`) + sets a 1.6s amber flash; renders the
+      checklist between the budget line and the ledger.
+- [x] **`close-entry-row.tsx`** — stable DOM id + `highlighted` flash class;
+      **`close-task-group.tsx`** threads `highlightId`.
+
+**Verification**: `npx tsc --noEmit` 0 errors; eslint clean; billingScope +
+closeFlags suites 33/33 green. **Browser-verified** on Arlow June: callout
+showed "3 things to review" (1 long-entry + 2 missing-note, amber icons);
+reducing the long entry dropped it to "2"; adding the two notes flipped it to
+"All clear — ready to close" (green check); all seed edits reverted afterward.
+
+**TODOs deferred**:
+- Running-timer flag is warning-only here; its commit gate (warn-not-block,
+  story 28) is slice 06.
+- Flash-highlight duration/scroll is a fixed 1.6s amber; fine for v1.
+
+### Slice 05 — Skip to next close ✅
+
+- [x] **`convex/lib/skipGuards.ts`** (+ tests) — pure batch eligibility:
+      `isSkippable` (open = no invoice, no settlement), `checkSkipEligibility`
+      (empty / all-or-nothing locked), `skipRejectionMessage`.
+- [x] **`convex/lib/billingScope.ts`** — new exports `resolveEntryPeriods`
+      (per open entry: `withoutSkip` = max(natural, firstOpen) and `withSkip` =
+      effective (I1)) and `getNextPeriod`. Skip target end = `withSkip.end`;
+      skipped-out detection = `withoutSkip == P && withSkip > P`.
+- [x] **`convex/close.ts:skipEntries`** mutation — admin-only, org-scoped,
+      all-or-nothing. Skip: re-derives each entry's current effective-period end
+      server-side (grouped by project) and stamps `skippedThrough` = that end.
+      Clear: unsets the stamp (I1 handles forward resolution). Never touches
+      `date`. Query extended: entries carry `skipped`/`skippedToLabel`, groups
+      carry `allSkipped`, payload carries `nextPeriodLabel`; skipped-out entries
+      surface collapsed with Undo while the origin period is open.
+- [x] **UI** — `close-entry-row.tsx`: hover "Skip → <next>" on in-scope rows;
+      skipped rows render muted ("skipped → <label>" + Undo, strikethrough
+      duration). `close-task-group.tsx`: hover "Skip all → <next>" header
+      action; fully-skipped group collapses to one line + "Undo all".
+      `close-workspace.tsx`: `skipEntries` mutation + `onSkip`/`onUnskip`
+      (toast with Undo, error toasts).
+
+**Verification**: `npx tsc --noEmit` 0 errors; eslint clean; 110 tests green
+(7 suites incl. skipGuards + billingScope + settle/invoice/retainer regression).
+**Browser round-trip** on Arlow: per-entry skip (July target) → entry left June
+scope + collapsed Undo + budget $1,867-equiv recomputed live; opened July →
+arrived as "carried · June 2026" + checklist "Carried in · Skipped from June
+2026"; per-entry Undo restored it; task-level "Skip all" collapsed the whole
+task to "skipped → July 2026 · Undo all"; "Undo all" restored. Seed reverted.
+
+**TODOs deferred**:
+- Skip is retainer/T&M only (fixed has no calendar periods → `resolveEntryPeriods`
+  returns [] and no skip UI renders). Intended.
+- The skipped-out detection keys on `withoutSkip == this period`; an entry
+  carried-late from an earlier month AND then skipped shows in the period it was
+  skipped from (its `withoutSkip`), which is correct.
+
+### Slice 06 — Commit integration (Generate / Close & report) ✅
+
+- [x] **`convex/lib/commitScope.ts`** (+ test) — the server bridge to
+      `billingScope`: `computeCommitScope` (fetch + compute scope for a period),
+      `selectCommitEntries` (invoice = billable in-scope; settle = all in-scope),
+      `isWholeCalendarMonth`, and the shared `toScope*Input` mappers (close.ts
+      now imports these — dedup).
+- [x] **`createInvoice`** — after the date-range `filtered`, routes selection
+      through `billingScope` for retainer (always) and whole-month T&M: skipped
+      entries drop, carried-in join. Period pinned to the close period (not
+      min/max) so carried dates don't widen it. I3 throws on `not-earliest-open`.
+      Legacy Path B / ad-hoc ranges unchanged (baseline-identical without skips).
+- [x] **`closePeriodInternal`** — now settles an explicit `settleEntryIds` set
+      (scope-derived) instead of a date filter; keeps the receiving-period stamp
+      + open-guard. **`closePeriod`** computes the month scope, gates on
+      `scope.withinBudget` + I3, passes `settleEntryIds`. **`closeRetainerCycle`**
+      computes the cycle scope, assigns each entry to a month (natural, or first
+      month for carried-in), and closes each month with its subset — per-month
+      reopen preserved.
+- [x] **`refreshInvoiceDraft`** — `collectRefreshableEntries` excludes entries
+      whose skip stamp covers the draft period (`skippedThrough >= periodEnd`).
+- [x] **UI** — `close-commit-button.tsx`: the single primary action, flipping
+      "Generate invoice draft · $X" / "Close & report" with the budget line;
+      disabled + reason on I3 / not-elapsed; "Set rate" block on missing overage
+      rate; hybrid post-commit navigation. Wired into the workspace header
+      (commit primary + Add-time secondary).
+
+**Verification**: `npx tsc --noEmit` 0 errors; eslint clean; 707 convex tests
+green (only the pre-existing time-dependent `taskActivityIndicators` flake
+fails — unrelated). **Browser round-trip** on Arlow April: Generate → invoice
+editor with the exact reviewed scope ($860 / 20h45m); skip the 8h entry →
+Generate bills **$220 / 12h45m** (skipped entry excluded from the invoice —
+commit re-derived scope server-side); June disabled by I3 ("Close the earlier
+open period first"); draft delete released April back to open. Seed reverted.
+
+**TODOs deferred**:
+- "Close & report" (within-budget close) is proven by the pure-helper + full
+  convex suites; a live browser pass was blocked by a transient concurrent-work
+  build break and no within-budget *earliest-open* seed period was handy. The
+  path mirrors Generate (same scope routing) and is covered by the 707 tests.
+- Invoice VOID unsettle already preserves skip stamps (it never touches
+  `skippedThrough`); no code change needed there.
+- Slice 07 (client documents: "Carried over from <month>" grouping on the
+  report/invoice) and slice 08 (queue + nav rename + redirect T&M invoicing to
+  the workspace) remain.
+
+### Slice 07 — Client documents (carried grouping, stamp-based reads) ✅ (report; invoice-doc grouping deferred)
+
+- [x] **`convex/lib/reportMembership.ts`** (+ test) — pure `computeReportMonths`:
+      each entry → its REPORT month. Settled → stamped month (I4, stable);
+      open → effective period via `resolveEntryPeriods` (skip/carried aware,
+      cycle-bucketed); draft-linked → natural month. 5 unit tests incl. the
+      story-32 stability case (backdated open insert never lands in a closed
+      month).
+- [x] **`getRetainerStatement`** — selects the report month's members via
+      `computeReportMonths` instead of raw date; splits into in-period +
+      carried-in; `usedMinutes` and `usedMinutesByMonth` bucket by report month
+      (so a closed month's balance is stamp-stable and carried entries count in
+      the receiving month). New `carriedGroups` output (one per origin month,
+      grouped category→task, with true dates).
+- [x] **`monthly-report-document.tsx`** — renders a "Carried over from <month>"
+      section per origin month, reusing `CategorySection` (no new visual
+      language).
+
+**Verification**: `npx tsc --noEmit` 0 errors; eslint clean; 712 convex tests
+green. **Browser round-trip** on Arlow: skipped a June entry → June's report
+omitted it (Add-new-people task 00:20, used 12:50); July's report showed it
+under "Carried over from June 2026" (used 08:35) with its true June date;
+skip undone to restore.
+
+**TODOs deferred**:
+- **Invoice work-breakdown carried grouping** — the invoice document renders
+  from stored `invoiceLineItems` (no per-entry origin month), so a visual
+  "Carried over" separator on the invoice isn't added. The carried WORK is
+  correctly billed (slice 06). To add: stamp origin-month onto line items at
+  `createInvoice`, or re-derive from `timeEntryIds` + entry dates in the doc.
+- **Worksheet / CSV exports** still enumerate by date range (not membership);
+  align them if/when internal exports need carried/skip fidelity.
+- Cycle-to-date usage rows now bucket by report month (consistent), but the
+  rollover cycle-to-date section wasn't exhaustively re-verified for every
+  multi-month-carried edge — covered by the pure membership tests + the
+  monthly path.
+
+### Slice 08 — Close queue + Billing nav rename ✅
+
+- [x] **Pure `convex/lib/closeQueue.ts`** (+ 9 tests) — `summarizeQueueScope`
+      (entryCount / flagCount / loggedMinutes from a scope report + flags),
+      `assignDisabledReasons` (I3 oldest-first: non-committable rows get
+      "Close <earlier period> first", falling back to the workspace's generic
+      "Close the earlier open period first" when the blocking period produced no
+      visible row — e.g. a $0-amount T&M month filtered from the inbox), and
+      `groupQueueByMonth` (month buckets, oldest-first, per-currency totals,
+      "N of M closed" progress from a committed-by-month count).
+- [x] **Query `convex/close.ts:getCloseQueue`** — admin-only. Reuses the
+      untouched `enumerateReadyRows` (exported from `invoices.ts`) for the period
+      list + badge parity (US 5), then enriches each row with a per-period
+      `billingScope` + `closeFlags` composition (running timers loaded once via
+      `loadActiveTimers`, filtered per period/project in memory). Returns
+      month-grouped `CloseQueueRow`s with committable/disabledReason,
+      periodToken ("YYYY-MM"/"fixed"), colored-hours data, and progress.
+- [x] **Nav rename Invoices → Billing** — `lib/navigation.ts` (`/billing`,
+      `ReceiptIcon`, admin-only), `lib/route-access.ts` (added `/billing(.*)`,
+      kept `/invoices(.*)` for the doc route), `nav-main.tsx` (badge attaches to
+      `/billing`; the `getInvoicingNavSignals` tooltip breakdown is unchanged).
+- [x] **Route move** — Billing hub is `app/(dashboard)/billing/page.tsx`; the
+      close workspace moved to `app/(dashboard)/billing/close/[projectId]/[period]`
+      (backHref → `/billing`); `app/(dashboard)/invoices/page.tsx` is now a
+      server redirect to `/billing`; **invoice document URLs `/invoices/[id]`
+      untouched** (verified). `close-commit-button` post-close nav → `/billing`.
+- [x] **Tab vocab** — `status-tab.ts` renamed `ready` → `close` (default tab
+      "close"; `tabIsClose`/`tabIncludesInvoices`); `tab-summary-strip` +
+      `invoices-empty-state` copy updated to reference the Close tab.
+- [x] **UI** (`components/billing/`) — `billing-tab-strip` (shared Close · Draft
+      · Outstanding · Paid · Void, URL-driven `?status=`), `billing-toolbar`
+      (tab strip + swappable right controls), `close-queue` (view: toolbar +
+      filtered month list + empty states), `close-queue-month` (collapsible
+      header, progress, per-currency total — Time-tab group grammar),
+      `close-queue-row` (Notion-flat: project + muted client, type dot + muted
+      text, budget-colored hours, "N to review", right-aligned amount,
+      hover-revealed quiet Review → workspace; blocked rows un-dimmed with the
+      CTA-slot hint; config-issue rows → Set rate), `close-queue-filter-bar`
+      (Notion "+ Filter" three-step facets client / billing type / readiness,
+      cross-filtered counts) + `CloseQueueActiveFacets` pills,
+      `close-queue-empty` (caught-up / no-matches), `close-queue-skeleton`.
+- [x] **Facets URL-persisted** — `lib/hooks/use-close-facets.ts`
+      (`?client=`/`?type=`/`?readiness=`) + pure `lib/billing/close-queue-filters.ts`
+      (predicate + cross-filtered `facetCounts`); ghost search via
+      `useUrlDebouncedParam("search")`. No default filter.
+- [x] **No invoice-creation bypass** — `project-time-content.tsx`
+      "Invoice unbilled hours" and the bulk-selection path now route to
+      `/billing` (removed `useGenerateInvoice`); selection toolbar button
+      relabeled "Review to invoice". The old one-click Generate is gone from the
+      queue (rows use Review). Orphaned modules deleted: `invoices-filters.tsx`,
+      `invoices/inbox-empty-state.tsx`, `lib/invoices/filter-ready-rows.ts`.
+
+**Verification**: `npx tsc --noEmit` → 0 errors; eslint clean on all
+new/changed files; `closeQueue` 9/9 + full suite 1520 passing (the 3
+pre-existing time-dependent/vendored failures — `format-activity-timestamp`,
+`taskActivityIndicators`, `.reference/tiptap` — are unrelated). **Browser-verified**
+on live seed: sidebar renamed Billing (badge 9 = Close-tab count 9, tooltip
+"8 ready to bill · 1 to close & report · 2 overdue"); month-grouped queue
+(April 3/6 · May 2/3 · June 0/2 · July 0/3) with per-month totals; row anatomy
+(type dots, amber over-budget / green within-budget hours, "N to review",
+amount); oldest-first blocking (June rows "Close April 2026 first"; the
+self-referential-label bug on the earliest-but-blocked April T&M row fixed to
+the generic hint); Review → `/billing/close/.../2026-04` with "7 things to
+review" matching the row's "7 to review" (flagCount parity); `/invoices`
+redirects to `/billing`; `/invoices/INV-054` still resolves; Draft/Outstanding
+tabs render under the shared toolbar; `?type=t_and_m` filters to 2 T&M rows with
+an active pill + Clear, empty months hidden, totals recomputed.
+
+**Post-ship fix — Close-queue dead-end (uncloseable blocked rows).** Reported
+live: April showed two rows both hinting "Close the earlier open period first"
+with no visible earlier period and no action — a hard dead-end. Root cause was a
+pre-existing enumeration leak: the ready-row builders emitted rows for periods
+`billingScope` already considers closed, which then computed `committable=false`
+with no reachable predecessor. Two leak sites, both fixed at the source (so the
+sidebar badge and queue stay consistent — US5):
+- `buildRetainerMonthlyReadyRows` / `buildRetainerCycleReadyRows` only skipped
+  admin-closed periods in the *within-budget* branch; an admin-closed month
+  pushed over budget by a late/unsettled entry still emitted a Generate row.
+  Now both builders skip admin-closed periods outright (the late entry carries
+  into the first open period per I1).
+- `buildTmReadyRows` bucketed by natural date and emitted a row for an open
+  billable entry sitting in an invoice-covered month; now it skips
+  invoice-covered months (matching `billingScope.invoicedAnchorMonths`), so the
+  straggler carries forward instead of anchoring an uncloseable row.
+Plus a defense-in-depth guard in `getCloseQueue` (skip any row whose scope reads
+`fromSettlementStamps`) so a closed period can never surface again. Regression
+tests added (readyToInvoice: admin-closed-over-budget monthly + cycle, T&M
+covered-month straggler). **Also fixed a money-source inconsistency**: queue rows
+now take amount / overage / badge / close-vs-generate from `billingScope` (the
+single source of truth), not the naive builder — a period with carried-in
+entries showed the builder's date-bucketed $853 while the workspace and the
+eventual invoice billed the true $1,813; both now read $1,813. Verified live:
+the two stuck April rows disappeared (April was admin-closed / invoice-covered),
+the queue starts at May, June Arlow surfaces committable with the carried April
+work ($1,813 / +22h 40m, matching its workspace), and every row has a reachable
+Review CTA. Badge 9→6, consistent with the Close tab.
+
+**TODOs deferred / known limitations**:
+- **T&M redirect granularity.** "Invoice unbilled hours" / bulk paths route to
+  the Close queue (`/billing`), not a deep-linked specific-period workspace —
+  the admin picks the oldest-first period via its Review CTA. Deep-linking the
+  earliest open period would need a per-project first-open-period query.
+- **Month progress for fixed.** Fixed remainders bucket under the current month
+  and a fixed invoice's periodEnd can nudge that month's committed count — a
+  cosmetic edge on the "N of M closed" denominator only.
+- **Dead ready-row path in `InvoiceList`.** `ReadyRowItem` + its Generate/Close
+  modals remain in `invoice-list.tsx` but no live surface feeds it ready rows
+  anymore (the Close tab uses the new queue). Left in place to avoid touching
+  the shared invoice list; a later cleanup can remove it.
+
+### Post-ship fix — settlement-stamp invariant (finding F3, 2026-07-19) ✅
+
+Found in the month-close verification review, confirmed by repro on the real
+modules: cycle-invoice finalization stamped `settledPeriodStart/End` with the
+whole CYCLE range, so `computeReportMonths` (settled → stamped month) collapsed
+every entry of an invoiced over-budget cycle into month 1 — months 2..N of the
+cycle rendered empty Monthly Reports (marked "final") and their
+`exportSettledPeriod` worksheets threw "No settled time entries". Money was
+never wrong: invoice totals freeze at creation from raw minutes, and cycle-level
+scope reads (`collectSettledScope` range check) still matched. Blast radius was
+report/worksheet month attribution on over-budget rollover cycles only; the
+within-budget close path already stamped monthly.
+
+Fix = write-side normalization, not a reader patch. New stamp invariant
+(documented in `convex/lib/settleEntries.ts`, `convex/schema.ts`, and PRD I4):
+`settledPeriodStart/End` is ALWAYS the entry's monthly settlement bucket —
+exactly one calendar month; the settling document's period lives on the invoice
+(via `invoiceId`). One shared pure rule, `monthlySettlementPeriod(date, period)`
+(natural month clamped into the period; carried-in → first month, the
+receiving-period rule), now feeds every writer:
+
+- [x] `settleInvoiceEntries` (finalization) — buckets per entry instead of
+      stamping the invoice period verbatim. Single-month invoices unchanged
+      (bucket ≡ period); ad-hoc T&M min/max-date periods now also produce
+      clean full-month stamps.
+- [x] `closeRetainerCycle` — inline month-find replaced with the same helper
+      (behaviour-identical; the two writers can no longer drift).
+- [x] `backfillSettledFromInvoiceId` — aligned to the invariant.
+- [x] Tests: `monthlySettlementPeriod` unit suite (settleEntries.test.ts) +
+      F3 regression and a **differential test** in reportMembership.test.ts
+      (invoice path ≡ close path attribution; worksheet single-month-stamp
+      compatibility). Full suite + `tsc` green (4 pre-existing failures in
+      unrelated activity-timestamp / task-indicator suites, untouched).
+
+**Backfill decision**: entries finalized BEFORE this fix retain cycle-wide
+stamps. Per MVP dummy-data policy a reseed supersedes a backfill; a real
+deployment would need a one-shot re-bucket migration (walk settled entries
+whose stamp spans >1 month, re-stamp via `monthlySettlementPeriod` against
+their invoice's period).
+
+### Post-ship fix — remaining verification findings closed (F1/F2/F4/F5, 2026-07-19) ✅
+
+All gaps from the month-close verification review are now closed:
+
+- [x] **F1 — all-skipped T&M month deadlock.** `firstOpenPeriod`'s T&M branch
+      now owns months by the EFFECTIVE rule (max(naturalMonth,
+      monthAfter(`skippedThrough`)), advanced past invoice-covered months) —
+      matching the PRD's own definition. Skipping every entry of a month makes
+      the RECEIVING month firstOpen (committable, carries the work); the
+      emptied month stops anchoring the queue. `buildTmReadyRows` mirrors the
+      same bucketing (entries carry `skippedThrough` from the enumeration
+      shim), so the walker and `billingScope` cannot disagree about which T&M
+      month owns work — this also closes the latent hole where a month whose
+      ONLY work was carried-in never emitted a row. 4 new golden scenarios in
+      billingScope.test.ts + 3 walker tests (receiving-month bucketing,
+      covered-month straggler advancing, straggler-into-current-month cap).
+- [x] **F2 — $0 T&M month invisible blocker.** `shouldAppearInInbox` now always
+      surfaces T&M rows: a zero-rate month owns open billable work, which makes
+      it firstOpen and blocks every later month under I3 — hiding it pointed
+      "Close earlier period first" hints at a nonexistent row. Still never
+      batch-invoiceable (`selectBatchEligibleRows` keeps its amount gate).
+- [x] **F4 — non-billable drift on over-budget retainer months.** Finalizing a
+      retainer invoice now ALSO settles the period's in-scope non-billable
+      entries as `retainer_included` (monthly bucket, never joining the invoice
+      document): open + dated ≤ period end + not skipped out
+      (`skippedThrough < periodEnd` keeps carried-in) + existed at draft
+      creation (`createdAt < invoice.createdAt` — a later entry is next
+      period's logged-late work per I1, matching the live report preview).
+      Void / back-to-draft releases them symmetrically in
+      `unsettleInvoiceEntries` (identified as non-billable +
+      `retainer_included` + no invoiceId + stamped inside the invoice period;
+      the covering-closed-period branch still wins). PRD I2 amended. 2
+      convex-tests (finalize settles / void releases, incl. skipped-out and
+      post-commit exclusions).
+- [x] **F5 — drafted period dead-end deep link.** `getCloseWorkspace` returns
+      `coveringDraft` when the period reads closed only because a draft covers
+      it; the workspace renders an info Alert with an "Open draft" link
+      (`/invoices/[id]` accepts raw doc ids, so unnumbered drafts work)
+      instead of a silently blank committed ledger.
+
+Full suite 1557 green (same 4 pre-existing unrelated failures), tsc 0,
+eslint 0. F6's remaining architecture debt (queue enumeration still walker-
+based rather than billingScope-derived) is now symptom-free for T&M; the
+retainer walkers were already covered by the 2026-07-13 dead-end fix.

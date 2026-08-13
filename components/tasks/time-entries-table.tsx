@@ -1,12 +1,13 @@
 "use client"
 
-import { useState, useRef, useEffect } from "react"
+import { useState } from "react"
 import { useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { UserAvatar } from "@/components/user-avatar"
+import { CategoryBadge } from "@/components/category-badge"
 import { formatShortDate, firstName } from "@/lib/format"
 import { cn } from "@/lib/utils"
-import { formatMinutesDisplay, formatDuration, parseDuration } from "@/lib/duration"
+import { formatMinutesDisplay } from "@/lib/duration"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -39,22 +40,27 @@ import { toast } from "sonner"
 import { toastError } from "@/lib/toast-helpers"
 import { entryStatus } from "@/convex/lib/entryStatus"
 import { formatLockedTooltip } from "@/lib/entry-tooltip"
-import type { Id } from "@/convex/_generated/dataModel"
+import type { Doc, Id } from "@/convex/_generated/dataModel"
 
 // Phase 8 Slice 4 — task-detail Time tab inherits the row-level lock
 // treatment from the project Time tab. The shape is wider than the
 // minimum: settlement + invoice fields are optional so any callers
 // still wiring through the older shape keep working with unlocked
 // rendering.
-type TimeEntry = {
+export type TimeEntry = {
   _id: Id<"timeEntries">
+  taskId: Id<"tasks">
   userId: Id<"users">
   date: string
+  // Wall-clock start (epoch ms) — the edit modal re-anchors it on date change.
+  startedAt: number
   durationMinutes: number
   note?: string
   isBillable: boolean
   userName: string
   userImageUrl?: string
+  // Entry billing category (sticky). Shown as a column and edited via the modal.
+  snapshotCategoryId?: Id<"workCategories">
   invoiceId?: Id<"invoices">
   invoicePrefix?: string
   invoiceNumber?: number
@@ -64,64 +70,29 @@ type TimeEntry = {
   settledPeriodEnd?: string
 }
 
-const COL = "grid-cols-[70px_120px_1fr_60px_18px_28px]"
+// Date | Person | Note | Category | Time | lock/dot | menu
+const COL = "grid-cols-[70px_110px_1fr_120px_60px_18px_28px]"
 
 export function TimeEntriesTable({
   entries,
   isAdmin,
   currentUserId,
+  categories,
+  onEditEntry,
 }: {
   entries: TimeEntry[]
   isAdmin: boolean
   currentUserId?: Id<"users">
+  categories?: Doc<"workCategories">[]
+  /** Open the shared full edit modal for this entry (project-tab parity). */
+  onEditEntry: (entry: TimeEntry) => void
 }) {
   const removeEntry = useMutation(api.timeEntries.remove)
-  const updateEntry = useMutation(api.timeEntries.update)
   const [deleteTarget, setDeleteTarget] = useState<Id<"timeEntries"> | null>(null)
-  const [editingId, setEditingId] = useState<Id<"timeEntries"> | null>(null)
-  const [editDuration, setEditDuration] = useState("")
-  const [editNote, setEditNote] = useState("")
-  const durationInputRef = useRef<HTMLInputElement>(null)
 
-  function startEdit(entry: TimeEntry) {
-    setEditingId(entry._id)
-    setEditDuration(formatDuration(entry.durationMinutes))
-    setEditNote(entry.note ?? "")
-  }
-
-  function cancelEdit() {
-    setEditingId(null)
-    setEditDuration("")
-    setEditNote("")
-  }
-
-  async function saveEdit() {
-    if (!editingId) return
-    const minutes = parseDuration(editDuration)
-    if (!minutes) {
-      toast.error("Enter a valid duration (e.g. 2h 30m, 90m)")
-      return
-    }
-    try {
-      await updateEntry({
-        id: editingId,
-        durationMinutes: minutes,
-        note: editNote.trim() || null,
-      })
-      toast.success("Time entry updated")
-      cancelEdit()
-    } catch (err) {
-      toastError(err, "Failed to update")
-    }
-  }
-
-  // Focus duration input when entering edit mode
-  useEffect(() => {
-    if (editingId && durationInputRef.current) {
-      durationInputRef.current.focus()
-      durationInputRef.current.select()
-    }
-  }, [editingId])
+  const categoryMap = new Map(
+    (categories ?? []).map((c) => [c._id.toString(), c]),
+  )
 
   async function handleDelete() {
     if (!deleteTarget) return
@@ -145,6 +116,7 @@ export function TimeEntriesTable({
           <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Date</span>
           <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Person</span>
           <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Note</span>
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Category</span>
           <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground text-right">Time</span>
           <span />
           <span />
@@ -161,7 +133,9 @@ export function TimeEntriesTable({
           const canEdit =
             !isLocked &&
             (isAdmin || (currentUserId && entry.userId === currentUserId))
-          const isEditing = editingId === entry._id
+          const category = entry.snapshotCategoryId
+            ? categoryMap.get(entry.snapshotCategoryId.toString())
+            : undefined
           const lockedTooltip = isLocked
             ? formatLockedTooltip({
                 settledAt: entry.settledAt,
@@ -172,75 +146,6 @@ export function TimeEntriesTable({
                 invoiceNumber: entry.invoiceNumber,
               })
             : null
-
-          if (isEditing) {
-            return (
-              <div
-                key={entry._id}
-                className={`group/entry grid ${COL} items-center gap-x-2 px-3.5 h-[38px] border-b border-border/20 last:border-b-0 bg-muted/30`}
-              >
-                {/* Date (read-only in edit mode) */}
-                <span className="text-[13px] text-foreground">{formatShortDate(entry.date)}</span>
-
-                {/* Person (read-only) */}
-                <div className="flex items-center gap-1.5 min-w-0">
-                  <UserAvatar
-                    name={entry.userName}
-                    imageUrl={entry.userImageUrl}
-                    className="size-5 text-[8px]"
-                  />
-                  <span className="text-[13px] text-foreground truncate">{firstName(entry.userName)}</span>
-                </div>
-
-                {/* Note (editable) */}
-                <input
-                  aria-label="Edit note"
-                  value={editNote}
-                  onChange={(e) => setEditNote(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") saveEdit()
-                    if (e.key === "Escape") cancelEdit()
-                  }}
-                  placeholder="Add a note"
-                  className="h-6 rounded border border-border/60 bg-background px-1.5 text-[13px] text-foreground outline-none focus:ring-1 focus:ring-ring"
-                />
-
-                {/* Duration (editable) */}
-                <input
-                  ref={durationInputRef}
-                  aria-label="Edit duration"
-                  value={editDuration}
-                  onChange={(e) => setEditDuration(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") saveEdit()
-                    if (e.key === "Escape") cancelEdit()
-                  }}
-                  onBlur={saveEdit}
-                  className="h-6 w-full rounded border border-border/60 bg-background px-1.5 text-[13px] font-mono font-medium text-foreground text-right outline-none focus:ring-1 focus:ring-ring"
-                />
-
-                {/* Billable dot */}
-                <div className="flex items-center justify-center">
-                  <div
-                    className={cn("size-1.5 rounded-full", entry.isBillable ? "bg-emerald-500" : "bg-border")}
-                    title={entry.isBillable ? "Billable" : "Non-billable"}
-                  />
-                </div>
-
-                {/* Cancel hint */}
-                <div className="flex items-center justify-center">
-                  <button
-                    type="button"
-                    aria-label="Cancel editing"
-                    onClick={cancelEdit}
-                    className="flex size-6 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted text-xs"
-                  >
-                    ✕
-                  </button>
-                </div>
-              </div>
-            )
-          }
 
           return (
             <div
@@ -270,6 +175,15 @@ export function TimeEntriesTable({
               <span className="text-[13px] text-muted-foreground truncate">
                 {entry.note || "—"}
               </span>
+
+              {/* Category */}
+              <div className="min-w-0">
+                {category ? (
+                  <CategoryBadge name={category.name} color={category.color} />
+                ) : (
+                  <span className="text-[13px] text-muted-foreground/50">—</span>
+                )}
+              </div>
 
               {/* Duration */}
               <span className="text-[13px] font-mono font-medium text-foreground text-right">
@@ -326,7 +240,7 @@ export function TimeEntriesTable({
                       </button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end" className="w-32">
-                      <DropdownMenuItem onClick={() => startEdit(entry)}>
+                      <DropdownMenuItem onClick={() => onEditEntry(entry)}>
                         <PencilIcon className="size-3.5" />
                         Edit
                       </DropdownMenuItem>

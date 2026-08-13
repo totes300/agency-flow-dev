@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { entryStatus, billableOverviewBucket } from "../settleEntries";
+import {
+  entryStatus,
+  billableOverviewBucket,
+  monthlySettlementPeriod,
+} from "../settleEntries";
 import type { Id } from "../../_generated/dataModel";
 
 /**
@@ -187,5 +191,66 @@ describe("entryStatus — invariants", () => {
   it("an entry with no lock fields displays as open (billable) or non_billable", () => {
     expect(entryStatus({ isBillable: true })).toBe("open");
     expect(entryStatus({ isBillable: false })).toBe("non_billable");
+  });
+});
+
+// ─── monthlySettlementPeriod — the stamp-invariant bucket rule ──────────────
+//
+// `settledPeriodStart/End` must always span exactly one calendar month; every
+// writer (closePeriodInternal, closeRetainerCycle, settleInvoiceEntries, the
+// backfill) derives it from this one function. Added 2026-07-19 with the F3
+// fix (cycle-invoice finalization used to stamp the whole cycle range).
+
+describe("monthlySettlementPeriod — bucket rule", () => {
+  const cycle = { periodStart: "2026-04-01", periodEnd: "2026-06-30" };
+
+  it("entry inside the period buckets to its own calendar month", () => {
+    expect(monthlySettlementPeriod("2026-05-10", cycle)).toEqual({
+      periodStart: "2026-05-01",
+      periodEnd: "2026-05-31",
+    });
+  });
+
+  it("carried-in entry (dated before the period) buckets to the FIRST month", () => {
+    // Receiving-period rule — mirrors billingScope.usageByMonth and
+    // closeRetainerCycle's grouping.
+    expect(monthlySettlementPeriod("2026-03-20", cycle)).toEqual({
+      periodStart: "2026-04-01",
+      periodEnd: "2026-04-30",
+    });
+  });
+
+  it("date after the period clamps to the LAST month (defensive)", () => {
+    expect(monthlySettlementPeriod("2026-07-02", cycle)).toEqual({
+      periodStart: "2026-06-01",
+      periodEnd: "2026-06-30",
+    });
+  });
+
+  it("single-month period is the identity for in-month dates", () => {
+    const june = { periodStart: "2026-06-01", periodEnd: "2026-06-30" };
+    expect(monthlySettlementPeriod("2026-06-15", june)).toEqual(june);
+  });
+
+  it("handles month-length edges (leap February)", () => {
+    const q1 = { periodStart: "2028-01-01", periodEnd: "2028-03-31" };
+    expect(monthlySettlementPeriod("2028-02-10", q1)).toEqual({
+      periodStart: "2028-02-01",
+      periodEnd: "2028-02-29",
+    });
+  });
+
+  it("ragged ad-hoc periods still produce full-month buckets", () => {
+    // An ad-hoc T&M invoice's period is min/max entry dates — readers match
+    // stamps by month, so the bucket must be the full month regardless.
+    const adHoc = { periodStart: "2026-06-03", periodEnd: "2026-07-10" };
+    expect(monthlySettlementPeriod("2026-06-05", adHoc)).toEqual({
+      periodStart: "2026-06-01",
+      periodEnd: "2026-06-30",
+    });
+    expect(monthlySettlementPeriod("2026-07-04", adHoc)).toEqual({
+      periodStart: "2026-07-01",
+      periodEnd: "2026-07-31",
+    });
   });
 });

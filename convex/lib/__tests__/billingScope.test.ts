@@ -570,6 +570,179 @@ describe("scenario 12 — cycle retainer", () => {
   });
 });
 
+// ─── Monthly balance ladder (rollover breakdown) ───────────────────────────────
+
+describe("monthly balance ladder", () => {
+  it("elapsed cycle: one row per month, running balance reconciles with the report balance", () => {
+    const proj = retainerCycle();
+    const apr = e({ date: "2026-04-10", durationMinutes: 500 });
+    const jun = e({ date: "2026-06-10", durationMinutes: 800 });
+    const r = computeBillingScope({
+      project: proj,
+      entries: [apr, jun],
+      closedPeriods: [],
+      invoices: [],
+      todayStr: TODAY, // 2026-07-12 → Apr–Jun fully elapsed
+      targetPeriodStart: "2026-04-01",
+    });
+    expect(r.monthlyBalances).toEqual([
+      {
+        monthKey: "2026-04",
+        includedMinutes: 600,
+        loggedMinutes: 500,
+        endingBalanceMinutes: 100,
+        pending: false,
+      },
+      {
+        monthKey: "2026-05",
+        includedMinutes: 600,
+        loggedMinutes: 0, // zero-month still gets a row — the ladder never skips
+        endingBalanceMinutes: 700,
+        pending: false,
+      },
+      {
+        monthKey: "2026-06",
+        includedMinutes: 600,
+        loggedMinutes: 800,
+        endingBalanceMinutes: 500,
+        pending: false,
+      },
+    ]);
+    expect(r.carriedInMinutes).toBe(0);
+    // Tie-out: the ladder's closing value IS the report's balance.
+    expect(r.balanceToDateMinutes).toBe(r.includedMinutes - r.usageMinutes);
+  });
+
+  it("carried-in minutes seed the ladder and never inflate a month's logged", () => {
+    const proj = retainerCycle();
+    const carried = e({
+      date: "2026-05-15",
+      durationMinutes: 300,
+      skippedThrough: "2026-06-30", // → carried into cycle 1 (Jul–Sep)
+    });
+    const jul = e({ date: "2026-07-05", durationMinutes: 200 });
+    const r = computeBillingScope({
+      project: proj,
+      entries: [carried, jul],
+      closedPeriods: [],
+      invoices: [],
+      todayStr: TODAY, // 2026-07-12 → mid cycle 1, Aug + Sep pending
+      targetPeriodStart: "2026-07-01",
+    });
+    expect(r.carriedInMinutes).toBe(300);
+    expect(r.monthlyBalances).toEqual([
+      {
+        monthKey: "2026-07",
+        includedMinutes: 600,
+        loggedMinutes: 200, // the carried 300 is the opening row, not July usage
+        endingBalanceMinutes: -300 + 600 - 200,
+        pending: false,
+      },
+      {
+        monthKey: "2026-08",
+        includedMinutes: 600,
+        loggedMinutes: 0,
+        endingBalanceMinutes: null,
+        pending: true,
+      },
+      {
+        monthKey: "2026-09",
+        includedMinutes: 600,
+        loggedMinutes: 0,
+        endingBalanceMinutes: null,
+        pending: true,
+      },
+    ]);
+    // Balance to date covers started months only — not the full-cycle allowance.
+    expect(r.balanceToDateMinutes).toBe(100);
+    expect(r.includedMinutes - r.usageMinutes).toBe(1300);
+  });
+
+  it("stamp-read (closed) cycle produces the same ladder as the live computation", () => {
+    const proj = retainerCycle();
+    const mkEntries = (settled: boolean): ScopeEntryInput[] => [
+      e({
+        _id: id<"timeEntries">("lad_apr"),
+        date: "2026-04-10",
+        durationMinutes: 500,
+        ...(settled
+          ? {
+              settledAt: 5,
+              settledReason: "retainer_included",
+              settledPeriodStart: "2026-04-01",
+              settledPeriodEnd: "2026-04-30",
+            }
+          : {}),
+      }),
+      e({
+        _id: id<"timeEntries">("lad_jun"),
+        date: "2026-06-10",
+        durationMinutes: 800,
+        ...(settled
+          ? {
+              settledAt: 5,
+              settledReason: "retainer_included",
+              settledPeriodStart: "2026-06-01",
+              settledPeriodEnd: "2026-06-30",
+            }
+          : {}),
+      }),
+    ];
+    const live = computeBillingScope({
+      project: proj,
+      entries: mkEntries(false),
+      closedPeriods: [],
+      invoices: [],
+      todayStr: TODAY,
+      targetPeriodStart: "2026-04-01",
+    });
+    // closeRetainerCycle closes every month of the cycle; stamps are monthly.
+    const closed = computeBillingScope({
+      project: proj,
+      entries: mkEntries(true),
+      closedPeriods: [
+        { periodStart: "2026-04-01", periodEnd: "2026-04-30", closedAt: 1 },
+        { periodStart: "2026-05-01", periodEnd: "2026-05-31", closedAt: 1 },
+        { periodStart: "2026-06-01", periodEnd: "2026-06-30", closedAt: 1 },
+      ],
+      invoices: [],
+      todayStr: TODAY,
+      targetPeriodStart: "2026-04-01",
+    });
+    expect(closed.fromSettlementStamps).toBe(true);
+    expect(live.fromSettlementStamps).toBe(false);
+    expect(closed.monthlyBalances).toEqual(live.monthlyBalances);
+    expect(closed.carriedInMinutes).toBe(live.carriedInMinutes);
+    expect(closed.balanceToDateMinutes).toBe(live.balanceToDateMinutes);
+  });
+
+  it("monthly retainer gets a single row and balanceToDate equals the balance", () => {
+    const r = run({
+      entries: [e({ date: "2026-06-10", durationMinutes: 700 })],
+    });
+    expect(r.monthlyBalances).toEqual([
+      {
+        monthKey: "2026-06",
+        includedMinutes: 600,
+        loggedMinutes: 700,
+        endingBalanceMinutes: -100,
+        pending: false,
+      },
+    ]);
+    expect(r.balanceToDateMinutes).toBe(r.includedMinutes - r.usageMinutes);
+  });
+
+  it("T&M reports an empty ladder", () => {
+    const r = run({
+      project: tm(),
+      entries: [e({ date: "2026-06-10" })],
+      targetPeriodStart: "2026-06-01",
+    });
+    expect(r.monthlyBalances).toEqual([]);
+    expect(r.carriedInMinutes).toBe(0);
+  });
+});
+
 // ─── Settlement-stamp immutability ──────────────────────────────────────────────
 
 describe("settlement-stamp immutability (I4)", () => {
@@ -674,5 +847,89 @@ describe("fixed projects", () => {
     expect(r.entries).toHaveLength(1);
     expect(r.amount).toBe(3000);
     expect(r.committable).toBe(true);
+  });
+});
+
+// ─── F1 (2026-07-19) — all-skipped T&M month must not deadlock oldest-first ────
+//
+// `firstOpenPeriod`'s T&M branch owns months by the EFFECTIVE rule
+// (max(natural, monthAfter(skip)), advanced past covered months). Before the
+// fix it used raw dates: skipping every June entry left June as firstOpen
+// with an EMPTY scope (Generate had nothing to invoice) while July was
+// blocked as not-earliest-open — an unrecoverable queue dead-end short of
+// undoing the skips.
+
+describe("F1 — all-skipped T&M month", () => {
+  const allSkippedJune = () => [
+    e({ date: "2026-06-05", durationMinutes: 120, skippedThrough: "2026-06-30" }),
+    e({ date: "2026-06-20", durationMinutes: 60, skippedThrough: "2026-06-30" }),
+  ];
+
+  it("the receiving month becomes the first open period and carries the work", () => {
+    const july = run({
+      project: tm(),
+      entries: allSkippedJune(),
+      targetPeriodStart: "2026-07-01",
+      todayStr: "2026-08-02", // July elapsed
+    });
+    expect(july.committable).toBe(true); // no not-earliest-open block
+    expect(july.issues).toEqual([]);
+    expect(july.entries).toHaveLength(2);
+    expect(july.entries.every((x) => x.carriedReason === "skipped")).toBe(true);
+  });
+
+  it("the skipped-out month has an empty scope and is not committable", () => {
+    const june = run({
+      project: tm(),
+      entries: allSkippedJune(),
+      targetPeriodStart: "2026-06-01",
+      todayStr: "2026-08-02",
+    });
+    expect(june.entries).toEqual([]);
+    expect(june.committable).toBe(false);
+  });
+
+  it("a partially-skipped month still anchors firstOpen (unskipped work first)", () => {
+    const entries = [
+      e({ date: "2026-06-05", durationMinutes: 120, skippedThrough: "2026-06-30" }),
+      e({ date: "2026-06-12", durationMinutes: 90 }), // stays in June
+    ];
+    const june = run({
+      project: tm(),
+      entries,
+      targetPeriodStart: "2026-06-01",
+      todayStr: "2026-08-02",
+    });
+    expect(june.committable).toBe(true);
+    expect(june.entries).toHaveLength(1);
+    const july = run({
+      project: tm(),
+      entries,
+      targetPeriodStart: "2026-07-01",
+      todayStr: "2026-08-02",
+    });
+    expect(july.committable).toBe(false); // June still first
+    expect(july.issues).toContain("not-earliest-open");
+  });
+
+  it("skip target advancing into a covered month resolves past it", () => {
+    // June entry skipped → July, but July is already invoice-covered: the
+    // entry's owned month advances to August (mirrors I1's max with firstOpen).
+    const entries = [
+      e({ date: "2026-06-05", durationMinutes: 120, skippedThrough: "2026-06-30" }),
+    ];
+    const invoices = [
+      { status: "invoiced" as const, periodStart: "2026-07-01", periodEnd: "2026-07-31" },
+    ];
+    const august = run({
+      project: tm(),
+      entries,
+      invoices,
+      targetPeriodStart: "2026-08-01",
+      todayStr: "2026-09-02",
+    });
+    expect(august.committable).toBe(true);
+    expect(august.entries).toHaveLength(1);
+    expect(august.entries[0].carriedReason).toBe("skipped");
   });
 });

@@ -28,13 +28,38 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { PlusIcon } from "lucide-react"
 import { toastError } from "@/lib/toast-helpers"
 import { RateBadge, NoRatesPlaceholder } from "@/components/rate-badge"
+import { CategoryBadge } from "@/components/category-badge"
+
+// Sentinel for the "no personal default" Select option — Radix Select can't
+// use an empty-string item value.
+const NO_DEFAULT = "__task_category__"
 
 export function SettingsUserRates() {
   const members = useQuery(api.orgMembers.listOrgMembers, {})
   const userRates = useQuery(api.userRates.list, {})
   const orgSettings = useQuery(api.orgSettings.get, {})
+  // includeArchived: a member's default may point at a since-archived
+  // category — the row must display it (so the admin can spot and fix the
+  // stale default) even though only active categories are offered as options.
+  const categories = useQuery(api.workCategories.list, { includeArchived: true })
   const upsertRate = useMutation(api.userRates.upsert)
   const removeRate = useMutation(api.userRates.remove)
+  const setDefaultCategory = useMutation(api.orgMembers.setDefaultWorkCategory)
+
+  async function handleSetDefaultCategory(
+    memberUserId: Id<"users">,
+    value: string,
+  ) {
+    try {
+      await setDefaultCategory({
+        memberUserId,
+        workCategoryId:
+          value === NO_DEFAULT ? undefined : (value as Id<"workCategories">),
+      })
+    } catch (err) {
+      toastError(err, "Failed to set default category")
+    }
+  }
 
   const [editingUser, setEditingUser] = useState<{
     userId: Id<"users">
@@ -95,12 +120,17 @@ export function SettingsUserRates() {
         <p className="text-sm text-muted-foreground">
           Set the internal hourly cost rate per team member per currency.
         </p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          New time entries use the member&apos;s default category; if none is
+          set, the task&apos;s category. The category decides the billable rate.
+        </p>
       </div>
 
       <Table>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
             <TableHead>Team Member</TableHead>
+            <TableHead>Default category</TableHead>
             <TableHead>Cost Rates</TableHead>
             <TableHead className="w-16" />
           </TableRow>
@@ -125,6 +155,57 @@ export function SettingsUserRates() {
                       )}
                     </div>
                   </div>
+                </TableCell>
+                <TableCell>
+                  {(() => {
+                    // Explicit trigger content: a default pointing at an
+                    // archived category has no matching option below, and
+                    // Radix would render the trigger empty — resolve the
+                    // badge from the full (archived-inclusive) list instead.
+                    const current = member.defaultWorkCategoryId
+                      ? categories?.find(
+                          (c) => c._id === member.defaultWorkCategoryId,
+                        )
+                      : undefined
+                    return (
+                      <Select
+                        value={member.defaultWorkCategoryId ?? NO_DEFAULT}
+                        onValueChange={(v) =>
+                          void handleSetDefaultCategory(member._id, v)
+                        }
+                      >
+                        <SelectTrigger
+                          size="sm"
+                          className="w-[168px] border-transparent bg-transparent shadow-none hover:bg-muted/60 data-[state=open]:bg-muted/60"
+                        >
+                          <SelectValue>
+                            {current ? (
+                              <CategoryBadge
+                                name={current.name}
+                                color={current.color}
+                              />
+                            ) : (
+                              <span className="text-muted-foreground">
+                                Task category
+                              </span>
+                            )}
+                          </SelectValue>
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value={NO_DEFAULT}>
+                            <span className="text-muted-foreground">Task category</span>
+                          </SelectItem>
+                          {(categories ?? [])
+                            .filter((c) => !c.archivedAt)
+                            .map((c) => (
+                              <SelectItem key={c._id} value={c._id}>
+                                <CategoryBadge name={c.name} color={c.color} />
+                              </SelectItem>
+                            ))}
+                        </SelectContent>
+                      </Select>
+                    )
+                  })()}
                 </TableCell>
                 <TableCell>
                   {rates.length === 0 ? (

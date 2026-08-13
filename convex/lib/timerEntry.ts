@@ -24,7 +24,7 @@ import type { MutationCtx } from "../_generated/server";
 import type { Doc, Id } from "../_generated/dataModel";
 import { getDateInTimezone, msToMinutes, MAX_TIMER_MS, ORG_TIMEZONE_FALLBACK } from "./timer";
 import { roundMinutes } from "./rounding";
-import { resolveRateSnapshot } from "./orgHelpers";
+import { resolveRateSnapshot, resolveEntryCategory } from "./orgHelpers";
 import { findEntryDateBlocker } from "./settleGuards";
 
 export async function insertTimerEntry(
@@ -44,7 +44,12 @@ export async function insertTimerEntry(
     isBillable: boolean;
     timezone: string;
   },
-): Promise<{ entryId: Id<"timeEntries">; durationMinutes: number; date: string }> {
+): Promise<{
+  entryId: Id<"timeEntries">;
+  durationMinutes: number;
+  date: string;
+  snapshotCategoryId: Id<"workCategories"> | undefined;
+}> {
   // RAW LEDGER (2026-07-05 rounding-policy decision): entries store the
   // actual measured time, ceiled to a whole minute only. The workspace
   // rounding setting is an INVOICE-time presentation rule — it never
@@ -54,6 +59,16 @@ export async function insertTimerEntry(
     throw new ConvexError("Duration must be greater than 0");
   }
 
+  // Billing category via the member-default chain for the OWNER (not the
+  // actor) — no explicit selection exists at stop time; the commit form edits
+  // it afterwards via timeEntries.update. Same value feeds the rate lookup and
+  // the stored snapshot below.
+  const snapshotCategoryId = await resolveEntryCategory(ctx, {
+    ownerUserId: opts.ownerId,
+    orgId: opts.orgId,
+    task: opts.task,
+  });
+
   // Rate snapshot for the OWNER (not the actor). Throws with a clear
   // config-fix message; callers decide whether that blocks (stop: yes,
   // transactional rollback keeps the timer alive) or degrades (archive
@@ -61,7 +76,7 @@ export async function insertTimerEntry(
   const rateSnapshot = await resolveRateSnapshot(ctx, {
     userId: opts.ownerId,
     orgId: opts.orgId,
-    task: opts.task,
+    workCategoryId: snapshotCategoryId,
     project: opts.project,
     isBillable: opts.isBillable,
   });
@@ -99,13 +114,13 @@ export async function insertTimerEntry(
     costRate: rateSnapshot.costRate,
     billableRate: rateSnapshot.billableRate,
     rateCurrency: rateSnapshot.rateCurrency,
-    snapshotCategoryId: opts.task.workCategoryId,
+    snapshotCategoryId,
     createdAt: now,
     updatedAt: now,
     createdBy: opts.createdBy,
   });
 
-  return { entryId, durationMinutes: rounded, date };
+  return { entryId, durationMinutes: rounded, date, snapshotCategoryId };
 }
 
 /**

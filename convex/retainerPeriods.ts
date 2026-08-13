@@ -4,6 +4,7 @@ import type { GenericMutationCtx } from "convex/server";
 import type { DataModel, Doc, Id } from "./_generated/dataModel";
 import { type AuthContext, getAuthContext, requireAdmin } from "./lib/auth";
 import { getCyclePeriods } from "./lib/retainerCycle";
+import { monthlySettlementPeriod } from "./lib/settleEntries";
 import { computeCommitScope, selectCommitEntries } from "./lib/commitScope";
 import { getOrgSettings } from "./lib/orgHelpers";
 import { ORG_TIMEZONE_FALLBACK, getDateInTimezone } from "./lib/timer";
@@ -747,21 +748,25 @@ export const closeRetainerCycle = mutation({
       );
     }
 
-    // Assign each in-scope entry to a month of the cycle for settlement:
-    // entries dated within the cycle → their natural month; carried-in entries
-    // (dated in an earlier month, skipped/late) → the cycle's FIRST month (the
+    // Assign each in-scope entry to a month of the cycle for settlement via
+    // the shared stamp-invariant rule (`monthlySettlementPeriod`): entries
+    // dated within the cycle → their natural month; carried-in entries (dated
+    // in an earlier month, skipped/late) → the cycle's FIRST month (the
     // receiving-period rule / budget bucketing, PRD § Scope and money). Each
     // month is stamped with its OWN boundary so per-month `reopenPeriod` stays
-    // unambiguous after a cycle close.
+    // unambiguous after a cycle close. The invoice-finalization writer
+    // (`settleInvoiceEntries`) applies the same rule, so the close path and
+    // the overage-invoice path cannot drift apart.
     const settleIdsByMonth = new Map<string, Set<string>>();
     for (const se of scope.entries) {
-      const month =
-        cycle.periods.find(
-          (p) => se.date >= p.periodStart && se.date <= p.periodEnd,
-        ) ?? cycle.periods[0];
-      const set = settleIdsByMonth.get(month.periodStart) ?? new Set<string>();
+      const bucket = monthlySettlementPeriod(se.date, {
+        periodStart: cycle.cycleStart,
+        periodEnd: cycle.cycleEnd,
+      });
+      const set =
+        settleIdsByMonth.get(bucket.periodStart) ?? new Set<string>();
       set.add(se.entryId.toString());
-      settleIdsByMonth.set(month.periodStart, set);
+      settleIdsByMonth.set(bucket.periodStart, set);
     }
 
     // Shared `now` so all N monthly periods receive identical `closedAt`

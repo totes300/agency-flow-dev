@@ -32,6 +32,8 @@ export type StopResult = {
   clientName: string | null
   isBillable: boolean
   isStale: boolean
+  /** The saved entry's billing category (create-at-stop) — null when discarded. */
+  snapshotCategoryId?: Id<"workCategories"> | null
 }
 
 // Stable context — actions + state that changes rarely

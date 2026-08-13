@@ -15,6 +15,15 @@ import {
 } from "@/lib/format"
 import { Switch } from "@/components/ui/switch"
 import { Button } from "@/components/ui/button"
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { CategoryBadge } from "@/components/category-badge"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { MiniCalendar, addDays } from "@/components/ui/mini-calendar"
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip"
@@ -27,6 +36,7 @@ import {
   CalendarIcon,
   ArrowLeftIcon,
   DollarSignIcon,
+  HashIcon,
 } from "lucide-react"
 import { toast } from "sonner"
 import { toastError } from "@/lib/toast-helpers"
@@ -172,6 +182,9 @@ export function TimeLogForm({
   const [durationStr, setDurationStr] = useState("")
   const [note, setNote] = useState("")
   const [billable, setBillable] = useState(isBillable)
+  // Explicit billing-category override. Undefined = let the server resolve via
+  // the member-default chain; the select still shows the resolved pre-fill.
+  const [categoryId, setCategoryId] = useState<Id<"workCategories"> | undefined>()
   const [saving, setSaving] = useState(false)
   // selectedDate is derived: explicit user pick wins, otherwise org-tz today.
   // Computing during render keeps it correct across midnight rollover and
@@ -186,10 +199,19 @@ export function TimeLogForm({
   const [customTime, setCustomTime] = useState("") // "HH:MM"
   const [startedAtPickerOpen, setStartedAtPickerOpen] = useState(false)
 
-  // Only load members when admin
+  // Members load for any authenticated user — admins use the full list for the
+  // on-behalf picker; everyone uses it to read the entry owner's default
+  // billing category for the pre-fill below.
   const orgMembers = useQuery(
     api.orgMembers.listOrgMembers,
-    isAuthenticated && isAdmin ? {} : "skip",
+    isAuthenticated ? {} : "skip",
+  )
+  // includeArchived: the resolved chain may point at a since-archived
+  // category (stale member default / old task category) — its badge must
+  // still render. Options re-filter to active below.
+  const categories = useQuery(
+    api.workCategories.list,
+    isAuthenticated ? { includeArchived: true } : "skip",
   )
 
   // Resolve selected user display info
@@ -198,6 +220,31 @@ export function TimeLogForm({
     ? orgMembers.find((m) => m._id === selectedUserId)
     : null
   const displayName = selectedMember?.name ?? currentUser?.name ?? "You"
+
+  // Billing-category pre-fill mirrors the full server chain: explicit pick ??
+  // entry OWNER's default ?? task category. Only an explicit pick is sent;
+  // the untouched form lets the server run the same chain.
+  const taskCategoryId = useQuery(
+    api.tasks.getWorkCategoryId,
+    isAuthenticated ? { taskId } : "skip",
+  )
+  const ownerDefaultCategoryId = orgMembers?.find(
+    (m) => m._id === effectiveUserId,
+  )?.defaultWorkCategoryId
+  const effectiveCategoryId =
+    categoryId ?? ownerDefaultCategoryId ?? taskCategoryId ?? undefined
+  const effectiveCategory = categories?.find(
+    (c) => c._id === effectiveCategoryId,
+  )
+  // Muted hint (spec §6.2): visible when the shown pre-fill is the owner's
+  // default and it diverges from the task's own category.
+  const taskCategory = categories?.find((c) => c._id === taskCategoryId)
+  const showDefaultDivergenceHint =
+    !!ownerDefaultCategoryId &&
+    effectiveCategoryId === ownerDefaultCategoryId &&
+    !!taskCategory &&
+    ownerDefaultCategoryId !== taskCategoryId
+  const activeCategories = (categories ?? []).filter((c) => !c.archivedAt)
 
   // Derived: parsed duration drives validity, preview, and Save label
   const parsedMinutes = parseDuration(durationStr)
@@ -216,6 +263,7 @@ export function TimeLogForm({
     setDurationStr("")
     setNote("")
     setBillable(isBillable)
+    setCategoryId(undefined)
     setSelectedUserId(null)
     setUserPickerOpen(false)
     setUserPickedDate(null)
@@ -238,6 +286,9 @@ export function TimeLogForm({
         isBillable: billable,
         date: selectedDate,
         ...(isAdmin && selectedUserId ? { userId: selectedUserId } : {}),
+        // Send only an EXPLICIT pick; otherwise the server resolves via the
+        // owner's default → task category chain.
+        ...(categoryId ? { workCategoryId: categoryId } : {}),
       })
       const forUser = selectedMember ? ` for ${selectedMember.name}` : ""
       toast.success(`${formatDuration(parsedMinutes)} logged${forUser}`)
@@ -541,6 +592,50 @@ export function TimeLogForm({
             aria-label="Note"
           />
         </div>
+
+        {/* Category — the entry's billing category (decides the rate).
+            Shows the resolved chain: owner default ?? task category. An empty
+            value means uncategorized task + no member default (the server
+            rejects billable logging in that case with a clear error). */}
+        <div className="flex items-center gap-2.5 rounded-md px-2 py-1.5">
+          <HashIcon className="size-3.5 shrink-0 text-muted-foreground" strokeWidth={1.5} />
+          <Select
+            value={effectiveCategoryId ?? ""}
+            onValueChange={(v) =>
+              setCategoryId(v ? (v as Id<"workCategories">) : undefined)
+            }
+          >
+            <SelectTrigger
+              size="sm"
+              className="h-7 flex-1 border-transparent bg-transparent px-0 shadow-none hover:bg-transparent focus-visible:ring-0"
+            >
+              <SelectValue placeholder="No category">
+                {effectiveCategory ? (
+                  <CategoryBadge
+                    name={effectiveCategory.name}
+                    color={effectiveCategory.color}
+                  />
+                ) : (
+                  <span className="text-muted-foreground">No category</span>
+                )}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                {activeCategories.map((c) => (
+                  <SelectItem key={c._id} value={c._id}>
+                    <CategoryBadge name={c.name} color={c.color} />
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+        </div>
+        {showDefaultDivergenceHint && taskCategory && (
+          <p className="pl-8 pr-2 text-[11px] leading-4 text-muted-foreground">
+            Your default · task is {taskCategory.name}
+          </p>
+        )}
 
         {/* Billable — full row clickable, mirrors Date row structure: icon + label + control */}
         {isBillable ? (

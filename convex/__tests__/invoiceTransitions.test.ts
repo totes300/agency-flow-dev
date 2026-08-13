@@ -595,3 +595,384 @@ describe("timeEntries.update / remove — settled-entry guards", () => {
     ).rejects.toThrow(/Cannot delete a settled time entry/);
   });
 });
+
+// ─── Stamp invariant — multi-month (cycle) invoice finalization ─────────────
+//
+// F3 fix (2026-07-19): `settledPeriodStart/End` must be the entry's MONTHLY
+// settlement bucket, never the document's multi-month period. This exercises
+// the REAL writer (`settleInvoiceEntries` via `applyStatusTransition`) with a
+// rollover-cycle invoice spanning Jan–Mar, including a carried-in entry dated
+// before the cycle (→ buckets into the cycle's first month, the
+// receiving-period rule). The pure-rule tests live in
+// `convex/lib/__tests__/settleEntries.test.ts`; this locks the DB wiring.
+
+describe("applyStatusTransition — cycle invoice stamps monthly buckets", () => {
+  it("finalizing a Jan–Mar cycle invoice stamps each entry with its own month", async () => {
+    const t = convexTest(schema, modules);
+
+    const ids = await t.run(async (ctx) => {
+      const now = Date.now();
+      const userId = await ctx.db.insert("users", {
+        name: "Test Admin",
+        externalId: "user_test",
+        createdAt: now,
+        updatedAt: now,
+      });
+      await ctx.db.insert("orgSettings", {
+        orgId: ORG_ID,
+        defaultCurrency: "EUR",
+        timezone: "UTC",
+        roundingMinutes: 1,
+        brandName: "Test Agency",
+        createdAt: now,
+        updatedAt: now,
+        createdBy: userId,
+      });
+      const statusId = await ctx.db.insert("statuses", {
+        orgId: ORG_ID,
+        name: "Todo",
+        type: "backlog",
+        color: "#000",
+        sortOrder: 0,
+        createdAt: now,
+        updatedAt: now,
+        createdBy: userId,
+      });
+      const clientId = await ctx.db.insert("clients", {
+        orgId: ORG_ID,
+        name: "Acme",
+        currency: "EUR",
+        createdAt: now,
+        updatedAt: now,
+        createdBy: userId,
+      });
+      const projectId = await ctx.db.insert("projects", {
+        orgId: ORG_ID,
+        clientId,
+        name: "Cycle Retainer",
+        code: "PRJ-CYC",
+        billingType: "retainer",
+        rolloverEnabled: true,
+        cycleLength: 3,
+        startDate: "2026-01-01",
+        includedMinutesPerMonth: 600,
+        overageRate: 100,
+        monthlyFee: 1000,
+        createdAt: now,
+        updatedAt: now,
+        createdBy: userId,
+      });
+      const taskId = await ctx.db.insert("tasks", {
+        orgId: ORG_ID,
+        title: "Cycle Task",
+        statusId,
+        statusType: "backlog",
+        projectId,
+        assigneeIds: [userId],
+        billable: true,
+        createdAt: now,
+        updatedAt: now,
+        createdBy: userId,
+      });
+      const invoiceId = await ctx.db.insert("invoices", {
+        orgId: ORG_ID,
+        projectId,
+        clientId,
+        number: 1,
+        prefix: "INV-",
+        status: "draft",
+        currency: "EUR",
+        subtotal: 3000,
+        total: 3000,
+        issueDate: "2026-04-01",
+        periodStart: "2026-01-01",
+        periodEnd: "2026-03-31",
+        createdAt: now,
+        updatedAt: now,
+        createdBy: userId,
+      });
+      const mkEntry = (date: string) =>
+        ctx.db.insert("timeEntries", {
+          orgId: ORG_ID,
+          taskId,
+          userId,
+          date,
+          startedAt: now,
+          durationMinutes: 600,
+          isBillable: true,
+          method: "manual",
+          costRate: 50,
+          billableRate: 100,
+          rateCurrency: "EUR",
+          invoiceId,
+          createdAt: now,
+          updatedAt: now,
+          createdBy: userId,
+        });
+      const janId = await mkEntry("2026-01-10");
+      const febId = await mkEntry("2026-02-10");
+      const marId = await mkEntry("2026-03-10");
+      // Carried-in: dated BEFORE the cycle (skipped/logged-late into it).
+      const carriedId = await mkEntry("2025-12-15");
+      await ctx.db.insert("invoiceLineItems", {
+        orgId: ORG_ID,
+        invoiceId,
+        sortOrder: 0,
+        lineType: "time",
+        description: "Cycle work",
+        quantity: 40,
+        unitPrice: 100,
+        amount: 4000,
+        quantityMinutes: 2400,
+        timeEntryIds: [janId, febId, marId, carriedId],
+        createdAt: now,
+        updatedAt: now,
+      });
+      return { invoiceId, janId, febId, marId, carriedId };
+    });
+
+    const result = await t.run(async (ctx) => {
+      const invoice = await ctx.db.get(ids.invoiceId);
+      return applyStatusTransition(ctx, ORG_ID, invoice!, "invoiced");
+    });
+    expect(result.ok).toBe(true);
+
+    const stamps = await t.run(async (ctx) => ({
+      jan: await ctx.db.get(ids.janId),
+      feb: await ctx.db.get(ids.febId),
+      mar: await ctx.db.get(ids.marId),
+      carried: await ctx.db.get(ids.carriedId),
+    }));
+
+    // Each in-cycle entry → its OWN month, not the cycle range.
+    expect(stamps.jan?.settledPeriodStart).toBe("2026-01-01");
+    expect(stamps.jan?.settledPeriodEnd).toBe("2026-01-31");
+    expect(stamps.feb?.settledPeriodStart).toBe("2026-02-01");
+    expect(stamps.feb?.settledPeriodEnd).toBe("2026-02-28");
+    expect(stamps.mar?.settledPeriodStart).toBe("2026-03-01");
+    expect(stamps.mar?.settledPeriodEnd).toBe("2026-03-31");
+    // Carried-in entry → the cycle's FIRST month (receiving-period rule).
+    expect(stamps.carried?.settledPeriodStart).toBe("2026-01-01");
+    expect(stamps.carried?.settledPeriodEnd).toBe("2026-01-31");
+    // All settled as rate-driven revenue with the reason unchanged.
+    for (const e of Object.values(stamps)) {
+      expect(e?.settledAt).toBeTypeOf("number");
+      expect(e?.settledReason).toBe("invoiced");
+    }
+  });
+});
+
+// ─── F4 (2026-07-19) — non-billable companions of a retainer invoice ────────
+//
+// An over-budget retainer period exits only via its overage invoice, whose
+// line items carry billable entries only. Finalization therefore ALSO settles
+// the period's in-scope non-billable entries as `retainer_included` (monthly
+// bucket) so they land on the right month's report instead of drifting into
+// the next close as logged-late. Void must release them symmetrically.
+
+describe("applyStatusTransition — retainer non-billable companions (F4)", () => {
+  async function seedRetainerWithCompanions(t: ReturnType<typeof convexTest>) {
+    return await t.run(async (ctx) => {
+      const now = Date.now();
+      const userId = await ctx.db.insert("users", {
+        name: "Test Admin",
+        externalId: "user_test",
+        createdAt: now,
+        updatedAt: now,
+      });
+      await ctx.db.insert("orgSettings", {
+        orgId: ORG_ID,
+        defaultCurrency: "EUR",
+        timezone: "UTC",
+        roundingMinutes: 1,
+        brandName: "Test Agency",
+        createdAt: now,
+        updatedAt: now,
+        createdBy: userId,
+      });
+      const statusId = await ctx.db.insert("statuses", {
+        orgId: ORG_ID,
+        name: "Todo",
+        type: "backlog",
+        color: "#000",
+        sortOrder: 0,
+        createdAt: now,
+        updatedAt: now,
+        createdBy: userId,
+      });
+      const clientId = await ctx.db.insert("clients", {
+        orgId: ORG_ID,
+        name: "Acme",
+        currency: "EUR",
+        createdAt: now,
+        updatedAt: now,
+        createdBy: userId,
+      });
+      const projectId = await ctx.db.insert("projects", {
+        orgId: ORG_ID,
+        clientId,
+        name: "Monthly Retainer",
+        code: "PRJ-RET",
+        billingType: "retainer",
+        rolloverEnabled: false,
+        startDate: "2026-06-01",
+        includedMinutesPerMonth: 60,
+        overageRate: 100,
+        monthlyFee: 1000,
+        createdAt: now,
+        updatedAt: now,
+        createdBy: userId,
+      });
+      const taskId = await ctx.db.insert("tasks", {
+        orgId: ORG_ID,
+        title: "Retainer Task",
+        statusId,
+        statusType: "backlog",
+        projectId,
+        assigneeIds: [userId],
+        billable: true,
+        createdAt: now,
+        updatedAt: now,
+        createdBy: userId,
+      });
+      const invoiceId = await ctx.db.insert("invoices", {
+        orgId: ORG_ID,
+        projectId,
+        clientId,
+        number: 1,
+        prefix: "INV-",
+        status: "draft",
+        currency: "EUR",
+        subtotal: 200,
+        total: 200,
+        issueDate: "2026-07-01",
+        periodStart: "2026-06-01",
+        periodEnd: "2026-06-30",
+        createdAt: now,
+        updatedAt: now,
+        createdBy: userId,
+      });
+      const mkEntry = (
+        date: string,
+        over: {
+          isBillable: boolean;
+          invoiceId?: Id<"invoices">;
+          skippedThrough?: string;
+          createdAt?: number;
+        },
+      ) =>
+        ctx.db.insert("timeEntries", {
+          orgId: ORG_ID,
+          taskId,
+          userId,
+          date,
+          startedAt: now,
+          durationMinutes: 120,
+          isBillable: over.isBillable,
+          method: "manual",
+          costRate: 50,
+          billableRate: 100,
+          rateCurrency: "EUR",
+          ...(over.invoiceId ? { invoiceId: over.invoiceId } : {}),
+          ...(over.skippedThrough ? { skippedThrough: over.skippedThrough } : {}),
+          createdAt: over.createdAt ?? now - 1000,
+          updatedAt: now,
+          createdBy: userId,
+        });
+
+      // Billable overage entry — on the invoice's line item.
+      const billableId = await mkEntry("2026-06-10", {
+        isBillable: true,
+        invoiceId,
+      });
+      // Companions:
+      const inPeriodId = await mkEntry("2026-06-12", { isBillable: false });
+      const carriedId = await mkEntry("2026-05-20", { isBillable: false });
+      const skippedOutId = await mkEntry("2026-06-15", {
+        isBillable: false,
+        skippedThrough: "2026-06-30", // deferred OUT of this period
+      });
+      const postCommitId = await mkEntry("2026-06-18", {
+        isBillable: false,
+        createdAt: now + 1000, // logged after the draft existed → next close
+      });
+      await ctx.db.insert("invoiceLineItems", {
+        orgId: ORG_ID,
+        invoiceId,
+        sortOrder: 0,
+        lineType: "overage",
+        description: "Overage",
+        quantity: 2,
+        unitPrice: 100,
+        amount: 200,
+        quantityMinutes: 120,
+        timeEntryIds: [billableId],
+        createdAt: now,
+        updatedAt: now,
+      });
+      return {
+        invoiceId,
+        billableId,
+        inPeriodId,
+        carriedId,
+        skippedOutId,
+        postCommitId,
+      };
+    });
+  }
+
+  it("finalization settles in-scope non-billable entries as retainer_included (monthly bucket)", async () => {
+    const t = convexTest(schema, modules);
+    const ids = await seedRetainerWithCompanions(t);
+
+    const result = await t.run(async (ctx) => {
+      const invoice = await ctx.db.get(ids.invoiceId);
+      return applyStatusTransition(ctx, ORG_ID, invoice!, "invoiced");
+    });
+    expect(result.ok).toBe(true);
+
+    const after = await t.run(async (ctx) => ({
+      inPeriod: await ctx.db.get(ids.inPeriodId),
+      carried: await ctx.db.get(ids.carriedId),
+      skippedOut: await ctx.db.get(ids.skippedOutId),
+      postCommit: await ctx.db.get(ids.postCommitId),
+    }));
+
+    // In-period + carried-in non-billable → settled, June bucket, fee-covered.
+    for (const e of [after.inPeriod, after.carried]) {
+      expect(e?.settledReason).toBe("retainer_included");
+      expect(e?.settledPeriodStart).toBe("2026-06-01");
+      expect(e?.settledPeriodEnd).toBe("2026-06-30");
+      expect(e?.invoiceId).toBeUndefined(); // companions never join the document
+    }
+    // Skipped-out and post-commit entries stay open (they belong to the next close).
+    expect(after.skippedOut?.settledAt).toBeUndefined();
+    expect(after.postCommit?.settledAt).toBeUndefined();
+  });
+
+  it("void releases the companions along with the billable entries", async () => {
+    const t = convexTest(schema, modules);
+    const ids = await seedRetainerWithCompanions(t);
+
+    await t.run(async (ctx) => {
+      const invoice = await ctx.db.get(ids.invoiceId);
+      return applyStatusTransition(ctx, ORG_ID, invoice!, "invoiced");
+    });
+    await t.run(async (ctx) => {
+      const invoice = await ctx.db.get(ids.invoiceId);
+      return applyStatusTransition(ctx, ORG_ID, invoice!, "void");
+    });
+
+    const after = await t.run(async (ctx) => ({
+      billable: await ctx.db.get(ids.billableId),
+      inPeriod: await ctx.db.get(ids.inPeriodId),
+      carried: await ctx.db.get(ids.carriedId),
+    }));
+    for (const e of [after.billable, after.inPeriod, after.carried]) {
+      expect(e?.settledAt).toBeUndefined();
+      expect(e?.settledReason).toBeUndefined();
+      expect(e?.settledPeriodStart).toBeUndefined();
+    }
+    expect(after.billable?.invoiceId).toBeUndefined(); // void frees the document link
+  });
+});

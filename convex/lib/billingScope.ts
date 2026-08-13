@@ -135,6 +135,25 @@ export type ScopeEntry = {
 
 export type ScopeIssue = "not-earliest-open" | "missing-overage-rate";
 
+/**
+ * One month of a retainer period's balance ladder. Rows read as a bank
+ * statement: prev + includedMinutes − loggedMinutes = endingBalanceMinutes,
+ * seeded by carried-in minutes before the first month. The last non-pending
+ * row's ending balance always equals `balanceToDateMinutes`, and — once every
+ * month has elapsed — `includedMinutes − usageMinutes` (the report's balance).
+ */
+export type MonthlyBalanceRow = {
+  /** YYYY-MM */
+  monthKey: string;
+  includedMinutes: number;
+  /** Billable minutes dated in this month (carried-in seeds the ladder instead). */
+  loggedMinutes: number;
+  /** Running balance after this month; null while the month is pending. */
+  endingBalanceMinutes: number | null;
+  /** Month not yet reached (future with nothing logged) — allowance not in play. */
+  pending: boolean;
+};
+
 export type BillingScopeReport = {
   billingType: BillingType;
   period: Period;
@@ -156,6 +175,20 @@ export type BillingScopeReport = {
    * PRD § Scope and money). For monthly/T&M every entry lands in the one month.
    */
   usageByMonth: Record<string, number>;
+  /** Billable minutes of carried-in entries — the balance ladder's opening row. */
+  carriedInMinutes: number;
+  /**
+   * Retainer only ([] otherwise): one row per month of the period, in order.
+   * Monthly retainers get a single row; cycle retainers get the rollover
+   * story the close header's breakdown renders.
+   */
+  monthlyBalances: MonthlyBalanceRow[];
+  /**
+   * Retainer balance over the months that have started: Σ non-pending included
+   * − usage. Mid-cycle this is the honest "balance to date"; once the period
+   * has fully elapsed it equals `includedMinutes − usageMinutes`. 0 otherwise.
+   */
+  balanceToDateMinutes: number;
   /** I3 — is this the first open, elapsed period (so it can be committed)? */
   committable: boolean;
   /** Typed, non-thrown failure modes (PRD § Module Design). */
@@ -335,14 +368,25 @@ function firstOpenPeriod(
   const step = periodMonths(project);
 
   if (project.billingType === "t_and_m") {
-    // Earliest elapsed month owning an open billable entry whose month is not
-    // already invoice-covered. Late entries into covered months don't anchor a
-    // firstOpen at their own month — they carry forward.
+    // Earliest elapsed month that OWNS an open billable entry — ownership by
+    // the effective-period rule (PRD § Definitions), not the raw date:
+    //   owned month = max(naturalMonth, monthAfter(skippedThrough)),
+    //   advanced past invoice-covered months (a late entry into a covered
+    //   month carries forward, I1).
+    // Ignoring the skip stamp here used to deadlock an all-skipped month
+    // (F1, fixed 2026-07-19): the month stayed firstOpen with an EMPTY scope
+    // (Generate had nothing to invoice) while the receiving month was blocked
+    // as not-earliest-open. With skip-aware ownership the skipped work's
+    // receiving month becomes firstOpen and carries it, matching story 35
+    // ("empty months don't jam the oldest-first queue").
     let earliest: number | null = null;
     for (const e of entries) {
       if (!e.isBillable || !isOpenEntry(e)) continue;
-      const abs = absMonthOf(e.date);
-      if (invoicedAnchorMonths.has(monthKeyFromAbs(abs))) continue;
+      let abs = absMonthOf(e.date);
+      if (e.skippedThrough) {
+        abs = Math.max(abs, absMonthOf(e.skippedThrough) + 1);
+      }
+      while (invoicedAnchorMonths.has(monthKeyFromAbs(abs))) abs += 1;
       if (earliest === null || abs < earliest) earliest = abs;
     }
     if (earliest === null) {
@@ -470,6 +514,9 @@ export function computeBillingScope(
       amount,
       withinBudget: true,
       usageByMonth,
+      carriedInMinutes: 0,
+      monthlyBalances: [],
+      balanceToDateMinutes: 0,
       committable,
       issues,
       fromSettlementStamps: targetClosed,
@@ -487,6 +534,9 @@ export function computeBillingScope(
     issues.push("missing-overage-rate");
   }
 
+  const { carriedInMinutes, monthlyBalances, balanceToDateMinutes } =
+    computeMonthlyBalances(project, period, scopeEntries, todayStr);
+
   return {
     billingType: project.billingType,
     period,
@@ -498,10 +548,73 @@ export function computeBillingScope(
     amount: overageAmount,
     withinBudget: overageMinutes <= 0,
     usageByMonth,
+    carriedInMinutes,
+    monthlyBalances,
+    balanceToDateMinutes,
     committable,
     issues,
     fromSettlementStamps: targetClosed,
   };
+}
+
+/**
+ * The retainer balance ladder (close-header breakdown). Carried-in billable
+ * minutes seed the running balance; each month of the period then contributes
+ * `+included − logged` (logged = billable minutes DATED in that month — unlike
+ * `usageByMonth`, carried entries never inflate a month here, they are the
+ * opening row). A future month with nothing logged is `pending`: its allowance
+ * is not yet in play and its ending balance is null, so the last non-pending
+ * row is the period's honest balance-to-date. Works identically for the live
+ * (I1/I2) and stamp-read (I4) scope — both produce the same `ScopeEntry` shape.
+ */
+function computeMonthlyBalances(
+  project: ScopeProjectInput,
+  period: Period,
+  scopeEntries: ScopeEntry[],
+  todayStr: string,
+): {
+  carriedInMinutes: number;
+  monthlyBalances: MonthlyBalanceRow[];
+  balanceToDateMinutes: number;
+} {
+  let carriedInMinutes = 0;
+  const loggedByMonth: Record<string, number> = {};
+  for (const se of scopeEntries) {
+    if (!se.isBillable) continue;
+    if (se.carried) {
+      carriedInMinutes += se.durationMinutes;
+    } else {
+      const key = monthKeyOf(se.date);
+      loggedByMonth[key] = (loggedByMonth[key] ?? 0) + se.durationMinutes;
+    }
+  }
+
+  const perMonthIncluded = project.includedMinutesPerMonth ?? 0;
+  const startAbs = absMonthOf(period.start);
+  const months = periodMonths(project);
+  const todayKey = monthKeyOf(todayStr);
+
+  const monthlyBalances: MonthlyBalanceRow[] = [];
+  let running = -carriedInMinutes;
+  let balanceToDateMinutes = running;
+  for (let i = 0; i < months; i++) {
+    const monthKey = monthKeyFromAbs(startAbs + i);
+    const loggedMinutes = loggedByMonth[monthKey] ?? 0;
+    const pending = monthKey > todayKey && loggedMinutes === 0;
+    if (!pending) {
+      running += perMonthIncluded - loggedMinutes;
+      balanceToDateMinutes = running;
+    }
+    monthlyBalances.push({
+      monthKey,
+      includedMinutes: perMonthIncluded,
+      loggedMinutes,
+      endingBalanceMinutes: pending ? null : running,
+      pending,
+    });
+  }
+
+  return { carriedInMinutes, monthlyBalances, balanceToDateMinutes };
 }
 
 // ─── Scope collectors ──────────────────────────────────────────────────────────
@@ -549,9 +662,11 @@ function collectSettledScope(
   const out: ScopeEntry[] = [];
   for (const e of entries) {
     if (e.settledAt === undefined || e.settledAt === null) continue;
-    // Membership by the entry's stamped period boundary. `closeRetainerCycle`
-    // stamps each entry with its MONTHLY boundary, so a cycle period matches
-    // any entry whose stamped month falls inside the cycle range.
+    // Membership by the entry's stamped period boundary. Every writer stamps
+    // the entry's MONTHLY bucket (the stamp invariant in
+    // `lib/settleEntries.ts:monthlySettlementPeriod` — close paths and invoice
+    // finalization alike), so a cycle period matches any entry whose stamped
+    // month falls inside the cycle range.
     const start = e.settledPeriodStart ?? undefined;
     const end = e.settledPeriodEnd ?? undefined;
     if (start === undefined || end === undefined) continue;
@@ -663,6 +778,9 @@ function computeFixedScope(input: ComputeScopeInput): BillingScopeReport {
     amount,
     withinBudget: true,
     usageByMonth,
+    carriedInMinutes: 0,
+    monthlyBalances: [],
+    balanceToDateMinutes: 0,
     committable: amount > 0,
     issues: [],
     fromSettlementStamps: false,

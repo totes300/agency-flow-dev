@@ -73,8 +73,13 @@ blocking.
 this period. Entries with `date < S` inside the scope are **carried-in**, with reason `skipped`
 (skip stamp present) or `logged-late` (entry date falls in an already-closed span). Non-billable
 entries are in scope for retainer closes (they get settled, as today) but never contribute to
-usage, overage, or invoice amounts. For T&M, scope contains billable entries only (non-billable
-T&M entries are never settled — unchanged from today).
+usage, overage, or invoice amounts. This holds for BOTH retainer commit paths (2026-07-19,
+finding F4): a within-budget period settles them at Close & report; an over-budget period
+settles them when its overage invoice **finalizes** (`retainer_included`, monthly bucket, never
+joining the invoice document; void/back-to-draft releases them symmetrically). Entries logged
+after the draft was created belong to the next close (story 28's principle). For T&M, scope
+contains billable entries only (non-billable T&M entries are never settled — unchanged from
+today).
 
 **I3 — Oldest-first.** Per project, only the first open, elapsed period can be committed. Later
 periods appear in the queue but their Review CTA is disabled with the hint "Close <earlier period>
@@ -82,7 +87,13 @@ first." This makes I1's `firstOpenPeriod` well-defined and the whole system orde
 
 **I4 — Settlement history is immutable truth.** At commit, in-scope entries are stamped exactly as
 today (`invoiceId` at draft creation; `settledAt` + `settledReason` + `settledPeriodStart/End` at
-finalization or period close). For **closed** periods, every consumer (retainer usage math, monthly
+finalization or period close). `settledPeriodStart/End` is always the entry's **monthly settlement
+bucket** — exactly one calendar month: the entry's natural month clamped into the settling period,
+with carried-in entries bucketing to the period's first month (2026-07-19, fixing finding F3 where
+cycle-invoice finalization stamped the whole cycle range and collapsed all N months into month 1 on
+reports and worksheets). The settling document's own period lives on the invoice, not the entry.
+All writers share one bucket rule (`lib/settleEntries.ts:monthlySettlementPeriod`); readers may
+assume single-month stamps. For **closed** periods, every consumer (retainer usage math, monthly
 report, cycle balance) MUST read membership from the settlement stamps, never re-derive it from
 dates. For **open** periods, consumers use I1/I2. Reopening a period (existing `reopenPeriod`,
 invoice void/back-to-draft) restores entries to open; their skip stamps survive, so a re-opened

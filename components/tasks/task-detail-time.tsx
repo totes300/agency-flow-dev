@@ -7,6 +7,7 @@ import { useOrganization } from "@clerk/nextjs"
 import { api } from "@/convex/_generated/api"
 import { TimeEntriesTable } from "@/components/tasks/time-entries-table"
 import { TimeLogForm } from "@/components/tasks/time-log-form"
+import { TimeEntryModal } from "@/components/projects/time-entry-modal"
 import { Button } from "@/components/ui/button"
 
 import { formatMinutesDisplay } from "@/lib/duration"
@@ -43,10 +44,30 @@ export function TaskDetailTime({
     api.timeEntries.listByTask,
     isAuthenticated ? { taskId } : "skip",
   )
+  // Reference data for the shared full edit modal (project-tab parity).
+  const taskDetail = useQuery(
+    api.tasks.getDetail,
+    isAuthenticated ? { id: taskId } : "skip",
+  )
+  // includeArchived: the table's Category column and the edit modal must show
+  // a since-archived category's name (the modal offers only active options).
+  const categories = useQuery(
+    api.workCategories.list,
+    isAuthenticated ? { includeArchived: true } : "skip",
+  )
+  const orgMembers = useQuery(
+    api.orgMembers.listOrgMembers,
+    isAuthenticated ? {} : "skip",
+  )
+  const projectId = taskDetail?.project?._id
 
   // ─── Filter + pagination ────────────────────────────────────────────────────
   const [range, setRange] = useState<TimeRange>("this_week")
   const [showAll, setShowAll] = useState(false)
+  const [editEntryId, setEditEntryId] = useState<Id<"timeEntries"> | null>(null)
+  const editEntry = editEntryId
+    ? entries?.find((e) => e._id === editEntryId)
+    : undefined
 
   const filteredEntries = useMemo(() => {
     if (!entries) return []
@@ -100,6 +121,8 @@ export function TaskDetailTime({
           entries={visibleEntries}
           isAdmin={isAdmin ?? false}
           currentUserId={currentUser?._id}
+          categories={categories}
+          onEditEntry={(entry) => setEditEntryId(entry._id)}
         />
       ) : entries ? (
         <div className="flex items-center justify-center rounded-lg border border-border/40 py-10 text-sm text-muted-foreground/50">
@@ -123,6 +146,40 @@ export function TaskDetailTime({
         >
           Show all {filteredEntries.length} entries
         </Button>
+      )}
+
+      {/* Full edit modal — same component as the project Time tab, so an
+          entry's date, duration, category, billable and note are all editable
+          here too (team member stays read-only after logging). */}
+      {editEntry && projectId && (
+        <TimeEntryModal
+          mode="edit"
+          entry={{
+            _id: editEntry._id,
+            taskId: editEntry.taskId,
+            date: editEntry.date,
+            startedAt: editEntry.startedAt,
+            durationMinutes: editEntry.durationMinutes,
+            isBillable: editEntry.isBillable,
+            note: editEntry.note,
+            invoiceId: editEntry.invoiceId,
+            settledAt: editEntry.settledAt,
+            userId: editEntry.userId,
+            snapshotCategoryId: editEntry.snapshotCategoryId,
+          }}
+          open={editEntryId !== null}
+          onOpenChange={(o) => {
+            if (!o) setEditEntryId(null)
+          }}
+          projectId={projectId}
+          // Member picker is disabled in edit mode; it falls back to the full
+          // org list, so the project team subset isn't needed here.
+          projectTeamMembers={undefined}
+          isAdmin={isAdmin ?? false}
+          currentUserId={currentUser?._id}
+          orgMembers={orgMembers ?? undefined}
+          categories={categories}
+        />
       )}
     </div>
   )

@@ -30,6 +30,7 @@ import {
   type ScopeProjectInput,
   type BillingType,
   type CarriedReason,
+  type MonthlyBalanceRow,
   type ScopeIssue,
 } from "./lib/billingScope";
 import {
@@ -129,6 +130,14 @@ export type CloseWorkspaceData = {
   usageMinutes: number;
   includedMinutes: number;
   balanceMinutes: number;
+  /** Billable minutes carried into this period — the ladder's opening row. */
+  carriedInMinutes: number;
+  /** Retainer balance ladder (one row per period month); [] for T&M/fixed. */
+  monthlyBalances: MonthlyBalanceRow[];
+  /** Balance over the months that have started — the honest mid-cycle number. */
+  balanceToDateMinutes: number;
+  /** period.end < today — picks "Ending balance" vs "Balance to date" copy. */
+  periodElapsed: boolean;
   overageMinutes: number;
   overageRate: number | null;
   overageAmount: number;
@@ -136,6 +145,14 @@ export type CloseWorkspaceData = {
   withinBudget: boolean;
   committable: boolean;
   fromSettlementStamps: boolean;
+  /**
+   * Set when the period reads as closed ONLY because a DRAFT invoice covers
+   * it (F5): draft-locked entries carry `invoiceId`, not settlement stamps,
+   * so the stamp-read ledger renders empty. The UI shows an "Open draft"
+   * banner instead of a silently blank closed view (reachable via stale
+   * deep-links only — the queue filters these periods out).
+   */
+  coveringDraft: { id: Id<"invoices">; prefix: string; number: number | null } | null;
   issues: ScopeIssue[];
   totalLoggedMinutes: number;
   /** Org timezone — client-side date-axis grouping must bucket with it. */
@@ -411,6 +428,29 @@ export const getCloseWorkspace = query({
       return safe;
     }
 
+    // F5 — a period covered only by a DRAFT invoice reads as closed (drafts
+    // anchor periods so the queue drops them) but has no settlement stamps to
+    // render. Surface the draft so the UI can route there instead of showing
+    // a blank committed ledger.
+    let coveringDraft: CloseWorkspaceData["coveringDraft"] = null;
+    if (scope.fromSettlementStamps && !isFixed) {
+      const draft = invoices.find(
+        (inv) =>
+          inv.status === "draft" &&
+          inv.periodStart !== undefined &&
+          inv.periodEnd !== undefined &&
+          inv.periodStart <= scope.period.end &&
+          scope.period.start <= inv.periodEnd,
+      );
+      if (draft) {
+        coveringDraft = {
+          id: draft._id,
+          prefix: draft.prefix,
+          number: draft.number ?? null,
+        };
+      }
+    }
+
     // Next-period label ("Skip → <next>"). Same target for every in-scope entry
     // (their current effective period IS this period).
     const nextPeriodLabel =
@@ -596,6 +636,11 @@ export const getCloseWorkspace = query({
       usageMinutes: scope.usageMinutes,
       includedMinutes: scope.includedMinutes,
       balanceMinutes: scope.includedMinutes - scope.usageMinutes,
+      carriedInMinutes: scope.carriedInMinutes,
+      monthlyBalances: scope.monthlyBalances,
+      balanceToDateMinutes: scope.balanceToDateMinutes,
+      // Fixed has no calendar period (empty `period.end` would read as elapsed).
+      periodElapsed: !isFixed && scope.period.end < todayStr,
       overageMinutes: scope.overageMinutes,
       overageRate: project.overageRate ?? null,
       overageAmount: scope.overageAmount,
@@ -603,6 +648,7 @@ export const getCloseWorkspace = query({
       withinBudget: scope.withinBudget,
       committable: scope.committable,
       fromSettlementStamps: scope.fromSettlementStamps,
+      coveringDraft,
       issues: scope.issues,
       totalLoggedMinutes,
       timezone,

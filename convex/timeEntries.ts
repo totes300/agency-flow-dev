@@ -4,7 +4,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { getAuthContext } from "./lib/auth";
 import { roundMinutes } from "./lib/rounding";
 import { getDateInTimezone, ORG_TIMEZONE_FALLBACK } from "./lib/timer";
-import { getOrgSettings, resolveRateSnapshot } from "./lib/orgHelpers";
+import { getOrgSettings, resolveRateSnapshot, resolveEntryCategory } from "./lib/orgHelpers";
 import { validateAssignees } from "./lib/task_helpers";
 import { assertValidDateString } from "./lib/dateValidation";
 import { assertEntryDateOpen } from "./lib/settleGuards";
@@ -16,6 +16,19 @@ function formatDurationHHMM(minutes: number): string {
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+/**
+ * Validate that an explicit work category belongs to the caller's org before
+ * it is used as an entry's billing category. Throws on cross-org / missing.
+ */
+async function assertCategoryInOrg(
+  ctx: { db: { get: (id: Id<"workCategories">) => Promise<Doc<"workCategories"> | null> } },
+  orgId: string,
+  workCategoryId: Id<"workCategories">,
+): Promise<void> {
+  const cat = await ctx.db.get(workCategoryId);
+  if (!cat || cat.orgId !== orgId) throw new ConvexError("Category not found");
 }
 
 /**
@@ -215,6 +228,7 @@ export const create = mutation({
     isBillable: v.optional(v.boolean()),
     date: v.optional(v.string()),
     userId: v.optional(v.id("users")), // admin can create on behalf
+    workCategoryId: v.optional(v.id("workCategories")), // explicit category override
   },
   handler: async (ctx, args) => {
     const auth = await getAuthContext(ctx);
@@ -266,11 +280,23 @@ export const create = mutation({
     // Determine billable before rate resolution — non-billable entries skip rate enforcement
     const isBillable = args.isBillable ?? task.billable;
 
-    // Rate snapshot (new model)
+    // Billing category (member-default chain). Owner is the entry's user, never
+    // the acting admin. An explicit selection must be org-validated before use.
+    if (args.workCategoryId) {
+      await assertCategoryInOrg(ctx, auth.orgId, args.workCategoryId);
+    }
+    const snapshotCategoryId = await resolveEntryCategory(ctx, {
+      ownerUserId: entryUserId,
+      orgId: auth.orgId,
+      task,
+      explicit: args.workCategoryId,
+    });
+
+    // Rate snapshot (new model) — same category used for the row snapshot below.
     const rateSnapshot = await resolveRateSnapshot(ctx, {
       userId: entryUserId,
       orgId: auth.orgId,
-      task,
+      workCategoryId: snapshotCategoryId,
       project,
       isBillable,
     });
@@ -289,7 +315,7 @@ export const create = mutation({
       costRate: rateSnapshot.costRate,
       billableRate: rateSnapshot.billableRate,
       rateCurrency: rateSnapshot.rateCurrency,
-      snapshotCategoryId: task.workCategoryId,
+      snapshotCategoryId,
       createdAt: now,
       updatedAt: now,
       createdBy: auth.userId,
@@ -320,6 +346,7 @@ export const update = mutation({
     startedAt: v.optional(v.number()),
     isBillable: v.optional(v.boolean()),
     taskId: v.optional(v.id("tasks")),
+    workCategoryId: v.optional(v.id("workCategories")), // explicit category change
   },
   handler: async (ctx, args) => {
     const { userId, orgId, isAdmin } = await getAuthContext(ctx);
@@ -346,6 +373,11 @@ export const update = mutation({
     }
 
     if (args.date !== undefined) assertValidDateString(args.date);
+
+    // Explicit category change must be org-validated before it touches the row.
+    if (args.workCategoryId !== undefined) {
+      await assertCategoryInOrg(ctx, orgId, args.workCategoryId);
+    }
 
     const updates: Record<string, unknown> = { updatedAt: Date.now() };
 
@@ -410,7 +442,8 @@ export const update = mutation({
         throw new ConvexError("Target task must belong to the same project");
       }
       updates.taskId = task._id;
-      updates.snapshotCategoryId = task.workCategoryId;
+      // Sticky category (locked decision): a task move never re-derives
+      // snapshotCategoryId. The entry keeps the discipline it was logged under.
     }
 
     // Phase 8 — closed-retainer-period guard on date OR task changes
@@ -441,14 +474,20 @@ export const update = mutation({
       updates.isBillable = args.isBillable;
     }
 
-    // Re-resolve rate snapshot when anything that feeds into rate resolution
-    // changed: billable flag, or task (category/project cascade). The snapshot
-    // walks category → project → user overrides, so all cases must re-snapshot.
+    // Re-resolve the rate snapshot only when the entry's OWN category changes
+    // (explicit edit) or billability toggles. A task move does NOT re-resolve:
+    // the category is sticky and the same-project invariant keeps the rate
+    // cascade identical. The category feeding both the rate lookup and the
+    // stored snapshot is the explicit selection, else the entry's current
+    // (sticky) category — never the task's.
+    const categoryChanged =
+      args.workCategoryId !== undefined && args.workCategoryId !== entry.snapshotCategoryId;
     const billableChanged =
       args.isBillable !== undefined && args.isBillable !== entry.isBillable;
     const effectiveIsBillable = args.isBillable ?? entry.isBillable;
 
-    if (billableChanged || taskChanged) {
+    if (categoryChanged || billableChanged) {
+      const nextCategoryId = args.workCategoryId ?? entry.snapshotCategoryId;
       const task = await loadTargetTask();
       if (!task.projectId) throw new ConvexError("Task has no project");
       const project = await ctx.db.get(task.projectId);
@@ -457,14 +496,14 @@ export const update = mutation({
       const snapshot = await resolveRateSnapshot(ctx, {
         userId: entry.userId,
         orgId,
-        task,
+        workCategoryId: nextCategoryId,
         project,
         isBillable: effectiveIsBillable,
       });
       updates.costRate = snapshot.costRate;
       updates.billableRate = snapshot.billableRate;
       updates.rateCurrency = snapshot.rateCurrency;
-      updates.snapshotCategoryId = task.workCategoryId;
+      updates.snapshotCategoryId = nextCategoryId;
     }
 
     await ctx.db.patch(args.id, updates);
@@ -573,11 +612,13 @@ export const bulkUpdateBillable = mutation({
       if (entry.invoiceId !== undefined) continue;
       if (entry.settledAt !== undefined) continue;
 
-      // Re-resolve per entry (each entry may belong to a different user)
+      // Re-resolve per entry (each entry may belong to a different user) using
+      // the entry's OWN sticky category, never the task's — a billable toggle
+      // must not silently re-snapshot the discipline.
       const snapshot = await resolveRateSnapshot(ctx, {
         userId: entry.userId,
         orgId,
-        task,
+        workCategoryId: entry.snapshotCategoryId,
         project,
         isBillable: args.isBillable,
       });
@@ -587,7 +628,6 @@ export const bulkUpdateBillable = mutation({
         costRate: snapshot.costRate,
         billableRate: snapshot.billableRate,
         rateCurrency: snapshot.rateCurrency,
-        snapshotCategoryId: task.workCategoryId,
         updatedAt: now,
       });
       updated++;

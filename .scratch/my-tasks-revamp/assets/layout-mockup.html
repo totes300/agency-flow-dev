@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="hu">
+<head>
+<meta charset="utf-8">
+<title>My Tasks layout — 3 variáns (statikus előnézet)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root{
+    --bg:#fff; --fg:#18181b; --muted:#71717a; --muted2:#a1a1aa; --border:#e4e4e7;
+    --amber:#f59e0b; --hover:#f4f4f5;
+  }
+  *{box-sizing:border-box; margin:0}
+  body{font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#fafafa;color:var(--fg);padding:24px}
+  .note{max-width:720px;margin:0 auto 16px;font-size:12px;color:var(--muted);background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:10px 14px}
+  .note code{background:#fff;border:1px solid var(--border);border-radius:4px;padding:0 4px;font-size:11px}
+  .tabs{max-width:720px;margin:0 auto 12px;display:flex;gap:6px}
+  .tabs button{border:1px solid var(--border);background:#fff;border-radius:8px;padding:6px 14px;font-size:13px;cursor:pointer;color:var(--muted)}
+  .tabs button.active{color:var(--fg);font-weight:600;border-color:#a1a1aa}
+  .frame{max-width:720px;margin:0 auto;background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:20px 20px 28px;min-height:520px}
+  .variant{display:none}
+  .variant.show{display:block}
+  h1{font-size:22px;font-weight:700;margin:4px 0 18px;padding:0 8px}
+  .sec-head{display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border);padding:8px;font-weight:500}
+  .sec-head .cnt{font-size:11px;color:var(--muted2)}
+  .sec-head .hint{font-size:11px;color:var(--muted2);font-weight:400}
+  .sun{color:var(--amber)}
+  .row{display:flex;align-items:flex-start;gap:10px;padding:9px 8px;border-bottom:1px solid #f1f1f3;border-radius:8px;cursor:default}
+  .row:hover{background:var(--hover)}
+  .cb{width:15px;height:15px;border:1.5px solid #d4d4d8;border-radius:50%;margin-top:2px;flex:none}
+  .rmain{flex:1;min-width:0}
+  .rtitle{font-weight:500}
+  .rmeta{font-size:11.5px;color:var(--muted2);margin-top:2px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+  .rmeta .dot{width:6px;height:6px;border-radius:50%;display:inline-block}
+  .rside{flex:none;font-size:11.5px;color:var(--muted2);display:flex;gap:10px;align-items:center;padding-top:2px}
+  .age{color:var(--muted2)}
+  .empty-compact{padding:12px 8px;color:var(--muted2);font-size:13px}
+  .addline{padding:8px;color:var(--muted2);font-size:13px}
+  .divider{border-top:1px solid var(--border);margin:28px 0 10px}
+  /* quiet collapsed one-liners (A) */
+  .quiet{display:flex;align-items:center;gap:8px;width:100%;padding:7px 8px;background:none;border:0;font:inherit;font-size:13.5px;color:var(--muted);cursor:pointer;border-radius:6px;text-align:left}
+  .quiet:hover{color:var(--fg);background:var(--hover)}
+  .quiet .cnt{font-size:11px;color:var(--muted2)}
+  .quiet .hint{font-size:11px;color:var(--muted2)}
+  .quiet .chev{margin-left:auto;color:var(--muted2);font-size:11px}
+  .quiet-body{display:none}
+  .qopen + .quiet-body{display:block}
+  /* dimmed sections (B) */
+  .dimsec{opacity:.55;transition:opacity .2s}
+  .dimsec:hover{opacity:1}
+  .cap{display:flex;align-items:baseline;gap:8px;border-bottom:1px solid var(--border);padding:20px 8px 5px;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:600}
+  .cap .cnt,.cap .hint{font-weight:400;text-transform:none;letter-spacing:0;font-size:11px;color:var(--muted2)}
+  /* C toggle */
+  .ctoggle{display:flex;gap:4px;padding:0 8px 10px}
+  .ctoggle button{border:0;background:none;font:inherit;font-size:13.5px;padding:5px 10px;border-radius:6px;color:var(--muted);cursor:pointer;display:flex;gap:6px;align-items:center}
+  .ctoggle button:hover{background:var(--hover);color:var(--fg)}
+  .ctoggle button.on{color:var(--fg);font-weight:600}
+  .ctoggle .cnt{font-size:11px;color:var(--muted2);font-weight:400}
+  .nudge{display:flex;align-items:center;gap:8px;width:100%;margin-top:20px;padding:8px;background:none;border:0;font:inherit;font-size:13.5px;color:var(--muted);cursor:pointer;border-radius:6px;text-align:left}
+  .nudge:hover{color:var(--fg);background:var(--hover)}
+  .cview{display:none}.cview.show{display:block}
+  .bigempty{text-align:center;padding:36px 0;color:var(--muted2)}
+  .bigempty .t{color:var(--fg);font-weight:500;font-size:14px;margin-top:6px}
+  .bigempty .s{font-size:12px;margin-top:2px}
+</style>
+</head>
+<body>
+<div class="note">
+  <b>Statikus előnézet</b> — az igazi, valós adatokon futó prototípus a dev szervereden él:
+  <code>localhost:3000/my-tasks?variant=a</code> (lebegő váltósáv alul, ←/→ billentyűkkel is léptethető).
+  Itt a szerkezetet nézd, ne a sor-dizájnt — a kártya-anatómia (badge-ek) a következő ticket.
+</div>
+
+<div class="tabs">
+  <button class="active" data-v="a">A — Collapsed stack</button>
+  <button data-v="b">B — Dimmed inline</button>
+  <button data-v="c">C — Today / All work</button>
+  <button data-v="d">D — Section tabs</button>
+  <button data-v="e">E — Tabs + collapsible</button>
+  <button data-v="f">F — Today / Earlier / All</button>
+</div>
+
+<div class="frame">
+
+<!-- ═══════════ VARIANT A ═══════════ -->
+<div class="variant show" id="v-a">
+  <h1>My tasks</h1>
+  <div class="sec-head"><span class="sun">☀</span> Today <span class="cnt">0</span> <span class="hint">the Planner's plan for today</span></div>
+  <div class="empty-compact">Nothing planned for today — add a task below, or schedule one in the Planner.</div>
+  <div class="addline">+ Add task…</div>
+
+  <div class="divider"></div>
+
+  <button class="quiet" onclick="tq(this)">🕘 Earlier <span class="cnt">11</span> <span class="hint">move or let go</span><span class="chev">▸</span></button>
+  <div class="quiet-body"></div>
+
+  <button class="quiet qopen" onclick="tq(this)">In progress <span class="cnt">3</span> <span class="hint">· 2 in Earlier</span><span class="chev">▾</span></button>
+  <div class="quiet-body">
+    <div class="row"><span class="cb"></span><div class="rmain"><div class="rtitle">Ez egy development 12345</div><div class="rmeta">Pragmatico · Ongoing <span class="dot" style="background:#60a5fa"></span>Development</div></div><div class="rside">00:30</div></div>
+    <div class="row"><span class="cb"></span><div class="rmain"><div class="rtitle">June monthly report + July planning call prep</div><div class="rmeta">Arlow · Arlow monthly retainer <span class="dot" style="background:#4ade80"></span>PM · <span style="color:#ef4444">Jun 30</span></div></div><div class="rside">💬 3 &nbsp; 01:00</div></div>
+    <div class="row"><span class="cb"></span><div class="rmain"><div class="rtitle">Teso</div><div class="rmeta">Arlow · Arlow monthly retainer</div></div><div class="rside">01:00</div></div>
+  </div>
+
+  <button class="quiet" onclick="tq(this)">Completed today <span class="cnt">2</span><span class="chev">▸</span></button>
+  <div class="quiet-body"></div>
+</div>
+
+<!-- ═══════════ VARIANT B ═══════════ -->
+<div class="variant" id="v-b">
+  <h1>My tasks</h1>
+  <div class="sec-head"><span class="sun">☀</span> Today <span class="cnt">0</span> <span class="hint">the Planner's plan for today</span></div>
+  <div class="empty-compact">Nothing planned for today — add a task below, or schedule one in the Planner.</div>
+  <div class="addline">+ Add task…</div>
+
+  <section class="dimsec">
+    <div class="cap">Earlier <span class="cnt">11</span> <span class="hint">move or let go</span></div>
+    <div class="row"><span class="cb"></span><div class="rmain"><div class="rtitle">NAme</div><div class="rmeta">Pragmatico · Speaking site <span class="dot" style="background:#f472b6"></span>Copywriting</div></div><div class="rside"><span class="age">2d</span> 00:00</div></div>
+    <div class="row"><span class="cb"></span><div class="rmain"><div class="rtitle">Mallrad</div><div class="rmeta">Pragmatico · Ongoing</div></div><div class="rside"><span class="age">4d</span> 00:00</div></div>
+    <div class="row"><span class="cb"></span><div class="rmain"><div class="rtitle">Internal QA (non-billable)</div><div class="rmeta">SEED: T&amp;M (hourly billing) <span class="dot" style="background:#60a5fa"></span>Development</div></div><div class="rside"><span class="age">7d</span> 02:00</div></div>
+    <div class="row"><span class="cb"></span><div class="rmain"><div class="rtitle">Old reatiner task from january</div><div class="rmeta">Arlow · Arlow monthly retainer <span class="dot" style="background:#a78bfa"></span>Design · <span style="color:#ef4444">Apr 22</span></div></div><div class="rside">💬 2 <span class="age">10d</span> 20:45</div></div>
+    <div class="row"><span class="cb"></span><div class="rmain"><div class="rtitle">Teso</div><div class="rmeta">Arlow · Arlow monthly retainer</div></div><div class="rside"><span class="age">12d</span> 01:00</div></div>
+    <div class="row" style="border-bottom:0"><span class="cb"></span><div class="rmain"><div class="rtitle">… (+6 további)</div><div class="rmeta">&nbsp;</div></div></div>
+  </section>
+
+  <section class="dimsec">
+    <div class="cap">In progress <span class="cnt">3</span> <span class="hint">· 2 in Earlier</span></div>
+    <div class="row"><span class="cb"></span><div class="rmain"><div class="rtitle">Ez egy development 12345</div><div class="rmeta">Pragmatico · Ongoing <span class="dot" style="background:#60a5fa"></span>Development</div></div><div class="rside">00:30</div></div>
+    <div class="row"><span class="cb"></span><div class="rmain"><div class="rtitle">June monthly report + July planning call prep</div><div class="rmeta">Arlow · Arlow monthly retainer <span class="dot" style="background:#4ade80"></span>PM · <span style="color:#ef4444">Jun 30</span></div></div><div class="rside">💬 3 &nbsp; 01:00</div></div>
+  </section>
+</div>
+
+<!-- ═══════════ VARIANT C ═══════════ -->
+<div class="variant" id="v-c">
+  <h1>My tasks</h1>
+  <div class="ctoggle">
+    <button class="on" onclick="cv('today',this)">Today <span class="cnt">0</span></button>
+    <button onclick="cv('all',this)">All work <span class="cnt">16</span></button>
+  </div>
+
+  <div class="cview show" id="c-today">
+    <div class="sec-head"><span class="sun">☀</span> Today <span class="cnt">0</span> <span class="hint">the Planner's plan for today</span></div>
+    <div class="bigempty">☀<div class="t">Nothing planned for today</div><div class="s">Add a task with the sun icon, or schedule it in the Planner.</div></div>
+    <div class="addline">+ Add task…</div>
+    <button class="nudge" onclick="cv('all',document.querySelectorAll('.ctoggle button')[1])">🕘 11 planned earlier still open — review in All work <span style="margin-left:auto">›</span></button>
+  </div>
+
+  <div class="cview" id="c-all">
+    <div class="sec-head">🕘 Earlier <span class="cnt">11</span> <span class="hint">move or let go</span></div>
+    <div class="row"><span class="cb"></span><div class="rmain"><div class="rtitle">NAme</div><div class="rmeta">Pragmatico · Speaking site <span class="dot" style="background:#f472b6"></span>Copywriting</div></div><div class="rside"><span class="age">2d</span> 00:00</div></div>
+    <div class="row"><span class="cb"></span><div class="rmain"><div class="rtitle">Mallrad</div><div class="rmeta">Pragmatico · Ongoing</div></div><div class="rside"><span class="age">4d</span> 00:00</div></div>
+    <div class="row" style="border-bottom:0"><span class="cb"></span><div class="rmain"><div class="rtitle">… (+9 további)</div><div class="rmeta">&nbsp;</div></div></div>
+    <div class="sec-head" style="margin-top:16px">In progress <span class="cnt">5</span></div>
+    <div class="row"><span class="cb"></span><div class="rmain"><div class="rtitle">Teso</div><div class="rmeta">Arlow · Arlow monthly retainer</div></div><div class="rside">01:00</div></div>
+    <div class="row"><span class="cb"></span><div class="rmain"><div class="rtitle">Ez egy teszt feladat</div><div class="rmeta">Pragmatico · Ongoing <span class="dot" style="background:#4ade80"></span>PM</div></div><div class="rside">💬 1 &nbsp; 09:15</div></div>
+    <div class="row" style="border-bottom:0"><span class="cb"></span><div class="rmain"><div class="rtitle">… (+3 további)</div><div class="rmeta">&nbsp;</div></div></div>
+  </div>
+</div>
+
+<!-- ═══════════ VARIANT D ═══════════ -->
+<div class="variant" id="v-d">
+  <h1>My tasks</h1>
+  <div class="ctoggle" style="border-bottom:1px solid var(--border);padding-bottom:8px">
+    <button onclick="dv('today',this)">Today <span class="cnt">0</span></button>
+    <button class="on" onclick="dv('earlier',this)">Earlier <span class="cnt">11</span></button>
+    <button onclick="dv('inprogress',this)">In progress <span class="cnt">5</span></button>
+    <button onclick="dv('done',this)">Done today <span class="cnt">2</span></button>
+  </div>
+
+  <div class="cview" id="d-today">
+    <div class="sec-head"><span class="sun">☀</span> Today <span class="cnt">0</span> <span class="hint">the Planner's plan for today</span></div>
+    <div class="bigempty">☀<div class="t">Nothing planned for today</div><div class="s">Add a task with the sun icon, or schedule it in the Planner.</div></div>
+    <div class="addline">+ Add task…</div>
+    <button class="nudge" onclick="dv('earlier',document.querySelectorAll('#v-d .ctoggle button')[1])">🕘 11 planned earlier still open — review <span style="margin-left:auto">›</span></button>
+  </div>
+
+  <div class="cview show" id="d-earlier">
+    <div class="addline" style="font-size:11.5px">planned earlier, still open — move to today or let go</div>
+    <div class="row"><span class="cb"></span><div class="rmain"><div class="rtitle">NAme</div><div class="rmeta">Pragmatico · Speaking site <span class="dot" style="background:#f472b6"></span>Copywriting</div></div><div class="rside"><span class="age">2d</span> 00:00</div></div>
+    <div class="row"><span class="cb"></span><div class="rmain"><div class="rtitle">Mallrad</div><div class="rmeta">Pragmatico · Ongoing</div></div><div class="rside"><span class="age">4d</span> 00:00</div></div>
+    <div class="row"><span class="cb"></span><div class="rmain"><div class="rtitle">Internal QA (non-billable)</div><div class="rmeta">SEED: T&amp;M (hourly billing) <span class="dot" style="background:#60a5fa"></span>Development</div></div><div class="rside"><span class="age">7d</span> 02:00</div></div>
+    <div class="row"><span class="cb"></span><div class="rmain"><div class="rtitle">Old reatiner task from january</div><div class="rmeta">Arlow · Arlow monthly retainer <span class="dot" style="background:#a78bfa"></span>Design · <span style="color:#ef4444">Apr 22</span></div></div><div class="rside">💬 2 <span class="age">10d</span> 20:45</div></div>
+    <div class="row"><span class="cb"></span><div class="rmain"><div class="rtitle">Teso</div><div class="rmeta">Arlow · Arlow monthly retainer</div></div><div class="rside"><span class="age">12d</span> 01:00</div></div>
+    <div class="row" style="border-bottom:0"><span class="cb"></span><div class="rmain"><div class="rtitle">… (+6 további)</div><div class="rmeta">&nbsp;</div></div></div>
+  </div>
+
+  <div class="cview" id="d-inprogress">
+    <div class="row"><span class="cb"></span><div class="rmain"><div class="rtitle">Teso</div><div class="rmeta">Arlow · Arlow monthly retainer</div></div><div class="rside">01:00</div></div>
+    <div class="row"><span class="cb"></span><div class="rmain"><div class="rtitle">Ez egy teszt feladat</div><div class="rmeta">Pragmatico · Ongoing <span class="dot" style="background:#4ade80"></span>PM</div></div><div class="rside">💬 1 &nbsp; 09:15</div></div>
+    <div class="row"><span class="cb"></span><div class="rmain"><div class="rtitle">WTP javítások Live-nek</div><div class="rmeta">Pragmatico · Ongoing <span class="dot" style="background:#60a5fa"></span>Development</div></div><div class="rside">00:00</div></div>
+    <div class="row"><span class="cb"></span><div class="rmain"><div class="rtitle">Ez egy development 12345</div><div class="rmeta">Pragmatico · Ongoing <span class="dot" style="background:#60a5fa"></span>Development</div></div><div class="rside">00:30</div></div>
+    <div class="row" style="border-bottom:0"><span class="cb"></span><div class="rmain"><div class="rtitle">June monthly report + July planning call prep</div><div class="rmeta">Arlow · Arlow monthly retainer <span class="dot" style="background:#4ade80"></span>PM · <span style="color:#ef4444">Jun 30</span></div></div><div class="rside">💬 3 &nbsp; 01:00</div></div>
+  </div>
+
+  <div class="cview" id="d-done">
+    <div class="row"><span class="cb" style="background:#14b8a6;border-color:#14b8a6"></span><div class="rmain"><div class="rtitle" style="text-decoration:line-through;color:var(--muted)">Kész feladat 1</div><div class="rmeta">Pragmatico · Ongoing</div></div><div class="rside">00:45</div></div>
+    <div class="row" style="border-bottom:0"><span class="cb" style="background:#14b8a6;border-color:#14b8a6"></span><div class="rmain"><div class="rtitle" style="text-decoration:line-through;color:var(--muted)">Kész feladat 2</div><div class="rmeta">Arlow · Arlow monthly retainer</div></div><div class="rside">01:30</div></div>
+  </div>
+</div>
+
+<!-- ═══════════ VARIANT E ═══════════ -->
+<div class="variant" id="v-e">
+  <h1>My tasks</h1>
+  <div class="ctoggle">
+    <button onclick="ev('today',this)">Today <span class="cnt">0</span></button>
+    <button class="on" onclick="ev('all',this)">All work <span class="cnt">16</span></button>
+  </div>
+
+  <div class="cview" id="e-today">
+    <div class="sec-head"><span class="sun">☀</span> Today <span class="cnt">0</span> <span class="hint">the Planner's plan for today</span></div>
+    <div class="bigempty">☀<div class="t">Nothing planned for today</div><div class="s">Add a task with the sun icon, or schedule it in the Planner.</div></div>
+    <div class="addline">+ Add task…</div>
+    <button class="nudge" onclick="ev('all',document.querySelectorAll('#v-e .ctoggle button')[1])">🕘 11 planned earlier still open — review in All work <span style="margin-left:auto">›</span></button>
+  </div>
+
+  <div class="cview show" id="e-all">
+    <button class="quiet qopen" onclick="tq(this)">🕘 Earlier <span class="cnt">11</span> <span class="hint">move or let go</span><span class="chev">▾</span></button>
+    <div class="quiet-body">
+      <div class="row"><span class="cb"></span><div class="rmain"><div class="rtitle">NAme</div><div class="rmeta">Pragmatico · Speaking site <span class="dot" style="background:#f472b6"></span>Copywriting</div></div><div class="rside"><span class="age">2d</span> 00:00</div></div>
+      <div class="row"><span class="cb"></span><div class="rmain"><div class="rtitle">Mallrad</div><div class="rmeta">Pragmatico · Ongoing</div></div><div class="rside"><span class="age">4d</span> 00:00</div></div>
+      <div class="row"><span class="cb"></span><div class="rmain"><div class="rtitle">Old reatiner task from january</div><div class="rmeta">Arlow · Arlow monthly retainer <span class="dot" style="background:#a78bfa"></span>Design · <span style="color:#ef4444">Apr 22</span></div></div><div class="rside">💬 2 <span class="age">10d</span> 20:45</div></div>
+      <div class="row" style="border-bottom:0"><span class="cb"></span><div class="rmain"><div class="rtitle">… (+8 további)</div><div class="rmeta">&nbsp;</div></div></div>
+    </div>
+
+    <button class="quiet qopen" onclick="tq(this)">In progress <span class="cnt">5</span><span class="chev">▾</span></button>
+    <div class="quiet-body">
+      <div class="row"><span class="cb"></span><div class="rmain"><div class="rtitle">Teso</div><div class="rmeta">Arlow · Arlow monthly retainer</div></div><div class="rside">01:00</div></div>
+      <div class="row"><span class="cb"></span><div class="rmain"><div class="rtitle">Ez egy teszt feladat</div><div class="rmeta">Pragmatico · Ongoing <span class="dot" style="background:#4ade80"></span>PM</div></div><div class="rside">💬 1 &nbsp; 09:15</div></div>
+      <div class="row" style="border-bottom:0"><span class="cb"></span><div class="rmain"><div class="rtitle">… (+3 további)</div><div class="rmeta">&nbsp;</div></div></div>
+    </div>
+
+    <button class="quiet" onclick="tq(this)">Done today <span class="cnt">2</span><span class="chev">▸</span></button>
+    <div class="quiet-body">
+      <div class="row" style="border-bottom:0"><span class="cb" style="background:#14b8a6;border-color:#14b8a6"></span><div class="rmain"><div class="rtitle" style="text-decoration:line-through;color:var(--muted)">Kész feladat 1</div><div class="rmeta">Pragmatico · Ongoing</div></div><div class="rside">00:45</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ VARIANT F ═══════════ -->
+<div class="variant" id="v-f">
+  <h1>My tasks</h1>
+  <div class="ctoggle">
+    <button onclick="fv('today',this)">Today <span class="cnt">0</span></button>
+    <button class="on" onclick="fv('earlier',this)">Earlier <span class="cnt">11</span></button>
+    <button onclick="fv('all',this)">All work <span class="cnt">5</span></button>
+  </div>
+
+  <div class="cview" id="f-today">
+    <div class="sec-head"><span class="sun">☀</span> Today <span class="cnt">0</span> <span class="hint">the Planner's plan for today</span></div>
+    <div class="bigempty">☀<div class="t">Nothing planned for today</div><div class="s">Add a task with the sun icon, or schedule it in the Planner.</div></div>
+    <div class="addline">+ Add task…</div>
+    <button class="nudge" onclick="fv('earlier',document.querySelectorAll('#v-f .ctoggle button')[1])">🕘 11 planned earlier still open — move or let go <span style="margin-left:auto">›</span></button>
+  </div>
+
+  <div class="cview show" id="f-earlier">
+    <div class="addline" style="font-size:11.5px">planned earlier, still open — move to today or let go</div>
+    <div class="row"><span class="cb"></span><div class="rmain"><div class="rtitle">NAme</div><div class="rmeta">Pragmatico · Speaking site <span class="dot" style="background:#f472b6"></span>Copywriting</div></div><div class="rside"><span class="age">2d</span> 00:00</div></div>
+    <div class="row"><span class="cb"></span><div class="rmain"><div class="rtitle">Mallrad</div><div class="rmeta">Pragmatico · Ongoing</div></div><div class="rside"><span class="age">4d</span> 00:00</div></div>
+    <div class="row"><span class="cb"></span><div class="rmain"><div class="rtitle">Internal QA (non-billable)</div><div class="rmeta">SEED: T&amp;M (hourly billing) <span class="dot" style="background:#60a5fa"></span>Development</div></div><div class="rside"><span class="age">7d</span> 02:00</div></div>
+    <div class="row"><span class="cb"></span><div class="rmain"><div class="rtitle">Old reatiner task from january</div><div class="rmeta">Arlow · Arlow monthly retainer <span class="dot" style="background:#a78bfa"></span>Design · <span style="color:#ef4444">Apr 22</span></div></div><div class="rside">💬 2 <span class="age">10d</span> 20:45</div></div>
+    <div class="row"><span class="cb"></span><div class="rmain"><div class="rtitle">Teso</div><div class="rmeta">Arlow · Arlow monthly retainer</div></div><div class="rside"><span class="age">12d</span> 01:00</div></div>
+    <div class="row" style="border-bottom:0"><span class="cb"></span><div class="rmain"><div class="rtitle">… (+6 további)</div><div class="rmeta">&nbsp;</div></div></div>
+  </div>
+
+  <div class="cview" id="f-all">
+    <button class="quiet qopen" onclick="tq(this)">In progress <span class="cnt">5</span> <span class="hint">· 2 in Earlier</span><span class="chev">▾</span></button>
+    <div class="quiet-body">
+      <div class="row"><span class="cb"></span><div class="rmain"><div class="rtitle">Teso</div><div class="rmeta">Arlow · Arlow monthly retainer</div></div><div class="rside">01:00</div></div>
+      <div class="row"><span class="cb"></span><div class="rmain"><div class="rtitle">Ez egy teszt feladat</div><div class="rmeta">Pragmatico · Ongoing <span class="dot" style="background:#4ade80"></span>PM</div></div><div class="rside">💬 1 &nbsp; 09:15</div></div>
+      <div class="row"><span class="cb"></span><div class="rmain"><div class="rtitle">WTP javítások Live-nek</div><div class="rmeta">Pragmatico · Ongoing <span class="dot" style="background:#60a5fa"></span>Development</div></div><div class="rside">00:00</div></div>
+      <div class="row" style="border-bottom:0"><span class="cb"></span><div class="rmain"><div class="rtitle">… (+2 további)</div><div class="rmeta">&nbsp;</div></div></div>
+    </div>
+
+    <button class="quiet" onclick="tq(this)">Done today <span class="cnt">2</span><span class="chev">▸</span></button>
+    <div class="quiet-body">
+      <div class="row" style="border-bottom:0"><span class="cb" style="background:#14b8a6;border-color:#14b8a6"></span><div class="rmain"><div class="rtitle" style="text-decoration:line-through;color:var(--muted)">Kész feladat 1</div><div class="rmeta">Pragmatico · Ongoing</div></div><div class="rside">00:45</div></div>
+    </div>
+  </div>
+</div>
+
+</div>
+
+<script>
+  document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
+    document.querySelectorAll('.tabs button').forEach(x=>x.classList.remove('active'));
+    b.classList.add('active');
+    document.querySelectorAll('.variant').forEach(v=>v.classList.remove('show'));
+    document.getElementById('v-'+b.dataset.v).classList.add('show');
+  });
+  function tq(el){el.classList.toggle('qopen');el.querySelector('.chev').textContent=el.classList.contains('qopen')?'▾':'▸'}
+  function switchView(root,prefix,which,btn){
+    document.querySelectorAll('#'+root+' .ctoggle button').forEach(x=>x.classList.remove('on'));
+    btn.classList.add('on');
+    document.querySelectorAll('#'+root+' .cview').forEach(v=>v.classList.remove('show'));
+    document.getElementById(prefix+'-'+which).classList.add('show');
+  }
+  function cv(which,btn){switchView('v-c','c',which,btn)}
+  function dv(which,btn){switchView('v-d','d',which,btn)}
+  function ev(which,btn){switchView('v-e','e',which,btn)}
+  function fv(which,btn){switchView('v-f','f',which,btn)}
+</script>
+</body>
+</html>

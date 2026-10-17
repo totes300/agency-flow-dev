@@ -1438,7 +1438,7 @@ export const deleteImpact = query({
       for (const e of entries) {
         entryCount++;
         totalMinutes += e.durationMinutes;
-        if (e.invoiceId || e.settledAt) {
+        if (e.closeId || e.invoiceId || e.settledAt) {
           lockedCount++;
           lockedMinutes += e.durationMinutes;
         }
@@ -1506,7 +1506,7 @@ export const remove = mutation({
         .withIndex("by_taskId", (q) => q.eq("taskId", t._id))
         .collect();
       for (const e of entries) {
-        if (e.invoiceId || e.settledAt) {
+        if (e.closeId || e.invoiceId || e.settledAt) {
           throw new ConvexError(
             "This task has invoiced or settled time entries. Archive it instead to keep billing records intact.",
           );

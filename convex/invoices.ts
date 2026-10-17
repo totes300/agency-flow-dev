@@ -51,37 +51,28 @@ import {
 } from "./lib/commitScope";
 import type { Doc, Id } from "./_generated/dataModel";
 import { ceilToIncrement, round2 } from "./lib/billing/money";
+import { formatInvoiceNumber, monthLabel, periodSubjectLabel } from "./lib/billing/labels";
+import {
+  allocateInvoiceNumber,
+  deleteCloseModelDraft,
+  isCloseModelInvoice,
+  transitionCloseModelInvoice,
+} from "./lib/billing/invoiceLifecycle";
 import { getProjectEntries } from "./lib/projectEntries";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Round minutes UP to the nearest `roundTo` block. 0 or 1 = no rounding. */
-
-/** Round a number to 2 decimal places. */
-
-/** Format a month label from a YYYY-MM-DD date string. */
-function monthLabel(dateStr: string): string {
-  const [year, month] = dateStr.split("-");
-  const date = new Date(Number(year), Number(month) - 1, 1);
-  return date.toLocaleDateString("en-US", { month: "long", year: "numeric" });
-}
-
-function monthShortLabel(dateStr: string): string {
-  const [, month] = dateStr.split("-");
-  const date = new Date(2000, Number(month) - 1, 1);
-  return date.toLocaleDateString("en-US", { month: "short" });
-}
-
-function periodSubjectLabel(periodStart: string, periodEnd: string): string {
-  if (periodStart.slice(0, 7) === periodEnd.slice(0, 7)) {
-    return monthLabel(periodStart);
+/**
+ * Billing refactor expand phase: the pre-close editing mutations (rounding
+ * picker, refresh, line amount edits) must never touch a close-model invoice,
+ * whose money is frozen at commit (docs/prd-billing-refactor.md D6, D7, D9).
+ */
+function assertLegacyInvoice(invoice: Doc<"invoices">): void {
+  if (isCloseModelInvoice(invoice)) {
+    throw new ConvexError(
+      "This invoice's amounts come from its close. Fix the time entries in Billing → Close, or add a manual line.",
+    );
   }
-  const startYear = periodStart.slice(0, 4);
-  const endYear = periodEnd.slice(0, 4);
-  const startMonth = monthShortLabel(periodStart);
-  const endMonth = monthShortLabel(periodEnd);
-  if (startYear === endYear) return `${startMonth}-${endMonth} ${endYear}`;
-  return `${startMonth} ${startYear}-${endMonth} ${endYear}`;
 }
 
 /** Inclusive month list from a YYYY-MM-DD periodStart to periodEnd. */
@@ -94,11 +85,6 @@ function invoiceMonthRange(
   const [endYear, endMonth] = periodEnd.split("-").map(Number);
   const span = (endYear * 12 + (endMonth - 1)) - (startYear * 12 + (startMonth - 1)) + 1;
   return monthRangeFrom({ year: startYear, month: startMonth }, span);
-}
-
-/** Format an invoice number for display/search, matching lib/format.ts:formatInvoiceNumber. */
-function formatInvoiceNumber(prefix: string, number: number): string {
-  return `${prefix}${String(number).padStart(3, "0")}`;
 }
 
 // ─── Queries ──────────────────────────────────────────────────────────────────
@@ -1839,6 +1825,7 @@ export const updateInvoiceRounding = mutation({
     if (!invoice || invoice.orgId !== orgId) {
       throw new ConvexError("Invoice not found.");
     }
+    assertLegacyInvoice(invoice);
     if (invoice.status !== "draft") {
       throw new ConvexError("Only draft invoices can change rounding.");
     }
@@ -1991,6 +1978,7 @@ export const refreshInvoiceDraft = mutation({
     if (!invoice || invoice.orgId !== orgId) {
       throw new ConvexError("Invoice not found.");
     }
+    assertLegacyInvoice(invoice);
     if (invoice.status !== "draft") {
       throw new ConvexError("Only draft invoices can be refreshed.");
     }
@@ -2538,6 +2526,7 @@ export const updateInvoiceLineItem = mutation({
     if (!invoice || invoice.orgId !== orgId || invoice.status !== "draft") {
       throw new ConvexError("Only draft invoices can be edited.");
     }
+    assertLegacyInvoice(invoice);
 
     // Derived line types are anchored to project/invoice snapshots
     // (retainerOverageRate etc.) — editing their numeric fields would silently
@@ -2687,6 +2676,7 @@ export const addInvoiceLineItem = mutation({
     if (!invoice || invoice.orgId !== orgId) {
       throw new ConvexError("Invoice not found.");
     }
+    assertLegacyInvoice(invoice);
     if (invoice.status !== "draft") {
       throw new ConvexError("Only draft invoices can be edited.");
     }
@@ -2735,6 +2725,7 @@ export const removeInvoiceLineItem = mutation({
     if (!invoice || invoice.orgId !== orgId || invoice.status !== "draft") {
       throw new ConvexError("Only draft invoices can be edited.");
     }
+    assertLegacyInvoice(invoice);
 
     // Guard core billing rows: `fixed` is derived from the project and anchors
     // the invoice total — removing it leaves the invoice in an incoherent
@@ -2859,7 +2850,14 @@ export async function applyStatusTransition(
   orgId: string,
   invoice: Doc<"invoices">,
   newStatus: InvoiceStatus,
+  actorId?: Id<"users">,
 ): Promise<TransitionResult> {
+  // Billing refactor expand phase: invoices created by the close model follow
+  // its lifecycle (docs/prd-billing-refactor.md §8.2).
+  if (isCloseModelInvoice(invoice)) {
+    if (!actorId) throw new ConvexError("An acting user is required for this invoice.");
+    return transitionCloseModelInvoice(ctx, { orgId, userId: actorId }, invoice, newStatus);
+  }
   const allowed = VALID_TRANSITIONS[invoice.status];
   if (!allowed || !allowed.includes(newStatus)) {
     return {
@@ -2968,15 +2966,8 @@ export async function applyStatusTransition(
     // time. Bulk transitions are safe: Convex mutations read their own
     // writes, so sequential allocations inside one mutation see the bumped
     // counter.
-    if (invoice.number == null) {
-      const nextNumber = orgSettings.nextInvoiceNumber ?? 1;
-      patch.number = nextNumber;
-      patch.prefix = orgSettings.invoicePrefix ?? invoice.prefix;
-      await ctx.db.patch(orgSettings._id, {
-        nextInvoiceNumber: nextNumber + 1,
-        updatedAt: now,
-      });
-    }
+    const allocated = await allocateInvoiceNumber(ctx, orgSettings, invoice);
+    if (allocated) Object.assign(patch, allocated);
   }
 
   await ctx.db.patch(invoice._id, patch);
@@ -3049,14 +3040,14 @@ export const changeInvoiceStatus = mutation({
     ),
   },
   handler: async (ctx, args) => {
-    const { orgId } = await requireAdmin(ctx);
+    const { orgId, userId } = await requireAdmin(ctx);
 
     const invoice = await ctx.db.get(args.id);
     if (!invoice || invoice.orgId !== orgId) {
       throw new ConvexError("Invoice not found.");
     }
 
-    const result = await applyStatusTransition(ctx, orgId, invoice, args.newStatus);
+    const result = await applyStatusTransition(ctx, orgId, invoice, args.newStatus, userId);
     if (!result.ok) throw new ConvexError(result.reason);
   },
 });
@@ -3079,7 +3070,7 @@ export const bulkChangeInvoiceStatus = mutation({
     ),
   },
   handler: async (ctx, args) => {
-    const { orgId } = await requireAdmin(ctx);
+    const { orgId, userId } = await requireAdmin(ctx);
 
     const succeeded: Id<"invoices">[] = [];
     const failed: { id: Id<"invoices">; reason: string }[] = [];
@@ -3090,7 +3081,7 @@ export const bulkChangeInvoiceStatus = mutation({
         failed.push({ id, reason: "Invoice not found." });
         continue;
       }
-      const result = await applyStatusTransition(ctx, orgId, invoice, args.newStatus);
+      const result = await applyStatusTransition(ctx, orgId, invoice, args.newStatus, userId);
       if (result.ok) {
         succeeded.push(id);
       } else {
@@ -3125,7 +3116,7 @@ export const markInvoicesPaid = mutation({
     invoiceIds: v.array(v.id("invoices")),
   },
   handler: async (ctx, args) => {
-    const { orgId } = await requireAdmin(ctx);
+    const { orgId, userId } = await requireAdmin(ctx);
     const now = Date.now();
 
     let updated = 0;
@@ -3160,7 +3151,7 @@ export const markInvoicesPaid = mutation({
         // future widening of classifyMarkPaid can't silently bypass
         // settle/unsettle. `setPaidAt` is unused — applyStatusTransition
         // computes `paidAt = now` from its own `now` (identical here).
-        const result = await applyStatusTransition(ctx, orgId, invoice, "paid");
+        const result = await applyStatusTransition(ctx, orgId, invoice, "paid", userId);
         if (!result.ok) {
           // Should be unreachable — classifyMarkPaid only patches when
           // current=invoiced, and invoiced → paid is in VALID_TRANSITIONS.
@@ -3201,7 +3192,7 @@ export const undoMarkInvoicesPaid = mutation({
     ),
   },
   handler: async (ctx, args) => {
-    const { orgId } = await requireAdmin(ctx);
+    const { orgId, userId } = await requireAdmin(ctx);
     const now = Date.now();
 
     let reverted = 0;
@@ -3246,6 +3237,7 @@ export const undoMarkInvoicesPaid = mutation({
         orgId,
         invoice,
         outcome.setStatus,
+        userId,
       );
       if (!result.ok) {
         skipped.push({ id: snapshot.id, reason: result.reason });
@@ -3280,11 +3272,15 @@ export const deleteInvoice = mutation({
     id: v.id("invoices"),
   },
   handler: async (ctx, args) => {
-    const { orgId } = await requireAdmin(ctx);
+    const { orgId, userId } = await requireAdmin(ctx);
 
     const invoice = await ctx.db.get(args.id);
     if (!invoice || invoice.orgId !== orgId) {
       throw new ConvexError("Invoice not found.");
+    }
+    if (isCloseModelInvoice(invoice)) {
+      await deleteCloseModelDraft(ctx, { orgId, userId }, invoice);
+      return;
     }
     if (invoice.status !== "draft") {
       throw new ConvexError(

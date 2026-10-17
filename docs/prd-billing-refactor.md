@@ -463,16 +463,42 @@ the hot fixes early. Each slice ends green on the gates above.
   asserted difference is B7. Mutation-checked: breaking T&M rounding or the carried
   reason turns it red.
 
-**Slice 3 — Write path**
-- `commitClose`, `releaseClose`, and lifecycle mutations (finalize, revert, void, delete,
-  paid/unpaid) on the new model, with events.
-- Invoice lines generated from the snapshot. Rates and amounts move to minor units
-  (deferred from slice 1). Editability per D6.
-- `createFixedInvoice` (D5). `skipEntries` and un-skip ported to the new scope rule,
-  with events.
-- Remove refresh, the stale-draft gate, the rounding picker, Path B, and line amount
-  edits.
-- The workspace commit is switched over. The B3–B7 tests now pass.
+**Slice 3 — Close model goes live (expand → cutover)**
+
+Switching only the writes would leave the old readers disagreeing with the new
+writer. So slice 3 is an expand → cutover migration in which every commit stays
+consistent:
+
+- **3a — write path, in parallel** *(done 2026-10-17)*
+  - `lib/billing/closeLifecycle` (`commitClose`, `releaseClose`),
+    `lib/billing/invoiceLifecycle` (finalize, revert, void, paid,
+    `deleteCloseModelDraft`, number allocation shared with the old path),
+    `lib/billing/closeData` (the only docs → model mapping), and
+    `lib/billing/events`.
+  - Public: `billingCloses` (`commitClose`, `reopenClose`, `skipEntries`) and
+    `billingInvoices` (`createFixedInvoice`, `setLineDescription`, manual lines).
+  - The existing status mutations and `deleteInvoice` delegate to the new lifecycle
+    for close-model invoices (marker: `totalMinor`). The old editing mutations
+    (rounding, refresh, line amounts) reject them.
+  - The entry guards treat `closeId` as a lock.
+  - Invoice schema widened with `closeId`, `*Minor`, and `groupKey`. The decimal fields
+    are derived display copies until slice 5.
+  - Billing output (closes, invoices, lines) is stored in minor units. Rate *config*
+    (rate tables, project overage rate and fixed fee) stays as typed decimals and is
+    converted once, at commit (`closeData.toBillingEntry`, `toPricingProject`).
+  - `billingWritePath.test.ts` (17 tests, mutation-checked) covers N1, N2, N3/N5, N7,
+    N9, N10, B3, and B6 on the new path.
+- **3b — read path, in parallel:** close queue, workspace, monthly report, invoice
+  detail and list, project billing summaries, and worksheets on `scope`, `pricing`,
+  and snapshots, keeping the current response shapes so the UI switch is a reference
+  swap.
+- **3c — cutover:**
+  - The UI calls the new API. Refresh, the rounding picker, line amount edits, and
+    Path B leave the UI.
+  - The retainer entry-date guard is dropped: late time carries forward by design
+    (story 28).
+  - Dev data reset and reseed. The consistency suite runs on the new API, and B3–B7
+    become plain tests.
 
 **Slice 4 — Read path**
 - Queue (one row per project), workspace, monthly report (N8), worksheets (2 exports),

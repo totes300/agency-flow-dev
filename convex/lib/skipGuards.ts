@@ -18,6 +18,8 @@ export type SkipEligibilityEntry = {
   // `Doc<"timeEntries">` rows satisfy the shape.
   invoiceId?: unknown;
   settledAt?: number;
+  /** Billing refactor: settled by a live close. */
+  closeId?: unknown;
 };
 
 export type SkipEligibilityResult =
@@ -28,7 +30,8 @@ export type SkipEligibilityResult =
 export function isSkippable(entry: SkipEligibilityEntry): boolean {
   const invoiced = entry.invoiceId !== undefined && entry.invoiceId !== null;
   const settled = entry.settledAt !== undefined && entry.settledAt !== null;
-  return !invoiced && !settled;
+  const closed = entry.closeId !== undefined && entry.closeId !== null;
+  return !invoiced && !settled && !closed;
 }
 
 /**

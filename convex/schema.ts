@@ -308,6 +308,15 @@ export default defineSchema({
     // flip a draft's balance meaning when an admin toggles settings mid-cycle.
     retainerRolloverEnabled: v.optional(v.boolean()),
     retainerCycleLength: v.optional(v.number()),
+    // ─── Billing refactor (docs/prd-billing-refactor.md §5.2) ─────────────
+    // Expand phase: invoices created by the close model carry these, and
+    // `totalMinor !== undefined` marks such an invoice (lib/billing/
+    // invoiceLifecycle.isCloseModelInvoice). The decimal `subtotal`/`total`
+    // above are then display copies derived from the minor amounts; the
+    // contract phase (slice 5) drops them and the retainer* snapshot fields.
+    closeId: v.optional(v.id("billingCloses")),
+    subtotalMinor: v.optional(v.number()),
+    totalMinor: v.optional(v.number()),
     createdAt: v.number(),
     updatedAt: v.number(),
     createdBy: v.id("users"),
@@ -344,6 +353,12 @@ export default defineSchema({
     quantityMinutes: v.optional(v.number()),
     workCategoryId: v.optional(v.id("workCategories")),
     timeEntryIds: v.optional(v.array(v.id("timeEntries"))),
+    // Close-model lines (expand phase, see `invoices` above): money in minor
+    // units; `quantity`/`unitPrice`/`amount` are derived display copies.
+    // `groupKey` ties a time line to its pricing group (category::task::rate).
+    amountMinor: v.optional(v.number()),
+    unitPriceMinor: v.optional(v.number()),
+    groupKey: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
   }).index("by_invoiceId", ["invoiceId"]),

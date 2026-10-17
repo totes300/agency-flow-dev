@@ -49,6 +49,24 @@ async function invoiceLockMessage(
   return `Cannot ${action} a time entry linked to an invoice — void the invoice first`;
 }
 
+/**
+ * Lock message for an entry settled by a live close (billing refactor, N1).
+ * The unblock path depends on whether the close is still a draft.
+ */
+async function closeLockMessage(
+  ctx: { db: { get: (id: Id<"billingCloses">) => Promise<Doc<"billingCloses"> | null> } },
+  closeId: Id<"billingCloses">,
+  action: "edit" | "delete",
+): Promise<string> {
+  const close = await ctx.db.get(closeId);
+  if (close?.status === "draft") {
+    return `Cannot ${action} a time entry that's on a draft invoice — delete the draft first`;
+  }
+  return close?.invoiceId
+    ? `Cannot ${action} a time entry linked to an invoice — void the invoice first`
+    : `Cannot ${action} a time entry in a closed period — reopen the period first`;
+}
+
 // ─── Queries ────────────────────────────────────────────────────────────────────
 
 export const listByTask = query({
@@ -354,6 +372,9 @@ export const update = mutation({
     // overage; `settledAt` covers retainer within-budget close (Slice 3,
     // populates without an invoice). Distinct messages so the unblock path
     // is obvious to the user.
+    if (entry.closeId !== undefined) {
+      throw new ConvexError(await closeLockMessage(ctx, entry.closeId, "edit"));
+    }
     if (entry.invoiceId !== undefined) {
       throw new ConvexError(await invoiceLockMessage(ctx, entry.invoiceId, "edit"));
     }
@@ -528,6 +549,9 @@ export const remove = mutation({
     }
 
     // Phase 8 — settlement guard (same rule as `update`).
+    if (entry.closeId !== undefined) {
+      throw new ConvexError(await closeLockMessage(ctx, entry.closeId, "delete"));
+    }
     if (entry.invoiceId !== undefined) {
       throw new ConvexError(await invoiceLockMessage(ctx, entry.invoiceId, "delete"));
     }
@@ -600,6 +624,7 @@ export const bulkUpdateBillable = mutation({
       if (entry.isBillable === args.isBillable) continue;
       // Skip locked entries — changing billable status would break the
       // invoice snapshot OR the settled-period report. Both axes apply.
+      if (entry.closeId !== undefined) continue;
       if (entry.invoiceId !== undefined) continue;
       if (entry.settledAt !== undefined) continue;
 

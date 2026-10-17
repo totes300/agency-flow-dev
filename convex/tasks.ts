@@ -1170,7 +1170,10 @@ export const update = mutation({
         const project = await ctx.db.get(args.projectId);
         if (!project || project.orgId !== orgId) throw new ConvexError("Project not found");
       }
-      if (args.projectId !== null && task.projectId && args.projectId !== task.projectId) {
+      // Covers clearing the project too: an entry's `projectId` is stamped
+      // from its task, so a task with entries must keep its project forever.
+      const nextProjectId = args.projectId ?? undefined;
+      if (nextProjectId !== task.projectId) {
         const hasEntries = await ctx.db.query("timeEntries").withIndex("by_taskId", (q) => q.eq("taskId", args.id)).first();
         if (hasEntries) throw new ConvexError("Cannot change the project of a task with time entries — existing entries keep their original rate snapshots");
       }
@@ -1687,10 +1690,8 @@ export const bulkUpdate = mutation({
         }
         case "project": {
           if (task.projectId === args.action.projectId) { updated++; break; }
-          if (task.projectId) {
-            const hasEntries = await ctx.db.query("timeEntries").withIndex("by_taskId", (q) => q.eq("taskId", taskId)).first();
-            if (hasEntries) { skipped.push({ taskId, title: task.title, reason: "Has time entries — cannot change project" }); continue; }
-          }
+          const hasEntries = await ctx.db.query("timeEntries").withIndex("by_taskId", (q) => q.eq("taskId", taskId)).first();
+          if (hasEntries) { skipped.push({ taskId, title: task.title, reason: "Has time entries — cannot change project" }); continue; }
           const projPatch: Record<string, unknown> = { projectId: args.action.projectId, updatedAt: now };
           // Auto-assign default assignee if task has no assignees
           if (task.assigneeIds.length === 0 && task.workCategoryId) {

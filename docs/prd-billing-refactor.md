@@ -428,13 +428,24 @@ the hot fixes early. Each slice ends green on the gates above.
   that is safe on the old model).
 - Done: the consistency suite runs and the known failures are marked.
 
-**Slice 1 — Foundations**
-- `lib/billing/money.ts` (exponent table, `roundHalfUp`, `ceilTo`, `priceMinutes`) and
-  `lib/billing/periods.ts` (grid, `periodOf`, `nextPeriod`, `monthBucket`). Replace all
-  the copied helpers.
-- `timeEntries.projectId` plus index, sync rules (§5.2), and fan-out removal in billing
-  readers.
-- Rates in minor units. Reseed.
+**Slice 1 — Foundations** *(done 2026-10-17)*
+- `lib/billing/money.ts` (exponent table, `roundHalfUp`, `ceilToIncrement`,
+  `priceMinutesMinor`, legacy `round2`) and `lib/billing/periods.ts` (grid,
+  `periodOfDate`, `nextPeriod`, `monthBucket`). All 10 private rounding copies in
+  `convex/` and `billingScope`'s private grid now import them.
+- `timeEntries.projectId` (required) with index `by_orgId_projectId`, rolled out as
+  widen → backfill (`migrations/backfillEntryProjectId`) → narrow. Task project changes
+  are now blocked for any task with entries, including clearing the project, which used
+  to be allowed.
+- `lib/projectEntries.getProjectEntries` replaces the tasks → entries fan-out in every
+  reader that survives the refactor: queue, workspace, statements, worksheets, project
+  overview/breakdown/retainer data, agent reports, period close/reopen, commit scope,
+  and the delete guards.
+- *Deferred deliberately:*
+  - Fan-outs inside `createInvoice`, the draft refresh, `lib/settleEntries`, and the
+    dead `lib/retainerCycle` stay until slices 3 and 5 delete that code.
+  - Rates and amounts in minor units move to slice 3, together with the new pricing
+    module. Converting the old engines first would be work thrown away in slice 5.
 
 **Slice 2 — Close model and pure modules**
 - Schema: `billingCloses`, `billingCloseEntries`, `billingEvents`, `timeEntries.closeId`.
@@ -445,7 +456,8 @@ the hot fixes early. Each slice ends green on the gates above.
 **Slice 3 — Write path**
 - `commitClose`, `releaseClose`, and lifecycle mutations (finalize, revert, void, delete,
   paid/unpaid) on the new model, with events.
-- Invoice lines generated from the snapshot. Minor-unit amounts. Editability per D6.
+- Invoice lines generated from the snapshot. Rates and amounts move to minor units
+  (deferred from slice 1). Editability per D6.
 - `createFixedInvoice` (D5). `skipEntries` and un-skip ported to the new scope rule,
   with events.
 - Remove refresh, the stale-draft gate, the rounding picker, Path B, and line amount

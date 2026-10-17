@@ -103,6 +103,7 @@ export async function insertTimerEntry(
 
   const entryId = await ctx.db.insert("timeEntries", {
     orgId: opts.orgId,
+    projectId: opts.project._id,
     taskId: opts.task._id,
     userId: opts.ownerId,
     date,

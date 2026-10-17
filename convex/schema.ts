@@ -365,6 +365,12 @@ export default defineSchema({
   //   directly. DO NOT add a mutation that allows client.currency edits.
   timeEntries: defineTable({
     orgId: v.string(),
+    // Denormalized from the task at creation (docs/prd-billing-refactor.md
+    // §5.2). Stable by construction: entries are only created on project
+    // tasks, a task with entries can never change (or drop) its project, and
+    // an entry can only move to a task in the same project. Lets every
+    // project reader use `by_orgId_projectId` instead of fanning out over tasks.
+    projectId: v.id("projects"),
     taskId: v.id("tasks"),
     userId: v.id("users"),
     date: v.string(),                         // YYYY-MM-DD (org timezone)
@@ -435,6 +441,7 @@ export default defineSchema({
     // carry `invoiceId === X`. Data drift is treated as a bug.
   })
     .index("by_orgId", ["orgId"])
+    .index("by_orgId_projectId", ["orgId", "projectId"])
     .index("by_taskId", ["taskId"])
     .index("by_userId_date", ["userId", "date"])
     .index("by_orgId_date", ["orgId", "date"]),

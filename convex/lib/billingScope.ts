@@ -40,6 +40,19 @@
  */
 
 import type { Id } from "../_generated/dataModel";
+import { ceilToIncrement, round2 } from "./billing/money";
+import {
+  absMonthOf,
+  laterPeriod,
+  monthKeyFromAbs,
+  monthKeyOf,
+  monthStartOfAbs,
+  nextPeriod,
+  periodMonths,
+  periodOfAbs,
+  periodOfDate,
+  type Period,
+} from "./billing/periods";
 
 // ─── Inputs ──────────────────────────────────────────────────────────────────
 
@@ -115,7 +128,7 @@ export type ComputeScopeInput = {
 
 // ─── Output ──────────────────────────────────────────────────────────────────
 
-export type Period = { start: string; end: string };
+export type { Period };
 
 export type CarriedReason = "skipped" | "logged-late";
 
@@ -197,103 +210,9 @@ export type BillingScopeReport = {
   fromSettlementStamps: boolean;
 };
 
-// ─── Date / period grid helpers (pure) ─────────────────────────────────────────
-
-/** Absolute month index (years * 12 + monthIndex0) for a YYYY-MM(-DD) string. */
-function absMonthOf(ymd: string): number {
-  const y = Number(ymd.slice(0, 4));
-  const m = Number(ymd.slice(5, 7)); // 1-12
-  return y * 12 + (m - 1);
-}
-
-/** {year, month(1-12)} from an absolute month index. */
-function ymFromAbs(abs: number): { year: number; month: number } {
-  return { year: Math.floor(abs / 12), month: (abs % 12) + 1 };
-}
-
-/** YYYY-MM key from an absolute month index. */
-function monthKeyFromAbs(abs: number): string {
-  const { year, month } = ymFromAbs(abs);
-  return `${year}-${String(month).padStart(2, "0")}`;
-}
-
-/** YYYY-MM key for a date string. */
-function monthKeyOf(ymd: string): string {
-  return ymd.slice(0, 7);
-}
-
-/** First day (YYYY-MM-01) of an absolute month. */
-function monthStart(abs: number): string {
-  return `${monthKeyFromAbs(abs)}-01`;
-}
-
-/** Last day (YYYY-MM-DD) of an absolute month. Timezone-free UTC calendar math. */
-function monthEnd(abs: number): string {
-  const { year, month } = ymFromAbs(abs);
-  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
-  return `${monthKeyFromAbs(abs)}-${String(lastDay).padStart(2, "0")}`;
-}
-
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
-}
-
-function roundMinutesUpTo(minutes: number, roundTo: number): number {
-  if (roundTo <= 1) return minutes;
-  return Math.ceil(minutes / roundTo) * roundTo;
-}
-
-/**
- * Is this retainer project period-gridded by cycle (rollover ON) rather than by
- * calendar month? A rollover retainer's close unit is the N-month cycle
- * (PRD § Definitions); a non-rollover retainer and T&M close monthly.
- */
-function isCycleGrid(project: ScopeProjectInput): boolean {
-  return (
-    project.billingType === "retainer" &&
-    project.rolloverEnabled === true &&
-    (project.cycleLength ?? 1) > 1
-  );
-}
-
-/** Months per period on this project's grid (1 = monthly, N = cycle length). */
-function periodMonths(project: ScopeProjectInput): number {
-  return isCycleGrid(project) ? Math.max(1, project.cycleLength ?? 1) : 1;
-}
-
-/**
- * The period (start/end) that a given absolute month falls into, quantized to
- * this project's grid. For cycles the grid is anchored to `startDate`; a month
- * before the project start clamps to the first cycle (defensive — entries
- * shouldn't predate the project).
- */
-function periodOfAbs(project: ScopeProjectInput, abs: number): Period {
-  const step = periodMonths(project);
-  if (step === 1) {
-    return { start: monthStart(abs), end: monthEnd(abs) };
-  }
-  const startAbs = absMonthOf(project.startDate ?? monthStart(abs));
-  const offset = abs - startAbs;
-  const cycleIndex = Math.max(0, Math.floor(offset / step));
-  const firstAbs = startAbs + cycleIndex * step;
-  return { start: monthStart(firstAbs), end: monthEnd(firstAbs + step - 1) };
-}
-
-/** The period containing a date on this project's grid. */
-function periodOfDate(project: ScopeProjectInput, date: string): Period {
-  return periodOfAbs(project, absMonthOf(date));
-}
-
-/** The period immediately after `period` on this project's grid. */
-function nextPeriod(project: ScopeProjectInput, period: Period): Period {
-  const step = periodMonths(project);
-  return periodOfAbs(project, absMonthOf(period.start) + step);
-}
-
-/** Chronological max of two periods (by start). */
-function laterPeriod(a: Period, b: Period): Period {
-  return a.start >= b.start ? a : b;
-}
+// ─── Date / period grid helpers ─────────────────────────────────────────────────
+// The grid lives in `billing/periods.ts` (shared with the close-entity rebuild);
+// rounding lives in `billing/money.ts`. No private copies (PRD §7).
 
 // ─── Open-state + close-state predicates ───────────────────────────────────────
 
@@ -322,7 +241,7 @@ function isRetainerMonthClosed(
   invoicedAnchorMonths: Set<string>,
 ): boolean {
   return (
-    closedMonthStarts.has(monthStart(monthAbs)) ||
+    closedMonthStarts.has(monthStartOfAbs(monthAbs)) ||
     invoicedAnchorMonths.has(monthKeyFromAbs(monthAbs))
   );
 }
@@ -729,7 +648,7 @@ function computeTmAmount(
 
   let amount = 0;
   for (const g of groups.values()) {
-    amount += round2((roundMinutesUpTo(g.minutes, rounding) / 60) * g.rate);
+    amount += round2((ceilToIncrement(g.minutes, rounding) / 60) * g.rate);
   }
   return round2(amount);
 }

@@ -175,6 +175,7 @@ async function seed(
     });
     const entryId = await ctx.db.insert("timeEntries", {
       orgId: ORG_ID,
+      projectId,
       taskId,
       userId,
       date: "2026-03-15",
@@ -694,6 +695,7 @@ describe("applyStatusTransition — cycle invoice stamps monthly buckets", () =>
       const mkEntry = (date: string) =>
         ctx.db.insert("timeEntries", {
           orgId: ORG_ID,
+          projectId,
           taskId,
           userId,
           date,
@@ -863,6 +865,7 @@ describe("applyStatusTransition — retainer non-billable companions (F4)", () =
       ) =>
         ctx.db.insert("timeEntries", {
           orgId: ORG_ID,
+          projectId,
           taskId,
           userId,
           date,

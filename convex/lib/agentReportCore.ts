@@ -16,6 +16,8 @@
  *    fee-based and shows up on the invoice side of the snapshot.
  */
 
+import { round2 } from "./billing/money";
+
 // ─── Shared input shapes ─────────────────────────────────────────────────────
 
 /** Structural subset of a `timeEntries` doc the aggregators consume. */
@@ -38,10 +40,6 @@ export type TaskProjectRef = {
   clientName: string;
   currency: string;
 };
-
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
-}
 
 // ─── Month helpers ───────────────────────────────────────────────────────────
 

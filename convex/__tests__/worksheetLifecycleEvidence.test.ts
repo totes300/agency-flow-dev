@@ -106,6 +106,7 @@ async function seed(
     }): Promise<Id<"timeEntries">> {
       return await ctx.db.insert("timeEntries", {
         orgId: ORG_ID,
+        projectId,
         taskId,
         userId,
         date: input.date,

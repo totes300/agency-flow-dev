@@ -9,10 +9,7 @@
 
 import type { QueryCtx } from "../_generated/server";
 import type { Id } from "../_generated/dataModel";
-
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
-}
+import { round2 } from "./billing/money";
 
 /**
  * Sum of `lineType:"fixed"` amounts across the project's FINALIZED invoices

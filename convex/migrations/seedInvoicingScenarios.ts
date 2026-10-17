@@ -295,8 +295,11 @@ export default internalMutation({
       const startedAt = Date.parse(
         `${opts.date}T${String(hour).padStart(2, "0")}:00:00Z`,
       );
+      const task = await ctx.db.get(opts.taskId);
+      if (!task?.projectId) throw new Error("Seed task has no project");
       await ctx.db.insert("timeEntries", {
         orgId,
+        projectId: task.projectId,
         taskId: opts.taskId,
         userId: userId!,
         date: opts.date,

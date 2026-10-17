@@ -50,19 +50,14 @@ import {
   isWholeCalendarMonth,
 } from "./lib/commitScope";
 import type { Doc, Id } from "./_generated/dataModel";
+import { ceilToIncrement, round2 } from "./lib/billing/money";
+import { getProjectEntries } from "./lib/projectEntries";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 /** Round minutes UP to the nearest `roundTo` block. 0 or 1 = no rounding. */
-function roundMinutesUp(minutes: number, roundTo: number): number {
-  if (roundTo <= 1) return minutes;
-  return Math.ceil(minutes / roundTo) * roundTo;
-}
 
 /** Round a number to 2 decimal places. */
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
-}
 
 /** Format a month label from a YYYY-MM-DD date string. */
 function monthLabel(dateStr: string): string {
@@ -544,23 +539,7 @@ export async function enumerateReadyRows(
     }
 
     if (project.billingType === "t_and_m") {
-      const tasks = await ctx.db
-        .query("tasks")
-        .withIndex("by_orgId_projectId", (q) =>
-          q.eq("orgId", orgId).eq("projectId", project._id),
-        )
-        .collect();
-      const entries = (
-        await Promise.all(
-          tasks.map((t) =>
-            ctx.db
-              .query("timeEntries")
-              .withIndex("by_taskId", (q) => q.eq("taskId", t._id))
-              .filter((q) => q.eq(q.field("orgId"), orgId))
-              .collect(),
-          ),
-        )
-      ).flat();
+      const entries = await getProjectEntries(ctx, orgId, project._id);
       const entryInputs = entries.map((e) => ({
         _id: e._id,
         date: e.date,
@@ -590,23 +569,7 @@ export async function enumerateReadyRows(
       // start onward. Used by both rollover modes — only the chaining
       // differs, which we do here once.
       if (!project.startDate) continue;
-      const tasks = await ctx.db
-        .query("tasks")
-        .withIndex("by_orgId_projectId", (q) =>
-          q.eq("orgId", orgId).eq("projectId", project._id),
-        )
-        .collect();
-      const entries = (
-        await Promise.all(
-          tasks.map((t) =>
-            ctx.db
-              .query("timeEntries")
-              .withIndex("by_taskId", (q) => q.eq("taskId", t._id))
-              .filter((q) => q.eq(q.field("orgId"), orgId))
-              .collect(),
-          ),
-        )
-      ).flat();
+      const entries = await getProjectEntries(ctx, orgId, project._id);
       const billableByMonth = new Map<string, number>(); // YYYY-MM → minutes
       for (const e of entries) {
         if (!e.isBillable) continue;
@@ -1099,23 +1062,7 @@ async function getClosedUninvoicedMonths(
 
   // Walk the project once: gather billable minutes per YYYY-MM, then run the
   // same cycle-state enumerator the Ready feed uses.
-  const tasks = await ctx.db
-    .query("tasks")
-    .withIndex("by_orgId_projectId", (q) =>
-      q.eq("orgId", orgId).eq("projectId", projectId),
-    )
-    .collect();
-  const entries = (
-    await Promise.all(
-      tasks.map((t) =>
-        ctx.db
-          .query("timeEntries")
-          .withIndex("by_taskId", (q) => q.eq("taskId", t._id))
-          .filter((q) => q.eq(q.field("orgId"), orgId))
-          .collect(),
-      ),
-    )
-  ).flat();
+  const entries = await getProjectEntries(ctx, orgId, projectId);
   const billableByMonth = new Map<string, number>();
   for (const e of entries) {
     if (!e.isBillable) continue;
@@ -1655,7 +1602,7 @@ export const createInvoice = mutation({
       // rounding so the draft picker can re-round losslessly later.
       // Amount is computed from minutes, not from the 2-decimal display
       // hours — one precision path from ledger to document.
-      const roundedMinutes = roundMinutesUp(group.minutes, effectiveRounding);
+      const roundedMinutes = ceilToIncrement(group.minutes, effectiveRounding);
       const hours = round2(roundedMinutes / 60);
 
       if (billingType === "t_and_m") {
@@ -1930,7 +1877,7 @@ export const updateInvoiceRounding = mutation({
         continue;
       }
       const rawMinutes = item.quantityMinutes ?? Math.round(item.quantity * 60);
-      const roundedMinutes = roundMinutesUp(rawMinutes, args.roundingMinutes);
+      const roundedMinutes = ceilToIncrement(rawMinutes, args.roundingMinutes);
       const hours = round2(roundedMinutes / 60);
       const amount =
         item.unitPrice > 0 ? round2((roundedMinutes / 60) * item.unitPrice) : 0;
@@ -2125,7 +2072,7 @@ export const refreshInvoiceDraft = mutation({
         const mergedRaw =
           (target.quantityMinutes ?? Math.round(target.quantity * 60)) +
           group.minutes;
-        const mergedRounded = roundMinutesUp(mergedRaw, rounding);
+        const mergedRounded = ceilToIncrement(mergedRaw, rounding);
         await ctx.db.patch(target._id, {
           quantityMinutes: mergedRaw,
           quantity: round2(mergedRounded / 60),
@@ -2136,7 +2083,7 @@ export const refreshInvoiceDraft = mutation({
         continue;
       }
 
-      const roundedMinutes = roundMinutesUp(group.minutes, rounding);
+      const roundedMinutes = ceilToIncrement(group.minutes, rounding);
       await ctx.db.insert("invoiceLineItems", {
         orgId,
         invoiceId: invoice._id,

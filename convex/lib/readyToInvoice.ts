@@ -10,6 +10,7 @@
  */
 import type { Id } from "../_generated/dataModel";
 import { getInvoiceAnchorMonthKey } from "./invoiceAnchor";
+import { ceilToIncrement, round2 } from "./billing/money";
 
 // ─── Input shapes ───────────────────────────────────────────────────────────────
 
@@ -208,7 +209,7 @@ export function buildFixedReadyRow(opts: {
     clientId: client._id,
     clientName: client.name,
     sortKey: client.name.toLowerCase() + "/" + project.name.toLowerCase(),
-    amount: roundCents(remaining),
+    amount: round2(remaining),
     currency: client.currency,
     badgeKind: null,
     lastInvoicedAt: computeLastInvoicedAt(invoices),
@@ -322,8 +323,8 @@ export function buildTmReadyRows(opts: {
     if (b.minutes === 0) continue;
     let monthAmount = 0;
     for (const g of b.groups.values()) {
-      const roundedMinutes = roundMinutesUpTo(g.minutes, rounding);
-      monthAmount += roundCents((roundedMinutes / 60) * g.rate);
+      const roundedMinutes = ceilToIncrement(g.minutes, rounding);
+      monthAmount += round2((roundedMinutes / 60) * g.rate);
     }
     out.push({
       kind: "tm",
@@ -333,7 +334,7 @@ export function buildTmReadyRows(opts: {
       clientName: client.name,
       period: { year: b.year, month: b.month },
       sortKey: `${b.year}-${String(b.month).padStart(2, "0")}/${client.name.toLowerCase()}`,
-      amount: roundCents(monthAmount),
+      amount: round2(monthAmount),
       currency: client.currency,
       badgeKind: null,
       lastInvoicedAt,
@@ -414,7 +415,7 @@ export function buildRetainerMonthlyReadyRows(opts: {
     out.push({
       ...base,
       kind: "retainer-monthly",
-      amount: roundCents(amount),
+      amount: round2(amount),
       badgeKind: "over-budget",
       overageHours: overHours,
       ...(amount <= 0 ? { configIssue: "missing-overage-rate" as const } : {}),
@@ -626,7 +627,7 @@ export function buildRetainerCycleReadyRows(opts: {
     out.push({
       ...base,
       kind: "retainer-cycle",
-      amount: roundCents(amount),
+      amount: round2(amount),
       badgeKind: "over-budget",
       overageHours: overHours,
       ...(amount <= 0 ? { configIssue: "missing-overage-rate" as const } : {}),
@@ -730,13 +731,4 @@ function monthKeyFromIndex(abs: number): string {
   const y = Math.floor(abs / 12);
   const m = (abs % 12) + 1;
   return `${y}-${String(m).padStart(2, "0")}`;
-}
-
-function roundMinutesUpTo(minutes: number, roundTo: number): number {
-  if (roundTo <= 1) return minutes;
-  return Math.ceil(minutes / roundTo) * roundTo;
-}
-
-function roundCents(n: number): number {
-  return Math.round(n * 100) / 100;
 }

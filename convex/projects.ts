@@ -31,6 +31,7 @@ import {
   type RetainerCycleContext,
   type ProjectSummary,
 } from "./lib/projectSummary";
+import { getProjectEntries } from "./lib/projectEntries";
 
 const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -574,22 +575,12 @@ export const getRetainerData = query({
       )
       .collect();
 
-    // Fetch all time entries for those tasks
-    const allEntries = (
-      await Promise.all(
-        tasks.map(async (task) => {
-          const entries = await ctx.db
-            .query("timeEntries")
-            .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
-            .collect();
-          return entries.map((e) => ({
-            ...e,
-            taskTitle: task.title,
-            workCategoryId: e.snapshotCategoryId,
-          }));
-        }),
-      )
-    ).flat();
+    const taskById = new Map(tasks.map((t) => [t._id.toString(), t]));
+    const allEntries = (await getProjectEntries(ctx, orgId, args.id)).flatMap((e) => {
+      const task = taskById.get(e.taskId.toString());
+      if (!task) return [];
+      return [{ ...e, taskTitle: task.title, workCategoryId: e.snapshotCategoryId }];
+    });
 
     // Split billable and non-billable
     const billableEntries = allEntries.filter((e) => e.isBillable);
@@ -904,23 +895,7 @@ export const getSummary = query({
 
     // Fetch all tasks + their entries once. Every branch needs the entries;
     // Fixed + Retainer slice the same set differently.
-    const tasks = await ctx.db
-      .query("tasks")
-      .withIndex("by_orgId_projectId", (q) =>
-        q.eq("orgId", orgId).eq("projectId", args.projectId),
-      )
-      .collect();
-    const rawEntries = (
-      await Promise.all(
-        tasks.map((task) =>
-          ctx.db
-            .query("timeEntries")
-            .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
-            .filter((q) => q.eq(q.field("orgId"), orgId))
-            .collect(),
-        ),
-      )
-    ).flat();
+    const rawEntries = await getProjectEntries(ctx, orgId, args.projectId);
     const entries: EntryInput[] = rawEntries.map((e) => ({
       durationMinutes: e.durationMinutes,
       isBillable: e.isBillable,
@@ -1189,25 +1164,23 @@ export const remove = mutation({
     const project = await ctx.db.get(args.id);
     if (!project || project.orgId !== orgId) throw new ConvexError("Project not found");
 
-    // Block if any task has time entries
-    const projectTasks = await ctx.db
-      .query("tasks")
+    // Block if the project has any time entries
+    const hasEntries = await ctx.db
+      .query("timeEntries")
       .withIndex("by_orgId_projectId", (q) => q.eq("orgId", orgId).eq("projectId", args.id))
-      .collect();
-    for (const task of projectTasks) {
-      const hasEntries = await ctx.db
-        .query("timeEntries")
-        .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
-        .first();
-      if (hasEntries) {
-        throw new ConvexError("Cannot delete a project with time entries — archive it instead");
-      }
+      .first();
+    if (hasEntries) {
+      throw new ConvexError("Cannot delete a project with time entries — archive it instead");
     }
 
     // Block on running timers too. Deleting the project would leave the
     // timer dangling — its stop would silently discard the measured hours
     // (and an auto-save is impossible: entry creation is exactly what the
     // entries-guard above forbids on delete).
+    const projectTasks = await ctx.db
+      .query("tasks")
+      .withIndex("by_orgId_projectId", (q) => q.eq("orgId", orgId).eq("projectId", args.id))
+      .collect();
     const projectTaskIds = new Set(projectTasks.map((t) => t._id.toString()));
     const projectMembers = await ctx.db
       .query("orgMembers")

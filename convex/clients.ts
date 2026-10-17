@@ -323,17 +323,15 @@ export const remove = mutation({
         .query("tasks")
         .withIndex("by_orgId_projectId", (q) => q.eq("orgId", orgId).eq("projectId", project._id))
         .collect();
-      for (const task of projectTasks) {
-        clientTaskIds.add(task._id.toString());
-        const hasEntries = await ctx.db
-          .query("timeEntries")
-          .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
-          .first();
-        if (hasEntries) {
-          throw new ConvexError(
-            "Cannot delete a client with time entries on its projects — archive it instead",
-          );
-        }
+      for (const task of projectTasks) clientTaskIds.add(task._id.toString());
+      const hasEntries = await ctx.db
+        .query("timeEntries")
+        .withIndex("by_orgId_projectId", (q) => q.eq("orgId", orgId).eq("projectId", project._id))
+        .first();
+      if (hasEntries) {
+        throw new ConvexError(
+          "Cannot delete a client with time entries on its projects — archive it instead",
+        );
       }
     }
 

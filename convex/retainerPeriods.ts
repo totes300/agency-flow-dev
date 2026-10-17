@@ -7,6 +7,7 @@ import { getCyclePeriods } from "./lib/retainerCycle";
 import { monthlySettlementPeriod } from "./lib/settleEntries";
 import { computeCommitScope, selectCommitEntries } from "./lib/commitScope";
 import { getOrgSettings } from "./lib/orgHelpers";
+import { getProjectEntries } from "./lib/projectEntries";
 import { ORG_TIMEZONE_FALLBACK, getDateInTimezone } from "./lib/timer";
 
 // ─── Queries ────────────────────────────────────────────────────────────────
@@ -306,37 +307,24 @@ export async function closePeriodInternal(
    */
   now: number = Date.now(),
 ): Promise<{ settledCount: number }> {
-  const tasks = await ctx.db
-    .query("tasks")
-    .withIndex("by_orgId_projectId", (q) =>
-      q.eq("orgId", authCtx.orgId).eq("projectId", period.projectId),
-    )
-    .collect();
+  const entries = await getProjectEntries(ctx, authCtx.orgId, period.projectId);
 
   let settledCount = 0;
 
-  for (const task of tasks) {
-    const entries = await ctx.db
-      .query("timeEntries")
-      .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
-      .collect();
-    for (const e of entries) {
-      // Tenancy belt — `by_taskId` doesn't narrow by orgId.
-      if (e.orgId !== authCtx.orgId) continue;
-      if (!settleEntryIds.has(e._id.toString())) continue;
-      // Defensive open-guard — `billingScope` only yields open entries, but a
-      // concurrent commit could have locked one between scope + settle.
-      if (e.settledAt !== undefined || e.invoiceId !== undefined) continue;
+  for (const e of entries) {
+    if (!settleEntryIds.has(e._id.toString())) continue;
+    // Defensive open-guard — `billingScope` only yields open entries, but a
+    // concurrent commit could have locked one between scope + settle.
+    if (e.settledAt !== undefined || e.invoiceId !== undefined) continue;
 
-      await ctx.db.patch(e._id, {
-        settledAt: now,
-        settledReason: "retainer_included",
-        settledPeriodStart: period.periodStart,
-        settledPeriodEnd: period.periodEnd,
-        updatedAt: now,
-      });
-      settledCount++;
-    }
+    await ctx.db.patch(e._id, {
+      settledAt: now,
+      settledReason: "retainer_included",
+      settledPeriodStart: period.periodStart,
+      settledPeriodEnd: period.periodEnd,
+      updatedAt: now,
+    });
+    settledCount++;
   }
 
   await ctx.db.patch(period._id, {
@@ -564,34 +552,22 @@ export const reopenPeriod = mutation({
       );
     }
 
-    const tasks = await ctx.db
-      .query("tasks")
-      .withIndex("by_orgId_projectId", (q) =>
-        q.eq("orgId", authCtx.orgId).eq("projectId", project._id),
-      )
-      .collect();
+    const entries = await getProjectEntries(ctx, authCtx.orgId, project._id);
 
     const now = Date.now();
     let reopenedCount = 0;
 
-    for (const task of tasks) {
-      const entries = await ctx.db
-        .query("timeEntries")
-        .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
-        .collect();
-      for (const e of entries) {
-        if (e.orgId !== authCtx.orgId) continue;
-        if (!shouldReopenEntry(e, period)) continue;
+    for (const e of entries) {
+      if (!shouldReopenEntry(e, period)) continue;
 
-        await ctx.db.patch(e._id, {
-          settledAt: undefined,
-          settledReason: undefined,
-          settledPeriodStart: undefined,
-          settledPeriodEnd: undefined,
-          updatedAt: now,
-        });
-        reopenedCount++;
-      }
+      await ctx.db.patch(e._id, {
+        settledAt: undefined,
+        settledReason: undefined,
+        settledPeriodStart: undefined,
+        settledPeriodEnd: undefined,
+        updatedAt: now,
+      });
+      reopenedCount++;
     }
 
     await ctx.db.patch(period._id, {

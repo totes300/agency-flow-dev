@@ -55,6 +55,8 @@ import {
   assignDisabledReasons,
   groupQueueByMonth,
 } from "./lib/closeQueue";
+import { round2 } from "./lib/billing/money";
+import { getProjectEntries } from "./lib/projectEntries";
 
 // ─── Output shapes ───────────────────────────────────────────────────────────
 
@@ -165,10 +167,6 @@ export type CloseWorkspaceData = {
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
-}
-
 /** "June 2026" for a YYYY-MM key. */
 function monthKeyLabel(monthKey: string): string {
   const [y, m] = monthKey.split("-").map(Number);
@@ -200,7 +198,7 @@ function periodLabel(billingType: string, start: string, end: string): string {
   return buildCycleRangeLabel(months);
 }
 
-/** Fetch every open+settled time entry for a project (tasks → entries fan-out). */
+/** Every time entry of a project, plus task titles (the queue's timer flag needs the task ids). */
 async function loadProjectEntries(
   ctx: QueryCtx | MutationCtx,
   orgId: string,
@@ -215,17 +213,7 @@ async function loadProjectEntries(
   const taskName = new Map<string, string>();
   for (const t of tasks) taskName.set(t._id.toString(), t.title);
 
-  const entries = (
-    await Promise.all(
-      tasks.map((t) =>
-        ctx.db
-          .query("timeEntries")
-          .withIndex("by_taskId", (q) => q.eq("taskId", t._id))
-          .filter((q) => q.eq(q.field("orgId"), orgId))
-          .collect(),
-      ),
-    )
-  ).flat();
+  const entries = await getProjectEntries(ctx, orgId, projectId);
   return { entries, taskName };
 }
 

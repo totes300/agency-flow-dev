@@ -13,6 +13,7 @@
 
 import type { GenericQueryCtx, GenericMutationCtx } from "convex/server";
 import type { DataModel, Doc, Id } from "../_generated/dataModel";
+import { getProjectEntries } from "./projectEntries";
 import {
   computeBillingScope,
   type ScopeEntryInput,
@@ -86,23 +87,7 @@ export async function computeCommitScope(
 ): Promise<CommitScope> {
   const { orgId, project } = opts;
 
-  const tasks = await ctx.db
-    .query("tasks")
-    .withIndex("by_orgId_projectId", (q) =>
-      q.eq("orgId", orgId).eq("projectId", project._id),
-    )
-    .collect();
-  const entries = (
-    await Promise.all(
-      tasks.map((t) =>
-        ctx.db
-          .query("timeEntries")
-          .withIndex("by_taskId", (q) => q.eq("taskId", t._id))
-          .filter((q) => q.eq(q.field("orgId"), orgId))
-          .collect(),
-      ),
-    )
-  ).flat();
+  const entries = await getProjectEntries(ctx, orgId, project._id);
 
   const closedPeriodRows = await ctx.db
     .query("retainerPeriods")

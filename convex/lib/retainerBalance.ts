@@ -9,6 +9,8 @@
  * disclaimer can show "billed separately via Stripe — $X/mo".
  */
 
+import { ceilToIncrement, round2 } from "./billing/money";
+
 export type RetainerComputeInput = {
   /** Grouped task minutes: Map<groupKey, totalMinutes>. */
   taskMinutesMap: Map<string, number>;
@@ -35,15 +37,6 @@ export type RetainerComputeResult = {
   /** After refactor: equals `overageAmount`. Monthly fee is never charged here. */
   total: number;
 };
-
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
-}
-
-function roundMinutesUp(minutes: number, roundTo: number): number {
-  if (roundTo <= 1) return minutes;
-  return Math.ceil(minutes / roundTo) * roundTo;
-}
 
 /**
  * The one rule that decides "is this scope's balance billable as overage?"
@@ -78,7 +71,7 @@ export function computeRetainerBalance(
 ): RetainerComputeResult {
   let usedMinutes = 0;
   for (const minutes of input.taskMinutesMap.values()) {
-    usedMinutes += roundMinutesUp(minutes, input.roundingMinutes);
+    usedMinutes += ceilToIncrement(minutes, input.roundingMinutes);
   }
 
   const endBalance = input.startBalance + input.includedMinutes - usedMinutes;

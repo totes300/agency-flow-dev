@@ -49,12 +49,10 @@ import {
   type RetainerUsageRow,
 } from "./lib/retainerUsage";
 import type { Doc, Id } from "./_generated/dataModel";
+import { round2 } from "./lib/billing/money";
+import { getProjectEntries } from "./lib/projectEntries";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
-}
 
 type EntryRow = {
   _id: Id<"timeEntries">;
@@ -198,17 +196,7 @@ export const getRetainerStatement = query({
     const taskMap = new Map<string, Doc<"tasks">>();
     for (const t of tasks) taskMap.set(t._id, t);
 
-    const allTaskEntries = (
-      await Promise.all(
-        tasks.map((task) =>
-          ctx.db
-            .query("timeEntries")
-            .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
-            .filter((q) => q.eq(q.field("orgId"), orgId))
-            .collect(),
-        ),
-      )
-    ).flat();
+    const allTaskEntries = await getProjectEntries(ctx, orgId, args.projectId);
 
     // Month-Close (slice 07) — membership by REPORT MONTH, not raw date:
     // closed months read from settlement stamps (I4 — stable), open months

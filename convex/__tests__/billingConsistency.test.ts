@@ -185,8 +185,11 @@ async function seedEntry(
 ): Promise<Id<"timeEntries">> {
   return t.run(async (ctx) => {
     const now = Date.now();
+    const task = await ctx.db.get(e.taskId);
+    if (!task?.projectId) throw new Error("Fixture task has no project");
     return ctx.db.insert("timeEntries", {
       orgId: ORG_ID,
+      projectId: task.projectId,
       taskId: e.taskId,
       userId: org.userId,
       date: e.date,

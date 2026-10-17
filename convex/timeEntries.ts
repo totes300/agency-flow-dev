@@ -11,6 +11,7 @@ import { assertEntryDateOpen } from "./lib/settleGuards";
 import type { EntrySettlementSnapshot } from "./lib/types";
 import { billableOverviewBucket } from "./lib/settleEntries";
 import { logActivity } from "./activityLog";
+import { getProjectEntries } from "./lib/projectEntries";
 
 function formatDurationHHMM(minutes: number): string {
   const h = Math.floor(minutes / 60);
@@ -195,23 +196,12 @@ export const sumByProject = query({
 
     const taskIds = new Set(tasks.map((t) => t._id.toString()));
 
-    // Get all entries for these tasks
     let totalMinutes = 0;
     const minutesByDate: Record<string, number> = {};
-
-    await Promise.all(
-      tasks.map(async (task) => {
-        const entries = await ctx.db
-          .query("timeEntries")
-          .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
-          .filter((q) => q.eq(q.field("orgId"), orgId))
-          .collect();
-        for (const e of entries) {
-          totalMinutes += e.durationMinutes;
-          minutesByDate[e.date] = (minutesByDate[e.date] ?? 0) + e.durationMinutes;
-        }
-      }),
-    );
+    for (const e of await getProjectEntries(ctx, orgId, args.projectId)) {
+      totalMinutes += e.durationMinutes;
+      minutesByDate[e.date] = (minutesByDate[e.date] ?? 0) + e.durationMinutes;
+    }
 
     return { totalMinutes, minutesByDate, taskCount: taskIds.size };
   },
@@ -304,6 +294,7 @@ export const create = mutation({
     const now = Date.now();
     const entryId = await ctx.db.insert("timeEntries", {
       orgId: auth.orgId,
+      projectId: project._id,
       taskId: args.taskId,
       userId: entryUserId,
       date,
@@ -697,19 +688,7 @@ export const listProjectEntries = query({
       .collect();
     const taskMap = new Map(tasks.map((t) => [t._id.toString(), t]));
 
-    // Fetch all entries for the project's tasks.
-    // Tenancy: `by_taskId` doesn't narrow by orgId; filter explicitly (CLAUDE.md).
-    const rawEntries = (
-      await Promise.all(
-        tasks.map((task) =>
-          ctx.db
-            .query("timeEntries")
-            .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
-            .filter((q) => q.eq(q.field("orgId"), orgId))
-            .collect(),
-        ),
-      )
-    ).flat();
+    const rawEntries = await getProjectEntries(ctx, orgId, args.projectId);
 
     // Members see only their own entries (matches listByTask).
     const visible = isAdmin
@@ -885,30 +864,11 @@ export const projectOverview = query({
     const project = await ctx.db.get(args.projectId);
     if (!project || project.orgId !== orgId) return null;
 
-    // Fetch all tasks for this project (including archived — historical reporting)
-    const tasks = await ctx.db
-      .query("tasks")
-      .withIndex("by_orgId_projectId", (q) =>
-        q.eq("orgId", orgId).eq("projectId", args.projectId),
-      )
-      .collect();
-
-    // Fetch all time entries per task in parallel
-    const allEntries = (
-      await Promise.all(
-        tasks.map(async (task) => {
-          const entries = await ctx.db
-            .query("timeEntries")
-            .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
-            .filter((q) => q.eq(q.field("orgId"), orgId))
-            .collect();
-          return entries.map((e) => ({
-            ...e,
-            workCategoryId: e.snapshotCategoryId,
-          }));
-        }),
-      )
-    ).flat();
+    // Every entry of the project, archived tasks included (historical reporting).
+    const allEntries = (await getProjectEntries(ctx, orgId, args.projectId)).map((e) => ({
+      ...e,
+      workCategoryId: e.snapshotCategoryId,
+    }));
 
     // Get org timezone for "this month" computation
     const orgSettings = await getOrgSettings(ctx, orgId);
@@ -1127,24 +1087,19 @@ export const projectMonthlyBreakdown = query({
       .collect();
     const catMap = new Map(categories.map((c) => [c._id.toString(), c]));
 
-    // Fetch all time entries per task
-    const allEntries = (
-      await Promise.all(
-        tasks.map(async (task) => {
-          const entries = await ctx.db
-            .query("timeEntries")
-            .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
-            .filter((q) => q.eq(q.field("orgId"), orgId))
-            .collect();
-          return entries.map((e) => ({
-            ...e,
-            taskId: task._id.toString(),
-            taskTitle: task.title,
-            workCategoryId: e.snapshotCategoryId?.toString() ?? null,
-          }));
-        }),
-      )
-    ).flat();
+    const taskById = new Map(tasks.map((t) => [t._id.toString(), t]));
+    const allEntries = (await getProjectEntries(ctx, orgId, args.projectId)).flatMap((e) => {
+      const task = taskById.get(e.taskId.toString());
+      if (!task) return [];
+      return [
+        {
+          ...e,
+          taskId: task._id.toString(),
+          taskTitle: task.title,
+          workCategoryId: e.snapshotCategoryId?.toString() ?? null,
+        },
+      ];
+    });
 
     // Group entries by month
     const entriesByMonth: Record<string, typeof allEntries> = {};

@@ -47,6 +47,8 @@ import {
   type RetainerMonthStatus,
   type TaskProjectRef,
 } from "./lib/agentReportCore";
+import { round2 } from "./lib/billing/money";
+import { getProjectEntries } from "./lib/projectEntries";
 
 /** Hard scan ceilings — throwing beats returning a silently-wrong sum. */
 const MAX_REPORT_ENTRIES = 20_000;
@@ -56,10 +58,6 @@ const MAX_MONTH_SPAN = 24;
 const NARROW_PERIOD_HINT =
   "The requested period contains too many time entries to aggregate in one " +
   "call — ask for a narrower date range and combine the results.";
-
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
-}
 
 function assertDateRange(fromDate: string, toDate: string): void {
   assertValidDateString(fromDate, "fromDate");
@@ -308,17 +306,11 @@ export const clientMonthlySummary = internalQuery({
     const fromDate = `${args.fromMonth}-01`;
     const toDate = lastDayOfMonth(args.toMonth);
 
-    // Per-task fan-out (the worksheet-collector pattern): the client's task
-    // set is bounded, and this avoids scanning every org entry in the range.
+    // Per-project indexed read: the client's project set is bounded, and this
+    // avoids scanning every org entry in the range.
     const projectByTaskId = new Map<string, TaskProjectRef | null>();
     const entries: ReportEntryInput[] = [];
     for (const project of projects) {
-      const tasks = await ctx.db
-        .query("tasks")
-        .withIndex("by_orgId_projectId", (q) =>
-          q.eq("orgId", auth.orgId).eq("projectId", project._id),
-        )
-        .collect();
       const ref: TaskProjectRef = {
         projectId: project._id.toString(),
         projectName: project.name,
@@ -326,19 +318,12 @@ export const clientMonthlySummary = internalQuery({
         clientName: client.name,
         currency: client.currency,
       };
-      for (const task of tasks) {
-        projectByTaskId.set(task._id.toString(), ref);
-        const taskEntries = await ctx.db
-          .query("timeEntries")
-          .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
-          .filter((q) => q.eq(q.field("orgId"), auth.orgId))
-          .collect();
-        for (const e of taskEntries) {
-          if (e.date < fromDate || e.date > toDate) continue;
-          entries.push(toReportEntry(e));
-          if (entries.length > MAX_REPORT_ENTRIES) {
-            throw new ConvexError(NARROW_PERIOD_HINT);
-          }
+      for (const e of await getProjectEntries(ctx, auth.orgId, project._id)) {
+        projectByTaskId.set(e.taskId.toString(), ref);
+        if (e.date < fromDate || e.date > toDate) continue;
+        entries.push(toReportEntry(e));
+        if (entries.length > MAX_REPORT_ENTRIES) {
+          throw new ConvexError(NARROW_PERIOD_HINT);
         }
       }
     }
@@ -464,28 +449,15 @@ export const retainerHealthForMonth = internalQuery({
       const cycleLength = project.cycleLength ?? 1;
 
       // Billable minutes per YYYY-MM — the statements.ts aggregation, per
-      // project (task fan-out; org-guarded).
-      const tasks = await ctx.db
-        .query("tasks")
-        .withIndex("by_orgId_projectId", (q) =>
-          q.eq("orgId", auth.orgId).eq("projectId", project._id),
-        )
-        .collect();
+      // project (one indexed read; org-guarded).
       const usedMinutesByMonth = new Map<string, number>();
-      for (const task of tasks) {
-        const taskEntries = await ctx.db
-          .query("timeEntries")
-          .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
-          .filter((q) => q.eq(q.field("orgId"), auth.orgId))
-          .collect();
-        for (const e of taskEntries) {
-          if (!e.isBillable) continue;
-          const key = e.date.slice(0, 7);
-          usedMinutesByMonth.set(
-            key,
-            (usedMinutesByMonth.get(key) ?? 0) + e.durationMinutes,
-          );
-        }
+      for (const e of await getProjectEntries(ctx, auth.orgId, project._id)) {
+        if (!e.isBillable) continue;
+        const key = e.date.slice(0, 7);
+        usedMinutesByMonth.set(
+          key,
+          (usedMinutesByMonth.get(key) ?? 0) + e.durationMinutes,
+        );
       }
       const usedMinutes = usedMinutesByMonth.get(targetKey) ?? 0;
       const monthEndBalance = includedMinutes - usedMinutes;

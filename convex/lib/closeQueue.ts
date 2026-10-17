@@ -17,6 +17,7 @@
 
 import type { BillingScopeReport } from "./billingScope";
 import { reviewFlagCount, type CloseFlag } from "./closeFlags";
+import { round2 } from "./billing/money";
 
 // ─── Per-row scope summary ──────────────────────────────────────────────────
 
@@ -171,8 +172,4 @@ export function groupQueueByMonth<T extends MonthGroupInput>(
 
   groups.sort((a, b) => (a.monthKey < b.monthKey ? -1 : a.monthKey > b.monthKey ? 1 : 0));
   return groups;
-}
-
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
 }

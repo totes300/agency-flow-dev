@@ -313,6 +313,7 @@ export const seed = internalMutation({
           const startedAt = ts(`${e.date}T09:30:00+02:00`);
           await ctx.db.insert("timeEntries", {
             orgId,
+            projectId: project._id,
             taskId,
             userId: authors[e.author],
             date: e.date,

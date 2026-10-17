@@ -28,6 +28,7 @@
 import type { GenericMutationCtx, GenericQueryCtx } from "convex/server";
 import type { DataModel, Doc } from "../_generated/dataModel";
 import { isOverageDueForScope } from "./retainerBalance";
+import { round2 } from "./billing/money";
 
 // ─── Cycle boundary (pure) ──────────────────────────────────────────────────
 
@@ -225,10 +226,6 @@ async function sumBillableMinutes(
         : Math.ceil(minutes / roundingMinutes) * roundingMinutes;
   }
   return total;
-}
-
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
 }
 
 /**

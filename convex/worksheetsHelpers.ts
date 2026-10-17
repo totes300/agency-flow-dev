@@ -25,6 +25,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { internalQuery, type QueryCtx } from "./_generated/server";
 import { requireAdmin } from "./lib/auth";
 import { getOrgSettings } from "./lib/orgHelpers";
+import { getProjectEntries } from "./lib/projectEntries";
 import { ORG_TIMEZONE_FALLBACK } from "./lib/timer";
 import { getCyclePeriods } from "./lib/retainerCycle";
 import {
@@ -329,8 +330,8 @@ export async function resolveScopeEntries(
     return { project, entries };
   }
 
-  // `period`, `cycle`, and `settledPeriod` all walk the project's task
-  // fan-out. Cycle uses its first month → last month range; the caller
+  // `period`, `cycle`, and `settledPeriod` all read the project's entries
+  // through the `by_orgId_projectId` index. Cycle uses its first month → last month range; the caller
   // (Slice 3) calls this internalQuery per-month and concatenates, so the
   // cycle branch here returns the union for the entire cycle in one go.
   const project = await ctx.db.get(scope.projectId);
@@ -343,25 +344,9 @@ export async function resolveScopeEntries(
   // month) belongs here, skipped-out work doesn't. This is what keeps the
   // post-close worksheet in exact agreement with the Monthly Report.
   if (scope.kind === "settledPeriod") {
-    const tasks = await ctx.db
-      .query("tasks")
-      .withIndex("by_orgId_projectId", (q) =>
-        q.eq("orgId", orgId).eq("projectId", project._id),
-      )
-      .collect();
-    const entries: Doc<"timeEntries">[] = [];
-    for (const task of tasks) {
-      const taskEntries = await ctx.db
-        .query("timeEntries")
-        .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
-        .collect();
-      for (const e of taskEntries) {
-        if (e.orgId !== orgId) continue;
-        if (e.settledAt === undefined) continue;
-        if (e.settledPeriodStart !== scope.periodStart) continue;
-        entries.push(e);
-      }
-    }
+    const entries = (await getProjectEntries(ctx, orgId, project._id)).filter(
+      (e) => e.settledAt !== undefined && e.settledPeriodStart === scope.periodStart,
+    );
     return { project, entries };
   }
 
@@ -389,37 +374,23 @@ export async function resolveScopeEntries(
     : null;
   const billableFilter = filters?.billable ?? "all";
 
-  const tasks = await ctx.db
-    .query("tasks")
-    .withIndex("by_orgId_projectId", (q) =>
-      q.eq("orgId", orgId).eq("projectId", project._id),
-    )
-    .collect();
-
   const entries: Doc<"timeEntries">[] = [];
-  for (const task of tasks) {
-    const taskEntries = await ctx.db
-      .query("timeEntries")
-      .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
-      .collect();
-    for (const e of taskEntries) {
-      if (e.orgId !== orgId) continue;
-      if (e.date < periodStart || e.date > periodEnd) continue;
-      // Category filter operates on the entry's SNAPSHOT category — the same
-      // attribution rule as the Monthly Report / invoice grouping
-      // (statements.ts `snapshotCategoryId`), so a category-filtered
-      // worksheet selects the same hours as the report's category bucket
-      // even after a task was re-categorized over existing history.
-      if (
-        allowedCategoryIds &&
-        !(e.snapshotCategoryId && allowedCategoryIds.has(e.snapshotCategoryId as unknown as string))
-      ) {
-        continue;
-      }
-      if (billableFilter === "billable" && !e.isBillable) continue;
-      if (billableFilter === "nonBillable" && e.isBillable) continue;
-      entries.push(e);
+  for (const e of await getProjectEntries(ctx, orgId, project._id)) {
+    if (e.date < periodStart || e.date > periodEnd) continue;
+    // Category filter operates on the entry's SNAPSHOT category — the same
+    // attribution rule as the Monthly Report / invoice grouping
+    // (statements.ts `snapshotCategoryId`), so a category-filtered
+    // worksheet selects the same hours as the report's category bucket
+    // even after a task was re-categorized over existing history.
+    if (
+      allowedCategoryIds &&
+      !(e.snapshotCategoryId && allowedCategoryIds.has(e.snapshotCategoryId as unknown as string))
+    ) {
+      continue;
     }
+    if (billableFilter === "billable" && !e.isBillable) continue;
+    if (billableFilter === "nonBillable" && e.isBillable) continue;
+    entries.push(e);
   }
   return { project, entries };
 }
@@ -848,30 +819,16 @@ export const collectCycleWorksheetData = internalQuery({
     const sections: WorksheetCycleSection[] = [];
     const allRows: WorksheetTaskRow[] = [];
     const usedMinutesByMonth = new Map<string, number>();
+    const projectEntries = await getProjectEntries(ctx, authCtx.orgId, project._id);
 
     for (const m of months) {
       const periodStart = `${m.year}-${String(m.month).padStart(2, "0")}-01`;
       const lastDay = new Date(m.year, m.month, 0).getDate();
       const periodEnd = `${m.year}-${String(m.month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
 
-      const monthEntries: Doc<"timeEntries">[] = [];
-      const tasks = await ctx.db
-        .query("tasks")
-        .withIndex("by_orgId_projectId", (q) =>
-          q.eq("orgId", authCtx.orgId).eq("projectId", project._id),
-        )
-        .collect();
-      for (const task of tasks) {
-        const taskEntries = await ctx.db
-          .query("timeEntries")
-          .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
-          .collect();
-        for (const e of taskEntries) {
-          if (e.orgId !== authCtx.orgId) continue;
-          if (e.date < periodStart || e.date > periodEnd) continue;
-          monthEntries.push(e);
-        }
-      }
+      const monthEntries = projectEntries.filter(
+        (e) => e.date >= periodStart && e.date <= periodEnd,
+      );
 
       const rows = await buildTaskRows(ctx, project, monthEntries, authCtx.orgId);
       const subtotalBillableMinutes = rows.reduce(

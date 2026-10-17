@@ -81,11 +81,10 @@ type EditEntryLite = {
   durationMinutes: number
   isBillable: boolean
   note: string | undefined
+  /** Settled by a live close (N1) — the form is read-only. */
+  closed: boolean
+  /** The close's invoice, when it has one (picks the read-only copy). */
   invoiceId: Id<"invoices"> | undefined
-  // Phase 8 — settlement lock (independent of invoice linkage). When set,
-  // the entry was closed by a period-close flow (retainer or Fixed) and
-  // the edit form should be read-only just as it is for invoiced entries.
-  settledAt: number | undefined
   userId: Id<"users">
   // Entry-level billing category (sticky). The edit form shows this and an
   // explicit change re-resolves the rate server-side.
@@ -141,11 +140,8 @@ export function TimeEntryModal({
 
   const mode: Mode = modeProps.mode
   const editEntry = modeProps.mode === "edit" ? modeProps.entry : undefined
-  // Phase 8 — "locked" covers both axes: invoiceId (T&M/Fixed/overage) and
-  // settledAt (retainer within-budget close + Fixed settlement). The form
-  // is read-only in either case; the backend guards reject the mutation
-  // regardless of which axis triggered the lock.
-  const isLocked = editEntry?.invoiceId != null || editEntry?.settledAt != null
+  // A closed entry is read-only; the backend guard rejects the mutation too.
+  const isLocked = editEntry?.closed === true
 
   // Reset form state when the modal is reopened (keyed by entry id or "new")
   const formKey = mode === "edit" ? editEntry!._id : "new"

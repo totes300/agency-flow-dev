@@ -1,6 +1,6 @@
 import { formatHoursCompact, formatCurrency } from "@/lib/format"
 import { cn } from "@/lib/utils"
-import type { CloseWorkspaceData } from "@/convex/close"
+import type { CloseWorkspaceData } from "@/convex/billingViews"
 
 /**
  * Calculation-row style table footer (PRD story 9 — a table-footer total so the

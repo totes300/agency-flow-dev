@@ -9,7 +9,7 @@ import { api } from "@/convex/_generated/api"
 import { Button } from "@/components/ui/button"
 import { formatCurrency } from "@/lib/format"
 import { toastError } from "@/lib/toast-helpers"
-import type { CloseWorkspaceData } from "@/convex/close"
+import type { CloseWorkspaceData } from "@/convex/billingViews"
 
 /**
  * The workspace's single primary action (PRD stories 24–27), flipping live with

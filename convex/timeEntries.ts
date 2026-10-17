@@ -7,9 +7,10 @@ import { getDateInTimezone, ORG_TIMEZONE_FALLBACK } from "./lib/timer";
 import { getOrgSettings, resolveRateSnapshot, resolveEntryCategory } from "./lib/orgHelpers";
 import { validateAssignees } from "./lib/task_helpers";
 import { assertValidDateString } from "./lib/dateValidation";
-import type { EntrySettlementSnapshot } from "./lib/types";
+import type { EntryCloseSnapshot } from "./lib/types";
 import { billableOverviewBucket, entryStatus } from "./lib/entryStatus";
 import { loadEntryCloseInfo } from "./lib/billing/entryCloseInfo";
+import { fromMinor } from "./lib/billing/money";
 import { logActivity } from "./activityLog";
 import { getProjectEntries } from "./lib/projectEntries";
 
@@ -30,23 +31,6 @@ async function assertCategoryInOrg(
 ): Promise<void> {
   const cat = await ctx.db.get(workCategoryId);
   if (!cat || cat.orgId !== orgId) throw new ConvexError("Category not found");
-}
-
-/**
- * Truthful lock message for an entry linked to an invoice. A draft can't be
- * voided — telling the user to "void the invoice" was a dead end; the unblock
- * path depends on the invoice's status.
- */
-async function invoiceLockMessage(
-  ctx: { db: { get: (id: Id<"invoices">) => Promise<Doc<"invoices"> | null> } },
-  invoiceId: Id<"invoices">,
-  action: "edit" | "delete",
-): Promise<string> {
-  const invoice = await ctx.db.get(invoiceId);
-  if (invoice?.status === "draft") {
-    return `Cannot ${action} a time entry that's on a draft invoice — remove it from the draft (or delete the draft) first`;
-  }
-  return `Cannot ${action} a time entry linked to an invoice — void the invoice first`;
 }
 
 /**
@@ -97,12 +81,37 @@ export const listByTask = query({
       users.filter(Boolean).map((u) => [u!._id.toString(), u!]),
     );
 
+    // Close state + its invoice number, so the row badge and lock tooltip
+    // read the same as on the project Time tab.
+    const closeInfo = await loadEntryCloseInfo(ctx, orgId, filtered);
+    const invoiceById = new Map<string, Doc<"invoices">>();
+    for (const info of closeInfo.values()) {
+      if (!info.closeInvoiceId || invoiceById.has(info.closeInvoiceId)) continue;
+      const inv = await ctx.db.get(info.closeInvoiceId);
+      if (inv && inv.orgId === orgId) invoiceById.set(inv._id, inv);
+    }
+
     return filtered
       .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt - a.createdAt)
       .map((e) => {
         const user = userMap.get(e.userId.toString());
+        const close = e.closeId ? closeInfo.get(e.closeId) : undefined;
+        const inv = close?.closeInvoiceId ? invoiceById.get(close.closeInvoiceId) : undefined;
+        const snapshot: EntryCloseSnapshot = close
+          ? {
+              closeStatus: close.closeStatus,
+              closeKind: close.closeKind,
+              closePeriodStart: close.closePeriodStart,
+              closePeriodEnd: close.closePeriodEnd,
+              closedAt: close.closedAt,
+            }
+          : {};
         return {
           ...e,
+          ...snapshot,
+          invoiceId: inv?._id,
+          invoicePrefix: inv?.prefix,
+          invoiceNumber: inv?.number,
           userName: user?.name ?? "Unknown",
           userImageUrl: user?.imageUrl,
         };
@@ -365,20 +374,9 @@ export const update = mutation({
       throw new ConvexError("You can only edit your own time entries");
     }
 
-    // Phase 8 — settlement guard. `invoiceId` covers T&M / Fixed / retainer
-    // overage; `settledAt` covers retainer within-budget close (Slice 3,
-    // populates without an invoice). Distinct messages so the unblock path
-    // is obvious to the user.
+    // Close lock (N1): an entry settled by a live close is read-only.
     if (entry.closeId !== undefined) {
       throw new ConvexError(await closeLockMessage(ctx, entry.closeId, "edit"));
-    }
-    if (entry.invoiceId !== undefined) {
-      throw new ConvexError(await invoiceLockMessage(ctx, entry.invoiceId, "edit"));
-    }
-    if (entry.settledAt !== undefined) {
-      throw new ConvexError(
-        "Cannot edit a settled time entry — reopen the period first",
-      );
     }
 
     if (args.date !== undefined) assertValidDateString(args.date);
@@ -521,17 +519,9 @@ export const remove = mutation({
       throw new ConvexError("You can only delete your own time entries");
     }
 
-    // Phase 8 — settlement guard (same rule as `update`).
+    // Close lock (N1), same rule as `update`.
     if (entry.closeId !== undefined) {
       throw new ConvexError(await closeLockMessage(ctx, entry.closeId, "delete"));
-    }
-    if (entry.invoiceId !== undefined) {
-      throw new ConvexError(await invoiceLockMessage(ctx, entry.invoiceId, "delete"));
-    }
-    if (entry.settledAt !== undefined) {
-      throw new ConvexError(
-        "Cannot delete a settled time entry — reopen the period first",
-      );
     }
 
     await logActivity(ctx, {
@@ -595,11 +585,9 @@ export const bulkUpdateBillable = mutation({
     let updated = 0;
     for (const entry of entries) {
       if (entry.isBillable === args.isBillable) continue;
-      // Skip locked entries — changing billable status would break the
-      // invoice snapshot OR the settled-period report. Both axes apply.
+      // Skip close-locked entries — their billability is frozen in the
+      // close snapshot (N1, N2).
       if (entry.closeId !== undefined) continue;
-      if (entry.invoiceId !== undefined) continue;
-      if (entry.settledAt !== undefined) continue;
 
       // Re-resolve per entry (each entry may belong to a different user) using
       // the entry's OWN sticky category, never the task's — a billable toggle
@@ -648,11 +636,11 @@ export const listProjectEntries = query({
   args: {
     projectId: v.id("projects"),
     memberId: v.optional(v.id("users")),
-    // Phase 8 vocabulary — collapsed UI states (matches `entryStatus()`):
-    //   open         billable && !invoiceId && !settledAt
-    //   draft        invoiceId set, settledAt unset (on a draft invoice)
-    //   closed       settledAt set (any reason — invoiced/retainer/fixed)
-    //   non_billable !isBillable (settled or not — billability is the row axis)
+    // Collapsed UI states (matches `entryStatus()`):
+    //   open         billable, no live close
+    //   draft        settled by a close whose invoice is a draft
+    //   closed       settled by a final close
+    //   non_billable !isBillable (closed or not — billability is the row axis)
     //   all          no filter
     billingStatus: v.optional(
       v.union(
@@ -715,7 +703,7 @@ export const listProjectEntries = query({
 
     const closeInfo = await loadEntryCloseInfo(ctx, orgId, visible);
     const invoiceIdOf = (e: Doc<"timeEntries">) =>
-      e.invoiceId ?? (e.closeId ? closeInfo.get(e.closeId)?.closeInvoiceId : undefined);
+      e.closeId ? closeInfo.get(e.closeId)?.closeInvoiceId : undefined;
     const invoiceIds = new Set<string>();
     for (const e of visible) {
       const id = invoiceIdOf(e);
@@ -730,10 +718,9 @@ export const listProjectEntries = query({
         .map((inv) => [inv._id.toString(), inv]),
     );
 
-    // Build rows. Settlement fields ride along via the shared
-    // `EntrySettlementSnapshot` type so the row, the component-side
-    // TimeEntryRow type, and the schema validator all evolve together.
-    type Row = EntrySettlementSnapshot & {
+    // Build rows. Close fields ride along via the shared `EntryCloseSnapshot`
+    // type so the row and the component-side TimeEntryRow evolve together.
+    type Row = EntryCloseSnapshot & {
       _id: Id<"timeEntries">;
       taskId: Id<"tasks">;
       taskTitle: string;
@@ -766,9 +753,14 @@ export const listProjectEntries = query({
       const cat = catId ? categoryMap.get(catId.toString()) : undefined;
       const invoiceId = invoiceIdOf(e);
       const inv = invoiceId ? invoiceMap.get(invoiceId.toString()) : undefined;
+      const close = e.closeId ? closeInfo.get(e.closeId) : undefined;
       return {
         _id: e._id,
-        closeStatus: e.closeId ? closeInfo.get(e.closeId)?.closeStatus : undefined,
+        closeStatus: close?.closeStatus,
+        closeKind: close?.closeKind,
+        closePeriodStart: close?.closePeriodStart,
+        closePeriodEnd: close?.closePeriodEnd,
+        closedAt: close?.closedAt,
         taskId: e.taskId,
         taskTitle: task?.title ?? "Unknown task",
         userId: e.userId,
@@ -789,10 +781,6 @@ export const listProjectEntries = query({
         invoiceNumber: inv?.number,
         invoiceStatus: inv?.status,
         invoiceDueDate: inv?.dueDate,
-        settledAt: e.settledAt,
-        settledReason: e.settledReason,
-        settledPeriodStart: e.settledPeriodStart,
-        settledPeriodEnd: e.settledPeriodEnd,
       };
     });
 
@@ -873,14 +861,12 @@ export const projectOverview = query({
     let totalNonBillableMinutes = 0;
     let thisMonthBillableMinutes = 0;
     let totalActualCost = 0;
-    // Phase 8 — FOUR buckets over billable entries, in lock-step with
-    // `entryStatus()` so the data shape matches the row display:
-    //   open      → !invoiceId && !settledAt (needs billing or closure)
-    //   draft     → invoiceId && !settledAt  (reserved by a draft invoice;
-    //                                          revenue not yet realized)
-    //   invoiced  → settledReason === "invoiced" (billed hourly — revenue)
-    //   settled   → settledReason ∈ {retainer_included, fixed_included}
-    //                                          (covered, no extra revenue)
+    // FOUR buckets over billable entries, in lock-step with `entryStatus()`
+    // so the data shape matches the row display (`billableOverviewBucket`):
+    //   open      → no live close (needs billing or closure)
+    //   draft     → close with a draft invoice (revenue not yet realized)
+    //   invoiced  → final T&M close (billed hourly — revenue)
+    //   settled   → final retainer close (covered, no extra revenue)
     //
     // The draft bucket is deliberate: a draft invoice has reserved hours
     // but no finalized revenue. Lumping draft into invoiced would inflate
@@ -889,10 +875,9 @@ export const projectOverview = query({
     // keeps reports honest and matches what the row badge already shows.
     let openMinutes = 0;
     let openAmount = 0;
-    // Promise = invoice: `openAmount` (the "ready to bill" number on the
-    // banner/overview) runs the SAME math as createInvoice — grouped by
-    // (category, task, rate), rounded up with the workspace default — so
-    // generating the invoice produces exactly the promised total.
+    // `openAmount` (the "ready to bill" number on the overview) groups like
+    // a T&M close — by (category, task, rate), rounded up with the
+    // workspace default.
     const defaultRounding = orgSettings?.roundingMinutes ?? 1;
     const openGroups = new Map<string, { minutes: number; rate: number }>();
     let draftMinutes = 0;
@@ -942,7 +927,7 @@ export const projectOverview = query({
       if (e.isBillable) {
         const amount = (e.durationMinutes / 60) * (e.billableRate ?? 0);
         const close = e.closeId ? closeInfo.get(e.closeId) : undefined;
-        switch (billableOverviewBucket({ ...e, ...close })) {
+        switch (billableOverviewBucket(close ?? {})) {
           case "invoiced":
             invoicedMinutes += e.durationMinutes;
             invoicedAmount += amount;
@@ -1014,7 +999,7 @@ export const projectOverview = query({
             .filter((q) => q.eq(q.field("orgId"), orgId))
             .collect();
           for (const li of lineItems) {
-            if (li.lineType === "fixed") fixedLineItemsAmount += li.amount;
+            if (li.lineType === "fixed") fixedLineItemsAmount += fromMinor(li.amountMinor, inv.currency);
           }
         }
       }
@@ -1036,14 +1021,14 @@ export const projectOverview = query({
       // For the Invoices tab "Total Invoiced" money figure (which includes
       // manual/overage lines), use api.invoices.getProjectInvoiceMetrics
       // instead — that one is invoice-derived, not entry-derived.
-      openMinutes,     // was `uninvoicedMinutes`     — !invoiceId && !settledAt
-      openAmount,      // was `uninvoicedAmount`
-      draftMinutes,    // NEW — invoiceId && !settledAt (reserved by draft)
-      draftAmount,     // NEW
-      invoicedMinutes, // was `invoicedBillableMinutes` — settledReason === "invoiced"
-      invoicedAmount,  // was `invoicedBillableAmount`
-      settledMinutes,  // NEW — settledReason ∈ {retainer_included, fixed_included}
-      settledAmount,   // NEW
+      openMinutes,     // no live close
+      openAmount,
+      draftMinutes,    // close with a draft invoice
+      draftAmount,
+      invoicedMinutes, // final T&M close
+      invoicedAmount,
+      settledMinutes,  // final retainer close
+      settledAmount,
       invoiceCount,
       // Fixed-specific — sum of `fixed`-type line items across invoices.
       // Distinct from `invoicedAmount` above (entry-derived).

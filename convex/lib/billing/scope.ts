@@ -1,9 +1,7 @@
 /**
  * The scope rule — which open entries a close settles.
  *
- * docs/prd-billing-refactor.md §6. Pure: plain data in, plain data out. This
- * replaces `lib/billingScope.ts`'s membership half once the close lifecycle
- * lands (slice 3); until then nothing in production calls it.
+ * docs/prd-billing-refactor.md §6. Pure: plain data in, plain data out.
  *
  *   from(e)            = later of naturalPeriod(e.date) and
  *                        periodAfter(e.skippedThrough)

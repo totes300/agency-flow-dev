@@ -38,6 +38,35 @@ current routes, modules, and dependency versions.
   webhook flow. Inspect `components/convex-client-provider.tsx`, `convex/users.ts`,
   and `convex/http.ts` before changing it.
 
+## Billing
+
+Time tracking → reporting → invoicing runs on one model, the **close**
+(`docs/prd-billing-refactor.md` is the source of truth; its invariants N1–N11
+are enforced and tested).
+
+- A `billingCloses` row is the committed decision "these entries settle period P
+  of project X". `billingCloseEntries` is its immutable snapshot; an entry's
+  `closeId` is only a lock and lookup key. `billingEvents` is the append-only
+  audit trail of every billing state change.
+- Pure modules own the rules: `convex/lib/billing/periods.ts` (the period grid),
+  `scope.ts` (which open entries a period settles), `pricing.ts` (the only place
+  minutes become money) and `money.ts` (integer minor units, rounding).
+- Lifecycles own every write: `lib/billing/closeLifecycle.ts` (`commitClose`, the
+  only way a retainer/T&M close or invoice comes into being, and `releaseClose`)
+  and `lib/billing/invoiceLifecycle.ts` (finalize, revert, void, paid, delete
+  draft, numbering). Public entry points are `convex/billingCloses.ts`,
+  `convex/billingInvoices.ts` (fixed-fee invoices, draft line edits) and the
+  status mutations in `convex/invoices.ts`.
+- Readers go through `lib/billing/periodView.ts`: a period with a live close reads
+  its snapshot, any other period is priced live from the scope rule. Views:
+  `convex/billingViews.ts` (Close queue, badge, workspace) and
+  `convex/billingReports.ts` (monthly report). `lib/billing/closeData.ts` is the
+  only docs → model mapping.
+- Money is stored only as integer minor units. Queries add decimal display
+  amounts at the read boundary (`lib/billing/invoiceView.ts`); the UI formats
+  them and never prices anything.
+- Fixed-fee projects have no periods or closes; their entries never lock.
+
 ## Frontend boundaries
 
 - `app/` owns routing and page composition.

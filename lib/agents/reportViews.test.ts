@@ -279,28 +279,45 @@ describe("invoice flatteners", () => {
     });
   });
 
-  it("flattens ready rows with YYYY-MM periods", () => {
-    const [row] = flattenReadyRows([
+  it("flattens close queue rows, marking within-budget closes", () => {
+    const [generate, close] = flattenReadyRows([
       {
-        kind: "retainer-monthly",
+        billingType: "retainer",
+        isCloseRow: false,
         projectName: "Retainer",
         clientName: "Pragmatico",
-        period: { year: 2026, month: 6 },
+        periodToken: "2026-06",
+        periodLabel: "June 2026",
         amount: 250,
         currency: "EUR",
         overageHours: 1.67,
+        pendingPeriods: 1,
+      },
+      {
+        billingType: "retainer",
+        isCloseRow: true,
+        projectName: "Care",
+        clientName: "Pragmatico",
+        periodToken: "2026-06",
+        periodLabel: "June 2026",
+        amount: 0,
+        currency: "EUR",
+        overageHours: null,
+        pendingPeriods: 0,
       },
     ]);
-    expect(row).toEqual({
-      kind: "retainer-monthly",
+    expect(generate).toEqual({
+      kind: "retainer",
       projectName: "Retainer",
       clientName: "Pragmatico",
       period: "2026-06",
+      periodLabel: "June 2026",
       amount: 250,
       currency: "EUR",
       overageHours: 1.67,
-      cycleLengthMonths: null,
+      pendingPeriods: 1,
     });
+    expect(close.kind).toBe("retainer-close");
   });
 
   it("flattens invoice detail into header + line rows", () => {
@@ -316,9 +333,8 @@ describe("invoice flatteners", () => {
         total: 1750,
         issueDate: "2026-07-01",
         dueDate: null,
-        periodStart: "2026-06-01",
-        periodEnd: "2026-06-30",
       },
+      period: { start: "2026-06-01", end: "2026-06-30" },
       categoryGroups: [
         {
           categoryName: "Development",
@@ -346,7 +362,6 @@ describe("invoice flatteners", () => {
       },
       project: { name: "Retainer", billingType: "retainer" },
       client: { name: "Pragmatico" },
-      staleEntries: null,
     };
     const flat = flattenInvoiceDetail(detail);
     expect(flat).toMatchObject({

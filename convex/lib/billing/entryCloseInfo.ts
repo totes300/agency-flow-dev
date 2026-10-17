@@ -7,6 +7,9 @@ export type EntryCloseInfo = {
   closeKind: "retainer" | "t_and_m";
   /** The close's invoice — the entry's invoice for display joins. */
   closeInvoiceId?: Id<"invoices">;
+  closePeriodStart: string;
+  closePeriodEnd: string;
+  closedAt: number;
 };
 
 /**
@@ -27,6 +30,9 @@ export async function loadEntryCloseInfo(
     out.set(id, {
       closeStatus: close.status,
       closeKind: close.kind,
+      closePeriodStart: close.periodStart,
+      closePeriodEnd: close.periodEnd,
+      closedAt: close.committedAt,
       ...(close.invoiceId ? { closeInvoiceId: close.invoiceId } : {}),
     });
   }

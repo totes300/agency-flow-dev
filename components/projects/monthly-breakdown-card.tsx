@@ -92,16 +92,16 @@ type MonthInvoice = NonNullable<MonthData["invoice"]>
 // `rolling` communicates "tracked, deferred to cycle-end" without lying about
 // where the action is.
 //
-// Why `draft` exists: once `createInvoice` runs, EVERY included entry gets
-// `invoiceId` stamped (`convex/invoices.ts:1880`) — so backend-wise those
-// entries are in the billing flow. The pill must reflect this honestly.
+// Why `draft` exists: once a close is committed with a draft invoice, EVERY
+// entry in its scope is locked by the close — so backend-wise those entries
+// are in the billing flow. The pill must reflect this honestly.
 // Leaving them as `rolling` would lie ("nothing has started yet") when the
 // truth is "a draft invoice exists and links to these entries." On rollover
 // mid-cycle rows the draft state INHERITS from the cycle-end row's invoice
 // (only the anchor carries the link, but all cycle rows are in the flow).
 //
 // Mid-cycle rows ALSO inherit the `invoiced` terminal state from the cycle's
-// finalized invoice. `closed` is per-row (each `retainerPeriods.closedAt`).
+// finalized invoice. `closed` is per-row (a live close covers the month).
 //
 // `closed` and `invoiced` share green: both are "done." Different reopen
 // paths (Reopen period vs void invoice) drive the distinct labels.
@@ -157,8 +157,8 @@ function lifecycleStateOf(month: MonthData, ctx: LifecycleCtx): LifecycleState {
 
   // Rollover mid-cycle rows: state inherits from the CYCLE (not from this
   // row's `month.invoice`, which is null for non-anchor rows). The cycle
-  // invoice — draft or finalized — covers EVERY entry in the cycle (each
-  // gets `invoiceId` stamped at `createInvoice`), so mid-cycle rows must
+  // invoice — draft or finalized — covers EVERY entry in the cycle (the
+  // cycle's close locks them all), so mid-cycle rows must
   // reflect that. `rolling` is the residual state for "cycle has ended but
   // no billing flow has started yet."
   if (ctx.isRollover && !ctx.isCycleEndRow) {

@@ -24,7 +24,7 @@ import {
   type CloseFacetKey,
   type CloseFacets,
 } from "@/lib/billing/close-queue-filters"
-import type { CloseQueueRow } from "@/convex/close"
+import type { CloseQueueRow } from "@/convex/billingViews"
 
 const FACET_LABEL: Record<CloseFacetKey, string> = {
   client: "Client",

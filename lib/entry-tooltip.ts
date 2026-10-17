@@ -1,62 +1,38 @@
 import { formatShortDate, formatInvoiceNumber } from "@/lib/format"
+import type { EntryCloseSnapshot } from "@/convex/lib/types"
 
 /**
- * Phase 8 Slice 4 — hover tooltip for locked time-entry rows.
+ * Hover tooltip for close-locked time-entry rows.
  *
- * Vocabulary contract (parent PRD § UI Changes → Time entry list):
+ *   Closed {committed} · invoiced | included in retainer · {periodStart}–{periodEnd}
  *
- *   Closed {settledAt} · included in retainer | fixed price | invoiced
- *                       · {settledPeriodStart}–{settledPeriodEnd}
- *
- * For Draft rows (invoiceId set, not yet settled) we render a simpler
- * "On draft invoice INV-038" line — the period boundary is meaningless
- * until the invoice finalizes.
+ * A row whose close still has a draft invoice reads "On draft invoice
+ * INV-038" (or "On a draft invoice" before it is numbered) — the document
+ * is not issued yet.
  */
+export function formatLockedTooltip(
+  args: EntryCloseSnapshot & {
+    invoicePrefix: string | undefined
+    invoiceNumber: number | undefined
+  },
+): string | null {
+  if (args.closeStatus === undefined) return null
 
-type ReasonClause = "included in retainer" | "covered by fixed price" | "invoiced"
-
-const REASON_TO_CLAUSE: Record<
-  "retainer_included" | "fixed_included" | "invoiced",
-  ReasonClause
-> = {
-  retainer_included: "included in retainer",
-  fixed_included: "covered by fixed price",
-  invoiced: "invoiced",
-}
-
-export function formatLockedTooltip(args: {
-  settledAt: number | undefined
-  settledReason:
-    | "retainer_included"
-    | "fixed_included"
-    | "invoiced"
-    | undefined
-  settledPeriodStart: string | undefined
-  settledPeriodEnd: string | undefined
-  invoicePrefix: string | undefined
-  invoiceNumber: number | undefined
-}): string | null {
-  // Draft (on a draft invoice, not yet settled).
-  if (args.settledAt === undefined) {
-    if (args.invoicePrefix && args.invoiceNumber != null) {
-      return `On draft invoice ${formatInvoiceNumber(args.invoicePrefix, args.invoiceNumber)}`
-    }
-    return null
+  if (args.closeStatus === "draft") {
+    return args.invoicePrefix && args.invoiceNumber != null
+      ? `On draft invoice ${formatInvoiceNumber(args.invoicePrefix, args.invoiceNumber)}`
+      : "On a draft invoice"
   }
 
-  // Closed (settled — three financial reasons collapse on the row badge,
-  // but the tooltip splits them back out per spec wording).
-  const settledOn = formatShortDate(formatDateOnly(args.settledAt))
-  const reason = args.settledReason
-    ? REASON_TO_CLAUSE[args.settledReason]
-    : "settled"
-  const period =
-    args.settledPeriodStart && args.settledPeriodEnd
-      ? `${formatShortDate(args.settledPeriodStart)}–${formatShortDate(args.settledPeriodEnd)}`
-      : null
-
-  const parts = [`Closed ${settledOn}`, reason]
-  if (period) parts.push(period)
+  // A final T&M close billed the hour; a final retainer close covered it
+  // (any overage is billed on the close's invoice, not per hour).
+  const parts: string[] = []
+  if (args.closedAt !== undefined) parts.push(`Closed ${formatShortDate(formatDateOnly(args.closedAt))}`)
+  else parts.push("Closed")
+  parts.push(args.closeKind === "t_and_m" ? "invoiced" : "included in retainer")
+  if (args.closePeriodStart && args.closePeriodEnd) {
+    parts.push(`${formatShortDate(args.closePeriodStart)}–${formatShortDate(args.closePeriodEnd)}`)
+  }
   return parts.join(" · ")
 }
 

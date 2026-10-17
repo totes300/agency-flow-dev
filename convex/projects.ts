@@ -7,10 +7,10 @@ import { generateNextProjectCode, ensureUniqueProjectCode } from "./lib/helpers"
 import { validateAssignees } from "./lib/task_helpers";
 import { getDateInTimezone, ORG_TIMEZONE_FALLBACK } from "./lib/timer";
 import { getOrgSettings, getProjectCurrency } from "./lib/orgHelpers";
-import { getFixedBilledFinalized } from "./lib/fixedBilling";
-import { getCyclePeriods } from "./lib/retainerCycle";
+import { fixedBilledMinor } from "./lib/billing/invoiceLifecycle";
+import { fromMinor, toMinor } from "./lib/billing/money";
 import { loadCloseContext, toScopeProject } from "./lib/billing/closeData";
-import { periodOfDate } from "./lib/billing/periods";
+import { getCyclePeriods, periodOfDate } from "./lib/billing/periods";
 import { buildPeriodView } from "./lib/billing/periodView";
 import { loadReportMonths } from "./lib/billing/reportMonths";
 import { autoSaveTimersForTasks } from "./lib/timerEntry";
@@ -354,10 +354,11 @@ export const update = mutation({
       }
       // Never below what's already been invoiced — the next generate would
       // otherwise emit a negative fixed line / negative-total invoice.
-      const billed = await getFixedBilledFinalized(ctx, orgId, args.id);
-      if (args.fixedPrice < billed) {
+      const currency = await getProjectCurrency(ctx, project);
+      const billedMinor = await fixedBilledMinor(ctx, orgId, args.id);
+      if (toMinor(args.fixedPrice, currency) < billedMinor) {
         throw new ConvexError(
-          `Fixed fee cannot be lower than the amount already invoiced (${billed}). Void the affected invoices first.`,
+          `Fixed fee cannot be lower than the amount already invoiced (${fromMinor(billedMinor, currency)}). Void the affected invoices first.`,
         );
       }
       updates.fixedPrice = args.fixedPrice;
@@ -537,11 +538,8 @@ export const getRetainerData = query({
     // Compute today in org timezone (same helper used by timer & time entries)
     const todayStr = getDateInTimezone(Date.now(), timezone);
 
-    // Resolve cycle boundaries via shared helper. See convex/lib/retainerCycle.ts
-    // for the rules — this is the only place we ask "what months belong to
-    // this cycle?", and the close mutations (Phase 8 Slice 3/4) consume the
-    // same helper so the read path and write path can never disagree on
-    // whether a date falls inside a given period.
+    // Resolve the navigated cycle's months (`lib/billing/periods`). Whether a
+    // month is closed comes from the close model below, never from here.
     //
     // Local `startDate`/`endDate` keys on `months[]` are kept (instead of the
     // helper's `periodStart`/`periodEnd`) so the downstream `monthlyData`
@@ -681,10 +679,9 @@ export const getRetainerData = query({
       const monthNonBillable = nonBillableByMonth[monthKey] ?? [];
       const workedMinutes = monthBillable.reduce((s, e) => s + e.durationMinutes, 0);
       const totalNonBillableMinutes = monthNonBillable.reduce((s, e) => s + e.durationMinutes, 0);
-      // Phase 8 — `periodEnded` is calendar-only (was `isMonthClosed`); the
-      // new `isClosed`/`closedAt` carry the admin-settlement state read from
-      // `retainerPeriods`. `balanceStatus` continues to key on `periodEnded`
-      // — financial due-ness is a calendar question, not an admin one.
+      // `periodEnded` is calendar-only; `isClosed`/`closedAt` carry the live
+      // close's state. `balanceStatus` keys on `periodEnded` — financial
+      // due-ness is a calendar question, not an admin one.
       const periodEnded = m.endDate < todayStr;
       const close = closeOfMonth(m.startDate, m.endDate);
       const closedAt = close?.committedAt;
@@ -932,13 +929,13 @@ export const getSummary = query({
         .flat()
         .map(({ li, inv }) => ({
           lineType: li.lineType,
-          amount: li.amount,
+          amount: fromMinor(li.amountMinor, inv.currency),
           invoiceStatus: inv.status,
         }));
 
       const invoiceInputs: InvoiceInput[] = invoices.map((inv) => ({
         status: inv.status,
-        total: inv.total,
+        total: fromMinor(inv.totalMinor, inv.currency),
       }));
 
       const estimatedBudgetMinutes = estimates.length > 0
@@ -1064,10 +1061,10 @@ export const getSummary = query({
 /**
  * Resolve retainer cycle boundaries for a given project + offset.
  *
- * Thin adapter over `getCyclePeriods` (Phase 8 — Slice 2) that preserves the
+ * Thin adapter over `getCyclePeriods` that preserves the
  * pre-existing return shape `{ start, end, length, number, offset, ...,
  * monthKeys }` consumed by `getSummary`. The boundary math itself lives in
- * `convex/lib/retainerCycle.ts` so the read and write paths cannot drift.
+ * `convex/lib/billing/periods.ts`.
  */
 function resolveRetainerCycleContext(input: {
   startDate: string;
@@ -1146,17 +1143,13 @@ export const remove = mutation({
       }
     }
 
-    // Cascade delete: fetch estimates, periods, and rate overrides in parallel
-    const [estimates, periods, rateOverrides] = await Promise.all([
+    // Cascade delete: fetch estimates and rate overrides in parallel
+    const [estimates, rateOverrides] = await Promise.all([
       ctx.db.query("projectCategoryEstimates").withIndex("by_projectId", (q) => q.eq("projectId", args.id)).collect(),
-      ctx.db.query("retainerPeriods").withIndex("by_projectId", (q) => q.eq("projectId", args.id)).collect(),
       ctx.db.query("projectRateOverrides").withIndex("by_projectId", (q) => q.eq("projectId", args.id)).collect(),
     ]);
     for (const est of estimates) {
       await ctx.db.delete(est._id);
-    }
-    for (const period of periods) {
-      await ctx.db.delete(period._id);
     }
     for (const override of rateOverrides) {
       await ctx.db.delete(override._id);

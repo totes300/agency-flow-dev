@@ -1,5 +1,10 @@
 # PRD: Month-Close Workflow (Billing hub, Close workspace, Skip-to-next-close)
 
+> **Historical (superseded 2026-10-17).** The data model and write paths described
+> here were replaced by the close model in `docs/prd-billing-refactor.md`, and the
+> code this document refers to has been deleted (billing refactor slice 5). Read it
+> for business intent only; `docs/prd-billing-refactor.md` is the source of truth.
+
 > **Criticality note.** This feature changes how billable hours are selected, reviewed, and settled.
 > A wrong scope rule silently mis-bills clients. Every semantic rule in this document is therefore
 > stated as a precise invariant, and the core logic is isolated in pure, exhaustively tested modules.

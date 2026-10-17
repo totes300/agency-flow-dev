@@ -30,12 +30,11 @@ export function isClosableProject(project: Doc<"projects">): project is Closable
 }
 
 /**
- * Locked = settled by a live close. `closeId` is cleared when a close is
- * released, so its presence alone means live. The legacy `invoiceId` /
- * `settledAt` locks still count until the contract phase removes them.
+ * Locked = settled by a live close (N1). `closeId` is cleared when a close is
+ * released, so its presence alone means live.
  */
 export function isEntryLocked(e: Doc<"timeEntries">): boolean {
-  return e.closeId !== undefined || e.invoiceId !== undefined || e.settledAt !== undefined;
+  return e.closeId !== undefined;
 }
 
 export function toBillingEntry(e: Doc<"timeEntries">, currency: string): BillingEntry {
@@ -161,7 +160,7 @@ export function snapshotMembers(
 /**
  * The retainer usage block an invoice document shows, from the close that
  * produced it — its frozen totals plus the per-month split of its snapshot.
- * Same shape as the legacy snapshot-field version in `invoices.getInvoice`.
+ * Same shape as `billingReports.getMonthlyReport`'s usage block.
  */
 export async function closeRetainerUsage(
   ctx: Reader,

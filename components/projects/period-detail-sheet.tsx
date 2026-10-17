@@ -31,17 +31,14 @@ import { cn } from "@/lib/utils"
  * the retainer vs invoiced as overage" come here.
  *
  * Reads `api.timeEntries.listProjectEntries` constrained to the period's
- * date range. NO new schema, NO new query parameter — per parent PRD
- * § Reporting Changes, `settledReason` is the durable truth and the
- * client-side group-by is the proof-of-life that the schema preserves
- * full fidelity behind the collapsed row badge.
+ * date range and groups the rows by the close that settles them.
  *
  * Three sections, each only rendered when its bucket is non-empty:
- *   1. Covered by retainer — `settledReason === "retainer_included"`
- *   2. Invoiced overage    — `settledReason === "invoiced"` (with the
- *      linked invoice number as a click-through)
- *   3. Open / Draft        — any entries that are NOT yet settled (a
- *      reopened period mid-edit, or an open period viewed for context)
+ *   1. Covered by retainer — settled by a final retainer close (its overage
+ *      invoice, if any, as a click-through)
+ *   2. Invoiced            — settled by a final T&M close (billed hourly)
+ *   3. Open / Draft        — not settled yet, or on a close whose invoice
+ *      is still a draft
  */
 export function PeriodDetailSheet({
   open,
@@ -74,7 +71,7 @@ export function PeriodDetailSheet({
       : "skip",
   )
 
-  const grouped = useMemo(() => groupBySettledReason(data?.entries), [data])
+  const grouped = useMemo(() => groupByCloseState(data?.entries), [data])
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -107,26 +104,18 @@ export function PeriodDetailSheet({
                   minutes={grouped.retainer.minutes}
                   currency={currency}
                   tone="neutral"
+                  invoiceLinks={grouped.retainer.invoices}
                 />
               )}
               {grouped.invoiced.entryCount > 0 && (
                 <SectionCard
-                  title="Invoiced overage"
+                  title="Invoiced"
                   description="Hours billed hourly on a finalized invoice."
                   minutes={grouped.invoiced.minutes}
                   amount={grouped.invoiced.amount}
                   currency={currency}
                   tone="green"
                   invoiceLinks={grouped.invoiced.invoices}
-                />
-              )}
-              {grouped.fixed.entryCount > 0 && (
-                <SectionCard
-                  title="Covered by fixed price"
-                  description="Hours rolled into the project's fixed fee — no extra revenue."
-                  minutes={grouped.fixed.minutes}
-                  currency={currency}
-                  tone="neutral"
                 />
               )}
               {(grouped.draft.entryCount > 0 ||
@@ -157,12 +146,8 @@ type EntryShape = {
   invoiceId: Id<"invoices"> | undefined
   invoicePrefix: string | undefined
   invoiceNumber: number | undefined
-  settledAt: number | undefined
-  settledReason:
-    | "invoiced"
-    | "retainer_included"
-    | "fixed_included"
-    | undefined
+  closeStatus?: "draft" | "final"
+  closeKind?: "retainer" | "t_and_m"
 }
 
 export type DrillDownGroup = {
@@ -180,7 +165,6 @@ export type DrillDownGroup = {
 export type DrillDownGroups = {
   retainer: DrillDownGroup
   invoiced: DrillDownGroup
-  fixed: DrillDownGroup
   draft: DrillDownGroup
   open: DrillDownGroup
   nonBillable: DrillDownGroup
@@ -193,20 +177,19 @@ function emptyGroup(): DrillDownGroup {
 
 /**
  * Pure client-side aggregator. Mirrors `entryStatus()` for the bucket
- * choice but additionally splits `closed` by `settledReason` so the
+ * choice but additionally splits `closed` by the close's kind so the
  * drill-down can render the split.
  *
  * Invoice de-duplication: a month can carry overage on one invoice (the
  * common case) or multiple if the admin generated more than one — we
  * keep them all so the user can click through to each.
  */
-export function groupBySettledReason(
+export function groupByCloseState(
   entries: EntryShape[] | undefined,
 ): DrillDownGroups {
   const out: DrillDownGroups = {
     retainer: emptyGroup(),
     invoiced: emptyGroup(),
-    fixed: emptyGroup(),
     draft: emptyGroup(),
     open: emptyGroup(),
     nonBillable: emptyGroup(),
@@ -244,28 +227,23 @@ export function groupBySettledReason(
       continue
     }
 
-    if (e.settledReason === "retainer_included") {
+    if (e.closeStatus === "final" && e.closeKind === "retainer") {
       out.retainer.minutes += e.durationMinutes
       out.retainer.entryCount += 1
+      recordInvoice(out.retainer, "retainer", e)
       continue
     }
-    if (e.settledReason === "invoiced") {
+    if (e.closeStatus === "final") {
       out.invoiced.minutes += e.durationMinutes
       out.invoiced.amount += amount
       out.invoiced.entryCount += 1
       recordInvoice(out.invoiced, "invoiced", e)
       continue
     }
-    if (e.settledReason === "fixed_included") {
-      out.fixed.minutes += e.durationMinutes
-      out.fixed.entryCount += 1
-      continue
-    }
-    // Not settled. Distinguish draft (on a draft invoice) from open
-    // (truly unbilled) — the drill-down section collapses both into one
-    // visual row but a downstream report may need the distinction, so we
-    // keep separate counters.
-    if (e.invoiceId !== undefined) {
+    // Not final. Distinguish draft (close with a draft invoice) from open
+    // (truly unbilled) — the section collapses both into one visual row
+    // but keeps separate counters.
+    if (e.closeStatus === "draft") {
       out.draft.minutes += e.durationMinutes
       out.draft.amount += amount
       out.draft.entryCount += 1

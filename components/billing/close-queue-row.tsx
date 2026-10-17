@@ -4,7 +4,7 @@ import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { formatCurrency, formatHoursCompact } from "@/lib/format"
 import { cn } from "@/lib/utils"
-import type { CloseQueueRow } from "@/convex/close"
+import type { CloseQueueRow } from "@/convex/billingViews"
 
 const BILLING_TYPE_META: Record<
   CloseQueueRow["billingType"],
@@ -23,14 +23,10 @@ const BILLING_TYPE_META: Record<
  * amount right-aligned, and an always-visible quiet Review button — this is an
  * action table, so the CTA is never hidden behind hover.
  *
- * Blocked oldest-first rows keep every number (un-dimmed) — their totals are
- * exactly what motivates closing the earlier period — and only swap the CTA
- * slot for a muted, non-interactive "Close <period> first" hint. Over-budget
- * rows missing an overage rate route to Set rate instead of Review.
+ * Over-budget rows missing an overage rate route to Set rate instead of Review.
  */
 export function CloseQueueRow({ row }: { row: CloseQueueRow }) {
   const meta = BILLING_TYPE_META[row.billingType]
-  const blocked = row.disabledReason !== null
 
   return (
     <div className="flex h-12 items-center gap-3 px-3 text-sm hover:bg-muted/30">
@@ -86,14 +82,7 @@ export function CloseQueueRow({ row }: { row: CloseQueueRow }) {
 
       {/* Action slot — fixed width so amounts align; hints stay one line */}
       <div className="flex w-40 shrink-0 items-center justify-end">
-        {blocked ? (
-          <span
-            className="truncate whitespace-nowrap text-xs text-muted-foreground"
-            title={row.disabledReason ?? undefined}
-          >
-            {row.disabledReason}
-          </span>
-        ) : row.configIssue === "missing-overage-rate" ? (
+        {row.configIssue === "missing-overage-rate" ? (
           <Button size="sm" variant="outline" asChild>
             <Link href={`/projects/${row.projectId}?tab=settings`}>Set rate</Link>
           </Button>

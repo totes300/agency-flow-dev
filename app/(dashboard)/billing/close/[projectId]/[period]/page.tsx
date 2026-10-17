@@ -12,11 +12,10 @@ import { useBreadcrumbTitle } from "@/lib/hooks/use-breadcrumb-title"
  * Close workspace route (slice 02; relocated under /billing in slice 08).
  *
  * URL: /billing/close/[projectId]/[period]
- *   - period = "YYYY-MM" for calendar periods (retainer month/cycle, T&M month)
- *   - period = "fixed" for fixed-price projects (single remaining-fee bucket)
+ *   - period = "YYYY-MM" (retainer month/cycle, T&M month; snapped to the grid)
  *
- * Thin orchestrator: parse params → subscribe to `getCloseWorkspace` (admin-only,
- * composes `billingScope` server-side) → loading skeleton → 404 on null →
+ * Thin orchestrator: parse params → subscribe to `billingViews.getCloseWorkspace`
+ * (admin-only; scope + pricing server-side) → loading skeleton → 404 on null →
  * render <CloseWorkspace>. Back returns to the Billing hub (/billing).
  */
 export default function CloseWorkspacePage() {

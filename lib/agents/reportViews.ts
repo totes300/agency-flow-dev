@@ -360,7 +360,7 @@ export function flattenRetainerCycle(
   };
 }
 
-// ─── Retainer statement (statements.getRetainerStatement) ───────────────────
+// ─── Retainer statement (billingReports.getMonthlyReport) ───────────────────
 
 export type RetainerStatementLike = {
   inProgress: boolean;
@@ -559,41 +559,48 @@ export function flattenInvoiceRows(rows: InvoiceRowLike[]): FlatInvoiceRow[] {
   }));
 }
 
-// ─── Ready-to-invoice rows (invoices.getReadyToInvoiceUnified) ──────────────
+// ─── Close queue rows (billingViews.getCloseQueue) ──────────────────────────
 
-export type ReadyRowLike = {
-  kind: string;
+export type CloseQueueRowLike = {
+  billingType: string;
+  isCloseRow: boolean;
   projectName: string;
   clientName: string;
-  period?: { year: number; month: number };
-  amount: number;
-  currency: string;
-  overageHours?: number;
-  cycleLengthMonths?: number;
-};
-
-export type FlatReadyRow = {
-  kind: string;
-  projectName: string;
-  clientName: string;
-  /** YYYY-MM for retainer rows; null for fixed/T&M. */
-  period: string | null;
+  /** YYYY-MM of the committable period's first month. */
+  periodToken: string;
+  periodLabel: string;
   amount: number;
   currency: string;
   overageHours: number | null;
-  cycleLengthMonths: number | null;
+  pendingPeriods: number;
 };
 
-export function flattenReadyRows(rows: ReadyRowLike[]): FlatReadyRow[] {
+export type FlatReadyRow = {
+  /** "retainer" | "t_and_m", or "retainer-close" for a within-budget Close & report. */
+  kind: string;
+  projectName: string;
+  clientName: string;
+  /** YYYY-MM of the period's first month. */
+  period: string;
+  periodLabel: string;
+  amount: number;
+  currency: string;
+  overageHours: number | null;
+  /** Further elapsed periods of the project waiting behind this one. */
+  pendingPeriods: number;
+};
+
+export function flattenReadyRows(rows: CloseQueueRowLike[]): FlatReadyRow[] {
   return rows.map((r) => ({
-    kind: r.kind,
+    kind: r.isCloseRow ? `${r.billingType}-close` : r.billingType,
     projectName: r.projectName,
     clientName: r.clientName,
-    period: r.period ? formatMonthKey(r.period.year, r.period.month) : null,
+    period: r.periodToken,
+    periodLabel: r.periodLabel,
     amount: round2(r.amount),
     currency: r.currency,
-    overageHours: r.overageHours ?? null,
-    cycleLengthMonths: r.cycleLengthMonths ?? null,
+    overageHours: r.overageHours,
+    pendingPeriods: r.pendingPeriods,
   }));
 }
 
@@ -611,9 +618,9 @@ export type InvoiceDetailLike = {
     total: number;
     issueDate: string;
     dueDate?: string | null;
-    periodStart?: string | null;
-    periodEnd?: string | null;
   };
+  /** The billed period, from the invoice's close (null on fixed-fee invoices). */
+  period: { start: string; end: string } | null;
   categoryGroups: Array<{
     categoryName: string;
     subtotalHours: number;
@@ -637,7 +644,6 @@ export type InvoiceDetailLike = {
   } | null;
   project: { name: string; billingType: string } | null;
   client: { name: string } | null;
-  staleEntries: { count: number; totalMinutes: number } | null;
 };
 
 export type FlatInvoiceDetail = {
@@ -671,8 +677,6 @@ export type FlatInvoiceDetail = {
     balanceMinutes: number;
     amountDue: number;
   } | null;
-  /** Draft-only: entries logged after the draft was generated. */
-  staleEntries: { count: number; totalMinutes: number } | null;
 };
 
 export function flattenInvoiceDetail(
@@ -691,8 +695,8 @@ export function flattenInvoiceDetail(
     total: round2(res.invoice.total),
     issueDate: res.invoice.issueDate,
     dueDate: res.invoice.dueDate ?? null,
-    periodStart: res.invoice.periodStart ?? null,
-    periodEnd: res.invoice.periodEnd ?? null,
+    periodStart: res.period?.start ?? null,
+    periodEnd: res.period?.end ?? null,
     lines: res.categoryGroups.flatMap((g) =>
       g.lineItems.map((li) => ({
         categoryName: g.categoryName,
@@ -713,6 +717,5 @@ export function flattenInvoiceDetail(
           amountDue: round2(res.retainerUsage.total.amountDue),
         }
       : null,
-    staleEntries: res.staleEntries,
   };
 }

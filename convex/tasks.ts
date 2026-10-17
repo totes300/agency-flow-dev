@@ -1438,7 +1438,7 @@ export const deleteImpact = query({
       for (const e of entries) {
         entryCount++;
         totalMinutes += e.durationMinutes;
-        if (e.closeId || e.invoiceId || e.settledAt) {
+        if (e.closeId) {
           lockedCount++;
           lockedMinutes += e.durationMinutes;
         }
@@ -1497,7 +1497,7 @@ export const remove = mutation({
       .withIndex("by_orgId_parentTaskId", (q) => q.eq("orgId", orgId).eq("parentTaskId", args.id))
       .collect();
 
-    // Time entries are ledger records. Invoiced/settled ones are immutable
+    // Time entries are ledger records. Close-locked ones are immutable
     // (same protection as timeEntries.remove); free ones require explicit
     // consent so a task delete can't silently destroy logged hours.
     let hasEntries = false;
@@ -1506,7 +1506,7 @@ export const remove = mutation({
         .withIndex("by_taskId", (q) => q.eq("taskId", t._id))
         .collect();
       for (const e of entries) {
-        if (e.closeId || e.invoiceId || e.settledAt) {
+        if (e.closeId) {
           throw new ConvexError(
             "This task has invoiced or settled time entries. Archive it instead to keep billing records intact.",
           );

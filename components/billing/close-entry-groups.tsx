@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react"
 import { CornerUpRightIcon } from "lucide-react"
 import type { Id } from "@/convex/_generated/dataModel"
-import type { CloseWorkspaceRow } from "@/convex/close"
+import type { CloseWorkspaceRow } from "@/convex/billingViews"
 import {
   compareCloseRows,
   deriveCloseGroupMeta,

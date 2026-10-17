@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest"
 import { FilterOperator, type Filter } from "@/lib/filter-types"
-import type { Id } from "@/convex/_generated/dataModel"
 import {
   applyTimeEntryFilters,
   parseTimeEntryFilters,
@@ -71,8 +70,7 @@ function entry(
 ): FilterableTimeEntry {
   return {
     isBillable: true,
-    invoiceId: undefined,
-    settledAt: undefined,
+    closeStatus: undefined,
     workCategoryId: undefined,
     ...overrides,
   }
@@ -81,14 +79,10 @@ function entry(
 const rows: FilterableTimeEntry[] = [
   // open, member u1, category c1
   entry({ userId: "u1", workCategoryId: "c1" }),
-  // draft (on a draft invoice), member u2, category c2
-  entry({
-    userId: "u2",
-    workCategoryId: "c2",
-    invoiceId: "inv1" as Id<"invoices">,
-  }),
-  // closed (settled), member u1, no category
-  entry({ userId: "u1", settledAt: 123 }),
+  // draft (close with a draft invoice), member u2, category c2
+  entry({ userId: "u2", workCategoryId: "c2", closeStatus: "draft" }),
+  // closed (final close), member u1, no category
+  entry({ userId: "u1", closeStatus: "final" }),
   // non-billable, member u2, category c1
   entry({ userId: "u2", workCategoryId: "c1", isBillable: false }),
 ]

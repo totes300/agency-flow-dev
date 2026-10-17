@@ -651,7 +651,7 @@ describe("update — sticky category, re-resolution, guards", () => {
     expect(entry?.billableRate).toBe(200); // project override, not 120
   });
 
-  it("locked entry (invoiceId set) rejects a category change", async () => {
+  it("locked entry (closeId set) rejects a category change", async () => {
     const t = convexTest(schema, modules);
     const w = await baseSetup(t);
     const designer = await addUser(t, w, {
@@ -671,27 +671,26 @@ describe("update — sticky category, re-resolution, guards", () => {
       startedAt: START_MS,
     })) as Id<"timeEntries">;
 
-    // Attach to a (finalized) invoice → locked.
+    // Settle it in a final close → locked (N1).
     await t.run(async (ctx) => {
-      const now = Date.now();
-      const invoiceId = await ctx.db.insert("invoices", {
+      const closeId = await ctx.db.insert("billingCloses", {
         orgId: ORG_ID,
         projectId,
-        clientId: w.clientId,
-        number: 1,
-        prefix: "INV-",
-        status: "invoiced",
-        currency: "EUR",
-        subtotal: 100,
-        total: 100,
-        issueDate: "2026-07-15",
+        kind: "t_and_m",
         periodStart: "2026-07-01",
         periodEnd: "2026-07-31",
-        createdAt: now,
-        updatedAt: now,
-        createdBy: w.admin,
+        status: "final",
+        currency: "EUR",
+        roundingMinutes: 1,
+        includedMinutes: 0,
+        overageRateMinor: 0,
+        usageMinutes: 60,
+        overageMinutes: 0,
+        amountMinor: 0,
+        committedAt: Date.now(),
+        committedBy: w.admin,
       });
-      await ctx.db.patch(entryId, { invoiceId });
+      await ctx.db.patch(entryId, { closeId });
     });
 
     await expect(

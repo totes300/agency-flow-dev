@@ -29,11 +29,9 @@ import { assertValidDateString } from "./lib/dateValidation";
 import { getOrgSettings } from "./lib/orgHelpers";
 import { ORG_TIMEZONE_FALLBACK, getDateInTimezone } from "./lib/timer";
 import { classifyReportPeriod } from "./lib/reportPeriod";
-import {
-  getRetainerCyclePosition,
-  getRetainerCycleStartMonth,
-} from "./lib/retainerBalance";
-import { monthKey, monthRangeFrom } from "./lib/retainerUsage";
+import { absMonthOf, monthKeyFromAbs, periodOfDate } from "./lib/billing/periods";
+import { fromMinor } from "./lib/billing/money";
+import { monthKey } from "./lib/retainerUsage";
 import {
   aggregateClientMonths,
   aggregateOrgFinance,
@@ -479,26 +477,22 @@ export const retainerHealthForMonth = internalQuery({
       let overageDue = false;
       let overageMinutes = 0;
 
+      const targetAbs = absMonthOf(periodStart);
       if (rolloverEnabled && project.startDate) {
-        const positionInCycle = getRetainerCyclePosition(
-          project.startDate,
-          args.year,
-          args.month,
-          cycleLength,
+        // The cycle containing the month, on the project's own grid.
+        const cyclePeriod = periodOfDate(
+          { billingType: "retainer", startDate: project.startDate, rolloverEnabled, cycleLength },
+          periodStart,
         );
-        const cycleStartMonth = getRetainerCycleStartMonth(
-          project.startDate,
-          args.year,
-          args.month,
-          cycleLength,
-        );
-        if (positionInCycle >= 0 && cycleStartMonth) {
+        const cycleStartAbs = absMonthOf(cyclePeriod.start);
+        const positionInCycle =
+          targetAbs >= absMonthOf(project.startDate) ? targetAbs - cycleStartAbs : -1;
+        if (positionInCycle >= 0) {
           cyclePosition = positionInCycle + 1;
-          const cycleMonths = monthRangeFrom(cycleStartMonth, positionInCycle + 1);
-          const cycleUsed = cycleMonths.reduce(
-            (s, m) => s + (usedMinutesByMonth.get(monthKey(m)) ?? 0),
-            0,
-          );
+          let cycleUsed = 0;
+          for (let abs = cycleStartAbs; abs <= targetAbs; abs++) {
+            cycleUsed += usedMinutesByMonth.get(monthKeyFromAbs(abs)) ?? 0;
+          }
           const cycleBudget = includedMinutes * cycleLength;
           const cycleBalance = cycleBudget - cycleUsed;
           const isClosingMonth = positionInCycle === cycleLength - 1;
@@ -651,7 +645,7 @@ export const orgFinanceSnapshot = internalQuery({
       entries: entries.map(toReportEntry),
       invoices: invoices.map((inv) => ({
         status: inv.status,
-        total: inv.total,
+        total: fromMinor(inv.totalMinor, inv.currency),
         currency: inv.currency,
       })),
       projectByTaskId,

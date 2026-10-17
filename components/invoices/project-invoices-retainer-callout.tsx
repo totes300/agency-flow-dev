@@ -10,11 +10,9 @@ export type UninvoicedMonth = { year: number; month: number; label: string }
 
 /**
  * Callout bar above the invoice list for retainer projects with one or more
- * uninvoiced closed months. Surfaces the month labels for context and offers
- * a single primary action — "Create <next month> invoice" — that calls
- * `createInvoice` directly and routes to the resulting draft (D10 in
- * `docs/invoicing-refactor.md` — the modal preview surface is gone; the draft
- * IS the preview surface).
+ * elapsed, unclosed periods with overage. Surfaces the month labels for
+ * context and links the next one to the Close workspace, where the close is
+ * committed (docs/prd-billing-refactor.md D8).
  */
 export function ProjectInvoicesRetainerCallout({
   projectId,

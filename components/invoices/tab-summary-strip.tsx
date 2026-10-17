@@ -1,13 +1,15 @@
 "use client"
 
-import { formatCurrency, round2 } from "@/lib/format"
+import { formatCurrency } from "@/lib/format"
+import { fromMinor } from "@/convex/lib/billing/money"
 import type { ListRow } from "@/lib/invoices/list-rows"
 import type { InvoiceStatusTab } from "@/lib/invoices/status-tab"
 
 /**
  * Per-tab amount summary strip rendered between the filter bar and the
- * invoice list. Aggregates `total` per currency over whatever rows are
- * currently visible (so it respects active filters and search).
+ * invoice list. Aggregates `totalMinor` per currency over whatever rows are
+ * currently visible (so it respects active filters and search), converting
+ * once for display.
  *
  * Multi-currency: stays inline, separated by middots, ordered by amount
  * descending. Symbol-only formatting (matches the top metric cards).
@@ -95,14 +97,8 @@ function buildSummary(
     tab === "outstanding" ? todayYMDInTimezone(timezone) : null
 
   for (const row of rows) {
-    if (row.kind === "ready") {
-      // Ready rows have no `total` field — they expose `amount` + `currency`.
-      add(totalsByCurrency, row.ready.currency, row.ready.amount)
-      count += 1
-      continue
-    }
     const inv = row.invoice
-    add(totalsByCurrency, inv.currency, inv.total)
+    add(totalsByCurrency, inv.currency, inv.totalMinor)
     count += 1
 
     if (
@@ -111,7 +107,7 @@ function buildSummary(
       inv.dueDate != null &&
       inv.dueDate < todayInTz
     ) {
-      add(overdueTotals, inv.currency, inv.total)
+      add(overdueTotals, inv.currency, inv.totalMinor)
       overdueCount += 1
     }
   }
@@ -122,17 +118,23 @@ function buildSummary(
   }
 
   return {
-    totalsByCurrency,
+    totalsByCurrency: toDisplay(totalsByCurrency),
     count,
     overdue:
       tab === "outstanding"
-        ? { totalsByCurrency: overdueTotals, count: overdueCount }
+        ? { totalsByCurrency: toDisplay(overdueTotals), count: overdueCount }
         : null,
   }
 }
 
-function add(map: Record<string, number>, currency: string, amount: number) {
-  map[currency] = round2((map[currency] ?? 0) + amount)
+function add(map: Record<string, number>, currency: string, amountMinor: number) {
+  map[currency] = (map[currency] ?? 0) + amountMinor
+}
+
+function toDisplay(minorByCurrency: Record<string, number>): Record<string, number> {
+  return Object.fromEntries(
+    Object.entries(minorByCurrency).map(([cur, minor]) => [cur, fromMinor(minor, cur)]),
+  )
 }
 
 function sortCurrenciesDesc(map: Record<string, number>): string[] {

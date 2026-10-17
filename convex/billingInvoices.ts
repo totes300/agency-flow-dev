@@ -1,9 +1,9 @@
 /**
- * Close-model invoice mutations (docs/prd-billing-refactor.md §8.4, D5, D6):
+ * Invoice draft mutations (docs/prd-billing-refactor.md §8.4, D5, D6):
  * fixed-fee invoices and the only edits a draft allows — line descriptions
  * and manual lines. Time and overage amounts are frozen at commit.
- * Status changes go through `invoices.changeInvoiceStatus`, which delegates
- * to `lib/billing/invoiceLifecycle` for these invoices.
+ * Status changes go through `invoices.changeInvoiceStatus`
+ * (`lib/billing/invoiceLifecycle`).
  */
 
 import { ConvexError, v } from "convex/values";
@@ -15,7 +15,6 @@ import { ORG_TIMEZONE_FALLBACK, getDateInTimezone } from "./lib/timer";
 import { fromMinor, toMinor } from "./lib/billing/money";
 import {
   fixedBilledMinor,
-  isCloseModelInvoice,
   manualLineAmountMinor,
   recomputeInvoiceTotals,
 } from "./lib/billing/invoiceLifecycle";
@@ -41,7 +40,7 @@ export const createFixedInvoice = mutation({
 
     const currency = client.currency;
     const remainingMinor =
-      toMinor(project.fixedPrice ?? 0, currency) - (await fixedBilledMinor(ctx, orgId, project._id, currency));
+      toMinor(project.fixedPrice ?? 0, currency) - (await fixedBilledMinor(ctx, orgId, project._id));
     const amountMinor = args.amount !== undefined ? toMinor(args.amount, currency) : remainingMinor;
     if (amountMinor <= 0) {
       throw new ConvexError(
@@ -61,7 +60,6 @@ export const createFixedInvoice = mutation({
     const due = new Date(`${issueDate}T00:00:00Z`);
     due.setUTCDate(due.getUTCDate() + (orgSettings?.defaultPaymentTermsDays ?? 30));
     const now = Date.now();
-    const amount = fromMinor(amountMinor, currency);
     const invoiceId = await ctx.db.insert("invoices", {
       orgId,
       projectId: project._id,
@@ -70,8 +68,6 @@ export const createFixedInvoice = mutation({
       subject: "Fixed fee",
       status: "draft",
       currency,
-      subtotal: amount,
-      total: amount,
       subtotalMinor: amountMinor,
       totalMinor: amountMinor,
       issueDate,
@@ -88,9 +84,7 @@ export const createFixedInvoice = mutation({
       lineType: "fixed",
       description: args.description?.trim() || project.name,
       quantity: 1,
-      unitPrice: amount,
       unitPriceMinor: amountMinor,
-      amount,
       amountMinor,
       createdAt: now,
       updatedAt: now,
@@ -99,7 +93,7 @@ export const createFixedInvoice = mutation({
   },
 });
 
-/** Load a line of a close-model DRAFT invoice the caller's org owns. */
+/** Load a line of a DRAFT invoice the caller's org owns. */
 async function loadDraftLine(
   ctx: MutationCtx,
   orgId: string,
@@ -109,7 +103,6 @@ async function loadDraftLine(
   if (!line || line.orgId !== orgId) throw new ConvexError("Line item not found.");
   const invoice = await ctx.db.get(line.invoiceId);
   if (!invoice || invoice.orgId !== orgId) throw new ConvexError("Invoice not found.");
-  if (!isCloseModelInvoice(invoice)) throw new ConvexError("Use the legacy editor for this invoice.");
   if (invoice.status !== "draft") throw new ConvexError("Only draft invoices can be edited.");
   return { line, invoice };
 }
@@ -132,7 +125,6 @@ export const addManualLine = mutation({
     const { orgId } = await requireAdmin(ctx);
     const invoice = await ctx.db.get(args.invoiceId);
     if (!invoice || invoice.orgId !== orgId) throw new ConvexError("Invoice not found.");
-    if (!isCloseModelInvoice(invoice)) throw new ConvexError("Use the legacy editor for this invoice.");
     if (invoice.status !== "draft") throw new ConvexError("Only draft invoices can be edited.");
     const lines = await ctx.db
       .query("invoiceLineItems")
@@ -146,9 +138,7 @@ export const addManualLine = mutation({
       lineType: "manual",
       description: args.description?.trim() || "New line item",
       quantity: 1,
-      unitPrice: 0,
       unitPriceMinor: 0,
-      amount: 0,
       amountMinor: 0,
       createdAt: now,
       updatedAt: now,
@@ -173,14 +163,12 @@ export const updateManualLine = mutation({
     }
     const quantity = args.quantity ?? line.quantity;
     const unitPriceMinor =
-      args.unitPrice !== undefined ? toMinor(args.unitPrice, invoice.currency) : line.unitPriceMinor ?? 0;
+      args.unitPrice !== undefined ? toMinor(args.unitPrice, invoice.currency) : line.unitPriceMinor;
     const amountMinor = manualLineAmountMinor(quantity, unitPriceMinor);
     await ctx.db.patch(line._id, {
       ...(args.description !== undefined ? { description: args.description.trim() } : {}),
       quantity,
-      unitPrice: fromMinor(unitPriceMinor, invoice.currency),
       unitPriceMinor,
-      amount: fromMinor(amountMinor, invoice.currency),
       amountMinor,
       updatedAt: Date.now(),
     });
@@ -217,17 +205,14 @@ export const setFixedAmount = mutation({
     if (amountMinor <= 0) throw new ConvexError("Enter an amount greater than zero.");
     const remainingMinor =
       toMinor(project.fixedPrice ?? 0, invoice.currency) -
-      (await fixedBilledMinor(ctx, orgId, project._id, invoice.currency));
+      (await fixedBilledMinor(ctx, orgId, project._id));
     if (amountMinor > remainingMinor) {
       throw new ConvexError(
         `Only ${fromMinor(Math.max(0, remainingMinor), invoice.currency)} ${invoice.currency} of the fixed fee is left to bill.`,
       );
     }
-    const amount = fromMinor(amountMinor, invoice.currency);
     await ctx.db.patch(line._id, {
-      unitPrice: amount,
       unitPriceMinor: amountMinor,
-      amount,
       amountMinor,
       updatedAt: Date.now(),
     });

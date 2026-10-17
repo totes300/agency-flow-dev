@@ -9,7 +9,6 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { convexTest } from "convex-test";
-import type { FunctionReturnType } from "convex/server";
 import schema from "../schema";
 import { api } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
@@ -19,12 +18,6 @@ const modules = (
     glob: (pattern: string) => Record<string, () => Promise<unknown>>;
   }
 ).glob("../**/*.ts");
-
-// Compile-time contract: the new report is a drop-in for the legacy one.
-type LegacyReport = NonNullable<FunctionReturnType<typeof api.statements.getRetainerStatement>>;
-type NewReport = NonNullable<FunctionReturnType<typeof api.billingReports.getMonthlyReport>>;
-const reportContract = (r: NewReport): LegacyReport => r;
-void reportContract;
 
 const ORG_ID = "org_read";
 const ADMIN = {
@@ -116,20 +109,20 @@ describe("N11 — one number per period, on every surface", () => {
     const row = await queueRow(w);
     expect(row).toMatchObject({ periodToken: "2026-03", amount: 82.5, isCloseRow: false, pendingPeriods: 0 });
     const ws = await workspace(w, "2026-03");
-    expect(ws).toMatchObject({ amount: 82.5, usageMinutes: 655, committable: true, fromSettlementStamps: false });
+    expect(ws).toMatchObject({ amount: 82.5, usageMinutes: 655, committable: true, isClosed: false });
     expect(ws?.entries).toHaveLength(3);
     expect((await report(w, 2026, 3))?.billing.overageAmount).toBe(82.5);
 
     const { invoiceId } = await commit(w, "2026-03-01");
     const detail = await as(w).query(api.invoices.getInvoice, { identifier: invoiceId! });
     expect(detail?.invoice.total).toBe(82.5);
-    expect(detail?.staleEntries).toBeNull();
+    expect(detail?.period).toEqual({ start: "2026-03-01", end: "2026-03-31", months: 1 });
     expect(detail?.retainerUsage?.total).toEqual({ availableMinutes: 600, usedMinutes: 655, balanceMinutes: -55, amountDue: 82.5 });
 
     // After commit: the period leaves the queue, the workspace reads the snapshot.
     expect(await queueRow(w)).toBeUndefined();
     const closed = await workspace(w, "2026-03");
-    expect(closed).toMatchObject({ amount: 82.5, fromSettlementStamps: true, committable: false });
+    expect(closed).toMatchObject({ amount: 82.5, isClosed: true, committable: false });
     expect(closed?.coveringDraft?.id).toBe(invoiceId);
     expect(closed?.flags).toEqual([]);
     const stmt = await report(w, 2026, 3);

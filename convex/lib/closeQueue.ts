@@ -1,18 +1,12 @@
 /**
- * `closeQueue` — pure enrichment + grouping helpers for the Billing → Close tab
- * (`docs/closing-refactor/08-close-queue-and-billing-nav.md`).
+ * `closeQueue` — pure enrichment + grouping helpers for the Billing → Close tab.
  *
- * The close queue is the front door of the month-end ritual: every open,
- * elapsed, closable period across the org, grouped by calendar month with
+ * The queue shows one row per project: its committable period
+ * (docs/prd-billing-refactor.md §6, §10), grouped by calendar month with
  * per-month progress ("N of M closed") and per-row review signals ("3 to
- * review") and oldest-first blocking ("Close May first").
- *
- * These helpers are pure so the enumeration extensions the PRD calls for
- * (entryCount, flagCount, disabledReason, month grouping/progress) are covered
- * by co-located unit tests — the money still comes from `billingScope` /
+ * review"). The money comes from `lib/billing/pricing` and the flags from
  * `closeFlags`; this module only summarizes and arranges what those produce.
- * The Convex shim in `convex/close.ts:getCloseQueue` fetches docs, composes
- * `billingScope`, and feeds these functions.
+ * `convex/billingViews.ts:getCloseQueue` fetches docs and feeds it.
  */
 
 import { reviewFlagCount, type CloseFlag } from "./closeFlags";
@@ -43,68 +37,6 @@ export function summarizeQueueScope(
     flagCount: reviewFlagCount(flags),
     loggedMinutes: scope.usageMinutes,
   };
-}
-
-// ─── Oldest-first blocking (I3) ─────────────────────────────────────────────
-
-export type DisableInput = {
-  /** Stable row key (project + period) — the map is keyed by this. */
-  key: string;
-  projectId: string;
-  /** Chronological sort key (same one the ready feed sorts by). */
-  sortKey: string;
-  /** Authoritative I3 flag from `billingScope` — is this the first open period? */
-  committable: boolean;
-  /** Human label of this row's period ("June 2026" / "Apr–Jun 2026"). */
-  periodLabel: string;
-};
-
-/** Fallback hint when the blocking period isn't a strictly-earlier visible row. */
-export const GENERIC_BLOCKED_HINT = "Close earlier period first";
-
-/**
- * PRD I3 — per project only the first open, elapsed period can be committed;
- * every later period is blocked with "Close <earlier period> first". We drive
- * the enabled/disabled decision off each row's authoritative `committable` flag
- * (from `billingScope`), so queue and workspace can never disagree about which
- * period is next.
- *
- * The hint names the earliest visible row's period only when that row is
- * strictly earlier than the blocked one. A row can be non-committable while
- * being the earliest *visible* row (e.g. a `billingScope` firstOpenPeriod that
- * produced no queue row — a $0-amount T&M month filtered from the inbox); in
- * that case we fall back to the workspace's own generic copy rather than emit a
- * self-referential "Close June first" on the June row.
- *
- * Returns a map row-key → disabled hint (absent when the row is committable).
- * Fixed projects have a single, always-committable row and never appear disabled.
- */
-export function assignDisabledReasons(
-  rows: DisableInput[],
-): Map<string, string> {
-  const byProject = new Map<string, DisableInput[]>();
-  for (const r of rows) {
-    const g = byProject.get(r.projectId);
-    if (g) g.push(r);
-    else byProject.set(r.projectId, [r]);
-  }
-
-  const out = new Map<string, string>();
-  for (const group of byProject.values()) {
-    // Earliest visible period for this project (the one that, if committable,
-    // is the front of the oldest-first queue).
-    const earliest = group.reduce((a, b) => (a.sortKey <= b.sortKey ? a : b));
-    for (const r of group) {
-      if (r.committable) continue;
-      out.set(
-        r.key,
-        earliest.sortKey < r.sortKey
-          ? `Close ${earliest.periodLabel} first`
-          : GENERIC_BLOCKED_HINT,
-      );
-    }
-  }
-  return out;
 }
 
 // ─── Month grouping + progress ──────────────────────────────────────────────

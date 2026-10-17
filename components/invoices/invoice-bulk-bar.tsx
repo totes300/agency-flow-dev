@@ -23,43 +23,33 @@ import { toastError } from "@/lib/toast-helpers"
 import { formatCurrency, pluralize } from "@/lib/format"
 import type { InvoiceRow } from "@/components/invoices/invoice-list"
 import type { InvoiceStatus } from "@/components/invoices/invoice-status-badge"
-import type { ReadyRow } from "@/lib/invoices/list-rows"
+import { fromMinor } from "@/convex/lib/billing/money"
 
 type Pending = "paid" | "void" | null
 
 /**
- * Sticky bulk bar across the unified invoice table. Selection can mix
- * lifecycle stages (ready + draft + invoiced + …) — each action button
- * acts on its own slice and labels its own count, so the user never has to
- * untangle which action covers which row.
+ * Sticky bulk bar across the invoice table. Selection can mix lifecycle
+ * stages (draft + invoiced + …) — each action button labels its own count.
  *
  * Visibility rules:
  *
- *   Mark paid  — every selected *invoice* row is status "invoiced".
- *                Ready rows in the selection are ignored.
- *   Void       — every selected *invoice* row is status "draft" or "invoiced".
- *                Ready rows in the selection are ignored.
- *
- * Ready rows have no batch action — each Ready row generates its draft
- * individually via `useGenerateInvoice` and the user lands on the draft
- * page (D10). Selection of Ready rows still contributes to the
- * multi-currency total preview.
+ *   Mark paid  — every selected row is status "invoiced".
+ *   Void       — every selected row is status "draft" or "invoiced".
  *
  * Multi-currency totals never sum across currencies — accounting hazard.
+ * Sums run in minor units and are converted once for display.
  */
 export function InvoiceBulkBar({
-  selectedReady,
   selectedInvoices,
   onClear,
 }: {
-  selectedReady: ReadyRow[]
   selectedInvoices: InvoiceRow[]
   onClear: () => void
 }) {
   const bulkChange = useMutation(api.invoices.bulkChangeInvoiceStatus)
   const [pending, setPending] = useState<Pending>(null)
 
-  const count = selectedReady.length + selectedInvoices.length
+  const count = selectedInvoices.length
 
   const allInvoiceStatuses = useMemo(
     () => new Set<InvoiceStatus>(selectedInvoices.map((i) => i.status)),
@@ -73,18 +63,14 @@ export function InvoiceBulkBar({
     selectedInvoices.length > 0 &&
     [...allInvoiceStatuses].every((s) => s === "draft" || s === "invoiced")
 
-  // Group totals by currency across ALL selected rows (ready amount + invoice
-  // total). Never sum across currencies.
+  // Group totals by currency (minor units). Never sum across currencies.
   const totalsByCurrency = useMemo(() => {
-    const map = new Map<string, number>()
-    for (const r of selectedReady) {
-      map.set(r.currency, (map.get(r.currency) ?? 0) + r.amount)
-    }
+    const minor = new Map<string, number>()
     for (const i of selectedInvoices) {
-      map.set(i.currency, (map.get(i.currency) ?? 0) + i.total)
+      minor.set(i.currency, (minor.get(i.currency) ?? 0) + i.totalMinor)
     }
-    return map
-  }, [selectedReady, selectedInvoices])
+    return new Map([...minor].map(([cur, sum]) => [cur, fromMinor(sum, cur)]))
+  }, [selectedInvoices])
   const currencies = [...totalsByCurrency.keys()]
 
   async function runMark(newStatus: "paid" | "void") {

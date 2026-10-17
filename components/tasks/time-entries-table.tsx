@@ -38,9 +38,9 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 import { toastError } from "@/lib/toast-helpers"
-import { entryStatus } from "@/convex/lib/entryStatus"
 import { formatLockedTooltip } from "@/lib/entry-tooltip"
 import type { Doc, Id } from "@/convex/_generated/dataModel"
+import type { EntryCloseSnapshot } from "@/convex/lib/types"
 
 // Phase 8 Slice 4 — task-detail Time tab inherits the row-level lock
 // treatment from the project Time tab. The shape is wider than the
@@ -64,11 +64,7 @@ export type TimeEntry = {
   invoiceId?: Id<"invoices">
   invoicePrefix?: string
   invoiceNumber?: number
-  settledAt?: number
-  settledReason?: "invoiced" | "retainer_included" | "fixed_included"
-  settledPeriodStart?: string
-  settledPeriodEnd?: string
-}
+} & EntryCloseSnapshot
 
 // Date | Person | Note | Category | Time | lock/dot | menu
 const COL = "grid-cols-[70px_110px_1fr_120px_60px_18px_28px]"
@@ -124,12 +120,10 @@ export function TimeEntriesTable({
 
         {/* Rows */}
         {entries.map((entry) => {
-          const status = entryStatus(entry)
-          const isLocked = status === "draft" || status === "closed"
-          // Locked rows are not editable — the server's settlement guard
-          // would reject the patch anyway. Mirroring the table-level
-          // gate keeps the menu from offering Edit/Delete that would
-          // error.
+          // Close-locked rows (billable or not) are not editable — the
+          // server's close guard would reject the patch anyway. Mirroring it
+          // keeps the menu from offering Edit/Delete that would error.
+          const isLocked = entry.closeStatus !== undefined
           const canEdit =
             !isLocked &&
             (isAdmin || (currentUserId && entry.userId === currentUserId))
@@ -138,10 +132,11 @@ export function TimeEntriesTable({
             : undefined
           const lockedTooltip = isLocked
             ? formatLockedTooltip({
-                settledAt: entry.settledAt,
-                settledReason: entry.settledReason,
-                settledPeriodStart: entry.settledPeriodStart,
-                settledPeriodEnd: entry.settledPeriodEnd,
+                closeStatus: entry.closeStatus,
+                closeKind: entry.closeKind,
+                closePeriodStart: entry.closePeriodStart,
+                closePeriodEnd: entry.closePeriodEnd,
+                closedAt: entry.closedAt,
                 invoicePrefix: entry.invoicePrefix,
                 invoiceNumber: entry.invoiceNumber,
               })

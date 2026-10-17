@@ -13,7 +13,7 @@ import {
 import { useCloseFacets } from "@/lib/hooks/use-close-facets"
 import { useUrlDebouncedParam } from "@/lib/hooks/use-url-debounced-param"
 import { rowMatches } from "@/lib/billing/close-queue-filters"
-import type { CloseQueueData } from "@/convex/close"
+import type { CloseQueueData } from "@/convex/billingViews"
 
 /**
  * The Billing → Close tab: the front door of the month-end ritual. Month-grouped

@@ -22,12 +22,12 @@ import {
   formatCurrency,
 } from "@/lib/format"
 import { cn } from "@/lib/utils"
-import type { CloseWorkspaceData } from "@/convex/close"
+import type { CloseWorkspaceData } from "@/convex/billingViews"
 
 /**
  * Inline budget summary line for the Close workspace header — the single place
  * the money consequence is stated while reviewing (PRD story 7). Every number
- * comes from the server `billingScope` report; this component only formats.
+ * comes from the server (`lib/billing/pricing`); this component only formats.
  *
  * Shape adapts by billing type:
  *   - retainer (monthly): Included · Logged · Balance ( · Overage × rate = amount )
@@ -89,7 +89,7 @@ export function CloseBudgetSummary({
         )}
         {/* Reassurance copy on demand, not as a permanent line — the money
             numbers are the content here; the explanation is a tool. */}
-        {!data.fromSettlementStamps && (
+        {!data.isClosed && (
           <TooltipProvider delayDuration={150}>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -108,7 +108,7 @@ export function CloseBudgetSummary({
       </div>
       {/* A closed period keeps its one-line state marker — it's the only
           signal that this view is committed history. */}
-      {data.fromSettlementStamps && (
+      {data.isClosed && (
         <p className="text-xs text-muted-foreground">
           Closed period — the ledger below is the committed record.
         </p>
@@ -175,7 +175,7 @@ function RetainerSummary({
   const balance = isCycle ? data.balanceToDateMinutes : data.balanceMinutes
   const balanceLabel = !isCycle
     ? "Balance"
-    : data.periodElapsed || data.fromSettlementStamps
+    : data.periodElapsed || data.isClosed
       ? "Ending balance"
       : "Balance to date"
   return (

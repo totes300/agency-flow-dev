@@ -1,7 +1,5 @@
 /**
- * Monthly report on the close model (docs/prd-billing-refactor.md N8, slice
- * 3b). Same response shape as the legacy `statements.getRetainerStatement`,
- * so the report document switches by reference at cutover.
+ * Monthly report on the close model (docs/prd-billing-refactor.md N8).
  *
  * Membership and money come from `lib/billing/periodView`:
  *   - a month inside a live close reads the close's frozen snapshot — a

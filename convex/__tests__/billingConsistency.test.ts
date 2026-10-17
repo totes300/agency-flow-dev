@@ -215,8 +215,12 @@ async function workspace(t: T, projectId: Id<"projects">, monthKey: string) {
     .query(api.billingViews.getCloseWorkspace, { projectId, period: monthKey });
 }
 
+/** The invoice as the editor sees it (display amounts derived from minor units). */
 async function invoiceDoc(t: T, invoiceId: Id<"invoices">) {
-  return t.run(async (ctx) => ctx.db.get(invoiceId));
+  const detail = await t
+    .withIdentity(ADMIN)
+    .query(api.invoices.getInvoice, { identifier: invoiceId });
+  return detail?.invoice ?? null;
 }
 
 async function finalize(t: T, invoiceId: Id<"invoices">) {
@@ -342,21 +346,6 @@ describe("B1 — retainer overage priced from minutes on every surface", () => {
 
     const { invoiceId } = await commit(t, projectId, "2026-03-01");
     expect((await invoiceDoc(t, invoiceId!))?.total).toBe(11.67); // was 12.00
-  });
-});
-
-describe("B2 — no unbounded T&M invoice", () => {
-  it("createInvoice for T&M without a period or entries is rejected", async () => {
-    setToday("2026-04-10");
-    const t = convexTest(schema, modules);
-    const org = await seedOrg(t);
-    const projectId = await seedTm(t, org);
-    const task = await seedTask(t, org, projectId, "Build");
-    await seedEntry(t, org, { taskId: task, date: "2026-03-09", minutes: 60, rate: 100 });
-
-    await expect(
-      t.withIdentity(ADMIN).mutation(api.invoices.createInvoice, { projectId }),
-    ).rejects.toThrow(/Billing → Close/);
   });
 });
 

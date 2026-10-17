@@ -162,8 +162,8 @@ export function TaskDetailTime({
             durationMinutes: editEntry.durationMinutes,
             isBillable: editEntry.isBillable,
             note: editEntry.note,
+            closed: editEntry.closeId !== undefined,
             invoiceId: editEntry.invoiceId,
-            settledAt: editEntry.settledAt,
             userId: editEntry.userId,
             snapshotCategoryId: editEntry.snapshotCategoryId,
           }}

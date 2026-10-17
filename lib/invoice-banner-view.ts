@@ -49,11 +49,8 @@ export type InvoiceBannerState =
       readyCyclesLabel: string
       overageDue: number
       lastInvoicedAt: number | null
-      // Target = cycle-end month (the row `createInvoice` keys on for cycle
-      // invoices). Same target shape as `retainer-monthly` so the click
-      // handler's `generate({ retainerYear, retainerMonth })` works
-      // identically — the backend resolves "this month" vs "this cycle"
-      // from the project's rolloverEnabled.
+      // Target = cycle-end month. Same target shape as `retainer-monthly`;
+      // the Close workspace snaps it onto the project's period grid.
       targetYear: number
       targetMonth: number
     }

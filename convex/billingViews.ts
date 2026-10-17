@@ -1,16 +1,14 @@
 /**
- * Close-model read views (docs/prd-billing-refactor.md slice 3b): the Billing
- * → Close queue, the sidebar badge and the Close workspace, built on
- * `lib/billing/periodView`. Response shapes match the legacy `close.ts`
- * queries so the cutover (3c) is a reference swap in the UI. Admin-only.
+ * Close-model read views (docs/prd-billing-refactor.md §10): the Billing →
+ * Close queue, the sidebar badge and the Close workspace, built on
+ * `lib/billing/periodView`. Admin-only. The response types below are the
+ * UI's contract (imported by `components/billing/*`).
  *
- * Differences from the legacy views, by design:
  *   - The queue has ONE row per project — its committable period — with the
- *     number of periods waiting behind it (`pendingPeriods`), instead of
- *     rendering blocked rows (PRD §10).
+ *     number of periods waiting behind it (`pendingPeriods`); there are no
+ *     blocked rows.
  *   - Fixed-fee projects have no periods (D5) and never appear here.
- *   - A drafted period shows its frozen snapshot plus the draft link, not an
- *     empty ledger.
+ *   - A drafted period shows its frozen snapshot plus the draft link.
  */
 
 import { v } from "convex/values";
@@ -24,18 +22,167 @@ import { compareCloseRows } from "./lib/closeGroups";
 import { groupQueueByMonth, summarizeQueueScope } from "./lib/closeQueue";
 import { isClosableProject, loadCloseContext, toScopeProject, type CloseContext } from "./lib/billing/closeData";
 import { monthLabel, periodSubjectLabel } from "./lib/billing/labels";
-import { fromMinor, round2 } from "./lib/billing/money";
+import { fromMinor, priceMinutesMinor, toMinor } from "./lib/billing/money";
 import { nextPeriod, periodOfDate } from "./lib/billing/periods";
 import { buildPeriodView, type PeriodMember, type PeriodView } from "./lib/billing/periodView";
 import { committablePeriod, effectivePeriod, skippedOutOf } from "./lib/billing/scope";
 import { loadActiveTimers, type ActiveTimer } from "./lib/billing/timers";
-import type {
-  CloseQueueData,
-  CloseQueueMonth,
-  CloseQueueRow,
-  CloseWorkspaceData,
-  CloseWorkspaceRow,
-} from "./close";
+import type { MonthlyBalanceRow } from "./lib/billing/pricing";
+import type { CarriedReason } from "./lib/billing/scope";
+import type { EntryCloseSnapshot } from "./lib/types";
+
+// ─── Response types ──────────────────────────────────────────────────────────
+
+/** Workspace issues: a pricing issue, or an earlier period still open. */
+export type WorkspaceIssue = "not-earliest-open" | "missing-overage-rate";
+
+/**
+ * One flat ledger row, structurally compatible with the project Time tab's
+ * row (`components/projects/project-time-table.tsx`) so the Close workspace
+ * renders through the same shared table. Close review state (carried /
+ * skipped) rides along; grouping happens client-side via `lib/closeGroups`.
+ */
+export type CloseWorkspaceRow = EntryCloseSnapshot & {
+  _id: Id<"timeEntries">;
+  taskId: Id<"tasks">;
+  taskTitle: string;
+  userId: Id<"users">;
+  userName: string;
+  userImageUrl: string | undefined;
+  date: string;
+  /** Wall-clock start (epoch ms) — the edit modal re-anchors date changes to it. */
+  startedAt: number;
+  durationMinutes: number;
+  note: string | undefined;
+  isBillable: boolean;
+  billableRate: number;
+  workCategoryId: Id<"workCategories"> | undefined;
+  workCategoryName: string | undefined;
+  workCategoryColor: string | undefined;
+  /** The close's invoice, for a committed period. */
+  invoiceId: Id<"invoices"> | undefined;
+  invoicePrefix: string | undefined;
+  invoiceNumber: number | undefined;
+  invoiceStatus: "draft" | "invoiced" | "paid" | "void" | undefined;
+  invoiceDueDate: string | undefined;
+  /**
+   * Server-computed per-row amount (T&M only). The UI renders THIS and never
+   * recomputes from rate × duration; totals always come from `pricing`.
+   */
+  amount: number | null;
+  carried: boolean;
+  carriedReason?: CarriedReason;
+  /** "carried · <month>" label source — origin month key (YYYY-MM). */
+  originMonthKey: string;
+  originMonthLabel: string;
+  /** True when this entry was skipped OUT of this period (renders collapsed, not counted). */
+  skipped: boolean;
+  /** For skipped rows — the period label it was deferred to (e.g. "July 2026"). */
+  skippedToLabel: string | null;
+};
+
+export type CloseWorkspaceData = {
+  project: {
+    id: Id<"projects">;
+    name: string;
+    code: string;
+    billingType: "fixed" | "retainer" | "t_and_m";
+    rolloverEnabled: boolean;
+    cycleLength: number | null;
+    overageRate: number | null;
+    includedMinutesPerMonth: number | null;
+    monthlyFee: number | null;
+    fixedPrice: number | null;
+    /** Feeds the add/edit entry modal's assignee scoping. */
+    teamMembers: Id<"users">[];
+  };
+  client: { id: Id<"clients">; name: string };
+  currency: string;
+  period: { start: string; end: string; label: string };
+  /** Label of the period a skip lands in ("Skip → <next>"). null once closed. */
+  nextPeriodLabel: string | null;
+  billingType: "fixed" | "retainer" | "t_and_m";
+  // Budget summary (raw, unrounded — from `pricing`).
+  usageMinutes: number;
+  includedMinutes: number;
+  balanceMinutes: number;
+  /** Billable minutes carried into this period — the ladder's opening row. */
+  carriedInMinutes: number;
+  /** Retainer balance ladder (one row per period month); [] for T&M. */
+  monthlyBalances: MonthlyBalanceRow[];
+  /** Balance over the months that have started — the honest mid-cycle number. */
+  balanceToDateMinutes: number;
+  /** period.end < today — picks "Ending balance" vs "Balance to date" copy. */
+  periodElapsed: boolean;
+  overageMinutes: number;
+  overageRate: number | null;
+  overageAmount: number;
+  amount: number;
+  withinBudget: boolean;
+  committable: boolean;
+  /** The period has a live close: the ledger is its frozen snapshot. */
+  isClosed: boolean;
+  /** The live close's invoice while it is still a draft ("Open draft" banner). */
+  coveringDraft: { id: Id<"invoices">; prefix: string; number: number | null } | null;
+  issues: WorkspaceIssue[];
+  totalLoggedMinutes: number;
+  /** Org timezone — client-side date-axis grouping must bucket with it. */
+  timezone: string;
+  /** Flat ledger rows in canonical display order (`compareCloseRows`). */
+  entries: CloseWorkspaceRow[];
+  /** Review flags from the pure `closeFlags` module (ordered blocking→warning→info). */
+  flags: CloseFlag[];
+};
+
+/** One project's committable period in the Billing → Close tab. */
+export type CloseQueueRow = {
+  /** Stable key (project + period). */
+  key: string;
+  projectId: Id<"projects">;
+  projectName: string;
+  clientId: Id<"clients">;
+  clientName: string;
+  billingType: Doc<"projects">["billingType"];
+  /** Workspace URL period token: "YYYY-MM". */
+  periodToken: string;
+  /** Display label: "June 2026" / "Apr–Jun 2026". */
+  periodLabel: string;
+  /** Calendar month this row groups under (YYYY-MM); a cycle uses its closing month. */
+  monthKey: string;
+  amount: number;
+  currency: string;
+  badgeKind: "within-budget" | "over-budget" | null;
+  /** Within-budget close ("Close & report") vs a Generate row. */
+  isCloseRow: boolean;
+  overageHours: number | null;
+  /** Billable minutes counted for money — the row's colored hours. */
+  loggedMinutes: number;
+  includedMinutes: number;
+  entryCount: number;
+  flagCount: number;
+  /** Over-budget retainer with no overage rate — routes to Set rate, not Review. */
+  configIssue: "missing-overage-rate" | null;
+  /** Elapsed periods of this project waiting behind this one. */
+  pendingPeriods: number;
+};
+
+export type CloseQueueMonth = {
+  monthKey: string;
+  label: string;
+  rows: CloseQueueRow[];
+  openCount: number;
+  closedCount: number;
+  totalCount: number;
+  totalsByCurrency: Record<string, number>;
+};
+
+export type CloseQueueData = {
+  months: CloseQueueMonth[];
+  /** Total open rows — equals the sidebar badge's generate+close count. */
+  actionableCount: number;
+};
+
+// ─── Shared ──────────────────────────────────────────────────────────────────
 
 type ViewSettings = { timezone: string; todayStr: string; roundingMinutes: number };
 
@@ -88,16 +235,7 @@ async function projectTaskIds(ctx: QueryCtx, orgId: string, projectId: Id<"proje
 
 // ─── Queue ───────────────────────────────────────────────────────────────────
 
-export type CloseQueueRowV2 = CloseQueueRow & {
-  /** Elapsed periods of this project waiting behind this one. */
-  pendingPeriods: number;
-};
-
-export type CloseQueueDataV2 = Omit<CloseQueueData, "months"> & {
-  months: (Omit<CloseQueueMonth, "rows"> & { rows: CloseQueueRowV2[] })[];
-};
-
-async function buildQueue(ctx: QueryCtx, orgId: string): Promise<CloseQueueDataV2> {
+async function buildQueue(ctx: QueryCtx, orgId: string): Promise<CloseQueueData> {
   const settings = await viewSettings(ctx, orgId);
   const timers = await loadActiveTimers(ctx, orgId, settings.timezone);
   const projects = await ctx.db
@@ -105,7 +243,7 @@ async function buildQueue(ctx: QueryCtx, orgId: string): Promise<CloseQueueDataV
     .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
     .collect();
 
-  const rows: CloseQueueRowV2[] = [];
+  const rows: CloseQueueRow[] = [];
   const committedByMonth = new Map<string, number>();
   for (const project of projects) {
     if (project.archivedAt || !isClosableProject(project)) continue;
@@ -150,8 +288,6 @@ async function buildQueue(ctx: QueryCtx, orgId: string): Promise<CloseQueueDataV
       includedMinutes: view.price.includedMinutes,
       entryCount: summary.entryCount,
       flagCount: summary.flagCount,
-      committable: true,
-      disabledReason: null,
       configIssue: view.price.issues.includes("missing-overage-rate") ? "missing-overage-rate" : null,
       pendingPeriods: view.pendingAfter,
     });
@@ -172,13 +308,13 @@ async function buildQueue(ctx: QueryCtx, orgId: string): Promise<CloseQueueDataV
 /** Billing → Close: one row per project that has a period due. */
 export const getCloseQueue = query({
   args: {},
-  handler: async (ctx): Promise<CloseQueueDataV2> => {
+  handler: async (ctx): Promise<CloseQueueData> => {
     const { orgId } = await requireAdmin(ctx);
     return buildQueue(ctx, orgId);
   },
 });
 
-/** Sidebar badge — same shape as `invoices.getInvoicingNavSignals`, counted from the queue. */
+/** Sidebar badge: to-generate / to-close rows from the queue, plus overdue invoices. */
 export const getNavSignals = query({
   args: {},
   handler: async (ctx) => {
@@ -245,7 +381,6 @@ export const getCloseWorkspace = query({
         start: view.period.start,
         end: view.period.end,
         label: periodSubjectLabel(view.period.start, view.period.end),
-        isCalendar: true,
       },
       nextPeriodLabel: closed ? null : periodSubjectLabel(next.start, next.end),
       billingType: project.billingType,
@@ -262,7 +397,7 @@ export const getCloseWorkspace = query({
       amount: fromMinor(price.amountMinor, c.currency),
       withinBudget: price.withinBudget,
       committable: !closed && view.committable?.start === view.period.start,
-      fromSettlementStamps: closed,
+      isClosed: closed,
       coveringDraft: draftInvoice
         ? { id: draftInvoice._id, prefix: draftInvoice.prefix, number: draftInvoice.number ?? null }
         : null,
@@ -290,6 +425,16 @@ async function workspaceRows(
   const categories = new Map<string, Doc<"workCategories"> | null>();
   const invoices = new Map<string, Doc<"invoices"> | null>();
   const isTm = c.project.billingType === "t_and_m";
+  const close = view.liveClose;
+  const closeSnapshot: EntryCloseSnapshot = close
+    ? {
+        closeStatus: close.status === "draft" ? "draft" : "final",
+        closeKind: close.kind,
+        closePeriodStart: close.periodStart,
+        closePeriodEnd: close.periodEnd,
+        closedAt: close.committedAt,
+      }
+    : {};
 
   async function row(
     doc: Doc<"timeEntries">,
@@ -336,12 +481,12 @@ async function workspaceRows(
       invoiceNumber: inv?.number,
       invoiceStatus: inv?.status,
       invoiceDueDate: inv?.dueDate,
-      settledAt: undefined,
-      settledReason: undefined,
-      settledPeriodStart: undefined,
-      settledPeriodEnd: undefined,
+      ...closeSnapshot,
       // Per-row display amount only — totals always come from `pricing`.
-      amount: isTm && m.isBillable ? round2((m.minutes / 60) * doc.billableRate) : null,
+      amount:
+        isTm && m.isBillable
+          ? fromMinor(priceMinutesMinor(m.minutes, toMinor(doc.billableRate, c.currency)), c.currency)
+          : null,
       carried: m.carried !== undefined,
       carriedReason: m.carried,
       originMonthKey: origin,

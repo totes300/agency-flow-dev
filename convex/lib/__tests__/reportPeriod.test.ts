@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { classifyReportPeriod } from "../reportPeriod";
 
 /**
- * `getRetainerMonthlyReport` (currently `getRetainerStatement`) accepts a
+ * `billingReports.getMonthlyReport` accepts a
  * year+month and returns:
  *   - past month → data with `inProgress: false`
  *   - current month → data with `inProgress: true`

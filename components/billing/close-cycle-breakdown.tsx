@@ -4,7 +4,7 @@ import { useMemo } from "react"
 import { FilterIcon } from "lucide-react"
 import { formatHoursCompact, formatSignedHours } from "@/lib/format"
 import { cn } from "@/lib/utils"
-import type { CloseWorkspaceData } from "@/convex/close"
+import type { CloseWorkspaceData } from "@/convex/billingViews"
 
 /**
  * Ledger row filter driven by the breakdown: a period month ("YYYY-MM") or
@@ -31,7 +31,7 @@ export function CloseCycleBreakdown({
   onLensChange?: (lens: CycleMonthLens | null) => void
 }) {
   const rows = data.monthlyBalances
-  const inProgress = !data.periodElapsed && !data.fromSettlementStamps
+  const inProgress = !data.periodElapsed && !data.isClosed
   const closingLabel = inProgress ? "Balance to date" : "Ending balance"
   const spansYears =
     rows.length > 0 &&

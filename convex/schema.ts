@@ -1,6 +1,5 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
-import { settledReasonValidator } from "./lib/settleEntries";
 import {
   proposalPayloadValidator,
   proposalStatusValidator,
@@ -244,26 +243,6 @@ export default defineSchema({
     createdBy: v.id("users"),
   }).index("by_projectId", ["projectId"]),
 
-  // ─── Retainer Periods (lazy-created per project per month) ───────────────────
-  //
-  // `closedAt`/`closedBy` are populated by `closePeriod`/`closeRetainerCycle`
-  // (Phase 8 Slice 3/4). When set, the row's period is admin-settled — its
-  // time entries should be locked from edits and excluded from "needs
-  // attention" feeds. Calendar-end vs admin-settled are two distinct concepts
-  // (see `periodEnded` vs `isClosed` on `getRetainerData`'s month rows).
-  retainerPeriods: defineTable({
-    orgId: v.string(),
-    projectId: v.id("projects"),
-    periodStart: v.string(), // YYYY-MM-DD (1st of month)
-    periodEnd: v.string(),   // YYYY-MM-DD (last of month)
-    createdAt: v.number(),
-    updatedAt: v.number(),
-    createdBy: v.id("users"),
-    closedAt: v.optional(v.number()),     // Phase 8 — admin settlement timestamp (ms)
-    closedBy: v.optional(v.id("users")),  // Phase 8 — admin who clicked Close
-  }).index("by_projectId", ["projectId"])
-    .index("by_projectId_periodStart", ["projectId", "periodStart"]),
-
   // ─── Invoices ──────────────────────────────────────────────────────────────
   invoices: defineTable({
     orgId: v.string(),
@@ -284,39 +263,21 @@ export default defineSchema({
       v.literal("void")
     ),
     currency: v.string(),
-    subtotal: v.number(),
-    total: v.number(),
+    // Money is integer minor units only (docs/prd-billing-refactor.md N6);
+    // queries add decimal display copies (`lib/billing/invoiceView`). Equal
+    // until tax lines exist.
+    subtotalMinor: v.number(),
+    totalMinor: v.number(),
     issueDate: v.string(),
     dueDate: v.optional(v.string()),
     paidAt: v.optional(v.number()),
-    periodStart: v.optional(v.string()),
-    periodEnd: v.optional(v.string()),
     note: v.optional(v.string()),
     // Editable per-invoice message rendered on the invoice document. Seeded
     // from `orgSettings.invoiceMessageTemplate` at creation; admin can edit.
     messageToClient: v.optional(v.string()),
-    roundingMinutes: v.optional(v.number()),
-    // Retainer balance snapshot (retainer invoices only)
-    retainerStartBalanceMinutes: v.optional(v.number()),
-    retainerIncludedMinutes: v.optional(v.number()),
-    retainerUsedMinutes: v.optional(v.number()),
-    retainerEndBalanceMinutes: v.optional(v.number()),
-    retainerMonthlyFee: v.optional(v.number()),
-    retainerOverageRate: v.optional(v.number()),
-    // Snapshot of the project's retainer config at invoice creation. Reading
-    // live `project.rolloverEnabled` / `project.cycleLength` would silently
-    // flip a draft's balance meaning when an admin toggles settings mid-cycle.
-    retainerRolloverEnabled: v.optional(v.boolean()),
-    retainerCycleLength: v.optional(v.number()),
-    // ─── Billing refactor (docs/prd-billing-refactor.md §5.2) ─────────────
-    // Expand phase: invoices created by the close model carry these, and
-    // `totalMinor !== undefined` marks such an invoice (lib/billing/
-    // invoiceLifecycle.isCloseModelInvoice). The decimal `subtotal`/`total`
-    // above are then display copies derived from the minor amounts; the
-    // contract phase (slice 5) drops them and the retainer* snapshot fields.
+    // The close that produced the invoice — its period, rounding and retainer
+    // figures live there (§5.2). Absent on fixed-fee invoices (D5).
     closeId: v.optional(v.id("billingCloses")),
-    subtotalMinor: v.optional(v.number()),
-    totalMinor: v.optional(v.number()),
     createdAt: v.number(),
     updatedAt: v.number(),
     createdBy: v.id("users"),
@@ -340,24 +301,18 @@ export default defineSchema({
       v.literal("manual")
     ),
     description: v.string(),
+    // Display quantity: billed hours on time/overage lines (derived at
+    // commit, never fed back into money), 1 on fixed lines, and the
+    // multiplier a manual line's amount is priced from.
     quantity: v.number(),
-    unitPrice: v.number(),
-    amount: v.number(),
-    amountOverridden: v.optional(v.boolean()),
-    // Source-of-truth minutes on time rows: the RAW summed time-entry
-    // minutes (2026-07-05 rounding rework — the ledger is never rounded).
-    // `quantity` (hours) and `amount` are DERIVED using the invoice's
-    // `roundingMinutes`, so the draft's rounding picker can re-round
-    // losslessly. A manual hours edit overrides it (quantity × 60).
-    // Mirrors the pattern used by Harvest, Bonsai, and Toggl.
+    // Raw summed minutes of a time/overage line — its source quantity.
     quantityMinutes: v.optional(v.number()),
     workCategoryId: v.optional(v.id("workCategories")),
-    timeEntryIds: v.optional(v.array(v.id("timeEntries"))),
-    // Close-model lines (expand phase, see `invoices` above): money in minor
-    // units; `quantity`/`unitPrice`/`amount` are derived display copies.
-    // `groupKey` ties a time line to its pricing group (category::task::rate).
-    amountMinor: v.optional(v.number()),
-    unitPriceMinor: v.optional(v.number()),
+    // Money in integer minor units (N6). `groupKey` ties a time line to its
+    // pricing group (category::task::rate). Membership lives in the close
+    // snapshot (`billingCloseEntries`), not on the line.
+    unitPriceMinor: v.number(),
+    amountMinor: v.number(),
     groupKey: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -376,8 +331,7 @@ export default defineSchema({
   //   Drift vectors eliminated: client.currency is immutable (convex/clients.ts:178),
   //   project.clientId is immutable (convex/projects.ts update mutation).
   //
-  //   DO NOT patch rateCurrency, invoiceId's currency, or project.clientId
-  //   directly. DO NOT add a mutation that allows client.currency edits.
+  //   DO NOT patch rateCurrency or project.clientId directly. DO NOT add a mutation that allows client.currency edits.
   timeEntries: defineTable({
     orgId: v.string(),
     // Denormalized from the task at creation (docs/prd-billing-refactor.md
@@ -407,61 +361,26 @@ export default defineSchema({
     // category). Sticky: changed only by an explicit category edit, never
     // re-derived on task move. Every financial reader groups by this field.
     snapshotCategoryId: v.optional(v.id("workCategories")),
-    invoiceId: v.optional(v.id("invoices")),
     createdAt: v.number(),
     updatedAt: v.number(),
     createdBy: v.id("users"),
 
-    // ─── Phase 8 — Settlement fields ─────────────────────────────────────
-    //
-    // `invoiceId` tracks the document linkage; the four fields below track
-    // client-facing work closure as a separate axis. The two are NOT the
-    // same concept — a Fixed-invoice entry has `invoiceId` set but its
-    // revenue is the fixed line, not the time rate; a retainer-within-
-    // budget entry has no invoice but is closed by the period-close flow.
-    //
-    // An entry is "locked" (no edits / no delete) when either field is set.
-    // For "is this hour revenue-bearing?" reports, read `settledReason` —
-    // only `"invoiced"` means revenue was rate-driven on a document.
-    //
-    // Populated by `convex/lib/settleEntries.ts` helpers (invoice-anchored
-    // settlement, Slice 1) and `convex/retainerPeriods.ts:closePeriod`
-    // (period-anchored settlement, Slice 3). See parent PRD § Derived
-    // Status for the row-level `entryStatus()` derivation.
-    settledAt: v.optional(v.number()),         // event timestamp (ms)
-    settledReason: v.optional(settledReasonValidator),
-    // Stamp invariant (2026-07-19): `settledPeriodStart/End` is the entry's
-    // MONTHLY settlement bucket — always exactly one calendar month, never a
-    // multi-month document period (that lives on the invoice, via
-    // `invoiceId`). See `lib/settleEntries.ts:monthlySettlementPeriod`.
-    settledPeriodStart: v.optional(v.string()), // YYYY-MM-01
-    settledPeriodEnd: v.optional(v.string()),   // YYYY-MM-DD (last of month)
-
     // ─── Month-Close — skip-to-next-close stamp ──────────────────────────
     //
-    // A period-end date (YYYY-MM-DD). Semantics (PRD § Definitions): "exclude
-    // this entry from every close whose period end is ≤ this date." Set/cleared
-    // only by the admin-only `skipEntries` mutation (Slice 05); read only by
-    // the pure `billingScope` module (Slice 01) which resolves an open entry's
-    // effective period as
-    //   max(naturalPeriod(date), periodAfter(skippedThrough), firstOpenPeriod).
-    // Only meaningful on OPEN entries — locking (invoiceId / settledAt) wins,
-    // and the skip mutation rejects locked entries. No index: membership is
-    // always derived over an already-fetched project entry set, never queried
-    // by this field.
+    // A period-end date (YYYY-MM-DD): "exclude this entry from every close
+    // whose period end is ≤ this date." Set/cleared only by the admin-only
+    // `billingCloses.skipEntries`; read by the pure scope rule
+    // (`lib/billing/scope.ts`, PRD §6). Only meaningful on OPEN entries — the
+    // skip mutation rejects closed ones. No index: membership is always
+    // derived over an already-fetched project entry set.
     skippedThrough: v.optional(v.string()),    // YYYY-MM-DD (a period end)
 
     // ─── Billing refactor — close lock (docs/prd-billing-refactor.md) ────
     //
-    // The live close this entry settles in. A lock and lookup key only: the
-    // close's membership truth is its `billingCloseEntries` snapshot (N2).
-    // Unset = open. Written by the close lifecycle (slice 3); nothing writes
-    // it yet.
+    // The live close this entry settles in (`lib/billing/closeLifecycle`).
+    // A lock (N1) and lookup key only: the close's membership truth is its
+    // `billingCloseEntries` snapshot (N2). Unset = open.
     closeId: v.optional(v.id("billingCloses")),
-    // No new index — settle helpers walk via `invoiceLineItems.by_invoiceId`.
-    // Canonical-set rule: "entries settled by invoice X" = the union of
-    // line-item `timeEntryIds` arrays, NOT every entry that happens to
-    // carry `invoiceId === X`. Data drift is treated as a bug.
   })
     .index("by_orgId", ["orgId"])
     // Prefix (orgId, projectId) lists a project's entries; adding
@@ -475,8 +394,8 @@ export default defineSchema({
   //
   // A close is the committed decision "these entries settle period P of
   // project X". Live while `draft` or `final`; `released` rows stay for
-  // audit. Money is integer minor units. Nothing writes these until the
-  // close lifecycle lands (slice 3).
+  // audit. Money is integer minor units. Written only by
+  // `lib/billing/closeLifecycle`.
   billingCloses: defineTable({
     orgId: v.string(),
     projectId: v.id("projects"),

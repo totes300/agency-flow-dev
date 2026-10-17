@@ -195,7 +195,9 @@ single commit mutation, which reads `by_projectId_periodStart` in the same trans
   **not** the source of truth for a closed period's membership (that is the snapshot,
   N2).
 - **Change** `billableRate` / `costRate` to integer minor units per hour
-  (`billableRateMinor`, `costRateMinor`).
+  (`billableRateMinor`, `costRateMinor`). *Not done:* rate config and the entry
+  rate snapshot stay decimal and are converted once, at commit
+  (`closeData.toBillingEntry`); every stored billing output is minor units.
 - **Keep** `skippedThrough` (a period end date).
 - **Remove** `invoiceId`, `settledAt`, `settledReason`, `settledPeriodStart`,
   `settledPeriodEnd`.
@@ -206,25 +208,32 @@ single commit mutation, which reads `by_projectId_periodStart` in the same trans
 
 **`invoices`**
 
-- Amounts become minor units: `subtotalMinor`, `totalMinor`.
+- Amounts become minor units: `subtotalMinor`, `totalMinor` (required). The
+  decimal `subtotal` / `total` are gone from storage; queries add them as display
+  copies at the read boundary (`lib/billing/invoiceView.ts`).
 - **Add** `closeId: v.optional(v.id("billingCloses"))`. Absent on fixed-fee invoices.
 - **Add** `sentAt: v.optional(v.number())`, reserved for the open question in §13.
 - **Remove** `retainerStartBalanceMinutes`, `retainerIncludedMinutes`,
   `retainerUsedMinutes`, `retainerEndBalanceMinutes`, `retainerMonthlyFee`,
   `retainerOverageRate`, `retainerRolloverEnabled`, `retainerCycleLength`,
   `roundingMinutes`, and `periodStart/End`. They move to the close (or are read through
-  `closeId`). `monthlyFee` for the Stripe disclaimer is read from the close's project
-  snapshot. Add `monthlyFeeMinor` to the close if the disclaimer must survive a fee change.
+  `closeId`): `invoices.getInvoice` returns the close's `period` (with its month count,
+  which also labels the document "monthly" vs "N-month rollover"). The Stripe
+  disclaimer reads the project's live `monthlyFee`; add `monthlyFeeMinor` to the
+  close if the disclaimer must survive a fee change.
 - Keep both `subtotalMinor` and `totalMinor`. They are equal until tax lines exist.
 
 **`invoiceLineItems`**
 
 - `lineType`: `time | overage | fixed | manual`.
-- Amounts in minor units: `unitPriceMinor`, `amountMinor`. `quantityMinutes` stays the
-  source quantity for time and overage lines.
+- Amounts in minor units: `unitPriceMinor`, `amountMinor` (required; the decimal
+  `unitPrice` / `amount` are read-boundary display copies). `quantityMinutes` stays
+  the source quantity for time and overage lines.
 - **Add** `groupKey` (time lines: `category::task::rate`) and `descriptionOverride`.
-- **Remove** `timeEntryIds` (membership lives in the snapshot), `amountOverridden`, and
-  the float `quantity` (hours are derived for display).
+- **Remove** `timeEntryIds` (membership lives in the snapshot) and `amountOverridden`.
+  *Deviation:* `quantity` stays. It is the manual-line multiplier (user input), 1 on
+  fixed lines, and the billed hours of a time/overage line written once at commit
+  for display. It never feeds money back: amounts are priced from minutes.
 - Editability (D6): time, overage, and fixed lines allow `descriptionOverride` only, and
   only in draft. Manual lines are fully editable in draft.
 
@@ -520,15 +529,39 @@ consistent:
   badge, agent tools and reports.
 - Remove frontend money math.
 
-**Slice 5 — Deletion**
-- Remove the entry `invoiceId` and `settled*` fields, the `retainerPeriods` table,
-  `retainerCron`, and the old `invoices.ts` retainer snapshot fields.
-- Remove these modules: `lib/billingScope.ts` (replaced), `lib/readyToInvoice.ts`,
-  `lib/retainerBalance.ts`, `lib/retainerCycle.ts`, `lib/retainerUsage.ts` (if fully
-  replaced), `lib/reportMembership.ts`, `lib/settleEntries.ts`, `lib/settleGuards.ts`,
-  `lib/commitScope.ts`, `lib/invoiceAnchor.ts`, `lib/invoiceCreation.ts`,
-  `lib/fixedBilling.ts`, `convex/settleEntries.ts`, and the dead queries and actions.
-- Update `docs/architecture.md`. Mark the superseded PRDs as historical.
+**Slice 5 — Deletion** *(done 2026-10-17)*
+- Schema: the entry `invoiceId` and `settled*` fields, the `retainerPeriods` table,
+  the invoice retainer snapshot fields, `roundingMinutes` and `periodStart/End`, and
+  the line `timeEntryIds` / `amountOverridden` are gone. Money is stored only as
+  minor units (`subtotalMinor`, `totalMinor`, `unitPriceMinor`, `amountMinor` are
+  required); `lib/billing/invoiceView` adds the decimal display copies in queries.
+  `quantity` stays (see §5.2).
+- Deleted: `lib/billingScope`, `readyToInvoice`, `retainerBalance`, `retainerCycle`
+  (`getCyclePeriods` moved to `lib/billing/periods`), `reportMembership`,
+  `settleEntries`, `settleGuards`, `commitScope`, `invoiceAnchor`, `invoiceCreation`,
+  `fixedBilling`, `skipGuards`; `convex/close.ts` (its UI types now live in
+  `billingViews.ts`), `statements.ts`, `retainerPeriods.ts`, `settleEntries.ts`,
+  `retainerCron.ts` and `crons.ts`; the legacy `invoices.ts` mutations and queries
+  (`createInvoice`, refresh, rounding, line amount edits, the ready feed and nav
+  signals); the old-model migrations (including `backfillEntryProjectId` and
+  `resetBillingForCloseModel`); and their tests (`billingShadow`, the B2 test and
+  `invoiceTransitions` with them — the seller-name gate and paid → draft rejection
+  moved to `billingWritePath`). `lib/retainerUsage` stays, trimmed to the document
+  usage rows.
+- `lib/billing/invoiceLifecycle` is the only lifecycle (`transitionInvoice`,
+  `deleteDraftInvoice`); the `isCloseModelInvoice` marker is gone.
+- Readers: entry status and locks read only `closeId` / the live close (the Time
+  tab, task time list, tooltips, day-group references and the period drill-down
+  now show close data — the Reopen / View report row actions work again). Queue
+  rows lost `disabledReason` / `committable` (no blocked rows); the workspace's
+  `fromSettlementStamps` is now `isClosed`. Agent tools read the Close queue and
+  `billingReports.getMonthlyReport`. Invoice-list "ready" rows are gone; list and
+  bulk totals sum minor units.
+- `docs/architecture.md` has a Billing section; the month-close, invoicing-refactor
+  and Phase 8 PRDs are marked historical.
+- *Left for later:* worksheet exports still number five (D10); slice 4's remaining
+  frontend money math (overview `openAmount`, Time-tab selection totals, drill-down
+  amounts) and the queue's "+N more periods" hint.
 
 **Slice 6 — Hardening**
 - Reconciliation query: for every live close, re-price the snapshot and compare it with

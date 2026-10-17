@@ -15,13 +15,13 @@ import { WorksheetDownloadButton } from "@/components/worksheet/worksheet-downlo
 import { useBreadcrumbTitle } from "@/lib/hooks/use-breadcrumb-title"
 
 /**
- * Retainer Monthly Report page (D8 in `docs/invoicing-refactor.md`).
+ * Retainer Monthly Report page.
  *
  * URL: /projects/[id]/reports/[period] where period = "YYYY-MM".
  *
- * The report is rendered live from `getRetainerStatement` (server symbol
- * kept; only the visible header + this route URL are rebranded — see Open
- * Question 1). The "Save as PDF" path uses the browser-native print dialog
+ * The report is rendered from `billingReports.getMonthlyReport`: a closed
+ * month reads its close snapshot, an open month is priced live
+ * (docs/prd-billing-refactor.md N8). The "Save as PDF" path uses the browser-native print dialog
  * (window.print) — same pattern invoices use, no PDF library, no server
  * render. A sibling `print:hidden` class on the chrome keeps the printed
  * output to just the MonthlyReportDocument card.

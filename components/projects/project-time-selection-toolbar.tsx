@@ -50,14 +50,13 @@ export function ProjectTimeSelectionToolbar({
   )
 
   // Bulk button visibility: only show when there's something to flip, and
-  // skip locked rows (backend blocks both axes: `invoiceId` and `settledAt`).
-  // UI filters for consistency so the count badge never promises an action
-  // the backend will reject.
+  // skip close-locked rows (the backend rejects them). UI filters for
+  // consistency so the count badge never promises a rejected action.
   const flippableToBillable = selectedEntries.filter(
-    (e) => !e.isBillable && e.invoiceId === undefined && e.settledAt === undefined,
+    (e) => !e.isBillable && e.closeStatus === undefined,
   )
   const flippableToNonBillable = selectedEntries.filter(
-    (e) => e.isBillable && e.invoiceId === undefined && e.settledAt === undefined,
+    (e) => e.isBillable && e.closeStatus === undefined,
   )
 
   async function runBulk(
@@ -93,10 +92,7 @@ export function ProjectTimeSelectionToolbar({
   function handleCreate() {
     if (count === 0) return
     const billableOpen = selectedEntries
-      .filter(
-        (e) =>
-          e.isBillable && e.invoiceId === undefined && e.settledAt === undefined,
-      )
+      .filter((e) => e.isBillable && e.closeStatus === undefined)
       .map((e) => e._id as Id<"timeEntries">)
     if (billableOpen.length === 0) {
       toast.error("Selection has no open billable entries.")

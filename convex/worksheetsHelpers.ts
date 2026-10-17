@@ -29,7 +29,7 @@ import { getProjectEntries } from "./lib/projectEntries";
 import { closeSnapshotEntries, getLiveCloses, loadCloseContext } from "./lib/billing/closeData";
 import { loadReportMonths } from "./lib/billing/reportMonths";
 import { ORG_TIMEZONE_FALLBACK } from "./lib/timer";
-import { getCyclePeriods } from "./lib/retainerCycle";
+import { getCyclePeriods } from "./lib/billing/periods";
 import {
   buildRetainerUsageRows,
   monthName,
@@ -181,10 +181,8 @@ export function groupWorksheetRowsByTaskId(
  *   - `cycle`: caller will iterate this internalQuery once per month and
  *     concat — Slice 3 wires that path. We expose `period` here so the
  *     cycle export reuses the same code by calling N times.
- *   - `invoice`: the canonical entry set is the union of
- *     `invoiceLineItems.timeEntryIds`, not entries with `invoiceId === X`
- *     (see schema.ts:379 — data drift is treated as a bug, not silently
- *     "healed").
+ *   - `invoice`: the entry set is the invoice's close snapshot
+ *     (`billingCloseEntries`); a fixed-fee invoice has none.
  */
 export const collectWorksheetData = internalQuery({
   args: {
@@ -246,9 +244,11 @@ export const collectWorksheetData = internalQuery({
     if (args.scope.kind === "invoice") {
       const inv = await ctx.db.get(args.scope.invoiceId);
       if (inv && inv.orgId === authCtx.orgId) {
+        const close = inv.closeId ? await ctx.db.get(inv.closeId) : null;
+        const period = close && close.orgId === authCtx.orgId ? close : null;
         invoiceContext = {
           identifier: `${inv.prefix}${String(inv.number).padStart(3, "0")}`,
-          scopeLabel: formatInvoiceScopeLabel(inv.periodStart, inv.periodEnd),
+          scopeLabel: formatInvoiceScopeLabel(period?.periodStart, period?.periodEnd),
         };
       }
     }

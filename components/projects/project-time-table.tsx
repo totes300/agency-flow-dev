@@ -5,8 +5,8 @@ import { useRef, useState } from "react"
 import { useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
-import type { CarriedReason } from "@/convex/lib/billingScope"
-import type { EntrySettlementSnapshot } from "@/convex/lib/types"
+import type { CarriedReason } from "@/convex/lib/billing/scope"
+import type { EntryCloseSnapshot } from "@/convex/lib/types"
 import { entryStatus } from "@/convex/lib/entryStatus"
 import {
   Table,
@@ -71,14 +71,13 @@ import {
   Trash2Icon,
 } from "lucide-react"
 
-// Settlement fields come from the shared `EntrySettlementSnapshot` so the
-// schema, the Convex Row type, and this component-side row stay in
-// lock-step. Adding a settlement field means editing `lib/types.ts` only.
+// Close fields come from the shared `EntryCloseSnapshot` so the Convex row
+// types and this component-side row stay in lock-step.
 //
 // `ProjectTimeTableRow` is the table's OWN structural contract — only fields
 // the table actually renders or derives from. Callers with richer rows
 // (`TimeEntryRow`, `CloseWorkspaceRow`) satisfy it without fabricating data.
-export type ProjectTimeTableRow = EntrySettlementSnapshot & {
+export type ProjectTimeTableRow = EntryCloseSnapshot & {
   _id: Id<"timeEntries">
   taskId: Id<"tasks">
   taskTitle: string
@@ -139,9 +138,9 @@ export type CloseTableConfig = {
   hideCarriedLabels?: boolean
 }
 
-/** T&M billable + uninvoiced entries are the only rows that can be selected. */
+/** T&M billable + open (not closed) entries are the only rows that can be selected. */
 function isSelectable(row: ProjectTimeTableRow, selectable: boolean): boolean {
-  return selectable && row.isBillable && !row.invoiceId
+  return selectable && row.isBillable && row.closeStatus === undefined
 }
 
 export type ProjectTimeTableProps<
@@ -658,9 +657,9 @@ function RowActionsMenu({
   // useful action instead.
   //
   // Three locked-row shapes:
-  //   - Draft (on a draft invoice)           → `Open invoice INV-…`
-  //   - Closed by an invoice (any reason)    → `Open invoice INV-…`
-  //   - Closed by retainer-period close      → `View report` + admin Reopen
+  //   - Draft (close with a draft invoice)   → `Open invoice INV-…`
+  //   - Closed with an invoice               → `Open invoice INV-…`
+  //   - Closed within budget (retainer)      → `View report` + admin Reopen
   if (status === "draft" || status === "closed") {
     const hasInvoiceLink =
       row.invoicePrefix && row.invoiceNumber != null && row.invoiceId
@@ -668,15 +667,14 @@ function RowActionsMenu({
       hasInvoiceLink && row.invoicePrefix && row.invoiceNumber != null
         ? formatInvoiceNumber(row.invoicePrefix, row.invoiceNumber)
         : null
-    // Retainer period close populates `settledPeriodStart/End` AND the
-    // period boundary is monthly (YYYY-MM-01 .. last-of-month). Used both
-    // to build the View report link and to wire the Reopen dialog.
+    // A within-budget retainer close (no invoice) can be reopened; its
+    // period also names the report month for the View report link.
     const reopenable =
       status === "closed" &&
-      row.settledReason === "retainer_included" &&
-      row.settledPeriodStart !== undefined &&
-      row.settledPeriodEnd !== undefined
-    const reportPeriodToken = row.settledPeriodStart?.slice(0, 7)
+      row.closeKind === "retainer" &&
+      row.invoiceId === undefined &&
+      row.closePeriodStart !== undefined
+    const reportPeriodToken = row.closePeriodStart?.slice(0, 7)
 
     return (
       <>
@@ -726,13 +724,13 @@ function RowActionsMenu({
           </DropdownMenuContent>
         </DropdownMenu>
 
-        {reopenable && row.settledPeriodStart && (
+        {reopenable && row.closePeriodStart && (
           <ReopenPeriodDialog
             open={reopenDialogOpen}
             onOpenChange={setReopenDialogOpen}
             projectId={projectId}
-            periodStart={row.settledPeriodStart}
-            periodLabel={formatPeriodMonth(row.settledPeriodStart)}
+            periodStart={row.closePeriodStart}
+            periodLabel={formatPeriodMonth(row.closePeriodStart)}
             workedMinutes={row.durationMinutes}
           />
         )}
@@ -826,8 +824,8 @@ function RowActionsMenu({
 
 /**
  * Status cell — one chip per row, derived from `entryStatus()`. The
- * financial reason (retainer-included vs invoiced vs fixed-included)
- * lives in the period drill-down (Slice 4), never on the row. The
+ * financial reason (retainer-included vs invoiced) lives in the period
+ * drill-down, never on the row. The
  * invoice's own state (Draft → Invoiced → Paid → Void) lives on the
  * Invoices tab and on day-group headers; for closed-by-invoice rows the
  * invoice number itself surfaces in the `⋯` menu's `Open invoice INV-…`
@@ -844,10 +842,11 @@ function BillingStatusCell({
   const tooltip =
     status === "draft" || status === "closed"
       ? formatLockedTooltip({
-          settledAt: row.settledAt,
-          settledReason: row.settledReason,
-          settledPeriodStart: row.settledPeriodStart,
-          settledPeriodEnd: row.settledPeriodEnd,
+          closeStatus: row.closeStatus,
+          closeKind: row.closeKind,
+          closePeriodStart: row.closePeriodStart,
+          closePeriodEnd: row.closePeriodEnd,
+          closedAt: row.closedAt,
           invoicePrefix: row.invoicePrefix,
           invoiceNumber: row.invoiceNumber,
         })

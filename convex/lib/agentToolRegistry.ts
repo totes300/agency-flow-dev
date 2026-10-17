@@ -1210,7 +1210,7 @@ const getRetainerStatementTool = createTool({
     ctx,
     input,
   ): Promise<{ message: string } | FlatRetainerStatement> => {
-    const statement = await ctx.runQuery(api.statements.getRetainerStatement, {
+    const statement = await ctx.runQuery(api.billingReports.getMonthlyReport, {
       projectId: input.projectId as Id<"projects">,
       year: input.year,
       month: input.month,
@@ -1327,12 +1327,12 @@ const collectRetainerHealthTool = createTool({
 const listReadyToInvoiceTool = createTool({
   description:
     "List everything currently waiting for a billing action, verbatim from " +
-    "the invoicing inbox: one row per pending unit (retainer month, " +
-    "retainer cycle, fixed project, T&M balance, or a within-budget close " +
-    "action) with project, client, period, amount and currency — plus the " +
-    "to-generate / to-close / overdue counts. Use for month-close and " +
-    "'what still needs invoicing' questions. Never re-type or re-add the " +
-    "numbers.",
+    "the Billing → Close queue: one row per retainer / T&M project with its " +
+    "next period to close (kind 'retainer-close' = within budget, Close & " +
+    "report), amount, currency and how many more periods wait behind it — " +
+    "plus the to-generate / to-close / overdue counts. Fixed-fee projects " +
+    "have no periods and never appear. Use for month-close and 'what still " +
+    "needs invoicing' questions. Never re-type or re-add the numbers.",
   inputSchema: z.object({}),
   execute: async (
     ctx,
@@ -1344,11 +1344,11 @@ const listReadyToInvoiceTool = createTool({
       overdueCount: number;
     };
   }> => {
-    const [rows, counts] = await Promise.all([
-      ctx.runQuery(api.invoices.getReadyToInvoiceUnified, {}),
-      ctx.runQuery(api.invoices.getInvoicingNavSignals, {}),
+    const [queue, counts] = await Promise.all([
+      ctx.runQuery(api.billingViews.getCloseQueue, {}),
+      ctx.runQuery(api.billingViews.getNavSignals, {}),
     ]);
-    return { rows: flattenReadyRows(rows), counts };
+    return { rows: flattenReadyRows(queue.months.flatMap((m) => m.rows)), counts };
   },
 });
 
@@ -1504,9 +1504,8 @@ const getInvoiceDetailTool = createTool({
     "Read one invoice in full, verbatim from the app: header (number, " +
     "status, client, project, currency, subtotal, total, dates, billed " +
     "period), every line item (category, description, type, quantity, " +
-    "unit price, amount), the retainer usage block when present, and — " +
-    "for drafts — whether entries were logged after the draft was " +
-    "generated. Accepts a friendly number like 'INV-035' or an invoice " +
+    "unit price, amount) and the retainer usage block when present. " +
+    "Accepts a friendly number like 'INV-035' or an invoice " +
     "id from findInvoices. Use it to verify statements and reports " +
     "against what was actually billed. Never re-type or re-add the " +
     "numbers.",
@@ -1876,7 +1875,7 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
   listReadyToInvoice: {
     name: "listReadyToInvoice",
     humanDescription:
-      "Everything waiting for a billing action (the invoicing inbox rows + " +
+      "Everything waiting for a billing action (the Close queue rows + " +
       "to-generate / to-close / overdue counts).",
     scope: "admin",
     kind: "read",

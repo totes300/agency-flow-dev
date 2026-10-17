@@ -408,8 +408,8 @@ export function ProjectTimeContent({
             durationMinutes: editEntryRow.durationMinutes,
             isBillable: editEntryRow.isBillable,
             note: editEntryRow.note,
+            closed: editEntryRow.closeStatus !== undefined,
             invoiceId: editEntryRow.invoiceId,
-            settledAt: editEntryRow.settledAt,
             userId: editEntryRow.userId,
             snapshotCategoryId: editEntryRow.workCategoryId,
           }}

@@ -1,6 +1,7 @@
 "use client"
 
-import type { Doc, Id } from "@/convex/_generated/dataModel"
+import type { Id } from "@/convex/_generated/dataModel"
+import type { InvoiceLineView } from "@/convex/lib/billing/invoiceView"
 import { Button } from "@/components/ui/button"
 import { InlineEditable, InlineEditableNumber } from "@/components/inline-editable"
 import { formatCurrency, getCurrencySymbol } from "@/lib/format"
@@ -11,7 +12,7 @@ export type CategoryGroup = {
   categoryId: string | null
   categoryName: string
   categoryColor: string
-  lineItems: Doc<"invoiceLineItems">[]
+  lineItems: InvoiceLineView[]
   subtotalHours: number
 }
 
@@ -28,7 +29,7 @@ function LineItemRow({
   currency,
   actions,
 }: {
-  lineItem: Doc<"invoiceLineItems">
+  lineItem: InvoiceLineView
   showAmounts: boolean
   readOnly: boolean
   /** Time-backed rows live inside a category group and are left-padded. */
@@ -120,7 +121,7 @@ export function InvoiceWorkBreakdown({
   timeCategoryGroups: CategoryGroup[]
   /** Pre-bucketed: only `lineType: "manual"` rows (T&M only — fixed/retainer
    * invoices route manual rows to the Billing Summary card instead). */
-  manualItems: Doc<"invoiceLineItems">[]
+  manualItems: InvoiceLineView[]
   showAmounts: boolean
   readOnly: boolean
   currency: string

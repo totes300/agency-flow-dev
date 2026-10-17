@@ -20,7 +20,7 @@
  * same for task, day, week, month, and member groupings.
  */
 
-import type { CarriedReason } from "./billingScope";
+import type { CarriedReason } from "./billing/scope";
 
 /** Structural subset of `CloseWorkspaceRow` the group helpers read. */
 export type CloseGroupableRow = {

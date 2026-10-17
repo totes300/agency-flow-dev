@@ -3,7 +3,7 @@
 import { useMemo } from "react"
 import { useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
-import type { Doc } from "@/convex/_generated/dataModel"
+import type { InvoiceView, InvoiceLineView } from "@/convex/lib/billing/invoiceView"
 import { DatePicker } from "@/components/ui/date-picker"
 import { InlineEditable } from "@/components/inline-editable"
 import { DocumentParties } from "@/components/document/parties"
@@ -52,16 +52,19 @@ export function InvoiceDocument({
   client,
   brand,
   retainerUsage,
+  periodMonths,
   org,
   readOnly,
 }: {
-  invoice: Doc<"invoices">
+  invoice: InvoiceView
   categoryGroups: CategoryGroup[]
-  lineItems: Doc<"invoiceLineItems">[]
-  project: { name: string; billingType: BillingType; fixedPrice?: number } | null
+  lineItems: InvoiceLineView[]
+  project: { name: string; billingType: BillingType; fixedPrice?: number; monthlyFee?: number } | null
   client: { name: string; billingName?: string; billingEmail?: string; billingStreet?: string; billingStreet2?: string; billingCity?: string; billingZip?: string; billingCountry?: string; taxId?: string } | null
   brand: { brandName?: string; brandAddress?: string; brandTaxId?: string; brandEmail?: string; brandPhone?: string } | null
   retainerUsage: RetainerUsageDocData | null
+  /** Months in the period the invoice's close billed; null without a close. */
+  periodMonths: number | null
   org: { paymentInstructions: string | undefined; invoiceMessageTemplate: string | undefined }
   readOnly: boolean
 }) {
@@ -82,8 +85,7 @@ export function InvoiceDocument({
   const invoiceNumber = formatInvoiceIdentifier(invoice.prefix, invoice.number)
   const billingTypeLabel = getDocumentBillingType({
     billingType,
-    retainerRolloverEnabled: invoice.retainerRolloverEnabled,
-    retainerCycleLength: invoice.retainerCycleLength,
+    periodMonths,
   })
 
   // Single source of truth for line item bucketing. Children render whatever
@@ -115,7 +117,7 @@ export function InvoiceDocument({
       return {
         workBreakdownGroups: manualOnlyGroups,
         manualWorkItems: manualItems,
-        billingItems: [] as Doc<"invoiceLineItems">[],
+        billingItems: [] as InvoiceLineView[],
       }
     }
 
@@ -137,7 +139,7 @@ export function InvoiceDocument({
     )
     return {
       workBreakdownGroups: timeGroups,
-      manualWorkItems: [] as Doc<"invoiceLineItems">[],
+      manualWorkItems: [] as InvoiceLineView[],
       billingItems: billing,
     }
   }, [categoryGroups, lineItems, hasBillingSummary])
@@ -260,9 +262,9 @@ export function InvoiceDocument({
         />
       )}
 
-      {billingType === "retainer" && (invoice.retainerMonthlyFee ?? 0) > 0 && (
+      {billingType === "retainer" && (project?.monthlyFee ?? 0) > 0 && (
         <p className="text-xs text-muted-foreground">
-          Monthly retainer fee — {formatCurrency(invoice.retainerMonthlyFee ?? 0, invoice.currency)}/mo —
+          Monthly retainer fee — {formatCurrency(project?.monthlyFee ?? 0, invoice.currency)}/mo —
           billed separately via Stripe.
         </p>
       )}

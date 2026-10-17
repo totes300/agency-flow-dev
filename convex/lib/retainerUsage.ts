@@ -1,7 +1,7 @@
 /**
- * Shared retainer usage row builders. Used by both
- * `convex/statements.ts` (raw, ledger-truth, for Reports) and
- * `convex/invoices.ts` (snapshot-aligned, for Invoice documents).
+ * Retainer usage rows for documents — the monthly report
+ * (`billingReports.getMonthlyReport`) and the invoice document
+ * (`lib/billing/closeData.closeRetainerUsage`) render the same block.
  *
  * Owns: month list construction, per-month row building, month label
  * formatting, and minutes formatting. Does NOT own: copy strings (subtitle,
@@ -27,18 +27,6 @@ export function monthName(year: number, month: number): string {
   return new Date(year, month - 1, 1).toLocaleDateString("en-US", {
     month: "long",
   });
-}
-
-/**
- * "00:00" / "-01:30" minute formatter. Display-only — stays in lib because
- * the same string ships from both queries (subtitle "300 monthly budget").
- */
-export function formatMinutesLabel(minutes: number): string {
-  const abs = Math.abs(minutes);
-  const hours = Math.floor(abs / 60);
-  const mins = abs % 60;
-  const formatted = `${String(hours).padStart(2, "0")}:${String(mins).padStart(2, "0")}`;
-  return minutes < 0 ? `-${formatted}` : formatted;
 }
 
 /** N consecutive months starting at `start` (inclusive). */
@@ -105,56 +93,4 @@ export function buildRetainerUsageRows(input: {
       balanceMinutes: runningBalance,
     };
   });
-}
-
-/**
- * Distribute a target total across per-month buckets so the buckets sum to
- * exactly `totalUsedMinutes`. Used by the invoice path: the invoice's
- * snapshot total is the source of truth (it's what the client was billed),
- * and the per-month breakdown must reconcile to it (decision 2026-05-03 Q1).
- *
- * Strategy: scale each bucket proportionally and round; correct any drift
- * onto the largest bucket so no per-month value gets visibly distorted.
- * If `rawByMonth` sums to 0 (no time entries in any month), drops the full
- * total on the last month so the invariant holds.
- */
-export function reconcileUsedMinutesToTotal(input: {
-  months: YearMonth[];
-  rawByMonth: Map<string, number>;
-  totalUsedMinutes: number;
-}): Map<string, number> {
-  const { months, rawByMonth, totalUsedMinutes } = input;
-  const out = new Map<string, number>();
-  if (months.length === 0) return out;
-
-  const rawSum = months.reduce(
-    (s, m) => s + (rawByMonth.get(monthKey(m)) ?? 0),
-    0,
-  );
-
-  if (rawSum === 0) {
-    for (const m of months) out.set(monthKey(m), 0);
-    const last = monthKey(months[months.length - 1]);
-    out.set(last, totalUsedMinutes);
-    return out;
-  }
-
-  // Proportional scale, then fix drift on the largest bucket so rounding
-  // error never visibly distorts a small month.
-  const scaled = months.map((m) => {
-    const raw = rawByMonth.get(monthKey(m)) ?? 0;
-    return Math.round((raw / rawSum) * totalUsedMinutes);
-  });
-  const drift = totalUsedMinutes - scaled.reduce((s, v) => s + v, 0);
-  if (drift !== 0) {
-    let largestIdx = 0;
-    for (let i = 1; i < scaled.length; i++) {
-      if (scaled[i] > scaled[largestIdx]) largestIdx = i;
-    }
-    scaled[largestIdx] += drift;
-  }
-  for (let i = 0; i < months.length; i++) {
-    out.set(monthKey(months[i]), scaled[i]);
-  }
-  return out;
 }

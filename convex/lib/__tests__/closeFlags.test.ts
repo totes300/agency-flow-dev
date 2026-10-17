@@ -5,17 +5,15 @@ import {
   summarizeCloseFlags,
   LONG_ENTRY_MINUTES,
 } from "../closeFlags";
-import type { BillingScopeReport, ScopeEntry } from "../billingScope";
+import type { FlagScope, FlagScopeEntry } from "../closeFlags";
 import type { DataModel, Id } from "../../_generated/dataModel";
 
 const id = <T extends keyof DataModel>(s: string) => s as unknown as Id<T>;
 
-function scopeEntry(over: Partial<ScopeEntry> = {}): ScopeEntry {
+function scopeEntry(over: Partial<FlagScopeEntry> = {}): FlagScopeEntry {
   return {
     entryId: id<"timeEntries">("e_1"),
-    date: "2026-06-10",
     durationMinutes: 60,
-    isBillable: true,
     note: "worked",
     carried: false,
     originMonthKey: "2026-06",
@@ -23,26 +21,8 @@ function scopeEntry(over: Partial<ScopeEntry> = {}): ScopeEntry {
   };
 }
 
-function report(over: Partial<BillingScopeReport> = {}): BillingScopeReport {
-  return {
-    billingType: "retainer",
-    period: { start: "2026-06-01", end: "2026-06-30" },
-    entries: [],
-    usageMinutes: 0,
-    includedMinutes: 600,
-    overageMinutes: 0,
-    overageAmount: 0,
-    amount: 0,
-    withinBudget: true,
-    usageByMonth: {},
-    carriedInMinutes: 0,
-    monthlyBalances: [],
-    balanceToDateMinutes: 0,
-    committable: true,
-    issues: [],
-    fromSettlementStamps: false,
-    ...over,
-  };
+function report(over: Partial<FlagScope> = {}): FlagScope {
+  return { entries: [], issues: [], ...over };
 }
 
 describe("computeCloseFlags", () => {
@@ -76,7 +56,7 @@ describe("computeCloseFlags", () => {
 
   it("emits a blocking missing-overage-rate flag from the scope issue", () => {
     const flags = computeCloseFlags({
-      scope: report({ issues: ["missing-overage-rate"], overageMinutes: 120, withinBudget: false }),
+      scope: report({ issues: ["missing-overage-rate"] }),
     });
     const blocking = flags.filter((f) => f.kind === "missing-overage-rate");
     expect(blocking).toHaveLength(1);
@@ -115,8 +95,6 @@ describe("computeCloseFlags", () => {
     const flags = computeCloseFlags({
       scope: report({
         issues: ["missing-overage-rate"],
-        withinBudget: false,
-        overageMinutes: 100,
         entries: [
           scopeEntry({
             entryId: id<"timeEntries">("carried"),
@@ -153,8 +131,6 @@ describe("computeCloseFlags", () => {
     const flags = computeCloseFlags({
       scope: report({
         issues: ["missing-overage-rate"],
-        withinBudget: false,
-        overageMinutes: 100,
         entries: [scopeEntry({ note: "" })],
       }),
       runningTimers: [{ entryId: id<"timeEntries">("t") }],

@@ -3,7 +3,7 @@
 // no default filter. Kept pure so the predicate + counting are testable and the
 // view/filter-bar stay thin.
 
-import type { CloseQueueRow } from "@/convex/close"
+import type { CloseQueueRow } from "@/convex/billingViews"
 
 export type CloseFacetKey = "client" | "billingType" | "readiness"
 

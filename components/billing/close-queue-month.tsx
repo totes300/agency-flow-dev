@@ -1,6 +1,6 @@
 import { formatCurrency } from "@/lib/format"
 import { CloseQueueRow } from "@/components/billing/close-queue-row"
-import type { CloseQueueRow as QueueRow } from "@/convex/close"
+import type { CloseQueueRow as QueueRow } from "@/convex/billingViews"
 
 /**
  * A calendar-month section in the Close queue: a static header carrying the

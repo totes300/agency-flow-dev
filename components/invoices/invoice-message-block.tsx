@@ -4,10 +4,9 @@ import { useRef, useState } from "react"
 import { useMutation } from "convex/react"
 import { PencilIcon } from "lucide-react"
 import { api } from "@/convex/_generated/api"
-import type { Doc } from "@/convex/_generated/dataModel"
+import type { InvoiceView } from "@/convex/lib/billing/invoiceView"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
-import { canEditInvoiceMessage } from "@/convex/lib/invoiceCreation"
 import { toastError } from "@/lib/toast-helpers"
 
 /**
@@ -18,8 +17,8 @@ import { toastError } from "@/lib/toast-helpers"
  *  - Invoiced / Paid / Void: read-only. Renders nothing when
  *    `messageToClient` is empty (no placeholder on sent invoices).
  *
- * Gate logic is shared with the server-side `updateInvoiceMessage` mutation
- * via `canEditInvoiceMessage` — single source of truth.
+ * Gate: drafts only — the same rule the server-side `updateInvoiceMessage`
+ * mutation enforces.
  *
  * Persistence: on-blur save to `updateInvoiceMessage`. Mirrors the inline-edit
  * pattern used elsewhere in the invoice editor.
@@ -28,12 +27,12 @@ export function InvoiceMessageBlock({
   invoice,
   template,
 }: {
-  invoice: Doc<"invoices">
+  invoice: InvoiceView
   template: string | undefined
 }) {
   const updateMessage = useMutation(api.invoices.updateInvoiceMessage)
   const persistedMessage = invoice.messageToClient ?? ""
-  const editable = canEditInvoiceMessage(invoice)
+  const editable = invoice.status === "draft"
 
   // Local draft only matters while focused. Computed (not synced) — when
   // not editing we render `persistedMessage` directly, so external updates

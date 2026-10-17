@@ -1,5 +1,6 @@
 /**
- * Invoice lifecycle for close-model invoices (docs/prd-billing-refactor.md §8.2).
+ * The invoice lifecycle (docs/prd-billing-refactor.md §8.2) — the only code
+ * that changes an invoice's status or deletes one.
  *
  *   draft → invoiced   number allocated (first time only), close → final
  *   invoiced → draft   number kept, close → draft (owner decision D3)
@@ -9,9 +10,6 @@
  *
  * Money never changes here: lines were priced and frozen at commit (N7).
  * Every transition appends one billing event (N10).
- *
- * Expand phase: `invoices.applyStatusTransition` / `deleteInvoice` delegate
- * here for invoices the close model created; slice 5 makes this the only path.
  */
 
 import { ConvexError } from "convex/values";
@@ -25,11 +23,6 @@ import { fromMinor, roundHalfUp, toMinor } from "./money";
 type Actor = { orgId: string; userId: Id<"users"> };
 type InvoiceStatus = Doc<"invoices">["status"];
 export type TransitionResult = { ok: true } | { ok: false; reason: string };
-
-/** An invoice created by the close model (expand-phase marker, removed in slice 5). */
-export function isCloseModelInvoice(invoice: Doc<"invoices">): boolean {
-  return invoice.totalMinor !== undefined;
-}
 
 export const VALID_TRANSITIONS: Record<InvoiceStatus, InvoiceStatus[]> = {
   draft: ["invoiced", "void"],
@@ -58,7 +51,6 @@ export async function fixedBilledMinor(
   ctx: MutationCtx,
   orgId: string,
   projectId: Id<"projects">,
-  currency: string,
 ): Promise<number> {
   const invoices = await ctx.db
     .query("invoices")
@@ -72,13 +64,13 @@ export async function fixedBilledMinor(
       .withIndex("by_invoiceId", (q) => q.eq("invoiceId", inv._id))
       .collect();
     for (const li of lines) {
-      if (li.lineType === "fixed") billed += li.amountMinor ?? toMinor(li.amount, currency);
+      if (li.lineType === "fixed") billed += li.amountMinor;
     }
   }
   return billed;
 }
 
-/** Re-sum a close-model invoice from its lines (only manual lines ever change). */
+/** Re-sum an invoice from its lines (only manual and fixed lines ever change). */
 export async function recomputeInvoiceTotals(
   ctx: MutationCtx,
   invoice: Doc<"invoices">,
@@ -87,13 +79,10 @@ export async function recomputeInvoiceTotals(
     .query("invoiceLineItems")
     .withIndex("by_invoiceId", (q) => q.eq("invoiceId", invoice._id))
     .collect();
-  const totalMinor = lines.reduce((sum, li) => sum + (li.amountMinor ?? 0), 0);
-  const total = fromMinor(totalMinor, invoice.currency);
+  const totalMinor = lines.reduce((sum, li) => sum + li.amountMinor, 0);
   await ctx.db.patch(invoice._id, {
     subtotalMinor: totalMinor,
     totalMinor,
-    subtotal: total,
-    total,
     updatedAt: Date.now(),
   });
 }
@@ -113,7 +102,7 @@ async function getClose(
   return close && close.orgId === orgId ? close : null;
 }
 
-export async function transitionCloseModelInvoice(
+export async function transitionInvoice(
   ctx: MutationCtx,
   actor: Actor,
   invoice: Doc<"invoices">,
@@ -184,10 +173,10 @@ async function checkFixedRemainder(
     .collect();
   const thisMinor = lines
     .filter((li) => li.lineType === "fixed")
-    .reduce((sum, li) => sum + (li.amountMinor ?? 0), 0);
+    .reduce((sum, li) => sum + li.amountMinor, 0);
   const remaining =
     toMinor(project.fixedPrice ?? 0, invoice.currency) -
-    (await fixedBilledMinor(ctx, orgId, project._id, invoice.currency));
+    (await fixedBilledMinor(ctx, orgId, project._id));
   if (thisMinor > remaining) {
     return {
       ok: false,
@@ -200,7 +189,7 @@ async function checkFixedRemainder(
 }
 
 /** Delete a never-numbered draft (N9) and release its close. */
-export async function deleteCloseModelDraft(
+export async function deleteDraftInvoice(
   ctx: MutationCtx,
   actor: Actor,
   invoice: Doc<"invoices">,

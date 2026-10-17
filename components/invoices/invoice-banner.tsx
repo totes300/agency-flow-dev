@@ -22,9 +22,9 @@ export type { InvoiceBannerState } from "@/lib/invoice-banner-view"
  * render nothing (mid-cycle rollover retainer, fully invoiced Fixed, no
  * uninvoiced T&M hours, etc.).
  *
- * After the invoicing refactor (D10 in `docs/invoicing-refactor.md`) the CTA
- * calls `createInvoice` directly and routes to the resulting draft; the
- * draft page is the edit/preview surface (no modal).
+ * The CTA opens the Close workspace for retainer / T&M (the only place a
+ * close is committed, docs/prd-billing-refactor.md D8) and bills a fixed fee
+ * via `createFixedInvoice`.
  */
 const ICON_BY_KIND: Record<InvoiceBannerState["kind"], LucideIcon> = {
   fixed: ReceiptIcon,

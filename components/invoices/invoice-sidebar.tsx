@@ -5,7 +5,8 @@ import { useAction, useMutation } from "convex/react"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import { api } from "@/convex/_generated/api"
-import type { Doc, Id } from "@/convex/_generated/dataModel"
+import type { Id } from "@/convex/_generated/dataModel"
+import type { InvoiceView } from "@/convex/lib/billing/invoiceView"
 import { InvoiceStatusBadge } from "@/components/invoices/invoice-status-badge"
 import { CompanyDetailsDialog } from "@/components/invoices/company-details-dialog"
 import { WorksheetDownloadButton } from "@/components/worksheet/worksheet-download-button"
@@ -27,14 +28,17 @@ export function InvoiceSidebar({
   backHref,
   fixedBilled,
   fixedLine,
+  periodMonths,
   onPrint,
   brandMissing = false,
 }: {
-  invoice: Doc<"invoices">
+  invoice: InvoiceView
   project: { name: string; billingType: string; fixedPrice?: number } | null
   timezone: string
   readOnly: boolean
   backHref: string
+  /** Months in the period the invoice's close billed; null without a close. */
+  periodMonths: number | null
   fixedBilled?: number
   /**
    * The draft's `lineType:"fixed"` row — enables the partial-billing control
@@ -143,8 +147,7 @@ export function InvoiceSidebar({
     fixedBilled != null
   const billingTypeLabel = getDocumentBillingType({
     billingType: project?.billingType,
-    retainerRolloverEnabled: invoice.retainerRolloverEnabled,
-    retainerCycleLength: invoice.retainerCycleLength,
+    periodMonths,
   })
 
   return (

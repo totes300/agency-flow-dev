@@ -44,7 +44,7 @@ import {
   summarizeCloseFlags,
   type CloseFlagKind,
 } from "@/convex/lib/closeFlags"
-import type { CloseWorkspaceData, CloseWorkspaceRow } from "@/convex/close"
+import type { CloseWorkspaceData, CloseWorkspaceRow } from "@/convex/billingViews"
 
 const BILLING_TYPE_LABEL: Record<
   CloseWorkspaceData["project"]["billingType"],
@@ -72,7 +72,7 @@ function billingModeLabel(data: CloseWorkspaceData): string {
       : "Retainer · monthly, no rollover"
   }
   let label = `Retainer · rollover · ${months}-month cycle`
-  if (!data.periodElapsed && !data.fromSettlementStamps) {
+  if (!data.periodElapsed && !data.isClosed) {
     const started = data.monthlyBalances.filter((row) => !row.pending).length
     label += ` · month ${Math.max(1, started)} of ${months}`
   }
@@ -110,9 +110,9 @@ type ModalState =
  * covers: totals, flags, and the footer always reflect the full scope, and a
  * visible hint says so whenever rows are hidden.
  *
- * Every number is server-derived from `billingScope`; this component never
- * does date or money math. Editing is disabled for closed periods (the I4
- * settlement-stamp view is historical and read-only).
+ * Every number is server-derived (`lib/billing/scope` + `pricing`); this
+ * component never does date or money math. Editing is disabled for closed
+ * periods (a close's snapshot is historical and read-only).
  */
 export function CloseWorkspace({
   data,
@@ -128,7 +128,7 @@ export function CloseWorkspace({
   const searchParams = useSearchParams()
   const [modal, setModal] = useState<ModalState>(null)
 
-  const editable = !data.fromSettlementStamps
+  const editable = !data.isClosed
 
   // Skip / un-skip (slice 05). Server re-derives the stamp; totals + carried
   // lines recompute via the reactive query.
@@ -533,8 +533,8 @@ export function CloseWorkspace({
             durationMinutes: modal.entry.durationMinutes,
             isBillable: modal.entry.isBillable,
             note: modal.entry.note,
+            closed: modal.entry.closeStatus !== undefined,
             invoiceId: modal.entry.invoiceId,
-            settledAt: modal.entry.settledAt,
             userId: modal.entry.userId,
             snapshotCategoryId: modal.entry.workCategoryId,
           }}

@@ -399,13 +399,15 @@ export const juneSnapshot = internalMutation({
         for (const e of entries) {
           if (e.date >= "2026-06-01" && e.date <= "2026-06-30") {
             juneMinutes += e.durationMinutes;
-            entryDetails.push({ task: t.title, date: e.date, min: e.durationMinutes, settled: e.settledReason ?? null, invoiceId: e.invoiceId ?? null });
+            entryDetails.push({ task: t.title, date: e.date, min: e.durationMinutes, closeId: e.closeId ?? null });
           }
         }
       }
-      const periods = await ctx.db
-        .query("retainerPeriods")
-        .withIndex("by_projectId", (q) => q.eq("projectId", pr._id))
+      const closes = await ctx.db
+        .query("billingCloses")
+        .withIndex("by_orgId_projectId_periodStart", (q) =>
+          q.eq("orgId", pr.orgId).eq("projectId", pr._id),
+        )
         .collect();
       out.push({
         project: pr.name,
@@ -420,7 +422,7 @@ export const juneSnapshot = internalMutation({
         startDate: pr.startDate,
         juneMinutes,
         entryDetails,
-        periods: periods.map((p2) => ({ start: p2.periodStart, closed: p2.closedAt != null })),
+        closes: closes.map((c) => ({ start: c.periodStart, status: c.status })),
       });
     }
     const invoices = await ctx.db.query("invoices").collect();
@@ -429,9 +431,9 @@ export const juneSnapshot = internalMutation({
       invoices: invoices.map((inv) => ({
         id: inv._id,
         clientId: inv.clientId,
-        status: (inv as unknown as Record<string, unknown>).status ?? null,
-        total: (inv as unknown as Record<string, unknown>).total ?? null,
-        periodStart: (inv as unknown as Record<string, unknown>).periodStart ?? null,
+        status: inv.status,
+        totalMinor: inv.totalMinor,
+        closeId: inv.closeId ?? null,
       })),
     };
   },

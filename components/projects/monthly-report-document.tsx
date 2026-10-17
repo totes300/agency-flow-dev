@@ -13,7 +13,7 @@ type MonthlyReport = NonNullable<FunctionReturnType<typeof api.billingReports.ge
 /**
  * Read-only Monthly Report document for a retainer period. Rendered both on
  * the project Reports page (download / print) and by the future auto-send
- * cron — `getRetainerStatement` is the single source of truth so the
+ * cron — `billingReports.getMonthlyReport` is the single source of truth so the
  * emailed PDF and the manually downloaded one cannot drift apart.
  */
 export function MonthlyReportDocument({ report }: { report: MonthlyReport }) {

@@ -1,8 +1,8 @@
 /**
  * `closeFlags` — derive the v1 review-checklist flags and informational
- * carried-in lines from a `billingScope` report plus running-timer info.
+ * carried-in lines from a period's scope plus running-timer info.
  *
- * PRD `docs/prd-month-close.md` § Review checklist (v1 flag set — fixed, not
+ * Month-close review checklist (now docs/prd-billing-refactor.md §10) (v1 flag set — fixed, not
  * configurable):
  *   - Missing note        (empty note on an in-scope entry)      → warning
  *   - Long entry          (duration ≥ 480 min)                   → warning
@@ -57,8 +57,8 @@ export type FlagScopeEntry = {
 };
 
 /**
- * The slice of a period's scope the checklist reads. Structural, so both the
- * legacy `BillingScopeReport` and the close-model views satisfy it.
+ * The slice of a period's scope the checklist reads (structural; the
+ * close-model period view satisfies it).
  */
 export type FlagScope = {
   issues: readonly string[];

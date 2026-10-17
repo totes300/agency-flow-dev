@@ -207,7 +207,7 @@ describe("commitClose", () => {
     for (const id of [a, b, internal]) expect((await get(w, id))?.closeId).toBe(closeId);
 
     const invoice = await get(w, invoiceId!);
-    expect(invoice).toMatchObject({ status: "draft", totalMinor: 8250, total: 82.5, closeId });
+    expect(invoice).toMatchObject({ status: "draft", totalMinor: 8250, subtotalMinor: 8250, closeId });
     const lines = await linesOf(w, invoiceId!);
     expect(lines.map((l) => [l.lineType, l.quantityMinutes, l.amountMinor])).toEqual([
       ["time", 655, 0],
@@ -341,6 +341,30 @@ describe("invoice lifecycle", () => {
     );
   });
 
+  it("finalize needs a seller name; a paid invoice never returns to draft", async () => {
+    const { w, invoiceId } = await drafted();
+    await w.t.run(async (ctx) => {
+      const settings = await ctx.db
+        .query("orgSettings")
+        .withIndex("by_orgId", (q) => q.eq("orgId", ORG_ID))
+        .first();
+      await ctx.db.patch(settings!._id, { brandName: "  " });
+    });
+    await expect(setStatus(w, invoiceId, "invoiced")).rejects.toThrow(/seller name/);
+    expect((await get(w, invoiceId))?.number).toBeUndefined();
+
+    await w.t.run(async (ctx) => {
+      const settings = await ctx.db
+        .query("orgSettings")
+        .withIndex("by_orgId", (q) => q.eq("orgId", ORG_ID))
+        .first();
+      await ctx.db.patch(settings!._id, { brandName: "Test Agency" });
+    });
+    await setStatus(w, invoiceId, "invoiced");
+    await setStatus(w, invoiceId, "paid");
+    await expect(setStatus(w, invoiceId, "draft")).rejects.toThrow(/Cannot transition from "paid" to "draft"/);
+  });
+
   it("time logged after the draft belongs to the next close (B3)", async () => {
     const { w, invoiceId } = await drafted();
     const late = await addEntry(w, "2026-03-20", 30);
@@ -402,9 +426,6 @@ describe("draft editing", () => {
     await expect(
       as(w).mutation(api.billingInvoices.updateManualLine, { lineId: timeLine._id, quantity: 2 }),
     ).rejects.toThrow(/Only manual lines/);
-    await expect(
-      as(w).mutation(api.invoices.updateInvoiceLineItem, { id: timeLine._id, amount: 1 }),
-    ).rejects.toThrow(/amounts come from its close/);
 
     const { lineId } = await as(w).mutation(api.billingInvoices.addManualLine, { invoiceId: invoiceId! });
     await as(w).mutation(api.billingInvoices.updateManualLine, { lineId, quantity: 2, unitPrice: -12.5 });

@@ -119,3 +119,82 @@ export function monthBucket(entryDate: string, period: Period): string {
     entryDate < period.start ? period.start : entryDate > period.end ? period.end : entryDate;
   return monthKeyOf(clamped);
 }
+
+// ─── Cycle navigation (UI) ──────────────────────────────────────────────────
+
+/** One calendar month inside a navigated cycle. `month` is 1-12. */
+export type MonthPeriod = {
+  year: number;
+  month: number;
+  label: string;       // e.g. "March 2026"
+  periodStart: string; // "YYYY-MM-01"
+  periodEnd: string;   // "YYYY-MM-DD" — last day of month
+};
+
+export type GetCyclePeriodsInput = {
+  /** Project start date (`YYYY-MM-DD`). Cycle 0 begins here. */
+  startDate: string;
+  /** Months per cycle (1 = monthly, 3 = quarterly, …). */
+  cycleLength: number;
+  /** Today in the org timezone, as `YYYY-MM-DD`. */
+  todayStr: string;
+  /** 0 = current cycle, -1 = previous, +1 = next. Defaults to 0. */
+  cycleOffset?: number;
+};
+
+export type GetCyclePeriodsResult = {
+  periods: MonthPeriod[];
+  /** Index of the cycle returned (0 = first cycle since project start). */
+  cycleIndex: number;
+  /** Index of the cycle that contains `todayStr`. */
+  currentCycleIndex: number;
+  /** True when the target cycle's last day has already passed. */
+  isCycleClosed: boolean;
+  isCurrentCycle: boolean;
+  cycleStart: string;
+  cycleEnd: string;
+};
+
+/**
+ * The months of the cycle `cycleOffset` cycles away from today's, anchored at
+ * `startDate` — the project pages' cycle navigator. Calendar shape only: what
+ * is closed or billed comes from the close model. `null` before the first
+ * cycle.
+ */
+export function getCyclePeriods(input: GetCyclePeriodsInput): GetCyclePeriodsResult | null {
+  const startAbs = absMonthOf(input.startDate);
+  const currentCycleIndex = Math.max(
+    0,
+    Math.floor((absMonthOf(input.todayStr) - startAbs) / input.cycleLength),
+  );
+  const cycleIndex = currentCycleIndex + (input.cycleOffset ?? 0);
+  if (cycleIndex < 0) return null;
+
+  const periods: MonthPeriod[] = [];
+  for (let i = 0; i < input.cycleLength; i++) {
+    const abs = startAbs + cycleIndex * input.cycleLength + i;
+    const year = Math.floor(abs / 12);
+    const month = (abs % 12) + 1;
+    periods.push({
+      year,
+      month,
+      label: new Date(year, month - 1, 1).toLocaleDateString("en-US", {
+        month: "long",
+        year: "numeric",
+      }),
+      periodStart: monthStartOfAbs(abs),
+      periodEnd: monthEndOfAbs(abs),
+    });
+  }
+  const cycleStart = periods[0].periodStart;
+  const cycleEnd = periods[periods.length - 1].periodEnd;
+  return {
+    periods,
+    cycleIndex,
+    currentCycleIndex,
+    isCycleClosed: cycleEnd < input.todayStr,
+    isCurrentCycle: cycleIndex === currentCycleIndex,
+    cycleStart,
+    cycleEnd,
+  };
+}

@@ -1,6 +1,7 @@
 "use client"
 
-import type { Doc, Id } from "@/convex/_generated/dataModel"
+import type { Id } from "@/convex/_generated/dataModel"
+import type { InvoiceLineView } from "@/convex/lib/billing/invoiceView"
 import { InlineEditable, InlineEditableNumber } from "@/components/inline-editable"
 import { formatCurrency, getCurrencySymbol } from "@/lib/format"
 import { useInvoiceLineActions } from "@/lib/hooks/use-invoice-line-actions"
@@ -24,7 +25,7 @@ export function InvoiceBillingSummary({
   currency,
 }: {
   invoiceId: Id<"invoices">
-  billingItems: Doc<"invoiceLineItems">[]
+  billingItems: InvoiceLineView[]
   readOnly: boolean
   currency: string
 }) {
@@ -157,12 +158,12 @@ export function InvoiceBillingSummary({
   )
 }
 
-function renderQty(item: Doc<"invoiceLineItems">): string {
+function renderQty(item: InvoiceLineView): string {
   if (item.lineType === "overage") return `${formatQuantity(item.quantity)}h`
   return "—"
 }
 
-function renderRate(item: Doc<"invoiceLineItems">, currency: string): string {
+function renderRate(item: InvoiceLineView, currency: string): string {
   if (item.lineType === "overage") return `${formatCurrency(item.unitPrice, currency)}/h`
   if (item.lineType === "fixed") return "Fixed"
   return "—"

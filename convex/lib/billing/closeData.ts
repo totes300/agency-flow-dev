@@ -10,7 +10,6 @@ import type { DataModel, Doc, Id } from "../../_generated/dataModel";
 import { getProjectEntries } from "../projectEntries";
 import { toMinor } from "./money";
 import { absMonthOf } from "./periods";
-import { buildRetainerUsageRows } from "../retainerUsage";
 import type { PricedEntry, PricingProject } from "./pricing";
 import type { ScopeEntry, ScopeProject } from "./scope";
 
@@ -142,7 +141,11 @@ export function frozenPricingProject(close: Doc<"billingCloses">): PricingProjec
 /** A close's snapshot rows as pricing members. */
 export function snapshotMembers(
   rows: Doc<"billingCloseEntries">[],
-): { entry: PricedEntry & { _id: Id<"timeEntries"> }; carried?: Doc<"billingCloseEntries">["carried"] }[] {
+): {
+  entry: PricedEntry & { _id: Id<"timeEntries"> };
+  carried?: Doc<"billingCloseEntries">["carried"];
+  monthKey: string;
+}[] {
   return rows.map((r) => ({
     entry: {
       _id: r.entryId,
@@ -154,47 +157,8 @@ export function snapshotMembers(
       billableRateMinor: r.billableRateMinor,
     },
     ...(r.carried ? { carried: r.carried } : {}),
+    monthKey: r.monthKey,
   }));
-}
-
-/**
- * The retainer usage block an invoice document shows, from the close that
- * produced it — its frozen totals plus the per-month split of its snapshot.
- * Same shape as `billingReports.getMonthlyReport`'s usage block.
- */
-export async function closeRetainerUsage(
-  ctx: Reader,
-  close: Doc<"billingCloses">,
-  amountDue: number,
-) {
-  const rows = await ctx.db
-    .query("billingCloseEntries")
-    .withIndex("by_closeId", (q) => q.eq("closeId", close._id))
-    .collect();
-  const firstAbs = absMonthOf(close.periodStart);
-  const monthCount = absMonthOf(close.periodEnd) - firstAbs + 1;
-  const months = Array.from({ length: monthCount }, (_, i) => {
-    const abs = firstAbs + i;
-    return { year: Math.floor(abs / 12), month: (abs % 12) + 1 };
-  });
-  const usedMinutesByMonth = new Map<string, number>();
-  for (const r of rows) {
-    if (!r.isBillable) continue;
-    usedMinutesByMonth.set(r.monthKey, (usedMinutesByMonth.get(r.monthKey) ?? 0) + r.minutes);
-  }
-  const monthlyIncludedMinutes = close.includedMinutes / monthCount;
-  return {
-    kind: monthCount > 1 ? ("cycle" as const) : ("month" as const),
-    closed: true,
-    monthlyIncludedMinutes,
-    rows: buildRetainerUsageRows({ months, monthlyIncludedMinutes, usedMinutesByMonth }),
-    total: {
-      availableMinutes: close.includedMinutes,
-      usedMinutes: close.usageMinutes,
-      balanceMinutes: close.includedMinutes - close.usageMinutes,
-      amountDue,
-    },
-  };
 }
 
 /** The entry documents of a close's snapshot, optionally one report month only. */

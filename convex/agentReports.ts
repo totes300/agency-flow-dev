@@ -29,9 +29,9 @@ import { assertValidDateString } from "./lib/dateValidation";
 import { getOrgSettings } from "./lib/orgHelpers";
 import { ORG_TIMEZONE_FALLBACK, getDateInTimezone } from "./lib/timer";
 import { classifyReportPeriod } from "./lib/reportPeriod";
-import { absMonthOf, monthKeyFromAbs, periodOfDate } from "./lib/billing/periods";
-import { fromMinor, priceMinutesDisplay } from "./lib/billing/money";
-import { monthKey } from "./lib/retainerUsage";
+import { monthKeyFromAbs } from "./lib/billing/periods";
+import { fromMinor } from "./lib/billing/money";
+import { monthBalances } from "./lib/billing/periodView";
 import {
   aggregateClientMonths,
   aggregateOrgFinance,
@@ -47,7 +47,6 @@ import {
 import { round2 } from "./lib/billing/money";
 import { getProjectEntries } from "./lib/projectEntries";
 import { loadCloseContext } from "./lib/billing/closeData";
-import { loadReportMonths } from "./lib/billing/reportMonths";
 
 /** Hard scan ceilings — throwing beats returning a silently-wrong sum. */
 const MAX_REPORT_ENTRIES = 20_000;
@@ -363,9 +362,9 @@ type RetainerHealthRow = {
   cyclePosition: number | null;
   includedMinutesPerMonth: number;
   usedMinutes: number;
-  /** includedMinutesPerMonth − usedMinutes (informational for rollover). */
+  /** Running balance after this month (the balance ladder, §8.3). */
   monthEndBalanceMinutes: number;
-  /** Cycle-to-date scope — only for rollover projects. */
+  /** Cycle-to-date scope (whole allowance vs usage so far) — cycle periods only. */
   cycle: {
     budgetMinutes: number;
     usedMinutes: number;
@@ -413,8 +412,7 @@ export const retainerHealthForMonth = internalQuery({
       );
     }
 
-    const targetKey = monthKey({ year: args.year, month: args.month });
-    const periodStart = `${targetKey}-01`;
+    const targetKey = monthKeyFromAbs(args.year * 12 + args.month - 1);
     const periodEnd = lastDayOfMonth(targetKey);
     const periodEnded = periodEnd < todayStr;
     const monthLabel = new Date(args.year, args.month - 1, 1).toLocaleDateString(
@@ -440,99 +438,51 @@ export const retainerHealthForMonth = internalQuery({
         clientCache.set(project.clientId.toString(), client);
       }
 
-      const includedMinutes = project.includedMinutesPerMonth ?? 0;
       const monthlyFee = project.monthlyFee ?? 0;
       const overageRate = project.overageRate ?? 0;
       // Defaults mirror `projects.create` (cycleLength 1 → monthly, no rollover).
       const rolloverEnabled = project.rolloverEnabled ?? false;
       const cycleLength = project.cycleLength ?? 1;
 
-      // Billable minutes per REPORT month — the monthly report's own rule
-      // (billing refactor N8): carried work counts where its close bills it.
+      // The month's balance-ladder row (§8.3) from the period that settles
+      // it — the same row the project page, report and Close workspace show.
       const closeContext = await loadCloseContext(ctx, auth.orgId, project._id);
-      const reportMonths = await loadReportMonths(ctx, closeContext);
-      const usedMinutesByMonth = new Map<string, number>();
-      for (const e of closeContext.entries) {
-        if (!e.isBillable) continue;
-        const key = reportMonths.get(e._id) ?? e.date.slice(0, 7);
-        usedMinutesByMonth.set(key, (usedMinutesByMonth.get(key) ?? 0) + e.minutes);
-      }
-      const usedMinutes = usedMinutesByMonth.get(targetKey) ?? 0;
-      const monthEndBalance = includedMinutes - usedMinutes;
+      const balance = (
+        await monthBalances(ctx, closeContext, [targetKey], { todayStr, roundingMinutes: 1 })
+      ).get(targetKey);
+      // A cycle month before the retainer's first cycle: not a retainer month yet.
+      if (!balance) continue;
+      const { view, row } = balance;
+      const ladder = view.price.monthlyBalances;
+      const isCycle = ladder.length > 1;
 
       // The live close covering the month: its invoice and the closed flag.
-      const coveringClose = closeContext.liveCloses.find(
-        (c) => c.periodStart <= periodStart && c.periodEnd >= periodStart,
-      );
-      const coveringInvoice = coveringClose?.invoiceId
-        ? await ctx.db.get(coveringClose.invoiceId)
+      const coveringInvoice = view.liveClose?.invoiceId
+        ? await ctx.db.get(view.liveClose.invoiceId)
         : null;
-      const isClosed = coveringClose !== undefined;
+      const isClosed = view.liveClose !== null;
 
-      // Scope classification: non-rollover months settle alone; rollover
-      // months classify on the cycle-to-date balance (statements.ts math).
-      let cyclePosition: number | null = null;
-      let cycle: RetainerHealthRow["cycle"] = null;
-      let status: RetainerMonthStatus;
-      let overageDue = false;
-      let overageMinutes = 0;
-
-      const targetAbs = absMonthOf(periodStart);
-      if (rolloverEnabled && project.startDate) {
-        // The cycle containing the month, on the project's own grid.
-        const cyclePeriod = periodOfDate(
-          { billingType: "retainer", startDate: project.startDate, rolloverEnabled, cycleLength },
-          periodStart,
-        );
-        const cycleStartAbs = absMonthOf(cyclePeriod.start);
-        const positionInCycle =
-          targetAbs >= absMonthOf(project.startDate) ? targetAbs - cycleStartAbs : -1;
-        if (positionInCycle >= 0) {
-          cyclePosition = positionInCycle + 1;
-          let cycleUsed = 0;
-          for (let abs = cycleStartAbs; abs <= targetAbs; abs++) {
-            cycleUsed += usedMinutesByMonth.get(monthKeyFromAbs(abs)) ?? 0;
+      // A cycle month classifies on the cycle-to-date view (whole allowance
+      // vs usage so far); a monthly period on its own balance. Overage is
+      // DUE only where the period settles — its last month, once ended —
+      // and while no invoice covers it (`getRetainerData` rule).
+      const settles = row.isLast && view.period.end < todayStr;
+      const status: RetainerMonthStatus = classifyRetainerMonth(
+        isCycle
+          ? { workedMinutes: row.usedToDateMinutes, endBalanceMinutes: row.remainingMinutes, periodEnded: settles }
+          : { workedMinutes: row.usedMinutes, endBalanceMinutes: row.balanceMinutes, periodEnded },
+      );
+      const overageDue = settles && row.overageMinutes > 0 && !coveringInvoice;
+      const overageMinutes = overageDue ? row.overageMinutes : 0;
+      const cyclePosition = isCycle ? ladder.indexOf(row) + 1 : null;
+      const cycle: RetainerHealthRow["cycle"] = isCycle
+        ? {
+            budgetMinutes: view.price.includedMinutes,
+            usedMinutes: row.usedToDateMinutes,
+            balanceMinutes: row.remainingMinutes,
+            isClosingMonth: row.isLast,
           }
-          const cycleBudget = includedMinutes * cycleLength;
-          const cycleBalance = cycleBudget - cycleUsed;
-          const isClosingMonth = positionInCycle === cycleLength - 1;
-          cycle = {
-            budgetMinutes: cycleBudget,
-            usedMinutes: cycleUsed,
-            balanceMinutes: cycleBalance,
-            isClosingMonth,
-          };
-          const cycleEnded = isClosingMonth && periodEnded;
-          status = classifyRetainerMonth({
-            workedMinutes: cycleUsed,
-            endBalanceMinutes: cycleBalance,
-            periodEnded: cycleEnded,
-          });
-          // Rollover overage is only DUE at a closed, uninvoiced cycle end
-          // (`getRetainerData` rule).
-          if (cycleEnded && cycleBalance < 0 && !coveringInvoice) {
-            overageDue = true;
-            overageMinutes = Math.abs(cycleBalance);
-          }
-        } else {
-          status = classifyRetainerMonth({
-            workedMinutes: usedMinutes,
-            endBalanceMinutes: monthEndBalance,
-            periodEnded,
-          });
-        }
-      } else {
-        // Non-rollover (or missing startDate — treated as monthly).
-        status = classifyRetainerMonth({
-          workedMinutes: usedMinutes,
-          endBalanceMinutes: monthEndBalance,
-          periodEnded,
-        });
-        if (periodEnded && monthEndBalance < 0 && !coveringInvoice) {
-          overageDue = true;
-          overageMinutes = Math.abs(monthEndBalance);
-        }
-      }
+        : null;
 
       rows.push({
         projectId: project._id.toString(),
@@ -544,18 +494,16 @@ export const retainerHealthForMonth = internalQuery({
         rolloverEnabled,
         cycleLength,
         cyclePosition,
-        includedMinutesPerMonth: includedMinutes,
-        usedMinutes,
-        monthEndBalanceMinutes: monthEndBalance,
+        includedMinutesPerMonth: row.includedMinutes,
+        usedMinutes: row.usedMinutes,
+        monthEndBalanceMinutes: row.balanceMinutes,
         cycle,
         status,
         periodEnded,
         isClosed,
         overageDue,
         overageMinutes,
-        overageAmount: overageDue
-          ? priceMinutesDisplay(overageMinutes, overageRate, client?.currency ?? "USD")
-          : 0,
+        overageAmount: overageDue ? fromMinor(row.overageAmountMinor, closeContext.currency) : 0,
         monthlyFee,
         overageRate,
         invoice: coveringInvoice

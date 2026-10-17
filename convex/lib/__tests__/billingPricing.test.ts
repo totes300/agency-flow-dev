@@ -169,10 +169,26 @@ describe("cycle retainer", () => {
     expect(r.usageMinutes).toBe(1900);
     expect(r.overageMinutes).toBe(100);
     expect(r.amountMinor).toBe(15000); // 100 min × 90/h
+    // Carried-in work counts on the first month (its §8.3 bucket).
     expect(r.monthlyBalances).toEqual([
-      { monthKey: "2026-01", includedMinutes: 600, loggedMinutes: 500, endingBalanceMinutes: 40, pending: false },
-      { monthKey: "2026-02", includedMinutes: 600, loggedMinutes: 700, endingBalanceMinutes: -60, pending: false },
-      { monthKey: "2026-03", includedMinutes: 600, loggedMinutes: 640, endingBalanceMinutes: -100, pending: false },
+      {
+        monthKey: "2026-01", includedMinutes: 600, carriedInMinutes: 60, loggedMinutes: 500, usedMinutes: 560,
+        startBalanceMinutes: 0, availableMinutes: 600, balanceMinutes: 40, endingBalanceMinutes: 40,
+        overageMinutes: 0, overageAmountMinor: 0, includedToDateMinutes: 600, usedToDateMinutes: 560,
+        remainingMinutes: 1240, pending: false, isLast: false,
+      },
+      {
+        monthKey: "2026-02", includedMinutes: 600, carriedInMinutes: 0, loggedMinutes: 700, usedMinutes: 700,
+        startBalanceMinutes: 40, availableMinutes: 640, balanceMinutes: -60, endingBalanceMinutes: -60,
+        overageMinutes: 60, overageAmountMinor: 9000, includedToDateMinutes: 1200, usedToDateMinutes: 1260,
+        remainingMinutes: 540, pending: false, isLast: false,
+      },
+      {
+        monthKey: "2026-03", includedMinutes: 600, carriedInMinutes: 0, loggedMinutes: 640, usedMinutes: 640,
+        startBalanceMinutes: -60, availableMinutes: 540, balanceMinutes: -100, endingBalanceMinutes: -100,
+        overageMinutes: 100, overageAmountMinor: 15000, includedToDateMinutes: 1800, usedToDateMinutes: 1900,
+        remainingMinutes: -100, pending: false, isLast: true,
+      },
     ]);
     expect(r.balanceToDateMinutes).toBe(-100);
   });
@@ -181,5 +197,16 @@ describe("cycle retainer", () => {
     const r = price(cycle, Q1, [m("2026-01-10", 500)], 1, "2026-01-20");
     expect(r.monthlyBalances.map((row) => row.pending)).toEqual([false, true, true]);
     expect(r.balanceToDateMinutes).toBe(100);
+  });
+
+  it("a future month with logged time keeps the months before it in play", () => {
+    const r = price(cycle, Q1, [m("2026-01-10", 500), m("2026-03-02", 30)], 1, "2026-01-20");
+    expect(r.monthlyBalances.map((row) => row.pending)).toEqual([false, false, false]);
+    expect(r.balanceToDateMinutes).toBe(1270);
+  });
+
+  it("stored snapshot months win over the entry date (§8.3)", () => {
+    const r = price(cycle, Q1, [{ ...m("2026-02-10", 120), monthKey: "2026-03" }]);
+    expect(r.monthlyBalances.map((row) => row.usedMinutes)).toEqual([0, 0, 120]);
   });
 });

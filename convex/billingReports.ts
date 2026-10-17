@@ -19,12 +19,12 @@ import { requireAdmin } from "./lib/auth";
 import { getOrgSettings } from "./lib/orgHelpers";
 import { ORG_TIMEZONE_FALLBACK, getDateInTimezone } from "./lib/timer";
 import { classifyReportPeriod } from "./lib/reportPeriod";
-import { buildCycleRangeLabel, buildRetainerUsageRows, monthRangeFrom } from "./lib/retainerUsage";
-import { loadCloseContext, toScopeProject } from "./lib/billing/closeData";
-import { monthLabel } from "./lib/billing/labels";
+import { loadCloseContext } from "./lib/billing/closeData";
+import { monthLabel, periodSubjectLabel } from "./lib/billing/labels";
 import { fromMinor, round2 } from "./lib/billing/money";
-import { absMonthOf, monthBucket, monthKeyOf, monthPeriodOf, periodOfDate } from "./lib/billing/periods";
-import { buildPeriodView, type PeriodMember } from "./lib/billing/periodView";
+import { absMonthOf, monthBucket, monthKeyOf, monthPeriodOf } from "./lib/billing/periods";
+import { monthBalances, type PeriodMember } from "./lib/billing/periodView";
+import { usageRows, usageTotal } from "./lib/billing/usageBlock";
 import { groupByCategory, type EntryRow } from "./lib/billing/reportGroups";
 
 export const getMonthlyReport = query({
@@ -46,23 +46,21 @@ export const getMonthlyReport = query({
     const monthKey = `${args.year}-${String(args.month).padStart(2, "0")}`;
     const monthStart = `${monthKey}-01`;
     const c = await loadCloseContext(ctx, orgId, project._id);
-    const gridPeriod = periodOfDate(toScopeProject(c.project), monthStart);
-    const view = await buildPeriodView(ctx, c, gridPeriod, {
-      todayStr,
-      roundingMinutes: orgSettings?.roundingMinutes ?? 1,
-    });
+    const balance = (
+      await monthBalances(ctx, c, [monthKey], {
+        todayStr,
+        roundingMinutes: orgSettings?.roundingMinutes ?? 1,
+      })
+    ).get(monthKey);
+    // A cycle month before the retainer's first cycle has nothing to report.
+    if (!balance) return null;
+    const { view, row } = balance;
     const { period, liveClose, price } = view;
     const monthEnd = monthPeriodOf(monthStart).end;
 
-    // Members by report month (the close's bucket rule).
-    const bucketOf = (m: PeriodMember) => monthBucket(m.entry.date, period);
+    // Members by report month (the close's bucket rule, §8.3).
+    const bucketOf = (m: PeriodMember) => m.monthKey ?? monthBucket(m.entry.date, period);
     const monthMembers = view.members.filter((m) => bucketOf(m) === monthKey);
-    const usedMinutesByMonth = new Map<string, number>();
-    for (const m of view.members) {
-      if (!m.entry.isBillable) continue;
-      const key = bucketOf(m);
-      usedMinutesByMonth.set(key, (usedMinutesByMonth.get(key) ?? 0) + m.entry.minutes);
-    }
 
     // Groupings — in-period vs carried-in (dated before this month).
     const tasks = await ctx.db
@@ -109,49 +107,35 @@ export const getMonthlyReport = query({
         ),
       }));
 
-    // Budget numbers: frozen by the close when there is one.
-    const periodMonthCount = absMonthOf(period.end) - absMonthOf(period.start) + 1;
-    const includedMinutes = price.includedMinutes / periodMonthCount;
+    // Budget numbers: frozen by the close when there is one. The balance is
+    // this month's ladder row; the usage block shows the ladder up to it.
     const overageRate = liveClose
       ? fromMinor(liveClose.overageRateMinor, c.currency)
       : project.overageRate ?? 0;
-    const usedMinutes = usedMinutesByMonth.get(monthKey) ?? 0;
-    const endBalanceMinutes = includedMinutes - usedMinutes;
-    const overageMinutes = Math.max(0, -endBalanceMinutes);
-
+    const ladder = price.monthlyBalances;
+    const periodMonthCount = ladder.length;
     const isCycle = periodMonthCount > 1;
-    const firstMonth = { year: Number(period.start.slice(0, 4)), month: Number(period.start.slice(5, 7)) };
-    const position = absMonthOf(monthStart) - absMonthOf(period.start); // 0-based
-    const rowsMonths = isCycle ? monthRangeFrom(firstMonth, position + 1) : [{ year: args.year, month: args.month }];
-    const usageRows = buildRetainerUsageRows({
-      months: rowsMonths,
-      monthlyIncludedMinutes: includedMinutes,
-      usedMinutesByMonth,
-    });
+    const position = ladder.indexOf(row); // 0-based
+    const shownRows = ladder.slice(0, position + 1);
     // The amount due is the close's price, shown once the whole period is in.
-    const usageClosed = !inProgress && (!isCycle || position === periodMonthCount - 1);
+    const usageClosed = !inProgress && row.isLast;
     const amountDue = usageClosed ? fromMinor(price.amountMinor, c.currency) : 0;
     const paymentOverageMinutes = usageClosed ? price.overageMinutes : 0;
 
     const cycleToDate = isCycle
-      ? (() => {
-          const usedToDate = [...usedMinutesByMonth.entries()]
-            .filter(([k]) => k <= monthKey)
-            .reduce((s, [, minutes]) => s + minutes, 0);
-          return {
-            cycleStart: period.start,
-            cycleEnd: period.end,
-            cycleLabel: buildCycleRangeLabel(monthRangeFrom(firstMonth, periodMonthCount)),
-            cycleNumber:
-              project.startDate !== undefined
-                ? Math.floor((absMonthOf(period.start) - absMonthOf(project.startDate)) / periodMonthCount) + 1
-                : 1,
-            positionInCycle: position + 1,
-            includedMinutes: price.includedMinutes,
-            usedMinutes: usedToDate,
-            balanceMinutes: price.includedMinutes - usedToDate,
-          };
-        })()
+      ? {
+          cycleStart: period.start,
+          cycleEnd: period.end,
+          cycleLabel: periodSubjectLabel(period.start, period.end),
+          cycleNumber:
+            project.startDate !== undefined
+              ? Math.floor((absMonthOf(period.start) - absMonthOf(project.startDate)) / periodMonthCount) + 1
+              : 1,
+          positionInCycle: position + 1,
+          includedMinutes: price.includedMinutes,
+          usedMinutes: row.usedToDateMinutes,
+          balanceMinutes: row.remainingMinutes,
+        }
       : null;
 
     const linkedInvoice = liveClose?.invoiceId ? await ctx.db.get(liveClose.invoiceId) : null;
@@ -170,12 +154,12 @@ export const getMonthlyReport = query({
         label: monthLabel(monthKey),
       },
       balance: {
-        startBalanceMinutes: 0,
-        includedMinutes,
-        usedMinutes,
-        endBalanceMinutes,
-        overageMinutes,
-        overageHours: round2(overageMinutes / 60),
+        startBalanceMinutes: row.startBalanceMinutes,
+        includedMinutes: row.includedMinutes,
+        usedMinutes: row.usedMinutes,
+        endBalanceMinutes: row.balanceMinutes,
+        overageMinutes: row.overageMinutes,
+        overageHours: round2(row.overageMinutes / 60),
       },
       cycleToDate,
       billing: {
@@ -187,12 +171,10 @@ export const getMonthlyReport = query({
       retainerUsage: {
         kind: isCycle ? ("cycle" as const) : ("month" as const),
         closed: usageClosed,
-        monthlyIncludedMinutes: includedMinutes,
-        rows: usageRows,
+        monthlyIncludedMinutes: row.includedMinutes,
+        rows: usageRows(shownRows),
         total: {
-          availableMinutes: includedMinutes * usageRows.length,
-          usedMinutes: usageRows.reduce((sum, row) => sum + row.usedMinutes, 0),
-          balanceMinutes: usageRows[usageRows.length - 1]?.balanceMinutes ?? 0,
+          ...usageTotal(shownRows),
           overageMinutes: paymentOverageMinutes,
           amountDue,
         },

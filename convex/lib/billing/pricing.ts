@@ -18,6 +18,7 @@
 import { ceilToIncrement, priceMinutesMinor } from "./money";
 import {
   absMonthOf,
+  monthBucket,
   monthKeyFromAbs,
   monthKeyOf,
   periodMonths,
@@ -46,7 +47,12 @@ export type PricedEntry = {
   billableRateMinor: number;
 };
 
-export type PricedMember = { entry: PricedEntry; carried?: CarriedReason };
+export type PricedMember = {
+  entry: PricedEntry;
+  carried?: CarriedReason;
+  /** The stored report month of a snapshot row (§8.3); scope members derive it. */
+  monthKey?: string;
+};
 
 // ─── Output ──────────────────────────────────────────────────────────────────
 
@@ -66,15 +72,41 @@ export type TimeLine = {
 
 export type OverageLine = { minutes: number; rateMinor: number; amountMinor: number };
 
+/**
+ * One month of a retainer period's balance ladder (§8.3). Every surface that
+ * shows a per-month retainer balance — project Monthly Breakdown, summary
+ * card, monthly report, invoice usage block, worksheets, agent reports, the
+ * Close workspace — reads these rows instead of chaining its own.
+ */
 export type MonthlyBalanceRow = {
   monthKey: string; // YYYY-MM
   includedMinutes: number;
-  /** Billable minutes dated in this month (carried-in work seeds the ladder instead). */
+  /** Billable minutes carried in from earlier periods (bucketed on the first month). */
+  carriedInMinutes: number;
+  /** Billable minutes dated in this month (carried-in work excluded). */
   loggedMinutes: number;
+  /** Billable minutes reported on this month: logged + carried in. */
+  usedMinutes: number;
+  /** Balance entering the month: the previous row's balance, 0 on the first. */
+  startBalanceMinutes: number;
+  /** startBalance + included. */
+  availableMinutes: number;
+  /** Running balance after this month (projected for pending months). */
+  balanceMinutes: number;
   /** Running balance after this month; null while the month is pending. */
   endingBalanceMinutes: number | null;
-  /** A future month with nothing logged — its allowance is not in play yet. */
+  /** What a negative balance here would bill: max(0, −balance) and its price. */
+  overageMinutes: number;
+  overageAmountMinor: number;
+  /** Σ included / Σ used over the period's months up to and including this one. */
+  includedToDateMinutes: number;
+  usedToDateMinutes: number;
+  /** The period's whole allowance minus usage to date (cycle-to-date view). */
+  remainingMinutes: number;
+  /** Trailing future months with nothing logged — their allowance is not in play yet. */
   pending: boolean;
+  /** Last month of the period — where the period's overage settles. */
+  isLast: boolean;
 };
 
 export type PricingIssue = "missing-overage-rate";
@@ -174,7 +206,7 @@ export function priceScope(input: {
   const rateMinor = project.overageRateMinor ?? 0;
   const issues: PricingIssue[] = overageMinutes > 0 && rateMinor <= 0 ? ["missing-overage-rate"] : [];
   const amountMinor = priceMinutesMinor(overageMinutes, rateMinor);
-  const ladder = monthlyBalances(project, period, members, input.todayStr);
+  const ladder = monthlyBalances(project, period, members, rateMinor, input.todayStr);
 
   return {
     lines,
@@ -190,50 +222,80 @@ export function priceScope(input: {
 }
 
 /**
- * The retainer balance ladder, read like a bank statement: carried-in billable
- * minutes open the balance, then each month adds `included − logged`. A future
- * month with nothing logged is pending (its allowance is not in play), so the
- * last non-pending row is the honest balance to date.
+ * The retainer balance ladder, read like a bank statement: each month adds
+ * `included − used`, where carried-in billable minutes count on the first
+ * month (their §8.3 bucket). Trailing future months with nothing logged are
+ * pending (their allowance is not in play), so the last non-pending row is
+ * the honest balance to date. The last row's balance is always
+ * `included − usage`, so its overage is the period's overage.
  */
 function monthlyBalances(
   project: PricingProject,
   period: Period,
   members: PricedMember[],
+  rateMinor: number,
   todayStr: string,
 ): Pick<PriceResult, "monthlyBalances" | "carriedInMinutes" | "balanceToDateMinutes"> {
   let carriedInMinutes = 0;
-  const loggedByMonth = new Map<string, number>();
-  for (const { entry, carried } of members) {
+  const usedByMonth = new Map<string, number>();
+  const carriedByMonth = new Map<string, number>();
+  for (const { entry, carried, monthKey } of members) {
     if (!entry.isBillable) continue;
+    const key = monthKey ?? monthBucket(entry.date, period);
+    usedByMonth.set(key, (usedByMonth.get(key) ?? 0) + entry.minutes);
     if (carried) {
       carriedInMinutes += entry.minutes;
-    } else {
-      const key = monthKeyOf(entry.date);
-      loggedByMonth.set(key, (loggedByMonth.get(key) ?? 0) + entry.minutes);
+      carriedByMonth.set(key, (carriedByMonth.get(key) ?? 0) + entry.minutes);
     }
   }
 
   const perMonth = project.includedMinutesPerMonth ?? 0;
+  const months = periodMonths(project);
+  const periodIncluded = perMonth * months;
   const firstAbs = absMonthOf(period.start);
   const todayKey = monthKeyOf(todayStr);
+  const keys = Array.from({ length: months }, (_, i) => monthKeyFromAbs(firstAbs + i));
+
+  // Pending = a trailing run of future months with nothing logged.
+  const pending = keys.map(() => false);
+  for (let i = keys.length - 1; i >= 0; i--) {
+    if (keys[i] <= todayKey || (usedByMonth.get(keys[i]) ?? 0) > 0) break;
+    pending[i] = true;
+  }
+
   const rows: MonthlyBalanceRow[] = [];
-  let running = -carriedInMinutes;
-  let balanceToDateMinutes = running;
-  for (let i = 0; i < periodMonths(project); i++) {
-    const monthKey = monthKeyFromAbs(firstAbs + i);
-    const loggedMinutes = loggedByMonth.get(monthKey) ?? 0;
-    const pending = monthKey > todayKey && loggedMinutes === 0;
-    if (!pending) {
-      running += perMonth - loggedMinutes;
-      balanceToDateMinutes = running;
-    }
+  let balance = 0;
+  let includedToDate = 0;
+  let usedToDate = 0;
+  let balanceToDateMinutes = -carriedInMinutes;
+  keys.forEach((monthKey, i) => {
+    const usedMinutes = usedByMonth.get(monthKey) ?? 0;
+    const carriedIn = carriedByMonth.get(monthKey) ?? 0;
+    const startBalanceMinutes = balance;
+    const availableMinutes = startBalanceMinutes + perMonth;
+    balance = availableMinutes - usedMinutes;
+    includedToDate += perMonth;
+    usedToDate += usedMinutes;
+    if (!pending[i]) balanceToDateMinutes = balance;
+    const overageMinutes = Math.max(0, -balance);
     rows.push({
       monthKey,
       includedMinutes: perMonth,
-      loggedMinutes,
-      endingBalanceMinutes: pending ? null : running,
-      pending,
+      carriedInMinutes: carriedIn,
+      loggedMinutes: usedMinutes - carriedIn,
+      usedMinutes,
+      startBalanceMinutes,
+      availableMinutes,
+      balanceMinutes: balance,
+      endingBalanceMinutes: pending[i] ? null : balance,
+      overageMinutes,
+      overageAmountMinor: priceMinutesMinor(overageMinutes, rateMinor),
+      includedToDateMinutes: includedToDate,
+      usedToDateMinutes: usedToDate,
+      remainingMinutes: periodIncluded - usedToDate,
+      pending: pending[i],
+      isLast: i === keys.length - 1,
     });
-  }
+  });
   return { monthlyBalances: rows, carriedInMinutes, balanceToDateMinutes };
 }

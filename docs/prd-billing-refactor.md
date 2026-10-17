@@ -579,7 +579,7 @@ consistent:
   Breakdown rows and invoice row/sidebar call `exportClose` when a close exists.
 - Money on read surfaces: billing figures that preview a close (overage due on the
   retainer pages and agent report, the T&M open amount) are priced through
-  `money.priceMinutesDisplay` / `priceMinutesMinor`, exactly like a close. Ledger
+  `priceMinutesMinor`, exactly like a close. Ledger
   values on reporting surfaces stay raw (`minutes × rate`, never rounded — see the
   reporting rule) but are computed on the server: Time-tab rows carry `amount`, and
   Monthly Breakdown rows carry `overageAmount`. The UI only sums server values,
@@ -587,6 +587,18 @@ consistent:
   summed in minor units.
 - The Close queue shows "+N more periods" when a project has elapsed periods
   waiting behind its committable one.
+- One balance ladder (§8.3): `pricing.ts` `monthlyBalances` (exposed as
+  `priceScope(...).monthlyBalances`) is the only per-month retainer balance. Each
+  row carries start / available / used / balance, its overage and price, and the
+  cycle-to-date figures. `periodView.monthBalances` reads it per month (snapshot for
+  a closed period, scope for an open one) for `projects.getRetainerData`,
+  `projects.getSummary`, `billingReports.getMonthlyReport` and
+  `agentReports.retainerHealthForMonth`; `periodView.priceClose` serves the invoice
+  usage block (`lib/billing/usageBlock`) and the cycle worksheet. `lib/retainerUsage`
+  and `money.priceMinutesDisplay` are deleted. The report's `balance` block and the
+  agent row's `monthEndBalanceMinutes` are now the ladder row (rollover-aware
+  running balance), so every surface shows the same per-month balance
+  (`billingReadPath` §8.3 test).
 - *Not built:* the billing history view (events) on the invoice and project pages
   — optional; owner call.
 

@@ -23,7 +23,7 @@ import {
   type CloseContext,
 } from "./closeData";
 import { nextPeriod, periodOfDate, type Period } from "./periods";
-import { priceScope, type PriceResult, type PricedEntry } from "./pricing";
+import { priceScope, type MonthlyBalanceRow, type PriceResult, type PricedEntry } from "./pricing";
 import { committablePeriod, isPeriodClosed, scopeOf, type CarriedReason } from "./scope";
 
 type Reader = { db: GenericDatabaseReader<DataModel> };
@@ -31,6 +31,8 @@ type Reader = { db: GenericDatabaseReader<DataModel> };
 export type PeriodMember = {
   entry: PricedEntry & { _id: Id<"timeEntries"> };
   carried?: CarriedReason;
+  /** Stored report month (§8.3) — snapshot members only. */
+  monthKey?: string;
   /** The live entry document (present unless it was deleted after commit). */
   doc: Doc<"timeEntries"> | null;
 };
@@ -65,22 +67,13 @@ export async function buildPeriodView(
     c.liveCloses.find((cl) => cl.periodStart <= period.end && cl.periodEnd >= period.start) ?? null;
 
   if (liveClose) {
-    const rows = await ctx.db
-      .query("billingCloseEntries")
-      .withIndex("by_closeId", (q) => q.eq("closeId", liveClose._id))
-      .collect();
-    const members = snapshotMembers(rows).map((m) => ({ ...m, doc: docById.get(m.entry._id) ?? null }));
-    const price = priceScope({
-      project: frozenPricingProject(liveClose),
-      period: { start: liveClose.periodStart, end: liveClose.periodEnd },
-      members,
-      roundingMinutes: liveClose.roundingMinutes,
-      todayStr: opts.todayStr,
-    });
+    const { members, price } = await priceClose(ctx, liveClose, opts.todayStr);
     return {
       period: { start: liveClose.periodStart, end: liveClose.periodEnd },
       liveClose,
-      members: sortMembers(members),
+      members: sortMembers(
+        members.map((m) => ({ ...m, doc: docById.get(m.entry._id) ?? null })),
+      ),
       price,
       committable,
       pendingAfter,
@@ -106,6 +99,68 @@ export async function buildPeriodView(
     todayStr: opts.todayStr,
   });
   return { period, liveClose: null, members, price, committable, pendingAfter };
+}
+
+/**
+ * A close's frozen snapshot re-priced with the inputs it froze — exactly the
+ * numbers it was committed with. `todayStr` only decides which ladder months
+ * read as pending; a document (invoice, worksheet) passes nothing and sees
+ * the whole period as elapsed.
+ */
+export async function priceClose(
+  ctx: Reader,
+  close: Doc<"billingCloses">,
+  todayStr: string = close.periodEnd,
+) {
+  const rows = await ctx.db
+    .query("billingCloseEntries")
+    .withIndex("by_closeId", (q) => q.eq("closeId", close._id))
+    .collect();
+  const members = snapshotMembers(rows);
+  const price = priceScope({
+    project: frozenPricingProject(close),
+    period: { start: close.periodStart, end: close.periodEnd },
+    members,
+    roundingMinutes: close.roundingMinutes,
+    todayStr,
+  });
+  return { members, price };
+}
+
+/** One month's ladder row, with the period view that produced it. */
+export type MonthBalance = { monthKey: string; view: PeriodView; row: MonthlyBalanceRow };
+
+/**
+ * The balance-ladder row (§8.3) of each requested month (YYYY-MM), read from
+ * the period that settles it: a live close's snapshot when one covers the
+ * month, the scope rule otherwise. Months sharing a period share one view.
+ * A month no period of the grid contains (a cycle month before the project
+ * start) is absent from the result.
+ */
+export async function monthBalances(
+  ctx: Reader,
+  c: CloseContext,
+  monthKeys: string[],
+  opts: { todayStr: string; roundingMinutes: number },
+): Promise<Map<string, MonthBalance>> {
+  const grid = toScopeProject(c.project);
+  const views = new Map<string, PeriodView>();
+  const out = new Map<string, MonthBalance>();
+  for (const monthKey of monthKeys) {
+    const monthStart = `${monthKey}-01`;
+    const close = c.liveCloses.find((cl) => cl.periodStart <= monthStart && cl.periodEnd >= monthStart);
+    const period = close
+      ? { start: close.periodStart, end: close.periodEnd }
+      : periodOfDate(grid, monthStart);
+    let view = views.get(period.start);
+    if (!view) {
+      view = await buildPeriodView(ctx, c, period, opts);
+      views.set(period.start, view);
+    }
+    const row = view.price.monthlyBalances.find((r) => r.monthKey === monthKey);
+    if (row) out.set(monthKey, { monthKey, view, row });
+  }
+  return out;
 }
 
 function sortMembers(members: PeriodMember[]): PeriodMember[] {

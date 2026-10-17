@@ -27,7 +27,7 @@ const month = (
 ): RetainerRowMonthInput => ({
   periodEnded: true,
   cyclePosition: 1,
-  endBalance: 0,
+  overageMinutes: 0,
   invoice: null,
   ...partial,
 });
@@ -46,7 +46,7 @@ describe("decideRetainerRowAction — invoice link", () => {
     // Even if the upstream loop forgot to filter, the helper does.
     expect(
       decideRetainerRowAction(
-        month({ invoice: { status: "void" }, endBalance: -120 }),
+        month({ invoice: { status: "void" }, overageMinutes: 120 }),
         monthlyCtx,
       ),
     ).toBe("generate");
@@ -65,20 +65,20 @@ describe("decideRetainerRowAction — invoice link", () => {
 describe("decideRetainerRowAction — monthly retainer (rollover OFF)", () => {
   it("over-budget closed month → generate", () => {
     expect(
-      decideRetainerRowAction(month({ endBalance: -180 }), monthlyCtx),
+      decideRetainerRowAction(month({ overageMinutes: 180 }), monthlyCtx),
     ).toBe("generate");
   });
 
   it("within-budget closed month → report", () => {
     expect(
-      decideRetainerRowAction(month({ endBalance: 60 }), monthlyCtx),
+      decideRetainerRowAction(month({ overageMinutes: 0 }), monthlyCtx),
     ).toBe("report");
   });
 
   it("in-progress month → report (never generate, even if currently over)", () => {
     expect(
       decideRetainerRowAction(
-        month({ periodEnded: false, endBalance: -180 }),
+        month({ periodEnded: false, overageMinutes: 180 }),
         monthlyCtx,
       ),
     ).toBe("report");
@@ -86,7 +86,7 @@ describe("decideRetainerRowAction — monthly retainer (rollover OFF)", () => {
 
   it("zero overage rate → report (no row should produce a $0 invoice)", () => {
     expect(
-      decideRetainerRowAction(month({ endBalance: -180 }), {
+      decideRetainerRowAction(month({ overageMinutes: 180 }), {
         ...monthlyCtx,
         overageRate: 0,
       }),
@@ -107,7 +107,7 @@ describe("decideRetainerRowAction — rollover retainer", () => {
   it("mid-cycle row never generates — even if over budget that month", () => {
     expect(
       decideRetainerRowAction(
-        month({ cyclePosition: 2, periodEnded: true, endBalance: -300 }),
+        month({ cyclePosition: 2, periodEnded: true, overageMinutes: 300 }),
         rolloverCtx,
       ),
     ).toBe("report");
@@ -168,7 +168,7 @@ const rolloverCloseCtx: RetainerRowCloseContext = {
 describe("decideRetainerRowCloseAction — guards", () => {
   it("returns null for members (close is admin-only)", () => {
     expect(
-      decideRetainerRowCloseAction(month({ endBalance: 60 }), {
+      decideRetainerRowCloseAction(month({ overageMinutes: 0 }), {
         ...monthlyCloseCtx,
         isAdmin: false,
       }),
@@ -179,7 +179,7 @@ describe("decideRetainerRowCloseAction — guards", () => {
     // Cycle close bulk-marks every month; the per-row button must
     // disappear immediately so the admin can't double-close.
     expect(
-      decideRetainerRowCloseAction(month({ endBalance: 60 }), {
+      decideRetainerRowCloseAction(month({ overageMinutes: 0 }), {
         ...monthlyCloseCtx,
         isMonthAlreadyClosed: true,
       }),
@@ -189,7 +189,7 @@ describe("decideRetainerRowCloseAction — guards", () => {
   it("returns null for in-progress rows (period hasn't ended yet)", () => {
     expect(
       decideRetainerRowCloseAction(
-        month({ periodEnded: false, endBalance: 60 }),
+        month({ periodEnded: false, overageMinutes: 0 }),
         monthlyCloseCtx,
       ),
     ).toBeNull();
@@ -208,14 +208,14 @@ describe("decideRetainerRowCloseAction — guards", () => {
 describe("decideRetainerRowCloseAction — monthly (non-rollover)", () => {
   it("returns close-month on an ended within-budget row", () => {
     expect(
-      decideRetainerRowCloseAction(month({ endBalance: 60 }), monthlyCloseCtx),
+      decideRetainerRowCloseAction(month({ overageMinutes: 0 }), monthlyCloseCtx),
     ).toBe("close-month");
   });
 
   it("returns null on an ended over-budget row (Generate wins instead)", () => {
     expect(
       decideRetainerRowCloseAction(
-        month({ endBalance: -60 }),
+        month({ overageMinutes: 60 }),
         monthlyCloseCtx,
       ),
     ).toBeNull();
@@ -229,7 +229,7 @@ describe("decideRetainerRowCloseAction — monthly (non-rollover)", () => {
     // rate instead.
     expect(
       decideRetainerRowCloseAction(
-        month({ endBalance: -60 }),
+        month({ overageMinutes: 60 }),
         { ...monthlyCloseCtx, overageRate: 0 },
       ),
     ).toBe(null);
@@ -244,7 +244,7 @@ describe("decideRetainerRowCloseAction — rollover monthly (non-cycle-end rows)
     // must never offer it.
     expect(
       decideRetainerRowCloseAction(
-        month({ cyclePosition: 1, endBalance: 60 }),
+        month({ cyclePosition: 1, overageMinutes: 0 }),
         { ...rolloverCloseCtx, isCycleClosed: false, allCycleMonthsEnded: false },
       ),
     ).toBeNull();
@@ -253,7 +253,7 @@ describe("decideRetainerRowCloseAction — rollover monthly (non-cycle-end rows)
   it("returns null even when cycleHasOverage is true on a non-cycle-end row", () => {
     expect(
       decideRetainerRowCloseAction(
-        month({ cyclePosition: 1, endBalance: 60 }),
+        month({ cyclePosition: 1, overageMinutes: 0 }),
         { ...rolloverCloseCtx, cycleHasOverage: true, isCycleClosed: false, allCycleMonthsEnded: false },
       ),
     ).toBeNull();
@@ -261,7 +261,7 @@ describe("decideRetainerRowCloseAction — rollover monthly (non-cycle-end rows)
 });
 
 describe("decideRetainerRowCloseAction — rollover cycle-end row", () => {
-  const cycleEndMonth = month({ cyclePosition: 3, endBalance: 60 });
+  const cycleEndMonth = month({ cyclePosition: 3, overageMinutes: 0 });
 
   it("returns close-cycle when all gates pass (cycle ended, all months ended, within budget)", () => {
     expect(

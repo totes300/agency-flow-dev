@@ -15,8 +15,6 @@
  * Fixture-based unit tests live in __tests__/projectSummary.test.ts.
  */
 
-import { priceMinutesDisplay } from "./billing/money";
-
 // ─── Shared input types ────────────────────────────────────────────────────────
 
 export type EntryInput = {
@@ -377,38 +375,26 @@ export function computeFixedSummary(args: {
 /**
  * Compute Retainer project summary (per selected cycle).
  *
- * Formulas (per PRD §4):
- *   cycleBudgetMinutes: includedMinutesPerMonth × cycleLength.
- *   Time breakdown: entries where date ∈ [cycle.start, cycle.end], split by billable.
- *   Over budget: max(0, billableMinutes − cycleBudgetMinutes).
- *   Overage due: overBudgetMinutes/60 × overageRate (live, regardless of cycle state).
+ * Formulas (per PRD §4; budget and overage come from the balance ladder,
+ * docs/prd-billing-refactor.md §8.3 — this layer never pools minutes):
+ *   cycleBudgetMinutes: Σ included minutes of the cycle's ladder months.
+ *   Time breakdown: the cycle's report-month entries, split by billable.
+ *   Overage: the priced overage of the cycle's periods (caller-selected).
  *   Earned Cycle Revenue: monthlyFee × cycleLength + overageDue.
  *   Total Cost: sum(all cycle-range entries × costRate).
  */
 export function computeRetainerSummary(args: {
   entries: EntryInput[];
   monthlyFee: number;
-  overageRate: number;
-  includedMinutesPerMonth: number;
+  cycleBudgetMinutes: number;
+  /** Overage minutes and their price (display units), from `priceScope`. */
+  overage: { minutes: number; amount: number };
   cycle: RetainerCycleContext;
-  /**
-   * Overage unit: rollover pools the whole cycle; non-rollover settles
-   * per month, so its overage is the SUM of monthly excesses (idle months
-   * don't absorb another month's overrun).
-   */
-  rolloverEnabled: boolean;
-  /**
-   * Billable minutes per YYYY-MM within the cycle (non-rollover math).
-   * Caller passes ENDED months only — an in-progress month has no overage
-   * due yet (matches getRetainerData's `periodEnded` gate and the inbox).
-   */
-  monthBillableMinutes?: ReadonlyMap<string, number>;
   currency: string;
   subtitle: string;
   isAdmin: boolean;
 }): RetainerSummary {
-  const cycleBudgetMinutes =
-    args.includedMinutesPerMonth * args.cycle.length;
+  const { cycleBudgetMinutes } = args;
 
   let totalMinutes = 0;
   let billableMinutes = 0;
@@ -422,22 +408,8 @@ export function computeRetainerSummary(args: {
     else nonBillableMinutes += e.durationMinutes;
   }
 
-  // Rollover: pooled cycle budget. Non-rollover: overage is per-month —
-  // month 1 running 10h over is billable even if months 2–3 sit idle.
-  // (Previously the pooled formula was applied to both, so the Summary
-  // card showed 0 overage while the Monthly Breakdown and billing inbox
-  // correctly demanded an invoice.)
-  let overBudgetMinutes: number;
-  if (args.rolloverEnabled || !args.monthBillableMinutes) {
-    overBudgetMinutes = Math.max(0, billableMinutes - cycleBudgetMinutes);
-  } else {
-    overBudgetMinutes = 0;
-    for (const worked of args.monthBillableMinutes.values()) {
-      overBudgetMinutes += Math.max(0, worked - args.includedMinutesPerMonth);
-    }
-  }
-  // Billing money: priced like the closes that will bill it (one rounding).
-  const overageDueAmount = priceMinutesDisplay(overBudgetMinutes, args.overageRate, args.currency);
+  const overBudgetMinutes = args.overage.minutes;
+  const overageDueAmount = args.overage.amount;
   const earnedCycleRevenue =
     args.monthlyFee * args.cycle.length + overageDueAmount;
 

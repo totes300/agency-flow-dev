@@ -28,13 +28,8 @@ import { getOrgSettings } from "./lib/orgHelpers";
 import { getProjectEntries } from "./lib/projectEntries";
 import { closeSnapshotEntries } from "./lib/billing/closeData";
 import { ORG_TIMEZONE_FALLBACK } from "./lib/timer";
-import {
-  buildRetainerUsageRows,
-  monthKey,
-  monthName,
-  monthRangeFrom,
-  type YearMonth,
-} from "./lib/retainerUsage";
+import { monthLabel } from "./lib/billing/labels";
+import { priceClose } from "./lib/billing/periodView";
 import { CSV_BOM, joinCsvRow, joinCsvRows } from "../lib/csv";
 import { extractPlainText } from "../lib/tiptap-utils";
 
@@ -752,8 +747,10 @@ export const collectCloseWorksheetData = internalQuery({
     const authCtx = await requireAdmin(ctx);
     const orgId = authCtx.orgId;
     const close = await loadClose(ctx, args.closeId, orgId);
-    const months = monthsOfPeriod(close.periodStart, close.periodEnd);
-    if (months.length === 1) {
+    // The close's balance ladder (§8.3): one row per month of its period.
+    const { price } = await priceClose(ctx, close);
+    const ladder = price.monthlyBalances;
+    if (ladder.length <= 1) {
       return { layout: "single", data: await collectScopeData(ctx, { kind: "close", closeId: close._id }, orgId) };
     }
 
@@ -763,41 +760,24 @@ export const collectCloseWorksheetData = internalQuery({
     if (!client || client.orgId !== orgId) throw new ConvexError("Client not found for project");
     const orgSettings = await getOrgSettings(ctx, orgId);
 
+    // A cycle close is a rollover cycle: allowance carries month to month and
+    // the overage settles on the final month.
     const sections: WorksheetCycleSection[] = [];
     const allRows: WorksheetTaskRow[] = [];
-    const usedMinutesByMonth = new Map<string, number>();
-    for (const m of months) {
-      const key = monthKey(m);
-      const entries = await closeSnapshotEntries(ctx, orgId, close._id, key);
+    for (const row of ladder) {
+      const entries = await closeSnapshotEntries(ctx, orgId, close._id, row.monthKey);
       const rows = await buildTaskRows(ctx, project, entries, orgId);
-      const subtotalBillableMinutes = rows.reduce((s, r) => s + r.billableMinutes, 0);
-      usedMinutesByMonth.set(key, subtotalBillableMinutes);
       sections.push({
-        monthLabel: `${monthName(m.year, m.month)} ${m.year}`,
+        monthLabel: monthLabel(row.monthKey),
         rows,
-        subtotalBillableMinutes,
-        allocationMinutes: 0,
-        rolloverIntoNextMinutes: null,
-        overageMinutes: null,
+        subtotalBillableMinutes: rows.reduce((s, r) => s + r.billableMinutes, 0),
+        allocationMinutes: row.availableMinutes,
+        rolloverIntoNextMinutes: row.isLast ? null : row.balanceMinutes,
+        overageMinutes: row.isLast && row.overageMinutes > 0 ? row.overageMinutes : null,
       });
       allRows.push(...rows);
     }
 
-    // A cycle close is a rollover cycle: allowance carries month to month and
-    // the overage settles on the final month.
-    const monthlyIncludedMinutes = close.includedMinutes / months.length;
-    const usageRows = buildRetainerUsageRows({ months, monthlyIncludedMinutes, usedMinutesByMonth });
-    sections.forEach((section, i) => {
-      section.allocationMinutes = usageRows[i].availableMinutes;
-      if (i === sections.length - 1) {
-        section.overageMinutes = close.overageMinutes > 0 ? close.overageMinutes : null;
-      } else {
-        section.rolloverIntoNextMinutes = usageRows[i].balanceMinutes;
-      }
-    });
-
-    const first = months[0];
-    const last = months[months.length - 1];
     return {
       layout: "cycle",
       data: {
@@ -806,17 +786,17 @@ export const collectCloseWorksheetData = internalQuery({
         slugs: { client: slugify(client.name), project: slugify(project.name) },
         timezone: orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK,
         orgId,
-        cycleRangeLabel: `${monthName(first.year, first.month)} 1, ${first.year} – ${monthName(last.year, last.month)} ${new Date(last.year, last.month, 0).getDate()}, ${last.year}`,
-        cycleLengthLabel: `${months.length}-month`,
+        cycleRangeLabel: `${longDate(close.periodStart)} – ${longDate(close.periodEnd)}`,
+        cycleLengthLabel: `${ladder.length}-month`,
         cycleStart: close.periodStart,
         cycleEnd: close.periodEnd,
         invoiceIdentifier: (await loadCloseLabel(ctx, close._id, orgId)).invoiceIdentifier,
         rolloverEnabled: true,
         sections,
         cycleTotal: {
-          billableMinutes: close.usageMinutes,
-          allocationMinutes: close.includedMinutes,
-          netOverageMinutes: close.overageMinutes,
+          billableMinutes: price.usageMinutes,
+          allocationMinutes: price.includedMinutes,
+          netOverageMinutes: price.overageMinutes,
         },
         allRows,
       },
@@ -824,11 +804,14 @@ export const collectCloseWorksheetData = internalQuery({
   },
 });
 
-/** The calendar months of a period, in order. */
-function monthsOfPeriod(periodStart: string, periodEnd: string): YearMonth[] {
-  const [sy, sm] = periodStart.split("-").map(Number);
-  const [ey, em] = periodEnd.split("-").map(Number);
-  return monthRangeFrom({ year: sy, month: sm }, (ey * 12 + em) - (sy * 12 + sm) + 1);
+/** "March 1, 2026" for a YYYY-MM-DD string. */
+function longDate(ymd: string): string {
+  const [y, m, d] = ymd.split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
 }
 
 /**

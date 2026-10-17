@@ -24,7 +24,7 @@ export type RetainerUsageLabels = {
   subtitle: string;
 }
 
-/** "00:00" / "-01:30" minute formatter, matches `convex/lib/retainerUsage.ts`. */
+/** "00:00" / "-01:30" minute formatter, matches the server usage block (`convex/lib/billing/usageBlock.ts`). */
 function formatMinutesLabel(minutes: number): string {
   const abs = Math.abs(minutes)
   const hours = Math.floor(abs / 60)

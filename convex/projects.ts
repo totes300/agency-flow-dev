@@ -8,10 +8,10 @@ import { validateAssignees } from "./lib/task_helpers";
 import { getDateInTimezone, ORG_TIMEZONE_FALLBACK } from "./lib/timer";
 import { getOrgSettings, getProjectCurrency } from "./lib/orgHelpers";
 import { fixedBilledMinor } from "./lib/billing/invoiceLifecycle";
-import { fromMinor, priceMinutesDisplay, toMinor } from "./lib/billing/money";
-import { loadCloseContext, toScopeProject } from "./lib/billing/closeData";
-import { getCyclePeriods, periodOfDate } from "./lib/billing/periods";
-import { buildPeriodView } from "./lib/billing/periodView";
+import { fromMinor, toMinor } from "./lib/billing/money";
+import { loadCloseContext } from "./lib/billing/closeData";
+import { getCyclePeriods } from "./lib/billing/periods";
+import { monthBalances, type MonthBalance } from "./lib/billing/periodView";
 import { loadReportMonths } from "./lib/billing/reportMonths";
 import { autoSaveTimersForTasks } from "./lib/timerEntry";
 import type {
@@ -651,7 +651,8 @@ export const getRetainerData = query({
       startBalance: number;
       available: number;
       endBalance: number;
-      /** Overage of this row (negative end balance) priced like a close. */
+      /** Overage of this row (negative end balance) and its price, from the ladder. */
+      overageMinutes: number;
       overageAmount: number;
       totalNonBillableMinutes: number;
       // Calendar truth: the month's last day has already passed in the org's
@@ -675,46 +676,45 @@ export const getRetainerData = query({
       invoice: MonthInvoice | null;
     };
     const monthlyData: MonthData[] = [];
+    const balances = await monthBalances(
+      ctx,
+      closeContext,
+      months.map((m) => `${m.year}-${String(m.month).padStart(2, "0")}`),
+      { todayStr, roundingMinutes: 1 },
+    );
 
     for (let i = 0; i < months.length; i++) {
       const m = months[i];
       const monthKey = `${m.year}-${String(m.month).padStart(2, "0")}`;
       const monthBillable = billableByMonth[monthKey] ?? [];
       const monthNonBillable = nonBillableByMonth[monthKey] ?? [];
-      const workedMinutes = monthBillable.reduce((s, e) => s + e.durationMinutes, 0);
       const totalNonBillableMinutes = monthNonBillable.reduce((s, e) => s + e.durationMinutes, 0);
       // `periodEnded` is calendar-only; `isClosed`/`closedAt` carry the live
-      // close's state. `balanceStatus` keys on `periodEnded` — financial
-      // due-ness is a calendar question, not an admin one.
+      // close's state. `balanceStatus` keys on the calendar too (the period
+      // has ended) — financial due-ness is not an admin question.
       const periodEnded = m.endDate < todayStr;
       const close = closeOfMonth(m.startDate, m.endDate);
       const closedAt = close?.committedAt;
       const isClosed = close !== undefined;
 
-      let startBalance: number;
-      if (rolloverEnabled) {
-        startBalance = i === 0 ? 0 : monthlyData[i - 1].endBalance;
-      } else {
-        startBalance = 0;
-      }
-
-      const available = startBalance + includedMinutesPerMonth;
-      const endBalance = available - workedMinutes;
+      // The month's balance-ladder row (§8.3) from the period that settles it.
+      const balance = balances.get(monthKey);
+      const row = balance?.row;
+      const startBalance = row?.startBalanceMinutes ?? 0;
+      const available = row?.availableMinutes ?? 0;
+      const endBalance = row?.balanceMinutes ?? 0;
+      // The month settles its period's balance when it is the period's last
+      // month and the period has ended (a cycle settles on its closing month).
+      const settles =
+        balance !== undefined && balance.row.isLast && balance.view.period.end < todayStr;
+      const multiMonthPeriod = (balance?.view.price.monthlyBalances.length ?? 1) > 1;
 
       // Badge status
       let balanceStatus: MonthData["balanceStatus"];
       if (endBalance < 0) {
-        if (rolloverEnabled) {
-          balanceStatus = (i === cycleLength - 1 && isCycleClosed) ? "due" : "deficit";
-        } else {
-          balanceStatus = periodEnded ? "due" : "deficit";
-        }
+        balanceStatus = settles ? "due" : "deficit";
       } else if (endBalance > 0) {
-        if (rolloverEnabled) {
-          balanceStatus = (i === cycleLength - 1 && isCycleClosed) ? "unused" : "rollover";
-        } else {
-          balanceStatus = periodEnded ? "unused" : "on_track";
-        }
+        balanceStatus = settles ? "unused" : multiMonthPeriod ? "rollover" : "on_track";
       } else {
         balanceStatus = "on_track";
       }
@@ -733,12 +733,12 @@ export const getRetainerData = query({
       const monthInvoice = invoiceByMonthKey.get(monthKey);
       monthlyData.push({
         ...m,
-        workedMinutes,
+        workedMinutes: row?.usedMinutes ?? 0,
         startBalance,
         available,
         endBalance,
-        overageAmount:
-          endBalance < 0 ? priceMinutesDisplay(-endBalance, project.overageRate ?? 0, currency) : 0,
+        overageMinutes: row?.overageMinutes ?? 0,
+        overageAmount: fromMinor(row?.overageAmountMinor ?? 0, currency),
         totalNonBillableMinutes,
         periodEnded,
         isClosed,
@@ -762,48 +762,34 @@ export const getRetainerData = query({
       });
     }
 
-    // Cycle totals
-    const cycleBudget = includedMinutesPerMonth * cycleLength;
-    const cycleWorked = monthlyData.reduce((sum, m) => sum + m.workedMinutes, 0);
-    const cycleBalance = cycleBudget - cycleWorked;
+    // Cycle totals — read off the ladder. Each period in view contributes the
+    // balance of its last month shown (one period for a rollover cycle, one
+    // per month otherwise).
+    const shownRows = [...balances.values()]; // month order
+    const cycleBudget = shownRows.reduce((sum, b) => sum + b.row.includedMinutes, 0);
+    const cycleWorked = shownRows.reduce((sum, b) => sum + b.row.usedMinutes, 0);
+    const lastShownByPeriod = new Map<string, MonthBalance>();
+    for (const b of shownRows) lastShownByPeriod.set(b.view.period.start, b);
+    const cycleBalance = [...lastShownByPeriod.values()].reduce(
+      (sum, b) => sum + b.row.balanceMinutes,
+      0,
+    );
     const utilization = cycleBudget > 0 ? (cycleWorked / cycleBudget) * 100 : 0;
 
-    // Overage calculation. "Due" means STILL owed — months/cycles whose
-    // overage already sits on a non-void invoice are excluded, mirroring the
-    // Ready feed's `invoicedMonthKeys` dedup. Without this exclusion the
-    // project page kept summing overage for periods that were already
-    // invoiced or even paid, disagreeing with the InvoiceBanner and the
-    // Invoices inbox on the same screen.
+    // Overage calculation. "Due" means STILL owed: an ended period with
+    // overage whose closing month carries no non-void invoice. Each period's
+    // overage is its close price (snapshot when closed, scope when open) —
+    // the number the Close queue and the invoice show.
     const projectOverageRate = project.overageRate ?? 0;
     let overageMinutes = 0;
-    let overageDue = 0;
-    if (rolloverEnabled) {
-      // Rollover: overage only at end of closed cycle, and only while the
-      // cycle's anchor month (its closing month) is uninvoiced.
-      const closingMonth = monthlyData[monthlyData.length - 1];
-      const closingKey = closingMonth
-        ? `${closingMonth.year}-${String(closingMonth.month).padStart(2, "0")}`
-        : null;
-      const cycleInvoiced =
-        closingKey !== null && invoiceByMonthKey.has(closingKey);
-      if (isCycleClosed && cycleBalance < 0 && !cycleInvoiced) {
-        overageMinutes = Math.abs(cycleBalance);
-        overageDue = priceMinutesDisplay(overageMinutes, projectOverageRate, currency);
-      }
-    } else {
-      // Non-rollover: each month settles independently. Calendar-driven —
-      // `periodEnded` (not `isClosed`) gates due-ness, so an unbilled
-      // overage month still shows due even before an admin clicks Close.
-      for (const m of monthlyData) {
-        if (m.periodEnded && m.endBalance < 0 && m.invoice === null) {
-          overageMinutes += Math.abs(m.endBalance);
-          overageDue += m.overageAmount;
-        }
-      }
-      // Each month is billed by its own close; sum their priced amounts in
-      // minor units so the total has no float drift.
-      overageDue = fromMinor(toMinor(overageDue, currency), currency);
+    let overageDueMinor = 0;
+    for (const { view } of lastShownByPeriod.values()) {
+      if (view.period.end >= todayStr) continue;
+      if (invoiceByMonthKey.has(view.period.end.slice(0, 7))) continue;
+      overageMinutes += view.price.overageMinutes;
+      overageDueMinor += view.price.amountMinor;
     }
+    const overageDue = fromMinor(overageDueMinor, currency);
 
     // totalNonBillableMinutes scoped to current cycle months only
     const totalNonBillableMinutes = monthlyData.reduce(
@@ -965,9 +951,7 @@ export const getSummary = query({
 
     // Retainer
     const {
-      includedMinutesPerMonth = 0,
       monthlyFee = 0,
-      overageRate = 0,
       startDate,
       rolloverEnabled = false,
       cycleLength = 1,
@@ -996,27 +980,32 @@ export const getSummary = query({
     const cycleEntries = entries.filter((_, i) =>
       inCycle(reportMonths.get(rawEntries[i]._id) ?? rawEntries[i].date.slice(0, 7)),
     );
-    const monthBillableMinutes = new Map<string, number>();
-    rawEntries.forEach((e, i) => {
-      const key = reportMonths.get(e._id) ?? e.date.slice(0, 7);
-      if (!entries[i].isBillable || !inCycle(key)) return;
-      monthBillableMinutes.set(key, (monthBillableMinutes.get(key) ?? 0) + e.durationMinutes);
-    });
 
+    // Budget and overage from the balance ladder (§8.3) of the periods that
+    // settle the cycle's months. A pooled rollover cycle shows its overage
+    // live; a single month's overage counts once the month has ended (an
+    // in-progress month must not flip the card to "overage due", review M2).
     // "Uninvoiced" = an elapsed period with overage that no live close has
     // billed yet — exactly what the Close queue would put in front of the
     // owner. Within-budget periods produce reports, not invoices.
-    const grid = toScopeProject(closeContext.project);
-    const periodStarts = new Set(cycleContext.monthKeys.map((k) => periodOfDate(grid, `${k}-01`).start));
+    const balances = await monthBalances(ctx, closeContext, cycleContext.monthKeys, {
+      todayStr,
+      roundingMinutes: 1,
+    });
+    const shownRows = [...balances.values()];
+    const cycleBudgetMinutes = shownRows.reduce((sum, b) => sum + b.row.includedMinutes, 0);
+    const periodViews = new Map(shownRows.map((b) => [b.view.period.start, b.view]));
     let hasUninvoicedClosedMonth = false;
-    for (const start of periodStarts) {
-      const view = await buildPeriodView(ctx, closeContext, periodOfDate(grid, start), {
-        todayStr,
-        roundingMinutes: 1,
-      });
-      if (!view.liveClose && view.period.end < todayStr && view.price.overageMinutes > 0) {
+    let overageMinutes = 0;
+    let overageMinor = 0;
+    for (const view of periodViews.values()) {
+      const ended = view.period.end < todayStr;
+      if (!view.liveClose && ended && view.price.overageMinutes > 0) {
         hasUninvoicedClosedMonth = true;
-        break;
+      }
+      if (ended || view.price.monthlyBalances.length > 1) {
+        overageMinutes += view.price.overageMinutes;
+        overageMinor += view.price.amountMinor;
       }
     }
 
@@ -1041,25 +1030,12 @@ export const getSummary = query({
     // Never overload `closed` for both — same rule as Slice 2 Revision Pass #1.
     const subtitle = `${rangeLabel} · ${length}-month ${rolloverEnabled ? "rollover" : "monthly"}${isCycleClosed ? " (ended)" : ""}`;
 
-    // Overage is only DUE for ended months (same rule as getRetainerData's
-    // `periodEnded` gate and the billing inbox) — an in-progress month must
-    // not flip the Summary card to "overage due" mid-month (review M2).
-    const endedMonthBillableMinutes = new Map<string, number>();
-    for (const [monthKey, minutes] of monthBillableMinutes) {
-      const [my, mm] = monthKey.split("-").map(Number);
-      const lastDay = new Date(my, mm, 0).getDate();
-      const monthEnd = `${monthKey}-${String(lastDay).padStart(2, "0")}`;
-      if (monthEnd < todayStr) endedMonthBillableMinutes.set(monthKey, minutes);
-    }
-
     return computeRetainerSummary({
       entries: cycleEntries,
       monthlyFee,
-      overageRate,
-      includedMinutesPerMonth,
+      cycleBudgetMinutes,
+      overage: { minutes: overageMinutes, amount: fromMinor(overageMinor, currency) },
       cycle: cycleForSummary,
-      rolloverEnabled,
-      monthBillableMinutes: endedMonthBillableMinutes,
       currency,
       subtitle,
       isAdmin,

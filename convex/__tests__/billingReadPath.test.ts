@@ -254,3 +254,117 @@ describe("entry status", () => {
     expect(closed.entries.map((r) => r._id)).toEqual([a]);
   });
 });
+
+describe("§8.3 — one balance ladder on every surface", () => {
+  // Cycle Apr–Jun 2026, 600 min/month, 90/h overage. 300 min skipped out of
+  // March land on April (carried in), so the ladder is
+  //   Apr: used 800, 0    + 600 − 800 = −200
+  //   May: used 700, −200 + 600 − 700 = −300
+  //   Jun: used 640, −300 + 600 − 640 = −340  → overage 340 min = 510.00
+  const months = [4, 5, 6] as const;
+  const used = [800, 700, 640];
+  const starts = [0, -200, -300];
+  const balances = [-200, -300, -340];
+
+  async function cycleWorld() {
+    setToday("2026-07-10");
+    const w = await world({ ...retainer, startDate: "2026-01-01", rolloverEnabled: true, cycleLength: 3 });
+    const late = await addEntry(w, "2026-03-20", 300);
+    await as(w).mutation(api.billingCloses.skipEntries, { entryIds: [late] });
+    await commit(w, "2026-01-01");
+    await addEntry(w, "2026-04-10", 500);
+    await addEntry(w, "2026-05-10", 700);
+    await addEntry(w, "2026-06-10", 640);
+    await addEntry(w, "2026-06-12", 90, { billable: false });
+    return w;
+  }
+
+  async function expectAgreement(w: World) {
+    const page = await as(w).query(api.projects.getRetainerData, { id: w.projectId, cycleOffset: -1 });
+    expect(page?.months.map((m) => [m.workedMinutes, m.startBalance, m.endBalance])).toEqual(
+      months.map((_, i) => [used[i], starts[i], balances[i]]),
+    );
+    expect(page).toMatchObject({ cycleBudget: 1800, cycleWorked: 2140, cycleBalance: -340 });
+
+    const ws = await workspace(w, "2026-04");
+    expect(ws?.monthlyBalances.map((r) => r.endingBalanceMinutes)).toEqual(balances);
+    expect(ws?.carriedInMinutes).toBe(300);
+
+    for (const [i, month] of months.entries()) {
+      const stmt = await report(w, 2026, month);
+      expect(stmt?.balance).toMatchObject({
+        startBalanceMinutes: starts[i],
+        usedMinutes: used[i],
+        endBalanceMinutes: balances[i],
+      });
+      expect(stmt?.retainerUsage.rows.map((r) => r.balanceMinutes)).toEqual(balances.slice(0, i + 1));
+      expect(stmt?.cycleToDate).toMatchObject({
+        usedMinutes: used.slice(0, i + 1).reduce((a, b) => a + b, 0),
+        includedMinutes: 1800,
+      });
+
+      const health = await as(w).query(internal.agentReports.retainerHealthForMonth, { year: 2026, month });
+      const row = health.rows.find((r) => r.projectId === w.projectId);
+      expect(row).toMatchObject({
+        usedMinutes: used[i],
+        monthEndBalanceMinutes: balances[i],
+        cyclePosition: i + 1,
+      });
+      expect(row?.cycle?.usedMinutes).toBe(stmt?.cycleToDate?.usedMinutes);
+    }
+
+    const summary = await as(w).query(api.projects.getSummary, { projectId: w.projectId, cycleOffset: -1 });
+    expect(summary?.billingType === "retainer" && summary.timeBreakdown.cycleBudgetMinutes).toBe(1800);
+    expect(summary?.billingType === "retainer" && summary.overage).toMatchObject({
+      overBudgetMinutes: 340,
+      overageDueAmount: 510,
+    });
+    return page;
+  }
+
+  it("project page = workspace = report = agent report = summary, open and after commit", async () => {
+    const w = await cycleWorld();
+
+    const open = await expectAgreement(w);
+    expect(open).toMatchObject({ overageMinutes: 340, overageDue: 510 });
+    expect(open?.months.map((m) => m.balanceStatus)).toEqual(["deficit", "deficit", "due"]);
+    const june = await as(w).query(internal.agentReports.retainerHealthForMonth, { year: 2026, month: 6 });
+    expect(june.rows[0]).toMatchObject({ overageDue: true, overageMinutes: 340, overageAmount: 510 });
+
+    const { invoiceId } = await commit(w, "2026-04-01");
+    const closed = await expectAgreement(w);
+    // Billed now: nothing is still due.
+    expect(closed).toMatchObject({ overageMinutes: 0, overageDue: 0 });
+
+    const detail = await as(w).query(api.invoices.getInvoice, { identifier: invoiceId! });
+    expect(detail?.invoice.total).toBe(510);
+    expect(detail?.retainerUsage?.rows.map((r) => [r.usedMinutes, r.balanceMinutes])).toEqual(
+      months.map((_, i) => [used[i], balances[i]]),
+    );
+    expect(detail?.retainerUsage?.total).toEqual({
+      availableMinutes: 1800,
+      usedMinutes: 2140,
+      balanceMinutes: -340,
+      amountDue: 510,
+    });
+  });
+
+  it("monthly periods settle alone: an idle month never absorbs another's overage", async () => {
+    setToday("2026-07-10");
+    // 3-month navigation window, no rollover → three independent monthly periods.
+    const w = await world({ ...retainer, startDate: "2026-04-01", rolloverEnabled: false, cycleLength: 3 });
+    await addEntry(w, "2026-04-10", 1200);
+    const page = await as(w).query(api.projects.getRetainerData, { id: w.projectId, cycleOffset: -1 });
+    expect(page?.months.map((m) => [m.startBalance, m.endBalance])).toEqual([
+      [0, -600],
+      [0, 600],
+      [0, 600],
+    ]);
+    expect(page).toMatchObject({ overageMinutes: 600, overageDue: 900 });
+    const summary = await as(w).query(api.projects.getSummary, { projectId: w.projectId, cycleOffset: -1 });
+    expect(summary?.billingType === "retainer" && summary.overage).toMatchObject({
+      overBudgetMinutes: 600,
+      overageDueAmount: 900,
+    });
+  });
+});

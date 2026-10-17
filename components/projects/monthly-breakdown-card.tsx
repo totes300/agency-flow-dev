@@ -618,7 +618,7 @@ function AmountCell({
 
   // Server-priced overage of the row (raw minutes, priced like the close that
   // bills it); $0 when the retainer fee covered the work. For rollover
-  // cycle-end the chained `endBalance` is the cycle aggregate, so this is the
+  // cycle-end the ladder balance is the cycle aggregate, so this is the
   // cycle total.
   const amount = month.overageAmount
 

@@ -1,5 +1,6 @@
 "use client"
 
+import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { useGenerateInvoice } from "@/lib/hooks/use-generate-invoice"
 import type { Id } from "@/convex/_generated/dataModel"
@@ -61,6 +62,7 @@ export function InvoiceBanner({
   timezone: string
 }) {
   const { generate, pending } = useGenerateInvoice()
+  const router = useRouter()
 
   if (!state) return null
 
@@ -86,6 +88,12 @@ export function InvoiceBanner({
       : undefined
 
   function handleGenerate() {
+    // T&M drafts are only created from the Close workspace, after review
+    // (docs/prd-billing-refactor.md B2). The server rejects unbounded calls.
+    if (state?.kind === "tm") {
+      router.push("/billing")
+      return
+    }
     void generate({
       projectId,
       retainerYear,
@@ -137,7 +145,7 @@ export function InvoiceBanner({
         </div>
       </div>
       <Button size="sm" disabled={pending} onClick={handleGenerate}>
-        Generate invoice
+        {state.kind === "tm" ? "Review to invoice" : "Generate invoice"}
       </Button>
     </div>
   )

@@ -1247,6 +1247,21 @@ export const createInvoice = mutation({
       );
     }
 
+    // Unbounded T&M guard (docs/prd-billing-refactor.md B2): a T&M call with
+    // neither a period nor explicit entries used to sweep EVERY open billable
+    // entry — skipped ones included — past oldest-first, then anchor a month
+    // as invoice-covered. T&M drafts come from the Close workspace, which
+    // always passes the period bounds.
+    if (
+      billingType === "t_and_m" &&
+      args.timeEntryIds === undefined &&
+      (args.startDate === undefined || args.endDate === undefined)
+    ) {
+      throw new ConvexError(
+        "Time & Materials invoices are created from Billing → Close. Review the period there first.",
+      );
+    }
+
     const client = await ctx.db.get(project.clientId);
     if (!client || client.orgId !== orgId) {
       throw new ConvexError("Client not found for project.");

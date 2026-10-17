@@ -100,8 +100,12 @@ export function computeRetainerBalance(
   let overageAmount = 0;
   if (isOverageDue) {
     overageMinutes = Math.abs(endBalance);
+    // `overageHours` is display-only. The amount is priced from MINUTES — the
+    // same formula `billingScope` uses for the queue/workspace promise — so
+    // "Generate · $11.67" produces an $11.67 draft, not $12.00 from the
+    // 2-decimal hours (docs/prd-billing-refactor.md B1, §7).
     overageHours = round2(overageMinutes / 60);
-    overageAmount = round2(overageHours * input.overageRate);
+    overageAmount = round2((overageMinutes / 60) * input.overageRate);
   }
 
   return {

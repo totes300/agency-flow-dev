@@ -1,6 +1,7 @@
 "use client"
 
 import { useQuery } from "convex/react"
+import { useRouter } from "next/navigation"
 import { useConvexAuth } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
@@ -40,6 +41,7 @@ export function ProjectInvoices({
   const overview = useQuery(api.timeEntries.projectOverview, isAuthenticated ? { projectId } : "skip")
   const orgSettings = useQuery(api.orgSettings.get, isAuthenticated ? {} : "skip")
   const { generate, pending } = useGenerateInvoice()
+  const router = useRouter()
 
   if (invoices === undefined || metrics === undefined || overview === undefined) {
     return <ProjectInvoicesSkeleton />
@@ -84,6 +86,12 @@ export function ProjectInvoices({
         retainerYear: next.year,
         retainerMonth: next.month,
       })
+      return
+    }
+    // T&M drafts are only created from the Close workspace, after review
+    // (docs/prd-billing-refactor.md B2). The server rejects unbounded calls.
+    if (billingType === "t_and_m") {
+      router.push("/billing")
       return
     }
     void generate({ projectId })

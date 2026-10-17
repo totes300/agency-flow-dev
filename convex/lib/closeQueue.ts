@@ -10,7 +10,7 @@
  */
 
 import { reviewFlagCount, type CloseFlag } from "./closeFlags";
-import { round2 } from "./billing/money";
+import { fromMinor } from "./billing/money";
 
 // ─── Per-row scope summary ──────────────────────────────────────────────────
 
@@ -44,7 +44,7 @@ export function summarizeQueueScope(
 export type MonthGroupInput = {
   /** Calendar month this row groups under (YYYY-MM) — a cycle uses its closing month. */
   monthKey: string;
-  amount: number;
+  amountMinor: number;
   currency: string;
 };
 
@@ -57,7 +57,7 @@ export type MonthGroup<T extends MonthGroupInput> = {
   closedCount: number;
   /** Progress denominator — open + closed. "N of M closed" = closedCount of totalCount. */
   totalCount: number;
-  /** Month total per currency (rows are not aggregated across currencies). */
+  /** Month total per currency, summed in minor units (never across currencies). */
   totalsByCurrency: Record<string, number>;
 };
 
@@ -85,12 +85,13 @@ export function groupQueueByMonth<T extends MonthGroupInput>(
     // so month-over-month progress reads honestly, but only when it has rows.
     if (groupRows.length === 0) continue;
     const closedCount = committedByMonth.get(monthKey) ?? 0;
-    const totalsByCurrency: Record<string, number> = {};
+    const minorByCurrency: Record<string, number> = {};
     for (const r of groupRows) {
-      totalsByCurrency[r.currency] = round2(
-        (totalsByCurrency[r.currency] ?? 0) + r.amount,
-      );
+      minorByCurrency[r.currency] = (minorByCurrency[r.currency] ?? 0) + r.amountMinor;
     }
+    const totalsByCurrency = Object.fromEntries(
+      Object.entries(minorByCurrency).map(([cur, minor]) => [cur, fromMinor(minor, cur)]),
+    );
     groups.push({
       monthKey,
       rows: groupRows,

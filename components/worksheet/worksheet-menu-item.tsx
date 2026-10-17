@@ -4,8 +4,8 @@
  * `WorksheetMenuItem` — a `DropdownMenuItem` that wraps the standard
  * worksheet-export click flow (Phase 9):
  *
- *   1. Call the action (`exportMonth` / `exportCycle` / `exportInvoice` /
- *      `exportAdHoc`) the caller hands in via the `run` prop.
+ *   1. Call the action (`exportClose` /
+ *      `exportRange`) the caller hands in via the `run` prop.
  *   2. Wrap the returned `csv` string in a Blob and trigger an anchor-click
  *      download.
  *   3. Surface the result with a status toast: success / partial / failure.

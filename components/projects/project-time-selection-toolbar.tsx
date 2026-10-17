@@ -44,10 +44,7 @@ export function ProjectTimeSelectionToolbar({
 
   const count = selectedEntries.length
   const totalMinutes = selectedEntries.reduce((sum, e) => sum + e.durationMinutes, 0)
-  const totalAmount = selectedEntries.reduce(
-    (sum, e) => sum + (e.durationMinutes / 60) * e.billableRate,
-    0,
-  )
+  const totalAmount = selectedEntries.reduce((sum, e) => sum + e.amount, 0)
 
   // Bulk button visibility: only show when there's something to flip, and
   // skip close-locked rows (the backend rejects them). UI filters for

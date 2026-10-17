@@ -15,6 +15,8 @@
  * Fixture-based unit tests live in __tests__/projectSummary.test.ts.
  */
 
+import { priceMinutesDisplay } from "./billing/money";
+
 // ─── Shared input types ────────────────────────────────────────────────────────
 
 export type EntryInput = {
@@ -434,7 +436,8 @@ export function computeRetainerSummary(args: {
       overBudgetMinutes += Math.max(0, worked - args.includedMinutesPerMonth);
     }
   }
-  const overageDueAmount = (overBudgetMinutes / 60) * args.overageRate;
+  // Billing money: priced like the closes that will bill it (one rounding).
+  const overageDueAmount = priceMinutesDisplay(overBudgetMinutes, args.overageRate, args.currency);
   const earnedCycleRevenue =
     args.monthlyFee * args.cycle.length + overageDueAmount;
 

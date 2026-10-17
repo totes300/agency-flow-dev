@@ -34,6 +34,7 @@ function row(over: Partial<TimeEntryRow>): TimeEntryRow {
     isBillable: true,
     billableRate: 100,
     costRate: 50,
+    amount: 100,
     workCategoryId: undefined,
     workCategoryName: undefined,
     workCategoryColor: undefined,
@@ -104,7 +105,7 @@ describe("ProjectTimeStats — Open figure", () => {
     // T&M billers care about the revenue side — same `Open` bucket,
     // expressed as both hours and money.
     const entries: TimeEntryRow[] = [
-      row({ durationMinutes: 60, billableRate: 200 }), // open, $200 worth
+      row({ durationMinutes: 60, billableRate: 200, amount: 200 }), // open, $200 worth
     ]
     const { getByText } = render(
       <ProjectTimeStats

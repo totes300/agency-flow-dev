@@ -76,3 +76,13 @@ export function fromMinor(minor: number, currency: string): number {
 export function priceMinutesMinor(minutes: number, rateMinorPerHour: number): number {
   return roundHalfUp((minutes * rateMinorPerHour) / 60);
 }
+
+/**
+ * `minutes` at a DECIMAL hourly rate (project config), priced exactly like a
+ * close prices it — rate to minor units, one multiplication, one rounding —
+ * and returned as a decimal display amount. For read surfaces that show what
+ * a close will bill (overage due, open T&M amount) without committing one.
+ */
+export function priceMinutesDisplay(minutes: number, rate: number, currency: string): number {
+  return fromMinor(priceMinutesMinor(minutes, toMinor(rate, currency)), currency);
+}

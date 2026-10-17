@@ -42,8 +42,7 @@ export default function ProjectMonthlyReportPage() {
   )
   useBreadcrumbTitle(report ? `Report · ${report.period.label}` : null)
 
-  const exportSettledPeriod = useAction(api.worksheets.exportSettledPeriod)
-  const exportCycle = useAction(api.worksheets.exportCycle)
+  const exportClose = useAction(api.worksheets.exportClose)
 
   if (!parsed) notFound()
   if (report === undefined) return <ReportSkeleton />
@@ -72,33 +71,14 @@ export default function ProjectMonthlyReportPage() {
             <PrinterIcon data-icon="inline-start" className="size-3.5" />
             Save as PDF
           </Button>
-          {/* Worksheets exist only for FINAL statements — the ledger is
-              settled, so the stamp-scoped export matches this report
-              exactly. Non-final months are live previews with nothing
-              immutable to export (one ceremony per cycle: a mid-cycle
-              month stays non-final until the whole cycle closes). */}
-          {report.isFinal && report.cycleToDate?.positionInCycle ===
-            report.project.cycleLength && (
+          {/* Worksheets exist only for FINAL statements: the close's snapshot
+              is exactly this report's membership. Non-final months are live
+              previews with nothing immutable to export. A cycle close exports
+              the whole cycle. */}
+          {report.isFinal && report.closeId && (
             <WorksheetDownloadButton
-              variant="outline"
-              label="Cycle worksheet"
-              run={() =>
-                exportCycle({
-                  projectId,
-                  cycleStart: report.cycleToDate!.cycleStart,
-                })
-              }
-            />
-          )}
-          {report.isFinal && (
-            <WorksheetDownloadButton
-              run={() =>
-                exportSettledPeriod({
-                  projectId,
-                  year: parsed.year,
-                  month: parsed.month,
-                })
-              }
+              label={report.cycleToDate ? "Cycle worksheet" : undefined}
+              run={() => exportClose({ closeId: report.closeId! })}
             />
           )}
         </div>

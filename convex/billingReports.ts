@@ -160,6 +160,8 @@ export const getMonthlyReport = query({
     return {
       inProgress,
       isFinal: !inProgress && liveClose?.status === "final",
+      /** The live close covering the month — what its worksheet exports. */
+      closeId: liveClose?._id ?? null,
       period: {
         year: args.year,
         month: args.month,

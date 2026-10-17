@@ -27,7 +27,7 @@ export function WorksheetDownloadButton({
   size = "sm",
   className,
 }: {
-  /** Calls the Convex export action (`exportInvoice`, `exportSettledPeriod`, …). */
+  /** Calls the Convex export action (`exportClose` or `exportRange`). */
   run: () => Promise<WorksheetExportResult>
   label?: string
   variant?: React.ComponentProps<typeof Button>["variant"]

@@ -4,13 +4,13 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { getAuthContext } from "./lib/auth";
 import { roundMinutes } from "./lib/rounding";
 import { getDateInTimezone, ORG_TIMEZONE_FALLBACK } from "./lib/timer";
-import { getOrgSettings, resolveRateSnapshot, resolveEntryCategory } from "./lib/orgHelpers";
+import { getOrgSettings, getProjectCurrency, resolveRateSnapshot, resolveEntryCategory } from "./lib/orgHelpers";
 import { validateAssignees } from "./lib/task_helpers";
 import { assertValidDateString } from "./lib/dateValidation";
 import type { EntryCloseSnapshot } from "./lib/types";
 import { billableOverviewBucket, entryStatus } from "./lib/entryStatus";
 import { loadEntryCloseInfo } from "./lib/billing/entryCloseInfo";
-import { fromMinor } from "./lib/billing/money";
+import { ceilToIncrement, fromMinor, priceMinutesMinor, toMinor } from "./lib/billing/money";
 import { logActivity } from "./activityLog";
 import { getProjectEntries } from "./lib/projectEntries";
 
@@ -736,6 +736,12 @@ export const listProjectEntries = query({
       isBillable: boolean;
       billableRate: number;
       costRate: number;
+      /**
+       * Ledger value of the entry (minutes × its rate snapshot), raw — a
+       * reporting figure, never rounded (the bill comes from the close). The
+       * UI sums it and never multiplies rates itself.
+       */
+      amount: number;
       workCategoryId: Id<"workCategories"> | undefined;
       workCategoryName: string | undefined;
       workCategoryColor: string | undefined;
@@ -773,6 +779,7 @@ export const listProjectEntries = query({
         isBillable: e.isBillable,
         billableRate: e.billableRate,
         costRate: e.costRate,
+        amount: (e.durationMinutes / 60) * e.billableRate,
         workCategoryId: catId,
         workCategoryName: cat?.name,
         workCategoryColor: cat?.color,
@@ -964,11 +971,16 @@ export const projectOverview = query({
       }
     }
 
-    // Materialize the open promise with invoice-identical rounding.
+    // Materialize the open promise exactly as a T&M close prices it.
+    const currency = await getProjectCurrency(ctx, project);
+    let openAmountMinor = 0;
     for (const g of openGroups.values()) {
-      const roundedMinutes = roundMinutes(g.minutes, defaultRounding);
-      openAmount += Math.round((roundedMinutes / 60) * g.rate * 100) / 100;
+      openAmountMinor += priceMinutesMinor(
+        ceilToIncrement(g.minutes, defaultRounding),
+        toMinor(g.rate, currency),
+      );
     }
+    openAmount = fromMinor(openAmountMinor, currency);
 
     // Last 3 billable months: compute the 3 calendar months ending with current month
     const last3BillableMonths = computeLast3Months(currentMonth).map((month) => ({

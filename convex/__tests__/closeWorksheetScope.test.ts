@@ -25,13 +25,13 @@ beforeEach(() => vi.useFakeTimers({ toFake: ["Date"] }));
 afterEach(() => vi.useRealTimers());
 
 /**
- * The closed-month (`settledPeriod`) worksheet scope reads the close's frozen
- * snapshot by report month, never entry dates — so the post-close worksheet
- * agrees with the Monthly Report: carried-in work (earlier date, settled into
- * this month) belongs; work skipped out of the month, or logged after the
- * close, doesn't (docs/prd-billing-refactor.md N8).
+ * The `close` worksheet scope reads the close's frozen snapshot, never entry
+ * dates — so the post-close worksheet agrees with the Monthly Report:
+ * carried-in work (earlier date, settled into this month) belongs; work
+ * skipped out of the month, or logged after the close, doesn't
+ * (docs/prd-billing-refactor.md N8, D10).
  */
-describe("resolveScopeEntries — settledPeriod", () => {
+describe("resolveScopeEntries — close", () => {
   it("selects the close snapshot: carried-in included, skipped-out and late excluded", async () => {
     vi.setSystemTime(new Date("2026-07-10T12:00:00Z"));
     const t = convexTest(schema, modules);
@@ -140,14 +140,14 @@ describe("resolveScopeEntries — settledPeriod", () => {
     // Dated June but skipped out to July.
     const skippedOut = await insertEntry("2026-06-20");
     await admin.mutation(api.billingCloses.skipEntries, { entryIds: [skippedOut] });
-    await commit("2026-06-01");
+    const { closeId } = await commit("2026-06-01");
     // Dated June, logged after the June close — open, belongs to July.
     const late = await insertEntry("2026-06-05");
 
     const result = await t.run(async (ctx) =>
       resolveScopeEntries(
         ctx,
-        { kind: "settledPeriod", projectId: ids.projectId, periodStart: "2026-06-01" },
+        { kind: "close", closeId },
         ORG_ID,
       ),
     );

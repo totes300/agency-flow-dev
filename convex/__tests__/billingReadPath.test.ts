@@ -10,7 +10,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { convexTest } from "convex-test";
 import schema from "../schema";
-import { api } from "../_generated/api";
+import { api, internal } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
 
 const modules = (
@@ -160,6 +160,22 @@ describe("N11 — one number per period, on every surface", () => {
     expect(june?.cycleToDate).toMatchObject({ usedMinutes: 1900, includedMinutes: 1800, positionInCycle: 3 });
     // Mid-cycle months show no amount due.
     expect((await report(w, 2026, 5))?.billing.overageAmount).toBe(0);
+
+    // The close's worksheet (D10): per-month sections from the snapshot, and
+    // the cycle ledger lands on the close's own overage.
+    const close = await w.t.run(async (ctx) => (await ctx.db.query("billingCloses").collect())[0]);
+    const sheet = await as(w).query(internal.worksheetsHelpers.collectCloseWorksheetData, { closeId: close._id });
+    expect(sheet.layout).toBe("cycle");
+    if (sheet.layout === "cycle") {
+      expect(sheet.data.sections.map((s) => [s.subtotalBillableMinutes, s.allocationMinutes])).toEqual([
+        [500, 600],
+        [700, 700],
+        [700, 600],
+      ]);
+      expect(sheet.data.sections.map((s) => s.rolloverIntoNextMinutes)).toEqual([100, 0, null]);
+      expect(sheet.data.sections[2].overageMinutes).toBe(close.overageMinutes);
+      expect(sheet.data.cycleTotal).toEqual({ billableMinutes: 1900, allocationMinutes: 1800, netOverageMinutes: 100 });
+    }
   });
 });
 

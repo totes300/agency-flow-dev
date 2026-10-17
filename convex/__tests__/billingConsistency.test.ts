@@ -23,6 +23,7 @@ import schema from "../schema";
 import { api } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
 import { scopeOf, type ScopeEntry, type ScopeProject } from "../lib/billing/scope";
+import { reconcileOrg } from "../lib/billing/reconcile";
 
 const modules = (
   import.meta as ImportMeta & {
@@ -240,6 +241,11 @@ async function commit(t: T, projectId: Id<"projects">, periodStart: string) {
   return t.withIdentity(ADMIN).mutation(api.billingCloses.commitClose, { projectId, periodStart });
 }
 
+/** Slice 6: every close re-prices to its stored numbers and agrees with its invoice. */
+async function expectReconciled(t: T) {
+  expect(await t.run(async (ctx) => reconcileOrg(ctx, ORG_ID))).toEqual([]);
+}
+
 // ─── N11: one number per period, on every surface ──────────────────────────
 
 describe("billing consistency (N11) — queue = workspace = draft = invoice = report", () => {
@@ -273,6 +279,17 @@ describe("billing consistency (N11) — queue = workspace = draft = invoice = re
     const stmt = await report(t, projectId, 2026, 3);
     expect(stmt?.billing.overageAmount).toBe(82.5);
     expect(stmt?.balance.usedMinutes).toBe(655);
+    await expectReconciled(t);
+
+    // Void, recommit, and everything agrees again (PRD §11).
+    await t
+      .withIdentity(ADMIN)
+      .mutation(api.invoices.changeInvoiceStatus, { id: invoiceId!, newStatus: "void" });
+    expect((await queueRow(t, projectId, "2026-03"))?.amount).toBe(82.5);
+    const again = await commit(t, projectId, "2026-03-01");
+    expect((await invoiceDoc(t, again.invoiceId!))?.total).toBe(82.5);
+    expect((await report(t, projectId, 2026, 3))?.billing.overageAmount).toBe(82.5);
+    await expectReconciled(t);
   });
 
   it("monthly retainer within budget — Close & report", async () => {
@@ -300,6 +317,7 @@ describe("billing consistency (N11) — queue = workspace = draft = invoice = re
     const stmt = await report(t, projectId, 2026, 3);
     expect(stmt?.billing.overageAmount).toBe(0);
     expect(stmt?.balance.usedMinutes).toBe(300);
+    await expectReconciled(t);
   });
 
   it("T&M month with line rounding", async () => {
@@ -323,6 +341,7 @@ describe("billing consistency (N11) — queue = workspace = draft = invoice = re
 
     await finalize(t, invoiceId!);
     expect((await invoiceDoc(t, invoiceId!))?.total).toBe(140);
+    await expectReconciled(t);
   });
 });
 

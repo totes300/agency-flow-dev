@@ -13,6 +13,7 @@ import { convexTest } from "convex-test";
 import schema from "../schema";
 import { api } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
+import { reconcileOrg } from "../lib/billing/reconcile";
 
 const modules = (
   import.meta as ImportMeta & {
@@ -527,5 +528,67 @@ describe("createFixedInvoice", () => {
     const two = await as(w).mutation(api.billingInvoices.createFixedInvoice, { projectId: w.projectId, amount: 7000 });
     await setStatus(w, one.invoiceId, "invoiced");
     await expect(setStatus(w, two.invoiceId, "invoiced")).rejects.toThrow(/exceeds the project's unbilled remainder/);
+  });
+});
+
+// ─── Reconciliation (slice 6) ──────────────────────────────────────────────
+
+describe("reconciliation", () => {
+  const reconcile = (w: World) => w.t.run(async (ctx) => reconcileOrg(ctx, ORG_ID));
+  const codes = async (w: World) => (await reconcile(w)).map((i) => i.code).sort();
+
+  async function committed() {
+    setToday("2026-04-10");
+    const w = await world(retainer);
+    const a = await addEntry(w, "2026-03-04", 700);
+    const b = await addEntry(w, "2026-03-20", 30, { billable: false });
+    const { closeId, invoiceId } = await as(w).mutation(api.billingCloses.commitClose, {
+      projectId: w.projectId,
+      periodStart: "2026-03-01",
+    });
+    return { w, a, b, closeId, invoiceId: invoiceId! };
+  }
+
+  it("a healthy lifecycle reconciles at every step", async () => {
+    const { w, invoiceId } = await committed();
+    expect(await reconcile(w)).toEqual([]);
+    const { lineId } = await as(w).mutation(api.billingInvoices.addManualLine, { invoiceId });
+    await as(w).mutation(api.billingInvoices.updateManualLine, { lineId, quantity: 1, unitPrice: 25 });
+    await setStatus(w, invoiceId, "invoiced");
+    await setStatus(w, invoiceId, "paid");
+    expect(await reconcile(w)).toEqual([]);
+    await setStatus(w, invoiceId, "invoiced");
+    await setStatus(w, invoiceId, "void");
+    expect(await reconcile(w)).toEqual([]);
+  });
+
+  it("flags a close whose stored money no longer matches its snapshot", async () => {
+    const { w, closeId } = await committed();
+    await w.t.run(async (ctx) => ctx.db.patch(closeId, { amountMinor: 1 }));
+    expect(await codes(w)).toEqual(["amount", "invoice-amount"]);
+  });
+
+  it("flags a tampered line and a total that is not the sum of its lines", async () => {
+    const { w, invoiceId } = await committed();
+    const overage = (await linesOf(w, invoiceId)).find((l) => l.lineType === "overage")!;
+    await w.t.run(async (ctx) => ctx.db.patch(overage._id, { amountMinor: overage.amountMinor + 1 }));
+    expect(await codes(w)).toEqual(["invoice-amount", "invoice-total", "overage-line"]);
+  });
+
+  it("flags locks that disagree with the snapshot (N2)", async () => {
+    const { w, a, closeId } = await committed();
+    const stray = await addEntry(w, "2026-04-02", 10);
+    await w.t.run(async (ctx) => {
+      await ctx.db.patch(a, { closeId: undefined });
+      await ctx.db.patch(stray, { closeId });
+    });
+    expect(await codes(w)).toEqual(["lock-missing-snapshot", "snapshot-missing-lock"]);
+  });
+
+  it("flags a released close that still locks entries", async () => {
+    const { w, b, closeId, invoiceId } = await committed();
+    await setStatus(w, invoiceId, "void");
+    await w.t.run(async (ctx) => ctx.db.patch(b, { closeId }));
+    expect(await codes(w)).toEqual(["released-still-locked"]);
   });
 });

@@ -30,7 +30,7 @@ import { getOrgSettings } from "./lib/orgHelpers";
 import { ORG_TIMEZONE_FALLBACK, getDateInTimezone } from "./lib/timer";
 import { classifyReportPeriod } from "./lib/reportPeriod";
 import { absMonthOf, monthKeyFromAbs, periodOfDate } from "./lib/billing/periods";
-import { fromMinor } from "./lib/billing/money";
+import { fromMinor, priceMinutesDisplay } from "./lib/billing/money";
 import { monthKey } from "./lib/retainerUsage";
 import {
   aggregateClientMonths,
@@ -554,7 +554,7 @@ export const retainerHealthForMonth = internalQuery({
         overageDue,
         overageMinutes,
         overageAmount: overageDue
-          ? round2((overageMinutes / 60) * overageRate)
+          ? priceMinutesDisplay(overageMinutes, overageRate, client?.currency ?? "USD")
           : 0,
         monthlyFee,
         overageRate,

@@ -66,6 +66,11 @@ are enforced and tested).
   amounts at the read boundary (`lib/billing/invoiceView.ts`); the UI formats
   them and never prices anything.
 - Fixed-fee projects have no periods or closes; their entries never lock.
+- `lib/billing/reconcile.ts` re-derives every close from its snapshot and checks it
+  against the stored close, invoice and entry locks. It runs in the test suite and
+  from the internal query `billingReconcile:run`.
+- Worksheets export either a close (`worksheets.exportClose`, the snapshot) or an
+  ad-hoc date range (`worksheets.exportRange`).
 
 ## Frontend boundaries
 

@@ -2,6 +2,7 @@
 
 import type { Id } from "@/convex/_generated/dataModel"
 import type { InvoiceLineView } from "@/convex/lib/billing/invoiceView"
+import { fromMinor } from "@/convex/lib/billing/money"
 import { InlineEditable, InlineEditableNumber } from "@/components/inline-editable"
 import { formatCurrency, getCurrencySymbol } from "@/lib/format"
 import { useInvoiceLineActions } from "@/lib/hooks/use-invoice-line-actions"
@@ -31,7 +32,10 @@ export function InvoiceBillingSummary({
 }) {
   const actions = useInvoiceLineActions(invoiceId)
 
-  const total = billingItems.reduce((sum, item) => sum + item.amount, 0)
+  const total = fromMinor(
+    billingItems.reduce((sum, item) => sum + item.amountMinor, 0),
+    currency,
+  )
   const symbol = getCurrencySymbol(currency)
 
   return (

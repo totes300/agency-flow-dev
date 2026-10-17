@@ -101,10 +101,10 @@ export type ProjectTimeTableRow = EntryCloseSnapshot & {
   invoiceStatus: "draft" | "invoiced" | "paid" | "void" | undefined
   invoiceDueDate: string | undefined
   // ── Close-workspace extras (present only on close-ledger rows) ──────────
-  /** Server-computed billable amount. When present the Amount cell renders
-   *  THIS instead of rate × duration — the close ledger must agree with the
-   *  server's commit totals to the cent (rounding happens server-side). */
-  amount?: number | null
+  /** Server-computed amount: the ledger value on the Time tab, the priced
+   *  T&M amount in the close ledger (null when the row bills nothing). The
+   *  UI renders it and never multiplies a rate itself. */
+  amount: number | null
   carried?: boolean
   carriedReason?: CarriedReason
   originMonthLabel?: string
@@ -114,8 +114,10 @@ export type ProjectTimeTableRow = EntryCloseSnapshot & {
 }
 
 /** Project Time tab row — the table contract plus Time-tab-only fields. */
-export type TimeEntryRow = ProjectTimeTableRow & {
+export type TimeEntryRow = Omit<ProjectTimeTableRow, "amount"> & {
   costRate: number
+  /** Ledger value (minutes × rate snapshot), server-computed. */
+  amount: number
 }
 
 /**
@@ -373,9 +375,7 @@ function TimeEntryTableRow<T extends ProjectTimeTableRow>({
   closeMode: CloseTableConfig | undefined
 }) {
   const rowSelectable = isSelectable(row, selectable)
-  // Close rows carry the server-computed amount (rounding parity with commit);
-  // Time-tab rows compute display-only amounts from the rate.
-  const amount = row.amount ?? (row.durationMinutes / 60) * row.billableRate
+  const amount = row.amount ?? 0
   // Phase 8 Slice 4 — row state via `entryStatus()` (single source of
   // truth, same derivation `listProjectEntries` filters on). Locked
   // rows (Draft + Closed) get a unified visual treatment — 72% opacity

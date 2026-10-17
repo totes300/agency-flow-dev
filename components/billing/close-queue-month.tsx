@@ -1,4 +1,5 @@
 import { formatCurrency } from "@/lib/format"
+import { fromMinor } from "@/convex/lib/billing/money"
 import { CloseQueueRow } from "@/components/billing/close-queue-row"
 import type { CloseQueueRow as QueueRow } from "@/convex/billingViews"
 
@@ -24,12 +25,16 @@ export function CloseQueueMonthGroup({
   closedCount: number
   totalCount: number
 }) {
-  // Month total from the visible rows only (close rows carry no amount).
-  const totals: Record<string, number> = {}
+  // Month total from the visible rows only (close rows carry no amount),
+  // summed in minor units and converted once.
+  const minor: Record<string, number> = {}
   for (const r of rows) {
     if (r.isCloseRow) continue
-    totals[r.currency] = Math.round(((totals[r.currency] ?? 0) + r.amount) * 100) / 100
+    minor[r.currency] = (minor[r.currency] ?? 0) + r.amountMinor
   }
+  const totals = Object.fromEntries(
+    Object.entries(minor).map(([cur, sum]) => [cur, fromMinor(sum, cur)]),
+  )
   const totalLabel = Object.entries(totals)
     .filter(([, v]) => v > 0)
     .map(([currency, amount]) => formatCurrency(amount, currency))

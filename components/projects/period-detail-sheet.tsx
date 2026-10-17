@@ -142,7 +142,8 @@ export function PeriodDetailSheet({
 type EntryShape = {
   durationMinutes: number
   isBillable: boolean
-  billableRate: number
+  /** Server-computed ledger value of the entry. */
+  amount: number
   invoiceId: Id<"invoices"> | undefined
   invoicePrefix: string | undefined
   invoiceNumber: number | undefined
@@ -216,7 +217,7 @@ export function groupByCloseState(
   }
 
   for (const e of entries) {
-    const amount = (e.durationMinutes / 60) * e.billableRate
+    const amount = e.amount
     out.total.minutes += e.durationMinutes
     out.total.entryCount += 1
     if (e.isBillable) out.total.amount += amount

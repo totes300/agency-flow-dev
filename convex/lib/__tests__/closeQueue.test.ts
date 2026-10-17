@@ -50,18 +50,18 @@ describe("summarizeQueueScope", () => {
 describe("groupQueueByMonth (progress + totals)", () => {
   type Row = MonthGroupInput & { key: string };
   const rows: Row[] = [
-    { key: "a", monthKey: "2026-06", amount: 100, currency: "USD" },
-    { key: "b", monthKey: "2026-06", amount: 50, currency: "USD" },
-    { key: "c", monthKey: "2026-05", amount: 200, currency: "USD" },
-    { key: "d", monthKey: "2026-06", amount: 30, currency: "EUR" },
+    { key: "a", monthKey: "2026-06", amountMinor: 10010, currency: "USD" },
+    { key: "b", monthKey: "2026-06", amountMinor: 5020, currency: "USD" },
+    { key: "c", monthKey: "2026-05", amountMinor: 20000, currency: "USD" },
+    { key: "d", monthKey: "2026-06", amountMinor: 3000, currency: "EUR" },
   ];
 
-  it("groups oldest month first with per-currency totals", () => {
+  it("groups oldest month first with per-currency totals summed in minor units", () => {
     const groups = groupQueueByMonth(rows, new Map());
     expect(groups.map((g) => g.monthKey)).toEqual(["2026-05", "2026-06"]);
     const june = groups[1];
     expect(june.rows).toHaveLength(3);
-    expect(june.totalsByCurrency).toEqual({ USD: 150, EUR: 30 });
+    expect(june.totalsByCurrency).toEqual({ USD: 150.3, EUR: 30 });
   });
 
   it("computes N of M closed progress from committedByMonth", () => {

@@ -397,7 +397,7 @@ Each has an owning module and at least one test that fails if it breaks.
 | **Invoice editor** | No rounding picker, no refresh banner, no hours/amount edit on time/overage lines. Description override, manual lines, subject, dates, message stay. Shows "Delete draft" only if never numbered, otherwise "Void". |
 | **Project pages** | Overview banners, Invoices tab, Monthly Breakdown, and retainer callout link to the Close workspace instead of generating. Fixed-fee projects get "Bill fixed fee" (§8.4). |
 | **Monthly report** | Membership per N8. The "Carried over from <month>" grouping reads `carried` from the snapshot or scope. |
-| **Worksheets** | `exportClose(closeId)` and `exportRange(projectId, start, end)`. The other three actions are deleted. |
+| **Worksheets** | `exportClose(closeId)` and `exportRange(projectId, start, end)`. The other actions are deleted. |
 | **Frontend math** | All ~22 sites render server values. Amounts arrive as minor units plus currency, and one formatter turns them into display strings. Overdue is computed once on the server. |
 | **Agent tools / reports** | Read through `scope.ts`, `pricing.ts`, and `reports.ts`. No private money math. |
 
@@ -559,14 +559,36 @@ consistent:
   bulk totals sum minor units.
 - `docs/architecture.md` has a Billing section; the month-close, invoicing-refactor
   and Phase 8 PRDs are marked historical.
-- *Left for later:* worksheet exports still number five (D10); slice 4's remaining
-  frontend money math (overview `openAmount`, Time-tab selection totals, drill-down
-  amounts) and the queue's "+N more periods" hint.
+- The leftovers (worksheet exports, remaining frontend money math, the queue's
+  "+N more periods" hint) landed with slice 6.
 
-**Slice 6 — Hardening**
-- Reconciliation query: for every live close, re-price the snapshot and compare it with
-  the stored close and invoice amounts. Run in tests and from a dev-only admin query.
-- Billing history view (events) on the invoice and project pages. Optional; owner call.
+**Slice 6 — Hardening** *(done 2026-10-17, except the optional history view)*
+- Reconciliation: `lib/billing/reconcile.ts` checks every close. A live close's
+  snapshot must re-price to its stored usage / overage / amount / included minutes
+  (N7), its snapshot and its entry locks must name the same entries (N2), money must
+  be integer minor units with invoice total = Σ lines (N6), time lines must equal
+  the priced groups and time + overage the close amount (N11), and the close ↔
+  invoice link and statuses must agree. A released close may lock nothing. Runs in
+  the consistency suite (including void → recommit) and `billingWritePath`
+  (tamper tests). Operator entry point: the internal query `billingReconcile:run`
+  (`npx convex run billingReconcile:run '{}'`); clean on dev.
+- Worksheets collapse to two (D10): `worksheets.exportClose({ closeId })` exports a
+  close's snapshot (per-month sections for a cycle close, its ledger ending on the
+  close's own overage) and `worksheets.exportRange` the ad-hoc range. The month /
+  cycle / invoice / settled-period actions are gone; the report page, Monthly
+  Breakdown rows and invoice row/sidebar call `exportClose` when a close exists.
+- Money on read surfaces: billing figures that preview a close (overage due on the
+  retainer pages and agent report, the T&M open amount) are priced through
+  `money.priceMinutesDisplay` / `priceMinutesMinor`, exactly like a close. Ledger
+  values on reporting surfaces stay raw (`minutes × rate`, never rounded — see the
+  reporting rule) but are computed on the server: Time-tab rows carry `amount`, and
+  Monthly Breakdown rows carry `overageAmount`. The UI only sums server values,
+  and money totals (invoice lists, bulk bar, queue months, billing summary) are
+  summed in minor units.
+- The Close queue shows "+N more periods" when a project has elapsed periods
+  waiting behind its committable one.
+- *Not built:* the billing history view (events) on the invoice and project pages
+  — optional; owner call.
 
 ## 13. Open Questions
 

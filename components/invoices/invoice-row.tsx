@@ -135,6 +135,7 @@ export function InvoiceRowItem({
           invoiceId={invoice._id as Id<"invoices">}
           identifier={invoiceUrlSegment(invoice)}
           status={invoice.status}
+          closeId={invoice.closeId as Id<"billingCloses"> | undefined}
         />
       </TableCell>
     </TableRow>

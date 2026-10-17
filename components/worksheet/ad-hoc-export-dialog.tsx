@@ -103,7 +103,7 @@ export function AdHocExportDialog({
   // every project page render.
   const orgSettings = useQuery(api.orgSettings.get, open ? {} : "skip")
   const workCategories = useQuery(api.workCategories.list, open ? {} : "skip")
-  const exportAdHoc = useAction(api.worksheets.exportAdHoc)
+  const exportRange = useAction(api.worksheets.exportRange)
 
   const [presetKey, setPresetKey] = useState<PeriodPresetKey>("this-month")
   const [customStart, setCustomStart] = useState<Date | undefined>(undefined)
@@ -146,7 +146,7 @@ export function AdHocExportDialog({
         .filter((name) => name.length > 0)
       await runExportWithToast({
         run: () =>
-          exportAdHoc({
+          exportRange({
             projectId,
             periodStart: resolvedPeriod.start,
             periodEnd: resolvedPeriod.end,

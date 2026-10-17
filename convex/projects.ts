@@ -8,7 +8,7 @@ import { validateAssignees } from "./lib/task_helpers";
 import { getDateInTimezone, ORG_TIMEZONE_FALLBACK } from "./lib/timer";
 import { getOrgSettings, getProjectCurrency } from "./lib/orgHelpers";
 import { fixedBilledMinor } from "./lib/billing/invoiceLifecycle";
-import { fromMinor, toMinor } from "./lib/billing/money";
+import { fromMinor, priceMinutesDisplay, toMinor } from "./lib/billing/money";
 import { loadCloseContext, toScopeProject } from "./lib/billing/closeData";
 import { getCyclePeriods, periodOfDate } from "./lib/billing/periods";
 import { buildPeriodView } from "./lib/billing/periodView";
@@ -651,6 +651,8 @@ export const getRetainerData = query({
       startBalance: number;
       available: number;
       endBalance: number;
+      /** Overage of this row (negative end balance) priced like a close. */
+      overageAmount: number;
       totalNonBillableMinutes: number;
       // Calendar truth: the month's last day has already passed in the org's
       // timezone. Drives financial due-ness (overage, "due" balanceStatus)
@@ -661,6 +663,8 @@ export const getRetainerData = query({
       // entry edits and the row's primary action. Independent of calendar.
       isClosed: boolean;
       closedAt: number | undefined; // ms timestamp when admin clicked Close
+      /** The live close covering the month (its worksheet export). */
+      closeId: Doc<"billingCloses">["_id"] | null;
       balanceStatus: "due" | "deficit" | "rollover" | "unused" | "on_track";
       cyclePosition: number;
       billableCategoryGroups: CategoryGroup[];
@@ -733,10 +737,13 @@ export const getRetainerData = query({
         startBalance,
         available,
         endBalance,
+        overageAmount:
+          endBalance < 0 ? priceMinutesDisplay(-endBalance, project.overageRate ?? 0, currency) : 0,
         totalNonBillableMinutes,
         periodEnded,
         isClosed,
         closedAt,
+        closeId: close?._id ?? null,
         balanceStatus,
         cyclePosition: i + 1,
         billableCategoryGroups,
@@ -781,7 +788,7 @@ export const getRetainerData = query({
         closingKey !== null && invoiceByMonthKey.has(closingKey);
       if (isCycleClosed && cycleBalance < 0 && !cycleInvoiced) {
         overageMinutes = Math.abs(cycleBalance);
-        overageDue = (overageMinutes / 60) * projectOverageRate;
+        overageDue = priceMinutesDisplay(overageMinutes, projectOverageRate, currency);
       }
     } else {
       // Non-rollover: each month settles independently. Calendar-driven —
@@ -789,11 +796,13 @@ export const getRetainerData = query({
       // overage month still shows due even before an admin clicks Close.
       for (const m of monthlyData) {
         if (m.periodEnded && m.endBalance < 0 && m.invoice === null) {
-          const monthOverage = Math.abs(m.endBalance);
-          overageMinutes += monthOverage;
-          overageDue += (monthOverage / 60) * projectOverageRate;
+          overageMinutes += Math.abs(m.endBalance);
+          overageDue += m.overageAmount;
         }
       }
+      // Each month is billed by its own close; sum their priced amounts in
+      // minor units so the total has no float drift.
+      overageDue = fromMinor(toMinor(overageDue, currency), currency);
     }
 
     // totalNonBillableMinutes scoped to current cycle months only

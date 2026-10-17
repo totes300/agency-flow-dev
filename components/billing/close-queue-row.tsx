@@ -24,6 +24,8 @@ const BILLING_TYPE_META: Record<
  * action table, so the CTA is never hidden behind hover.
  *
  * Over-budget rows missing an overage rate route to Set rate instead of Review.
+ * Later elapsed periods of the same project show as a muted "+N more periods"
+ * hint — they surface one at a time, oldest first.
  */
 export function CloseQueueRow({ row }: { row: CloseQueueRow }) {
   const meta = BILLING_TYPE_META[row.billingType]
@@ -34,6 +36,14 @@ export function CloseQueueRow({ row }: { row: CloseQueueRow }) {
       <div className="flex min-w-0 flex-1 items-baseline gap-2">
         <span className="truncate font-medium">{row.projectName}</span>
         <span className="truncate text-muted-foreground">{row.clientName}</span>
+        {row.pendingPeriods > 0 && (
+          <span
+            className="shrink-0 whitespace-nowrap text-xs text-muted-foreground"
+            title="Elapsed periods of this project waiting behind this one — close them oldest first."
+          >
+            +{row.pendingPeriods} more {row.pendingPeriods === 1 ? "period" : "periods"}
+          </span>
+        )}
       </div>
 
       {/* Billing type — dot + muted text, never a pill */}

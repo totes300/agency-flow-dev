@@ -20,7 +20,7 @@ function entry(over: Partial<Entry>): Entry {
   return {
     durationMinutes: 60,
     isBillable: true,
-    billableRate: 100,
+    amount: 100,
     invoiceId: undefined,
     invoicePrefix: undefined,
     invoiceNumber: undefined,
@@ -28,7 +28,7 @@ function entry(over: Partial<Entry>): Entry {
   }
 }
 
-const retainerFinal = { closeStatus: "final" as const, closeKind: "retainer" as const, billableRate: 0 }
+const retainerFinal = { closeStatus: "final" as const, closeKind: "retainer" as const, amount: 0 }
 const tmFinal = (n: number) => ({
   closeStatus: "final" as const,
   closeKind: "t_and_m" as const,
@@ -66,8 +66,8 @@ describe("groupByCloseState — single-bucket splits", () => {
     expect(out.retainer.invoices).toEqual([{ id: inv("inv_9"), prefix: "INV-", number: 9 }])
   })
 
-  it("routes final T&M closes to `invoiced` with amount = hours × billableRate", () => {
-    const out = groupByCloseState([entry({ durationMinutes: 90, billableRate: 200, ...tmFinal(38) })])
+  it("routes final T&M closes to `invoiced`, summing the server amounts", () => {
+    const out = groupByCloseState([entry({ durationMinutes: 90, amount: 300, ...tmFinal(38) })])
     expect(out.invoiced).toMatchObject({ minutes: 90, amount: 300, entryCount: 1 })
     expect(out.invoiced.invoices).toEqual([{ id: inv("inv_38"), prefix: "INV-", number: 38 }])
   })

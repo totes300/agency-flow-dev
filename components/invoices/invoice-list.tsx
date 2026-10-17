@@ -27,6 +27,8 @@ export type InvoiceRow = {
   /** Display total (derived server-side from `totalMinor`). */
   total: number
   totalMinor: number
+  /** The invoice's close (absent on fixed-fee invoices). */
+  closeId?: string
   issueDate: string
   dueDate?: string
   paidAt?: number

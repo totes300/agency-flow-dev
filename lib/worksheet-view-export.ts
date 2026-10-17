@@ -1,6 +1,6 @@
 /**
  * Maps the Time tab's current view filters (URL state) onto the
- * `worksheets.exportAdHoc` action's parameters, so the toolbar's Worksheet
+ * `worksheets.exportRange` action's parameters, so the toolbar's Worksheet
  * button can download exactly what the user is looking at — no re-picking
  * the period in a dialog.
  *

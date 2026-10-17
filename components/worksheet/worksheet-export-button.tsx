@@ -4,7 +4,7 @@
  * One-click worksheet download for the project Time tab toolbar.
  *
  * Reads the tab's current URL filters (date range, billing status), maps
- * them onto `worksheets.exportAdHoc` via `resolveViewExportParams`, and
+ * them onto `worksheets.exportRange` via `resolveViewExportParams`, and
  * downloads the CSV immediately — no dialog. The tooltip previews the
  * resolved period so the user knows what they're about to send the client.
  *
@@ -41,7 +41,7 @@ export function WorksheetExportButton({
   timezone: string
 }) {
   const searchParams = useSearchParams()
-  const exportAdHoc = useAction(api.worksheets.exportAdHoc)
+  const exportRange = useAction(api.worksheets.exportRange)
   const [pending, setPending] = useState(false)
 
   const dateRange = parseDateRangePreset(searchParams.get("dateRange"))
@@ -60,7 +60,7 @@ export function WorksheetExportButton({
     try {
       await runExportWithToast({
         run: () =>
-          exportAdHoc({
+          exportRange({
             projectId,
             periodStart: exportParams.periodStart,
             periodEnd: exportParams.periodEnd,

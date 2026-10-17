@@ -41,7 +41,7 @@ function computeStats(
     // return.
     if (entryStatus(e) === "open") {
       openMinutes += e.durationMinutes
-      unbilledAmount += (e.durationMinutes / 60) * e.billableRate
+      unbilledAmount += e.amount
     }
   }
 

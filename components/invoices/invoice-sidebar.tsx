@@ -57,7 +57,7 @@ export function InvoiceSidebar({
   const updateInvoice = useMutation(api.invoices.updateInvoice)
   const changeStatus = useMutation(api.invoices.changeInvoiceStatus)
   const deleteInvoiceMutation = useMutation(api.invoices.deleteInvoice)
-  const exportInvoiceWorksheet = useAction(api.worksheets.exportInvoice)
+  const exportCloseWorksheet = useAction(api.worksheets.exportClose)
 
   // Note editing — always-visible textarea with autosave on blur.
   //
@@ -290,12 +290,12 @@ export function InvoiceSidebar({
         {/* Document outputs, grouped under the status action — worksheet
             first (the client-facing deliverable), PDF second. Exactly one
             primary lives in this stack: the status transition above. */}
-        {invoice.status !== "void" && (
+        {invoice.status !== "void" && invoice.closeId && (
           <WorksheetDownloadButton
             variant="outline"
             size="default"
             className="w-full"
-            run={() => exportInvoiceWorksheet({ invoiceId: invoice._id })}
+            run={() => exportCloseWorksheet({ closeId: invoice.closeId! })}
           />
         )}
         {onPrint && (

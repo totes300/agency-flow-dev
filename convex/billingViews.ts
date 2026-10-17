@@ -149,7 +149,9 @@ export type CloseQueueRow = {
   periodLabel: string;
   /** Calendar month this row groups under (YYYY-MM); a cycle uses its closing month. */
   monthKey: string;
+  /** Display amount; `amountMinor` is what totals sum. */
   amount: number;
+  amountMinor: number;
   currency: string;
   badgeKind: "within-budget" | "over-budget" | null;
   /** Within-budget close ("Close & report") vs a Generate row. */
@@ -280,6 +282,7 @@ async function buildQueue(ctx: QueryCtx, orgId: string): Promise<CloseQueueData>
       periodLabel: periodSubjectLabel(period.start, period.end),
       monthKey: period.end.slice(0, 7),
       amount: fromMinor(view.price.amountMinor, c.currency),
+      amountMinor: view.price.amountMinor,
       currency: c.currency,
       badgeKind: isRetainer ? (view.price.withinBudget ? "within-budget" : "over-budget") : null,
       isCloseRow: isRetainer && view.price.withinBudget,

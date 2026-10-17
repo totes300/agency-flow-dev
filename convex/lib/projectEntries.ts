@@ -2,8 +2,8 @@ import type { GenericDatabaseReader } from "convex/server";
 import type { DataModel, Doc, Id } from "../_generated/dataModel";
 
 /**
- * Every time entry of a project, via the org-scoped `by_orgId_projectId`
- * index — one indexed read instead of a query per task
+ * Every time entry of a project, via the org-scoped
+ * `by_orgId_projectId_closeId` index (prefix match) — one indexed read instead of a query per task
  * (docs/prd-billing-refactor.md §5.2). Equivalent to walking the project's
  * tasks because an entry's `projectId` is stamped from its task and a task
  * with entries can never change project.
@@ -18,7 +18,7 @@ export async function getProjectEntries(
 ): Promise<Doc<"timeEntries">[]> {
   return ctx.db
     .query("timeEntries")
-    .withIndex("by_orgId_projectId", (q) =>
+    .withIndex("by_orgId_projectId_closeId", (q) =>
       q.eq("orgId", orgId).eq("projectId", projectId),
     )
     .collect();

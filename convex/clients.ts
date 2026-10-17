@@ -326,7 +326,7 @@ export const remove = mutation({
       for (const task of projectTasks) clientTaskIds.add(task._id.toString());
       const hasEntries = await ctx.db
         .query("timeEntries")
-        .withIndex("by_orgId_projectId", (q) => q.eq("orgId", orgId).eq("projectId", project._id))
+        .withIndex("by_orgId_projectId_closeId", (q) => q.eq("orgId", orgId).eq("projectId", project._id))
         .first();
       if (hasEntries) {
         throw new ConvexError(

@@ -435,16 +435,104 @@ export default defineSchema({
     // always derived over an already-fetched project entry set, never queried
     // by this field.
     skippedThrough: v.optional(v.string()),    // YYYY-MM-DD (a period end)
+
+    // ─── Billing refactor — close lock (docs/prd-billing-refactor.md) ────
+    //
+    // The live close this entry settles in. A lock and lookup key only: the
+    // close's membership truth is its `billingCloseEntries` snapshot (N2).
+    // Unset = open. Written by the close lifecycle (slice 3); nothing writes
+    // it yet.
+    closeId: v.optional(v.id("billingCloses")),
     // No new index — settle helpers walk via `invoiceLineItems.by_invoiceId`.
     // Canonical-set rule: "entries settled by invoice X" = the union of
     // line-item `timeEntryIds` arrays, NOT every entry that happens to
     // carry `invoiceId === X`. Data drift is treated as a bug.
   })
     .index("by_orgId", ["orgId"])
-    .index("by_orgId_projectId", ["orgId", "projectId"])
+    // Prefix (orgId, projectId) lists a project's entries; adding
+    // closeId === undefined lists its OPEN entries.
+    .index("by_orgId_projectId_closeId", ["orgId", "projectId", "closeId"])
     .index("by_taskId", ["taskId"])
     .index("by_userId_date", ["userId", "date"])
     .index("by_orgId_date", ["orgId", "date"]),
+
+  // ─── Billing closes (docs/prd-billing-refactor.md §5.1) ──────────────────
+  //
+  // A close is the committed decision "these entries settle period P of
+  // project X". Live while `draft` or `final`; `released` rows stay for
+  // audit. Money is integer minor units. Nothing writes these until the
+  // close lifecycle lands (slice 3).
+  billingCloses: defineTable({
+    orgId: v.string(),
+    projectId: v.id("projects"),
+    kind: v.union(v.literal("retainer"), v.literal("t_and_m")),
+    periodStart: v.string(),            // YYYY-MM-01
+    periodEnd: v.string(),              // YYYY-MM-DD (month or cycle end)
+    status: v.union(v.literal("draft"), v.literal("final"), v.literal("released")),
+    invoiceId: v.optional(v.id("invoices")),
+
+    // Frozen at commit — pricing inputs and outputs.
+    currency: v.string(),
+    roundingMinutes: v.number(),
+    includedMinutes: v.number(),
+    overageRateMinor: v.number(),
+    usageMinutes: v.number(),
+    overageMinutes: v.number(),
+    amountMinor: v.number(),
+
+    committedAt: v.number(),
+    committedBy: v.id("users"),
+    finalizedAt: v.optional(v.number()),
+    releasedAt: v.optional(v.number()),
+    releasedReason: v.optional(
+      v.union(v.literal("draft_deleted"), v.literal("invoice_voided"), v.literal("reopened")),
+    ),
+  })
+    .index("by_orgId_projectId_periodStart", ["orgId", "projectId", "periodStart"])
+    .index("by_orgId_status", ["orgId", "status"]),
+
+  // The immutable membership snapshot of a close (N2): written once at
+  // commit, never patched. Closed-period reports read from here.
+  billingCloseEntries: defineTable({
+    orgId: v.string(),
+    closeId: v.id("billingCloses"),
+    entryId: v.id("timeEntries"),
+    taskId: v.id("tasks"),
+    categoryId: v.optional(v.id("workCategories")),
+    date: v.string(),                   // entry date at commit
+    monthKey: v.string(),               // YYYY-MM report bucket (periods.monthBucket)
+    minutes: v.number(),
+    isBillable: v.boolean(),
+    billableRateMinor: v.number(),
+    carried: v.optional(v.union(v.literal("skipped"), v.literal("logged-late"))),
+  })
+    .index("by_closeId", ["closeId"])
+    .index("by_entryId", ["entryId"]),
+
+  // Append-only billing audit trail (N10).
+  billingEvents: defineTable({
+    orgId: v.string(),
+    projectId: v.id("projects"),
+    closeId: v.optional(v.id("billingCloses")),
+    invoiceId: v.optional(v.id("invoices")),
+    type: v.union(
+      v.literal("close_committed"),
+      v.literal("close_released"),
+      v.literal("invoice_finalized"),
+      v.literal("invoice_reverted"),
+      v.literal("invoice_voided"),
+      v.literal("invoice_paid"),
+      v.literal("invoice_unpaid"),
+      v.literal("draft_deleted"),
+      v.literal("entries_skipped"),
+      v.literal("entries_unskipped"),
+    ),
+    actorId: v.id("users"),
+    at: v.number(),
+    data: v.optional(v.record(v.string(), v.union(v.string(), v.number(), v.boolean()))),
+  })
+    .index("by_orgId_projectId_at", ["orgId", "projectId", "at"])
+    .index("by_invoiceId", ["invoiceId"]),
 
   // ─── User Rates (per-user, per-currency cost rates) ────────────────────────
   userRates: defineTable({

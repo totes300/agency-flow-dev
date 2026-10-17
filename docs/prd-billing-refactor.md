@@ -189,7 +189,7 @@ single commit mutation, which reads `by_projectId_periodStart` in the same trans
 **`timeEntries`**
 
 - **Add** `projectId: v.id("projects")` (denormalized from the task) with index
-  `by_projectId_closeId: ["projectId", "closeId"]`. This removes the ~20 tasks → entries
+  `by_orgId_projectId_closeId: ["orgId", "projectId", "closeId"]`. This removes the ~20 tasks → entries
   fan-outs.
 - **Add** `closeId: v.optional(v.id("billingCloses"))`. It is a lock and a lookup key,
   **not** the source of truth for a closed period's membership (that is the snapshot,
@@ -447,11 +447,21 @@ the hot fixes early. Each slice ends green on the gates above.
   - Rates and amounts in minor units move to slice 3, together with the new pricing
     module. Converting the old engines first would be work thrown away in slice 5.
 
-**Slice 2 — Close model and pure modules**
-- Schema: `billingCloses`, `billingCloseEntries`, `billingEvents`, `timeEntries.closeId`.
-- `scope.ts` and `pricing.ts` with the full pure suites. No consumers yet.
-- Shadow test: run new and old modules over the seed scenarios. Differences are allowed
-  only in the B-list cases, and each one is documented in the test.
+**Slice 2 — Close model and pure modules** *(done 2026-10-17)*
+- Schema: `billingCloses`, `billingCloseEntries`, `billingEvents`, and
+  `timeEntries.closeId`. The slice 1 index became `by_orgId_projectId_closeId`: its
+  prefix lists a project's entries, and `closeId === undefined` lists its open ones.
+- `lib/billing/scope.ts` (§6) and `lib/billing/pricing.ts` (§7) are pure and have no
+  production consumers yet. Suites:
+  - `billingScopeRule.test.ts`: the golden scenarios, plus properties over random
+    ledgers. Every open entry has exactly one unclosed home, and repeated oldest-first
+    closes settle every entry exactly once.
+  - `billingPricing.test.ts`.
+- `billingShadow.test.ts`: the new modules agree with `computeBillingScope` on
+  membership, carried reasons, usage, overage, amount, committability, and the ladder.
+  It covers fixed scenarios and 40 random ledgers for each grid type. The only
+  asserted difference is B7. Mutation-checked: breaking T&M rounding or the carried
+  reason turns it red.
 
 **Slice 3 — Write path**
 - `commitClose`, `releaseClose`, and lifecycle mutations (finalize, revert, void, delete,

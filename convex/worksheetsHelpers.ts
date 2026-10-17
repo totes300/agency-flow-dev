@@ -26,6 +26,8 @@ import { internalQuery, type QueryCtx } from "./_generated/server";
 import { requireAdmin } from "./lib/auth";
 import { getOrgSettings } from "./lib/orgHelpers";
 import { getProjectEntries } from "./lib/projectEntries";
+import { closeSnapshotEntries, getLiveCloses, loadCloseContext } from "./lib/billing/closeData";
+import { loadReportMonths } from "./lib/billing/reportMonths";
 import { ORG_TIMEZONE_FALLBACK } from "./lib/timer";
 import { getCyclePeriods } from "./lib/retainerCycle";
 import {
@@ -311,23 +313,10 @@ export async function resolveScopeEntries(
     if (!project || project.orgId !== orgId) {
       throw new ConvexError("Project not found for invoice");
     }
-    // Canonical entry set = union of timeEntryIds from invoice's line items.
-    const lineItems = await ctx.db
-      .query("invoiceLineItems")
-      .withIndex("by_invoiceId", (q) => q.eq("invoiceId", invoice._id))
-      .collect();
-    const seen = new Set<string>();
-    const entries: Doc<"timeEntries">[] = [];
-    for (const li of lineItems) {
-      if (li.orgId !== orgId) continue;
-      for (const entryId of li.timeEntryIds ?? []) {
-        if (seen.has(entryId)) continue;
-        seen.add(entryId);
-        const e = await ctx.db.get(entryId);
-        if (e && e.orgId === orgId) entries.push(e);
-      }
-    }
-    return { project, entries };
+    // The invoice's entries are its close's frozen snapshot. A fixed-fee
+    // invoice has no close (amount-only, D5): its work report is a range export.
+    if (!invoice.closeId) return { project, entries: [] };
+    return { project, entries: await closeSnapshotEntries(ctx, orgId, invoice.closeId) };
   }
 
   // `period`, `cycle`, and `settledPeriod` all read the project's entries
@@ -339,15 +328,16 @@ export async function resolveScopeEntries(
     throw new ConvexError("Project not found");
   }
 
-  // Closed-period scope: membership comes from settlement stamps, NOT the
-  // entry date — carried-in work (stamped into this period from an earlier
-  // month) belongs here, skipped-out work doesn't. This is what keeps the
-  // post-close worksheet in exact agreement with the Monthly Report.
+  // Closed-month scope: the snapshot of the live close covering the month,
+  // bucketed by report month — carried-in work included, skipped-out work
+  // excluded — so the worksheet matches the Monthly Report exactly (N8).
   if (scope.kind === "settledPeriod") {
-    const entries = (await getProjectEntries(ctx, orgId, project._id)).filter(
-      (e) => e.settledAt !== undefined && e.settledPeriodStart === scope.periodStart,
+    const monthKey = scope.periodStart.slice(0, 7);
+    const close = (await getLiveCloses(ctx, orgId, project._id)).find(
+      (c) => c.periodStart <= scope.periodStart && c.periodEnd >= scope.periodStart,
     );
-    return { project, entries };
+    if (!close) return { project, entries: [] };
+    return { project, entries: await closeSnapshotEntries(ctx, orgId, close._id, monthKey) };
   }
 
   let periodStart: string;
@@ -819,16 +809,15 @@ export const collectCycleWorksheetData = internalQuery({
     const sections: WorksheetCycleSection[] = [];
     const allRows: WorksheetTaskRow[] = [];
     const usedMinutesByMonth = new Map<string, number>();
-    const projectEntries = await getProjectEntries(ctx, authCtx.orgId, project._id);
+    // Months split by REPORT month (N8), the Monthly Report's own rule.
+    const closeContext = await loadCloseContext(ctx, authCtx.orgId, project._id);
+    const reportMonths = await loadReportMonths(ctx, closeContext);
 
     for (const m of months) {
-      const periodStart = `${m.year}-${String(m.month).padStart(2, "0")}-01`;
-      const lastDay = new Date(m.year, m.month, 0).getDate();
-      const periodEnd = `${m.year}-${String(m.month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
-
-      const monthEntries = projectEntries.filter(
-        (e) => e.date >= periodStart && e.date <= periodEnd,
-      );
+      const key = `${m.year}-${String(m.month).padStart(2, "0")}`;
+      const monthEntries = closeContext.entries
+        .filter((e) => reportMonths.get(e._id) === key)
+        .map((e) => e.doc);
 
       const rows = await buildTaskRows(ctx, project, monthEntries, authCtx.orgId);
       const subtotalBillableMinutes = rows.reduce(

@@ -43,7 +43,7 @@ import { CloseCycleModal } from "@/components/projects/close-cycle-modal"
 import { ReopenPeriodDialog } from "@/components/projects/reopen-period-dialog"
 import { PeriodDetailSheet } from "@/components/projects/period-detail-sheet"
 import { WorksheetMenuItem } from "@/components/worksheet/worksheet-menu-item"
-import { useGenerateInvoice } from "@/lib/hooks/use-generate-invoice"
+import { useBillingActions } from "@/lib/hooks/use-billing-actions"
 import {
   formatCurrency,
   formatCycleLabel,
@@ -265,7 +265,7 @@ export function MonthlyBreakdownCard({
   // (PRD § Further Notes): the toggle is a transient per-visit preference, not
   // part of the page's shareable view.
   const [sortDir, setSortDir] = useState<"oldest" | "newest">("oldest")
-  const { generate, pending } = useGenerateInvoice()
+  const { reviewClose } = useBillingActions()
   // Phase 8 Slice 3 — close/reopen are admin-only actions. Members render
   // the row without `Close` / `Reopen` affordances; the read-only `↓ Report`
   // primary stays for them on `open` rows.
@@ -435,14 +435,7 @@ export function MonthlyBreakdownCard({
                   projectId={projectId}
                   isAdmin={isAdmin}
                   isHighlighted={key === highlightKey}
-                  isPending={pending}
-                  onGenerate={() =>
-                    void generate({
-                      projectId,
-                      retainerYear: month.year,
-                      retainerMonth: month.month,
-                    })
-                  }
+                  onGenerate={() => reviewClose(projectId, month)}
                 />
               )
             })}
@@ -485,7 +478,6 @@ function MonthRow({
   projectId,
   isAdmin,
   isHighlighted,
-  isPending,
   onGenerate,
 }: {
   month: MonthData
@@ -503,7 +495,6 @@ function MonthRow({
   projectId: Id<"projects">
   isAdmin: boolean
   isHighlighted: boolean
-  isPending: boolean
   onGenerate: () => void
 }) {
   const state = lifecycleStateOf(month, {
@@ -564,7 +555,6 @@ function MonthRow({
           month={month}
           state={state}
           isAdmin={isAdmin}
-          isPending={isPending}
           onGenerate={onGenerate}
           onOpenDrillDown={() => setDrillDownOpen(true)}
           cycleStart={cycleStart}
@@ -675,7 +665,6 @@ function ActionCell({
   month,
   state,
   isAdmin,
-  isPending,
   onGenerate,
   onOpenDrillDown,
   cycleStart,
@@ -692,7 +681,6 @@ function ActionCell({
   month: MonthData
   state: LifecycleState
   isAdmin: boolean
-  isPending: boolean
   onGenerate: () => void
   onOpenDrillDown: () => void
   cycleStart: string
@@ -775,8 +763,8 @@ function ActionCell({
   if (action === "generate") {
     return (
       <div className="flex items-center justify-end gap-1">
-        <Button size="sm" onClick={onGenerate} disabled={isPending}>
-          Generate
+        <Button size="sm" onClick={onGenerate}>
+          Review
         </Button>
         <RowOverflow ariaLabel={`More actions for ${month.label}`}>
           {worksheetItem}

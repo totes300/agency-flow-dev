@@ -49,7 +49,7 @@ function MyTasksBadge() {
 function InvoicesNavSignals() {
   const { isAuthenticated } = useConvexAuth()
   const signals = useQuery(
-    api.invoices.getInvoicingNavSignals,
+    api.billingViews.getNavSignals,
     isAuthenticated ? {} : "skip",
   )
   if (!signals) return null

@@ -8,7 +8,7 @@ import { ColoredPillBadge } from "@/components/ui/colored-pill-badge"
 import { formatCurrency, formatInvoiceIdentifier, formatMinutes } from "@/lib/format"
 import { getRetainerUsageLabels } from "@/lib/retainerLabels"
 
-type MonthlyReport = NonNullable<FunctionReturnType<typeof api.statements.getRetainerStatement>>
+type MonthlyReport = NonNullable<FunctionReturnType<typeof api.billingReports.getMonthlyReport>>
 
 /**
  * Read-only Monthly Report document for a retainer period. Rendered both on

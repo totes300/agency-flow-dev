@@ -57,6 +57,7 @@ import {
 } from "./lib/closeQueue";
 import { round2 } from "./lib/billing/money";
 import { getProjectEntries } from "./lib/projectEntries";
+import { loadActiveTimers } from "./lib/billing/timers";
 
 // ─── Output shapes ───────────────────────────────────────────────────────────
 
@@ -249,38 +250,6 @@ async function loadRunningTimers(
     const timerDate = getDateInTimezone(user.timerStartedAt, timezone);
     if (timerDate < period.start || timerDate > period.end) continue;
     out.push({ userId: user._id });
-  }
-  return out;
-}
-
-/**
- * All active (running / paused) timers in the org, resolved to {task, date}
- * once. The close queue filters this list per period+project in memory rather
- * than re-scanning `orgMembers` for every row (`loadRunningTimers` is the
- * single-period workspace variant).
- */
-type ActiveTimer = { userId: Id<"users">; taskIdStr: string; dateStr: string };
-async function loadActiveTimers(
-  ctx: QueryCtx,
-  orgId: string,
-  timezone: string,
-): Promise<ActiveTimer[]> {
-  const memberships = await ctx.db
-    .query("orgMembers")
-    .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
-    .collect();
-  const out: ActiveTimer[] = [];
-  for (const m of memberships) {
-    if (!m.userId) continue;
-    const user = await ctx.db.get(m.userId);
-    if (!user || user.deletedAt) continue;
-    if (user.timerStatus !== "running" && user.timerStatus !== "paused") continue;
-    if (!user.timerTaskId || user.timerStartedAt === undefined) continue;
-    out.push({
-      userId: user._id,
-      taskIdStr: user.timerTaskId.toString(),
-      dateStr: getDateInTimezone(user.timerStartedAt, timezone),
-    });
   }
   return out;
 }

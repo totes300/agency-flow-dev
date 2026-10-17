@@ -1,3 +1,4 @@
+import type { EntryCloseStatus } from "./entryStatus";
 import type { Doc } from "../_generated/dataModel";
 import type { SettledReason } from "./settleEntries";
 
@@ -12,6 +13,8 @@ import type { SettledReason } from "./settleEntries";
  * a per-field nullish coalesce.
  */
 export type EntrySettlementSnapshot = {
+  /** Billing refactor: status of the live close settling the entry, if any. */
+  closeStatus?: EntryCloseStatus;
   settledAt: number | undefined;
   settledReason: SettledReason | undefined;
   settledPeriodStart: string | undefined;

@@ -44,7 +44,7 @@ export function ReopenPeriodDialog({
   periodLabel: string
   workedMinutes: number
 }) {
-  const reopenPeriod = useMutation(api.retainerPeriods.reopenPeriod)
+  const reopenPeriod = useMutation(api.billingCloses.reopenClose)
   const [pending, setPending] = useState(false)
 
   const hoursLabel = formatMinutes(workedMinutes)

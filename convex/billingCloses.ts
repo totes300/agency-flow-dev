@@ -8,7 +8,7 @@ import { ConvexError, v } from "convex/values";
 import { mutation } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel";
 import { requireAdmin } from "./lib/auth";
-import { loadCloseContext, toScopeProject } from "./lib/billing/closeData";
+import { getLiveCloses, loadCloseContext, toScopeProject } from "./lib/billing/closeData";
 import { commitClose as commit, releaseClose } from "./lib/billing/closeLifecycle";
 import { appendBillingEvent } from "./lib/billing/events";
 import { skipStampFor } from "./lib/billing/scope";
@@ -26,14 +26,18 @@ export const commitClose = mutation({
   },
 });
 
-/** Reopen a final close that billed nothing (within-budget retainer). */
+/**
+ * Reopen the period containing `periodStart` when its close billed nothing
+ * (within-budget retainer). Returns how many entries became editable again.
+ */
 export const reopenClose = mutation({
-  args: { closeId: v.id("billingCloses") },
-  handler: async (ctx, args) => {
+  args: { projectId: v.id("projects"), periodStart: v.string() },
+  handler: async (ctx, args): Promise<{ reopenedCount: number }> => {
     const { orgId, userId } = await requireAdmin(ctx);
-    const close = await ctx.db.get(args.closeId);
-    if (!close || close.orgId !== orgId) throw new ConvexError("Close not found.");
-    if (close.status !== "final") throw new ConvexError("Only a closed period can be reopened.");
+    const close = (await getLiveCloses(ctx, orgId, args.projectId)).find(
+      (c) => c.periodStart <= args.periodStart && c.periodEnd >= args.periodStart,
+    );
+    if (!close || close.status !== "final") throw new ConvexError("This period is not closed.");
     if (close.invoiceId) {
       throw new ConvexError("This period is billed on an invoice. Void that invoice to reopen it.");
     }
@@ -48,7 +52,14 @@ export const reopenClose = mutation({
     if (later.some((c) => c.status !== "released")) {
       throw new ConvexError("Reopen the later closed periods first.");
     }
+    const reopenedCount = (
+      await ctx.db
+        .query("billingCloseEntries")
+        .withIndex("by_closeId", (q) => q.eq("closeId", close._id))
+        .collect()
+    ).length;
     await releaseClose(ctx, { orgId, userId }, close, "reopened");
+    return { reopenedCount };
   },
 });
 

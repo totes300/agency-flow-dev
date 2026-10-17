@@ -51,7 +51,7 @@ export default function BillingPage() {
 
   // Counts feed the shared tab strip in every branch.
   const liveNavSignals = useQuery(
-    api.invoices.getInvoicingNavSignals,
+    api.billingViews.getNavSignals,
     isAuthenticated ? {} : "skip",
   )
   const liveMetrics = useQuery(
@@ -104,7 +104,7 @@ function CloseTab({
 }) {
   const { isAuthenticated } = useConvexAuth()
   const liveQueue = useQuery(
-    api.close.getCloseQueue,
+    api.billingViews.getCloseQueue,
     isAuthenticated ? {} : "skip",
   )
   const queue = useLastDefined(liveQueue)

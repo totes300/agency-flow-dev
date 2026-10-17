@@ -16,7 +16,7 @@
  */
 
 import type { Id } from "../_generated/dataModel";
-import type { BillingScopeReport, CarriedReason } from "./billingScope";
+import type { CarriedReason } from "./billing/scope";
 
 export const LONG_ENTRY_MINUTES = 480; // ≥ 8h — forgotten-timer suspicion.
 
@@ -45,8 +45,28 @@ export type RunningTimerInfo = {
   userId?: Id<"users">;
 };
 
+/** One in-scope entry, as the review checklist sees it. */
+export type FlagScopeEntry = {
+  entryId: Id<"timeEntries">;
+  note?: string | null;
+  durationMinutes: number;
+  carried: boolean;
+  carriedReason?: CarriedReason;
+  /** YYYY-MM of the entry's own date (the "carried · May" label). */
+  originMonthKey: string;
+};
+
+/**
+ * The slice of a period's scope the checklist reads. Structural, so both the
+ * legacy `BillingScopeReport` and the close-model views satisfy it.
+ */
+export type FlagScope = {
+  issues: readonly string[];
+  entries: readonly FlagScopeEntry[];
+};
+
 export type CloseFlagsInput = {
-  scope: BillingScopeReport;
+  scope: FlagScope;
   /** Timers currently running that overlap the period. Empty when none. */
   runningTimers?: RunningTimerInfo[];
 };

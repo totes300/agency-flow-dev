@@ -488,17 +488,31 @@ consistent:
     converted once, at commit (`closeData.toBillingEntry`, `toPricingProject`).
   - `billingWritePath.test.ts` (17 tests, mutation-checked) covers N1, N2, N3/N5, N7,
     N9, N10, B3, and B6 on the new path.
-- **3b — read path, in parallel:** close queue, workspace, monthly report, invoice
-  detail and list, project billing summaries, and worksheets on `scope`, `pricing`,
-  and snapshots, keeping the current response shapes so the UI switch is a reference
-  swap.
-- **3c — cutover:**
-  - The UI calls the new API. Refresh, the rounding picker, line amount edits, and
-    Path B leave the UI.
-  - The retainer entry-date guard is dropped: late time carries forward by design
-    (story 28).
-  - Dev data reset and reseed. The consistency suite runs on the new API, and B3–B7
-    become plain tests.
+- **3b + 3c — read path and cutover** *(done 2026-10-17, one commit)*. Readers that
+  switch in place cannot coexist with old UI writes without dual-model code, so the read
+  path and the cutover landed together. Every commit stays consistent.
+  - **New views:** `billingViews` (queue with one row per project plus
+    `pendingPeriods`, workspace, badge) and `billingReports.getMonthlyReport` (a
+    compile-time drop-in for the legacy report). Both are built on
+    `lib/billing/periodView`: a closed period re-prices its frozen snapshot, an open
+    period is priced live.
+  - **Readers moved to closes:** `getInvoice`, `entryStatus` and the overview buckets
+    (now close-aware), `getRetainerData`, `getSummary`, `getProjectInvoiceMetrics`,
+    worksheets (closed-month and invoice scopes read the snapshot; cycle exports split
+    by report month), and the agent retainer report. They use report months
+    (`lib/billing/reportMonths`).
+  - **UI cutover:**
+    - Billing hub, workspace, report page and close/reopen modals call the new API.
+    - Project-page Generate buttons open the Close workspace; fixed fee uses
+      `createFixedInvoice`.
+    - Editor: description and manual lines only (`useInvoiceLineActions`); the fixed
+      amount goes through `setFixedAmount`.
+    - Refresh, the rounding picker and the line amount edits are gone.
+  - The retainer entry-date guard is dropped (story 28).
+  - Dev reset: `migrations/resetBillingForCloseModel`.
+  - The consistency suite runs on the new API, and B3–B7 are plain tests.
+  - Verified in the browser on dev: queue → workspace → draft ($1,550, equal to the
+    promise) → delete draft → the period returns.
 
 **Slice 4 — Read path**
 - Queue (one row per project), workspace, monthly report (N8), worksheets (2 exports),

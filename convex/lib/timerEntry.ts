@@ -25,7 +25,6 @@ import type { Doc, Id } from "../_generated/dataModel";
 import { getDateInTimezone, msToMinutes, MAX_TIMER_MS, ORG_TIMEZONE_FALLBACK } from "./timer";
 import { roundMinutes } from "./rounding";
 import { resolveRateSnapshot, resolveEntryCategory } from "./orgHelpers";
-import { findEntryDateBlocker } from "./settleGuards";
 
 export async function insertTimerEntry(
   ctx: MutationCtx,
@@ -82,24 +81,12 @@ export async function insertTimerEntry(
   });
 
   const now = Date.now();
-  const today = getDateInTimezone(now, opts.timezone);
   const synthetic = now - rounded * 60_000;
 
-  let startedAt = opts.sessionStartedAt ?? synthetic;
-  let date = getDateInTimezone(startedAt, opts.timezone);
-  if (date !== today) {
-    const blocker = await findEntryDateBlocker(ctx, opts.project, date);
-    if (blocker) {
-      // Settled start day — file under today rather than stranding the stop.
-      date = today;
-      startedAt =
-        getDateInTimezone(synthetic, opts.timezone) === today ? synthetic : now;
-    }
-  }
-  // Final guard (also covers the date === today path; today can never be
-  // settled, so this only fires on genuinely blocked backdates).
-  const blocker = await findEntryDateBlocker(ctx, opts.project, date);
-  if (blocker) throw new ConvexError(blocker);
+  // A timer that started in an already-closed period files under its true
+  // start day: the entry is open and carries into the next close (story 28).
+  const startedAt = opts.sessionStartedAt ?? synthetic;
+  const date = getDateInTimezone(startedAt, opts.timezone);
 
   const entryId = await ctx.db.insert("timeEntries", {
     orgId: opts.orgId,

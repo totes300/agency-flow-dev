@@ -1,14 +1,10 @@
 "use client"
 
-import { useMutation } from "convex/react"
-import { api } from "@/convex/_generated/api"
 import type { Doc, Id } from "@/convex/_generated/dataModel"
 import { InlineEditable, InlineEditableNumber } from "@/components/inline-editable"
-import { toastError } from "@/lib/toast-helpers"
 import { formatCurrency, getCurrencySymbol } from "@/lib/format"
+import { useInvoiceLineActions } from "@/lib/hooks/use-invoice-line-actions"
 import { PlusIcon, Trash2Icon } from "lucide-react"
-
-type BillingField = "description" | "quantity" | "unitPrice" | "amount"
 
 /**
  * Billing summary card for fixed fee / retainer charge rows.
@@ -32,31 +28,7 @@ export function InvoiceBillingSummary({
   readOnly: boolean
   currency: string
 }) {
-  const updateLineItem = useMutation(api.invoices.updateInvoiceLineItem)
-  const addLineItem = useMutation(api.invoices.addInvoiceLineItem)
-  const removeLineItem = useMutation(api.invoices.removeInvoiceLineItem)
-
-  function handleUpdate(
-    lineItemId: Id<"invoiceLineItems">,
-    field: BillingField,
-    value: string | number,
-  ) {
-    void updateLineItem({ id: lineItemId, [field]: value }).catch((err) =>
-      toastError(err, "Failed to update line item")
-    )
-  }
-
-  function handleAddLine() {
-    void addLineItem({ invoiceId }).catch((err) =>
-      toastError(err, "Failed to add line item")
-    )
-  }
-
-  function handleRemoveLine(lineItemId: Id<"invoiceLineItems">) {
-    void removeLineItem({ id: lineItemId }).catch((err) =>
-      toastError(err, "Failed to remove line item")
-    )
-  }
+  const actions = useInvoiceLineActions(invoiceId)
 
   const total = billingItems.reduce((sum, item) => sum + item.amount, 0)
   const symbol = getCurrencySymbol(currency)
@@ -94,7 +66,7 @@ export function InvoiceBillingSummary({
                 <td className="py-3 pr-3">
                   <InlineEditable
                     value={li.description}
-                    onSave={(val) => handleUpdate(li._id, "description", val)}
+                    onSave={(val) => actions.rename(li._id, val)}
                     readOnly={readOnly}
                     ariaLabel="Edit description"
                     errorMessage="Failed to update line item"
@@ -105,7 +77,7 @@ export function InvoiceBillingSummary({
                   {editable ? (
                     <InlineEditableNumber
                       value={li.quantity}
-                      onSave={(val) => handleUpdate(li._id, "quantity", val)}
+                      onSave={(val) => actions.updateManual(li._id, "quantity", val)}
                       ariaLabel="Edit quantity"
                       errorMessage="Failed to update line item"
                     />
@@ -120,7 +92,7 @@ export function InvoiceBillingSummary({
                   {editable ? (
                     <InlineEditableNumber
                       value={li.unitPrice}
-                      onSave={(val) => handleUpdate(li._id, "unitPrice", val)}
+                      onSave={(val) => actions.updateManual(li._id, "unitPrice", val)}
                       ariaLabel="Edit rate"
                       errorMessage="Failed to update line item"
                       prefix={symbol}
@@ -133,17 +105,8 @@ export function InvoiceBillingSummary({
                 </td>
 
                 <td className="py-3 pl-3 text-right font-medium tabular-nums">
-                  {editable ? (
-                    <InlineEditableNumber
-                      value={li.amount}
-                      onSave={(val) => handleUpdate(li._id, "amount", val)}
-                      ariaLabel="Edit amount"
-                      errorMessage="Failed to update line item"
-                      prefix={symbol}
-                    />
-                  ) : (
-                    formatCurrency(li.amount, currency)
-                  )}
+                  {/* Always derived: quantity × unit price (manual), frozen at commit (others). */}
+                  {formatCurrency(li.amount, currency)}
                 </td>
 
                 {!readOnly && (
@@ -152,7 +115,7 @@ export function InvoiceBillingSummary({
                       <button
                         type="button"
                         aria-label="Remove line item"
-                        onClick={() => handleRemoveLine(li._id)}
+                        onClick={() => actions.removeManual(li._id)}
                         className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground/60 opacity-0 transition-[opacity,color,background-color] hover:bg-muted hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
                       >
                         <Trash2Icon className="size-3.5" />
@@ -170,7 +133,7 @@ export function InvoiceBillingSummary({
                 <button
                   type="button"
                   className="inline-flex items-center gap-1.5 rounded-md px-1 py-1 text-sm text-muted-foreground hover:text-foreground"
-                  onClick={handleAddLine}
+                  onClick={actions.addManual}
                 >
                   <PlusIcon className="size-3.5" />
                   Add line item

@@ -50,8 +50,10 @@ import {
   isWholeCalendarMonth,
 } from "./lib/commitScope";
 import type { Doc, Id } from "./_generated/dataModel";
-import { ceilToIncrement, round2 } from "./lib/billing/money";
+import { ceilToIncrement, fromMinor, round2 } from "./lib/billing/money";
 import { formatInvoiceNumber, monthLabel, periodSubjectLabel } from "./lib/billing/labels";
+import { closeRetainerUsage, loadCloseContext } from "./lib/billing/closeData";
+import { openElapsedRetainerPeriods } from "./lib/billing/periodView";
 import {
   allocateInvoiceNumber,
   deleteCloseModelDraft,
@@ -805,26 +807,22 @@ export const getProjectInvoiceMetrics = query({
     let uninvoicedMonths: UninvoicedMonth[] = [];
     let uninvoicedOverageTotal = 0;
     if (project.billingType === "retainer") {
-      const closedUninvoiced = await getClosedUninvoicedMonths(
-        ctx,
-        orgId,
-        args.projectId,
-        project,
-        timezone,
-      );
-      uninvoicedMonths = closedUninvoiced.map((m) => ({
-        year: m.year,
-        month: m.month,
-        label: m.label,
+      // Elapsed, unclosed periods with overage — priced exactly as the Close
+      // queue and `commitClose` price them. A period is listed by its last
+      // month (where a cycle bills). The project-level total stays stable
+      // across cycle navigation in the UI.
+      const c = await loadCloseContext(ctx, orgId, args.projectId);
+      const pending = (
+        await openElapsedRetainerPeriods(ctx, c, { todayStr, roundingMinutes: 1 })
+      ).filter((view) => view.price.overageMinutes > 0);
+      uninvoicedMonths = pending.map((view) => ({
+        year: Number(view.period.end.slice(0, 4)),
+        month: Number(view.period.end.slice(5, 7)),
+        label: periodSubjectLabel(view.period.start, view.period.end),
       }));
-      // Project-level overage total — the InvoiceBanner displays this so the
-      // amount stays stable across cycle navigation. Reading the
-      // currently-viewed cycle's overage instead (the pre-fix behavior)
-      // produced lying "$0.00 within budget" labels whenever the user was
-      // on a within-budget month while an over-budget month elsewhere
-      // remained unbilled. See `lib/invoice-banner-view.ts:retainer-monthly`.
-      uninvoicedOverageTotal = round2(
-        closedUninvoiced.reduce((sum, m) => sum + m.overageAmount, 0),
+      uninvoicedOverageTotal = fromMinor(
+        pending.reduce((sum, view) => sum + view.price.amountMinor, 0),
+        c.currency,
       );
     }
 
@@ -2272,7 +2270,12 @@ export const getInvoice = query({
         amountDue: number;
       };
     } | null = null;
-    if (
+    const close =
+      invoice.closeId !== undefined ? await ctx.db.get(invoice.closeId) : null;
+    if (close && close.orgId === orgId && close.kind === "retainer") {
+      // Close-model invoice: usage comes from its close and snapshot.
+      retainerUsage = await closeRetainerUsage(ctx, close, invoice.total);
+    } else if (
       project &&
       project.billingType === "retainer" &&
       invoice.retainerIncludedMinutes != null &&
@@ -2351,7 +2354,13 @@ export const getInvoice = query({
     // were generated now but aren't on it (logged after draft creation).
     // Powers the "Refresh draft" callout + the finalize confirmation.
     let staleEntries: { count: number; totalMinutes: number } | null = null;
-    if (invoice.status === "draft" && project && project.billingType !== "non_billable") {
+    // Close-model drafts have no refresh: later time belongs to the next close (D7).
+    if (
+      invoice.status === "draft" &&
+      !isCloseModelInvoice(invoice) &&
+      project &&
+      project.billingType !== "non_billable"
+    ) {
       const { entries } = await collectRefreshableEntries(
         ctx,
         orgId,

@@ -1,9 +1,9 @@
 "use client"
 
-import { CalendarClockIcon, PlusIcon } from "lucide-react"
+import { CalendarClockIcon } from "lucide-react"
 import type { Id } from "@/convex/_generated/dataModel"
 import { Button } from "@/components/ui/button"
-import { useGenerateInvoice } from "@/lib/hooks/use-generate-invoice"
+import { useBillingActions } from "@/lib/hooks/use-billing-actions"
 import { pluralize } from "@/lib/format"
 
 export type UninvoicedMonth = { year: number; month: number; label: string }
@@ -23,7 +23,7 @@ export function ProjectInvoicesRetainerCallout({
   projectId: Id<"projects">
   uninvoicedMonths: UninvoicedMonth[]
 }) {
-  const { generate, pending } = useGenerateInvoice()
+  const { reviewClose } = useBillingActions()
 
   if (uninvoicedMonths.length === 0) return null
 
@@ -51,19 +51,8 @@ export function ProjectInvoicesRetainerCallout({
         </p>
         <p className="truncate text-xs text-muted-foreground">{summary}</p>
       </div>
-      <Button
-        size="sm"
-        disabled={pending}
-        onClick={() =>
-          void generate({
-            projectId,
-            retainerYear: next.year,
-            retainerMonth: next.month,
-          })
-        }
-      >
-        <PlusIcon data-icon="inline-start" className="size-3.5" />
-        Create {next.label} invoice
+      <Button size="sm" onClick={() => reviewClose(projectId, next)}>
+        Review {next.label}
       </Button>
     </div>
   )

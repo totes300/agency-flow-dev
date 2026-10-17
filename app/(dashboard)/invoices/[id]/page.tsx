@@ -59,7 +59,7 @@ export default function InvoiceEditorPage() {
   // explicitly what happened with a back button rather than 404'ing.
   if (data === null) return <InvoiceDeletedState backHref={backHref} />
 
-  const { invoice, categoryGroups, lineItems, project, client, brand, timezone, orgInvoiceCount, fixedBilled, retainerUsage, staleEntries, org } = data
+  const { invoice, categoryGroups, lineItems, project, client, brand, timezone, orgInvoiceCount, fixedBilled, retainerUsage, org } = data
   const readOnly = invoice.status !== "draft"
 
   const brandIncomplete = !brand?.brandName || !brand?.brandAddress
@@ -137,11 +137,6 @@ export default function InvoiceEditorPage() {
                 const fx = lineItems.find((li) => li.lineType === "fixed")
                 return fx ? { id: fx._id, amount: fx.amount } : null
               })()}
-              hasTimeLines={
-                project?.billingType !== "retainer" &&
-                lineItems.some((li) => li.lineType === "time")
-              }
-              staleEntries={staleEntries}
               onPrint={() => window.print()}
               brandMissing={!brand?.brandName}
             />

@@ -15,13 +15,12 @@ import {
   InvoiceRowItem,
   ReadyRowItem,
 } from "@/components/invoices/invoice-row"
-import { useGenerateInvoice } from "@/lib/hooks/use-generate-invoice"
+import { useBillingActions } from "@/lib/hooks/use-billing-actions"
 import { InvoiceBulkBar } from "@/components/invoices/invoice-bulk-bar"
 import { ClosePeriodModal } from "@/components/projects/close-period-modal"
 import { CloseCycleModal } from "@/components/projects/close-cycle-modal"
 import { type ListRow, type ReadyRow } from "@/lib/invoices/list-rows"
 import { buildCycleMonths, invoiceUrlSegment } from "@/lib/format"
-import { monthBounds } from "@/lib/date-buckets"
 
 export type InvoiceRow = {
   _id: string
@@ -88,7 +87,7 @@ export function InvoiceList({
   emptyState?: React.ReactNode
 }) {
   const router = useRouter()
-  const { generate, pending } = useGenerateInvoice()
+  const { reviewClose, billFixedFee, pending } = useBillingActions()
   // Within-budget close rows open the same review-then-confirm modals the
   // project's Monthly Breakdown card uses — one close flow everywhere.
   const [closeTarget, setCloseTarget] = useState<ReadyRow | null>(null)
@@ -123,29 +122,8 @@ export function InvoiceList({
 
   function handleGenerate(row: ReadyRow) {
     if (pending) return
-    // T&M month rows MUST send their month's boundaries: the row promises
-    // one month's amount, and a bound-less createInvoice would sweep every
-    // open entry (other closed months + the in-progress month) onto a draft
-    // labeled with this month. Retainer rows send year/month so the server
-    // takes the retainer code path; fixed rows sweep everything by design.
-    const tmBounds =
-      row.kind === "tm" && row.period
-        ? monthBounds(row.period.year, row.period.month)
-        : null
-    void generate({
-      projectId: row.projectId,
-      startDate: tmBounds?.start,
-      endDate: tmBounds?.end,
-      retainerYear:
-        row.kind === "retainer-monthly" || row.kind === "retainer-cycle"
-          ? row.period?.year
-          : undefined,
-      retainerMonth:
-        row.kind === "retainer-monthly" || row.kind === "retainer-cycle"
-          ? row.period?.month
-          : undefined,
-      navigateTo: (identifier) => `/invoices/${identifier}`,
-    })
+    if (row.kind === "fixed") void billFixedFee(row.projectId)
+    else reviewClose(row.projectId, row.period)
   }
 
   // Selected slices, keyed back to source rows for the bulk bar.

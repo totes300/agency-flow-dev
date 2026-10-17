@@ -35,7 +35,7 @@ export default function ProjectMonthlyReportPage() {
 
   // Skip the query for malformed period strings — the page will 404 below.
   const report = useQuery(
-    api.statements.getRetainerStatement,
+    api.billingReports.getMonthlyReport,
     isAuthenticated && parsed
       ? { projectId, year: parsed.year, month: parsed.month }
       : "skip",

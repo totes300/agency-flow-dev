@@ -18,7 +18,7 @@ import type { CloseWorkspaceData } from "@/convex/close"
  *     then navigate forward to the report page — the page that carries the
  *     "Download worksheet" action, the owner's primary post-close deliverable
  *     (story 26 re-amended with the ledger rebuild).
- *   - over-budget retainer / T&M / fixed → "Generate invoice draft · $X", then
+ *   - over-budget retainer / T&M → "Generate invoice draft · $X", then
  *     navigate forward to the invoice editor (which carries the same
  *     worksheet download).
  *
@@ -28,9 +28,7 @@ import type { CloseWorkspaceData } from "@/convex/close"
  */
 export function CloseCommitButton({ data }: { data: CloseWorkspaceData }) {
   const router = useRouter()
-  const createInvoice = useMutation(api.invoices.createInvoice)
-  const closePeriod = useMutation(api.retainerPeriods.closePeriod)
-  const closeRetainerCycle = useMutation(api.retainerPeriods.closeRetainerCycle)
+  const commitClose = useMutation(api.billingCloses.commitClose)
   const [pending, setPending] = useState(false)
 
   const isCloseReport = data.billingType === "retainer" && data.withinBudget
@@ -48,41 +46,17 @@ export function CloseCommitButton({ data }: { data: CloseWorkspaceData }) {
     if (pending) return
     setPending(true)
     try {
-      if (isCloseReport) {
-        if (data.project.rolloverEnabled) {
-          await closeRetainerCycle({
-            projectId: data.project.id,
-            cycleStart: data.period.start,
-          })
-        } else {
-          await closePeriod({
-            projectId: data.project.id,
-            periodStart: data.period.start,
-          })
-        }
-        const reportToken = data.period.start.slice(0, 7)
-        router.push(`/projects/${data.project.id}/reports/${reportToken}`)
-        toast.success("Period closed & reported")
+      // One commit for every close: the server re-derives scope and price and
+      // creates a draft only when there is money to bill.
+      const { invoiceId } = await commitClose({
+        projectId: data.project.id,
+        periodStart: data.period.start,
+      })
+      if (invoiceId) {
+        router.push(`/invoices/${invoiceId}`)
       } else {
-        let result: { invoiceId: string }
-        if (data.billingType === "retainer") {
-          // Closing month = period end's month (cycle-end for rollover).
-          const [y, m] = data.period.end.split("-").map(Number)
-          result = await createInvoice({
-            projectId: data.project.id,
-            retainerYear: y,
-            retainerMonth: m,
-          })
-        } else if (data.billingType === "t_and_m") {
-          result = await createInvoice({
-            projectId: data.project.id,
-            startDate: data.period.start,
-            endDate: data.period.end,
-          })
-        } else {
-          result = await createInvoice({ projectId: data.project.id })
-        }
-        router.push(`/invoices/${result.invoiceId}`)
+        router.push(`/projects/${data.project.id}/reports/${data.period.end.slice(0, 7)}`)
+        toast.success("Period closed & reported")
       }
     } catch (err) {
       toastError(err, "Couldn't complete the close")

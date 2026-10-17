@@ -12,11 +12,9 @@
  * unit tests; this suite is the only place that checks them AGAINST EACH
  * OTHER, through the public API, the way the UI calls them.
  *
- * The second half pins the verified defects B1–B7 from the PRD. B1 and B2 are
- * fixed in slice 0. B3–B7 are fixed structurally by the close-entity rebuild
- * (slices 2–3); until then they are `it.fails` — they document the CORRECT
- * behaviour and flip to failing-as-expected the moment the fix lands, which
- * is the signal to turn them into plain `it`.
+ * The second half pins the verified defects B1–B7 from the PRD. B1 and B2 were
+ * fixed in slice 0; B3–B7 by the close-model rebuild (slice 3). Every surface
+ * here is the close-model API the UI calls since the cutover.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -24,12 +22,7 @@ import { convexTest } from "convex-test";
 import schema from "../schema";
 import { api } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
-import {
-  computeBillingScope,
-  type ScopeEntryInput,
-  type ScopeProjectInput,
-} from "../lib/billingScope";
-import { computeReportMonths } from "../lib/reportMembership";
+import { scopeOf, type ScopeEntry, type ScopeProject } from "../lib/billing/scope";
 
 const modules = (
   import.meta as ImportMeta & {
@@ -210,7 +203,7 @@ async function seedEntry(
 // ─── Surface readers (exactly what the UI calls) ────────────────────────────
 
 async function queueRow(t: T, projectId: Id<"projects">, monthKey: string) {
-  const queue = await t.withIdentity(ADMIN).query(api.close.getCloseQueue, {});
+  const queue = await t.withIdentity(ADMIN).query(api.billingViews.getCloseQueue, {});
   return queue.months
     .flatMap((m) => m.rows)
     .find((r) => r.projectId === projectId && r.periodToken === monthKey);
@@ -219,7 +212,7 @@ async function queueRow(t: T, projectId: Id<"projects">, monthKey: string) {
 async function workspace(t: T, projectId: Id<"projects">, monthKey: string) {
   return t
     .withIdentity(ADMIN)
-    .query(api.close.getCloseWorkspace, { projectId, period: monthKey });
+    .query(api.billingViews.getCloseWorkspace, { projectId, period: monthKey });
 }
 
 async function invoiceDoc(t: T, invoiceId: Id<"invoices">) {
@@ -235,13 +228,12 @@ async function finalize(t: T, invoiceId: Id<"invoices">) {
 async function report(t: T, projectId: Id<"projects">, year: number, month: number) {
   return t
     .withIdentity(ADMIN)
-    .query(api.statements.getRetainerStatement, { projectId, year, month });
+    .query(api.billingReports.getMonthlyReport, { projectId, year, month });
 }
 
-function monthEnd(monthKey: string): string {
-  const [y, m] = monthKey.split("-").map(Number);
-  const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
-  return `${monthKey}-${String(last).padStart(2, "0")}`;
+/** The one way a period becomes a draft / close (the Close workspace's commit). */
+async function commit(t: T, projectId: Id<"projects">, periodStart: string) {
+  return t.withIdentity(ADMIN).mutation(api.billingCloses.commitClose, { projectId, periodStart });
 }
 
 // ─── N11: one number per period, on every surface ──────────────────────────
@@ -268,14 +260,11 @@ describe("billing consistency (N11) — queue = workspace = draft = invoice = re
     expect(ws?.amount).toBe(82.5);
     expect(ws?.usageMinutes).toBe(655);
 
-    const { invoiceId } = await t
-      .withIdentity(ADMIN)
-      .mutation(api.invoices.createInvoice, { projectId, retainerYear: 2026, retainerMonth: 3 });
-    expect((await invoiceDoc(t, invoiceId))?.total).toBe(82.5);
-    expect((await invoiceDoc(t, invoiceId))?.retainerUsedMinutes).toBe(655);
+    const { invoiceId } = await commit(t, projectId, "2026-03-01");
+    expect((await invoiceDoc(t, invoiceId!))?.total).toBe(82.5);
 
-    await finalize(t, invoiceId);
-    expect((await invoiceDoc(t, invoiceId))?.total).toBe(82.5);
+    await finalize(t, invoiceId!);
+    expect((await invoiceDoc(t, invoiceId!))?.total).toBe(82.5);
 
     const stmt = await report(t, projectId, 2026, 3);
     expect(stmt?.billing.overageAmount).toBe(82.5);
@@ -301,9 +290,7 @@ describe("billing consistency (N11) — queue = workspace = draft = invoice = re
     expect(ws?.withinBudget).toBe(true);
     expect(ws?.usageMinutes).toBe(300);
 
-    await t
-      .withIdentity(ADMIN)
-      .mutation(api.retainerPeriods.closePeriod, { projectId, periodStart: "2026-03-01" });
+    expect((await commit(t, projectId, "2026-03-01")).invoiceId).toBeNull();
 
     expect(await queueRow(t, projectId, "2026-03")).toBeUndefined();
     const stmt = await report(t, projectId, 2026, 3);
@@ -327,15 +314,11 @@ describe("billing consistency (N11) — queue = workspace = draft = invoice = re
     expect(row?.amount).toBe(140);
     expect(ws?.amount).toBe(140);
 
-    const { invoiceId } = await t.withIdentity(ADMIN).mutation(api.invoices.createInvoice, {
-      projectId,
-      startDate: "2026-03-01",
-      endDate: monthEnd("2026-03"),
-    });
-    expect((await invoiceDoc(t, invoiceId))?.total).toBe(140);
+    const { invoiceId } = await commit(t, projectId, "2026-03-01");
+    expect((await invoiceDoc(t, invoiceId!))?.total).toBe(140);
 
-    await finalize(t, invoiceId);
-    expect((await invoiceDoc(t, invoiceId))?.total).toBe(140);
+    await finalize(t, invoiceId!);
+    expect((await invoiceDoc(t, invoiceId!))?.total).toBe(140);
   });
 });
 
@@ -357,10 +340,8 @@ describe("B1 — retainer overage priced from minutes on every surface", () => {
     expect((await queueRow(t, projectId, "2026-03"))?.amount).toBe(11.67);
     expect((await workspace(t, projectId, "2026-03"))?.amount).toBe(11.67);
 
-    const { invoiceId } = await t
-      .withIdentity(ADMIN)
-      .mutation(api.invoices.createInvoice, { projectId, retainerYear: 2026, retainerMonth: 3 });
-    expect((await invoiceDoc(t, invoiceId))?.total).toBe(11.67); // was 12.00
+    const { invoiceId } = await commit(t, projectId, "2026-03-01");
+    expect((await invoiceDoc(t, invoiceId!))?.total).toBe(11.67); // was 12.00
   });
 });
 
@@ -380,7 +361,7 @@ describe("B2 — no unbounded T&M invoice", () => {
 });
 
 describe("B3 — time logged after the draft belongs to the next close", () => {
-  it.fails("a retainer draft finalizes even if its month got new time after creation", async () => {
+  it("a retainer draft finalizes even if its month got new time after creation", async () => {
     setToday("2026-04-10");
     const t = convexTest(schema, modules);
     const org = await seedOrg(t);
@@ -391,24 +372,21 @@ describe("B3 — time logged after the draft belongs to the next close", () => {
     });
     const task = await seedTask(t, org, projectId, "Support");
     await seedEntry(t, org, { taskId: task, date: "2026-03-10", minutes: 120 });
-    const { invoiceId } = await t
-      .withIdentity(ADMIN)
-      .mutation(api.invoices.createInvoice, { projectId, retainerYear: 2026, retainerMonth: 3 });
+    const { invoiceId } = await commit(t, projectId, "2026-03-01");
 
-    // Drafts don't block logging into their month — this is reachable today.
     const late = await seedEntry(t, org, { taskId: task, date: "2026-03-20", minutes: 30 });
 
-    await finalize(t, invoiceId); // today: rejected by the stale-draft gate
-    const invoice = await invoiceDoc(t, invoiceId);
+    await finalize(t, invoiceId!);
+    const invoice = await invoiceDoc(t, invoiceId!);
     expect(invoice?.status).toBe("invoiced");
     expect(invoice?.total).toBe(100); // the draft's snapshot, unchanged
     const lateEntry = await t.run(async (ctx) => ctx.db.get(late));
-    expect(lateEntry?.invoiceId).toBeUndefined(); // still open → next close
+    expect(lateEntry?.closeId).toBeUndefined(); // still open → next close
   });
 });
 
 describe("B4 — a closed month's report never changes", () => {
-  it.fails("a skipped entry on the next month's draft counts on that month, not on the closed origin month", async () => {
+  it("a skipped entry on the next month's draft counts on that month, not on the closed origin month", async () => {
     setToday("2026-05-10");
     const t = convexTest(schema, modules);
     const org = await seedOrg(t);
@@ -421,123 +399,81 @@ describe("B4 — a closed month's report never changes", () => {
     const skipped = await seedEntry(t, org, { taskId: task, date: "2026-03-12", minutes: 30 });
 
     // Skip it out of March, close March (zero usage), bill April with it.
-    await t.withIdentity(ADMIN).mutation(api.close.skipEntries, { entryIds: [skipped] });
-    await t
-      .withIdentity(ADMIN)
-      .mutation(api.retainerPeriods.closePeriod, { projectId, periodStart: "2026-03-01" });
+    await t.withIdentity(ADMIN).mutation(api.billingCloses.skipEntries, { entryIds: [skipped] });
+    await commit(t, projectId, "2026-03-01");
     await seedEntry(t, org, { taskId: task, date: "2026-04-08", minutes: 45 });
-    await t
-      .withIdentity(ADMIN)
-      .mutation(api.invoices.createInvoice, { projectId, retainerYear: 2026, retainerMonth: 4 });
+    await commit(t, projectId, "2026-04-01");
 
     const march = await report(t, projectId, 2026, 3);
     const april = await report(t, projectId, 2026, 4);
     // Reports aggregate per task, so membership is asserted through minutes.
-    expect(march?.balance.usedMinutes).toBe(0); // today: 30 — listed on March
-    expect(april?.balance.usedMinutes).toBe(75); // today: 45 — April's report
-    // shows "within budget" while the April draft bills 15 min of overage.
+    expect(march?.balance.usedMinutes).toBe(0);
+    expect(april?.balance.usedMinutes).toBe(75); // 45 + the carried 30
     expect(april?.billing.overageAmount).toBe(25); // what the April draft bills
   });
 });
 
-describe("B5 — draft line amounts come from minutes, not 2-decimal hours", () => {
-  it.fails("changing the rate of a 20-minute line prices 20 minutes", async () => {
+describe("B5 — draft amounts come from minutes, never from 2-decimal hours", () => {
+  it("a 20-minute T&M line at 100/h is 33.33, and its amount cannot be hand-edited", async () => {
     setToday("2026-04-10");
     const t = convexTest(schema, modules);
     const org = await seedOrg(t);
     const projectId = await seedTm(t, org);
     const task = await seedTask(t, org, projectId, "Build");
-    await seedEntry(t, org, { taskId: task, date: "2026-03-09", minutes: 20, rate: 90 });
-    const { invoiceId } = await t.withIdentity(ADMIN).mutation(api.invoices.createInvoice, {
-      projectId,
-      startDate: "2026-03-01",
-      endDate: "2026-03-31",
-    });
+    await seedEntry(t, org, { taskId: task, date: "2026-03-09", minutes: 20, rate: 100 });
+    const { invoiceId } = await commit(t, projectId, "2026-03-01");
+    expect((await invoiceDoc(t, invoiceId!))?.total).toBe(33.33);
+
     const line = await t.run(async (ctx) =>
       ctx.db
         .query("invoiceLineItems")
-        .withIndex("by_invoiceId", (q) => q.eq("invoiceId", invoiceId))
+        .withIndex("by_invoiceId", (q) => q.eq("invoiceId", invoiceId!))
         .first(),
     );
-    expect(line?.amount).toBe(30);
-
-    await t
-      .withIdentity(ADMIN)
-      .mutation(api.invoices.updateInvoiceLineItem, { id: line!._id, unitPrice: 100 });
-
-    const updated = await t.run(async (ctx) => ctx.db.get(line!._id));
-    expect(updated?.amount).toBe(33.33); // today: 0.33 h × 100 = 33.00
+    await expect(
+      t.withIdentity(ADMIN).mutation(api.billingInvoices.updateManualLine, { lineId: line!._id, unitPrice: 90 }),
+    ).rejects.toThrow(/Only manual lines/);
   });
 });
 
 describe("B6 — a numbered invoice is never deleted", () => {
-  it.fails("a finalized-then-reverted draft cannot be deleted (gapless series)", async () => {
+  it("a finalized-then-reverted draft cannot be deleted (gapless series)", async () => {
     setToday("2026-04-10");
     const t = convexTest(schema, modules);
     const org = await seedOrg(t);
     const projectId = await seedTm(t, org);
     const task = await seedTask(t, org, projectId, "Build");
     await seedEntry(t, org, { taskId: task, date: "2026-03-09", minutes: 60, rate: 100 });
-    const { invoiceId } = await t.withIdentity(ADMIN).mutation(api.invoices.createInvoice, {
-      projectId,
-      startDate: "2026-03-01",
-      endDate: "2026-03-31",
-    });
-    await finalize(t, invoiceId);
+    const { invoiceId } = await commit(t, projectId, "2026-03-01");
+    await finalize(t, invoiceId!);
     await t
       .withIdentity(ADMIN)
-      .mutation(api.invoices.changeInvoiceStatus, { id: invoiceId, newStatus: "draft" });
-    expect((await invoiceDoc(t, invoiceId))?.number).toBe(1);
+      .mutation(api.invoices.changeInvoiceStatus, { id: invoiceId!, newStatus: "draft" });
+    expect((await invoiceDoc(t, invoiceId!))?.number).toBe(1);
 
     await expect(
-      t.withIdentity(ADMIN).mutation(api.invoices.deleteInvoice, { id: invoiceId }),
-    ).rejects.toThrow(); // today: deleted, number 1 is gone
+      t.withIdentity(ADMIN).mutation(api.invoices.deleteInvoice, { id: invoiceId! }),
+    ).rejects.toThrow(/gap in the series/);
   });
 });
 
-describe("B7 — an open entry never resolves into a closed period (latent)", () => {
-  // Pure-level: today the retainer entry-date write guard keeps this state
-  // out of the database, but the scope rule itself is wrong (PRD §1.1).
-  const project: ScopeProjectInput = {
-    _id: "p1" as Id<"projects">,
-    billingType: "retainer",
-    startDate: "2026-03-01",
-    rolloverEnabled: false,
-    cycleLength: 1,
-    includedMinutesPerMonth: 600,
-    overageRate: 100,
-  };
-  const late: ScopeEntryInput = {
-    _id: "e1" as Id<"timeEntries">,
-    date: "2026-05-15",
-    durationMinutes: 60,
-    isBillable: true,
-  };
-  // March re-opened; April and May still closed.
-  const closedPeriods = [
-    { periodStart: "2026-04-01", periodEnd: "2026-04-30", closedAt: 1 },
-    { periodStart: "2026-05-01", periodEnd: "2026-05-31", closedAt: 1 },
-  ];
-
-  it.fails("a May-dated open entry lands in June, not in the closed May", () => {
-    const todayStr = "2026-07-10";
-    const months = computeReportMonths({
-      project,
-      entries: [late],
-      closedPeriods,
-      invoices: [],
-      todayStr,
-    });
-    expect(months.get("e1")).toBe("2026-06"); // today: "2026-05" (closed)
-
-    const june = computeBillingScope({
-      project,
-      entries: [late],
-      closedPeriods,
-      invoices: [],
-      todayStr,
-      targetPeriodStart: "2026-06-01",
-    });
-    expect(june.entries.map((e) => e.entryId)).toContain("e1"); // today: in no scope
+describe("B7 — an open entry never resolves into a closed period", () => {
+  it("a May-dated open entry lands in June, not in the closed May", () => {
+    // March re-opened while April and May stay closed.
+    const project: ScopeProject = { billingType: "retainer", startDate: "2026-03-01" };
+    const late: ScopeEntry = {
+      _id: "e1" as Id<"timeEntries">,
+      date: "2026-05-15",
+      isBillable: true,
+      locked: false,
+    };
+    const liveCloses = [
+      { start: "2026-04-01", end: "2026-04-30" },
+      { start: "2026-05-01", end: "2026-05-31" },
+    ];
+    const june = { start: "2026-06-01", end: "2026-06-30" };
+    expect(scopeOf({ project, entries: [late], liveCloses, period: june })).toEqual([
+      { entry: late, carried: "logged-late" },
+    ]);
   });
 });

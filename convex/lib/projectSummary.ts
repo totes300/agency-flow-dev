@@ -20,12 +20,8 @@
 export type EntryInput = {
   durationMinutes: number;
   isBillable: boolean;
-  invoiceId: string | null;
-  // Phase 8 — settlement axis (independent of invoice linkage). An entry
-  // is "billed" for summary purposes when either field is set: invoiced
-  // covers T&M/Fixed/overage, settledAt covers retainer within-budget
-  // close (Slice 3) and Fixed coverage (Slice 1).
-  settledAt?: number | null;
+  /** In a live close (billing refactor): billed or covered, no longer open. */
+  closed: boolean;
   costRate: number;
   billableRate: number;
   date: string; // YYYY-MM-DD
@@ -194,13 +190,7 @@ export function computeTmSummary(args: {
     if (e.isBillable) {
       billableMinutes += e.durationMinutes;
       const amount = (e.durationMinutes / 60) * e.billableRate;
-      // Phase 8 — "billed" for T&M summary purposes means either
-      // invoice-anchored OR settled (period-closed). A retainer-included
-      // hour is no longer "unbilled" — it's covered by the monthly fee.
-      const isBilled =
-        (e.invoiceId !== undefined && e.invoiceId !== null) ||
-        (e.settledAt !== undefined && e.settledAt !== null);
-      if (isBilled) {
+      if (e.closed) {
         billedMinutes += e.durationMinutes;
         billedAmount += amount;
       } else {

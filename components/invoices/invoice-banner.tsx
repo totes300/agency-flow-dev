@@ -1,8 +1,7 @@
 "use client"
 
-import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
-import { useGenerateInvoice } from "@/lib/hooks/use-generate-invoice"
+import { useBillingActions } from "@/lib/hooks/use-billing-actions"
 import type { Id } from "@/convex/_generated/dataModel"
 import { cn } from "@/lib/utils"
 import {
@@ -61,8 +60,7 @@ export function InvoiceBanner({
   currency: string
   timezone: string
 }) {
-  const { generate, pending } = useGenerateInvoice()
-  const router = useRouter()
+  const { reviewClose, billFixedFee, pending } = useBillingActions()
 
   if (!state) return null
 
@@ -73,32 +71,18 @@ export function InvoiceBanner({
     state.daysSinceLastInvoice !== null &&
     state.daysSinceLastInvoice >= CADENCE_THRESHOLD_DAYS
 
-  // Both retainer kinds carry `targetYear`/`targetMonth`. For monthly the
-  // target is the over-budget month; for cycle the target is the cycle-end
-  // month (the row `createInvoice` keys on). Either way `useGenerateInvoice`
-  // hands them to `createInvoice`, which resolves "month vs cycle" from the
-  // project's `rolloverEnabled` flag.
-  const retainerYear =
-    state.kind === "retainer-monthly" || state.kind === "retainer-cycle"
-      ? state.targetYear
-      : undefined
-  const retainerMonth =
-    state.kind === "retainer-monthly" || state.kind === "retainer-cycle"
-      ? state.targetMonth
-      : undefined
-
+  // Retainer and T&M periods are reviewed and committed in the Close
+  // workspace (D8); a fixed fee bills straight to a draft (D5). Retainer
+  // targets are the period's last month — the workspace snaps it to the grid.
   function handleGenerate() {
-    // T&M drafts are only created from the Close workspace, after review
-    // (docs/prd-billing-refactor.md B2). The server rejects unbounded calls.
-    if (state?.kind === "tm") {
-      router.push("/billing")
-      return
+    if (!state) return
+    if (state.kind === "fixed") {
+      void billFixedFee(projectId)
+    } else if (state.kind === "tm") {
+      reviewClose(projectId)
+    } else {
+      reviewClose(projectId, { year: state.targetYear, month: state.targetMonth })
     }
-    void generate({
-      projectId,
-      retainerYear,
-      retainerMonth,
-    })
   }
 
   return (
@@ -145,7 +129,7 @@ export function InvoiceBanner({
         </div>
       </div>
       <Button size="sm" disabled={pending} onClick={handleGenerate}>
-        {state.kind === "tm" ? "Review to invoice" : "Generate invoice"}
+        {state.kind === "fixed" ? "Generate invoice" : "Review to invoice"}
       </Button>
     </div>
   )

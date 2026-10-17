@@ -29,7 +29,6 @@ import { assertValidDateString } from "./lib/dateValidation";
 import { getOrgSettings } from "./lib/orgHelpers";
 import { ORG_TIMEZONE_FALLBACK, getDateInTimezone } from "./lib/timer";
 import { classifyReportPeriod } from "./lib/reportPeriod";
-import { invoiceCoversMonth } from "./lib/invoiceAnchor";
 import {
   getRetainerCyclePosition,
   getRetainerCycleStartMonth,
@@ -49,6 +48,8 @@ import {
 } from "./lib/agentReportCore";
 import { round2 } from "./lib/billing/money";
 import { getProjectEntries } from "./lib/projectEntries";
+import { loadCloseContext } from "./lib/billing/closeData";
+import { loadReportMonths } from "./lib/billing/reportMonths";
 
 /** Hard scan ceilings — throwing beats returning a silently-wrong sum. */
 const MAX_REPORT_ENTRIES = 20_000;
@@ -448,41 +449,27 @@ export const retainerHealthForMonth = internalQuery({
       const rolloverEnabled = project.rolloverEnabled ?? false;
       const cycleLength = project.cycleLength ?? 1;
 
-      // Billable minutes per YYYY-MM — the statements.ts aggregation, per
-      // project (one indexed read; org-guarded).
+      // Billable minutes per REPORT month — the monthly report's own rule
+      // (billing refactor N8): carried work counts where its close bills it.
+      const closeContext = await loadCloseContext(ctx, auth.orgId, project._id);
+      const reportMonths = await loadReportMonths(ctx, closeContext);
       const usedMinutesByMonth = new Map<string, number>();
-      for (const e of await getProjectEntries(ctx, auth.orgId, project._id)) {
+      for (const e of closeContext.entries) {
         if (!e.isBillable) continue;
-        const key = e.date.slice(0, 7);
-        usedMinutesByMonth.set(
-          key,
-          (usedMinutesByMonth.get(key) ?? 0) + e.durationMinutes,
-        );
+        const key = reportMonths.get(e._id) ?? e.date.slice(0, 7);
+        usedMinutesByMonth.set(key, (usedMinutesByMonth.get(key) ?? 0) + e.minutes);
       }
       const usedMinutes = usedMinutesByMonth.get(targetKey) ?? 0;
       const monthEndBalance = includedMinutes - usedMinutes;
 
-      // Covering invoice — same anchor rule the project page and statements
-      // use; a void invoice frees its period.
-      const projectInvoices = await ctx.db
-        .query("invoices")
-        .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
-        .filter((q) => q.eq(q.field("orgId"), auth.orgId))
-        .collect();
-      const coveringInvoice =
-        projectInvoices.find(
-          (inv) =>
-            inv.status !== "void" && invoiceCoversMonth(inv, args.year, args.month),
-        ) ?? null;
-
-      // Admin settlement state for the month row.
-      const periodRow = await ctx.db
-        .query("retainerPeriods")
-        .withIndex("by_projectId_periodStart", (q) =>
-          q.eq("projectId", project._id).eq("periodStart", periodStart),
-        )
-        .first();
-      const isClosed = periodRow?.closedAt !== undefined && periodRow !== null;
+      // The live close covering the month: its invoice and the closed flag.
+      const coveringClose = closeContext.liveCloses.find(
+        (c) => c.periodStart <= periodStart && c.periodEnd >= periodStart,
+      );
+      const coveringInvoice = coveringClose?.invoiceId
+        ? await ctx.db.get(coveringClose.invoiceId)
+        : null;
+      const isClosed = coveringClose !== undefined;
 
       // Scope classification: non-rollover months settle alone; rollover
       // months classify on the cycle-to-date balance (statements.ts math).

@@ -1,9 +1,6 @@
 import { describe, it, expect } from "vitest";
-import {
-  entryStatus,
-  billableOverviewBucket,
-  monthlySettlementPeriod,
-} from "../settleEntries";
+import { monthlySettlementPeriod } from "../settleEntries";
+import { entryStatus, billableOverviewBucket } from "../entryStatus";
 import type { Id } from "../../_generated/dataModel";
 
 /**

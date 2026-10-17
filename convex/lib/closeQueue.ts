@@ -15,7 +15,6 @@
  * `billingScope`, and feeds these functions.
  */
 
-import type { BillingScopeReport } from "./billingScope";
 import { reviewFlagCount, type CloseFlag } from "./closeFlags";
 import { round2 } from "./billing/money";
 
@@ -36,7 +35,7 @@ export type QueueScopeSummary = {
  * is the next close), so counting them here is the row's true in-scope size.
  */
 export function summarizeQueueScope(
-  scope: BillingScopeReport,
+  scope: { entries: readonly unknown[]; usageMinutes: number },
   flags: CloseFlag[],
 ): QueueScopeSummary {
   return {

@@ -132,7 +132,7 @@ export function CloseWorkspace({
 
   // Skip / un-skip (slice 05). Server re-derives the stamp; totals + carried
   // lines recompute via the reactive query.
-  const skipEntries = useMutation(api.close.skipEntries)
+  const skipEntries = useMutation(api.billingCloses.skipEntries)
   async function onSkip(entryIds: Id<"timeEntries">[], nextLabel: string) {
     try {
       await skipEntries({ entryIds })

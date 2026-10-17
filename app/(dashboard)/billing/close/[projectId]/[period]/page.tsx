@@ -28,7 +28,7 @@ export default function CloseWorkspacePage() {
   const valid = period === "fixed" || /^\d{4}-\d{2}$/.test(period)
 
   const data = useQuery(
-    api.close.getCloseWorkspace,
+    api.billingViews.getCloseWorkspace,
     isAuthenticated && valid ? { projectId, period } : "skip",
   )
   useBreadcrumbTitle(data ? `Close · ${data.period.label}` : null)

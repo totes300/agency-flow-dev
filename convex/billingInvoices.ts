@@ -22,12 +22,13 @@ import {
 
 /**
  * A fixed-fee invoice: one `fixed` line for `amount` (deposit, installment or
- * remainder). Fixed-project entries are a work report only and never lock.
+ * remainder; omitted = everything left). The draft's sidebar adjusts it.
+ * Fixed-project entries are a work report only and never lock.
  */
 export const createFixedInvoice = mutation({
   args: {
     projectId: v.id("projects"),
-    amount: v.number(), // decimal currency units, as typed
+    amount: v.optional(v.number()), // decimal currency units, as typed
     description: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -39,10 +40,16 @@ export const createFixedInvoice = mutation({
     if (!client || client.orgId !== orgId) throw new ConvexError("Client not found for project.");
 
     const currency = client.currency;
-    const amountMinor = toMinor(args.amount, currency);
-    if (amountMinor <= 0) throw new ConvexError("Enter an amount greater than zero.");
     const remainingMinor =
       toMinor(project.fixedPrice ?? 0, currency) - (await fixedBilledMinor(ctx, orgId, project._id, currency));
+    const amountMinor = args.amount !== undefined ? toMinor(args.amount, currency) : remainingMinor;
+    if (amountMinor <= 0) {
+      throw new ConvexError(
+        args.amount !== undefined
+          ? "Enter an amount greater than zero."
+          : "This project's fixed fee is fully invoiced — there is nothing left to bill.",
+      );
+    }
     if (amountMinor > remainingMinor) {
       throw new ConvexError(
         `Only ${fromMinor(Math.max(0, remainingMinor), currency)} ${currency} of the fixed fee is left to bill.`,
@@ -190,6 +197,40 @@ export const removeManualLine = mutation({
       throw new ConvexError("Only manual lines can be removed. Skip the time in Billing → Close instead.");
     }
     await ctx.db.delete(line._id);
+    await recomputeInvoiceTotals(ctx, invoice);
+  },
+});
+
+/**
+ * Set the amount of a fixed-fee draft's `fixed` line (deposit, installment,
+ * remainder). Never beyond what is left of the sold fee; finalize re-checks.
+ */
+export const setFixedAmount = mutation({
+  args: { lineId: v.id("invoiceLineItems"), amount: v.number() },
+  handler: async (ctx, args) => {
+    const { orgId } = await requireAdmin(ctx);
+    const { line, invoice } = await loadDraftLine(ctx, orgId, args.lineId);
+    if (line.lineType !== "fixed") throw new ConvexError("Not a fixed-fee line.");
+    const project = await ctx.db.get(invoice.projectId);
+    if (!project || project.orgId !== orgId) throw new ConvexError("Project not found.");
+    const amountMinor = toMinor(args.amount, invoice.currency);
+    if (amountMinor <= 0) throw new ConvexError("Enter an amount greater than zero.");
+    const remainingMinor =
+      toMinor(project.fixedPrice ?? 0, invoice.currency) -
+      (await fixedBilledMinor(ctx, orgId, project._id, invoice.currency));
+    if (amountMinor > remainingMinor) {
+      throw new ConvexError(
+        `Only ${fromMinor(Math.max(0, remainingMinor), invoice.currency)} ${invoice.currency} of the fixed fee is left to bill.`,
+      );
+    }
+    const amount = fromMinor(amountMinor, invoice.currency);
+    await ctx.db.patch(line._id, {
+      unitPrice: amount,
+      unitPriceMinor: amountMinor,
+      amount,
+      amountMinor,
+      updatedAt: Date.now(),
+    });
     await recomputeInvoiceTotals(ctx, invoice);
   },
 });

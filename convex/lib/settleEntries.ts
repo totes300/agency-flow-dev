@@ -416,35 +416,6 @@ export {
 
 // ─── projectOverview bucket classifier ─────────────────────────────────────
 
-/**
- * Bucket vocabulary used by `projectOverview` to aggregate per-entry
- * minutes/amounts. Mirrors `entryStatus()` but splits the `closed` bucket
- * by `settledReason` so reports can distinguish revenue ("invoiced") from
- * coverage ("settled"). Non-billable entries are excluded from the
- * billable rollup entirely (the caller tracks them via
- * `totalNonBillableMinutes`).
- *
- *   open      → !invoiceId && !settledAt           (needs billing/closure)
- *   draft     → invoiceId set, settledAt unset     (reserved by a draft)
- *   invoiced  → settledReason === "invoiced"        (revenue, billed hourly)
- *   settled   → settledReason ∈ {retainer_included, (covered, no revenue)
- *                                fixed_included}
- */
-export type OverviewBucket = "open" | "draft" | "invoiced" | "settled";
-
-type BillableBucketInput = {
-  invoiceId?: Id<"invoices">;
-  settledAt?: number;
-  settledReason?: SettledReason;
-};
-
-export function billableOverviewBucket(e: BillableBucketInput): OverviewBucket {
-  if (e.settledReason === "invoiced") return "invoiced";
-  if (e.settledReason !== undefined) return "settled";
-  if (e.invoiceId !== undefined) return "draft";
-  return "open";
-}
-
 // The one-shot `backfillSettledFromInvoiceId` deployed mutation lives at
 // `convex/settleEntries.ts` (top-level). `lib/` is helpers-only — keeping
 // the deployment-target separate keeps the file boundary honest.

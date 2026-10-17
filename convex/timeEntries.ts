@@ -7,9 +7,9 @@ import { getDateInTimezone, ORG_TIMEZONE_FALLBACK } from "./lib/timer";
 import { getOrgSettings, resolveRateSnapshot, resolveEntryCategory } from "./lib/orgHelpers";
 import { validateAssignees } from "./lib/task_helpers";
 import { assertValidDateString } from "./lib/dateValidation";
-import { assertEntryDateOpen } from "./lib/settleGuards";
 import type { EntrySettlementSnapshot } from "./lib/types";
-import { billableOverviewBucket } from "./lib/settleEntries";
+import { billableOverviewBucket, entryStatus } from "./lib/entryStatus";
+import { loadEntryCloseInfo } from "./lib/billing/entryCloseInfo";
 import { logActivity } from "./activityLog";
 import { getProjectEntries } from "./lib/projectEntries";
 
@@ -279,11 +279,8 @@ export const create = mutation({
       );
     }
 
-    // Phase 8 — closed-retainer-period guard (Slice 3). No-op for non-retainer
-    // projects. Runs after the date is resolved so it sees the actual day the
-    // entry will file under (not the user-supplied `args.date`, which may
-    // disagree with `startedAt` and is rejected above).
-    await assertEntryDateOpen(ctx, project, date);
+    // No closed-period date guard (billing refactor, story 28): time logged
+    // into an already-closed period is open and carries into the next close.
 
     // Determine billable before rate resolution — non-billable entries skip rate enforcement
     const isBillable = args.isBillable ?? task.billable;
@@ -456,30 +453,6 @@ export const update = mutation({
       updates.taskId = task._id;
       // Sticky category (locked decision): a task move never re-derives
       // snapshotCategoryId. The entry keeps the discipline it was logged under.
-    }
-
-    // Phase 8 — closed-retainer-period guard on date OR task changes
-    // (Slice 3 / Revision Pass #3a). The same-project invariant above
-    // means the target project is always the entry's existing project, so
-    // we resolve the project once from the entry's task. The guard is a
-    // no-op for non-retainer projects.
-    //
-    // We run AFTER the same-project check so a task swap that would have
-    // been rejected for other reasons fails first with its own clearer
-    // error. Date-only changes also run through here so a backdated edit
-    // into a closed month is rejected with the same hint message as a
-    // backdated create.
-    const dateChanged = nextDate !== entry.date;
-    if (dateChanged || taskChanged) {
-      const sourceTask = taskChanged
-        ? await loadTargetTask()
-        : await ctx.db.get(entry.taskId);
-      if (sourceTask?.projectId) {
-        const guardProject = await ctx.db.get(sourceTask.projectId);
-        if (guardProject) {
-          await assertEntryDateOpen(ctx, guardProject, nextDate);
-        }
-      }
     }
 
     if (args.isBillable !== undefined) {
@@ -740,9 +713,13 @@ export const listProjectEntries = query({
       categories.filter(Boolean).map((c) => [c!._id.toString(), c!]),
     );
 
+    const closeInfo = await loadEntryCloseInfo(ctx, orgId, visible);
+    const invoiceIdOf = (e: Doc<"timeEntries">) =>
+      e.invoiceId ?? (e.closeId ? closeInfo.get(e.closeId)?.closeInvoiceId : undefined);
     const invoiceIds = new Set<string>();
     for (const e of visible) {
-      if (e.invoiceId) invoiceIds.add(e.invoiceId.toString());
+      const id = invoiceIdOf(e);
+      if (id) invoiceIds.add(id.toString());
     }
     const invoices = await Promise.all(
       [...invoiceIds].map((id) => ctx.db.get(id as Id<"invoices">)),
@@ -787,9 +764,11 @@ export const listProjectEntries = query({
       const user = userMap.get(e.userId.toString());
       const catId = e.snapshotCategoryId;
       const cat = catId ? categoryMap.get(catId.toString()) : undefined;
-      const inv = e.invoiceId ? invoiceMap.get(e.invoiceId.toString()) : undefined;
+      const invoiceId = invoiceIdOf(e);
+      const inv = invoiceId ? invoiceMap.get(invoiceId.toString()) : undefined;
       return {
         _id: e._id,
+        closeStatus: e.closeId ? closeInfo.get(e.closeId)?.closeStatus : undefined,
         taskId: e.taskId,
         taskTitle: task?.title ?? "Unknown task",
         userId: e.userId,
@@ -828,22 +807,8 @@ export const listProjectEntries = query({
       rows = rows.filter((r) => r.userId === args.memberId);
     }
     if (args.billingStatus && args.billingStatus !== "all") {
-      // Phase 8 — collapsed UI vocabulary; mirrors `entryStatus()` in
-      // `convex/lib/settleEntries.ts`. The "non_billable" row always wins
-      // its axis (settled or not) — billability is the more informative
-      // axis for that row per Revision Pass #5.
-      rows = rows.filter((r) => {
-        if (args.billingStatus === "non_billable") return !r.isBillable;
-        if (!r.isBillable) return false;
-        if (args.billingStatus === "open") {
-          return r.invoiceId === undefined && r.settledAt === undefined;
-        }
-        if (args.billingStatus === "draft") {
-          return r.invoiceId !== undefined && r.settledAt === undefined;
-        }
-        // closed
-        return r.settledAt !== undefined;
-      });
+      // The row badge's own rule, so the filter can never disagree with it.
+      rows = rows.filter((r) => entryStatus(r) === args.billingStatus);
     }
     const searchTerm = args.search?.trim().toLowerCase();
     if (searchTerm) {
@@ -894,6 +859,7 @@ export const projectOverview = query({
       ...e,
       workCategoryId: e.snapshotCategoryId,
     }));
+    const closeInfo = await loadEntryCloseInfo(ctx, orgId, allEntries);
 
     // Get org timezone for "this month" computation
     const orgSettings = await getOrgSettings(ctx, orgId);
@@ -975,7 +941,8 @@ export const projectOverview = query({
       // correct (retainer revenue lives in `getRetainerData`'s cycle math).
       if (e.isBillable) {
         const amount = (e.durationMinutes / 60) * (e.billableRate ?? 0);
-        switch (billableOverviewBucket(e)) {
+        const close = e.closeId ? closeInfo.get(e.closeId) : undefined;
+        switch (billableOverviewBucket({ ...e, ...close })) {
           case "invoiced":
             invoicedMinutes += e.durationMinutes;
             invoicedAmount += amount;

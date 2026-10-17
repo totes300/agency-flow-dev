@@ -1,12 +1,10 @@
 "use client"
 
-import { useMutation } from "convex/react"
-import { api } from "@/convex/_generated/api"
 import type { Doc, Id } from "@/convex/_generated/dataModel"
 import { Button } from "@/components/ui/button"
 import { InlineEditable, InlineEditableNumber } from "@/components/inline-editable"
-import { toastError } from "@/lib/toast-helpers"
 import { formatCurrency, getCurrencySymbol } from "@/lib/format"
+import { useInvoiceLineActions } from "@/lib/hooks/use-invoice-line-actions"
 import { PlusIcon, Trash2Icon } from "lucide-react"
 
 export type CategoryGroup = {
@@ -17,27 +15,30 @@ export type CategoryGroup = {
   subtotalHours: number
 }
 
-type LineField = "description" | "quantity" | "unitPrice" | "amount"
-
+/**
+ * One line. Time lines are frozen at commit (D6): only the description is
+ * editable and they cannot be removed. Manual lines edit quantity and unit
+ * price; their amount is derived server-side.
+ */
 function LineItemRow({
   lineItem,
   showAmounts,
   readOnly,
   indented = false,
-  currencySymbol,
-  onUpdate,
-  onRemove,
+  currency,
+  actions,
 }: {
   lineItem: Doc<"invoiceLineItems">
   showAmounts: boolean
   readOnly: boolean
   /** Time-backed rows live inside a category group and are left-padded. */
   indented?: boolean
-  currencySymbol: string
-  onUpdate: (id: Id<"invoiceLineItems">, field: LineField, value: string | number) => void
-  onRemove: (id: Id<"invoiceLineItems">) => void
+  currency: string
+  actions: ReturnType<typeof useInvoiceLineActions>
 }) {
   const { _id: id, description, quantity, unitPrice, amount } = lineItem
+  const isManual = lineItem.lineType === "manual"
+  const currencySymbol = getCurrencySymbol(currency)
 
   return (
     <div
@@ -48,7 +49,7 @@ function LineItemRow({
       <span className="flex-1 text-sm leading-snug">
         <InlineEditable
           value={description}
-          onSave={(val) => onUpdate(id, "description", val)}
+          onSave={(val) => actions.rename(id, val)}
           readOnly={readOnly}
           ariaLabel="Edit description"
           errorMessage="Failed to update line item"
@@ -57,9 +58,9 @@ function LineItemRow({
       <span className="flex w-20 justify-end text-sm tabular-nums">
         <InlineEditableNumber
           value={quantity}
-          onSave={(val) => onUpdate(id, "quantity", val)}
-          readOnly={readOnly}
-          suffix="h"
+          onSave={(val) => actions.updateManual(id, "quantity", val)}
+          readOnly={readOnly || !isManual}
+          suffix={isManual ? undefined : "h"}
           ariaLabel="Edit hours"
           errorMessage="Failed to update line item"
         />
@@ -69,31 +70,25 @@ function LineItemRow({
           <span className="flex w-24 justify-end text-sm tabular-nums">
             <InlineEditableNumber
               value={unitPrice}
-              onSave={(val) => onUpdate(id, "unitPrice", val)}
-              readOnly={readOnly}
+              onSave={(val) => actions.updateManual(id, "unitPrice", val)}
+              readOnly={readOnly || !isManual}
               prefix={currencySymbol}
               ariaLabel="Edit rate"
               errorMessage="Failed to update line item"
             />
           </span>
           <span className="flex w-28 justify-end text-sm font-medium tabular-nums">
-            <InlineEditableNumber
-              value={amount}
-              onSave={(val) => onUpdate(id, "amount", val)}
-              readOnly={readOnly}
-              prefix={currencySymbol}
-              ariaLabel="Edit amount"
-              errorMessage="Failed to update line item"
-            />
+            {formatCurrency(amount, currency)}
           </span>
         </>
       )}
-      {!readOnly && (
+      {!readOnly && !isManual && <span className="w-8" />}
+      {!readOnly && isManual && (
         <span className="flex w-8 justify-end">
           <button
             type="button"
             aria-label="Remove line item"
-            onClick={() => onRemove(id)}
+            onClick={() => actions.removeManual(id)}
             className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground/60 opacity-0 transition-[opacity,color,background-color] hover:bg-muted hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
           >
             <Trash2Icon className="size-3.5" />
@@ -132,32 +127,7 @@ export function InvoiceWorkBreakdown({
   subtotal: number
   total: number
 }) {
-  const updateLineItem = useMutation(api.invoices.updateInvoiceLineItem)
-  const addLineItem = useMutation(api.invoices.addInvoiceLineItem)
-  const removeLineItem = useMutation(api.invoices.removeInvoiceLineItem)
-  const symbol = getCurrencySymbol(currency)
-
-  function handleUpdateField(
-    lineItemId: Id<"invoiceLineItems">,
-    field: "description" | "quantity" | "unitPrice" | "amount",
-    value: string | number,
-  ) {
-    void updateLineItem({ id: lineItemId, [field]: value }).catch((err) =>
-      toastError(err, "Failed to update line item")
-    )
-  }
-
-  function handleAddLine() {
-    void addLineItem({ invoiceId }).catch((err) =>
-      toastError(err, "Failed to add line item")
-    )
-  }
-
-  function handleRemoveLine(lineItemId: Id<"invoiceLineItems">) {
-    void removeLineItem({ id: lineItemId }).catch((err) =>
-      toastError(err, "Failed to remove line item")
-    )
-  }
+  const actions = useInvoiceLineActions(invoiceId)
 
   return (
     <div className="flex flex-col">
@@ -213,9 +183,8 @@ export function InvoiceWorkBreakdown({
               showAmounts={showAmounts}
               readOnly={readOnly}
               indented
-              currencySymbol={symbol}
-              onUpdate={handleUpdateField}
-              onRemove={handleRemoveLine}
+              currency={currency}
+              actions={actions}
             />
           ))}
         </div>
@@ -250,9 +219,8 @@ export function InvoiceWorkBreakdown({
               lineItem={li}
               showAmounts={showAmounts}
               readOnly={readOnly}
-              currencySymbol={symbol}
-              onUpdate={handleUpdateField}
-              onRemove={handleRemoveLine}
+              currency={currency}
+              actions={actions}
             />
           ))}
         </div>
@@ -264,7 +232,7 @@ export function InvoiceWorkBreakdown({
           variant="ghost"
           size="sm"
           className="mt-1 w-fit text-muted-foreground"
-          onClick={handleAddLine}
+          onClick={actions.addManual}
         >
           <PlusIcon className="mr-1.5 size-3.5" />
           Add line item

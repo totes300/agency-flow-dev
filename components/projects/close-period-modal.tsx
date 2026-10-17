@@ -25,7 +25,7 @@ import { toast } from "sonner"
  *
  * Principle #1 (Revision Pass) — `Close` is NOT a one-click action; the
  * admin reviews the live Monthly Report preview first, then confirms. The
- * preview is read straight from `api.statements.getRetainerStatement` so
+ * preview is read straight from `api.billingReports.getMonthlyReport` so
  * the confirm-time view matches what `/projects/[id]/reports/[period]`
  * renders pixel-for-pixel.
  *
@@ -52,15 +52,15 @@ export function ClosePeriodModal({
   projectId: Id<"projects">
   year: number
   month: number          // 1-indexed
-  periodStart: string    // YYYY-MM-01 — the natural key for `closePeriod`
+  periodStart: string    // YYYY-MM-01 — the period `commitClose` settles
   periodLabel: string    // "March 2026" — header copy
 }) {
-  const closePeriod = useMutation(api.retainerPeriods.closePeriod)
+  const commitClose = useMutation(api.billingCloses.commitClose)
   // Only fetch the preview when the modal is actually open — a closed
   // modal must not pay the read cost or trigger reactive subscriptions
   // for every retainer row on the page.
   const report = useQuery(
-    api.statements.getRetainerStatement,
+    api.billingReports.getMonthlyReport,
     open ? { projectId, year, month } : "skip",
   )
   const [pending, setPending] = useState(false)
@@ -69,11 +69,11 @@ export function ClosePeriodModal({
     if (pending) return
     setPending(true)
     try {
-      const { settledCount } = await closePeriod({ projectId, periodStart })
+      const { entryCount } = await commitClose({ projectId, periodStart })
       toast.success(
-        settledCount > 0
-          ? `Closed ${periodLabel} — ${settledCount} ${
-              settledCount === 1 ? "entry" : "entries"
+        entryCount > 0
+          ? `Closed ${periodLabel} — ${entryCount} ${
+              entryCount === 1 ? "entry" : "entries"
             } settled.`
           : `Closed ${periodLabel}.`,
         {

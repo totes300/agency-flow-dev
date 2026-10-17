@@ -1,9 +1,10 @@
 // @vitest-environment edge-runtime
 
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { convexTest } from "convex-test";
 import schema from "../schema";
-import type { Doc, Id } from "../_generated/dataModel";
+import { api } from "../_generated/api";
+import type { Id } from "../_generated/dataModel";
 import { resolveScopeEntries } from "../worksheetsHelpers";
 
 const modules = (
@@ -13,29 +14,50 @@ const modules = (
 ).glob("../**/*.ts");
 
 const ORG_ID = "org_settled_period_scope";
+const ADMIN = {
+  subject: "settled_scope_user",
+  tokenIdentifier: "test|settled_scope_user",
+  org_id: ORG_ID,
+  org_role: "org:admin",
+} as never;
+
+beforeEach(() => vi.useFakeTimers({ toFake: ["Date"] }));
+afterEach(() => vi.useRealTimers());
 
 /**
- * The `settledPeriod` worksheet scope selects by SETTLEMENT STAMP, never by
- * entry date — that's what makes the post-close worksheet agree with the
- * Monthly Report: carried-in work (earlier date, stamped into this period)
- * belongs, work skipped out of the period (in-month date, stamped later or
- * not settled) doesn't.
+ * The closed-month (`settledPeriod`) worksheet scope reads the close's frozen
+ * snapshot by report month, never entry dates — so the post-close worksheet
+ * agrees with the Monthly Report: carried-in work (earlier date, settled into
+ * this month) belongs; work skipped out of the month, or logged after the
+ * close, doesn't (docs/prd-billing-refactor.md N8).
  */
 describe("resolveScopeEntries — settledPeriod", () => {
-  async function seed(t: ReturnType<typeof convexTest>): Promise<{
-    projectId: Id<"projects">;
-    inPeriod: Id<"timeEntries">;
-    carriedIn: Id<"timeEntries">;
-    skippedOut: Id<"timeEntries">;
-    unsettled: Id<"timeEntries">;
-  }> {
-    return await t.run(async (ctx) => {
+  it("selects the close snapshot: carried-in included, skipped-out and late excluded", async () => {
+    vi.setSystemTime(new Date("2026-07-10T12:00:00Z"));
+    const t = convexTest(schema, modules);
+    const ids = await t.run(async (ctx) => {
       const now = Date.now();
       const userId = await ctx.db.insert("users", {
         name: "Test User",
         externalId: "settled_scope_user",
         createdAt: now,
         updatedAt: now,
+      });
+      await ctx.db.insert("orgMembers", {
+        orgId: ORG_ID,
+        clerkUserId: "settled_scope_user",
+        userId,
+        role: "admin",
+        joinedAt: now,
+      });
+      await ctx.db.insert("orgSettings", {
+        orgId: ORG_ID,
+        defaultCurrency: "EUR",
+        timezone: "UTC",
+        roundingMinutes: 1,
+        createdAt: now,
+        updatedAt: now,
+        createdBy: userId,
       });
       const statusId = await ctx.db.insert("statuses", {
         orgId: ORG_ID,
@@ -61,6 +83,9 @@ describe("resolveScopeEntries — settledPeriod", () => {
         name: "Stamp Project",
         code: "STMP-001",
         billingType: "retainer",
+        startDate: "2026-05-01",
+        includedMinutesPerMonth: 6000,
+        overageRate: 100,
         createdAt: now,
         updatedAt: now,
         createdBy: userId,
@@ -77,106 +102,58 @@ describe("resolveScopeEntries — settledPeriod", () => {
         updatedAt: now,
         createdBy: userId,
       });
+      return { userId, projectId, taskId };
+    });
 
-      async function insertEntry(input: {
-        date: string;
-        settledPeriodStart?: string;
-        settledPeriodEnd?: string;
-      }): Promise<Id<"timeEntries">> {
-        return await ctx.db.insert("timeEntries", {
+    const insertEntry = (date: string): Promise<Id<"timeEntries">> =>
+      t.run(async (ctx) => {
+        const now = Date.now();
+        return ctx.db.insert("timeEntries", {
           orgId: ORG_ID,
-          projectId,
-          taskId,
-          userId,
-          date: input.date,
+          projectId: ids.projectId,
+          taskId: ids.taskId,
+          userId: ids.userId,
+          date,
           startedAt: now,
           durationMinutes: 60,
           note: "work",
           isBillable: true,
           method: "manual",
           costRate: 50,
-          billableRate: 100,
+          billableRate: 0,
           rateCurrency: "EUR",
           createdAt: now,
           updatedAt: now,
-          createdBy: userId,
-          ...(input.settledPeriodStart
-            ? {
-                settledAt: now,
-                settledReason: "retainer_included" as const,
-                settledPeriodStart: input.settledPeriodStart,
-                settledPeriodEnd: input.settledPeriodEnd,
-              }
-            : {}),
+          createdBy: ids.userId,
         });
-      }
-
-      // Stamped into June, dated June — the ordinary case.
-      const inPeriod = await insertEntry({
-        date: "2026-06-10",
-        settledPeriodStart: "2026-06-01",
-        settledPeriodEnd: "2026-06-30",
       });
-      // Dated MAY but stamped into June (carried in) — must be selected.
-      const carriedIn = await insertEntry({
-        date: "2026-05-28",
-        settledPeriodStart: "2026-06-01",
-        settledPeriodEnd: "2026-06-30",
-      });
-      // Dated June but stamped into JULY (skipped out) — must be excluded.
-      const skippedOut = await insertEntry({
-        date: "2026-06-20",
-        settledPeriodStart: "2026-07-01",
-        settledPeriodEnd: "2026-07-31",
-      });
-      // Dated June, never settled — must be excluded.
-      const unsettled = await insertEntry({ date: "2026-06-05" });
+    const admin = t.withIdentity(ADMIN);
+    const commit = (periodStart: string) =>
+      admin.mutation(api.billingCloses.commitClose, { projectId: ids.projectId, periodStart });
 
-      return { projectId, inPeriod, carriedIn, skippedOut, unsettled };
-    });
-  }
+    // Dated May, skipped into June — carried in.
+    const carriedIn = await insertEntry("2026-05-28");
+    await admin.mutation(api.billingCloses.skipEntries, { entryIds: [carriedIn] });
+    await commit("2026-05-01");
+    // Dated June — the ordinary case.
+    const inPeriod = await insertEntry("2026-06-10");
+    // Dated June but skipped out to July.
+    const skippedOut = await insertEntry("2026-06-20");
+    await admin.mutation(api.billingCloses.skipEntries, { entryIds: [skippedOut] });
+    await commit("2026-06-01");
+    // Dated June, logged after the June close — open, belongs to July.
+    const late = await insertEntry("2026-06-05");
 
-  it("selects by stamp: carried-in included, skipped-out and unsettled excluded", async () => {
-    const t = convexTest(schema, modules);
-    const seeded = await seed(t);
-
-    const entries = await t.run(async (ctx) => {
-      const { entries } = await resolveScopeEntries(
+    const result = await t.run(async (ctx) =>
+      resolveScopeEntries(
         ctx,
-        {
-          kind: "settledPeriod",
-          projectId: seeded.projectId,
-          periodStart: "2026-06-01",
-        },
+        { kind: "settledPeriod", projectId: ids.projectId, periodStart: "2026-06-01" },
         ORG_ID,
-      );
-      return entries.map((e: Doc<"timeEntries">) => e._id);
-    });
-
-    expect(entries).toHaveLength(2);
-    expect(entries).toContain(seeded.inPeriod);
-    expect(entries).toContain(seeded.carriedIn);
-    expect(entries).not.toContain(seeded.skippedOut);
-    expect(entries).not.toContain(seeded.unsettled);
-  });
-
-  it("returns nothing for an open (unstamped) period", async () => {
-    const t = convexTest(schema, modules);
-    const seeded = await seed(t);
-
-    const entries = await t.run(async (ctx) => {
-      const { entries } = await resolveScopeEntries(
-        ctx,
-        {
-          kind: "settledPeriod",
-          projectId: seeded.projectId,
-          periodStart: "2026-08-01",
-        },
-        ORG_ID,
-      );
-      return entries;
-    });
-
-    expect(entries).toHaveLength(0);
+      ),
+    );
+    const selected = new Set(result.entries.map((e) => e._id));
+    expect(selected).toEqual(new Set([inPeriod, carriedIn]));
+    expect(selected.has(skippedOut)).toBe(false);
+    expect(selected.has(late)).toBe(false);
   });
 });

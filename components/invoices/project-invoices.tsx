@@ -1,7 +1,6 @@
 "use client"
 
 import { useQuery } from "convex/react"
-import { useRouter } from "next/navigation"
 import { useConvexAuth } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
@@ -12,7 +11,7 @@ import { InvoicesEmptyState } from "@/components/invoices/invoices-empty-state"
 import { ProjectInvoicesSkeleton } from "@/components/invoices/project-invoices-skeleton"
 import { ProjectInvoicesPaymentCards } from "@/components/invoices/project-invoices-payment-cards"
 import { ProjectInvoicesRetainerCallout } from "@/components/invoices/project-invoices-retainer-callout"
-import { useGenerateInvoice } from "@/lib/hooks/use-generate-invoice"
+import { useBillingActions } from "@/lib/hooks/use-billing-actions"
 import { toast } from "sonner"
 import { formatCurrency } from "@/lib/format"
 import { ORG_TIMEZONE_FALLBACK } from "@/lib/hooks/use-org-timezone"
@@ -40,8 +39,7 @@ export function ProjectInvoices({
   const metrics = useQuery(api.invoices.getProjectInvoiceMetrics, isAuthenticated ? { projectId } : "skip")
   const overview = useQuery(api.timeEntries.projectOverview, isAuthenticated ? { projectId } : "skip")
   const orgSettings = useQuery(api.orgSettings.get, isAuthenticated ? {} : "skip")
-  const { generate, pending } = useGenerateInvoice()
-  const router = useRouter()
+  const { reviewClose, billFixedFee, pending } = useBillingActions()
 
   if (invoices === undefined || metrics === undefined || overview === undefined) {
     return <ProjectInvoicesSkeleton />
@@ -81,20 +79,15 @@ export function ProjectInvoices({
         )
         return
       }
-      void generate({
-        projectId,
-        retainerYear: next.year,
-        retainerMonth: next.month,
-      })
+      reviewClose(projectId, next)
       return
     }
-    // T&M drafts are only created from the Close workspace, after review
-    // (docs/prd-billing-refactor.md B2). The server rejects unbounded calls.
+    // T&M periods are reviewed and committed in Billing → Close (D8).
     if (billingType === "t_and_m") {
-      router.push("/billing")
+      reviewClose(projectId)
       return
     }
-    void generate({ projectId })
+    void billFixedFee(projectId)
   }
 
   return (
@@ -116,7 +109,7 @@ export function ProjectInvoices({
           onClick={handleCreate}
         >
           <PlusIcon data-icon="inline-start" className="size-4" />
-          Create Invoice
+          {billingType === "fixed" ? "Create Invoice" : "Review to invoice"}
         </Button>
       </div>
 

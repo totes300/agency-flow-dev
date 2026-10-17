@@ -461,15 +461,15 @@ describe("reopenClose", () => {
       projectId: w.projectId,
       periodStart: "2026-03-01",
     });
-    const april = await as(w).mutation(api.billingCloses.commitClose, {
+    await as(w).mutation(api.billingCloses.commitClose, {
       projectId: w.projectId,
       periodStart: "2026-04-01",
     });
-    await expect(as(w).mutation(api.billingCloses.reopenClose, { closeId: march.closeId })).rejects.toThrow(
+    await expect(as(w).mutation(api.billingCloses.reopenClose, { projectId: w.projectId, periodStart: "2026-03-01" })).rejects.toThrow(
       /later closed periods first/,
     );
-    await as(w).mutation(api.billingCloses.reopenClose, { closeId: april.closeId });
-    await as(w).mutation(api.billingCloses.reopenClose, { closeId: march.closeId });
+    await as(w).mutation(api.billingCloses.reopenClose, { projectId: w.projectId, periodStart: "2026-04-01" });
+    await as(w).mutation(api.billingCloses.reopenClose, { projectId: w.projectId, periodStart: "2026-03-01" });
     expect((await get(w, a))?.closeId).toBeUndefined();
     expect((await get(w, march.closeId))?.status).toBe("released");
   });

@@ -31,6 +31,8 @@ export type CommitResult = {
   closeId: Id<"billingCloses">;
   /** Present when the close bills money (over-budget retainer, T&M). */
   invoiceId: Id<"invoices"> | null;
+  /** Entries the close settled (billable and non-billable). */
+  entryCount: number;
 };
 
 export async function commitClose(
@@ -117,7 +119,7 @@ export async function commitClose(
     ...(invoiceId ? { invoiceId } : {}),
     data: { periodStart: period.start, amountMinor: price.amountMinor, entries: members.length },
   });
-  return { closeId, invoiceId };
+  return { closeId, invoiceId, entryCount: members.length };
 }
 
 /** The immutable membership snapshot (N2) plus the entry locks (N1). */

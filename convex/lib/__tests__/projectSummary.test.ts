@@ -23,7 +23,7 @@ function entry(overrides: Partial<EntryInput> = {}): EntryInput {
   return {
     durationMinutes: 60,
     isBillable: true,
-    invoiceId: null,
+    closed: false,
     costRate: 50,
     billableRate: 120,
     date: "2026-04-01",
@@ -65,9 +65,9 @@ describe("computeTmSummary", () => {
 
   it("happy path — 3 billable (1 invoiced), 1 non-billable", () => {
     const entries: EntryInput[] = [
-      entry({ durationMinutes: 120, isBillable: true, invoiceId: "inv1", billableRate: 100, costRate: 40 }),
-      entry({ durationMinutes: 60,  isBillable: true, invoiceId: null,   billableRate: 100, costRate: 40 }),
-      entry({ durationMinutes: 180, isBillable: true, invoiceId: null,   billableRate: 150, costRate: 60 }),
+      entry({ durationMinutes: 120, isBillable: true, closed: true, billableRate: 100, costRate: 40 }),
+      entry({ durationMinutes: 60,  isBillable: true, closed: false, billableRate: 100, costRate: 40 }),
+      entry({ durationMinutes: 180, isBillable: true, closed: false, billableRate: 150, costRate: 60 }),
       entry({ durationMinutes: 30,  isBillable: false, costRate: 40 }),
     ];
     const result = computeTmSummary({ ...defaultArgs, entries });

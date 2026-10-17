@@ -17,8 +17,7 @@ import { toastError } from "@/lib/toast-helpers"
 import { cn } from "@/lib/utils"
 import { getDocumentBillingType } from "@/lib/documentBillingType"
 import { formatCurrency, formatInvoiceDate, getCurrencySymbol } from "@/lib/format"
-import { formatDuration } from "@/lib/duration"
-import { ChevronDownIcon, PrinterIcon, RefreshCwIcon } from "lucide-react"
+import { ChevronDownIcon, PrinterIcon } from "lucide-react"
 
 export function InvoiceSidebar({
   invoice,
@@ -28,8 +27,6 @@ export function InvoiceSidebar({
   backHref,
   fixedBilled,
   fixedLine,
-  hasTimeLines = false,
-  staleEntries,
   onPrint,
   brandMissing = false,
 }: {
@@ -45,13 +42,6 @@ export function InvoiceSidebar({
    * this is the single edit surface for the fixed amount.
    */
   fixedLine?: { id: Id<"invoiceLineItems">; amount: number } | null
-  /** Draft has time lines → show the time-rounding picker. */
-  hasTimeLines?: boolean
-  /**
-   * Entries eligible for this draft but not on it (logged since creation).
-   * Drives the amber "Refresh draft" callout + the finalize warning.
-   */
-  staleEntries?: { count: number; totalMinutes: number } | null
   onPrint?: () => void
   /**
    * Seller identity (company name) not set yet — mirrors the server-side
@@ -96,28 +86,6 @@ export function InvoiceSidebar({
   >(null)
   const [actionLoading, setActionLoading] = useState(false)
   const [companyDialogOpen, setCompanyDialogOpen] = useState(false)
-
-  // Stale-draft refresh — pulls entries logged since the draft was created.
-  const refreshDraft = useMutation(api.invoices.refreshInvoiceDraft)
-  const [refreshing, setRefreshing] = useState(false)
-  const isStaleDraft =
-    invoice.status === "draft" && !readOnly && (staleEntries?.count ?? 0) > 0
-
-  async function handleRefreshDraft() {
-    setRefreshing(true)
-    try {
-      const res = await refreshDraft({ invoiceId: invoice._id })
-      toast.success(
-        res.added > 0
-          ? `Added ${res.added} ${res.added === 1 ? "entry" : "entries"} (${formatDuration(res.addedMinutes)}) to the draft`
-          : "Draft is already up to date",
-      )
-    } catch (err) {
-      toastError(err, "Failed to refresh draft")
-    } finally {
-      setRefreshing(false)
-    }
-  }
 
   async function handleNoteSave() {
     if (savingNoteRef.current) return
@@ -200,33 +168,6 @@ export function InvoiceSidebar({
         </div>
       </div>
 
-      {/* Stale-draft callout — entries logged since this draft was created.
-          One-click fix in place; retainer finalize is also server-gated. */}
-      {isStaleDraft && staleEntries && (
-        <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3">
-          <p className="text-xs leading-relaxed">
-            <span className="font-medium tabular-nums">
-              {staleEntries.count} {staleEntries.count === 1 ? "entry" : "entries"} (
-              {formatDuration(staleEntries.totalMinutes)})
-            </span>{" "}
-            logged since this draft was created.
-          </p>
-          <Button
-            size="sm"
-            variant="outline"
-            className="mt-2 w-full"
-            disabled={refreshing}
-            onClick={() => { void handleRefreshDraft() }}
-          >
-            <RefreshCwIcon
-              data-icon="inline-start"
-              className={cn("size-3.5", refreshing && "animate-spin")}
-            />
-            Refresh draft
-          </Button>
-        </div>
-      )}
-
       {/* Fixed Fee — on drafts this is THE edit surface for partial billing
           (segmented bar + amount + presets); finalized/readOnly invoices get
           the compact progress bar. The document canvas stays chrome-free. */}
@@ -246,15 +187,6 @@ export function InvoiceSidebar({
             currency={invoice.currency}
           />
         ))}
-
-      {/* Time rounding — drafts with time lines. The ledger stays exact;
-          this rounds each line UP to the increment on this document only. */}
-      {invoice.status === "draft" && !readOnly && hasTimeLines && (
-        <TimeRoundingPicker
-          invoiceId={invoice._id}
-          value={invoice.roundingMinutes ?? 1}
-        />
-      )}
 
       {/* Issue / Due dates — side by side, compact */}
       <div className="grid grid-cols-2 gap-4">
@@ -426,11 +358,7 @@ export function InvoiceSidebar({
         open={confirmAction === "markInvoiced"}
         onOpenChange={(open) => { if (!open) setConfirmAction(null) }}
         title="Mark as Invoiced"
-        description={
-          isStaleDraft && staleEntries
-            ? `${staleEntries.count} ${staleEntries.count === 1 ? "entry" : "entries"} (${formatDuration(staleEntries.totalMinutes)}) logged since this draft was created ${staleEntries.count === 1 ? "is" : "are"} NOT on it. Refresh the draft to include them, or finalize without them.`
-            : "This will lock the invoice for editing. You can revert to draft later if corrections are needed."
-        }
+        description="This will lock the invoice for editing. You can revert to draft later if corrections are needed."
         confirmLabel="Mark as Invoiced"
         onConfirm={() => {
           void handleStatusChange("invoiced", "Invoice marked as invoiced")
@@ -469,63 +397,6 @@ function roundCents(n: number): number {
   return Math.round(n * 100) / 100
 }
 
-const ROUNDING_CHOICES = [
-  { label: "Exact", value: 1 },
-  { label: "5m", value: 5 },
-  { label: "15m", value: 15 },
-  { label: "30m", value: 30 },
-] as const
-
-/**
- * Per-draft time-rounding control. Re-derives the time lines from their raw
- * minutes server-side — switching back and forth is lossless because the
- * ledger is never rounded. Defaults from the workspace "Invoice rounding"
- * setting at draft creation.
- */
-function TimeRoundingPicker({
-  invoiceId,
-  value,
-}: {
-  invoiceId: Id<"invoices">
-  value: number
-}) {
-  const updateRounding = useMutation(api.invoices.updateInvoiceRounding)
-  const active = value <= 1 ? 1 : value
-
-  function pick(next: number) {
-    if (next === active) return
-    void updateRounding({ invoiceId, roundingMinutes: next }).catch((err) =>
-      toastError(err, "Failed to change rounding"),
-    )
-  }
-
-  return (
-    <div className="flex flex-col gap-2">
-      <p className="text-xs font-medium text-muted-foreground">Time rounding</p>
-      <div className="flex flex-wrap items-center gap-1">
-        {ROUNDING_CHOICES.map(({ label, value: v }) => (
-          <button
-            key={v}
-            type="button"
-            onClick={() => pick(v)}
-            className={cn(
-              "rounded-md border px-2 py-0.5 text-[11px] font-medium transition-colors",
-              v === active
-                ? "border-foreground/20 bg-muted text-foreground"
-                : "border-border text-muted-foreground hover:bg-muted hover:text-foreground",
-            )}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-      <p className="text-[11px] leading-relaxed text-muted-foreground">
-        Rounds each line&apos;s time up on this invoice. Timesheets keep exact time.
-      </p>
-    </div>
-  )
-}
-
 /**
  * Draft-only partial-billing control for the fixed fee. Owns the amount of
  * the invoice's `fixed` line: segmented bar (billed so far / this draft /
@@ -546,11 +417,11 @@ function FixedFeeBillingControl({
   amount: number
   currency: string
 }) {
-  const updateLineItem = useMutation(api.invoices.updateInvoiceLineItem)
+  const setFixedAmount = useMutation(api.billingInvoices.setFixedAmount)
 
   function saveAmount(value: number) {
     if (roundCents(value) === roundCents(amount)) return
-    void updateLineItem({ id: lineId, amount: value }).catch((err) =>
+    void setFixedAmount({ lineId, amount: value }).catch((err) =>
       toastError(err, "Failed to update amount"),
     )
   }

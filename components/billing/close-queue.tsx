@@ -4,7 +4,14 @@ import { useMemo } from "react"
 import { SearchIcon } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { BillingToolbar } from "@/components/billing/billing-toolbar"
-import { CloseQueueMonthGroup } from "@/components/billing/close-queue-month"
+import { CloseQueueRow } from "@/components/billing/close-queue-row"
+import {
+  Table,
+  TableBody,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
 import { CloseQueueEmpty } from "@/components/billing/close-queue-empty"
 import {
   CloseQueueFilterBar,
@@ -16,14 +23,10 @@ import { rowMatches } from "@/lib/billing/close-queue-filters"
 import type { CloseQueueData } from "@/convex/billingViews"
 
 /**
- * The Billing → Close tab: the front door of the month-end ritual. Month-grouped
- * flat rows with progress + review signals, oldest-first blocking, a ghost
- * search + faceted filter (client / billing type / readiness), and dedicated
- * empty states (PRD slice 08, stories 1–5, 29).
- *
- * Facets + search are URL-persisted and applied client-side over the server's
- * month groups; each month's "N of M closed" progress stays the month's real
- * state while the rows shown honor the filter.
+ * The Billing → To close tab: one row per project with a period due, oldest
+ * period first, so the list reads top-down as the order to work in. A ghost
+ * search + faceted filter (client / billing type / readiness) narrow it;
+ * both are URL-persisted and applied client-side.
  */
 export function CloseQueueView({
   data,
@@ -45,15 +48,16 @@ export function CloseQueueView({
     [data.months],
   )
 
-  const filteredMonths = useMemo(
+  const rows = useMemo(
     () =>
-      data.months
-        .map((m) => ({
-          ...m,
-          rows: m.rows.filter((r) => rowMatches(r, facets, search)),
-        }))
-        .filter((m) => m.rows.length > 0),
-    [data.months, facets, search],
+      allRows
+        .filter((r) => rowMatches(r, facets, search))
+        .sort(
+          (a, b) =>
+            a.periodToken.localeCompare(b.periodToken) ||
+            a.projectName.localeCompare(b.projectName),
+        ),
+    [allRows, facets, search],
   )
 
   const totallyEmpty = allRows.length === 0
@@ -98,19 +102,25 @@ export function CloseQueueView({
 
       {totallyEmpty ? (
         <CloseQueueEmpty reason="caught-up" />
-      ) : filteredMonths.length === 0 ? (
+      ) : rows.length === 0 ? (
         <CloseQueueEmpty reason="no-matches" onClearFilters={clearAll} />
       ) : (
-        <div className="flex flex-col gap-8">
-          {filteredMonths.map((m) => (
-            <CloseQueueMonthGroup
-              key={m.monthKey}
-              label={m.label}
-              rows={m.rows}
-              closedCount={m.closedCount}
-              totalCount={m.totalCount}
-            />
-          ))}
+        <div className="overflow-hidden rounded-xl border">
+          <Table>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead>Project</TableHead>
+                <TableHead className="hidden w-28 text-right md:table-cell">Time</TableHead>
+                <TableHead className="w-28 text-right">Amount</TableHead>
+                <TableHead className="w-36" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((row) => (
+                <CloseQueueRow key={row.key} row={row} />
+              ))}
+            </TableBody>
+          </Table>
         </div>
       )}
     </div>

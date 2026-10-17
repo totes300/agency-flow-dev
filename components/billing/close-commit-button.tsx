@@ -1,30 +1,25 @@
 "use client"
 
 import { useState } from "react"
-import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useMutation } from "convex/react"
 import { toast } from "sonner"
 import { api } from "@/convex/_generated/api"
 import { Button } from "@/components/ui/button"
-import { formatCurrency } from "@/lib/format"
+import { Spinner } from "@/components/ui/spinner"
 import { toastError } from "@/lib/toast-helpers"
 import type { CloseWorkspaceData } from "@/convex/billingViews"
 
 /**
- * The workspace's single primary action (PRD stories 24–27), flipping live with
- * the budget line:
- *   - within-budget retainer → "Close & report" (settle + Monthly Report),
- *     then navigate forward to the report page — the page that carries the
- *     "Download worksheet" action, the owner's primary post-close deliverable
- *     (story 26 re-amended with the ledger rebuild).
- *   - over-budget retainer / T&M → "Generate invoice draft · $X", then
- *     navigate forward to the invoice editor (which carries the same
- *     worksheet download).
- *
- * Server re-derives scope at commit — this button never sends entry ids or
- * amounts. Missing overage rate blocks Generate (settings link); a running
- * timer is only a checklist warning and never blocks here.
+ * The workspace's single primary action, full width in the summary card:
+ *   - within-budget retainer → "Close period" (settle + monthly report), then
+ *     on to the report page, which carries the worksheet download;
+ *   - over-budget retainer / T&M → "Create draft invoice", then on to the
+ *     invoice editor.
+ * The amount is the card's headline, so the label names only the outcome.
+ * The server re-derives scope and price at commit — this button never sends
+ * entry ids or amounts. A missing overage rate disables it (the card's check
+ * list links to the setting); a running timer only warns.
  */
 export function CloseCommitButton({ data }: { data: CloseWorkspaceData }) {
   const router = useRouter()
@@ -36,11 +31,13 @@ export function CloseCommitButton({ data }: { data: CloseWorkspaceData }) {
 
   // Oldest-first / not-elapsed: the server rejects, but disable + explain here.
   const notEarliest = data.issues.includes("not-earliest-open")
-  const disabledReason = !data.committable
-    ? notEarliest
-      ? "Close the earlier open period first."
-      : "This period hasn't ended yet."
-    : null
+  const disabledReason = blockedMissingRate
+    ? "Set the project's overage rate first."
+    : !data.committable
+      ? notEarliest
+        ? "Close the earlier open period first."
+        : "This period hasn't ended yet."
+      : null
 
   async function commit() {
     if (pending) return
@@ -56,7 +53,7 @@ export function CloseCommitButton({ data }: { data: CloseWorkspaceData }) {
         router.push(`/invoices/${invoiceId}`)
       } else {
         router.push(`/projects/${data.project.id}/reports/${data.period.end.slice(0, 7)}`)
-        toast.success("Period closed & reported")
+        toast.success("Period closed")
       }
     } catch (err) {
       toastError(err, "Couldn't complete the close")
@@ -64,33 +61,21 @@ export function CloseCommitButton({ data }: { data: CloseWorkspaceData }) {
     }
   }
 
-  if (blockedMissingRate) {
-    return (
-      <div className="flex shrink-0 items-center gap-2">
-        <span className="text-xs text-destructive">No overage rate set</span>
-        <Button variant="outline" size="sm" asChild>
-          <Link href={`/projects/${data.project.id}?tab=settings`}>
-            Set rate
-          </Link>
-        </Button>
-      </div>
-    )
-  }
-
-  const label = isCloseReport
-    ? "Close & report"
-    : `Generate invoice draft · ${formatCurrency(data.amount, data.currency)}`
+  const label = isCloseReport ? "Close period" : "Create draft invoice"
 
   return (
-    // Default size, not sm — this is the page's single primary action and
-    // must survive visually next to the money line and toolbar.
-    <Button
-      className="shrink-0"
-      disabled={pending || !data.committable}
-      title={disabledReason ?? undefined}
-      onClick={() => void commit()}
-    >
-      {pending ? "Working…" : label}
-    </Button>
+    <div className="flex flex-col gap-1.5">
+      <Button
+        className="w-full"
+        disabled={pending || disabledReason !== null}
+        onClick={() => void commit()}
+      >
+        {pending ? <Spinner data-icon="inline-start" /> : null}
+        {label}
+      </Button>
+      {disabledReason && (
+        <p className="text-center text-xs text-muted-foreground">{disabledReason}</p>
+      )}
+    </div>
   )
 }

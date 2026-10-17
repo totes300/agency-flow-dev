@@ -157,11 +157,12 @@ export function CloseEntryGroups({
                   onEdit={onEdit}
                   onOpenTask={onOpenTask}
                   statusColumn={false}
-                  closeMode={
-                    promoted
-                      ? { ...closeMode, hideCarriedLabels: true }
-                      : closeMode
-                  }
+                  closeMode={{
+                    ...closeMode,
+                    ...(promoted ? { hideCarriedLabels: true } : {}),
+                    // The group header already names the task.
+                    ...(grouping === "task" ? { hideTaskTitle: true } : {}),
+                  }}
                 />
               </div>
             )}

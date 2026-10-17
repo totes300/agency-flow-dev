@@ -8,26 +8,20 @@ import { toast } from "sonner"
 import {
   ArrowLeftIcon,
   ClipboardListIcon,
-  InfoIcon,
   MonitorIcon,
   PlusIcon,
 } from "lucide-react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { toastError } from "@/lib/toast-helpers"
-import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { useTaskDetailNav } from "@/lib/hooks/use-task-detail-nav"
 import { TaskDetailDrawer } from "@/components/tasks/task-detail-drawer"
 import { TimeEntryModal } from "@/components/projects/time-entry-modal"
-import { CloseBudgetSummary } from "@/components/billing/close-budget-summary"
-import { CloseCommitButton } from "@/components/billing/close-commit-button"
+import { Badge } from "@/components/ui/badge"
 import { CloseEntryGroups } from "@/components/billing/close-entry-groups"
-import {
-  CloseBlockingAlert,
-  CloseReviewChips,
-} from "@/components/billing/close-review-chips"
-import { CloseWorkspaceFooter } from "@/components/billing/close-workspace-footer"
+import { ClosePeriodMonths } from "@/components/billing/close-period-months"
+import { CloseSummaryCard } from "@/components/billing/close-summary-card"
 import { EmptyStateBanner } from "@/components/projects/empty-state-banner"
 import { ProjectTimeFilters } from "@/components/projects/project-time-filters"
 import {
@@ -63,20 +57,25 @@ const BILLING_TYPE_LABEL: Record<
  */
 function billingModeLabel(data: CloseWorkspaceData): string {
   if (data.project.billingType !== "retainer") {
-    return BILLING_TYPE_LABEL[data.project.billingType]
+    return data.project.billingType === "t_and_m" ? "Hourly" : BILLING_TYPE_LABEL[data.project.billingType]
   }
   const months = data.monthlyBalances.length
-  if (months <= 1) {
-    return data.project.rolloverEnabled
-      ? "Retainer · monthly"
-      : "Retainer · monthly, no rollover"
-  }
-  let label = `Retainer · rollover · ${months}-month cycle`
+  if (months <= 1) return "Monthly retainer"
+  let label = `${months}-month rollover retainer`
   if (!data.periodElapsed && !data.isClosed) {
     const started = data.monthlyBalances.filter((row) => !row.pending).length
     label += ` · month ${Math.max(1, started)} of ${months}`
   }
   return label
+}
+
+/** The period's state in one word, for the header badge. */
+function periodStatus(data: CloseWorkspaceData): string {
+  if (data.coveringDraft) return "Draft invoice"
+  if (data.isClosed) return "Closed"
+  if (!data.periodElapsed) return "In progress"
+  if (data.billingType === "retainer") return data.withinBudget ? "Within budget" : "Over budget"
+  return "Ready to invoice"
 }
 
 /** The close offers member + category facets — never status (every in-scope
@@ -154,23 +153,10 @@ export function CloseWorkspace({
     }
   }
 
-  // ── Rollover breakdown (cycle retainers) ────────────────────────────────
-  // Open/closed state lives in the URL so it survives drawer round-trips;
-  // the month lens is a transient review tool like the checklist filter.
-  const breakdownOpen = searchParams.get("balance") === "open"
+  // Month lens (cycle retainers): a transient review tool — clicking a month
+  // tile narrows the ledger to that month's entries.
   const [monthLens, setMonthLens] = useState<string | null>(null)
-  function setBreakdownOpen(open: boolean) {
-    // Closing the breakdown must drop its lens — otherwise the ledger stays
-    // filtered with the only indicator (the highlighted row) hidden.
-    if (!open) setMonthLens(null)
-    const params = new URLSearchParams(searchParams.toString())
-    if (open) params.set("balance", "open")
-    else params.delete("balance")
-    const query = params.toString()
-    router.replace(query ? `${pathname}?${query}` : pathname, {
-      scroll: false,
-    })
-  }
+  const firstMonthKey = data.monthlyBalances[0]?.monthKey
 
   // ── Review-issue filter (checklist click-to-filter) ─────────────────────
   // Local, transient state — a review lens, not a saved view. Auto-degrades:
@@ -192,27 +178,6 @@ export function CloseWorkspace({
     return new Set<string>(summary?.entryIds ?? [])
   }, [activeIssue, flagSummaries])
 
-  // Warning markers for ledger rows (missing note / long entry) — the amber
-  // dot next to the note, so flagged rows are spottable while scrolling.
-  const rowWarnings = useMemo(() => {
-    const map = new Map<string, string>()
-    for (const summary of flagSummaries) {
-      if (summary.severity !== "warning") continue
-      const label =
-        summary.kind === "missing-note"
-          ? "Missing note"
-          : summary.kind === "long-entry"
-            ? "Over 8h — check for a forgotten timer"
-            : null
-      if (!label) continue
-      for (const id of summary.entryIds) {
-        const existing = map.get(id.toString())
-        map.set(id.toString(), existing ? `${existing} · ${label}` : label)
-      }
-    }
-    return map
-  }, [flagSummaries])
-
   // ── View narrowing — URL state, applied client-side over the scope ──────
   const groupBy = parseGrouping(searchParams.get("groupBy"))
   const { filters } = useProjectTimeFilters()
@@ -229,16 +194,15 @@ export function CloseWorkspace({
     }
     if (issueEntryIds) rows = rows.filter((row) => issueEntryIds.has(row._id))
     if (monthLens) {
+      // Carried-in work reports on the period's first month.
       rows = rows.filter(
         (row) =>
           !row.skipped &&
-          (monthLens === "carried"
-            ? row.carried
-            : !row.carried && row.date.slice(0, 7) === monthLens),
+          (row.carried ? monthLens === firstMonthKey : row.date.slice(0, 7) === monthLens),
       )
     }
     return rows
-  }, [data.entries, filters, search, issueEntryIds, monthLens])
+  }, [data.entries, filters, search, issueEntryIds, monthLens, firstMonthKey])
 
   // Facet options derive from the scope itself — they can't drift from it.
   const availableMembers = useMemo(() => {
@@ -304,7 +268,6 @@ export function CloseWorkspace({
     nextPeriodLabel: editable ? data.nextPeriodLabel : null,
     onSkip,
     onUnskip,
-    rowWarnings,
     inlineNoteEdit: editable,
   }
 
@@ -332,180 +295,125 @@ export function CloseWorkspace({
         </Button>
       </div>
 
-      <div className="mx-auto hidden w-full max-w-5xl flex-col gap-6 md:flex">
-        {/* Header */}
-        <div className="flex items-start justify-between gap-3">
+      <div className="mx-auto hidden w-full max-w-6xl flex-col gap-6 md:flex">
+        {/* Header: what this is, in one title and one quiet line. */}
+        <div className="flex items-start justify-between gap-4">
           <div className="flex items-start gap-3">
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label="Back to Billing"
-              className="size-8 shrink-0"
-              asChild
-            >
+            <Button variant="ghost" size="icon" aria-label="Back to Billing" className="mt-0.5 size-8 shrink-0" asChild>
               <Link href={backHref}>
-                <ArrowLeftIcon className="size-4" />
+                <ArrowLeftIcon />
               </Link>
             </Button>
             <div className="flex flex-col gap-1">
-              <h1 className="text-xl font-semibold tracking-tight">
-                Close · {data.period.label}
-              </h1>
-              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
-                <span className="font-medium text-foreground">
-                  {data.project.name}
-                </span>
-                <span aria-hidden className="text-muted-foreground/40">·</span>
-                <span>{data.client.name}</span>
-                <span aria-hidden className="text-muted-foreground/40">·</span>
-                <span>{billingModeLabel(data)}</span>
-                <span className="text-xs text-muted-foreground/70">
-                  {data.project.code}
-                </span>
+              <div className="flex items-center gap-2">
+                <h1 className="text-xl font-semibold tracking-tight">{data.period.label}</h1>
+                <Badge variant="secondary">{periodStatus(data)}</Badge>
               </div>
+              <p className="text-sm text-muted-foreground">
+                <span className="text-foreground">{data.project.name}</span>
+                {" · "}
+                {data.client.name}
+                {" · "}
+                {billingModeLabel(data)}
+              </p>
             </div>
           </div>
-
-          {/* Secondary: add missed work (story 12). Primary: the commit button
-              (Generate / Close & report), flipping with the budget line. */}
           {editable && (
-            <div className="flex shrink-0 items-center gap-2">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setModal({ mode: "create" })}
-              >
-                <PlusIcon data-icon="inline-start" className="size-3.5" />
-                Add time
-              </Button>
-              <CloseCommitButton data={data} />
-            </div>
+            <Button variant="ghost" size="sm" onClick={() => setModal({ mode: "create" })}>
+              <PlusIcon data-icon="inline-start" />
+              Add time
+            </Button>
           )}
         </div>
 
-        <CloseBudgetSummary
-          data={data}
-          breakdownOpen={breakdownOpen}
-          onBreakdownOpenChange={setBreakdownOpen}
-          monthLens={monthLens}
-          onMonthLensChange={setMonthLens}
-        />
+        <div className="grid grid-cols-1 items-start gap-8 lg:grid-cols-[minmax(0,1fr)_20rem]">
+          {/* Decision panel — first on narrow screens, sticky on the right on wide ones. */}
+          <div className="lg:sticky lg:top-6 lg:order-2">
+            <CloseSummaryCard
+              data={data}
+              activeIssue={activeIssue}
+              onToggleIssue={(kind) => setIssueFilter((prev) => (prev === kind ? null : kind))}
+            />
+          </div>
 
-        {/* Loud only when it must be: the blocking overage-rate condition.
-            Everything else about review state lives as quiet toolbar chips. */}
-        {editable && (
-          <CloseBlockingAlert flags={data.flags} projectId={data.project.id} />
-        )}
+          <div className="flex min-w-0 flex-col gap-4 lg:order-1">
+            <ClosePeriodMonths data={data} activeMonth={monthLens} onMonthChange={setMonthLens} />
 
-        {/* F5 — the period reads as closed because a DRAFT covers it; the
-            entries live on the draft, not in settlement stamps, so this
-            ledger would render blank. Route to the draft instead. */}
-        {!editable && data.coveringDraft && (
-          <Alert>
-            <InfoIcon />
-            <AlertDescription>
-              This period is on a draft invoice — its entries are locked to
-              the draft and appear there until it finalizes or is deleted.{" "}
-              <Link
-                href={`/invoices/${data.coveringDraft.id}`}
-                className="font-medium underline underline-offset-2"
-              >
-                Open draft
-              </Link>
-            </AlertDescription>
-          </Alert>
-        )}
+            {isEmpty ? (
+              <ZeroScopeCallout data={data} />
+            ) : (
+              <>
+                <ProjectTimeFilters
+                  availableMembers={availableMembers}
+                  // Facet options stay active-only — the incoming list includes
+                  // archived categories for display lookups only.
+                  categories={categories?.filter((c) => !c.archivedAt) ?? undefined}
+                  showDateRange={false}
+                  facets={CLOSE_FACETS}
+                />
 
-        {isEmpty ? (
-          <ZeroScopeCallout data={data} />
-        ) : (
-          <div className="flex flex-col gap-4">
-            <ProjectTimeFilters
-              availableMembers={availableMembers}
-              // Facet options stay active-only — the incoming list includes
-              // archived categories for display lookups only.
-              categories={categories?.filter((c) => !c.archivedAt) ?? undefined}
-              showDateRange={false}
-              facets={CLOSE_FACETS}
-              // Review chips ride in the toolbar's right slot — review state
-              // is a filtering tool here, so it lives with the other tools.
-              actions={
-                editable ? (
-                  <CloseReviewChips
-                    flags={data.flags}
-                    activeFilter={activeIssue}
-                    onToggleFilter={(kind) =>
-                      setIssueFilter((prev) => (prev === kind ? null : kind))
+                {hiddenInScopeCount > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    Showing {filteredEntries.length} of {data.entries.length} entries — the close
+                    still covers all of them.
+                  </p>
+                )}
+
+                {filteredEntries.length === 0 ? (
+                  <EmptyStateBanner
+                    icon={ClipboardListIcon}
+                    title="No entries match your filters"
+                    description="The close still covers every in-scope entry."
+                    action={
+                      <Button
+                        variant="link"
+                        size="sm"
+                        onClick={() => {
+                          setIssueFilter(null)
+                          setMonthLens(null)
+                          clearViewNarrowing()
+                        }}
+                      >
+                        Show all entries
+                      </Button>
                     }
                   />
-                ) : undefined
-              }
-            />
-
-            {hiddenInScopeCount > 0 && (
-              <p className="text-xs text-muted-foreground">
-                {hiddenInScopeCount} in-scope{" "}
-                {hiddenInScopeCount === 1 ? "entry is" : "entries are"} hidden by
-                filters — totals and commit include{" "}
-                {hiddenInScopeCount === 1 ? "it" : "them"}.
-              </p>
+                ) : groupBy === "none" ? (
+                  <ProjectTimeTable
+                    entries={filteredEntries}
+                    selectedIds={NO_SELECTION}
+                    onToggle={noop}
+                    onSelectAllVisible={noop}
+                    selectable={false}
+                    showAmounts={showAmounts}
+                    currency={data.currency}
+                    timezone={data.timezone}
+                    isAdmin
+                    projectId={data.project.id}
+                    currentUserId={currentUser?._id}
+                    onEdit={handleEditById}
+                    onOpenTask={openTask}
+                    statusColumn={false}
+                    closeMode={closeMode}
+                  />
+                ) : (
+                  <CloseEntryGroups
+                    entries={filteredEntries}
+                    grouping={groupBy}
+                    timezone={data.timezone}
+                    showAmounts={showAmounts}
+                    currency={data.currency}
+                    projectId={data.project.id}
+                    currentUserId={currentUser?._id}
+                    onEdit={handleEditById}
+                    onOpenTask={openTask}
+                    closeMode={closeMode}
+                  />
+                )}
+              </>
             )}
-
-            {filteredEntries.length === 0 ? (
-              <EmptyStateBanner
-                icon={ClipboardListIcon}
-                title="No entries match your filters"
-                description="The close still covers every in-scope entry."
-                action={
-                  <Button
-                    variant="link"
-                    size="sm"
-                    onClick={() => {
-                      setIssueFilter(null)
-                      setMonthLens(null)
-                      clearViewNarrowing()
-                    }}
-                  >
-                    Show all entries
-                  </Button>
-                }
-              />
-            ) : groupBy === "none" ? (
-              <ProjectTimeTable
-                entries={filteredEntries}
-                selectedIds={NO_SELECTION}
-                onToggle={noop}
-                onSelectAllVisible={noop}
-                selectable={false}
-                showAmounts={showAmounts}
-                currency={data.currency}
-                timezone={data.timezone}
-                isAdmin
-                projectId={data.project.id}
-                currentUserId={currentUser?._id}
-                onEdit={handleEditById}
-                onOpenTask={openTask}
-                statusColumn={false}
-                closeMode={closeMode}
-              />
-            ) : (
-              <CloseEntryGroups
-                entries={filteredEntries}
-                grouping={groupBy}
-                timezone={data.timezone}
-                showAmounts={showAmounts}
-                currency={data.currency}
-                projectId={data.project.id}
-                currentUserId={currentUser?._id}
-                onEdit={handleEditById}
-                onOpenTask={openTask}
-                closeMode={closeMode}
-              />
-            )}
-
-            <CloseWorkspaceFooter data={data} />
           </div>
-        )}
+        </div>
       </div>
 
       {/* Task peek (side drawer, no scrim) — opened by task titles via ?detail. */}
@@ -546,19 +454,17 @@ export function CloseWorkspace({
 }
 
 /**
- * Zero-scope end state (PRD story 35 / UX Decisions § States) — a valid
- * end-state, not an error. The budget line already shows zeros above; this gray
- * callout explains that Close & report (zero usage) is still available for
- * retainers.
+ * Zero-scope end state — valid, not an error: a retainer period with no time
+ * still closes (a zero-usage report).
  */
 function ZeroScopeCallout({ data }: { data: CloseWorkspaceData }) {
   return (
-    <div className="rounded-lg bg-muted/50 px-4 py-6 text-center">
-      <p className="text-sm font-medium">No entries in scope</p>
+    <div className="rounded-xl border border-dashed px-4 py-10 text-center">
+      <p className="text-sm font-medium">No time logged in this period</p>
       <p className="mt-1 text-xs text-muted-foreground">
         {data.billingType === "retainer"
-          ? "You can still Close & report this period (zero usage)."
-          : "Nothing to bill for this period."}
+          ? "You can still close it — the monthly report will show zero usage."
+          : "There is nothing to bill for this period."}
       </p>
     </div>
   )

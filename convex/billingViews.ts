@@ -330,7 +330,20 @@ export const getNavSignals = query({
     const overdueCount = invoiced.filter((inv) => inv.dueDate != null && inv.dueDate < todayStr).length;
     const rows = (await buildQueue(ctx, orgId)).months.flatMap((m) => m.rows);
     const toCloseCount = rows.filter((r) => r.isCloseRow).length;
-    return { toGenerateCount: rows.length - toCloseCount, toCloseCount, overdueCount };
+    // Money waiting to be invoiced, per currency (minor-unit sums, converted once).
+    const readyMinor: Record<string, number> = {};
+    for (const r of rows) {
+      if (!r.isCloseRow) readyMinor[r.currency] = (readyMinor[r.currency] ?? 0) + r.amountMinor;
+    }
+    const readyAmountByCurrency = Object.fromEntries(
+      Object.entries(readyMinor).map(([cur, minor]) => [cur, fromMinor(minor, cur)]),
+    );
+    return {
+      toGenerateCount: rows.length - toCloseCount,
+      toCloseCount,
+      overdueCount,
+      readyAmountByCurrency,
+    };
   },
 });
 

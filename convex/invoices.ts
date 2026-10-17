@@ -274,10 +274,20 @@ export const getInvoiceMetrics = query({
       }
     }
 
+    // Everything issued and unpaid (unpaid + past due), for the hub summary.
+    const outstanding = empty();
+    for (const b of [unpaid, pastDue]) {
+      outstanding.count += b.count;
+      for (const [cur, minor] of Object.entries(b.currencySums)) {
+        outstanding.currencySums[cur] = (outstanding.currencySums[cur] ?? 0) + minor;
+      }
+    }
+
     return {
       draft: toDisplay(draft),
       unpaid: toDisplay(unpaid),
       pastDue: toDisplay(pastDue),
+      outstanding: toDisplay(outstanding),
       paidThisMonth: toDisplay(paidThisMonth),
     };
   },

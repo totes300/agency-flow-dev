@@ -1,33 +1,29 @@
 import { Skeleton } from "@/components/ui/skeleton"
 
 /**
- * Content-aware skeleton mirroring the Close queue: two month section headers
- * each followed by a bordered card of single-line rows, so first paint matches
- * the resolved layout (loading → empty → content order, PRD Definition of done).
+ * Mirrors the Close queue's single bordered table: a header row and a few
+ * two-line project rows with time, amount and an action slot, so first paint
+ * matches the resolved layout.
  */
 export function CloseQueueSkeleton() {
   return (
-    <div className="flex flex-col gap-8">
-      {[0, 1].map((group) => (
-        <div key={group} className="flex flex-col gap-2">
-          <div className="flex items-center gap-2 px-1">
-            <Skeleton className="h-4 w-28" />
-            <Skeleton className="h-3 w-20" />
-            <Skeleton className="ml-auto h-4 w-16" />
+    <div className="overflow-hidden rounded-xl border">
+      <div className="flex h-10 items-center border-b px-3">
+        <Skeleton className="h-3 w-16" />
+      </div>
+      <div className="divide-y">
+        {[0, 1, 2, 3].map((row) => (
+          <div key={row} className="flex h-16 items-center gap-4 px-3">
+            <div className="flex flex-1 flex-col gap-1.5">
+              <Skeleton className="h-4 w-48" />
+              <Skeleton className="h-3 w-64" />
+            </div>
+            <Skeleton className="h-4 w-16" />
+            <Skeleton className="h-4 w-16" />
+            <Skeleton className="h-8 w-28 rounded-md" />
           </div>
-          <div className="divide-y rounded-lg border">
-            {[0, 1, 2].map((row) => (
-              <div key={row} className="flex h-12 items-center gap-3 px-3">
-                <Skeleton className="h-4 w-40" />
-                <Skeleton className="hidden h-3 w-16 sm:block" />
-                <Skeleton className="ml-auto h-4 w-16" />
-                <Skeleton className="h-4 w-20" />
-                <Skeleton className="h-8 w-[4.5rem] rounded-md" />
-              </div>
-            ))}
-          </div>
-        </div>
-      ))}
+        ))}
+      </div>
     </div>
   )
 }

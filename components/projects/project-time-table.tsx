@@ -138,6 +138,8 @@ export type CloseTableConfig = {
   inlineNoteEdit: boolean
   /** Suppress per-row carried labels (the group header carries a promoted one). */
   hideCarriedLabels?: boolean
+  /** Suppress the per-row task title (the group header already names the task). */
+  hideTaskTitle?: boolean
 }
 
 /** T&M billable + open (not closed) entries are the only rows that can be selected. */
@@ -232,7 +234,7 @@ export function ProjectTimeTable<T extends ProjectTimeTableRow>({
           )}
           <TableHead className="w-24">Date</TableHead>
           <TableHead className="w-40">Member</TableHead>
-          <TableHead>Task</TableHead>
+          <TableHead>{closeMode?.hideTaskTitle ? "Note" : "Task"}</TableHead>
           <TableHead className="w-40">Category</TableHead>
           {statusColumn && <TableHead className="w-32">Status</TableHead>}
           <TableHead className="w-20 text-right">Hours</TableHead>
@@ -427,10 +429,12 @@ function TimeEntryTableRow<T extends ProjectTimeTableRow>({
       <TableCell>
         {closeMode ? (
           <div className="flex min-w-0 flex-col">
-            <TaskTitleButton
-              title={row.taskTitle}
-              onClick={() => onOpenTask(row.taskId)}
-            />
+            {!closeMode.hideTaskTitle && (
+              <TaskTitleButton
+                title={row.taskTitle}
+                onClick={() => onOpenTask(row.taskId)}
+              />
+            )}
             <div className="flex min-w-0 items-center gap-2">
               {/* Review-warning marker — spot flagged rows while scrolling;
                   the reason lives in the tooltip. */}
@@ -577,7 +581,11 @@ function InlineNoteCell({
       ariaLabel="Edit note"
       placeholder="Add a note"
       errorMessage="Couldn't update note"
-      className="min-w-0 flex-1 text-xs text-muted-foreground"
+      // An empty note stays out of the way until the row is hovered or focused.
+      className={cn(
+        "min-w-0 flex-1 text-xs text-muted-foreground",
+        !note && "opacity-0 focus-within:opacity-100 group-hover/row:opacity-100",
+      )}
     />
   )
 }

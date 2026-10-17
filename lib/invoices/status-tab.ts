@@ -42,7 +42,7 @@ export const STATUS_TAB_TO_QUERY: Record<
 }
 
 export const INVOICE_STATUS_TABS: { key: InvoiceStatusTab; label: string }[] = [
-  { key: "close", label: "Close" },
+  { key: "close", label: "To close" },
   { key: "draft", label: "Draft" },
   { key: "outstanding", label: "Outstanding" },
   { key: "paid", label: "Paid" },

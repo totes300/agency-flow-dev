@@ -1,109 +1,76 @@
 "use client"
 
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
-import { formatCurrency, formatHoursCompact } from "@/lib/format"
-import { cn } from "@/lib/utils"
+import { TableCell, TableRow } from "@/components/ui/table"
+import { formatCurrency, formatHoursShort, pluralize } from "@/lib/format"
 import type { CloseQueueRow } from "@/convex/billingViews"
 
-const BILLING_TYPE_META: Record<
-  CloseQueueRow["billingType"],
-  { label: string; dot: string }
-> = {
-  retainer: { label: "Retainer", dot: "bg-emerald-500" },
-  t_and_m: { label: "T&M", dot: "bg-sky-500" },
-  fixed: { label: "Fixed", dot: "bg-violet-500" },
-  non_billable: { label: "Non-billable", dot: "bg-muted-foreground" },
-}
-
 /**
- * One queue row in the month card — strictly single-line: project (primary) +
- * client (muted, same line), billing type as dot + muted text, hours colored
- * by budget with the overage inline (never wrapping), "N to review" muted,
- * amount right-aligned, and an always-visible quiet Review button — this is an
- * action table, so the CTA is never hidden behind hover.
- *
- * Over-budget rows missing an overage rate route to Set rate instead of Review.
- * Later elapsed periods of the same project show as a muted "+N more periods"
- * hint — they surface one at a time, oldest first.
+ * One project in the Close queue. Three things only: what it is (project,
+ * then client · period · how many periods wait behind it), how much time it
+ * carries against its budget, and what closing it bills. The button names the
+ * outcome — "Create invoice" or "Close period" — and, like the row itself,
+ * opens the Close workspace, where the period is reviewed and committed.
+ * An over-budget retainer without an overage rate routes to the project's
+ * settings instead.
  */
 export function CloseQueueRow({ row }: { row: CloseQueueRow }) {
-  const meta = BILLING_TYPE_META[row.billingType]
+  const router = useRouter()
+  const workspaceHref = `/billing/close/${row.projectId}/${row.periodToken}`
+  const isRetainer = row.billingType === "retainer"
+  const overageMinutes = row.overageHours != null ? Math.round(row.overageHours * 60) : 0
 
   return (
-    <div className="flex h-12 items-center gap-3 px-3 text-sm hover:bg-muted/30">
-      {/* Project + client */}
-      <div className="flex min-w-0 flex-1 items-baseline gap-2">
-        <span className="truncate font-medium">{row.projectName}</span>
-        <span className="truncate text-muted-foreground">{row.clientName}</span>
-        {row.pendingPeriods > 0 && (
-          <span
-            className="shrink-0 whitespace-nowrap text-xs text-muted-foreground"
-            title="Elapsed periods of this project waiting behind this one — close them oldest first."
-          >
-            +{row.pendingPeriods} more {row.pendingPeriods === 1 ? "period" : "periods"}
+    <TableRow className="cursor-pointer" onClick={() => router.push(workspaceHref)}>
+      <TableCell className="max-w-0 py-3">
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <span className="truncate font-medium">{row.projectName}</span>
+          <span className="truncate text-xs text-muted-foreground">
+            {row.clientName} · {row.periodLabel}
+            {row.pendingPeriods > 0 &&
+              ` · ${row.pendingPeriods} more ${pluralize(row.pendingPeriods, "period", "periods")} waiting`}
           </span>
+        </div>
+      </TableCell>
+      <TableCell className="hidden py-3 text-right tabular-nums md:table-cell">
+        {row.loggedMinutes === 0 ? (
+          <span className="text-muted-foreground">No time</span>
+        ) : (
+          <div className="flex flex-col items-end gap-0.5">
+            <span>
+              {formatHoursShort(row.loggedMinutes)}
+              {isRetainer && (
+                <span className="text-muted-foreground"> / {formatHoursShort(row.includedMinutes)}</span>
+              )}
+            </span>
+            {overageMinutes > 0 && (
+              <span className="text-xs text-amber-700 dark:text-amber-500">
+                {formatHoursShort(overageMinutes)} over
+              </span>
+            )}
+          </div>
         )}
-      </div>
-
-      {/* Billing type — dot + muted text, never a pill */}
-      <span className="hidden w-24 shrink-0 items-center gap-1.5 text-xs text-muted-foreground sm:flex">
-        <span className={cn("size-1.5 rounded-full", meta.dot)} aria-hidden />
-        {meta.label}
-      </span>
-
-      {/* Hours, colored by budget state — overage inline, never wrapping */}
-      <span
-        className={cn(
-          "w-36 shrink-0 whitespace-nowrap text-right tabular-nums",
-          row.badgeKind === "over-budget"
-            ? "text-amber-600 dark:text-amber-500"
-            : row.badgeKind === "within-budget"
-              ? "text-emerald-600 dark:text-emerald-500"
-              : "text-muted-foreground",
+      </TableCell>
+      <TableCell className="py-3 text-right tabular-nums">
+        {row.isCloseRow ? (
+          <span className="text-muted-foreground">No charge</span>
+        ) : (
+          <span className="font-medium">{formatCurrency(row.amount, row.currency)}</span>
         )}
-      >
-        {formatHoursCompact(row.loggedMinutes)}
-        {row.badgeKind === "over-budget" && row.overageHours != null && (
-          <span className="ml-1 text-xs">
-            (+{formatHoursCompact(Math.round(row.overageHours * 60))})
-          </span>
-        )}
-      </span>
-
-      {/* Review readiness */}
-      <span className="hidden w-24 shrink-0 text-right text-xs text-muted-foreground md:block">
-        {row.flagCount > 0
-          ? `${row.flagCount} to review`
-          : row.entryCount === 0
-            ? "No entries"
-            : "Ready"}
-      </span>
-
-      {/* Amount — close rows carry no billable amount */}
-      <span
-        className={cn(
-          "w-24 shrink-0 text-right tabular-nums",
-          row.isCloseRow ? "text-muted-foreground" : "font-medium",
-        )}
-      >
-        {row.isCloseRow ? "—" : formatCurrency(row.amount, row.currency)}
-      </span>
-
-      {/* Action slot — fixed width so amounts align; hints stay one line */}
-      <div className="flex w-40 shrink-0 items-center justify-end">
+      </TableCell>
+      <TableCell className="py-3 text-right" onClick={(e) => e.stopPropagation()}>
         {row.configIssue === "missing-overage-rate" ? (
           <Button size="sm" variant="outline" asChild>
-            <Link href={`/projects/${row.projectId}?tab=settings`}>Set rate</Link>
+            <Link href={`/projects/${row.projectId}?tab=settings`}>Set overage rate</Link>
           </Button>
         ) : (
           <Button size="sm" variant="outline" asChild>
-            <Link href={`/billing/close/${row.projectId}/${row.periodToken}`}>
-              Review
-            </Link>
+            <Link href={workspaceHref}>{row.isCloseRow ? "Close period" : "Create invoice"}</Link>
           </Button>
         )}
-      </div>
-    </div>
+      </TableCell>
+    </TableRow>
   )
 }

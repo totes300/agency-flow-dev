@@ -219,7 +219,7 @@ describe("queue", () => {
     await addEntry(w, "2026-04-04", 100);
     expect(await queueRow(w)).toMatchObject({ periodToken: "2026-03", isCloseRow: true, pendingPeriods: 2 });
     const signals = await as(w).query(api.billingViews.getNavSignals, {});
-    expect(signals).toEqual({ toGenerateCount: 0, toCloseCount: 1, overdueCount: 0 });
+    expect(signals).toEqual({ toGenerateCount: 0, toCloseCount: 1, overdueCount: 0, readyAmountByCurrency: {} });
   });
 
   it("an open period behind an unclosed one is flagged, not committable", async () => {

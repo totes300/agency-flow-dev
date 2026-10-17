@@ -10,6 +10,7 @@ import { InvoicesPageSkeleton } from "@/components/invoices/invoices-page-skelet
 import { CloseQueueSkeleton } from "@/components/billing/close-queue-skeleton"
 import { CloseQueueView } from "@/components/billing/close-queue"
 import { BillingToolbar } from "@/components/billing/billing-toolbar"
+import { BillingSummary } from "@/components/billing/billing-summary"
 import {
   InvoicesFilterBar,
   InvoicesActiveFilters,
@@ -73,6 +74,14 @@ export default function BillingPage() {
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6">
       {header}
+      <BillingSummary
+        readyAmountByCurrency={navSignals?.readyAmountByCurrency ?? {}}
+        readyCount={navSignals?.toGenerateCount ?? 0}
+        closeCount={navSignals?.toCloseCount ?? 0}
+        outstandingByCurrency={metrics?.outstanding?.currencySums ?? {}}
+        outstandingCount={outstandingCount}
+        overdueCount={metrics?.pastDue.count ?? 0}
+      />
       {tabIsClose(statusTab) ? (
         <CloseTab
           draftCount={draftCount}

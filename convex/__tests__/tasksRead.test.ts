@@ -739,20 +739,9 @@ describe("old queries keep their return shapes", () => {
     expect(indicators[f.P].lastActivity).toMatchObject({ userName: "Admin", type: "subtask_created" });
   });
 
-  it("myTasks.listMyTasks / planner.taskPanel", async () => {
+  it("planner.taskPanel", async () => {
     const t = createT();
     const f = await setup(t);
-    const alice = as(t, "assigned");
-    const my = await alice.query(api.myTasks.listMyTasks, {});
-    expect(keys(my)).toEqual(["groups", "hiddenCount", "todayStr", "visibleStatusIds"]);
-    const myIds = my.groups.flatMap((g) => g.tasks.map((x) => x._id));
-    // A ("In progress") is Alice's only top-level task; the default visible
-    // status is "Next up", so it is counted as hidden (unchanged behaviour).
-    expect(my.hiddenCount).toBe(1);
-    expect(myIds).not.toContain(f.S); // sub-tasks stay out of My Tasks
-    expect(myIds).not.toContain(f.U);
-    expect(myIds).not.toContain(f.P);
-
     const panel = await as(t, "admin").query(api.planner.taskPanel, {});
     expect(keys(panel[0])).toEqual([
       "_id", "categoryColor", "categoryId", "categoryName", "clientId", "clientName", "createdAt", "dueDate",

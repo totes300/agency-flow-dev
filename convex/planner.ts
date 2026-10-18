@@ -1,5 +1,4 @@
 import { v, ConvexError } from "convex/values";
-import { generateKeyBetween } from "fractional-indexing";
 import { query, mutation, internalMutation } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
@@ -16,13 +15,7 @@ import {
   segmentSpanDays,
   type PartRank,
 } from "./lib/plannerMath";
-import {
-  planRemovalOps,
-  summarizeRemovalOps,
-  segmentCoversDate,
-  addDaysToDateString,
-  SEGMENT_SCAN_WINDOW_DAYS,
-} from "./lib/todayPlan";
+import { segmentCoversDate } from "./lib/todayPlan";
 import { getOrgSettings } from "./lib/orgHelpers";
 import { getDateInTimezone, ORG_TIMEZONE_FALLBACK } from "./lib/timer";
 import type { StatusType } from "./lib/constants";
@@ -483,40 +476,6 @@ export const taskSegments = query({
   },
 });
 
-/**
- * The caller's task ids that have a segment of theirs covering today — the
- * set of "in my Today" tasks. Powers the sun state on every `/tasks` row in
- * one index-backed read (correct on first paint, live on segment changes).
- */
-export const myTodayTaskIds = query({
-  args: {},
-  handler: async (ctx): Promise<Id<"tasks">[]> => {
-    const { orgId, userId } = await getAuthContext(ctx);
-
-    const orgSettings = await getOrgSettings(ctx, orgId);
-    const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
-    const today = getDateInTimezone(Date.now(), timezone);
-    const scanFloor = addDaysToDateString(today, -SEGMENT_SCAN_WINDOW_DAYS);
-
-    const segments = await ctx.db
-      .query("planSegments")
-      .withIndex("by_orgId_userId_startDate", (q) =>
-        q
-          .eq("orgId", orgId)
-          .eq("userId", userId)
-          .gte("startDate", scanFloor)
-          .lte("startDate", today),
-      )
-      .collect();
-
-    const ids = new Set<string>();
-    for (const s of segments) {
-      if (segmentCoversDate(s, today)) ids.add(s.taskId.toString());
-    }
-    return [...ids] as Id<"tasks">[];
-  },
-});
-
 // ─── Mutations (admin-or-self gated; every referenced id org-validated) ──────
 //
 // Permission model (Today × Planner PRD): admins manage every row; members
@@ -677,208 +636,10 @@ export const removeSegment = mutation({
   },
 });
 
-// ─── Today wrapper mutations (the sun gesture) ────────────────────────────────
-
-/**
- * Resolve "today" (org timezone) plus the caller's segments of one task.
- * Shared by addToToday / removeFromToday — both are self-scoped: they only
- * ever operate on the CALLER's segments, so they are member-callable by
- * construction.
- */
-async function getMyTaskPlanContext(
-  ctx: MutationCtx,
-  taskId: Id<"tasks">,
-) {
-  const { orgId, userId } = await getAuthContext(ctx);
-
-  const task = await ctx.db.get(taskId);
-  if (!task || task.orgId !== orgId) throw new ConvexError("Task not found");
-
-  const orgSettings = await getOrgSettings(ctx, orgId);
-  const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
-  const today = getDateInTimezone(Date.now(), timezone);
-
-  const taskSegments = await ctx.db
-    .query("planSegments")
-    .withIndex("by_orgId_taskId", (q) => q.eq("orgId", orgId).eq("taskId", taskId))
-    .collect();
-  const myCoveringToday = taskSegments.filter(
-    (s) => s.userId === userId && segmentCoversDate(s, today),
-  );
-
-  return { orgId, userId, task, today, myCoveringToday };
-}
-
-/**
- * The sun gesture, add side: plan this task for ME, TODAY, as a one-day
- * segment. Idempotent — if any of my segments already covers today, this is
- * a no-op (rapid clicking is safe, no duplicate segments).
- */
-export const addToToday = mutation({
-  args: { taskId: v.id("tasks") },
-  handler: async (ctx, args): Promise<{ added: boolean }> => {
-    const { orgId, userId, task, today, myCoveringToday } =
-      await getMyTaskPlanContext(ctx, args.taskId);
-
-    if (task.archivedAt) {
-      throw new ConvexError("Archived tasks cannot be planned");
-    }
-    if (myCoveringToday.length > 0) return { added: false };
-
-    const now = Date.now();
-    await ctx.db.insert("planSegments", {
-      orgId,
-      taskId: args.taskId,
-      userId,
-      startDate: today,
-      endDate: today,
-      createdAt: now,
-      updatedAt: now,
-      createdBy: userId,
-    });
-    return { added: true };
-  },
-});
-
-/**
- * Bulk sun-add for the `/tasks` selection toolbar: plan every selected task
- * for me today. Self-scoped and idempotent per task (mirrors addToToday);
- * archived tasks are skipped, not planned. Returns honest counts so the
- * toolbar can report "N added to today" without lying.
- */
-export const bulkAddToToday = mutation({
-  args: { taskIds: v.array(v.id("tasks")) },
-  handler: async (
-    ctx,
-    args,
-  ): Promise<{ added: number; alreadyPlanned: number; skippedArchived: number; notFound: number }> => {
-    const { orgId, userId } = await getAuthContext(ctx);
-
-    const orgSettings = await getOrgSettings(ctx, orgId);
-    const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
-    const today = getDateInTimezone(Date.now(), timezone);
-    const now = Date.now();
-
-    let added = 0;
-    let alreadyPlanned = 0;
-    let skippedArchived = 0;
-    let notFound = 0;
-
-    for (const taskId of args.taskIds) {
-      const task = await ctx.db.get(taskId);
-      if (!task || task.orgId !== orgId) {
-        notFound++;
-        continue;
-      }
-      if (task.archivedAt) {
-        skippedArchived++;
-        continue;
-      }
-
-      const segs = await ctx.db
-        .query("planSegments")
-        .withIndex("by_orgId_taskId", (q) => q.eq("orgId", orgId).eq("taskId", taskId))
-        .collect();
-      const alreadyToday = segs.some(
-        (s) => s.userId === userId && segmentCoversDate(s, today),
-      );
-      if (alreadyToday) {
-        alreadyPlanned++;
-        continue;
-      }
-
-      await ctx.db.insert("planSegments", {
-        orgId,
-        taskId,
-        userId,
-        startDate: today,
-        endDate: today,
-        createdAt: now,
-        updatedAt: now,
-        createdBy: userId,
-      });
-      added++;
-    }
-
-    return { added, alreadyPlanned, skippedArchived, notFound };
-  },
-});
-
-/**
- * The sun gesture, remove side: take this task out of MY today. Applies
- * `planRemovalOps` surgery to every covering segment of mine — single-day
- * deletes; multi-day bars keep their other days (trim or split). Idempotent
- * on tasks not in my today. Returns the summary kind for toast copy.
- */
-export const removeFromToday = mutation({
-  args: { taskId: v.id("tasks") },
-  handler: async (
-    ctx,
-    args,
-  ): Promise<{ removed: boolean; kind: "deleted" | "trimmed" | "split" | null }> => {
-    const { today, myCoveringToday } = await getMyTaskPlanContext(ctx, args.taskId);
-
-    const ops = planRemovalOps(myCoveringToday, today);
-    if (ops.length === 0) return { removed: false, kind: null };
-
-    const segById = new Map(myCoveringToday.map((s) => [s._id.toString(), s]));
-    const now = Date.now();
-    for (const op of ops) {
-      if (op.op === "delete") {
-        await ctx.db.delete(op.segmentId as Id<"planSegments">);
-      } else if (op.op === "patch") {
-        await ctx.db.patch(op.segmentId as Id<"planSegments">, {
-          startDate: op.startDate,
-          endDate: op.endDate,
-          updatedAt: now,
-        });
-      } else {
-        const source = segById.get(op.fromSegmentId)!;
-        // The split remainder inherits the source's lane priority so the
-        // Planner row does not reshuffle (stable lane packing).
-        await ctx.db.insert("planSegments", {
-          orgId: source.orgId,
-          taskId: source.taskId,
-          userId: source.userId,
-          startDate: op.startDate,
-          endDate: op.endDate,
-          laneOrder: source.laneOrder ?? source.createdAt,
-          createdAt: now,
-          updatedAt: now,
-          createdBy: source.createdBy,
-        });
-      }
-    }
-
-    return { removed: true, kind: summarizeRemovalOps(ops) };
-  },
-});
-
-/**
- * Manual reorder within the My Tasks Today group. Self-scoped: writes
- * `todaySortKey` onto the CALLER's covering segment(s) of the task —
- * ordering is per person, like the plan itself. Neighbor keys come from
- * the effective keys the list query returned (lib/reorder pattern).
- */
-export const reorderTodayTask = mutation({
-  args: {
-    taskId: v.id("tasks"),
-    beforeKey: v.optional(v.string()),
-    afterKey: v.optional(v.string()),
-  },
-  handler: async (ctx, args) => {
-    const { myCoveringToday } = await getMyTaskPlanContext(ctx, args.taskId);
-    if (myCoveringToday.length === 0) {
-      throw new ConvexError("Task is not in your today plan");
-    }
-
-    const newKey = generateKeyBetween(args.beforeKey ?? null, args.afterKey ?? null);
-    const now = Date.now();
-    for (const seg of myCoveringToday) {
-      await ctx.db.patch(seg._id, { todaySortKey: newKey, updatedAt: now });
-    }
-  },
-});
+// ─── Today (the sun) ──────────────────────────────────────────────────────────
+// The sun gesture, Today ordering and carried-over handling live in
+// `tasks/today.ts` (tasks refactor §5.6). `createTodayTask` stays here as one
+// of the task create paths.
 
 /**
  * Inline-add inside the Today group: "I'll also do this today" as ONE

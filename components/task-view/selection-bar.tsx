@@ -8,23 +8,29 @@ import {
   ArchiveNavIcon,
   CloseNavIcon,
   LabelNavIcon,
+  SunNavIcon,
   UserNavIcon,
 } from "@/components/icons/nav-icons"
 import type { PropertyMenuKind } from "@/components/task-view/property-menus"
 
 /**
  * Floating selection bar (U10), bottom centre while rows are selected:
- * count, clear (Esc), Status / Priority / Assignee / Labels menus and Archive.
- * "Add to today" joins with the sun semantics in slice 5.
+ * count, clear (Esc), Add to today (the sun for every selected task, D9),
+ * Status / Priority / Assignee / Labels menus and Archive.
  */
 export function SelectionBar({
   count,
   onClear,
   onOpenMenu,
+  onAddToToday,
+  todayLabel = "Add to today",
   onArchive,
 }: {
   count: number
   onClear: () => void
+  onAddToToday: () => void
+  /** My Tasks Today relabels the sun action ("Remove from today"). */
+  todayLabel?: string
   onOpenMenu: (kind: PropertyMenuKind, anchor: HTMLElement) => void
   onArchive: () => void
 }) {
@@ -48,6 +54,10 @@ export function SelectionBar({
         <CloseNavIcon />
       </Button>
       <Separator orientation="vertical" className="mx-1 data-vertical:h-5 data-vertical:self-auto" />
+      <Button variant="ghost" size="sm" title={`${todayLabel} (T)`} onClick={onAddToToday}>
+        <SunNavIcon data-icon="inline-start" />
+        {todayLabel}
+      </Button>
       {menuButton("status", <StatusIcon icon={{ kind: "pie", fill: 0.5 }} color="gray" className="size-3.5" />, "Status")}
       {menuButton("priority", <PriorityIcon priority={3} label={false} />, "Priority")}
       {menuButton("assignee", <UserNavIcon data-icon="inline-start" />, "Assignee")}

@@ -126,7 +126,8 @@ function ViewTab({
   })
 
   return (
-    <DropdownMenu open={menuOpen} onOpenChange={(open) => setMenuOpen(open && active)}>
+    // A plan view (My Tasks Today) has nothing to rename, duplicate or delete: no menu.
+    <DropdownMenu open={menuOpen} onOpenChange={(open) => setMenuOpen(open && active && !view.plan)}>
       <DropdownMenuTrigger asChild>
         <button
           ref={ref}

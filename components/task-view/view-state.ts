@@ -16,7 +16,8 @@ import type { ListFilter } from "@/convex/tasks/filters"
  * URL ⇄ view ⇄ spec (docs/prd-tasks-refactor.md §4.4, §5.4, §6.1). Pure — the
  * hook (`use-view-state.ts`) binds it to the router and the saved views.
  *
- * - `?view=` selects a system view (`active`) or a saved view (its id).
+ * - `?view=` selects a system view (`active`) or a saved view (its id); My
+ *   Tasks uses `?tab=` (§6.1) and opens on its Today plan (`TODAY_VIEW_KEY`).
  * - Unsaved changes live in the URL as overrides on top of that view, so a
  *   reload or a shared link shows the same view. Only values that differ
  *   from the view are written, so "modified" is a plain comparison.
@@ -47,6 +48,8 @@ const FILTER_OPERATOR_VALUES: readonly ListFilter["operator"][] = taskViewFilter
 
 /** Search params owned by the view state. Everything else (e.g. `detail`) is left alone. */
 export const VIEW_PARAM = "view"
+/** My Tasks names its tabs `?tab=` (§6.1). */
+export const TAB_PARAM = "tab"
 export const FILTER_PARAM = "filter"
 export const SEARCH_PARAM = "q"
 export const OVERRIDE_PARAMS = {
@@ -79,6 +82,44 @@ export type ViewOption = {
   /** The caller may rename / re-save / reorder / delete it (saved views only). */
   canEdit: boolean
   spec: TaskViewSpec
+  /**
+   * A plan, not a filter (My Tasks Today, U8): served by `tasks/today.ts`,
+   * fixed layout in the user's manual order; only the visible properties change.
+   */
+  plan?: true
+}
+
+/** My Tasks "Today" (U8, §5.6). Not a `listView` system view. */
+export const TODAY_VIEW_KEY = "today"
+
+/** Today's display (prototype v4): no grouping, the hand-made order, My Tasks columns. */
+export const TODAY_SPEC: TaskViewSpec = {
+  filters: [],
+  layout: "list",
+  groupBy: "none",
+  orderBy: "manual",
+  visibleProperties: ["priority", "title", "status", "labels", "client", "due", "time"],
+  showSubtasks: false,
+  showEmptyGroups: false,
+}
+
+const TODAY_OPTION: ViewOption = {
+  key: TODAY_VIEW_KEY,
+  name: "Today",
+  scope: "system",
+  canEdit: false,
+  spec: TODAY_SPEC,
+  plan: true,
+}
+
+/** The URL param naming the view on a surface. */
+export function viewParamFor(surface: ListViewSurface): string {
+  return surface === "myTasks" ? TAB_PARAM : VIEW_PARAM
+}
+
+/** The view a surface opens on (no param in the URL). */
+export function defaultViewKeyFor(surface: ListViewSurface): string {
+  return surface === "myTasks" ? TODAY_VIEW_KEY : DEFAULT_SYSTEM_VIEW[surface]
 }
 
 /** The saved-view shape `api.tasks.views.list` returns. */
@@ -92,18 +133,22 @@ export type SavedViewInput = {
 
 // ─── Views ───────────────────────────────────────────────────────────────────
 
-/** System views in order, with the org's "Set default for everyone" applied when known. */
+/**
+ * System views in order, with the org's "Set default for everyone" applied
+ * when known. My Tasks starts with its Today plan.
+ */
 export function systemViewOptions(
   surface: ListViewSurface,
   defaults?: Readonly<Record<string, TaskViewSpec>>,
 ): ViewOption[] {
-  return Object.entries(SYSTEM_VIEWS[surface]).map(([key, view]) => ({
+  const views: ViewOption[] = Object.entries(SYSTEM_VIEWS[surface]).map(([key, view]) => ({
     key,
     name: view.name,
     scope: "system",
     canEdit: false,
     spec: defaults?.[key] ?? view.spec,
   }))
+  return surface === "myTasks" ? [TODAY_OPTION, ...views] : views
 }
 
 /** All tabs: system views, then the saved views in server order (workspace, then personal). */
@@ -118,10 +163,10 @@ export function buildViewOptions(
   ]
 }
 
-/** The view `?view=` names, else the surface's default system view. */
+/** The view `?view=` (`?tab=`) names, else the surface's default view. */
 export function resolveView(options: readonly ViewOption[], surface: ListViewSurface, raw: string | null): ViewOption {
   const hit = raw ? options.find((o) => o.key === raw) : undefined
-  return hit ?? options.find((o) => o.key === DEFAULT_SYSTEM_VIEW[surface]) ?? systemViewOptions(surface)[0]
+  return hit ?? options.find((o) => o.key === defaultViewKeyFor(surface)) ?? systemViewOptions(surface)[0]
 }
 
 export function isSystemView(view: Pick<ViewOption, "scope">): boolean {
@@ -273,8 +318,9 @@ export function writeViewParams(
   draft: ViewDraft,
 ): URLSearchParams {
   const next = new URLSearchParams(current.toString())
-  if (view.key === DEFAULT_SYSTEM_VIEW[surface]) next.delete(VIEW_PARAM)
-  else next.set(VIEW_PARAM, view.key)
+  const param = viewParamFor(surface)
+  if (view.key === defaultViewKeyFor(surface)) next.delete(param)
+  else next.set(param, view.key)
 
   for (const param of Object.values(OVERRIDE_PARAMS)) next.delete(param)
   next.delete(FILTER_PARAM)
@@ -298,8 +344,9 @@ export function paramsForView(current: URLSearchParams, surface: ListViewSurface
   for (const param of Object.values(OVERRIDE_PARAMS)) next.delete(param)
   next.delete(FILTER_PARAM)
   next.delete(SEARCH_PARAM)
-  if (viewKey === DEFAULT_SYSTEM_VIEW[surface]) next.delete(VIEW_PARAM)
-  else next.set(VIEW_PARAM, viewKey)
+  const param = viewParamFor(surface)
+  if (viewKey === defaultViewKeyFor(surface)) next.delete(param)
+  else next.set(param, viewKey)
   return next
 }
 

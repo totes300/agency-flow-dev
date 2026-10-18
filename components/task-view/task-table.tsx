@@ -18,11 +18,11 @@ import {
 import type { OrderBy } from "@/components/task-view/column-rules"
 import { GroupHeader } from "@/components/task-view/group-header"
 import { InlineAddRow } from "@/components/task-view/inline-add-row"
-import { ROW_GRID_CLASS, SortableTaskRow, TaskRow } from "@/components/task-view/task-row"
+import { ROW_CHECKBOX_LEFT_CLASS, ROW_GRID_CLASS, SortableTaskRow, TaskRow } from "@/components/task-view/task-row"
 import type { TaskGroup } from "@/components/task-view/row-model"
 
 /** Same setup as the board: pointer after 5px (a click still opens), keyboard on the focused grip. */
-const LIST_DRAG_SENSORS = [
+export const LIST_DRAG_SENSORS = [
   PointerSensor.configure({ activationConstraints: [new PointerActivationConstraints.Distance({ value: 5 })] }),
   KeyboardSensor,
 ]
@@ -87,57 +87,18 @@ export function TaskTable({
   inlineAdd: (group: TaskGroup) => ((title: string) => void) | undefined
 }) {
   const titleColumn = columns.indexOf("title") + 1
-  const style = {
-    "--task-cols": gridTemplateFor(columns),
-    minWidth: tableMinWidthFor(columns),
-  } as CSSProperties
 
   return (
-    <div role="grid" aria-label="Tasks" style={style}>
-      <div
-        role="row"
-        className={cn(
-          ROW_GRID_CLASS,
-          "sticky top-0 z-[3] h-9 border-b border-border/60 bg-background text-xs text-muted-foreground",
-        )}
-      >
-        {hasSelection ? (
-          <div className="absolute top-1/2 left-3 flex -translate-y-1/2">
-            <Checkbox
-              checked={headerSelection === "all" ? true : headerSelection === "some" ? "indeterminate" : false}
-              aria-label="Select all visible tasks"
-              onClick={onToggleAll}
-            />
-          </div>
-        ) : null}
-        {columns.map((key) => {
-          const meta = columnMeta(key)
-          const sortBy = meta.header ? meta.sortBy : undefined
-          if (!sortBy) {
-            return (
-              <span key={key} role="columnheader" className="truncate">
-                {meta.header}
-              </span>
-            )
-          }
-          const active = orderBy === sortBy
-          return (
-            <span key={key} role="columnheader" aria-sort={active ? "other" : "none"} className="min-w-0">
-              <button
-                type="button"
-                className={cn(
-                  "flex max-w-full items-center gap-1 rounded-sm outline-none hover:text-foreground focus-visible:text-foreground",
-                  active && "text-foreground",
-                )}
-                onClick={() => onOrderBy(active ? defaultOrderBy : sortBy)}
-              >
-                <span className="truncate">{meta.header}</span>
-                {active ? <ChevronDownNavIcon size={11} strokeWidth={1.6} /> : null}
-              </button>
-            </span>
-          )
-        })}
-      </div>
+    <TaskGrid columns={columns}>
+      <TaskTableHeader
+        columns={columns}
+        hasSelection={hasSelection}
+        headerSelection={headerSelection}
+        onToggleAll={onToggleAll}
+        orderBy={orderBy}
+        defaultOrderBy={defaultOrderBy}
+        onOrderBy={onOrderBy}
+      />
 
       {groups.map((group) => {
         const collapsed = grouped && isCollapsed(group.key)
@@ -180,6 +141,89 @@ export function TaskTable({
             )}
             {collapsed ? null : <GroupAddRow group={group} titleColumn={titleColumn} inlineAdd={inlineAdd} />}
           </Fragment>
+        )
+      })}
+    </TaskGrid>
+  )
+}
+
+/** The grid container: one column template (from the registry) for the header and every row. */
+export function TaskGrid({ columns, children }: { columns: readonly ColumnKey[]; children: ReactNode }) {
+  const style = {
+    "--task-cols": gridTemplateFor(columns),
+    minWidth: tableMinWidthFor(columns),
+  } as CSSProperties
+  return (
+    <div role="grid" aria-label="Tasks" style={style}>
+      {children}
+    </div>
+  )
+}
+
+/**
+ * The sticky column header row. Sortable headers set the order (clicking the
+ * active one goes back to the view's default); without `onOrderBy` the
+ * headers are plain labels (a manual-order list such as Today).
+ */
+export function TaskTableHeader({
+  columns,
+  hasSelection,
+  headerSelection,
+  onToggleAll,
+  orderBy,
+  defaultOrderBy,
+  onOrderBy,
+}: {
+  columns: readonly ColumnKey[]
+  hasSelection: boolean
+  headerSelection: HeaderSelectionState
+  onToggleAll: () => void
+  orderBy?: OrderBy
+  defaultOrderBy?: OrderBy
+  onOrderBy?: (orderBy: OrderBy) => void
+}) {
+  return (
+    <div
+      role="row"
+      className={cn(
+        ROW_GRID_CLASS,
+        "sticky top-0 z-[3] h-9 border-b border-border/60 bg-background text-xs text-muted-foreground",
+      )}
+    >
+      {hasSelection ? (
+        <div className={cn("absolute top-1/2 flex -translate-y-1/2", ROW_CHECKBOX_LEFT_CLASS)}>
+          <Checkbox
+            checked={headerSelection === "all" ? true : headerSelection === "some" ? "indeterminate" : false}
+            aria-label="Select all visible tasks"
+            onClick={onToggleAll}
+          />
+        </div>
+      ) : null}
+      {columns.map((key) => {
+        const meta = columnMeta(key)
+        const sortBy = meta.header && onOrderBy ? meta.sortBy : undefined
+        if (!sortBy || !onOrderBy) {
+          return (
+            <span key={key} role="columnheader" className="truncate">
+              {meta.header}
+            </span>
+          )
+        }
+        const active = orderBy === sortBy
+        return (
+          <span key={key} role="columnheader" aria-sort={active ? "other" : "none"} className="min-w-0">
+            <button
+              type="button"
+              className={cn(
+                "flex max-w-full items-center gap-1 rounded-sm outline-none hover:text-foreground focus-visible:text-foreground",
+                active && "text-foreground",
+              )}
+              onClick={() => onOrderBy(active ? (defaultOrderBy ?? sortBy) : sortBy)}
+            >
+              <span className="truncate">{meta.header}</span>
+              {active ? <ChevronDownNavIcon size={11} strokeWidth={1.6} /> : null}
+            </button>
+          </span>
         )
       })}
     </div>

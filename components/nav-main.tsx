@@ -1,5 +1,6 @@
 "use client"
 
+import { useState } from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { useQuery } from "convex/react"
@@ -19,15 +20,20 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { SidebarCountBadge } from "@/components/sidebar-count-badge"
+import { formatDateToYMD } from "@/lib/format"
+import { useOptionalQuery } from "@/lib/hooks/use-optional-query"
 
+/**
+ * My Tasks: the caller's open tasks planned for today (§5.4 — today's
+ * `planSegments` for the user, a small range), on the shared sidebar badge.
+ */
 function MyTasksBadge() {
   const { isAuthenticated } = useConvexAuth()
-  const count = useQuery(
-    api.myTasks.myTasksCount,
-    isAuthenticated ? {} : "skip",
-  )
+  const [today] = useState(() => formatDateToYMD(new Date()))
+  // A failure (e.g. a deployment without tasks/today) hides the badge, never the sidebar.
+  const { data: count } = useOptionalQuery(api.tasks.today.badgeCount, isAuthenticated ? { today } : "skip")
   if (!count) return null
-  return <SidebarCountBadge count={count} aria-label={`${count} tasks assigned to you`} />
+  return <SidebarCountBadge count={count} aria-label={`${count} ${count === 1 ? "task" : "tasks"} planned for today`} />
 }
 
 /**

@@ -8,7 +8,7 @@ import { CategoryBadge } from "@/components/category-badge"
 import { InlineTimeCell } from "@/components/tasks/inline-time-cell"
 import { InlineSubtaskRing } from "@/components/tasks/activity-indicators"
 import { PriorityIcon } from "@/components/icons/priority-icon"
-import { CalendarNavIcon, CommentNavIcon } from "@/components/icons/nav-icons"
+import { CalendarNavIcon, CommentNavIcon, SunNavIcon } from "@/components/icons/nav-icons"
 import { useTimerActions } from "@/lib/hooks/use-timer"
 import { formatHoursShort } from "@/lib/format"
 import { getStatusColor } from "@/lib/status-colors"
@@ -46,7 +46,8 @@ function Chip({ className, children, ...props }: React.ComponentProps<"span">) {
  *   ▶ 01:30                                        💬 2      ← activity (only when there is any)
  *
  * Only values that are set and visible render; never the column's own
- * property (U3 rules decide `keys`) and no task ID. Status shows as an icon
+ * property (U3 rules decide `keys`) and no task ID. A task in today leads the
+ * chips with the sun. Status shows as an icon
  * before the title unless the columns are statuses.
  */
 export const BoardCard = memo(function BoardCard({
@@ -86,6 +87,28 @@ export const BoardCard = memo(function BoardCard({
   const unread = perUser.unreadComments
 
   const chips: ReactNode[] = []
+  // The sun shows on a card only while the task is in today (a quiet chip that
+  // takes it out again); adding happens with T on the focused card or in the detail.
+  const sun = ctx.sun?.stateFor(row)
+  if (sun?.kind === "on") {
+    chips.push(
+      <button
+        key="today"
+        type="button"
+        data-menu-anchor="today"
+        aria-label={sun.label}
+        title={sun.label}
+        className="inline-flex h-6 shrink-0 items-center gap-1 rounded-md bg-secondary px-2 text-xs text-muted-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
+        onClick={(e) => {
+          e.stopPropagation()
+          ctx.sun?.toggle(row, sun)
+        }}
+      >
+        <SunNavIcon size={12} strokeWidth={1.8} className="text-warning" />
+        Today
+      </button>,
+    )
+  }
   if (keys.has("priority") && task.priority !== PRIORITY.none) {
     chips.push(
       <button

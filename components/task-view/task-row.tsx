@@ -14,6 +14,14 @@ export const ROW_GRID_CLASS =
   "grid items-center gap-x-3 pl-10 pr-3 [grid-template-columns:var(--task-cols)]"
 
 /**
+ * The left gutter (40px): the drag grip at 10–22px, the selection checkbox at
+ * 22–38px. The grip keeps a 10px inner gutter so a drag never starts on the
+ * sidebar's rail, which overhangs the inset panel's left edge by ~8px.
+ */
+export const ROW_GRIP_CLASS = "absolute inset-y-0 left-2.5 w-3"
+export const ROW_CHECKBOX_LEFT_CLASS = "left-[22px]"
+
+/**
  * THE task row (docs/prd-tasks-refactor.md §6.2): one CSS grid line per task,
  * one track per visible column from the registry. Clicking the row opens the
  * task; editable cells open their property menu instead. The selection
@@ -94,7 +102,10 @@ function TaskRowView({
           ref={setHandleElement}
           type="button"
           aria-label={`Drag to reorder ${row.task.title}`}
-          className="absolute inset-y-0 left-0 flex w-3 cursor-grab items-center justify-center text-muted-foreground/40 outline-none hover:text-muted-foreground focus-visible:text-foreground active:cursor-grabbing"
+          className={cn(
+            ROW_GRIP_CLASS,
+            "flex cursor-grab items-center justify-center text-muted-foreground/40 outline-none hover:text-muted-foreground focus-visible:text-foreground active:cursor-grabbing",
+          )}
           onClick={(e) => e.stopPropagation()}
         >
           <GripNavIcon size={12} />
@@ -102,7 +113,8 @@ function TaskRowView({
       ) : null}
       <div
         className={cn(
-          "absolute top-1/2 left-3 flex -translate-y-1/2 transition-opacity",
+          "absolute top-1/2 flex -translate-y-1/2 transition-opacity",
+          ROW_CHECKBOX_LEFT_CLASS,
           hasSelection || isSelected ? "opacity-100" : "opacity-0 group-hover/row:opacity-100 focus-within:opacity-100",
         )}
       >
@@ -116,7 +128,12 @@ function TaskRowView({
         />
       </div>
       {columns.map((key) => (
-        <div key={key} role="gridcell" data-col={key} className="flex min-w-0 items-center gap-1.5 overflow-hidden">
+        <div
+          key={key}
+          role="gridcell"
+          data-col={key}
+          className={cn("flex min-w-0 items-center gap-1.5 overflow-hidden", key === "title" && "@container/title")}
+        >
           {CELL_RENDERERS[key](row, ctx)}
         </div>
       ))}

@@ -17,7 +17,10 @@ import {
   scopeFiltersOf,
   serializeFilter,
   systemViewOptions,
+  TODAY_SPEC,
+  TODAY_VIEW_KEY,
   toSearchString,
+  viewParamFor,
   writeViewParams,
   type ViewDraft,
   type ViewOption,
@@ -76,6 +79,54 @@ describe("views", () => {
     expect(baseChipsOf(active)).toEqual([])
     expect(scopeFiltersOf(saved)).toEqual([SAVED_SPEC.filters[0]])
     expect(baseChipsOf(saved)).toEqual([SAVED_SPEC.filters[1]])
+  })
+})
+
+describe("My Tasks tabs (?tab=)", () => {
+  const myOptions = buildViewOptions("myTasks", [
+    { _id: "v_mine", name: "Mine", scope: "personal", canEdit: true, spec: SYSTEM_VIEWS.myTasks.assigned.spec },
+  ])
+
+  it("lists Today | Assigned | Created, then saved views", () => {
+    expect(myOptions.map((o) => [o.key, o.name])).toEqual([
+      ["today", "Today", ],
+      ["assigned", "Assigned"],
+      ["created", "Created"],
+      ["v_mine", "Mine"],
+    ])
+    expect(myOptions[0]).toMatchObject({ plan: true, spec: TODAY_SPEC })
+    // Assigned hides the Assignee column (§11.2).
+    expect(myOptions[1].spec.visibleProperties).not.toContain("assignee")
+  })
+
+  it("opens on Today and names the tab with ?tab=", () => {
+    expect(viewParamFor("myTasks")).toBe("tab")
+    expect(viewParamFor("tasks")).toBe("view")
+    expect(resolveView(myOptions, "myTasks", null).key).toBe(TODAY_VIEW_KEY)
+    expect(resolveView(myOptions, "myTasks", "created").key).toBe("created")
+    expect(resolveView(myOptions, "myTasks", "v_mine").key).toBe("v_mine")
+    // ?view= means nothing on My Tasks.
+    expect(resolveView(myOptions, "myTasks", "bogus").key).toBe(TODAY_VIEW_KEY)
+  })
+
+  it("writes ?tab= (omitted for Today) and keeps other params", () => {
+    const assigned = myOptions[1]
+    const toAssigned = paramsForView(params("detail=t1"), "myTasks", "assigned")
+    expect(toAssigned.get("tab")).toBe("assigned")
+    expect(toAssigned.get("view")).toBeNull()
+    expect(toAssigned.get("detail")).toBe("t1")
+    expect(paramsForView(params("tab=assigned"), "myTasks", TODAY_VIEW_KEY).get("tab")).toBeNull()
+    const draft: ViewDraft = { display: { ...displayOf(assigned.spec), groupBy: "priority" }, chips: [] }
+    const written = writeViewParams(params(""), "myTasks", assigned, draft)
+    expect(toSearchString(written)).toBe("?tab=assigned&group=priority")
+  })
+
+  it("Today's only override is its visible properties", () => {
+    const today = myOptions[0]
+    const draft = draftFromSearchParams(params("props=priority,title,due"), today)
+    expect(draft.display.visibleProperties).toEqual(["priority", "title", "due"])
+    expect(isDraftModified(draft, today)).toBe(true)
+    expect(toSearchString(writeViewParams(params(""), "myTasks", today, draft))).toBe("?props=priority%2Ctitle%2Cdue")
   })
 })
 

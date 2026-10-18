@@ -10,7 +10,6 @@ import type { TaskViewSpec, TaskViewSurface } from "@/convex/tasks/model"
 import { toastError } from "@/lib/toast-helpers"
 import {
   SEARCH_PARAM,
-  VIEW_PARAM,
   buildViewOptions,
   draftFromSearchParams,
   draftSpec,
@@ -22,6 +21,7 @@ import {
   resolveView,
   toSearchString,
   writeViewParams,
+  viewParamFor,
   type DisplaySpec,
   type ListFilter,
   type ViewDraft,
@@ -32,7 +32,7 @@ type SavedViews = (typeof api.tasks.views.list)["_returnType"]
 
 /**
  * The view state of a task surface, bound to the URL and the saved views
- * (§4.4, §6.1): `view` from `?view=`, `draft` = that view + the URL
+ * (§4.4, §6.1): `view` from `?view=` (My Tasks: `?tab=`), `draft` = that view + the URL
  * overrides, `modified` when they differ. Switching views pushes a history
  * entry and drops the previous view's overrides and search; display and
  * filter changes replace the entry.
@@ -61,7 +61,7 @@ export function useViewState(surface: TaskViewSurface) {
     [saved, surface],
   )
   const paramsKey = searchParams.toString()
-  const view = resolveView(options, surface, searchParams.get(VIEW_PARAM))
+  const view = resolveView(options, surface, searchParams.get(viewParamFor(surface)))
   const draft = useMemo(() => draftFromSearchParams(new URLSearchParams(paramsKey), view), [paramsKey, view])
   const spec = useMemo(() => draftSpec(view, draft), [view, draft])
   const modified = isDraftModified(draft, view)

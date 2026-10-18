@@ -68,6 +68,8 @@ export function boardGroupBy(groupBy: GroupBy): Exclude<GroupBy, "none"> {
  * Ordering, Show sub-tasks, Show empty groups, display properties, then
  * Reset / Save / Save as new / Set default for everyone. The round toolbar
  * button carries the "modified" dot while the URL differs from the view.
+ * A plan view (My Tasks Today) keeps its layout and hand-made order: only the
+ * display properties change, and nothing is saved.
  */
 export function DisplayMenu({
   display,
@@ -94,8 +96,9 @@ export function DisplayMenu({
   const groupBy = board ? boardGroupBy(display.groupBy) : display.groupBy
   const subId = useId()
   const emptyId = useId()
+  const locked = view.plan === true
   const canSave = view.scope !== "system" && view.canEdit
-  const canSetDefault = isAdmin && view.scope !== "personal"
+  const canSetDefault = isAdmin && view.scope !== "personal" && !locked
 
   const toggleProperty = (key: ViewProperty) =>
     onChange({
@@ -121,7 +124,13 @@ export function DisplayMenu({
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-[22rem] gap-0 p-3">
-        <Segmented value={display.layout} onValueChange={(layout) => onChange({ layout })} className="w-full" aria-label="Layout">
+        <Segmented
+          value={display.layout}
+          onValueChange={(layout) => onChange({ layout })}
+          className="w-full"
+          aria-label="Layout"
+          disabled={locked}
+        >
           <SegmentedItem value="list">
             <ListLayoutIcon data-icon="inline-start" />
             List
@@ -136,6 +145,7 @@ export function DisplayMenu({
           <DisplayRow label={board ? "Columns" : "Grouping"}>
             <OptionSelect
               value={groupBy}
+              disabled={locked}
               options={GROUP_BY_ORDER.filter((g) => !board || g !== "none")}
               labels={GROUP_BY_LABELS}
               onSelect={(value) => onChange({ groupBy: value })}
@@ -144,23 +154,32 @@ export function DisplayMenu({
           <DisplayRow label="Ordering">
             <OptionSelect
               value={display.orderBy}
+              disabled={locked}
               options={ORDER_BY_ORDER}
               labels={ORDER_BY_LABELS}
               onSelect={(value) => onChange({ orderBy: value })}
             />
           </DisplayRow>
           <DisplayRow label="Show sub-tasks" htmlFor={subId}>
-            <Switch id={subId} checked={display.showSubtasks} onCheckedChange={(checked) => onChange({ showSubtasks: checked })} />
+            <Switch
+              id={subId}
+              checked={display.showSubtasks}
+              disabled={locked}
+              onCheckedChange={(checked) => onChange({ showSubtasks: checked })}
+            />
           </DisplayRow>
           <DisplayRow label={board ? "Show empty columns" : "Show empty groups"} htmlFor={emptyId}>
             <Switch
               id={emptyId}
               checked={display.showEmptyGroups}
-              disabled={!board && display.groupBy === "none"}
+              disabled={locked || (!board && display.groupBy === "none")}
               onCheckedChange={(checked) => onChange({ showEmptyGroups: checked })}
             />
           </DisplayRow>
         </div>
+        {locked ? (
+          <p className="pt-1 text-xs text-muted-foreground">Today keeps your hand-made order. Drag rows to reorder.</p>
+        ) : null}
 
         <Separator className="my-2.5 -mx-3 w-auto" />
         <p className="text-[13px] text-muted-foreground">Display properties</p>
@@ -183,9 +202,11 @@ export function DisplayMenu({
           <Button variant="ghost" size="sm" disabled={!modified} onClick={onReset}>
             Reset
           </Button>
-          <Button variant="ghost" size="sm" onClick={onSaveAsNew}>
-            Save as new view
-          </Button>
+          {locked ? null : (
+            <Button variant="ghost" size="sm" onClick={onSaveAsNew}>
+              Save as new view
+            </Button>
+          )}
           {canSave ? (
             <Button variant="ghost" size="sm" disabled={!modified} onClick={onSave}>
               Save
@@ -218,16 +239,18 @@ function OptionSelect<T extends string>({
   options,
   labels,
   onSelect,
+  disabled = false,
 }: {
   value: T
   options: readonly T[]
   labels: Record<T, string>
   onSelect: (value: T) => void
+  disabled?: boolean
 }) {
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="sm" className="w-40 justify-between font-normal">
+      <DropdownMenuTrigger asChild disabled={disabled}>
+        <Button variant="outline" size="sm" className="w-40 justify-between font-normal" disabled={disabled}>
           {labels[value]}
           <ChevronDownNavIcon className="text-muted-foreground" />
         </Button>

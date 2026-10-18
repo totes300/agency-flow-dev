@@ -7,6 +7,7 @@ import type { Id } from "@/convex/_generated/dataModel"
 import { MetadataRow } from "@/components/tasks/task-detail-metadata"
 import { Skeleton } from "@/components/ui/skeleton"
 import { formatSegmentRange, spanDays } from "@/lib/planner"
+import { formatDateToYMD } from "@/lib/format"
 import { toast } from "sonner"
 import { toastError } from "@/lib/toast-helpers"
 import { cn } from "@/lib/utils"
@@ -34,7 +35,8 @@ export function TaskPlanSection({
     isAuthenticated ? { taskId } : "skip",
   )
   const removeSegment = useMutation(api.planner.removeSegment)
-  const addToToday = useMutation(api.planner.addToToday)
+  // The sun (D9): a member plans their own day, an admin every assignee's.
+  const addToToday = useMutation(api.tasks.today.addToToday)
 
   const handleRemove = (segmentId: Id<"planSegments">) => {
     void removeSegment({ id: segmentId }).catch((err) =>
@@ -43,9 +45,9 @@ export function TaskPlanSection({
   }
 
   const handleAddToday = () => {
-    void addToToday({ taskId })
+    void addToToday({ taskId, today: formatDateToYMD(new Date()) })
       .then((r) => {
-        if (r.added) toast.success("Added to today — visible in your Planner row")
+        toast.success(r.added.length > 0 ? "Added to today · visible in the Planner" : "Already planned for today")
       })
       .catch((err) => toastError(err, "Failed to add to today"))
   }

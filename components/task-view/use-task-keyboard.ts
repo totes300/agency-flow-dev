@@ -8,8 +8,10 @@ import type { PropertyMenuKind } from "@/components/task-view/property-menus"
  * List keyboard (U10) for the table. Covers the keys that work on the list
  * itself: C new task, J/K (and ↓/↑) move focus, Enter / Space open the
  * focused task (drawer-or-page mode is slice 6), X select, S/P/A/L property
- * menus, Y timer, F filter, / search, Esc clear, ? shortcuts. T (today)
- * arrives with slice 5; J/K inside an open task is the detail's own stepping.
+ * menus, T today (the sun on the focused task or the selection; on My Tasks
+ * Today without a focused row, the "Add tasks to today" picker), Y timer,
+ * F filter, / search, Esc clear, ? shortcuts. J/K inside an open task is the
+ * detail's own stepping.
  *
  * Keys are ignored while typing, with a modifier held, or while a dialog,
  * menu or the task detail is open (those own the keyboard).
@@ -26,6 +28,8 @@ export type TaskKeyboardHandlers = {
   onClearSelection: () => void
   onOpenMenu: (kind: PropertyMenuKind, focusedId: Id<"tasks">) => void
   onToggleTimer: (id: Id<"tasks">) => void
+  /** T: the focused task (null when nothing is focused). */
+  onToday: (focusedId: Id<"tasks"> | null) => void
   onNewTask: () => void
   onShowShortcuts: () => void
   onFilter: () => void
@@ -41,6 +45,7 @@ export const TASK_LIST_SHORTCUTS: ReadonlyArray<{ keys: string[]; label: string 
   { keys: ["P"], label: "Change priority (then 0–4)" },
   { keys: ["A"], label: "Assign (then 0–9)" },
   { keys: ["L"], label: "Labels (then 1–9)" },
+  { keys: ["T"], label: "Add to today" },
   { keys: ["Y"], label: "Start / stop timer" },
   { keys: ["F"], label: "Filter" },
   { keys: ["/"], label: "Search" },
@@ -117,6 +122,9 @@ export function useTaskKeyboard(handlers: TaskKeyboardHandlers) {
         case "/":
           e.preventDefault()
           return h.onSearch()
+        case "t":
+          e.preventDefault()
+          return h.onToday(focused)
         case "Escape":
           if (h.hasSelection) h.onClearSelection()
           else h.setFocusedId(null)

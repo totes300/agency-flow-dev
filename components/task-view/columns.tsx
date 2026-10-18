@@ -11,13 +11,14 @@ import { InlineTimeCell } from "@/components/tasks/inline-time-cell"
 import { CommentPill, InlineSubtaskRing } from "@/components/tasks/activity-indicators"
 import { StatusIcon } from "@/components/icons/status-icon"
 import { PriorityIcon } from "@/components/icons/priority-icon"
-import { CalendarNavIcon, ClientsNavIcon, LabelNavIcon, NoAssigneeNavIcon } from "@/components/icons/nav-icons"
+import { CalendarNavIcon, ClientsNavIcon, LabelNavIcon, NoAssigneeNavIcon, SunNavIcon } from "@/components/icons/nav-icons"
 import { firstName, formatHoursShort, formatRelativeTime, formatShortDate } from "@/lib/format"
 import { getStatusColor } from "@/lib/status-colors"
 import { cn } from "@/lib/utils"
 import type { ColumnKey } from "@/components/task-view/column-rules"
 import type { PropertyMenuKind } from "@/components/task-view/property-menus"
 import type { MemberRef, TaskRowModel } from "@/components/task-view/row-model"
+import type { SunState } from "@/components/task-view/sun"
 
 export {
   COLUMNS,
@@ -43,6 +44,7 @@ export {
  * when `ctx.canEditBilling` (D5: members cannot change project or work
  * category) — otherwise they render read-only. Board cards build their own
  * chips and only reuse `statusIcon`, so these editors stay in the list.
+ * The title cell carries the sun (`ctx.sun`, §5.6) after the sub-task ring.
  */
 
 export type CellContext = {
@@ -52,6 +54,48 @@ export type CellContext = {
   memberById: ReadonlyMap<Id<"users">, MemberRef>
   /** Admin: may change project and work category (D5, §5.3). The server enforces it. */
   canEditBilling: boolean
+  /** The sun in the title cell (§5.6, D9); absent = no sun on this surface. */
+  sun?: {
+    stateFor: (row: TaskRowModel) => SunState
+    toggle: (row: TaskRowModel, state: SunState) => void
+  }
+  /** Extra title-cell content after the title (My Tasks carried-over: when it was planned). */
+  titleAccessory?: (row: TaskRowModel) => ReactNode
+  /** Row actions at the title cell's right edge, aligned across rows (carried-over: Keep / Remove). */
+  titleActions?: (row: TaskRowModel) => ReactNode
+}
+
+/**
+ * The sun button (always visible, quiet): muted when off, the warning tone
+ * when the task is in today, disabled with "Assign first" without assignees.
+ */
+function SunButton({ row, ctx }: { row: TaskRowModel; ctx: CellContext }) {
+  if (!ctx.sun) return null
+  const state = ctx.sun.stateFor(row)
+  if (state.kind === "hidden") return null
+  const on = state.kind === "on"
+  return (
+    <Button
+      variant="ghost"
+      size="icon-xs"
+      className={cn(
+        "size-[22px] shrink-0",
+        on ? "text-warning hover:text-warning" : "text-muted-foreground/50 hover:text-foreground",
+        state.kind === "disabled" && "disabled:pointer-events-auto disabled:cursor-not-allowed",
+      )}
+      aria-label={state.label}
+      aria-pressed={on}
+      title={state.label}
+      disabled={state.kind === "disabled"}
+      data-menu-anchor="today"
+      onClick={(e) => {
+        e.stopPropagation()
+        ctx.sun?.toggle(row, state)
+      }}
+    >
+      <SunNavIcon size={14} strokeWidth={on ? 1.8 : 1.5} />
+    </Button>
+  )
 }
 
 type CellRenderer = (row: TaskRowModel, ctx: CellContext) => ReactNode
@@ -165,7 +209,7 @@ export const CELL_RENDERERS: Record<ColumnKey, CellRenderer> = {
       </Button>
     ) : null,
 
-  title: (row) => {
+  title: (row, ctx) => {
     const { task, perUser } = row
     const unread = perUser.unreadComments
     return (
@@ -186,7 +230,10 @@ export const CELL_RENDERERS: Record<ColumnKey, CellRenderer> = {
             {task.subtaskDoneCount}/{task.subtaskCount}
           </span>
         ) : null}
+        {ctx.titleAccessory?.(row)}
+        <SunButton row={row} ctx={ctx} />
         <span className="flex-1" />
+        {ctx.titleActions?.(row)}
         {task.commentCount > 0 || unread > 0 ? (
           <span
             className="shrink-0"

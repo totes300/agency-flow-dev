@@ -53,28 +53,67 @@ export function GroupHeader({
   onCreate?: () => void
 }) {
   return (
-    <div
-      role="row"
-      className="sticky top-9 z-[2] flex h-9 items-center gap-2 border-b border-border/60 bg-muted pr-3 pl-3 text-[13px] font-medium"
+    <GroupHeaderRow
+      label={group.label}
+      count={group.rows.length}
+      icon={<GroupIcon header={group.header} />}
+      collapsed={collapsed}
+      onToggle={onToggle}
     >
-      <Button
-        variant="ghost"
-        size="icon-xs"
-        aria-expanded={!collapsed}
-        aria-label={collapsed ? `Expand ${group.label}` : `Collapse ${group.label}`}
-        onClick={onToggle}
-      >
-        {collapsed ? <ChevronRightNavIcon strokeWidth={1.8} /> : <ChevronDownNavIcon strokeWidth={1.8} />}
-      </Button>
-      <GroupIcon header={group.header} />
-      <span className="min-w-0 truncate">{group.label}</span>
-      <span className="font-normal text-muted-foreground tabular-nums">{group.rows.length}</span>
-      <span className="flex-1" />
       {onCreate ? (
         <Button variant="ghost" size="icon-xs" aria-label={`New task in ${group.label}`} onClick={onCreate}>
           <PlusNavIcon />
         </Button>
       ) : null}
+    </GroupHeaderRow>
+  )
+}
+
+/**
+ * The group header row itself: chevron (when collapsible), icon, name, the
+ * count as plain muted text, an optional muted note, then right-aligned
+ * actions. Shared by the grouped table and My Tasks Today's sections.
+ */
+export function GroupHeaderRow({
+  label,
+  count,
+  icon,
+  note,
+  collapsed = false,
+  onToggle,
+  children,
+}: {
+  label: string
+  count: number
+  icon?: React.ReactNode
+  note?: string
+  collapsed?: boolean
+  /** Absent = not collapsible; the icon then takes the chevron's slot so labels stay aligned. */
+  onToggle?: () => void
+  children?: React.ReactNode
+}) {
+  return (
+    <div
+      role="row"
+      className="sticky top-9 z-[2] flex h-9 items-center gap-2 border-b border-border/60 bg-muted pr-3 pl-3 text-[13px] font-medium"
+    >
+      {onToggle ? (
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-expanded={!collapsed}
+          aria-label={collapsed ? `Expand ${label}` : `Collapse ${label}`}
+          onClick={onToggle}
+        >
+          {collapsed ? <ChevronRightNavIcon strokeWidth={1.8} /> : <ChevronDownNavIcon strokeWidth={1.8} />}
+        </Button>
+      ) : null}
+      {onToggle ? icon : <span className="flex size-6 shrink-0 items-center justify-center">{icon}</span>}
+      <span className="min-w-0 truncate">{label}</span>
+      <span className="font-normal text-muted-foreground tabular-nums">{count}</span>
+      {note ? <span className="hidden truncate font-normal text-muted-foreground sm:inline">· {note}</span> : null}
+      <span className="flex-1" />
+      {children}
     </div>
   )
 }

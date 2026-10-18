@@ -10,6 +10,7 @@ import type { TaskViewSpec, TaskViewSurface } from "@/convex/tasks/model"
 import { useIsAdmin } from "@/lib/hooks/use-is-admin"
 import { useIsMobile } from "@/lib/hooks/use-is-mobile"
 import { useLastDefined } from "@/lib/hooks/use-last-defined"
+import { useOptionalQuery } from "@/lib/hooks/use-optional-query"
 import { useRowSelection } from "@/lib/hooks/use-row-selection"
 import { useTimerActions } from "@/lib/hooks/use-timer"
 import { buildDetailUrl, parseDetailParam } from "@/lib/task-detail"
@@ -23,7 +24,8 @@ import { TaskReferenceDataProvider } from "@/components/tasks/task-reference-dat
 import { TaskDetailDrawer } from "@/components/tasks/task-detail-drawer"
 import { TaskDetailModal } from "@/components/tasks/task-detail-modal"
 import { TaskFormModal, type TaskFormDefaults } from "@/components/tasks/task-form-modal"
-import { ComposeIcon } from "@/components/icons/nav-icons"
+import { Kbd } from "@/components/ui/kbd"
+import { ComposeIcon, PanelNavIcon, PlusNavIcon } from "@/components/icons/nav-icons"
 import { visibleColumnKeys, type CellContext } from "@/components/task-view/columns"
 import type { ColumnKey, OrderBy } from "@/components/task-view/column-rules"
 import { boardMoveFor, canDragOnBoard } from "@/components/task-view/board-model"
@@ -33,6 +35,7 @@ import { FilterButton, FilterChips, type FacetContext } from "@/components/task-
 import { SearchBox, type SearchBoxHandle } from "@/components/task-view/search-box"
 import { TaskBoard } from "@/components/task-view/task-board"
 import { ViewDialog, type ViewDialogRequest } from "@/components/task-view/view-dialog"
+import { SYSTEM_VIEWS } from "@/convex/tasks/model"
 import type { ViewOption } from "@/components/task-view/view-state"
 import { PropertyMenu, type PropertyMenuKind, type PropertyMenuRequest } from "@/components/task-view/property-menus"
 import { buildRowModels, groupRows, indexRefs, sortRows, type TaskGroup } from "@/components/task-view/row-model"
@@ -45,6 +48,16 @@ import { useTaskActions } from "@/components/task-view/use-task-actions"
 import { useTaskKeyboard } from "@/components/task-view/use-task-keyboard"
 import { useViewActions, useViewState } from "@/components/task-view/use-view-state"
 import { ViewTabs } from "@/components/task-view/view-tabs"
+import { sunStateFor, type SunViewer } from "@/components/task-view/sun"
+import { useTodayActions } from "@/components/task-view/use-today-actions"
+import { TodayList } from "@/components/my-tasks/today-list"
+import { TodayNotes } from "@/components/my-tasks/today-notes"
+import { TodayPicker } from "@/components/my-tasks/today-picker"
+import {
+  EMPTY_SECTIONS,
+  buildTodaySections,
+  todayOrderedIds,
+} from "@/components/my-tasks/today-model"
 
 /** Closed-row paging, mirroring `CLOSED_ROW_DEFAULT` / `CLOSED_ROW_MAX` in convex/tasks/read.ts (server clamps). */
 const CLOSED_ROW_DEFAULT = 200
@@ -61,8 +74,14 @@ const BOARD_HIDDEN_KEYS: ReadonlySet<ColumnKey> = new Set(["id", "created", "act
  * task detail (`?detail=`). The list edits category, client (project) and due
  * date inline, reorders by drag in manual order and adds tasks from the end
  * of each group (slice 4b, `row-editing.ts`).
+ *
+ * My Tasks (`surface: "myTasks"`, slice 5) is the same container: its tabs are
+ * Today | Assigned | Created + saved views (`?tab=`). Assigned/Created are
+ * `listView` presets; Today is a plan (`tasks.today.listToday`) rendered by
+ * `TodayList`. The sun (§5.6, D9) is on every list row, board card, the
+ * selection bar and T.
  */
-export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks"> }) {
+export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks" | "myTasks"> }) {
   const { isAuthenticated } = useConvexAuth()
   const isAdmin = useIsAdmin() ?? false
   const isMobile = useIsMobile()
@@ -76,6 +95,9 @@ export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks
   // UI affordances follow the Clerk role (like the rest of the app); `tasks/views.ts` enforces it.
   const canManageViews = view.canManageWorkspace || isAdmin
   const [today] = useState(() => formatDateToYMD(new Date()))
+  const [timezone] = useState(() => Intl.DateTimeFormat().resolvedOptions().timeZone)
+  /** My Tasks → Today: a plan, not a `listView` view (U8). */
+  const isToday = view.view.plan === true
 
   // "Load more" for completed/canceled rows, per view.
   const [closedLimits, setClosedLimits] = useState<Record<string, number>>({})
@@ -85,9 +107,17 @@ export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks
     () => ({ surface, ...view.listQuery, closedLimit, today }),
     [surface, view.listQuery, closedLimit, today],
   )
-  const liveResult = useQuery(api.tasks.queries.listView, isAuthenticated && view.ready ? listArgs : "skip")
+  const liveResult = useQuery(api.tasks.queries.listView, isAuthenticated && view.ready && !isToday ? listArgs : "skip")
   const result = useLastDefined(liveResult)
   const refs = useQuery(api.workspaceRefs.get, isAuthenticated ? {} : "skip")
+  const { data: todayResult, error: todayError } = useOptionalQuery(
+    api.tasks.today.listToday,
+    isAuthenticated && isToday ? { today, timezone } : "skip",
+  )
+  const trackedToday = useQuery(api.timeEntries.sumMyToday, isAuthenticated && isToday ? {} : "skip")
+  // Who has each row planned today (the sun's state on lists and cards).
+  // Optional: without it the sun falls back to the row's own `inMyToday`.
+  const { data: planned } = useOptionalQuery(api.tasks.today.plannedToday, isAuthenticated && !isToday ? { today } : "skip")
 
   // The existing detail drawer/modal and the create modal still read the
   // legacy reference-data context (they are reworked in slice 6).
@@ -105,10 +135,19 @@ export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks
   // ─── Rows → search → chips → groups ─────────────────────────────────────────
   const index = useMemo(() => (refs ? indexRefs(refs) : null), [refs])
   const me = refs?.me ?? ""
-  const allRows = useMemo(
+  const sections = useMemo(
+    () => (isToday && todayResult && index ? buildTodaySections(todayResult, index) : EMPTY_SECTIONS),
+    [index, isToday, todayResult],
+  )
+  const todayRows = useMemo(
+    () => [...sections.carried.map((c) => c.row), ...sections.today, ...sections.done],
+    [sections],
+  )
+  const listRows = useMemo(
     () => (result && index ? sortRows(buildRowModels(result.rows, result.perUser, index), spec.orderBy) : []),
     [result, index, spec.orderBy],
   )
+  const allRows = isToday ? todayRows : listRows
   const searched = useMemo(() => applySearch(allRows, view.search), [allRows, view.search])
   const rows = useMemo(() => applyChips(searched, draft.chips, me), [searched, draft.chips, me])
   const rowById = useMemo(() => new Map(allRows.map((r) => [r.task._id, r])), [allRows])
@@ -148,8 +187,17 @@ export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks
     [groupStateKey],
   )
 
+  // Today's sections: Done today starts collapsed (prototype v4).
+  const [todayCollapsed, setTodayCollapsed] = useState({ carried: false, done: true })
+  const toggleTodaySection = useCallback(
+    (key: "carried" | "done") =>
+      setTodayCollapsed((prev) => (key === "carried" ? { ...prev, carried: !prev.carried } : { ...prev, done: !prev.done })),
+    [],
+  )
+
+  const todayOrder = useMemo(() => todayOrderedIds(sections, todayCollapsed), [sections, todayCollapsed])
   /** Visible rows in screen order (a multi-assignee/label row counts once). */
-  const orderedIds = useMemo(() => {
+  const listOrder = useMemo(() => {
     const seen = new Set<Id<"tasks">>()
     for (const g of groups) {
       if (grouped && isCollapsed(g.key)) continue
@@ -157,6 +205,7 @@ export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks
     }
     return [...seen]
   }, [groups, grouped, isCollapsed])
+  const orderedIds = isToday ? todayOrder : listOrder
 
   // ─── Selection, focus, detail ───────────────────────────────────────────────
   const selection = useRowSelection(orderedIds)
@@ -190,18 +239,60 @@ export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks
     [menu, rowById],
   )
 
+  // ─── Today (the sun, §5.6) ──────────────────────────────────────────────────
+  const memberById = useMemo(() => index?.memberById ?? new Map(), [index])
+  const todayActions = useTodayActions({ today, me: refs?.me ?? null, memberById })
+  const viewer: SunViewer | null = useMemo(() => (refs ? { me: refs.me, isAdmin } : null), [isAdmin, refs])
+  const sun = useMemo<CellContext["sun"]>(() => {
+    if (!viewer) return undefined
+    return {
+      stateFor: (row) => sunStateFor(row, viewer, planned, memberById),
+      toggle: (row, state) => void todayActions.toggleSun(row.task._id, state),
+    }
+  }, [memberById, planned, todayActions, viewer])
+  const todayIds = useMemo(() => new Set(sections.today.map((r) => r.task._id)), [sections])
+  const carriedById = useMemo(() => new Map(sections.carried.map((c) => [c.row.task._id, c.plannedOn])), [sections])
+  const keepAllCarried = useCallback(
+    () =>
+      void todayActions.planMyDay(
+        [...carriedById.keys()],
+        (n) => `${n} carried-over ${n === 1 ? "task" : "tasks"} kept for today`,
+      ),
+    [carriedById, todayActions],
+  )
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const [notesOpen, setNotesOpen] = useSidePanelPreference()
+  // An admin reads a member's daily notes via `?user=` (kept from the old page).
+  const viewingUserId = isAdmin && isToday ? (searchParams.get("user") as Id<"users"> | null) : null
+  const showNotes = isToday && (notesOpen || viewingUserId !== null)
+
+  /** T: the sun on the focused row (or the selection), or the picker on Today. */
+  const onTodayKey = (focused: Id<"tasks"> | null) => {
+    const selected = focused && selection.size > 0 && selection.isSelected(focused) ? [...selection.selectedIds] : null
+    if (isToday) {
+      if (!focused) return setPickerOpen(true)
+      if (todayIds.has(focused)) return void todayActions.removeFromMyToday(focused)
+      if (carriedById.has(focused)) return void todayActions.planMyDay([focused])
+      return
+    }
+    if (selected) return void todayActions.addManyToToday(selected)
+    const row = focused ? rowById.get(focused) : undefined
+    if (row && sun) sun.toggle(row, sun.stateFor(row))
+  }
+
   const cellContext: CellContext = useMemo(
     () => ({
       today,
-      memberById: index?.memberById ?? new Map(),
+      memberById,
       openMenu: (kind, taskId, anchor) => toggleMenu(kind, [taskId], anchor),
       canEditBilling: isAdmin,
+      sun,
     }),
-    [today, index, toggleMenu, isAdmin],
+    [today, memberById, toggleMenu, isAdmin, sun],
   )
 
   const [createDefaults, setCreateDefaults] = useState<TaskFormDefaults | null>(null)
-  const openCreate = useCallback((defaults: TaskFormDefaults = {}) => setCreateDefaults({ ...defaults }), [])
+  const openCreate = useCallback((defaults: TaskFormDefaults = {}) => setCreateDefaults({ ...defaults }), [setCreateDefaults])
   const createInGroup = useCallback(
     (group: TaskGroup) => {
       const h = group.header
@@ -311,13 +402,14 @@ export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks
       const row = rowById.get(id)
       if (row) void toggleTimer(row.task._id, row.isClosed)
     },
+    onToday: onTodayKey,
     onNewTask: () => openCreate(),
     onShowShortcuts: () => setShortcutsOpen(true),
-    onFilter: () => setFilterOpen(true),
-    onSearch: () => searchRef.current?.focus(),
+    onFilter: () => { if (!isToday) setFilterOpen(true) },
+    onSearch: () => { if (!isToday) searchRef.current?.focus() },
   })
 
-  const loaded = result !== undefined && index !== null
+  const loaded = (isToday ? todayResult !== undefined || todayError !== null : result !== undefined) && index !== null
   const changeOrder = (orderBy: OrderBy) => view.updateDisplay({ orderBy })
   const narrowed = draft.chips.length > 0 || view.search !== ""
 
@@ -332,7 +424,13 @@ export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks
             customizedDefaults={view.customizedDefaults}
             actions={{
               onSelect: (key) => { selection.clear(); view.setView(key) },
-              onNew: () => setViewDialog({ mode: "create", filterCount: draft.chips.length }),
+              // From Today (a plan), a new view starts from the Assigned preset.
+              onNew: () =>
+                setViewDialog(
+                  isToday
+                    ? { mode: "create", filterCount: 0, spec: SYSTEM_VIEWS.myTasks.assigned.spec }
+                    : { mode: "create", filterCount: draft.chips.length },
+                ),
               onRename: (target) => setViewDialog({ mode: "rename", initialName: target.name, target }),
               onDuplicate: (target) =>
                 setViewDialog({
@@ -347,8 +445,18 @@ export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks
             }}
           />
           <span className="flex-1" />
-          <SearchBox ref={searchRef} value={view.search} onChange={view.setSearch} />
-          {facetCtx ? <FilterButton open={filterOpen} onOpenChange={setFilterOpen} ctx={facetCtx} /> : null}
+          {isToday ? (
+            <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => setPickerOpen(true)}>
+              <PlusNavIcon data-icon="inline-start" />
+              Add tasks
+              <Kbd>T</Kbd>
+            </Button>
+          ) : (
+            <>
+              <SearchBox ref={searchRef} value={view.search} onChange={view.setSearch} />
+              {facetCtx ? <FilterButton open={filterOpen} onOpenChange={setFilterOpen} ctx={facetCtx} /> : null}
+            </>
+          )}
           <DisplayMenu
             display={draft.display}
             view={view.view}
@@ -360,6 +468,19 @@ export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks
             onSaveAsNew={() => setViewDialog({ mode: "create", filterCount: draft.chips.length })}
             onSetDefault={() => void viewActions.setDefaultForEveryone()}
           />
+          {isToday ? (
+            <Button
+              variant="outline"
+              size="icon-sm"
+              className="hidden rounded-full lg:inline-flex"
+              aria-label={showNotes ? "Hide daily notes" : "Show daily notes"}
+              aria-pressed={showNotes}
+              title="Daily notes"
+              onClick={() => setNotesOpen(!showNotes)}
+            >
+              <PanelNavIcon />
+            </Button>
+          ) : null}
           <Button
             variant="outline"
             size="icon-sm"
@@ -371,17 +492,51 @@ export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks
             <ComposeIcon />
           </Button>
         </div>
-        {facetCtx ? <FilterChips ctx={facetCtx} /> : null}
+        {facetCtx && !isToday ? <FilterChips ctx={facetCtx} /> : null}
 
-        {result?.truncated ? (
+        {!isToday && result?.truncated ? (
           <p className="shrink-0 border-t border-border/60 px-4 py-2 text-xs text-muted-foreground">
             Showing the first 1,000 open tasks. Refine with filters.
           </p>
         ) : null}
 
-        <div className={board ? "min-h-0 flex-1 overflow-auto border-t border-border/60" : "min-h-0 flex-1 overflow-auto border-t border-border/60 pb-20"}>
+        <div className="flex min-h-0 flex-1 border-t border-border/60">
+        <div className={board && !isToday ? "min-w-0 flex-1 overflow-auto" : "min-w-0 flex-1 overflow-auto pb-20"}>
           {!loaded ? (
             <TaskTableSkeleton />
+          ) : isToday && todayError ? (
+            <Empty className="h-full">
+              <EmptyHeader>
+                <EmptyTitle>Today couldn&apos;t load</EmptyTitle>
+                <EmptyDescription>Your plan is safe. Reload the page, or try again in a moment.</EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          ) : isToday ? (
+            <TodayList
+              today={todayResult?.date ?? today}
+              sections={sections}
+              ctx={cellContext}
+              rowProps={{
+                columns,
+                isSelected: selection.isSelected,
+                hasSelection: selection.size > 0,
+                focusedId,
+                openId: detailId,
+                onToggleSelect: selection.toggle,
+                onOpen: openTask,
+              }}
+              headerSelection={selection.headerState}
+              onToggleAll={selection.toggleAllVisible}
+              collapsed={todayCollapsed}
+              onToggleSection={toggleTodaySection}
+              doneStatus={index ? (index.refs.statuses.find((st) => st.category === "completed" && st.isDefault) ?? null) : null}
+              trackedTodayMinutes={trackedToday}
+              onPick={() => setPickerOpen(true)}
+              onKeep={(id) => void todayActions.planMyDay([id], () => "Kept for today")}
+              onKeepAll={keepAllCarried}
+              onRemoveCarried={(id) => void todayActions.dropCarried(id)}
+              onReorder={(ids) => void todayActions.reorder(ids)}
+            />
           ) : rows.length === 0 && !board ? (
             narrowed ? (
               <Empty className="h-full">
@@ -445,7 +600,7 @@ export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks
                 onReorder={reorderInGroup}
                 inlineAdd={inlineAdd}
               />
-              {result.hasMoreClosed && closedLimit < CLOSED_ROW_MAX ? (
+              {result?.hasMoreClosed && closedLimit < CLOSED_ROW_MAX ? (
                 <div className="flex justify-center py-4">
                   <Button
                     variant="ghost"
@@ -462,11 +617,30 @@ export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks
             </>
           )}
         </div>
+        {showNotes ? (
+          <TodayNotes
+            me={currentUser ? { _id: currentUser._id, name: currentUser.name, imageUrl: currentUser.imageUrl } : null}
+            viewingUserId={viewingUserId}
+            viewingUserName={viewingUserId ? (index?.memberById.get(viewingUserId)?.name ?? null) : null}
+          />
+        ) : null}
+        </div>
       </div>
 
       <SelectionBar
         count={selection.size}
         onClear={selection.clear}
+        todayLabel={isToday ? "Remove from today" : undefined}
+        onAddToToday={() => {
+          const ids = [...selection.selectedIds]
+          if (!isToday) return void todayActions.addManyToToday(ids)
+          // On Today the bar takes the selection out of the caller's day.
+          for (const id of ids) {
+            if (todayIds.has(id)) void todayActions.removeFromMyToday(id)
+            else if (carriedById.has(id)) void todayActions.dropCarried(id)
+          }
+          selection.clear()
+        }}
         onOpenMenu={(kind, anchor) => toggleMenu(kind, [...selection.selectedIds], anchor)}
         onArchive={() => {
           const ids = [...selection.selectedIds]
@@ -508,6 +682,18 @@ export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks
         defaults={createDefaults ?? undefined}
       />
       <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
+      {isToday && index ? (
+        <TodayPicker
+          open={pickerOpen}
+          onOpenChange={setPickerOpen}
+          today={today}
+          me={refs?.me ?? null}
+          index={index}
+          todayIds={todayIds}
+          carried={carriedById}
+          onAdd={(ids) => void todayActions.planMyDay(ids)}
+        />
+      ) : null}
 
       {detailMode === "drawer" ? (
         <TaskDetailDrawer taskIds={orderedIds} isAdmin={isAdmin} />
@@ -549,4 +735,28 @@ function useToggleTaskTimer() {
     },
     [isRunningOn, setPendingStopResult, startTimer, stopTimer, timerState],
   )
+}
+
+const NOTES_PANEL_KEY = "my-tasks-today-notes-open"
+
+/** Whether Today's daily-notes side panel is open (per browser; closed by default, prototype v4). */
+function useSidePanelPreference(): [boolean, (open: boolean) => void] {
+  // The view renders client-only (below the page's useSearchParams Suspense
+  // boundary), so the stored value can be read on the first render.
+  const [open, setOpen] = useState(() => {
+    try {
+      return typeof window !== "undefined" && window.localStorage.getItem(NOTES_PANEL_KEY) === "1"
+    } catch {
+      return false
+    }
+  })
+  const update = useCallback((next: boolean) => {
+    setOpen(next)
+    try {
+      window.localStorage.setItem(NOTES_PANEL_KEY, next ? "1" : "0")
+    } catch {
+      // Storage unavailable (private mode): the toggle still works for this visit.
+    }
+  }, [])
+  return [open, update]
 }

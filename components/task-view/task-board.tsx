@@ -102,11 +102,11 @@ function BoardColumn({
       role="listitem"
       aria-label={column.label}
       className={cn(
-        "flex max-h-full min-h-60 w-72 shrink-0 flex-col gap-2 rounded-xl bg-muted p-2 transition-colors",
+        "flex max-h-full min-h-60 w-[19rem] shrink-0 flex-col gap-2 rounded-2xl bg-muted p-2 transition-colors",
         isDropTarget && "ring-2 ring-primary/25",
       )}
     >
-      <header className="flex h-8 shrink-0 items-center gap-2 pr-1 pl-1.5 text-[13px] font-medium">
+      <header className="flex h-9 shrink-0 items-center gap-2 pr-1 pl-2 text-[13px] font-medium">
         <GroupIcon header={column.header} />
         <span className="min-w-0 truncate">{column.label}</span>
         <span className="font-normal text-muted-foreground tabular-nums">{column.rows.length > 0 ? column.rows.length : null}</span>
@@ -117,7 +117,7 @@ function BoardColumn({
           </Button>
         ) : null}
       </header>
-      <div className="flex min-h-0 flex-col gap-2 overflow-y-auto">
+      <div className="flex min-h-0 flex-col gap-2 overflow-y-auto p-px">
         {column.rows.map((row) => (
           <BoardCard
             key={row.task._id}

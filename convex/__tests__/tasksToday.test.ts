@@ -511,3 +511,46 @@ describe("reorderToday / badgeCount / plannedToday", () => {
     expect(aliceView).toEqual({ [f.shared]: [f.alice] });
   });
 });
+
+// ─── My Tasks tab counts (§11.11, slice 7a) ─────────────────────────────────
+
+describe("tabCounts", () => {
+  const counts = (r: { today: { count: number }; assigned: { count: number }; created: { count: number } }) => ({
+    today: r.today.count,
+    assigned: r.assigned.count,
+    created: r.created.count,
+  });
+
+  it("counts open top-level work: Today = open plan, Assigned = my open tasks, Created = my readable open tasks", async () => {
+    const t = createT();
+    const f = await setup(t);
+    const admin = as(t, "admin");
+    const alice = as(t, "alice");
+    // Alice: assigned Shared + Alice's (+ the sub-task, not counted); created nothing.
+    expect(counts(await alice.query(api.tasks.today.tabCounts, { today: TODAY }))).toEqual({ today: 0, assigned: 2, created: 0 });
+    // Admin created the four top-level tasks (the sub-task is not counted).
+    expect(counts(await admin.query(api.tasks.today.tabCounts, { today: TODAY }))).toEqual({ today: 0, assigned: 0, created: 4 });
+
+    await alice.mutation(api.tasks.today.addToToday, { taskId: f.aliceTask, today: TODAY });
+    const own = await alice.mutation(api.tasks.create, { title: "Mine" }); // members are auto-assigned
+    expect(counts(await alice.query(api.tasks.today.tabCounts, { today: TODAY }))).toEqual({ today: 1, assigned: 3, created: 1 });
+
+    // Closed and archived tasks drop out; a plan on a closed task leaves Today.
+    await admin.mutation(api.tasks.update, { id: f.aliceTask, statusId: f.status.Done });
+    await admin.mutation(api.tasks.archive, { id: f.shared });
+    expect(counts(await alice.query(api.tasks.today.tabCounts, { today: TODAY }))).toEqual({ today: 0, assigned: 1, created: 1 });
+
+    // A task Alice created but can no longer read (reassigned) is not counted (T1).
+    await admin.mutation(api.tasks.update, { id: own, assigneeIds: [f.bob] });
+    const after = await alice.query(api.tasks.today.tabCounts, { today: TODAY });
+    expect(counts(after)).toEqual({ today: 0, assigned: 0, created: 0 });
+    expect(after.assigned.truncated || after.created.truncated || after.today.truncated).toBe(false);
+  });
+
+  it("another org only counts its own tasks", async () => {
+    const t = createT();
+    await setup(t);
+    const r = await as(t, "other").query(api.tasks.today.tabCounts, { today: TODAY });
+    expect(counts(r)).toEqual({ today: 0, assigned: 0, created: 1 });
+  });
+});

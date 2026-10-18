@@ -5,7 +5,7 @@ import { useMutation, useQuery, useConvexAuth } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { ConfirmDialog } from "@/components/confirm-dialog"
-import { useTaskReferenceData } from "@/components/tasks/task-reference-data"
+import { useWorkspaceMembers } from "@/lib/hooks/use-workspace-members"
 import { extractMentionIds } from "@/lib/tiptap-utils"
 import { toastError } from "@/lib/toast-helpers"
 
@@ -45,7 +45,7 @@ export function useMentionAccessGuard(taskId: Id<"tasks"> | undefined) {
     api.tasks.getDetail,
     isAuthenticated && taskId ? { id: taskId } : "skip",
   )
-  const { orgMembers } = useTaskReferenceData()
+  const orgMembers = useWorkspaceMembers()
   const updateTask = useMutation(api.tasks.update)
   const [pending, setPending] = useState<PendingGrant | null>(null)
 

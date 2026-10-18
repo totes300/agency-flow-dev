@@ -8,7 +8,6 @@ import type { Id } from "@/convex/_generated/dataModel"
 import { ErrorBoundary } from "@/components/error-boundary"
 import { Button } from "@/components/ui/button"
 import { InlineTimeCell } from "@/components/tasks/inline-time-cell"
-import { EnsureTaskReferenceData } from "@/components/tasks/task-reference-data"
 import { PropertyMenu } from "@/components/task-view/property-menus"
 import type { CellContext } from "@/components/task-view/columns"
 import type { TaskRowModel } from "@/components/task-view/row-model"
@@ -41,22 +40,6 @@ import {
  * `?task=` directly (without it the URL is canonicalised after the step).
  */
 export function TaskDetailDrawer({
-  taskIds,
-  isAdmin,
-  identifierOf,
-}: {
-  taskIds: string[]
-  isAdmin: boolean
-  identifierOf?: (taskId: string) => string | null
-}) {
-  return (
-    <EnsureTaskReferenceData>
-      <Drawer taskIds={taskIds} isAdmin={isAdmin} identifierOf={identifierOf} />
-    </EnsureTaskReferenceData>
-  )
-}
-
-function Drawer({
   taskIds,
   isAdmin,
   identifierOf,

@@ -42,16 +42,13 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { PriorityIcon } from "@/components/icons/priority-icon"
-import { InlineStatusCell } from "@/components/tasks/inline-status-cell"
-import { InlineAssigneeCell } from "@/components/tasks/inline-assignee-cell"
-import { InlineProjectCell } from "@/components/tasks/inline-project-cell"
-import { InlineCategoryCell } from "@/components/tasks/inline-category-cell"
-import { InlineDueDateCell } from "@/components/tasks/inline-due-date-cell"
+import { StatusIcon } from "@/components/icons/status-icon"
+import { CategoryBadge } from "@/components/category-badge"
 import { InlineTimeCell } from "@/components/tasks/inline-time-cell"
-import { useTaskReferenceData } from "@/components/tasks/task-reference-data"
 import { TaskPlanSection } from "@/components/planner/task-plan-section"
+import { AssigneeAvatars } from "@/components/task-view/columns"
 import { formatDuration, parseDuration } from "@/lib/duration"
-import { formatShortDate, isOverdue } from "@/lib/format"
+import { firstName, formatShortDate, isOverdue } from "@/lib/format"
 import { getStatusColor } from "@/lib/status-colors"
 import { toastError } from "@/lib/toast-helpers"
 import { cn } from "@/lib/utils"
@@ -110,9 +107,11 @@ export function MetadataRow({
  * The single task property panel (docs/prd-tasks-refactor.md §6.2, U9):
  * stacked in the drawer's property column (the current drawer, plus
  * Priority, Labels, Start date and the Today row), as a label-left sidebar on
- * the full page. Status, assignees, category, due date, project, estimate and
- * billing keep the drawer's existing editors; priority, labels and start date
- * open the shared `PropertyMenu`; Today is the sun (D9).
+ * the full page. Status, priority, assignees, category, labels, the dates and
+ * the project open the shared `PropertyMenu` (Linear-style searchable menus,
+ * §11.9) — no legacy reference data; estimate and billing keep their inline
+ * editors; Today is the sun (D9). Members see project, category and billing
+ * read-only (D5); a sub-task's project is its parent's (T8).
  */
 export function TaskProperties({
   task,
@@ -132,29 +131,18 @@ export function TaskProperties({
   openMenu: (kind: PropertyMenuKind, taskId: Id<"tasks">, anchor: HTMLElement) => void
 }) {
   const variant = layout === "stack" ? "stacked" : "sidebar"
-  const { statuses } = useTaskReferenceData()
   const billable = useBillableToggle(task._id, task.billable)
-
-  // The existing editors take the legacy shapes; names come from workspaceRefs.
-  const status = statuses?.find((s) => s._id === task.statusId) ?? null
-  const assignees = row.assignees.map((m) => ({
-    _id: m._id,
-    name: m.name,
-    email: m.email ?? undefined,
-    imageUrl: m.imageUrl ?? undefined,
-  }))
-  const project = row.project ? { _id: row.project._id, name: row.project.name, code: row.project.code } : null
-  const client = row.client
-    ? { _id: row.client._id, name: row.client.name, prefix: row.client.prefix ?? "", usePrefix: row.client.usePrefix }
-    : null
-  const category = row.workCategory
-    ? { _id: row.workCategory._id, name: row.workCategory.name, color: row.workCategory.color }
-    : null
   const createdBy = memberById.get(task.createdBy) ?? null
   const open = (kind: PropertyMenuKind) => (e: React.MouseEvent<HTMLElement>) => openMenu(kind, task._id, e.currentTarget)
+  // D5: members cannot change project or work category; a sub-task moves with its parent (T8).
+  const canEditCategory = isAdmin
+  const canEditProject = isAdmin && !task.parentTaskId
 
-  const statusCell = status ? (
-    <InlineStatusCell taskId={task._id} status={status} isAdmin={isAdmin} />
+  const statusCell = row.status ? (
+    <PropertyButton onClick={open("status")} anchor="status" label={`Status: ${row.status.name}`}>
+      <StatusIcon icon={row.status.icon} color={row.status.color} className="size-3.5" />
+      <span className="truncate">{row.status.name}</span>
+    </PropertyButton>
   ) : (
     <Skeleton className="h-5 w-24" />
   )
@@ -166,8 +154,32 @@ export function TaskProperties({
       </span>
     </PropertyButton>
   )
-  const assigneeCell = <InlineAssigneeCell taskId={task._id} assignees={assignees} emptyLabel="Add assignee" />
-  const categoryCell = <InlineCategoryCell taskId={task._id} category={category} emptyLabel="Add category" />
+  const assigneeCell = (
+    <PropertyButton
+      onClick={open("assignee")}
+      anchor="assignee"
+      label={row.assignees.length > 0 ? `Assignees: ${row.assignees.map((a) => a.name).join(", ")}` : "Add assignee"}
+    >
+      {row.assignees.length === 0 ? (
+        <EmptyValue icon={UserIcon}>Add assignee</EmptyValue>
+      ) : row.assignees.length === 1 ? (
+        <>
+          <UserAvatar name={row.assignees[0].name} imageUrl={row.assignees[0].imageUrl} size="sm" className="size-5" />
+          <span className="truncate">{firstName(row.assignees[0].name)}</span>
+        </>
+      ) : (
+        <AssigneeAvatars assignees={row.assignees} />
+      )}
+    </PropertyButton>
+  )
+  const categoryBadge = row.workCategory ? <CategoryBadge name={row.workCategory.name} color={row.workCategory.color} /> : null
+  const categoryCell = canEditCategory ? (
+    <PropertyButton onClick={open("category")} anchor="category" label={row.workCategory ? `Category: ${row.workCategory.name}` : "Add category"}>
+      {categoryBadge ?? <EmptyValue icon={TagIcon}>Add category</EmptyValue>}
+    </PropertyButton>
+  ) : (
+    categoryBadge ?? <span className="text-[13px] text-foreground/50">No category</span>
+  )
   const labelsCell = (
     <PropertyButton onClick={open("labels")} anchor="labels" label="Labels" wrap>
       {row.labels.length > 0 ? (
@@ -179,10 +191,7 @@ export function TaskProperties({
           />
         ))
       ) : (
-        <span className="flex items-center gap-1.5 text-foreground/50">
-          <TagsIcon className="size-4" strokeWidth={1.75} />
-          Add label
-        </span>
+        <EmptyValue icon={TagsIcon}>Add label</EmptyValue>
       )}
     </PropertyButton>
   )
@@ -194,26 +203,41 @@ export function TaskProperties({
           {formatShortDate(task.startDate)}
         </span>
       ) : (
-        <span className="flex items-center gap-1.5 text-foreground/50">
-          <CalendarIcon className="size-4" strokeWidth={1.75} />
-          Add start date
-        </span>
+        <EmptyValue icon={CalendarIcon}>Add start date</EmptyValue>
       )}
     </PropertyButton>
   )
+  const dueOverdue = !row.isClosed && isOverdue(task.dueDate ?? undefined)
   const dueCell = (
-    <InlineDueDateCell
-      taskId={task._id}
-      dueDate={task.dueDate}
-      isOverdue={isOverdue(task.dueDate ?? undefined)}
-      emptyLabel="Add due date"
-    />
+    <PropertyButton onClick={open("due")} anchor="due" label="Due date">
+      {task.dueDate ? (
+        <span className={cn("flex items-center gap-1.5", dueOverdue ? "text-destructive" : "text-muted-foreground")}>
+          <CalendarIcon className="size-4 opacity-40" strokeWidth={1.75} />
+          {formatShortDate(task.dueDate)}
+        </span>
+      ) : (
+        <EmptyValue icon={CalendarIcon}>Add due date</EmptyValue>
+      )}
+    </PropertyButton>
   )
   const estimateCell = <InlineEstimateCell taskId={task._id} estimate={task.estimateMinutes ?? undefined} />
   const billingCell = (
     <InlineBillableSelect billable={task.billable} isAdmin={isAdmin} onChange={billable.change} disabled={billable.loading} />
   )
-  const projectCell = <InlineProjectCell taskId={task._id} project={project} client={client} emptyLabel="Add project" />
+  const projectLabel = row.project ? (row.client ? `${row.client.name} › ${row.project.name}` : row.project.name) : null
+  const projectCell = canEditProject ? (
+    <PropertyButton onClick={open("project")} anchor="project" label={projectLabel ? `Project: ${projectLabel}` : "Add project"}>
+      {projectLabel ? (
+        <span className="truncate text-muted-foreground">{projectLabel}</span>
+      ) : (
+        <EmptyValue icon={FolderIcon}>Add project</EmptyValue>
+      )}
+    </PropertyButton>
+  ) : (
+    <span className={cn("block truncate text-[13px]", projectLabel ? "text-muted-foreground" : "text-foreground/50")}>
+      {projectLabel ?? "No project"}
+    </span>
+  )
   const todayRow = sun.state.kind === "hidden" ? null : (
     <MetadataRow icon={SunIcon} label="Today" variant={variant}>
       <TodayCell sun={sun} />
@@ -370,6 +394,22 @@ function PropertyButton({
     >
       {children}
     </button>
+  )
+}
+
+/** An unset property: its icon and an "Add …" prompt, muted. */
+function EmptyValue({
+  icon: Icon,
+  children,
+}: {
+  icon: React.ComponentType<{ className?: string; strokeWidth?: number }>
+  children: React.ReactNode
+}) {
+  return (
+    <span className="flex items-center gap-1.5 text-foreground/50">
+      <Icon className="size-4" strokeWidth={1.75} />
+      {children}
+    </span>
   )
 }
 

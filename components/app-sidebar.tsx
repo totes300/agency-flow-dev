@@ -9,6 +9,7 @@ import { NavMain } from "@/components/nav-main"
 import { NavSavedViews } from "@/components/nav-saved-views"
 import { NavUser } from "@/components/nav-user"
 import { TeamSwitcher } from "@/components/team-switcher"
+import { SidebarTimer } from "@/components/timer/sidebar-timer"
 import { WorkspaceSwitch } from "@/components/workspace-switch"
 import { navigation } from "@/lib/navigation"
 import {
@@ -30,6 +31,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         <WorkspaceSwitch />
         <TeamSwitcher />
         <InboxButton />
+        <SidebarTimer />
         <SidebarSeparator className="mt-1" />
       </SidebarHeader>
       <SidebarContent>

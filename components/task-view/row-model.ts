@@ -152,6 +152,8 @@ export type GroupHeader =
   | { kind: "client"; client: ClientRef | null }
   | { kind: "workCategory"; category: WorkCategoryRef | null }
   | { kind: "label"; label: LabelRef | null }
+  /** The caller's Today plan (the dashboard "My work" board, §11.8). */
+  | { kind: "today" }
 
 export type TaskGroup = {
   key: string

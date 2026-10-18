@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo } from "react"
+import { Fragment, useMemo, type ReactNode } from "react"
 import { DragDropProvider, useDroppable } from "@dnd-kit/react"
 import { KeyboardSensor, PointerActivationConstraints, PointerSensor } from "@dnd-kit/dom"
 import type { Id } from "@/convex/_generated/dataModel"
@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils"
 import type { CellContext, ColumnKey } from "@/components/task-view/columns"
 import { GroupIcon } from "@/components/task-view/group-header"
 import { BoardCard, type BoardCardDragData } from "@/components/task-view/board-card"
-import type { TaskGroup } from "@/components/task-view/row-model"
+import type { TaskGroup, TaskRowModel } from "@/components/task-view/row-model"
 
 /** Pointer (after 5px, so a click still opens the card) and keyboard (focus a card, Space, arrows, Space). */
 const BOARD_DRAG_SENSORS = [
@@ -34,6 +34,9 @@ export function TaskBoard({
   onOpen,
   onMove,
   onCreateInColumn,
+  fill = false,
+  dividerFor,
+  emptyFor,
 }: {
   columns: readonly TaskGroup[]
   keys: readonly ColumnKey[]
@@ -44,6 +47,10 @@ export function TaskBoard({
   onOpen: (taskId: Id<"tasks">) => void
   onMove: (taskId: Id<"tasks">, fromKey: string, toKey: string) => void
   onCreateInColumn: (column: TaskGroup) => (() => void) | undefined
+  /** Equal columns across the available width (embedded boards) instead of fixed 19rem tracks. */
+  fill?: boolean
+  dividerFor?: (column: TaskGroup, row: TaskRowModel) => string | null
+  emptyFor?: (column: TaskGroup) => ReactNode
 }) {
   const keySet = useMemo(() => new Set(keys), [keys])
   return (
@@ -57,7 +64,7 @@ export function TaskBoard({
         onMove(data.taskId, data.fromKey, String(target.id))
       }}
     >
-      <div className="flex h-full min-w-min items-start gap-3 p-3" role="list" aria-label="Board">
+      <div className={cn("flex items-start gap-3", fill ? "w-full" : "h-full min-w-min p-3")} role="list" aria-label="Board">
         {columns.map((column) => (
           <BoardColumn
             key={column.key}
@@ -69,6 +76,9 @@ export function TaskBoard({
             openId={openId}
             onOpen={onOpen}
             onCreate={onCreateInColumn(column)}
+            fill={fill}
+            dividerFor={dividerFor}
+            empty={column.rows.length === 0 ? emptyFor?.(column) : undefined}
           />
         ))}
       </div>
@@ -85,6 +95,9 @@ function BoardColumn({
   openId,
   onOpen,
   onCreate,
+  fill,
+  dividerFor,
+  empty,
 }: {
   column: TaskGroup
   keys: ReadonlySet<ColumnKey>
@@ -94,6 +107,9 @@ function BoardColumn({
   openId: string | null
   onOpen: (taskId: Id<"tasks">) => void
   onCreate?: () => void
+  fill: boolean
+  dividerFor?: (column: TaskGroup, row: TaskRowModel) => string | null
+  empty?: ReactNode
 }) {
   const { ref, isDropTarget } = useDroppable({ id: column.key, disabled: !draggable })
   return (
@@ -102,7 +118,8 @@ function BoardColumn({
       role="listitem"
       aria-label={column.label}
       className={cn(
-        "flex max-h-full min-h-60 w-[19rem] shrink-0 flex-col gap-2 rounded-2xl bg-muted p-2 transition-colors",
+        "flex max-h-full min-h-60 shrink-0 flex-col gap-2 rounded-2xl bg-muted p-2 transition-colors",
+        fill ? "w-[17rem] md:w-auto md:min-w-0 md:flex-1 md:shrink" : "w-[19rem]",
         isDropTarget && "ring-2 ring-primary/25",
       )}
     >
@@ -118,19 +135,25 @@ function BoardColumn({
         ) : null}
       </header>
       <div className="flex min-h-0 flex-col gap-2 overflow-y-auto p-px">
-        {column.rows.map((row) => (
-          <BoardCard
-            key={row.task._id}
-            row={row}
-            columnKey={column.key}
-            keys={keys}
-            ctx={ctx}
-            draggable={draggable}
-            isFocused={focusedId === row.task._id}
-            isOpen={openId === row.task._id}
-            onOpen={onOpen}
-          />
-        ))}
+        {column.rows.map((row) => {
+          const divider = dividerFor?.(column, row)
+          return (
+            <Fragment key={row.task._id}>
+              {divider ? <p className="px-1.5 pt-1 text-xs font-medium text-muted-foreground">{divider}</p> : null}
+              <BoardCard
+                row={row}
+                columnKey={column.key}
+                keys={keys}
+                ctx={ctx}
+                draggable={draggable}
+                isFocused={focusedId === row.task._id}
+                isOpen={openId === row.task._id}
+                onOpen={onOpen}
+              />
+            </Fragment>
+          )
+        })}
+        {empty ? <div className="px-3 py-8 text-center text-xs leading-relaxed text-muted-foreground">{empty}</div> : null}
       </div>
     </section>
   )

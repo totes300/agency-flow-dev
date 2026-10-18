@@ -13,7 +13,6 @@ import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import { InlineTimeCell } from "@/components/tasks/inline-time-cell"
-import { EnsureTaskReferenceData } from "@/components/tasks/task-reference-data"
 import { ChevronLeftNavIcon } from "@/components/icons/nav-icons"
 import { PropertyMenu } from "@/components/task-view/property-menus"
 import { TASK_VIEW_PANEL_CLASS } from "@/components/task-view/task-view-skeleton"
@@ -40,14 +39,6 @@ const noopSubscribe = () => () => {}
  * for today (D9), Y starts/stops its timer, Esc goes back to that list.
  */
 export function TaskDetailPage({ identifier }: { identifier: string }) {
-  return (
-    <EnsureTaskReferenceData>
-      <Page identifier={identifier} />
-    </EnsureTaskReferenceData>
-  )
-}
-
-function Page({ identifier }: { identifier: string }) {
   const router = useRouter()
   const { isAuthenticated } = useConvexAuth()
   const isAdmin = useIsAdmin() ?? false

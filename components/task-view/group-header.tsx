@@ -4,12 +4,12 @@ import { Button } from "@/components/ui/button"
 import { UserAvatar } from "@/components/user-avatar"
 import { StatusIcon } from "@/components/icons/status-icon"
 import { PriorityIcon } from "@/components/icons/priority-icon"
-import { ChevronDownNavIcon, ChevronRightNavIcon, NoAssigneeNavIcon, PlusNavIcon } from "@/components/icons/nav-icons"
+import { ChevronDownNavIcon, ChevronRightNavIcon, NoAssigneeNavIcon, PlusNavIcon, SunNavIcon } from "@/components/icons/nav-icons"
 import { getCategoryColor } from "@/convex/lib/constants"
 import { getStatusColor } from "@/lib/status-colors"
 import type { GroupHeader as GroupHeaderData, TaskGroup } from "@/components/task-view/row-model"
 
-/** The icon a group shows in its header (status, priority, avatar, colour dot). */
+/** The icon a group shows in its header (status, priority, avatar, colour dot, the sun). */
 export function GroupIcon({ header }: { header: GroupHeaderData }) {
   switch (header.kind) {
     case "status":
@@ -30,6 +30,8 @@ export function GroupIcon({ header }: { header: GroupHeaderData }) {
       return header.label ? (
         <span className="size-2 shrink-0 rounded-full" style={{ backgroundColor: getStatusColor(header.label.color).dot }} />
       ) : null
+    case "today":
+      return <SunNavIcon size={14} strokeWidth={1.8} className="text-warning" />
     default:
       return null
   }

@@ -92,14 +92,3 @@ export function useTaskReferenceDataValue(enabled = true): TaskReferenceData {
     [statuses, categories, projects, orgMembers],
   )
 }
-
-/**
- * Provides the reference data only when no provider exists above (the task
- * detail is mounted on pages that never set one up, e.g. billing close).
- */
-export function EnsureTaskReferenceData({ children }: { children: React.ReactNode }) {
-  const { provided } = useContext(TaskReferenceDataContext)
-  const value = useTaskReferenceDataValue(!provided)
-  if (provided) return <>{children}</>
-  return <TaskReferenceDataProvider value={value}>{children}</TaskReferenceDataProvider>
-}

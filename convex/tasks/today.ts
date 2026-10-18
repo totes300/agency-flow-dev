@@ -15,7 +15,15 @@ import {
 } from "../lib/todayPlan";
 import { filterReadableTasks, loadTaskForRead, loadTaskForWrite } from "./access";
 import { isClosedCategory } from "./model";
-import { loadPerUser, toRowDTO, todayFor, type PerUserRowState, type TaskRowDTO } from "./read";
+import {
+  loadAssignedTo,
+  loadCreatedBy,
+  loadPerUser,
+  toRowDTO,
+  todayFor,
+  type PerUserRowState,
+  type TaskRowDTO,
+} from "./read";
 
 /**
  * My Tasks "Today" — the sun (docs/prd-tasks-refactor.md §5.6, D9, U8).
@@ -49,6 +57,9 @@ export const ORG_PLAN_SEGMENT_CAP = 2000;
 export const DONE_TODAY_CAP = 300;
 /** Tasks per bulk request. */
 export const BULK_TODAY_MAX = 200;
+
+/** Created-by rows read for the My Tasks "Created" tab count (any category, newest first). */
+export const CREATED_COUNT_SCAN_CAP = 2000;
 
 /** The typed error code for "the task has no assignee to plan for" (D9). */
 export const NO_ASSIGNEE_CODE = "NO_ASSIGNEE";
@@ -371,6 +382,40 @@ export const badgeCount = query({
     const auth = await getAuthContext(ctx);
     const today = await todayFor(ctx, auth.orgId, args.today && YMD.test(args.today) ? args.today : undefined);
     return (await loadMyPlan(ctx, auth, today)).today.length;
+  },
+});
+
+/** One My Tasks tab count; `truncated` = the bounded read hit its cap (show "N+"). */
+export type TabCount = { count: number; truncated: boolean };
+
+/** Open, top-level, not archived — what the Assigned / Created tab counts (§11.11). */
+function isOpenTopLevel(task: Doc<"tasks">): boolean {
+  if (task.archivedAt !== undefined || task.parentTaskId !== undefined) return false;
+  return task.statusCategory === undefined || !isClosedCategory(task.statusCategory);
+}
+
+/**
+ * My Tasks tab counts (§11.11): Today = the caller's open plan for today (the
+ * sidebar badge); Assigned = open top-level tasks assigned to the caller (the
+ * Assigned view's scope); Created = open top-level tasks the caller created
+ * and can read. Closed tasks are not counted (the tab shows open work).
+ * Bounded (T7): the caller's edges, the newest created rows and today's plan
+ * segments, each with its cap.
+ */
+export const tabCounts = query({
+  args: { today: todayArg },
+  handler: async (ctx, args): Promise<{ today: TabCount; assigned: TabCount; created: TabCount }> => {
+    const auth = await getAuthContext(ctx);
+    const today = await todayFor(ctx, auth.orgId, args.today && YMD.test(args.today) ? args.today : undefined);
+    const plan = await loadMyPlan(ctx, auth, today);
+    const assigned = await loadAssignedTo(ctx, auth.orgId, auth.userId);
+    const created = await loadCreatedBy(ctx, auth.orgId, auth.userId, CREATED_COUNT_SCAN_CAP);
+    const createdOpen = await filterReadableTasks(ctx, auth, created.tasks.filter(isOpenTopLevel));
+    return {
+      today: { count: plan.today.length, truncated: plan.truncated },
+      assigned: { count: assigned.tasks.filter(isOpenTopLevel).length, truncated: assigned.truncated },
+      created: { count: createdOpen.length, truncated: created.truncated },
+    };
   },
 });
 

@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useMemo, useRef, useState } from "react"
-import { usePathname, useRouter, useSearchParams } from "next/navigation"
+import { useSearchParams } from "next/navigation"
 import { useConvexAuth, useMutation, useQuery } from "convex/react"
 import { toast } from "sonner"
 import { api } from "@/convex/_generated/api"
@@ -11,7 +11,7 @@ import { useIsAdmin } from "@/lib/hooks/use-is-admin"
 import { useLastDefined } from "@/lib/hooks/use-last-defined"
 import { useOptionalQuery } from "@/lib/hooks/use-optional-query"
 import { useRowSelection } from "@/lib/hooks/use-row-selection"
-import { buildTaskUrl, parseTaskRef, taskPagePath } from "@/lib/task-detail"
+import { parseTaskRef } from "@/lib/task-detail"
 import { formatDateToYMD } from "@/lib/format"
 import { toastError } from "@/lib/toast-helpers"
 import { Button } from "@/components/ui/button"
@@ -19,8 +19,6 @@ import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from "
 import { ConfirmDialog } from "@/components/confirm-dialog"
 import { TaskReferenceDataProvider, useTaskReferenceDataValue } from "@/components/tasks/task-reference-data"
 import { TaskDetailDrawer } from "@/components/task-detail/task-detail-drawer"
-import { useTaskDetailMode } from "@/components/task-detail/task-detail-actions"
-import { setDetailNavList } from "@/components/task-detail/detail-nav"
 import { useToggleTaskTimer } from "@/components/task-view/use-toggle-task-timer"
 import { TaskFormModal, type TaskFormDefaults } from "@/components/tasks/task-form-modal"
 import { Kbd } from "@/components/ui/kbd"
@@ -35,7 +33,7 @@ import { SearchBox, type SearchBoxHandle } from "@/components/task-view/search-b
 import { TaskBoard } from "@/components/task-view/task-board"
 import { ViewDialog, type ViewDialogRequest } from "@/components/task-view/view-dialog"
 import { SYSTEM_VIEWS } from "@/convex/tasks/model"
-import type { ViewOption } from "@/components/task-view/view-state"
+import { TODAY_VIEW_KEY, type ViewOption } from "@/components/task-view/view-state"
 import { PropertyMenu, type PropertyMenuKind, type PropertyMenuRequest } from "@/components/task-view/property-menus"
 import { buildRowModels, groupRows, indexRefs, sortRows, type TaskGroup } from "@/components/task-view/row-model"
 import { canReorderList, inlineAddPrefill, reorderNeighbours, scopeDefaultStatusId } from "@/components/task-view/row-editing"
@@ -45,13 +43,15 @@ import { TaskTable } from "@/components/task-view/task-table"
 import { TASK_VIEW_PANEL_CLASS, TaskTableSkeleton } from "@/components/task-view/task-view-skeleton"
 import { useTaskActions } from "@/components/task-view/use-task-actions"
 import { useTaskKeyboard } from "@/components/task-view/use-task-keyboard"
+import { useTaskOpener } from "@/components/task-view/use-task-opener"
 import { useViewActions, useViewState } from "@/components/task-view/use-view-state"
-import { ViewTabs } from "@/components/task-view/view-tabs"
+import { ViewTabs, type ViewTabCount } from "@/components/task-view/view-tabs"
 import { sunStateFor, type SunViewer } from "@/components/task-view/sun"
 import { useTodayActions } from "@/components/task-view/use-today-actions"
 import { TodayList } from "@/components/my-tasks/today-list"
 import { TodayNotes } from "@/components/my-tasks/today-notes"
 import { TodayPicker } from "@/components/my-tasks/today-picker"
+import { MobileFab } from "@/components/my-tasks/mobile-fab"
 import {
   EMPTY_SECTIONS,
   buildTodaySections,
@@ -84,8 +84,6 @@ const BOARD_HIDDEN_KEYS: ReadonlySet<ColumnKey> = new Set(["id", "created", "act
 export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks" | "myTasks"> }) {
   const { isAuthenticated } = useConvexAuth()
   const isAdmin = useIsAdmin() ?? false
-  const router = useRouter()
-  const pathname = usePathname()
   const searchParams = useSearchParams()
   const view = useViewState(surface)
   const viewActions = useViewActions(view)
@@ -117,12 +115,22 @@ export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks
   // Who has each row planned today (the sun's state on lists and cards).
   // Optional: without it the sun falls back to the row's own `inMyToday`.
   const { data: planned } = useOptionalQuery(api.tasks.today.plannedToday, isAuthenticated && !isToday ? { today } : "skip")
+  // My Tasks tab counts (§11.11): one small bounded query, since only the active tab's rows load.
+  const { data: tabCounts } = useOptionalQuery(
+    api.tasks.today.tabCounts,
+    isAuthenticated && surface === "myTasks" ? { today } : "skip",
+  )
+  const viewCounts = useMemo<Record<string, ViewTabCount> | undefined>(
+    () =>
+      tabCounts
+        ? { [TODAY_VIEW_KEY]: tabCounts.today, assigned: tabCounts.assigned, created: tabCounts.created }
+        : undefined,
+    [tabCounts],
+  )
 
-  // The detail's existing editors and the create modal still read the legacy
-  // reference-data context (slice 7 replaces them).
+  // The create modal still reads the legacy reference-data context (slice 7b).
   const currentUser = useQuery(api.users.current, isAuthenticated ? {} : "skip")
   const referenceData = useTaskReferenceDataValue()
-  const { mode: detailMode } = useTaskDetailMode()
 
   // ─── Rows → search → chips → groups ─────────────────────────────────────────
   const index = useMemo(() => (refs ? indexRefs(refs) : null), [refs])
@@ -219,30 +227,13 @@ export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks
     return allRows.find((r) => r.task.identifier?.toUpperCase() === wanted)?.task._id ?? null
   }, [allRows, taskRef])
 
-  /** Peek (Space): always the drawer, whatever the user's mode. */
-  const peekTask = useCallback(
-    (taskId: Id<"tasks">) => {
-      setFocusState(taskId)
-      const target = { id: taskId, identifier: identifierOf(taskId) }
-      router.push(`${pathname}${buildTaskUrl(new URLSearchParams(searchParams.toString()), target)}`, { scroll: false })
-    },
-    [identifierOf, pathname, router, searchParams],
-  )
-  /** Open (click, Enter): the drawer or the full page, per the user's setting (U9). */
-  const openTask = useCallback(
-    (taskId: Id<"tasks">) => {
-      const identifier = identifierOf(taskId)
-      if (detailMode !== "page" || !identifier) return peekTask(taskId)
-      setFocusState(taskId)
-      const back = buildTaskUrl(new URLSearchParams(searchParams.toString()), null)
-      setDetailNavList({
-        from: { label: surface === "myTasks" ? "My Tasks" : "Tasks", href: `${pathname}${back}` },
-        entries: orderedIds.map((id) => ({ id, identifier: identifierOf(id) })),
-      })
-      router.push(taskPagePath(identifier))
-    },
-    [detailMode, identifierOf, orderedIds, pathname, peekTask, router, searchParams, surface],
-  )
+  // Click/Enter: drawer or full page per the user's setting (U9); Space: always the drawer.
+  const { open: openTask, peek: peekTask } = useTaskOpener({
+    identifierOf,
+    orderedIds,
+    fromLabel: surface === "myTasks" ? "My Tasks" : "Tasks",
+    onOpened: setFocusState,
+  })
 
   // ─── Menus and actions ──────────────────────────────────────────────────────
   const actions = useTaskActions()
@@ -444,6 +435,7 @@ export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks
             activeKey={viewKey}
             isAdmin={canManageViews}
             customizedDefaults={view.customizedDefaults}
+            counts={viewCounts}
             actions={{
               onSelect: (key) => { selection.clear(); view.setView(key) },
               // From Today (a plan), a new view starts from the Assigned preset.
@@ -704,6 +696,13 @@ export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks
         defaults={createDefaults ?? undefined}
       />
       <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
+      {isMyTasks ? (
+        <MobileFab
+          me={refs?.me ?? null}
+          // Quick add on Today lands in the caller's day, like the old My Tasks FAB.
+          onCreated={isToday ? (id) => void todayActions.planMyDay([id], () => "Added to today") : undefined}
+        />
+      ) : null}
       {isToday && index ? (
         <TodayPicker
           open={pickerOpen}

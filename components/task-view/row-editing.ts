@@ -122,5 +122,7 @@ export function inlineAddPrefill(
       return opts.isAdmin ? { ...status, workCategoryId: h.category._id } : null
     case "label":
       return h.label ? { ...status, labelIds: [h.label._id] } : status
+    case "today":
+      return null
   }
 }

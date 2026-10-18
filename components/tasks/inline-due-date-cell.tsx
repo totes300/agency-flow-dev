@@ -1,15 +1,9 @@
 "use client"
 
-import { useState } from "react"
-import { useMutation } from "convex/react"
-import { api } from "@/convex/_generated/api"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { MiniCalendar, addDays, nextDayOfWeek } from "@/components/ui/mini-calendar"
 import { CalendarIcon, ClockIcon, ArrowRightIcon, XIcon, RepeatIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { formatDateToYMD, formatShortDate } from "@/lib/format"
-import { toastError } from "@/lib/toast-helpers"
-import type { Id } from "@/convex/_generated/dataModel"
+import { formatDateToYMD } from "@/lib/format"
 
 // ─── Presets ─────────────────────────────────────────────────────────────────
 
@@ -35,79 +29,9 @@ function PresetIcon({ type, className }: { type: Preset["icon"]; className?: str
   }
 }
 
-// ─── Main Component ─────────────────────────────────────────────────────────
-
-export function InlineDueDateCell({
-  taskId,
-  dueDate,
-  isOverdue,
-  onSelect: onSelectProp,
-  emptyLabel,
-  align = "start",
-}: {
-  taskId?: Id<"tasks">
-  dueDate: string | null // YYYY-MM-DD
-  isOverdue?: boolean
-  onSelect?: (date: string | null) => void
-  emptyLabel?: string
-  align?: "start" | "end"
-}) {
-  const [open, setOpen] = useState(false)
-  const updateTask = useMutation(api.tasks.update)
-
-  async function handleSelect(date: string | null) {
-    setOpen(false)
-    if (onSelectProp) {
-      onSelectProp(date)
-      return
-    }
-    if (!taskId) return
-    try {
-      await updateTask({ id: taskId, dueDate: date })
-    } catch (err) {
-      toastError(err, "Failed to update")
-    }
-  }
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          className={cn("flex w-full items-center py-0.5", align === "end" && "justify-end text-right")}
-          onClick={(e) => e.stopPropagation()}
-        >
-          {dueDate ? (
-            <span
-              className={cn(
-                "inline-flex items-center gap-1.5 text-[13px]",
-                isOverdue ? "font-medium text-red-600" : "text-muted-foreground",
-              )}
-            >
-              <CalendarIcon
-                className={cn("size-4 shrink-0", isOverdue ? "opacity-70" : "opacity-40")}
-                strokeWidth={1.75}
-              />
-              {formatShortDate(dueDate)}
-            </span>
-          ) : (
-            <span className="flex items-center gap-1.5 rounded-md border border-dashed border-border/55 bg-muted/[0.12] px-2 py-1 text-muted-foreground/60 transition-colors group-hover/row:border-border/80 group-hover/row:bg-muted/[0.22] group-hover/row:text-muted-foreground">
-              <CalendarIcon className="size-4 shrink-0" strokeWidth={1.75} />
-              {emptyLabel && <span className="text-[13px]">{emptyLabel}</span>}
-            </span>
-          )}
-        </button>
-      </PopoverTrigger>
-      <PopoverContent className="w-[380px] p-0" align="end">
-        <DueDatePanel dueDate={dueDate} onSelect={handleSelect} />
-      </PopoverContent>
-    </Popover>
-  )
-}
-
 /**
- * The due-date picker body (quick presets + month calendar). Shared by this
- * cell's popover and the task table's due-date menu.
+ * The due-date picker body (quick presets + month calendar), shown by the
+ * shared `PropertyMenu` for the due and start dates.
  */
 export function DueDatePanel({
   dueDate,

@@ -20,6 +20,9 @@ const TAB_DRAG_SENSORS = [
   PointerSensor.configure({ activationConstraints: [new PointerActivationConstraints.Distance({ value: 5 })] }),
 ]
 
+/** A tab's count (My Tasks Today / Assigned / Created): plain muted text, hidden at zero. */
+export type ViewTabCount = { count: number; truncated: boolean }
+
 export type ViewTabActions = {
   onSelect: (key: string) => void
   onNew: () => void
@@ -36,19 +39,22 @@ export type ViewTabActions = {
  * first, then workspace views (globe), then the caller's personal views
  * (lock). Clicking the active tab opens its menu (rename, duplicate, move,
  * delete); saved views the caller may edit can also be dragged within their
- * group. The modified dot lives on the Display button, not here.
+ * group. The modified dot lives on the Display button, not here. `counts`
+ * (My Tasks, §11.11) show after the name as muted numbers, hidden at zero.
  */
 export function ViewTabs({
   views,
   activeKey,
   isAdmin,
   customizedDefaults,
+  counts,
   actions,
 }: {
   views: readonly ViewOption[]
   activeKey: string
   isAdmin: boolean
   customizedDefaults: readonly string[]
+  counts?: Readonly<Record<string, ViewTabCount>>
   actions: ViewTabActions
 }) {
   const groups: Record<ViewOption["scope"], ViewOption[]> = { system: [], workspace: [], personal: [] }
@@ -80,6 +86,7 @@ export function ViewTabs({
               active={view.key === activeKey}
               isAdmin={isAdmin}
               customized={customizedDefaults.includes(view.key)}
+              count={counts?.[view.key]}
               actions={actions}
             />
           )),
@@ -105,6 +112,7 @@ function ViewTab({
   active,
   isAdmin,
   customized,
+  count,
   actions,
 }: {
   view: ViewOption
@@ -112,6 +120,7 @@ function ViewTab({
   active: boolean
   isAdmin: boolean
   customized: boolean
+  count?: ViewTabCount
   actions: ViewTabActions
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
@@ -159,6 +168,12 @@ function ViewTab({
             <LockNavIcon size={13} className="text-muted-foreground" aria-label="Personal view" />
           ) : null}
           {view.name}
+          {count && count.count > 0 ? (
+            <span className="font-normal text-muted-foreground tabular-nums">
+              {count.count}
+              {count.truncated ? "+" : ""}
+            </span>
+          ) : null}
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="min-w-48">

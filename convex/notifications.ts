@@ -3,6 +3,8 @@ import { query, mutation, internalMutation, MutationCtx, QueryCtx } from "./_gen
 import { internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { getAuthContext } from "./lib/auth";
+import { loadTaskForRead, userCanReadTask } from "./tasks/access";
+import { setTaskMuted } from "./tasks/userState";
 
 export type NotificationType =
   | "mention_comment"
@@ -61,10 +63,13 @@ export async function createNotifications(
         .unique();
       if (!membership) continue;
 
-      // 3. Task access: assignee or org admin (defense in depth — a mention
-      // must never leak a notification to someone who can't open the task)
-      const hasAccess =
-        membership.role === "admin" || task.assigneeIds.includes(recipientId);
+      // 3. Task access via tasks/access.ts (defense in depth — a mention
+      // must never leak a notification to someone who can't open the task;
+      // a parent's assignee can open its sub-tasks, §11.5)
+      const hasAccess = await userCanReadTask(ctx, task, {
+        userId: recipientId,
+        isAdmin: membership.role === "admin",
+      });
       if (!hasAccess) continue;
 
       // 4. Mute check — only comment/comment_reply respect mutes; mentions
@@ -387,13 +392,11 @@ export const wake = internalMutation({
 export const muteTask = mutation({
   args: { taskId: v.id("tasks") },
   handler: async (ctx, args) => {
-    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
+    const { task, auth } = await loadTaskForRead(ctx, args.taskId);
+    const { orgId, userId } = auth;
 
-    const task = await ctx.db.get(args.taskId);
-    if (!task || task.orgId !== orgId) throw new ConvexError("Task not found");
-    if (!isAdmin && !task.assigneeIds.includes(userId)) {
-      throw new ConvexError("Task not found");
-    }
+    // Mirror into per-user state: muted subscribers get no fan-out (§4.3).
+    await setTaskMuted(ctx, task, userId, true);
 
     const existing = await ctx.db
       .query("taskMutes")
@@ -422,6 +425,8 @@ export const unmuteTask = mutation({
     if (existing && existing.orgId === orgId) {
       await ctx.db.delete(existing._id);
     }
+    const task = await ctx.db.get(args.taskId);
+    if (task && task.orgId === orgId) await setTaskMuted(ctx, task, userId, false);
   },
 });
 

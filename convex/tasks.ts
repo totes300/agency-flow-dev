@@ -1,15 +1,11 @@
 import { v, ConvexError } from "convex/values";
 import { query, mutation, type QueryCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
-import { getAuthContext } from "./lib/auth";
+import { getAuthContext, type AuthContext } from "./lib/auth";
 import { MAX_TIMER_MS } from "./lib/timer";
-import { STATUS_TYPES } from "./lib/constants";
 import type { StatusType } from "./lib/constants";
-import { isTiptapEmpty } from "../lib/tiptap-utils";
-import { computeTaskIndicatorState } from "./lib/taskActivityIndicators";
 import {
   TAB_STATUS_TYPE,
-  isVisibleTopLevelTask,
   taskHasTimeEntries,
   createTaskEnricher,
 } from "./lib/task_helpers";
@@ -18,10 +14,27 @@ import {
   canChangeAssignees,
   canDelete,
   canEditField,
+  filterReadableTasks,
+  loadTaskForRead,
   loadTaskForReadOrNull,
   loadTaskForWrite,
 } from "./tasks/access";
-import { taskPriorityValidator } from "./tasks/model";
+import {
+  TASK_CATEGORIES,
+  categoryOfStatus,
+  taskPriorityValidator,
+  type TaskCategory,
+} from "./tasks/model";
+import {
+  OPEN_ROW_CAP,
+  USER_STATE_CAP,
+  loadAssignedTo,
+  loadByCategories,
+  loadProjectTasks,
+  loadSubtasksOf,
+  loadViaParentSubtasks,
+} from "./tasks/read";
+import { UNSEEN_CHANGE_TYPES, loadUserStates } from "./tasks/userState";
 import {
   archiveTask,
   createTask,
@@ -34,6 +47,54 @@ import {
   type TimerRescue,
 } from "./tasks/write";
 
+// ─── Legacy adapters (docs/prd-tasks-refactor.md §9 slice 2) ─────────────────
+//
+// The queries below keep the return shapes the old UI and the agent tools
+// read, but load through the bounded loaders of tasks/read.ts and check access
+// through tasks/access.ts (T1, T7). They are deleted in slices 3–7 (§10).
+
+/**
+ * Top-level tasks (archived included) of the given categories the caller
+ * may see: an admin reads the category index (one capped range per
+ * category, the old per-statusType cap), a member their own assignee edges.
+ */
+async function loadLegacyTopLevel(
+  ctx: QueryCtx,
+  auth: AuthContext,
+  categories: readonly TaskCategory[],
+): Promise<{ tasks: Doc<"tasks">[]; truncated: boolean }> {
+  let tasks: Doc<"tasks">[] = [];
+  let truncated = false;
+  if (auth.isAdmin) {
+    for (const category of categories) {
+      const loaded = await loadByCategories(ctx, auth.orgId, [category], OPEN_ROW_CAP);
+      tasks.push(...loaded.tasks);
+      truncated ||= loaded.truncated;
+    }
+  } else {
+    const loaded = await loadAssignedTo(ctx, auth.orgId, auth.userId);
+    truncated = loaded.truncated;
+    tasks = loaded.tasks.filter(
+      (t) => t.statusCategory === undefined || categories.includes(t.statusCategory),
+    );
+  }
+  return { tasks: tasks.filter((t) => !t.parentTaskId), truncated };
+}
+
+/** The categories holding statuses of a legacy type (the old tabs filter by type). */
+async function categoriesForLegacyType(
+  ctx: QueryCtx,
+  orgId: string,
+  type: StatusType,
+): Promise<TaskCategory[]> {
+  const statuses = await ctx.db
+    .query("statuses")
+    .withIndex("by_orgId_type", (q) => q.eq("orgId", orgId).eq("type", type))
+    .take(500);
+  const set = new Set(statuses.map((s) => categoryOfStatus(s)));
+  return TASK_CATEGORIES.filter((c) => set.has(c));
+}
+
 // ─── Detail Query ────────────────────────────────────────────────────────────────
 
 /**
@@ -42,13 +103,8 @@ import {
 export const getDetail = query({
   args: { id: v.id("tasks") },
   handler: async (ctx, { id }) => {
-    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
-
-    const task = await ctx.db.get(id);
-    if (!task || task.orgId !== orgId) throw new ConvexError("Task not found");
-    if (!isAdmin && !task.assigneeIds.includes(userId)) {
-      throw new ConvexError("You don't have access to this task");
-    }
+    // T1: access.ts (a parent's assignee reads its sub-tasks, §11.5).
+    const { task } = await loadTaskForRead(ctx, id);
 
     const status = task.statusId ? await ctx.db.get(task.statusId) : null;
 
@@ -83,11 +139,7 @@ export const getDetail = query({
     // Resolve created-by user
     const createdByUser = task.createdBy ? await ctx.db.get(task.createdBy) : null;
 
-    const timeEntries = await ctx.db
-      .query("timeEntries")
-      .withIndex("by_taskId", (q) => q.eq("taskId", id))
-      .collect();
-    const totalMinutes = timeEntries.reduce((sum, e) => sum + e.durationMinutes, 0);
+    const totalMinutes = task.trackedMinutes ?? (await sumEntryMinutes(ctx, id));
 
     return {
       _id: task._id,
@@ -124,6 +176,15 @@ export const getDetail = query({
   },
 });
 
+/** Fallback for tasks the reseed never backfilled (derived `trackedMinutes`, T6). */
+async function sumEntryMinutes(ctx: QueryCtx, taskId: Id<"tasks">): Promise<number> {
+  const entries = await ctx.db
+    .query("timeEntries")
+    .withIndex("by_taskId", (q) => q.eq("taskId", taskId))
+    .collect();
+  return entries.reduce((sum, e) => sum + e.durationMinutes, 0);
+}
+
 /**
  * Minimal read for the time-log form's category pre-fill: the task's own
  * category id (the last step of the entry-category default chain). Tolerant —
@@ -133,10 +194,8 @@ export const getDetail = query({
 export const getWorkCategoryId = query({
   args: { taskId: v.id("tasks") },
   handler: async (ctx, args) => {
-    const { orgId } = await getAuthContext(ctx);
-    const task = await ctx.db.get(args.taskId);
-    if (!task || task.orgId !== orgId) return null;
-    return task.workCategoryId ?? null;
+    const access = await loadTaskForReadOrNull(ctx, args.taskId);
+    return access?.task.workCategoryId ?? null;
   },
 });
 
@@ -145,29 +204,16 @@ export const getWorkCategoryId = query({
 export const getSubtasks = query({
   args: { parentTaskId: v.id("tasks") },
   handler: async (ctx, { parentTaskId }) => {
-    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
+    // Whoever reads the parent reads all of its sub-tasks (§11.5).
+    const { auth } = await loadTaskForRead(ctx, parentTaskId);
 
-    const parent = await ctx.db.get(parentTaskId);
-    if (!parent || parent.orgId !== orgId) throw new ConvexError("Task not found");
-    if (!isAdmin && !parent.assigneeIds.includes(userId)) {
-      throw new ConvexError("You don't have access to this task");
-    }
-
-    const subtasks = await ctx.db
-      .query("tasks")
-      .withIndex("by_orgId_parentTaskId", (q) => q.eq("orgId", orgId).eq("parentTaskId", parentTaskId))
-      .filter((q) => q.eq(q.field("archivedAt"), undefined))
-      .collect();
+    const subtasks = (await loadSubtasksOf(ctx, auth.orgId, parentTaskId)).tasks.filter((t) => !t.archivedAt);
 
     subtasks.sort((a, b) => (a.sortOrder ?? a.createdAt) - (b.sortOrder ?? b.createdAt));
 
     const timeMap = new Map<string, number>();
     for (const sub of subtasks) {
-      const entries = await ctx.db
-        .query("timeEntries")
-        .withIndex("by_taskId", (q) => q.eq("taskId", sub._id))
-        .collect();
-      timeMap.set(sub._id, entries.reduce((sum, e) => sum + e.durationMinutes, 0));
+      timeMap.set(sub._id, sub.trackedMinutes ?? (await sumEntryMinutes(ctx, sub._id)));
     }
 
     const enriched = await Promise.all(subtasks.map(async (sub) => {
@@ -206,23 +252,22 @@ export const getSubtasks = query({
 export const listByProject = query({
   args: { projectId: v.id("projects") },
   handler: async (ctx, args) => {
-    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
+    const auth = await getAuthContext(ctx);
 
     const project = await ctx.db.get(args.projectId);
-    if (!project || project.orgId !== orgId) return [];
+    if (!project || project.orgId !== auth.orgId) return [];
 
-    const tasks = await ctx.db
-      .query("tasks")
-      .withIndex("by_orgId_projectId", (q) =>
-        q.eq("orgId", orgId).eq("projectId", args.projectId),
-      )
-      .collect();
+    let tasks: Doc<"tasks">[];
+    if (auth.isAdmin) {
+      tasks = (await loadProjectTasks(ctx, auth.orgId, args.projectId, TASK_CATEGORIES, OPEN_ROW_CAP * 2)).tasks;
+    } else {
+      // A member's own edges plus the sub-tasks of their assigned parents (§11.5).
+      const assigned = (await loadAssignedTo(ctx, auth.orgId, auth.userId)).tasks;
+      const via = (await loadViaParentSubtasks(ctx, auth.orgId, assigned)).tasks;
+      tasks = [...assigned, ...via].filter((t) => t.projectId === args.projectId);
+    }
 
-    const visible = tasks.filter((t) => {
-      if (t.archivedAt) return false;
-      if (!isAdmin && !t.assigneeIds.includes(userId)) return false;
-      return true;
-    });
+    const visible = tasks.filter((t) => !t.archivedAt);
 
     const statusTypeOrder: Record<StatusType, number> = {
       backlog: 0,
@@ -292,28 +337,22 @@ export const reorderSubtasks = mutation({
 export const counts = query({
   args: {},
   handler: async (ctx) => {
-    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
+    const auth = await getAuthContext(ctx);
 
     const typeCounts: Record<StatusType, number> = {
       backlog: 0, in_progress: 0, review: 0, blocked: 0, done: 0,
     };
     let archivedCount = 0;
 
-    // Collect all tasks per statusType bucket (no limit — counts must be exact)
-    for (const type of STATUS_TYPES) {
-      const docs = await ctx.db
-        .query("tasks")
-        .withIndex("by_orgId_statusType", (q) =>
-          q.eq("orgId", orgId).eq("statusType", type)
-        )
-        .collect();
-      for (const t of docs) {
-        if (!isVisibleTopLevelTask(t, userId, isAdmin)) continue;
-        if (t.archivedAt) {
-          archivedCount++;
-        } else {
-          typeCounts[type]++;
-        }
+    // Bounded (T7): at most OPEN_ROW_CAP rows per category, so a count can
+    // read "1000" when a category holds more. §5.4: tab counts come from the
+    // loaded rows once slice 3 lands.
+    const { tasks } = await loadLegacyTopLevel(ctx, auth, TASK_CATEGORIES);
+    for (const t of tasks) {
+      if (t.archivedAt) {
+        archivedCount++;
+      } else {
+        typeCounts[t.statusType]++;
       }
     }
 
@@ -371,18 +410,19 @@ export const list = query({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
+    const auth = await getAuthContext(ctx);
+    const { orgId } = auth;
     const limit = args.limit ?? 50;
-    const maxScan = 1000;
+    const maxScan = OPEN_ROW_CAP;
     const tabType = TAB_STATUS_TYPE[args.tab];
     const isArchivedTab = args.tab === "archived";
 
-    // ── Step 1: Fetch tasks by tab ───────────────────────────────────────
+    // ── Step 1: Fetch tasks by tab (bounded loaders, T7) ─────────────────
     let tasks: Doc<"tasks">[];
     let hitScanLimit = false;
 
     function passesBaseFilter(t: Doc<"tasks">): boolean {
-      if (!isVisibleTopLevelTask(t, userId, isAdmin)) return false;
+      if (t.parentTaskId) return false;
       if (isArchivedTab) { if (!t.archivedAt) return false; }
       else { if (t.archivedAt) return false; }
       return true;
@@ -394,32 +434,18 @@ export const list = query({
         .withSearchIndex("search_title", (q) =>
           q.search("title", args.search!).eq("orgId", orgId)
         )
-        .collect();
-      tasks = searchResults.filter(passesBaseFilter);
-    } else if (tabType === null) {
-      const allTypes = STATUS_TYPES;
-      const taskArrays = await Promise.all(
-        allTypes.map(async (type) => {
-          const docs = await ctx.db
-            .query("tasks")
-            .withIndex("by_orgId_statusType", (q) =>
-              q.eq("orgId", orgId).eq("statusType", type)
-            )
-            .take(maxScan);
-          return { docs: docs.filter(passesBaseFilter), limited: docs.length >= maxScan };
-        })
-      );
-      tasks = taskArrays.flatMap((r) => r.docs);
-      hitScanLimit = taskArrays.some((r) => r.limited);
+        .take(maxScan + 1);
+      hitScanLimit = searchResults.length > maxScan;
+      tasks = await filterReadableTasks(ctx, auth, searchResults.slice(0, maxScan).filter(passesBaseFilter));
     } else {
-      const docs = await ctx.db
-        .query("tasks")
-        .withIndex("by_orgId_statusType", (q) =>
-          q.eq("orgId", orgId).eq("statusType", tabType)
-        )
-        .take(maxScan);
-      tasks = docs.filter(passesBaseFilter);
-      hitScanLimit = docs.length >= maxScan;
+      const categories = tabType === null
+        ? TASK_CATEGORIES
+        : await categoriesForLegacyType(ctx, orgId, tabType);
+      const loaded = await loadLegacyTopLevel(ctx, auth, categories);
+      hitScanLimit = loaded.truncated;
+      tasks = loaded.tasks.filter(
+        (t) => passesBaseFilter(t) && (tabType === null || t.statusType === tabType),
+      );
     }
 
     // ── Step 2: Apply filters ────────────────────────────────────────────
@@ -747,14 +773,15 @@ export const list = query({
 export const activityIndicators = query({
   args: { taskIds: v.array(v.id("tasks")) },
   handler: async (ctx, { taskIds }) => {
-    const { orgId, userId } = await getAuthContext(ctx);
+    const auth = await getAuthContext(ctx);
+    const { orgId, userId } = auth;
 
     const capped = taskIds.slice(0, 500);
     const result: Record<string, {
       subtaskTotal: number;
       subtaskDone: number;
       commentCount: number;
-      hasAttachments: boolean; // backward compat — removed in Phase 2
+      hasAttachments: boolean; // deprecated, no reader: always false since slice 2
       hasDescription: boolean;
       hasUnseenNonComment: boolean;
       hasUnseenSubtasks: boolean;
@@ -771,6 +798,17 @@ export const activityIndicators = query({
       } | null;
     }> = {};
 
+    // Counters are derived on the task (§5.5) and per-user state is one
+    // range read of the caller's taskUserState rows (§4.3), so a row costs
+    // its task read plus one activity read (was ~7 queries per task).
+    const docs = await Promise.all(capped.map((id) => ctx.db.get(id)));
+    const tasks = await filterReadableTasks(
+      ctx,
+      auth,
+      docs.filter((t): t is Doc<"tasks"> => t !== null),
+    );
+    const states = await loadUserStates(ctx, orgId, userId, USER_STATE_CAP);
+
     // Cache user names across tasks
     const userNameCache = new Map<string, string>();
     async function getUserName(uid: Id<"users">): Promise<string> {
@@ -782,105 +820,49 @@ export const activityIndicators = query({
       return userNameCache.get(key)!;
     }
 
-    await Promise.all(capped.map(async (taskId) => {
-      const task = await ctx.db.get(taskId);
-      if (!task || task.orgId !== orgId) return;
+    await Promise.all(tasks.map(async (task) => {
+      const state = states.get(task._id);
+      const unread = state?.unreadComments ?? 0;
+      const hasUnseenChanges = state?.hasUnseenChanges ?? false;
+      const lastViewedAt = state?.lastViewedAt ?? 0;
 
-      // hasDescription via isTiptapEmpty
-      let hasDescription = false;
-      if (task?.description) {
-        try {
-          hasDescription = !isTiptapEmpty(JSON.parse(task.description));
-        } catch {
-          hasDescription = false;
-        }
-      }
-
-      const [subtasks, comments, attachments] = await Promise.all([
-        ctx.db.query("tasks")
-          .withIndex("by_orgId_parentTaskId", (q) => q.eq("orgId", orgId).eq("parentTaskId", taskId))
-          .filter((q) => q.eq(q.field("archivedAt"), undefined))
-          .collect(),
-        ctx.db.query("comments")
-          .withIndex("by_task", (q) => q.eq("taskId", taskId))
-          .collect(),
-        ctx.db.query("attachments")
-          .withIndex("by_task", (q) => q.eq("taskId", taskId))
-          .take(1),
-      ]);
-
-      // Fetch receipts for unseen computation
-      const [viewReceipt, commentReceipt] = await Promise.all([
-        ctx.db.query("taskViewReceipts")
-          .withIndex("by_user_task", (q) => q.eq("userId", userId).eq("taskId", taskId))
-          .unique(),
-        ctx.db.query("commentReadReceipts")
-          .withIndex("by_user_task", (q) => q.eq("userId", userId).eq("taskId", taskId))
-          .unique(),
-      ]);
-
-      const lastViewedAt = viewReceipt?.lastViewedAt ?? 0;
-      const lastSeenAt = commentReceipt?.lastSeenAt ?? 0;
-
-      const events = (await ctx.db
+      const recent = (await ctx.db
         .query("activityLog")
-        .withIndex("by_task", (q) => q.eq("taskId", taskId).gt("createdAt", lastViewedAt))
-        .collect())
-        .filter((event) => event.type !== "description_changed");
-
-      const indicatorState = computeTaskIndicatorState({
-        events: events.map((event) => ({
-          createdAt: event.createdAt,
-          type: event.type,
-          userId: event.userId,
-        })),
-        comments: comments.map((comment) => ({
-          createdAt: comment.createdAt,
-          userId: comment.userId,
-        })),
-        currentUserId: userId,
-        lastViewedAt,
-        lastSeenAt,
-      });
-
-      // lastActivity: most recent activityLog event
-      const latestEvent = (await ctx.db
-        .query("activityLog")
-        .withIndex("by_task", (q) => q.eq("taskId", taskId))
+        .withIndex("by_task", (q) => q.eq("taskId", task._id))
         .order("desc")
         .take(20))
-        .find((event) => event.type !== "description_changed");
+        .filter((event) => event.type !== "description_changed");
+      const unseenEvents = hasUnseenChanges
+        ? recent.filter(
+            (e) => e.createdAt > lastViewedAt && e.userId !== userId && UNSEEN_CHANGE_TYPES.has(e.type),
+          )
+        : [];
 
-      let lastActivity: {
-        userName: string;
-        type: string;
-        metadata: Record<string, unknown>;
-        createdAt: number;
-      } | null = null;
+      const latestEvent = recent[0];
+      const lastActivity = latestEvent
+        ? {
+            userName: await getUserName(latestEvent.userId),
+            type: latestEvent.type,
+            metadata: latestEvent.metadata as Record<string, unknown>,
+            createdAt: latestEvent.createdAt,
+          }
+        : null;
 
-      if (latestEvent) {
-        const userName = await getUserName(latestEvent.userId);
-        lastActivity = {
-          userName,
-          type: latestEvent.type,
-          metadata: latestEvent.metadata as Record<string, unknown>,
-          createdAt: latestEvent.createdAt,
-        };
-      }
-
-      result[taskId] = {
-        subtaskTotal: subtasks.length,
-        subtaskDone: subtasks.filter((s) => s.statusType === "done").length,
-        commentCount: comments.length,
-        hasAttachments: attachments.length > 0,
-        hasDescription,
-        hasUnseenNonComment: indicatorState.hasUnseenNonComment,
-        hasUnseenSubtasks: indicatorState.hasUnseenSubtasks,
-        hasUnseenDescription: indicatorState.hasUnseenDescription,
-        hasUnseenComments: indicatorState.hasUnseenComments,
-        hasUnseen: indicatorState.hasUnseen,
-        unreadCommentCount: indicatorState.unreadCommentCount,
-        unseenActivityCount: indicatorState.unseenActivityCount,
+      result[task._id] = {
+        subtaskTotal: task.subtaskCount ?? 0,
+        subtaskDone: task.subtaskDoneCount ?? 0,
+        commentCount: task.commentCount ?? 0,
+        hasAttachments: false,
+        hasDescription: task.hasDescription ?? false,
+        hasUnseenNonComment: hasUnseenChanges,
+        hasUnseenSubtasks: unseenEvents.some(
+          (e) => e.type === "subtask_created" || e.type === "subtask_completed",
+        ),
+        hasUnseenDescription: false,
+        hasUnseenComments: unread > 0,
+        hasUnseen: hasUnseenChanges || unread > 0,
+        unreadCommentCount: unread,
+        unseenActivityCount: Math.max(unseenEvents.length, hasUnseenChanges ? 1 : 0) + unread,
         lastActivity,
       };
     }));
@@ -896,16 +878,10 @@ export const activityIndicators = query({
 export const subtaskPreview = query({
   args: { taskId: v.id("tasks") },
   handler: async (ctx, { taskId }) => {
-    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
-    const task = await ctx.db.get(taskId);
-    if (!task || task.orgId !== orgId) return [];
-    if (!isAdmin && !task.assigneeIds.includes(userId)) return [];
+    const access = await loadTaskForReadOrNull(ctx, taskId);
+    if (!access) return [];
 
-    const subtasks = await ctx.db
-      .query("tasks")
-      .withIndex("by_orgId_parentTaskId", (q) => q.eq("orgId", orgId).eq("parentTaskId", taskId))
-      .filter((q) => q.eq(q.field("archivedAt"), undefined))
-      .collect();
+    const subtasks = (await loadSubtasksOf(ctx, access.auth.orgId, taskId)).tasks.filter((t) => !t.archivedAt);
 
     // Sort: incomplete first, then completed, both by creation order
     const incomplete = subtasks.filter((s) => s.statusType !== "done");
@@ -1025,13 +1001,12 @@ export const restore = mutation({
 export const deleteImpact = query({
   args: { id: v.id("tasks") },
   handler: async (ctx, args) => {
-    const { orgId } = await getAuthContext(ctx);
-    const task = await ctx.db.get(args.id);
-    if (!task || task.orgId !== orgId) return null;
+    const access = await loadTaskForReadOrNull(ctx, args.id);
+    if (!access) return null;
+    const { task } = access;
+    const { orgId } = access.auth;
 
-    const subtasks = await ctx.db.query("tasks")
-      .withIndex("by_orgId_parentTaskId", (q) => q.eq("orgId", orgId).eq("parentTaskId", args.id))
-      .collect();
+    const subtasks = (await loadSubtasksOf(ctx, orgId, args.id)).tasks;
 
     let entryCount = 0;
     let totalMinutes = 0;

@@ -20,6 +20,7 @@ import {
   type TaskPriority,
 } from "./tasks/model";
 import { recomputeTaskCounters } from "./tasks/derived";
+import { recomputeUserStates } from "./tasks/userState";
 import {
   addIdentifierAlias,
   deleteOrphanEdges,
@@ -48,6 +49,8 @@ import {
  *     derived counters — and its `taskAssignees`/`taskLabels` edges are
  *     rewritten to equal the caches. Some single-assignee tasks get a second
  *     assignee (D1 demo). Legacy fields stay populated for the old UI.
+ *  5b. Every task's `taskUserState` rows are rebuilt from the legacy view /
+ *     comment receipts and mutes (subscribers, unread comments, unseen dot).
  *  6. Project and org counters are set past the highest number.
  *
  * Idempotent: a second run changes nothing (existing numbers, positions,
@@ -100,6 +103,9 @@ export type SeedTaskFoundationsResult = {
   aliasesCreated: number;
   /** Tasks whose project was hard-deleted (projects.remove keeps tasks): projectId cleared. */
   danglingProjectsCleared: number;
+  /** `taskUserState` rows inserted / updated by the per-user backfill (§4.3, slice 2). */
+  userStatesInserted: number;
+  userStatesUpdated: number;
 };
 
 async function resolveOrgId(ctx: MutationCtx, orgId: string | undefined): Promise<string> {
@@ -182,6 +188,8 @@ export async function seedTaskFoundations(
     edgesDeleted: 0,
     aliasesCreated: 0,
     danglingProjectsCleared: 0,
+    userStatesInserted: 0,
+    userStatesUpdated: 0,
   };
 
   // ── 1. Statuses ───────────────────────────────────────────────────────────
@@ -512,6 +520,36 @@ export async function seedTaskFoundations(
 
   // Edges of hard-deleted tasks (tasks removed before the write path cascaded them).
   result.edgesDeleted += await deleteOrphanEdges(ctx, orgId, new Set(tasks.map((t) => t._id)));
+
+  // ── 5b. Per-user state (§4.3, slice 2) ────────────────────────────────────
+  // Backfilled from the legacy receipts so unread counts and unseen dots
+  // survive the switch; the comment/activity hooks keep it current after.
+  const viewedAtByTask = new Map<Id<"tasks">, Map<Id<"users">, number>>();
+  const noteViewed = (taskId: Id<"tasks">, userId: Id<"users">, at: number) => {
+    const perUser = viewedAtByTask.get(taskId) ?? new Map<Id<"users">, number>();
+    perUser.set(userId, Math.max(perUser.get(userId) ?? 0, at));
+    viewedAtByTask.set(taskId, perUser);
+  };
+  for (const r of await ctx.db.query("taskViewReceipts").withIndex("by_orgId", (q) => q.eq("orgId", orgId)).collect()) {
+    noteViewed(r.taskId, r.userId, r.lastViewedAt);
+  }
+  for (const r of await ctx.db.query("commentReadReceipts").withIndex("by_orgId", (q) => q.eq("orgId", orgId)).collect()) {
+    noteViewed(r.taskId, r.userId, r.lastSeenAt);
+  }
+  const mutedByTask = new Map<Id<"tasks">, Set<Id<"users">>>();
+  for (const m of await ctx.db.query("taskMutes").withIndex("by_orgId", (q) => q.eq("orgId", orgId)).collect()) {
+    mutedByTask.set(m.taskId, new Set([...(mutedByTask.get(m.taskId) ?? []), m.userId]));
+  }
+  for (const t of tasks) {
+    const current = await ctx.db.get(t._id);
+    if (!current) continue;
+    const states = await recomputeUserStates(ctx, current, {
+      viewedAt: viewedAtByTask.get(t._id) ?? new Map(),
+      mutedUserIds: mutedByTask.get(t._id) ?? new Set(),
+    });
+    result.userStatesInserted += states.inserted;
+    result.userStatesUpdated += states.updated;
+  }
 
   // ── 6. Counters ───────────────────────────────────────────────────────────
   for (const p of projects) {

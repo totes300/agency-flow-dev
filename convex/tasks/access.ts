@@ -69,6 +69,55 @@ async function resolveTaskAccess(
 }
 
 /**
+ * Whether a user (not necessarily the caller) may read `task`: admin, or an
+ * edge on the task or its parent (§11.5). For recipient checks (notifications,
+ * per-user fan-out), where the subject is another user.
+ */
+export async function userCanReadTask(
+  ctx: QueryCtx | MutationCtx,
+  task: Doc<"tasks">,
+  subject: { userId: Id<"users">; isAdmin: boolean },
+): Promise<boolean> {
+  if (subject.isAdmin) return true;
+  if (await hasAssigneeEdge(ctx, task.orgId, task._id, subject.userId)) return true;
+  return (
+    task.parentTaskId !== undefined &&
+    (await hasAssigneeEdge(ctx, task.orgId, task.parentTaskId, subject.userId))
+  );
+}
+
+/**
+ * Bulk read filter for list loaders (T1): keeps the tasks of the caller's
+ * org the caller may read, in input order. Admins pass every org task; a
+ * member keeps tasks with an edge on the task or on its parent. Parent edge
+ * lookups are memoized, so N sub-tasks of one parent cost one lookup.
+ */
+export async function filterReadableTasks(
+  ctx: QueryCtx | MutationCtx,
+  auth: AuthContext,
+  tasks: readonly Doc<"tasks">[],
+): Promise<Doc<"tasks">[]> {
+  const inOrg = tasks.filter((t) => t.orgId === auth.orgId);
+  if (auth.isAdmin) return inOrg;
+  const edgeCache = new Map<Id<"tasks">, boolean>();
+  const hasEdge = async (taskId: Id<"tasks">) => {
+    let known = edgeCache.get(taskId);
+    if (known === undefined) {
+      known = await hasAssigneeEdge(ctx, auth.orgId, taskId, auth.userId);
+      edgeCache.set(taskId, known);
+    }
+    return known;
+  };
+  const readable: Doc<"tasks">[] = [];
+  for (const task of inOrg) {
+    if ((await hasEdge(task._id)) || (task.parentTaskId !== undefined && (await hasEdge(task.parentTaskId)))) {
+      readable.push(task);
+    }
+  }
+  return readable;
+}
+
+/**
  * Loads a task the caller may read, or throws "Task not found". Pass `auth`
  * when the caller already resolved it (bulk paths) to skip the user lookup.
  */

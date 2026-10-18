@@ -7,6 +7,7 @@ import { ConvexError } from "convex/values";
 import type { QueryCtx, MutationCtx } from "../_generated/server";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { StatusType } from "./constants";
+import { deleteStatesOfTask } from "../tasks/userState";
 
 // ─── Types ───────────────────────────────────────────────────────────────────────
 
@@ -17,29 +18,6 @@ export type TaskWithJoins = Doc<"tasks"> & {
   category: Pick<Doc<"workCategories">, "_id" | "name" | "color"> | null;
   assignees: Array<Pick<Doc<"users">, "_id" | "name" | "email" | "imageUrl">>;
 };
-
-// ─── Base visibility filter ──────────────────────────────────────────────────────
-
-/**
- * Shared predicate: is this task a top-level task visible to the given user?
- * Used by both `counts` and `list` queries to guarantee identical filtering.
- *
- * Rules:
- * - Subtasks (parentTaskId set) are always excluded
- * - Members only see tasks assigned to them; admins see all
- *
- * Does NOT filter by archived state — callers handle that based on context
- * (counts buckets archived separately, list filters by tab).
- */
-export function isVisibleTopLevelTask(
-  task: Doc<"tasks">,
-  userId: Id<"users">,
-  isAdmin: boolean,
-): boolean {
-  if (task.parentTaskId) return false;
-  if (!isAdmin && !task.assigneeIds.includes(userId)) return false;
-  return true;
-}
 
 // ─── Constants ───────────────────────────────────────────────────────────────────
 
@@ -120,7 +98,7 @@ export async function taskHasTimeEntries(ctx: QueryCtx, taskId: Id<"tasks">): Pr
 
 /**
  * Cascade-delete all related data for a single task (not subtasks — call separately for those).
- * Removes: time entries, activity log, comments (+ reactions + attachments), attachments, read receipts, notifications, task mutes, plan segments.
+ * Removes: time entries, activity log, comments (+ reactions + attachments), attachments, read receipts, notifications, per-user state, task mutes, plan segments.
  *
  * Callers MUST check `taskHasTimeEntries` on the whole task tree first — this
  * function deletes entries unconditionally and would otherwise destroy
@@ -202,6 +180,9 @@ export async function cascadeDeleteTaskData(ctx: MutationCtx, taskId: Id<"tasks"
     .withIndex("by_task", (q) => q.eq("taskId", taskId))
     .collect();
   for (const n of notifications) await ctx.db.delete(n._id);
+
+  // Per-user task state (§4.3)
+  await deleteStatesOfTask(ctx, taskId);
 
   // Task mutes
   const mutes = await ctx.db

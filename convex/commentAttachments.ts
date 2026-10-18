@@ -1,6 +1,7 @@
 import { v, ConvexError } from "convex/values";
 import { query, mutation } from "./_generated/server";
 import { getAuthContext } from "./lib/auth";
+import { loadTaskForReadOrNull } from "./tasks/access";
 import { isMimeTypeBlocked } from "./lib/content_validation";
 
 const MAX_FILES_PER_COMMENT = 5;
@@ -16,11 +17,8 @@ const MAX_FILE_NAME_LENGTH = 255;
 export const byTask = query({
   args: { taskId: v.id("tasks") },
   handler: async (ctx, { taskId }) => {
-    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
-
-    const task = await ctx.db.get(taskId);
-    if (!task || task.orgId !== orgId) return {};
-    if (!isAdmin && !task.assigneeIds.includes(userId)) return {};
+    // Access via tasks/access.ts (T1, incl. sub-tasks of an assigned parent).
+    if (!(await loadTaskForReadOrNull(ctx, taskId))) return {};
 
     const attachments = await ctx.db
       .query("commentAttachments")
@@ -78,7 +76,8 @@ export const save = mutation({
     mimeType: v.string(),
   },
   handler: async (ctx, args) => {
-    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
+    const auth = await getAuthContext(ctx);
+    const { orgId, userId } = auth;
 
     // Validate file name length
     if (args.fileName.length > MAX_FILE_NAME_LENGTH) {
@@ -95,9 +94,8 @@ export const save = mutation({
       throw new ConvexError("Comment not found");
     }
 
-    // Task-assignment guard — non-admins can only attach to tasks they're assigned to
-    const task = await ctx.db.get(comment.taskId);
-    if (!task || (!isAdmin && !task.assigneeIds.includes(userId))) {
+    // Task access guard (tasks/access.ts)
+    if (!(await loadTaskForReadOrNull(ctx, comment.taskId, auth))) {
       throw new ConvexError("Comment not found");
     }
 

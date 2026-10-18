@@ -209,11 +209,12 @@ async function addTask(
 ): Promise<Id<"tasks">> {
   return await t.run(async (ctx) => {
     const now = Date.now();
-    return await ctx.db.insert("tasks", {
+    const taskId = await ctx.db.insert("tasks", {
       orgId: ORG_ID,
       title: "Task",
       statusId: w.statusId,
       statusType: "backlog",
+      statusCategory: "backlog",
       projectId: opts.projectId,
       assigneeIds: opts.assignees ?? [],
       billable: opts.billable ?? true,
@@ -222,6 +223,11 @@ async function addTask(
       updatedAt: now,
       createdBy: w.admin,
     });
+    // Assignee edges are the access source of truth (tasks/access.ts, D1).
+    for (const userId of opts.assignees ?? []) {
+      await ctx.db.insert("taskAssignees", { orgId: ORG_ID, taskId, userId, assignedAt: now, assignedBy: w.admin });
+    }
+    return taskId;
   });
 }
 

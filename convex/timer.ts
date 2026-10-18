@@ -2,6 +2,7 @@ import { v, ConvexError } from "convex/values";
 import { query, mutation } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
+import { loadTaskForReadOrNull } from "./tasks/access";
 import { getAuthContext } from "./lib/auth";
 import { computeElapsedMs, totalElapsedMs, msToMinutes, getDateInTimezone, MAX_TIMER_MS, ORG_TIMEZONE_FALLBACK } from "./lib/timer";
 import { roundMinutes } from "./lib/rounding";
@@ -58,22 +59,21 @@ export const getState = query({
 export const start = mutation({
   args: { taskId: v.id("tasks") },
   handler: async (ctx, args) => {
-    const { userId, orgId, isAdmin, user } = await getAuthContext(ctx);
+    const auth = await getAuthContext(ctx);
+    const { userId, orgId, user } = auth;
 
     // Reject if a timer is already running (client must stop first)
     if (user.timerTaskId && user.timerStatus) {
       throw new ConvexError("A timer is already running. Stop it before starting a new one.");
     }
 
-    const task = await ctx.db.get(args.taskId);
-    if (!task || task.orgId !== orgId) throw new ConvexError("Task not found");
+    // Member: only on tasks they can work on (assigned, or a sub-task of an
+    // assigned parent — tasks/access.ts, §11.5).
+    const access = await loadTaskForReadOrNull(ctx, args.taskId, auth);
+    if (!access) throw new ConvexError("Task not found");
+    const { task } = access;
     if (task.archivedAt) throw new ConvexError("Cannot start timer on an archived task");
     if (!task.projectId) throw new ConvexError("Assign a project to this task before starting a timer");
-
-    // Member: only on assigned tasks
-    if (!isAdmin && !task.assigneeIds.includes(userId)) {
-      throw new ConvexError("You can only start timers on tasks assigned to you");
-    }
 
     // Validate rates upfront so the user discovers missing rates before
     // spending time, not when they try to commit the entry.
@@ -112,15 +112,14 @@ export const start = mutation({
 export const previewRateForTask = query({
   args: { taskId: v.id("tasks") },
   handler: async (ctx, args) => {
-    const { userId, orgId, isAdmin } = await getAuthContext(ctx);
+    const auth = await getAuthContext(ctx);
+    const { userId, orgId } = auth;
 
-    const task = await ctx.db.get(args.taskId);
-    if (!task || task.orgId !== orgId) return { ok: false as const, reason: "Task not found" };
+    const access = await loadTaskForReadOrNull(ctx, args.taskId, auth);
+    if (!access) return { ok: false as const, reason: "Task not found" };
+    const { task } = access;
     if (task.archivedAt) return { ok: false as const, reason: "Task is archived" };
     if (!task.projectId) return { ok: false as const, reason: "Assign a project first" };
-    if (!isAdmin && !task.assigneeIds.includes(userId)) {
-      return { ok: false as const, reason: "Task isn't assigned to you" };
-    }
 
     const project = await ctx.db.get(task.projectId);
     if (!project) return { ok: false as const, reason: "Project not found" };

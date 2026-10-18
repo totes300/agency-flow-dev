@@ -107,6 +107,9 @@ import type * as tasks from "../tasks.js";
 import type * as tasks_access from "../tasks/access.js";
 import type * as tasks_derived from "../tasks/derived.js";
 import type * as tasks_model from "../tasks/model.js";
+import type * as tasks_queries from "../tasks/queries.js";
+import type * as tasks_read from "../tasks/read.js";
+import type * as tasks_userState from "../tasks/userState.js";
 import type * as tasks_write from "../tasks/write.js";
 import type * as timeEntries from "../timeEntries.js";
 import type * as timer from "../timer.js";
@@ -116,6 +119,7 @@ import type * as userRates from "../userRates.js";
 import type * as users from "../users.js";
 import type * as workCategories from "../workCategories.js";
 import type * as workday from "../workday.js";
+import type * as workspaceRefs from "../workspaceRefs.js";
 import type * as worksheets from "../worksheets.js";
 import type * as worksheetsHelpers from "../worksheetsHelpers.js";
 
@@ -225,6 +229,9 @@ declare const fullApi: ApiFromModules<{
   "tasks/access": typeof tasks_access;
   "tasks/derived": typeof tasks_derived;
   "tasks/model": typeof tasks_model;
+  "tasks/queries": typeof tasks_queries;
+  "tasks/read": typeof tasks_read;
+  "tasks/userState": typeof tasks_userState;
   "tasks/write": typeof tasks_write;
   timeEntries: typeof timeEntries;
   timer: typeof timer;
@@ -234,6 +241,7 @@ declare const fullApi: ApiFromModules<{
   users: typeof users;
   workCategories: typeof workCategories;
   workday: typeof workday;
+  workspaceRefs: typeof workspaceRefs;
   worksheets: typeof worksheets;
   worksheetsHelpers: typeof worksheetsHelpers;
 }>;

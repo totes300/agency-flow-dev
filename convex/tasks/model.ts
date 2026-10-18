@@ -575,3 +575,100 @@ export const taskViewSpecValidator = v.object({
 });
 
 export type TaskViewSpec = Infer<typeof taskViewSpecValidator>;
+
+// ─── System views (§4.4, U5, U8) ─────────────────────────────────────────────
+
+/**
+ * Surfaces `listView` serves: the three saved-view surfaces plus the Planner
+ * task panel (§10: `planner.taskPanel` becomes a `listView` preset). The
+ * planner has system views only.
+ */
+export const listViewSurfaceValidator = v.union(
+  v.literal("tasks"),
+  v.literal("myTasks"),
+  v.literal("project"),
+  v.literal("planner"),
+);
+
+export type ListViewSurface = Infer<typeof listViewSurfaceValidator>;
+
+/** Filter value meaning "the caller" (assignee / createdBy filters). */
+export const ME_FILTER_VALUE = "me";
+
+/** Default visible columns (§6.3 / prototype v4). */
+export const DEFAULT_VISIBLE_PROPERTIES: TaskViewSpec["visibleProperties"] = [
+  "priority",
+  "title",
+  "status",
+  "category",
+  "client",
+  "assignee",
+  "due",
+  "time",
+];
+
+function systemSpec(overrides: Partial<TaskViewSpec> = {}): TaskViewSpec {
+  return {
+    filters: [],
+    layout: "list",
+    groupBy: "status",
+    orderBy: "priority",
+    visibleProperties: DEFAULT_VISIBLE_PROPERTIES,
+    showSubtasks: false,
+    showEmptyGroups: false,
+    ...overrides,
+  };
+}
+
+const OPEN_CATEGORY_VALUES = ["backlog", "unstarted", "started"];
+const ACTIVE_FILTER = { property: "statusCategory" as const, operator: "is" as const, values: ["unstarted", "started"] };
+const BACKLOG_FILTER = { property: "statusCategory" as const, operator: "is" as const, values: ["backlog"] };
+const OPEN_FILTER = { property: "statusCategory" as const, operator: "is" as const, values: OPEN_CATEGORY_VALUES };
+
+/**
+ * The code-constant system views (U5 Active / Backlog / All tasks, U8
+ * Assigned / Created, the project tab and the Planner panel). Their filters
+ * are the view's scope; display settings are defaults the client may
+ * override ("Set default for everyone" lands with slice 4's `viewDefaults`).
+ * My Tasks "Today" is a plan, not a filter: it is served by `tasks/today.ts`
+ * (slice 5), not by `listView`.
+ */
+export const SYSTEM_VIEWS: Record<ListViewSurface, Record<string, { name: string; spec: TaskViewSpec }>> = {
+  tasks: {
+    active: { name: "Active", spec: systemSpec({ filters: [ACTIVE_FILTER] }) },
+    backlog: { name: "Backlog", spec: systemSpec({ filters: [BACKLOG_FILTER], groupBy: "project" }) },
+    all: { name: "All tasks", spec: systemSpec() },
+  },
+  myTasks: {
+    assigned: {
+      name: "Assigned",
+      spec: systemSpec({
+        filters: [{ property: "assignee", operator: "is", values: [ME_FILTER_VALUE] }, OPEN_FILTER],
+        // §11.2: My Tasks hides the Assignee column.
+        visibleProperties: DEFAULT_VISIBLE_PROPERTIES.filter((p) => p !== "assignee"),
+      }),
+    },
+    created: {
+      name: "Created",
+      spec: systemSpec({
+        filters: [{ property: "createdBy", operator: "is", values: [ME_FILTER_VALUE] }],
+        groupBy: "assignee",
+      }),
+    },
+  },
+  project: {
+    active: { name: "Active", spec: systemSpec({ filters: [ACTIVE_FILTER] }) },
+    backlog: { name: "Backlog", spec: systemSpec({ filters: [BACKLOG_FILTER] }) },
+    all: { name: "All tasks", spec: systemSpec() },
+  },
+  planner: {
+    panel: { name: "Tasks", spec: systemSpec({ groupBy: "none", orderBy: "createdAt" }) },
+  },
+};
+
+export const DEFAULT_SYSTEM_VIEW: Record<ListViewSurface, string> = {
+  tasks: "active",
+  myTasks: "assigned",
+  project: "active",
+  planner: "panel",
+};

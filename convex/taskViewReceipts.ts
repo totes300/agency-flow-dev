@@ -1,7 +1,8 @@
-import { v, ConvexError } from "convex/values";
+import { v } from "convex/values";
 import { mutation } from "./_generated/server";
-import { getAuthContext } from "./lib/auth";
 import { markTaskNotificationsRead } from "./notifications";
+import { loadTaskForRead } from "./tasks/access";
+import { markTaskViewed } from "./tasks/userState";
 
 /**
  * Upsert lastViewedAt for current user + task.
@@ -10,13 +11,9 @@ import { markTaskNotificationsRead } from "./notifications";
 export const markViewed = mutation({
   args: { taskId: v.id("tasks") },
   handler: async (ctx, { taskId }) => {
-    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
-
-    const task = await ctx.db.get(taskId);
-    if (!task || task.orgId !== orgId) throw new ConvexError("Task not found");
-    if (!isAdmin && !task.assigneeIds.includes(userId)) {
-      throw new ConvexError("Not authorized");
-    }
+    const access = await loadTaskForRead(ctx, taskId);
+    const { orgId, userId } = access.auth;
+    const now = Date.now();
 
     const existing = await ctx.db
       .query("taskViewReceipts")
@@ -24,15 +21,18 @@ export const markViewed = mutation({
       .unique();
 
     if (existing) {
-      await ctx.db.patch(existing._id, { lastViewedAt: Date.now() });
+      await ctx.db.patch(existing._id, { lastViewedAt: now });
     } else {
       await ctx.db.insert("taskViewReceipts", {
         taskId,
         orgId,
         userId,
-        lastViewedAt: Date.now(),
+        lastViewedAt: now,
       });
     }
+
+    // Per-user state reset on open (§4.3) — the new list rows read this.
+    await markTaskViewed(ctx, access, now);
 
     // Honest badge: opening a task via ANY path clears its unread
     // notifications for the viewer — every task-open surface funnels here.

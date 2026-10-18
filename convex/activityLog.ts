@@ -1,15 +1,16 @@
 import { v } from "convex/values";
 import { query, MutationCtx } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
-import { getAuthContext } from "./lib/auth";
+import { loadTaskForReadOrNull } from "./tasks/access";
 import type { ActivityEvent } from "./tasks/model";
-import { touchLastActivity } from "./tasks/derived";
+import { onActivity } from "./tasks/derived";
 
 // ─── Helper (called from other mutations) ───────────────────────────────────────
 
 /**
  * Append a typed activity event (tasks/model.ts activityLogValidator) and
- * move the task's `lastActivity` forward (§5.5). Called from tasks/write.ts,
+ * move the task's `lastActivity` forward + fan out the unseen-change flag
+ * (§5.5, §4.3). Called from tasks/write.ts,
  * comments.ts and timeEntries.ts. `at` defaults to now (seeds pass history).
  */
 export async function logActivity(
@@ -24,7 +25,7 @@ export async function logActivity(
   const { at, ...event } = args;
   const createdAt = at ?? Date.now();
   await ctx.db.insert("activityLog", { ...event, createdAt });
-  await touchLastActivity(ctx, args.taskId, { kind: args.type, actorId: args.userId, at: createdAt });
+  await onActivity(ctx, args.taskId, { kind: args.type, actorId: args.userId, at: createdAt });
 }
 
 // ─── Query ──────────────────────────────────────────────────────────────────────
@@ -36,13 +37,8 @@ export async function logActivity(
 export const byTask = query({
   args: { taskId: v.id("tasks") },
   handler: async (ctx, { taskId }) => {
-    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
-
-    const task = await ctx.db.get(taskId);
-    if (!task || task.orgId !== orgId) return [];
-
-    // Member access check — non-admin can only see activity on assigned tasks
-    if (!isAdmin && !task.assigneeIds.includes(userId)) return [];
+    // Access via tasks/access.ts (T1, incl. sub-tasks of an assigned parent).
+    if (!(await loadTaskForReadOrNull(ctx, taskId))) return [];
 
     const events = (await ctx.db
       .query("activityLog")
@@ -77,10 +73,7 @@ export const byTask = query({
 export const latestForTask = query({
   args: { taskId: v.id("tasks") },
   handler: async (ctx, { taskId }) => {
-    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
-    const task = await ctx.db.get(taskId);
-    if (!task || task.orgId !== orgId) return [];
-    if (!isAdmin && !task.assigneeIds.includes(userId)) return [];
+    if (!(await loadTaskForReadOrNull(ctx, taskId))) return [];
 
     const events = (await ctx.db
       .query("activityLog")

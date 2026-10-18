@@ -86,9 +86,14 @@ async function seed(t: T): Promise<Seed> {
     });
     const taskId = await ctx.db.insert("tasks", {
       orgId: ORG_ID, title: "Test Task", statusId, statusType: "backlog",
+      statusCategory: "backlog",
       assigneeIds: [memberB, memberC], billable: true,
       createdAt: now, updatedAt: now, createdBy: admin,
     });
+    // Assignee edges are the access source of truth (tasks/access.ts, D1).
+    for (const userId of [memberB, memberC]) {
+      await ctx.db.insert("taskAssignees", { orgId: ORG_ID, taskId, userId, assignedAt: now, assignedBy: admin });
+    }
 
     return { admin, admin2, memberB, memberC, memberD, statusId, taskId };
   });
@@ -489,11 +494,16 @@ describe("state machine", () => {
     // Second task, also assigned to B, with its own notification
     const task2 = await t.run(async (ctx) => {
       const now = Date.now();
-      return await ctx.db.insert("tasks", {
+      const id = await ctx.db.insert("tasks", {
         orgId: ORG_ID, title: "Second Task", statusId: s.statusId, statusType: "backlog",
+        statusCategory: "backlog",
         assigneeIds: [s.memberB], billable: true,
         createdAt: now, updatedAt: now, createdBy: s.admin,
       });
+      await ctx.db.insert("taskAssignees", {
+        orgId: ORG_ID, taskId: id, userId: s.memberB, assignedAt: now, assignedBy: s.admin,
+      });
+      return id;
     });
     await asAdmin.mutation(api.comments.create, { taskId: s.taskId, content: doc("x ", s.memberB) });
     await asAdmin.mutation(api.comments.create, { taskId: task2, content: doc("y ", s.memberB) });

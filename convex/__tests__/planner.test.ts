@@ -62,7 +62,7 @@ async function seed(t: T): Promise<Seed> {
       archivedAt?: number,
     ) =>
       await ctx.db.insert("tasks", {
-        orgId, title, statusId, statusType: "backlog", assigneeIds: [],
+        orgId, title, statusId, statusType: "backlog", statusCategory: "backlog", assigneeIds: [],
         billable: true, archivedAt, createdAt: now, updatedAt: now, createdBy,
       });
     const mkSegment = async (
@@ -270,9 +270,9 @@ describe("planner.taskPanel", () => {
   it("returns only the org's active tasks with plan rollups", async () => {
     const t = createT();
     const s = await seed(t);
-    const asMember = t.withIdentity(identityFor("clerk_member", "member"));
+    const asAdmin = t.withIdentity(identityFor("clerk_admin", "admin"));
 
-    const panel = await asMember.query(api.planner.taskPanel, {});
+    const panel = await asAdmin.query(api.planner.taskPanel, {});
 
     const ids = panel.map((p) => p._id);
     expect(ids).toContain(s.taskA);
@@ -292,6 +292,22 @@ describe("planner.taskPanel", () => {
       categoryColor: null,
       estimate: null,
     });
+  });
+
+  it("a member sees only the tasks they can read (T1, slice 2)", async () => {
+    const t = createT();
+    const s = await seed(t);
+    await t.run(async (ctx) => {
+      await ctx.db.insert("taskAssignees", {
+        orgId: ORG_ID, taskId: s.taskB, userId: s.member, assignedAt: Date.now(), assignedBy: s.admin,
+      });
+    });
+    const asMember = t.withIdentity(identityFor("clerk_member", "member"));
+
+    const ids = (await asMember.query(api.planner.taskPanel, {})).map((p) => p._id);
+
+    // A segment on the member's row does not grant access; the edge does.
+    expect(ids).toEqual([s.taskB]);
   });
 
   it("joins project/client/category, excludes subtasks, sorts newest first", async () => {
@@ -314,13 +330,13 @@ describe("planner.taskPanel", () => {
       });
       const parentId = await ctx.db.insert("tasks", {
         orgId: ORG_ID, title: "Newest with project", statusId: s.statusId,
-        statusType: "backlog", assigneeIds: [], billable: true,
+        statusType: "backlog", statusCategory: "backlog", assigneeIds: [], billable: true,
         projectId, workCategoryId: categoryId, estimate: 960,
         createdAt: now + 60_000, updatedAt: now, createdBy: s.admin,
       });
       await ctx.db.insert("tasks", {
         orgId: ORG_ID, title: "Subtask (hidden)", statusId: s.statusId,
-        statusType: "backlog", assigneeIds: [], billable: true,
+        statusType: "backlog", statusCategory: "backlog", assigneeIds: [], billable: true,
         parentTaskId: parentId,
         createdAt: now + 120_000, updatedAt: now, createdBy: s.admin,
       });

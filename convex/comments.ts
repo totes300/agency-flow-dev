@@ -4,6 +4,7 @@ import { Id } from "./_generated/dataModel";
 import { getAuthContext } from "./lib/auth";
 import { logActivity } from "./activityLog";
 import { onComment } from "./tasks/derived";
+import { loadTaskForReadOrNull, loadTaskForWrite } from "./tasks/access";
 import { createNotifications } from "./notifications";
 import {
   extractMentionIds,
@@ -18,13 +19,8 @@ import {
 export const byTask = query({
   args: { taskId: v.id("tasks") },
   handler: async (ctx, { taskId }) => {
-    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
-
-    const task = await ctx.db.get(taskId);
-    if (!task || task.orgId !== orgId) return [];
-
-    // Member access check — non-admin can only see comments on assigned tasks
-    if (!isAdmin && !task.assigneeIds.includes(userId)) return [];
+    // Access via tasks/access.ts (T1, incl. sub-tasks of an assigned parent).
+    if (!(await loadTaskForReadOrNull(ctx, taskId))) return [];
 
     const comments = await ctx.db
       .query("comments")
@@ -96,13 +92,8 @@ export const create = mutation({
     parentCommentId: v.optional(v.id("comments")),
   },
   handler: async (ctx, args) => {
-    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
-
-    const task = await ctx.db.get(args.taskId);
-    if (!task || task.orgId !== orgId) throw new ConvexError("Task not found");
-    if (!isAdmin && !task.assigneeIds.includes(userId)) {
-      throw new ConvexError("Task not found");
-    }
+    const { task, auth } = await loadTaskForWrite(ctx, args.taskId);
+    const { orgId, userId } = auth;
 
     // Validate parent comment if replying
     let parentAuthorId: Id<"users"> | undefined;
@@ -192,15 +183,15 @@ export const update = mutation({
     content: v.any(),
   },
   handler: async (ctx, args) => {
-    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
+    const auth = await getAuthContext(ctx);
+    const { orgId, userId } = auth;
 
     const comment = await ctx.db.get(args.id);
     if (!comment || comment.orgId !== orgId) throw new ConvexError("Comment not found");
     if (comment.userId !== userId) throw new ConvexError("You can only edit your own comments");
 
-    // Task-assignment guard
-    const task = await ctx.db.get(comment.taskId);
-    if (!task || (!isAdmin && !task.assigneeIds.includes(userId))) {
+    // Task access guard (tasks/access.ts)
+    if (!(await loadTaskForReadOrNull(ctx, comment.taskId, auth))) {
       throw new ConvexError("Comment not found");
     }
 
@@ -219,7 +210,8 @@ export const update = mutation({
 export const remove = mutation({
   args: { id: v.id("comments") },
   handler: async (ctx, args) => {
-    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
+    const auth = await getAuthContext(ctx);
+    const { orgId, userId, isAdmin } = auth;
 
     const comment = await ctx.db.get(args.id);
     if (!comment || comment.orgId !== orgId) throw new ConvexError("Comment not found");
@@ -227,9 +219,8 @@ export const remove = mutation({
       throw new ConvexError("You can only delete your own comments");
     }
 
-    // Task-assignment guard
-    const task = await ctx.db.get(comment.taskId);
-    if (!task || (!isAdmin && !task.assigneeIds.includes(userId))) {
+    // Task access guard (tasks/access.ts)
+    if (!(await loadTaskForReadOrNull(ctx, comment.taskId, auth))) {
       throw new ConvexError("Comment not found");
     }
 
@@ -265,14 +256,14 @@ export const remove = mutation({
 export const resolve = mutation({
   args: { id: v.id("comments") },
   handler: async (ctx, args) => {
-    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
+    const auth = await getAuthContext(ctx);
+    const { orgId, userId } = auth;
 
     const comment = await ctx.db.get(args.id);
     if (!comment || comment.orgId !== orgId) throw new ConvexError("Comment not found");
     if (comment.parentCommentId) throw new ConvexError("Only top-level comments can be resolved");
 
-    const task = await ctx.db.get(comment.taskId);
-    if (!task || (!isAdmin && !task.assigneeIds.includes(userId))) {
+    if (!(await loadTaskForReadOrNull(ctx, comment.taskId, auth))) {
       throw new ConvexError("Comment not found");
     }
 
@@ -300,14 +291,14 @@ export const resolve = mutation({
 export const unresolve = mutation({
   args: { id: v.id("comments") },
   handler: async (ctx, args) => {
-    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
+    const auth = await getAuthContext(ctx);
+    const { orgId, userId } = auth;
 
     const comment = await ctx.db.get(args.id);
     if (!comment || comment.orgId !== orgId) throw new ConvexError("Comment not found");
     if (comment.parentCommentId) throw new ConvexError("Only top-level comments can be re-opened");
 
-    const task = await ctx.db.get(comment.taskId);
-    if (!task || (!isAdmin && !task.assigneeIds.includes(userId))) {
+    if (!(await loadTaskForReadOrNull(ctx, comment.taskId, auth))) {
       throw new ConvexError("Comment not found");
     }
 
@@ -339,11 +330,9 @@ export const unresolve = mutation({
 export const unreadCount = query({
   args: { taskId: v.id("tasks") },
   handler: async (ctx, { taskId }) => {
-    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
-
-    const task = await ctx.db.get(taskId);
-    if (!task || task.orgId !== orgId) return { total: 0, unread: 0 };
-    if (!isAdmin && !task.assigneeIds.includes(userId)) return { total: 0, unread: 0 };
+    const access = await loadTaskForReadOrNull(ctx, taskId);
+    if (!access) return { total: 0, unread: 0 };
+    const { userId } = access.auth;
 
     const comments = await ctx.db
       .query("comments")
@@ -374,11 +363,9 @@ export const unreadCount = query({
 export const readReceipts = query({
   args: { taskId: v.id("tasks") },
   handler: async (ctx, { taskId }) => {
-    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
-
-    const task = await ctx.db.get(taskId);
-    if (!task || task.orgId !== orgId) return [];
-    if (!isAdmin && !task.assigneeIds.includes(userId)) return [];
+    const access = await loadTaskForReadOrNull(ctx, taskId);
+    if (!access) return [];
+    const { userId } = access.auth;
 
     const receipts = await ctx.db
       .query("commentReadReceipts")
@@ -415,11 +402,9 @@ export const readReceipts = query({
 export const myLastSeen = query({
   args: { taskId: v.id("tasks") },
   handler: async (ctx, { taskId }) => {
-    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
-
-    const task = await ctx.db.get(taskId);
-    if (!task || task.orgId !== orgId) return 0;
-    if (!isAdmin && !task.assigneeIds.includes(userId)) return 0;
+    const access = await loadTaskForReadOrNull(ctx, taskId);
+    if (!access) return 0;
+    const { userId } = access.auth;
 
     const receipt = await ctx.db
       .query("commentReadReceipts")
@@ -437,14 +422,9 @@ export const myLastSeen = query({
 export const markSeen = mutation({
   args: { taskId: v.id("tasks"), seenAt: v.number() },
   handler: async (ctx, { taskId, seenAt }) => {
-    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
-
-    // Verify task belongs to caller's org + assignment guard
-    const task = await ctx.db.get(taskId);
-    if (!task || task.orgId !== orgId) throw new ConvexError("Task not found");
-    if (!isAdmin && !task.assigneeIds.includes(userId)) {
-      throw new ConvexError("Task not found");
-    }
+    // Org + access guard (tasks/access.ts)
+    const access = await loadTaskForWrite(ctx, taskId);
+    const { orgId, userId } = access.auth;
 
     const existing = await ctx.db
       .query("commentReadReceipts")
@@ -476,10 +456,9 @@ export const markSeen = mutation({
 export const latestPreview = query({
   args: { taskId: v.id("tasks") },
   handler: async (ctx, { taskId }) => {
-    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
-    const task = await ctx.db.get(taskId);
-    if (!task || task.orgId !== orgId) return [];
-    if (!isAdmin && !task.assigneeIds.includes(userId)) return [];
+    const access = await loadTaskForReadOrNull(ctx, taskId);
+    if (!access) return [];
+    const { userId } = access.auth;
 
     const comments = await ctx.db
       .query("comments")

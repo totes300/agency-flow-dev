@@ -9,6 +9,8 @@ import {
 } from "./lib/auth";
 import { assertValidDateString } from "./lib/dateValidation";
 import { createTask } from "./tasks/write";
+import { CLOSED_ROW_DEFAULT, loadView } from "./tasks/read";
+import { SYSTEM_VIEWS } from "./tasks/model";
 import {
   rankTaskSegments,
   segmentSpanDays,
@@ -256,10 +258,6 @@ export const weekGrid = query({
   },
 });
 
-/** Cap the panel read well below Convex limits; the PRD defers server-side
- *  narrowing/pagination until backlogs outgrow client-side filtering. */
-const MAX_PANEL_TASKS = 5_000;
-
 export type TaskPanelItem = {
   _id: Id<"tasks">;
   title: string;
@@ -282,27 +280,27 @@ export type TaskPanelItem = {
 };
 
 /**
- * The Tasks panel: every active (non-archived) top-level task with the
- * light fields the cards and the default-span rule need, newest first.
+ * The Tasks panel: the caller's readable non-archived top-level tasks (open,
+ * plus the 200 most recently closed) with the light fields the cards and
+ * the default-span rule need, newest first.
  * Search / tab / filter narrowing runs client-side (PRD: fine at hundreds
  * of tasks). Subtasks are excluded — they are planned via their parent.
  */
 export const taskPanel = query({
   args: {},
   handler: async (ctx): Promise<TaskPanelItem[]> => {
-    const { orgId } = await getAuthContext(ctx);
+    const auth = await getAuthContext(ctx);
+    const { orgId } = auth;
 
-    const tasksRaw = await ctx.db
-      .query("tasks")
-      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
-      .order("desc")
-      .take(MAX_PANEL_TASKS + 1);
-    if (tasksRaw.length > MAX_PANEL_TASKS) {
-      throw new ConvexError(
-        `Task panel exceeded ${MAX_PANEL_TASKS} tasks — switch to a paginated panel query.`,
-      );
-    }
-    const tasks = tasksRaw.filter((t) => !t.archivedAt && !t.parentTaskId);
+    // The panel is the `planner` preset of the read layer (§10): open tasks
+    // plus the most recently closed, top-level and non-archived, bounded
+    // (T7), and only tasks the caller may read (T1 — members see their own).
+    const loaded = await loadView(ctx, auth, {
+      filters: SYSTEM_VIEWS.planner.panel.spec.filters,
+      showSubtasks: false,
+      closedLimit: CLOSED_ROW_DEFAULT,
+    });
+    const tasks = loaded.tasks;
 
     // One bounded read over the org's segments, grouped per task — beats a
     // per-task index query for every card.

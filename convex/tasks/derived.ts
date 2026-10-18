@@ -2,6 +2,7 @@ import type { MutationCtx, QueryCtx } from "../_generated/server";
 import type { Doc, Id } from "../_generated/dataModel";
 import { categoryOfStatus, isClosedCategory, type ActivityType, type TaskCategory } from "./model";
 import { patchDerivedFields } from "./write";
+import { onCommentCreated, onCommentDeleted, onTaskChanged } from "./userState";
 
 /**
  * Derived task data (docs/prd-tasks-refactor.md §5.5, invariant T6).
@@ -111,9 +112,24 @@ export async function touchLastActivity(
 }
 
 /**
+ * Every activity event (`logActivity`): moves `lastActivity` forward and
+ * fans an unseen-change flag out to the task's subscribers (§4.3,
+ * `userState.UNSEEN_CHANGE_TYPES`).
+ */
+export async function onActivity(
+  ctx: MutationCtx,
+  taskId: Id<"tasks">,
+  event: { kind: ActivityType; actorId: Id<"users">; at: number },
+): Promise<void> {
+  await touchLastActivity(ctx, taskId, event);
+  const task = await ctx.db.get(taskId);
+  if (task) await onTaskChanged(ctx, task, { type: event.kind, actorId: event.actorId });
+}
+
+/**
  * A comment was created or deleted. Creation increments; deletion recounts
  * (it may remove the newest comment, so `lastCommentAt` must be recomputed).
- * Per-user unread fan-out (`taskUserState`) is added by slice 2.
+ * Both fan out to the subscribers' `taskUserState` (§4.3).
  */
 export async function onComment(
   ctx: MutationCtx,
@@ -122,6 +138,11 @@ export async function onComment(
 ): Promise<void> {
   const task = await ctx.db.get(taskId);
   if (!task) return;
+  if (change.kind === "created") {
+    await onCommentCreated(ctx, task, { authorId: change.actorId, at: change.at });
+  } else {
+    await onCommentDeleted(ctx, task);
+  }
   if (change.kind === "created" && task.commentCount !== undefined) {
     await patchDerivedFields(ctx, taskId, {
       commentCount: task.commentCount + 1,

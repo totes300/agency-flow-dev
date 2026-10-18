@@ -1,6 +1,7 @@
 import { query } from "./_generated/server";
 import { getAuthContext } from "./lib/auth";
 import { createTaskEnricher } from "./lib/task_helpers";
+import { loadAssignedTo } from "./tasks/read";
 import { getOrgSettings } from "./lib/orgHelpers";
 import { getDateInTimezone, ORG_TIMEZONE_FALLBACK } from "./lib/timer";
 import {
@@ -63,12 +64,9 @@ export const listMyTasks = query({
     // 2. Resolve which statuses to show
     const visibleStatusIds = resolveVisibleStatusIds(user, orgSettings, activeStatuses);
 
-    // 3. Load all org tasks and filter to mine
-    const allTasks = await ctx.db
-      .query("tasks")
-      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
-      .collect();
-    const myTasks = filterMyTasks(allTasks, userId);
+    // 3. My tasks from my assignee edges (bounded, T7 — was a full-org scan)
+    const assigned = (await loadAssignedTo(ctx, orgId, userId)).tasks;
+    const myTasks = filterMyTasks(assigned, userId);
 
     // 3b. Load my plan segments in the scan window (segments starting after
     // today cannot cover today; ones older than the guard are noise).
@@ -87,8 +85,13 @@ export const listMyTasks = query({
     // The plan wins over assignment: Today candidates come from segment
     // taskIds, not from the assigned set. Subtasks are excluded to match
     // My Tasks semantics (the Planner only schedules top-level tasks).
-    const taskById = new Map(allTasks.map((t) => [t._id.toString(), t]));
+    const taskById = new Map(assigned.map((t) => [t._id.toString(), t]));
     const segmentTaskIds = [...new Set(mySegments.map((s) => s.taskId.toString()))];
+    for (const id of segmentTaskIds) {
+      if (taskById.has(id)) continue;
+      const planned = await ctx.db.get(id as Id<"tasks">);
+      if (planned && planned.orgId === orgId) taskById.set(id, planned);
+    }
     const segmentTasks = segmentTaskIds
       .map((id) => taskById.get(id))
       .filter((t): t is Doc<"tasks"> => t !== undefined && !t.parentTaskId);

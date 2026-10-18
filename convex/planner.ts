@@ -10,6 +10,7 @@ import { assertValidDateString } from "./lib/dateValidation";
 import { createTask } from "./tasks/write";
 import { CLOSED_ROW_DEFAULT, loadView } from "./tasks/read";
 import { SYSTEM_VIEWS } from "./tasks/model";
+import { addTaskToToday, moveTodayTaskBetween } from "./tasks/today";
 import {
   rankTaskSegments,
   segmentSpanDays,
@@ -800,5 +801,31 @@ export const seedDemo = internalMutation({
     }
 
     return { orgId, wiped, created: wanted.length, weekStart: monday };
+  },
+});
+
+// ─── LEGACY SHIMS — remove in tasks-refactor slice 7 (§10) ─────────────────
+// Slice 5 moved the sun to `tasks/today.ts`. These two keep the old call
+// shapes alive only for the owner's uncommitted dashboard board WIP
+// (`components/dashboard/my-work-board`). Both run the slice 5 rules (D9
+// targeting, access.ts).
+
+/** Legacy shape of `api.tasks.today.addToToday`. */
+export const addToToday = mutation({
+  args: { taskId: v.id("tasks") },
+  handler: async (ctx, args) => {
+    await addTaskToToday(ctx, args.taskId, undefined);
+  },
+});
+
+/** Legacy neighbour-key reorder of the caller's Today (`tasks.today.reorderToday` is the new API). */
+export const reorderTodayTask = mutation({
+  args: {
+    taskId: v.id("tasks"),
+    beforeKey: v.optional(v.string()),
+    afterKey: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await moveTodayTaskBetween(ctx, args.taskId, args.beforeKey, args.afterKey);
   },
 });

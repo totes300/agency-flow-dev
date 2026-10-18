@@ -438,13 +438,45 @@ async function addForTargets(
 export const addToToday = mutation({
   args: { taskId: v.id("tasks"), today: todayArg },
   handler: async (ctx, args): Promise<AddToTodayResult> => {
-    const auth = await getAuthContext(ctx);
-    const { task } = await loadTaskForWrite(ctx, args.taskId, auth);
-    const reason = unplannableReason(task);
-    if (reason) throw new ConvexError(reason);
-    return await addForTargets(ctx, auth, task, await resolvePlanDay(ctx, auth.orgId, args.today));
+    return await addTaskToToday(ctx, args.taskId, args.today);
   },
 });
+
+/** The sun as a helper, shared by `addToToday` and the legacy `planner.addToToday` shim. */
+export async function addTaskToToday(
+  ctx: MutationCtx,
+  taskId: Id<"tasks">,
+  today: string | undefined,
+): Promise<AddToTodayResult> {
+  const auth = await getAuthContext(ctx);
+  const { task } = await loadTaskForWrite(ctx, taskId, auth);
+  const reason = unplannableReason(task);
+  if (reason) throw new ConvexError(reason);
+  return await addForTargets(ctx, auth, task, await resolvePlanDay(ctx, auth.orgId, today));
+}
+
+/**
+ * Moves the caller's today plan for one task between two `todaySortKey`
+ * neighbours (legacy `planner.reorderTodayTask` shim; `reorderToday` is the
+ * slice 5 API).
+ */
+export async function moveTodayTaskBetween(
+  ctx: MutationCtx,
+  taskId: Id<"tasks">,
+  beforeKey: string | undefined,
+  afterKey: string | undefined,
+): Promise<void> {
+  const auth = await getAuthContext(ctx);
+  await loadTaskForRead(ctx, taskId, auth);
+  const day = await resolvePlanDay(ctx, auth.orgId, undefined);
+  const mine = (await taskSegments(ctx, auth.orgId, taskId)).filter(
+    (s) => s.userId === auth.userId && segmentCoversDate(s, day),
+  );
+  if (mine.length === 0) throw new ConvexError("Task is not in your today plan");
+  const [key] = generateNKeysBetween(beforeKey ?? null, afterKey ?? null, 1);
+  const now = Date.now();
+  for (const seg of mine) await ctx.db.patch(seg._id, { todaySortKey: key, updatedAt: now });
+}
 
 /**
  * The selection bar's "Add to today": the sun on every selected task. Tasks

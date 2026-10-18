@@ -103,3 +103,14 @@ export function summarizeRemovalOps(
   if (ops.some((o) => o.op === "patch")) return "trimmed";
   return "deleted";
 }
+
+// LEGACY SHIM — re-exported for the owner's dashboard board WIP only; remove
+// in slice 7 together with convex/lib/legacyMyDay.ts.
+export {
+  EARLIER_WINDOW_DAYS,
+  isCompletedToday,
+  partitionMyDay,
+  type MinimalSegment,
+  type MyDayPartition,
+  type TodayPartitionTask,
+} from "./legacyMyDay";

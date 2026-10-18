@@ -201,6 +201,16 @@ export function useTaskActions() {
     [updateEach],
   )
 
+  const setStartDate = useCallback(
+    (tasks: readonly TaskRowDTO[], startDate: string | null) =>
+      updateEach(
+        tasks,
+        (t) => ((t.startDate ?? null) === startDate ? null : { id: t._id, startDate }),
+        "Failed to change the start date",
+      ),
+    [updateEach],
+  )
+
   /** Drag reorder in the global manual order (write path `reorderTask`). */
   const reorder = useCallback(
     async (taskId: Id<"tasks">, neighbours: ReorderNeighbours) => {
@@ -247,11 +257,12 @@ export function useTaskActions() {
       setWorkCategory,
       setProject,
       setDueDate,
+      setStartDate,
       patchTask,
       reorder,
       archive,
     }),
-    [setStatus, setPriority, toggleAssignee, toggleLabel, setWorkCategory, setProject, setDueDate, patchTask, reorder, archive],
+    [setStatus, setPriority, toggleAssignee, toggleLabel, setWorkCategory, setProject, setDueDate, setStartDate, patchTask, reorder, archive],
   )
 }
 

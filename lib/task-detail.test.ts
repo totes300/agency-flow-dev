@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest"
 import {
   buildDetailUrl,
+  buildTaskDeepLink,
+  buildTaskUrl,
+  isTaskDetailOpen,
   parseDetailParam,
+  parseTaskRef,
+  taskPagePath,
   getAdjacentTaskId,
   mergeActivityFeed,
   validateSubtaskCreation,
@@ -47,6 +52,61 @@ describe("buildDetailUrl", () => {
     const params = new URLSearchParams("tab=all")
     buildDetailUrl(params, "task1" as any)
     expect(params.get("detail")).toBeNull()
+  })
+})
+
+// ─── ?task=<identifier> (slice 6) ───────────────────────────────────────────────
+
+describe("parseTaskRef", () => {
+  it("reads ?task= as an identifier", () => {
+    expect(parseTaskRef(new URLSearchParams("task=ARLO-21"))).toEqual({ kind: "identifier", identifier: "ARLO-21" })
+  })
+
+  it("falls back to the legacy ?detail= id", () => {
+    expect(parseTaskRef(new URLSearchParams("detail=abc"))).toEqual({ kind: "id", id: "abc" })
+  })
+
+  it("prefers ?task= when both are present", () => {
+    expect(parseTaskRef(new URLSearchParams("detail=abc&task=KON-7"))).toEqual({ kind: "identifier", identifier: "KON-7" })
+  })
+
+  it("is null without either param (or with blanks)", () => {
+    expect(parseTaskRef(new URLSearchParams("view=all"))).toBeNull()
+    expect(parseTaskRef(new URLSearchParams("task=%20&detail="))).toBeNull()
+    expect(isTaskDetailOpen(new URLSearchParams("view=all"))).toBe(false)
+    expect(isTaskDetailOpen(new URLSearchParams("task=KON-7"))).toBe(true)
+  })
+})
+
+describe("buildTaskUrl", () => {
+  it("writes ?task=<identifier>, keeps other params and drops a legacy ?detail=", () => {
+    const params = new URLSearchParams("view=all&detail=abc")
+    expect(buildTaskUrl(params, { id: "abc", identifier: "ARLO-21" })).toBe("?view=all&task=ARLO-21")
+  })
+
+  it("falls back to ?detail=<id> for a task without an identifier", () => {
+    expect(buildTaskUrl(new URLSearchParams(), { id: "abc", identifier: null })).toBe("?detail=abc")
+  })
+
+  it("closes (removes both params) for null", () => {
+    expect(buildTaskUrl(new URLSearchParams("task=KON-1&detail=x&tab=today"), null)).toBe("?tab=today")
+  })
+
+  it("drops the comment deep-link unless asked to keep it", () => {
+    const params = new URLSearchParams("detail=abc&comment=c1")
+    expect(buildTaskUrl(params, { id: "abc", identifier: "KON-2" })).toBe("?task=KON-2")
+    expect(buildTaskUrl(params, { id: "abc", identifier: "KON-2" }, { keepComment: true })).toBe("?comment=c1&task=KON-2")
+  })
+})
+
+describe("taskPagePath / buildTaskDeepLink", () => {
+  it("builds the full-page route, optionally anchored to a comment", () => {
+    expect(taskPagePath("ARLO-21")).toBe("/tasks/ARLO-21")
+    expect(taskPagePath("ARLO-21", "c 1")).toBe("/tasks/ARLO-21?comment=c%201")
+  })
+
+  it("deep links still open by id (the drawer canonicalises)", () => {
+    expect(buildTaskDeepLink("abc", "c1")).toBe("/tasks?detail=abc&comment=c1")
   })
 })
 

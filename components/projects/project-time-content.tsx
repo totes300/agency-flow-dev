@@ -27,7 +27,7 @@ import { useProjectTimeFilters } from "@/lib/hooks/use-project-time-filters"
 import { applyTimeEntryFilters } from "@/lib/time-entry-filters"
 import { parseDateRangePreset } from "@/lib/date-buckets"
 import { useTaskDetailNav } from "@/lib/hooks/use-task-detail-nav"
-import { parseDetailParam } from "@/lib/task-detail"
+import { useOpenTaskId } from "@/components/task-detail/open-task-store"
 import { Button } from "@/components/ui/button"
 import {
   Tooltip,
@@ -129,11 +129,11 @@ export function ProjectTimeContent({
   const isTmProject = project.billingType === "t_and_m"
   const selectionEnabled = isAdmin && isTmProject
 
-  // Task side peek — clicking a task title opens ?detail=taskId (handled by
-  // the drawer/modal mounted on the project page). The open task's rows stay
-  // highlighted while the peek is up.
+  // Task side peek — clicking a task title opens the drawer mounted on the
+  // project page (`?detail=taskId`, canonicalised to `?task=`). The open
+  // task's rows stay highlighted while the peek is up.
   const openTaskDetail = useTaskDetailNav()
-  const activeTaskId = parseDetailParam(searchParams)
+  const activeTaskId = useOpenTaskId()
 
   // ─── State ────────────────────────────────────────────────────────────────
 

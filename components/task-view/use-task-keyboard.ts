@@ -6,8 +6,9 @@ import type { PropertyMenuKind } from "@/components/task-view/property-menus"
 
 /**
  * List keyboard (U10) for the table. Covers the keys that work on the list
- * itself: C new task, J/K (and ↓/↑) move focus, Enter / Space open the
- * focused task (drawer-or-page mode is slice 6), X select, S/P/A/L property
+ * itself: C new task, J/K (and ↓/↑) move focus, Enter opens the focused task
+ * (drawer or full page, per the user's setting), Space peeks it in the
+ * drawer, X select, S/P/A/L property
  * menus, T today (the sun on the focused task or the selection; on My Tasks
  * Today without a focused row, the "Add tasks to today" picker), Y timer,
  * F filter, / search, Esc clear, ? shortcuts. J/K inside an open task is the
@@ -24,6 +25,8 @@ export type TaskKeyboardHandlers = {
   setFocusedId: (id: Id<"tasks"> | null) => void
   hasSelection: boolean
   onOpen: (id: Id<"tasks">) => void
+  /** Space: peek in the drawer (defaults to `onOpen`). */
+  onPeek?: (id: Id<"tasks">) => void
   onToggleSelect: (id: Id<"tasks">) => void
   onClearSelection: () => void
   onOpenMenu: (kind: PropertyMenuKind, focusedId: Id<"tasks">) => void
@@ -39,7 +42,8 @@ export type TaskKeyboardHandlers = {
 export const TASK_LIST_SHORTCUTS: ReadonlyArray<{ keys: string[]; label: string }> = [
   { keys: ["C"], label: "New task" },
   { keys: ["J", "K"], label: "Move focus down / up" },
-  { keys: ["↵", "Space"], label: "Open focused task" },
+  { keys: ["↵"], label: "Open focused task" },
+  { keys: ["Space"], label: "Peek in the drawer" },
   { keys: ["X"], label: "Select focused task" },
   { keys: ["S"], label: "Change status (then 1–9)" },
   { keys: ["P"], label: "Change priority (then 0–4)" },
@@ -134,9 +138,11 @@ export function useTaskKeyboard(handlers: TaskKeyboardHandlers) {
       if (!focused) return
       switch (key) {
         case "Enter":
-        case " ":
           e.preventDefault()
           return h.onOpen(focused)
+        case " ":
+          e.preventDefault()
+          return (h.onPeek ?? h.onOpen)(focused)
         case "x":
           e.preventDefault()
           return h.onToggleSelect(focused)

@@ -19,11 +19,9 @@ import { SettingsRetainer } from "@/components/projects/settings-retainer"
 import { ProjectTeam } from "@/components/projects/project-team"
 import { ProjectInvoices } from "@/components/invoices/project-invoices"
 import { ProjectTime } from "@/components/projects/project-time"
-import { TaskDetailModal } from "@/components/tasks/task-detail-modal"
 import { TaskDetailDrawer } from "@/components/tasks/task-detail-drawer"
 import { TaskReferenceDataProvider } from "@/components/tasks/task-reference-data"
 import { useIsAdmin } from "@/lib/hooks/use-is-admin"
-import { useIsMobile } from "@/lib/hooks/use-is-mobile"
 import { useBreadcrumbTitle } from "@/lib/hooks/use-breadcrumb-title"
 
 export default function ProjectDetailPage() {
@@ -46,10 +44,6 @@ export default function ProjectDetailPage() {
     isAuthenticated ? {} : "skip",
   )
 
-  // Same drawer-vs-modal preference as /tasks — one detail surface app-wide.
-  const currentUser = useQuery(api.users.current, isAuthenticated ? {} : "skip")
-  const isMobile = useIsMobile()
-  const viewPref = isMobile ? "modal" : (currentUser?.taskDetailView ?? "modal")
 
   useBreadcrumbTitle(project?.name ?? null)
 
@@ -222,18 +216,8 @@ export default function ProjectDetailPage() {
         </TabsContent>
       </Tabs>
 
-      {/* Task detail — route-driven via ?detail=taskId, drawer or modal per user preference */}
-      {viewPref === "drawer" ? (
-        <TaskDetailDrawer
-          taskIds={projectTaskIds}
-          isAdmin={isAdmin ?? false}
-        />
-      ) : (
-        <TaskDetailModal
-          taskIds={projectTaskIds}
-          isAdmin={isAdmin ?? false}
-        />
-      )}
+      {/* Task detail — route-driven (?task= / ?detail=); the full page when that is the user's mode */}
+      <TaskDetailDrawer taskIds={projectTaskIds} isAdmin={isAdmin ?? false} />
     </div>
     </TaskReferenceDataProvider>
   )

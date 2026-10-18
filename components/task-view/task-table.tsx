@@ -148,10 +148,19 @@ export function TaskTable({
 }
 
 /** The grid container: one column template (from the registry) for the header and every row. */
-export function TaskGrid({ columns, children }: { columns: readonly ColumnKey[]; children: ReactNode }) {
+export function TaskGrid({
+  columns,
+  template,
+  children,
+}: {
+  columns: readonly ColumnKey[]
+  /** Explicit track template (compact lists such as the detail's sub-tasks); no minimum width. */
+  template?: string
+  children: ReactNode
+}) {
   const style = {
-    "--task-cols": gridTemplateFor(columns),
-    minWidth: tableMinWidthFor(columns),
+    "--task-cols": template ?? gridTemplateFor(columns),
+    minWidth: template ? undefined : tableMinWidthFor(columns),
   } as CSSProperties
   return (
     <div role="grid" aria-label="Tasks" style={style}>

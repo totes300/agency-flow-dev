@@ -63,6 +63,8 @@ export type CellContext = {
   titleAccessory?: (row: TaskRowModel) => ReactNode
   /** Row actions at the title cell's right edge, aligned across rows (carried-over: Keep / Remove). */
   titleActions?: (row: TaskRowModel) => ReactNode
+  /** Assignee cell shows photos only (narrow compact lists: the detail's sub-tasks). */
+  compactAssignee?: boolean
 }
 
 /**
@@ -328,7 +330,11 @@ export const CELL_RENDERERS: Record<ColumnKey, CellRenderer> = {
       onClick={menuClick(ctx, "assignee", row.task._id)}
       {...menuAnchor("assignee")}
     >
-      <AssigneeStack assignees={row.assignees} />
+      {ctx.compactAssignee && row.assignees.length > 0 ? (
+        <AssigneeAvatars assignees={row.assignees} />
+      ) : (
+        <AssigneeStack assignees={row.assignees} />
+      )}
     </Button>
   ),
 

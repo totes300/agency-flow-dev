@@ -319,8 +319,9 @@ export const markAllRead = mutation({
 
 /**
  * Honest badge: mark all of the viewer's unread notifications for one task
- * as read. Called from taskViewReceipts.markViewed, which fires on EVERY
- * task-detail open path — organically reading a task clears its inbox dots.
+ * as read. Called from tasks/userState.markViewed (the task detail's open
+ * stamp, drawer and full page) and the legacy taskViewReceipts.markViewed —
+ * organically reading a task clears its inbox dots.
  */
 export async function markTaskNotificationsRead(
   ctx: MutationCtx,

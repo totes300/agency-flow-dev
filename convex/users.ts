@@ -155,12 +155,16 @@ export const clearDefaultAvatars = internalMutation({
   },
 });
 
-export const updateTaskDetailView = mutation({
-  args: { view: v.union(v.literal("modal"), v.literal("drawer")) },
-  handler: async (ctx, { view }) => {
+/**
+ * Per-user task detail mode (docs/prd-tasks-refactor.md §4.4, U9): open a
+ * task in the drawer or as the full page. Unset = drawer.
+ */
+export const updateTaskDetailMode = mutation({
+  args: { mode: v.union(v.literal("drawer"), v.literal("page")) },
+  handler: async (ctx, { mode }) => {
     const user = await getCurrentUserOrThrow(ctx);
     await ctx.db.patch(user._id, {
-      taskDetailView: view,
+      taskDetailMode: mode,
       updatedAt: Date.now(),
     });
   },

@@ -8,21 +8,20 @@ import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import type { TaskViewSpec, TaskViewSurface } from "@/convex/tasks/model"
 import { useIsAdmin } from "@/lib/hooks/use-is-admin"
-import { useIsMobile } from "@/lib/hooks/use-is-mobile"
 import { useLastDefined } from "@/lib/hooks/use-last-defined"
 import { useOptionalQuery } from "@/lib/hooks/use-optional-query"
 import { useRowSelection } from "@/lib/hooks/use-row-selection"
-import { useTimerActions } from "@/lib/hooks/use-timer"
-import { buildDetailUrl, parseDetailParam } from "@/lib/task-detail"
+import { buildTaskUrl, parseTaskRef, taskPagePath } from "@/lib/task-detail"
 import { formatDateToYMD } from "@/lib/format"
-import { formatDuration } from "@/lib/duration"
 import { toastError } from "@/lib/toast-helpers"
 import { Button } from "@/components/ui/button"
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import { ConfirmDialog } from "@/components/confirm-dialog"
-import { TaskReferenceDataProvider } from "@/components/tasks/task-reference-data"
-import { TaskDetailDrawer } from "@/components/tasks/task-detail-drawer"
-import { TaskDetailModal } from "@/components/tasks/task-detail-modal"
+import { TaskReferenceDataProvider, useTaskReferenceDataValue } from "@/components/tasks/task-reference-data"
+import { TaskDetailDrawer } from "@/components/task-detail/task-detail-drawer"
+import { useTaskDetailMode } from "@/components/task-detail/task-detail-actions"
+import { setDetailNavList } from "@/components/task-detail/detail-nav"
+import { useToggleTaskTimer } from "@/components/task-view/use-toggle-task-timer"
 import { TaskFormModal, type TaskFormDefaults } from "@/components/tasks/task-form-modal"
 import { Kbd } from "@/components/ui/kbd"
 import { ComposeIcon, PanelNavIcon, PlusNavIcon } from "@/components/icons/nav-icons"
@@ -70,8 +69,9 @@ const BOARD_HIDDEN_KEYS: ReadonlySet<ColumnKey> = new Set(["id", "created", "act
  * The task view container (docs/prd-tasks-refactor.md §6.2): surface preset +
  * view (URL ⇄ saved views, `use-view-state`) → `tasks.queries.listView` (the
  * view's scope) → client-side search, filter chips and facets, grouping and
- * ordering → the aligned-column table or the board. Rows open the existing
- * task detail (`?detail=`). The list edits category, client (project) and due
+ * ordering → the aligned-column table or the board. Rows open the task detail
+ * as the drawer (`?task=<identifier>`) or the full page (`/tasks/[identifier]`)
+ * per the user's setting; Space always peeks in the drawer (slice 6). The list edits category, client (project) and due
  * date inline, reorders by drag in manual order and adds tasks from the end
  * of each group (slice 4b, `row-editing.ts`).
  *
@@ -84,7 +84,6 @@ const BOARD_HIDDEN_KEYS: ReadonlySet<ColumnKey> = new Set(["id", "created", "act
 export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks" | "myTasks"> }) {
   const { isAuthenticated } = useConvexAuth()
   const isAdmin = useIsAdmin() ?? false
-  const isMobile = useIsMobile()
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
@@ -119,18 +118,11 @@ export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks
   // Optional: without it the sun falls back to the row's own `inMyToday`.
   const { data: planned } = useOptionalQuery(api.tasks.today.plannedToday, isAuthenticated && !isToday ? { today } : "skip")
 
-  // The existing detail drawer/modal and the create modal still read the
-  // legacy reference-data context (they are reworked in slice 6).
+  // The detail's existing editors and the create modal still read the legacy
+  // reference-data context (slice 7 replaces them).
   const currentUser = useQuery(api.users.current, isAuthenticated ? {} : "skip")
-  const statuses = useQuery(api.statuses.list, isAuthenticated ? {} : "skip")
-  const categories = useQuery(api.workCategories.list, isAuthenticated ? {} : "skip")
-  const projects = useQuery(api.projects.list, isAuthenticated ? {} : "skip")
-  const orgMembers = useQuery(api.orgMembers.listOrgMembers, isAuthenticated ? undefined : "skip")
-  const referenceData = useMemo(
-    () => ({ statuses, categories, projects, orgMembers }),
-    [statuses, categories, projects, orgMembers],
-  )
-  const detailMode = isMobile ? "modal" : (currentUser?.taskDetailView ?? "modal")
+  const referenceData = useTaskReferenceDataValue()
+  const { mode: detailMode } = useTaskDetailMode()
 
   // ─── Rows → search → chips → groups ─────────────────────────────────────────
   const index = useMemo(() => (refs ? indexRefs(refs) : null), [refs])
@@ -216,13 +208,40 @@ export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks
     if (id) document.querySelector(`[data-task-id="${id}"]`)?.scrollIntoView({ block: "nearest" })
   }, [])
 
-  const detailId = parseDetailParam(searchParams)
-  const openTask = useCallback(
+  // The open task (`?task=<identifier>`, or an old `?detail=<id>` link) — highlighted in the list.
+  const taskRef = parseTaskRef(searchParams)
+  const detailOpen = taskRef !== null
+  const identifierOf = useCallback((taskId: string) => rowById.get(taskId as Id<"tasks">)?.task.identifier ?? null, [rowById])
+  const detailId = useMemo(() => {
+    if (!taskRef) return null
+    if (taskRef.kind === "id") return taskRef.id
+    const wanted = taskRef.identifier.toUpperCase()
+    return allRows.find((r) => r.task.identifier?.toUpperCase() === wanted)?.task._id ?? null
+  }, [allRows, taskRef])
+
+  /** Peek (Space): always the drawer, whatever the user's mode. */
+  const peekTask = useCallback(
     (taskId: Id<"tasks">) => {
       setFocusState(taskId)
-      router.push(`${pathname}${buildDetailUrl(new URLSearchParams(searchParams.toString()), taskId)}`, { scroll: false })
+      const target = { id: taskId, identifier: identifierOf(taskId) }
+      router.push(`${pathname}${buildTaskUrl(new URLSearchParams(searchParams.toString()), target)}`, { scroll: false })
     },
-    [pathname, router, searchParams],
+    [identifierOf, pathname, router, searchParams],
+  )
+  /** Open (click, Enter): the drawer or the full page, per the user's setting (U9). */
+  const openTask = useCallback(
+    (taskId: Id<"tasks">) => {
+      const identifier = identifierOf(taskId)
+      if (detailMode !== "page" || !identifier) return peekTask(taskId)
+      setFocusState(taskId)
+      const back = buildTaskUrl(new URLSearchParams(searchParams.toString()), null)
+      setDetailNavList({
+        from: { label: surface === "myTasks" ? "My Tasks" : "Tasks", href: `${pathname}${back}` },
+        entries: orderedIds.map((id) => ({ id, identifier: identifierOf(id) })),
+      })
+      router.push(taskPagePath(identifier))
+    },
+    [detailMode, identifierOf, orderedIds, pathname, peekTask, router, searchParams, surface],
   )
 
   // ─── Menus and actions ──────────────────────────────────────────────────────
@@ -383,12 +402,13 @@ export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
 
   useTaskKeyboard({
-    enabled: !!index && !detailId && menu === null,
+    enabled: !!index && !detailOpen && menu === null,
     orderedIds,
     focusedId,
     setFocusedId,
     hasSelection: selection.size > 0,
     onOpen: openTask,
+    onPeek: peekTask,
     onToggleSelect: (id) => selection.toggle(id),
     onClearSelection: selection.clear,
     onOpenMenu: (kind, id) => {
@@ -695,45 +715,8 @@ export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks
         />
       ) : null}
 
-      {detailMode === "drawer" ? (
-        <TaskDetailDrawer taskIds={orderedIds} isAdmin={isAdmin} />
-      ) : (
-        <TaskDetailModal taskIds={orderedIds} isAdmin={isAdmin} />
-      )}
+      <TaskDetailDrawer taskIds={orderedIds} isAdmin={isAdmin} identifierOf={identifierOf} />
     </TaskReferenceDataProvider>
-  )
-}
-
-/**
- * Y — start/stop the timer on a task, with the same rules as the row's time
- * cell: a running timer elsewhere is stopped (and its entry reported) first;
- * closed tasks don't start a timer.
- */
-function useToggleTaskTimer() {
-  const { timerState, isRunningOn, startTimer, stopTimer, setPendingStopResult } = useTimerActions()
-
-  return useCallback(
-    async (taskId: Id<"tasks">, isClosed: boolean) => {
-      const running = isRunningOn(taskId)
-      if (!running && isClosed) return
-      try {
-        if (timerState !== null) {
-          const stopped = await stopTimer()
-          if (stopped && !stopped.discarded && stopped.entryId) {
-            setPendingStopResult(stopped)
-            toast.info(`${formatDuration(stopped.roundedMinutes)} saved on "${stopped.taskName}"`, {
-              description: "Adjust it in the floating widget if needed",
-            })
-          } else if (stopped?.discarded) {
-            toast.info("Timer was under 30 seconds — nothing saved")
-          }
-        }
-        if (!running) await startTimer(taskId)
-      } catch (err) {
-        toastError(err, running ? "Failed to stop timer" : "Failed to start timer")
-      }
-    },
-    [isRunningOn, setPendingStopResult, startTimer, stopTimer, timerState],
   )
 }
 

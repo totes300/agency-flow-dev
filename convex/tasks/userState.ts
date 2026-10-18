@@ -3,6 +3,7 @@ import { mutation, type MutationCtx, type QueryCtx } from "../_generated/server"
 import type { Doc, Id } from "../_generated/dataModel";
 import { loadTaskForRead, type TaskAccess } from "./access";
 import type { ActivityType } from "./model";
+import { markTaskNotificationsRead } from "../notifications";
 
 /**
  * Per-user task state (docs/prd-tasks-refactor.md §4.3): fan-out on write,
@@ -342,5 +343,8 @@ export const markViewed = mutation({
   handler: async (ctx, { taskId }) => {
     const access = await loadTaskForRead(ctx, taskId);
     await markTaskViewed(ctx, access, Date.now());
+    // Honest badge (kept from `taskViewReceipts.markViewed`): opening a task
+    // clears the viewer's unread inbox notifications for it.
+    await markTaskNotificationsRead(ctx, { userId: access.auth.userId, orgId: access.auth.orgId, taskId });
   },
 });

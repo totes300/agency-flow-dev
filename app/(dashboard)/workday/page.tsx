@@ -5,15 +5,13 @@ import { useSearchParams } from "next/navigation"
 import { useConvexAuth, useQuery } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { useIsAdmin } from "@/lib/hooks/use-is-admin"
-import { useIsMobile } from "@/lib/hooks/use-is-mobile"
 import { useWorkdayQueryArgs } from "@/lib/hooks/use-workday-query-args"
 import { formatYMD } from "@/lib/hooks/use-week-picker"
 import { getYMDInTimezone } from "@/lib/workday"
-import { parseDetailParam } from "@/lib/task-detail"
-import { useTaskDetail } from "@/components/tasks/use-task-detail"
+import { isTaskDetailOpen } from "@/lib/task-detail"
+import { useTaskDetailNav } from "@/lib/hooks/use-task-detail-nav"
 import { TaskReferenceDataProvider } from "@/components/tasks/task-reference-data"
 import { TaskDetailDrawer } from "@/components/tasks/task-detail-drawer"
-import { TaskDetailModal } from "@/components/tasks/task-detail-modal"
 import { WorkdayHeader } from "@/components/workday/workday-header"
 import { WorkdayGrid } from "@/components/workday/workday-grid"
 import { WorkdayGridSkeleton } from "@/components/workday/workday-grid-skeleton"
@@ -21,7 +19,6 @@ import { WorkdayGridSkeleton } from "@/components/workday/workday-grid-skeleton"
 export default function WorkdayPage() {
   const { isAuthenticated } = useConvexAuth()
   const isAdmin = useIsAdmin() === true
-  const isMobile = useIsMobile()
 
   // Org timezone drives "today" everywhere on this page (column highlight,
   // current-week URL state) so all viewers see the same anchor regardless of
@@ -50,14 +47,13 @@ export default function WorkdayPage() {
   const displayData = useDeferredValue(data)
 
   // Drawer reference data loads on first open, then stays subscribed.
-  // Watching `?detail=` keeps this gate in sync with the drawer's own hook.
+  // Watching the drawer param keeps this gate in sync with the drawer's own hook.
   const searchParams = useSearchParams()
-  const detailId = parseDetailParam(searchParams)
+  const detailOpen = isTaskDetailOpen(searchParams)
   const [drawerEverOpened, setDrawerEverOpened] = useState(false)
-  if (detailId && !drawerEverOpened) setDrawerEverOpened(true)
+  if (detailOpen && !drawerEverOpened) setDrawerEverOpened(true)
   const drawerNeedsData = isAuthenticated && drawerEverOpened
 
-  const currentUser = useQuery(api.users.current, isAuthenticated ? {} : "skip")
   const todayYMD = useMemo(
     () =>
       orgTimezone
@@ -99,10 +95,7 @@ export default function WorkdayPage() {
       .map(([id]) => id)
   }, [data])
 
-  const { navigateToTask } = useTaskDetail(visibleTaskIds)
-
-  const rawViewPref = currentUser?.taskDetailView ?? "modal"
-  const viewPref = isMobile ? "modal" : rawViewPref
+  const navigateToTask = useTaskDetailNav()
 
   return (
     <TaskReferenceDataProvider value={referenceData}>
@@ -129,11 +122,7 @@ export default function WorkdayPage() {
         )}
       </div>
 
-      {viewPref === "drawer" ? (
-        <TaskDetailDrawer taskIds={visibleTaskIds} isAdmin={isAdmin} />
-      ) : (
-        <TaskDetailModal taskIds={visibleTaskIds} isAdmin={isAdmin} />
-      )}
+      <TaskDetailDrawer taskIds={visibleTaskIds} isAdmin={isAdmin} />
     </TaskReferenceDataProvider>
   )
 }

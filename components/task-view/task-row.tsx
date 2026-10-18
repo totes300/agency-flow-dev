@@ -14,6 +14,13 @@ export const ROW_GRID_CLASS =
   "grid items-center gap-x-3 pl-10 pr-3 [grid-template-columns:var(--task-cols)]"
 
 /**
+ * Compact rows (sub-tasks inside the task detail): no selection checkbox, so
+ * the gutter only holds the drag grip; tighter gaps for the narrow column.
+ */
+export const ROW_GRID_COMPACT_CLASS =
+  "grid items-center gap-x-2 pl-6 pr-2 [grid-template-columns:var(--task-cols)]"
+
+/**
  * The left gutter (40px): the drag grip at 10–22px, the selection checkbox at
  * 22–38px. The grip keeps a 10px inner gutter so a drag never starts on the
  * sidebar's rail, which overhangs the inset panel's left edge by ~8px.
@@ -39,6 +46,8 @@ type TaskRowProps = {
   isOpen: boolean
   onToggleSelect: (taskId: Id<"tasks">, opts: { shiftKey: boolean }) => void
   onOpen: (taskId: Id<"tasks">) => void
+  /** Compact row (task detail sub-tasks): no selection checkbox, narrow gutter. */
+  compact?: boolean
 }
 
 /** dnd-kit sortable wiring (only on rows in a manual-order list). */
@@ -76,6 +85,7 @@ function TaskRowView({
   isOpen,
   onToggleSelect,
   onOpen,
+  compact = false,
   setRowElement,
   setHandleElement,
   isDragging = false,
@@ -89,8 +99,9 @@ function TaskRowView({
       data-task-id={taskId}
       data-focused={isFocused || undefined}
       className={cn(
-        ROW_GRID_CLASS,
-        "group/row relative h-10 scroll-mt-[72px] scroll-mb-4 border-b border-border/60 text-[13px] transition-colors hover:bg-muted/50",
+        compact ? ROW_GRID_COMPACT_CLASS : ROW_GRID_CLASS,
+        "group/row relative scroll-mt-[72px] scroll-mb-4 border-b border-border/60 text-[13px] transition-colors hover:bg-muted/50",
+        compact ? "h-9" : "h-10",
         isFocused && "bg-muted/70 hover:bg-muted/70",
         (isSelected || isOpen) && "bg-primary/5 hover:bg-primary/[0.07]",
         isDragging && "z-[1] bg-background shadow-sm",
@@ -103,7 +114,7 @@ function TaskRowView({
           type="button"
           aria-label={`Drag to reorder ${row.task.title}`}
           className={cn(
-            ROW_GRIP_CLASS,
+            compact ? "absolute inset-y-0 left-1.5 w-3" : ROW_GRIP_CLASS,
             "flex cursor-grab items-center justify-center text-muted-foreground/40 outline-none hover:text-muted-foreground focus-visible:text-foreground active:cursor-grabbing",
           )}
           onClick={(e) => e.stopPropagation()}
@@ -111,7 +122,7 @@ function TaskRowView({
           <GripNavIcon size={12} />
         </button>
       ) : null}
-      <div
+      {compact ? null : <div
         className={cn(
           "absolute top-1/2 flex -translate-y-1/2 transition-opacity",
           ROW_CHECKBOX_LEFT_CLASS,
@@ -126,7 +137,7 @@ function TaskRowView({
             onToggleSelect(taskId, { shiftKey: e.shiftKey })
           }}
         />
-      </div>
+      </div>}
       {columns.map((key) => (
         <div
           key={key}

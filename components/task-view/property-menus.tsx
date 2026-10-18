@@ -24,12 +24,12 @@ import type { TaskActions } from "@/components/task-view/use-task-actions"
  * Search at the top with the shortcut key as a hint; every option carries a
  * number — with an empty search, pressing it picks the option. Status,
  * priority, work category and project close on pick; assignees and labels are
- * multi-value and stay open. The due date opens the existing date panel
- * (presets + calendar) in the same popover. Category, project and due date
+ * multi-value and stay open. The due and start dates open the existing date
+ * panel (presets + calendar) in the same popover (start date: task detail). Category, project and due date
  * have no list shortcut (U10); they open from their row cells (slice 4b).
  */
 
-export type PropertyMenuKind = "status" | "priority" | "assignee" | "labels" | "category" | "project" | "due"
+export type PropertyMenuKind = "status" | "priority" | "assignee" | "labels" | "category" | "project" | "due" | "start"
 
 export type PropertyMenuRequest = {
   kind: PropertyMenuKind
@@ -44,7 +44,13 @@ export const PROPERTY_MENU_KEYS: Partial<Record<PropertyMenuKind, string>> = {
   labels: "L",
 }
 
-type OptionMenuKind = Exclude<PropertyMenuKind, "due">
+/** The date kinds open the date panel instead of an option list. */
+type DateMenuKind = "due" | "start"
+type OptionMenuKind = Exclude<PropertyMenuKind, DateMenuKind>
+
+function isDateKind(kind: PropertyMenuKind): kind is DateMenuKind {
+  return kind === "due" || kind === "start"
+}
 
 const PLACEHOLDER: Record<OptionMenuKind, string> = {
   status: "Change status…",
@@ -229,19 +235,20 @@ export function PropertyMenu({
       <PopoverAnchor virtualRef={virtualAnchor} />
       {request ? (
         <PopoverContent
-          align={request.kind === "due" ? "end" : "start"}
-          className={cn("gap-0 p-0", request.kind === "due" ? "w-[380px]" : "w-64")}
+          align={isDateKind(request.kind) ? "end" : "start"}
+          className={cn("gap-0 p-0", isDateKind(request.kind) ? "w-[380px]" : "w-64")}
           onCloseAutoFocus={(e) => e.preventDefault()}
           onInteractOutside={(e) => {
             // The opener toggles the menu itself.
             if (e.target instanceof Node && request.anchor.contains(e.target)) e.preventDefault()
           }}
         >
-          {request.kind === "due" ? (
+          {isDateKind(request.kind) ? (
             <DueDatePanel
-              dueDate={tasks.length > 0 && tasks.every((t) => t.dueDate === tasks[0].dueDate) ? tasks[0].dueDate : null}
+              dueDate={sharedDate(tasks, request.kind === "due" ? "dueDate" : "startDate")}
               onSelect={(date) => {
-                void actions.setDueDate(tasks, date)
+                if (request.kind === "due") void actions.setDueDate(tasks, date)
+                else void actions.setStartDate(tasks, date)
                 onClose()
               }}
             />
@@ -257,6 +264,11 @@ export function PropertyMenu({
       ) : null}
     </Popover>
   )
+}
+
+/** The date every task shares, or null. */
+function sharedDate(tasks: readonly TaskRowDTO[], field: "dueDate" | "startDate"): string | null {
+  return tasks.length > 0 && tasks.every((t) => t[field] === tasks[0][field]) ? tasks[0][field] : null
 }
 
 /** Consecutive options with the same `group` share one heading (ungrouped first). */

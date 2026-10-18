@@ -12,9 +12,8 @@ import { useConvexAuth, useQuery } from "convex/react"
 import { useSearchParams, useRouter, usePathname } from "next/navigation"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
-import { buildDetailUrl, parseDetailParam } from "@/lib/task-detail"
+import { buildDetailUrl, isTaskDetailOpen } from "@/lib/task-detail"
 import { useIsAdmin } from "@/lib/hooks/use-is-admin"
-import { useIsMobile } from "@/lib/hooks/use-is-mobile"
 import { usePlannerQueryArgs } from "@/lib/hooks/use-planner-query-args"
 import { usePlannerMutations } from "@/lib/hooks/use-planner-mutations"
 import {
@@ -42,7 +41,6 @@ import { PlannerTaskCard } from "@/components/planner/planner-task-card"
 import { PlannerGridSkeleton } from "@/components/planner/planner-grid-skeleton"
 import { PlannerToolbar } from "@/components/planner/planner-toolbar"
 import { TaskDetailDrawer } from "@/components/tasks/task-detail-drawer"
-import { TaskDetailModal } from "@/components/tasks/task-detail-modal"
 import { TaskReferenceDataProvider } from "@/components/tasks/task-reference-data"
 
 export default function PlannerPage() {
@@ -58,7 +56,7 @@ export default function PlannerPage() {
   const pathname = usePathname()
   const searchParamsRef = useRef(searchParams)
   searchParamsRef.current = searchParams
-  const detailId = parseDetailParam(searchParams)
+  const detailOpen = isTaskDetailOpen(searchParams)
 
   // The Planner always opens tasks in the DRAWER on desktop, regardless of
   // the /tasks drawer/modal preference. The fullscreen modal covers the
@@ -67,7 +65,6 @@ export default function PlannerPage() {
   // task. A shared board must stay visible and clickable behind the open
   // task (mockup behavior; owner ruling 2026-07-06). Mobile still gets the
   // modal — a 54vw side drawer is unusable there.
-  const isMobile = useIsMobile()
 
   // Org timezone anchors "today" so all viewers see the same column tinted.
   const orgSettings = useQuery(api.orgSettings.get, isAuthenticated ? {} : "skip")
@@ -126,15 +123,15 @@ export default function PlannerPage() {
   // task detail is open, so the board itself stays light.
   const statuses = useQuery(
     api.statuses.list,
-    isAuthenticated && detailId ? {} : "skip",
+    isAuthenticated && detailOpen ? {} : "skip",
   )
   const categories = useQuery(
     api.workCategories.list,
-    isAuthenticated && detailId ? {} : "skip",
+    isAuthenticated && detailOpen ? {} : "skip",
   )
   const projects = useQuery(
     api.projects.list,
-    isAuthenticated && detailId ? {} : "skip",
+    isAuthenticated && detailOpen ? {} : "skip",
   )
   const referenceData = useMemo(
     () => ({ statuses, categories, projects, orgMembers: members }),
@@ -355,11 +352,7 @@ export default function PlannerPage() {
         </div>
       ) : null}
 
-      {isMobile ? (
-        <TaskDetailModal taskIds={orderedTaskIds} isAdmin={isAdmin} />
-      ) : (
-        <TaskDetailDrawer taskIds={orderedTaskIds} isAdmin={isAdmin} />
-      )}
+      <TaskDetailDrawer taskIds={orderedTaskIds} isAdmin={isAdmin} />
     </div>
     </TaskReferenceDataProvider>
   )

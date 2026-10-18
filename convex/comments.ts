@@ -3,6 +3,7 @@ import { query, mutation } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
 import { getAuthContext } from "./lib/auth";
 import { logActivity } from "./activityLog";
+import { onComment } from "./tasks/derived";
 import { createNotifications } from "./notifications";
 import {
   extractMentionIds,
@@ -143,7 +144,9 @@ export const create = mutation({
       userId,
       type: "comment_added",
       metadata: { commentId },
+      at: now,
     });
+    await onComment(ctx, args.taskId, { kind: "created", at: now, actorId: userId });
 
     // Notification fan-out: @mentions + reply-to-author + task participants
     // (assignees ∪ prior commenters). Mention ids come from client-controlled
@@ -250,6 +253,7 @@ export const remove = mutation({
     }
 
     await ctx.db.delete(args.id);
+    await onComment(ctx, comment.taskId, { kind: "deleted" });
   },
 });
 

@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { internalMutation } from "../_generated/server";
+import { setStatusUnchecked } from "../tasks/write";
 
 /**
  * DEV-ONLY cleanup for the Today × Planner rollout (slice 05): the "Today"
@@ -45,11 +46,7 @@ export default internalMutation({
         .take(200);
       if (batch.length === 0) break;
       for (const task of batch) {
-        await ctx.db.patch(task._id, {
-          statusId: target._id,
-          statusType: target.type,
-          updatedAt: now,
-        });
+        await setStatusUnchecked(ctx, task, target);
         restatused++;
       }
     }

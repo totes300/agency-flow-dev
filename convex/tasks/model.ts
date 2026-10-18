@@ -1,4 +1,4 @@
-import { v, type Infer } from "convex/values";
+import { v, type GenericValidator, type Infer } from "convex/values";
 import type { Id } from "../_generated/dataModel";
 import { isTiptapEmpty } from "../../lib/tiptap-utils";
 
@@ -108,6 +108,22 @@ export const DEFAULT_STATUS_SEED: readonly DefaultStatusSeed[] = [
   { name: "Done", category: "completed", color: "green", isDefault: true, legacyType: "done" },
   { name: "Canceled", category: "canceled", color: "gray", isDefault: true, legacyType: "done" },
 ];
+
+/**
+ * The category of a status. Statuses written by the old settings/onboarding
+ * paths before slice 0 may lack `category`; for those the known default
+ * names map explicitly ("Next up" → unstarted) before the legacy type. The
+ * write path and the seed both use this, so T3 holds for every status.
+ */
+export function categoryOfStatus(status: {
+  category?: TaskCategory;
+  name: string;
+  type: LegacyStatusType;
+}): TaskCategory {
+  if (status.category) return status.category;
+  const seed = DEFAULT_STATUS_SEED.find((s) => s.name.toLowerCase() === status.name.trim().toLowerCase());
+  return seed?.category ?? categoryFromLegacyType(status.type);
+}
 
 // ─── Status icon (derived, §4.1) ─────────────────────────────────────────────
 
@@ -250,6 +266,45 @@ export function deriveIdentifierKey(name: string | undefined, fallback = DEFAULT
   return isValidIdentifierKey(key) ? key : fallback;
 }
 
+/**
+ * A valid key not in `used`: the first free valid candidate, else the first
+ * valid candidate (or `fallback`) with 2, 3, … appended, kept within the
+ * 10-character limit.
+ */
+export function uniqueIdentifierKey(
+  candidates: readonly string[],
+  used: ReadonlySet<string>,
+  fallback = "PRJ",
+): string {
+  const valid = candidates.filter(isValidIdentifierKey);
+  for (const c of valid) if (!used.has(c)) return c;
+  const base = valid[0] ?? fallback;
+  for (let n = 2; ; n++) {
+    const suffix = String(n);
+    const candidate = `${base.slice(0, IDENTIFIER_KEY_MAX_LENGTH - suffix.length)}${suffix}`;
+    if (!used.has(candidate)) return candidate;
+  }
+}
+
+/**
+ * A suggested project code (identifier key) for a new project: the client's
+ * prefix, else a key derived from the client or project name, made unique
+ * against `used` (other project codes + the org key).
+ */
+export function suggestProjectCode(
+  input: { clientPrefix?: string; clientName?: string; projectName?: string },
+  used: ReadonlySet<string>,
+): string {
+  return uniqueIdentifierKey(
+    [
+      (input.clientPrefix ?? "").toUpperCase(),
+      deriveIdentifierKey(input.clientName, ""),
+      deriveIdentifierKey(input.projectName, "PRJ"),
+    ],
+    used,
+  );
+}
+
 // ─── Description ─────────────────────────────────────────────────────────────
 
 /** `tasks.hasDescription`: the TipTap JSON string has real content. Malformed JSON counts as empty. */
@@ -328,6 +383,104 @@ export function completedAtAfterTransition(input: {
 export function changesOpenness(prev: TaskCategory, next: TaskCategory): boolean {
   return isClosedCategory(prev) !== isClosedCategory(next);
 }
+
+// ─── Typed activity (§4.5) ───────────────────────────────────────────────────
+
+const nullableString = v.union(v.string(), v.null());
+const nullableNumber = v.union(v.number(), v.null());
+const fromToString = v.object({ from: v.string(), to: v.string() });
+const fromToDate = v.object({ from: nullableString, to: nullableString });
+const commentRef = v.object({ commentId: v.id("comments") });
+
+/** Fields every `activityLog` row carries next to its typed `type` + `metadata`. */
+const activityBase = {
+  taskId: v.id("tasks"),
+  orgId: v.string(),
+  userId: v.id("users"),
+  createdAt: v.number(),
+};
+
+function activity<T extends string, M extends GenericValidator>(type: T, metadata: M) {
+  return v.object({ ...activityBase, type: v.literal(type), metadata });
+}
+
+/**
+ * The `activityLog` document: `type` is a literal and `metadata` is typed per
+ * type (a table-level discriminated union). Shapes are a superset of what
+ * earlier writers stored (e.g. `status_changed` without ids from the old bulk
+ * path), so existing rows stay valid. `description_changed` is legacy: still
+ * in old rows, no longer written.
+ */
+export const activityLogValidator = v.union(
+  activity("task_created", v.object({ duplicatedFrom: v.optional(v.id("tasks")) })),
+  activity("subtask_created", v.object({ subtaskId: v.id("tasks"), title: v.string() })),
+  activity("subtask_completed", v.object({ subtaskId: v.id("tasks"), title: v.string() })),
+  activity("subtask_deleted", v.object({ title: v.string() })),
+  activity(
+    "status_changed",
+    v.object({
+      from: v.string(),
+      to: v.string(),
+      fromId: v.optional(v.id("statuses")),
+      toId: v.optional(v.id("statuses")),
+      toCategory: v.optional(taskCategoryValidator),
+    }),
+  ),
+  activity(
+    "assignee_added",
+    v.object({
+      userId: v.id("users"),
+      userName: v.string(),
+      reason: v.optional(v.literal("default_assignee")),
+      categoryName: v.optional(v.string()),
+    }),
+  ),
+  activity("assignee_removed", v.object({ userId: v.id("users"), userName: v.string() })),
+  activity("label_added", v.object({ labelId: v.id("labels"), labelName: v.string() })),
+  activity("label_removed", v.object({ labelId: v.id("labels"), labelName: v.string() })),
+  activity("title_changed", fromToString),
+  activity("category_changed", fromToString),
+  activity("priority_changed", v.object({ from: taskPriorityValidator, to: taskPriorityValidator })),
+  activity("due_date_changed", fromToDate),
+  activity("start_date_changed", fromToDate),
+  activity("estimate_changed", v.object({ from: nullableNumber, to: nullableNumber })),
+  activity("project_changed", v.object({ from: nullableString, to: nullableString })),
+  activity("billable_changed", v.object({ from: v.boolean(), to: v.boolean() })),
+  activity(
+    "identifier_changed",
+    v.object({
+      from: nullableString,
+      to: v.string(),
+      reason: v.union(v.literal("project_move"), v.literal("code_rename")),
+    }),
+  ),
+  activity("task_archived", v.object({ viaParent: v.optional(v.id("tasks")) })),
+  activity("task_restored", v.object({ viaParent: v.optional(v.id("tasks")) })),
+  activity("comment_added", commentRef),
+  activity("comment_resolved", commentRef),
+  activity("comment_reopened", commentRef),
+  activity(
+    "time_entry_logged",
+    v.object({ entryId: v.id("timeEntries"), duration: v.string(), note: nullableString }),
+  ),
+  activity(
+    "time_entry_edited",
+    v.object({ entryId: v.id("timeEntries"), oldDuration: v.string(), newDuration: v.string() }),
+  ),
+  activity("time_entry_deleted", v.object({ entryId: v.id("timeEntries"), duration: v.string() })),
+  activity("description_changed", v.object({})),
+);
+
+type ActivityLogRow = Infer<typeof activityLogValidator>;
+
+/** One event as callers pass it: `{ type, metadata }`, discriminated by `type`. */
+export type ActivityEvent = ActivityLogRow extends infer R
+  ? R extends ActivityLogRow
+    ? Pick<R, "type" | "metadata">
+    : never
+  : never;
+
+export type ActivityType = ActivityEvent["type"];
 
 // ─── Saved view spec (§4.4) ──────────────────────────────────────────────────
 

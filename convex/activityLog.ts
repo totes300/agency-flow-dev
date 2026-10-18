@@ -2,12 +2,15 @@ import { v } from "convex/values";
 import { query, MutationCtx } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
 import { getAuthContext } from "./lib/auth";
+import type { ActivityEvent } from "./tasks/model";
+import { touchLastActivity } from "./tasks/derived";
 
 // ─── Helper (called from other mutations) ───────────────────────────────────────
 
 /**
- * Log an activity event for a task.
- * Called from tasks.ts, timeEntries.ts, comments.ts mutations.
+ * Append a typed activity event (tasks/model.ts activityLogValidator) and
+ * move the task's `lastActivity` forward (§5.5). Called from tasks/write.ts,
+ * comments.ts and timeEntries.ts. `at` defaults to now (seeds pass history).
  */
 export async function logActivity(
   ctx: MutationCtx,
@@ -15,18 +18,13 @@ export async function logActivity(
     taskId: Id<"tasks">;
     orgId: string;
     userId: Id<"users">;
-    type: string;
-    metadata: Record<string, unknown>;
-  }
+    at?: number;
+  } & ActivityEvent,
 ) {
-  await ctx.db.insert("activityLog", {
-    taskId: args.taskId,
-    orgId: args.orgId,
-    userId: args.userId,
-    type: args.type,
-    metadata: args.metadata,
-    createdAt: Date.now(),
-  });
+  const { at, ...event } = args;
+  const createdAt = at ?? Date.now();
+  await ctx.db.insert("activityLog", { ...event, createdAt });
+  await touchLastActivity(ctx, args.taskId, { kind: args.type, actorId: args.userId, at: createdAt });
 }
 
 // ─── Query ──────────────────────────────────────────────────────────────────────

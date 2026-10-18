@@ -1,5 +1,8 @@
 import { internalMutation, type MutationCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
+import type { AuthContext } from "./lib/auth";
+import { onComment, onTimeEntryChange } from "./tasks/derived";
+import { createTask, deleteTaskRecord, patchTaskForSeed } from "./tasks/write";
 
 /**
  * DEV-ONLY dummy data for testing the AI task summarizer.
@@ -17,6 +20,7 @@ import type { Doc, Id } from "./_generated/dataModel";
  */
 
 const PROJECT_CODE = "PRJ-002";
+const PROJECT_NAME = "Arlow monthly retainer";
 
 // ─── Tiptap builders ────────────────────────────────────────────────────────
 
@@ -215,8 +219,11 @@ const TASKS: SeedTask[] = [
 
 async function getProject(ctx: MutationCtx): Promise<Doc<"projects">> {
   const projects = await ctx.db.query("projects").collect();
-  const project = projects.find((pr) => pr.code === PROJECT_CODE);
-  if (!project) throw new Error(`No project with code ${PROJECT_CODE}`);
+  // The tasks reseed recodes legacy "PRJ-002" codes into identifier keys, so
+  // fall back to the project name.
+  const project =
+    projects.find((pr) => pr.code === PROJECT_CODE) ?? projects.find((pr) => pr.name === PROJECT_NAME);
+  if (!project) throw new Error(`No project with code ${PROJECT_CODE} or name "${PROJECT_NAME}"`);
   return project;
 }
 
@@ -231,6 +238,8 @@ export const seed = internalMutation({
     const oslop = users.find((u) => u.email === "adam@oslop.studio");
     if (!adam || !oslop) throw new Error("Expected both org members (adam@konverted.io, adam@oslop.studio)");
     const authors: [Id<"users">, Id<"users">] = [adam._id, oslop._id];
+    // Tasks are created through the write path as the admin (no notifications).
+    const seedActor: AuthContext = { userId: adam._id, orgId, orgRole: "admin", isAdmin: true, user: adam };
 
     const statuses = await ctx.db
       .query("statuses")
@@ -265,22 +274,23 @@ export const seed = internalMutation({
       // Task + comments — skipped when the task already exists (re-run).
       let taskId = existingByTitle.get(st.title)?._id;
       if (!taskId) {
-        taskId = await ctx.db.insert("tasks", {
-          orgId,
-          title: st.title,
-          description: JSON.stringify(st.description),
-          statusId: status._id,
-          statusType: status.type,
-          projectId: project._id,
-          assigneeIds: [authors[st.assignee]],
-          workCategoryId: category._id,
-          estimate: st.estimate,
-          billable: true,
-          dueDate: st.dueDate,
-          createdAt,
-          updatedAt: lastCommentAt,
-          createdBy: adam._id,
-        });
+        taskId = await createTask(
+          ctx,
+          seedActor,
+          {
+            title: st.title,
+            description: JSON.stringify(st.description),
+            statusId: status._id,
+            projectId: project._id,
+            assigneeIds: [authors[st.assignee]],
+            workCategoryId: category._id,
+            estimateMinutes: st.estimate,
+            billable: true,
+            dueDate: st.dueDate,
+          },
+          { now: createdAt, notify: false },
+        );
+        await patchTaskForSeed(ctx, taskId, { updatedAt: lastCommentAt });
         tasksInserted++;
 
         let prevCommentId: Id<"comments"> | undefined;
@@ -297,6 +307,7 @@ export const seed = internalMutation({
           });
           prevCommentId = commentId;
           commentsInserted++;
+          await onComment(ctx, taskId, { kind: "created", at, actorId: authors[c.author] });
         }
       }
 
@@ -330,6 +341,7 @@ export const seed = internalMutation({
             updatedAt: startedAt + e.minutes * 60_000,
             createdBy: authors[e.author],
           });
+          await onTimeEntryChange(ctx, taskId, e.minutes);
           entriesInserted++;
         }
       }
@@ -458,23 +470,14 @@ export const clear = internalMutation({
     let entriesDeleted = 0;
     for (const task of tasks) {
       if (!titles.has(task.title)) continue;
-      const comments = await ctx.db
-        .query("comments")
-        .withIndex("by_task", (q) => q.eq("taskId", task._id))
-        .collect();
-      for (const c of comments) {
-        await ctx.db.delete(c._id);
-        commentsDeleted++;
-      }
-      const entries = await ctx.db
-        .query("timeEntries")
-        .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
-        .collect();
-      for (const e of entries) {
-        await ctx.db.delete(e._id);
-        entriesDeleted++;
-      }
-      await ctx.db.delete(task._id);
+      commentsDeleted += (
+        await ctx.db.query("comments").withIndex("by_task", (q) => q.eq("taskId", task._id)).collect()
+      ).length;
+      entriesDeleted += (
+        await ctx.db.query("timeEntries").withIndex("by_taskId", (q) => q.eq("taskId", task._id)).collect()
+      ).length;
+      // Entries, comments, activity, edges, aliases and the task row (write path).
+      await deleteTaskRecord(ctx, task);
       tasksDeleted++;
     }
     return { tasksDeleted, commentsDeleted, entriesDeleted };

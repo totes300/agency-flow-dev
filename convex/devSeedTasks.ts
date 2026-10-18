@@ -13,11 +13,21 @@ import {
   isValidIdentifierKey,
   numberScopeFor,
   sameNumberScope,
-  IDENTIFIER_KEY_MAX_LENGTH,
+  suggestProjectCode,
+  uniqueIdentifierKey,
   type NumberScope,
   type TaskCategory,
   type TaskPriority,
 } from "./tasks/model";
+import { recomputeTaskCounters } from "./tasks/derived";
+import {
+  addIdentifierAlias,
+  deleteOrphanEdges,
+  insertLegacyTaskForSeed,
+  patchTaskForSeed,
+  syncAssigneeEdges,
+  syncLabelEdges,
+} from "./tasks/write";
 
 /**
  * DEV-ONLY reseed for the tasks refactor foundations
@@ -122,17 +132,6 @@ function maxKey(keys: Array<string | undefined>): string | null {
   let max: string | null = null;
   for (const k of keys) if (k !== undefined && (max === null || k > max)) max = k;
   return max;
-}
-
-/** A valid key not in `used`: the first free candidate, else candidate + 2, 3, … */
-function uniqueKey(candidates: string[], used: Set<string>): string {
-  const valid = candidates.filter(isValidIdentifierKey);
-  for (const c of valid) if (!used.has(c)) return c;
-  const base = (valid[0] ?? "PRJ").slice(0, IDENTIFIER_KEY_MAX_LENGTH - 3);
-  for (let n = 2; ; n++) {
-    const candidate = `${base}${n}`;
-    if (!used.has(candidate)) return candidate;
-  }
 }
 
 /** Key-order-insensitive JSON, for "did this field change" checks on stored objects. */
@@ -272,7 +271,7 @@ export async function seedTaskFoundations(
       : (args.orgKey ?? deriveIdentifierKey(settings.brandName));
   if (!isValidIdentifierKey(orgKey)) throw new ConvexError(`Invalid org key: ${orgKey}`);
   if (orgKey !== settings.taskKey && projectCodes.has(orgKey)) {
-    orgKey = uniqueKey([orgKey], projectCodes);
+    orgKey = uniqueIdentifierKey([orgKey], projectCodes);
   }
   result.orgKey = orgKey;
   const usedKeys = new Set<string>([orgKey]);
@@ -291,12 +290,8 @@ export async function seedTaskFoundations(
   }
   for (const p of recode) {
     const client = await ctx.db.get(p.clientId);
-    const code = uniqueKey(
-      [
-        (client?.prefix ?? "").toUpperCase(),
-        deriveIdentifierKey(client?.name, ""),
-        deriveIdentifierKey(p.name, "PRJ"),
-      ],
+    const code = suggestProjectCode(
+      { clientPrefix: client?.prefix, clientName: client?.name, projectName: p.name },
       usedKeys,
     );
     usedKeys.add(code);
@@ -339,7 +334,8 @@ export async function seedTaskFoundations(
     const status = defaultStatusFor(demo.category);
     lastSortKey = generateKeyBetween(lastSortKey, null);
     const assigneeIds = memberUserIds.slice(0, demo.assignees);
-    await ctx.db.insert("tasks", {
+    // Inserted with legacy-shaped fields only; step 5 fills the model.
+    await insertLegacyTaskForSeed(ctx, {
       orgId,
       title: demo.title,
       statusId: status._id,
@@ -367,7 +363,7 @@ export async function seedTaskFoundations(
   // code to number under, so it becomes an org-level task.
   for (const [i, t] of tasks.entries()) {
     if (t.projectId && !codeOf.has(t.projectId)) {
-      await ctx.db.patch(t._id, { projectId: undefined });
+      await patchTaskForSeed(ctx, t._id, { projectId: undefined });
       tasks[i] = { ...t, projectId: undefined };
       result.danglingProjectsCleared++;
     }
@@ -452,29 +448,23 @@ export async function seedTaskFoundations(
           ? [activeLabels[index % activeLabels.length]._id, activeLabels[(index + 1) % activeLabels.length]._id]
           : [activeLabels[index % activeLabels.length]._id]);
 
-    // Derived counters (§5.5) — recomputed from the source tables.
-    const entries = await ctx.db
-      .query("timeEntries")
-      .withIndex("by_taskId", (q) => q.eq("taskId", t._id))
-      .collect();
-    const comments = await ctx.db
-      .query("comments")
-      .withIndex("by_task", (q) => q.eq("taskId", t._id))
-      .collect();
+    // Derived counters (§5.5) — the same recompute derived.ts is tested against (T6).
+    const counters = await recomputeTaskCounters(ctx, t);
     const lastLog = await ctx.db
       .query("activityLog")
       .withIndex("by_task", (q) => q.eq("taskId", t._id))
       .order("desc")
       .first();
-    const children = childrenOf.get(t._id) ?? [];
-    const lastCommentAt = comments.reduce<number | undefined>(
-      (max, c) => (max === undefined || c.createdAt > max ? c.createdAt : max),
-      undefined,
-    );
-    const lastComment = comments.find((c) => c.createdAt === lastCommentAt);
     const lastActivity =
-      lastComment && (!lastLog || lastComment.createdAt >= lastLog.createdAt)
-        ? { kind: "comment", actorId: lastComment.userId, at: lastComment.createdAt }
+      counters.lastCommentAt !== undefined && (!lastLog || counters.lastCommentAt >= lastLog.createdAt)
+        ? {
+            kind: "comment_added",
+            actorId: (await ctx.db
+              .query("comments")
+              .withIndex("by_task", (q) => q.eq("taskId", t._id).eq("createdAt", counters.lastCommentAt!))
+              .first())!.userId,
+            at: counters.lastCommentAt,
+          }
         : lastLog
           ? { kind: lastLog.type, actorId: lastLog.userId, at: lastLog.createdAt }
           : { kind: "task_created", actorId: t.createdBy, at: t.createdAt };
@@ -492,14 +482,7 @@ export async function seedTaskFoundations(
       sortKey: t.sortKey ?? t.manualSortKey ?? appendedKeyOf.get(t._id),
       assigneeIds,
       labelIds,
-      trackedMinutes: entries.reduce((sum, e) => sum + e.durationMinutes, 0),
-      commentCount: comments.length,
-      lastCommentAt,
-      subtaskCount: children.length,
-      subtaskDoneCount: children.filter((c) => {
-        const childCategory = statusCategory.get(c.statusId);
-        return childCategory !== undefined && isClosedCategory(childCategory);
-      }).length,
+      ...counters,
       lastActivityAt: lastActivity.at,
       lastActivity,
     };
@@ -507,86 +490,28 @@ export async function seedTaskFoundations(
       (k) => canonical(t[k]) !== canonical(next[k]),
     );
     if (changed) {
-      await ctx.db.patch(t._id, next);
+      await patchTaskForSeed(ctx, t._id, next);
       result.tasksUpdated++;
     }
 
     // T5: an identifier that changed keeps resolving.
     if (t.identifier && t.identifier !== identifier) {
-      const alias = await ctx.db
-        .query("taskIdentifierAliases")
-        .withIndex("by_orgId_identifier", (q) => q.eq("orgId", orgId).eq("identifier", t.identifier!))
-        .first();
-      if (!alias) {
-        await ctx.db.insert("taskIdentifierAliases", { orgId, identifier: t.identifier, taskId: t._id });
-        result.aliasesCreated++;
-      }
+      if (await addIdentifierAlias(ctx, orgId, t.identifier, t._id)) result.aliasesCreated++;
     }
 
     // Edges == caches (T6).
-    const assigneeEdges = await ctx.db
-      .query("taskAssignees")
-      .withIndex("by_taskId_userId", (q) => q.eq("taskId", t._id))
-      .collect();
-    const keptUsers = new Set<Id<"users">>();
-    for (const edge of assigneeEdges) {
-      if (assigneeIds.includes(edge.userId) && !keptUsers.has(edge.userId) && edge.orgId === orgId) {
-        keptUsers.add(edge.userId);
-      } else {
-        await ctx.db.delete(edge._id);
-        result.edgesDeleted++;
-      }
-    }
-    for (const userId of assigneeIds) {
-      if (keptUsers.has(userId)) continue;
-      keptUsers.add(userId);
-      await ctx.db.insert("taskAssignees", {
-        orgId,
-        taskId: t._id,
-        userId,
-        assignedAt: t.createdAt,
-        assignedBy: t.createdBy,
-      });
-      result.edgesInserted++;
-    }
-
-    const labelEdges = await ctx.db
-      .query("taskLabels")
-      .withIndex("by_taskId_labelId", (q) => q.eq("taskId", t._id))
-      .collect();
-    const keptLabels = new Set<Id<"labels">>();
-    for (const edge of labelEdges) {
-      if (labelIds.includes(edge.labelId) && !keptLabels.has(edge.labelId) && edge.orgId === orgId) {
-        keptLabels.add(edge.labelId);
-      } else {
-        await ctx.db.delete(edge._id);
-        result.edgesDeleted++;
-      }
-    }
-    for (const labelId of labelIds) {
-      if (keptLabels.has(labelId)) continue;
-      keptLabels.add(labelId);
-      await ctx.db.insert("taskLabels", { orgId, taskId: t._id, labelId });
-      result.edgesInserted++;
-    }
+    const updated = (await ctx.db.get(t._id))!;
+    const assigneeSync = await syncAssigneeEdges(ctx, updated, assigneeIds, {
+      actorId: t.createdBy,
+      at: t.createdAt,
+    });
+    const labelSync = await syncLabelEdges(ctx, updated, labelIds);
+    result.edgesInserted += assigneeSync.inserted + labelSync.inserted;
+    result.edgesDeleted += assigneeSync.deleted + labelSync.deleted;
   }
 
-  // Edges of hard-deleted tasks (the old `tasks.remove` does not cascade them).
-  const taskIds = new Set(tasks.map((t) => t._id));
-  const orgAssigneeEdges = await ctx.db
-    .query("taskAssignees")
-    .withIndex("by_orgId_userId_taskId", (q) => q.eq("orgId", orgId))
-    .collect();
-  const orgLabelEdges = await ctx.db
-    .query("taskLabels")
-    .withIndex("by_orgId_labelId", (q) => q.eq("orgId", orgId))
-    .collect();
-  for (const edge of [...orgAssigneeEdges, ...orgLabelEdges]) {
-    if (!taskIds.has(edge.taskId)) {
-      await ctx.db.delete(edge._id);
-      result.edgesDeleted++;
-    }
-  }
+  // Edges of hard-deleted tasks (tasks removed before the write path cascaded them).
+  result.edgesDeleted += await deleteOrphanEdges(ctx, orgId, new Set(tasks.map((t) => t._id)));
 
   // ── 6. Counters ───────────────────────────────────────────────────────────
   for (const p of projects) {

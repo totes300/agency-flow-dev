@@ -25,6 +25,7 @@ import type { Doc, Id } from "../_generated/dataModel";
 import { getDateInTimezone, msToMinutes, MAX_TIMER_MS, ORG_TIMEZONE_FALLBACK } from "./timer";
 import { roundMinutes } from "./rounding";
 import { resolveRateSnapshot, resolveEntryCategory } from "./orgHelpers";
+import { onTimeEntryChange } from "../tasks/derived";
 
 export async function insertTimerEntry(
   ctx: MutationCtx,
@@ -107,6 +108,8 @@ export async function insertTimerEntry(
     updatedAt: now,
     createdBy: opts.createdBy,
   });
+
+  await onTimeEntryChange(ctx, opts.task._id, rounded);
 
   return { entryId, durationMinutes: rounded, date, snapshotCategoryId };
 }

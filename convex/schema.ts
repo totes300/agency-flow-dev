@@ -5,6 +5,7 @@ import {
   proposalStatusValidator,
 } from "./lib/proposalValidators";
 import {
+  activityLogValidator,
   numberScopeValidator,
   taskCategoryValidator,
   taskPriorityValidator,
@@ -242,7 +243,9 @@ export default defineSchema({
     orgId: v.string(),
     identifier: v.string(),
     taskId: v.id("tasks"),
-  }).index("by_orgId_identifier", ["orgId", "identifier"]),
+  })
+    .index("by_orgId_identifier", ["orgId", "identifier"])
+    .index("by_taskId", ["taskId"]),
 
   // ─── Per-user task state (§4.3) — fan-out on write ─────────────────────────
   // Replaces taskViewReceipts / taskMutes / commentReadReceipts-as-list-signal
@@ -657,14 +660,9 @@ export default defineSchema({
   }).index("by_orgId", ["orgId"]),
 
   // ─── Activity Log (audit trail per task) ───────────────────────────────────
-  activityLog: defineTable({
-    taskId: v.id("tasks"),
-    orgId: v.string(),
-    userId: v.id("users"),
-    type: v.string(),
-    metadata: v.any(),
-    createdAt: v.number(),
-  })
+  // Typed (§4.5): `type` is a literal union and `metadata` is discriminated
+  // by it — tasks/model.ts activityLogValidator.
+  activityLog: defineTable(activityLogValidator)
     .index("by_task", ["taskId", "createdAt"])
     .index("by_org", ["orgId", "createdAt"]),
 

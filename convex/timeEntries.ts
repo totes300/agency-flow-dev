@@ -12,6 +12,7 @@ import { billableOverviewBucket, entryStatus } from "./lib/entryStatus";
 import { loadEntryCloseInfo } from "./lib/billing/entryCloseInfo";
 import { ceilToIncrement, fromMinor, priceMinutesMinor, toMinor } from "./lib/billing/money";
 import { logActivity } from "./activityLog";
+import { onTimeEntryChange } from "./tasks/derived";
 import { getProjectEntries } from "./lib/projectEntries";
 
 function formatDurationHHMM(minutes: number): string {
@@ -336,6 +337,8 @@ export const create = mutation({
       createdBy: auth.userId,
     });
 
+    await onTimeEntryChange(ctx, args.taskId, rounded);
+
     await logActivity(ctx, {
       taskId: args.taskId,
       orgId: auth.orgId,
@@ -491,6 +494,17 @@ export const update = mutation({
 
     await ctx.db.patch(args.id, updates);
 
+    // trackedMinutes (§5.5): a move takes the old minutes off the source
+    // task and puts the new ones on the target.
+    const nextMinutes = (updates.durationMinutes as number | undefined) ?? entry.durationMinutes;
+    const nextTaskId = (updates.taskId as Id<"tasks"> | undefined) ?? entry.taskId;
+    if (nextTaskId !== entry.taskId) {
+      await onTimeEntryChange(ctx, entry.taskId, -entry.durationMinutes);
+      await onTimeEntryChange(ctx, nextTaskId, nextMinutes);
+    } else {
+      await onTimeEntryChange(ctx, entry.taskId, nextMinutes - entry.durationMinutes);
+    }
+
     if (args.durationMinutes !== undefined && updates.durationMinutes !== entry.durationMinutes) {
       await logActivity(ctx, {
         taskId: entry.taskId,
@@ -533,6 +547,7 @@ export const remove = mutation({
     });
 
     await ctx.db.delete(args.id);
+    await onTimeEntryChange(ctx, entry.taskId, -entry.durationMinutes);
   },
 });
 

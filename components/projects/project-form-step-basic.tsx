@@ -212,7 +212,7 @@ export function ProjectFormStepBasic({
             id="project-code"
             value={code}
             onChange={(e) => setCode(e.target.value.toUpperCase())}
-            placeholder="PRJ-001"
+            placeholder="ARLO"
             className="font-mono"
           />
         </Field>

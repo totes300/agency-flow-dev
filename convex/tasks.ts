@@ -1,33 +1,38 @@
 import { v, ConvexError } from "convex/values";
-import { generateKeyBetween } from "fractional-indexing";
-import { query, mutation } from "./_generated/server";
+import { query, mutation, type QueryCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
-import { getAuthContext, requireAdmin, validateStringLength } from "./lib/auth";
-import { autoSaveTimersForTasks } from "./lib/timerEntry";
+import { getAuthContext } from "./lib/auth";
 import { MAX_TIMER_MS } from "./lib/timer";
-import { logActivity } from "./activityLog";
 import { STATUS_TYPES } from "./lib/constants";
 import type { StatusType } from "./lib/constants";
-import { isTiptapEmpty, extractPlainText } from "../lib/tiptap-utils";
+import { isTiptapEmpty } from "../lib/tiptap-utils";
 import { computeTaskIndicatorState } from "./lib/taskActivityIndicators";
-import { createNotifications } from "./notifications";
-import {
-  extractMentionIds,
-  diffMentionIds,
-  safeParseDoc,
-  truncatePreview,
-} from "./lib/notificationEvents";
 import {
   TAB_STATUS_TYPE,
   isVisibleTopLevelTask,
-  validateAssignees,
-  validateWorkCategory,
-  getDefaultStatusId,
-  cascadeDeleteTaskData,
   taskHasTimeEntries,
   createTaskEnricher,
-  resolveDefaultAssignee,
 } from "./lib/task_helpers";
+import {
+  TASK_NOT_FOUND,
+  canChangeAssignees,
+  canDelete,
+  canEditField,
+  loadTaskForReadOrNull,
+  loadTaskForWrite,
+} from "./tasks/access";
+import { taskPriorityValidator } from "./tasks/model";
+import {
+  archiveTask,
+  createTask,
+  duplicateTask,
+  removeTask,
+  reorderSubtasks as reorderSubtasksWrite,
+  reorderTask as reorderTaskWrite,
+  restoreTask,
+  updateTask,
+  type TimerRescue,
+} from "./tasks/write";
 
 // ─── Detail Query ────────────────────────────────────────────────────────────────
 
@@ -254,96 +259,20 @@ export const createSubtask = mutation({
     assigneeIds: v.optional(v.array(v.id("users"))),
   },
   handler: async (ctx, args) => {
-    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
-
-    const parent = await ctx.db.get(args.parentTaskId);
-    if (!parent || parent.orgId !== orgId) throw new ConvexError("Parent task not found");
-    if (!isAdmin && !parent.assigneeIds.includes(userId)) {
-      throw new ConvexError("You don't have access to this task");
-    }
-    if (parent.parentTaskId) {
-      throw new ConvexError("Subtasks cannot have subtasks (max 1 level)");
-    }
-
-    const title = args.title.trim();
-    if (!title) throw new ConvexError("Subtask title is required");
-    validateStringLength(title, 500, "Subtask title");
-
-    let statusId = args.statusId;
-    let statusType: StatusType = "backlog";
-    if (statusId) {
-      const status = await ctx.db.get(statusId);
-      if (!status || status.orgId !== orgId) throw new ConvexError("Status not found");
-      statusType = status.type as StatusType;
-    } else {
-      const defaults = await getDefaultStatusId(ctx, orgId);
-      statusId = defaults.statusId;
-      statusType = defaults.statusType;
-    }
-
-    if (args.workCategoryId) {
-      await validateWorkCategory(ctx, orgId, args.workCategoryId);
-    }
-    let assigneeIds = args.assigneeIds ?? [...parent.assigneeIds];
-    if (assigneeIds.length > 0) {
-      await validateAssignees(ctx, orgId, assigneeIds);
-    }
-    // Auto-assign default assignee if no assignees after inheritance
-    if (assigneeIds.length === 0) {
-      const effectiveCategoryId = args.workCategoryId ?? parent.workCategoryId;
-      const defaultUserId = await resolveDefaultAssignee(ctx, orgId, parent.projectId, effectiveCategoryId);
-      if (defaultUserId) assigneeIds = [defaultUserId];
-    }
-
-    const existingSubtasks = await ctx.db
-      .query("tasks")
-      .withIndex("by_orgId_parentTaskId", (q) => q.eq("orgId", orgId).eq("parentTaskId", args.parentTaskId))
-      .filter((q) => q.eq(q.field("archivedAt"), undefined))
-      .collect();
-    const maxSort = existingSubtasks.reduce((max, s) => Math.max(max, s.sortOrder ?? 0), -1);
-
-    const now = Date.now();
-    const subtaskId = await ctx.db.insert("tasks", {
-      orgId,
-      title,
-      statusId: statusId!,
-      statusType,
-      projectId: parent.projectId,
-      assigneeIds,
-      workCategoryId: args.workCategoryId ?? parent.workCategoryId,
-      billable: parent.billable,
-      parentTaskId: args.parentTaskId,
-      sortOrder: maxSort + 1,
-      createdAt: now,
-      updatedAt: now,
-      createdBy: userId,
-    });
-
-    await logActivity(ctx, {
-      taskId: args.parentTaskId,
-      orgId,
-      userId,
-      type: "subtask_created",
-      metadata: { subtaskId, title },
-    });
-
-    // Notification fan-out: assignment (incl. inherited + default assignee;
-    // actor self-assign is excluded in createNotifications)
-    const createdSubtask = await ctx.db.get(subtaskId);
-    if (createdSubtask && assigneeIds.length > 0) {
-      await createNotifications(ctx, {
-        orgId,
-        actorId: userId,
-        task: createdSubtask,
-        events: assigneeIds.map((recipientId) => ({
-          recipientId,
-          type: "assigned" as const,
-          previewText: title,
-        })),
-      });
-    }
-
-    return subtaskId;
+    const auth = await getAuthContext(ctx);
+    // Parent access, one-level rule and project inheritance (T8) live in write.ts.
+    return await createTask(
+      ctx,
+      auth,
+      {
+        title: args.title,
+        parentTaskId: args.parentTaskId,
+        statusId: args.statusId,
+        workCategoryId: args.workCategoryId,
+        assigneeIds: args.assigneeIds,
+      },
+      { defaultAssignee: true },
+    );
   },
 });
 
@@ -353,21 +282,8 @@ export const reorderSubtasks = mutation({
     orderedIds: v.array(v.id("tasks")),
   },
   handler: async (ctx, { parentTaskId, orderedIds }) => {
-    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
-
-    const parent = await ctx.db.get(parentTaskId);
-    if (!parent || parent.orgId !== orgId) throw new ConvexError("Task not found");
-    if (!isAdmin && !parent.assigneeIds.includes(userId)) {
-      throw new ConvexError("You don't have access to this task");
-    }
-
-    for (let i = 0; i < orderedIds.length; i++) {
-      const sub = await ctx.db.get(orderedIds[i]);
-      if (!sub || sub.parentTaskId !== parentTaskId) {
-        throw new ConvexError("Subtask does not belong to this parent");
-      }
-      await ctx.db.patch(orderedIds[i], { sortOrder: i, updatedAt: Date.now() });
-    }
+    const access = await loadTaskForWrite(ctx, parentTaskId);
+    await reorderSubtasksWrite(ctx, access, orderedIds);
   },
 });
 
@@ -1019,6 +935,21 @@ export const subtaskPreview = query({
 
 // ─── Mutations ───────────────────────────────────────────────────────────────────
 
+const taskPatchArgs = {
+  title: v.optional(v.string()),
+  description: v.optional(v.string()),
+  statusId: v.optional(v.id("statuses")),
+  projectId: v.optional(v.union(v.id("projects"), v.null())),
+  assigneeIds: v.optional(v.array(v.id("users"))),
+  workCategoryId: v.optional(v.union(v.id("workCategories"), v.null())),
+  estimate: v.optional(v.union(v.number(), v.null())),
+  billable: v.optional(v.boolean()),
+  dueDate: v.optional(v.union(v.string(), v.null())),
+  startDate: v.optional(v.union(v.string(), v.null())),
+  priority: v.optional(taskPriorityValidator),
+  labelIds: v.optional(v.array(v.id("labels"))),
+};
+
 export const create = mutation({
   args: {
     title: v.string(),
@@ -1030,285 +961,29 @@ export const create = mutation({
     estimate: v.optional(v.number()),
     billable: v.optional(v.boolean()),
     dueDate: v.optional(v.string()),
+    startDate: v.optional(v.string()),
+    priority: v.optional(taskPriorityValidator),
+    labelIds: v.optional(v.array(v.id("labels"))),
   },
   handler: async (ctx, args) => {
-    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
-
-    const title = args.title.trim();
-    if (!title) throw new ConvexError("Task title is required");
-    validateStringLength(title, 500, "Task title");
-
-    let statusId: Id<"statuses">;
-    let statusType: StatusType;
-    if (args.statusId) {
-      const status = await ctx.db.get(args.statusId);
-      if (!status || status.orgId !== orgId) throw new ConvexError("Status not found");
-      statusId = args.statusId;
-      statusType = status.type;
-    } else {
-      const defaults = await getDefaultStatusId(ctx, orgId);
-      statusId = defaults.statusId;
-      statusType = defaults.statusType;
-    }
-
-    if (args.projectId) {
-      const project = await ctx.db.get(args.projectId);
-      if (!project || project.orgId !== orgId) throw new ConvexError("Project not found");
-    }
-    if (args.workCategoryId) {
-      await validateWorkCategory(ctx, orgId, args.workCategoryId);
-    }
-
-    let assigneeIds = args.assigneeIds ?? [];
-    if (!isAdmin && !assigneeIds.includes(userId)) {
-      assigneeIds = [userId, ...assigneeIds];
-    }
-    // Auto-assign default assignee if no explicit assignees provided
-    if (assigneeIds.length === 0 && args.assigneeIds === undefined) {
-      const defaultUserId = await resolveDefaultAssignee(ctx, orgId, args.projectId, args.workCategoryId);
-      if (defaultUserId) assigneeIds = [defaultUserId];
-    }
-    await validateAssignees(ctx, orgId, assigneeIds);
-
-    // Generate manualSortKey — append after the task with the highest sort key in this org.
-    // Uses a dedicated index so we always get the true maximum key, not just the latest doc.
-    // Convex OCC ensures concurrent creates on the same index range will
-    // serialize (second transaction retries), so duplicate keys cannot occur.
-    const lastSorted = await ctx.db
-      .query("tasks")
-      .withIndex("by_orgId_manualSortKey", (q) => q.eq("orgId", orgId))
-      .order("desc")
-      .first();
-    const lastKey = lastSorted?.manualSortKey ?? null;
-    const manualSortKey = generateKeyBetween(lastKey, null);
-
-    const now = Date.now();
-    const taskId = await ctx.db.insert("tasks", {
-      orgId, title,
-      description: args.description?.trim() || undefined,
-      statusId, statusType,
-      projectId: args.projectId,
-      assigneeIds,
-      workCategoryId: args.workCategoryId,
-      estimate: args.estimate,
-      billable: args.billable ?? true,
-      dueDate: args.dueDate,
-      manualSortKey,
-      createdAt: now, updatedAt: now, createdBy: userId,
-    });
-
-    await logActivity(ctx, { taskId, orgId, userId, type: "task_created", metadata: {} });
-
-    // Notification fan-out: assignment (incl. default-assignee; actor
-    // self-assign is excluded in createNotifications) + description mentions.
-    const createdTask = await ctx.db.get(taskId);
-    if (createdTask) {
-      const events: Parameters<typeof createNotifications>[1]["events"] = assigneeIds.map(
-        (recipientId) => ({ recipientId, type: "assigned" as const, previewText: title })
-      );
-      const descDoc = safeParseDoc(createdTask.description);
-      const descMentions = extractMentionIds(descDoc);
-      if (descMentions.length > 0) {
-        const preview = truncatePreview(extractPlainText(descDoc));
-        for (const recipientId of descMentions) {
-          events.push({ recipientId, type: "mention_description", previewText: preview });
-        }
-      }
-      if (events.length > 0) {
-        await createNotifications(ctx, { orgId, actorId: userId, task: createdTask, events });
-      }
-    }
-
-    return taskId;
+    const auth = await getAuthContext(ctx);
+    const { estimate, ...input } = args;
+    return await createTask(
+      ctx,
+      auth,
+      { ...input, estimateMinutes: estimate },
+      // The project's default assignee only when the caller did not pick assignees.
+      { defaultAssignee: args.assigneeIds === undefined },
+    );
   },
 });
 
 export const update = mutation({
-  args: {
-    id: v.id("tasks"),
-    title: v.optional(v.string()),
-    description: v.optional(v.string()),
-    statusId: v.optional(v.id("statuses")),
-    projectId: v.optional(v.union(v.id("projects"), v.null())),
-    assigneeIds: v.optional(v.array(v.id("users"))),
-    workCategoryId: v.optional(v.union(v.id("workCategories"), v.null())),
-    estimate: v.optional(v.union(v.number(), v.null())),
-    billable: v.optional(v.boolean()),
-    dueDate: v.optional(v.union(v.string(), v.null())),
-  },
+  args: { id: v.id("tasks"), ...taskPatchArgs },
   handler: async (ctx, args) => {
-    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
-
-    const task = await ctx.db.get(args.id);
-    if (!task || task.orgId !== orgId) throw new ConvexError("Task not found");
-    if (!isAdmin && !task.assigneeIds.includes(userId)) {
-      throw new ConvexError("You can only edit tasks assigned to you");
-    }
-
-    const updates: Record<string, unknown> = { updatedAt: Date.now() };
-
-    if (args.title !== undefined) {
-      const title = args.title.trim();
-      if (!title) throw new ConvexError("Task title is required");
-      validateStringLength(title, 500, "Task title");
-      updates.title = title;
-    }
-    const nextDescription = args.description !== undefined
-      ? (args.description.trim() || undefined)
-      : undefined;
-    if (args.description !== undefined) {
-      updates.description = nextDescription;
-    }
-    if (args.statusId !== undefined) {
-      const status = await ctx.db.get(args.statusId);
-      if (!status || status.orgId !== orgId) throw new ConvexError("Status not found");
-      updates.statusId = args.statusId;
-      updates.statusType = status.type;
-    }
-    if (args.projectId !== undefined) {
-      if (args.projectId !== null) {
-        const project = await ctx.db.get(args.projectId);
-        if (!project || project.orgId !== orgId) throw new ConvexError("Project not found");
-      }
-      // Covers clearing the project too: an entry's `projectId` is stamped
-      // from its task, so a task with entries must keep its project forever.
-      const nextProjectId = args.projectId ?? undefined;
-      if (nextProjectId !== task.projectId) {
-        const hasEntries = await ctx.db.query("timeEntries").withIndex("by_taskId", (q) => q.eq("taskId", args.id)).first();
-        if (hasEntries) throw new ConvexError("Cannot change the project of a task with time entries — existing entries keep their original rate snapshots");
-      }
-      updates.projectId = args.projectId === null ? undefined : args.projectId;
-    }
-    if (args.assigneeIds !== undefined) {
-      await validateAssignees(ctx, orgId, args.assigneeIds);
-      updates.assigneeIds = args.assigneeIds;
-    }
-    if (args.workCategoryId !== undefined) {
-      if (args.workCategoryId !== null) await validateWorkCategory(ctx, orgId, args.workCategoryId);
-      updates.workCategoryId = args.workCategoryId === null ? undefined : args.workCategoryId;
-    }
-    if (args.estimate !== undefined) updates.estimate = args.estimate === null ? undefined : args.estimate;
-    if (args.billable !== undefined) updates.billable = args.billable;
-    if (args.dueDate !== undefined) updates.dueDate = args.dueDate === null ? undefined : args.dueDate;
-
-    // Auto-assign default assignee when category or project changes
-    // Only if caller did NOT explicitly set assigneeIds (undefined = not touched, [] = explicit clear)
-    let autoAssignedUserId: Id<"users"> | null = null;
-    if (args.assigneeIds === undefined) {
-      const categoryChanged = args.workCategoryId !== undefined && args.workCategoryId !== (task.workCategoryId ?? null);
-      const projectChanged = args.projectId !== undefined && args.projectId !== (task.projectId ?? null);
-      const currentAssignees = task.assigneeIds;
-      const hasNoAssignees = !Array.isArray(currentAssignees) || currentAssignees.length === 0;
-
-      if ((categoryChanged || projectChanged) && hasNoAssignees) {
-        const effectiveProjectId = (updates.projectId ?? task.projectId) as Id<"projects"> | undefined;
-        const effectiveCategoryId = (updates.workCategoryId ?? task.workCategoryId) as Id<"workCategories"> | undefined;
-        autoAssignedUserId = await resolveDefaultAssignee(ctx, orgId, effectiveProjectId, effectiveCategoryId);
-        if (autoAssignedUserId) {
-          updates.assigneeIds = [autoAssignedUserId];
-        }
-      }
-    }
-
-    await ctx.db.patch(args.id, updates);
-
-    // ── Activity logging ─────────────────────────────────────────────────
-    const logCtx = { taskId: args.id, orgId, userId };
-
-    if (args.statusId !== undefined && args.statusId !== task.statusId) {
-      const newStatus = await ctx.db.get(args.statusId);
-      const oldStatus = task.statusId ? await ctx.db.get(task.statusId) : null;
-      await logActivity(ctx, { ...logCtx, type: "status_changed", metadata: { from: oldStatus?.name ?? "None", to: newStatus?.name ?? "Unknown", fromId: task.statusId, toId: args.statusId } });
-
-      // Log subtask_completed on the parent task when a subtask transitions INTO done
-      if (
-        newStatus?.type === "done" &&
-        oldStatus?.type !== "done" &&
-        task.parentTaskId
-      ) {
-        await logActivity(ctx, {
-          taskId: task.parentTaskId,
-          orgId,
-          userId,
-          type: "subtask_completed",
-          metadata: { title: task.title, subtaskId: args.id },
-        });
-      }
-    }
-    if (args.assigneeIds !== undefined) {
-      const oldSet = new Set(task.assigneeIds.map(String));
-      const newSet = new Set(args.assigneeIds.map(String));
-      for (const uid of args.assigneeIds) {
-        if (!oldSet.has(uid.toString())) {
-          const user = await ctx.db.get(uid);
-          await logActivity(ctx, { ...logCtx, type: "assignee_added", metadata: { userId: uid, userName: user?.name ?? "Unknown" } });
-        }
-      }
-      for (const uid of task.assigneeIds) {
-        if (!newSet.has(uid.toString())) {
-          const user = await ctx.db.get(uid);
-          await logActivity(ctx, { ...logCtx, type: "assignee_removed", metadata: { userId: uid, userName: user?.name ?? "Unknown" } });
-        }
-      }
-    }
-    // Log auto-assigned default assignee (separate from explicit assignee changes)
-    if (autoAssignedUserId) {
-      const autoUser = await ctx.db.get(autoAssignedUserId);
-      const effectiveCatId = (updates.workCategoryId ?? task.workCategoryId) as Id<"workCategories"> | undefined;
-      const autoCat = effectiveCatId ? await ctx.db.get(effectiveCatId) : null;
-      await logActivity(ctx, { ...logCtx, type: "assignee_added", metadata: { userId: autoAssignedUserId, userName: autoUser?.name ?? "Unknown", reason: "default_assignee", categoryName: autoCat?.name ?? "Unknown" } });
-    }
-    if (args.workCategoryId !== undefined && args.workCategoryId !== (task.workCategoryId ?? null)) {
-      const oldCat = task.workCategoryId ? await ctx.db.get(task.workCategoryId) : null;
-      const newCat = args.workCategoryId ? await ctx.db.get(args.workCategoryId) : null;
-      await logActivity(ctx, { ...logCtx, type: "category_changed", metadata: { from: oldCat?.name ?? "None", to: newCat?.name ?? "None" } });
-    }
-    if (args.dueDate !== undefined && args.dueDate !== (task.dueDate ?? null)) {
-      await logActivity(ctx, { ...logCtx, type: "due_date_changed", metadata: { from: task.dueDate ?? null, to: args.dueDate } });
-    }
-    if (args.projectId !== undefined && args.projectId !== (task.projectId ?? null)) {
-      const oldProj = task.projectId ? await ctx.db.get(task.projectId) : null;
-      const newProj = args.projectId ? await ctx.db.get(args.projectId) : null;
-      await logActivity(ctx, { ...logCtx, type: "project_changed", metadata: { from: oldProj?.name ?? null, to: newProj?.name ?? null } });
-    }
-    if (args.billable !== undefined && args.billable !== task.billable) {
-      await logActivity(ctx, { ...logCtx, type: "billable_changed", metadata: { from: task.billable, to: args.billable } });
-    }
-
-    // ── Notification fan-out ─────────────────────────────────────────────
-    // Assignment: newly added ids (explicit diff + auto-assign path).
-    // Description: only newly ADDED mentions notify (diff vs old content).
-    const notifEvents: Parameters<typeof createNotifications>[1]["events"] = [];
-    const taskTitle = (updates.title as string | undefined) ?? task.title;
-    if (args.assigneeIds !== undefined) {
-      const oldSet = new Set(task.assigneeIds.map(String));
-      for (const uid of args.assigneeIds) {
-        if (!oldSet.has(uid.toString())) {
-          notifEvents.push({ recipientId: uid, type: "assigned", previewText: taskTitle });
-        }
-      }
-    }
-    if (autoAssignedUserId) {
-      notifEvents.push({ recipientId: autoAssignedUserId, type: "assigned", previewText: taskTitle });
-    }
-    if (args.description !== undefined) {
-      const newDoc = safeParseDoc(nextDescription);
-      const addedMentions = diffMentionIds(safeParseDoc(task.description), newDoc);
-      if (addedMentions.length > 0) {
-        const preview = truncatePreview(extractPlainText(newDoc));
-        for (const recipientId of addedMentions) {
-          notifEvents.push({ recipientId, type: "mention_description", previewText: preview });
-        }
-      }
-    }
-    if (notifEvents.length > 0) {
-      // Re-read: the access check must see the NEW assignee list, or the
-      // just-added assignee would be filtered out as "no task access".
-      const updatedTask = await ctx.db.get(args.id);
-      if (updatedTask) {
-        await createNotifications(ctx, { orgId, actorId: userId, task: updatedTask, events: notifEvents });
-      }
-    }
+    const { id, estimate, ...patch } = args;
+    const access = await loadTaskForWrite(ctx, id);
+    await updateTask(ctx, access, { ...patch, estimateMinutes: estimate });
   },
 });
 
@@ -1318,96 +993,27 @@ export const updateDescription = mutation({
     description: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
-
-    const task = await ctx.db.get(args.id);
-    if (!task || task.orgId !== orgId) throw new ConvexError("Task not found");
-    if (!isAdmin && !task.assigneeIds.includes(userId)) {
-      throw new ConvexError("You can only edit tasks assigned to you");
-    }
-
-    const nextDescription = args.description !== undefined
-      ? (args.description.trim() || undefined)
-      : undefined;
-
-    if (nextDescription === task.description) return;
-
-    await ctx.db.patch(args.id, {
-      description: nextDescription,
-      updatedAt: Date.now(),
-    });
-
-    // Notification fan-out: only newly ADDED mentions (diff absorbs autosave
-    // churn; the unread dedupe in createNotifications absorbs re-adds).
-    const newDoc = safeParseDoc(nextDescription);
-    const addedMentions = diffMentionIds(safeParseDoc(task.description), newDoc);
-    if (addedMentions.length > 0) {
-      const preview = truncatePreview(extractPlainText(newDoc));
-      await createNotifications(ctx, {
-        orgId,
-        actorId: userId,
-        task,
-        events: addedMentions.map((recipientId) => ({
-          recipientId,
-          type: "mention_description" as const,
-          previewText: preview,
-        })),
-      });
-    }
+    const access = await loadTaskForWrite(ctx, args.id);
+    await updateTask(ctx, access, { description: args.description ?? "" });
   },
 });
 
 export const archive = mutation({
   args: { id: v.id("tasks") },
   handler: async (ctx, args) => {
-    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
-    const task = await ctx.db.get(args.id);
-    if (!task || task.orgId !== orgId) throw new ConvexError("Task not found");
-    if (!isAdmin && !task.assigneeIds.includes(userId)) throw new ConvexError("You can only archive tasks assigned to you");
-
-    const now = Date.now();
-    await ctx.db.patch(args.id, { archivedAt: now, updatedAt: now });
-
-    const subtasks = await ctx.db.query("tasks")
-      .withIndex("by_orgId_parentTaskId", (q) => q.eq("orgId", orgId).eq("parentTaskId", args.id))
-      .collect();
-    for (const sub of subtasks) {
-      if (!sub.archivedAt) await ctx.db.patch(sub._id, { archivedAt: now, updatedAt: now });
-    }
-
-    // Running timers on affected tasks: auto-save the measured time as
-    // entries instead of wiping it (returned so the caller's toast can say
-    // whose time was saved / left running).
-    const affectedTaskIds = new Set([args.id.toString(), ...subtasks.map((s) => s._id.toString())]);
-    const timerRescue = await autoSaveTimersForTasks(ctx, {
-      orgId,
-      actorUserId: userId,
-      taskIds: affectedTaskIds,
-      noteLabel: "Auto-saved when the task was archived",
-    });
-
-    return { autoSavedTimers: timerRescue.saved, timerSaveFailures: timerRescue.failed };
+    const access = await loadTaskForWrite(ctx, args.id);
+    // Running timers on the tree are auto-saved as entries (returned so the
+    // caller's toast can say whose time was saved / left running).
+    const rescue = await archiveTask(ctx, access);
+    return { autoSavedTimers: rescue.saved, timerSaveFailures: rescue.failed };
   },
 });
 
 export const restore = mutation({
   args: { id: v.id("tasks") },
   handler: async (ctx, args) => {
-    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
-    const task = await ctx.db.get(args.id);
-    if (!task || task.orgId !== orgId) throw new ConvexError("Task not found");
-    if (!isAdmin && !task.assigneeIds.includes(userId)) throw new ConvexError("You can only restore tasks assigned to you");
-    if (!task.archivedAt) throw new ConvexError("Task is not archived");
-
-    const now = Date.now();
-    await ctx.db.patch(args.id, { archivedAt: undefined, updatedAt: now });
-
-    const subtasks = await ctx.db.query("tasks")
-      .withIndex("by_orgId_parentTaskId", (q) => q.eq("orgId", orgId).eq("parentTaskId", args.id))
-      .collect();
-    for (const sub of subtasks) {
-      if (sub.archivedAt) await ctx.db.patch(sub._id, { archivedAt: undefined, updatedAt: now });
-    }
+    const access = await loadTaskForWrite(ctx, args.id);
+    await restoreTask(ctx, access);
   },
 });
 
@@ -1489,83 +1095,20 @@ export const remove = mutation({
     deleteEntries: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
-    const { orgId } = await requireAdmin(ctx);
-    const task = await ctx.db.get(args.id);
-    if (!task || task.orgId !== orgId) throw new ConvexError("Task not found");
-
-    const subtasks = await ctx.db.query("tasks")
-      .withIndex("by_orgId_parentTaskId", (q) => q.eq("orgId", orgId).eq("parentTaskId", args.id))
-      .collect();
-
-    // Time entries are ledger records. Close-locked ones are immutable
-    // (same protection as timeEntries.remove); free ones require explicit
-    // consent so a task delete can't silently destroy logged hours.
-    let hasEntries = false;
-    for (const t of [task, ...subtasks]) {
-      const entries = await ctx.db.query("timeEntries")
-        .withIndex("by_taskId", (q) => q.eq("taskId", t._id))
-        .collect();
-      for (const e of entries) {
-        if (e.closeId) {
-          throw new ConvexError(
-            "This task has invoiced or settled time entries. Archive it instead to keep billing records intact.",
-          );
-        }
-        hasEntries = true;
-      }
-    }
-    if (hasEntries && !args.deleteEntries) {
-      throw new ConvexError(
-        "This task has logged time. Archive it instead, or confirm deleting the time entries with it.",
-      );
-    }
-
-    for (const sub of subtasks) {
-      await cascadeDeleteTaskData(ctx, sub._id);
-      await ctx.db.delete(sub._id);
-    }
-    await cascadeDeleteTaskData(ctx, args.id);
-
-    const affectedTaskIds = new Set([args.id.toString(), ...subtasks.map((s) => s._id.toString())]);
-    const orgMembers = await ctx.db.query("orgMembers").withIndex("by_orgId", (q) => q.eq("orgId", orgId)).collect();
-    for (const member of orgMembers) {
-      if (!member.userId) continue;
-      const user = await ctx.db.get(member.userId);
-      if (user?.timerTaskId && affectedTaskIds.has(user.timerTaskId.toString())) {
-        await ctx.db.patch(member.userId, { timerTaskId: undefined, timerStartedAt: undefined, timerAccumulatedMs: undefined, timerStatus: undefined });
-      }
-    }
-
-    await ctx.db.delete(args.id);
+    const access = await loadTaskForWrite(ctx, args.id);
+    await removeTask(ctx, access, { deleteEntries: args.deleteEntries });
   },
 });
 
 export const duplicate = mutation({
   args: { id: v.id("tasks") },
   handler: async (ctx, args) => {
-    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
-    const task = await ctx.db.get(args.id);
-    if (!task || task.orgId !== orgId) throw new ConvexError("Task not found");
-    if (!isAdmin && !task.assigneeIds.includes(userId)) {
-      throw new ConvexError("You can only duplicate tasks assigned to you");
-    }
-
-    // Place duplicate right after the original in manual sort order
-    const manualSortKey = generateKeyBetween(task.manualSortKey ?? null, null);
-
-    const now = Date.now();
-    const newId = await ctx.db.insert("tasks", {
-      orgId, title: `${task.title} (copy)`,
-      description: task.description, statusId: task.statusId, statusType: task.statusType,
-      projectId: task.projectId, assigneeIds: task.assigneeIds, workCategoryId: task.workCategoryId,
-      estimate: task.estimate, billable: task.billable,
-      manualSortKey,
-      createdAt: now, updatedAt: now, createdBy: userId,
-    });
-
-    return newId;
+    const access = await loadTaskForWrite(ctx, args.id);
+    return await duplicateTask(ctx, access);
   },
 });
+
+type BulkSkip = { taskId: Id<"tasks">; title: string; reason: string };
 
 export const bulkUpdate = mutation({
   args: {
@@ -1582,198 +1125,90 @@ export const bulkUpdate = mutation({
     ),
   },
   handler: async (ctx, args) => {
-    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
+    const auth = await getAuthContext(ctx);
     if (args.taskIds.length > 50) throw new ConvexError("Maximum 50 tasks per bulk operation");
+    const action = args.action;
 
-    let newStatusType: StatusType | undefined;
-    if (args.action.type === "status") {
-      const status = await ctx.db.get(args.action.statusId);
-      if (!status || status.orgId !== orgId) throw new ConvexError("Status not found");
-      if (!isAdmin && status.type === "done") throw new ConvexError("Only admins can mark tasks as done");
-      newStatusType = status.type;
-    }
-    if (args.action.type === "project") {
-      const project = await ctx.db.get(args.action.projectId);
-      if (!project || project.orgId !== orgId) throw new ConvexError("Project not found");
-    }
-    if (args.action.type === "addAssignee") await validateAssignees(ctx, orgId, [args.action.userId]);
-    if (args.action.type === "category") await validateWorkCategory(ctx, orgId, args.action.workCategoryId);
-
-    const now = Date.now();
     let updated = 0;
-    const autoSavedTimers: Array<{ userName: string; minutes: number }> = [];
-    const timerSaveFailures: Array<{ userName: string; reason: string }> = [];
-    const skipped: Array<{ taskId: Id<"tasks">; title: string; reason: string }> = [];
+    const autoSavedTimers: TimerRescue["saved"] = [];
+    const timerSaveFailures: TimerRescue["failed"] = [];
+    const skipped: BulkSkip[] = [];
 
+    // Every per-task rule is checked BEFORE that task's writes, so a skip
+    // never leaves a half-applied task behind; unexpected errors abort the
+    // whole batch (transaction rollback).
     for (const taskId of args.taskIds) {
-      const task = await ctx.db.get(taskId);
-      if (!task || task.orgId !== orgId) { skipped.push({ taskId, title: "Unknown", reason: "Task not found" }); continue; }
-      if (!isAdmin && !task.assigneeIds.includes(userId)) { skipped.push({ taskId, title: task.title, reason: "Not assigned to you" }); continue; }
+      const access = await loadTaskForReadOrNull(ctx, taskId, auth);
+      if (!access) { skipped.push({ taskId, title: "Unknown", reason: TASK_NOT_FOUND }); continue; }
+      const { task } = access;
+      const skip = (reason: string) => skipped.push({ taskId, title: task.title, reason });
 
-      switch (args.action.type) {
-        case "status": {
-          await ctx.db.patch(taskId, { statusId: args.action.statusId, statusType: newStatusType!, updatedAt: now });
-          if (args.action.statusId !== task.statusId) {
-            const newStatus = await ctx.db.get(args.action.statusId);
-            const oldStatus = task.statusId ? await ctx.db.get(task.statusId) : null;
-            await logActivity(ctx, { taskId, orgId, userId, type: "status_changed", metadata: { from: oldStatus?.name ?? "None", to: newStatus?.name ?? "Unknown" } });
-
-            // Log subtask_completed on the parent when a subtask transitions INTO done
-            if (
-              newStatus?.type === "done" &&
-              oldStatus?.type !== "done" &&
-              task.parentTaskId
-            ) {
-              await logActivity(ctx, {
-                taskId: task.parentTaskId,
-                orgId,
-                userId,
-                type: "subtask_completed",
-                metadata: { title: task.title, subtaskId: taskId },
-              });
-            }
-          }
-          updated++;
+      switch (action.type) {
+        case "status":
+          await updateTask(ctx, access, { statusId: action.statusId });
           break;
-        }
-        case "addAssignee": {
-          if (!task.assigneeIds.includes(args.action.userId)) {
-            const nextAssignees = [...task.assigneeIds, args.action.userId];
-            await ctx.db.patch(taskId, { assigneeIds: nextAssignees, updatedAt: now });
-            const user = await ctx.db.get(args.action.userId);
-            await logActivity(ctx, { taskId, orgId, userId, type: "assignee_added", metadata: { userId: args.action.userId, userName: user?.name ?? "Unknown" } });
-            // Access check needs the NEW assignee list; unread dedupe absorbs repeats
-            await createNotifications(ctx, {
-              orgId, actorId: userId,
-              task: { ...task, assigneeIds: nextAssignees },
-              events: [{ recipientId: args.action.userId, type: "assigned", previewText: task.title }],
-            });
+        case "addAssignee":
+          if (!task.assigneeIds.includes(action.userId)) {
+            await updateTask(ctx, access, { assigneeIds: [...task.assigneeIds, action.userId] });
           }
-          updated++;
           break;
-        }
         case "removeAssignee": {
-          const removeUid = args.action.userId;
-          if (task.assigneeIds.includes(removeUid)) {
-            await ctx.db.patch(taskId, { assigneeIds: task.assigneeIds.filter((id) => id !== removeUid), updatedAt: now });
-            const user = await ctx.db.get(removeUid);
-            await logActivity(ctx, { taskId, orgId, userId, type: "assignee_removed", metadata: { userId: removeUid, userName: user?.name ?? "Unknown" } });
-          }
-          updated++;
+          if (!task.assigneeIds.includes(action.userId)) break;
+          const next = task.assigneeIds.filter((id) => id !== action.userId);
+          const decision = canChangeAssignees(access, task.assigneeIds, next);
+          if (!decision.ok) { skip(decision.reason); continue; }
+          await updateTask(ctx, access, { assigneeIds: next });
           break;
         }
-        case "category": {
-          if (args.action.workCategoryId !== task.workCategoryId) {
-            const catPatch: Record<string, unknown> = { workCategoryId: args.action.workCategoryId, updatedAt: now };
-            // Auto-assign default assignee if task has no assignees
-            if (task.assigneeIds.length === 0 && task.projectId) {
-              const defaultUser = await resolveDefaultAssignee(ctx, orgId, task.projectId, args.action.workCategoryId);
-              if (defaultUser) catPatch.assigneeIds = [defaultUser];
-            }
-            await ctx.db.patch(taskId, catPatch);
-            const oldCat = task.workCategoryId ? await ctx.db.get(task.workCategoryId) : null;
-            const newCat = await ctx.db.get(args.action.workCategoryId);
-            await logActivity(ctx, { taskId, orgId, userId, type: "category_changed", metadata: { from: oldCat?.name ?? "None", to: newCat?.name ?? "Unknown" } });
-            if (catPatch.assigneeIds) {
-              const autoAssignee = (catPatch.assigneeIds as Id<"users">[])[0];
-              const autoUser = await ctx.db.get(autoAssignee);
-              await logActivity(ctx, { taskId, orgId, userId, type: "assignee_added", metadata: { userId: autoAssignee, userName: autoUser?.name ?? "Unknown", reason: "default_assignee", categoryName: newCat?.name ?? "Unknown" } });
-              await createNotifications(ctx, {
-                orgId, actorId: userId,
-                task: { ...task, assigneeIds: catPatch.assigneeIds as Id<"users">[] },
-                events: [{ recipientId: autoAssignee, type: "assigned", previewText: task.title }],
-              });
-            }
-          }
-          updated++;
+        case "category":
+          if (!canEditField(access, "workCategory")) { skip("Only admins can change the work category"); continue; }
+          await updateTask(ctx, access, { workCategoryId: action.workCategoryId });
           break;
-        }
         case "project": {
-          if (task.projectId === args.action.projectId) { updated++; break; }
-          const hasEntries = await ctx.db.query("timeEntries").withIndex("by_taskId", (q) => q.eq("taskId", taskId)).first();
-          if (hasEntries) { skipped.push({ taskId, title: task.title, reason: "Has time entries — cannot change project" }); continue; }
-          const projPatch: Record<string, unknown> = { projectId: args.action.projectId, updatedAt: now };
-          // Auto-assign default assignee if task has no assignees
-          if (task.assigneeIds.length === 0 && task.workCategoryId) {
-            const defaultUser = await resolveDefaultAssignee(ctx, orgId, args.action.projectId, task.workCategoryId);
-            if (defaultUser) projPatch.assigneeIds = [defaultUser];
-          }
-          await ctx.db.patch(taskId, projPatch);
-          if (projPatch.assigneeIds) {
-            const autoAssignee = (projPatch.assigneeIds as Id<"users">[])[0];
-            const autoUser = await ctx.db.get(autoAssignee);
-            const cat = task.workCategoryId ? await ctx.db.get(task.workCategoryId) : null;
-            await logActivity(ctx, { taskId, orgId, userId, type: "assignee_added", metadata: { userId: autoAssignee, userName: autoUser?.name ?? "Unknown", reason: "default_assignee", categoryName: cat?.name ?? "Unknown" } });
-            await createNotifications(ctx, {
-              orgId, actorId: userId,
-              task: { ...task, assigneeIds: projPatch.assigneeIds as Id<"users">[] },
-              events: [{ recipientId: autoAssignee, type: "assigned", previewText: task.title }],
-            });
-          }
-          updated++;
+          if (task.projectId === action.projectId) break;
+          if (!canEditField(access, "project")) { skip("Only admins can change the project"); continue; }
+          if (task.parentTaskId) { skip("Sub-tasks follow their parent's project"); continue; }
+          if (await treeHasTimeEntries(ctx, task)) { skip("Has time entries — cannot change project"); continue; }
+          await updateTask(ctx, access, { projectId: action.projectId });
           break;
         }
         case "archive": {
-          if (!task.archivedAt) {
-            await ctx.db.patch(taskId, { archivedAt: now, updatedAt: now });
-            const subs = await ctx.db.query("tasks").withIndex("by_orgId_parentTaskId", (q) => q.eq("orgId", orgId).eq("parentTaskId", taskId)).collect();
-            for (const sub of subs) { if (!sub.archivedAt) await ctx.db.patch(sub._id, { archivedAt: now, updatedAt: now }); }
-            // Running timers on affected tasks: auto-save instead of wipe.
-            const affectedIds = new Set([taskId.toString(), ...subs.map((s) => s._id.toString())]);
-            const rescue = await autoSaveTimersForTasks(ctx, {
-              orgId,
-              actorUserId: userId,
-              taskIds: affectedIds,
-              noteLabel: "Auto-saved when the task was archived",
-            });
-            autoSavedTimers.push(...rescue.saved);
-            timerSaveFailures.push(...rescue.failed);
-          }
-          updated++;
+          const rescue = await archiveTask(ctx, access);
+          autoSavedTimers.push(...rescue.saved);
+          timerSaveFailures.push(...rescue.failed);
           break;
         }
-        case "delete": {
-          if (!isAdmin) { skipped.push({ taskId, title: task.title, reason: "Only admins can delete tasks" }); continue; }
-          const delSubs = await ctx.db.query("tasks").withIndex("by_orgId_parentTaskId", (q) => q.eq("orgId", orgId).eq("parentTaskId", taskId)).collect();
+        case "delete":
+          if (!canDelete(access)) { skip("Only admins can delete tasks"); continue; }
           // Time entries are ledger records — same rule as projects.remove.
-          let hasLoggedTime = false;
-          for (const t of [task, ...delSubs]) {
-            if (await taskHasTimeEntries(ctx, t._id)) { hasLoggedTime = true; break; }
-          }
-          if (hasLoggedTime) { skipped.push({ taskId, title: task.title, reason: "Task has logged time — archive it instead" }); continue; }
-          // Stop active timers on affected tasks
-          const delAffectedIds = new Set([taskId.toString(), ...delSubs.map((s) => s._id.toString())]);
-          const delMembers = await ctx.db.query("orgMembers").withIndex("by_orgId", (q) => q.eq("orgId", orgId)).collect();
-          for (const member of delMembers) {
-            if (!member.userId) continue;
-            const user = await ctx.db.get(member.userId);
-            if (user?.timerTaskId && delAffectedIds.has(user.timerTaskId.toString())) {
-              await ctx.db.patch(member.userId, { timerTaskId: undefined, timerStartedAt: undefined, timerAccumulatedMs: undefined, timerStatus: undefined });
-            }
-          }
-          for (const sub of delSubs) { await cascadeDeleteTaskData(ctx, sub._id); await ctx.db.delete(sub._id); }
-          await cascadeDeleteTaskData(ctx, taskId);
-          await ctx.db.delete(taskId);
-          updated++;
+          if (await treeHasTimeEntries(ctx, task)) { skip("Task has logged time — archive it instead"); continue; }
+          await removeTask(ctx, access);
           break;
-        }
-        case "restore": {
-          if (!task.archivedAt) { skipped.push({ taskId, title: task.title, reason: "Task is not archived" }); continue; }
-          await ctx.db.patch(taskId, { archivedAt: undefined, updatedAt: now });
-          const restSubs = await ctx.db.query("tasks").withIndex("by_orgId_parentTaskId", (q) => q.eq("orgId", orgId).eq("parentTaskId", taskId)).collect();
-          for (const sub of restSubs) { if (sub.archivedAt) await ctx.db.patch(sub._id, { archivedAt: undefined, updatedAt: now }); }
-          updated++;
+        case "restore":
+          if (!task.archivedAt) { skip("Task is not archived"); continue; }
+          await restoreTask(ctx, access);
           break;
-        }
       }
+      updated++;
     }
 
     return { updated, skipped, autoSavedTimers, timerSaveFailures };
   },
 });
 
-// ─── Reorder task (drag & drop, fractional indexing) ────────────────────────
+async function treeHasTimeEntries(ctx: QueryCtx, task: Doc<"tasks">): Promise<boolean> {
+  if (await taskHasTimeEntries(ctx, task._id)) return true;
+  const children = await ctx.db
+    .query("tasks")
+    .withIndex("by_orgId_parentTaskId", (q) => q.eq("orgId", task.orgId).eq("parentTaskId", task._id))
+    .collect();
+  for (const child of children) {
+    if (await taskHasTimeEntries(ctx, child._id)) return true;
+  }
+  return false;
+}
 
+// ─── Reorder task (drag & drop, fractional indexing) ────────────────────────
 
 export const reorderTask = mutation({
   args: {
@@ -1782,19 +1217,7 @@ export const reorderTask = mutation({
     afterKey: v.optional(v.string()),    // manualSortKey of the item below (null = last)
   },
   handler: async (ctx, { taskId, beforeKey, afterKey }) => {
-    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
-
-    const task = await ctx.db.get(taskId);
-    if (!task || task.orgId !== orgId) {
-      throw new ConvexError("Task not found");
-    }
-    if (!isAdmin && !task.assigneeIds.includes(userId)) {
-      throw new ConvexError("You can only reorder tasks assigned to you");
-    }
-
-    // Generate fractional key between neighbors
-    const newKey = generateKeyBetween(beforeKey ?? null, afterKey ?? null);
-
-    await ctx.db.patch(taskId, { manualSortKey: newKey });
+    const access = await loadTaskForWrite(ctx, taskId);
+    await reorderTaskWrite(ctx, access, { beforeKey, afterKey });
   },
 });

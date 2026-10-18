@@ -342,7 +342,7 @@ describe("devSeedTasks: legacy org", () => {
       commentCount: 2,
       estimateMinutes: 120,
       hasDescription: true,
-      lastActivity: { kind: "comment", actorId: legacy.admin },
+      lastActivity: { kind: "comment_added", actorId: legacy.admin },
     });
     expect(task(legacy.doneTask).completedAt).toBe(task(legacy.doneTask).updatedAt);
     expect(task(legacy.parentTask)).toMatchObject({ identifier: "PRAG-1", subtaskCount: 2, subtaskDoneCount: 1 });

@@ -2,6 +2,7 @@ import { query, mutation } from "./_generated/server";
 import { v, ConvexError } from "convex/values";
 import { getAuthContextOptional, requireAdmin, validateStringLength } from "./lib/auth";
 import { currencyValidator, roundingValidator, statusTypeValidator, statusColorValidator, categoryColorValidator } from "./lib/validators";
+import { categoryOfStatus } from "./tasks/model";
 
 export const get = query({
   args: {},
@@ -102,6 +103,7 @@ export const create = mutation({
         name: trimmedName,
         color: s.color,
         type: s.type,
+        category: categoryOfStatus({ name: trimmedName, type: s.type }),
         sortOrder: i,
         createdAt: now,
         updatedAt: now,

@@ -3,7 +3,12 @@ import { v, ConvexError } from "convex/values";
 import { getAuthContext, requireAdmin, validateStringLength } from "./lib/auth";
 import { statusTypeValidator, statusColorValidator } from "./lib/validators";
 import { DEFAULT_STATUSES } from "./lib/constants";
-import type { StatusType } from "./lib/constants";
+import {
+  categoryFromLegacyType,
+  categoryOfStatus,
+  type TaskCategory,
+} from "./tasks/model";
+import { syncLegacyStatusType } from "./tasks/write";
 
 export const list = query({
   args: {
@@ -54,6 +59,8 @@ export const create = mutation({
       color: args.color,
       icon: args.icon,
       type: args.type,
+      category: categoryFromLegacyType(args.type),
+      isDefault: false,
       sortOrder: maxSort + 1,
       createdAt: now,
       updatedAt: now,
@@ -85,6 +92,7 @@ export const update = mutation({
       color?: string;
       icon?: string;
       type?: typeof args.type;
+      category?: TaskCategory;
       sortOrder?: number;
       updatedAt: number;
     } = { updatedAt: Date.now() };
@@ -101,26 +109,33 @@ export const update = mutation({
     if (args.icon !== undefined) patch.icon = args.icon;
     if (args.sortOrder !== undefined) patch.sortOrder = args.sortOrder;
 
-    // If type changes, cascade to all tasks with this statusId
+    // A legacy type change. The category (D3) is what business logic reads:
+    // it may only change while no task uses the status (§4.1); otherwise the
+    // tasks' legacy `statusType` cache follows the new type (write path, T2).
+    let syncTasks = false;
     if (args.type !== undefined && args.type !== status.type) {
-      const newType = args.type as StatusType;
-
-      const affectedTasks = await ctx.db
-        .query("tasks")
-        .withIndex("by_orgId_statusId", (q) =>
-          q.eq("orgId", orgId).eq("statusId", args.id)
-        )
-        .collect();
-
-      const now = Date.now();
-      for (const task of affectedTasks) {
-        await ctx.db.patch(task._id, { statusType: newType, updatedAt: now });
+      const currentCategory = categoryOfStatus(status);
+      const nextCategory = categoryFromLegacyType(args.type);
+      if (nextCategory !== currentCategory) {
+        const used = await ctx.db
+          .query("tasks")
+          .withIndex("by_orgId_statusId", (q) => q.eq("orgId", orgId).eq("statusId", args.id))
+          .first();
+        if (used) {
+          throw new ConvexError(
+            "This status is used by tasks, so its category can't change. Move its tasks to another status first.",
+          );
+        }
+        patch.category = nextCategory;
+      } else {
+        patch.category = currentCategory;
+        syncTasks = true;
       }
-
       patch.type = args.type;
     }
 
     await ctx.db.patch(args.id, patch);
+    if (syncTasks) await syncLegacyStatusType(ctx, (await ctx.db.get(args.id))!);
   },
 });
 
@@ -270,6 +285,7 @@ export const seed = internalMutation({
         name: status.name,
         color: status.color,
         type: status.type,
+        category: categoryOfStatus(status),
         sortOrder: status.sortOrder,
         createdAt: now,
         updatedAt: now,

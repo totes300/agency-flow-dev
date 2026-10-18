@@ -5,12 +5,10 @@ import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import {
   getAuthContext,
-  validateStringLength,
   assertCanManagePlanFor,
 } from "./lib/auth";
 import { assertValidDateString } from "./lib/dateValidation";
-import { getDefaultStatusId } from "./lib/task_helpers";
-import { logActivity } from "./activityLog";
+import { createTask } from "./tasks/write";
 import {
   rankTaskSegments,
   segmentSpanDays,
@@ -624,13 +622,10 @@ export const updateSegment = mutation({
  * range) leaves no half-created task behind (Convex mutations are
  * transactions, and every referenced id is validated before any write).
  *
- * Task defaults are deliberately identical to the /tasks inline-add path
- * (tasks.create called with only title + project): default backlog status,
- * no category, no due date, billable, appended fractional sort key, empty
- * assignees — resolveDefaultAssignee needs a category to match a project's
- * defaultAssignees mapping, and Planner-created tasks never have one. The
- * segment's row user is NOT assigned to the task (PRD: `assigneeIds` is
- * untouched by the Planner; segments carry their own userId).
+ * The task goes through the one write path (tasks/write.ts createTask) with
+ * the /tasks inline-add defaults: default backlog status, no category, no
+ * due date, billable, appended sort key. Assignees: none for an admin; a
+ * member is assigned to what they create (§5.3).
  */
 export const createTaskWithSegment = mutation({
   args: {
@@ -647,55 +642,15 @@ export const createTaskWithSegment = mutation({
     const auth = await getAuthContext(ctx);
     const { orgId, userId: createdBy } = auth;
     assertCanManagePlanFor(auth, args.userId);
-
-    const title = args.title.trim();
-    if (!title) throw new ConvexError("Task title is required");
-    validateStringLength(title, 500, "Task title");
-
-    if (args.projectId) {
-      const project = await ctx.db.get(args.projectId);
-      if (!project || project.orgId !== orgId) {
-        throw new ConvexError("Project not found");
-      }
-    }
     await assertOrgMember(ctx, orgId, args.userId);
     assertSegmentRange(args.startDate, args.endDate);
 
-    const defaults = await getDefaultStatusId(ctx, orgId);
-
-    // Append after the org's highest manual sort key (same index + OCC
-    // serialization argument as tasks.create).
-    const lastSorted = await ctx.db
-      .query("tasks")
-      .withIndex("by_orgId_manualSortKey", (q) => q.eq("orgId", orgId))
-      .order("desc")
-      .first();
-    const manualSortKey = generateKeyBetween(
-      lastSorted?.manualSortKey ?? null,
-      null,
-    );
-
+    // The write path appends the task with the default backlog status. A
+    // member is auto-assigned (§5.3: a member is assigned to what they
+    // create; their own row is the only one they may draw on). The segment's
+    // row user is otherwise NOT assigned: segments carry their own userId.
+    const taskId = await createTask(ctx, auth, { title: args.title, projectId: args.projectId });
     const now = Date.now();
-    const taskId = await ctx.db.insert("tasks", {
-      orgId,
-      title,
-      statusId: defaults.statusId,
-      statusType: defaults.statusType,
-      projectId: args.projectId,
-      assigneeIds: [],
-      billable: true,
-      manualSortKey,
-      createdAt: now,
-      updatedAt: now,
-      createdBy,
-    });
-    await logActivity(ctx, {
-      taskId,
-      orgId,
-      userId: createdBy,
-      type: "task_created",
-      metadata: {},
-    });
 
     const segmentId = await ctx.db.insert("planSegments", {
       orgId,
@@ -929,8 +884,8 @@ export const reorderTodayTask = mutation({
 
 /**
  * Inline-add inside the Today group: "I'll also do this today" as ONE
- * atomic gesture — the task is created with the org's first In progress
- * status (by sortOrder), assigned to the creator, and planned for today
+ * atomic gesture — the task is created with the org's default started
+ * status ("In progress"), assigned to the creator, and planned for today
  * (one-day segment). Member-callable; self-scoped by construction.
  *
  * Mirrors createTaskWithSegment's task defaults otherwise (billable,
@@ -943,65 +898,22 @@ export const createTodayTask = mutation({
     projectId: v.optional(v.id("projects")),
   },
   handler: async (ctx, args) => {
-    const { orgId, userId } = await getAuthContext(ctx);
-
-    const title = args.title.trim();
-    if (!title) throw new ConvexError("Task title is required");
-    validateStringLength(title, 500, "Task title");
-
-    if (args.projectId) {
-      const project = await ctx.db.get(args.projectId);
-      if (!project || project.orgId !== orgId) {
-        throw new ConvexError("Project not found");
-      }
-    }
-
-    // Typing a task into today's plan means I'm on it → first In progress
-    // status by sortOrder (PRD story 17).
-    const statuses = await ctx.db
-      .query("statuses")
-      .withIndex("by_orgId_type", (q) => q.eq("orgId", orgId).eq("type", "in_progress"))
-      .collect();
-    const status = statuses
-      .filter((s) => !s.archivedAt)
-      .sort((a, b) => a.sortOrder - b.sortOrder)[0];
-    if (!status) throw new ConvexError("No in-progress status found for org");
+    const auth = await getAuthContext(ctx);
+    const { orgId, userId } = auth;
 
     const orgSettings = await getOrgSettings(ctx, orgId);
     const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
     const today = getDateInTimezone(Date.now(), timezone);
 
-    const lastSorted = await ctx.db
-      .query("tasks")
-      .withIndex("by_orgId_manualSortKey", (q) => q.eq("orgId", orgId))
-      .order("desc")
-      .first();
-    const manualSortKey = generateKeyBetween(
-      lastSorted?.manualSortKey ?? null,
-      null,
-    );
-
-    const now = Date.now();
-    const taskId = await ctx.db.insert("tasks", {
-      orgId,
-      title,
-      statusId: status._id,
-      statusType: status.type,
+    // Typing a task into today's plan means I'm on it → the org's default
+    // started status (an org without one falls back to unstarted).
+    const taskId = await createTask(ctx, auth, {
+      title: args.title,
       projectId: args.projectId,
       assigneeIds: [userId],
-      billable: true,
-      manualSortKey,
-      createdAt: now,
-      updatedAt: now,
-      createdBy: userId,
+      defaultCategories: ["started", "unstarted"],
     });
-    await logActivity(ctx, {
-      taskId,
-      orgId,
-      userId,
-      type: "task_created",
-      metadata: {},
-    });
+    const now = Date.now();
 
     const segmentId = await ctx.db.insert("planSegments", {
       orgId,

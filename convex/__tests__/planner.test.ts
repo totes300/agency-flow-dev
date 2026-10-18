@@ -790,7 +790,8 @@ describe("createTaskWithSegment", () => {
     });
     const created = await t.run(async (ctx) => await ctx.db.get(taskId));
     expect(created?.title).toBe("Member draw");
-    expect(created?.assigneeIds).toEqual([]); // Planner never auto-assigns
+    // §5.3: a member is assigned to what they create (else they could not see it, T1).
+    expect(created?.assigneeIds).toEqual([s.member]);
 
     // Member drawing on ANOTHER user's row → rejected
     await expect(

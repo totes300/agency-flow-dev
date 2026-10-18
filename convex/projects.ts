@@ -3,7 +3,8 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { query, mutation } from "./_generated/server";
 import { getAuthContext, requireAdmin, validateStringLength } from "./lib/auth";
 import { billingTypeValidator, retainerStatusValidator } from "./lib/validators";
-import { generateNextProjectCode, ensureUniqueProjectCode } from "./lib/helpers";
+import { generateNextProjectCode, ensureUniqueProjectCode, normalizeProjectCode } from "./lib/helpers";
+import { rewriteProjectIdentifiers } from "./tasks/write";
 import { validateAssignees } from "./lib/task_helpers";
 import { getDateInTimezone, ORG_TIMEZONE_FALLBACK } from "./lib/timer";
 import { getOrgSettings, getProjectCurrency } from "./lib/orgHelpers";
@@ -202,29 +203,19 @@ export const create = mutation({
       }
     }
 
-    // Validate or generate project code
+    // The code is the task identifier key (D2): validate a user-entered one,
+    // else suggest one from the client prefix / client or project name.
     const userCode = args.code?.trim();
     let code: string;
-
     if (userCode) {
-      await ensureUniqueProjectCode(ctx, orgId, userCode);
-      code = userCode;
+      code = normalizeProjectCode(userCode);
+      await ensureUniqueProjectCode(ctx, orgId, code);
     } else {
-      code = await generateNextProjectCode(ctx, orgId);
-      let attempts = 0;
-      const maxAttempts = 3;
-      while (attempts < maxAttempts) {
-        try {
-          await ensureUniqueProjectCode(ctx, orgId, code);
-          break;
-        } catch {
-          attempts++;
-          if (attempts >= maxAttempts) {
-            throw new ConvexError(`Could not generate a unique project code after ${maxAttempts} attempts`);
-          }
-          code = await generateNextProjectCode(ctx, orgId);
-        }
-      }
+      code = await generateNextProjectCode(ctx, orgId, {
+        clientPrefix: client.prefix,
+        clientName: client.name,
+        projectName: name,
+      });
     }
 
     const now = Date.now();
@@ -307,7 +298,7 @@ export const update = mutation({
     teamMembers: v.optional(v.array(v.id("users"))),
   },
   handler: async (ctx, args) => {
-    const { orgId } = await requireAdmin(ctx);
+    const { orgId, userId } = await requireAdmin(ctx);
     const project = await ctx.db.get(args.id);
     if (!project || project.orgId !== orgId) throw new ConvexError("Project not found");
 
@@ -320,11 +311,15 @@ export const update = mutation({
       updates.name = name;
     }
 
-    if (args.code !== undefined) {
-      const code = args.code.trim();
-      if (!code) throw new ConvexError("Project code is required");
-      await ensureUniqueProjectCode(ctx, orgId, code, args.id.toString());
-      updates.code = code;
+    let codeRename: string | undefined;
+    // Re-sending the unchanged code (even a legacy "PRJ-042") is a no-op.
+    if (args.code !== undefined && args.code.trim() !== project.code) {
+      const code = normalizeProjectCode(args.code);
+      if (code !== project.code) {
+        await ensureUniqueProjectCode(ctx, orgId, code, args.id.toString());
+        updates.code = code;
+        codeRename = code;
+      }
     }
 
     if (args.teamMembers !== undefined) {
@@ -365,6 +360,9 @@ export const update = mutation({
     }
 
     await ctx.db.patch(args.id, updates);
+    // §11.1: a code rename rewrites every identifier in the project; the old
+    // ones become aliases (write path, T5).
+    if (codeRename) await rewriteProjectIdentifiers(ctx, userId, project, codeRename);
   },
 });
 

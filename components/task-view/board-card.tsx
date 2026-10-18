@@ -1,23 +1,53 @@
 "use client"
 
-import { memo } from "react"
+import { memo, type ReactNode } from "react"
 import { useDraggable } from "@dnd-kit/react"
 import type { Id } from "@/convex/_generated/dataModel"
+import { PRIORITY, PRIORITY_LABELS } from "@/convex/tasks/model"
+import { CategoryBadge } from "@/components/category-badge"
+import { InlineTimeCell } from "@/components/tasks/inline-time-cell"
+import { InlineSubtaskRing } from "@/components/tasks/activity-indicators"
+import { PriorityIcon } from "@/components/icons/priority-icon"
+import { CalendarNavIcon, CommentNavIcon } from "@/components/icons/nav-icons"
+import { useTimerActions } from "@/lib/hooks/use-timer"
+import { formatHoursShort } from "@/lib/format"
+import { getStatusColor } from "@/lib/status-colors"
 import { cn } from "@/lib/utils"
-import { CELL_RENDERERS, type CellContext, type ColumnKey } from "@/components/task-view/columns"
+import { AssigneeAvatars, CELL_RENDERERS, formatDue, type CellContext, type ColumnKey } from "@/components/task-view/columns"
 import type { TaskRowModel } from "@/components/task-view/row-model"
-
-/** Card lines, in order. Only the keys the view shows (and the column does not repeat) render. */
-const META_KEYS: readonly ColumnKey[] = ["priority", "labels", "category", "due", "estimate"]
-const FOOTER_KEYS: readonly ColumnKey[] = ["client", "assignee", "time"]
 
 export type BoardCardDragData = { taskId: Id<"tasks">; fromKey: string }
 
+/** Labels shown as chips before "+N". */
+const MAX_CARD_LABELS = 2
+
+/** A property chip: quiet fill, no border, one value each (Notion/Linear card chips). */
+function Chip({ className, children, ...props }: React.ComponentProps<"span">) {
+  return (
+    <span
+      className={cn(
+        "inline-flex h-6 max-w-full min-w-0 items-center gap-1.5 rounded-md bg-secondary px-2 text-xs text-muted-foreground",
+        className,
+      )}
+      {...props}
+    >
+      {children}
+    </span>
+  )
+}
+
 /**
- * A board card (prototype v4): the same cell renderers as the table row, laid
- * out as a card. No task ID, and never the column's own property (the
- * registry's U3 rules decide the visible keys). Status shows as an icon
- * before the title unless the board's columns are statuses.
+ * A board card, laid out like Linear's / Notion's: a vertical stack where
+ * every row has one job, generous padding, the title as the largest element.
+ *
+ *   Arlo Coffee                                   (photos)   ← where + who
+ *   ○ Summer campaign landing page redesign                  ← what
+ *   [▂▄]  [• Design]  [▢ Oct 21]                             ← properties, one chip each
+ *   ▶ 01:30                                        💬 2      ← activity (only when there is any)
+ *
+ * Only values that are set and visible render; never the column's own
+ * property (U3 rules decide `keys`) and no task ID. Status shows as an icon
+ * before the title unless the columns are statuses.
  */
 export const BoardCard = memo(function BoardCard({
   row,
@@ -39,16 +69,80 @@ export const BoardCard = memo(function BoardCard({
   isOpen: boolean
   onOpen: (taskId: Id<"tasks">) => void
 }) {
-  const taskId = row.task._id
+  const { task, perUser } = row
+  const taskId = task._id
   const { ref, isDragging } = useDraggable({
     id: `${columnKey}:${taskId}`,
     data: { taskId, fromKey: columnKey } satisfies BoardCardDragData,
     disabled: !draggable,
   })
-  const showStatus = keys.has("status") || keys.has("statusIcon")
-  // An empty label list would render an "Add labels" target; cards stay quiet.
-  const meta = META_KEYS.filter((k) => keys.has(k) && (k !== "labels" || row.labels.length > 0))
-  const footer = FOOTER_KEYS.filter((k) => keys.has(k))
+  const { isRunningOn } = useTimerActions()
+  const running = isRunningOn(taskId)
+
+  const client = keys.has("client") ? row.client : null
+  const assignees = keys.has("assignee") ? row.assignees : []
+  const showStatus = (keys.has("status") || keys.has("statusIcon")) && row.status
+  const overdue = !!task.dueDate && !row.isClosed && task.dueDate < ctx.today
+  const unread = perUser.unreadComments
+
+  const chips: ReactNode[] = []
+  if (keys.has("priority") && task.priority !== PRIORITY.none) {
+    chips.push(
+      <button
+        key="priority"
+        type="button"
+        data-menu-anchor="priority"
+        aria-label={`Priority: ${PRIORITY_LABELS[task.priority]}`}
+        className="inline-flex size-6 shrink-0 items-center justify-center rounded-md bg-secondary outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
+        onClick={(e) => {
+          e.stopPropagation()
+          ctx.openMenu("priority", taskId, e.currentTarget)
+        }}
+      >
+        <PriorityIcon priority={task.priority} label={false} />
+      </button>,
+    )
+  }
+  if (keys.has("category") && row.workCategory) {
+    chips.push(
+      <CategoryBadge key="category" name={row.workCategory.name} color={row.workCategory.color} className="h-6 max-w-full truncate rounded-md" />,
+    )
+  }
+  if (keys.has("labels")) {
+    for (const label of row.labels.slice(0, MAX_CARD_LABELS)) {
+      chips.push(
+        <Chip key={label._id}>
+          <span className="size-1.5 shrink-0 rounded-full" style={{ backgroundColor: getStatusColor(label.color).dot }} />
+          <span className="truncate">{label.name}</span>
+        </Chip>,
+      )
+    }
+    if (row.labels.length > MAX_CARD_LABELS) {
+      chips.push(<Chip key="labels-more" className="tabular-nums">+{row.labels.length - MAX_CARD_LABELS}</Chip>)
+    }
+  }
+  if (keys.has("due") && task.dueDate) {
+    chips.push(
+      <Chip key="due" className={cn("tabular-nums", overdue && "text-destructive")}>
+        <CalendarNavIcon size={12} className="shrink-0" />
+        {formatDue(task.dueDate, ctx.today)}
+      </Chip>,
+    )
+  }
+  if (keys.has("estimate") && task.estimateMinutes) {
+    chips.push(<Chip key="estimate" className="tabular-nums">{formatHoursShort(task.estimateMinutes)}</Chip>)
+  }
+  if (task.subtaskCount > 0) {
+    chips.push(
+      <Chip key="subtasks" className="tabular-nums" aria-label={`${task.subtaskDoneCount} of ${task.subtaskCount} sub-tasks done`}>
+        <InlineSubtaskRing done={task.subtaskDoneCount} total={task.subtaskCount} isUnseen={false} />
+        {task.subtaskDoneCount}/{task.subtaskCount}
+      </Chip>,
+    )
+  }
+
+  const showTime = keys.has("time") && (task.trackedMinutes > 0 || running)
+  const showComments = task.commentCount > 0 || unread > 0
 
   return (
     <div
@@ -58,47 +152,52 @@ export const BoardCard = memo(function BoardCard({
       data-task-id={taskId}
       data-focused={isFocused || undefined}
       className={cn(
-        "group/card flex cursor-default flex-col gap-2 rounded-lg bg-background px-3 py-2.5 text-[13px] shadow-xs ring-1 ring-border transition-shadow outline-none hover:ring-foreground/20",
-        isFocused && "ring-foreground/30",
+        "flex cursor-default flex-col gap-2.5 rounded-xl bg-background p-3.5 ring-1 ring-border transition-[box-shadow,opacity] outline-none",
+        "shadow-[0_1px_2px_0_rgb(0_0_0/0.04)] hover:shadow-[0_2px_6px_-1px_rgb(0_0_0/0.08)]",
+        isFocused && "ring-foreground/25",
         isOpen && "ring-primary/40",
         isDragging && "opacity-60",
       )}
       onClick={() => onOpen(taskId)}
     >
-      <div className="flex min-w-0 items-start gap-1.5">
-        {showStatus && row.status ? <span className="flex h-5 shrink-0 items-center">{CELL_RENDERERS.statusIcon(row, ctx)}</span> : null}
-        <div className="flex min-w-0 flex-1 items-center gap-1.5 [&>span.truncate]:line-clamp-2 [&>span.truncate]:whitespace-normal">
-          {CELL_RENDERERS.title(row, ctx)}
-        </div>
-      </div>
-      {meta.length > 0 ? (
-        <div className="flex min-w-0 flex-wrap items-center gap-1.5 empty:hidden">
-          {meta.map((key) => (
-            <CardCell key={key} col={key} row={row} ctx={ctx} />
-          ))}
+      {client || assignees.length > 0 ? (
+        <div className="-mb-1 flex h-5 min-w-0 items-center gap-2">
+          <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{client?.name ?? ""}</span>
+          {assignees.length > 0 ? <AssigneeAvatars assignees={assignees} className="shrink-0" /> : null}
         </div>
       ) : null}
-      {footer.length > 0 ? (
-        <div className="flex min-w-0 items-center gap-2">
-          {footer.includes("client") ? (
-            <div className="min-w-0 flex-1 truncate">{CELL_RENDERERS.client(row, ctx)}</div>
-          ) : (
-            <span className="flex-1" />
-          )}
-          {footer.includes("assignee") ? <CardCell col="assignee" row={row} ctx={ctx} /> : null}
-          {footer.includes("time") ? <CardCell col="time" row={row} ctx={ctx} /> : null}
+
+      <div className="flex min-w-0 items-start gap-2">
+        {showStatus ? <span className="flex h-5 shrink-0 items-center">{CELL_RENDERERS.statusIcon(row, ctx)}</span> : null}
+        <span className="line-clamp-3 min-w-0 flex-1 text-sm leading-5 font-medium">
+          {perUser.hasUnseenChanges ? (
+            <span className="mr-1.5 mb-px inline-block size-1.5 rounded-full bg-primary align-middle" aria-label="Updated since you last opened it" />
+          ) : null}
+          {task.title}
+        </span>
+      </div>
+
+      {chips.length > 0 ? <div className="flex min-w-0 flex-wrap items-center gap-1.5">{chips}</div> : null}
+
+      {showTime || showComments ? (
+        <div className="flex h-5 items-center gap-3 text-xs text-muted-foreground">
+          {showTime ? (
+            <span className="flex items-center" onClick={(e) => e.stopPropagation()}>
+              <InlineTimeCell taskId={taskId} totalMinutes={task.trackedMinutes} isDone={row.isClosed} isBillable={task.billable} />
+            </span>
+          ) : null}
+          <span className="flex-1" />
+          {showComments ? (
+            <span
+              className={cn("flex items-center gap-1 tabular-nums", unread > 0 && "font-medium text-destructive")}
+              aria-label={unread > 0 ? `${unread} new comments since your last visit` : `${task.commentCount} comments`}
+            >
+              <CommentNavIcon size={13} strokeWidth={unread > 0 ? 1.8 : 1.4} />
+              {unread > 0 ? unread : task.commentCount}
+            </span>
+          ) : null}
         </div>
       ) : null}
     </div>
   )
 })
-
-function CardCell({ col, row, ctx }: { col: ColumnKey; row: TaskRowModel; ctx: CellContext }) {
-  const content = CELL_RENDERERS[col](row, ctx)
-  if (content === null) return null
-  return (
-    <div data-col={col} className="flex min-w-0 items-center gap-1.5 [&_button]:ml-0">
-      {content}
-    </div>
-  )
-}

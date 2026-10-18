@@ -57,7 +57,8 @@ function menuClick(ctx: CellContext, kind: PropertyMenuKind, taskId: Id<"tasks">
   }
 }
 
-function formatDue(date: string, today: string): string {
+/** "Today" or a short date (Due date cell, board card). */
+export function formatDue(date: string, today: string): string {
   return date === today ? "Today" : formatShortDate(date)
 }
 
@@ -108,13 +109,18 @@ function AssigneeStack({ assignees }: { assignees: MemberRef[] }) {
       </>
     )
   }
+  return <AssigneeAvatars assignees={assignees} />
+}
+
+/** Overlapping assignee photos (up to three, then "+N"). Shared by the row cell and board cards. */
+export function AssigneeAvatars({ assignees, className }: { assignees: readonly MemberRef[]; className?: string }) {
   return (
-    <span className="flex" aria-label={assignees.map((a) => a.name).join(", ")}>
+    <span className={cn("flex", className)} aria-label={assignees.map((a) => a.name).join(", ")}>
       {assignees.slice(0, 3).map((m) => (
         <UserAvatar key={m._id} name={m.name} imageUrl={m.imageUrl} size="sm" className="size-5 ring-2 ring-background not-first:-ml-1.5" />
       ))}
       {assignees.length > 3 ? (
-        <span className="pl-2.5 text-xs text-muted-foreground tabular-nums">+{assignees.length - 3}</span>
+        <span className="pl-1.5 text-xs text-muted-foreground tabular-nums">+{assignees.length - 3}</span>
       ) : null}
     </span>
   )

@@ -11,7 +11,7 @@ import { InlineTimeCell } from "@/components/tasks/inline-time-cell"
 import { CommentPill, InlineSubtaskRing } from "@/components/tasks/activity-indicators"
 import { StatusIcon } from "@/components/icons/status-icon"
 import { PriorityIcon } from "@/components/icons/priority-icon"
-import { CalendarNavIcon, NoAssigneeNavIcon } from "@/components/icons/nav-icons"
+import { CalendarNavIcon, ClientsNavIcon, LabelNavIcon, NoAssigneeNavIcon } from "@/components/icons/nav-icons"
 import { firstName, formatHoursShort, formatRelativeTime, formatShortDate } from "@/lib/format"
 import { getStatusColor } from "@/lib/status-colors"
 import { cn } from "@/lib/utils"
@@ -36,6 +36,13 @@ export {
  * `ColoredPillBadge` for labels, `UserAvatar` photos, the existing
  * `InlineTimeCell`, `CommentPill` and `InlineSubtaskRing` from the old row,
  * shadcn `Button` for the editable cells. Numbers are plain tabular text.
+ *
+ * Editable cells are ghost buttons that open the shared `PropertyMenu`;
+ * an empty editable cell shows its property icon, muted (like "No assignee"),
+ * always visible. Category and client (= the task's project) are editable only
+ * when `ctx.canEditBilling` (D5: members cannot change project or work
+ * category) — otherwise they render read-only. Board cards build their own
+ * chips and only reuse `statusIcon`, so these editors stay in the list.
  */
 
 export type CellContext = {
@@ -43,6 +50,8 @@ export type CellContext = {
   today: string
   openMenu: (kind: PropertyMenuKind, taskId: Id<"tasks">, anchor: HTMLElement) => void
   memberById: ReadonlyMap<Id<"users">, MemberRef>
+  /** Admin: may change project and work category (D5, §5.3). The server enforces it. */
+  canEditBilling: boolean
 }
 
 type CellRenderer = (row: TaskRowModel, ctx: CellContext) => ReactNode
@@ -204,10 +213,24 @@ export const CELL_RENDERERS: Record<ColumnKey, CellRenderer> = {
       </Button>
     ) : null,
 
-  category: (row) =>
-    row.workCategory ? (
+  category: (row, ctx) => {
+    const badge = row.workCategory ? (
       <CategoryBadge name={row.workCategory.name} color={row.workCategory.color} className="max-w-full truncate" />
-    ) : null,
+    ) : null
+    if (!ctx.canEditBilling) return badge
+    return (
+      <Button
+        variant="ghost"
+        size="sm"
+        className="-ml-1 h-7 max-w-full justify-start px-1 font-normal"
+        aria-label={row.workCategory ? `Category: ${row.workCategory.name}` : "Set category"}
+        onClick={menuClick(ctx, "category", row.task._id)}
+        {...menuAnchor("category")}
+      >
+        {badge ?? <LabelNavIcon className="text-muted-foreground/60" />}
+      </Button>
+    )
+  },
 
   labels: (row, ctx) => (
     <Button
@@ -228,7 +251,26 @@ export const CELL_RENDERERS: Record<ColumnKey, CellRenderer> = {
     </Button>
   ),
 
-  client: (row) => <span className="truncate text-muted-foreground">{row.client?.name ?? ""}</span>,
+  client: (row, ctx) => {
+    const name = row.client?.name ?? ""
+    // A sub-task inherits its parent's project (T8); it is moved with the parent.
+    if (!ctx.canEditBilling || row.task.parentTaskId) {
+      return <span className="truncate text-muted-foreground">{name}</span>
+    }
+    return (
+      <Button
+        variant="ghost"
+        size="sm"
+        className="-ml-2 max-w-full justify-start font-normal text-muted-foreground"
+        aria-label={row.project ? `Project: ${row.project.name}` : "Set project"}
+        title={row.project?.name}
+        onClick={menuClick(ctx, "project", row.task._id)}
+        {...menuAnchor("project")}
+      >
+        {name ? <span className="truncate">{name}</span> : <ClientsNavIcon className="text-muted-foreground/60" />}
+      </Button>
+    )
+  },
 
   assignee: (row, ctx) => (
     <Button
@@ -245,13 +287,22 @@ export const CELL_RENDERERS: Record<ColumnKey, CellRenderer> = {
 
   due: (row, ctx) => {
     const due = row.task.dueDate
-    if (!due) return null
-    const overdue = !row.isClosed && due < ctx.today
+    const overdue = !!due && !row.isClosed && due < ctx.today
     return (
-      <span className={cn("flex items-center gap-1.5 tabular-nums", overdue ? "text-destructive" : "text-muted-foreground")}>
-        <CalendarNavIcon size={13} className="shrink-0 opacity-70" />
-        {formatDue(due, ctx.today)}
-      </span>
+      <Button
+        variant="ghost"
+        size="sm"
+        className={cn(
+          "-ml-2 max-w-full justify-start gap-1.5 font-normal tabular-nums",
+          overdue ? "text-destructive hover:text-destructive" : "text-muted-foreground",
+        )}
+        aria-label={due ? `Due ${formatDue(due, ctx.today)}` : "Set due date"}
+        onClick={menuClick(ctx, "due", row.task._id)}
+        {...menuAnchor("due")}
+      >
+        <CalendarNavIcon size={13} className={cn("shrink-0", due ? "opacity-70" : "text-muted-foreground/60")} />
+        {due ? formatDue(due, ctx.today) : null}
+      </Button>
     )
   },
 

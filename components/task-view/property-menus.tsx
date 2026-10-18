@@ -11,6 +11,8 @@ import { UserAvatar } from "@/components/user-avatar"
 import { StatusIcon } from "@/components/icons/status-icon"
 import { PriorityIcon } from "@/components/icons/priority-icon"
 import { NoAssigneeNavIcon } from "@/components/icons/nav-icons"
+import { DueDatePanel } from "@/components/tasks/inline-due-date-cell"
+import { getCategoryColor } from "@/convex/lib/constants"
 import { getStatusColor } from "@/lib/status-colors"
 import { cn } from "@/lib/utils"
 import type { RefIndex, TaskRowDTO } from "@/components/task-view/row-model"
@@ -20,11 +22,14 @@ import type { TaskActions } from "@/components/task-view/use-task-actions"
  * Linear-style property menus (U10): one popover, anchored to whatever opened
  * it (a row cell, the focused row for S/P/A/L, or a selection-bar button).
  * Search at the top with the shortcut key as a hint; every option carries a
- * number — with an empty search, pressing it picks the option. Status and
- * priority close on pick; assignees and labels are multi-value and stay open.
+ * number — with an empty search, pressing it picks the option. Status,
+ * priority, work category and project close on pick; assignees and labels are
+ * multi-value and stay open. The due date opens the existing date panel
+ * (presets + calendar) in the same popover. Category, project and due date
+ * have no list shortcut (U10); they open from their row cells (slice 4b).
  */
 
-export type PropertyMenuKind = "status" | "priority" | "assignee" | "labels"
+export type PropertyMenuKind = "status" | "priority" | "assignee" | "labels" | "category" | "project" | "due"
 
 export type PropertyMenuRequest = {
   kind: PropertyMenuKind
@@ -32,25 +37,31 @@ export type PropertyMenuRequest = {
   anchor: HTMLElement
 }
 
-export const PROPERTY_MENU_KEYS: Record<PropertyMenuKind, string> = {
+export const PROPERTY_MENU_KEYS: Partial<Record<PropertyMenuKind, string>> = {
   status: "S",
   priority: "P",
   assignee: "A",
   labels: "L",
 }
 
-const PLACEHOLDER: Record<PropertyMenuKind, string> = {
+type OptionMenuKind = Exclude<PropertyMenuKind, "due">
+
+const PLACEHOLDER: Record<OptionMenuKind, string> = {
   status: "Change status…",
   priority: "Change priority…",
   assignee: "Assign to…",
   labels: "Add labels…",
+  category: "Change category…",
+  project: "Move to project…",
 }
 
-const STAYS_OPEN: Record<PropertyMenuKind, boolean> = {
+const STAYS_OPEN: Record<OptionMenuKind, boolean> = {
   status: false,
   priority: false,
   assignee: true,
   labels: true,
+  category: false,
+  project: false,
 }
 
 type MenuOption = {
@@ -61,6 +72,8 @@ type MenuOption = {
   shortcut: string | null
   checked: boolean
   pick: () => void
+  /** Group heading (projects are listed under their client). */
+  group?: string
 }
 
 function digit(n: number): string | null {
@@ -68,7 +81,7 @@ function digit(n: number): string | null {
 }
 
 function buildOptions(
-  kind: PropertyMenuKind,
+  kind: OptionMenuKind,
   tasks: readonly TaskRowDTO[],
   index: RefIndex,
   actions: TaskActions,
@@ -134,6 +147,54 @@ function buildOptions(
           checked: all((t) => t.labelIds.includes(l._id)),
           pick: () => void actions.toggleLabel(tasks, l._id),
         }))
+
+    case "category":
+      return [
+        {
+          id: "none",
+          label: "No category",
+          icon: <span className="size-2 shrink-0 rounded-full border border-muted-foreground/50" />,
+          shortcut: "0",
+          checked: all((t) => !t.workCategoryId),
+          pick: () => void actions.setWorkCategory(tasks, null),
+        },
+        ...index.refs.workCategories
+          .filter((c) => !c.archived)
+          .map((c, i) => ({
+            id: c._id,
+            label: c.name,
+            icon: <span className="size-2 shrink-0 rounded-full" style={{ backgroundColor: getCategoryColor(c.color).dot }} />,
+            shortcut: digit(i + 1),
+            checked: all((t) => t.workCategoryId === c._id),
+            pick: () => void actions.setWorkCategory(tasks, c._id),
+          })),
+      ]
+
+    case "project": {
+      const clientName = (clientId: Id<"clients">) => index.clientById.get(clientId)?.name ?? ""
+      const projects = index.refs.projects
+        .filter((p) => !p.archived)
+        .sort((a, b) => clientName(a.clientId).localeCompare(clientName(b.clientId)) || a.name.localeCompare(b.name))
+      return [
+        {
+          id: "none",
+          label: "No project",
+          icon: null,
+          shortcut: "0",
+          checked: all((t) => !t.projectId),
+          pick: () => void actions.setProject(tasks, null),
+        },
+        ...projects.map((p, i) => ({
+          id: p._id,
+          label: p.name,
+          icon: null,
+          shortcut: digit(i + 1),
+          checked: all((t) => t.projectId === p._id),
+          pick: () => void actions.setProject(tasks, p._id),
+          group: clientName(p.clientId) || "No client",
+        })),
+      ]
+    }
   }
 }
 
@@ -168,24 +229,45 @@ export function PropertyMenu({
       <PopoverAnchor virtualRef={virtualAnchor} />
       {request ? (
         <PopoverContent
-          align="start"
-          className="w-64 gap-0 p-0"
+          align={request.kind === "due" ? "end" : "start"}
+          className={cn("gap-0 p-0", request.kind === "due" ? "w-[380px]" : "w-64")}
           onCloseAutoFocus={(e) => e.preventDefault()}
           onInteractOutside={(e) => {
             // The opener toggles the menu itself.
             if (e.target instanceof Node && request.anchor.contains(e.target)) e.preventDefault()
           }}
         >
-          <PropertyMenuBody
-            key={`${request.kind}:${request.taskIds.join(",")}`}
-            kind={request.kind}
-            options={buildOptions(request.kind, tasks, index, actions)}
-            onClose={onClose}
-          />
+          {request.kind === "due" ? (
+            <DueDatePanel
+              dueDate={tasks.length > 0 && tasks.every((t) => t.dueDate === tasks[0].dueDate) ? tasks[0].dueDate : null}
+              onSelect={(date) => {
+                void actions.setDueDate(tasks, date)
+                onClose()
+              }}
+            />
+          ) : (
+            <PropertyMenuBody
+              key={`${request.kind}:${request.taskIds.join(",")}`}
+              kind={request.kind}
+              options={buildOptions(request.kind, tasks, index, actions)}
+              onClose={onClose}
+            />
+          )}
         </PopoverContent>
       ) : null}
     </Popover>
   )
+}
+
+/** Consecutive options with the same `group` share one heading (ungrouped first). */
+function groupOptions(options: readonly MenuOption[]): { heading?: string; options: MenuOption[] }[] {
+  const groups: { heading?: string; options: MenuOption[] }[] = []
+  for (const option of options) {
+    const last = groups.at(-1)
+    if (last && last.heading === option.group) last.options.push(option)
+    else groups.push({ heading: option.group, options: [option] })
+  }
+  return groups
 }
 
 function PropertyMenuBody({
@@ -193,7 +275,7 @@ function PropertyMenuBody({
   options,
   onClose,
 }: {
-  kind: PropertyMenuKind
+  kind: OptionMenuKind
   options: MenuOption[]
   onClose: () => void
 }) {
@@ -221,27 +303,29 @@ function PropertyMenuBody({
             }}
           />
         </div>
-        <Kbd className="mt-1">{PROPERTY_MENU_KEYS[kind]}</Kbd>
+        {PROPERTY_MENU_KEYS[kind] ? <Kbd className="mt-1">{PROPERTY_MENU_KEYS[kind]}</Kbd> : null}
       </div>
       <CommandList>
         <CommandEmpty>No matches</CommandEmpty>
-        <CommandGroup>
-          {options.map((option) => (
-            <CommandItem
-              key={option.id}
-              value={`${option.label} ${option.id}`}
-              keywords={[option.label]}
-              onSelect={() => choose(option)}
-            >
-              {option.icon}
-              <span className="min-w-0 truncate">{option.label}</span>
-              <CommandShortcut className="flex items-center gap-2 tracking-normal tabular-nums">
-                <CheckIcon className={cn(!option.checked && "invisible")} />
-                {option.shortcut ? <span className="w-2 text-right">{option.shortcut}</span> : null}
-              </CommandShortcut>
-            </CommandItem>
-          ))}
-        </CommandGroup>
+        {groupOptions(options).map((group) => (
+          <CommandGroup key={group.heading ?? ""} heading={group.heading}>
+            {group.options.map((option) => (
+              <CommandItem
+                key={option.id}
+                value={`${option.label} ${option.id}`}
+                keywords={[option.label, ...(option.group ? [option.group] : [])]}
+                onSelect={() => choose(option)}
+              >
+                {option.icon}
+                <span className="min-w-0 truncate">{option.label}</span>
+                <CommandShortcut className="flex items-center gap-2 tracking-normal tabular-nums">
+                  <CheckIcon className={cn(!option.checked && "invisible")} />
+                  {option.shortcut ? <span className="w-2 text-right">{option.shortcut}</span> : null}
+                </CommandShortcut>
+              </CommandItem>
+            ))}
+          </CommandGroup>
+        ))}
       </CommandList>
     </Command>
   )

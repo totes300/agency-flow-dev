@@ -1,6 +1,9 @@
 "use client"
 
-import { Fragment, type CSSProperties } from "react"
+import { Fragment, type CSSProperties, type ReactNode } from "react"
+import { DragDropProvider } from "@dnd-kit/react"
+import { isSortable } from "@dnd-kit/react/sortable"
+import { KeyboardSensor, PointerActivationConstraints, PointerSensor } from "@dnd-kit/dom"
 import type { Id } from "@/convex/_generated/dataModel"
 import { Checkbox } from "@/components/ui/checkbox"
 import { ChevronDownNavIcon } from "@/components/icons/nav-icons"
@@ -14,8 +17,15 @@ import {
 } from "@/components/task-view/columns"
 import type { OrderBy } from "@/components/task-view/column-rules"
 import { GroupHeader } from "@/components/task-view/group-header"
-import { ROW_GRID_CLASS, TaskRow } from "@/components/task-view/task-row"
+import { InlineAddRow } from "@/components/task-view/inline-add-row"
+import { ROW_GRID_CLASS, SortableTaskRow, TaskRow } from "@/components/task-view/task-row"
 import type { TaskGroup } from "@/components/task-view/row-model"
+
+/** Same setup as the board: pointer after 5px (a click still opens), keyboard on the focused grip. */
+const LIST_DRAG_SENSORS = [
+  PointerSensor.configure({ activationConstraints: [new PointerActivationConstraints.Distance({ value: 5 })] }),
+  KeyboardSensor,
+]
 
 export type HeaderSelectionState = "none" | "some" | "all"
 
@@ -24,6 +34,11 @@ export type HeaderSelectionState = "none" | "some" | "all"
  * group a sticky group header and its rows, all on one CSS grid template
  * built from the column registry. Below the template's minimum width the
  * surrounding panel scrolls horizontally.
+ *
+ * In manual order (`onReorder` set) each group is its own dnd-kit sortable
+ * list — its own `DragDropProvider`, separate from the board's — so a row only
+ * moves inside its group and a drop never changes the grouped property. Each
+ * group ends with an inline "add task" row when `inlineAdd` returns a handler.
  */
 export function TaskTable({
   columns,
@@ -44,6 +59,8 @@ export function TaskTable({
   focusedId,
   openId,
   onOpen,
+  onReorder,
+  inlineAdd,
 }: {
   columns: readonly ColumnKey[]
   groups: readonly TaskGroup[]
@@ -64,7 +81,12 @@ export function TaskTable({
   focusedId: Id<"tasks"> | null
   openId: string | null
   onOpen: (taskId: Id<"tasks">) => void
+  /** Drag reorder inside a group (manual order only); null = not offered. */
+  onReorder: ((group: TaskGroup, from: number, to: number) => void) | null
+  /** The inline add row's create handler for a group, if the group offers one. */
+  inlineAdd: (group: TaskGroup) => ((title: string) => void) | undefined
 }) {
+  const titleColumn = columns.indexOf("title") + 1
   const style = {
     "--task-cols": gridTemplateFor(columns),
     minWidth: tableMinWidthFor(columns),
@@ -129,25 +151,79 @@ export function TaskTable({
                 onCreate={onCreateInGroup(group)}
               />
             ) : null}
-            {collapsed
-              ? null
-              : group.rows.map((row) => (
-                  <TaskRow
-                    key={row.task._id}
-                    row={row}
-                    columns={columns}
-                    ctx={ctx}
-                    isSelected={isSelected(row.task._id)}
-                    hasSelection={hasSelection}
-                    isFocused={focusedId === row.task._id}
-                    isOpen={openId === row.task._id}
-                    onToggleSelect={onToggleSelect}
-                    onOpen={onOpen}
-                  />
-                ))}
+            {collapsed ? null : (
+              <GroupRows group={group} onReorder={onReorder}>
+                {(row, index) => {
+                  const rowProps = {
+                    row,
+                    columns,
+                    ctx,
+                    isSelected: isSelected(row.task._id),
+                    hasSelection,
+                    isFocused: focusedId === row.task._id,
+                    isOpen: openId === row.task._id,
+                    onToggleSelect,
+                    onOpen,
+                  }
+                  return onReorder ? (
+                    <SortableTaskRow
+                      key={row.task._id}
+                      sortableId={`${group.key}:${row.task._id}`}
+                      index={index}
+                      {...rowProps}
+                    />
+                  ) : (
+                    <TaskRow key={row.task._id} {...rowProps} />
+                  )
+                }}
+              </GroupRows>
+            )}
+            {collapsed ? null : <GroupAddRow group={group} titleColumn={titleColumn} inlineAdd={inlineAdd} />}
           </Fragment>
         )
       })}
     </div>
   )
+}
+
+/** A group's rows; in manual order wrapped in the group's own sortable provider. */
+function GroupRows({
+  group,
+  onReorder,
+  children,
+}: {
+  group: TaskGroup
+  onReorder: ((group: TaskGroup, from: number, to: number) => void) | null
+  children: (row: TaskGroup["rows"][number], index: number) => ReactNode
+}) {
+  const rows = group.rows.map((row, i) => children(row, i))
+  if (!onReorder) return <>{rows}</>
+  return (
+    <DragDropProvider
+      sensors={LIST_DRAG_SENSORS}
+      onDragEnd={(event) => {
+        if (event.canceled) return
+        const { source } = event.operation
+        if (!isSortable(source)) return
+        const { initialIndex, index } = source
+        if (initialIndex !== index) onReorder(group, initialIndex, index)
+      }}
+    >
+      {rows}
+    </DragDropProvider>
+  )
+}
+
+function GroupAddRow({
+  group,
+  titleColumn,
+  inlineAdd,
+}: {
+  group: TaskGroup
+  titleColumn: number
+  inlineAdd: (group: TaskGroup) => ((title: string) => void) | undefined
+}) {
+  const onCreate = inlineAdd(group)
+  if (!onCreate) return null
+  return <InlineAddRow titleColumn={titleColumn} groupLabel={group.label} onCreate={onCreate} />
 }

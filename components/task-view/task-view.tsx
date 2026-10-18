@@ -2,7 +2,7 @@
 
 import { useCallback, useMemo, useRef, useState } from "react"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
-import { useConvexAuth, useQuery } from "convex/react"
+import { useConvexAuth, useMutation, useQuery } from "convex/react"
 import { toast } from "sonner"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
@@ -36,6 +36,7 @@ import { ViewDialog, type ViewDialogRequest } from "@/components/task-view/view-
 import type { ViewOption } from "@/components/task-view/view-state"
 import { PropertyMenu, type PropertyMenuKind, type PropertyMenuRequest } from "@/components/task-view/property-menus"
 import { buildRowModels, groupRows, indexRefs, sortRows, type TaskGroup } from "@/components/task-view/row-model"
+import { canReorderList, inlineAddPrefill, reorderNeighbours, scopeDefaultStatusId } from "@/components/task-view/row-editing"
 import { SelectionBar } from "@/components/task-view/selection-bar"
 import { ShortcutsDialog } from "@/components/task-view/shortcuts-dialog"
 import { TaskTable } from "@/components/task-view/task-table"
@@ -57,7 +58,9 @@ const BOARD_HIDDEN_KEYS: ReadonlySet<ColumnKey> = new Set(["id", "created", "act
  * view (URL ⇄ saved views, `use-view-state`) → `tasks.queries.listView` (the
  * view's scope) → client-side search, filter chips and facets, grouping and
  * ordering → the aligned-column table or the board. Rows open the existing
- * task detail (`?detail=`).
+ * task detail (`?detail=`). The list edits category, client (project) and due
+ * date inline, reorders by drag in manual order and adds tasks from the end
+ * of each group (slice 4b, `row-editing.ts`).
  */
 export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks"> }) {
   const { isAuthenticated } = useConvexAuth()
@@ -192,8 +195,9 @@ export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks
       today,
       memberById: index?.memberById ?? new Map(),
       openMenu: (kind, taskId, anchor) => toggleMenu(kind, [taskId], anchor),
+      canEditBilling: isAdmin,
     }),
-    [today, index, toggleMenu],
+    [today, index, toggleMenu, isAdmin],
   )
 
   const [createDefaults, setCreateDefaults] = useState<TaskFormDefaults | null>(null)
@@ -207,6 +211,37 @@ export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks
       return undefined
     },
     [openCreate],
+  )
+
+  // ─── Row editing: drag reorder + inline add (§11.7) ─────────────────────────
+  const { reorder } = actions
+  const reorderInGroup = useMemo(() => {
+    if (!canReorderList(spec)) return null
+    return (group: TaskGroup, from: number, to: number) => {
+      const moved = group.rows[from]
+      const neighbours = reorderNeighbours(group.rows.map((r) => r.task.sortKey), from, to)
+      if (!moved || !neighbours) {
+        toast.error("This task can't be placed there")
+        return
+      }
+      void reorder(moved.task._id, neighbours)
+    }
+  }, [reorder, spec])
+
+  const createTask = useMutation(api.tasks.create)
+  const defaultStatusId = useMemo(
+    () => (refs ? scopeDefaultStatusId(spec, refs.statuses) : undefined),
+    [refs, spec],
+  )
+  const inlineAdd = useCallback(
+    (group: TaskGroup) => {
+      const prefill = inlineAddPrefill(group, { defaultStatusId, isAdmin })
+      if (!prefill) return undefined
+      return (title: string) => {
+        createTask({ title, ...prefill }).catch((err) => toastError(err, "Failed to create task"))
+      }
+    },
+    [createTask, defaultStatusId, isAdmin],
   )
 
   const boardDraggable = canDragOnBoard(boardGroup, isAdmin)
@@ -407,6 +442,8 @@ export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks
                 focusedId={focusedId}
                 openId={detailId}
                 onOpen={openTask}
+                onReorder={reorderInGroup}
+                inlineAdd={inlineAdd}
               />
               {result.hasMoreClosed && closedLimit < CLOSED_ROW_MAX ? (
                 <div className="flex justify-center py-4">

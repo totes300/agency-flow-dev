@@ -2,12 +2,14 @@
 
 import { useCallback, useMemo } from "react"
 import { useMutation } from "convex/react"
+import { generateKeyBetween } from "fractional-indexing"
 import { toast } from "sonner"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import type { TaskPriority } from "@/convex/tasks/model"
 import { toastArchiveSuccess, toastError } from "@/lib/toast-helpers"
 import type { TaskRowDTO } from "@/components/task-view/row-model"
+import type { ReorderNeighbours } from "@/components/task-view/row-editing"
 
 /** `tasks.bulkUpdate` accepts at most this many ids per call. */
 const BULK_LIMIT = 50
@@ -25,12 +27,29 @@ function plural(n: number, word: string): string {
 /**
  * Row and selection-bar writes, all through the slice-1 mutations
  * (`tasks.update` → write.ts per task, `tasks.bulkUpdate` for the bulk
- * actions it has). The server enforces the access policy (§5.3); a refused
+ * actions it has, `tasks.reorderTask` for drag reorder). The server enforces the access policy (§5.3); a refused
  * change surfaces as a toast, partial bulk results report the skips.
  */
 export function useTaskActions() {
   const update = useMutation(api.tasks.update)
   const bulkUpdate = useMutation(api.tasks.bulkUpdate)
+  // The server computes the same key from the same neighbours, so the
+  // optimistic row lands exactly where the drop put it (no snap-back).
+  const reorderTask = useMutation(api.tasks.reorderTask).withOptimisticUpdate((store, { taskId, beforeKey, afterKey }) => {
+    let sortKey: string
+    try {
+      sortKey = generateKeyBetween(beforeKey ?? null, afterKey ?? null)
+    } catch {
+      return
+    }
+    for (const { args, value } of store.getAllQueries(api.tasks.queries.listView)) {
+      if (!value || !value.rows.some((r) => r._id === taskId)) continue
+      store.setQuery(api.tasks.queries.listView, args, {
+        ...value,
+        rows: value.rows.map((r) => (r._id === taskId ? { ...r, sortKey } : r)),
+      })
+    }
+  })
 
   /** Runs one `tasks.update` per task; reports failures without hiding successes. */
   const updateEach = useCallback(
@@ -152,6 +171,48 @@ export function useTaskActions() {
     [update],
   )
 
+  const setWorkCategory = useCallback(
+    (tasks: readonly TaskRowDTO[], workCategoryId: Id<"workCategories"> | null) =>
+      updateEach(
+        tasks,
+        (t) => ((t.workCategoryId ?? null) === workCategoryId ? null : { id: t._id, workCategoryId }),
+        "Failed to change the category",
+      ),
+    [updateEach],
+  )
+
+  const setProject = useCallback(
+    (tasks: readonly TaskRowDTO[], projectId: Id<"projects"> | null) =>
+      updateEach(
+        tasks,
+        (t) => ((t.projectId ?? null) === projectId ? null : { id: t._id, projectId }),
+        "Failed to move the task",
+      ),
+    [updateEach],
+  )
+
+  const setDueDate = useCallback(
+    (tasks: readonly TaskRowDTO[], dueDate: string | null) =>
+      updateEach(
+        tasks,
+        (t) => ((t.dueDate ?? null) === dueDate ? null : { id: t._id, dueDate }),
+        "Failed to change the due date",
+      ),
+    [updateEach],
+  )
+
+  /** Drag reorder in the global manual order (write path `reorderTask`). */
+  const reorder = useCallback(
+    async (taskId: Id<"tasks">, neighbours: ReorderNeighbours) => {
+      try {
+        await reorderTask({ taskId, ...neighbours })
+      } catch (err) {
+        toastError(err, "Failed to reorder")
+      }
+    },
+    [reorderTask],
+  )
+
   const archive = useCallback(
     async (taskIds: readonly Id<"tasks">[]) => {
       try {
@@ -178,8 +239,19 @@ export function useTaskActions() {
   )
 
   return useMemo(
-    () => ({ setStatus, setPriority, toggleAssignee, toggleLabel, patchTask, archive }),
-    [setStatus, setPriority, toggleAssignee, toggleLabel, patchTask, archive],
+    () => ({
+      setStatus,
+      setPriority,
+      toggleAssignee,
+      toggleLabel,
+      setWorkCategory,
+      setProject,
+      setDueDate,
+      patchTask,
+      reorder,
+      archive,
+    }),
+    [setStatus, setPriority, toggleAssignee, toggleLabel, setWorkCategory, setProject, setDueDate, patchTask, reorder, archive],
   )
 }
 

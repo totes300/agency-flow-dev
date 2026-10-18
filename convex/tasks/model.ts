@@ -595,6 +595,9 @@ export type ListViewSurface = Infer<typeof listViewSurfaceValidator>;
 /** Filter value meaning "the caller" (assignee / createdBy filters). */
 export const ME_FILTER_VALUE = "me";
 
+/** Filter value meaning "the property is unset" (No assignee, No label, No project, …). */
+export const NONE_FILTER_VALUE = "none";
+
 /** Default visible columns (§6.3 / prototype v4). */
 export const DEFAULT_VISIBLE_PROPERTIES: TaskViewSpec["visibleProperties"] = [
   "priority",
@@ -672,3 +675,76 @@ export const DEFAULT_SYSTEM_VIEW: Record<ListViewSurface, string> = {
   project: "active",
   planner: "panel",
 };
+
+// ─── Saved view validation (§4.4) ────────────────────────────────────────────
+
+export const VIEW_NAME_MAX_LENGTH = 60;
+/** Saved views per scope (one user's personal views, or the workspace views) per surface. */
+export const MAX_VIEWS_PER_SCOPE = 50;
+export const MAX_VIEW_FILTERS = 20;
+export const MAX_FILTER_VALUES = 100;
+const FILTER_VALUE_MAX_LENGTH = 64;
+const YMD_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+type SpecFilter = TaskViewSpec["filters"][number];
+
+const DATE_PROPERTIES: ReadonlySet<SpecFilter["property"]> = new Set(["startDate", "dueDate"]);
+
+function filterError(f: SpecFilter): string | null {
+  const isDate = DATE_PROPERTIES.has(f.property);
+  if ((f.operator === "before" || f.operator === "after") && !isDate) {
+    return `"${f.operator}" only applies to dates`;
+  }
+  if (f.operator === "isEmpty" || f.operator === "isNotEmpty") {
+    if (f.values.length > 0) return `"${f.operator}" takes no values`;
+    if (f.property === "newComments" || f.property === "billable" || f.property === "priority") {
+      return `"${f.operator}" does not apply to ${f.property}`;
+    }
+    return null;
+  }
+  if (f.values.length === 0) return `Filter on ${f.property} needs a value`;
+  if (f.values.length > MAX_FILTER_VALUES) return `At most ${MAX_FILTER_VALUES} values per filter`;
+  for (const value of f.values) {
+    if (value.length === 0 || value.length > FILTER_VALUE_MAX_LENGTH) return `Invalid filter value`;
+    if (isDate && !YMD_PATTERN.test(value)) return `Dates must be YYYY-MM-DD`;
+    if (f.property === "statusCategory" && !isTaskCategory(value)) return `Unknown status category "${value}"`;
+    if (f.property === "priority" && !isTaskPriority(Number(value))) return `Unknown priority "${value}"`;
+    if ((f.property === "billable" || f.property === "newComments") && value !== "true" && value !== "false") {
+      return `${f.property} filters take "true" or "false"`;
+    }
+  }
+  if (f.property === "newComments" && f.values.length !== 1) return `newComments takes one value`;
+  return null;
+}
+
+/**
+ * Validates a view spec beyond its validator and returns it normalized
+ * (visible properties de-duplicated, the derived `statusIcon` dropped).
+ * Returns `{ error }` for a spec a saved view must not store.
+ */
+export function normalizeViewSpec(spec: TaskViewSpec): { spec: TaskViewSpec } | { error: string } {
+  if (spec.filters.length > MAX_VIEW_FILTERS) return { error: `At most ${MAX_VIEW_FILTERS} filters per view` };
+  for (const f of spec.filters) {
+    const error = filterError(f);
+    if (error) return { error };
+  }
+  const visibleProperties = [...new Set(spec.visibleProperties)].filter((p) => p !== "statusIcon");
+  return { spec: { ...spec, visibleProperties } };
+}
+
+/** A trimmed, non-empty view name within the length limit, or `{ error }`. */
+export function normalizeViewName(name: string): { name: string } | { error: string } {
+  const trimmed = name.trim().replace(/\s+/g, " ");
+  if (trimmed.length === 0) return { error: "View name is required" };
+  if (trimmed.length > VIEW_NAME_MAX_LENGTH) return { error: `View name must be ${VIEW_NAME_MAX_LENGTH} characters or fewer` };
+  return { name: trimmed };
+}
+
+/**
+ * "Set default for everyone" on a system view (U6): the stored default keeps
+ * the view's own filters — they ARE the system view (Active = unstarted +
+ * started) — and takes the display settings from `spec`.
+ */
+export function systemDefaultSpec(systemSpec: TaskViewSpec, spec: TaskViewSpec): TaskViewSpec {
+  return { ...spec, filters: systemSpec.filters };
+}

@@ -5,7 +5,6 @@ import { getAuthContext } from "../lib/auth";
 import { filterReadableTasks, loadTaskForReadOrNull } from "./access";
 import {
   DEFAULT_SYSTEM_VIEW,
-  SYSTEM_VIEWS,
   isClosedCategory,
   listViewSurfaceValidator,
   normalizeIdentifier,
@@ -32,6 +31,7 @@ import {
   type TaskDetailDTO,
   type TaskRowDTO,
 } from "./read";
+import { resolveSystemViewSpec } from "./views";
 
 /**
  * Public task reads (docs/prd-tasks-refactor.md §5.1, §5.4). Every read goes
@@ -62,10 +62,11 @@ export const listView = query({
     if (args.spec) {
       spec = args.spec;
     } else {
+      // A system view, with the org's "Set default for everyone" applied.
       const key = args.viewKey ?? DEFAULT_SYSTEM_VIEW[args.surface];
-      const view = SYSTEM_VIEWS[args.surface][key];
-      if (!view) throw new ConvexError(`Unknown view "${key}"`);
-      spec = view.spec;
+      const resolved = await resolveSystemViewSpec(ctx, auth.orgId, args.surface, key);
+      if (!resolved) throw new ConvexError(`Unknown view "${key}"`);
+      spec = resolved;
     }
     if (args.surface === "project") {
       if (!args.projectId) throw new ConvexError("projectId is required for the project surface");

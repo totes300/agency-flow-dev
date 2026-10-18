@@ -17,7 +17,7 @@ import {
   type TaskField,
 } from "./access";
 import {
-  ME_FILTER_VALUE,
+  NONE_FILTER_VALUE,
   PRIORITY,
   TASK_CATEGORIES,
   isClosedCategory,
@@ -27,6 +27,7 @@ import {
   type TaskViewSpec,
 } from "./model";
 import { loadUserStates } from "./userState";
+import { matchesFilters, resolveFilterValue, type ListFilter } from "./filters";
 
 /**
  * The task read layer (docs/prd-tasks-refactor.md §5.4, invariant T7).
@@ -212,7 +213,7 @@ export async function loadViaParentSubtasks(
 
 // ─── Index selection (§5.4) ──────────────────────────────────────────────────
 
-export type ListFilter = TaskViewSpec["filters"][number];
+export type { ListFilter } from "./filters";
 
 export type LoadPlan =
   | { kind: "assignee"; userId: Id<"users"> }
@@ -220,10 +221,7 @@ export type LoadPlan =
   | { kind: "project"; projectId: Id<"projects">; categories: TaskCategory[] }
   | { kind: "category"; open: TaskCategory[]; closed: TaskCategory[] };
 
-/** Resolves "me" in assignee/createdBy filter values to the caller's id. */
-export function resolveFilterValue(value: string, me: Id<"users">): string {
-  return value === ME_FILTER_VALUE ? me : value;
-}
+export { resolveFilterValue } from "./filters";
 
 /** The categories a spec's `statusCategory` filters allow (all when unfiltered). */
 export function categoriesOf(filters: readonly ListFilter[]): TaskCategory[] {
@@ -240,7 +238,8 @@ export function categoriesOf(filters: readonly ListFilter[]): TaskCategory[] {
 /** The single id an `is` filter on `property` pins, if any. */
 function pinnedValue(filters: readonly ListFilter[], property: ListFilter["property"]): string | undefined {
   const f = filters.find((x) => x.property === property && x.operator === "is" && x.values.length === 1);
-  return f?.values[0];
+  // "none" (unset) pins nothing: it cannot be read from an edge/creator index.
+  return f?.values[0] === NONE_FILTER_VALUE ? undefined : f?.values[0];
 }
 
 /**
@@ -269,97 +268,9 @@ export function planListLoad(input: {
   };
 }
 
-// ─── Spec filters (pure) ─────────────────────────────────────────────────────
+// ─── Spec filters (pure, shared with the client: ./filters.ts) ──────────────
 
-function matchIds(present: readonly string[], f: ListFilter, me: Id<"users">): boolean {
-  const values = f.values.map((v) => resolveFilterValue(v, me));
-  switch (f.operator) {
-    case "is":
-      return present.some((p) => values.includes(p));
-    case "isNot":
-      return !present.some((p) => values.includes(p));
-    case "isEmpty":
-      return present.length === 0;
-    case "isNotEmpty":
-      return present.length > 0;
-    default:
-      return true;
-  }
-}
-
-function matchDate(value: string | undefined, f: ListFilter): boolean {
-  const pivot = f.values[0];
-  switch (f.operator) {
-    case "isEmpty":
-      return value === undefined;
-    case "isNotEmpty":
-      return value !== undefined;
-    case "before":
-      return value !== undefined && pivot !== undefined && value < pivot;
-    case "after":
-      return value !== undefined && pivot !== undefined && value > pivot;
-    case "is":
-      return value !== undefined && f.values.includes(value);
-    case "isNot":
-      return value === undefined || !f.values.includes(value);
-  }
-}
-
-const one = (id: string | undefined) => (id === undefined ? [] : [id]);
-
-/**
- * Whether a task passes one saved-view filter. `newComments` needs the
- * caller's state and is checked by `matchesFilters` with `unreadComments`.
- */
-export function matchesFilter(
-  task: Doc<"tasks">,
-  f: ListFilter,
-  me: Id<"users">,
-  unreadComments = 0,
-): boolean {
-  switch (f.property) {
-    case "status":
-      return matchIds([task.statusId], f, me);
-    case "statusCategory":
-      return matchIds(one(task.statusCategory), f, me);
-    case "priority":
-      return matchIds([String(task.priority ?? PRIORITY.none)], f, me);
-    case "assignee":
-      return matchIds(task.assigneeIds, f, me);
-    case "label":
-      return matchIds(task.labelIds ?? [], f, me);
-    case "project":
-      return matchIds(one(task.projectId), f, me);
-    case "client":
-      return matchIds(one(task.clientId), f, me);
-    case "workCategory":
-      return matchIds(one(task.workCategoryId), f, me);
-    case "createdBy":
-      return matchIds([task.createdBy], f, me);
-    case "startDate":
-      return matchDate(task.startDate, f);
-    case "dueDate":
-      return matchDate(task.dueDate, f);
-    case "billable":
-      return f.operator === "isNot"
-        ? !f.values.includes(String(task.billable))
-        : f.values.length === 0 || f.values.includes(String(task.billable));
-    case "newComments": {
-      const want = f.values[0] !== "false";
-      const has = unreadComments > 0;
-      return f.operator === "isNot" ? has !== want : has === want;
-    }
-  }
-}
-
-export function matchesFilters(
-  task: Doc<"tasks">,
-  filters: readonly ListFilter[],
-  me: Id<"users">,
-  unreadComments = 0,
-): boolean {
-  return filters.every((f) => matchesFilter(task, f, me, unreadComments));
-}
+export { matchesFilter, matchesFilters } from "./filters";
 
 // ─── DTOs ────────────────────────────────────────────────────────────────────
 

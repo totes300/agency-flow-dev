@@ -120,8 +120,8 @@ export function InvoiceList({
     <>
       <Table className="table-fixed">
         <TableHeader>
-          <TableRow>
-            <TableHead className="w-10 pr-0">
+          <TableRow className="hover:bg-transparent [&>th]:text-xs [&>th]:font-medium">
+            <TableHead className="w-10 pl-3 pr-0">
               <Checkbox
                 checked={headerChecked}
                 onCheckedChange={() => selection.toggleAllVisible()}
@@ -134,8 +134,8 @@ export function InvoiceList({
             </TableHead>
             <TableHead className="w-24">Number</TableHead>
             <TableHead>Subject</TableHead>
-            {showProject && <TableHead className="w-40">Client</TableHead>}
-            {showProject && <TableHead className="w-48">Project</TableHead>}
+            {showProject && <TableHead>Client</TableHead>}
+            {showProject && <TableHead>Project</TableHead>}
             {showType && <TableHead className="w-24">Type</TableHead>}
             {showStatus && <TableHead className="w-32">Status</TableHead>}
             <TableHead className="w-28 text-right">Total</TableHead>
@@ -149,7 +149,7 @@ export function InvoiceList({
             />
           </TableRow>
         </TableHeader>
-        <TableBody>
+        <TableBody className="[&_tr:last-child]:border-b">
           {rows.map((row) => {
             return (
               <InvoiceRowItem

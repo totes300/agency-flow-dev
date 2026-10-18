@@ -20,11 +20,14 @@ import {
 import { useCloseFacets } from "@/lib/hooks/use-close-facets"
 import { useUrlDebouncedParam } from "@/lib/hooks/use-url-debounced-param"
 import { rowMatches } from "@/lib/billing/close-queue-filters"
+import { pluralize } from "@/lib/format"
 import type { CloseQueueData } from "@/convex/billingViews"
 
 /**
- * The Billing → To close tab: one row per project with a period due, oldest
- * period first, so the list reads top-down as the order to work in. A ghost
+ * The Billing → To close tab: one single-line row per project with a period
+ * due, oldest period first, so the list reads top-down as the order to work
+ * in. An open table (hairline rows, no card frame) with a results count
+ * underneath. A ghost
  * search + faceted filter (client / billing type / readiness) narrow it;
  * both are URL-persisted and applied client-side.
  */
@@ -105,22 +108,32 @@ export function CloseQueueView({
       ) : rows.length === 0 ? (
         <CloseQueueEmpty reason="no-matches" onClearFilters={clearAll} />
       ) : (
-        <div className="overflow-hidden rounded-xl border">
-          <Table>
+        <div className="flex flex-col">
+          <Table className="table-fixed">
             <TableHeader>
               <TableRow className="hover:bg-transparent">
-                <TableHead>Project</TableHead>
-                <TableHead className="hidden w-28 text-right md:table-cell">Time</TableHead>
-                <TableHead className="w-28 text-right">Amount</TableHead>
-                <TableHead className="w-36" />
+                <TableHead className="w-32 pl-3 text-xs font-medium sm:w-44">Period</TableHead>
+                <TableHead className="text-xs font-medium">Project</TableHead>
+                <TableHead className="hidden text-xs font-medium md:table-cell">Client</TableHead>
+                <TableHead className="hidden w-36 text-xs font-medium sm:table-cell">Status</TableHead>
+                <TableHead className="hidden w-32 text-right text-xs font-medium lg:table-cell">Time</TableHead>
+                <TableHead className="w-28 text-right text-xs font-medium">Amount</TableHead>
+                <TableHead className="hidden w-36 pr-3 sm:table-cell">
+                  <span className="sr-only">Action</span>
+                </TableHead>
               </TableRow>
             </TableHeader>
-            <TableBody>
+            <TableBody className="[&_tr:last-child]:border-b">
               {rows.map((row) => (
                 <CloseQueueRow key={row.key} row={row} />
               ))}
             </TableBody>
           </Table>
+          <p className="px-3 pt-3 text-xs tabular-nums text-muted-foreground">
+            {rows.length === allRows.length
+              ? `${rows.length} ${pluralize(rows.length, "period", "periods")}`
+              : `${rows.length} of ${allRows.length} periods`}
+          </p>
         </div>
       )}
     </div>

@@ -42,11 +42,11 @@ export function TabSummaryStrip({
   const noun = countNounForTab(tab, count)
 
   return (
-    <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-sm">
+    <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-xs text-muted-foreground">
       <div className="flex flex-wrap items-baseline gap-x-2 tabular-nums">
-        <span className="text-muted-foreground">Total:</span>
+        <span>Total</span>
         {currencies.map((cur, idx) => (
-          <span key={cur} className="font-medium">
+          <span key={cur} className="font-medium text-foreground">
             {idx > 0 && <span className="mr-2 text-muted-foreground">·</span>}
             {formatCurrency(totalsByCurrency[cur], cur)}
           </span>

@@ -54,7 +54,7 @@ export function InvoiceRowItem({
   return (
     <TableRow
       className={cn(
-        "group cursor-pointer",
+        "group h-12 cursor-pointer",
         selected && "bg-muted/40",
         // Void rows read as historical — mute the text so live rows visually
         // dominate the scan. Badge already carries the line-through signal.
@@ -63,7 +63,7 @@ export function InvoiceRowItem({
       data-selected={selected || undefined}
       onClick={() => onOpen(invoice)}
     >
-      <TableCell className="w-10 pr-0" onClick={(e) => e.stopPropagation()}>
+      <TableCell className="w-10 pl-3 pr-0" onClick={(e) => e.stopPropagation()}>
         <Checkbox
           checked={selected}
           onCheckedChange={() => onSelect(invoice._id as Id<"invoices">, false)}
@@ -85,7 +85,7 @@ export function InvoiceRowItem({
           ? "—"
           : formatInvoiceIdentifier(invoice.prefix, invoice.number)}
       </TableCell>
-      <TableCell className="max-w-0 truncate text-muted-foreground">
+      <TableCell className="max-w-0 truncate">
         {invoice.subject ?? "—"}
       </TableCell>
       {showProject && (

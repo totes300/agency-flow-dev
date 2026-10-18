@@ -215,7 +215,6 @@ function InvoiceTab({
   return (
     <>
       {toolbar}
-      <TabSummaryStrip rows={listRows} tab={statusTab} timezone={timezone} />
       <InvoiceList
         rows={listRows}
         showProject
@@ -234,6 +233,10 @@ function InvoiceTab({
           )
         }
       />
+      {/* Totals sit under the table, Stripe-style, like the Close queue's count. */}
+      <div className="-mt-3 px-3">
+        <TabSummaryStrip rows={listRows} tab={statusTab} timezone={timezone} />
+      </div>
     </>
   )
 }

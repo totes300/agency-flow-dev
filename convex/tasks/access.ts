@@ -11,7 +11,9 @@ import { getAuthContext, type AuthContext } from "../lib/auth";
  *   client-supplied ids.
  * - Admins read and write every task in their org.
  * - A member reads and writes a task iff a `taskAssignees` edge
- *   (task, member) exists. The `tasks.assigneeIds` cache is NOT consulted.
+ *   (task, member) exists, or — for a sub-task — an edge on its parent
+ *   (§11.5: a parent's assignee works on all of its sub-tasks). The
+ *   `tasks.assigneeIds` cache is NOT consulted.
  * - Inaccessible, missing and other-org tasks all fail with the same
  *   "Task not found" error so ids cannot be probed.
  *
@@ -25,12 +27,15 @@ export type TaskAccess = {
   task: Doc<"tasks">;
   /** The caller has a `taskAssignees` edge on this task. */
   isAssignee: boolean;
+  /** No edge on this sub-task, but one on its parent (§11.5). */
+  viaParent: boolean;
 };
 
 /** What the pure policy checks need; `TaskAccess` satisfies it. */
 export type TaskPolicySubject = {
   auth: Pick<AuthContext, "userId" | "isAdmin">;
   isAssignee: boolean;
+  viaParent?: boolean;
 };
 
 async function hasAssigneeEdge(
@@ -55,8 +60,12 @@ async function resolveTaskAccess(
   const task = await ctx.db.get(taskId);
   if (!task || task.orgId !== resolvedAuth.orgId) return null;
   const isAssignee = await hasAssigneeEdge(ctx, resolvedAuth.orgId, taskId, resolvedAuth.userId);
-  if (!resolvedAuth.isAdmin && !isAssignee) return null;
-  return { auth: resolvedAuth, task, isAssignee };
+  const viaParent =
+    !isAssignee &&
+    task.parentTaskId !== undefined &&
+    (await hasAssigneeEdge(ctx, resolvedAuth.orgId, task.parentTaskId, resolvedAuth.userId));
+  if (!resolvedAuth.isAdmin && !isAssignee && !viaParent) return null;
+  return { auth: resolvedAuth, task, isAssignee, viaParent };
 }
 
 /**
@@ -124,13 +133,18 @@ export const ADMIN_ONLY_TASK_FIELDS: ReadonlySet<TaskField> = new Set<TaskField>
   "billable",
 ]);
 
+/** A member's access: assigned to the task, or to its parent (§11.5). */
+function hasMemberAccess(subject: TaskPolicySubject): boolean {
+  return subject.isAssignee || subject.viaParent === true;
+}
+
 function hasTaskAccess(subject: TaskPolicySubject): boolean {
-  return subject.auth.isAdmin || subject.isAssignee;
+  return subject.auth.isAdmin || hasMemberAccess(subject);
 }
 
 export function canEditField(subject: TaskPolicySubject, field: TaskField): boolean {
   if (subject.auth.isAdmin) return true;
-  return subject.isAssignee && !ADMIN_ONLY_TASK_FIELDS.has(field);
+  return hasMemberAccess(subject) && !ADMIN_ONLY_TASK_FIELDS.has(field);
 }
 
 export function canArchive(subject: TaskPolicySubject): boolean {
@@ -147,9 +161,9 @@ export type AssigneeChangeDecision =
 
 /**
  * Whether the caller may change the assignee set from `current` to `next`.
- * Admins may make any change, including clearing every assignee. An assigned
- * member may add anyone, may remove only themselves, and never the last
- * assignee.
+ * Admins may make any change, including clearing every assignee. A member
+ * with access (assigned, or via the parent) may add anyone, may remove only
+ * themselves, and never the last assignee.
  */
 export function canChangeAssignees(
   subject: TaskPolicySubject,
@@ -157,7 +171,7 @@ export function canChangeAssignees(
   next: readonly Id<"users">[],
 ): AssigneeChangeDecision {
   if (subject.auth.isAdmin) return { ok: true };
-  if (!subject.isAssignee) return { ok: false, reason: TASK_NOT_FOUND };
+  if (!hasMemberAccess(subject)) return { ok: false, reason: TASK_NOT_FOUND };
   const nextSet = new Set(next);
   const removed = current.filter((id) => !nextSet.has(id));
   if (removed.some((id) => id !== subject.auth.userId)) {

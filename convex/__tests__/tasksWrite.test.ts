@@ -677,15 +677,22 @@ async function outcome(run: () => Promise<unknown>): Promise<Outcome> {
   }
 }
 
-/** A task (ARLO) assigned to Alice with one sub-task, plus an archived copy. */
+/**
+ * A task (ARLO) assigned to Alice with one inherited sub-task, a sub-task
+ * assigned to the admin only (Alice reaches it via the parent, §11.5), plus
+ * an archived copy.
+ */
 async function accessFixture(t: T) {
   const f = await setup(t);
   const admin = as(t, "admin");
   const task = await admin.mutation(api.tasks.create, { title: "Shared", projectId: f.arlo, assigneeIds: [f.alice] });
   const sub = await admin.mutation(api.tasks.createSubtask, { parentTaskId: task, title: "Sub" });
+  const adminSub = await admin.mutation(api.tasks.createSubtask, {
+    parentTaskId: task, title: "Admin's sub", assigneeIds: [f.admin],
+  });
   const archived = await admin.mutation(api.tasks.create, { title: "Old", projectId: f.arlo, assigneeIds: [f.alice] });
   await admin.mutation(api.tasks.archive, { id: archived });
-  return { f, task, sub, archived };
+  return { f, task, sub, adminSub, archived };
 }
 
 const CALLERS: Caller[] = ["admin", "assigned", "unassigned", "otherOrg"];
@@ -768,6 +775,46 @@ describe("T1: access matrix for every rewired public mutation", () => {
       run: (t, c, x) => as(t, c).mutation(api.tasks.reorderTask, { taskId: x.task }),
     },
     {
+      name: "sub-task via parent (§11.5): tasks.update (title)",
+      expected: { admin: "ok", assigned: "ok", ...DENIED },
+      run: (t, c, x) => as(t, c).mutation(api.tasks.update, { id: x.adminSub, title: `Renamed by ${c}` }),
+    },
+    {
+      name: "sub-task via parent (§11.5): tasks.update (status)",
+      expected: { admin: "ok", assigned: "ok", ...DENIED },
+      run: (t, c, x) => as(t, c).mutation(api.tasks.update, { id: x.adminSub, statusId: x.f.status.Done }),
+    },
+    {
+      name: "sub-task via parent (§11.5): tasks.update (add self as assignee)",
+      expected: { admin: "ok", assigned: "ok", ...DENIED },
+      run: (t, c, x) => as(t, c).mutation(api.tasks.update, { id: x.adminSub, assigneeIds: [x.f.admin, x.f.alice] }),
+    },
+    {
+      name: "sub-task via parent (§11.5): tasks.update (remove another assignee)",
+      expected: { admin: "ok", assigned: "Only admins can remove other assignees", ...DENIED },
+      run: (t, c, x) => as(t, c).mutation(api.tasks.update, { id: x.adminSub, assigneeIds: [x.f.alice] }),
+    },
+    {
+      name: "sub-task via parent (§11.5): tasks.update (billable) — admin-only field",
+      expected: { admin: "ok", assigned: "Only admins can change the task's billable", ...DENIED },
+      run: (t, c, x) => as(t, c).mutation(api.tasks.update, { id: x.adminSub, billable: false }),
+    },
+    {
+      name: "sub-task via parent (§11.5): tasks.archive",
+      expected: { admin: "ok", assigned: "ok", ...DENIED },
+      run: (t, c, x) => as(t, c).mutation(api.tasks.archive, { id: x.adminSub }),
+    },
+    {
+      name: "sub-task via parent (§11.5): tasks.remove",
+      expected: { admin: "ok", assigned: "Only admins can delete tasks", ...DENIED },
+      run: (t, c, x) => as(t, c).mutation(api.tasks.remove, { id: x.adminSub }),
+    },
+    {
+      name: "sub-task via parent (§11.5): tasks.duplicate",
+      expected: { admin: "ok", assigned: "ok", ...DENIED },
+      run: (t, c, x) => as(t, c).mutation(api.tasks.duplicate, { id: x.adminSub }),
+    },
+    {
       name: "tasks.create in this org's project",
       expected: { admin: "ok", assigned: "ok", unassigned: "ok", otherOrg: "Project not found" },
       run: (t, c, x) => as(t, c).mutation(api.tasks.create, { title: "New", projectId: x.f.arlo }),
@@ -817,6 +864,33 @@ describe("T1: access matrix for every rewired public mutation", () => {
         skipped: reachable ? [] : ["Task not found"],
       });
     }
+  });
+
+  it("assignment to a sub-task alone grants that sub-task, not its parent or siblings (§11.5)", async () => {
+    const t = createT();
+    const x = await accessFixture(t);
+    const bobSub = await as(t, "admin").mutation(api.tasks.createSubtask, {
+      parentTaskId: x.task, title: "Bob's sub", assigneeIds: [x.f.bob],
+    });
+    const bob = as(t, "unassigned");
+    expect(await outcome(() => bob.mutation(api.tasks.update, { id: bobSub, title: "Mine" }))).toBe("ok");
+    expect(await outcome(() => bob.mutation(api.tasks.update, { id: x.task, title: "Parent" }))).toBe("Task not found");
+    expect(await outcome(() => bob.mutation(api.tasks.update, { id: x.adminSub, title: "Sibling" }))).toBe(
+      "Task not found",
+    );
+    expect(
+      await outcome(() => bob.mutation(api.tasks.createSubtask, { parentTaskId: x.task, title: "Sibling" })),
+    ).toBe("Task not found");
+  });
+
+  it("tasks.bulkUpdate reaches sub-tasks via the parent", async () => {
+    const t = createT();
+    const x = await accessFixture(t);
+    const result = await as(t, "assigned").mutation(api.tasks.bulkUpdate, {
+      taskIds: [x.adminSub], action: { type: "status", statusId: x.f.status.Done },
+    });
+    expect(result).toMatchObject({ updated: 1, skipped: [] });
+    expect(await getTask(t, x.task)).toMatchObject({ subtaskDoneCount: 1 });
   });
 
   it("tasks.bulkUpdate keeps admin-only actions admin-only", async () => {

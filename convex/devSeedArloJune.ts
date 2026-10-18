@@ -8,7 +8,7 @@ import { createTask, deleteTaskRecord, patchTaskForSeed } from "./tasks/write";
  * DEV-ONLY dummy data for testing the AI task summarizer.
  *
  * Seeds 5 realistic June-2026 tasks into the "Arlow monthly retainer"
- * project (PRJ-002), each with a rich Tiptap description and a comment
+ * project (code ARLO, formerly PRJ-002), each with a rich Tiptap description and a comment
  * thread alternating between the org's two members — so the summarizer
  * has real back-and-forth (decisions, blockers, approvals) to condense.
  *
@@ -19,7 +19,8 @@ import { createTask, deleteTaskRecord, patchTaskForSeed } from "./tasks/write";
  * in the project. Safe to delete this whole file once done.
  */
 
-const PROJECT_CODE = "PRJ-002";
+// Recoded from the legacy "PRJ-002" by the tasks reseed (devSeedTasks).
+const PROJECT_CODE = "ARLO";
 const PROJECT_NAME = "Arlow monthly retainer";
 
 // ─── Tiptap builders ────────────────────────────────────────────────────────
@@ -219,10 +220,12 @@ const TASKS: SeedTask[] = [
 
 async function getProject(ctx: MutationCtx): Promise<Doc<"projects">> {
   const projects = await ctx.db.query("projects").collect();
-  // The tasks reseed recodes legacy "PRJ-002" codes into identifier keys, so
-  // fall back to the project name.
+  // The reseed gives unique keys per project (a second Arlow project would be
+  // ARLO2), so the name disambiguates; the code alone is the last resort.
   const project =
-    projects.find((pr) => pr.code === PROJECT_CODE) ?? projects.find((pr) => pr.name === PROJECT_NAME);
+    projects.find((pr) => pr.code === PROJECT_CODE && pr.name === PROJECT_NAME) ??
+    projects.find((pr) => pr.name === PROJECT_NAME) ??
+    projects.find((pr) => pr.code === PROJECT_CODE);
   if (!project) throw new Error(`No project with code ${PROJECT_CODE} or name "${PROJECT_NAME}"`);
   return project;
 }

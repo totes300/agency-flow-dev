@@ -252,6 +252,77 @@ describe("loadTaskForRead / loadTaskForWrite", () => {
   });
 });
 
+// ─── Sub-task access via the parent (§11.5) ───────────────────────────────
+
+describe("sub-task access via the parent (§11.5)", () => {
+  async function subtaskFixture(t: T) {
+    const f = await setup(t);
+    return await t.run(async (ctx) => {
+      const now = Date.now();
+      const parent = (await ctx.db.get(f.soloTask))!; // edge: assigned only
+      const mkSub = async (title: string, parentTaskId: Id<"tasks">) =>
+        await ctx.db.insert("tasks", {
+          orgId: ORG_ID, title, statusId: parent.statusId, statusType: "in_progress", assigneeIds: [],
+          billable: true, parentTaskId, createdAt: now, updatedAt: now, createdBy: f.admin,
+          statusCategory: "started",
+        });
+      // Unassigned sub-task of the assigned member's parent.
+      const sub = await mkSub("Parent-assigned only", f.soloTask);
+      // Sub-task assigned to `unassigned`, whose parent they are NOT assigned to.
+      const ownSub = await mkSub("Own sub-task", f.soloTask);
+      await ctx.db.insert("taskAssignees", {
+        orgId: ORG_ID, taskId: ownSub, userId: f.unassigned, assignedAt: now, assignedBy: f.admin,
+      });
+      // Parent whose only edge for `assigned` carries another org.
+      const foreignSub = await mkSub("Foreign parent edge", f.foreignEdgeTask);
+      return { ...f, sub, ownSub, foreignSub };
+    });
+  }
+
+  for (const mode of ["read", "write"] as const) {
+    it(`${mode}: a parent's assignee reaches an unassigned sub-task (viaParent)`, async () => {
+      const t = createT();
+      const f = await subtaskFixture(t);
+      const access = await t.withIdentity(identityFor("assigned")).run(async (ctx) => {
+        const a = mode === "read" ? await loadTaskForRead(ctx, f.sub) : await loadTaskForWrite(ctx, f.sub);
+        return { isAssignee: a.isAssignee, viaParent: a.viaParent };
+      });
+      expect(access).toEqual({ isAssignee: false, viaParent: true });
+    });
+  }
+
+  it("a member assigned to neither the sub-task nor its parent gets Task not found", async () => {
+    const t = createT();
+    const f = await subtaskFixture(t);
+    expect(await tryLoad(t, "unassigned", f.sub, "write")).toEqual({ ok: false, error: TASK_NOT_FOUND });
+    expect(await tryLoad(t, "otherOrgMember", f.sub, "read")).toEqual({ ok: false, error: TASK_NOT_FOUND });
+  });
+
+  it("assignment to a sub-task alone grants that sub-task, not its parent", async () => {
+    const t = createT();
+    const f = await subtaskFixture(t);
+    expect(await tryLoad(t, "unassigned", f.ownSub, "write")).toMatchObject({ ok: true, isAssignee: true });
+    expect(await tryLoad(t, "unassigned", f.soloTask, "read")).toEqual({ ok: false, error: TASK_NOT_FOUND });
+  });
+
+  it("an other-org edge on the parent grants nothing", async () => {
+    const t = createT();
+    const f = await subtaskFixture(t);
+    expect(await tryLoad(t, "assigned", f.foreignSub, "read")).toEqual({ ok: false, error: TASK_NOT_FOUND });
+  });
+
+  it("via-parent access follows the member field policy (§5.3)", () => {
+    const viaParent: TaskPolicySubject = { auth: { userId: "u_self" as Id<"users">, isAdmin: false }, isAssignee: false, viaParent: true };
+    for (const field of MEMBER_FIELDS) expect(canEditField(viaParent, field)).toBe(true);
+    for (const field of ADMIN_ONLY_TASK_FIELDS) expect(canEditField(viaParent, field)).toBe(false);
+    expect(canArchive(viaParent)).toBe(true);
+    expect(canDelete(viaParent)).toBe(false);
+    const other = "u_other" as Id<"users">;
+    expect(canChangeAssignees(viaParent, [other], [other, "u_self" as Id<"users">])).toEqual({ ok: true });
+    expect(canChangeAssignees(viaParent, [other], [])).toMatchObject({ ok: false });
+  });
+});
+
 // ─── Field policy ──────────────────────────────────────────────────────────
 
 describe("canEditField", () => {

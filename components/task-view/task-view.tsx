@@ -262,9 +262,11 @@ export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks
   )
   const [pickerOpen, setPickerOpen] = useState(false)
   const [notesOpen, setNotesOpen] = useSidePanelPreference()
-  // An admin reads a member's daily notes via `?user=` (kept from the old page).
-  const viewingUserId = isAdmin && isToday ? (searchParams.get("user") as Id<"users"> | null) : null
-  const showNotes = isToday && (notesOpen || viewingUserId !== null)
+  // Daily Notes sit beside every My Tasks tab, as on the old My Tasks page
+  // (owner, 2026-10-18). An admin reads a member's notes via `?user=`.
+  const isMyTasks = surface === "myTasks"
+  const viewingUserId = isAdmin && isMyTasks ? (searchParams.get("user") as Id<"users"> | null) : null
+  const showNotes = isMyTasks && (notesOpen || viewingUserId !== null)
 
   /** T: the sun on the focused row (or the selection), or the picker on Today. */
   const onTodayKey = (focused: Id<"tasks"> | null) => {
@@ -468,7 +470,7 @@ export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks
             onSaveAsNew={() => setViewDialog({ mode: "create", filterCount: draft.chips.length })}
             onSetDefault={() => void viewActions.setDefaultForEveryone()}
           />
-          {isToday ? (
+          {isMyTasks ? (
             <Button
               variant="outline"
               size="icon-sm"
@@ -739,15 +741,15 @@ function useToggleTaskTimer() {
 
 const NOTES_PANEL_KEY = "my-tasks-today-notes-open"
 
-/** Whether Today's daily-notes side panel is open (per browser; closed by default, prototype v4). */
+/** Whether My Tasks' daily-notes side panel is open (per browser; open by default, like the old My Tasks page). */
 function useSidePanelPreference(): [boolean, (open: boolean) => void] {
   // The view renders client-only (below the page's useSearchParams Suspense
   // boundary), so the stored value can be read on the first render.
   const [open, setOpen] = useState(() => {
     try {
-      return typeof window !== "undefined" && window.localStorage.getItem(NOTES_PANEL_KEY) === "1"
+      return typeof window === "undefined" || window.localStorage.getItem(NOTES_PANEL_KEY) !== "0"
     } catch {
-      return false
+      return true
     }
   })
   const update = useCallback((next: boolean) => {

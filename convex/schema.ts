@@ -4,6 +4,13 @@ import {
   proposalPayloadValidator,
   proposalStatusValidator,
 } from "./lib/proposalValidators";
+import {
+  numberScopeValidator,
+  taskCategoryValidator,
+  taskPriorityValidator,
+  taskViewSpecValidator,
+  taskViewSurfaceValidator,
+} from "./tasks/model";
 
 export default defineSchema({
   // ─── Users (synced from Clerk) ─────────────────────────────────────────────
@@ -19,6 +26,9 @@ export default defineSchema({
     timerAccumulatedMs: v.optional(v.number()),
     timerStatus: v.optional(v.union(v.literal("running"), v.literal("paused"))),
     taskDetailView: v.optional(v.union(v.literal("modal"), v.literal("drawer"))),
+    // Tasks refactor (docs/prd-tasks-refactor.md §4.4): replaces taskDetailView
+    // in slice 6. Unset = drawer.
+    taskDetailMode: v.optional(v.union(v.literal("drawer"), v.literal("page"))),
     // My Tasks view: which individual statuses to show (status IDs)
     // During migration: may contain old type-key strings — widen accepts both
     todayVisibleStatuses: v.optional(v.array(v.string())),
@@ -84,18 +94,30 @@ export default defineSchema({
     aiKeyConfiguredBy: v.optional(v.id("users")),
     aiKeyRemovedAt: v.optional(v.number()),
     aiKeyRemovedBy: v.optional(v.id("users")),
+    // Tasks refactor §4.2 (D2): identifier key + counter for tasks without a
+    // project (`KON-7`). Incremented in the mutation that creates/moves the task.
+    taskKey: v.optional(v.string()),
+    nextTaskNumber: v.optional(v.number()),
     // Base
     createdAt: v.number(),
     updatedAt: v.number(),
     createdBy: v.id("users"),
   }).index("by_orgId", ["orgId"]),
 
-  // ─── Task Statuses (per org, 5 system types) ──────────────────────────────
+  // ─── Task Statuses (per org) ───────────────────────────────────────────────
+  // Tasks refactor §4.1 (D3): org-defined statuses inside 5 fixed categories
+  // (convex/tasks/model.ts). WIDEN phase: `category`/`position`/`isDefault`
+  // are optional until slice 7 because the old status writers do not set
+  // them; `type`/`sortOrder` are the legacy fields removed in slice 7.
   statuses: defineTable({
     orgId: v.string(),
     name: v.string(),
+    description: v.optional(v.string()),
     color: v.string(),
     icon: v.optional(v.string()),
+    category: v.optional(taskCategoryValidator),
+    position: v.optional(v.string()),         // fractional key, order within category
+    isDefault: v.optional(v.boolean()),       // exactly one per category
     type: v.union(
       v.literal("backlog"),
       v.literal("in_progress"),
@@ -111,13 +133,19 @@ export default defineSchema({
     createdBy: v.id("users"),
   })
     .index("by_orgId", ["orgId"])
-    .index("by_orgId_type", ["orgId", "type"]),
+    .index("by_orgId_type", ["orgId", "type"])
+    .index("by_orgId_category_position", ["orgId", "category", "position"]),
 
   // ─── Tasks ───────────────────────────────────────────────────────────────────
+  // Tasks refactor §4.2. WIDEN phase (§12): the new fields below the legacy
+  // block are optional until slice 7 narrows them, because the old create
+  // paths keep inserting tasks without them until slice 1 rewires those to
+  // `tasks/write.ts`. Legacy fields removed in slice 7: statusType,
+  // manualSortKey, sortOrder, estimate.
   tasks: defineTable({
     orgId: v.string(),
     title: v.string(),
-    description: v.optional(v.string()),
+    description: v.optional(v.string()),      // TipTap JSON string
     statusId: v.id("statuses"),
     statusType: v.union(
       v.literal("backlog"),
@@ -139,6 +167,30 @@ export default defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
     createdBy: v.id("users"),
+
+    // ── New model (§4.2) ──
+    hasDescription: v.optional(v.boolean()),
+    identifier: v.optional(v.string()),       // "ARLO-21"; unique per org (T5)
+    numberScope: v.optional(numberScopeValidator),
+    number: v.optional(v.number()),
+    statusCategory: v.optional(taskCategoryValidator), // == statuses[statusId].category (T3)
+    priority: v.optional(taskPriorityValidator),       // D7
+    clientId: v.optional(v.id("clients")),    // denormalized from project
+    startDate: v.optional(v.string()),        // YYYY-MM-DD
+    estimateMinutes: v.optional(v.number()),
+    sortKey: v.optional(v.string()),          // fractional; one global manual order
+    labelIds: v.optional(v.array(v.id("labels"))), // READ CACHE of taskLabels
+    // Derived, maintained by the write module (§5.5).
+    trackedMinutes: v.optional(v.number()),
+    commentCount: v.optional(v.number()),
+    lastCommentAt: v.optional(v.number()),
+    subtaskCount: v.optional(v.number()),
+    subtaskDoneCount: v.optional(v.number()),
+    lastActivityAt: v.optional(v.number()),
+    lastActivity: v.optional(
+      v.object({ kind: v.string(), actorId: v.id("users"), at: v.number() }),
+    ),
+    completedAt: v.optional(v.number()),      // set iff statusCategory is closed (T4)
   })
     .index("by_orgId", ["orgId"])
     .index("by_orgId_manualSortKey", ["orgId", "manualSortKey"])
@@ -146,10 +198,91 @@ export default defineSchema({
     .index("by_orgId_statusId", ["orgId", "statusId"])
     .index("by_orgId_projectId", ["orgId", "projectId"])
     .index("by_orgId_parentTaskId", ["orgId", "parentTaskId"])
+    .index("by_orgId_statusCategory_sortKey", ["orgId", "statusCategory", "sortKey"])
+    .index("by_orgId_projectId_statusCategory", ["orgId", "projectId", "statusCategory"])
+    .index("by_orgId_identifier", ["orgId", "identifier"])
+    .index("by_orgId_completedAt", ["orgId", "completedAt"])
+    .index("by_orgId_createdBy", ["orgId", "createdBy"])
     .searchIndex("search_title", {
       searchField: "title",
-      filterFields: ["orgId"],
+      filterFields: ["orgId", "statusCategory"],
     }),
+
+  // ─── Task edges (§4.2) — written only by tasks/write.ts (T2) ─────────────
+  // Source of truth for assignees (D1); `tasks.assigneeIds` is a read cache.
+  taskAssignees: defineTable({
+    orgId: v.string(),
+    taskId: v.id("tasks"),
+    userId: v.id("users"),
+    assignedAt: v.number(),
+    assignedBy: v.id("users"),
+  })
+    .index("by_orgId_userId_taskId", ["orgId", "userId", "taskId"])
+    .index("by_taskId_userId", ["taskId", "userId"]),
+
+  taskLabels: defineTable({
+    orgId: v.string(),
+    taskId: v.id("tasks"),
+    labelId: v.id("labels"),
+  })
+    .index("by_orgId_labelId", ["orgId", "labelId"])
+    .index("by_taskId_labelId", ["taskId", "labelId"]),
+
+  // Org-level, multi-value, non-billing (D8).
+  labels: defineTable({
+    orgId: v.string(),
+    name: v.string(),
+    color: v.string(),
+    archivedAt: v.optional(v.number()),
+    position: v.string(),                     // fractional key
+  }).index("by_orgId_position", ["orgId", "position"]),
+
+  // Old identifiers keep resolving after a project move or code rename (T5).
+  taskIdentifierAliases: defineTable({
+    orgId: v.string(),
+    identifier: v.string(),
+    taskId: v.id("tasks"),
+  }).index("by_orgId_identifier", ["orgId", "identifier"]),
+
+  // ─── Per-user task state (§4.3) — fan-out on write ─────────────────────────
+  // Replaces taskViewReceipts / taskMutes / commentReadReceipts-as-list-signal
+  // once slice 2 wires it.
+  taskUserState: defineTable({
+    orgId: v.string(),
+    userId: v.id("users"),
+    taskId: v.id("tasks"),
+    lastViewedAt: v.number(),
+    unreadComments: v.number(),
+    hasUnseenChanges: v.boolean(),
+    subscribed: v.boolean(),
+    muted: v.boolean(),
+  })
+    .index("by_orgId_userId_unreadComments", ["orgId", "userId", "unreadComments"])
+    .index("by_taskId_userId", ["taskId", "userId"]),
+
+  // ─── Saved task views (§4.4) ───────────────────────────────────────────────
+  // ownerId absent = workspace view (admin-managed). System views are code
+  // constants; `viewDefaults` stores "Set default for everyone" overrides.
+  taskViews: defineTable({
+    orgId: v.string(),
+    ownerId: v.optional(v.id("users")),
+    surface: taskViewSurfaceValidator,
+    name: v.string(),
+    position: v.string(),                     // fractional key
+    spec: taskViewSpecValidator,
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_orgId_surface_position", ["orgId", "surface", "position"])
+    .index("by_orgId_ownerId_surface", ["orgId", "ownerId", "surface"]),
+
+  viewDefaults: defineTable({
+    orgId: v.string(),
+    surface: taskViewSurfaceValidator,
+    systemViewKey: v.string(),
+    spec: taskViewSpecValidator,
+  }).index("by_orgId_surface_systemViewKey", ["orgId", "surface", "systemViewKey"]),
 
   // ─── Clients ──────────────────────────────────────────────────────────────────
   clients: defineTable({
@@ -201,7 +334,13 @@ export default defineSchema({
     orgId: v.string(),
     clientId: v.id("clients"),
     name: v.string(),
-    code: v.string(), // "PRJ-042", editable, unique per org
+    // Editable, unique per org. Also the task identifier key (D2: `ARLO-21`);
+    // tasks/model.ts isValidIdentifierKey. Legacy auto codes ("PRJ-042") are
+    // rewritten by the seed.
+    code: v.string(),
+    // Next per-project task number (D2). Incremented in the same mutation that
+    // creates or moves a task into the project.
+    nextTaskNumber: v.optional(v.number()),
     billingType: v.union(v.literal("fixed"), v.literal("retainer"), v.literal("t_and_m"), v.literal("non_billable")),
     // Currency is NOT stored on the project. Canonical source: client.currency.
     // See D1 invariant in convex/schema.ts above `timeEntries`.

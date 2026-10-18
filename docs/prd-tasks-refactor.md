@@ -150,7 +150,7 @@ mutation that creates or moves the task.
 ### 4.3 Per-user state
 ```
 taskUserState: orgId, userId, taskId, lastViewedAt, unreadComments, hasUnseenChanges, subscribed, muted
-  index by_orgId_userId_unread (orgId, userId, unreadComments)
+  index by_orgId_userId_unreadComments (orgId, userId, unreadComments)
   index by_taskId_userId
 ```
 This replaces `taskViewReceipts`, `commentReadReceipts`-as-list-signal and `taskMutes`. It
@@ -165,6 +165,7 @@ taskViews: orgId, ownerId? (absent = workspace view), surface: "tasks"|"myTasks"
   name, position, spec, createdBy, createdAt, updatedAt
   index by_orgId_surface_position · index by_orgId_ownerId_surface
 viewDefaults: orgId, surface, systemViewKey, spec    // "Set default for everyone" on system views
+  index by_orgId_surface_systemViewKey
 users.taskDetailMode: "drawer" | "page"              // replaces taskDetailView (modal|drawer)
 ```
 `spec` is a validated object: `filters[{property, operator, values}]`, `layout`, `groupBy`,
@@ -180,7 +181,7 @@ discriminated union).
 
 ### 4.6 Removed
 `tasks.statusType`, `tasks.manualSortKey` (renamed to `sortKey`), `tasks.sortOrder`
-(sub-tasks use `sortKey`), `tasks.estimate` (hours → `estimateMinutes`),
+(sub-tasks use `sortKey`), `tasks.estimate` (already minutes; renamed to `estimateMinutes`),
 `orgSettings.defaultStatusId` (dead), `orgSettings.completionDefault*StatusId` (D5 makes
 them unnecessary), `orgSettings.defaultMyTasksStatusIds`, `users.todayVisibleStatuses`,
 `users.taskDetailView`, `migrations/retireTodayStatus.ts`.
@@ -415,7 +416,7 @@ code (§4.6, §10) once nothing reads them. Reseed whenever a slice changes seed
 
 | # | Slice | Status | Commit | Notes |
 |---|---|---|---|---|
-| 0 | Foundations | not started | | |
+| 0 | Foundations | done (pending review) | | Schema widened (§4: statuses category/position/isDefault/description, tasks new fields + indexes, taskAssignees, taskLabels, labels, taskIdentifierAliases, taskUserState, taskViews, viewDefaults, users.taskDetailMode, projects.nextTaskNumber, orgSettings.taskKey/nextTaskNumber); `tasks/model.ts`, `tasks/access.ts`; reseed `convex/devSeedTasks.ts` (`npx convex run devSeedTasks:seed '{}'`); tests `convex/__tests__/tasks{Model,Access,Seed}.test.ts`. **Deviations:** (1) widen = every new `tasks`/`statuses`/counter field is `v.optional` (old writers don't set them) — slice 7 narrows; (2) no general seed existed (`seedInvoicingScenarios` was deleted in billing slice 5) and time entries/closes reference tasks, so the seed reshapes the org **in place** (idempotent) instead of wipe + reseed; (3) `projects.code` is the identifier key — legacy `PRJ-042` codes are not valid keys (hyphen), the seed recodes them (`ARLO`, `PRAG`, `ARLO2`); (4) index names `by_orgId_userId_unreadComments` and new `viewDefaults.by_orgId_surface_systemViewKey` (§4.3/§4.4 updated); (5) `tasks.estimate` was already minutes (§4.6 text fixed). **Slice 1 must know:** `generateNextProjectCode` still emits `PRJ-NNN` for new projects (invalid key → no identifier); old create/assign/remove paths write no edges/identifiers and don't cascade edges on delete (re-running the seed backfills/sweeps); `projects.remove` keeps tasks (seed moves them to org scope); seed counts `subtaskDoneCount` as closed (completed + canceled) — confirm in `derived.ts`; T1 read literally means a member cannot open an unassigned sub-task of an assigned parent (old `getSubtasks` shows all) — orchestrator to confirm before slice 2; `devSeedArloJune` looks up `PRJ-002` and breaks after recoding; `api.d.ts` hand-edited (no codegen run) — regenerate after merge; guidelines target Convex ^1.41, installed 1.34.1 (single-arg `db.get/patch` kept). |
 | 1 | Write path | not started | | |
 | 2 | Read path | not started | | |
 | 3 | Table UI kit on /tasks | not started | | |

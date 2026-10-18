@@ -7,8 +7,8 @@ import { useDailyNotes } from "@/lib/hooks/use-daily-notes"
 import { DailyNotesPanel } from "@/components/my-tasks/daily-notes-panel"
 
 /**
- * The Today tab's side panel (prototype v4's panel button): the existing
- * Daily Notes, kept from the old My Tasks page. An admin opening
+ * My Tasks' side panel (toolbar panel button, open by default): the existing
+ * Daily Notes, as on the old My Tasks page. An admin opening
  * `/my-tasks?user=<id>` reads that member's notes.
  */
 export function TodayNotes({
@@ -31,7 +31,7 @@ export function TodayNotes({
   )
 
   return (
-    <aside className="hidden w-[420px] shrink-0 overflow-hidden border-l border-border/60 pt-4 lg:flex lg:flex-col" aria-label="Daily notes">
+    <aside className="hidden w-[480px] shrink-0 overflow-hidden border-l border-border/60 pt-4 lg:flex lg:flex-col" aria-label="Daily notes">
       <DailyNotesPanel
         today={today}
         content={note?.content ?? null}

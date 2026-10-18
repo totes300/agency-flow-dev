@@ -1,5 +1,5 @@
-import { TasksListSkeleton } from "@/components/tasks/tasks-list-skeleton"
+import { TaskViewSkeleton } from "@/components/task-view/task-view-skeleton"
 
 export default function TasksLoading() {
-  return <TasksListSkeleton />
+  return <TaskViewSkeleton />
 }

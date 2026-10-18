@@ -27,7 +27,7 @@ import type { TaskWithJoins } from "@/convex/lib/task_helpers"
 import type { MyTasksGroup as MyTasksGroupType } from "@/convex/lib/myTaskHelpers"
 import { findNeighborKeys } from "@/lib/reorder"
 import { getStatusColor } from "@/lib/status-colors"
-import type { ActivityIndicator } from "@/components/tasks/task-row"
+import type { ActivityIndicator } from "@/components/tasks/activity-indicators"
 import type { Id } from "@/convex/_generated/dataModel"
 
 /** Today-group rows carry their effective manual ordering key (slice 03). */

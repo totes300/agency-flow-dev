@@ -49,12 +49,21 @@ function isTiptapDocEmpty(doc: unknown): boolean {
   })
 }
 
+export type TaskFormDefaults = {
+  statusId?: Id<"statuses">
+  projectId?: Id<"projects">
+  assigneeIds?: Id<"users">[]
+}
+
 export function TaskFormModal({
   open,
   onOpenChange,
+  defaults,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
+  /** Prefill applied each time the modal opens (e.g. "+" on a group header). */
+  defaults?: TaskFormDefaults
 }) {
   const titleRef = useRef<HTMLInputElement>(null)
   const [title, setTitle] = useState("")
@@ -77,6 +86,15 @@ export function TaskFormModal({
       setTimeout(() => titleRef.current?.focus(), 100)
     }
   }, [open])
+
+  // Apply the opener's prefill (e.g. the group a "+" was clicked in)
+  const [appliedDefaults, setAppliedDefaults] = useState<TaskFormDefaults | undefined>()
+  if (open && defaults && appliedDefaults !== defaults) {
+    setAppliedDefaults(defaults)
+    if (defaults.statusId) setStatusId(defaults.statusId)
+    if (defaults.projectId) setProjectId(defaults.projectId)
+    if (defaults.assigneeIds) setAssigneeIds(defaults.assigneeIds)
+  }
 
   function resetForm() {
     setTitle("")

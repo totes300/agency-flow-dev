@@ -14,7 +14,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { cn } from "@/lib/utils"
 import { getClientDisplayName } from "@/lib/format"
 import type { TaskWithJoins } from "@/convex/lib/task_helpers"
-import type { ActivityIndicator } from "@/components/tasks/task-row"
+import type { ActivityIndicator } from "@/components/tasks/activity-indicators"
 import type { Id } from "@/convex/_generated/dataModel"
 
 function isOverdue(dueDate: string): boolean {

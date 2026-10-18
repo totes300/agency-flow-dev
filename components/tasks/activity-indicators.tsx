@@ -3,6 +3,26 @@
 import { MessageCircleIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
 
+/** Per-task activity summary from `tasks.activityIndicators` (old list rows; My Tasks until slice 5). */
+export type ActivityIndicator = {
+  subtaskTotal: number
+  subtaskDone: number
+  commentCount: number
+  hasDescription: boolean
+  hasUnseenNonComment: boolean
+  hasUnseenSubtasks: boolean
+  hasUnseenComments: boolean
+  hasUnseenDescription: boolean
+  hasUnseen: boolean
+  unreadCommentCount: number
+  lastActivity: {
+    userName: string
+    type: string
+    metadata: Record<string, unknown>
+    createdAt: number
+  } | null
+}
+
 /** Comment pill — gray when seen, red when unseen. */
 export function CommentPill({ count, unreadCount, hasUnseen }: { count: number; unreadCount: number; hasUnseen: boolean }) {
   const displayCount = hasUnseen ? unreadCount : count

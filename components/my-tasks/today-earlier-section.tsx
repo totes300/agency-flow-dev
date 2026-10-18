@@ -4,7 +4,7 @@ import { HistoryIcon } from "lucide-react"
 import { MyTasksGroup } from "./my-tasks-group"
 import { MyTaskRow } from "./my-task-row"
 import type { TaskWithJoins } from "@/convex/lib/task_helpers"
-import type { ActivityIndicator } from "@/components/tasks/task-row"
+import type { ActivityIndicator } from "@/components/tasks/activity-indicators"
 import type { Id } from "@/convex/_generated/dataModel"
 
 export type EarlierTask = TaskWithJoins & { plannedEndDate?: string }

@@ -140,6 +140,18 @@ export function useTaskActions() {
     [updateEach],
   )
 
+  /** One task, one patch (board drag between columns); the server enforces the field policy. */
+  const patchTask = useCallback(
+    async (task: TaskRowDTO, patch: Omit<Parameters<typeof update>[0], "id">, failure: string) => {
+      try {
+        await update({ id: task._id, ...patch })
+      } catch (err) {
+        toastError(err, failure)
+      }
+    },
+    [update],
+  )
+
   const archive = useCallback(
     async (taskIds: readonly Id<"tasks">[]) => {
       try {
@@ -166,8 +178,8 @@ export function useTaskActions() {
   )
 
   return useMemo(
-    () => ({ setStatus, setPriority, toggleAssignee, toggleLabel, archive }),
-    [setStatus, setPriority, toggleAssignee, toggleLabel, archive],
+    () => ({ setStatus, setPriority, toggleAssignee, toggleLabel, patchTask, archive }),
+    [setStatus, setPriority, toggleAssignee, toggleLabel, patchTask, archive],
   )
 }
 

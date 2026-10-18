@@ -1,9 +1,13 @@
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
 
-/** The panel shell shared by the task view and its loading states. */
+/**
+ * The task view fills the app shell's inset panel (U1): full bleed
+ * (`data-full-bleed` drops the layout padding), below the 3rem header; on
+ * desktop the inset panel sits 0.5rem off each viewport edge.
+ */
 export const TASK_VIEW_PANEL_CLASS =
-  "flex h-[calc(100svh-7rem)] min-h-[28rem] w-full flex-col overflow-hidden rounded-xl border border-border/70 bg-background"
+  "flex h-[calc(100svh-3rem)] min-h-[28rem] w-full flex-col overflow-hidden border-t border-border/60 bg-background md:h-[calc(100svh-4rem)]"
 
 /** Table rows only (inside a loaded panel). */
 export function TaskTableSkeleton({ rows = 10 }: { rows?: number }) {
@@ -27,7 +31,7 @@ export function TaskTableSkeleton({ rows = 10 }: { rows?: number }) {
 /** Full panel placeholder (route `loading.tsx` and first paint). */
 export function TaskViewSkeleton() {
   return (
-    <div className={TASK_VIEW_PANEL_CLASS} aria-busy="true">
+    <div className={TASK_VIEW_PANEL_CLASS} data-full-bleed aria-busy="true">
       <div className="flex h-12 shrink-0 items-center gap-1.5 border-b border-border/60 px-3">
         <Skeleton className="h-7 w-16 rounded-full" />
         <Skeleton className="h-7 w-20 rounded-full" />

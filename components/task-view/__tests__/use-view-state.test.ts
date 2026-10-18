@@ -1,133 +1,241 @@
 import { describe, expect, it } from "vitest"
-import { DEFAULT_VISIBLE_PROPERTIES, SYSTEM_VIEWS } from "@/convex/tasks/model"
+import { DEFAULT_VISIBLE_PROPERTIES, SYSTEM_VIEWS, type TaskViewSpec } from "@/convex/tasks/model"
 import {
-  baseSpecFor,
+  baseChipsOf,
+  buildViewOptions,
   diffOverrides,
-  isSpecModified,
+  displayOf,
+  draftFromSearchParams,
+  draftSpec,
+  isDraftModified,
+  listViewQueryFor,
+  paramsForView,
+  parseChips,
+  parseFilter,
   parseOverrides,
-  resolveViewKey,
-  specFromSearchParams,
-  systemViewsFor,
+  resolveView,
+  scopeFiltersOf,
+  serializeFilter,
+  systemViewOptions,
   toSearchString,
   writeViewParams,
+  type ViewDraft,
+  type ViewOption,
 } from "@/components/task-view/view-state"
 
 const params = (s: string) => new URLSearchParams(s)
 
-describe("view key (URL → system view)", () => {
-  it("lists the /tasks system views in order", () => {
-    expect(systemViewsFor("tasks")).toEqual([
-      { key: "active", name: "Active" },
-      { key: "backlog", name: "Backlog" },
-      { key: "all", name: "All tasks" },
+const SAVED_SPEC: TaskViewSpec = {
+  ...SYSTEM_VIEWS.tasks.active.spec,
+  layout: "board",
+  groupBy: "project",
+  filters: [
+    { property: "statusCategory", operator: "is", values: ["unstarted", "started"] },
+    { property: "label", operator: "is", values: ["l1"] },
+  ],
+}
+
+const options = buildViewOptions(
+  "tasks",
+  [
+    { _id: "v_ws", name: "Design team", scope: "workspace", canEdit: false, spec: SAVED_SPEC },
+    { _id: "v_me", name: "Waiting", scope: "personal", canEdit: true, spec: SAVED_SPEC },
+  ],
+  { active: { ...SYSTEM_VIEWS.tasks.active.spec, orderBy: "dueDate" } },
+)
+const view = (key: string) => options.find((o) => o.key === key)!
+const active = view("active")
+const saved = view("v_me")
+const draftOf = (v: ViewOption): ViewDraft => ({ display: displayOf(v.spec), chips: baseChipsOf(v) })
+
+describe("views", () => {
+  it("lists the system views first, then saved views in server order", () => {
+    expect(systemViewOptions("tasks").map((o) => [o.key, o.name, o.scope])).toEqual([
+      ["active", "Active", "system"],
+      ["backlog", "Backlog", "system"],
+      ["all", "All tasks", "system"],
     ])
+    expect(options.map((o) => o.key)).toEqual(["active", "backlog", "all", "v_ws", "v_me"])
   })
 
-  it("falls back to the surface default for a missing or unknown view", () => {
-    expect(resolveViewKey("tasks", null)).toBe("active")
-    expect(resolveViewKey("tasks", "nope")).toBe("active")
-    expect(resolveViewKey("tasks", "toString")).toBe("active")
-    expect(resolveViewKey("tasks", "backlog")).toBe("backlog")
+  it("applies the org's default to a system view", () => {
+    expect(active.spec.orderBy).toBe("dueDate")
+    expect(view("backlog").spec).toBe(SYSTEM_VIEWS.tasks.backlog.spec)
   })
 
-  it("uses the system view's spec as the base", () => {
-    expect(baseSpecFor("tasks", "backlog")).toBe(SYSTEM_VIEWS.tasks.backlog.spec)
-    expect(baseSpecFor("tasks", "garbage")).toBe(SYSTEM_VIEWS.tasks.active.spec)
+  it("resolves ?view= to a system or saved view, else the surface default", () => {
+    expect(resolveView(options, "tasks", null).key).toBe("active")
+    expect(resolveView(options, "tasks", "nope").key).toBe("active")
+    expect(resolveView(options, "tasks", "toString").key).toBe("active")
+    expect(resolveView(options, "tasks", "backlog").key).toBe("backlog")
+    expect(resolveView(options, "tasks", "v_me")).toBe(saved)
+  })
+
+  it("splits a view's filters into server scope and editable chips", () => {
+    expect(scopeFiltersOf(active)).toEqual(SYSTEM_VIEWS.tasks.active.spec.filters)
+    expect(baseChipsOf(active)).toEqual([])
+    expect(scopeFiltersOf(saved)).toEqual([SAVED_SPEC.filters[0]])
+    expect(baseChipsOf(saved)).toEqual([SAVED_SPEC.filters[1]])
   })
 })
 
-describe("URL → spec", () => {
-  const base = SYSTEM_VIEWS.tasks.active.spec
-
-  it("returns the base spec when the URL carries no overrides", () => {
-    expect(specFromSearchParams(params("detail=abc"), base)).toEqual(base)
+describe("filters ⇄ URL", () => {
+  it("round-trips a filter", () => {
+    const f = { property: "assignee" as const, operator: "is" as const, values: ["me", "none", "u2"] }
+    expect(serializeFilter(f)).toBe("assignee.is.me,none,u2")
+    expect(parseFilter(serializeFilter(f))).toEqual(f)
+    expect(parseFilter("dueDate.before.2026-10-21")).toEqual({ property: "dueDate", operator: "before", values: ["2026-10-21"] })
+    expect(parseFilter("dueDate.isEmpty.")).toEqual({ property: "dueDate", operator: "isEmpty", values: [] })
   })
 
-  it("applies valid overrides on top of the view's spec", () => {
-    const spec = specFromSearchParams(params("group=assignee&order=dueDate&props=title,due&sub=1&empty=1"), base)
-    expect(spec).toEqual({
-      ...base,
+  it("drops invalid filters and the statusCategory scope", () => {
+    for (const raw of ["planet.is.x", "status.near.x", "status.is.", "priority.is.9", "status.is.a b", "status.before.x", "statusCategory.is.backlog", "a.b.c.d"]) {
+      expect(parseFilter(raw)).toBeNull()
+    }
+  })
+
+  it("absent → undefined (the view's chips), empty → explicit no chips", () => {
+    expect(parseChips(params("view=v_me"))).toBeUndefined()
+    expect(parseChips(params("filter="))).toEqual([])
+    expect(parseChips(params("filter=status.is.s1&filter=bogus&filter=priority.is.1,2"))).toEqual([
+      { property: "status", operator: "is", values: ["s1"] },
+      { property: "priority", operator: "is", values: ["1", "2"] },
+    ])
+  })
+})
+
+describe("URL → draft", () => {
+  it("is the view itself when the URL carries no overrides", () => {
+    expect(draftFromSearchParams(params("detail=abc"), active)).toEqual(draftOf(active))
+    expect(draftFromSearchParams(params(""), saved).chips).toEqual(baseChipsOf(saved))
+  })
+
+  it("applies valid display overrides incl. layout", () => {
+    const draft = draftFromSearchParams(params("layout=board&group=assignee&order=title&props=title,due&sub=1&empty=1"), active)
+    expect(draft.display).toEqual({
+      ...displayOf(active.spec),
+      layout: "board",
       groupBy: "assignee",
-      orderBy: "dueDate",
+      orderBy: "title",
       visibleProperties: ["title", "due"],
       showSubtasks: true,
       showEmptyGroups: true,
     })
-    // Filters are the view's scope and never come from the URL in slice 3.
-    expect(spec.filters).toBe(base.filters)
   })
 
   it("ignores invalid values", () => {
-    expect(parseOverrides(params("group=planet&order=random&sub=yes&empty=2&props=bogus,,"))).toEqual({})
-  })
-
-  it("keeps valid properties, drops unknown ones and duplicates", () => {
+    expect(parseOverrides(params("layout=grid&group=planet&order=random&sub=yes&empty=2&props=bogus,,"))).toEqual({})
     expect(parseOverrides(params("props=due,bogus,due,time")).visibleProperties).toEqual(["due", "time"])
     expect(parseOverrides(params("props=")).visibleProperties).toEqual([])
   })
+
+  it("URL chips replace a saved view's chips; the scope stays", () => {
+    const draft = draftFromSearchParams(params("view=v_me&filter=priority.is.1"), saved)
+    expect(draft.chips).toEqual([{ property: "priority", operator: "is", values: ["1"] }])
+    expect(draftSpec(saved, draft).filters).toEqual([
+      SAVED_SPEC.filters[0],
+      { property: "priority", operator: "is", values: ["1"] },
+    ])
+    expect(draftFromSearchParams(params("view=v_me&filter="), saved).chips).toEqual([])
+  })
 })
 
-describe("spec → URL", () => {
-  it("writes only what differs from the view's spec", () => {
-    const base = SYSTEM_VIEWS.tasks.all.spec
-    const next = writeViewParams(params(""), "tasks", "all", { ...base, orderBy: "title" })
+describe("draft → URL", () => {
+  it("writes only what differs from the view", () => {
+    const all = view("all")
+    const next = writeViewParams(params(""), "tasks", all, { ...draftOf(all), display: { ...draftOf(all).display, orderBy: "title" } })
     expect(next.toString()).toBe("view=all&order=title")
   })
 
-  it("omits the default view and clears overrides equal to the spec", () => {
-    const base = SYSTEM_VIEWS.tasks.active.spec
-    const next = writeViewParams(params("view=active&order=title&group=priority"), "tasks", "active", base)
+  it("omits the default view and clears overrides equal to it", () => {
+    const next = writeViewParams(params("view=active&order=title&group=priority&filter=status.is.s1"), "tasks", active, draftOf(active))
     expect(toSearchString(next)).toBe("")
   })
 
   it("preserves params it does not own", () => {
-    const base = SYSTEM_VIEWS.tasks.backlog.spec
-    const next = writeViewParams(params("detail=t1&order=title"), "tasks", "backlog", base)
+    const backlog = view("backlog")
+    const next = writeViewParams(params("detail=t1&order=title&q=logo"), "tasks", backlog, draftOf(backlog))
     expect(next.get("detail")).toBe("t1")
+    expect(next.get("q")).toBe("logo")
     expect(next.get("view")).toBe("backlog")
     expect(next.has("order")).toBe(false)
   })
 
-  it("round-trips: spec → URL → spec", () => {
-    const base = SYSTEM_VIEWS.tasks.backlog.spec
-    const spec = {
-      ...base,
-      groupBy: "none" as const,
-      orderBy: "createdAt" as const,
-      visibleProperties: ["priority", "title", "labels"] as typeof base.visibleProperties,
-      showSubtasks: true,
-      showEmptyGroups: true,
-    }
-    const url = writeViewParams(params(""), "tasks", "backlog", spec)
-    expect(specFromSearchParams(url, baseSpecFor("tasks", url.get("view")!))).toEqual(spec)
+  it("writes chips as repeated filter params, and an explicit empty set for a saved view", () => {
+    const chips = [
+      { property: "status" as const, operator: "is" as const, values: ["s1", "s2"] },
+      { property: "newComments" as const, operator: "is" as const, values: ["true"] },
+    ]
+    const url = writeViewParams(params(""), "tasks", active, { ...draftOf(active), chips })
+    expect(url.getAll("filter")).toEqual(["status.is.s1,s2", "newComments.is.true"])
+    expect(writeViewParams(params(""), "tasks", saved, { ...draftOf(saved), chips: [] }).getAll("filter")).toEqual([""])
   })
 
-  it("serialises boolean overrides as 1/0", () => {
-    const base = SYSTEM_VIEWS.tasks.all.spec
-    const url = writeViewParams(params(""), "tasks", "all", { ...base, showSubtasks: true, showEmptyGroups: true })
-    expect(url.get("sub")).toBe("1")
-    expect(url.get("empty")).toBe("1")
-    expect(diffOverrides({ ...base, showSubtasks: true }, base)).toEqual({ showSubtasks: true })
+  it("round-trips: draft → URL → draft", () => {
+    const backlog = view("backlog")
+    const draft: ViewDraft = {
+      display: {
+        ...displayOf(backlog.spec),
+        layout: "board",
+        groupBy: "none",
+        orderBy: "createdAt",
+        visibleProperties: ["priority", "title", "labels"],
+        showSubtasks: true,
+        showEmptyGroups: true,
+      },
+      chips: [{ property: "assignee", operator: "is", values: ["none"] }],
+    }
+    const url = writeViewParams(params(""), "tasks", backlog, draft)
+    expect(draftFromSearchParams(url, resolveView(options, "tasks", url.get("view")))).toEqual(draft)
+  })
+
+  it("opening a view drops overrides, filters and search", () => {
+    const next = paramsForView(params("view=all&order=title&filter=status.is.s1&q=x&detail=t1"), "tasks", "v_me")
+    expect(next.toString()).toBe("view=v_me&detail=t1")
+    expect(paramsForView(params("view=all"), "tasks", "active").toString()).toBe("")
   })
 })
 
 describe("modified detection", () => {
-  const base = SYSTEM_VIEWS.tasks.active.spec
-
   it("is unmodified for the plain view", () => {
-    expect(isSpecModified(base, base)).toBe(false)
-    expect(isSpecModified({ ...base, visibleProperties: [...DEFAULT_VISIBLE_PROPERTIES] }, base)).toBe(false)
+    expect(isDraftModified(draftOf(active), active)).toBe(false)
+    expect(isDraftModified(draftOf(saved), saved)).toBe(false)
+    expect(
+      isDraftModified({ ...draftOf(active), display: { ...draftOf(active).display, visibleProperties: [...DEFAULT_VISIBLE_PROPERTIES] } }, active),
+    ).toBe(false)
   })
 
-  it("is modified when any display field differs", () => {
-    expect(isSpecModified({ ...base, orderBy: "title" }, base)).toBe(true)
-    expect(isSpecModified({ ...base, groupBy: "none" }, base)).toBe(true)
-    expect(isSpecModified({ ...base, showEmptyGroups: true }, base)).toBe(true)
-    expect(isSpecModified({ ...base, visibleProperties: [...base.visibleProperties].reverse() }, base)).toBe(true)
+  it("is modified when a display field, the layout or the chips differ", () => {
+    const d = draftOf(active)
+    expect(isDraftModified({ ...d, display: { ...d.display, orderBy: "title" } }, active)).toBe(true)
+    expect(isDraftModified({ ...d, display: { ...d.display, layout: "board" } }, active)).toBe(true)
+    expect(isDraftModified({ ...d, chips: [{ property: "priority", operator: "is", values: ["1"] }] }, active)).toBe(true)
+    expect(isDraftModified({ ...draftOf(saved), chips: [] }, saved)).toBe(true)
+    expect(diffOverrides({ ...d, display: { ...d.display, showSubtasks: true } }, active)).toEqual({ showSubtasks: true })
   })
 
   it("matches what the URL carries", () => {
-    expect(isSpecModified(specFromSearchParams(params("order=title"), base), base)).toBe(true)
-    expect(isSpecModified(specFromSearchParams(params("order=priority"), base), base)).toBe(false)
+    expect(isDraftModified(draftFromSearchParams(params("order=title"), active), active)).toBe(true)
+    expect(isDraftModified(draftFromSearchParams(params("order=dueDate"), active), active)).toBe(false)
+  })
+})
+
+describe("listView args", () => {
+  it("an untouched system view goes by key (the server applies the org default)", () => {
+    expect(listViewQueryFor(active, draftOf(active))).toEqual({ viewKey: "active" })
+    // Display changes and chips are client-side: the subscription stays the same.
+    const d = { ...draftOf(active), display: { ...draftOf(active).display, groupBy: "none" as const }, chips: [{ property: "priority" as const, operator: "is" as const, values: ["1"] }] }
+    expect(listViewQueryFor(active, d)).toEqual({ viewKey: "active" })
+  })
+
+  it("sends the scope + showSubtasks only, with display fields pinned", () => {
+    const d = { ...draftOf(active), display: { ...draftOf(active).display, showSubtasks: true } }
+    expect(listViewQueryFor(active, d)).toEqual({
+      spec: { ...SYSTEM_VIEWS.tasks.all.spec, filters: active.spec.filters, showSubtasks: true },
+    })
+    const a = listViewQueryFor(saved, draftOf(saved))
+    const b = listViewQueryFor(saved, { ...draftOf(saved), display: { ...draftOf(saved).display, groupBy: "status" }, chips: [] })
+    expect(a).toEqual(b)
+    expect(a).toEqual({ spec: { ...SYSTEM_VIEWS.tasks.all.spec, filters: [SAVED_SPEC.filters[0]], showSubtasks: false } })
   })
 })

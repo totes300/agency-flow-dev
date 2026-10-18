@@ -24,7 +24,6 @@ import {
   isTaskCategory,
   type TaskCategory,
   type TaskPriority,
-  type TaskViewSpec,
 } from "./model";
 import { loadUserStates } from "./userState";
 import { matchesFilters, resolveFilterValue, type ListFilter } from "./filters";

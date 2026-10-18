@@ -9,7 +9,8 @@ import { getCategoryColor } from "@/convex/lib/constants"
 import { getStatusColor } from "@/lib/status-colors"
 import type { GroupHeader as GroupHeaderData, TaskGroup } from "@/components/task-view/row-model"
 
-function GroupIcon({ header }: { header: GroupHeaderData }) {
+/** The icon a group shows in its header (status, priority, avatar, colour dot). */
+export function GroupIcon({ header }: { header: GroupHeaderData }) {
   switch (header.kind) {
     case "status":
       return <StatusIcon icon={header.status.icon} color={header.status.color} />

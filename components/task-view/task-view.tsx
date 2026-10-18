@@ -1,12 +1,12 @@
 "use client"
 
-import { useCallback, useMemo, useState } from "react"
+import { useCallback, useMemo, useRef, useState } from "react"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { useConvexAuth, useQuery } from "convex/react"
 import { toast } from "sonner"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
-import type { ListViewSurface } from "@/convex/tasks/model"
+import type { TaskViewSpec, TaskViewSurface } from "@/convex/tasks/model"
 import { useIsAdmin } from "@/lib/hooks/use-is-admin"
 import { useIsMobile } from "@/lib/hooks/use-is-mobile"
 import { useLastDefined } from "@/lib/hooks/use-last-defined"
@@ -18,13 +18,22 @@ import { formatDuration } from "@/lib/duration"
 import { toastError } from "@/lib/toast-helpers"
 import { Button } from "@/components/ui/button"
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
+import { ConfirmDialog } from "@/components/confirm-dialog"
 import { TaskReferenceDataProvider } from "@/components/tasks/task-reference-data"
 import { TaskDetailDrawer } from "@/components/tasks/task-detail-drawer"
 import { TaskDetailModal } from "@/components/tasks/task-detail-modal"
 import { TaskFormModal, type TaskFormDefaults } from "@/components/tasks/task-form-modal"
 import { ComposeIcon } from "@/components/icons/nav-icons"
 import { visibleColumnKeys, type CellContext } from "@/components/task-view/columns"
-import type { OrderBy } from "@/components/task-view/column-rules"
+import type { ColumnKey, OrderBy } from "@/components/task-view/column-rules"
+import { boardMoveFor, canDragOnBoard } from "@/components/task-view/board-model"
+import { DisplayMenu, boardGroupBy } from "@/components/task-view/display-menu"
+import { applyChips, applySearch } from "@/components/task-view/filter-model"
+import { FilterButton, FilterChips, type FacetContext } from "@/components/task-view/filter-menu"
+import { SearchBox, type SearchBoxHandle } from "@/components/task-view/search-box"
+import { TaskBoard } from "@/components/task-view/task-board"
+import { ViewDialog, type ViewDialogRequest } from "@/components/task-view/view-dialog"
+import type { ViewOption } from "@/components/task-view/view-state"
 import { PropertyMenu, type PropertyMenuKind, type PropertyMenuRequest } from "@/components/task-view/property-menus"
 import { buildRowModels, groupRows, indexRefs, sortRows, type TaskGroup } from "@/components/task-view/row-model"
 import { SelectionBar } from "@/components/task-view/selection-bar"
@@ -33,21 +42,24 @@ import { TaskTable } from "@/components/task-view/task-table"
 import { TASK_VIEW_PANEL_CLASS, TaskTableSkeleton } from "@/components/task-view/task-view-skeleton"
 import { useTaskActions } from "@/components/task-view/use-task-actions"
 import { useTaskKeyboard } from "@/components/task-view/use-task-keyboard"
-import { useViewState } from "@/components/task-view/use-view-state"
+import { useViewActions, useViewState } from "@/components/task-view/use-view-state"
 import { ViewTabs } from "@/components/task-view/view-tabs"
 
 /** Closed-row paging, mirroring `CLOSED_ROW_DEFAULT` / `CLOSED_ROW_MAX` in convex/tasks/read.ts (server clamps). */
 const CLOSED_ROW_DEFAULT = 200
 const CLOSED_ROW_MAX = 2000
 
+/** Columns a board card never shows: the ID (U3) and the long list-only cells. */
+const BOARD_HIDDEN_KEYS: ReadonlySet<ColumnKey> = new Set(["id", "created", "activity"])
+
 /**
  * The task view container (docs/prd-tasks-refactor.md §6.2): surface preset +
- * view spec (URL) → `tasks.queries.listView` → client-side grouping/ordering
- * → the aligned-column table. Slice 3 serves `/tasks` with the system views
- * Active / Backlog / All tasks; saved views, the display/filter menus and the
- * board arrive in slice 4. Rows open the existing task detail (`?detail=`).
+ * view (URL ⇄ saved views, `use-view-state`) → `tasks.queries.listView` (the
+ * view's scope) → client-side search, filter chips and facets, grouping and
+ * ordering → the aligned-column table or the board. Rows open the existing
+ * task detail (`?detail=`).
  */
-export function TaskView({ surface }: { surface: Extract<ListViewSurface, "tasks"> }) {
+export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks"> }) {
   const { isAuthenticated } = useConvexAuth()
   const isAdmin = useIsAdmin() ?? false
   const isMobile = useIsMobile()
@@ -55,7 +67,11 @@ export function TaskView({ surface }: { surface: Extract<ListViewSurface, "tasks
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const view = useViewState(surface)
-  const { spec, viewKey } = view
+  const viewActions = useViewActions(view)
+  const { spec, draft } = view
+  const viewKey = view.view.key
+  // UI affordances follow the Clerk role (like the rest of the app); `tasks/views.ts` enforces it.
+  const canManageViews = view.canManageWorkspace || isAdmin
   const [today] = useState(() => formatDateToYMD(new Date()))
 
   // "Load more" for completed/canceled rows, per view.
@@ -63,15 +79,10 @@ export function TaskView({ surface }: { surface: Extract<ListViewSurface, "tasks
   const closedLimit = closedLimits[viewKey] ?? CLOSED_ROW_DEFAULT
 
   const listArgs = useMemo(
-    () => ({
-      surface,
-      ...(view.modified ? { spec } : { viewKey }),
-      closedLimit,
-      today,
-    }),
-    [surface, view.modified, spec, viewKey, closedLimit, today],
+    () => ({ surface, ...view.listQuery, closedLimit, today }),
+    [surface, view.listQuery, closedLimit, today],
   )
-  const liveResult = useQuery(api.tasks.queries.listView, isAuthenticated ? listArgs : "skip")
+  const liveResult = useQuery(api.tasks.queries.listView, isAuthenticated && view.ready ? listArgs : "skip")
   const result = useLastDefined(liveResult)
   const refs = useQuery(api.workspaceRefs.get, isAuthenticated ? {} : "skip")
 
@@ -88,20 +99,41 @@ export function TaskView({ surface }: { surface: Extract<ListViewSurface, "tasks
   )
   const detailMode = isMobile ? "modal" : (currentUser?.taskDetailView ?? "modal")
 
-  // ─── Rows → groups ──────────────────────────────────────────────────────────
+  // ─── Rows → search → chips → groups ─────────────────────────────────────────
   const index = useMemo(() => (refs ? indexRefs(refs) : null), [refs])
-  const rows = useMemo(
+  const me = refs?.me ?? ""
+  const allRows = useMemo(
     () => (result && index ? sortRows(buildRowModels(result.rows, result.perUser, index), spec.orderBy) : []),
     [result, index, spec.orderBy],
   )
-  const rowById = useMemo(() => new Map(rows.map((r) => [r.task._id, r])), [rows])
-  const groups = useMemo(() => (index ? groupRows(rows, spec, index) : []), [rows, spec, index])
+  const searched = useMemo(() => applySearch(allRows, view.search), [allRows, view.search])
+  const rows = useMemo(() => applyChips(searched, draft.chips, me), [searched, draft.chips, me])
+  const rowById = useMemo(() => new Map(allRows.map((r) => [r.task._id, r])), [allRows])
+
+  const board = spec.layout === "board"
+  const boardGroup = boardGroupBy(spec.groupBy)
+  const groups = useMemo(() => {
+    if (!index) return []
+    if (!board) return groupRows(rows, spec, index)
+    // Status columns always show (inside the view's scope) so every status is a drop target.
+    return groupRows(rows, { ...spec, groupBy: boardGroup, showEmptyGroups: spec.showEmptyGroups || boardGroup === "status" }, index)
+  }, [board, boardGroup, index, rows, spec])
   const columns = useMemo(() => visibleColumnKeys(spec), [spec])
-  const grouped = spec.groupBy !== "none"
+  const boardKeys = useMemo(
+    () =>
+      visibleColumnKeys({ ...spec, groupBy: boardGroup }).filter(
+        (k) => !BOARD_HIDDEN_KEYS.has(k) && !(boardGroup === "status" && k === "statusIcon"),
+      ),
+    [boardGroup, spec],
+  )
+  const grouped = board || spec.groupBy !== "none"
 
   const [collapsedGroups, setCollapsedGroups] = useState<ReadonlySet<string>>(() => new Set())
   const groupStateKey = useCallback((key: string) => `${viewKey}|${spec.groupBy}|${key}`, [viewKey, spec.groupBy])
-  const isCollapsed = useCallback((key: string) => collapsedGroups.has(groupStateKey(key)), [collapsedGroups, groupStateKey])
+  const isCollapsed = useCallback(
+    (key: string) => !board && collapsedGroups.has(groupStateKey(key)),
+    [board, collapsedGroups, groupStateKey],
+  )
   const toggleGroup = useCallback(
     (key: string) =>
       setCollapsedGroups((prev) => {
@@ -177,6 +209,50 @@ export function TaskView({ surface }: { surface: Extract<ListViewSurface, "tasks
     [openCreate],
   )
 
+  const boardDraggable = canDragOnBoard(boardGroup, isAdmin)
+  const moveOnBoard = useCallback(
+    (taskId: Id<"tasks">, fromKey: string, toKey: string) => {
+      const row = rowById.get(taskId)
+      if (!row) return
+      const move = boardMoveFor(boardGroup, row.task, fromKey, toKey)
+      if (!move) return
+      switch (move.kind) {
+        case "status":
+          return void actions.setStatus([row.task], move.statusId)
+        case "priority":
+          return void actions.setPriority([row.task], move.priority)
+        case "assignees":
+          return void actions.patchTask(row.task, { assigneeIds: move.assigneeIds }, "Failed to change assignees")
+        case "labels":
+          return void actions.patchTask(row.task, { labelIds: move.labelIds }, "Failed to change labels")
+        case "project":
+          return void actions.patchTask(row.task, { projectId: move.projectId }, "Failed to move the task")
+        case "workCategory":
+          return void actions.patchTask(row.task, { workCategoryId: move.workCategoryId }, "Failed to change the category")
+      }
+    },
+    [actions, boardGroup, rowById],
+  )
+
+  // ─── Views: dialogs ─────────────────────────────────────────────────────────
+  const [viewDialog, setViewDialog] = useState<
+    (ViewDialogRequest & { spec?: TaskViewSpec; target?: ViewOption }) | null
+  >(null)
+  const [deleting, setDeleting] = useState<ViewOption | null>(null)
+  const submitViewDialog = async (name: string, scope: "personal" | "workspace") => {
+    if (!viewDialog) return
+    if (viewDialog.mode === "rename" && viewDialog.target) await viewActions.rename(viewDialog.target, name)
+    else if ((await viewActions.saveAsNew(name, scope, viewDialog.spec)) === null) return
+    setViewDialog(null)
+  }
+
+  const facetCtx: FacetContext | null = useMemo(
+    () => (index ? { rows: searched, chips: draft.chips, index, me, onChange: view.setChips } : null),
+    [draft.chips, index, me, searched, view.setChips],
+  )
+  const [filterOpen, setFilterOpen] = useState(false)
+  const searchRef = useRef<SearchBoxHandle>(null)
+
   const toggleTimer = useToggleTaskTimer()
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
 
@@ -202,22 +278,53 @@ export function TaskView({ surface }: { surface: Extract<ListViewSurface, "tasks
     },
     onNewTask: () => openCreate(),
     onShowShortcuts: () => setShortcutsOpen(true),
+    onFilter: () => setFilterOpen(true),
+    onSearch: () => searchRef.current?.focus(),
   })
 
   const loaded = result !== undefined && index !== null
-  const changeOrder = (orderBy: OrderBy) => view.updateSpec({ orderBy })
+  const changeOrder = (orderBy: OrderBy) => view.updateDisplay({ orderBy })
+  const narrowed = draft.chips.length > 0 || view.search !== ""
 
   return (
     <TaskReferenceDataProvider value={referenceData}>
-      <div className={TASK_VIEW_PANEL_CLASS}>
-        <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border/60 px-3">
-          <ViewTabs views={view.views} activeKey={viewKey} modified={view.modified} onSelect={(key) => { selection.clear(); view.setView(key) }} />
-          {view.modified ? (
-            <Button variant="ghost" size="xs" className="text-muted-foreground" onClick={view.reset}>
-              Reset
-            </Button>
-          ) : null}
+      <div className={TASK_VIEW_PANEL_CLASS} data-full-bleed>
+        <div className="flex h-12 shrink-0 items-center gap-2 px-3">
+          <ViewTabs
+            views={view.options}
+            activeKey={viewKey}
+            isAdmin={canManageViews}
+            customizedDefaults={view.customizedDefaults}
+            actions={{
+              onSelect: (key) => { selection.clear(); view.setView(key) },
+              onNew: () => setViewDialog({ mode: "create", filterCount: draft.chips.length }),
+              onRename: (target) => setViewDialog({ mode: "rename", initialName: target.name, target }),
+              onDuplicate: (target) =>
+                setViewDialog({
+                  mode: "create",
+                  initialName: `${target.name} copy`,
+                  filterCount: target.key === viewKey ? draft.chips.length : 0,
+                  spec: target.key === viewKey ? spec : target.spec,
+                }),
+              onDelete: setDeleting,
+              onMove: (target, afterKey) => void viewActions.move(target, afterKey),
+              onResetDefault: (target) => void viewActions.resetDefaultForEveryone(target),
+            }}
+          />
           <span className="flex-1" />
+          <SearchBox ref={searchRef} value={view.search} onChange={view.setSearch} />
+          {facetCtx ? <FilterButton open={filterOpen} onOpenChange={setFilterOpen} ctx={facetCtx} /> : null}
+          <DisplayMenu
+            display={draft.display}
+            view={view.view}
+            modified={view.modified}
+            isAdmin={canManageViews}
+            onChange={view.updateDisplay}
+            onReset={view.reset}
+            onSave={() => void viewActions.save()}
+            onSaveAsNew={() => setViewDialog({ mode: "create", filterCount: draft.chips.length })}
+            onSetDefault={() => void viewActions.setDefaultForEveryone()}
+          />
           <Button
             variant="outline"
             size="icon-sm"
@@ -229,29 +336,56 @@ export function TaskView({ surface }: { surface: Extract<ListViewSurface, "tasks
             <ComposeIcon />
           </Button>
         </div>
+        {facetCtx ? <FilterChips ctx={facetCtx} /> : null}
 
         {result?.truncated ? (
-          <p className="shrink-0 border-b border-border/60 px-4 py-2 text-xs text-muted-foreground">
+          <p className="shrink-0 border-t border-border/60 px-4 py-2 text-xs text-muted-foreground">
             Showing the first 1,000 open tasks. Refine with filters.
           </p>
         ) : null}
 
-        <div className="min-h-0 flex-1 overflow-auto pb-20">
+        <div className={board ? "min-h-0 flex-1 overflow-auto border-t border-border/60" : "min-h-0 flex-1 overflow-auto border-t border-border/60 pb-20"}>
           {!loaded ? (
             <TaskTableSkeleton />
-          ) : rows.length === 0 ? (
-            <Empty className="h-full">
-              <EmptyHeader>
-                <EmptyTitle>No tasks in this view</EmptyTitle>
-                <EmptyDescription>Tasks you create or are assigned to show up here.</EmptyDescription>
-              </EmptyHeader>
-              <EmptyContent>
-                <Button variant="outline" size="sm" onClick={() => openCreate()}>
-                  <ComposeIcon data-icon="inline-start" />
-                  New task
-                </Button>
-              </EmptyContent>
-            </Empty>
+          ) : rows.length === 0 && !board ? (
+            narrowed ? (
+              <Empty className="h-full">
+                <EmptyHeader>
+                  <EmptyTitle>No tasks match</EmptyTitle>
+                  <EmptyDescription>Nothing in this view matches the current filters or search.</EmptyDescription>
+                </EmptyHeader>
+                <EmptyContent>
+                  <Button variant="outline" size="sm" onClick={() => { view.setChips([]); view.setSearch("") }}>
+                    Clear filters
+                  </Button>
+                </EmptyContent>
+              </Empty>
+            ) : (
+              <Empty className="h-full">
+                <EmptyHeader>
+                  <EmptyTitle>No tasks in this view</EmptyTitle>
+                  <EmptyDescription>Tasks you create or are assigned to show up here.</EmptyDescription>
+                </EmptyHeader>
+                <EmptyContent>
+                  <Button variant="outline" size="sm" onClick={() => openCreate()}>
+                    <ComposeIcon data-icon="inline-start" />
+                    New task
+                  </Button>
+                </EmptyContent>
+              </Empty>
+            )
+          ) : board ? (
+            <TaskBoard
+              columns={groups}
+              keys={boardKeys}
+              ctx={cellContext}
+              draggable={boardDraggable}
+              focusedId={focusedId}
+              openId={detailId}
+              onOpen={openTask}
+              onMove={moveOnBoard}
+              onCreateInColumn={createInGroup}
+            />
           ) : (
             <>
               <TaskTable
@@ -259,7 +393,7 @@ export function TaskView({ surface }: { surface: Extract<ListViewSurface, "tasks
                 groups={groups}
                 grouped={grouped}
                 orderBy={spec.orderBy}
-                defaultOrderBy={view.baseSpec.orderBy}
+                defaultOrderBy={view.view.spec.orderBy}
                 onOrderBy={changeOrder}
                 isCollapsed={isCollapsed}
                 onToggleGroup={toggleGroup}
@@ -307,6 +441,29 @@ export function TaskView({ surface }: { surface: Extract<ListViewSurface, "tasks
       {index ? (
         <PropertyMenu request={menu} tasks={menuTasks} index={index} actions={actions} onClose={closeMenu} />
       ) : null}
+
+      <ViewDialog
+        request={viewDialog}
+        canManageWorkspace={canManageViews}
+        onOpenChange={(open) => { if (!open) setViewDialog(null) }}
+        onSubmit={submitViewDialog}
+      />
+      <ConfirmDialog
+        open={deleting !== null}
+        onOpenChange={(open) => { if (!open) setDeleting(null) }}
+        title={`Delete “${deleting?.name ?? ""}”?`}
+        description={
+          deleting?.scope === "workspace"
+            ? "The view disappears for everyone in the workspace. Tasks are not affected."
+            : "The view is removed. Tasks are not affected."
+        }
+        confirmLabel="Delete view"
+        variant="destructive"
+        onConfirm={() => {
+          if (deleting) void viewActions.remove(deleting)
+          setDeleting(null)
+        }}
+      />
 
       <TaskFormModal
         open={createDefaults !== null}

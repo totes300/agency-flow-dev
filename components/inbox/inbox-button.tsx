@@ -2,7 +2,6 @@
 
 import { useState } from "react"
 import { useQuery, useConvexAuth } from "convex/react"
-import { InboxIcon } from "lucide-react"
 import { api } from "@/convex/_generated/api"
 import {
   SidebarMenu,
@@ -16,6 +15,7 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet"
 import { SidebarCountBadge } from "@/components/sidebar-count-badge"
+import { InboxNavIcon } from "@/components/icons/nav-icons"
 import { InboxPanel } from "@/components/inbox/inbox-panel"
 import { useInboxSidebar } from "@/components/inbox/inbox-sidebar-context"
 import { useIsMobile } from "@/lib/hooks/use-is-mobile"
@@ -63,7 +63,7 @@ export function InboxButton() {
                 tooltip="Inbox"
                 className={cn("font-medium", inboxRestingFill)}
               >
-                <InboxIcon />
+                <InboxNavIcon />
                 <span>Inbox</span>
                 <InboxBadge />
               </SidebarMenuButton>
@@ -86,7 +86,7 @@ export function InboxButton() {
             onClick={toggleInbox}
             className={cn("font-medium", !inboxOpen && inboxRestingFill)}
           >
-            <InboxIcon />
+            <InboxNavIcon />
             <span>Inbox</span>
             <InboxBadge />
           </SidebarMenuButton>

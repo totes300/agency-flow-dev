@@ -107,6 +107,7 @@ export const PanelNavIcon = createNavIcon("PanelNavIcon", <>
 export const PlusNavIcon = createNavIcon("PlusNavIcon", <path d="M8 3v10M3 8h10" />)
 export const ChevronDownNavIcon = createNavIcon("ChevronDownNavIcon", <path d="m4.5 6.25 3.5 3.5 3.5-3.5" />)
 export const ChevronRightNavIcon = createNavIcon("ChevronRightNavIcon", <path d="m6.25 4.5 3.5 3.5-3.5 3.5" />)
+export const ChevronLeftNavIcon = createNavIcon("ChevronLeftNavIcon", <path d="m9.75 4.5-3.5 3.5 3.5 3.5" />)
 export const ChevronUpNavIcon = createNavIcon("ChevronUpNavIcon", <path d="m4.5 9.75 3.5-3.5 3.5 3.5" />)
 export const SortNavIcon = createNavIcon("SortNavIcon", <path d="m5 6.5 3-3 3 3M5 9.5l3 3 3-3" />)
 
@@ -209,4 +210,25 @@ export const TimerNavIcon = createNavIcon("TimerNavIcon", <>
 export const CopyNavIcon = createNavIcon("CopyNavIcon", <>
   <rect x="5.25" y="5.25" width="8.5" height="8.5" rx="1.5" />
   <path d="M10.75 5.25V3.75a1.5 1.5 0 0 0-1.5-1.5h-5.5a1.5 1.5 0 0 0-1.5 1.5v5.5a1.5 1.5 0 0 0 1.5 1.5h1.5" />
+</>)
+
+// ─── Sidebar items beyond the prototype set (same grid / stroke) ────────────
+
+export const DashboardNavIcon = createNavIcon("DashboardNavIcon", <>
+  <rect x="2.5" y="2.5" width="4.75" height="6" rx="1.25" />
+  <rect x="8.75" y="2.5" width="4.75" height="3.5" rx="1.25" />
+  <rect x="8.75" y="7.5" width="4.75" height="6" rx="1.25" />
+  <rect x="2.5" y="10" width="4.75" height="3.5" rx="1.25" />
+</>)
+
+export const WorkdayNavIcon = createNavIcon("WorkdayNavIcon", <>
+  <rect x="2.5" y="3.25" width="11" height="10.25" rx="2" />
+  <path d="M2.5 6.5h11M5.5 1.75v2.5M10.5 1.75v2.5" />
+  <path d="M5.5 9.25h2M5.5 11.25h4.5" />
+</>)
+
+export const SettingsNavIcon = createNavIcon("SettingsNavIcon", <>
+  <circle cx="8" cy="8" r="2" />
+  <path d="M8 1.75v1.5M8 12.75v1.5M3.58 3.58l1.06 1.06M11.36 11.36l1.06 1.06M1.75 8h1.5M12.75 8h1.5M3.58 12.42l1.06-1.06M11.36 4.64l1.06-1.06" />
+  <circle cx="8" cy="8" r="4.25" />
 </>)

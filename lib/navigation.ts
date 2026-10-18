@@ -1,21 +1,22 @@
+import type { ComponentType } from "react"
 import {
-  LayoutDashboardIcon,
-  SettingsIcon,
-  CheckSquareIcon,
-  CircleUserIcon,
-  UsersIcon,
-  FolderIcon,
-  ClockIcon,
-  ReceiptIcon,
-  CalendarDaysIcon,
-  CalendarRangeIcon,
-  type LucideIcon,
-} from "lucide-react"
+  BillingNavIcon,
+  CalendarNavIcon,
+  ClientsNavIcon,
+  ClockNavIcon,
+  DashboardNavIcon,
+  MyTasksNavIcon,
+  ProjectsNavIcon,
+  SettingsNavIcon,
+  TasksNavIcon,
+  WorkdayNavIcon,
+} from "@/components/icons/nav-icons"
 
 export type NavItem = {
   title: string
   url: string
-  icon: LucideIcon
+  /** The in-house Linear-style set (U1); any `currentColor` SVG component fits. */
+  icon: ComponentType<{ className?: string }>
   adminOnly?: boolean
 }
 
@@ -34,41 +35,41 @@ export const navigation: NavGroup[] = [
   {
     label: "Overview",
     items: [
-      { title: "Dashboard", url: "/dashboard", icon: LayoutDashboardIcon },
+      { title: "Dashboard", url: "/dashboard", icon: DashboardNavIcon },
     ],
   },
   {
     label: "Work",
     items: [
-      { title: "My Tasks", url: "/my-tasks", icon: CircleUserIcon },
-      { title: "Tasks", url: "/tasks", icon: CheckSquareIcon },
+      { title: "My Tasks", url: "/my-tasks", icon: MyTasksNavIcon },
+      { title: "Tasks", url: "/tasks", icon: TasksNavIcon },
     ],
   },
   {
     label: "Manage",
     items: [
-      { title: "Clients", url: "/clients", icon: UsersIcon, adminOnly: true },
-      { title: "Projects", url: "/projects", icon: FolderIcon, adminOnly: true },
+      { title: "Clients", url: "/clients", icon: ClientsNavIcon, adminOnly: true },
+      { title: "Projects", url: "/projects", icon: ProjectsNavIcon, adminOnly: true },
     ],
   },
   {
     label: "Insights",
     items: [
-      { title: "Workday", url: "/workday", icon: CalendarDaysIcon },
-      { title: "Planner", url: "/planner", icon: CalendarRangeIcon },
+      { title: "Workday", url: "/workday", icon: WorkdayNavIcon },
+      { title: "Planner", url: "/planner", icon: CalendarNavIcon },
     ],
   },
   {
     label: "Finance",
     items: [
-      { title: "Billing", url: "/billing", icon: ReceiptIcon, adminOnly: true },
-      { title: "My Time", url: "/my-time", icon: ClockIcon },
+      { title: "Billing", url: "/billing", icon: BillingNavIcon, adminOnly: true },
+      { title: "My Time", url: "/my-time", icon: ClockNavIcon },
     ],
   },
   {
     label: "System",
     items: [
-      { title: "Settings", url: "/settings", icon: SettingsIcon, adminOnly: true },
+      { title: "Settings", url: "/settings", icon: SettingsNavIcon, adminOnly: true },
     ],
   },
 ]

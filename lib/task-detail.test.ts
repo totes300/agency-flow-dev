@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest"
 import {
   buildDetailUrl,
+  buildProposalUrl,
   buildTaskDeepLink,
   buildTaskUrl,
   isTaskDetailOpen,
   parseDetailParam,
+  parseProposalRef,
   parseTaskRef,
   taskPagePath,
   getAdjacentTaskId,
@@ -285,5 +287,40 @@ describe("mergeActivityFeed", () => {
     // Both present, order is stable (activities first since they're first in concat)
     expect(feed[0].id).toBe("a1")
     expect(feed[1].id).toBe("c1")
+  })
+})
+
+// ─── Proposal sources (email-triage B7) ────────────────────────────────────────
+
+describe("parseProposalRef", () => {
+  it("reads ?draft= and ?change=", () => {
+    expect(parseProposalRef(new URLSearchParams("draft=p1"))).toEqual({ kind: "draft", proposalId: "p1" })
+    expect(parseProposalRef(new URLSearchParams("change=p2"))).toEqual({ kind: "change", proposalId: "p2" })
+  })
+
+  it("is null without a proposal, for blanks, and when a task is open", () => {
+    expect(parseProposalRef(new URLSearchParams(""))).toBeNull()
+    expect(parseProposalRef(new URLSearchParams("draft=%20"))).toBeNull()
+    expect(parseProposalRef(new URLSearchParams("task=ARLO-1&draft=p1"))).toBeNull()
+  })
+})
+
+describe("buildProposalUrl", () => {
+  it("opens a proposal, dropping an open task and its comment link, keeping the rest", () => {
+    const params = new URLSearchParams("view=board&task=ARLO-1&comment=c1")
+    expect(buildProposalUrl(params, { kind: "draft", proposalId: "p1" })).toBe("?view=board&draft=p1")
+  })
+
+  it("switches draft ↔ change and closes", () => {
+    const params = new URLSearchParams("thread=t1&draft=p1")
+    expect(buildProposalUrl(params, { kind: "change", proposalId: "p2" })).toBe("?thread=t1&change=p2")
+    expect(buildProposalUrl(params, null)).toBe("?thread=t1")
+    expect(buildProposalUrl(new URLSearchParams("draft=p1"), null)).toBe("")
+  })
+
+  it("opening a task, or closing the drawer, closes an open proposal", () => {
+    const params = new URLSearchParams("draft=p1&view=list")
+    expect(buildTaskUrl(params, { id: "t1", identifier: "ARLO-2" })).toBe("?view=list&task=ARLO-2")
+    expect(buildTaskUrl(new URLSearchParams("change=p2&view=list"), null)).toBe("?view=list")
   })
 })

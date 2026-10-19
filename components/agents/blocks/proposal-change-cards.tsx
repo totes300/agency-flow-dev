@@ -15,7 +15,7 @@ import type {
 } from "@/lib/agents/proposals"
 import { parseMentionText } from "@/lib/agents/composer"
 import { firstName, formatShortDate } from "@/lib/format"
-import { ProposalFooter } from "./proposal-card-chrome"
+import { OpenInDrawerButton, ProposalFooter } from "./proposal-card-chrome"
 import { useProposalDecision } from "./use-proposal-decision"
 
 /**
@@ -24,7 +24,7 @@ import { useProposalDecision } from "./use-proposal-decision"
  * known), a `postComment` shows the comment, a `proposeSkill` shows the
  * instruction and the evidence behind it. Each ends in the shared footer —
  * quiet Discard, one dark Approve. The full editable review lives in the task
- * drawer (B7 / D1); these cards only decide.
+ * drawer (B7 / D1: the Update card's "Open"); these cards only decide.
  */
 
 type Member = { _id: Id<"users">; name: string }
@@ -55,11 +55,12 @@ export function subtaskLine(sub: ProposedSubtask, members: readonly Member[]): s
     .join(" · ")
 }
 
-function CardHeader({ label, title }: { label: string; title: string }) {
+function CardHeader({ label, title, action }: { label: string; title: string; action?: ReactNode }) {
   return (
     <div className="flex min-w-0 items-baseline gap-2 px-4 pt-3">
       <span className="shrink-0 text-xs text-muted-foreground">{label}</span>
-      <span className="min-w-0 truncate text-sm font-medium">{title}</span>
+      <span className="min-w-0 flex-1 truncate text-sm font-medium">{title}</span>
+      {action}
     </div>
   )
 }
@@ -217,7 +218,11 @@ export function UpdateTaskCard({
 
   return (
     <div className="rounded-lg border">
-      <CardHeader label="Update" title={known?.title ?? payload.taskTitle ?? "Task"} />
+      <CardHeader
+        label="Update"
+        title={known?.title ?? payload.taskTitle ?? "Task"}
+        action={task === null ? undefined : <OpenInDrawerButton kind="change" proposalId={card._id} />}
+      />
       <div className="grid grid-cols-[6rem_minmax(0,1fr)] gap-x-3 gap-y-1 px-4 pb-3 pt-2 text-xs">
         {rows}
       </div>

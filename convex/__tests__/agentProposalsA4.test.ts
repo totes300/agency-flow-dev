@@ -725,3 +725,40 @@ describe("statuses.workflowRole", () => {
     expect((await rolesOf(ORG)).blocked).toBe("In progress");
   });
 });
+
+// ─── Drawer reads (email-triage B7) ──────────────────────────────────────────
+
+describe("drawer reads: viewerCanWrite + planSiblings (B7)", () => {
+  it("cards say whether the viewer may decide them", async () => {
+    const t = createT();
+    const f = await setup(t);
+    const proposalId = await mkProposal(t, f.aliceThread, { kind: "createTask", title: "Alice's" });
+    const [mine] = await as(t, "alice").query(api.agentProposals.listForCards, { proposalIds: [proposalId] });
+    expect(mine.viewerCanWrite).toBe(true);
+    // An admin auditing a member's private thread reads it, inert.
+    const [audit] = await as(t, "admin").query(api.agentProposals.listForCards, { proposalIds: [proposalId] });
+    expect(audit.viewerCanWrite).toBe(false);
+  });
+
+  it("lists the live tasks of one plan in plan order, readable only by thread readers", async () => {
+    const t = createT();
+    const f = await setup(t);
+    const plan = (index: number, planId = "plan1") => ({
+      kind: "createTask", title: `Task ${index}`, grouping: { planId, index, count: 3 },
+    });
+    const third = await mkProposal(t, f.adminThread, plan(3));
+    const first = await mkProposal(t, f.adminThread, plan(1));
+    const second = await mkProposal(t, f.adminThread, plan(2));
+    await mkProposal(t, f.adminThread, plan(1, "other"));
+    const discarded = await mkProposal(t, f.adminThread, plan(2));
+    await t.run((ctx) => ctx.db.patch(discarded, { status: "discarded" }));
+    const lone = await mkProposal(t, f.adminThread, { kind: "createTask", title: "No plan" });
+
+    const siblings = await as(t, "admin").query(api.agentProposals.planSiblings, { proposalId: second });
+    expect(siblings.proposalIds).toEqual([first, second, third]);
+    expect((await as(t, "admin").query(api.agentProposals.planSiblings, { proposalId: lone })).proposalIds).toEqual([]);
+    // Another tenant, or a garbage id: nothing.
+    expect((await as(t, "stranger").query(api.agentProposals.planSiblings, { proposalId: second })).proposalIds).toEqual([]);
+    expect((await as(t, "admin").query(api.agentProposals.planSiblings, { proposalId: "nope" })).proposalIds).toEqual([]);
+  });
+});

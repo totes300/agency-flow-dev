@@ -17,6 +17,7 @@ import { BlockRenderer } from "@/components/agents/blocks/block-renderer"
 import { ErrorBlock } from "@/components/agents/blocks/error-block"
 import { SystemBlock } from "@/components/agents/blocks/system-block"
 import { UserMessage } from "@/components/agents/user-message"
+import { ProposalDrawer } from "@/components/task-detail/proposal-drawer"
 import { classifyParts, type MessagePartLike } from "@/lib/agents/blocks"
 import { cleanErrorText } from "@/lib/agents/providerErrors"
 
@@ -214,6 +215,8 @@ export function ThreadView({ threadId }: { threadId: string }) {
           composerRef={composerRef}
         />
       )}
+      {/* A proposal card's "Open" (`?draft=` / `?change=`, email-triage B7). */}
+      <ProposalDrawer readOnly={readOnly} />
     </div>
   )
 }

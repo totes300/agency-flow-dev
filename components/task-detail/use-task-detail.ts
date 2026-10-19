@@ -160,7 +160,8 @@ export function useTaskDetailKeys(handlers: {
       ) {
         return
       }
-      if (document.querySelector("[role='dialog'][data-state='open'], [role='menu'][data-state='open']")) return
+      // A dialog or menu on top of the drawer (the drawer itself is a `data-drawer-shell` dialog).
+      if (document.querySelector("[role='dialog'][data-state='open']:not([data-drawer-shell]), [role='menu'][data-state='open']")) return
       switch (e.key.toLowerCase()) {
         case "j":
           e.preventDefault()

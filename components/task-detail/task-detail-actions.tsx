@@ -66,16 +66,19 @@ export function TaskStepper({
   index,
   total,
   onStep,
+  label,
 }: {
   index: number | null
   total: number
   onStep: (direction: "next" | "prev") => void
+  /** Replaces the "3 / 12" position (e.g. "Task 2 of 3" for a split plan). */
+  label?: string
 }) {
   if (index === null || total === 0) return null
   return (
     <div className="flex items-center gap-0.5">
       <span className="mr-1 text-xs text-muted-foreground tabular-nums">
-        {index + 1} / {total}
+        {label ?? `${index + 1} / ${total}`}
       </span>
       <Button
         variant="ghost"

@@ -37,7 +37,7 @@ import {
 } from "@/components/tasks/task-property-pickers"
 import { cn } from "@/lib/utils"
 import { useIsAdmin } from "@/lib/hooks/use-is-admin"
-import { FailureNote, ProposalFooter } from "./proposal-card-chrome"
+import { FailureNote, OpenInDrawerButton, ProposalFooter } from "./proposal-card-chrome"
 import {
   PostCommentCard,
   ProposeSkillCard,
@@ -370,7 +370,7 @@ function CreateTaskCard({
 
   return (
     <div className="rounded-lg border">
-      <div className="px-4 pt-3">
+      <div className="flex items-start gap-2 px-4 pt-3">
         <input
           value={draft.title}
           onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value }))}
@@ -380,8 +380,9 @@ function CreateTaskCard({
           placeholder="Task name"
           aria-label="Task title"
           disabled={busy}
-          className="w-full text-sm font-medium text-foreground outline-none placeholder:text-muted-foreground/40 bg-transparent"
+          className="min-w-0 flex-1 text-sm font-medium text-foreground outline-none placeholder:text-muted-foreground/40 bg-transparent"
         />
+        <OpenInDrawerButton kind="draft" proposalId={card._id} />
       </div>
 
       <div className="px-4 pt-1.5">
@@ -637,6 +638,12 @@ function ReadOnlyPendingRow({ card }: { card: ProposalCardData }) {
       <span className="min-w-0 flex-1 truncate text-sm">
         {payloadTitle(card.payload)}
       </span>
+      {card.payload.kind === "createTask" || card.payload.kind === "updateTask" ? (
+        <OpenInDrawerButton
+          kind={card.payload.kind === "createTask" ? "draft" : "change"}
+          proposalId={card._id}
+        />
+      ) : null}
     </div>
   )
 }

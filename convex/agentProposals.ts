@@ -757,6 +757,12 @@ export type ProposalCard = {
   committedRef: string | null;
   /** I11: echo it back on approve/updateDraft; a mismatch is refused. */
   revision: number;
+  /**
+   * The viewer may decide it (write access to its thread). False for a
+   * reader-only viewer (an admin auditing a member's private thread): the
+   * card and the drawer render inert. UX only — every decision re-checks.
+   */
+  viewerCanWrite: boolean;
 };
 
 /**
@@ -775,18 +781,18 @@ export const listForCards = query({
   handler: async (ctx, args): Promise<ProposalCard[]> => {
     const auth = await getAuthContext(ctx);
     const cards: ProposalCard[] = [];
-    const readableThreads = new Map<Id<"agentThreads">, boolean>();
+    const threadAccessById = new Map<Id<"agentThreads">, { canRead: boolean; canWrite: boolean }>();
     for (const rawId of args.proposalIds.slice(0, 50)) {
       const id = ctx.db.normalizeId("agentProposals", rawId);
       const proposal = id ? await ctx.db.get(id) : null;
       if (!proposal || proposal.orgId !== auth.orgId) continue;
-      let readable = readableThreads.get(proposal.threadId);
-      if (readable === undefined) {
+      let access = threadAccessById.get(proposal.threadId);
+      if (access === undefined) {
         const thread = await ctx.db.get(proposal.threadId);
-        readable = thread ? threadAccess(thread, auth).canRead : false;
-        readableThreads.set(proposal.threadId, readable);
+        access = thread ? threadAccess(thread, auth) : { canRead: false, canWrite: false };
+        threadAccessById.set(proposal.threadId, access);
       }
-      if (!readable) continue;
+      if (!access.canRead) continue;
 
       // Normalize on the way out (folds the legacy single-assignee field)
       // so the card always sees the current payload shape.
@@ -800,9 +806,47 @@ export const listForCards = query({
         failureReason: proposal.failureReason ?? null,
         committedRef: proposal.committedRef ?? null,
         revision: proposalRevision(proposal),
+        viewerCanWrite: access.canWrite,
       });
     }
     return cards;
+  },
+});
+
+/**
+ * The live tasks of the split plan a `createTask` proposal belongs to
+ * (`grouping.planId`, D6), in plan order — the drawer's "Task N of M" and
+ * its prev / next (B7). Pending and failed only: a created or discarded plan
+ * task is no longer something to review. Empty when the proposal has no
+ * plan, is not readable, or is unknown. Bounded: one thread's proposals.
+ */
+export const planSiblings = query({
+  args: { proposalId: v.string() },
+  handler: async (ctx, args): Promise<{ proposalIds: string[] }> => {
+    const auth = await getAuthContext(ctx);
+    const id = ctx.db.normalizeId("agentProposals", args.proposalId);
+    const proposal = id ? await ctx.db.get(id) : null;
+    if (!proposal || proposal.orgId !== auth.orgId) return { proposalIds: [] };
+    const thread = await ctx.db.get(proposal.threadId);
+    if (!thread || !threadAccess(thread, auth).canRead) return { proposalIds: [] };
+    const effective = proposal.editedPayload ?? proposal.payload;
+    const planId = effective.kind === "createTask" ? effective.grouping?.planId : undefined;
+    if (!planId) return { proposalIds: [] };
+
+    const siblings: Array<{ id: string; index: number; createdAt: number }> = [];
+    for (const status of ["pending", "failed"] as const) {
+      const rows = await ctx.db
+        .query("agentProposals")
+        .withIndex("by_threadId_status", (q) => q.eq("threadId", proposal.threadId).eq("status", status))
+        .take(100);
+      for (const row of rows) {
+        const payload = row.editedPayload ?? row.payload;
+        if (payload.kind !== "createTask" || payload.grouping?.planId !== planId) continue;
+        siblings.push({ id: row._id, index: payload.grouping.index, createdAt: row.createdAt });
+      }
+    }
+    siblings.sort((a, b) => a.index - b.index || a.createdAt - b.createdAt);
+    return { proposalIds: siblings.map((s) => s.id) };
   },
 });
 

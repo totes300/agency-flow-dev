@@ -9,7 +9,7 @@ import {
   useState,
 } from "react"
 import { SidebarProvider } from "@/components/ui/sidebar"
-import { isTaskDetailOpen } from "@/lib/task-detail"
+import { isTaskDetailOpen, parseProposalRef } from "@/lib/task-detail"
 import { useIsMobile } from "@/lib/hooks/use-is-mobile"
 
 type InboxSidebarContextValue = {
@@ -92,9 +92,10 @@ export function InboxSidebarProvider({ children }: { children: React.ReactNode }
     if (!inboxOpen) return
     function handleKeyDown(e: KeyboardEvent) {
       if (e.key !== "Escape") return
-      // Task drawer open (`?task=` / `?detail=`) — its own Escape handler
+      // Task drawer open (`?task=` / `?detail=`, or a proposal `?draft=` / `?change=`) — its own Escape handler
       // closes it; the inbox waits for the next press.
-      if (isTaskDetailOpen(new URLSearchParams(window.location.search))) return
+      const params = new URLSearchParams(window.location.search)
+      if (isTaskDetailOpen(params) || parseProposalRef(params)) return
       // Any open Radix overlay (dialog, alert, sheet, popover) wins too.
       if (
         document.querySelector(

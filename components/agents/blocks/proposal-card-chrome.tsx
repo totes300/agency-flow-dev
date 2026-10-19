@@ -3,6 +3,7 @@
 import type { ReactNode } from "react"
 import { CircleAlertIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { useOpenProposal } from "@/components/task-detail/use-open-proposal"
 
 /**
  * Shared chrome of the proposal cards (`proposal-block.tsx`,
@@ -62,5 +63,30 @@ export function ProposalFooter({
         )}
       </div>
     </div>
+  )
+}
+
+/**
+ * "Open" — the proposal in the task drawer (email-triage B7): a Draft for a
+ * `createTask`, the task with the change in place for an `updateTask`.
+ * Edits there persist into the same proposal, so this card follows.
+ */
+export function OpenInDrawerButton({
+  kind,
+  proposalId,
+}: {
+  kind: "draft" | "change"
+  proposalId: string
+}) {
+  const open = useOpenProposal()
+  return (
+    <Button
+      size="xs"
+      variant="ghost"
+      className="shrink-0 text-muted-foreground"
+      onClick={() => open({ kind, proposalId })}
+    >
+      Open
+    </Button>
   )
 }

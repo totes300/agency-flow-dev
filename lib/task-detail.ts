@@ -47,9 +47,52 @@ export function buildTaskUrl(
   if (!keepComment) params.delete(COMMENT_PARAM)
   params.delete(TASK_PARAM)
   params.delete(LEGACY_DETAIL_PARAM)
+  // One drawer source at a time: opening a task (or closing the drawer) closes a proposal.
+  params.delete(DRAFT_PARAM)
+  params.delete(CHANGE_PARAM)
   if (target) {
     if (target.identifier) params.set(TASK_PARAM, target.identifier)
     else params.set(LEGACY_DETAIL_PARAM, target.id)
+  }
+  const str = params.toString()
+  return str ? `?${str}` : ""
+}
+
+// ─── Proposal sources (email-triage B7, D15) ────────────────────────────────────
+
+/** Opens a pending `createTask` proposal as a Draft in the drawer: `?draft=<proposalId>`. */
+export const DRAFT_PARAM = "draft"
+
+/** Opens a pending `updateTask` proposal on its task: `?change=<proposalId>`. */
+export const CHANGE_PARAM = "change"
+
+/** A proposal the drawer shows instead of a task. */
+export type ProposalRef = { kind: "draft" | "change"; proposalId: string }
+
+/** The proposal the URL opens in the drawer, or null. A task param wins (one source at a time). */
+export function parseProposalRef(searchParams: URLSearchParams): ProposalRef | null {
+  if (parseTaskRef(searchParams)) return null
+  const draft = searchParams.get(DRAFT_PARAM)?.trim()
+  if (draft) return { kind: "draft", proposalId: draft }
+  const change = searchParams.get(CHANGE_PARAM)?.trim()
+  if (change) return { kind: "change", proposalId: change }
+  return null
+}
+
+/**
+ * The search string that opens `target` (a proposal) in the drawer, or
+ * closes it for null. Drops any open task (and its comment deep-link);
+ * keeps every other param.
+ */
+export function buildProposalUrl(currentParams: URLSearchParams, target: ProposalRef | null): string {
+  const params = new URLSearchParams(currentParams.toString())
+  params.delete(DRAFT_PARAM)
+  params.delete(CHANGE_PARAM)
+  if (target) {
+    params.delete(TASK_PARAM)
+    params.delete(LEGACY_DETAIL_PARAM)
+    params.delete(COMMENT_PARAM)
+    params.set(target.kind === "draft" ? DRAFT_PARAM : CHANGE_PARAM, target.proposalId)
   }
   const str = params.toString()
   return str ? `?${str}` : ""

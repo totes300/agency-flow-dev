@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import type { StatusIcon as StatusIconShape } from "@/convex/tasks/model"
+import { PRIORITY_LABELS, PRIORITY_VALUES, type StatusIcon as StatusIconShape, type TaskPriority } from "@/convex/tasks/model"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import {
   Command,
@@ -12,6 +12,7 @@ import {
   CommandEmpty,
 } from "@/components/ui/command"
 import { StatusIcon } from "@/components/icons/status-icon"
+import { PriorityIcon } from "@/components/icons/priority-icon"
 import { CategoryBadge } from "@/components/category-badge"
 import { UserAvatar } from "@/components/user-avatar"
 import { firstName, getClientDisplayName } from "@/lib/format"
@@ -153,6 +154,47 @@ export function StatusPicker({
                   <StatusIcon icon={s.icon} color={s.color} size={14} />
                   <span className="truncate text-xs">{s.name}</span>
                   {value === s._id && <CheckIcon className="ml-auto size-3.5 text-muted-foreground" />}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+/** Priority pill: the Linear-style priority icon and name (0 = none). */
+export function PriorityPicker({
+  value,
+  onChange,
+}: {
+  value: TaskPriority | undefined
+  onChange: (priority: TaskPriority) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const shown = value ?? 0
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          aria-label={`Priority: ${PRIORITY_LABELS[shown]}`}
+          className="flex items-center gap-1.5 rounded-md border border-dashed border-border px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-muted/30"
+        >
+          <PriorityIcon priority={shown} size={12} label={false} />
+          {shown === 0 ? "Priority" : <span className="font-medium text-foreground">{PRIORITY_LABELS[shown]}</span>}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-48 p-0" align="start">
+        <Command>
+          <CommandList>
+            <CommandGroup>
+              {PRIORITY_VALUES.map((p) => (
+                <CommandItem key={p} value={PRIORITY_LABELS[p]} onSelect={() => { onChange(p); setOpen(false) }} className="px-2 py-1.5">
+                  <PriorityIcon priority={p} size={14} label={false} />
+                  <span className="truncate text-xs">{PRIORITY_LABELS[p]}</span>
+                  {shown === p && <CheckIcon className="ml-auto size-3.5 text-muted-foreground" />}
                 </CommandItem>
               ))}
             </CommandGroup>

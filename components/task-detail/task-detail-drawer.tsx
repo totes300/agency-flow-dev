@@ -2,10 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
-import { FocusScope } from "@radix-ui/react-focus-scope"
 import { ChevronsRightIcon, FullscreenIcon, PanelRightCloseIcon, PanelRightOpenIcon } from "lucide-react"
 import type { Id } from "@/convex/_generated/dataModel"
-import { ErrorBoundary } from "@/components/error-boundary"
 import { Button } from "@/components/ui/button"
 import { InlineTimeCell } from "@/components/tasks/inline-time-cell"
 import { PropertyMenu } from "@/components/task-view/property-menus"
@@ -19,6 +17,8 @@ import { TaskActionsMenu, TaskStepper, useTaskDetailMode } from "@/components/ta
 import { navLabelFor, setDetailNavList } from "@/components/task-detail/detail-nav"
 import { useDrawerTask } from "@/components/task-detail/use-drawer-task"
 import { setOpenTaskId } from "@/components/task-detail/open-task-store"
+import { DrawerShell } from "@/components/task-detail/drawer-shell"
+import { ProposalDrawer, type ProposalDrawerProps } from "@/components/task-detail/proposal-drawer"
 import {
   useTaskDetailController,
   useTaskDetailKeys,
@@ -34,7 +34,8 @@ import {
  * date / Today in the property column, sub-tasks on the shared row, the
  * "N new since your last visit" divider, no Email tab. T and Y work inside
  * it. Opened by `?task=<identifier>` (or an old `?detail=<id>` link) on any
- * route.
+ * route; `?draft=<proposalId>` / `?change=<proposalId>` open the same drawer
+ * on a proposal (`ProposalDrawer`, email-triage B7).
  *
  * `taskIds` is the list in screen order; `identifierOf` lets J/K write
  * `?task=` directly (without it the URL is canonicalised after the step).
@@ -43,10 +44,16 @@ export function TaskDetailDrawer({
   taskIds,
   isAdmin,
   identifierOf,
+  proposalFooter,
+  planGaps,
 }: {
   taskIds: string[]
   isAdmin: boolean
   identifierOf?: (taskId: string) => string | null
+  /** The footer of a `?draft=` / `?change=` drawer (default: Approve / Discard). */
+  proposalFooter?: ProposalDrawerProps["footer"]
+  /** Ledger gaps of a plan task ("Not covered: …"), from the page that knows them. */
+  planGaps?: ProposalDrawerProps["planGaps"]
 }) {
   const { mode, ready } = useTaskDetailMode()
   const route = useDrawerTask({ taskIds, identifierOf, mode, modeReady: ready })
@@ -77,31 +84,6 @@ export function TaskDetailDrawer({
     return () => mq.removeEventListener("change", handleChange)
   }, [])
 
-  // Close on Escape
-  useEffect(() => {
-    if (!isOpen) return
-    function handleKeyDown(e: KeyboardEvent) {
-      // A menu or popover inside the drawer handled it (Radix prevents default).
-      if (e.key === "Escape" && !e.defaultPrevented) {
-        e.preventDefault()
-        e.stopPropagation()
-        close()
-      }
-    }
-    document.addEventListener("keydown", handleKeyDown)
-    return () => document.removeEventListener("keydown", handleKeyDown)
-  }, [isOpen, close])
-
-  // Lock body scroll when open
-  useEffect(() => {
-    if (!isOpen) return
-    const prev = document.body.style.overflow
-    document.body.style.overflow = "hidden"
-    return () => {
-      document.body.style.overflow = prev
-    }
-  }, [isOpen])
-
   useTaskDetailKeys({
     enabled: isOpen && !!task,
     onStep: route.step,
@@ -124,76 +106,65 @@ export function TaskDetailDrawer({
   }
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="Task detail"
-      className={cn(
-        "fixed top-0 right-0 bottom-0 z-40 w-[54vw] border-l border-border bg-background shadow-[-8px_0_24px_-12px_rgba(0,0,0,0.08)] flex flex-col max-md:w-full",
-        "transition-transform duration-200 ease-out",
-        isOpen ? "translate-x-0" : "translate-x-full pointer-events-none",
-      )}
-    >
-      {isOpen ? (
-        <FocusScope trapped className="flex flex-1 flex-col min-h-0 overflow-hidden">
-          <ErrorBoundary>
-            <DrawerHeader
-              task={task ?? null}
-              isAdmin={isAdmin}
-              onClose={close}
-              onOpenTask={(id) => route.navigateTo(id)}
-              onOpenFullPage={openFullPage}
-              onToggleProperties={() => setShowProperties((p) => !p)}
-              showProperties={showProperties}
-              stepper={<TaskStepper index={route.index} total={route.total} onStep={route.step} />}
-              row={controller.row}
-            />
+    <>
+      <DrawerShell isOpen={isOpen} label="Task detail" onClose={close}>
+        <DrawerHeader
+          task={task ?? null}
+          isAdmin={isAdmin}
+          onClose={close}
+          onOpenTask={(id) => route.navigateTo(id)}
+          onOpenFullPage={openFullPage}
+          onToggleProperties={() => setShowProperties((p) => !p)}
+          showProperties={showProperties}
+          stepper={<TaskStepper index={route.index} total={route.total} onStep={route.step} />}
+          row={controller.row}
+        />
 
-            <div className="flex flex-1 overflow-hidden">
-              {task && controller.row ? (
-                // Phones: the properties toggle swaps the content for the property column.
-                <div className={cn("flex min-w-0 flex-1", showProperties && "max-md:hidden")}>
-                  <DrawerContent task={task} controller={controller} isAdmin={isAdmin} onOpenTask={(id) => route.navigateTo(id)} />
-                </div>
-              ) : route.notFound ? (
-                <div className="flex-1 p-6 text-sm text-muted-foreground">
-                  This task doesn&apos;t exist or you don&apos;t have access to it.
-                </div>
-              ) : (
-                <div className="flex-1 p-6">
-                  <div className="h-6 w-2/3 animate-pulse rounded bg-muted" />
-                  <div className="mt-3 h-4 w-1/2 animate-pulse rounded bg-muted" />
-                </div>
-              )}
-
-              {task && controller.row && showProperties ? (
-                <div className="w-[240px] shrink-0 overflow-y-auto scrollbar-thin border-l border-border/70 max-md:w-full max-md:border-l-0">
-                  <TaskProperties
-                    task={task}
-                    row={controller.row}
-                    memberById={controller.memberById}
-                    isAdmin={isAdmin}
-                    layout="stack"
-                    sun={controller.sun}
-                    openMenu={controller.openMenu}
-                  />
-                </div>
-              ) : null}
+        <div className="flex flex-1 overflow-hidden">
+          {task && controller.row ? (
+            // Phones: the properties toggle swaps the content for the property column.
+            <div className={cn("flex min-w-0 flex-1", showProperties && "max-md:hidden")}>
+              <DrawerContent task={task} controller={controller} isAdmin={isAdmin} onOpenTask={(id) => route.navigateTo(id)} />
             </div>
+          ) : route.notFound ? (
+            <div className="flex-1 p-6 text-sm text-muted-foreground">
+              This task doesn&apos;t exist or you don&apos;t have access to it.
+            </div>
+          ) : (
+            <div className="flex-1 p-6">
+              <div className="h-6 w-2/3 animate-pulse rounded bg-muted" />
+              <div className="mt-3 h-4 w-1/2 animate-pulse rounded bg-muted" />
+            </div>
+          )}
 
-            {controller.index ? (
-              <PropertyMenu
-                request={controller.menu}
-                tasks={controller.menuTasks}
-                index={controller.index}
-                actions={controller.actions}
-                onClose={controller.closeMenu}
+          {task && controller.row && showProperties ? (
+            <div className="w-[240px] shrink-0 overflow-y-auto scrollbar-thin border-l border-border/70 max-md:w-full max-md:border-l-0">
+              <TaskProperties
+                task={task}
+                row={controller.row}
+                memberById={controller.memberById}
+                isAdmin={isAdmin}
+                layout="stack"
+                sun={controller.sun}
+                openMenu={controller.openMenu}
               />
-            ) : null}
-          </ErrorBoundary>
-        </FocusScope>
-      ) : null}
-    </div>
+            </div>
+          ) : null}
+        </div>
+
+        {controller.index ? (
+          <PropertyMenu
+            request={controller.menu}
+            tasks={controller.menuTasks}
+            index={controller.index}
+            actions={controller.actions}
+            onClose={controller.closeMenu}
+          />
+        ) : null}
+      </DrawerShell>
+      {/* `?draft=` / `?change=` (email-triage B7): the same drawer on a proposal. */}
+      <ProposalDrawer footer={proposalFooter} planGaps={planGaps} />
+    </>
   )
 }
 

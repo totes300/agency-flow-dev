@@ -11,7 +11,7 @@ import { useIsAdmin } from "@/lib/hooks/use-is-admin"
 import { useLastDefined } from "@/lib/hooks/use-last-defined"
 import { useOptionalQuery } from "@/lib/hooks/use-optional-query"
 import { useRowSelection } from "@/lib/hooks/use-row-selection"
-import { parseTaskRef } from "@/lib/task-detail"
+import { parseProposalRef, parseTaskRef } from "@/lib/task-detail"
 import { formatDateToYMD } from "@/lib/format"
 import { toastError } from "@/lib/toast-helpers"
 import { Button } from "@/components/ui/button"
@@ -254,7 +254,8 @@ export function TaskView({
 
   // The open task (`?task=<identifier>`, or an old `?detail=<id>` link) — highlighted in the list.
   const taskRef = parseTaskRef(searchParams)
-  const detailOpen = taskRef !== null
+  // A task, or a proposal (`?draft=` / `?change=`, email-triage B7) in the drawer: the drawer owns the keys.
+  const detailOpen = taskRef !== null || parseProposalRef(searchParams) !== null
   const identifierOf = useCallback((taskId: string) => rowById.get(taskId as Id<"tasks">)?.task.identifier ?? null, [rowById])
   const detailId = useMemo(() => {
     if (!taskRef) return null

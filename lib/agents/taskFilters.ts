@@ -1,167 +1,119 @@
 /**
- * Agent-friendly task filter façade — pure mapping layer.
+ * Agent task-tool helpers — pure mapping layer (docs/prd-tasks-refactor.md §7).
  *
- * `api.tasks.list` speaks the UI's wire format: op/value filter objects,
- * tab unions, grouping. Exposing that shape to the model invites
- * hallucinated operators and malformed filter objects, so the `findTasks`
- * tool accepts a FLAT input (one optional scalar per dimension) and this
- * module maps it into the real query args (`mapAgentTaskFilters`) and
- * flattens the grouped response back into plain rows
- * (`flattenTaskGroups`). Both directions are pure and unit-tested; the
- * registry tool only wires them to `ctx.runQuery`.
+ * The `findTasks` tool accepts a FLAT input (one optional scalar per
+ * dimension) instead of the view layer's filter objects, so the model can't
+ * hallucinate operators or malformed filters. This module maps that input
+ * onto the shared view filters (`convex/tasks/filters.ts`, the same matcher
+ * the task views use) and decides which status categories a query covers.
+ * `convex/tasks/agent.ts` loads through the bounded read layer and applies
+ * these; everything here is pure and unit-tested.
  *
- * Ids stay plain strings here (this file must not import Convex types);
- * the Convex validator on `tasks.list` rejects malformed ids at runtime
- * with a model-actionable error.
+ * Ids stay plain strings: `convex/tasks/agent.ts` normalizes and validates
+ * them against the caller's org before filtering, with model-actionable
+ * errors for malformed or foreign ids.
  */
+
+import type { ListFilter } from "../../convex/tasks/filters";
+import {
+  TASK_CATEGORIES,
+  isClosedCategory,
+  type TaskCategory,
+} from "../../convex/tasks/model";
 
 export const AGENT_TASK_LIMIT_DEFAULT = 50;
 export const AGENT_TASK_LIMIT_MAX = 100;
 
-export const AGENT_TASK_STATUS_TYPES = [
-  "backlog",
-  "in_progress",
-  "review",
-  "blocked",
-  "done",
-] as const;
-
-export type AgentTaskStatusType = (typeof AGENT_TASK_STATUS_TYPES)[number];
+/** The five fixed status categories, as the tools' enum. */
+export const AGENT_TASK_CATEGORIES = TASK_CATEGORIES;
 
 export type AgentTaskFilterInput = {
-  statusType?: AgentTaskStatusType;
+  /** One status category; wins over `includeClosed`. */
+  category?: TaskCategory;
   statusId?: string;
   clientId?: string;
   projectId?: string;
   assigneeId?: string;
   workCategoryId?: string;
-  /** Due on or after this date (YYYY-MM-DD). */
+  /** Due on or after this date (YYYY-MM-DD), inclusive. */
   dueAfter?: string;
-  /** Due on or before this date (YYYY-MM-DD). */
+  /** Due on or before this date (YYYY-MM-DD), inclusive. */
   dueBefore?: string;
   search?: string;
-  /** Archived tasks live on their own tab; statusType is ignored with it. */
-  includeArchived?: boolean;
+  /** Also return completed and canceled tasks (default: open only). */
+  includeClosed?: boolean;
   limit?: number;
 };
 
-/** Structural mirror of `api.tasks.list` args (ids as plain strings). */
-export type TaskListQueryArgs = {
-  tab:
-    | "all"
-    | "backlog"
-    | "in_progress"
-    | "review"
-    | "blocked"
-    | "done"
-    | "archived";
-  filters?: {
-    statusId?: { op: "is"; value: string[] };
-    clientId?: { op: "is"; value: string };
-    projectId?: { op: "is"; value: string[] };
-    assigneeIds?: { op: "is"; value: string[] };
-    workCategoryId?: { op: "is"; value: string[] };
-    dateFrom?: string;
-    dateTo?: string;
-  };
-  groupBy: null;
-  search?: string;
-  sortBy: "updatedAt";
-  sortOrder: "desc";
-  limit: number;
-};
-
-/**
- * Map the flat agent input onto `tasks.list` args. Always ungrouped and
- * sorted by recent activity (updatedAt desc) — deterministic and the most
- * useful default for "what's going on" questions.
- */
-export function mapAgentTaskFilters(
-  input: AgentTaskFilterInput,
-): TaskListQueryArgs {
-  const filters: NonNullable<TaskListQueryArgs["filters"]> = {};
-  if (input.statusId) filters.statusId = { op: "is", value: [input.statusId] };
-  if (input.clientId) filters.clientId = { op: "is", value: input.clientId };
-  if (input.projectId)
-    filters.projectId = { op: "is", value: [input.projectId] };
-  if (input.assigneeId)
-    filters.assigneeIds = { op: "is", value: [input.assigneeId] };
-  if (input.workCategoryId)
-    filters.workCategoryId = { op: "is", value: [input.workCategoryId] };
-  if (input.dueAfter) filters.dateFrom = input.dueAfter;
-  if (input.dueBefore) filters.dateTo = input.dueBefore;
-
-  const limit = Math.max(
-    1,
-    Math.min(input.limit ?? AGENT_TASK_LIMIT_DEFAULT, AGENT_TASK_LIMIT_MAX),
-  );
-
-  const search = input.search?.trim();
-
-  return {
-    // The archived tab is exclusive in `tasks.list`; statusType is ignored
-    // when the caller asks for archived tasks (documented on the tool).
-    tab: input.includeArchived ? "archived" : (input.statusType ?? "all"),
-    ...(Object.keys(filters).length > 0 ? { filters } : {}),
-    groupBy: null,
-    ...(search ? { search } : {}),
-    sortBy: "updatedAt",
-    sortOrder: "desc",
-    limit,
-  };
+export function clampAgentTaskLimit(limit: number | undefined): number {
+  if (limit === undefined || !Number.isFinite(limit)) return AGENT_TASK_LIMIT_DEFAULT;
+  return Math.max(1, Math.min(AGENT_TASK_LIMIT_MAX, Math.floor(limit)));
 }
 
-// ─── Response flattening ────────────────────────────────────────────────────
+/**
+ * The categories a query covers: the explicit `category`, else the
+ * category of the pinned status (`statusCategory`, resolved by the caller),
+ * else every open category — plus the closed ones with `includeClosed`.
+ */
+export function agentTaskCategories(input: {
+  category?: TaskCategory;
+  statusCategory?: TaskCategory;
+  includeClosed?: boolean;
+}): TaskCategory[] {
+  if (input.category) return [input.category];
+  if (input.statusCategory) return [input.statusCategory];
+  return TASK_CATEGORIES.filter((c) => input.includeClosed === true || !isClosedCategory(c));
+}
 
-/** Structural subset of one enriched task inside a `tasks.list` group. */
-export type TaskGroupTaskLike = {
-  _id: string;
-  title: string;
-  statusType: string;
-  billable: boolean;
-  dueDate?: string | null;
-  status?: { name: string } | null;
-  project?: { name: string } | null;
-  client?: { name: string } | null;
-  category?: { name: string } | null;
-  assignees?: Array<{ name: string }>;
-};
+/**
+ * The id filters of a flat input as view filters (one `is` per set
+ * dimension), plus the category scope. Due dates are NOT mapped: the view
+ * matcher's `before`/`after` are strict, the agent's range is inclusive
+ * (`inDueRange`).
+ */
+export function agentTaskViewFilters(
+  input: Pick<AgentTaskFilterInput, "statusId" | "clientId" | "projectId" | "assigneeId" | "workCategoryId">,
+  categories: readonly TaskCategory[],
+): ListFilter[] {
+  const filters: ListFilter[] = [{ property: "statusCategory", operator: "is", values: [...categories] }];
+  const pin = (property: ListFilter["property"], value: string | undefined) => {
+    if (value) filters.push({ property, operator: "is", values: [value] });
+  };
+  pin("status", input.statusId);
+  pin("client", input.clientId);
+  pin("project", input.projectId);
+  pin("assignee", input.assigneeId);
+  pin("workCategory", input.workCategoryId);
+  return filters;
+}
 
-export type TaskGroupLike = {
-  tasks: TaskGroupTaskLike[];
-};
+/** Inclusive due-date range; a task without a due date never matches a set bound. */
+export function inDueRange(
+  dueDate: string | null | undefined,
+  range: { dueAfter?: string; dueBefore?: string },
+): boolean {
+  if (!range.dueAfter && !range.dueBefore) return true;
+  if (!dueDate) return false;
+  if (range.dueAfter && dueDate < range.dueAfter) return false;
+  if (range.dueBefore && dueDate > range.dueBefore) return false;
+  return true;
+}
 
-export type FlatTaskRow = {
+/** One `findTasks` row: flat, names resolved, nothing the model must join. */
+export type AgentTaskRow = {
   id: string;
+  /** `ARLO-21` — what the user sees and what the task tools accept. */
+  identifier: string | null;
   title: string;
   status: string | null;
-  statusType: string;
-  projectName: string | null;
-  clientName: string | null;
-  categoryName: string | null;
-  assigneeNames: string[];
+  statusCategory: TaskCategory | null;
+  priority: string;
+  project: string | null;
+  client: string | null;
+  workCategory: string | null;
+  assignees: string[];
   dueDate: string | null;
   billable: boolean;
+  /** The parent's identifier when this is a sub-task. */
+  parent: string | null;
 };
-
-/**
- * Flatten the grouped `tasks.list` response into plain rows. The agent
- * query always passes `groupBy: null` (a single bucket), but this handles
- * any number of groups defensively.
- */
-export function flattenTaskGroups(groups: TaskGroupLike[]): FlatTaskRow[] {
-  return groups.flatMap((group) =>
-    group.tasks.map((t) => ({
-      id: t._id,
-      title: t.title,
-      status: t.status?.name ?? null,
-      statusType: t.statusType,
-      projectName: t.project?.name ?? null,
-      clientName: t.client?.name ?? null,
-      categoryName: t.category?.name ?? null,
-      assigneeNames: (t.assignees ?? []).map((a) => a.name),
-      dueDate: t.dueDate ?? null,
-      billable: t.billable,
-    })),
-  );
-}

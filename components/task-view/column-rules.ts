@@ -77,7 +77,20 @@ const COLUMN_SHOWN_BY_GROUP: Partial<Record<TaskViewSpec["groupBy"], ColumnKey>>
  *   column (`statusIcon`) right before the title instead of the Status column.
  * - `statusIcon` is derived only; listing it in `visibleProperties` has no effect.
  */
-export function visibleColumnKeys(spec: Pick<TaskViewSpec, "visibleProperties" | "groupBy">): ColumnKey[] {
+/**
+ * A view inside one project (the project Tasks tab, §6.1): every row has the
+ * same project and client, so the Client column, project/client grouping and
+ * project/client filters would only repeat the context (U3).
+ */
+export type ViewContext = { projectScoped?: boolean }
+
+export const PROJECT_CONTEXT_HIDDEN_GROUPS: ReadonlySet<TaskViewSpec["groupBy"]> = new Set(["project", "client"])
+export const PROJECT_CONTEXT_HIDDEN_COLUMNS: ReadonlySet<ColumnKey> = new Set(["client"])
+
+export function visibleColumnKeys(
+  spec: Pick<TaskViewSpec, "visibleProperties" | "groupBy">,
+  context: ViewContext = {},
+): ColumnKey[] {
   const visible = new Set<ColumnKey>(spec.visibleProperties)
   const hiddenByGroup = COLUMN_SHOWN_BY_GROUP[spec.groupBy]
   const statusAsIcon = spec.groupBy === "status" && visible.has("status")
@@ -86,6 +99,7 @@ export function visibleColumnKeys(spec: Pick<TaskViewSpec, "visibleProperties" |
     if (key === "title") return true
     if (key === "statusIcon") return statusAsIcon
     if (key === "status") return visible.has("status") && !statusAsIcon
+    if (context.projectScoped && PROJECT_CONTEXT_HIDDEN_COLUMNS.has(key)) return false
     return visible.has(key) && key !== hiddenByGroup
   })
 }

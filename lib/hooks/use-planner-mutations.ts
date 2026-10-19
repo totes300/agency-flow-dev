@@ -105,7 +105,7 @@ export function usePlannerMutations(
       taskTitle: template?.taskTitle ?? panelTask!.title,
       projectName: template?.projectName ?? panelTask!.projectName,
       categoryColor: template?.categoryColor ?? panelTask!.categoryColor,
-      statusType: template?.statusType ?? panelTask!.statusType,
+      statusCategory: template?.statusCategory ?? panelTask!.statusCategory,
       // Provisional rank (server re-ranks all sittings by start date).
       partIndex: newCount,
       partCount: newCount,

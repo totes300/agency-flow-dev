@@ -28,7 +28,6 @@
 
 import { z } from "zod";
 import type { Tool } from "ai";
-import type { FunctionArgs } from "convex/server";
 import { createTool, type ToolCtx } from "@convex-dev/agent";
 import { api, internal } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
@@ -65,12 +64,14 @@ import {
   connectorGuidanceMessage,
 } from "../../lib/agents/connectors";
 import {
+  AGENT_TASK_CATEGORIES,
   AGENT_TASK_LIMIT_MAX,
-  AGENT_TASK_STATUS_TYPES,
-  flattenTaskGroups,
-  mapAgentTaskFilters,
-  type FlatTaskRow,
 } from "../../lib/agents/taskFilters";
+import type {
+  AgentFindTasksResult,
+  AgentTaskCounts,
+  AgentTaskDetail,
+} from "../tasks/agent";
 import {
   flattenInvoiceDetail,
   flattenInvoiceMetrics,
@@ -81,7 +82,6 @@ import {
   flattenRetainerCycle,
   flattenRetainerStatement,
   formatInvoiceRef,
-  taskDescriptionToPlainText,
   type FlatInvoiceDetail,
   type FlatInvoiceMetricsRow,
   type FlatInvoiceRow,
@@ -607,19 +607,42 @@ const proposeArchiveTaskTool = createTool({
   description:
     "Propose ARCHIVING an existing task (destructive — the user must " +
     "explicitly confirm the card). Use only when the user asks to archive " +
-    "or remove a task, and only with an exact task id from the " +
-    "conversation context (e.g. an @-mentioned task). Never guess ids.",
+    "or remove a task, and only with a task the conversation identifies " +
+    "exactly: its identifier (e.g. ARLO-21, from findTasks or the user's " +
+    "message) or an @-mentioned task's id. Never guess.",
   inputSchema: z.object({
-    taskId: z.string().describe("Exact task id from the conversation context"),
+    task: z
+      .string()
+      .describe(
+        "The task's identifier (e.g. ARLO-21, preferred) or exact task id",
+      ),
   }),
   execute: async (ctx, input): Promise<ProposeResult> => {
     if (!ctx.threadId) throw new Error("No thread for proposals");
+    // Resolve with the running user's access, so the stored payload holds
+    // the real id (never model text) and an unreadable task can't be named.
+    const resolved = await ctx.runQuery(api.tasks.agent.resolveTask, {
+      task: input.task,
+    });
+    if (!resolved) {
+      throw new Error(
+        `No task found for "${input.task}". Use an identifier like ARLO-21 ` +
+          "from findTasks or an @-mentioned task.",
+      );
+    }
+    if (resolved.archived) {
+      throw new Error(`${resolved.identifier ?? resolved.title} is already archived.`);
+    }
     const proposalIds: string[] = await ctx.runMutation(
       internal.agentProposals.createFromTool,
       {
         componentThreadId: ctx.threadId,
         proposals: [
-          { kind: "archiveTask" as const, taskId: input.taskId, taskTitle: "" },
+          {
+            kind: "archiveTask" as const,
+            taskId: resolved.id,
+            taskTitle: resolved.title,
+          },
         ],
       },
     );
@@ -752,10 +775,12 @@ const listWorkCategoriesTool = createTool({
 
 const listStatusesTool = createTool({
   description:
-    "List the organization's task statuses from the app database. Returns " +
-    "each status's id, name, type (backlog | in_progress | review | " +
-    "blocked | done) and archived state. Use it to resolve status names to " +
-    "ids for task filters — never answer from memory.",
+    "List the organization's task statuses from the app database, in " +
+    "workflow order. Returns each status's id, name, category (backlog | " +
+    "unstarted | started | completed | canceled — every status belongs to " +
+    "exactly one), whether it is its category's default, and archived " +
+    "state. Use it to resolve status names to ids for task filters — never " +
+    "answer from memory.",
   inputSchema: z.object({
     includeArchived: z
       .boolean()
@@ -766,17 +791,25 @@ const listStatusesTool = createTool({
     ctx,
     input,
   ): Promise<
-    Array<{ id: string; name: string; statusType: string; archived: boolean }>
+    Array<{
+      id: string;
+      name: string;
+      category: string;
+      isDefault: boolean;
+      archived: boolean;
+    }>
   > => {
-    const statuses = await ctx.runQuery(api.statuses.list, {
-      includeArchived: input.includeArchived ?? false,
-    });
-    return statuses.map((s) => ({
-      id: s._id,
-      name: s.name,
-      statusType: s.type,
-      archived: Boolean(s.archivedAt),
-    }));
+    // The member-readable reference query every task surface renders from.
+    const refs = await ctx.runQuery(api.workspaceRefs.get, {});
+    return refs.statuses
+      .filter((s) => input.includeArchived === true || !s.archived)
+      .map((s) => ({
+        id: s._id,
+        name: s.name,
+        category: s.category,
+        isDefault: s.isDefault,
+        archived: s.archived,
+      }));
   },
 });
 
@@ -784,20 +817,27 @@ const listStatusesTool = createTool({
 
 const findTasksTool = createTool({
   description:
-    "Search the organization's tasks with flat filters — status type, " +
+    "Search the organization's tasks with flat filters — status category, " +
     "status id, client, project, assignee, work category, due-date range, " +
-    "text search. Returns plain rows (id, title, status, project, client, " +
-    "category, assignee names, due date, billable) sorted by most recently " +
-    "updated. Members only see tasks assigned to them; admins see all. Use " +
-    "ids from listClients / listProjects / listTeamMembers / listStatuses / " +
-    "listWorkCategories — never guess ids, never answer about tasks from " +
-    "memory. Results are capped; when `truncated` is true, narrow the " +
-    "filters instead of assuming you saw everything.",
+    "text search. Returns plain rows (identifier like ARLO-21, title, " +
+    "status, status category, priority, project, client, work category, " +
+    "assignee names, due date, billable, parent identifier for sub-tasks) " +
+    "sorted by most recent activity. Open tasks only unless includeClosed " +
+    "or a completed/canceled category is set; archived tasks are never " +
+    "returned. Members only see tasks assigned to them (and sub-tasks of " +
+    "their tasks); admins see all. Use ids from listClients / listProjects " +
+    "/ listTeamMembers / listStatuses / listWorkCategories — never guess " +
+    "ids, never answer about tasks from memory. Refer to tasks by their " +
+    "identifier. When `truncated` is true, narrow the filters instead of " +
+    "assuming you saw everything; for counts use countTasksByStatus.",
   inputSchema: z.object({
-    statusType: z
-      .enum(AGENT_TASK_STATUS_TYPES)
+    category: z
+      .enum(AGENT_TASK_CATEGORIES)
       .optional()
-      .describe("Filter by status type (ignored when includeArchived is set)"),
+      .describe(
+        "Status category: backlog | unstarted | started (in progress, " +
+          "review, stuck…) | completed | canceled",
+      ),
     statusId: z
       .string()
       .optional()
@@ -826,10 +866,10 @@ const findTasksTool = createTool({
       .optional()
       .describe("Only tasks due on or before this date (YYYY-MM-DD)"),
     search: z.string().optional().describe("Full-text search over task titles"),
-    includeArchived: z
+    includeClosed: z
       .boolean()
       .optional()
-      .describe("Search archived tasks instead of active ones"),
+      .describe("Also include completed and canceled tasks (default false)"),
     limit: z
       .number()
       .int()
@@ -838,113 +878,62 @@ const findTasksTool = createTool({
       .optional()
       .describe("Max rows to return (default 50)"),
   }),
-  execute: async (
-    ctx,
-    input,
-  ): Promise<{
-    tasks: FlatTaskRow[];
-    totalCount: number;
-    truncated: boolean;
-  }> => {
-    const mapped = mapAgentTaskFilters(input);
-    // Ids travel as plain strings; tasks.list's own validators reject
-    // malformed ids at runtime with a model-actionable error.
-    const result = await ctx.runQuery(
-      api.tasks.list,
-      mapped as unknown as FunctionArgs<typeof api.tasks.list>,
-    );
-    const tasks = flattenTaskGroups(result.groups);
-    return {
-      tasks,
-      totalCount: result.totalCount,
-      truncated: tasks.length < result.totalCount || result.hitScanLimit,
-    };
+  execute: async (ctx, input): Promise<AgentFindTasksResult> => {
+    // Ids travel as plain strings; the query validates them against the
+    // running user's org and throws a model-actionable error otherwise.
+    return await ctx.runQuery(api.tasks.agent.findTasks, input);
   },
 });
 
 const getTaskDetailTool = createTool({
   description:
-    "Read one task in full: title, plain-text description, status, project, " +
-    "client, category, assignees, due date, total logged minutes, and its " +
-    "subtasks with their logged minutes. Use an exact task id from " +
-    "findTasks or an @-mentioned task — never guess ids.",
+    "Read one task in full: identifier, title, plain-text description, " +
+    "status and status category, priority, project, client, work category, " +
+    "assignees, labels, start/due dates, estimate and tracked minutes, and " +
+    "its sub-tasks with their status and tracked minutes. Pass the task's " +
+    "identifier (e.g. ARLO-21, from findTasks or the user's message) or an " +
+    "@-mentioned task's id — never guess. Returns found:false when the task " +
+    "doesn't exist or isn't visible to the user.",
   inputSchema: z.object({
-    taskId: z.string().describe("Exact task id from findTasks or a mention"),
+    task: z
+      .string()
+      .describe(
+        "The task's identifier (e.g. ARLO-21, preferred) or exact task id",
+      ),
   }),
   execute: async (
     ctx,
     input,
-  ): Promise<{
-    id: string;
-    title: string;
-    description: string | null;
-    status: string | null;
-    statusType: string;
-    projectName: string | null;
-    clientName: string | null;
-    categoryName: string | null;
-    assigneeNames: string[];
-    dueDate: string | null;
-    billable: boolean;
-    estimateMinutes: number | null;
-    totalMinutes: number;
-    subtasks: Array<{
-      id: string;
-      title: string;
-      statusType: string;
-      totalMinutes: number;
-      assigneeNames: string[];
-    }>;
-  }> => {
-    const taskId = input.taskId as Id<"tasks">;
-    const detail = await ctx.runQuery(api.tasks.getDetail, { id: taskId });
-    const subtasks = await ctx.runQuery(api.tasks.getSubtasks, {
-      parentTaskId: taskId,
+  ): Promise<
+    | ({ found: true } & AgentTaskDetail)
+    | { found: false; message: string }
+  > => {
+    const detail = await ctx.runQuery(api.tasks.agent.getTaskDetail, {
+      task: input.task,
     });
-    return {
-      id: detail._id,
-      title: detail.title,
-      description: taskDescriptionToPlainText(detail.description),
-      status: detail.status?.name ?? null,
-      statusType: detail.statusType,
-      projectName: detail.project?.name ?? null,
-      clientName: detail.client?.name ?? null,
-      categoryName: detail.category?.name ?? null,
-      assigneeNames: detail.assignees.map((a) => a.name),
-      dueDate: detail.dueDate ?? null,
-      billable: detail.billable,
-      estimateMinutes: detail.estimate ?? null,
-      totalMinutes: detail.totalMinutes,
-      subtasks: subtasks.map((s) => ({
-        id: s._id,
-        title: s.title,
-        statusType: s.statusType,
-        totalMinutes: s.totalMinutes,
-        assigneeNames: s.assignees.map((a) => a.name),
-      })),
-    };
+    if (!detail) {
+      return {
+        found: false,
+        message:
+          `No task found for "${input.task}" (or the user can't see it). ` +
+          "Use findTasks to look it up by title.",
+      };
+    }
+    return { found: true, ...detail };
   },
 });
 
 const countTasksByStatusTool = createTool({
   description:
-    "Exact task counts per status type for the organization (all, backlog, " +
-    "in_progress, review, blocked, done, archived). Members' counts cover " +
-    "only tasks assigned to them. Use for 'how many tasks are …' questions " +
-    "— never estimate counts from a task list.",
+    "Task counts per status category (backlog, unstarted, started, " +
+    "completed, canceled) and per status, archived tasks excluded. Admins " +
+    "get the whole organization; members' counts cover only their own " +
+    "tasks. Use for 'how many tasks are …' questions — never estimate " +
+    "counts from a task list. When `truncated` is true a count hit a cap: " +
+    "say \"at least N\" for it, never an exact number.",
   inputSchema: z.object({}),
-  execute: async (
-    ctx,
-  ): Promise<{
-    all: number;
-    backlog: number;
-    in_progress: number;
-    review: number;
-    blocked: number;
-    done: number;
-    archived: number;
-  }> => {
-    return await ctx.runQuery(api.tasks.counts, {});
+  execute: async (ctx): Promise<AgentTaskCounts> => {
+    return await ctx.runQuery(api.tasks.agent.countTasksByStatus, {});
   },
 });
 
@@ -1777,7 +1766,7 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
   },
   listStatuses: {
     name: "listStatuses",
-    humanDescription: "Read the task status list (names, status types).",
+    humanDescription: "Read the task status list (names, categories).",
     scope: "member",
     kind: "read",
     tool: listStatusesTool,
@@ -1787,7 +1776,7 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
     name: "findTasks",
     humanDescription:
       "Search tasks with flat filters (status, client, project, assignee, " +
-      "category, due dates, text). Members see only their own tasks.",
+      "work category, due dates, text). Members see only their own tasks.",
     scope: "member",
     kind: "read",
     tool: findTasksTool,
@@ -1795,14 +1784,15 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
   getTaskDetail: {
     name: "getTaskDetail",
     humanDescription:
-      "Read one task in full (description, joins, logged minutes, subtasks).",
+      "Read one task in full by identifier (description, joins, tracked " +
+      "minutes, sub-tasks).",
     scope: "member",
     kind: "read",
     tool: getTaskDetailTool,
   },
   countTasksByStatus: {
     name: "countTasksByStatus",
-    humanDescription: "Exact task counts per status type.",
+    humanDescription: "Task counts per status category and status.",
     scope: "member",
     kind: "read",
     tool: countTasksByStatusTool,

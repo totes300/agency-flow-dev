@@ -1,17 +1,14 @@
 "use client"
 
-import { useDeferredValue, useMemo, useState } from "react"
-import { useSearchParams } from "next/navigation"
+import { useDeferredValue, useMemo } from "react"
 import { useConvexAuth, useQuery } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { useIsAdmin } from "@/lib/hooks/use-is-admin"
 import { useWorkdayQueryArgs } from "@/lib/hooks/use-workday-query-args"
 import { formatYMD } from "@/lib/hooks/use-week-picker"
 import { getYMDInTimezone } from "@/lib/workday"
-import { isTaskDetailOpen } from "@/lib/task-detail"
 import { useTaskDetailNav } from "@/lib/hooks/use-task-detail-nav"
-import { TaskReferenceDataProvider } from "@/components/tasks/task-reference-data"
-import { TaskDetailDrawer } from "@/components/tasks/task-detail-drawer"
+import { TaskDetailDrawer } from "@/components/task-detail/task-detail-drawer"
 import { WorkdayHeader } from "@/components/workday/workday-header"
 import { WorkdayGrid } from "@/components/workday/workday-grid"
 import { WorkdayGridSkeleton } from "@/components/workday/workday-grid-skeleton"
@@ -46,14 +43,6 @@ export default function WorkdayPage() {
   // don't flash the skeleton.
   const displayData = useDeferredValue(data)
 
-  // Drawer reference data loads on first open, then stays subscribed.
-  // Watching the drawer param keeps this gate in sync with the drawer's own hook.
-  const searchParams = useSearchParams()
-  const detailOpen = isTaskDetailOpen(searchParams)
-  const [drawerEverOpened, setDrawerEverOpened] = useState(false)
-  if (detailOpen && !drawerEverOpened) setDrawerEverOpened(true)
-  const drawerNeedsData = isAuthenticated && drawerEverOpened
-
   const todayYMD = useMemo(
     () =>
       orgTimezone
@@ -61,17 +50,10 @@ export default function WorkdayPage() {
         : formatYMD(new Date()),
     [orgTimezone],
   )
-  const statuses = useQuery(api.statuses.list, drawerNeedsData ? {} : "skip")
-  const categories = useQuery(api.workCategories.list, drawerNeedsData ? {} : "skip")
-  const projects = useQuery(api.projects.list, drawerNeedsData ? {} : "skip")
-  // Members also feed the toolbar filter — eager for admins, deferred for members.
+  // Members feed the admin toolbar filter (the drawer reads `workspaceRefs` itself).
   const orgMembersData = useQuery(
     api.orgMembers.listOrgMembers,
-    isAuthenticated && (isAdmin || drawerEverOpened) ? undefined : "skip",
-  )
-  const referenceData = useMemo(
-    () => ({ statuses, categories, projects, orgMembers: orgMembersData }),
-    [statuses, categories, projects, orgMembersData],
+    isAuthenticated && isAdmin ? undefined : "skip",
   )
 
   // Visible-week task IDs in scan order (earliest firstStart, deduped) so the
@@ -98,7 +80,7 @@ export default function WorkdayPage() {
   const navigateToTask = useTaskDetailNav()
 
   return (
-    <TaskReferenceDataProvider value={referenceData}>
+    <>
       <div className="mx-auto w-full max-w-screen-2xl">
         <WorkdayHeader
           selectedWeek={selectedWeek}
@@ -123,6 +105,6 @@ export default function WorkdayPage() {
       </div>
 
       <TaskDetailDrawer taskIds={visibleTaskIds} isAdmin={isAdmin} />
-    </TaskReferenceDataProvider>
+    </>
   )
 }

@@ -5,7 +5,6 @@ import type { Doc, Id } from "./_generated/dataModel";
 import {
   DEFAULT_STATUS_SEED,
   TASK_CATEGORIES,
-  categoryFromLegacyType,
   deriveIdentifierKey,
   formatIdentifier,
   hasDescriptionContent,
@@ -23,8 +22,8 @@ import { recomputeTaskCounters } from "./tasks/derived";
 import { recomputeUserStates } from "./tasks/userState";
 import {
   addIdentifierAlias,
+  createTask,
   deleteOrphanEdges,
-  insertLegacyTaskForSeed,
   patchTaskForSeed,
   syncAssigneeEdges,
   syncLabelEdges,
@@ -36,21 +35,25 @@ import {
  * the §4 model IN PLACE, so time entries, closes and invoices that reference
  * the existing tasks stay intact:
  *
- *  1. Statuses get a category, a position and one default per category; a
- *     brand-new org gets the full §4.1 default set, an existing org only
- *     gets defaults for categories it has no status in (e.g. Canceled).
+ *  1. Statuses get a position and one default per category; a brand-new org
+ *     gets the full §4.1 default set, an existing org only gets defaults for
+ *     categories it has no status in (e.g. Canceled).
  *  2. The org gets a task key; projects whose code is not a valid identifier
  *     key (legacy "PRJ-042") get a short letter code ("ARLO").
  *  3. Default labels are upserted by name.
  *  4. A few org-level demo tasks (no project → org identifier, a canceled
- *     one, a multi-assignee one) are created once, matched by title.
+ *     one, a multi-assignee one) are created once through the write path,
+ *     matched by title.
  *  5. Every task gets identifier/number, statusCategory, completedAt,
  *     priority, sortKey, clientId, estimateMinutes, label/assignee caches,
  *     derived counters — and its `taskAssignees`/`taskLabels` edges are
  *     rewritten to equal the caches. Some single-assignee tasks get a second
- *     assignee (D1 demo). Legacy fields stay populated for the old UI.
- *  5b. Every task's `taskUserState` rows are rebuilt from the legacy view /
- *     comment receipts and mutes (subscribers, unread comments, unseen dot).
+ *     assignee (D1 demo).
+ *  5b. Every task's `taskUserState` rows are rebuilt from the comment
+ *     receipts (subscribers, unread comments, unseen dot); mutes are kept.
+ *
+ * Rows still carrying the pre-refactor fields are normalised by
+ * `devCleanupTasks:stripLegacy` (slice 7b), not here.
  *  6. Project and org counters are set past the highest number.
  *
  * Idempotent: a second run changes nothing (existing numbers, positions,
@@ -108,7 +111,8 @@ export type SeedTaskFoundationsResult = {
   userStatesUpdated: number;
 };
 
-async function resolveOrgId(ctx: MutationCtx, orgId: string | undefined): Promise<string> {
+/** The given org, else the deployment's only org (dev tools). */
+export async function resolveOrgId(ctx: MutationCtx, orgId: string | undefined): Promise<string> {
   if (orgId) return orgId;
   const settings = await ctx.db.query("orgSettings").collect();
   const orgIds = Array.from(new Set(settings.map((s) => s.orgId)));
@@ -199,22 +203,27 @@ export async function seedTaskFoundations(
     .collect();
   const seedByName = new Map(DEFAULT_STATUS_SEED.map((s) => [s.name.toLowerCase(), s]));
   const categoryOf = (s: Doc<"statuses">): TaskCategory =>
-    s.category ?? seedByName.get(s.name.toLowerCase())?.category ?? categoryFromLegacyType(s.type);
+    s.category ?? seedByName.get(s.name.toLowerCase())?.category ?? "backlog";
 
   const coveredCategories = new Set(statuses.filter((s) => !s.archivedAt).map(categoryOf));
   const missingSeeds =
     statuses.length === 0
       ? DEFAULT_STATUS_SEED
       : DEFAULT_STATUS_SEED.filter((s) => s.isDefault && !coveredCategories.has(s.category));
-  let nextSortOrder = statuses.reduce((max, s) => Math.max(max, s.sortOrder), -1) + 1;
+  const lastPosition = new Map<TaskCategory, string | null>();
+  for (const category of TASK_CATEGORIES) {
+    lastPosition.set(category, maxKey(statuses.filter((s) => categoryOf(s) === category).map((s) => s.position)));
+  }
   for (const s of missingSeeds) {
+    const position = generateKeyBetween(lastPosition.get(s.category) ?? null, null);
+    lastPosition.set(s.category, position);
     await ctx.db.insert("statuses", {
       orgId,
       name: s.name,
       color: s.color,
-      type: s.legacyType,
-      sortOrder: nextSortOrder++,
       category: s.category,
+      position,
+      isDefault: false, // decided per category below
       createdAt: now,
       updatedAt: now,
       createdBy: actorId,
@@ -233,7 +242,7 @@ export async function seedTaskFoundations(
   for (const category of TASK_CATEGORIES) {
     const inCategory = statuses
       .filter((s) => categoryOf(s) === category)
-      .sort((a, b) => a.sortOrder - b.sortOrder || a._creationTime - b._creationTime);
+      .sort((a, b) => (a.position ?? "￿").localeCompare(b.position ?? "￿") || a._creationTime - b._creationTime);
     const unpositioned = inCategory.filter((s) => s.position === undefined);
     const newKeys = keysAfter(maxKey(inCategory.map((s) => s.position)), unpositioned.length);
     const positionOf = new Map(unpositioned.map((s, i) => [s._id, newKeys[i]]));
@@ -336,27 +345,24 @@ export async function seedTaskFoundations(
     .query("tasks")
     .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
     .collect();
-  let lastSortKey = maxKey(tasks.flatMap((t) => [t.sortKey, t.manualSortKey]));
+  const actor = await ctx.db.get(actorId);
+  if (!actor) throw new ConvexError(`Org ${orgId} has no admin user to seed as`);
   for (const demo of DEMO_TASKS) {
     if (tasks.some((t) => t.title === demo.title && !t.projectId)) continue;
     const status = defaultStatusFor(demo.category);
-    lastSortKey = generateKeyBetween(lastSortKey, null);
-    const assigneeIds = memberUserIds.slice(0, demo.assignees);
-    // Inserted with legacy-shaped fields only; step 5 fills the model.
-    await insertLegacyTaskForSeed(ctx, {
-      orgId,
-      title: demo.title,
-      statusId: status._id,
-      statusType: status.type,
-      assigneeIds,
-      billable: false,
-      manualSortKey: lastSortKey,
-      createdAt: now,
-      updatedAt: now,
-      createdBy: actorId,
-      priority: demo.priority,
-      labelIds: demo.labels.flatMap((n) => labelIdByName.get(n.toLowerCase()) ?? []),
-    });
+    await createTask(
+      ctx,
+      { orgId, userId: actorId, orgRole: "admin", isAdmin: true, user: actor },
+      {
+        title: demo.title,
+        statusId: status._id,
+        assigneeIds: memberUserIds.slice(0, demo.assignees),
+        billable: false,
+        priority: demo.priority,
+        labelIds: demo.labels.flatMap((n) => labelIdByName.get(n.toLowerCase()) ?? []),
+      },
+      { notify: false, now },
+    );
     result.demoTasksCreated++;
   }
   if (result.demoTasksCreated > 0) {
@@ -406,17 +412,17 @@ export async function seedTaskFoundations(
   }
 
   // sortKey: keep existing keys; append the rest, top-level tasks first, then
-  // sub-tasks in (parent, sortOrder) order so siblings keep their order.
+  // sub-tasks grouped by parent in creation order.
   const needsSortKey = ordered
-    .filter((t) => t.sortKey === undefined && t.manualSortKey === undefined)
+    .filter((t) => t.sortKey === undefined)
     .sort((a, b) => {
       if (!a.parentTaskId !== !b.parentTaskId) return a.parentTaskId ? 1 : -1;
       if (a.parentTaskId && b.parentTaskId && a.parentTaskId !== b.parentTaskId) {
         return a.parentTaskId < b.parentTaskId ? -1 : 1;
       }
-      return (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.createdAt - b.createdAt;
+      return a.createdAt - b.createdAt;
     });
-  const appendedKeys = keysAfter(lastSortKey, needsSortKey.length);
+  const appendedKeys = keysAfter(maxKey(tasks.map((t) => t.sortKey)), needsSortKey.length);
   const appendedKeyOf = new Map(needsSortKey.map((t, i) => [t._id, appendedKeys[i]]));
 
   const childrenOf = new Map<Id<"tasks">, Doc<"tasks">[]>();
@@ -486,8 +492,8 @@ export async function seedTaskFoundations(
       priority: t.priority ?? PRIORITY_CYCLE[index % PRIORITY_CYCLE.length],
       clientId: t.projectId ? clientOf.get(t.projectId) : undefined,
       hasDescription: hasDescriptionContent(t.description),
-      estimateMinutes: t.estimateMinutes ?? t.estimate,
-      sortKey: t.sortKey ?? t.manualSortKey ?? appendedKeyOf.get(t._id),
+      estimateMinutes: t.estimateMinutes,
+      sortKey: t.sortKey ?? appendedKeyOf.get(t._id),
       assigneeIds,
       labelIds,
       ...counters,
@@ -522,30 +528,23 @@ export async function seedTaskFoundations(
   result.edgesDeleted += await deleteOrphanEdges(ctx, orgId, new Set(tasks.map((t) => t._id)));
 
   // ── 5b. Per-user state (§4.3, slice 2) ────────────────────────────────────
-  // Backfilled from the legacy receipts so unread counts and unseen dots
-  // survive the switch; the comment/activity hooks keep it current after.
+  // Rebuilt from the comment receipts; the comment/activity hooks keep it
+  // current after. Mutes live on the state rows themselves.
   const viewedAtByTask = new Map<Id<"tasks">, Map<Id<"users">, number>>();
   const noteViewed = (taskId: Id<"tasks">, userId: Id<"users">, at: number) => {
     const perUser = viewedAtByTask.get(taskId) ?? new Map<Id<"users">, number>();
     perUser.set(userId, Math.max(perUser.get(userId) ?? 0, at));
     viewedAtByTask.set(taskId, perUser);
   };
-  for (const r of await ctx.db.query("taskViewReceipts").withIndex("by_orgId", (q) => q.eq("orgId", orgId)).collect()) {
-    noteViewed(r.taskId, r.userId, r.lastViewedAt);
-  }
   for (const r of await ctx.db.query("commentReadReceipts").withIndex("by_orgId", (q) => q.eq("orgId", orgId)).collect()) {
     noteViewed(r.taskId, r.userId, r.lastSeenAt);
-  }
-  const mutedByTask = new Map<Id<"tasks">, Set<Id<"users">>>();
-  for (const m of await ctx.db.query("taskMutes").withIndex("by_orgId", (q) => q.eq("orgId", orgId)).collect()) {
-    mutedByTask.set(m.taskId, new Set([...(mutedByTask.get(m.taskId) ?? []), m.userId]));
   }
   for (const t of tasks) {
     const current = await ctx.db.get(t._id);
     if (!current) continue;
     const states = await recomputeUserStates(ctx, current, {
       viewedAt: viewedAtByTask.get(t._id) ?? new Map(),
-      mutedUserIds: mutedByTask.get(t._id) ?? new Set(),
+      mutedUserIds: new Set(),
     });
     result.userStatesInserted += states.inserted;
     result.userStatesUpdated += states.updated;

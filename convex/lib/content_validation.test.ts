@@ -3,8 +3,6 @@ import {
   validateTiptapContent,
   isMimeTypeBlocked,
   getBlockedMimeTypes,
-  applyCountChanges,
-  buildInitialCounts,
   extractPlainText,
 } from "./content_validation";
 
@@ -122,85 +120,6 @@ describe("isMimeTypeBlocked", () => {
     expect(blocked.size).toBe(7);
   });
 });
-
-// ─── applyCountChanges ─────────────────────────────────────────────────────────
-
-describe("applyCountChanges", () => {
-  const base = { backlog: 5, in_progress: 3, review: 2, blocked: 1, done: 10 };
-
-  it("increments a single type", () => {
-    const { result, drifts } = applyCountChanges(base, { backlog: 1 });
-    expect(result.backlog).toBe(6);
-    expect(drifts).toHaveLength(0);
-    // Other fields unchanged
-    expect(result.in_progress).toBe(3);
-  });
-
-  it("decrements a single type", () => {
-    const { result, drifts } = applyCountChanges(base, { in_progress: -1 });
-    expect(result.in_progress).toBe(2);
-    expect(drifts).toHaveLength(0);
-  });
-
-  it("applies multiple changes", () => {
-    const { result } = applyCountChanges(base, { backlog: -1, in_progress: 1 });
-    expect(result.backlog).toBe(4);
-    expect(result.in_progress).toBe(4);
-  });
-
-  it("clamps negative values to 0 and reports drift", () => {
-    const { result, drifts } = applyCountChanges(base, { blocked: -5 });
-    expect(result.blocked).toBe(0);
-    expect(drifts).toHaveLength(1);
-    expect(drifts[0]).toContain("blocked");
-    expect(drifts[0]).toContain("-4");
-  });
-
-  it("does not mutate the input", () => {
-    const original = { ...base };
-    applyCountChanges(base, { backlog: 10 });
-    expect(base).toEqual(original);
-  });
-
-  it("handles zero delta (no-op)", () => {
-    const { result } = applyCountChanges(base, { done: 0 });
-    expect(result).toEqual(base);
-  });
-
-  it("handles empty changes", () => {
-    const { result, drifts } = applyCountChanges(base, {});
-    expect(result).toEqual(base);
-    expect(drifts).toHaveLength(0);
-  });
-});
-
-// ─── buildInitialCounts ─────────────────────────────────────────────────────────
-
-describe("buildInitialCounts", () => {
-  it("creates counts with a single positive delta", () => {
-    const result = buildInitialCounts({ backlog: 1 });
-    expect(result).toEqual({ backlog: 1, in_progress: 0, review: 0, blocked: 0, done: 0 });
-  });
-
-  it("clamps negative deltas to 0", () => {
-    const result = buildInitialCounts({ backlog: -3 });
-    expect(result.backlog).toBe(0);
-  });
-
-  it("handles empty changes", () => {
-    const result = buildInitialCounts({});
-    expect(result).toEqual({ backlog: 0, in_progress: 0, review: 0, blocked: 0, done: 0 });
-  });
-
-  it("handles multiple types", () => {
-    const result = buildInitialCounts({ in_progress: 2, done: 5 });
-    expect(result.in_progress).toBe(2);
-    expect(result.done).toBe(5);
-    expect(result.backlog).toBe(0);
-  });
-});
-
-// ─── extractPlainText ───────────────────────────────────────────────────────────
 
 describe("extractPlainText", () => {
   it("extracts text from a simple paragraph", () => {

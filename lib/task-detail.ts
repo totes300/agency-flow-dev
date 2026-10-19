@@ -186,31 +186,3 @@ export function mergeActivityFeed(
   ]
   return tagged.sort((a, b) => a.createdAt - b.createdAt)
 }
-
-// ─── Subtask validation ─────────────────────────────────────────────────────────
-
-/**
- * Validate whether a task can have subtasks created under it.
- * Returns an error message or null if valid.
- */
-export function validateSubtaskCreation(
-  parentTaskId: string | null | undefined,
-  parentParentTaskId: string | null | undefined
-): string | null {
-  if (!parentTaskId) return "Parent task ID is required"
-  if (parentParentTaskId) return "Subtasks cannot have subtasks (max 1 level)"
-  return null
-}
-
-/**
- * Compute subtask progress from a list of subtasks.
- * Returns { done, total, percent }.
- */
-export function computeSubtaskProgress(
-  subtasks: { statusType: string }[]
-): { done: number; total: number; percent: number } {
-  const total = subtasks.length
-  if (total === 0) return { done: 0, total: 0, percent: 0 }
-  const done = subtasks.filter((s) => s.statusType === "done").length
-  return { done, total, percent: Math.round((done / total) * 100) }
-}

@@ -20,7 +20,6 @@ import {
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { getCategoryColor } from "@/convex/lib/constants"
-import type { TaskPanelItem } from "@/convex/planner"
 import { cn } from "@/lib/utils"
 import {
   anyPanelFilterActive,
@@ -29,6 +28,7 @@ import {
   type PlannerDueFilter,
   type PlannerPanelFilters,
   type PlannerScheduleFilter,
+  type TaskPanelItem,
 } from "@/lib/planner"
 
 type PropertyKey = "schedule" | "project" | "client" | "category" | "due"

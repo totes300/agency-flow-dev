@@ -9,6 +9,10 @@ import { cn } from "@/lib/utils"
 export const TASK_VIEW_PANEL_CLASS =
   "flex h-[calc(100svh-3rem)] min-h-[28rem] w-full flex-col overflow-hidden border-t border-border/60 bg-background md:h-[calc(100svh-4rem)]"
 
+/** The task view inside another page (the project Tasks tab): a bordered panel below the page header. */
+export const TASK_VIEW_EMBEDDED_PANEL_CLASS =
+  "flex h-[calc(100svh-15rem)] min-h-[28rem] w-full flex-col overflow-hidden rounded-lg border border-border bg-background"
+
 /** Table rows only (inside a loaded panel). */
 export function TaskTableSkeleton({ rows = 10 }: { rows?: number }) {
   return (

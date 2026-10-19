@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useMemo } from "react"
+import { Suspense, useState, useEffect, useMemo } from "react"
 import { useParams, useSearchParams, useRouter, usePathname, notFound } from "next/navigation"
 import { useQuery } from "convex/react"
 import { useConvexAuth } from "convex/react"
@@ -19,8 +19,9 @@ import { SettingsRetainer } from "@/components/projects/settings-retainer"
 import { ProjectTeam } from "@/components/projects/project-team"
 import { ProjectInvoices } from "@/components/invoices/project-invoices"
 import { ProjectTime } from "@/components/projects/project-time"
-import { TaskDetailDrawer } from "@/components/tasks/task-detail-drawer"
-import { TaskReferenceDataProvider } from "@/components/tasks/task-reference-data"
+import { TaskDetailDrawer } from "@/components/task-detail/task-detail-drawer"
+import { TaskView } from "@/components/task-view/task-view"
+import { TaskTableSkeleton } from "@/components/task-view/task-view-skeleton"
 import { useIsAdmin } from "@/lib/hooks/use-is-admin"
 import { useBreadcrumbTitle } from "@/lib/hooks/use-breadcrumb-title"
 
@@ -36,14 +37,6 @@ export default function ProjectDetailPage() {
   const overview = useQuery(api.timeEntries.projectOverview, isAuthenticated ? { projectId } : "skip")
   const monthlyData = useQuery(api.timeEntries.projectMonthlyBreakdown, isAuthenticated ? { projectId } : "skip")
 
-  const statuses = useQuery(api.statuses.list, isAuthenticated ? {} : "skip")
-  const categories = useQuery(api.workCategories.list, isAuthenticated ? {} : "skip")
-  const projects = useQuery(api.projects.list, isAuthenticated ? {} : "skip")
-  const orgMembersData = useQuery(
-    api.orgMembers.listOrgMembers,
-    isAuthenticated ? {} : "skip",
-  )
-
 
   useBreadcrumbTitle(project?.name ?? null)
 
@@ -52,7 +45,7 @@ export default function ProjectDetailPage() {
   // and shareable links working (CLAUDE.md: filterable views persist to URL).
   const tabParam = searchParams.get("tab")
   const tab =
-    tabParam === "settings" || tabParam === "invoices" || tabParam === "time"
+    tabParam === "tasks" || tabParam === "settings" || tabParam === "invoices" || tabParam === "time"
       ? tabParam
       : "overview"
 
@@ -68,16 +61,6 @@ export default function ProjectDetailPage() {
   const isBillable = project ? project.billingType !== "non_billable" : true
   const effectiveTab =
     ((tab === "invoices" || tab === "time") && !isBillable) ? "overview" : tab
-
-  const referenceData = useMemo(
-    () => ({
-      statuses,
-      categories,
-      projects,
-      orgMembers: orgMembersData,
-    }),
-    [statuses, categories, projects, orgMembersData],
-  )
 
   const projectTaskIds = useMemo(() => {
     if (!monthlyData) return []
@@ -109,7 +92,6 @@ export default function ProjectDetailPage() {
   if (project === null) notFound()
 
   return (
-    <TaskReferenceDataProvider value={referenceData}>
     <div className="flex w-full flex-col gap-6">
       <ProjectDetailHeader
         projectId={projectId}
@@ -122,6 +104,7 @@ export default function ProjectDetailPage() {
       <Tabs value={effectiveTab} onValueChange={setTab}>
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="tasks">Tasks</TabsTrigger>
           {project.billingType !== "non_billable" && (
             <TabsTrigger value="time">Time</TabsTrigger>
           )}
@@ -163,6 +146,16 @@ export default function ProjectDetailPage() {
                 </p>
               </div>
             </div>
+          )}
+        </TabsContent>
+
+        {/* The project's tasks: the task-view preset `surface: "project"`
+            (views, display options, filters as on /tasks; no Client column). */}
+        <TabsContent value="tasks" className="mt-6">
+          {effectiveTab === "tasks" && (
+            <Suspense fallback={<TaskTableSkeleton />}>
+              <TaskView surface="project" projectId={projectId} fromLabel={project.name} embedded />
+            </Suspense>
           )}
         </TabsContent>
 
@@ -216,9 +209,9 @@ export default function ProjectDetailPage() {
         </TabsContent>
       </Tabs>
 
-      {/* Task detail — route-driven (?task= / ?detail=); the full page when that is the user's mode */}
-      <TaskDetailDrawer taskIds={projectTaskIds} isAdmin={isAdmin ?? false} />
+      {/* Task detail — route-driven (?task= / ?detail=); the full page when that is
+          the user's mode. The Tasks tab mounts its own (stepping through its rows). */}
+      {effectiveTab !== "tasks" && <TaskDetailDrawer taskIds={projectTaskIds} isAdmin={isAdmin ?? false} />}
     </div>
-    </TaskReferenceDataProvider>
   )
 }

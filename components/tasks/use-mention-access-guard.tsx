@@ -40,10 +40,10 @@ type PendingGrant = {
  */
 export function useMentionAccessGuard(taskId: Id<"tasks"> | undefined) {
   const { isAuthenticated } = useConvexAuth()
-  // Dedupes with the drawer/modal's own getDetail subscription (same args)
+  // The task's assignees (T1 via tasks/access.ts on the server).
   const task = useQuery(
-    api.tasks.getDetail,
-    isAuthenticated && taskId ? { id: taskId } : "skip",
+    api.tasks.queries.getDetail,
+    isAuthenticated && taskId ? { taskId } : "skip",
   )
   const orgMembers = useWorkspaceMembers()
   const updateTask = useMutation(api.tasks.update)

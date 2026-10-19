@@ -16,10 +16,10 @@ import {
   DEFAULT_CURRENCY,
   DEFAULT_TIMEZONE,
   DEFAULT_ROUNDING,
-  DEFAULT_STATUSES,
   DEFAULT_CATEGORIES,
 } from "@/convex/lib/constants"
-import type { Currency, RoundingMinutes } from "@/convex/lib/constants"
+import type { Currency, RoundingMinutes, StatusColorName } from "@/convex/lib/constants"
+import { DEFAULT_STATUS_SEED } from "@/convex/tasks/model"
 import { cn } from "@/lib/utils"
 import { extractErrorMessage } from "@/lib/toast-helpers"
 import { StepGeneral } from "./step-general"
@@ -44,7 +44,12 @@ export function OnboardingModal() {
 
   // Step 1: Statuses
   const [statuses, setStatuses] = useState<StatusDraft[]>(
-    DEFAULT_STATUSES.map((s) => ({ ...s, id: crypto.randomUUID() }))
+    DEFAULT_STATUS_SEED.map((s) => ({
+      id: crypto.randomUUID(),
+      name: s.name,
+      color: s.color as StatusColorName,
+      category: s.category,
+    }))
   )
 
   // Step 2: Work Categories
@@ -69,7 +74,7 @@ export function OnboardingModal() {
         statuses: statuses.map((s) => ({
           name: s.name.trim(),
           color: s.color,
-          type: s.type,
+          category: s.category,
         })),
         workCategories: categories.map((c) => {
           const billStr = String(c.defaultBillRate ?? "").trim()

@@ -3,9 +3,9 @@
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { STATUS_TYPES, STATUS_COLOR_NAMES } from "@/convex/lib/constants"
-import type { StatusType, StatusColorName } from "@/convex/lib/constants"
-import { TYPE_LABELS } from "@/lib/display-constants"
+import { STATUS_COLOR_NAMES } from "@/convex/lib/constants"
+import type { StatusColorName } from "@/convex/lib/constants"
+import { CATEGORY_LABELS, TASK_CATEGORIES, type TaskCategory } from "@/convex/tasks/model"
 import { STATUS_COLOR_CONFIG } from "@/lib/status-colors"
 import { StatusDot } from "./shared"
 import type { StatusDraft } from "./shared"
@@ -18,12 +18,12 @@ import {
 
 // ─── Constants ──────────────────────────────────────────────────────────────────
 
-const TYPE_DESCRIPTIONS: Record<StatusType, string> = {
-  backlog: "Unprioritized work",
-  in_progress: "Actively being worked on",
-  review: "Waiting on someone",
-  blocked: "Cannot proceed",
-  done: "Completed",
+const CATEGORY_DESCRIPTIONS: Record<TaskCategory, string> = {
+  backlog: "Not planned yet",
+  unstarted: "Planned, not started",
+  started: "Being worked on, in review or stuck",
+  completed: "Finished",
+  canceled: "Won't be done",
 }
 
 // ─── Component ──────────────────────────────────────────────────────────────────
@@ -35,16 +35,16 @@ export function StepStatuses({
   statuses: StatusDraft[]
   onChange: (s: StatusDraft[]) => void
 }) {
-  const [addingToType, setAddingToType] = useState<StatusType | null>(null)
+  const [addingToType, setAddingToType] = useState<TaskCategory | null>(null)
   const [newName, setNewName] = useState("")
   const [newColor, setNewColor] = useState<StatusColorName>("gray")
 
   function getOrdered(): StatusDraft[] {
-    return STATUS_TYPES.flatMap((type) => statuses.filter((s) => s.type === type))
+    return TASK_CATEGORIES.flatMap((category) => statuses.filter((s) => s.category === category))
   }
 
-  function statusesForType(type: StatusType) {
-    return statuses.filter((s) => s.type === type)
+  function statusesForCategory(category: TaskCategory) {
+    return statuses.filter((s) => s.category === category)
   }
 
   function handleRemove(id: string) {
@@ -64,20 +64,20 @@ export function StepStatuses({
     const current = ordered[idx]
     const target = ordered[targetIdx]
 
-    if (current.type === target.type) {
+    if (current.category === target.category) {
       const next = [...ordered]
       ;[next[idx], next[targetIdx]] = [next[targetIdx], next[idx]]
       onChange(next)
     } else {
-      const newType = target.type
+      const newCategory = target.category
       const updated = ordered.filter((s) => s.id !== statusId)
-      const movedStatus = { ...current, type: newType }
+      const movedStatus = { ...current, category: newCategory }
 
       if (direction === 1) {
-        const lastIdx = updated.findLastIndex((s) => s.type === newType)
+        const lastIdx = updated.findLastIndex((s) => s.category === newCategory)
         updated.splice(lastIdx + 1, 0, movedStatus)
       } else {
-        const firstIdx = updated.findIndex((s) => s.type === newType)
+        const firstIdx = updated.findIndex((s) => s.category === newCategory)
         updated.splice(firstIdx === -1 ? targetIdx : firstIdx, 0, movedStatus)
       }
 
@@ -85,13 +85,13 @@ export function StepStatuses({
     }
   }
 
-  function handleAdd(type: StatusType) {
+  function handleAdd(category: TaskCategory) {
     if (!newName.trim()) return
     onChange([...statuses, {
       id: crypto.randomUUID(),
       name: newName.trim(),
       color: newColor,
-      type,
+      category,
     }])
     setNewName("")
     setNewColor("gray")
@@ -105,19 +105,19 @@ export function StepStatuses({
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        Customize your workflow. Use arrows to reorder — statuses move between stages when crossing a boundary.
+        Customize your workflow. Every stage needs at least one status; the first one in a stage is its default. Use arrows to reorder — statuses move between stages when crossing a boundary.
       </p>
 
-      {STATUS_TYPES.map((type) => {
-        const group = statusesForType(type)
+      {TASK_CATEGORIES.map((category) => {
+        const group = statusesForCategory(category)
         return (
-          <div key={type}>
+          <div key={category}>
             <div className="mb-1 flex items-baseline gap-2">
               <span className="text-xs font-semibold uppercase tracking-wide text-foreground">
-                {TYPE_LABELS[type]}
+                {CATEGORY_LABELS[category]}
               </span>
               <span className="text-xs text-muted-foreground">
-                {TYPE_DESCRIPTIONS[type]}
+                {CATEGORY_DESCRIPTIONS[category]}
               </span>
             </div>
 
@@ -184,10 +184,10 @@ export function StepStatuses({
                 </div>
               ))}
 
-              {addingToType === type ? (
+              {addingToType === category ? (
                 <form
                   className="flex items-center gap-2 rounded-md border border-dashed px-2 py-1"
-                  onSubmit={(e) => { e.preventDefault(); handleAdd(type) }}
+                  onSubmit={(e) => { e.preventDefault(); handleAdd(category) }}
                 >
                   <StatusDot color={newColor} />
                   <Input
@@ -223,8 +223,8 @@ export function StepStatuses({
                   variant="ghost"
                   size="xs"
                   className="text-muted-foreground"
-                  onClick={() => { setAddingToType(type); setNewName(""); setNewColor("gray") }}
-                  aria-label={`Add ${TYPE_LABELS[type]} status`}
+                  onClick={() => { setAddingToType(category); setNewName(""); setNewColor("gray") }}
+                  aria-label={`Add ${CATEGORY_LABELS[category]} status`}
                 >
                   <PlusIcon />
                   Add status

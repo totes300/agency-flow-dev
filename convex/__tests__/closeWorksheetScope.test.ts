@@ -6,6 +6,7 @@ import schema from "../schema";
 import { api } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
 import { resolveScopeEntries } from "../worksheetsHelpers";
+import { statusRow, taskRow } from "./helpers/taskFixtures";
 
 const modules = (
   import.meta as ImportMeta & {
@@ -59,16 +60,15 @@ describe("resolveScopeEntries — close", () => {
         updatedAt: now,
         createdBy: userId,
       });
-      const statusId = await ctx.db.insert("statuses", {
+      const statusId = await ctx.db.insert("statuses", statusRow({
         orgId: ORG_ID,
         name: "Done",
-        type: "done",
+        category: "completed",
         color: "green",
-        sortOrder: 0,
         createdAt: now,
         updatedAt: now,
         createdBy: userId,
-      });
+      }));
       const clientId = await ctx.db.insert("clients", {
         orgId: ORG_ID,
         name: "Stamp Client",
@@ -90,18 +90,18 @@ describe("resolveScopeEntries — close", () => {
         updatedAt: now,
         createdBy: userId,
       });
-      const taskId = await ctx.db.insert("tasks", {
+      const taskId = await ctx.db.insert("tasks", taskRow({
         orgId: ORG_ID,
         title: "Stamped task",
         statusId,
-        statusType: "done",
+        statusCategory: "completed",
         projectId,
         assigneeIds: [userId],
         billable: true,
         createdAt: now,
         updatedAt: now,
         createdBy: userId,
-      });
+      }));
       return { userId, projectId, taskId };
     });
 

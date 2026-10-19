@@ -46,8 +46,8 @@ export function TaskDetailTime({
   )
   // Reference data for the shared full edit modal (project-tab parity).
   const taskDetail = useQuery(
-    api.tasks.getDetail,
-    isAuthenticated ? { id: taskId } : "skip",
+    api.tasks.queries.getDetail,
+    isAuthenticated ? { taskId } : "skip",
   )
   // includeArchived: the table's Category column and the edit modal must show
   // a since-archived category's name (the modal offers only active options).
@@ -59,7 +59,7 @@ export function TaskDetailTime({
     api.orgMembers.listOrgMembers,
     isAuthenticated ? {} : "skip",
   )
-  const projectId = taskDetail?.project?._id
+  const projectId = taskDetail?.projectId ?? undefined
 
   // ─── Filter + pagination ────────────────────────────────────────────────────
   const [range, setRange] = useState<TimeRange>("this_week")

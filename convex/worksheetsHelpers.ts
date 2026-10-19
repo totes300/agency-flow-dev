@@ -29,6 +29,7 @@ import { getProjectEntries } from "./lib/projectEntries";
 import { closeSnapshotEntries } from "./lib/billing/closeData";
 import { ORG_TIMEZONE_FALLBACK } from "./lib/timer";
 import { monthLabel } from "./lib/billing/labels";
+import { isClosedCategory } from "./tasks/model";
 import { priceClose } from "./lib/billing/periodView";
 import { CSV_BOM, joinCsvRow, joinCsvRows } from "../lib/csv";
 import { extractPlainText } from "../lib/tiptap-utils";
@@ -406,7 +407,7 @@ export async function buildTaskRows(
       .collect();
     const subtasks = subtaskDocs
       .filter((s) => s.archivedAt === undefined)
-      .map((s) => ({ title: s.title, done: s.statusType === "done" }));
+      .map((s) => ({ title: s.title, done: s.statusCategory !== undefined && isClosedCategory(s.statusCategory) }));
 
     // Comments — flattened by createdAt (text only). `comments.content` is
     // already structured Tiptap; no JSON.parse needed (schema.ts:479).

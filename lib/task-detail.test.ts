@@ -9,8 +9,6 @@ import {
   taskPagePath,
   getAdjacentTaskId,
   mergeActivityFeed,
-  validateSubtaskCreation,
-  computeSubtaskProgress,
 } from "./task-detail"
 
 // ─── buildDetailUrl ─────────────────────────────────────────────────────────────
@@ -287,87 +285,5 @@ describe("mergeActivityFeed", () => {
     // Both present, order is stable (activities first since they're first in concat)
     expect(feed[0].id).toBe("a1")
     expect(feed[1].id).toBe("c1")
-  })
-})
-
-// ─── validateSubtaskCreation ────────────────────────────────────────────────────
-
-describe("validateSubtaskCreation", () => {
-  it("returns null for valid parent task", () => {
-    expect(validateSubtaskCreation("task_abc", null)).toBeNull()
-  })
-
-  it("returns null for valid parent task (undefined parentParent)", () => {
-    expect(validateSubtaskCreation("task_abc", undefined)).toBeNull()
-  })
-
-  it("rejects missing parent task ID", () => {
-    expect(validateSubtaskCreation(null, null)).toBe("Parent task ID is required")
-  })
-
-  it("rejects empty parent task ID", () => {
-    expect(validateSubtaskCreation(undefined, null)).toBe("Parent task ID is required")
-  })
-
-  it("rejects nested subtask (max 1 level)", () => {
-    expect(validateSubtaskCreation("task_child", "task_parent")).toBe(
-      "Subtasks cannot have subtasks (max 1 level)"
-    )
-  })
-})
-
-// ─── computeSubtaskProgress ─────────────────────────────────────────────────────
-
-describe("computeSubtaskProgress", () => {
-  it("computes 0/0 for empty array", () => {
-    expect(computeSubtaskProgress([])).toEqual({ done: 0, total: 0, percent: 0 })
-  })
-
-  it("computes progress for mixed statuses", () => {
-    const subtasks = [
-      { statusType: "done" },
-      { statusType: "in_progress" },
-      { statusType: "done" },
-      { statusType: "backlog" },
-    ]
-    expect(computeSubtaskProgress(subtasks)).toEqual({ done: 2, total: 4, percent: 50 })
-  })
-
-  it("computes 100% when all done", () => {
-    const subtasks = [
-      { statusType: "done" },
-      { statusType: "done" },
-    ]
-    expect(computeSubtaskProgress(subtasks)).toEqual({ done: 2, total: 2, percent: 100 })
-  })
-
-  it("computes 0% when none done", () => {
-    const subtasks = [
-      { statusType: "backlog" },
-      { statusType: "in_progress" },
-    ]
-    expect(computeSubtaskProgress(subtasks)).toEqual({ done: 0, total: 2, percent: 0 })
-  })
-
-  it("rounds percentage", () => {
-    const subtasks = [
-      { statusType: "done" },
-      { statusType: "backlog" },
-      { statusType: "backlog" },
-    ]
-    // 1/3 = 33.33... → 33
-    expect(computeSubtaskProgress(subtasks)).toEqual({ done: 1, total: 3, percent: 33 })
-  })
-
-  it("handles single subtask done", () => {
-    expect(computeSubtaskProgress([{ statusType: "done" }])).toEqual({
-      done: 1, total: 1, percent: 100,
-    })
-  })
-
-  it("handles single subtask not done", () => {
-    expect(computeSubtaskProgress([{ statusType: "review" }])).toEqual({
-      done: 0, total: 1, percent: 0,
-    })
   })
 })

@@ -8,9 +8,7 @@ import {
 } from "./lib/auth";
 import { assertValidDateString } from "./lib/dateValidation";
 import { createTask } from "./tasks/write";
-import { CLOSED_ROW_DEFAULT, loadView } from "./tasks/read";
-import { SYSTEM_VIEWS } from "./tasks/model";
-import { addTaskToToday, moveTodayTaskBetween } from "./tasks/today";
+import type { TaskCategory } from "./tasks/model";
 import {
   rankTaskSegments,
   segmentSpanDays,
@@ -19,7 +17,6 @@ import {
 import { segmentCoversDate } from "./lib/todayPlan";
 import { getOrgSettings } from "./lib/orgHelpers";
 import { getDateInTimezone, ORG_TIMEZONE_FALLBACK } from "./lib/timer";
-import type { StatusType } from "./lib/constants";
 
 /** Cap one weekGrid call well below Convex's 16k-doc read limit (mirrors
  *  convex/workday.ts). Revisit if per-range segment counts grow. */
@@ -33,7 +30,8 @@ export type PlannerSegmentBar = {
   taskTitle: string;
   projectName: string | null;
   categoryColor: string | null;
-  statusType: StatusType;
+  /** The task's status category (closed bars render as done). */
+  statusCategory: TaskCategory;
   /** 1-based rank among ALL of the task's segments (incl. off-screen ones). */
   partIndex: number;
   /** Total segments of the task; badge shows only when > 1. */
@@ -228,7 +226,7 @@ export const weekGrid = query({
         taskTitle: task.title,
         projectName: project?.name ?? null,
         categoryColor: category?.color ?? null,
-        statusType: task.statusType,
+        statusCategory: task.statusCategory ?? "backlog",
         partIndex: rank?.partIndex ?? 1,
         partCount: rank?.partCount ?? 1,
         laneOrder: s.laneOrder ?? s.createdAt,
@@ -252,52 +250,24 @@ export const weekGrid = query({
   },
 });
 
-export type TaskPanelItem = {
-  _id: Id<"tasks">;
-  title: string;
-  projectId: Id<"projects"> | null;
-  projectName: string | null;
-  clientId: Id<"clients"> | null;
-  clientName: string | null;
-  categoryId: Id<"workCategories"> | null;
-  categoryName: string | null;
-  categoryColor: string | null;
-  statusType: StatusType;
-  /** YYYY-MM-DD deadline; drives the panel's Due filter. */
-  dueDate: string | null;
-  /** Minutes (same unit the estimate cell edits); null when unset. */
-  estimate: number | null;
+export type TaskPlanStats = {
+  taskId: Id<"tasks">;
   /** Sum of day-spans across ALL of the task's segments. */
   plannedDays: number;
   segmentCount: number;
-  createdAt: number;
 };
 
 /**
- * The Tasks panel: the caller's readable non-archived top-level tasks (open,
- * plus the 200 most recently closed) with the light fields the cards and
- * the default-span rule need, newest first.
- * Search / tab / filter narrowing runs client-side (PRD: fine at hundreds
- * of tasks). Subtasks are excluded — they are planned via their parent.
+ * Plan totals per task for the Planner's Tasks panel. The panel's rows are
+ * the `planner` preset of `tasks.queries.listView` (§10); this adds how much
+ * of each is already on the board (Unscheduled / Planned filter, default
+ * span). One bounded read over the org's segments — the plan is a shared
+ * board, so every member reads the same totals.
  */
-export const taskPanel = query({
+export const planStats = query({
   args: {},
-  handler: async (ctx): Promise<TaskPanelItem[]> => {
-    const auth = await getAuthContext(ctx);
-    const { orgId } = auth;
-
-    // The panel is the `planner` preset of the read layer (§10): open tasks
-    // plus the most recently closed, top-level and non-archived, bounded
-    // (T7), and only tasks the caller may read (T1 — members see their own).
-    const loaded = await loadView(ctx, auth, {
-      filters: SYSTEM_VIEWS.planner.panel.spec.filters,
-      showSubtasks: false,
-      closedLimit: CLOSED_ROW_DEFAULT,
-    });
-    const tasks = loaded.tasks;
-
-    // One bounded read over the org's segments, grouped per task — beats a
-    // per-task index query for every card.
+  handler: async (ctx): Promise<TaskPlanStats[]> => {
+    const { orgId } = await getAuthContext(ctx);
     const segments = await ctx.db
       .query("planSegments")
       .withIndex("by_orgId_startDate", (q) => q.eq("orgId", orgId))
@@ -307,91 +277,14 @@ export const taskPanel = query({
         `Task panel exceeded ${MAX_SEGMENTS_PER_RANGE} segments — switch to per-task reads.`,
       );
     }
-    const planByTask = new Map<string, { days: number; count: number }>();
+    const byTask = new Map<Id<"tasks">, TaskPlanStats>();
     for (const s of segments) {
-      const key = s.taskId.toString();
-      const agg = planByTask.get(key) ?? { days: 0, count: 0 };
-      agg.days += segmentSpanDays(s.startDate, s.endDate);
-      agg.count += 1;
-      planByTask.set(key, agg);
+      const stats = byTask.get(s.taskId) ?? { taskId: s.taskId, plannedDays: 0, segmentCount: 0 };
+      stats.plannedDays += segmentSpanDays(s.startDate, s.endDate);
+      stats.segmentCount += 1;
+      byTask.set(s.taskId, stats);
     }
-
-    const projectIds = [
-      ...new Set(
-        tasks
-          .map((t) => t.projectId)
-          .filter((id): id is Id<"projects"> => Boolean(id))
-          .map((id) => id.toString()),
-      ),
-    ];
-    const projects = await Promise.all(
-      projectIds.map((id) => ctx.db.get(id as Id<"projects">)),
-    );
-    const projectMap = new Map<string, Doc<"projects">>();
-    for (const p of projects) {
-      if (p && p.orgId === orgId) projectMap.set(p._id.toString(), p);
-    }
-
-    const clientIds = [
-      ...new Set(
-        [...projectMap.values()].map((p) => p.clientId.toString()),
-      ),
-    ];
-    const clients = await Promise.all(
-      clientIds.map((id) => ctx.db.get(id as Id<"clients">)),
-    );
-    const clientMap = new Map<string, Doc<"clients">>();
-    for (const c of clients) {
-      if (c && c.orgId === orgId) clientMap.set(c._id.toString(), c);
-    }
-
-    const categoryIds = [
-      ...new Set(
-        tasks
-          .map((t) => t.workCategoryId)
-          .filter((id): id is Id<"workCategories"> => Boolean(id))
-          .map((id) => id.toString()),
-      ),
-    ];
-    const categories = await Promise.all(
-      categoryIds.map((id) => ctx.db.get(id as Id<"workCategories">)),
-    );
-    const categoryMap = new Map<string, Doc<"workCategories">>();
-    for (const c of categories) {
-      if (c && c.orgId === orgId) categoryMap.set(c._id.toString(), c);
-    }
-
-    return tasks
-      .map((t) => {
-        const project = t.projectId
-          ? projectMap.get(t.projectId.toString()) ?? null
-          : null;
-        const client = project
-          ? clientMap.get(project.clientId.toString()) ?? null
-          : null;
-        const category = t.workCategoryId
-          ? categoryMap.get(t.workCategoryId.toString()) ?? null
-          : null;
-        const plan = planByTask.get(t._id.toString());
-        return {
-          _id: t._id,
-          title: t.title,
-          projectId: project?._id ?? null,
-          projectName: project?.name ?? null,
-          clientId: client?._id ?? null,
-          clientName: client?.name ?? null,
-          categoryId: category?._id ?? null,
-          categoryName: category?.name ?? null,
-          categoryColor: category?.color ?? null,
-          statusType: t.statusType,
-          dueDate: t.dueDate ?? null,
-          estimate: t.estimate ?? null,
-          plannedDays: plan?.days ?? 0,
-          segmentCount: plan?.count ?? 0,
-          createdAt: t.createdAt,
-        };
-      })
-      .sort((a, b) => b.createdAt - a.createdAt);
+    return [...byTask.values()];
   },
 });
 
@@ -411,16 +304,13 @@ export type TaskPlanSegment = {
 
 export type TaskPlanData = {
   segments: TaskPlanSegment[];
-  /** True when the caller can still add today (task active + no covering segment of mine). */
-  canAddToToday: boolean;
 };
 
 /**
  * All sittings of one task, for the task drawer's "Plan" section. Readable
  * by every org member (the plan is a shared board); sorted by start date
  * with the same part ranking the grid badges use. Each segment carries
- * `isMine` (member self-service gating) and `coversToday` (today highlight);
- * `canAddToToday` drives the Add-to-Today affordance.
+ * `isMine` (member self-service gating) and `coversToday` (today highlight).
  */
 export const taskSegments = query({
   args: { taskId: v.id("tasks") },
@@ -470,10 +360,7 @@ export const taskSegments = query({
           a.endDate.localeCompare(b.endDate),
       );
 
-    const canAddToToday =
-      !task.archivedAt && !enriched.some((s) => s.isMine && s.coversToday);
-
-    return { segments: enriched, canAddToToday };
+    return { segments: enriched };
   },
 });
 
@@ -637,59 +524,6 @@ export const removeSegment = mutation({
   },
 });
 
-// ─── Today (the sun) ──────────────────────────────────────────────────────────
-// The sun gesture, Today ordering and carried-over handling live in
-// `tasks/today.ts` (tasks refactor §5.6). `createTodayTask` stays here as one
-// of the task create paths.
-
-/**
- * Inline-add inside the Today group: "I'll also do this today" as ONE
- * atomic gesture — the task is created with the org's default started
- * status ("In progress"), assigned to the creator, and planned for today
- * (one-day segment). Member-callable; self-scoped by construction.
- *
- * Mirrors createTaskWithSegment's task defaults otherwise (billable,
- * appended manual sort key, task_created activity entry — the segment
- * itself is never logged).
- */
-export const createTodayTask = mutation({
-  args: {
-    title: v.string(),
-    projectId: v.optional(v.id("projects")),
-  },
-  handler: async (ctx, args) => {
-    const auth = await getAuthContext(ctx);
-    const { orgId, userId } = auth;
-
-    const orgSettings = await getOrgSettings(ctx, orgId);
-    const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
-    const today = getDateInTimezone(Date.now(), timezone);
-
-    // Typing a task into today's plan means I'm on it → the org's default
-    // started status (an org without one falls back to unstarted).
-    const taskId = await createTask(ctx, auth, {
-      title: args.title,
-      projectId: args.projectId,
-      assigneeIds: [userId],
-      defaultCategories: ["started", "unstarted"],
-    });
-    const now = Date.now();
-
-    const segmentId = await ctx.db.insert("planSegments", {
-      orgId,
-      taskId,
-      userId,
-      startDate: today,
-      endDate: today,
-      createdAt: now,
-      updatedAt: now,
-      createdBy: userId,
-    });
-
-    return { taskId, segmentId };
-  },
-});
-
 // ─── Dev seed ─────────────────────────────────────────────────────────────────
 
 function ymdFromUtcMs(t: number): string {
@@ -801,31 +635,5 @@ export const seedDemo = internalMutation({
     }
 
     return { orgId, wiped, created: wanted.length, weekStart: monday };
-  },
-});
-
-// ─── LEGACY SHIMS — remove in tasks-refactor slice 7 (§10) ─────────────────
-// Slice 5 moved the sun to `tasks/today.ts`. These two keep the old call
-// shapes alive only for the owner's uncommitted dashboard board WIP
-// (`components/dashboard/my-work-board`). Both run the slice 5 rules (D9
-// targeting, access.ts).
-
-/** Legacy shape of `api.tasks.today.addToToday`. */
-export const addToToday = mutation({
-  args: { taskId: v.id("tasks") },
-  handler: async (ctx, args) => {
-    await addTaskToToday(ctx, args.taskId, undefined);
-  },
-});
-
-/** Legacy neighbour-key reorder of the caller's Today (`tasks.today.reorderToday` is the new API). */
-export const reorderTodayTask = mutation({
-  args: {
-    taskId: v.id("tasks"),
-    beforeKey: v.optional(v.string()),
-    afterKey: v.optional(v.string()),
-  },
-  handler: async (ctx, args) => {
-    await moveTodayTaskBetween(ctx, args.taskId, args.beforeKey, args.afterKey);
   },
 });

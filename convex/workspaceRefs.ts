@@ -49,8 +49,7 @@ export const get = query({
     // Statuses: category order, then position; the icon is derived from the
     // index among the category's active statuses (§4.1).
     const withCategory = statusDocs.map((s) => ({ doc: s, category: categoryOfStatus(s) }));
-    const position = (s: (typeof withCategory)[number]) =>
-      s.doc.position ?? String(s.doc.sortOrder).padStart(6, "0");
+    const position = (s: (typeof withCategory)[number]) => s.doc.position ?? "";
     withCategory.sort(
       (a, b) =>
         TASK_CATEGORIES.indexOf(a.category) - TASK_CATEGORIES.indexOf(b.category) ||

@@ -69,7 +69,7 @@ function drawPreviewSeg(
     taskTitle: "New task",
     projectName: subtitle, // the bar's second line (mockup `r2`)
     categoryColor: null, // gray — the created task has no category
-    statusType: "backlog",
+    statusCategory: "backlog",
     partIndex: 1,
     partCount: 1,
     // Newest possible priority: the sketch packs below every real bar.
@@ -91,7 +91,7 @@ function panelTaskToPreviewSeg(
     taskTitle: task.title,
     projectName: task.projectName,
     categoryColor: task.categoryColor,
-    statusType: task.statusType,
+    statusCategory: task.statusCategory,
     partIndex: 1,
     partCount: 1, // no part badge on the drop ghost (mockup)
     // Newest possible priority: the drop ghost packs below every real bar.

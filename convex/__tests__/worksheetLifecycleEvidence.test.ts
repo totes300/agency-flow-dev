@@ -8,6 +8,7 @@ import {
   buildTaskRows,
   groupWorksheetRowsByTaskId,
 } from "../worksheetsHelpers";
+import { statusRow, taskRow } from "./helpers/taskFixtures";
 
 const modules = (
   import.meta as ImportMeta & {
@@ -34,16 +35,15 @@ async function seed(
       createdAt: now,
       updatedAt: now,
     });
-    const statusId = await ctx.db.insert("statuses", {
+    const statusId = await ctx.db.insert("statuses", statusRow({
       orgId: ORG_ID,
       name: "Done",
-      type: "done",
+      category: "completed",
       color: "green",
-      sortOrder: 0,
       createdAt: now,
       updatedAt: now,
       createdBy: userId,
-    });
+    }));
     const clientId = await ctx.db.insert("clients", {
       orgId: ORG_ID,
       name: "Lifecycle Client",
@@ -62,18 +62,18 @@ async function seed(
       updatedAt: now,
       createdBy: userId,
     });
-    const taskId = await ctx.db.insert("tasks", {
+    const taskId = await ctx.db.insert("tasks", taskRow({
       orgId: ORG_ID,
       title: "Lifecycle task",
       statusId,
-      statusType: "done",
+      statusCategory: "completed",
       projectId,
       assigneeIds: [userId],
       billable: true,
       createdAt: now,
       updatedAt: now,
       createdBy: userId,
-    });
+    }));
 
     // Two work categories: a task's in-scope entries can now carry different
     // snapshot categories (entry-level billing category feature), so the

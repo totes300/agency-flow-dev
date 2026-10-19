@@ -33,7 +33,6 @@ import { onSubtaskChange } from "./derived";
 import {
   DEFAULT_ORG_TASK_KEY,
   PRIORITY,
-  TASK_CATEGORIES,
   categoryOfStatus,
   completedAtAfterTransition,
   deriveIdentifierKey,
@@ -72,10 +71,6 @@ import {
  *   every change); counters via `derived.ts`.
  * - T8 one-level sub-tasks that share the parent's project/client; archive
  *   and restore cascade from the parent.
- *
- * WIDEN phase (§12): the legacy fields `statusType`, `manualSortKey`,
- * `sortOrder`, `estimate` and the `assigneeIds` cache stay populated so the
- * old UI keeps working until slice 7.
  */
 
 const TITLE_MAX_LENGTH = 500;
@@ -145,6 +140,7 @@ function normalizeEstimate(raw: number | null | undefined): number | undefined {
 
 export type ResolvedStatus = { status: Doc<"statuses">; category: TaskCategory };
 
+/** A status a task may move into: the org's, and not archived (archived statuses stay only on tasks that had them). */
 async function loadStatus(
   ctx: MutationCtx,
   orgId: string,
@@ -152,46 +148,39 @@ async function loadStatus(
 ): Promise<ResolvedStatus> {
   const status = await ctx.db.get(statusId);
   if (!status || status.orgId !== orgId) throw new ConvexError("Status not found");
+  if (status.archivedAt) throw new ConvexError(`The status "${status.name}" is archived`);
   return { status, category: categoryOfStatus(status) };
 }
 
 /**
- * The default status of the first of `categories` the org has a status in:
- * the one flagged `isDefault`, else the first by position, else by legacy
- * sortOrder. Archived statuses are skipped.
+ * The default status of the first of `categories` the org has an active
+ * status in: the one flagged `isDefault`, else the first by position.
  */
 export async function defaultStatusFor(
   ctx: MutationCtx,
   orgId: string,
   categories: readonly TaskCategory[],
 ): Promise<ResolvedStatus> {
-  const statuses = await ctx.db
-    .query("statuses")
-    .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
-    .collect();
   for (const category of categories) {
-    const candidates = statuses
-      .filter((s) => !s.archivedAt && categoryOfStatus(s) === category)
-      .sort(
-        (a, b) =>
-          Number(b.isDefault === true) - Number(a.isDefault === true) ||
-          (a.position ?? "￿").localeCompare(b.position ?? "￿") ||
-          a.sortOrder - b.sortOrder,
-      );
-    if (candidates[0]) return { status: candidates[0], category };
+    const inCategory = await ctx.db
+      .query("statuses")
+      .withIndex("by_orgId_category_position", (q) => q.eq("orgId", orgId).eq("category", category))
+      .take(100);
+    const active = inCategory.filter((s) => !s.archivedAt);
+    const status = active.find((s) => s.isDefault === true) ?? active[0];
+    if (status) return { status, category };
   }
   throw new ConvexError(`No ${categories[0]} status found for org`);
 }
 
-/** The status fields of a task entering `next` (T3, T4, legacy statusType). */
+/** The status fields of a task entering `next` (T3, T4). */
 function statusFields(
   next: ResolvedStatus,
   prev: { statusCategory?: TaskCategory; completedAt?: number } | undefined,
   now: number,
-): Pick<TaskDocFields, "statusId" | "statusType" | "statusCategory" | "completedAt"> {
+): Pick<TaskDocFields, "statusId" | "statusCategory" | "completedAt"> {
   return {
     statusId: next.status._id,
-    statusType: next.status.type,
     statusCategory: next.category,
     completedAt: completedAtAfterTransition({
       prevCategory: prev?.statusCategory,
@@ -322,21 +311,24 @@ async function maxNumberInScope(ctx: MutationCtx, orgId: string, scope: NumberSc
 }
 
 /**
- * Allocates the next number in a scope and bumps its counter. A project whose
- * code is not a valid key (legacy `PRJ-042`, until reseeded or renamed) still
- * numbers its tasks but gives them no identifier.
+ * Allocates the next number in a scope and bumps its counter. Every task has
+ * an identifier (T5): project codes are validated on create/rename, and the
+ * legacy `PRJ-042` style codes were recoded by the dev cleanup.
  */
 async function allocateNumber(
   ctx: MutationCtx,
   orgId: string,
   scope: NumberScope,
-): Promise<{ number: number; identifier: string | undefined }> {
-  let key: string | undefined;
+): Promise<{ number: number; identifier: string }> {
+  let key: string;
   let counter: number | undefined;
   let commit: (next: number) => Promise<void> = async () => {};
   if (scope.kind === "project") {
     const project = await loadProject(ctx, orgId, scope.projectId);
-    key = isValidIdentifierKey(project.code) ? project.code : undefined;
+    if (!isValidIdentifierKey(project.code)) {
+      throw new ConvexError(`The project code "${project.code}" can't number tasks. Rename it in the project's settings.`);
+    }
+    key = project.code;
     counter = project.nextTaskNumber;
     commit = async (next) => await ctx.db.patch(project._id, { nextTaskNumber: next });
   } else {
@@ -353,11 +345,9 @@ async function allocateNumber(
     }
   }
   let number = counter ?? (await maxNumberInScope(ctx, orgId, scope)) + 1;
-  if (key) {
-    while (await identifierTaken(ctx, orgId, formatIdentifier(key, number))) number++;
-  }
+  while (await identifierTaken(ctx, orgId, formatIdentifier(key, number))) number++;
   await commit(number + 1);
-  return { number, identifier: key ? formatIdentifier(key, number) : undefined };
+  return { number, identifier: formatIdentifier(key, number) };
 }
 
 /**
@@ -386,7 +376,7 @@ async function moveToProject(
     if (t.identifier && t.identifier !== identifier) {
       await addIdentifierAlias(ctx, task.orgId, t.identifier, t._id);
     }
-    if (identifier && identifier !== t.identifier) {
+    if (identifier !== t.identifier) {
       await logActivity(ctx, {
         taskId: t._id,
         orgId: task.orgId,
@@ -448,41 +438,25 @@ export async function rewriteProjectIdentifiers(
 
 // ─── Sort keys ───────────────────────────────────────────────────────────────
 
-/** A key after every existing `sortKey` / `manualSortKey` in the org (one global manual order). */
+/** A key after every existing `sortKey` in the org (one global manual order). */
 async function sortKeyAtEnd(ctx: MutationCtx, orgId: string): Promise<string> {
-  let max: string | null = null;
-  const consider = (key: string | undefined) => {
-    if (key !== undefined && (max === null || key > max)) max = key;
-  };
-  const lastManual = await ctx.db
+  const last = await ctx.db
     .query("tasks")
-    .withIndex("by_orgId_manualSortKey", (q) => q.eq("orgId", orgId))
+    .withIndex("by_orgId_sortKey", (q) => q.eq("orgId", orgId))
     .order("desc")
     .first();
-  consider(lastManual?.manualSortKey);
-  consider(lastManual?.sortKey);
-  for (const category of TASK_CATEGORIES) {
-    const last = await ctx.db
-      .query("tasks")
-      .withIndex("by_orgId_statusCategory_sortKey", (q) =>
-        q.eq("orgId", orgId).eq("statusCategory", category),
-      )
-      .order("desc")
-      .first();
-    consider(last?.sortKey);
-  }
-  return generateKeyBetween(max, null);
+  return generateKeyBetween(last?.sortKey ?? null, null);
 }
 
-/** A key right after `task` in manual order (between it and its next top-level neighbour). */
+/** A key right after `task` in manual order (between it and its next neighbour). */
 async function sortKeyAfter(ctx: MutationCtx, task: Doc<"tasks">): Promise<string> {
-  const key = task.sortKey ?? task.manualSortKey;
+  const key = task.sortKey;
   if (!key) return await sortKeyAtEnd(ctx, task.orgId);
   const next = await ctx.db
     .query("tasks")
-    .withIndex("by_orgId_manualSortKey", (q) => q.eq("orgId", task.orgId).gt("manualSortKey", key))
+    .withIndex("by_orgId_sortKey", (q) => q.eq("orgId", task.orgId).gt("sortKey", key))
     .first();
-  return generateKeyBetween(key, next?.manualSortKey ?? null);
+  return generateKeyBetween(key, next?.sortKey ?? null);
 }
 
 // ─── Edges (T6) ──────────────────────────────────────────────────────────────
@@ -681,11 +655,6 @@ export async function createTask(
     options.duplicatedFrom && !parent
       ? await sortKeyAfter(ctx, options.duplicatedFrom)
       : await sortKeyAtEnd(ctx, orgId);
-  let sortOrder: number | undefined;
-  if (parent) {
-    const siblings = await childrenOf(ctx, parent);
-    sortOrder = siblings.reduce((max, s) => Math.max(max, s.sortOrder ?? 0), -1) + 1;
-  }
 
   const taskId = await ctx.db.insert("tasks", {
     orgId,
@@ -699,14 +668,11 @@ export async function createTask(
     labelIds: labels.map((l) => l._id),
     workCategoryId,
     billable,
-    estimate: estimateMinutes,
     estimateMinutes,
     dueDate,
     startDate,
     priority: input.priority ?? PRIORITY.none,
     parentTaskId: parent?._id,
-    sortOrder,
-    manualSortKey: parent ? undefined : sortKey,
     sortKey,
     identifier,
     numberScope: scope,
@@ -772,6 +738,9 @@ export async function createTask(
 /** Duplicate = a create with the original's properties, placed right after it. */
 export async function duplicateTask(ctx: MutationCtx, access: TaskAccess): Promise<Id<"tasks">> {
   const { task } = access;
+  // An archived status can't be set on a new task: the copy gets its category's default.
+  const status = await ctx.db.get(task.statusId);
+  const keepStatus = status !== null && !status.archivedAt;
   const activeLabelIds: Id<"labels">[] = [];
   for (const labelId of task.labelIds ?? []) {
     const label = await ctx.db.get(labelId);
@@ -784,13 +753,14 @@ export async function duplicateTask(ctx: MutationCtx, access: TaskAccess): Promi
     {
       title: copyTitle.length > TITLE_MAX_LENGTH ? task.title : copyTitle,
       description: task.description,
-      statusId: task.statusId,
+      statusId: keepStatus ? task.statusId : undefined,
+      defaultCategories: task.statusCategory ? [task.statusCategory] : undefined,
       projectId: task.parentTaskId ? undefined : task.projectId,
       parentTaskId: task.parentTaskId,
       assigneeIds: task.assigneeIds,
       workCategoryId: task.workCategoryId,
       billable: task.billable,
-      estimateMinutes: task.estimateMinutes ?? task.estimate,
+      estimateMinutes: task.estimateMinutes,
       priority: task.priority,
       labelIds: activeLabelIds,
     },
@@ -899,10 +869,9 @@ export async function updateTask(
 
   if (patch.estimateMinutes !== undefined) {
     const estimate = normalizeEstimate(patch.estimateMinutes);
-    const current = task.estimateMinutes ?? task.estimate;
+    const current = task.estimateMinutes;
     if (estimate !== current) {
       changed.add("estimate");
-      set.estimate = estimate;
       set.estimateMinutes = estimate;
       events.push({ type: "estimate_changed", metadata: { from: current ?? null, to: estimate ?? null } });
     }
@@ -1231,16 +1200,13 @@ export async function reorderTask(
   neighbours: { beforeKey?: string; afterKey?: string },
 ): Promise<void> {
   const key = generateKeyBetween(neighbours.beforeKey ?? null, neighbours.afterKey ?? null);
-  await ctx.db.patch(access.task._id, {
-    sortKey: key,
-    ...(access.task.parentTaskId ? {} : { manualSortKey: key }),
-  });
+  await ctx.db.patch(access.task._id, { sortKey: key });
 }
 
 /**
  * Reorders a parent's sub-tasks: the siblings' existing sort keys are
  * permuted into the new order (they stay where they were in the global
- * space); legacy `sortOrder` becomes the index.
+ * space).
  */
 export async function reorderSubtasks(
   ctx: MutationCtx,
@@ -1268,51 +1234,17 @@ export async function reorderSubtasks(
   }
   const now = Date.now();
   for (const [i, sub] of subs.entries()) {
-    await ctx.db.patch(sub._id, { sortOrder: i, sortKey: keys[i], updatedAt: now });
+    await ctx.db.patch(sub._id, { sortKey: keys[i], updatedAt: now });
   }
 }
 
-// ─── Maintenance (statuses settings, migrations, seeds) ─────────────────────
+// ─── Maintenance (seeds, dev cleanup) ────────────────────────────────────────
 
 /**
- * A status's legacy `type` changed without changing its category: the
- * legacy `statusType` cache on its tasks follows. (A category change on a
- * status in use is rejected by statuses.update, §4.1.)
+ * Seeds only: inserts a task row as given; the reseed then computes and
+ * writes the model fields (identifier, counters) and the edges.
  */
-export async function syncLegacyStatusType(ctx: MutationCtx, status: Doc<"statuses">): Promise<number> {
-  const tasks = await ctx.db
-    .query("tasks")
-    .withIndex("by_orgId_statusId", (q) => q.eq("orgId", status.orgId).eq("statusId", status._id))
-    .collect();
-  const now = Date.now();
-  for (const task of tasks) await ctx.db.patch(task._id, { statusType: status.type, updatedAt: now });
-  return tasks.length;
-}
-
-/**
- * Re-statuses a task outside any user action (status retirement scripts):
- * no access check, no activity row; T3/T4 and the parent counters hold.
- */
-export async function setStatusUnchecked(
-  ctx: MutationCtx,
-  task: Doc<"tasks">,
-  status: Doc<"statuses">,
-): Promise<void> {
-  if (status.orgId !== task.orgId) throw new ConvexError("Status not found");
-  const now = Date.now();
-  const prevCategory = await currentCategory(ctx, task);
-  await ctx.db.patch(task._id, {
-    ...statusFields({ status, category: categoryOfStatus(status) }, { statusCategory: prevCategory, completedAt: task.completedAt }, now),
-    updatedAt: now,
-  });
-  if (task.parentTaskId) await onSubtaskChange(ctx, task.parentTaskId);
-}
-
-/**
- * Seeds only: inserts a task with legacy-shaped fields; the reseed then
- * computes and writes the model fields (identifier, category, counters).
- */
-export async function insertLegacyTaskForSeed(ctx: MutationCtx, doc: TaskDocFields): Promise<Id<"tasks">> {
+export async function insertTaskForSeed(ctx: MutationCtx, doc: TaskDocFields): Promise<Id<"tasks">> {
   return await ctx.db.insert("tasks", doc);
 }
 
@@ -1326,4 +1258,31 @@ export async function patchTaskForSeed(
   fields: TaskPatchFields,
 ): Promise<void> {
   await ctx.db.patch(taskId, fields);
+}
+
+/**
+ * Dev cleanup only (`devCleanupTasks:stripLegacy`, slice 7b): a number +
+ * identifier for a task row that predates identifiers, allocated like a
+ * create (counter bumped, aliases skipped).
+ */
+export async function allocateIdentifierForCleanup(
+  ctx: MutationCtx,
+  orgId: string,
+  projectId: Id<"projects"> | undefined,
+): Promise<{ numberScope: NumberScope; number: number; identifier: string }> {
+  const numberScope = numberScopeFor(projectId);
+  return { numberScope, ...(await allocateNumber(ctx, orgId, numberScope)) };
+}
+
+/**
+ * Dev cleanup only: rewrites a task row to exactly `doc` (dropping the
+ * pre-refactor fields the narrowed schema no longer has). The caller keeps
+ * T3–T6 (category from the status, counters recomputed, edges synced).
+ */
+export async function replaceTaskForCleanup(
+  ctx: MutationCtx,
+  taskId: Id<"tasks">,
+  doc: TaskDocFields,
+): Promise<void> {
+  await ctx.db.replace(taskId, doc);
 }

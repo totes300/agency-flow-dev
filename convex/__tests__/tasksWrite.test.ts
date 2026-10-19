@@ -22,6 +22,7 @@ import {
   isValidIdentifierKey,
   type TaskCategory,
 } from "../tasks/model";
+import { statusRow } from "./helpers/taskFixtures";
 import { recomputeTaskCounters } from "../tasks/derived";
 
 const modules = (
@@ -92,7 +93,7 @@ async function setup(t: T): Promise<Fixture> {
     for (const [orgId, createdBy] of [[ORG, admin], [OTHER, other]] as const) {
       for (const [i, s] of DEFAULT_STATUS_SEED.entries()) {
         const id = await ctx.db.insert("statuses", {
-          orgId, name: s.name, color: s.color, type: s.legacyType, sortOrder: i,
+          orgId, name: s.name, color: s.color,
           category: s.category, position: `a${i}`, isDefault: s.isDefault,
           createdAt: now, updatedAt: now, createdBy,
         });
@@ -169,7 +170,6 @@ async function expectTaskInvariants(t: T, id: Id<"tasks">) {
     counters: await recomputeTaskCounters(ctx, task),
   }));
   expect(task.statusCategory).toBe(categoryOfStatus(status));
-  expect(task.statusType).toBe(status.type);
   expect(task.completedAt !== undefined).toBe(isClosedCategory(task.statusCategory!));
   const edges = await edgesOf(t, id);
   expect(sorted(edges.assignees)).toEqual(sorted(task.assigneeIds));
@@ -224,10 +224,8 @@ describe("create paths (all five go through write.ts)", () => {
       numberScope: { kind: "project", projectId: f.arlo },
       clientId: f.arloClient,
       statusId: f.status.Inbox,
-      statusType: "backlog",
       statusCategory: "backlog",
       priority: 2,
-      estimate: 90,
       estimateMinutes: 90,
       assigneeIds: [f.alice],
       labelIds: [f.bug],
@@ -237,7 +235,6 @@ describe("create paths (all five go through write.ts)", () => {
       subtaskDoneCount: 0,
       lastActivity: { kind: "task_created", actorId: f.admin },
     });
-    expect(first.sortKey).toBe(first.manualSortKey);
     expect(first.completedAt).toBeUndefined();
     expect((await getTask(t, a2)).identifier).toBe("ARLO-2");
     expect((await getTask(t, a2)).sortKey! > first.sortKey!).toBe(true);
@@ -262,13 +259,12 @@ describe("create paths (all five go through write.ts)", () => {
     expect(sorted((await edgesOf(t, shared)).assignees)).toEqual(sorted([f.alice, f.bob]));
   });
 
-  it("a project whose code is not a valid key numbers tasks without an identifier", async () => {
+  it("a project whose code is not a valid key can't number tasks (every task has an identifier, T5)", async () => {
     const t = createT();
     const f = await setup(t);
-    const id = await as(t, "admin").mutation(api.tasks.create, { title: "Legacy", projectId: f.legacy });
-    const task = await getTask(t, id);
-    expect(task.number).toBe(1);
-    expect(task.identifier).toBeUndefined();
+    await expect(
+      as(t, "admin").mutation(api.tasks.create, { title: "Legacy", projectId: f.legacy }),
+    ).rejects.toThrow(/can't number tasks/);
   });
 
   it("createSubtask inherits project, client, assignees and category; one level only (T8)", async () => {
@@ -286,7 +282,6 @@ describe("create paths (all five go through write.ts)", () => {
       identifier: "ARLO-2",
       assigneeIds: [f.alice],
       workCategoryId: f.design,
-      sortOrder: 0,
     });
     expect(await getTask(t, parent)).toMatchObject({ subtaskCount: 1, subtaskDoneCount: 0 });
     expect(await activityTypes(t, parent)).toContain("subtask_created");
@@ -314,7 +309,7 @@ describe("create paths (all five go through write.ts)", () => {
     await expectTaskInvariants(t, copy);
   });
 
-  it("planner.createTaskWithSegment and planner.createTodayTask use the same path", async () => {
+  it("planner.createTaskWithSegment uses the same path", async () => {
     const t = createT();
     const f = await setup(t);
     const drawn = await as(t, "admin").mutation(api.planner.createTaskWithSegment, {
@@ -323,15 +318,7 @@ describe("create paths (all five go through write.ts)", () => {
     expect(await getTask(t, drawn.taskId)).toMatchObject({
       identifier: "PRAG-1", statusCategory: "backlog", assigneeIds: [],
     });
-    const today = await as(t, "assigned").mutation(api.planner.createTodayTask, { title: "Today" });
-    expect(await getTask(t, today.taskId)).toMatchObject({
-      identifier: "KONV-1",
-      statusId: f.status["In progress"],
-      statusCategory: "started",
-      assigneeIds: [f.alice],
-    });
     await expectTaskInvariants(t, drawn.taskId);
-    await expectTaskInvariants(t, today.taskId);
   });
 });
 
@@ -343,12 +330,9 @@ describe("T3/T4: status category and completedAt across transitions", () => {
     const f = await setup(t);
     const admin = as(t, "admin");
     const id = await admin.mutation(api.tasks.create, { title: "Walker", projectId: f.arlo });
-    // A pre-slice-0 status without a category: resolved by name/legacy type.
+    // A second, non-default started status (an org-defined one).
     const waiting = await t.run(async (ctx) =>
-      await ctx.db.insert("statuses", {
-        orgId: ORG, name: "Waiting", color: "gray", type: "review", sortOrder: 99,
-        createdAt: Date.now(), updatedAt: Date.now(), createdBy: f.admin,
-      }),
+      await ctx.db.insert("statuses", statusRow({ orgId: ORG, createdBy: f.admin, name: "Waiting", category: "started" })),
     );
     const statusIds = [...Object.values(f.status), waiting];
     const r = rng(7);
@@ -828,11 +812,6 @@ describe("T1: access matrix for every rewired public mutation", () => {
           title: "Drawn", projectId: x.f.arlo, userId: self, startDate: "2026-10-19", endDate: "2026-10-19",
         });
       },
-    },
-    {
-      name: "planner.createTodayTask in this org's project",
-      expected: { admin: "ok", assigned: "ok", unassigned: "ok", otherOrg: "Project not found" },
-      run: (t, c, x) => as(t, c).mutation(api.planner.createTodayTask, { title: "Today", projectId: x.f.arlo }),
     },
   ];
 

@@ -19,7 +19,8 @@ import {
 } from "./_generated/server";
 import { components, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { getAuthContext } from "./lib/auth";
+import { getAuthContext, type AuthContext } from "./lib/auth";
+import { loadTaskForReadOrNull } from "./tasks/access";
 import { requireOwnedThread, UNTITLED_THREAD } from "./agentThreads";
 import { getToolsForAgent } from "./lib/agentToolRegistry";
 import {
@@ -187,7 +188,7 @@ export const beginRun = internalMutation({
     // message carried neither, so a plain run's prompt is unchanged.
     const resolvedMentions = await resolveMentions(
       ctx,
-      auth.orgId,
+      auth,
       args.mentions ?? [],
     );
     const composerContext = buildComposerContext({
@@ -292,16 +293,19 @@ async function loadAgentSkills(
  * Re-resolve composer @-mentions server-side (slice 07). The client sends
  * {type,id,label}; we trust NEITHER the id (could point cross-tenant) NOR the
  * label (could be stale) and re-read each record org-scoped, dropping anything
- * invalid. Users are validated against org membership (they carry no orgId).
+ * invalid. Users are validated against org membership (they carry no orgId);
+ * tasks go through `tasks/access.ts` (T1: a member only gets tasks they can
+ * read) and are labelled with their identifier.
  * The result feeds the authoritative-context block, so the model always uses
  * verified ids and canonical names — never a name the client typed.
  */
 async function resolveMentions(
   ctx: MutationCtx,
-  orgId: string,
+  auth: AuthContext,
   refs: { type: MentionType; id: string; label: string }[],
 ): Promise<MentionRef[]> {
   if (refs.length === 0) return [];
+  const { orgId } = auth;
 
   // Org membership set — loaded once, only when a user is mentioned.
   let memberUserIds: Set<string> | null = null;
@@ -336,15 +340,19 @@ async function resolveMentions(
       continue;
     }
 
+    if (ref.type === "task") {
+      const access = await loadTaskForReadOrNull(ctx, id as Id<"tasks">, auth);
+      if (!access || access.task.archivedAt) continue;
+      const { identifier, title } = access.task;
+      resolved.push({ type: "task", id: ref.id, label: identifier ? `${identifier} ${title}` : title });
+      continue;
+    }
+
     const doc = await ctx.db.get(id);
     // Every domain table here carries orgId + a name/title — verify tenancy.
     if (!doc || (doc as { orgId?: string }).orgId !== orgId) continue;
     if ((doc as { archivedAt?: number }).archivedAt) continue;
-    const label =
-      ref.type === "task"
-        ? (doc as { title: string }).title
-        : (doc as { name: string }).name;
-    resolved.push({ type: ref.type, id: ref.id, label });
+    resolved.push({ type: ref.type, id: ref.id, label: (doc as { name: string }).name });
   }
   return resolved;
 }

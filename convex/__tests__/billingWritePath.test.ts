@@ -14,6 +14,7 @@ import schema from "../schema";
 import { api } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
 import { reconcileOrg } from "../lib/billing/reconcile";
+import { statusRow, taskRow } from "./helpers/taskFixtures";
 
 const modules = (
   import.meta as ImportMeta & {
@@ -78,16 +79,15 @@ async function world(
       updatedAt: now,
       createdBy: userId,
     });
-    const statusId = await ctx.db.insert("statuses", {
+    const statusId = await ctx.db.insert("statuses", statusRow({
       orgId: ORG_ID,
       name: "Todo",
-      type: "backlog",
+      category: "backlog",
       color: "#000",
-      sortOrder: 0,
       createdAt: now,
       updatedAt: now,
       createdBy: userId,
-    });
+    }));
     const clientId = await ctx.db.insert("clients", {
       orgId: ORG_ID,
       name: "Acme",
@@ -107,18 +107,18 @@ async function world(
       createdBy: userId,
       ...project,
     });
-    const taskId = await ctx.db.insert("tasks", {
+    const taskId = await ctx.db.insert("tasks", taskRow({
       orgId: ORG_ID,
       title: "Support",
       statusId,
-      statusType: "backlog",
+      statusCategory: "backlog",
       projectId,
       assigneeIds: [userId],
       billable: true,
       createdAt: now,
       updatedAt: now,
       createdBy: userId,
-    });
+    }));
     return { userId, projectId, taskId };
   });
   return { t, ...ids };

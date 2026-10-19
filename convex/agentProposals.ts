@@ -9,6 +9,7 @@ import { api } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { getAuthContext, type AuthContext } from "./lib/auth";
 import { proposalPayloadValidator } from "./lib/proposalValidators";
+import { resolveTaskRef } from "./tasks/agent";
 import {
   mergeEditedPayload,
   plainTextToTiptapDoc,
@@ -199,9 +200,11 @@ async function requireOwnProposal(
  *
  * Payloads are structurally validated here with the pure validator; an
  * invalid draft throws a model-actionable error (the model corrects and
- * retries). `archiveTask` additionally snapshots the task's title so the
- * card stays renderable even after the task is deleted — that IS the
- * stale case the engine must display.
+ * retries). `archiveTask` additionally resolves the task reference (an id,
+ * or an identifier like `ARLO-21` — the tool resolves it with the running
+ * user's access first) to the real id in the thread's org and snapshots the
+ * task's title so the card stays renderable even after the task is deleted
+ * — that IS the stale case the engine must display.
  */
 export const createFromTool = internalMutation({
   args: {
@@ -229,15 +232,15 @@ export const createFromTool = internalMutation({
       }
       let payload = validated.payload;
       if (payload.kind === "archiveTask") {
-        const taskId = ctx.db.normalizeId("tasks", payload.taskId);
+        const taskId = await resolveTaskRef(ctx, thread.orgId, payload.taskId);
         const task = taskId ? await ctx.db.get(taskId) : null;
         if (!task || task.orgId !== thread.orgId) {
           throw new Error(
-            `No task found with id ${payload.taskId}. Use an exact task id ` +
-              "from the conversation context (e.g. an @-mentioned task).",
+            `No task found for ${payload.taskId}. Use the task's identifier ` +
+              "(e.g. ARLO-21) or an @-mentioned task.",
           );
         }
-        payload = { ...payload, taskTitle: task.title };
+        payload = { ...payload, taskId: task._id, taskTitle: task.title };
       }
       const id = await ctx.db.insert("agentProposals", {
         orgId: thread.orgId,

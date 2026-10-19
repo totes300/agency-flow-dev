@@ -56,6 +56,8 @@ type FacetContext = {
   index: RefIndex
   me: string
   onChange: (chips: ListFilter[]) => void
+  /** Fields the surface's context makes redundant (a project's own tab: project, client). */
+  hiddenFields?: ReadonlySet<FilterField>
 }
 
 const FIELD_ICON: Record<FilterField, ReactNode> = {
@@ -155,7 +157,13 @@ function FacetValueList({
 }
 
 /** Step 1: the property list. */
-function FieldList({ onPick }: { onPick: (field: FilterField) => void }) {
+function FieldList({
+  onPick,
+  hidden,
+}: {
+  onPick: (field: FilterField) => void
+  hidden?: ReadonlySet<FilterField>
+}) {
   return (
     <Command>
       <div className="flex items-center gap-1 pr-2">
@@ -167,7 +175,7 @@ function FieldList({ onPick }: { onPick: (field: FilterField) => void }) {
       <CommandList>
         <CommandEmpty>No matches</CommandEmpty>
         <CommandGroup>
-          {FILTER_FIELDS.map((f) => (
+          {FILTER_FIELDS.filter((f) => !hidden?.has(f.key)).map((f) => (
             <CommandItem key={f.key} value={f.label} onSelect={() => onPick(f.key)}>
               {FIELD_ICON[f.key]}
               <span>{f.label}</span>
@@ -188,7 +196,7 @@ function AddFilterBody({ ctx }: { ctx: FacetContext }) {
   return field ? (
     <FacetValueList field={field} ctx={ctx} onBack={() => setField(null)} />
   ) : (
-    <FieldList onPick={setField} />
+    <FieldList onPick={setField} hidden={ctx.hiddenFields} />
   )
 }
 

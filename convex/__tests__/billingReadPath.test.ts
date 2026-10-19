@@ -12,6 +12,7 @@ import { convexTest } from "convex-test";
 import schema from "../schema";
 import { api, internal } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
+import { statusRow, taskRow } from "./helpers/taskFixtures";
 
 const modules = (
   import.meta as ImportMeta & {
@@ -50,9 +51,9 @@ async function world(project: Record<string, unknown>, roundingMinutes = 1): Pro
       updatedAt: now,
       createdBy: userId,
     });
-    const statusId = await ctx.db.insert("statuses", {
-      orgId: ORG_ID, name: "Todo", type: "backlog", color: "#000", sortOrder: 0, createdAt: now, updatedAt: now, createdBy: userId,
-    });
+    const statusId = await ctx.db.insert("statuses", statusRow({
+      orgId: ORG_ID, name: "Todo", category: "backlog", color: "#000", createdAt: now, updatedAt: now, createdBy: userId,
+    }));
     const clientId = await ctx.db.insert("clients", { orgId: ORG_ID, name: "Acme", currency: "EUR", createdAt: now, updatedAt: now, createdBy: userId });
     const projectId = await ctx.db.insert("projects", {
       orgId: ORG_ID,
@@ -66,10 +67,10 @@ async function world(project: Record<string, unknown>, roundingMinutes = 1): Pro
       createdBy: userId,
       ...project,
     } as never);
-    const taskId = await ctx.db.insert("tasks", {
-      orgId: ORG_ID, title: "Support", statusId, statusType: "backlog", projectId, assigneeIds: [userId], billable: true,
+    const taskId = await ctx.db.insert("tasks", taskRow({
+      orgId: ORG_ID, title: "Support", statusId, statusCategory: "backlog", projectId, assigneeIds: [userId], billable: true,
       createdAt: now, updatedAt: now, createdBy: userId,
-    });
+    }));
     return { userId, projectId, taskId };
   });
   return { t, ...ids };

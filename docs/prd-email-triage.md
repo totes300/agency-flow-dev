@@ -1449,7 +1449,7 @@ B1 phase prints. Started during milestone A (E4); blocks B1.
 |---|---|---|---|---|
 | A1 | Actor + background runs | done | (this commit) | actor on agentRuns, internal agentBackground.start, 8 tools on the actor path, single role source (orgMembers); reviewed |
 | A2 | Threads + jobs | done | (this commit) | A2a visibility + anchor, one access policy, proposal revisions, run queue, stale-run cron; A2b job registry (llm_step + agent_run), system agents, designated agent actor (E2), Claude-only model allowlist, stages from tool events; both reviewed |
-| A3 | Read layer | pending | | |
+| A3 | Read layer | done | (this commit) | getProjectRouting, getTaskComments, getTaskActivity, getTaskFiles, getTaskBundle on the actor path, reusing the UI access helpers; reseed for Copilot / Flow Assistant |
 | A4 | Proposal consolidation | pending | | |
 | A5 | Question block | pending | | |
 | A6 | Attachment contents | pending | | |

@@ -77,7 +77,7 @@ export function ToolCallBlock({
           />
         )}
         <span>
-          {toolLabel(toolName, phase)}
+          {toolLabel(toolName, phase, { input, output })}
           {phase === "running" && "…"}
         </span>
         {summary && (

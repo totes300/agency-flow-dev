@@ -262,6 +262,49 @@ describe("tool display", () => {
   });
 });
 
+describe("A3 read-tool display", () => {
+  it("names the task from the output, else an identifier-shaped input", () => {
+    const output = { found: true, task: { identifier: "PRG-12" }, comments: [{}, {}], omitted: 0 };
+    expect(toolLabel("getTaskComments", "done", { input: { task: "x" }, output })).toBe(
+      "Read comments on PRG-12",
+    );
+    expect(toolLabel("getTaskComments", "running", { input: { task: "prg-12" } })).toBe(
+      "Reading comments on PRG-12",
+    );
+    // A raw id is not shown; no call info keeps the bare verb.
+    expect(toolLabel("getTaskActivity", "running", { input: { task: "k57abc" } })).toBe("Reading activity");
+    expect(toolLabel("getTaskFiles", "done")).toBe("Read files");
+    expect(
+      toolLabel("getTaskBundle", "done", { output: { task: { identifier: "ARLO-3" } } }),
+    ).toBe("Read task digest for ARLO-3");
+    expect(
+      toolLabel("getProjectRouting", "done", { output: { project: { name: "Arlow site" } } }),
+    ).toBe("Read routing for Arlow site");
+  });
+
+  it("summarizes from the deterministic payload", () => {
+    expect(toolResultSummary("getTaskComments", { comments: [{}, {}], omitted: 5 })).toBe(
+      "2 comments · 5 older not shown",
+    );
+    expect(toolResultSummary("getTaskComments", { comments: [{}], omitted: 0 })).toBe("1 comment");
+    expect(toolResultSummary("getTaskActivity", { events: [{}], timeEntries: [{}, {}] })).toBe(
+      "1 event · 2 time entries",
+    );
+    expect(toolResultSummary("getTaskFiles", { files: [{}], links: [] })).toBe("1 file");
+    expect(toolResultSummary("getTaskFiles", { files: [], links: [{}] })).toBe("0 files · 1 link");
+    expect(
+      toolResultSummary("getTaskBundle", { comments: [{}], activity: [{}, {}], files: [] }),
+    ).toBe("1 comment · 2 events · 0 files");
+    expect(toolResultSummary("getProjectRouting", { defaultAssignees: [{}, {}] })).toBe(
+      "2 default assignees",
+    );
+    for (const name of ["getTaskComments", "getTaskActivity", "getTaskFiles", "getTaskBundle", "getProjectRouting"]) {
+      expect(toolResultSummary(name, { found: false, message: "x" }), name).toBe("not found");
+      expect(toolResultSummary(name, { rows: 1 }), name).toBeNull();
+    }
+  });
+});
+
 describe("thoughtLabel", () => {
   it("formats measured durations, rounding to whole seconds", () => {
     expect(thoughtLabel(4200)).toBe("Thought for 4s");

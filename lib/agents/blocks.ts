@@ -182,7 +182,46 @@ type ToolDisplay = {
   doneLabel: string;
   /** Deterministic result summary computed from the raw output. */
   summarize: (output: unknown) => string | null;
+  /**
+   * What the call was about, appended to the verb ("Read comments on
+   * ARLO-21"). Derived from the tool's own output (or an identifier-shaped
+   * input), never model prose; absent → the bare verb.
+   */
+  target?: { join: string; of: (input: unknown, output: unknown) => string | null };
 };
+
+const IDENTIFIER_SHAPE = /^[A-Za-z][A-Za-z0-9]*-\d+$/;
+
+function field(value: unknown, key: string): unknown {
+  return value && typeof value === "object" ? (value as Record<string, unknown>)[key] : undefined;
+}
+
+/** The task a task-addressed read was about: its identifier from the output, else the input ref. */
+function taskTarget(input: unknown, output: unknown): string | null {
+  const identifier = field(field(output, "task"), "identifier");
+  if (typeof identifier === "string" && identifier) return identifier;
+  const ref = field(input, "task");
+  return typeof ref === "string" && IDENTIFIER_SHAPE.test(ref.trim()) ? ref.trim().toUpperCase() : null;
+}
+
+function projectTarget(_input: unknown, output: unknown): string | null {
+  const name = field(field(output, "project"), "name");
+  return typeof name === "string" && name ? name : null;
+}
+
+function plural(n: number, noun: string, many = `${noun}s`): string {
+  return `${n} ${n === 1 ? noun : many}`;
+}
+
+function arrayLength(output: unknown, key: string): number | null {
+  const value = field(output, key);
+  return Array.isArray(value) ? value.length : null;
+}
+
+/** found:false outputs of the A3 reads summarize as "not found". */
+function notFound(output: unknown): boolean {
+  return field(output, "found") === false;
+}
 
 function countOf(noun: string): ToolDisplay["summarize"] {
   return (output) =>
@@ -246,6 +285,69 @@ const TOOL_DISPLAY: Record<string, ToolDisplay> = {
     summarize: (output) =>
       isProposalRefsOutput(output) ? "awaiting confirmation" : null,
   },
+  // A3 read layer — task context & routing. Summaries count the
+  // deterministic payload; the target comes from the output.
+  getTaskBundle: {
+    runningLabel: "Reading task digest",
+    doneLabel: "Read task digest",
+    target: { join: "for", of: taskTarget },
+    summarize: (output) => {
+      if (notFound(output)) return "not found";
+      const comments = arrayLength(output, "comments");
+      const activity = arrayLength(output, "activity");
+      const files = arrayLength(output, "files");
+      if (comments === null || activity === null || files === null) return null;
+      return `${plural(comments, "comment")} · ${plural(activity, "event")} · ${plural(files, "file")}`;
+    },
+  },
+  getTaskComments: {
+    runningLabel: "Reading comments",
+    doneLabel: "Read comments",
+    target: { join: "on", of: taskTarget },
+    summarize: (output) => {
+      if (notFound(output)) return "not found";
+      const n = arrayLength(output, "comments");
+      if (n === null) return null;
+      const omitted = field(output, "omitted");
+      return typeof omitted === "number" && omitted > 0
+        ? `${plural(n, "comment")} · ${omitted} older not shown`
+        : plural(n, "comment");
+    },
+  },
+  getTaskActivity: {
+    runningLabel: "Reading activity",
+    doneLabel: "Read activity",
+    target: { join: "on", of: taskTarget },
+    summarize: (output) => {
+      if (notFound(output)) return "not found";
+      const events = arrayLength(output, "events");
+      const entries = arrayLength(output, "timeEntries");
+      if (events === null || entries === null) return null;
+      return `${plural(events, "event")} · ${plural(entries, "time entry", "time entries")}`;
+    },
+  },
+  getTaskFiles: {
+    runningLabel: "Reading files",
+    doneLabel: "Read files",
+    target: { join: "on", of: taskTarget },
+    summarize: (output) => {
+      if (notFound(output)) return "not found";
+      const files = arrayLength(output, "files");
+      const links = arrayLength(output, "links");
+      if (files === null || links === null) return null;
+      return links > 0 ? `${plural(files, "file")} · ${plural(links, "link")}` : plural(files, "file");
+    },
+  },
+  getProjectRouting: {
+    runningLabel: "Reading project routing",
+    doneLabel: "Read routing",
+    target: { join: "for", of: projectTarget },
+    summarize: (output) => {
+      if (notFound(output)) return "not found";
+      const n = arrayLength(output, "defaultAssignees");
+      return n === null ? null : plural(n, "default assignee");
+    },
+  },
   // The skill stop-condition tool (slice 04) — when it fires, a skill halted
   // the run. The explanatory block is run-derived; this is just its ghost row.
   [STOP_CONDITION_TOOL_NAME]: {
@@ -266,16 +368,21 @@ export function humanizeToolName(name: string): string {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
-/** Ghost-row verb for a tool call in the given phase. */
+/**
+ * Ghost-row verb for a tool call in the given phase. Pass the call's
+ * `input` / `output` so task- and project-addressed reads name their
+ * target ("Read comments on ARLO-21").
+ */
 export function toolLabel(
   toolName: string,
   phase: "running" | "done" | "error",
+  call?: { input?: unknown; output?: unknown },
 ): string {
   const display = TOOL_DISPLAY[toolName];
-  if (phase === "running") {
-    return display ? display.runningLabel : humanizeToolName(toolName);
-  }
-  return display ? display.doneLabel : humanizeToolName(toolName);
+  if (!display) return humanizeToolName(toolName);
+  const verb = phase === "running" ? display.runningLabel : display.doneLabel;
+  const target = display.target?.of(call?.input, phase === "done" ? call?.output : undefined) ?? null;
+  return target ? `${verb} ${display.target!.join} ${target}` : verb;
 }
 
 /**

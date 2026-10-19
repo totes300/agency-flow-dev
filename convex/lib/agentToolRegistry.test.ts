@@ -70,6 +70,12 @@ describe("agentToolRegistry", () => {
       findTasks: "member",
       getTaskDetail: "member",
       countTasksByStatus: "member",
+      // A3 read layer — task context & routing
+      getProjectRouting: "member",
+      getTaskComments: "member",
+      getTaskActivity: "member",
+      getTaskFiles: "member",
+      getTaskBundle: "member",
       // Package C — time & utilization
       collectMemberTime: "member", // self-scoped for members inside the query
       collectTeamTime: "admin",
@@ -116,7 +122,14 @@ describe("task tools speak the new task layer (tasks refactor §7)", () => {
   });
 
   it("task-addressed tools take an identifier or id as `task`", () => {
-    for (const name of ["getTaskDetail", "proposeArchiveTask"]) {
+    for (const name of [
+      "getTaskDetail",
+      "proposeArchiveTask",
+      "getTaskComments",
+      "getTaskActivity",
+      "getTaskFiles",
+      "getTaskBundle",
+    ]) {
       const schema = schemaOf(name);
       expect(schema.safeParse({ task: "ARLO-21" }).success, name).toBe(true);
       expect(schema.safeParse({}).success, name).toBe(false);
@@ -213,6 +226,12 @@ describe("background tool filtering (A1 actor layer)", () => {
     "findTasks",
     "getTaskDetail",
     "proposeCreateTasks",
+    // A3 read layer
+    "getProjectRouting",
+    "getTaskComments",
+    "getTaskActivity",
+    "getTaskFiles",
+    "getTaskBundle",
   ];
 
   it("exactly the migrated tools are background-capable, all on the actor path", () => {

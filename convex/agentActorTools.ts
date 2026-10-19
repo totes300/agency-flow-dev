@@ -19,6 +19,18 @@ import {
   type AgentTaskDetail,
 } from "./tasks/agent";
 import { insertProposalsForThread, loadThreadByComponentId } from "./agentProposals";
+import {
+  getProjectRoutingForAuth,
+  getTaskActivityForAuth,
+  getTaskBundleForAuth,
+  getTaskCommentsForAuth,
+  getTaskFilesForAuth,
+  type AgentProjectRouting,
+  type AgentTaskActivity,
+  type AgentTaskBundle,
+  type AgentTaskComments,
+  type AgentTaskFiles,
+} from "./agentReads";
 
 /**
  * Actor-path variants of the functions behind background-capable agent tools
@@ -88,6 +100,48 @@ export const getTaskDetail = internalQuery({
   args: { actor: agentActorRefValidator, task: v.string() },
   handler: async (ctx, { actor, ...args }): Promise<AgentTaskDetail | null> => {
     return await getTaskDetailForAuth(ctx, await loadAuthContextForActor(ctx, actor), args);
+  },
+});
+
+// ─── A3 read layer (T3, T9, T10, T11, T14) — cores in agentReads.ts ─────────
+
+export const getProjectRouting = internalQuery({
+  args: { actor: agentActorRefValidator, projectId: v.string() },
+  handler: async (ctx, { actor, ...args }): Promise<AgentProjectRouting | null> => {
+    return await getProjectRoutingForAuth(ctx, await loadAuthContextForActor(ctx, actor), args);
+  },
+});
+
+export const getTaskComments = internalQuery({
+  args: {
+    actor: agentActorRefValidator,
+    task: v.string(),
+    includeSubtasks: v.optional(v.boolean()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, { actor, ...args }): Promise<AgentTaskComments | null> => {
+    return await getTaskCommentsForAuth(ctx, await loadAuthContextForActor(ctx, actor), args);
+  },
+});
+
+export const getTaskActivity = internalQuery({
+  args: { actor: agentActorRefValidator, task: v.string(), limit: v.optional(v.number()) },
+  handler: async (ctx, { actor, ...args }): Promise<AgentTaskActivity | null> => {
+    return await getTaskActivityForAuth(ctx, await loadAuthContextForActor(ctx, actor), args);
+  },
+});
+
+export const getTaskFiles = internalQuery({
+  args: { actor: agentActorRefValidator, task: v.string(), includeSubtasks: v.optional(v.boolean()) },
+  handler: async (ctx, { actor, ...args }): Promise<AgentTaskFiles | null> => {
+    return await getTaskFilesForAuth(ctx, await loadAuthContextForActor(ctx, actor), args);
+  },
+});
+
+export const getTaskBundle = internalQuery({
+  args: { actor: agentActorRefValidator, task: v.string() },
+  handler: async (ctx, { actor, ...args }): Promise<AgentTaskBundle | null> => {
+    return await getTaskBundleForAuth(ctx, await loadAuthContextForActor(ctx, actor), args);
   },
 });
 

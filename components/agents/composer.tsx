@@ -53,6 +53,22 @@ export type ComposerSubmission = {
   attachments: ComposerAttachment[]
 }
 
+/**
+ * A suggestion chip above the composer (email-triage B8a, PRD §7.1
+ * "composer"): 2–3 next steps for the current state, given by the parent
+ * (Triage: "Create it", "Ask Réka about the time"…).
+ */
+export type ComposerSuggestion = {
+  label: string
+  /** Sent as the message when picked (default: the label). */
+  message?: string
+  /** Put the text into the composer instead of sending it ("Countdown ends: "). */
+  prefill?: boolean
+}
+
+/** At most this many chips show (PRD: 2–3). */
+export const COMPOSER_SUGGESTIONS_MAX = 3
+
 /** Imperative handle so parents can prefill (example chips) / restore drafts. */
 export type AgentComposerHandle = {
   /** Replace the draft with `text` (example chips, restoring a failed send). */
@@ -97,7 +113,9 @@ export const AgentComposer = forwardRef<AgentComposerHandle, {
   onStop?: () => void
   /** Stop already requested (or no run id yet) — Stop shows as settling. */
   stopDisabled?: boolean
-}>(function AgentComposer({ agentName, onSend, running, onStop, stopDisabled }, ref) {
+  /** Suggestion chips for the current state (the parent decides; at most 3 show). */
+  suggestions?: readonly ComposerSuggestion[]
+}>(function AgentComposer({ agentName, onSend, running, onStop, stopDisabled, suggestions }, ref) {
   const [hasContent, setHasContent] = useState(false)
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -259,6 +277,21 @@ export const AgentComposer = forwardRef<AgentComposerHandle, {
     submitRef.current = send
   })
 
+  const pickSuggestion = (suggestion: ComposerSuggestion) => {
+    const text = suggestion.message ?? suggestion.label
+    if (suggestion.prefill) {
+      const ed = editorRef.current
+      if (!ed) return
+      ed.commands.setContent(text)
+      setHasContent(text.trim().length > 0)
+      ed.commands.focus("end")
+      return
+    }
+    if (running) return
+    onSend({ text, mentions: [], attachments: [] })
+  }
+  const chips = (suggestions ?? []).slice(0, COMPOSER_SUGGESTIONS_MAX)
+
   useImperativeHandle(
     ref,
     () => ({
@@ -288,6 +321,23 @@ export const AgentComposer = forwardRef<AgentComposerHandle, {
   return (
     <div className="shrink-0 border-t p-4">
       <div className="mx-auto w-full max-w-2xl">
+        {chips.length > 0 && (
+          <div aria-label="Suggestions" className="mb-2 flex flex-wrap gap-1.5">
+            {chips.map((chip) => (
+              <Button
+                key={chip.label}
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="font-normal text-muted-foreground"
+                disabled={running && !chip.prefill}
+                onClick={() => pickSuggestion(chip)}
+              >
+                {chip.label}
+              </Button>
+            ))}
+          </div>
+        )}
         <div className="mb-1.5 flex items-center gap-1.5 px-1 text-xs text-muted-foreground">
           <BotIcon className="size-3.5" />
           <span>{agentName}</span>

@@ -8,6 +8,7 @@ import {
   AgentComposer,
   type AgentComposerHandle,
   type ComposerSubmission,
+  type ComposerSuggestion,
 } from "@/components/agents/composer"
 import { toastError } from "@/lib/toast-helpers"
 
@@ -24,6 +25,7 @@ export function ThreadComposer({
   isRunning,
   activeRun,
   composerRef: externalRef,
+  suggestions,
 }: {
   threadId: string
   agentName: string
@@ -31,6 +33,8 @@ export function ThreadComposer({
   activeRun: { _id: Id<"agentRuns">; cancelRequested: boolean } | null
   /** The thread's composer handle, shared with blocks (question prefixes). */
   composerRef?: RefObject<AgentComposerHandle | null>
+  /** Suggestion chips for the thread's current state (B8a; Triage provides them). */
+  suggestions?: readonly ComposerSuggestion[]
 }) {
   // Covers the gap between the action call and the thread's reactive status
   // flip to "running".
@@ -82,6 +86,7 @@ export function ThreadComposer({
       onStop={stop}
       // No run row yet (action still settling) or stop already requested.
       stopDisabled={!activeRun || activeRun.cancelRequested}
+      suggestions={suggestions}
     />
   )
 }

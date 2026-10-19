@@ -31,8 +31,9 @@ import {
   currentAuth,
   DRAFT_NOT_FOUND,
   draftContentHash,
+  mailboxBinding,
   RESET_SEND_FIELDS,
-  type MailboxBinding,
+  sameBinding,
 } from "./drafts";
 
 /**
@@ -274,18 +275,8 @@ async function gateFor(ctx: QueryCtx | MutationCtx, draft: Doc<"emailDrafts">, a
   return sendGate(draft, await loadSendGateContext(ctx, draft, { expectedVersion, approverIsAdmin: auth.isAdmin }));
 }
 
-/** The sending mailbox's address + grant generation (what an approval binds), or null. */
-export async function mailboxBinding(
-  ctx: QueryCtx | MutationCtx,
-  draft: Pick<Doc<"emailDrafts">, "orgId" | "fromConnectorId">,
-): Promise<MailboxBinding | null> {
-  const c = await ctx.db.get(draft.fromConnectorId);
-  if (!c || c.orgId !== draft.orgId || !c.credentialMask) return null;
-  return { address: c.credentialMask.toLowerCase(), connectedAt: c.connectedAt };
-}
-
-const sameBinding = (approval: NonNullable<Doc<"emailDrafts">["approval"]>, b: MailboxBinding | null) =>
-  !!b && approval.fromAddress === b.address && approval.fromConnectedAt === b.connectedAt;
+// The approval's mailbox binding lives in drafts.ts (the email component reads it too).
+export { mailboxBinding } from "./drafts";
 
 /** §6.7 "choice logged": every warning the gate returned must be acknowledged (by key or label). */
 export function unacknowledged(warnings: readonly GateRow[], acknowledged: readonly string[]): GateRow[] {
@@ -347,7 +338,14 @@ export const previewSendGate = query({
 
 /**
  * Approve exactly version `version` and send it after the 15 s undo window
- * (D9). Admin only (orgMembers role). Blocks are returned, not thrown, so
+ * (D9). Admin only (orgMembers role). From `draft`, or from `failed` (B8a):
+ * a failed send whose approval no longer binds it — the mailbox was
+ * reconnected or changed — is re-approved here without an edit: a fresh
+ * approval (new hash, the current mailbox address and grant, the warnings
+ * acknowledged again) through the same gates, with a NEW Message-ID. The
+ * earlier ones stay in `priorMessageIds`, so the dispatch searches the
+ * mailbox for every one of them before sending — a re-approval never sends
+ * twice. Blocks are returned, not thrown, so
  * the email component can show them. `acknowledgedWarnings` (keys or
  * labels) must cover EVERY warning the gate returns — otherwise nothing is
  * approved; the acknowledged warnings are recorded with the approval. The
@@ -362,7 +360,9 @@ export const approveAndSend = mutation({
   handler: async (ctx, args): Promise<ApproveResult> => {
     const { auth, draft } = await loadForSendDecision(ctx, args.draftId);
     if (draft.status === "queued") throw new ConvexError("Already sending — use Undo to change it.");
-    if (draft.status !== "draft") throw new ConvexError(`This draft is ${draft.status} and can't be approved.`);
+    if (draft.status !== "draft" && draft.status !== "failed") {
+      throw new ConvexError(`This draft is ${draft.status} and can't be approved.`);
+    }
     const { blocks, warnings } = await gateFor(ctx, draft, auth, args.version);
     if (blocks.length > 0) return { ok: false, blocks, warnings };
     if (unacknowledged(warnings, args.acknowledgedWarnings).length > 0) {
@@ -382,9 +382,14 @@ export const approveAndSend = mutation({
       fromConnectedAt: binding.connectedAt,
     };
     // One Message-ID per approval, kept across its retries (unknown-outcome check).
+    // A re-approval of a failed send keeps the old id in the search history.
+    const prior = draft.messageIdHeader
+      ? [...new Set([...(draft.priorMessageIds ?? []), draft.messageIdHeader])].slice(-PRIOR_IDS_CAP)
+      : draft.priorMessageIds;
     const sendAt = await queueSend(ctx, draft, approval, {
       messageIdHeader: generateMessageId(binding.address),
       sendAttempts: 0,
+      ...(prior ? { priorMessageIds: prior } : {}),
     });
     return { ok: true, sendAt, warnings };
   },

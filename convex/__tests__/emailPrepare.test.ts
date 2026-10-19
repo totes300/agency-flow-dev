@@ -903,7 +903,11 @@ describe("fake seed plans", () => {
       questions: await ctx.db.query("agentQuestions").collect(),
       runs: await ctx.db.query("agentRuns").collect(),
     }));
-    expect(data.runs).toEqual([]); // no model run — the canned plans
+    // No model run — the canned plans; each canned turn is recorded as a
+    // settled background job run (devFake) so the thread renders it as one (B8a).
+    expect(data.runs.length).toBeGreaterThan(0);
+    expect(data.runs.every((r) => r.devFake === true && r.status === "succeeded" && r.via === "background" && r.job)).toBe(true);
+    expect(data.runs.every((r) => r.inputTokens === undefined)).toBe(true);
     const thread = (needle: string) => data.threads.find((th) => th.subject.includes(needle))!;
     const item = (needle: string) => data.items.find((i) => i.anchor.id === thread(needle)._id)!;
 

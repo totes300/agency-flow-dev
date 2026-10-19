@@ -1,5 +1,4 @@
 import { v, ConvexError } from "convex/values";
-import { saveMessages } from "@convex-dev/agent";
 import type { ModelMessage } from "ai";
 import {
   internalAction,
@@ -8,7 +7,7 @@ import {
   type MutationCtx,
   type QueryCtx,
 } from "../_generated/server";
-import { components, internal } from "../_generated/api";
+import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
 import { loadAuthContextForActor, type AuthContext } from "../lib/auth";
 import { getOrgSettings } from "../lib/orgHelpers";
@@ -20,6 +19,7 @@ import { AGENT_EMAIL_DRAFT_MARKER } from "../../lib/agents/emailDrafts";
 import { isEmailTriageEnabled, requireEmailTriageEnabled } from "./gate";
 import { conversationThreads, markConversationDraftsStale } from "./drafts";
 import { DRAFT_REPLY_JOB } from "./jobs";
+import { saveFakeJobTurn } from "./fakeRun";
 import {
   checkReplyDraft,
   detectLanguage,
@@ -582,12 +582,7 @@ export const runFakeDraft = internalMutation({
       },
       { role: "assistant", content: facts.mode === "kickoff" ? "The kickoff reply is ready for you to review." : "The reply is ready for you to review." },
     ];
-    await saveMessages(ctx, components.agent, {
-      threadId: thread.componentThreadId,
-      userId: auth.userId,
-      agentName: "Email assistant",
-      messages,
-    });
+    await saveFakeJobTurn(ctx, { thread, auth, job: DRAFT_REPLY_JOB, messages });
     return { draftId: outcome.draftId };
   },
 });

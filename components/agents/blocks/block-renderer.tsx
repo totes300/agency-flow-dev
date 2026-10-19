@@ -8,6 +8,10 @@ import { TableBlock } from "@/components/agents/blocks/table-block"
 import { ArtifactBlock } from "@/components/agents/blocks/artifact-block"
 import { ProposalBlock } from "@/components/agents/blocks/proposal-block"
 import { QuestionBlock } from "@/components/agents/blocks/question-block"
+import { EmailDraftBlock } from "@/components/agents/blocks/email-draft-block"
+import { EventLineBlock } from "@/components/agents/blocks/event-line-block"
+import { TaskCardBlock } from "@/components/agents/blocks/task-card-block"
+import { RequestChecklistBlock } from "@/components/agents/blocks/request-checklist-block"
 
 /**
  * The block vocabulary's single dispatch point (PRD renderer contract):
@@ -16,8 +20,8 @@ import { QuestionBlock } from "@/components/agents/blocks/question-block"
  * directly in the thread timeline.
  *
  * `readOnly` (a non-owner admin viewing a thread in the audit view) makes the
- * interactive blocks — proposals and questions — inert; every other block is
- * read-only already.
+ * interactive blocks — proposals, questions and the email component — inert;
+ * every other block is read-only already.
  */
 export function BlockRenderer({
   block,
@@ -57,5 +61,13 @@ export function BlockRenderer({
       )
     case "question":
       return <QuestionBlock questionId={block.questionId} readOnly={readOnly} />
+    case "emailDraft":
+      return <EmailDraftBlock draftId={block.draftId} readOnly={readOnly} />
+    case "event":
+      return <EventLineBlock text={block.text} />
+    case "taskCard":
+      return <TaskCardBlock taskId={block.taskId} />
+    case "requestChecklist":
+      return <RequestChecklistBlock checklistRef={block.ref} />
   }
 }

@@ -8,6 +8,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { convexTest } from "convex-test";
+import { backgroundJobPrompts, runAt } from "../../lib/agents/threadRuns";
 import { mockModel } from "@convex-dev/agent";
 import agentComponentTest from "@convex-dev/agent/test";
 import schema from "../schema";
@@ -924,6 +925,32 @@ describe("the seed demo: Réka end to end, Péter's reply", () => {
     const revised = (await get(t, kickoff._id))!;
     expect(revised.version).toBe(2);
     expect(revised.stale).toBeUndefined();
+
+    // B8a: every canned turn (plan, kickoff, change, kickoff again) is recorded
+    // like a background job run, so its machine prompt never renders as a user
+    // turn and its messages fall inside the run's window (the run line).
+    const threadId = reka.agentThreadId!;
+    const runs = await t.withIdentity(SEED_ADMIN).query(api.agentThreads.listRuns, { threadId });
+    expect(runs.map((r) => [r.job, r.via, r.status])).toEqual(
+      expect.arrayContaining([
+        ["prepareTask", "background", "succeeded"],
+        ["draftReply", "background", "succeeded"],
+        ["prepareChange", "background", "succeeded"],
+      ]),
+    );
+    const page = await t.withIdentity(SEED_ADMIN).query(api.agentThreads.listMessages, {
+      threadId,
+      paginationOpts: { numItems: 100, cursor: null },
+    });
+    const stamps = page.page.map((m) => ({ key: m.key, role: m.role, at: m._creationTime }));
+    const windows = runs.map((r) => ({ id: r._id, status: r.status, startedAt: r.startedAt, finishedAt: r.finishedAt, job: r.job, via: r.via, answersQuestion: r.answersQuestion, started: r.started }));
+    const hidden = backgroundJobPrompts(stamps, windows);
+    const userTurns = stamps.filter((m) => m.role === "user");
+    expect(userTurns.length).toBeGreaterThanOrEqual(4);
+    expect(userTurns.filter((m) => !hidden.has(m.key))).toEqual([]);
+    for (const m of stamps.filter((x) => x.role === "assistant")) {
+      expect(runAt(windows, m.at)?.job).toBeTruthy();
+    }
   });
 
   it("Péter's question gets a reply draft; Make it a task instead re-plans as a task", async () => {

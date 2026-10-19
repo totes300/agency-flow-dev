@@ -1064,6 +1064,9 @@ export default defineSchema({
     // starts (so it never lands inside the active run's turn); cleared then.
     queuedMessage: v.optional(v.string()),
     queuedAt: v.optional(v.number()),
+    // When a queued run was claimed and actually started (B8a). A queued row
+    // without it never ran (cancelled while queued, or refused at claim).
+    claimedAt: v.optional(v.number()),
     // Cooperative Stop: set by stopRun, checked by the loop between steps.
     cancelRequested: v.optional(v.boolean()),
     // Skills loaded into this run's system prompt (slice 04) — surfaced as
@@ -1093,6 +1096,8 @@ export default defineSchema({
     // answer starts (`agentQuestions.answer`), so the run gets the answered
     // question as context.
     questionId: v.optional(v.id("agentQuestions")),
+    // DEV: a canned seed turn (email/fakeRun.ts) — no model call was made.
+    devFake: v.optional(v.boolean()),
   })
     .index("by_orgId", ["orgId"])
     .index("by_threadId", ["threadId"])
@@ -1548,6 +1553,10 @@ export default defineSchema({
     ),
     sentMessageId: v.optional(v.id("emailMessages")),
     createdBy: v.union(v.literal("agent"), v.id("users")),
+    // B8a: who made the current version (the agent's rewrite, D20, or a
+    // person's edit) — the email component's "v2 · rewritten" / "edited by
+    // you". Unset on version 1.
+    lastEditedBy: v.optional(v.union(v.literal("agent"), v.id("users"))),
     createdAt: v.number(),
     updatedAt: v.number(),
   })

@@ -577,6 +577,11 @@ describe("queue robustness", () => {
     expect(b).toMatchObject({ status: "failed" });
     expect(b?.error).toMatch(/Queued run not started: .*simulated open failure/);
     expect(g?.status).toBe("succeeded");
+    // B8a: only the claimed run "started" — the one refused at claim owns no messages.
+    const listed = await t.withIdentity(IDENTITY.admin).query(api.agentThreads.listRuns, { threadId });
+    expect(listed.find((r) => r._id === bad.runId)?.started).toBe(false);
+    expect(listed.find((r) => r._id === good.runId)?.started).toBe(true);
+    expect(listed.find((r) => r._id === active)?.started).toBe(true);
     const prompts = (await componentMessages(t, threadId)).filter((m) => m.message?.role === "user");
     expect(prompts.map((m) => m.userId)).toEqual([u.admin2]);
   });
@@ -595,7 +600,7 @@ describe("queue robustness", () => {
     await t.withIdentity(IDENTITY.admin2).mutation(api.agentRunner.stopRun, { runId: queued.runId });
     expect((await t.run((ctx) => ctx.db.get(queued.runId)))?.status).toBe("cancelled");
     const runs = await t.withIdentity(IDENTITY.admin).query(api.agentThreads.listRuns, { threadId });
-    expect(runs.find((r) => r._id === queued.runId)).toMatchObject({ cancelledBeforeStart: true, queuedAt: null });
+    expect(runs.find((r) => r._id === queued.runId)).toMatchObject({ cancelledBeforeStart: true, queuedAt: null, started: false });
 
     modelSlot.current = mockModel({ content: [{ type: "text", text: "unused" }] });
     await t.mutation(internal.agentRunner.finishRun, { runId: active, status: "succeeded" });

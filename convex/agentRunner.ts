@@ -378,7 +378,7 @@ async function openRun(
   let runId: Id<"agentRuns">;
   if (queuedRunId) {
     // Claim the queued row in place: one audit row per run, queued → running.
-    await ctx.db.patch(queuedRunId, { ...runFields, queuedMessage: undefined });
+    await ctx.db.patch(queuedRunId, { ...runFields, queuedMessage: undefined, claimedAt: now });
     runId = queuedRunId;
   } else {
     runId = await ctx.db.insert("agentRuns", {

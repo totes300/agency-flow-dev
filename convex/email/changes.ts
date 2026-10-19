@@ -1,5 +1,4 @@
 import { v, ConvexError, type Infer } from "convex/values";
-import { saveMessages } from "@convex-dev/agent";
 import type { ModelMessage } from "ai";
 import {
   internalAction,
@@ -9,7 +8,7 @@ import {
   type MutationCtx,
   type QueryCtx,
 } from "../_generated/server";
-import { components, internal } from "../_generated/api";
+import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
 import { loadAuthContextForActor, type AuthContext } from "../lib/auth";
 import { getOrgSettings } from "../lib/orgHelpers";
@@ -34,6 +33,7 @@ import { isEmailTriageEnabled, requireEmailTriageEnabled } from "./gate";
 import { conversationThreads, discardUnsentDraft, markConversationDraftsStale, markTaskDraftsStale } from "./drafts";
 import { recordPlannedDispositions, threadRequests, type PlannedDisposition } from "./requests";
 import { DRAFT_REPLY_JOB, PREPARE_CHANGE_JOB } from "./jobs";
+import { saveFakeJobTurn } from "./fakeRun";
 import { conversationInbound, requestPlanning, teamLanguageOf } from "./prepare";
 import { resolveDue, type PlanGap, type PlanLedgerRow } from "./plan";
 import { checkChangePlan, changeCoverage, needsReopen, type ChangePlanInput } from "./changePlan";
@@ -828,7 +828,7 @@ export const runFakeChange = internalMutation({
       },
       { role: "assistant", content: canned.summary },
     ];
-    await saveMessages(ctx, components.agent, { threadId: thread.componentThreadId, userId: auth.userId, agentName: "Email assistant", messages });
+    await saveFakeJobTurn(ctx, { thread, auth, job: PREPARE_CHANGE_JOB, messages });
     return { proposalId: outcome.proposalId };
   },
 });

@@ -98,6 +98,24 @@ export function toolNamesFromParts(parts: readonly ToolPartLike[]): string[] {
 }
 
 /**
+ * The stage each call belongs to (same order as `toolNames`; -1 = outside
+ * every stage). A call is attributed to the EARLIEST stage at or after the
+ * furthest one reached that lists the tool; a call to a tool only listed by an
+ * earlier stage (re-reading something) belongs to the stage reached so far,
+ * so the run never moves backwards. The run line groups its quiet tool rows
+ * and its per-stage detail by this.
+ */
+export function attributeCalls(stages: readonly JobStage[], toolNames: readonly string[]): number[] {
+  let current = -1;
+  return toolNames.map((name) => {
+    const ahead = stages.findIndex((stage, i) => i >= Math.max(current, 0) && stage.tools.includes(name));
+    if (ahead > current) current = ahead;
+    if (ahead >= 0) return ahead;
+    return stages.some((stage) => stage.tools.includes(name)) ? current : -1;
+  });
+}
+
+/**
  * Stage states for one run from its tool calls (in order) and its status.
  *
  * A call is attributed to the EARLIEST stage at or after the current one
@@ -111,13 +129,7 @@ export function computeStageStates(
   toolNames: readonly string[],
   status: StageRunStatus,
 ): JobStageView[] {
-  let current = -1;
-  for (const name of toolNames) {
-    const ahead = stages.findIndex(
-      (stage, i) => i >= Math.max(current, 0) && stage.tools.includes(name),
-    );
-    if (ahead > current) current = ahead;
-  }
+  const current = Math.max(-1, ...attributeCalls(stages, toolNames));
 
   const live = status === "running" || status === "queued";
   return stages.map((stage, i) => {

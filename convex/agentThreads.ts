@@ -224,6 +224,11 @@ export const listRuns = query({
       queuedAt: r.status === "queued" ? (r.queuedAt ?? r.startedAt) : null,
       // Started by a question answer (A5) — the UI skips its queued line.
       answersQuestion: r.questionId !== undefined,
+      // The run actually started (B8a): a direct start, or a queued row that
+      // was claimed. False for a queued row, one cancelled while queued and
+      // one refused at claim — those own no messages.
+      started:
+        r.status !== "queued" && (r.queuedAt === undefined || r.claimedAt !== undefined),
       // Cancelled while still queued (stopRun) — it never ran; its message
       // was never posted.
       cancelledBeforeStart:
@@ -240,6 +245,9 @@ export const listRuns = query({
       droppedTools: r.droppedTools ?? [],
       // The agent job this run executed (A2b) — keys its stage line (B8).
       job: r.job ?? null,
+      // Entry mode (A1): a background job's prompt is machine input — the
+      // thread shows its run line instead of a user turn (B8a).
+      via: r.via ?? "user",
     }));
   },
 });

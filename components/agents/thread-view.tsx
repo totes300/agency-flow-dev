@@ -3,22 +3,31 @@
 import { useEffect, useMemo, useRef } from "react"
 import { useQuery } from "convex/react"
 import { useUIMessages } from "@convex-dev/agent/react"
-import type { UIMessage } from "@convex-dev/agent/react"
 import { EyeIcon } from "lucide-react"
 import { api } from "@/convex/_generated/api"
 import { Skeleton } from "@/components/ui/skeleton"
 import { ThreadComposer } from "@/components/agents/thread-composer"
-import type { AgentComposerHandle } from "@/components/agents/composer"
+import type { AgentComposerHandle, ComposerSuggestion } from "@/components/agents/composer"
 import {
   ComposerBridgeContext,
   type ComposerBridge,
 } from "@/components/agents/composer-bridge"
 import { BlockRenderer } from "@/components/agents/blocks/block-renderer"
 import { ErrorBlock } from "@/components/agents/blocks/error-block"
+import { RunLineBlock, type RunLineCall } from "@/components/agents/blocks/run-line-block"
+import { DraftPrimaryProvider } from "@/components/agents/blocks/draft-primary"
 import { SystemBlock } from "@/components/agents/blocks/system-block"
 import { UserMessage } from "@/components/agents/user-message"
 import { ProposalDrawer } from "@/components/task-detail/proposal-drawer"
-import { classifyParts, type MessagePartLike } from "@/lib/agents/blocks"
+import {
+  classifyParts,
+  deliverableBlocks,
+  latestDraftBlocks,
+  type AgentBlock,
+  type MessagePartLike,
+} from "@/lib/agents/blocks"
+import { JOB_STAGES, type StageRunStatus } from "@/lib/agents/jobStages"
+import { backgroundJobPrompts, runAt, type RunWindow } from "@/lib/agents/threadRuns"
 import { cleanErrorText } from "@/lib/agents/providerErrors"
 
 /**
@@ -26,8 +35,22 @@ import { cleanErrorText } from "@/lib/agents/providerErrors"
  * component's UIMessage parts, interleaved with run-derived error/system
  * blocks (failed → error + hint, stopped → quiet system line), and the
  * run-state composer below.
+ *
+ * A JOB run (`agentRuns.job` with stages in `JOB_STAGES`, email-triage B8a)
+ * renders as ONE run line — its stages from the run's real tool parts, with a
+ * live "‹stage›… · 4s" line while it works, one collapsed line when done —
+ * followed only by its deliverable (prose, plan, question, email); its tool
+ * rows live inside the run line and a background job's machine prompt is not
+ * shown as a user turn. Every other run renders as before.
  */
-export function ThreadView({ threadId }: { threadId: string }) {
+export function ThreadView({
+  threadId,
+  suggestions,
+}: {
+  threadId: string
+  /** Composer suggestion chips for the current state (Triage provides them, B8b). */
+  suggestions?: readonly ComposerSuggestion[]
+}) {
   const thread = useQuery(api.agentThreads.get, { threadId })
   const runs = useQuery(api.agentThreads.listRuns, { threadId })
   const { results: messages, status: loadStatus } = useUIMessages(
@@ -71,24 +94,94 @@ export function ThreadView({ threadId }: { threadId: string }) {
       ? new Map(thread.authors.map((a) => [a.userId as string, a.name]))
       : null
 
+  // Job runs (B8a): which messages belong to a staged job run, their tool
+  // calls (→ the run line), and the background prompts to hide.
+  const windows: RunWindow[] = (runs ?? []).map((r) => ({
+    id: r._id,
+    status: r.status,
+    startedAt: r.startedAt,
+    finishedAt: r.finishedAt,
+    job: r.job,
+    via: r.via,
+    answersQuestion: r.answersQuestion,
+    started: r.started,
+  }))
+  const stagedRun = (run: RunWindow | null) =>
+    run && run.job && JOB_STAGES[run.job] ? run : null
+  const hiddenPrompts = backgroundJobPrompts(
+    messages.map((m) => ({ key: m.key, role: m.role, at: m._creationTime })),
+    windows,
+  )
+  const jobCalls = new Map<string, RunLineCall[]>()
+
   // One timeline: messages by creation time + settled-run outcomes by
-  // finish time, so an error/stop note lands under the run it closes.
-  const timeline: { key: string; at: number; node: React.ReactNode }[] =
-    messages.map((message) => ({
-      key: message.key,
-      at: message._creationTime,
-      node: (
-        <MessageRow
-          message={message}
-          readOnly={readOnly}
-          authorName={
-            authorNames && message.userId
-              ? authorNames.get(message.userId)
-              : undefined
-          }
-        />
-      ),
-    }))
+  // finish time, so an error/stop note lands under the run it closes. On a
+  // tie, a user turn sorts first, then a run line, then the rest.
+  const timeline: { key: string; at: number; rank: number; node: React.ReactNode }[] = []
+  const assistant: { key: string; at: number; blocks: AgentBlock[] }[] = []
+  for (const message of messages) {
+    if (message.role === "user") {
+      if (hiddenPrompts.has(message.key)) continue
+      timeline.push({
+        key: message.key,
+        at: message._creationTime,
+        rank: 0,
+        node: (
+          <UserMessage
+            text={message.text}
+            authorName={
+              authorNames && message.userId
+                ? authorNames.get(message.userId)
+                : undefined
+            }
+          />
+        ),
+      })
+      continue
+    }
+    const all = classifyParts(message.parts as unknown as MessagePartLike[])
+    const jobRun = stagedRun(runAt(windows, message._creationTime))
+    let blocks: AgentBlock[] = all
+    if (jobRun) {
+      const calls = jobCalls.get(jobRun.id) ?? []
+      for (const b of all) if (b.kind === "tool") calls.push(b)
+      jobCalls.set(jobRun.id, calls)
+      blocks = deliverableBlocks(all)
+    }
+    assistant.push({ key: message.key, at: message._creationTime, blocks })
+  }
+  // A revised draft renders once, at its latest version's marker (B8a).
+  assistant.sort((a, b) => a.at - b.at)
+  const { groups, draftOrder } = latestDraftBlocks(assistant.map((a) => a.blocks))
+  assistant.forEach((entry, i) => {
+    const blocks = groups[i]
+    if (blocks.length === 0) return
+    timeline.push({
+      key: entry.key,
+      at: entry.at,
+      rank: 2,
+      node: <AssistantBlocks blocks={blocks} readOnly={readOnly} />,
+    })
+  })
+  for (const run of runs ?? []) {
+    const staged = run.job ? JOB_STAGES[run.job] : undefined
+    if (staged && run.started) {
+      timeline.push({
+        key: `${run._id}-run-line`,
+        at: run.startedAt,
+        rank: 1,
+        node: (
+          <RunLineBlock
+            stages={staged}
+            calls={jobCalls.get(run._id) ?? []}
+            status={run.status as StageRunStatus}
+            startedAt={run.startedAt}
+            finishedAt={run.finishedAt}
+          />
+        ),
+      })
+    }
+  }
   for (const run of runs ?? []) {
     // A background run waiting for the active one (I11) — its message is
     // posted when it starts, so only a quiet note shows meanwhile.
@@ -99,6 +192,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
       timeline.push({
         key: `${run._id}-queued`,
         at: run.queuedAt,
+        rank: 2,
         node: (
           <SystemBlock>
             Background run queued — starts when the current run finishes.
@@ -113,6 +207,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
       timeline.push({
         key: `${run._id}-skill-${skill.name}`,
         at: run.startedAt,
+        rank: 1,
         node: (
           <SystemBlock>
             Skill loaded: {skill.name}
@@ -129,6 +224,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
       timeline.push({
         key: `${run._id}-dropped-tools`,
         at: run.startedAt,
+        rank: 1,
         node: (
           <SystemBlock>
             {run.droppedTools.length === 1
@@ -145,6 +241,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
       timeline.push({
         key: run._id,
         at: run.finishedAt,
+        rank: 2,
         node: (
           <ErrorBlock
             message={`Stopped by the “${run.stoppedBySkill.skillName}” skill`}
@@ -158,6 +255,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
       timeline.push({
         key: run._id,
         at: run.finishedAt,
+        rank: 2,
         node: (
           <ErrorBlock
             message={cleanErrorText(run.error)}
@@ -169,17 +267,19 @@ export function ThreadView({ threadId }: { threadId: string }) {
       timeline.push({
         key: run._id,
         at: run.finishedAt,
+        rank: 2,
         node: <SystemBlock>Queued background run cancelled.</SystemBlock>,
       })
     } else if (run.status === "cancelled") {
       timeline.push({
         key: run._id,
         at: run.finishedAt,
+        rank: 2,
         node: <SystemBlock>Run stopped — partial output kept.</SystemBlock>,
       })
     }
   }
-  timeline.sort((a, b) => a.at - b.at)
+  timeline.sort((a, b) => a.at - b.at || a.rank - b.rank)
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -191,14 +291,16 @@ export function ThreadView({ threadId }: { threadId: string }) {
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
         <ComposerBridgeContext.Provider value={readOnly ? null : composerBridge}>
-          <div className="mx-auto flex max-w-2xl flex-col gap-4 px-4 py-6">
-            {timeline.map((entry) => (
-              <div key={entry.key} className="flex flex-col">
-                {entry.node}
-              </div>
-            ))}
-            <div ref={bottomRef} />
-          </div>
+          <DraftPrimaryProvider order={draftOrder}>
+            <div className="mx-auto flex max-w-2xl flex-col gap-4 px-4 py-6">
+              {timeline.map((entry) => (
+                <div key={entry.key} className="flex flex-col">
+                  {entry.node}
+                </div>
+              ))}
+              <div ref={bottomRef} />
+            </div>
+          </DraftPrimaryProvider>
         </ComposerBridgeContext.Provider>
       </div>
       {readOnly ? (
@@ -213,6 +315,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
           isRunning={thread.status === "running"}
           activeRun={thread.activeRun}
           composerRef={composerRef}
+          suggestions={suggestions}
         />
       )}
       {/* A proposal card's "Open" (`?draft=` / `?change=`, email-triage B7). */}
@@ -221,20 +324,13 @@ export function ThreadView({ threadId }: { threadId: string }) {
   )
 }
 
-function MessageRow({
-  message,
+function AssistantBlocks({
+  blocks,
   readOnly,
-  authorName,
 }: {
-  message: UIMessage
+  blocks: readonly AgentBlock[]
   readOnly: boolean
-  authorName?: string
 }) {
-  if (message.role === "user") {
-    return <UserMessage text={message.text} authorName={authorName} />
-  }
-  const blocks = classifyParts(message.parts as unknown as MessagePartLike[])
-  if (blocks.length === 0) return null
   return (
     <div className="flex flex-col gap-2">
       {blocks.map((block, i) => (

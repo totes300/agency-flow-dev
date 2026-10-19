@@ -45,6 +45,7 @@ import {
   subtaskLine,
 } from "./proposal-change-cards"
 import { useProposalDecision } from "./use-proposal-decision"
+import { PlanListBlock, isPlanCard } from "./plan-list-block"
 
 /**
  * `proposal` block (PRD Module 3 · slice 08) — a batch of write-intent
@@ -81,6 +82,17 @@ export function ProposalBlock({
   }
   if (cards.length === 0) return null
 
+  // Email-sourced createTask proposals are a Triage plan (B8a): they render
+  // as the plan list (created by Triage's Create, never by Approve here);
+  // any other kind in the batch keeps its card below.
+  const planCards = cards.filter(isPlanCard)
+  const plan =
+    planCards.length > 0 ? (
+      <PlanListBlock cards={planCards} members={orgMembers ?? []} categories={categories ?? []} />
+    ) : null
+  const otherCards = cards.filter((c) => !isPlanCard(c))
+  if (otherCards.length === 0) return plan
+
   // Read-only (no write access to the thread, e.g. an admin auditing a
   // member's private thread): each card's outcome as a compact row — no
   // editors, no Approve/Discard, no Approve-all. The decision mutations
@@ -88,7 +100,8 @@ export function ProposalBlock({
   if (readOnly) {
     return (
       <div className="flex flex-col gap-2">
-        {cards.map((card) =>
+        {plan}
+        {otherCards.map((card) =>
           card.status === "approved" ? (
             <CommittedRow key={card._id} card={card} />
           ) : card.status === "discarded" ? (
@@ -101,7 +114,7 @@ export function ProposalBlock({
     )
   }
 
-  const pending = cards.filter((c) => c.status === "pending")
+  const pending = otherCards.filter((c) => c.status === "pending")
   const canApproveKind = (kind: ProposalPayload["kind"]) =>
     isAdmin || PROPOSAL_KIND_META[kind].approveScope !== "admin"
   const approvable = pending.filter((c) => canApproveKind(c.payload.kind))
@@ -118,9 +131,10 @@ export function ProposalBlock({
 
   return (
     <div className="flex flex-col gap-2">
+      {plan}
       {batchable.length > 1 && (
         <ApproveAllBar
-          threadId={cards[0].threadId}
+          threadId={otherCards[0].threadId}
           items={batchable.map((c) => ({
             proposalId: c._id,
             revision: c.revision,
@@ -128,7 +142,7 @@ export function ProposalBlock({
           confirmOnly={confirmOnly}
         />
       )}
-      {cards.map((card) => (
+      {otherCards.map((card) => (
         <ProposalCard
           key={card._id}
           card={card}

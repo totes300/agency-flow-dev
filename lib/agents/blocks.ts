@@ -15,6 +15,23 @@ import {
   SETTLE_QUESTION_TOOL_NAME,
 } from "./questions";
 import { STOP_CONDITION_TOOL_NAME } from "./skills";
+import { isEmailDraftRefOutput } from "./emailDrafts";
+import {
+  EVENT_LINE_TOOL_NAME,
+  isEventLineOutput,
+  isRequestChecklistRefOutput,
+  isTaskCardRefOutput,
+  type RequestChecklistRef,
+} from "./widgets";
+
+/**
+ * Which tools may emit which B8a marker (hardening): a marker on any other
+ * tool's output — e.g. echoed by a connector or a misbehaving tool — is
+ * ignored and the call stays a plain ghost row.
+ */
+const EMAIL_DRAFT_TOOLS: ReadonlySet<string> = new Set(["submitDraft"]);
+const TASK_CARD_TOOLS: ReadonlySet<string> = new Set(["getTaskBundle", "getReplyTaskBundle"]);
+const REQUEST_CHECKLIST_TOOLS: ReadonlySet<string> = new Set(["getThreadRequests"]);
 
 /**
  * Determinism visual token (US 19), decided here per the PRD: AI prose
@@ -72,7 +89,30 @@ export type AgentBlock =
        * answered / later / superseded always show their current state.
        */
       questionId: string;
+    }
+  | {
+      kind: "emailDraft";
+      /** `submitDraft`'s draft (B6b) — the email component reads the live `emailDrafts` row (B8a). */
+      draftId: string;
+    }
+  | {
+      kind: "event";
+      /** A code-written event sentence ("Created PRG-132 · Frances notified"), never model text. */
+      text: string;
+    }
+  | {
+      kind: "taskCard";
+      /** `getTaskBundle`'s task (T14) — the card reads it live with the viewer's access. */
+      taskId: string;
+    }
+  | {
+      kind: "requestChecklist";
+      /** `getThreadRequests`' conversation (T15) — the checklist reads the ledger live. */
+      ref: RequestChecklistRef;
     };
+
+/** Widget kinds: read-tool results rendered as live blocks (PRD §7.1). */
+const WIDGET_KINDS: ReadonlySet<AgentBlock["kind"]> = new Set(["taskCard", "requestChecklist"]);
 
 /** Reference a tool output carries when it persisted a canvas artifact. */
 type ArtifactRef = { artifactId: string; name: string; artifactKind: string };
@@ -152,9 +192,27 @@ export function classifyPart(part: MessagePartLike): AgentBlock | null {
  */
 export function classifyParts(parts: MessagePartLike[]): AgentBlock[] {
   const blocks: AgentBlock[] = [];
+  // The model step each widget block came from (`step-start` parts split a
+  // message into steps) — only the latest widget step renders (below).
+  const widgetStep = new Map<AgentBlock, number>();
+  let step = 0;
   for (const part of parts) {
+    if (part.type === "step-start") {
+      step++;
+      continue;
+    }
     const block = classifyPart(part);
     if (block === null) continue;
+    // A code-written event line (B8a) is the block itself — no ghost row.
+    if (
+      block.kind === "tool" &&
+      block.phase === "done" &&
+      block.toolName === EVENT_LINE_TOOL_NAME &&
+      isEventLineOutput(block.output)
+    ) {
+      blocks.push({ kind: "event", text: block.output.text });
+      continue;
+    }
     blocks.push(block);
     if (block.kind === "tool" && block.phase === "done") {
       // A finished tool call expands into its result blocks in order: the
@@ -185,10 +243,56 @@ export function classifyParts(parts: MessagePartLike[]): AgentBlock[] {
       if (isQuestionRefOutput(block.output)) {
         blocks.push({ kind: "question", questionId: block.output.questionId });
       }
+      // submitDraft's marker expands into the email component (B8a).
+      if (EMAIL_DRAFT_TOOLS.has(block.toolName) && isEmailDraftRefOutput(block.output)) {
+        blocks.push({ kind: "emailDraft", draftId: block.output.draftId });
+      }
+      // Live widgets (B8a): getTaskBundle → task card, getThreadRequests →
+      // request checklist. The block carries only the reference.
+      if (TASK_CARD_TOOLS.has(block.toolName) && isTaskCardRefOutput(block.output)) {
+        const widget: AgentBlock = { kind: "taskCard", taskId: block.output.taskId };
+        widgetStep.set(widget, step);
+        blocks.push(widget);
+      }
+      if (REQUEST_CHECKLIST_TOOLS.has(block.toolName) && isRequestChecklistRefOutput(block.output)) {
+        const widget: AgentBlock = { kind: "requestChecklist", ref: block.output.ref };
+        widgetStep.set(widget, step);
+        blocks.push(widget);
+      }
     }
   }
   const lastTable = blocks.findLastIndex((b) => b.kind === "table");
-  return blocks.filter((b, i) => b.kind !== "table" || i === lastTable);
+  // Widgets follow the same intermediate-results rule as tables: reads the
+  // model made on the way to its answer are working material (their ghost
+  // rows stay), only the LAST step that read widgets renders them — and each
+  // reference once.
+  const lastWidgetStep = Math.max(-1, ...widgetStep.values());
+  const seenWidgets = new Set<string>();
+  return blocks.filter((b, i) => {
+    if (b.kind === "table") return i === lastTable;
+    if (!WIDGET_KINDS.has(b.kind)) return true;
+    if (widgetStep.get(b) !== lastWidgetStep) return false;
+    const key = widgetKey(b);
+    if (seenWidgets.has(key)) return false;
+    seenWidgets.add(key);
+    return true;
+  });
+}
+
+function widgetKey(block: AgentBlock): string {
+  if (block.kind === "taskCard") return `task:${block.taskId}`;
+  if (block.kind === "requestChecklist") return `requests:${JSON.stringify(block.ref)}`;
+  return block.kind;
+}
+
+/**
+ * The blocks of a JOB run's message that render in the conversation (B8a):
+ * the deliverable only — prose, plans / proposals, questions, the email
+ * component, event lines. Tool rows and reasoning move into the run line;
+ * read-tool widgets are the job's working material, never its answer.
+ */
+export function deliverableBlocks(blocks: readonly AgentBlock[]): AgentBlock[] {
+  return blocks.filter((b) => b.kind !== "tool" && b.kind !== "reasoning" && !WIDGET_KINDS.has(b.kind));
 }
 
 // ─── Tool display (verb + deterministic result summary) ────────────────────
@@ -398,6 +502,63 @@ const TOOL_DISPLAY: Record<string, ToolDisplay> = {
       return n === null ? null : plural(n, "default assignee");
     },
   },
+  // Email triage reads + results (B6a / B6b; summaries for the run line, B8a).
+  getEmailThread: {
+    runningLabel: "Reading the email",
+    doneLabel: "Read the email",
+    summarize: (output) => {
+      if (notFound(output)) return "not found";
+      const n = arrayLength(output, "messages");
+      return n === null ? null : plural(n, "message");
+    },
+  },
+  getThreadRequests: {
+    runningLabel: "Reading the requests",
+    doneLabel: "Read the requests",
+    summarize: (output) => {
+      if (notFound(output)) return "not found";
+      const n = arrayLength(output, "requests");
+      if (n === null) return null;
+      const open = field(output, "unresolved");
+      return typeof open === "number" && open > 0 ? `${plural(n, "request")} · ${open} open` : plural(n, "request");
+    },
+  },
+  findSimilarTasksForClient: {
+    runningLabel: "Looking for similar work",
+    doneLabel: "Looked for similar work",
+    summarize: (output) => {
+      if (notFound(output)) return "not found";
+      const n = arrayLength(output, "tasks");
+      return n === null ? null : plural(n, "similar task");
+    },
+  },
+  getReplyTaskBundle: {
+    runningLabel: "Reading task digest",
+    doneLabel: "Read task digest",
+    target: { join: "for", of: taskTarget },
+    summarize: (output) => (notFound(output) ? "not found" : null),
+  },
+  submitTriagePlan: {
+    runningLabel: "Preparing the plan",
+    doneLabel: "Prepared the plan",
+    summarize: (output) => {
+      if (!isProposalRefsOutput(output)) return null;
+      return plural(output.proposalIds.length, "task");
+    },
+  },
+  submitDraft: {
+    runningLabel: "Writing the email",
+    doneLabel: "Wrote the email",
+    summarize: (output) => {
+      const version = field(output, "version");
+      return isEmailDraftRefOutput(output) && typeof version === "number" ? `v${version}` : null;
+    },
+  },
+  proposeTaskUpdate: {
+    runningLabel: "Preparing the change",
+    doneLabel: "Prepared the change",
+    summarize: (output) => (isProposalRefsOutput(output) ? "awaiting review" : null),
+  },
   // The question block (A5): the ghost row above the block itself.
   [ASK_USER_TOOL_NAME]: {
     runningLabel: "Asking a question",
@@ -482,4 +643,34 @@ export function thoughtLabel(durationMs: number | null): string {
   }
   const seconds = Math.max(1, Math.round(durationMs / 1000));
   return `Thought for ${seconds}s`;
+}
+
+/**
+ * A draft revised in the same conversation (D20: a rewrite is a new version
+ * of the SAME draft) leaves one `submitDraft` marker per version. The live
+ * email component renders once, at its LATEST marker; the earlier ones keep
+ * only their ghost rows. `groups` are the messages' blocks in timeline
+ * order; also returns the drafts' order (oldest first) for "one dark primary
+ * per screen".
+ */
+export function latestDraftBlocks(groups: readonly (readonly AgentBlock[])[]): {
+  groups: AgentBlock[][];
+  draftOrder: string[];
+} {
+  const last = new Map<string, string>();
+  groups.forEach((blocks, g) =>
+    blocks.forEach((b, i) => {
+      if (b.kind === "emailDraft") last.set(b.draftId, `${g}:${i}`);
+    }),
+  );
+  const draftOrder: string[] = [];
+  const out = groups.map((blocks, g) =>
+    blocks.filter((b, i) => {
+      if (b.kind !== "emailDraft") return true;
+      const keep = last.get(b.draftId) === `${g}:${i}`;
+      if (keep) draftOrder.push(b.draftId);
+      return keep;
+    }),
+  );
+  return { groups: out, draftOrder };
 }

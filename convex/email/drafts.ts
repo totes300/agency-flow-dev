@@ -131,6 +131,33 @@ export async function draftContentHash(d: HashedFields, mailbox: MailboxBinding)
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+/** The sending mailbox's address + grant generation (what an approval binds), or null. */
+export async function mailboxBinding(
+  ctx: QueryCtx | MutationCtx,
+  draft: Pick<Doc<"emailDrafts">, "orgId" | "fromConnectorId">,
+): Promise<MailboxBinding | null> {
+  const c = await ctx.db.get(draft.fromConnectorId);
+  if (!c || c.orgId !== draft.orgId || !c.credentialMask) return null;
+  return { address: c.credentialMask.toLowerCase(), connectedAt: c.connectedAt };
+}
+
+/** The approval was given for this sending mailbox (address + grant generation). */
+export const sameBinding = (approval: NonNullable<Doc<"emailDrafts">["approval"]>, b: MailboxBinding | null) =>
+  !!b && approval.fromAddress === b.address && approval.fromConnectedAt === b.connectedAt;
+
+/**
+ * The draft's approval still binds it exactly as it is now: the same version,
+ * content hash and sending mailbox. A `failed` draft whose approval binds can
+ * be retried (`retrySend`); otherwise it needs a fresh Approve & send.
+ */
+export async function approvalBinds(ctx: QueryCtx | MutationCtx, draft: Doc<"emailDrafts">): Promise<boolean> {
+  const approval = draft.approval;
+  if (!approval || approval.version !== draft.version) return false;
+  const binding = await mailboxBinding(ctx, draft);
+  if (!binding || !sameBinding(approval, binding)) return false;
+  return approval.hash === (await draftContentHash(draft, binding));
+}
+
 /**
  * The body that goes out: the draft text, plus a line per link attachment
  * whose URL the text does not already contain (a link "attachment" is only
@@ -797,6 +824,7 @@ async function updateDraftCore(
     ...RESET_SEND_FIELDS,
     stale: undefined,
     version,
+    lastEditedBy: editor ? editor.userId : "agent",
     updatedAt: Date.now(),
   });
   return { version, changed: true };
@@ -844,9 +872,11 @@ export const reviseDraftInternal = internalMutation({
 export const setFromMailbox = mutation({
   args: { draftId: v.id("emailDrafts"), version: v.number(), connectorId: v.id("connectors") },
   handler: async (ctx, args): Promise<{ version: number }> => {
-    const { auth, draft, ownsAsMember } = await loadDraftForCaller(ctx, args.draftId);
+    const { auth, draft } = await loadDraftForCaller(ctx, args.draftId);
+    // Only an admin picks the sending mailbox (D35): a member never sees the
+    // other mailboxes of a conversation (getDraft), nor switches to one.
+    if (!auth.isAdmin) throw new ConvexError("Admin access required");
     if (draft.version !== args.version) throw new ConvexError(VERSION_CHANGED_MESSAGE);
-    if (ownsAsMember && draft.status !== "draft") throw new ConvexError(`This draft is ${draft.status}`);
     return { version: (await updateDraftCore(ctx, draft, { fromConnectorId: args.connectorId }, auth)).version };
   },
 });
@@ -1006,10 +1036,43 @@ export const markThreadDraftsStale = internalMutation({
 
 // ─── Read ─────────────────────────────────────────────────────────────────────
 
-export type DraftView = Omit<Doc<"emailDrafts">, "approval" | "scheduledFnId" | "messageIdHeader"> & {
+export type DraftMailbox = {
+  connectorId: Id<"connectors">;
+  email: string | null;
+  ownerName: string | null;
+  connected: boolean;
+};
+
+export type DraftView = Omit<Doc<"emailDrafts">, "approval" | "scheduledFnId" | "messageIdHeader" | "lastEditedBy"> & {
   approval: { version: number; userId: Id<"users">; at: number; warningsAcknowledged: string[] } | null;
   fromMailbox: { email: string | null; ownerName: string | null; connected: boolean } | null;
+  /** B8a: who made the version shown ("v2 · rewritten" / "edited by you"); null on v1. */
+  lastEdit: { by: "agent" } | { by: "user"; isViewer: boolean; name: string | null } | null;
+  /** B8a, D35: the mailboxes that hold the conversation — the From menu (the current one included). Admins only; a member gets just the current one. */
+  mailboxOptions: DraftMailbox[];
+  /** B8a: the viewer may approve / send (an admin by the CURRENT role). UX only — every mutation re-checks. */
+  viewerIsAdmin: boolean;
+  /** B8a: the viewer may edit it now (an admin while editable; a member's own draft while `draft`). */
+  viewerCanEdit: boolean;
+  /**
+   * B8a: a `failed` draft whose approval still binds it (Retry). False → it
+   * needs a fresh Approve & send (e.g. the mailbox was reconnected).
+   */
+  retryable: boolean;
 };
+
+/** A connector as the From line shows it (address, owner, connected). */
+async function draftMailbox(ctx: QueryCtx, orgId: string, connectorId: Id<"connectors">): Promise<DraftMailbox | null> {
+  const connector = await ctx.db.get(connectorId);
+  if (!connector || connector.orgId !== orgId) return null;
+  const owner = await ctx.db.get(connector.userId);
+  return {
+    connectorId: connector._id,
+    email: connector.credentialMask ?? null,
+    ownerName: owner?.name ?? null,
+    connected: connector.status === "connected" && !connector.devSeed && Boolean(connector.credentialsCiphertext),
+  };
+}
 
 /**
  * One draft for the email component (B8): admins, or the member who saved
@@ -1029,24 +1092,42 @@ export const getDraft = query({
     if (!draft || draft.orgId !== auth.orgId) return null;
     if (!(await isEmailTriageEnabled(ctx, auth.orgId))) return null;
     if (!auth.isAdmin && !(await memberOwnsDraft(ctx, auth, draft))) return null;
-    const connector = await ctx.db.get(draft.fromConnectorId);
-    const owner = connector && connector.orgId === draft.orgId ? await ctx.db.get(connector.userId) : null;
-    const { approval, scheduledFnId: _s, messageIdHeader: _m, ...rest } = draft;
+    const mailbox = await draftMailbox(ctx, draft.orgId, draft.fromConnectorId);
+    // A member sees only the sending address — no owner names, no other mailboxes.
+    const from = mailbox && !auth.isAdmin ? { ...mailbox, ownerName: null } : mailbox;
+    const { approval, scheduledFnId: _s, messageIdHeader: _m, lastEditedBy, ...rest } = draft;
     void _s;
     void _m;
+
+    // D35: the From menu offers the mailboxes that hold the conversation (admins).
+    const mailboxOptions: DraftMailbox[] = from ? [from] : [];
+    const thread = auth.isAdmin && draft.threadId ? await ctx.db.get(draft.threadId) : null;
+    if (thread && thread.orgId === draft.orgId) {
+      for (const holder of await holdersOf(ctx, await conversationThreads(ctx, thread))) {
+        if (mailboxOptions.some((m) => m.connectorId === holder.connectorId)) continue;
+        const option = await draftMailbox(ctx, draft.orgId, holder.connectorId);
+        if (option) mailboxOptions.push(option);
+      }
+    }
+
+    let lastEdit: DraftView["lastEdit"] = null;
+    if (draft.version > 1 && lastEditedBy === "agent") lastEdit = { by: "agent" };
+    else if (draft.version > 1 && lastEditedBy) {
+      const editor = await ctx.db.get(lastEditedBy as Id<"users">);
+      lastEdit = { by: "user", isViewer: lastEditedBy === auth.userId, name: editor?.name ?? null };
+    }
+
     return {
       ...rest,
       approval: approval
         ? { version: approval.version, userId: approval.userId, at: approval.at, warningsAcknowledged: approval.warningsAcknowledged ?? [] }
         : null,
-      fromMailbox:
-        connector && connector.orgId === draft.orgId
-          ? {
-              email: connector.credentialMask ?? null,
-              ownerName: owner?.name ?? null,
-              connected: connector.status === "connected" && !connector.devSeed && Boolean(connector.credentialsCiphertext),
-            }
-          : null,
+      fromMailbox: from ? { email: from.email, ownerName: from.ownerName, connected: from.connected } : null,
+      lastEdit,
+      mailboxOptions,
+      viewerIsAdmin: auth.isAdmin,
+      viewerCanEdit: auth.isAdmin ? EDITABLE.has(draft.status) : draft.status === "draft",
+      retryable: draft.status === "failed" && (await approvalBinds(ctx, draft)),
     };
   },
 });

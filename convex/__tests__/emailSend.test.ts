@@ -709,6 +709,78 @@ describe("failed (§5.4 error kinds)", () => {
   });
 });
 
+// ─── B8a: re-approve a failed send without an edit ───────────────────────────
+
+describe("B8a: a failed send whose approval no longer binds is approved afresh", () => {
+  async function failDisconnected(t: T, f: Fixture) {
+    const draftId = await agentDraft(t, f);
+    gmail.plan = [{ status: 401 }]; // the token was revoked: Gmail refuses, nothing is accepted
+    await approveAndDrain(t, draftId);
+    const failed = (await getDraft(t, draftId))!;
+    expect(failed).toMatchObject({ status: "failed", failure: { kind: "disconnected" } });
+    expect(failed.priorMessageIds).toContain(failed.messageIdHeader);
+    // Reconnect: a new grant generation — the old approval no longer binds.
+    await t.run((ctx) => ctx.db.patch(f.adamBox, { status: "connected", connectedAt: Date.now() + 1 }));
+    return { draftId, firstId: failed.messageIdHeader! };
+  }
+
+  it("failed → reconnect → Retry refused → approveAndSend → searches the earlier Message-ID first → sends once", async () => {
+    const t = createT();
+    const f = await setup(t);
+    const { draftId, firstId } = await failDisconnected(t, f);
+    expect((await t.withIdentity(ADAM).query(api.email.drafts.getDraft, { draftId }))!.retryable).toBe(false);
+    expect(await retry(t, draftId)).toMatchObject({ ok: false, blocks: [{ key: "approve_again" }] });
+
+    const result = await approve(t, draftId); // no edit
+    expect(result.ok).toBe(true);
+    let draft = (await getDraft(t, draftId))!;
+    expect(draft).toMatchObject({ status: "queued", version: 1, approval: { fromAddress: "adam@agency.test" } });
+    const box = await t.run((ctx) => ctx.db.get(f.adamBox));
+    expect(draft.approval!.fromConnectedAt).toBe(box!.connectedAt); // bound to the NEW grant
+    expect(draft.messageIdHeader).not.toBe(firstId);
+    expect(draft.priorMessageIds).toContain(firstId);
+
+    gmail.searches.length = 0;
+    await settle(t);
+    draft = (await getDraft(t, draftId))!;
+    expect(draft.status).toBe("sent");
+    expect(gmail.searches).toEqual([`rfc822msgid:${firstId.slice(1, -1)}`]); // the earlier attempt, before sending
+    expect(gmail.sends).toHaveLength(2); // the refused 401 + the one that went out
+    expect(gmail.mailbox.size).toBe(1);
+  });
+
+  it("an earlier attempt that did reach the mailbox is recorded as sent — nothing is sent again", async () => {
+    const t = createT();
+    const f = await setup(t);
+    const { draftId, firstId } = await failDisconnected(t, f);
+    gmail.mailbox.set(firstId, { id: "gm-early", threadId: "gt-adam-1" });
+    expect((await approve(t, draftId)).ok).toBe(true);
+    await settle(t);
+    const draft = (await getDraft(t, draftId))!;
+    expect(draft.status).toBe("sent");
+    expect(gmail.sends).toHaveLength(1); // only the refused first attempt
+  });
+
+  it("the same gates hold: a stale failed draft is not re-approved until reviewed", async () => {
+    const t = createT();
+    const f = await setup(t);
+    const { draftId } = await failDisconnected(t, f);
+    await t.run((ctx) => ctx.db.patch(draftId, { stale: { reason: "Kovács Réka wrote at 14:05", at: Date.now() } }));
+    expect(await approve(t, draftId)).toMatchObject({ ok: false, blocks: [{ key: "review_again" }] });
+    expect((await getDraft(t, draftId))!.status).toBe("failed");
+  });
+
+  it("a failed draft whose approval still binds stays retryable", async () => {
+    const t = createT();
+    const f = await setup(t);
+    const draftId = await agentDraft(t, f);
+    gmail.plan = [{ status: 400, body: { error: { code: 400, message: "Invalid To header", status: "INVALID_ARGUMENT" } } }];
+    await approveAndDrain(t, draftId);
+    const view = await t.withIdentity(ADAM).query(api.email.drafts.getDraft, { draftId });
+    expect(view).toMatchObject({ status: "failed", retryable: true });
+  });
+});
+
 // ─── Unknown ─────────────────────────────────────────────────────────────────
 
 describe("unknown → confirmed by Message-ID, never sent twice", () => {
@@ -1230,5 +1302,163 @@ describe("access (§5.5, I6)", () => {
     expect(gmail.sends).toHaveLength(0);
     await t.withIdentity(ADAM).mutation(api.email.drafts.restoreDraft, { draftId });
     expect((await getDraft(t, draftId))!.status).toBe("draft");
+  });
+});
+
+// ─── B8a: the email component's view + the live widgets ─────────────────────
+
+describe("B8a: getDraft view (version label, From menu, viewer) and live widgets", () => {
+  it("getDraft says who made the version shown and what the viewer may do", async () => {
+    const t = createT();
+    const f = await setup(t);
+    const draftId = await agentDraft(t, f);
+    let view = await t.withIdentity(ADAM).query(api.email.drafts.getDraft, { draftId });
+    expect(view).toMatchObject({ version: 1, lastEdit: null, viewerIsAdmin: true, viewerCanEdit: true });
+    expect(view!.mailboxOptions.map((m) => m.connectorId)).toEqual([f.adamBox]);
+    expect(view!.mailboxOptions[0]).toMatchObject({ email: "adam@agency.test", ownerName: "Tóth Ádám", connected: true });
+
+    // The agent's rewrite (D20) → "rewritten".
+    await t.mutation(internal.email.drafts.reviseDraftInternal, { orgId: ORG, draftId, bodyText: "Szia Réka!\n\nRövidebben." });
+    view = await t.withIdentity(ADAM).query(api.email.drafts.getDraft, { draftId });
+    expect(view).toMatchObject({ version: 2, lastEdit: { by: "agent" } });
+
+    // A person's edit → "edited by you" for them, the name for another admin.
+    await t.withIdentity(ADAM).mutation(api.email.drafts.updateDraft, { draftId, version: 2, bodyText: "Szia Réka!\n\nKézzel." });
+    expect((await t.withIdentity(ADAM).query(api.email.drafts.getDraft, { draftId }))!.lastEdit).toEqual({
+      by: "user", isViewer: true, name: "Tóth Ádám",
+    });
+    expect((await t.withIdentity(BENCE).query(api.email.drafts.getDraft, { draftId }))!.lastEdit).toEqual({
+      by: "user", isViewer: false, name: "Tóth Ádám",
+    });
+
+    // Queued: an admin can no longer edit it in place; a sent draft neither.
+    await approve(t, draftId);
+    view = await t.withIdentity(ADAM).query(api.email.drafts.getDraft, { draftId });
+    expect(view).toMatchObject({ status: "queued", viewerCanEdit: true }); // edit during the window voids the approval (D9)
+    await settle(t);
+    view = await t.withIdentity(ADAM).query(api.email.drafts.getDraft, { draftId });
+    expect(view).toMatchObject({ status: "sent", viewerCanEdit: false });
+  });
+
+  it("the From menu: admins see the mailboxes that hold the conversation; a member only the current address", async () => {
+    const t = createT();
+    const f = await setup(t);
+    // Bence's mailbox holds a copy of Réka's email → a second holder (D35).
+    await t.run(async (ctx) => {
+      const now = Date.now();
+      const copy = await ctx.db.insert("emailThreads", {
+        orgId: ORG, connectorId: f.benceBox, gmailThreadId: "gt-bence-1", subject: "Black Friday", clientId: f.client,
+        participants: [{ name: "Kovács Réka", email: "reka@pragmatico.hu" }], lastMessageAt: now - 60_000,
+        lastInboundAt: now - 60_000, waitingOn: "us", createdAt: now, updatedAt: now,
+      });
+      await ctx.db.insert("emailMessages", {
+        orgId: ORG, threadId: copy, connectorId: f.benceBox, gmailMessageId: "g-in-1-b", rfcMessageId: "<m1@pragmatico.hu>",
+        direction: "inbound", from: { name: "Kovács Réka", email: "reka@pragmatico.hu" }, to: [{ email: "bence@agency.test" }],
+        cc: [], subject: "Black Friday", bodyText: "Kérnénk két bannert.", attachments: [],
+        sentAt: now - 60_000, stage: "handled", createdAt: now,
+      });
+    });
+    const draftId = await t.withIdentity(MARI).mutation(api.email.drafts.createDraft, {
+      kind: "reply", threadId: f.thread, taskId: f.task, bodyText: "Szia Réka!", sourceSummary: "mari",
+    });
+
+    const admin = (await t.withIdentity(ADAM).query(api.email.drafts.getDraft, { draftId }))!;
+    expect(admin.mailboxOptions.map((m) => [m.email, m.ownerName])).toEqual([
+      ["adam@agency.test", "Tóth Ádám"],
+      ["bence@agency.test", "Kiss Bence"],
+    ]);
+
+    const member = (await t.withIdentity(MARI).query(api.email.drafts.getDraft, { draftId }))!;
+    expect(member.viewerIsAdmin).toBe(false);
+    expect(member.mailboxOptions).toEqual([{ connectorId: f.adamBox, email: "adam@agency.test", ownerName: null, connected: true }]);
+    expect(member.fromMailbox).toEqual({ email: "adam@agency.test", ownerName: null, connected: true });
+
+    // A member never switches the sending mailbox; an admin can.
+    await expect(
+      t.withIdentity(MARI).mutation(api.email.drafts.setFromMailbox, { draftId, version: member.version, connectorId: f.benceBox }),
+    ).rejects.toThrow(/Admin access required/);
+    expect((await getDraft(t, draftId))!.fromConnectorId).toBe(f.adamBox);
+    await t.withIdentity(ADAM).mutation(api.email.drafts.setFromMailbox, { draftId, version: admin.version, connectorId: f.benceBox });
+    expect((await getDraft(t, draftId))!.fromConnectorId).toBe(f.benceBox);
+  });
+
+  it("requestChecklist: the ledger live, by conversation — admins of an enabled org only", async () => {
+    const t = createT();
+    const f = await setup(t);
+    const view = await t.withIdentity(ADAM).query(api.agentWidgets.requestChecklist, { threadId: f.thread });
+    expect(view).toMatchObject({ askedBy: "Kovács Réka", total: 2, open: 2, truncated: false });
+    expect(view!.rows.map((r) => [r.text, r.state])).toEqual([
+      ["Két banner 1200×628", "open"],
+      ["A 20% kedvezményt is írjátok rá.", "open"],
+    ]);
+
+    // Live: covering the row flips its state, with the covering task linked.
+    await t.run((ctx) => ctx.db.patch(f.r1, { disposition: "covered", taskId: f.task }));
+    const after = await t.withIdentity(ADAM).query(api.agentWidgets.requestChecklist, { threadId: f.thread });
+    expect(after!.rows[0]).toMatchObject({ state: "covered", covering: { taskId: f.task } });
+    expect(after!.open).toBe(1);
+
+    expect(await t.withIdentity(MARI).query(api.agentWidgets.requestChecklist, { threadId: f.thread })).toBeNull();
+    expect(await t.withIdentity(CAROL).query(api.agentWidgets.requestChecklist, { threadId: f.thread })).toBeNull();
+    expect(await t.withIdentity(ADAM).query(api.agentWidgets.requestChecklist, { threadId: "garbage" })).toBeNull();
+  });
+
+  it("taskCard: the task live with the viewer's access; gone or unreadable → null", async () => {
+    const t = createT();
+    const f = await setup(t);
+    const card = await t.withIdentity(ADAM).query(api.agentWidgets.taskCard, { taskId: f.task });
+    expect(card).toMatchObject({
+      id: f.task,
+      title: "Black Friday bannerek",
+      status: { name: "Admin review" },
+      subtaskCount: 0,
+      owners: [{ id: f.mari, name: "Varga Mari" }],
+      openQuestions: 0,
+    });
+    expect(card!.identifier).toMatch(/^PRG-\d+$/);
+
+    // A member reads her own task (no ledger figures), never another one.
+    expect(await t.withIdentity(MARI).query(api.agentWidgets.taskCard, { taskId: f.task })).toMatchObject({ openQuestions: null });
+    expect(await t.withIdentity(MARI).query(api.agentWidgets.taskCard, { taskId: f.otherTask })).toBeNull();
+    expect(await t.withIdentity(CAROL).query(api.agentWidgets.taskCard, { taskId: f.task })).toBeNull();
+
+    // Live: a pending client question on the task shows; an archived task is gone.
+    await t.run((ctx) => ctx.db.patch(f.r2, { disposition: "question_pending", taskId: f.task }));
+    expect((await t.withIdentity(ADAM).query(api.agentWidgets.taskCard, { taskId: f.task }))!.openQuestions).toBe(1);
+    await t.run((ctx) => ctx.db.patch(f.task, { archivedAt: Date.now() }));
+    expect(await t.withIdentity(ADAM).query(api.agentWidgets.taskCard, { taskId: f.task })).toBeNull();
+  });
+
+  it("planGaps: the gaps the item's CURRENT plan was stored with, for admins", async () => {
+    const t = createT();
+    const f = await setup(t);
+    const proposalId = await t.run(async (ctx) => {
+      const now = Date.now();
+      const agentId = await ctx.db.insert("agents", {
+        orgId: ORG, name: "Email assistant", description: "", instructions: "", tools: [], runPermission: "admins",
+        trigger: "manual", createdBy: f.adam, createdAt: now, updatedAt: now,
+      });
+      const threadId = await ctx.db.insert("agentThreads", {
+        orgId: ORG, componentThreadId: "ct-plan", agentId, userId: f.adam, title: "t", status: "idle",
+        lastActivityAt: now, createdAt: now, visibility: "admins", anchor: { type: "emailThread", id: f.thread },
+      });
+      const thread = (await ctx.db.get(threadId))!;
+      const auth: AuthContext = { userId: f.adam, orgId: ORG, orgRole: "admin", isAdmin: true, user: (await ctx.db.get(f.adam))! };
+      const [id] = await insertProposalsForThread(ctx, thread, [{ kind: "createTask", title: "Bannerek" }], auth);
+      await ctx.db.patch(f.item, {
+        plan: {
+          planId: "plan-1", proposalIds: [id as Id<"agentProposals">], revision: 1,
+          grouping: { mode: "one", suggested: "one" },
+          gaps: [{ kind: "missing_disposition", requestId: f.r2, detail: 'Not covered: "A 20% kedvezményt"' }],
+          submittedAt: now,
+        },
+      });
+      return id;
+    });
+    expect(await t.withIdentity(ADAM).query(api.agentWidgets.planGaps, { proposalIds: [proposalId] })).toEqual({
+      gaps: ['Not covered: "A 20% kedvezményt"'],
+    });
+    expect(await t.withIdentity(MARI).query(api.agentWidgets.planGaps, { proposalIds: [proposalId] })).toEqual({ gaps: [] });
+    expect(await t.withIdentity(ADAM).query(api.agentWidgets.planGaps, { proposalIds: ["nope"] })).toEqual({ gaps: [] });
   });
 });

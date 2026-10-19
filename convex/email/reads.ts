@@ -297,7 +297,14 @@ export type AgentThreadRequest = {
   warnings: string[];
   messageId: string | null;
   /** The subtask that covers it (after Create), with its task. */
-  covering: { task: string | null; subtask: string | null; subtaskTitle: string | null } | null;
+  covering: {
+    task: string | null;
+    subtask: string | null;
+    subtaskTitle: string | null;
+    /** Ids for a link (B8a request checklist). */
+    taskId: string | null;
+    subtaskId: string | null;
+  } | null;
   /** The current plan's (provisional) disposition. */
   planned: { disposition: string; taskIndex: number | null; subtaskIndex: number | null; question: string | null; reason: string | null } | null;
   createdAt: string;
@@ -369,6 +376,8 @@ export async function getThreadRequestsForAuth(
         task: task && task.orgId === auth.orgId ? (task.identifier ?? task._id) : null,
         subtask: sub && sub.orgId === auth.orgId ? (sub.identifier ?? sub._id) : null,
         subtaskTitle: sub && sub.orgId === auth.orgId ? sub.title : null,
+        taskId: task && task.orgId === auth.orgId ? task._id : null,
+        subtaskId: sub && sub.orgId === auth.orgId ? sub._id : null,
       };
     }
     requests.push({

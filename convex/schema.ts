@@ -1280,7 +1280,8 @@ export default defineSchema({
     // Polling sync state (email triage S4, D34, D36) — any polling connector
     // syncs the same way. Gmail: `cursor` = history id, set to "now" on first
     // connect (no backfill). `error` shows on the connector row and as
-    // "Mailbox not syncing" in Triage. TODO(B3): written by email/gmail.ts.
+    // "Mailbox not syncing" in Triage. The B1 callback initialises it to
+    // `{ cursor: undefined }`. TODO(B3): written by email/gmail.ts.
     sync: v.optional(
       v.object({
         cursor: v.optional(v.string()),
@@ -1296,7 +1297,9 @@ export default defineSchema({
   })
     .index("by_orgId", ["orgId"])
     .index("by_orgId_userId", ["orgId", "userId"])
-    .index("by_orgId_userId_type", ["orgId", "userId", "type"]),
+    .index("by_orgId_userId_type", ["orgId", "userId", "type"])
+    // One live mailbox per address per org (B1 L2) + the revoke guard.
+    .index("by_orgId_type_credentialMask", ["orgId", "type", "credentialMask"]),
 
 
   // ─── Email triage (docs/prd-email-triage.md §4.1) ──────────────────────────
@@ -1496,18 +1499,44 @@ export default defineSchema({
     .index("by_orgId_agentThreadId", ["orgId", "agentThreadId"])
     .index("by_orgId_disposition", ["orgId", "disposition"]),
 
-  // One-time OAuth state for connector sign-in (PKCE). Looked up by the
-  // random `state` on the callback, which carries no org context; the row's
-  // orgId / userId / expiresAt are checked after the read. TODO(B1).
+  // One-time OAuth state for connector sign-in (PKCE, convex/oauth.ts).
+  // Looked up by the random `state` on the callback, which carries no org
+  // context; the row is deleted on that first read (consumed exactly once)
+  // and its orgId / userId / expiresAt / flag are checked after. `returnTo`
+  // is a validated relative app path. Abandoned rows are swept by
+  // `by_expiresAt` on the next start.
   oauthStates: defineTable({
     orgId: v.string(),
     userId: v.id("users"),
     connectorType: v.string(),
     state: v.string(),
     codeVerifier: v.string(),
+    returnTo: v.optional(v.string()),
     createdAt: v.number(),
     expiresAt: v.number(),
-  }).index("by_state", ["state"]),
+  })
+    .index("by_state", ["state"])
+    .index("by_expiresAt", ["expiresAt"]),
+
+  // A Gmail grant between the OAuth callback and the signed-in
+  // `oauth.finishGmailConnect` step (B1 M1 — login-CSRF): the callback has no
+  // session, so it parks the encrypted grant here under a one-time token
+  // (only its SHA-256 is stored) and the app activates it for the user who
+  // started the flow. Single use, 10-minute expiry; refused / expired grants
+  // are revoked at Google best-effort.
+  oauthPendingGrants: defineTable({
+    orgId: v.string(),
+    userId: v.id("users"),
+    connectorType: v.string(),
+    tokenHash: v.string(),
+    credentialsCiphertext: v.string(),
+    emailAddress: v.string(),
+    scopes: v.array(v.string()),
+    createdAt: v.number(),
+    expiresAt: v.number(),
+  })
+    .index("by_tokenHash", ["tokenHash"])
+    .index("by_expiresAt", ["expiresAt"]),
 
   // One QA result shape (S3): hand-over QA (§6.8.1) and pre-send review
   // (§6.7). Keyed by subject (task | draft) + kind + revision (presend: the

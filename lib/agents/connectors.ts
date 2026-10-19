@@ -3,8 +3,8 @@
  * chassis lets a user authenticate an external account once (per-user, V1);
  * connector-backed tools then resolve THAT user's live credentials at run
  * time. Wave 1 ships the framework and one dev/mock connector ("Echo"); the
- * first real provider (Gmail, email triage) is catalogued hidden until its
- * OAuth flow lands (B1).
+ * first real provider (Gmail, email triage) is behind the `emailTriage`
+ * feature gate (D23, I14) — surfaced only to orgs with `emailTriageEnabled`.
  *
  * This module owns everything about connectors that needs no I/O: the
  * type catalog (code, like the tool registry), the status vocabulary, the
@@ -53,13 +53,20 @@ export type ConnectorTypeMeta = {
   /** Scopes stored on the connection at connect time (audit + future OAuth). */
   defaultScopes: readonly string[];
   /**
-   * Not on the Connectors surface (`getConnectorCatalog` leaves it out). For
-   * a type whose connect flow does not exist yet, so the surface never shows
-   * a Connect button that cannot work. Rows of the type may still exist
-   * (e.g. the email-triage dev seed mailbox).
+   * A per-org feature flag the type sits behind. `emailTriage` =
+   * `orgSettings.emailTriageEnabled` (D23, I14): `getConnectorCatalog` leaves
+   * the type out unless the caller says the flag is on, and every server
+   * entry point of the type re-checks the flag itself (the surface is not the
+   * gate). Rows of the type may still exist (e.g. the dev seed mailbox).
    */
-  hidden?: true;
+  featureGate?: ConnectorFeatureGate;
 };
+
+/** The feature flags a connector type can sit behind. */
+export type ConnectorFeatureGate = "emailTriage";
+
+/** Which gates are open for the caller's org (absent / false = closed). */
+export type ConnectorGateState = Partial<Record<ConnectorFeatureGate, boolean>>;
 
 /**
  * The vetted connector catalog. Wave 1 ships exactly one entry — the Echo
@@ -80,10 +87,11 @@ export const CONNECTOR_CATALOG: Record<ConnectorType, ConnectorTypeMeta> = {
   },
   // Email triage (docs/prd-email-triage.md §4.2, D17, D23): one mailbox per
   // user, access + refresh token encrypted with convex/lib/secretCrypto.ts.
-  // Hidden until B1 ships the OAuth flow (PKCE, `oauthStates`, callback
-  // routes) — TODO(B1): unhide behind `emailTriageEnabled` (I14), so other
-  // tenants never see the row. No registry tools: the email jobs read
-  // through convex/email/*, not through the model.
+  // OAuth (PKCE, `oauthStates`, the /oauth/google/callback route) lives in
+  // convex/oauth.ts; token refresh in convex/email/gmailAuth.ts. Gated on
+  // `emailTriageEnabled` (I14), so other tenants never see the row. No
+  // registry tools: the email jobs read through convex/email/*, not through
+  // the model.
   gmail: {
     type: "gmail",
     displayName: "Gmail",
@@ -96,13 +104,18 @@ export const CONNECTOR_CATALOG: Record<ConnectorType, ConnectorTypeMeta> = {
       "https://www.googleapis.com/auth/gmail.readonly",
       "https://www.googleapis.com/auth/gmail.send",
     ],
-    hidden: true,
+    featureGate: "emailTriage",
   },
 };
 
-/** The surfaced catalog as an ordered array — what a Convex query hands the surface. */
-export function getConnectorCatalog(): ConnectorTypeMeta[] {
-  return Object.values(CONNECTOR_CATALOG).filter((meta) => !meta.hidden);
+/**
+ * The surfaced catalog as an ordered array — what a Convex query hands the
+ * surface. A gated type is included only when its gate is open for the org.
+ */
+export function getConnectorCatalog(gates: ConnectorGateState = {}): ConnectorTypeMeta[] {
+  return Object.values(CONNECTOR_CATALOG).filter(
+    (meta) => !meta.featureGate || gates[meta.featureGate] === true,
+  );
 }
 
 export function isConnectorType(value: unknown): value is ConnectorType {

@@ -9,7 +9,10 @@
  *   - `list`        — the catalog joined to the caller's own connection state
  *                     (status / mask / timestamps). Never returns ciphertext.
  *   - `connect`     — token-auth connect: encrypt + upsert (status connected).
- *   - `disconnect`  — clear the credential + flip status to `revoked`.
+ *   - `disconnect`  — clear the credential + flip status to `revoked` (Gmail:
+ *                     plus a best-effort revoke at Google).
+ *   - Gmail (OAuth) connects through `oauth.startGmailConnect` + the
+ *     `/oauth/google/callback` route (convex/oauth.ts), not `connect`.
  *
  * Internal (server-to-server, consumed by connector-backed tools during a
  * run — each takes the run's actor and re-derives membership from the DB, so
@@ -39,6 +42,7 @@ import {
   type MutationCtx,
   type QueryCtx,
 } from "./_generated/server";
+import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
   agentActorRefValidator,
@@ -60,12 +64,13 @@ import {
   type ConnectionFailureReason,
   type ConnectorStatus,
 } from "../lib/agents/connectors";
+import { isEmailTriageEnabled } from "./email/gate";
 
 const CONNECTOR_TOKEN_MIN_LEN = 8;
 const CONNECTOR_TOKEN_MAX_LEN = 4096;
 
 /** Load the caller's connection row for a type (the unique per-user record). */
-async function loadOwnConnection(
+export async function loadOwnConnection(
   ctx: QueryCtx | MutationCtx,
   auth: AuthContext,
   type: string,
@@ -84,8 +89,9 @@ export const DEV_SEED_CONNECTION_MESSAGE = "Remove the demo mailbox first (devSe
 /**
  * Every connect path for (org, user, type) must find NO dev-seed row
  * (`connectors.devSeed`, convex/devSeedEmail.ts) — a real connection must
- * never silently adopt the demo mailbox and its seeded threads.
- * TODO(B1): the Gmail OAuth callback calls this before it upserts.
+ * never silently adopt the demo mailbox and its seeded threads. The Gmail
+ * OAuth start and callback (convex/oauth.ts) call this too — the callback
+ * before it upserts.
  */
 export async function assertNoDevSeedConnection(
   ctx: QueryCtx | MutationCtx,
@@ -109,18 +115,25 @@ export type ConnectorListItem = {
   connectedAt: number | null;
   lastUsedAt: number | null;
   scopes: string[];
+  /** Polling sync state (Gmail) — null when the type doesn't sync or never did. */
+  sync: { lastSyncAt: number | null; error: { message: string; at: number } | null } | null;
+  /** The email-triage dev seed mailbox occupies the slot (connect is refused). */
+  isDemo: boolean;
 };
 
 /**
  * The Connectors surface: every catalog type joined to the CALLER's own
  * connection state. Per-user by construction (auth context → this user only),
  * so it never leaks whether a teammate connected anything. Ciphertext is
- * never included — only the display mask.
+ * never included — only the display mask. Gated types (Gmail) appear only
+ * for orgs whose gate is open (I14).
  */
 export const list = query({
   args: {},
   handler: async (ctx): Promise<ConnectorListItem[]> => {
     const auth = await getAuthContext(ctx);
+    // TODO(email-triage): with the flag off, a leftover Gmail row is hidden here, so it can't be disconnected from the UI.
+    const emailTriage = await isEmailTriageEnabled(ctx, auth.orgId);
     const rows = await ctx.db
       .query("connectors")
       .withIndex("by_orgId_userId", (q) =>
@@ -129,7 +142,7 @@ export const list = query({
       .collect();
     const byType = new Map(rows.map((r) => [r.type, r]));
 
-    return getConnectorCatalog().map((meta) => {
+    return getConnectorCatalog({ emailTriage }).map((meta) => {
       const row = byType.get(meta.type);
       return {
         type: meta.type,
@@ -141,6 +154,10 @@ export const list = query({
         connectedAt: row?.connectedAt ?? null,
         lastUsedAt: row?.lastUsedAt ?? null,
         scopes: row?.scopes ?? [...meta.defaultScopes],
+        sync: row?.sync
+          ? { lastSyncAt: row.sync.lastSyncAt ?? null, error: row.sync.error ?? null }
+          : null,
+        isDemo: row?.devSeed === true,
       };
     });
   },
@@ -231,6 +248,13 @@ export const connect = mutation({
  * to `revoked`. The row is kept (not deleted) so the surface shows the
  * disconnected state; a later `connect` upserts over it. Idempotent — a
  * missing/already-revoked connection is a no-op.
+ *
+ * Gmail: the wiped (still encrypted) grant is handed to a scheduled action
+ * that revokes it at Google, best-effort — the row is clean the moment this
+ * mutation commits, whether or not Google answers. The revoke is skipped
+ * while another live gmail row in the org holds the same address (L2: one
+ * Google grant per account, so revoking would cut that connection too). Not
+ * gated on the email flag: removing your own credentials must always work.
  */
 export const disconnect = mutation({
   args: { type: v.string() },
@@ -238,6 +262,13 @@ export const disconnect = mutation({
     const auth = await getAuthContext(ctx);
     const row = await loadOwnConnection(ctx, auth, args.type);
     if (!row || row.status === "revoked") return null;
+    if (row.type === "gmail" && row.credentialsCiphertext && !row.devSeed) {
+      await ctx.scheduler.runAfter(0, internal.email.gmailAuth.revokeGmailGrant, {
+        credentialsCiphertext: row.credentialsCiphertext,
+        orgId: row.orgId,
+        emailAddress: row.credentialMask,
+      });
+    }
     await ctx.db.patch(row._id, {
       status: "revoked",
       credentialsCiphertext: undefined,

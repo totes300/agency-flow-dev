@@ -281,12 +281,15 @@ describe("devSeedEmail.seed", () => {
     expect((await emailCounts(t)).emailThreads).toBe(0);
   });
 
-  it("keeps the Gmail type off the Connectors surface, seed row or not", async () => {
+  it("lists Gmail only behind the flag, and shows the seed mailbox as a demo (B1)", async () => {
     const t = createT();
     await setup(t);
+    const before = await t.withIdentity(ADMIN).query(api.connectors.list, {});
+    expect(before.map((c) => c.type)).toEqual(["echo"]);
     await t.mutation(internal.devSeedEmail.seed, { orgId: ORG });
     const list = await t.withIdentity(ADMIN).query(api.connectors.list, {});
-    expect(list.map((c) => c.type)).toEqual(["echo"]);
+    expect(list.map((c) => c.type)).toEqual(["echo", "gmail"]);
+    expect(list.find((c) => c.type === "gmail")).toMatchObject({ isDemo: true, status: "revoked" });
     // The demo mailbox can never be adopted by a real connect (B1 guard) …
     await expect(
       t.withIdentity(ADMIN).mutation(api.connectors.connect, { type: "gmail", token: "a-long-enough-token" }),

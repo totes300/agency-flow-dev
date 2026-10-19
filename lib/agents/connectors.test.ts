@@ -12,10 +12,15 @@ import {
 } from "./connectors";
 
 describe("connector catalog", () => {
-  it("surfaces exactly the Echo dev connector (Gmail stays hidden until B1)", () => {
+  it("surfaces exactly the Echo dev connector while the email-triage gate is closed", () => {
     const catalog = getConnectorCatalog();
     expect(catalog).toHaveLength(1);
     expect(catalog.map((c) => c.type)).toEqual(["echo"]);
+    expect(getConnectorCatalog({ emailTriage: false }).map((c) => c.type)).toEqual(["echo"]);
+  });
+
+  it("adds Gmail only when the email-triage gate is open (I14)", () => {
+    expect(getConnectorCatalog({ emailTriage: true }).map((c) => c.type)).toEqual(["echo", "gmail"]);
   });
 
   it("every entry's key matches its type; token connectors back at least one tool", () => {
@@ -27,9 +32,9 @@ describe("connector catalog", () => {
     }
   });
 
-  it("Gmail is a hidden OAuth connector with read + send scopes", () => {
+  it("Gmail is a gated OAuth connector with read + send scopes", () => {
     const gmail = CONNECTOR_CATALOG.gmail;
-    expect(gmail).toMatchObject({ authKind: "oauth", hidden: true, toolNames: [] });
+    expect(gmail).toMatchObject({ authKind: "oauth", featureGate: "emailTriage", toolNames: [] });
     expect(gmail.defaultScopes).toEqual([
       "https://www.googleapis.com/auth/gmail.readonly",
       "https://www.googleapis.com/auth/gmail.send",

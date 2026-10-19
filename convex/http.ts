@@ -4,6 +4,7 @@ import { internal } from "./_generated/api";
 import type { WebhookEvent } from "@clerk/backend";
 import { Webhook } from "svix";
 import type { Id } from "./_generated/dataModel";
+import { handleGoogleCallback } from "./oauth";
 
 const http = httpRouter();
 
@@ -100,6 +101,16 @@ http.route({
 
     return new Response(null, { status: 200 });
   }),
+});
+
+// ─── Gmail connect: Google OAuth redirect target (convex/oauth.ts) ──────────
+// Register `${CONVEX_SITE_URL}/oauth/google/callback` as the OAuth client's
+// redirect URI. Unauthenticated by nature: who connects is decided only by
+// the one-time `oauthStates` row the signed-in user created.
+http.route({
+  path: "/oauth/google/callback",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => await handleGoogleCallback(ctx, request)),
 });
 
 async function validateRequest(

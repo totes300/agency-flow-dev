@@ -3,9 +3,17 @@
 /**
  * Connectors surface (`?view=connectors`, slice 10) — the per-user connector
  * lifecycle UI inside the agent workspace. Lists every catalog connector with
- * the caller's OWN connection state; connect (paste token) / disconnect /
- * status. Not admin-gated: a connector authenticates the running user's own
- * account (US 37–39).
+ * the caller's OWN connection state; connect (paste token, or the OAuth
+ * redirect for Gmail) / disconnect / status. Not admin-gated: a connector
+ * authenticates the running user's own account (US 37–39).
+ *
+ * Gmail (email triage B1, D17): listed only when the org has
+ * `emailTriageEnabled` (the server decides — `api.connectors.list`). Connect
+ * calls the `oauth.startGmailConnect` action and navigates to Google; the
+ * callback sends the user back here with `?gmail=pending&t=…` — this page,
+ * signed in, finishes it through `oauth.finishGmailConnect` (only the user
+ * who started the flow can) — or `?gmail=error&reason=…`. Either becomes a
+ * toast and the params are removed from the URL first.
  *
  * Security posture (mirrors Settings → Integrations):
  *   - The token plaintext lives in memory only during the paste→save flow;
@@ -14,15 +22,10 @@
  *     credential-derived value that reaches this client.
  */
 
-import { useState } from "react"
-import { useMutation, useQuery } from "convex/react"
-import {
-  CheckCircle2Icon,
-  Loader2Icon,
-  PlugIcon,
-  PlugZapIcon,
-  TriangleAlertIcon,
-} from "lucide-react"
+import { useEffect, useRef, useState } from "react"
+import { usePathname, useRouter, useSearchParams } from "next/navigation"
+import { useAction, useConvexAuth, useMutation, useQuery } from "convex/react"
+import { Loader2Icon, PlugIcon, PlugZapIcon } from "lucide-react"
 import { toast } from "sonner"
 import { api } from "@/convex/_generated/api"
 import type { ConnectorListItem } from "@/convex/connectors"
@@ -39,11 +42,70 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Skeleton } from "@/components/ui/skeleton"
+import { formatRelativeTime } from "@/lib/format"
 import { toastError } from "@/lib/toast-helpers"
 import { cn } from "@/lib/utils"
 
+/** `?reason=` from the OAuth callback (convex/lib/googleOAuth.ts) → copy. */
+const GMAIL_CONNECT_ERRORS: Record<string, string> = {
+  denied: "Gmail wasn't connected — the Google sign-in was cancelled.",
+  invalid_state: "That sign-in link was already used. Try Connect again.",
+  expired: "The Google sign-in took longer than 10 minutes. Try Connect again.",
+  disabled: "Email triage isn't enabled for this organization.",
+  permission: "Gmail needs both read and send access. Connect again and allow both.",
+  demo_mailbox: "Remove the demo mailbox first (devSeedEmail:reset), then connect.",
+  not_member: "You're no longer a member of this organization.",
+  config: "Gmail sign-in isn't configured on this deployment yet.",
+}
+const GMAIL_CONNECT_FALLBACK_ERROR = "Couldn't connect Gmail. Try again."
+
+/**
+ * Handle the OAuth callback's return once: `pending` → finish the connect
+ * (signed in), `error` → explain. The params (incl. the one-time token) are
+ * dropped from the URL before anything else.
+ */
+function useGmailReturn() {
+  const searchParams = useSearchParams()
+  const router = useRouter()
+  const pathname = usePathname()
+  const { isAuthenticated } = useConvexAuth()
+  const finishGmailConnect = useMutation(api.oauth.finishGmailConnect)
+  const handled = useRef<string | null>(null)
+  const outcome = searchParams.get("gmail")
+  const reason = searchParams.get("reason")
+  const token = searchParams.get("t")
+
+  useEffect(() => {
+    if (!outcome) return
+    // The finish step needs the session; wait for Convex auth.
+    if (outcome === "pending" && token && !isAuthenticated) return
+    const key = `${outcome}:${reason ?? ""}:${token ?? ""}`
+    if (handled.current === key) return
+    handled.current = key
+
+    const next = new URLSearchParams(searchParams.toString())
+    next.delete("gmail")
+    next.delete("reason")
+    next.delete("t")
+    const query = next.toString()
+    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false })
+
+    if (outcome === "pending" && token) {
+      finishGmailConnect({ t: token })
+        .then((result) => {
+          if (result.ok) toast.success(`Gmail connected: ${result.emailAddress}.`)
+          else toast.error(result.message)
+        })
+        .catch((err: unknown) => toastError(err, GMAIL_CONNECT_FALLBACK_ERROR))
+    } else if (outcome === "error") {
+      toast.error(GMAIL_CONNECT_ERRORS[reason ?? ""] ?? GMAIL_CONNECT_FALLBACK_ERROR)
+    }
+  }, [outcome, reason, token, isAuthenticated, searchParams, router, pathname, finishGmailConnect])
+}
+
 export function ConnectorsView() {
   const connectors = useQuery(api.connectors.list, {})
+  useGmailReturn()
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -82,10 +144,14 @@ export function ConnectorsView() {
 
 function ConnectorCard({ connector }: { connector: ConnectorListItem }) {
   const disconnect = useMutation(api.connectors.disconnect)
+  const startGmailConnect = useAction(api.oauth.startGmailConnect)
   const [connectOpen, setConnectOpen] = useState(false)
   const [disconnectOpen, setDisconnectOpen] = useState(false)
+  const [redirecting, setRedirecting] = useState(false)
 
+  const isOAuth = connector.authKind === "oauth"
   const isConnected = connector.status === "connected"
+  const needsReconnect = connector.status === "expired" || connector.status === "error"
 
   async function handleDisconnect() {
     try {
@@ -97,22 +163,52 @@ function ConnectorCard({ connector }: { connector: ConnectorListItem }) {
     }
   }
 
+  async function handleConnect() {
+    if (!isOAuth) {
+      setConnectOpen(true)
+      return
+    }
+    setRedirecting(true)
+    try {
+      const params = new URLSearchParams(window.location.search)
+      params.delete("gmail")
+      params.delete("reason")
+      params.delete("t")
+      const query = params.toString()
+      const { url } = await startGmailConnect({
+        returnTo: `${window.location.pathname}${query ? `?${query}` : ""}`,
+      })
+      window.location.assign(url)
+    } catch (err) {
+      setRedirecting(false)
+      toastError(err, `Couldn't start the ${connector.displayName} sign-in`)
+    }
+  }
+
   return (
     <div className="rounded-lg border bg-card p-5">
       <div className="flex items-start justify-between gap-4">
         <div className="flex min-w-0 flex-col gap-2">
           <div className="flex items-center gap-2">
             <h3 className="text-sm font-semibold">{connector.displayName}</h3>
-            <ConnectorStatusBadge status={connector.status} />
+            {!connector.isDemo && <ConnectorStatus status={connector.status} />}
           </div>
 
-          {isConnected ? (
+          {connector.isDemo ? (
+            <p className="text-sm text-muted-foreground">
+              Demo mailbox with seed data — not connected to Google. Remove it
+              (devSeedEmail:reset) to connect your own.
+            </p>
+          ) : isConnected || (isOAuth && needsReconnect) ? (
             <div className="flex flex-col gap-1 text-sm">
-              {connector.mask && (
-                <code className="w-fit rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground/80">
-                  {connector.mask}
-                </code>
-              )}
+              {connector.mask &&
+                (isOAuth ? (
+                  <span className="truncate text-foreground/90">{connector.mask}</span>
+                ) : (
+                  <code className="w-fit rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground/80">
+                    {connector.mask}
+                  </code>
+                ))}
               <p className="text-xs text-muted-foreground">
                 {connector.connectedAt
                   ? `Connected ${new Date(connector.connectedAt).toLocaleDateString(
@@ -126,7 +222,20 @@ function ConnectorCard({ connector }: { connector: ConnectorListItem }) {
                       { month: "short", day: "numeric" },
                     )}`
                   : null}
+                {isOAuth ? ` · ${syncLabel(connector.sync)}` : null}
               </p>
+              {isOAuth && connector.sync?.error && (
+                <p className="text-xs text-destructive">
+                  Sync error: {connector.sync.error.message}
+                </p>
+              )}
+              {isOAuth && needsReconnect && (
+                <p className="text-xs text-muted-foreground">
+                  {connector.status === "expired"
+                    ? "Google ended this connection. Reconnect to keep syncing."
+                    : "This connection can't be used. Reconnect to fix it."}
+                </p>
+              )}
             </div>
           ) : (
             <p className="text-sm text-muted-foreground">
@@ -136,15 +245,17 @@ function ConnectorCard({ connector }: { connector: ConnectorListItem }) {
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
-          {isConnected ? (
+          {connector.isDemo ? null : isConnected ? (
             <>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setConnectOpen(true)}
-              >
-                Reconnect
-              </Button>
+              {!isOAuth && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setConnectOpen(true)}
+                >
+                  Reconnect
+                </Button>
+              )}
               <Button
                 variant="ghost"
                 size="sm"
@@ -155,24 +266,52 @@ function ConnectorCard({ connector }: { connector: ConnectorListItem }) {
               </Button>
             </>
           ) : (
-            <Button size="sm" onClick={() => setConnectOpen(true)}>
-              <PlugZapIcon className="size-3.5" aria-hidden />
-              {connector.status === null ? "Connect" : "Reconnect"}
-            </Button>
+            <>
+              {isOAuth && needsReconnect && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setDisconnectOpen(true)}
+                  className="text-destructive hover:text-destructive"
+                >
+                  Disconnect
+                </Button>
+              )}
+              <Button
+                size="sm"
+                onClick={() => void handleConnect()}
+                disabled={redirecting}
+              >
+                {redirecting ? (
+                  <Loader2Icon className="size-3.5 animate-spin" aria-hidden />
+                ) : (
+                  <PlugZapIcon className="size-3.5" aria-hidden />
+                )}
+                {connector.status === null || connector.status === "revoked"
+                  ? "Connect"
+                  : "Reconnect"}
+              </Button>
+            </>
           )}
         </div>
       </div>
 
-      <ConnectTokenDialog
-        open={connectOpen}
-        onOpenChange={setConnectOpen}
-        connector={connector}
-      />
+      {!isOAuth && (
+        <ConnectTokenDialog
+          open={connectOpen}
+          onOpenChange={setConnectOpen}
+          connector={connector}
+        />
+      )}
       <ConfirmDialog
         open={disconnectOpen}
         onOpenChange={setDisconnectOpen}
         title={`Disconnect ${connector.displayName}?`}
-        description="Agents you run will no longer be able to use it until you reconnect. Nothing else is affected."
+        description={
+          isOAuth
+            ? "Access is revoked at Google and the stored credentials are deleted. Syncing and sending from this mailbox stop until you reconnect."
+            : "Agents you run will no longer be able to use it until you reconnect. Nothing else is affected."
+        }
         confirmLabel="Disconnect"
         variant="destructive"
         onConfirm={handleDisconnect}
@@ -181,34 +320,26 @@ function ConnectorCard({ connector }: { connector: ConnectorListItem }) {
   )
 }
 
-// ─── Status badge ───────────────────────────────────────────────────────────
+function syncLabel(sync: ConnectorListItem["sync"]): string {
+  if (!sync?.lastSyncAt) return "Not synced yet"
+  return `last sync ${formatRelativeTime(sync.lastSyncAt)}`
+}
 
-function ConnectorStatusBadge({
-  status,
-}: {
-  status: ConnectorListItem["status"]
-}) {
-  if (status === "connected") {
-    return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-green-50 px-2 py-0.5 text-xs font-medium text-green-700 ring-1 ring-green-200 dark:bg-green-950/40 dark:text-green-300 dark:ring-green-900">
-        <CheckCircle2Icon className="size-3" aria-hidden />
-        Connected
-      </span>
-    )
-  }
-  if (status === "expired" || status === "error") {
-    return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 ring-1 ring-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-900">
-        <TriangleAlertIcon className="size-3" aria-hidden />
-        {status === "expired" ? "Expired" : "Error"}
-      </span>
-    )
-  }
-  // revoked or never-connected (null) both read as "not connected".
+// ─── Status (quiet: dot + muted text, no pill) ──────────────────────────────
+
+const STATUS_COPY: Record<NonNullable<ConnectorListItem["status"]>, { label: string; dot: string }> = {
+  connected: { label: "Connected", dot: "bg-emerald-500" },
+  expired: { label: "Expired", dot: "bg-amber-500" },
+  error: { label: "Error", dot: "bg-red-500" },
+  revoked: { label: "Disconnected", dot: "bg-muted-foreground/40" },
+}
+
+function ConnectorStatus({ status }: { status: ConnectorListItem["status"] }) {
+  const copy = status ? STATUS_COPY[status] : { label: "Not connected", dot: "bg-muted-foreground/40" }
   return (
-    <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground ring-1 ring-border">
-      <PlugIcon className="size-3" aria-hidden />
-      Not connected
+    <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+      <span className={cn("size-1.5 rounded-full", copy.dot)} aria-hidden />
+      {copy.label}
     </span>
   )
 }

@@ -7,8 +7,11 @@ import { api } from "@/convex/_generated/api"
 import type { TaskPlanStats } from "@/convex/planner"
 import type { TaskRowDTO } from "@/convex/tasks/read"
 import type { TaskPanelItem } from "@/lib/planner"
+import { useOptionalQuery } from "@/lib/hooks/use-optional-query"
 
 type WorkspaceRefs = FunctionReturnType<typeof api.workspaceRefs.get>
+
+const NO_STATS: readonly TaskPlanStats[] = []
 
 /**
  * Resolves the Planner panel's cards: `listView` rows (the `planner` preset,
@@ -58,9 +61,12 @@ export function buildPanelItems(
 export function usePlannerPanelTasks(enabled: boolean, today: string): TaskPanelItem[] | undefined {
   const list = useQuery(api.tasks.queries.listView, enabled ? { surface: "planner", today } : "skip")
   const refs = useQuery(api.workspaceRefs.get, enabled ? {} : "skip")
-  const stats = useQuery(api.planner.planStats, enabled ? {} : "skip")
+  // Optional: a deployment without `planner.planStats` shows the panel
+  // without plan totals instead of failing the page.
+  const { data: stats, error: statsError } = useOptionalQuery(api.planner.planStats, enabled ? {} : "skip")
+  const planStats = statsError ? NO_STATS : stats
   return useMemo(
-    () => (list && refs && stats ? buildPanelItems(list.rows, refs, stats) : undefined),
-    [list, refs, stats],
+    () => (list && refs && planStats ? buildPanelItems(list.rows, refs, planStats) : undefined),
+    [list, refs, planStats],
   )
 }

@@ -1,5 +1,9 @@
 # Phase 5 — Tasks Core: Implementation Plan
 
+> **Historical.** Superseded by `docs/prd-tasks-refactor.md` (tasks refactor, 2026-10-18,
+> completed in slice 7b). Kept for context only; where they differ, the refactor PRD and
+> the code win.
+
 > **Date**: 2026-03-16
 > **Status**: Planning
 > **Depends on**: Phase 3 (Projects Core) — complete

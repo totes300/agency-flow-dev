@@ -28,10 +28,6 @@ export default defineSchema({
     timerStatus: v.optional(v.union(v.literal("running"), v.literal("paused"))),
     // Tasks refactor (docs/prd-tasks-refactor.md §4.4). Unset = drawer.
     taskDetailMode: v.optional(v.union(v.literal("drawer"), v.literal("page"))),
-    // ── Pre-refactor fields (slice 7b commit A): no code reads or writes them;
-    // `devCleanupTasks:stripLegacy` removes them, then commit B drops them. ──
-    taskDetailView: v.optional(v.union(v.literal("modal"), v.literal("drawer"))),
-    todayVisibleStatuses: v.optional(v.array(v.string())),
     createdAt: v.number(),
     updatedAt: v.number(),
   }).index("byExternalId", ["externalId"]),
@@ -92,12 +88,6 @@ export default defineSchema({
     // project (`KON-7`). Incremented in the mutation that creates/moves the task.
     taskKey: v.optional(v.string()),
     nextTaskNumber: v.optional(v.number()),
-    // ── Pre-refactor fields (slice 7b commit A): no code reads or writes them;
-    // `devCleanupTasks:stripLegacy` removes them, then commit B drops them. ──
-    defaultStatusId: v.optional(v.id("statuses")),
-    completionDefaultAdminStatusId: v.optional(v.id("statuses")),
-    completionDefaultMemberStatusId: v.optional(v.id("statuses")),
-    defaultMyTasksStatusIds: v.optional(v.array(v.id("statuses"))),
     // Base
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -105,8 +95,6 @@ export default defineSchema({
   }).index("by_orgId", ["orgId"]),
 
   // ─── Task Statuses (per org) ───────────────────────────────────────────────
-  // WIDEN→NARROW (§12): this is slice 7b commit A — the narrowed shape plus the
-  // pre-refactor fields as optional. Commit B makes the new fields required.
   // Tasks refactor §4.1 (D3): org-defined statuses inside 5 fixed categories
   // (convex/tasks/model.ts); the icon is derived from category + position.
   // Settings: convex/statuses.ts (category immutable once used, one default
@@ -116,22 +104,10 @@ export default defineSchema({
     name: v.string(),
     description: v.optional(v.string()),
     color: v.string(),
-    // Required after the narrowing (commit B); optional until the cleanup ran.
-    category: v.optional(taskCategoryValidator),
-    position: v.optional(v.string()),         // fractional key, order within category
-    isDefault: v.optional(v.boolean()),       // exactly one per category
+    category: taskCategoryValidator,
+    position: v.string(),                     // fractional key, order within category
+    isDefault: v.boolean(),                   // exactly one per category
     archivedAt: v.optional(v.number()),
-    // ── Pre-refactor fields (slice 7b commit A): no code reads or writes them;
-    // `devCleanupTasks:stripLegacy` removes them, then commit B drops them. ──
-    type: v.optional(v.union(
-      v.literal("backlog"),
-      v.literal("in_progress"),
-      v.literal("review"),
-      v.literal("blocked"),
-      v.literal("done"),
-    )),
-    sortOrder: v.optional(v.number()),
-    icon: v.optional(v.string()),
     // Base
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -147,13 +123,13 @@ export default defineSchema({
     orgId: v.string(),
     title: v.string(),
     description: v.optional(v.string()),      // TipTap JSON string
-    hasDescription: v.optional(v.boolean()),
-    identifier: v.optional(v.string()),                   // "ARLO-21"; unique per org (T5)
-    numberScope: v.optional(numberScopeValidator),
-    number: v.optional(v.number()),
+    hasDescription: v.boolean(),
+    identifier: v.string(),                   // "ARLO-21"; unique per org (T5)
+    numberScope: numberScopeValidator,
+    number: v.number(),
     statusId: v.id("statuses"),
-    statusCategory: v.optional(taskCategoryValidator),    // == statuses[statusId].category (T3)
-    priority: v.optional(taskPriorityValidator),          // D7
+    statusCategory: taskCategoryValidator,    // == statuses[statusId].category (T3)
+    priority: taskPriorityValidator,          // D7
     projectId: v.optional(v.id("projects")),
     clientId: v.optional(v.id("clients")),    // denormalized from project
     workCategoryId: v.optional(v.id("workCategories")),
@@ -162,16 +138,16 @@ export default defineSchema({
     dueDate: v.optional(v.string()),          // YYYY-MM-DD
     estimateMinutes: v.optional(v.number()),
     parentTaskId: v.optional(v.id("tasks")),
-    sortKey: v.optional(v.string()),                      // fractional; one global manual order
+    sortKey: v.string(),                      // fractional; one global manual order
     assigneeIds: v.array(v.id("users")),      // READ CACHE of taskAssignees
-    labelIds: v.optional(v.array(v.id("labels"))),        // READ CACHE of taskLabels
+    labelIds: v.array(v.id("labels")),        // READ CACHE of taskLabels
     // Derived, maintained by the write module (§5.5).
-    trackedMinutes: v.optional(v.number()),
-    commentCount: v.optional(v.number()),
+    trackedMinutes: v.number(),
+    commentCount: v.number(),
     lastCommentAt: v.optional(v.number()),
-    subtaskCount: v.optional(v.number()),
-    subtaskDoneCount: v.optional(v.number()),
-    lastActivityAt: v.optional(v.number()),
+    subtaskCount: v.number(),
+    subtaskDoneCount: v.number(),
+    lastActivityAt: v.number(),
     lastActivity: v.optional(
       v.object({ kind: v.string(), actorId: v.id("users"), at: v.number() }),
     ),
@@ -180,18 +156,6 @@ export default defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
     createdBy: v.id("users"),
-    // ── Pre-refactor fields (slice 7b commit A): no code reads or writes them;
-    // `devCleanupTasks:stripLegacy` removes them, then commit B drops them. ──
-    statusType: v.optional(v.union(
-      v.literal("backlog"),
-      v.literal("in_progress"),
-      v.literal("review"),
-      v.literal("blocked"),
-      v.literal("done"),
-    )),
-    manualSortKey: v.optional(v.string()),
-    sortOrder: v.optional(v.number()),
-    estimate: v.optional(v.number()),
   })
     .index("by_orgId", ["orgId"])
     .index("by_orgId_sortKey", ["orgId", "sortKey"])
@@ -734,28 +698,6 @@ export default defineSchema({
   })
     .index("by_task", ["taskId"])
     .index("by_comment", ["commentId"])
-    .index("by_orgId", ["orgId"]),
-
-  // ─── Retired tables (slice 7b commit A) ────────────────────────────────────
-  // Replaced by `taskUserState` (§4.3). Nothing reads or writes them;
-  // `devCleanupTasks:stripLegacy` empties them, then commit B drops them.
-  taskViewReceipts: defineTable({
-    taskId: v.id("tasks"),
-    orgId: v.string(),
-    userId: v.id("users"),
-    lastViewedAt: v.number(),
-  })
-    .index("by_user_task", ["userId", "taskId"])
-    .index("by_orgId", ["orgId"]),
-
-  taskMutes: defineTable({
-    orgId: v.string(),
-    taskId: v.id("tasks"),
-    userId: v.id("users"),
-    createdAt: v.number(),
-  })
-    .index("by_user_task", ["userId", "taskId"])
-    .index("by_task", ["taskId"])
     .index("by_orgId", ["orgId"]),
 
   // ─── Notifications (inbox — mentions, assignments, comments) ─────────────

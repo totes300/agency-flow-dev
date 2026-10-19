@@ -72,6 +72,37 @@ are enforced and tested).
 - Worksheets export either a close (`worksheets.exportClose`, the snapshot) or an
   ad-hoc date range (`worksheets.exportRange`).
 
+## Tasks
+
+Tasks, My Tasks, the project Tasks tab and task detail run on one model
+(`docs/prd-tasks-refactor.md` is the source of truth; invariants T1–T8 are
+enforced and tested).
+
+- Statuses are org-defined inside five fixed categories (`backlog`, `unstarted`,
+  `started`, `completed`, `canceled`; `convex/tasks/model.ts`). Business logic
+  reads a task's `statusCategory`, never a status name. Settings:
+  `convex/statuses.ts` and `convex/labels.ts` (admin).
+- `convex/tasks/access.ts` is the only authorization entry point for a task
+  (T1): admins read and write every task of the org; a member reads and writes a
+  task they are assigned to (a `taskAssignees` edge) or whose parent they are
+  assigned to, with the field policy of §5.3.
+- `convex/tasks/write.ts` is the only writer of `tasks`, `taskAssignees`,
+  `taskLabels` and `taskIdentifierAliases` (T2, checked by
+  `tasksWriteBoundary.test.ts`): identifiers (`ARLO-21`), status category and
+  `completedAt`, edge caches, archive/restore cascades. `derived.ts` keeps the
+  counters (comments, sub-tasks, tracked minutes) from the comment, sub-task and
+  time-entry hooks; `userState.ts` fans out unread comments and the unseen dot.
+- `convex/tasks/read.ts` has the bounded loaders (one index range + cap each,
+  T7) and the row/detail DTOs. Public reads: `tasks/queries.ts` (`listView` for
+  every surface — tasks, myTasks, project, planner — `getByIdentifier`,
+  `getDetail`, `subtasks`, `pickerCandidates`), `tasks/today.ts` (the Today
+  plan and the sun), `tasks/views.ts` (saved views), `tasks/agent.ts` (agent
+  tools). Rows are id-based; names come from `convex/workspaceRefs.ts`.
+- Public mutations are thin wrappers in `convex/tasks.ts` and `tasks/today.ts`.
+- UI: `components/task-view/` (the one view engine: table, board, views,
+  display and filter menus), `components/task-detail/` (drawer + full page),
+  `components/my-tasks/` (Today only).
+
 ## Frontend boundaries
 
 - `app/` owns routing and page composition.

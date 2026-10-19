@@ -1,5 +1,9 @@
 # Phase 6 — Tasks Detail + Subtasks
 
+> **Historical.** Superseded by `docs/prd-tasks-refactor.md` (tasks refactor, 2026-10-18,
+> completed in slice 7b). Kept for context only; where they differ, the refactor PRD and
+> the code win.
+
 > **Goal**: The task detail modal (4 tabs) and the subtask lite system.
 > **Depends on**: Phase 5 (Tasks Core)
 

@@ -1453,6 +1453,7 @@ B1 phase prints. Started during milestone A (E4); blocks B1.
 | A4 | Proposal consolidation | done | (this commit) | createTask (subtasks, descriptionJson, source, grouping) / updateTask / postComment / proposeSkill; atomic approve via executeEffect with via-agent activity; createTask notify afterMs; I3 gate + final-state check; statuses.workflowRole + settings select + backfill; reviewed. Manual: statuses:backfillWorkflowRoles, reseed |
 | A5 | Question block | done | (this commit) | agentQuestions + askUser (ends the run via questionAsked), answer / later / reopen, exactly one next run (job continues as the answerer), settleQuestion only on typed turns, question-block.tsx with focused 1–4 keys; reviewed. Answer runs get only background tools until A7 |
 | A6 | Attachment contents | pending | | |
+| A7 | All tools on the actor path | done | (this commit) | added after the A5 review: every registry tool on *ForAuth cores + actor variants, static ctx.auth path and background flag removed, connector tools interactive-only, interactive role = orgMembers AND JWT; reviewed |
 | B1 | Gmail connect | pending | | waits on the Google OAuth client (E4) |
 | B2 | Email schema + pure model | pending | | |
 | B3 | Sync + ingest + filter | pending | | |

@@ -14,7 +14,7 @@
 import { v } from "convex/values";
 import { query, type QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
-import { requireAdmin } from "./lib/auth";
+import { assertAdmin, getAuthContext, requireAdmin, type AuthContext } from "./lib/auth";
 import { getOrgSettings } from "./lib/orgHelpers";
 import { ORG_TIMEZONE_FALLBACK, getDateInTimezone } from "./lib/timer";
 import { computeCloseFlags, type CloseFlag, type RunningTimerInfo } from "./lib/closeFlags";
@@ -309,41 +309,55 @@ async function buildQueue(ctx: QueryCtx, orgId: string): Promise<CloseQueueData>
 }
 
 /** Billing → Close: one row per project that has a period due. */
+export async function getCloseQueueForAuth(
+  ctx: QueryCtx,
+  auth: AuthContext,
+): Promise<CloseQueueData> {
+  const { orgId } = assertAdmin(auth);
+  return buildQueue(ctx, orgId);
+}
+
 export const getCloseQueue = query({
   args: {},
   handler: async (ctx): Promise<CloseQueueData> => {
-    const { orgId } = await requireAdmin(ctx);
-    return buildQueue(ctx, orgId);
+    return await getCloseQueueForAuth(ctx, await getAuthContext(ctx));
   },
 });
 
 /** Sidebar badge: to-generate / to-close rows from the queue, plus overdue invoices. */
+export async function getNavSignalsForAuth(
+  ctx: QueryCtx,
+  auth: AuthContext,
+) {
+  const { orgId } = assertAdmin(auth);
+  const { todayStr } = await viewSettings(ctx, orgId);
+  const invoiced = await ctx.db
+    .query("invoices")
+    .withIndex("by_orgId_status", (q) => q.eq("orgId", orgId).eq("status", "invoiced"))
+    .collect();
+  const overdueCount = invoiced.filter((inv) => inv.dueDate != null && inv.dueDate < todayStr).length;
+  const rows = (await buildQueue(ctx, orgId)).months.flatMap((m) => m.rows);
+  const toCloseCount = rows.filter((r) => r.isCloseRow).length;
+  // Money waiting to be invoiced, per currency (minor-unit sums, converted once).
+  const readyMinor: Record<string, number> = {};
+  for (const r of rows) {
+    if (!r.isCloseRow) readyMinor[r.currency] = (readyMinor[r.currency] ?? 0) + r.amountMinor;
+  }
+  const readyAmountByCurrency = Object.fromEntries(
+    Object.entries(readyMinor).map(([cur, minor]) => [cur, fromMinor(minor, cur)]),
+  );
+  return {
+    toGenerateCount: rows.length - toCloseCount,
+    toCloseCount,
+    overdueCount,
+    readyAmountByCurrency,
+  };
+}
+
 export const getNavSignals = query({
   args: {},
   handler: async (ctx) => {
-    const { orgId } = await requireAdmin(ctx);
-    const { todayStr } = await viewSettings(ctx, orgId);
-    const invoiced = await ctx.db
-      .query("invoices")
-      .withIndex("by_orgId_status", (q) => q.eq("orgId", orgId).eq("status", "invoiced"))
-      .collect();
-    const overdueCount = invoiced.filter((inv) => inv.dueDate != null && inv.dueDate < todayStr).length;
-    const rows = (await buildQueue(ctx, orgId)).months.flatMap((m) => m.rows);
-    const toCloseCount = rows.filter((r) => r.isCloseRow).length;
-    // Money waiting to be invoiced, per currency (minor-unit sums, converted once).
-    const readyMinor: Record<string, number> = {};
-    for (const r of rows) {
-      if (!r.isCloseRow) readyMinor[r.currency] = (readyMinor[r.currency] ?? 0) + r.amountMinor;
-    }
-    const readyAmountByCurrency = Object.fromEntries(
-      Object.entries(readyMinor).map(([cur, minor]) => [cur, fromMinor(minor, cur)]),
-    );
-    return {
-      toGenerateCount: rows.length - toCloseCount,
-      toCloseCount,
-      overdueCount,
-      readyAmountByCurrency,
-    };
+    return await getNavSignalsForAuth(ctx, await getAuthContext(ctx));
   },
 });
 

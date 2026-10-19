@@ -40,9 +40,10 @@ import { taskDescriptionToPlainText } from "../../lib/agents/reportViews";
 /**
  * Task reads for the agent tools (docs/prd-tasks-refactor.md §7). The tool
  * registry (`convex/lib/agentToolRegistry.ts`) wraps these from the agent
- * action, so they run as the run's acting user: `findTasks`/`getTaskDetail`
- * via their `*ForAuth` cores on the actor path (`agentActorTools.ts`, role
- * from `orgMembers`), the rest via `api.tasks.agent.…` with `getAuthContext`.
+ * action, so they run as the run's acting user: every tool calls a
+ * `*ForAuth` core here through the actor path (`agentActorTools.ts`, role
+ * from `orgMembers`); the public queries run the same cores with
+ * `getAuthContext`.
  * Access from `access.ts` (T1), loading from the bounded loaders of
  * `read.ts` (T7).
  *
@@ -447,23 +448,36 @@ export const getTaskDetail = query({
  * Resolves a task reference the caller can read to its id + title snapshot
  * (the `proposeArchiveTask` tool stores real ids, never model text).
  */
+export type ResolvedAgentTask = {
+  id: Id<"tasks">;
+  identifier: string | null;
+  title: string;
+  archived: boolean;
+};
+
+export const resolveTaskArgs = { task: v.string() };
+
+export async function resolveTaskForAuth(
+  ctx: QueryCtx,
+  auth: AuthContext,
+  args: ObjectType<typeof resolveTaskArgs>,
+): Promise<ResolvedAgentTask | null> {
+  const taskId = await resolveTaskRef(ctx, auth.orgId, args.task);
+  if (!taskId) return null;
+  const access = await loadTaskForReadOrNull(ctx, taskId, auth);
+  if (!access) return null;
+  return {
+    id: access.task._id,
+    identifier: access.task.identifier ?? null,
+    title: access.task.title,
+    archived: access.task.archivedAt !== undefined,
+  };
+}
+
 export const resolveTask = query({
-  args: { task: v.string() },
-  handler: async (
-    ctx,
-    args,
-  ): Promise<{ id: Id<"tasks">; identifier: string | null; title: string; archived: boolean } | null> => {
-    const auth = await getAuthContext(ctx);
-    const taskId = await resolveTaskRef(ctx, auth.orgId, args.task);
-    if (!taskId) return null;
-    const access = await loadTaskForReadOrNull(ctx, taskId, auth);
-    if (!access) return null;
-    return {
-      id: access.task._id,
-      identifier: access.task.identifier ?? null,
-      title: access.task.title,
-      archived: access.task.archivedAt !== undefined,
-    };
+  args: resolveTaskArgs,
+  handler: async (ctx, args): Promise<ResolvedAgentTask | null> => {
+    return await resolveTaskForAuth(ctx, await getAuthContext(ctx), args);
   },
 });
 
@@ -486,62 +500,68 @@ export type AgentTaskCounts = {
  * `COUNT_CAP_PER_CATEGORY` rows (members: their capped edge set), and
  * `truncated` says when a count is a lower bound.
  */
+export async function countTasksByStatusForAuth(
+  ctx: QueryCtx,
+  auth: AuthContext,
+): Promise<AgentTaskCounts> {
+  const { orgId } = auth;
+
+  const categoryTruncated = new Map<TaskCategory, boolean>();
+  let tasks: Doc<"tasks">[] = [];
+  if (auth.isAdmin) {
+    for (const category of TASK_CATEGORIES) {
+      const loaded = await loadByCategories(ctx, orgId, [category], COUNT_CAP_PER_CATEGORY);
+      categoryTruncated.set(category, loaded.truncated);
+      tasks.push(...loaded.tasks);
+    }
+  } else {
+    const loaded = await loadMemberVisible(ctx, auth);
+    // A capped edge set leaves every category incomplete.
+    for (const category of TASK_CATEGORIES) categoryTruncated.set(category, loaded.truncated);
+    tasks = await filterReadableTasks(ctx, auth, loaded.tasks);
+  }
+  const live = tasks.filter((t) => !t.archivedAt && t.statusCategory !== undefined);
+
+  const statusCounts = new Map<Id<"statuses">, number>();
+  const categoryCounts = new Map<TaskCategory, number>();
+  for (const t of live) {
+    statusCounts.set(t.statusId, (statusCounts.get(t.statusId) ?? 0) + 1);
+    const category = t.statusCategory!;
+    categoryCounts.set(category, (categoryCounts.get(category) ?? 0) + 1);
+  }
+
+  // Every active status (zero counts included) plus archived ones still in use.
+  const byStatus: AgentTaskCounts["byStatus"] = [];
+  for (const category of TASK_CATEGORIES) {
+    const statuses = await ctx.db
+      .query("statuses")
+      .withIndex("by_orgId_category_position", (q) => q.eq("orgId", orgId).eq("category", category))
+      .take(100);
+    for (const s of statuses) {
+      const count = statusCounts.get(s._id) ?? 0;
+      if (s.archivedAt && count === 0) continue;
+      byStatus.push({ statusId: s._id, status: s.name, category, count });
+    }
+  }
+
+  const byCategory = TASK_CATEGORIES.map((category) => ({
+    category,
+    label: CATEGORY_LABELS[category],
+    count: categoryCounts.get(category) ?? 0,
+    truncated: categoryTruncated.get(category) ?? false,
+  }));
+  return {
+    scope: auth.isAdmin ? "organization" : "assigned to you",
+    total: live.length,
+    truncated: byCategory.some((c) => c.truncated),
+    byCategory,
+    byStatus,
+  };
+}
+
 export const countTasksByStatus = query({
   args: {},
   handler: async (ctx): Promise<AgentTaskCounts> => {
-    const auth = await getAuthContext(ctx);
-    const { orgId } = auth;
-
-    const categoryTruncated = new Map<TaskCategory, boolean>();
-    let tasks: Doc<"tasks">[] = [];
-    if (auth.isAdmin) {
-      for (const category of TASK_CATEGORIES) {
-        const loaded = await loadByCategories(ctx, orgId, [category], COUNT_CAP_PER_CATEGORY);
-        categoryTruncated.set(category, loaded.truncated);
-        tasks.push(...loaded.tasks);
-      }
-    } else {
-      const loaded = await loadMemberVisible(ctx, auth);
-      // A capped edge set leaves every category incomplete.
-      for (const category of TASK_CATEGORIES) categoryTruncated.set(category, loaded.truncated);
-      tasks = await filterReadableTasks(ctx, auth, loaded.tasks);
-    }
-    const live = tasks.filter((t) => !t.archivedAt && t.statusCategory !== undefined);
-
-    const statusCounts = new Map<Id<"statuses">, number>();
-    const categoryCounts = new Map<TaskCategory, number>();
-    for (const t of live) {
-      statusCounts.set(t.statusId, (statusCounts.get(t.statusId) ?? 0) + 1);
-      const category = t.statusCategory!;
-      categoryCounts.set(category, (categoryCounts.get(category) ?? 0) + 1);
-    }
-
-    // Every active status (zero counts included) plus archived ones still in use.
-    const byStatus: AgentTaskCounts["byStatus"] = [];
-    for (const category of TASK_CATEGORIES) {
-      const statuses = await ctx.db
-        .query("statuses")
-        .withIndex("by_orgId_category_position", (q) => q.eq("orgId", orgId).eq("category", category))
-        .take(100);
-      for (const s of statuses) {
-        const count = statusCounts.get(s._id) ?? 0;
-        if (s.archivedAt && count === 0) continue;
-        byStatus.push({ statusId: s._id, status: s.name, category, count });
-      }
-    }
-
-    const byCategory = TASK_CATEGORIES.map((category) => ({
-      category,
-      label: CATEGORY_LABELS[category],
-      count: categoryCounts.get(category) ?? 0,
-      truncated: categoryTruncated.get(category) ?? false,
-    }));
-    return {
-      scope: auth.isAdmin ? "organization" : "assigned to you",
-      total: live.length,
-      truncated: byCategory.some((c) => c.truncated),
-      byCategory,
-      byStatus,
-    };
+    return await countTasksByStatusForAuth(ctx, await getAuthContext(ctx));
   },
 });

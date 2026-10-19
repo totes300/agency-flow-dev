@@ -2,19 +2,16 @@
  * Agent tool registry — the single vetted catalog of what agents CAN do,
  * and the determinism boundary (PRD module 2).
  *
- * Every entry wraps an EXISTING Convex function via `ctx.runQuery` /
+ * Every entry wraps an EXISTING Convex function core via `ctx.runQuery` /
  * `ctx.runMutation`, so the wrapped function's own enforcement applies as
- * the run's acting user (D6 — permission intersection). Two paths:
- *
- *   - actor path (`makeTool`) — the tool is built per run with the run's
- *     `AgentActor` in a closure and calls an INTERNAL actor variant
- *     (`convex/agentActorTools.ts` & co.) that re-derives the AuthContext
- *     from the DB on every call and runs the same core as the public query.
- *     Works with or without `ctx.auth` → the only tools a background run
- *     gets (`background: true`). Used in BOTH modes — one code path.
- *   - legacy path (`tool`) — a static tool calling `api.*` and relying on
- *     the interactive run action's inherited `ctx.auth`. Interactive only;
- *     a background run drops it (recorded in the run's `droppedTools`).
+ * the run's acting user (D6 — permission intersection). ONE path (A7):
+ * every entry's tool is built per run by `makeTool(actor)` with the run's
+ * `AgentActor` in a closure, and calls an INTERNAL actor variant
+ * (`convex/agentActorTools.ts` & co.) that re-derives the AuthContext from
+ * the DB on every call and runs the same `*ForAuth` core as the public
+ * query. Nothing relies on an inherited `ctx.auth`, so interactive,
+ * background, job and question-answer runs get the same tools — except the
+ * explicit `interactiveOnly` gate on connector entries.
  *
  * Kinds:
  *   - `read`     — returns data verbatim from a deterministic query.
@@ -38,7 +35,7 @@ import { z } from "zod";
 import type { Infer } from "convex/values";
 import type { Tool } from "ai";
 import { createTool, type ToolCtx } from "@convex-dev/agent";
-import { api, internal } from "../_generated/api";
+import { internal } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
 import { actorRef, type AgentActor } from "./auth";
 import type { proposalPayloadValidator } from "./proposalValidators";
@@ -148,29 +145,25 @@ type AgentToolEntryBase = {
 };
 
 /**
- * A registry entry. `background: true` is only expressible on an actor-path
- * entry (`makeTool`) — a static `ctx.auth` tool can't be marked background,
- * so a background run can never receive a tool that silently needs a
- * signed-in user.
+ * A registry entry. There is no static-tool variant: a tool that silently
+ * needs a signed-in user (`ctx.auth`) is not expressible, so every run mode
+ * gets the same tool set.
  */
-export type AgentToolEntry = AgentToolEntryBase &
-  (
-    | {
-        /** Legacy: calls `api.*` with the interactive run's `ctx.auth`. */
-        tool: Tool;
-        background: false;
-      }
-    | {
-        /** Actor path: built per run with the acting user in a closure. */
-        makeTool: (actor: AgentActor) => Tool;
-        /** Offered to background runs (no `ctx.auth`). */
-        background: boolean;
-      }
-  );
+export type AgentToolEntry = AgentToolEntryBase & {
+  /** Built per run with the acting user in a closure (actor path). */
+  makeTool: (actor: AgentActor) => Tool;
+  /**
+   * Run-mode gate: offered only to interactive runs (`actor.via === "user"`),
+   * dropped (and recorded) in background, job and answer runs. Connector
+   * tools act on the user's own external account, so they need the user
+   * present (revisit for Gmail in B1). Not a general background flag.
+   */
+  interactiveOnly?: true;
+};
 
 /** Materialize an entry's model tool for one run's actor. */
 export function buildEntryTool(entry: AgentToolEntry, actor: AgentActor): Tool {
-  return "makeTool" in entry ? entry.makeTool(actor) : entry.tool;
+  return entry.makeTool(actor);
 }
 
 // ─── Read tools (tracer seed) ───────────────────────────────────────────────
@@ -281,6 +274,7 @@ type CollectTimesheetResult =
  */
 async function summarizeTimesheetRows(
   ctx: ToolCtx,
+  actor: AgentActor,
   rows: Array<TimesheetPivotRow & { aiInput: WorksheetAiInput }>,
 ): Promise<{
   rows: TimesheetPivotRow[];
@@ -308,9 +302,11 @@ async function summarizeTimesheetRows(
   let aiUnavailable = false;
 
   if (eligible.length > 0) {
+    // The org's key via the actor path (membership re-checked per call) —
+    // the same loader the runner uses, so background runs summarize too.
     const apiKey = await ctx.runQuery(
-      internal.aiIntegration.loadDecryptedKeyForRun,
-      {},
+      internal.aiIntegration.loadDecryptedKeyForActor,
+      { actor: actorRef(actor) },
     );
     try {
       const results = await summarizeTasksWithBoundedConcurrency(
@@ -353,7 +349,7 @@ async function summarizeTimesheetRows(
   };
 }
 
-const collectTimesheetDataTool = createTool({
+const collectTimesheetDataTool = (actor: AgentActor) => createTool({
   description:
     "Generate a client timesheet for a period: per-task rows with hours " +
     "pivoted into work-category columns, plus totals — computed verbatim " +
@@ -410,7 +406,8 @@ const collectTimesheetDataTool = createTool({
       throw new Error("endDate must not be before startDate.");
     }
 
-    const data = await ctx.runQuery(internal.timesheets.collectTimesheetData, {
+    const data = await ctx.runQuery(internal.agentActorTools.collectTimesheetData, {
+      actor: actorRef(actor),
       clientId: input.clientId,
       periodStart,
       periodEnd,
@@ -429,7 +426,7 @@ const collectTimesheetDataTool = createTool({
 
     // Slice 05: the summarize step writes the two AI prose columns; the
     // deterministic table build then merges them next to the hours cells.
-    const summarized = await summarizeTimesheetRows(ctx, data.rows);
+    const summarized = await summarizeTimesheetRows(ctx, actor, data.rows);
     const note = summarized.aiUnavailable
       ? "AI summaries are unavailable — no Anthropic key is configured for " +
         "this organization. The table shows deterministic hours only; the " +
@@ -454,8 +451,9 @@ const collectTimesheetDataTool = createTool({
       | undefined;
     if (ctx.threadId) {
       const artifactId = await ctx.runMutation(
-        internal.agentArtifacts.createForThread,
+        internal.agentActorTools.createArtifact,
         {
+          actor: actorRef(actor),
           componentThreadId: ctx.threadId,
           kind: "timesheet_csv",
           name: table.title,
@@ -510,7 +508,7 @@ const sheetCellValue = z.union([z.string(), z.number(), z.null()]);
  * `buildModelSheet` validates strictly and stamps the code-authored
  * provenance note onto the table.
  */
-const createSheetTool = createTool({
+const createSheetTool = (actor: AgentActor) => createTool({
   description:
     "Create a spreadsheet from data you assembled out of earlier tool " +
     "results in this conversation. It renders in chat with a compact " +
@@ -560,8 +558,9 @@ const createSheetTool = createTool({
     let artifact: CreateSheetResult["artifact"];
     if (ctx.threadId) {
       const artifactId = await ctx.runMutation(
-        internal.agentArtifacts.createForThread,
+        internal.agentActorTools.createArtifact,
         {
+          actor: actorRef(actor),
           componentThreadId: ctx.threadId,
           kind: "sheet_csv",
           name: table.title,
@@ -834,7 +833,7 @@ const proposeSkillTool = (actor: AgentActor) => createTool({
  * ships closePeriod/closeCycle. Admin-scoped at run time AND at approve
  * time (PROPOSAL_KIND_META.archiveTask).
  */
-const proposeArchiveTaskTool = createTool({
+const proposeArchiveTaskTool = (actor: AgentActor) => createTool({
   description:
     "Propose ARCHIVING an existing task (destructive — the user must " +
     "explicitly confirm the card). Use only when the user asks to archive " +
@@ -850,9 +849,10 @@ const proposeArchiveTaskTool = createTool({
   }),
   execute: async (ctx, input): Promise<ProposeResult> => {
     if (!ctx.threadId) throw new Error("No thread for proposals");
-    // Resolve with the running user's access, so the stored payload holds
+    // Resolve with the acting user's access, so the stored payload holds
     // the real id (never model text) and an unreadable task can't be named.
-    const resolved = await ctx.runQuery(api.tasks.agent.resolveTask, {
+    const resolved = await ctx.runQuery(internal.agentActorTools.resolveTask, {
+      actor: actorRef(actor),
       task: input.task,
     });
     if (!resolved) {
@@ -864,25 +864,9 @@ const proposeArchiveTaskTool = createTool({
     if (resolved.archived) {
       throw new Error(`${resolved.identifier ?? resolved.title} is already archived.`);
     }
-    const proposalIds: string[] = await ctx.runMutation(
-      internal.agentProposals.createFromTool,
-      {
-        componentThreadId: ctx.threadId,
-        proposals: [
-          {
-            kind: "archiveTask" as const,
-            taskId: resolved.id,
-            taskTitle: resolved.title,
-          },
-        ],
-      },
-    );
-    return {
-      block: AGENT_PROPOSALS_MARKER,
-      proposalIds,
-      count: proposalIds.length,
-      note: PROPOSE_NOTE,
-    };
+    return await recordProposals(ctx, actor, [
+      { kind: "archiveTask" as const, taskId: resolved.id, taskTitle: resolved.title },
+    ]);
   },
 });
 
@@ -1318,7 +1302,7 @@ const getProjectRoutingTool = (actor: AgentActor) => createTool({
   },
 });
 
-const countTasksByStatusTool = createTool({
+const countTasksByStatusTool = (actor: AgentActor) => createTool({
   description:
     "Task counts per status category (backlog, unstarted, started, " +
     "completed, canceled) and per status, archived tasks excluded. Admins " +
@@ -1328,7 +1312,9 @@ const countTasksByStatusTool = createTool({
     "say \"at least N\" for it, never an exact number.",
   inputSchema: z.object({}),
   execute: async (ctx): Promise<AgentTaskCounts> => {
-    return await ctx.runQuery(api.tasks.agent.countTasksByStatus, {});
+    return await ctx.runQuery(internal.agentActorTools.countTasksByStatus, {
+      actor: actorRef(actor),
+    });
   },
 });
 
@@ -1345,7 +1331,7 @@ const memberTimePeriodSchema = {
     .describe("Period end, inclusive (YYYY-MM-DD)"),
 };
 
-const collectMemberTimeTool = createTool({
+const collectMemberTimeTool = (actor: AgentActor) => createTool({
   description:
     "Collect one member's logged time for a period, verbatim from the time " +
     "ledger: total / billable / non-billable minutes plus a per-project " +
@@ -1368,7 +1354,8 @@ const collectMemberTimeTool = createTool({
     toDate: string;
     member: MemberTimeRollup;
   }> => {
-    const result = await ctx.runQuery(internal.agentReports.timeByMember, {
+    const result = await ctx.runQuery(internal.agentActorTools.timeByMember, {
+      actor: actorRef(actor),
       fromDate: input.fromDate,
       toDate: input.toDate,
       ...(input.userId ? { userIds: [input.userId] } : {}),
@@ -1381,7 +1368,7 @@ const collectMemberTimeTool = createTool({
   },
 });
 
-const collectTeamTimeTool = createTool({
+const collectTeamTimeTool = (actor: AgentActor) => createTool({
   description:
     "Collect the whole team's logged time for a period, verbatim from the " +
     "time ledger: one row per member (total / billable / non-billable " +
@@ -1410,7 +1397,8 @@ const collectTeamTimeTool = createTool({
       entryCount: number;
     };
   }> => {
-    return await ctx.runQuery(internal.agentReports.timeByMember, {
+    return await ctx.runQuery(internal.agentActorTools.timeByMember, {
+      actor: actorRef(actor),
       fromDate: input.fromDate,
       toDate: input.toDate,
       ...(input.userIds && input.userIds.length > 0
@@ -1420,7 +1408,7 @@ const collectTeamTimeTool = createTool({
   },
 });
 
-const getProjectTimeSummaryTool = createTool({
+const getProjectTimeSummaryTool = (actor: AgentActor) => createTool({
   description:
     "Read one project's lifetime time & billing overview, verbatim from " +
     "the app: total / billable / non-billable minutes, last 3 billable " +
@@ -1446,7 +1434,8 @@ const getProjectTimeSummaryTool = createTool({
       })
   > => {
     const projectId = input.projectId as Id<"projects">;
-    const overview = await ctx.runQuery(api.timeEntries.projectOverview, {
+    const overview = await ctx.runQuery(internal.agentActorTools.projectOverview, {
+      actor: actorRef(actor),
       projectId,
     });
     if (!overview) {
@@ -1456,8 +1445,14 @@ const getProjectTimeSummaryTool = createTool({
       };
     }
     const [project, categories] = await Promise.all([
-      ctx.runQuery(api.projects.get, { id: projectId }),
-      ctx.runQuery(api.workCategories.list, { includeArchived: true }),
+      ctx.runQuery(internal.agentActorTools.getProject, {
+        actor: actorRef(actor),
+        id: projectId,
+      }),
+      ctx.runQuery(internal.agentActorTools.listWorkCategories, {
+        actor: actorRef(actor),
+        includeArchived: true,
+      }),
     ]);
     const categoryNameById = new Map<string, string>(
       categories.map((c) => [c._id.toString(), c.name]),
@@ -1472,7 +1467,7 @@ const getProjectTimeSummaryTool = createTool({
   },
 });
 
-const getProjectMonthlyBreakdownTool = createTool({
+const getProjectMonthlyBreakdownTool = (actor: AgentActor) => createTool({
   description:
     "Read one project's month-by-month time breakdown, verbatim from the " +
     "app: per calendar month the total / billable / non-billable minutes, " +
@@ -1501,14 +1496,18 @@ const getProjectMonthlyBreakdownTool = createTool({
       }
   > => {
     const projectId = input.projectId as Id<"projects">;
-    const project = await ctx.runQuery(api.projects.get, { id: projectId });
+    const project = await ctx.runQuery(internal.agentActorTools.getProject, {
+      actor: actorRef(actor),
+      id: projectId,
+    });
     if (!project) {
       return {
         message:
           "Project not found. Use the listProjects tool to get valid project ids.",
       };
     }
-    const months = await ctx.runQuery(api.timeEntries.projectMonthlyBreakdown, {
+    const months = await ctx.runQuery(internal.agentActorTools.projectMonthlyBreakdown, {
+      actor: actorRef(actor),
       projectId,
     });
     return {
@@ -1523,7 +1522,7 @@ const getProjectMonthlyBreakdownTool = createTool({
 
 // ─── Read-tool expansion — client reporting (Package D) ─────────────────────
 
-const collectClientMonthlyTotalsTool = createTool({
+const collectClientMonthlyTotalsTool = (actor: AgentActor) => createTool({
   description:
     "Collect a client's month-by-month totals across a month range in ONE " +
     "call (up to 24 months — use this for 'every month of the year' " +
@@ -1567,7 +1566,8 @@ const collectClientMonthlyTotalsTool = createTool({
       entryCount: number;
     };
   }> => {
-    return await ctx.runQuery(internal.agentReports.clientMonthlySummary, {
+    return await ctx.runQuery(internal.agentActorTools.clientMonthlySummary, {
+      actor: actorRef(actor),
       clientId: input.clientId,
       fromMonth: input.fromMonth,
       toMonth: input.toMonth,
@@ -1575,7 +1575,7 @@ const collectClientMonthlyTotalsTool = createTool({
   },
 });
 
-const getRetainerStatementTool = createTool({
+const getRetainerStatementTool = (actor: AgentActor) => createTool({
   description:
     "Read the monthly retainer report (statement) for one retainer project " +
     "and month, verbatim from the app: included vs used minutes, end " +
@@ -1594,7 +1594,8 @@ const getRetainerStatementTool = createTool({
     ctx,
     input,
   ): Promise<{ message: string } | FlatRetainerStatement> => {
-    const statement = await ctx.runQuery(api.billingReports.getMonthlyReport, {
+    const statement = await ctx.runQuery(internal.agentActorTools.getMonthlyReport, {
+      actor: actorRef(actor),
       projectId: input.projectId as Id<"projects">,
       year: input.year,
       month: input.month,
@@ -1612,7 +1613,7 @@ const getRetainerStatementTool = createTool({
 
 // ─── Read-tool expansion — retainer health & month close (Package E) ────────
 
-const collectRetainerHealthTool = createTool({
+const collectRetainerHealthTool = (actor: AgentActor) => createTool({
   description:
     "Month-close sweep across ALL retainer projects in ONE call: for the " +
     "given month, one row per retainer with client, included vs used " +
@@ -1668,8 +1669,8 @@ const collectRetainerHealthTool = createTool({
     };
   }> => {
     const result = await ctx.runQuery(
-      internal.agentReports.retainerHealthForMonth,
-      { year: input.year, month: input.month },
+      internal.agentActorTools.retainerHealthForMonth,
+      { actor: actorRef(actor), year: input.year, month: input.month },
     );
     return {
       month: result.month,
@@ -1708,7 +1709,7 @@ const collectRetainerHealthTool = createTool({
   },
 });
 
-const listReadyToInvoiceTool = createTool({
+const listReadyToInvoiceTool = (actor: AgentActor) => createTool({
   description:
     "List everything currently waiting for a billing action, verbatim from " +
     "the Billing → Close queue: one row per retainer / T&M project with its " +
@@ -1729,14 +1730,14 @@ const listReadyToInvoiceTool = createTool({
     };
   }> => {
     const [queue, counts] = await Promise.all([
-      ctx.runQuery(api.billingViews.getCloseQueue, {}),
-      ctx.runQuery(api.billingViews.getNavSignals, {}),
+      ctx.runQuery(internal.agentActorTools.getCloseQueue, { actor: actorRef(actor) }),
+      ctx.runQuery(internal.agentActorTools.getNavSignals, { actor: actorRef(actor) }),
     ]);
     return { rows: flattenReadyRows(queue.months.flatMap((m) => m.rows)), counts };
   },
 });
 
-const getRetainerCycleReportTool = createTool({
+const getRetainerCycleReportTool = (actor: AgentActor) => createTool({
   description:
     "Read one retainer project's cycle report, verbatim from the app: " +
     "cycle budget / worked / balance / utilization, overage due, monthly " +
@@ -1762,7 +1763,8 @@ const getRetainerCycleReportTool = createTool({
     | (FlatRetainerCycleReport & { projectName: string; clientName: string })
   > => {
     const projectId = input.projectId as Id<"projects">;
-    const data = await ctx.runQuery(api.projects.getRetainerData, {
+    const data = await ctx.runQuery(internal.agentActorTools.getRetainerData, {
+      actor: actorRef(actor),
       id: projectId,
       cycleOffset: input.cycleOffset,
     });
@@ -1773,7 +1775,7 @@ const getRetainerCycleReportTool = createTool({
           "start date). Check the project with listProjects.",
       };
     }
-    const project = await ctx.runQuery(api.projects.get, { id: projectId });
+    const project = await ctx.runQuery(internal.agentActorTools.getProject, { actor: actorRef(actor), id: projectId });
     return {
       projectName: project?.name ?? "Unknown",
       clientName: project?.clientName ?? "Unknown",
@@ -1784,7 +1786,7 @@ const getRetainerCycleReportTool = createTool({
 
 // ─── Read-tool expansion — invoices & AR (Package F) ────────────────────────
 
-const findInvoicesTool = createTool({
+const findInvoicesTool = (actor: AgentActor) => createTool({
   description:
     "Search the organization's invoices with flat filters — status, " +
     "client, project, issue/due date ranges, text search over the invoice " +
@@ -1843,7 +1845,8 @@ const findInvoicesTool = createTool({
     totalCount: number;
     truncated: boolean;
   }> => {
-    const invoices = await ctx.runQuery(api.invoices.listAllInvoices, {
+    const invoices = await ctx.runQuery(internal.agentActorTools.listAllInvoices, {
+      actor: actorRef(actor),
       status: input.status,
       ...(input.clientId
         ? { clientIds: [input.clientId as Id<"clients">], clientIdsOp: "is" as const }
@@ -1869,7 +1872,7 @@ const findInvoicesTool = createTool({
   },
 });
 
-const getInvoiceMetricsTool = createTool({
+const getInvoiceMetricsTool = (actor: AgentActor) => createTool({
   description:
     "Read the organization's invoice health metrics, verbatim from the " +
     "app: draft / unpaid / past-due / paid-this-month buckets, each with a " +
@@ -1878,12 +1881,12 @@ const getInvoiceMetricsTool = createTool({
     "void invoices are excluded. Never re-type or re-add the numbers.",
   inputSchema: z.object({}),
   execute: async (ctx): Promise<{ buckets: FlatInvoiceMetricsRow[] }> => {
-    const metrics = await ctx.runQuery(api.invoices.getInvoiceMetrics, {});
+    const metrics = await ctx.runQuery(internal.agentActorTools.getInvoiceMetrics, { actor: actorRef(actor) });
     return { buckets: flattenInvoiceMetrics(metrics) };
   },
 });
 
-const getInvoiceDetailTool = createTool({
+const getInvoiceDetailTool = (actor: AgentActor) => createTool({
   description:
     "Read one invoice in full, verbatim from the app: header (number, " +
     "status, client, project, currency, subtotal, total, dates, billed " +
@@ -1902,7 +1905,8 @@ const getInvoiceDetailTool = createTool({
     ctx,
     input,
   ): Promise<{ message: string } | FlatInvoiceDetail> => {
-    const result = await ctx.runQuery(api.invoices.getInvoice, {
+    const result = await ctx.runQuery(internal.agentActorTools.getInvoice, {
+      actor: actorRef(actor),
       identifier: input.identifier,
     });
     if (!result) {
@@ -1917,7 +1921,7 @@ const getInvoiceDetailTool = createTool({
 
 // ─── Read-tool expansion — profitability & org finance (Package G) ──────────
 
-const getProjectFinanceSummaryTool = createTool({
+const getProjectFinanceSummaryTool = (actor: AgentActor) => createTool({
   description:
     "Read one project's financial summary, verbatim from the app. Always " +
     "returns the time breakdown; when the running user is an admin it " +
@@ -1971,7 +1975,8 @@ const getProjectFinanceSummaryTool = createTool({
       }
   > => {
     const useCustom = Boolean(input.from || input.to);
-    const summary = await ctx.runQuery(api.projects.getSummary, {
+    const summary = await ctx.runQuery(internal.agentActorTools.getProjectSummary, {
+      actor: actorRef(actor),
       projectId: input.projectId as Id<"projects">,
       ...(input.period || useCustom
         ? {
@@ -2018,7 +2023,7 @@ const getProjectFinanceSummaryTool = createTool({
   },
 });
 
-const collectOrgFinanceSnapshotTool = createTool({
+const collectOrgFinanceSnapshotTool = (actor: AgentActor) => createTool({
   description:
     "Org-wide financial snapshot for a period in ONE call, verbatim from " +
     "the app: total / billable / non-billable minutes, labor cost and " +
@@ -2074,7 +2079,8 @@ const collectOrgFinanceSnapshotTool = createTool({
     projectCount: number;
     projectsTruncated: boolean;
   }> => {
-    return await ctx.runQuery(internal.agentReports.orgFinanceSnapshot, {
+    return await ctx.runQuery(internal.agentActorTools.orgFinanceSnapshot, {
+      actor: actorRef(actor),
       fromDate: input.fromDate,
       toDate: input.toDate,
     });
@@ -2176,7 +2182,6 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "run ends and continues when they answer.",
     scope: "member",
     kind: "question",
-    background: true,
     makeTool: askUserTool,
   },
   listClients: {
@@ -2184,7 +2189,6 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
     humanDescription: "Read the client directory (names, currencies).",
     scope: "member",
     kind: "read",
-    background: true,
     makeTool: listClientsTool,
   },
   listProjects: {
@@ -2192,7 +2196,6 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
     humanDescription: "Read the project list (names, clients, billing types).",
     scope: "member",
     kind: "read",
-    background: true,
     makeTool: listProjectsTool,
   },
   createSheet: {
@@ -2202,8 +2205,7 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "export) from data assembled out of other tools' results.",
     scope: "member",
     kind: "artifact",
-    background: false,
-    tool: createSheetTool,
+    makeTool: createSheetTool,
   },
   proposeCreateTasks: {
     name: "proposeCreateTasks",
@@ -2212,7 +2214,6 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "human approves each card.",
     scope: "member",
     kind: "propose",
-    background: true,
     makeTool: proposeCreateTasksTool,
   },
   proposeTaskUpdate: {
@@ -2222,7 +2223,6 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "cancelled, reopen) as an approval card.",
     scope: "member",
     kind: "propose",
-    background: true,
     makeTool: proposeTaskUpdateTool,
   },
   proposeComment: {
@@ -2230,7 +2230,6 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
     humanDescription: "Propose a task comment, posted as the approving user.",
     scope: "member",
     kind: "propose",
-    background: true,
     makeTool: proposeCommentTool,
   },
   proposeSkill: {
@@ -2238,7 +2237,6 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
     humanDescription: "Propose a new skill (standing instruction) — an admin approves it.",
     scope: "admin",
     kind: "propose",
-    background: true,
     makeTool: proposeSkillTool,
   },
   proposeArchiveTask: {
@@ -2248,8 +2246,7 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "confirmation step on the card). Dev kind exercising the confirm flow.",
     scope: "admin",
     kind: "propose",
-    background: false,
-    tool: proposeArchiveTaskTool,
+    makeTool: proposeArchiveTaskTool,
   },
   collectTimesheetData: {
     name: "collectTimesheetData",
@@ -2259,8 +2256,7 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
     // not soften that — members don't even see it in their tool set.
     scope: "admin",
     kind: "read",
-    background: false,
-    tool: collectTimesheetDataTool,
+    makeTool: collectTimesheetDataTool,
   },
   echo: {
     name: "echo",
@@ -2269,7 +2265,7 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "the connector framework; self-explains when the user hasn't connected).",
     scope: "member",
     kind: "connector",
-    background: false,
+    interactiveOnly: true,
     makeTool: echoTool,
   },
   // ── Read-tool expansion — directory & reference (Package A) ──────────────
@@ -2278,7 +2274,6 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
     humanDescription: "Read the team roster (names, emails, roles).",
     scope: "member",
     kind: "read",
-    background: true,
     makeTool: listTeamMembersTool,
   },
   listWorkCategories: {
@@ -2286,7 +2281,6 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
     humanDescription: "Read the work-category list (names, archived state).",
     scope: "member",
     kind: "read",
-    background: true,
     makeTool: listWorkCategoriesTool,
   },
   listStatuses: {
@@ -2294,7 +2288,6 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
     humanDescription: "Read the task status list (names, categories).",
     scope: "member",
     kind: "read",
-    background: true,
     makeTool: listStatusesTool,
   },
   // ── Tasks & work status (Package B) ───────────────────────────────────────
@@ -2305,7 +2298,6 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "work category, due dates, text). Members see only their own tasks.",
     scope: "member",
     kind: "read",
-    background: true,
     makeTool: findTasksTool,
   },
   getTaskDetail: {
@@ -2315,7 +2307,6 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "minutes, sub-tasks).",
     scope: "member",
     kind: "read",
-    background: true,
     makeTool: getTaskDetailTool,
   },
   // ── A3 read layer — task context & routing (email-triage §6.4) ───────────
@@ -2326,7 +2317,6 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "activity and files, with counts of what was left out.",
     scope: "member",
     kind: "read",
-    background: true,
     makeTool: getTaskBundleTool,
   },
   getTaskComments: {
@@ -2336,7 +2326,6 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "text with mentions, threads, resolved state and attachment names.",
     scope: "member",
     kind: "read",
-    background: true,
     makeTool: getTaskCommentsTool,
   },
   getTaskActivity: {
@@ -2346,7 +2335,6 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "time entries with notes (members: their own).",
     scope: "member",
     kind: "read",
-    background: true,
     makeTool: getTaskActivityTool,
   },
   getTaskFiles: {
@@ -2356,7 +2344,6 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "their cached page titles.",
     scope: "member",
     kind: "read",
-    background: true,
     makeTool: getTaskFilesTool,
   },
   getProjectRouting: {
@@ -2366,7 +2353,6 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "its client.",
     scope: "member",
     kind: "read",
-    background: true,
     makeTool: getProjectRoutingTool,
   },
   countTasksByStatus: {
@@ -2374,8 +2360,7 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
     humanDescription: "Task counts per status category and status.",
     scope: "member",
     kind: "read",
-    background: false,
-    tool: countTasksByStatusTool,
+    makeTool: countTasksByStatusTool,
   },
   // ── Time & utilization (Package C) ────────────────────────────────────────
   collectMemberTime: {
@@ -2385,8 +2370,7 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "Non-admin runs are always scoped to the running user.",
     scope: "member",
     kind: "read",
-    background: false,
-    tool: collectMemberTimeTool,
+    makeTool: collectMemberTimeTool,
   },
   collectTeamTime: {
     name: "collectTeamTime",
@@ -2395,8 +2379,7 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "with per-project splits and team totals.",
     scope: "admin",
     kind: "read",
-    background: false,
-    tool: collectTeamTimeTool,
+    makeTool: collectTeamTimeTool,
   },
   getProjectTimeSummary: {
     name: "getProjectTimeSummary",
@@ -2405,8 +2388,7 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "billing buckets, labor cost). Mirrors the project overview page.",
     scope: "member",
     kind: "read",
-    background: false,
-    tool: getProjectTimeSummaryTool,
+    makeTool: getProjectTimeSummaryTool,
   },
   getProjectMonthlyBreakdown: {
     name: "getProjectMonthlyBreakdown",
@@ -2414,8 +2396,7 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "One project's month-by-month time breakdown (optionally per category).",
     scope: "member",
     kind: "read",
-    background: false,
-    tool: getProjectMonthlyBreakdownTool,
+    makeTool: getProjectMonthlyBreakdownTool,
   },
   // ── Client reporting (Package D) ──────────────────────────────────────────
   collectClientMonthlyTotals: {
@@ -2425,8 +2406,7 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "(minutes, billable value, per-project split).",
     scope: "admin",
     kind: "read",
-    background: false,
-    tool: collectClientMonthlyTotalsTool,
+    makeTool: collectClientMonthlyTotalsTool,
   },
   getRetainerStatement: {
     name: "getRetainerStatement",
@@ -2435,8 +2415,7 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "overage, categories, covering invoice).",
     scope: "admin",
     kind: "read",
-    background: false,
-    tool: getRetainerStatementTool,
+    makeTool: getRetainerStatementTool,
   },
   // ── Retainer health & month close (Package E) ─────────────────────────────
   collectRetainerHealth: {
@@ -2446,8 +2425,7 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "(used vs included, status, overage due, invoice) in one call.",
     scope: "admin",
     kind: "read",
-    background: false,
-    tool: collectRetainerHealthTool,
+    makeTool: collectRetainerHealthTool,
   },
   listReadyToInvoice: {
     name: "listReadyToInvoice",
@@ -2456,8 +2434,7 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "to-generate / to-close / overdue counts).",
     scope: "admin",
     kind: "read",
-    background: false,
-    tool: listReadyToInvoiceTool,
+    makeTool: listReadyToInvoiceTool,
   },
   getRetainerCycleReport: {
     name: "getRetainerCycleReport",
@@ -2466,8 +2443,7 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "utilization, per-month rows). Mirrors the project retainer page.",
     scope: "member",
     kind: "read",
-    background: false,
-    tool: getRetainerCycleReportTool,
+    makeTool: getRetainerCycleReportTool,
   },
   // ── Invoices & AR (Package F) ─────────────────────────────────────────────
   findInvoices: {
@@ -2477,8 +2453,7 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "ranges, text).",
     scope: "admin",
     kind: "read",
-    background: false,
-    tool: findInvoicesTool,
+    makeTool: findInvoicesTool,
   },
   getInvoiceMetrics: {
     name: "getInvoiceMetrics",
@@ -2487,8 +2462,7 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "month) with per-currency totals.",
     scope: "admin",
     kind: "read",
-    background: false,
-    tool: getInvoiceMetricsTool,
+    makeTool: getInvoiceMetricsTool,
   },
   getInvoiceDetail: {
     name: "getInvoiceDetail",
@@ -2497,8 +2471,7 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "or id — the verification tool for reports.",
     scope: "admin",
     kind: "read",
-    background: false,
-    tool: getInvoiceDetailTool,
+    makeTool: getInvoiceDetailTool,
   },
   // ── Profitability & org finance (Package G) ───────────────────────────────
   getProjectFinanceSummary: {
@@ -2509,8 +2482,7 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "query strips money for members itself).",
     scope: "member",
     kind: "read",
-    background: false,
-    tool: getProjectFinanceSummaryTool,
+    makeTool: getProjectFinanceSummaryTool,
   },
   collectOrgFinanceSnapshot: {
     name: "collectOrgFinanceSnapshot",
@@ -2519,8 +2491,7 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "value and invoice totals per currency, plus per-project rows.",
     scope: "admin",
     kind: "read",
-    background: false,
-    tool: collectOrgFinanceSnapshotTool,
+    makeTool: collectOrgFinanceSnapshotTool,
   },
 };
 
@@ -2558,9 +2529,10 @@ export function isKnownTool(name: string): boolean {
  *   not erroring — the model cannot attempt it).
  * - Names missing from the registry are collected in `dropped` so the
  *   runner can surface a system note instead of silently shrinking the set.
- * - A background actor only receives `background: true` entries; the rest
- *   are `dropped` too (same system note), since they need `ctx.auth`.
- * - Actor-path entries are built with THIS actor in their closure.
+ * - Every entry is built with THIS actor in its closure. The run mode
+ *   (`actor.via`) does not narrow the set — interactive, background, job and
+ *   question-answer runs get the same tools (A7) — except `interactiveOnly`
+ *   entries (connectors), which a non-interactive run drops into `dropped`.
  */
 export function getToolsForAgent(
   toolNames: string[],
@@ -2575,7 +2547,7 @@ export function getToolsForAgent(
       continue;
     }
     if (entry.scope === "admin" && !actor.isAdmin) continue;
-    if (actor.via === "background" && !entry.background) {
+    if (entry.interactiveOnly && actor.via !== "user") {
       dropped.push(name);
       continue;
     }

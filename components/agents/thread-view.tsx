@@ -121,10 +121,9 @@ export function ThreadView({ threadId }: { threadId: string }) {
     }
     // A tool the agent references no longer exists in the registry — dropped
     // before the model call, flagged here instead of failing the run (slice 09).
-    // TODO(A7): answer runs (`questionId`) start on the background path, which
-    // drops the agent's non-actor-path tools; the notice is noise there until
-    // A7 moves every registry tool to the actor path.
-    if (run.droppedTools.length > 0 && !run.answersQuestion) {
+    // Every run mode gets the same tools (A7); besides renamed/removed tools
+    // this only names connector tools a non-interactive run can't use.
+    if (run.droppedTools.length > 0) {
       timeline.push({
         key: `${run._id}-dropped-tools`,
         at: run.startedAt,

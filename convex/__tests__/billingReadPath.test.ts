@@ -88,6 +88,8 @@ async function addEntry(w: World, date: string, minutes: number, over: { billabl
 }
 
 const as = (w: World) => w.t.withIdentity(ADMIN);
+/** The same admin as an agent actor (agent collectors run on the actor path, A7). */
+const adminActor = (w: World) => ({ orgId: ORG_ID, userId: w.userId });
 const queueRow = async (w: World) =>
   (await as(w).query(api.billingViews.getCloseQueue, {})).months.flatMap((m) => m.rows).find((r) => r.projectId === w.projectId);
 const workspace = (w: World, period: string) =>
@@ -304,7 +306,7 @@ describe("§8.3 — one balance ladder on every surface", () => {
         includedMinutes: 1800,
       });
 
-      const health = await as(w).query(internal.agentReports.retainerHealthForMonth, { year: 2026, month });
+      const health = await w.t.query(internal.agentActorTools.retainerHealthForMonth, { actor: adminActor(w), year: 2026, month });
       const row = health.rows.find((r) => r.projectId === w.projectId);
       expect(row).toMatchObject({
         usedMinutes: used[i],
@@ -329,7 +331,7 @@ describe("§8.3 — one balance ladder on every surface", () => {
     const open = await expectAgreement(w);
     expect(open).toMatchObject({ overageMinutes: 340, overageDue: 510 });
     expect(open?.months.map((m) => m.balanceStatus)).toEqual(["deficit", "deficit", "due"]);
-    const june = await as(w).query(internal.agentReports.retainerHealthForMonth, { year: 2026, month: 6 });
+    const june = await w.t.query(internal.agentActorTools.retainerHealthForMonth, { actor: adminActor(w), year: 2026, month: 6 });
     expect(june.rows[0]).toMatchObject({ overageDue: true, overageMinutes: 340, overageAmount: 510 });
 
     const { invoiceId } = await commit(w, "2026-04-01");

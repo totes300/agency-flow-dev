@@ -104,11 +104,19 @@ export async function getAuthContextOptional(
 export async function requireAdmin(
   ctx: QueryCtx | MutationCtx
 ): Promise<AuthContext> {
-  const authCtx = await getAuthContext(ctx);
-  if (!authCtx.isAdmin) {
+  return assertAdmin(await getAuthContext(ctx));
+}
+
+/**
+ * `requireAdmin` for an AuthContext already in hand — the gate inside shared
+ * `*ForAuth` cores, so the public query (JWT auth) and the agent actor path
+ * (`loadAuthContextForActor`) refuse non-admins with the same error.
+ */
+export function assertAdmin(auth: AuthContext): AuthContext {
+  if (!auth.isAdmin) {
     throw new ConvexError("Admin access required");
   }
-  return authCtx;
+  return auth;
 }
 
 /**
@@ -156,10 +164,10 @@ export const requireAdminForAction = internalQuery({
  * Who an agent run acts as (docs/prd-email-triage-implementation-plan.md §3
  * P1). `via: "user"` = an interactive run started by the signed-in user;
  * `via: "background"` = a server-started run with no `ctx.auth`, acting as a
- * named org member. `isAdmin` is the `orgMembers` role resolved when the run
- * began (both modes — never the JWT role) and is used ONLY for tool-set
- * filtering; every actor-path read/write re-derives the role from
- * `orgMembers` via `loadAuthContextForActor`.
+ * named org member. `isAdmin` is the role `loadAuthContextForActor` resolved
+ * when the run began (`orgMembers`; for an interactive start also ANDed with
+ * the JWT role) and is used ONLY for tool-set filtering; every actor-path
+ * read/write re-derives the role via `loadAuthContextForActor`.
  */
 export type AgentActor = {
   orgId: string;
@@ -185,10 +193,18 @@ export function actorRef(actor: AgentActorRef): AgentActorRef {
 }
 
 /**
- * Build an `AuthContext` (same shape as `getAuthContext`) from DB records for
- * a run that has no `ctx.auth`. Membership + role come from `orgMembers`,
- * which the Clerk webhook (`organizationMembership.*`, convex/http.ts) keeps
- * in sync with the same `org:admin → admin` mapping the JWT path uses.
+ * Build an `AuthContext` (same shape as `getAuthContext`) for an agent run's
+ * actor. Membership + role come from `orgMembers`, which the Clerk webhook
+ * (`organizationMembership.*`, convex/http.ts) keeps in sync with the same
+ * `org:admin → admin` mapping the JWT path uses.
+ *
+ * Fail closed on the interactive role (A7): when the call carries a signed-in
+ * identity that IS the actor (subject = the user's `externalId`), the JWT org
+ * must be the actor's org, and the actor is an admin only if BOTH the
+ * membership row and the JWT say so — a demoted admin whose webhook lags
+ * loses admin data in interactive runs too. With no identity (background,
+ * job and answer runs) or another user's identity, `orgMembers` alone
+ * decides.
  *
  * Throws when the user is missing/deleted or is not a CURRENT member of the
  * org. Server-side only: callers are internal functions whose actor came from
@@ -211,11 +227,20 @@ export async function loadAuthContextForActor(
   if (!membership || (membership.userId && membership.userId !== user._id)) {
     throw new ConvexError("Acting user is not a member of this organization");
   }
+  let isAdmin = membership.role === "admin";
+  const identity = await ctx.auth.getUserIdentity();
+  if (identity && identity.subject === user.externalId) {
+    const jwt = parseOrgFromIdentity(identity as Record<string, unknown>);
+    if (jwt.orgId !== actor.orgId) {
+      throw new ConvexError("Acting user's session is for a different organization");
+    }
+    isAdmin = isAdmin && jwt.orgRole === "admin";
+  }
   return {
     userId: user._id,
     orgId: actor.orgId,
-    orgRole: membership.role,
-    isAdmin: membership.role === "admin",
+    orgRole: isAdmin ? "admin" : "member",
+    isAdmin,
     user,
   };
 }

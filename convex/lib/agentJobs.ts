@@ -13,7 +13,7 @@
  *     (convex/lib/systemAgents.ts), started or queued through the background
  *     path by `internal.agentJobs.startAgentJob`. The run uses the agent's
  *     base instructions + the job's instructions + platform prompt + skills,
- *     the job's tools (background-capable only), `maxSteps` and `model`.
+ *     the job's tools (any non-interactive-only tool), `maxSteps` and `model`.
  *     Its stages have ONE source: `JOB_STAGES[name]` (lib/agents/jobStages.ts,
  *     client-safe), read via `getJobStages`; their state is derived from
  *     real tool events.
@@ -58,7 +58,7 @@ export type AgentRunJob = {
   visibility: "admins" | "private";
   /** Appended after the system agent's base instructions. */
   instructions: string;
-  /** Registry tool names; only background-capable ones are allowed. */
+  /** Registry tool names (actor path, A7); interactive-only ones are refused. */
   tools: string[];
   // No `stages` here: the fixed stage list (§6.5) is `JOB_STAGES[name]`
   // (getJobStages) — one source for the registry and the client.
@@ -97,10 +97,12 @@ export function validateAgentJob(
     throw new Error(`${where}: unknown system agent "${job.systemAgentKey}"`);
   }
   for (const name of job.tools) {
+    // Every registry tool runs on the actor path (A7); only the explicit
+    // `interactiveOnly` gate (connectors) keeps one out of a job's run.
     const entry = agentToolRegistry[name];
     if (!entry) throw new Error(`${where}: unknown tool "${name}"`);
-    if (!entry.background) {
-      throw new Error(`${where}: tool "${name}" can't run in a background run`);
+    if (entry.interactiveOnly) {
+      throw new Error(`${where}: tool "${name}" is interactive-only`);
     }
   }
   const keys = new Set<string>();

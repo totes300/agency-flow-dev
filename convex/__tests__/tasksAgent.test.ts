@@ -401,7 +401,7 @@ describe("countTasksByStatus (T1, T7)", () => {
 // ─── resolveTask + archive proposals ─────────────────────────────────────────
 
 describe("archive proposals resolve task references", () => {
-  it("resolveTask applies access; createFromTool stores the real id + title", async () => {
+  it("resolveTask applies access; createProposals stores the real id + title", async () => {
     const t = createT();
     const f = await setup(t);
     expect(await as(t, "admin").query(api.tasks.agent.resolveTask, { task: f.identifier.A.toLowerCase() })).toEqual({
@@ -409,6 +409,11 @@ describe("archive proposals resolve task references", () => {
     });
     expect(await as(t, "unassigned").query(api.tasks.agent.resolveTask, { task: f.identifier.A })).toBeNull();
     expect(await as(t, "otherOrg").query(api.tasks.agent.resolveTask, { task: f.A })).toBeNull();
+    // The actor path (A7) runs the same core: same answer for the same user.
+    const adminActor = { orgId: ORG, userId: f.admin };
+    expect(
+      await t.query(internal.agentActorTools.resolveTask, { actor: adminActor, task: f.identifier.A }),
+    ).toEqual(await as(t, "admin").query(api.tasks.agent.resolveTask, { task: f.identifier.A }));
 
     const componentThreadId = "thread_component_1";
     await t.run(async (ctx) => {
@@ -422,7 +427,8 @@ describe("archive proposals resolve task references", () => {
         lastActivityAt: now, createdAt: now,
       });
     });
-    const [proposalId] = await t.mutation(internal.agentProposals.createFromTool, {
+    const [proposalId] = await t.mutation(internal.agentActorTools.createProposals, {
+      actor: adminActor,
       componentThreadId,
       proposals: [{ kind: "archiveTask", taskId: f.identifier.A.toLowerCase(), taskTitle: "" }],
     });
@@ -431,7 +437,8 @@ describe("archive proposals resolve task references", () => {
 
     // A task of another org never resolves in this thread's org.
     await expect(
-      t.mutation(internal.agentProposals.createFromTool, {
+      t.mutation(internal.agentActorTools.createProposals, {
+        actor: adminActor,
         componentThreadId,
         proposals: [{ kind: "archiveTask", taskId: f.X, taskTitle: "" }],
       }),

@@ -328,32 +328,16 @@ export const loadDecryptedKey = internalQuery({
 });
 
 /**
- * Key loader for agent tools still on the `ctx.auth` path (today only the
- * timesheet summarizer inside `collectTimesheetData`); the runner itself uses
- * `loadDecryptedKeyForActor` below.
- *
- * Unlike `loadDecryptedKey` (admin-gated: the Integrations tab is an
- * admin surface), this variant requires only org membership: agents with
- * `runPermission: "everyone"` are runnable by members, and the org's AI
- * key is run infrastructure, not a per-user secret. The plaintext still
- * never crosses the client boundary — this is `internalQuery`, consumed
- * server-side by the runner action only. What a member can DO with the
- * model stays bounded by the tool registry's scope filtering plus each
- * wrapped function's own auth (D6).
- */
-export const loadDecryptedKeyForRun = internalQuery({
-  args: {},
-  handler: async (ctx): Promise<string | null> => {
-    const auth = await getAuthContext(ctx);
-    return await loadOrgAiKey(ctx, auth.orgId);
-  },
-});
-
-/**
- * Actor-path key loader — what the agent runner uses in BOTH interactive and
- * background runs (docs/prd-email-triage-implementation-plan.md §3 P1). The
- * key is org-level; the actor's membership is re-checked from the DB on every
- * call (`loadAuthContextForActor`), so a removed member's run cannot load it.
+ * Actor-path key loader — what the agent runner AND the timesheet tool's
+ * summarizer use in every run, interactive or background
+ * (docs/prd-email-triage-implementation-plan.md §3 P1, A7). The key is
+ * org-level run infrastructure, not a per-user secret: agents with
+ * `runPermission: "everyone"` are runnable by members, so only org
+ * membership is required — re-checked from the DB on every call
+ * (`loadAuthContextForActor`), so a removed member's run cannot load it. The
+ * plaintext never crosses the client boundary (internal, server-side only);
+ * what a member can DO with the model stays bounded by the registry's scope
+ * filtering plus each wrapped function's own auth (D6).
  */
 export const loadDecryptedKeyForActor = internalQuery({
   args: { actor: agentActorRefValidator },

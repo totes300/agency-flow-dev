@@ -331,7 +331,7 @@ describe("agentBackground.start", () => {
     ).rejects.toThrow(/permission/);
   });
 
-  it("runs end-to-end with no identity: actor-path tool executes, legacy tools dropped", async () => {
+  it("runs end-to-end with no identity: actor-path tool executes, every tool offered (A7)", async () => {
     const t = createT();
     const f = await setup(t);
     const model = recordingModel({
@@ -354,16 +354,19 @@ describe("agentBackground.start", () => {
     expect(run).toMatchObject({
       orgId: ORG, userId: f.alice, via: "background", actorIsAdmin: false, status: "succeeded",
     });
-    // countTasksByStatus is a ctx.auth tool → dropped and recorded; the
+    // Every tool is on the actor path (A7): nothing is dropped; the
     // admin-only timesheet tool is simply absent for a member (not dropped).
-    expect(run?.droppedTools).toEqual(["countTasksByStatus"]);
+    expect(run?.droppedTools).toBeUndefined();
     const thread = await t.run((ctx) => ctx.db.get(threadId));
     expect(thread?.status).toBe("idle");
 
-    // The model was offered only listClients, and the tool really ran as
-    // Alice without ctx.auth: its result reached the second model call.
+    // The model was offered the same tools an interactive member run gets,
+    // and listClients really ran as Alice without ctx.auth: its result
+    // reached the second model call.
     expect(model.doStreamCalls).toHaveLength(2);
-    expect((model.doStreamCalls[0].tools ?? []).map((tool) => tool.name)).toEqual(["listClients"]);
+    expect((model.doStreamCalls[0].tools ?? []).map((tool) => tool.name).sort()).toEqual(
+      ["countTasksByStatus", "listClients"],
+    );
     expect(JSON.stringify(model.doStreamCalls[1].prompt)).toContain(f.clientName);
     expect(JSON.stringify(model.doStreamCalls[1].prompt)).not.toContain("Elsewhere");
   });
@@ -412,7 +415,7 @@ describe("agentBackground.start", () => {
 // ─── Interactive path regression ─────────────────────────────────────────────
 
 describe("startRun (interactive) on the shared loop", () => {
-  it("records via=user and keeps legacy ctx.auth tools available", async () => {
+  it("records via=user; formerly ctx.auth-only tools run on the actor path", async () => {
     const t = createT();
     const f = await setup(t);
     const model = recordingModel({
@@ -436,7 +439,7 @@ describe("startRun (interactive) on the shared loop", () => {
     expect((model.doStreamCalls[0].tools ?? []).map((tool) => tool.name).sort()).toEqual(
       ["countTasksByStatus", "listClients"],
     );
-    // The legacy tool ran with the inherited identity (member scope: 1 task).
+    // countTasksByStatus ran as the actor (member scope: Alice's own tasks).
     expect(JSON.stringify(model.doStreamCalls[1].prompt)).toContain("assigned to you");
   });
 

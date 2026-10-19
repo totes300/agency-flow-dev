@@ -1,5 +1,6 @@
-import { v, ConvexError } from "convex/values";
-import { internalMutation, query } from "./_generated/server";
+import { v } from "convex/values";
+import { query, type MutationCtx } from "./_generated/server";
+import type { Doc, Id } from "./_generated/dataModel";
 import { getAuthContext } from "./lib/auth";
 import { threadAccess } from "./agentThreads";
 import {
@@ -19,47 +20,37 @@ import {
  *
  * Tenancy: orgId-scoped; read access follows the artifact's THREAD under the
  * thread policy (`threadAccess`): owner or admin on a private thread, any
- * admin on an `admins` thread. Writes happen only through the
- * internal mutation the timesheet tool calls — never from the client.
+ * admin on an `admins` thread. Writes happen only through the actor-path
+ * internal mutation the artifact tools call — never from the client.
  */
 
-// ─── Write (internal — called from the timesheet tool's action) ─────────────
+// ─── Write (called from artifact tools via the actor path) ───────────────────
+
+export type ArtifactKind = "timesheet_csv" | "sheet_csv";
 
 /**
- * Persist an artifact for a component thread. The tool ctx exposes the
- * component thread id (not the app thread), so we resolve the app thread via
- * `by_componentThreadId` and inherit its orgId + owner — the artifact can
- * never be scoped to a different tenant than its thread.
+ * Persist an artifact for a thread — the core behind
+ * `agentActorTools.createArtifact` (the timesheet + sheet tools). The tool
+ * ctx exposes the component thread id (not the app thread); the caller
+ * resolves the app thread and checks the actor's write access, and the
+ * artifact inherits its orgId + owner — it can never be scoped to a
+ * different tenant than its thread.
  */
-export const createForThread = internalMutation({
-  args: {
-    componentThreadId: v.string(),
-    runId: v.optional(v.id("agentRuns")),
-    kind: v.union(v.literal("timesheet_csv"), v.literal("sheet_csv")),
-    name: v.string(),
-    sheetJson: v.string(),
-  },
-  handler: async (ctx, args) => {
-    const thread = await ctx.db
-      .query("agentThreads")
-      .withIndex("by_componentThreadId", (q) =>
-        q.eq("componentThreadId", args.componentThreadId),
-      )
-      .unique();
-    if (!thread) throw new ConvexError("Thread not found for artifact");
-
-    return await ctx.db.insert("agentArtifacts", {
-      orgId: thread.orgId,
-      threadId: thread._id,
-      runId: args.runId,
-      userId: thread.userId,
-      kind: args.kind,
-      name: args.name,
-      sheetJson: args.sheetJson,
-      createdAt: Date.now(),
-    });
-  },
-});
+export async function insertArtifactForThread(
+  ctx: MutationCtx,
+  thread: Doc<"agentThreads">,
+  args: { kind: ArtifactKind; name: string; sheetJson: string },
+): Promise<Id<"agentArtifacts">> {
+  return await ctx.db.insert("agentArtifacts", {
+    orgId: thread.orgId,
+    threadId: thread._id,
+    userId: thread.userId,
+    kind: args.kind,
+    name: args.name,
+    sheetJson: args.sheetJson,
+    createdAt: Date.now(),
+  });
+}
 
 // ─── Reads (thread read access) ─────────────────────────────────────────────
 

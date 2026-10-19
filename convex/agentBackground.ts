@@ -28,8 +28,9 @@ import {
  * A busy thread does not reject: the run is QUEUED (FIFO) and started by
  * `runNextQueued` once the active run settles, actor re-checked then (I11).
  * Otherwise the SAME loop as `startRun` runs (`executeRun`): instructions
- * assembly, stop handling, settle/finish, audit rows. Only `background: true`
- * tools are offered; the rest are recorded in the run's `droppedTools`.
+ * assembly, stop handling, settle/finish, audit rows — with the same tool set
+ * (every registry tool is on the actor path, A7) minus `interactiveOnly`
+ * connector tools, which are recorded in the run's `droppedTools`.
  */
 export const start = internalAction({
   args: {

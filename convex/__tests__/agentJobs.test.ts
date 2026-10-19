@@ -598,8 +598,15 @@ describe("startAgentJob", () => {
     ).rejects.toThrow(/Unknown agent_run job/);
   });
 
-  it("registering a job with a non-background tool or a bad model throws", () => {
-    expect(() => registerAgentJobForTesting({ ...TRIAGE_JOB, name: "bad1", tools: ["countTasksByStatus"] })).toThrow(/background/);
+  it("registering a job with an unknown or interactive-only tool or a bad model throws; other tools are fine (A7)", () => {
+    expect(() => registerAgentJobForTesting({ ...TRIAGE_JOB, name: "bad1", tools: ["sudo"] })).toThrow(/unknown tool/);
+    // Connector tools are interactive-only: a job run could never use them.
+    expect(() => registerAgentJobForTesting({ ...TRIAGE_JOB, name: "bad2", tools: ["echo"] })).toThrow(/interactive-only/);
+    // Every registry tool runs on the actor path now — formerly ctx.auth-only ones too.
+    const unregister = registerAgentJobForTesting({
+      ...TRIAGE_JOB, name: "any_tool", tools: ["countTasksByStatus", "collectOrgFinanceSnapshot", "createSheet"],
+    });
+    unregister();
     expect(() => registerAgentJobForTesting({ ...TRIAGE_JOB, name: "bad3", model: "openai/gpt-5" })).toThrow(/Claude/);
   });
 

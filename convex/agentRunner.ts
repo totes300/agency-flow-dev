@@ -282,7 +282,7 @@ async function openRun(
   }
   const resolved = resolveSkills(skills, clientId);
   const skillPrompt = assembleSkillPrompt(resolved);
-  // A job run uses the JOB's tool list (background-capable by
+  // A job run uses the JOB's tool list (known registry names by
   // construction, validateAgentJob); a plain turn uses the agent's.
   const toolNames = job ? job.tools : agent.tools;
   // Agent identity first (+ the job's instructions for a job run, A2b), then
@@ -334,11 +334,12 @@ async function openRun(
     prompt: args.message,
   });
 
-  // Flag tool names the registry no longer knows (renamed/removed in code),
-  // plus — for a background actor — tools not yet on the actor path: recorded
-  // on the run row so the thread surfaces a `system` block, and dropped again
-  // at model-call time (getToolsForAgent in the action is the single source
-  // of truth — never executed).
+  // Flag tool names the registry no longer knows (renamed/removed in code):
+  // recorded on the run row so the thread surfaces a `system` block, and
+  // dropped again at model-call time (getToolsForAgent in the action is the
+  // single source of truth — never executed). Every run mode gets the same
+  // tools (A7), except `interactiveOnly` (connector) tools, which a
+  // non-interactive run drops and records here too.
   const actor: AgentActor = {
     orgId: auth.orgId,
     userId: auth.userId,
@@ -453,9 +454,10 @@ export const MEMBERSHIP_NOT_SYNCED_MESSAGE =
  * from the JWT (`getAuthContext`, inherited from the public `startRun`
  * action); the core then requires the JWT org to be the thread's org.
  *
- * The ROLE comes from `orgMembers` (`loadAuthContextForActor`), exactly as in
- * background runs — one role source per run, so the admin-scope tool filter,
- * the `runPermission` check and every actor-path read always agree. Resolved
+ * The ROLE comes from `loadAuthContextForActor` — `orgMembers` ANDed with the
+ * JWT role for the signed-in actor (fail closed, A7) — the same resolver every
+ * actor-path read uses, so the admin-scope tool filter, the `runPermission`
+ * check and each tool call always agree. Resolved
  * BEFORE anything is recorded: a missing membership row (Clerk webhook lag,
  * preview deployments) rejects here with a clear toast instead of failing
  * mid-run with no user message / run row written.

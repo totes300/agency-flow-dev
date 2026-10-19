@@ -54,8 +54,9 @@ function rejectionReason(err: unknown, fallback: string): string {
  * Proposal engine (PRD Module 3 · slice 08; email-triage A4 / S2) — the ONLY
  * path from agent intent to domain writes.
  *
- * Lifecycle: a propose-kind registry tool inserts a `pending` row via
- * `createFromTool` / the actor path (never touching domain tables); the chat
+ * Lifecycle: a propose-kind registry tool inserts a `pending` row via the
+ * actor path (`agentActorTools.createProposals`, never touching domain
+ * tables); the chat
  * renders the row as an editable card; `approve` validates the (possibly
  * edited) payload and executes the kind's WHOLE effect in ONE nested
  * mutation (`executeEffect`), which calls the domain write paths directly
@@ -528,33 +529,7 @@ async function normalizeAgentPayload(
   };
 }
 
-// ─── Write (internal — called from propose-kind tools) ──────────────────────
-
-/**
- * Insert a batch of pending proposals for a component thread. The tool ctx
- * exposes the component thread id, so the app thread is resolved via
- * `by_componentThreadId` and orgId/owner are inherited — a proposal can
- * never be scoped to a different tenant than its thread (same pattern as
- * `agentArtifacts.createForThread`).
- *
- * Payloads are structurally validated here with the pure validator; an
- * invalid draft throws a model-actionable error (the model corrects and
- * retries). `archiveTask` additionally resolves the task reference (an id,
- * or an identifier like `ARLO-21` — the tool resolves it with the running
- * user's access first) to the real id in the thread's org and snapshots the
- * task's title so the card stays renderable even after the task is deleted
- * — that IS the stale case the engine must display.
- */
-export const createFromTool = internalMutation({
-  args: {
-    componentThreadId: v.string(),
-    proposals: v.array(proposalPayloadValidator),
-  },
-  handler: async (ctx, args): Promise<string[]> => {
-    const thread = await loadThreadByComponentId(ctx, args.componentThreadId);
-    return await insertProposalsForThread(ctx, thread, args.proposals);
-  },
-});
+// ─── Write (called from propose-kind tools via the actor path) ──────────────
 
 /** The app thread behind a component thread id (proposal tools' tool ctx). */
 export async function loadThreadByComponentId(
@@ -572,16 +547,27 @@ export async function loadThreadByComponentId(
 }
 
 /**
- * Shared core of proposal creation — `createFromTool` (ctx.auth-path tools)
- * and the agent actor path (`agentActorTools.createProposals`) both insert
- * through here, so validation and scoping never fork.
+ * Insert a batch of pending proposals for a thread — the core behind
+ * `agentActorTools.createProposals`, the one path every propose-kind tool
+ * records through. The tool ctx exposes the component thread id, so the
+ * caller resolves the app thread via `by_componentThreadId` and orgId/owner
+ * are inherited — a proposal can never be scoped to a different tenant than
+ * its thread.
+ *
+ * Payloads are structurally validated here with the pure validator; an
+ * invalid draft throws a model-actionable error (the model corrects and
+ * retries). Task-addressed kinds (`archiveTask`, `postComment`,
+ * `updateTask`) resolve their task reference (an id, or an identifier like
+ * `ARLO-21`) to the real id in the thread's org — readable by the acting
+ * user — and snapshot the task's title so the card stays renderable even
+ * after the task is deleted (the stale case the engine must display).
  */
 export async function insertProposalsForThread(
   ctx: MutationCtx,
   thread: Doc<"agentThreads">,
   proposals: Infer<typeof proposalPayloadValidator>[],
-  /** The acting user (actor path): task refs must be readable by them. */
-  auth?: AuthContext,
+  /** The acting user: task refs must be readable by them. */
+  auth: AuthContext,
 ): Promise<string[]> {
   if (proposals.length === 0 || proposals.length > 25) {
     throw new Error("Propose between 1 and 25 items per call.");

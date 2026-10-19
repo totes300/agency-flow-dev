@@ -232,6 +232,10 @@ describe("background tool filtering (A1 actor layer)", () => {
     "getTaskActivity",
     "getTaskFiles",
     "getTaskBundle",
+    // A4 propose kinds (actor path)
+    "proposeTaskUpdate",
+    "proposeComment",
+    "proposeSkill",
   ];
 
   it("exactly the migrated tools are background-capable, all on the actor path", () => {

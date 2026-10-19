@@ -161,6 +161,6 @@ export const createProposals = internalMutation({
     const auth = await loadAuthContextForActor(ctx, args.actor);
     const found = await loadThreadByComponentId(ctx, args.componentThreadId);
     const { thread } = await requireThreadAccess(ctx, auth, found._id, "write");
-    return await insertProposalsForThread(ctx, thread, args.proposals);
+    return await insertProposalsForThread(ctx, thread, args.proposals, auth);
   },
 });

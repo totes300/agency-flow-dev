@@ -49,6 +49,7 @@ export function OnboardingModal() {
       name: s.name,
       color: s.color as StatusColorName,
       category: s.category,
+      workflowRole: s.workflowRole,
     }))
   )
 
@@ -75,6 +76,7 @@ export function OnboardingModal() {
           name: s.name.trim(),
           color: s.color,
           category: s.category,
+          workflowRole: s.workflowRole,
         })),
         workCategories: categories.map((c) => {
           const billStr = String(c.defaultBillRate ?? "").trim()

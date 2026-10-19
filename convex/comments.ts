@@ -1,10 +1,10 @@
 import { v, ConvexError } from "convex/values";
-import { query, mutation } from "./_generated/server";
-import { Id } from "./_generated/dataModel";
+import { query, mutation, type MutationCtx } from "./_generated/server";
+import { Doc, Id } from "./_generated/dataModel";
 import { getAuthContext } from "./lib/auth";
-import { logActivity } from "./activityLog";
+import { logActivity, type ActivityAttribution } from "./activityLog";
 import { onComment } from "./tasks/derived";
-import { loadTaskForReadOrNull, loadTaskForWrite } from "./tasks/access";
+import { loadTaskForReadOrNull, loadTaskForWrite, type TaskAccess } from "./tasks/access";
 import { createNotifications } from "./notifications";
 import {
   extractMentionIds,
@@ -92,87 +92,108 @@ export const create = mutation({
     parentCommentId: v.optional(v.id("comments")),
   },
   handler: async (ctx, args) => {
-    const { task, auth } = await loadTaskForWrite(ctx, args.taskId);
-    const { orgId, userId } = auth;
-
-    // Validate parent comment if replying
-    let parentAuthorId: Id<"users"> | undefined;
-    if (args.parentCommentId) {
-      const parent = await ctx.db.get(args.parentCommentId);
-      if (!parent || parent.taskId !== args.taskId) {
-        throw new ConvexError("Parent comment not found");
-      }
-      parentAuthorId = parent.userId;
-
-      // Auto re-open: find root comment and unresolve if resolved
-      let root = parent;
-      while (root.parentCommentId) {
-        const ancestor = await ctx.db.get(root.parentCommentId);
-        if (!ancestor) break;
-        root = ancestor;
-      }
-      if (root.resolvedAt) {
-        await ctx.db.patch(root._id, { resolvedAt: undefined, resolvedBy: undefined });
-      }
-    }
-
-    validateTiptapContent(args.content);
-
-    const now = Date.now();
-    const commentId = await ctx.db.insert("comments", {
-      taskId: args.taskId,
-      orgId,
-      userId,
+    const access = await loadTaskForWrite(ctx, args.taskId);
+    return await createComment(ctx, access, {
       content: args.content,
       parentCommentId: args.parentCommentId,
-      createdAt: now,
-      updatedAt: now,
     });
-
-    await logActivity(ctx, {
-      taskId: args.taskId,
-      orgId,
-      userId,
-      type: "comment_added",
-      metadata: { commentId },
-      at: now,
-    });
-    await onComment(ctx, args.taskId, { kind: "created", at: now, actorId: userId });
-
-    // Notification fan-out: @mentions + reply-to-author + task participants
-    // (assignees ∪ prior commenters). Mention ids come from client-controlled
-    // Tiptap JSON — createNotifications validates each recipient.
-    const priorComments = await ctx.db
-      .query("comments")
-      .withIndex("by_task", (q) => q.eq("taskId", args.taskId))
-      .take(200);
-    const participantIds = [...new Set(priorComments.map((c) => c.userId))];
-
-    const recipients = computeCommentRecipients({
-      actorId: userId,
-      assigneeIds: task.assigneeIds,
-      mentionIds: extractMentionIds(args.content),
-      participantIds,
-      parentAuthorId,
-    });
-    if (recipients.length > 0) {
-      const preview = extractContentPreview(args.content, 140);
-      await createNotifications(ctx, {
-        orgId,
-        actorId: userId,
-        task,
-        events: recipients.map((r) => ({
-          recipientId: r.userId,
-          type: r.type,
-          commentId,
-          previewText: preview,
-        })),
-      });
-    }
-
-    return commentId;
   },
 });
+
+/**
+ * THE comment create path: `comments.create` and the agent `postComment`
+ * proposal approval (as the approving user) both run it, so validation,
+ * activity, counters and the mention / reply / participant notifications
+ * are identical. `access` is a write access to the task (tasks/access.ts).
+ */
+export async function createComment(
+  ctx: MutationCtx,
+  access: TaskAccess,
+  input: { content: Doc<"comments">["content"]; parentCommentId?: Id<"comments"> },
+  options: { attribution?: ActivityAttribution } = {},
+): Promise<Id<"comments">> {
+  const { task, auth } = access;
+  const { orgId, userId } = auth;
+  const args = { taskId: task._id, ...input };
+
+  // Validate parent comment if replying
+  let parentAuthorId: Id<"users"> | undefined;
+  if (args.parentCommentId) {
+    const parent = await ctx.db.get(args.parentCommentId);
+    if (!parent || parent.taskId !== args.taskId) {
+      throw new ConvexError("Parent comment not found");
+    }
+    parentAuthorId = parent.userId;
+
+    // Auto re-open: find root comment and unresolve if resolved
+    let root = parent;
+    while (root.parentCommentId) {
+      const ancestor = await ctx.db.get(root.parentCommentId);
+      if (!ancestor) break;
+      root = ancestor;
+    }
+    if (root.resolvedAt) {
+      await ctx.db.patch(root._id, { resolvedAt: undefined, resolvedBy: undefined });
+    }
+  }
+
+  validateTiptapContent(args.content);
+
+  const now = Date.now();
+  const commentId = await ctx.db.insert("comments", {
+    taskId: args.taskId,
+    orgId,
+    userId,
+    content: args.content,
+    parentCommentId: args.parentCommentId,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  await logActivity(ctx, {
+    taskId: args.taskId,
+    orgId,
+    userId,
+    type: "comment_added",
+    metadata: { commentId },
+    at: now,
+    attribution: options.attribution,
+  });
+  await onComment(ctx, args.taskId, { kind: "created", at: now, actorId: userId });
+
+  // Notification fan-out: @mentions + reply-to-author + task participants
+  // (assignees ∪ prior commenters). Mention ids come from client-controlled
+  // Tiptap JSON — createNotifications validates each recipient.
+  const priorComments = await ctx.db
+    .query("comments")
+    .withIndex("by_task", (q) => q.eq("taskId", args.taskId))
+    .take(200);
+  const participantIds = [...new Set(priorComments.map((c) => c.userId))];
+
+  const recipients = computeCommentRecipients({
+    actorId: userId,
+    assigneeIds: task.assigneeIds,
+    mentionIds: extractMentionIds(args.content),
+    participantIds,
+    parentAuthorId,
+  });
+  if (recipients.length > 0) {
+    const preview = extractContentPreview(args.content, 140);
+    await createNotifications(ctx, {
+      orgId,
+      actorId: userId,
+      task,
+      events: recipients.map((r) => ({
+        recipientId: r.userId,
+        type: r.type,
+        commentId,
+        previewText: preview,
+      })),
+    });
+  }
+
+  return commentId;
+}
 
 /**
  * Update own comment.

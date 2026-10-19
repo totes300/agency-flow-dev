@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   AGENT_PROPOSALS_MARKER,
+  commentTextToTiptapDoc,
   isProposalRefsOutput,
   mergeEditedPayload,
   plainTextToTiptapDoc,
@@ -276,6 +277,195 @@ describe("plainTextToTiptapDoc", () => {
         { type: "paragraph", content: [{ type: "text", text: "A" }] },
         { type: "paragraph" },
         { type: "paragraph", content: [{ type: "text", text: "B" }] },
+      ],
+    });
+  });
+});
+
+// ─── A4 kinds (S2) ──────────────────────────────────────────────────────────
+
+describe("validateProposalPayload — createTask extensions", () => {
+  it("normalizes sub-tasks, priority, labels, source, reasons and grouping", () => {
+    const result = validateProposalPayload({
+      kind: "createTask",
+      title: "Landing page",
+      descriptionJson: JSON.stringify({ type: "doc", content: [] }),
+      priority: 2,
+      labelIds: ["l1", "l1", " "],
+      statusId: "s1",
+      subtasks: [
+        { title: " Hero ", assigneeIds: ["u1", "u1"], dueDate: "2026-10-24", requestIds: [] },
+        { title: "Footer", assigneeIds: [] },
+      ],
+      source: { kind: "email", threadId: "th", messageId: "m", requestIds: ["r1"] },
+      fieldReasons: { dueDate: { reason: "Friday", confidence: "unsure" }, title: { reason: "  " } },
+      grouping: { planId: "p", index: 1, count: 2 },
+    });
+    expect(result).toEqual({
+      ok: true,
+      payload: {
+        kind: "createTask",
+        title: "Landing page",
+        descriptionJson: JSON.stringify({ type: "doc", content: [] }),
+        statusId: "s1",
+        priority: 2,
+        labelIds: ["l1"],
+        subtasks: [
+          { title: "Hero", assigneeIds: ["u1"], dueDate: "2026-10-24" },
+          { title: "Footer", assigneeIds: [] },
+        ],
+        source: { kind: "email", threadId: "th", messageId: "m", requestIds: ["r1"] },
+        fieldReasons: { dueDate: { reason: "Friday", confidence: "unsure" } },
+        grouping: { planId: "p", index: 1, count: 2 },
+      },
+    });
+  });
+
+  it("rejects bad sub-tasks, priorities, descriptionJson and grouping", () => {
+    const bad = (extra: Record<string, unknown>) =>
+      validateProposalPayload({ kind: "createTask", title: "T", ...extra });
+    expect(bad({ subtasks: [{ title: " ", assigneeIds: [] }] })).toMatchObject({ ok: false, reason: "Subtask title is required" });
+    expect(bad({ subtasks: [{ title: "x", assigneeIds: [], dueDate: "soon" }] })).toMatchObject({ ok: false });
+    expect(bad({ priority: 7 })).toMatchObject({ ok: false });
+    expect(bad({ descriptionJson: "not json" })).toMatchObject({ ok: false });
+    expect(bad({ descriptionJson: JSON.stringify({ type: "paragraph" }) })).toMatchObject({ ok: false });
+    expect(bad({ grouping: { planId: "p", index: 3, count: 2 } })).toMatchObject({ ok: false });
+    expect(bad({ source: { kind: "email", threadId: "t" } })).toMatchObject({ ok: false });
+  });
+});
+
+describe("validateProposalPayload — updateTask", () => {
+  it("keeps only real changes; null clears a due date / category", () => {
+    expect(
+      validateProposalPayload({
+        kind: "updateTask",
+        taskId: " t1 ",
+        changes: { dueDate: null, workCategoryId: "", assigneeIds: ["u1"], priority: 0 },
+        subtasks: {
+          add: [{ title: "New", assigneeIds: [] }],
+          amend: [{ subtaskId: "s1", title: "Renamed" }],
+          cancel: [{ subtaskId: "s2", reason: "Dropped" }],
+          tick: [{ subtaskId: "s3" }],
+        },
+      }),
+    ).toEqual({
+      ok: true,
+      payload: {
+        kind: "updateTask",
+        taskId: "t1",
+        changes: { dueDate: null, workCategoryId: null, assigneeIds: ["u1"], priority: 0 },
+        subtasks: {
+          add: [{ title: "New", assigneeIds: [] }],
+          amend: [{ subtaskId: "s1", title: "Renamed" }],
+          cancel: [{ subtaskId: "s2", reason: "Dropped" }],
+          tick: [{ subtaskId: "s3" }],
+        },
+      },
+    });
+  });
+
+  it("rejects an empty change, a sub-task in two ops, and statusId + reopen together", () => {
+    expect(validateProposalPayload({ kind: "updateTask", taskId: "t", changes: {} })).toMatchObject({
+      ok: false, reason: "The proposal changes nothing",
+    });
+    expect(
+      validateProposalPayload({
+        kind: "updateTask", taskId: "t", subtasks: { tick: [{ subtaskId: "s" }], cancel: [{ subtaskId: "s" }] },
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      validateProposalPayload({ kind: "updateTask", taskId: "t", changes: { statusId: "a" }, reopen: { statusId: "b" } }),
+    ).toMatchObject({ ok: false });
+    expect(validateProposalPayload({ kind: "updateTask", changes: { title: "x" } })).toMatchObject({
+      ok: false, reason: "taskId is required",
+    });
+  });
+});
+
+describe("validateProposalPayload — postComment / proposeSkill", () => {
+  it("requires a comment body and trims it", () => {
+    expect(validateProposalPayload({ kind: "postComment", taskId: "t", body: "  Hi  " })).toEqual({
+      ok: true, payload: { kind: "postComment", taskId: "t", body: "Hi" },
+    });
+    expect(validateProposalPayload({ kind: "postComment", taskId: "t", body: " " })).toMatchObject({ ok: false });
+  });
+
+  it("pairs scope and client and keeps non-empty evidence", () => {
+    expect(
+      validateProposalPayload({
+        kind: "proposeSkill", name: "N", instruction: "I", scope: "global", clientId: "c", evidence: ["a", " "],
+      }),
+    ).toEqual({ ok: true, payload: { kind: "proposeSkill", name: "N", instruction: "I", scope: "global", evidence: ["a"] } });
+    expect(
+      validateProposalPayload({ kind: "proposeSkill", name: "N", instruction: "I", scope: "client", evidence: [] }),
+    ).toMatchObject({ ok: false, reason: "A client skill needs a client" });
+  });
+});
+
+describe("A4 kind metadata + merge", () => {
+  it("proposeSkill is admin-approved; the change kinds are member-approvable", () => {
+    expect(PROPOSAL_KIND_META.proposeSkill.approveScope).toBe("admin");
+    expect(PROPOSAL_KIND_META.updateTask.approveScope).toBe("member");
+    expect(PROPOSAL_KIND_META.postComment.approveScope).toBe("member");
+  });
+
+  it("replaces sub-tasks as a whole and removes them when emptied", () => {
+    const original: CreateTaskPayload = {
+      kind: "createTask",
+      title: "T",
+      subtasks: [
+        { title: "A", assigneeIds: [] },
+        { title: "B", assigneeIds: [] },
+      ],
+      source: { kind: "agentThread", agentThreadId: "x" },
+    };
+    expect(mergeEditedPayload(original, { subtasks: [{ title: "B", assigneeIds: [] }] })).toEqual({
+      ...original,
+      subtasks: [{ title: "B", assigneeIds: [] }],
+    });
+    // source is agent-owned — not editable.
+    expect(mergeEditedPayload(original, { subtasks: [], source: null })).toEqual({
+      kind: "createTask", title: "T", source: { kind: "agentThread", agentThreadId: "x" },
+    });
+  });
+});
+
+describe("description edits vs descriptionJson (L2)", () => {
+  const rich: CreateTaskPayload = {
+    kind: "createTask",
+    title: "T",
+    description: "Agent text",
+    descriptionJson: JSON.stringify({ type: "doc", content: [] }),
+  };
+
+  it("a typed description drops the agent's TipTap JSON so the typed text wins", () => {
+    expect(mergeEditedPayload(rich, { description: "Typed by me" })).toEqual({
+      kind: "createTask", title: "T", description: "Typed by me",
+    });
+    // Clearing the description clears both.
+    expect(mergeEditedPayload(rich, { description: "" })).toEqual({ kind: "createTask", title: "T" });
+  });
+
+  it("an unchanged description (the card re-sends it with every edit) keeps the JSON", () => {
+    expect(mergeEditedPayload(rich, { description: "Agent text", title: "T2" })).toEqual({ ...rich, title: "T2" });
+  });
+});
+
+describe("commentTextToTiptapDoc", () => {
+  it("turns @[Name](user:id) tokens into mention nodes and leaves other text literal", () => {
+    expect(commentTextToTiptapDoc("Hi @[Bob](user:u1), see @[ARLO-2](task:t1)\n\nThanks")).toEqual({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            { type: "text", text: "Hi " },
+            { type: "mention", attrs: { id: "u1", label: "Bob" } },
+            { type: "text", text: ", see @[ARLO-2](task:t1)" },
+          ],
+        },
+        { type: "paragraph" },
+        { type: "paragraph", content: [{ type: "text", text: "Thanks" }] },
       ],
     });
   });

@@ -2,7 +2,7 @@ import { query, mutation } from "./_generated/server";
 import { v, ConvexError } from "convex/values";
 import { getAuthContextOptional, requireAdmin, validateStringLength } from "./lib/auth";
 import { currencyValidator, roundingValidator, statusColorValidator, categoryColorValidator } from "./lib/validators";
-import { taskCategoryValidator } from "./tasks/model";
+import { taskCategoryValidator, workflowRoleValidator } from "./tasks/model";
 import { seedOrgStatuses } from "./statuses";
 
 export const get = query({
@@ -55,6 +55,7 @@ export const create = mutation({
         name: v.string(),
         color: statusColorValidator,
         category: taskCategoryValidator,
+        workflowRole: v.optional(workflowRoleValidator),
       })
     ),
     workCategories: v.array(

@@ -446,12 +446,16 @@ export const devSeedAgents = internalMutation({
           "notes into task PROPOSALS the user reviews and approves.\n\n" +
           "Rules you must never break:\n" +
           "1. You cannot create, change or archive anything yourself. Your " +
-          "only write path is proposing: proposeCreateTasks for new tasks, " +
-          "proposeArchiveTask for archiving. The user approves or discards " +
-          "each card — never claim something was created or archived.\n" +
-          "2. One proposal per distinct task in the source material. Keep " +
-          "titles short and imperative; put supporting detail in the " +
-          "description as plain text.\n" +
+          "only write path is proposing: proposeCreateTasks for new tasks " +
+          "(with subtasks), proposeTaskUpdate for changes to an existing " +
+          "task (status, assignees, due date, subtasks added / ticked / " +
+          "cancelled), proposeComment for a comment, proposeArchiveTask for " +
+          "archiving. The user approves or discards each card — never claim " +
+          "something was created or changed.\n" +
+          "2. One proposal per distinct task in the source material; separate " +
+          "requests inside one task become its subtasks. Keep titles short " +
+          "and imperative; put supporting detail in the description as plain " +
+          "text. Before proposing a change, read the task with getTaskDetail.\n" +
           "3. Use exact ids only: resolve project names via listProjects; " +
           "take assignee ids only from @-mentions in the user's message; " +
           "refer to tasks by their identifier (e.g. ARLO-21) from an " +
@@ -463,7 +467,14 @@ export const devSeedAgents = internalMutation({
         tools: [
           "listClients",
           "listProjects",
+          "listTeamMembers",
+          "listStatuses",
+          "listWorkCategories",
+          "findTasks",
+          "getTaskDetail",
           "proposeCreateTasks",
+          "proposeTaskUpdate",
+          "proposeComment",
           "proposeArchiveTask",
         ],
         runPermission: "everyone" as const,
@@ -543,7 +554,8 @@ export const devSeedAgents = internalMutation({
           "5. Money stays per currency — never sum across currencies. " +
           "Retainer hours carry a 0 hourly amount by design; retainer " +
           "money comes from the retainer/cycle/invoice tools.\n" +
-          "6. Your only write path is proposing (proposeCreateTasks, " +
+          "6. Your only write path is proposing (proposeCreateTasks with " +
+          "subtasks, proposeTaskUpdate, proposeComment, proposeSkill, " +
           "proposeArchiveTask) — cards the user approves. Never claim " +
           "anything was created or changed; after proposing, add at most " +
           "one short sentence.\n" +

@@ -12,19 +12,148 @@ import { v } from "convex/values";
  * drafts, normalized against real tables only at approve time (a stale or
  * hallucinated id must degrade to a validation failure, not a schema error).
  */
+// ─── Shared parts (A4 / S2) ─────────────────────────────────────────────────
+
+const requestIdsValidator = v.optional(v.array(v.string()));
+
+/**
+ * Where a proposal came from. Email specifics live HERE, never in the kind
+ * name (implementation plan S2) — the standup / transcript / Monthly Close
+ * agents propose the same kinds with `agentThread`. Ids are strings: the
+ * email tables arrive in B2 and payload ids are normalized at approve time.
+ */
+export const proposalSourceValidator = v.union(
+  v.object({
+    kind: v.literal("email"),
+    threadId: v.string(),
+    messageId: v.string(),
+    requestIds: requestIdsValidator,
+  }),
+  v.object({
+    kind: v.literal("agentThread"),
+    agentThreadId: v.string(),
+    requestIds: requestIdsValidator,
+  }),
+);
+
+/** "Why these suggestions?" — field name → the agent's reason. */
+export const proposalFieldReasonsValidator = v.record(
+  v.string(),
+  v.object({
+    reason: v.string(),
+    confidence: v.union(v.literal("sure"), v.literal("unsure")),
+  }),
+);
+
+/** A sub-task to create (D7: each client request → a sub-task). */
+export const proposedSubtaskValidator = v.object({
+  title: v.string(),
+  assigneeIds: v.array(v.string()),
+  dueDate: v.optional(v.string()),
+  requestIds: requestIdsValidator,
+});
+
 export const proposalPayloadValidator = v.union(
   v.object({
     kind: v.literal("createTask"),
     title: v.string(),
+    /** Plain text; wrapped into a TipTap doc at approve time. */
     description: v.optional(v.string()),
+    /** TipTap JSON string; wins over `description` when both are set. */
+    descriptionJson: v.optional(v.string()),
     projectId: v.optional(v.string()),
     assigneeIds: v.optional(v.array(v.string())),
     workCategoryId: v.optional(v.string()),
     dueDate: v.optional(v.string()),
+    statusId: v.optional(v.string()),
+    /** 0 none · 1 urgent · 2 high · 3 medium · 4 low (tasks/model PRIORITY). */
+    priority: v.optional(v.number()),
+    labelIds: v.optional(v.array(v.string())),
+    subtasks: v.optional(v.array(proposedSubtaskValidator)),
+    source: v.optional(proposalSourceValidator),
+    fieldReasons: v.optional(proposalFieldReasonsValidator),
+    /** One split plan = N createTask proposals sharing `planId` ("Task i of count"). */
+    grouping: v.optional(
+      v.object({ planId: v.string(), index: v.number(), count: v.number() }),
+    ),
     /** @deprecated Pre-multi-assignee rows; folded into assigneeIds by
      * `validateProposalPayload` on every read/merge path. Kept so existing
      * dev rows don't fail schema validation. */
     assigneeId: v.optional(v.string()),
+  }),
+  // A change to an existing task (D4 change proposals, Merge D29, standup).
+  v.object({
+    kind: v.literal("updateTask"),
+    taskId: v.string(),
+    /** Display snapshot taken at propose time (the card renders without the task). */
+    taskTitle: v.optional(v.string()),
+    changes: v.optional(
+      v.object({
+        title: v.optional(v.string()),
+        statusId: v.optional(v.string()),
+        /** The FULL new assignee set. */
+        assigneeIds: v.optional(v.array(v.string())),
+        priority: v.optional(v.number()),
+        /** null clears. */
+        dueDate: v.optional(v.union(v.string(), v.null())),
+        /** null clears. */
+        workCategoryId: v.optional(v.union(v.string(), v.null())),
+        descriptionJson: v.optional(v.string()),
+      }),
+    ),
+    subtasks: v.optional(
+      v.object({
+        add: v.optional(v.array(proposedSubtaskValidator)),
+        amend: v.optional(
+          v.array(
+            v.object({
+              subtaskId: v.string(),
+              subtaskTitle: v.optional(v.string()),
+              title: v.optional(v.string()),
+              assigneeIds: v.optional(v.array(v.string())),
+              dueDate: v.optional(v.union(v.string(), v.null())),
+            }),
+          ),
+        ),
+        cancel: v.optional(
+          v.array(
+            v.object({
+              subtaskId: v.string(),
+              subtaskTitle: v.optional(v.string()),
+              reason: v.optional(v.string()),
+            }),
+          ),
+        ),
+        tick: v.optional(
+          v.array(
+            v.object({ subtaskId: v.string(), subtaskTitle: v.optional(v.string()) }),
+          ),
+        ),
+      }),
+    ),
+    /** Status to set when the task holds a review role or is closed at approve time. */
+    reopen: v.optional(v.object({ statusId: v.string() })),
+    source: v.optional(proposalSourceValidator),
+    fieldReasons: v.optional(proposalFieldReasonsValidator),
+  }),
+  // A comment on a task, posted as the approving user.
+  v.object({
+    kind: v.literal("postComment"),
+    taskId: v.string(),
+    taskTitle: v.optional(v.string()),
+    /** Plain text; `@[Name](user:<id>)` tokens become mentions. */
+    body: v.string(),
+    source: v.optional(proposalSourceValidator),
+  }),
+  // A learned SOP (PRD §6.8.4) — admin-approved.
+  v.object({
+    kind: v.literal("proposeSkill"),
+    name: v.string(),
+    instruction: v.string(),
+    scope: v.union(v.literal("global"), v.literal("client")),
+    clientId: v.optional(v.string()),
+    /** What the agent saw that suggests the skill (shown on the card). */
+    evidence: v.array(v.string()),
   }),
   // Dev-only destructive kind — exercises the confirm flow ahead of Wave 2's
   // closePeriod/closeCycle.

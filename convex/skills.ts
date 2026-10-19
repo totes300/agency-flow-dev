@@ -1,6 +1,6 @@
 import { v, ConvexError } from "convex/values";
 import { mutation, query, type MutationCtx } from "./_generated/server";
-import { requireAdmin, validateStringLength } from "./lib/auth";
+import { requireAdmin, validateStringLength, type AuthContext } from "./lib/auth";
 import type { Id } from "./_generated/dataModel";
 
 /**
@@ -93,34 +93,53 @@ export const create = mutation({
   },
   handler: async (ctx, args) => {
     const auth = await requireAdmin(ctx);
-    const name = args.name.trim();
-    const instruction = args.instruction.trim();
-    if (!name) throw new ConvexError("Name is required");
-    if (!instruction) throw new ConvexError("Instruction is required");
-    validateStringLength(name, NAME_MAX, "Name");
-    validateStringLength(instruction, INSTRUCTION_MAX, "Instruction");
-
-    const clientId = await resolveScopeClient(
-      ctx,
-      auth.orgId,
-      args.scope,
-      args.clientId,
-    );
-
-    const now = Date.now();
-    return await ctx.db.insert("skills", {
-      orgId: auth.orgId,
-      name,
-      instruction,
-      scope: args.scope,
-      clientId,
-      isStopCondition: args.isStopCondition,
-      createdBy: auth.userId,
-      createdAt: now,
-      updatedAt: now,
-    });
+    return await createSkill(ctx, auth, args);
   },
 });
+
+/**
+ * THE skill create path: `skills.create` and the agent `proposeSkill`
+ * approval both run it. Admin-only, enforced here too (not just by callers).
+ */
+export async function createSkill(
+  ctx: MutationCtx,
+  auth: AuthContext,
+  args: {
+    name: string;
+    instruction: string;
+    scope: "global" | "client";
+    clientId?: Id<"clients">;
+    isStopCondition: boolean;
+  },
+): Promise<Id<"skills">> {
+  if (!auth.isAdmin) throw new ConvexError("Only admins can add skills");
+  const name = args.name.trim();
+  const instruction = args.instruction.trim();
+  if (!name) throw new ConvexError("Name is required");
+  if (!instruction) throw new ConvexError("Instruction is required");
+  validateStringLength(name, NAME_MAX, "Name");
+  validateStringLength(instruction, INSTRUCTION_MAX, "Instruction");
+
+  const clientId = await resolveScopeClient(
+    ctx,
+    auth.orgId,
+    args.scope,
+    args.clientId,
+  );
+
+  const now = Date.now();
+  return await ctx.db.insert("skills", {
+    orgId: auth.orgId,
+    name,
+    instruction,
+    scope: args.scope,
+    clientId,
+    isStopCondition: args.isStopCondition,
+    createdBy: auth.userId,
+    createdAt: now,
+    updatedAt: now,
+  });
+}
 
 export const update = mutation({
   args: {

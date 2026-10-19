@@ -57,11 +57,35 @@ export const CATEGORY_LABELS: Record<TaskCategory, string> = {
 
 // ─── Default statuses (§4.1) ─────────────────────────────────────────────────
 
+// ─── Workflow roles (email-triage PRD §4.2, §11 O7) ─────────────────────────
+
+/**
+ * What a status MEANS to workflow rules (the I3 review gate, Reviews, the
+ * stuck watcher) — at most one status per role per org. Rules read the role,
+ * never the status name (D3).
+ */
+export const WORKFLOW_ROLES = ["admin_review", "client_review", "blocked"] as const;
+
+export type WorkflowRole = (typeof WORKFLOW_ROLES)[number];
+
+export const workflowRoleValidator = v.union(
+  v.literal("admin_review"),
+  v.literal("client_review"),
+  v.literal("blocked"),
+);
+
+export const WORKFLOW_ROLE_LABELS: Record<WorkflowRole, string> = {
+  admin_review: "Admin review",
+  client_review: "Client review",
+  blocked: "Blocked",
+};
+
 export type DefaultStatusSeed = {
   name: string;
   category: TaskCategory;
   color: string;
   isDefault: boolean;
+  workflowRole?: WorkflowRole;
 };
 
 /** Default seed per org, in display order. One `isDefault` per category. */
@@ -69,9 +93,9 @@ export const DEFAULT_STATUS_SEED: readonly DefaultStatusSeed[] = [
   { name: "Inbox", category: "backlog", color: "gray", isDefault: true },
   { name: "Next up", category: "unstarted", color: "blue", isDefault: true },
   { name: "In progress", category: "started", color: "amber", isDefault: true },
-  { name: "Admin review", category: "started", color: "purple", isDefault: false },
-  { name: "Client review", category: "started", color: "coral", isDefault: false },
-  { name: "Stuck", category: "started", color: "red", isDefault: false },
+  { name: "Admin review", category: "started", color: "purple", isDefault: false, workflowRole: "admin_review" },
+  { name: "Client review", category: "started", color: "coral", isDefault: false, workflowRole: "client_review" },
+  { name: "Stuck", category: "started", color: "red", isDefault: false, workflowRole: "blocked" },
   { name: "Done", category: "completed", color: "green", isDefault: true },
   { name: "Canceled", category: "canceled", color: "gray", isDefault: true },
 ];
@@ -348,12 +372,19 @@ const fromToString = v.object({ from: v.string(), to: v.string() });
 const fromToDate = v.object({ from: nullableString, to: nullableString });
 const commentRef = v.object({ commentId: v.id("comments") });
 
-/** Fields every `activityLog` row carries next to its typed `type` + `metadata`. */
+/**
+ * Fields every `activityLog` row carries next to its typed `type` + `metadata`.
+ * `via` + `agentProposalId` mark a row written by approving an agent proposal
+ * (email-triage PRD §4.2, §11 O1 / E2): the actor (`userId`) stays the
+ * approving human; the UI can show "Agent · approved by X".
+ */
 const activityBase = {
   taskId: v.id("tasks"),
   orgId: v.string(),
   userId: v.id("users"),
   createdAt: v.number(),
+  via: v.optional(v.literal("agent")),
+  agentProposalId: v.optional(v.id("agentProposals")),
 };
 
 function activity<T extends string, M extends GenericValidator>(type: T, metadata: M) {

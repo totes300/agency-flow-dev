@@ -1,6 +1,7 @@
 import { ConvexError } from "convex/values";
 import { generateKeyBetween } from "fractional-indexing";
 import type { MutationCtx } from "../_generated/server";
+import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
 import { validateStringLength, type AuthContext } from "../lib/auth";
 import { assertValidDateString } from "../lib/dateValidation";
@@ -18,7 +19,7 @@ import {
   truncatePreview,
 } from "../lib/notificationEvents";
 import { extractPlainText } from "../../lib/tiptap-utils";
-import { logActivity } from "../activityLog";
+import { logActivity, type ActivityAttribution } from "../activityLog";
 import { createNotifications } from "../notifications";
 import {
   assertCanArchive,
@@ -195,6 +196,48 @@ async function currentCategory(ctx: MutationCtx, task: Doc<"tasks">): Promise<Ta
   if (task.statusCategory) return task.statusCategory;
   const status = await ctx.db.get(task.statusId);
   return status ? categoryOfStatus(status) : undefined;
+}
+
+/** I3 refusal text (email-triage PRD §4.3). */
+export function openSubtasksMessage(open: number): string {
+  return `Finish or hand over the open subtasks first (${open} open).`;
+}
+
+/**
+ * I3 (email-triage PRD §4.3, D7): a task cannot move into the status with
+ * `workflowRole: "admin_review"` while it has open sub-tasks
+ * (`subtaskDoneCount < subtaskCount`). Returns the refusal, or null when the
+ * move is allowed. Enforced in `updateTask` (so `bulkUpdate` is covered);
+ * exported so bulk paths can skip a task before writing anything.
+ *
+ * Only the MOVE into the role is gated here. Manual paths can still open
+ * sub-tasks under a parent already in review (`tasks.createSubtask`, reopening
+ * a done sub-task, restore, a `statuses.update` role change), so the Reviews
+ * read model (C1) must read the live counters (`subtaskDoneCount <
+ * subtaskCount`), never the status alone. The agent proposal path re-checks
+ * its final state (`agentProposals.executeUpdateTask`).
+ *
+ * TODO(B6, I9): a pending change proposal on the task also blocks entering
+ * the admin-review role (and its drafts from sending) — added with B6.
+ *
+ * TODO(C2): D8 "Hand over partially" names the open sub-tasks that move to a
+ * follow-up — it gets its own write.ts entry point, never a public flag.
+ */
+export function reviewGateRefusal(task: Doc<"tasks">, next: Doc<"statuses">): string | null {
+  if (next.workflowRole !== "admin_review" || next._id === task.statusId) return null;
+  const open = (task.subtaskCount ?? 0) - (task.subtaskDoneCount ?? 0);
+  return open > 0 ? openSubtasksMessage(open) : null;
+}
+
+/** `reviewGateRefusal` for a status id (bulk pre-checks). Unknown statuses pass — `updateTask` rejects them. */
+export async function reviewGateRefusalFor(
+  ctx: MutationCtx,
+  task: Doc<"tasks">,
+  statusId: Id<"statuses">,
+): Promise<string | null> {
+  const status = await ctx.db.get(statusId);
+  if (!status || status.orgId !== task.orgId) return null;
+  return reviewGateRefusal(task, status);
 }
 
 async function loadProject(
@@ -590,8 +633,14 @@ export type CreateTaskOptions = {
   /** Seeds: historical timestamp for createdAt/updatedAt/activity. */
   now?: number;
   duplicatedFrom?: Doc<"tasks">;
-  /** Default true: notify assignees and description mentions. */
-  notify?: boolean;
+  /**
+   * Default true: notify assignees and description mentions now. `false`
+   * sends none. `{ afterMs }` schedules them (D30: Create's 10 s Undo); when
+   * they fire, a task removed or archived meanwhile gets none.
+   */
+  notify?: boolean | { afterMs: number };
+  /** Activity written by an agent-proposal approval (`via: "agent"`). */
+  attribution?: ActivityAttribution;
 };
 
 /**
@@ -694,6 +743,7 @@ export async function createTask(
     await ctx.db.insert("taskLabels", { orgId, taskId, labelId: label._id });
   }
 
+  const attribution = options.attribution;
   await logActivity(ctx, {
     taskId,
     orgId,
@@ -701,6 +751,7 @@ export async function createTask(
     type: "task_created",
     metadata: options.duplicatedFrom ? { duplicatedFrom: options.duplicatedFrom._id } : {},
     at: now,
+    attribution,
   });
   if (parent) {
     await logActivity(ctx, {
@@ -710,13 +761,17 @@ export async function createTask(
       type: "subtask_created",
       metadata: { subtaskId: taskId, title },
       at: now,
+      attribution,
     });
     await onSubtaskChange(ctx, parent._id);
   }
 
   if (options.notify !== false) {
-    const created = (await ctx.db.get(taskId))!;
-    const events: Parameters<typeof createNotifications>[1]["events"] = assigneeIds.map((recipientId) => ({
+    const events: Array<{
+      recipientId: string;
+      type: "assigned" | "mention_description";
+      previewText: string;
+    }> = assigneeIds.map((recipientId) => ({
       recipientId,
       type: "assigned" as const,
       previewText: title,
@@ -729,7 +784,18 @@ export async function createTask(
         events.push({ recipientId, type: "mention_description", previewText: preview });
       }
     }
-    if (events.length > 0) await createNotifications(ctx, { orgId, actorId: userId, task: created, events });
+    if (events.length > 0) {
+      if (typeof options.notify === "object") {
+        await ctx.scheduler.runAfter(
+          Math.max(0, options.notify.afterMs),
+          internal.notifications.deliverDeferredTaskNotifications,
+          { orgId, taskId, actorId: userId, events },
+        );
+      } else {
+        const created = (await ctx.db.get(taskId))!;
+        await createNotifications(ctx, { orgId, actorId: userId, task: created, events });
+      }
+    }
   }
 
   return taskId;
@@ -796,7 +862,11 @@ export async function updateTask(
   ctx: MutationCtx,
   access: TaskAccess,
   patch: TaskPatch,
-  options: { now?: number } = {},
+  options: {
+    now?: number;
+    /** Activity written by an agent-proposal approval (`via: "agent"`). */
+    attribution?: ActivityAttribution;
+  } = {},
 ): Promise<{ changed: TaskField[] }> {
   const { task, auth } = access;
   const { orgId, userId } = auth;
@@ -826,6 +896,8 @@ export async function updateTask(
   let statusChange: { from: TaskCategory | undefined; to: TaskCategory } | undefined;
   if (patch.statusId !== undefined && patch.statusId !== task.statusId) {
     const next = await loadStatus(ctx, orgId, patch.statusId);
+    const refusal = reviewGateRefusal(task, next.status);
+    if (refusal) throw new ConvexError(refusal);
     const prevStatus = await ctx.db.get(task.statusId);
     const prevCategory = await currentCategory(ctx, task);
     changed.add("status");
@@ -960,7 +1032,7 @@ export async function updateTask(
 
   // ── Activity ──
   const log = async (event: ActivityEvent, taskId: Id<"tasks"> = task._id) =>
-    await logActivity(ctx, { taskId, orgId, userId, ...event });
+    await logActivity(ctx, { taskId, orgId, userId, ...event, attribution: options.attribution });
   for (const event of events) await log(event);
   if (labelChange) {
     for (const label of labelChange.added) {
@@ -1039,13 +1111,25 @@ export type TimerRescue = Awaited<ReturnType<typeof autoSaveTimersForTasks>>;
  * restore can undo exactly this cascade), then auto-saves running timers on
  * them as entries.
  */
-export async function archiveTask(ctx: MutationCtx, access: TaskAccess): Promise<TimerRescue> {
+export async function archiveTask(
+  ctx: MutationCtx,
+  access: TaskAccess,
+  options: { attribution?: ActivityAttribution } = {},
+): Promise<TimerRescue> {
   assertCanArchive(access);
   const { task, auth } = access;
+  const { attribution } = options;
   if (task.archivedAt) return { saved: [], failed: [] };
   const now = Date.now();
   await ctx.db.patch(task._id, { archivedAt: now, updatedAt: now });
-  await logActivity(ctx, { taskId: task._id, orgId: task.orgId, userId: auth.userId, type: "task_archived", metadata: {} });
+  await logActivity(ctx, {
+    taskId: task._id,
+    orgId: task.orgId,
+    userId: auth.userId,
+    type: "task_archived",
+    metadata: {},
+    attribution,
+  });
   const children = await childrenOf(ctx, task);
   for (const child of children) {
     if (child.archivedAt) continue;
@@ -1056,6 +1140,7 @@ export async function archiveTask(ctx: MutationCtx, access: TaskAccess): Promise
       userId: auth.userId,
       type: "task_archived",
       metadata: { viaParent: task._id },
+      attribution,
     });
   }
   if (children.length > 0) await onSubtaskChange(ctx, task._id);

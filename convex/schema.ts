@@ -11,6 +11,7 @@ import {
   taskPriorityValidator,
   taskViewSpecValidator,
   taskViewSurfaceValidator,
+  workflowRoleValidator,
 } from "./tasks/model";
 
 export default defineSchema({
@@ -112,6 +113,10 @@ export default defineSchema({
     category: taskCategoryValidator,
     position: v.string(),                     // fractional key, order within category
     isDefault: v.boolean(),                   // exactly one per category
+    // Email-triage PRD §4.2 / §11 O7: what the status means to workflow rules
+    // (I3 review gate, Reviews, stuck watcher). At most one per role per org
+    // (convex/statuses.ts). Rules read this, never the name.
+    workflowRole: v.optional(workflowRoleValidator),
     archivedAt: v.optional(v.number()),
     // Base
     createdAt: v.number(),

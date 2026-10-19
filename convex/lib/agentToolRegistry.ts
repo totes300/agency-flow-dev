@@ -35,11 +35,13 @@
  */
 
 import { z } from "zod";
+import type { Infer } from "convex/values";
 import type { Tool } from "ai";
 import { createTool, type ToolCtx } from "@convex-dev/agent";
 import { api, internal } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
 import { actorRef, type AgentActor } from "./auth";
+import type { proposalPayloadValidator } from "./proposalValidators";
 import type { WorksheetAiInput } from "../worksheetsHelpers";
 import {
   AGENT_TABLE_MARKER,
@@ -65,8 +67,14 @@ import {
 } from "./worksheetAi";
 import {
   AGENT_PROPOSALS_MARKER,
-  PROPOSAL_TITLE_MAX,
+  PROPOSAL_COMMENT_MAX,
   PROPOSAL_DESCRIPTION_MAX,
+  PROPOSAL_EVIDENCE_ITEM_MAX,
+  PROPOSAL_EVIDENCE_MAX,
+  PROPOSAL_SKILL_INSTRUCTION_MAX,
+  PROPOSAL_SKILL_NAME_MAX,
+  PROPOSAL_SUBTASKS_MAX,
+  PROPOSAL_TITLE_MAX,
 } from "../../lib/agents/proposals";
 import {
   CONNECTOR_CATALOG,
@@ -582,11 +590,50 @@ const PROPOSE_NOTE =
   "was created, do not repeat the proposed items, and do not ask the user " +
   "to approve (the cards do that). Add at most one short sentence.";
 
+const ymd = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+
+/** A sub-task in a propose tool's input (D7: one per client request). */
+const proposedSubtaskInput = z.object({
+  title: z
+    .string()
+    .min(1)
+    .max(PROPOSAL_TITLE_MAX)
+    .describe("Self-explaining sub-task title"),
+  assigneeIds: z
+    .array(z.string())
+    .max(5)
+    .optional()
+    .describe("Exact user ids (listTeamMembers / @-mentions); empty = the parent's assignees"),
+  dueDate: ymd.optional().describe("YYYY-MM-DD"),
+});
+
+/** Record proposals through the actor path (member access re-derived per call). */
+async function recordProposals(
+  ctx: ToolCtx,
+  actor: AgentActor,
+  proposals: ProposalInput[],
+): Promise<ProposeResult> {
+  if (!ctx.threadId) throw new Error("No thread for proposals");
+  const proposalIds: string[] = await ctx.runMutation(
+    internal.agentActorTools.createProposals,
+    { actor: actorRef(actor), componentThreadId: ctx.threadId, proposals },
+  );
+  return {
+    block: AGENT_PROPOSALS_MARKER,
+    proposalIds,
+    count: proposalIds.length,
+    note: PROPOSE_NOTE,
+  };
+}
+
+type ProposalInput = Infer<typeof proposalPayloadValidator>;
+
 /**
- * The first write-intent tool: propose creating tasks. Creates proposal
- * records and returns their ids — it NEVER touches the tasks table. The
- * human edits/approves/discards the cards; only approval executes the real
- * `tasks.create` as the approving user (PRD Module 3, US 21).
+ * The first write-intent tool: propose creating tasks — optionally each with
+ * its sub-tasks, which approval creates together in one transaction. Creates
+ * proposal records and returns their ids — it NEVER touches the tasks table.
+ * The human edits/approves/discards the cards; only approval executes the
+ * real task write path as the approving user (PRD Module 3, US 21).
  */
 const proposeCreateTasksTool = (actor: AgentActor) => createTool({
   description:
@@ -594,9 +641,10 @@ const proposeCreateTasksTool = (actor: AgentActor) => createTool({
     "as an editable card the user must approve — nothing is created until " +
     "they do. Use this whenever the user wants tasks made from a list, an " +
     "email, a transcript or a conversation. Resolve projectId via " +
-    "listProjects when the user names a project; take assigneeId ONLY from " +
-    "an @-mentioned person in the user's message — never guess ids. Leave " +
-    "fields you don't know empty; the user can fill them on the card.",
+    "listProjects when the user names a project; take assigneeIds from " +
+    "@-mentions or listTeamMembers — never guess ids. Separate requests " +
+    "inside one task become subtasks (one per request). Leave fields you " +
+    "don't know empty; the user can fill them on the card.",
   inputSchema: z.object({
     tasks: z
       .array(
@@ -615,33 +663,156 @@ const proposeCreateTasksTool = (actor: AgentActor) => createTool({
             .array(z.string())
             .max(5)
             .optional()
-            .describe("Exact user ids from @-mentions in the message"),
-          dueDate: z
-            .string()
-            .regex(/^\d{4}-\d{2}-\d{2}$/)
+            .describe("Exact user ids from @-mentions or listTeamMembers"),
+          dueDate: ymd.optional().describe("YYYY-MM-DD"),
+          subtasks: z
+            .array(proposedSubtaskInput)
+            .max(PROPOSAL_SUBTASKS_MAX)
             .optional()
-            .describe("YYYY-MM-DD"),
+            .describe("One per distinct request inside this task"),
         }),
       )
       .min(1)
       .max(25),
   }),
   execute: async (ctx, input): Promise<ProposeResult> => {
-    if (!ctx.threadId) throw new Error("No thread for proposals");
-    const proposalIds: string[] = await ctx.runMutation(
-      internal.agentActorTools.createProposals,
-      {
-        actor: actorRef(actor),
-        componentThreadId: ctx.threadId,
-        proposals: input.tasks.map((t) => ({ kind: "createTask" as const, ...t })),
-      },
+    return await recordProposals(
+      ctx,
+      actor,
+      input.tasks.map(({ subtasks, ...t }) => ({
+        kind: "createTask" as const,
+        ...t,
+        ...(subtasks
+          ? { subtasks: subtasks.map((s) => ({ ...s, assigneeIds: s.assigneeIds ?? [] })) }
+          : {}),
+      })),
     );
-    return {
-      block: AGENT_PROPOSALS_MARKER,
-      proposalIds,
-      count: proposalIds.length,
-      note: PROPOSE_NOTE,
+  },
+});
+
+/**
+ * Propose a change to ONE existing task: fields, sub-tasks added / amended /
+ * cancelled / ticked, or a reopen. Approval runs it in one transaction as the
+ * approving user, so the task write policy (what a member may change, the I3
+ * review gate) decides at approve time.
+ */
+const proposeTaskUpdateTool = (actor: AgentActor) => createTool({
+  description:
+    "Propose a change to an existing task — the user approves the card; " +
+    "nothing changes until then. Use it for a status change, new assignees, " +
+    "a new due date or priority, new subtasks, or ticking / cancelling / " +
+    "renaming existing subtasks. Identify the task by its identifier (e.g. " +
+    "ARLO-21) from findTasks / getTaskDetail or an @-mention, and subtasks by " +
+    "the ids getTaskDetail returns. Status and category ids come from " +
+    "listStatuses / listWorkCategories. Only include what actually changes.",
+  inputSchema: z.object({
+    task: z.string().describe("The task's identifier (e.g. ARLO-21, preferred) or exact id"),
+    changes: z
+      .object({
+        title: z.string().min(1).max(PROPOSAL_TITLE_MAX).optional(),
+        statusId: z.string().optional().describe("Exact id from listStatuses"),
+        assigneeIds: z
+          .array(z.string())
+          .max(10)
+          .optional()
+          .describe("The FULL new assignee set (exact user ids)"),
+        priority: z
+          .number()
+          .int()
+          .min(0)
+          .max(4)
+          .optional()
+          .describe("0 none, 1 urgent, 2 high, 3 medium, 4 low"),
+        dueDate: ymd.nullable().optional().describe("YYYY-MM-DD; null clears it"),
+        workCategoryId: z.string().nullable().optional().describe("Exact id from listWorkCategories; null clears"),
+      })
+      .optional(),
+    addSubtasks: z.array(proposedSubtaskInput).max(PROPOSAL_SUBTASKS_MAX).optional(),
+    amendSubtasks: z
+      .array(
+        z.object({
+          subtaskId: z.string().describe("Subtask id or identifier from getTaskDetail"),
+          title: z.string().min(1).max(PROPOSAL_TITLE_MAX).optional(),
+          assigneeIds: z.array(z.string()).max(5).optional(),
+          dueDate: ymd.nullable().optional(),
+        }),
+      )
+      .max(PROPOSAL_SUBTASKS_MAX)
+      .optional(),
+    cancelSubtasks: z
+      .array(z.object({ subtaskId: z.string(), reason: z.string().max(PROPOSAL_EVIDENCE_ITEM_MAX).optional() }))
+      .max(PROPOSAL_SUBTASKS_MAX)
+      .optional(),
+    tickSubtasks: z
+      .array(z.object({ subtaskId: z.string() }))
+      .max(PROPOSAL_SUBTASKS_MAX)
+      .optional(),
+    reopenStatusId: z
+      .string()
+      .optional()
+      .describe(
+        "Status to move the task back to IF it is in review or done when approved " +
+          "(typically the started default from listStatuses)",
+      ),
+  }),
+  execute: async (ctx, input): Promise<ProposeResult> => {
+    const subtasks = {
+      ...(input.addSubtasks
+        ? { add: input.addSubtasks.map((s) => ({ ...s, assigneeIds: s.assigneeIds ?? [] })) }
+        : {}),
+      ...(input.amendSubtasks ? { amend: input.amendSubtasks } : {}),
+      ...(input.cancelSubtasks ? { cancel: input.cancelSubtasks } : {}),
+      ...(input.tickSubtasks ? { tick: input.tickSubtasks } : {}),
     };
+    return await recordProposals(ctx, actor, [
+      {
+        kind: "updateTask" as const,
+        taskId: input.task,
+        ...(input.changes ? { changes: input.changes } : {}),
+        ...(Object.keys(subtasks).length > 0 ? { subtasks } : {}),
+        ...(input.reopenStatusId ? { reopen: { statusId: input.reopenStatusId } } : {}),
+      },
+    ]);
+  },
+});
+
+/** Propose a comment on a task, posted as the approving user (normal mentions + notifications). */
+const proposeCommentTool = (actor: AgentActor) => createTool({
+  description:
+    "Propose a comment on an existing task (a blocker, a decision, \"waiting " +
+    "on the client\"). The user approves the card; it is then posted as them, " +
+    "and mentions notify like a typed comment. Mention a person as " +
+    "@[Name](user:<id>) with the id from listTeamMembers. Plain text only.",
+  inputSchema: z.object({
+    task: z.string().describe("The task's identifier (e.g. ARLO-21, preferred) or exact id"),
+    body: z.string().min(1).max(PROPOSAL_COMMENT_MAX),
+  }),
+  execute: async (ctx, input): Promise<ProposeResult> => {
+    return await recordProposals(ctx, actor, [
+      { kind: "postComment" as const, taskId: input.task, body: input.body },
+    ]);
+  },
+});
+
+/** Propose a learned SOP (PRD §6.8.4) — an admin approves it into Skills. */
+const proposeSkillTool = (actor: AgentActor) => createTool({
+  description:
+    "Propose a new skill (a short standing instruction agents follow) when " +
+    "you notice a repeated correction or rule worth remembering. Quote the " +
+    "evidence you saw. An admin approves it; nothing is saved until then.",
+  inputSchema: z.object({
+    name: z.string().min(1).max(PROPOSAL_SKILL_NAME_MAX),
+    instruction: z.string().min(1).max(PROPOSAL_SKILL_INSTRUCTION_MAX),
+    scope: z.enum(["global", "client"]),
+    clientId: z.string().optional().describe("Exact id from listClients (client scope only)"),
+    evidence: z
+      .array(z.string().max(PROPOSAL_EVIDENCE_ITEM_MAX))
+      .min(1)
+      .max(PROPOSAL_EVIDENCE_MAX)
+      .describe("Short quotes / observations that motivate the skill"),
+  }),
+  execute: async (ctx, input): Promise<ProposeResult> => {
+    return await recordProposals(ctx, actor, [{ kind: "proposeSkill" as const, ...input }]);
   },
 });
 
@@ -832,9 +1003,10 @@ const listStatusesTool = (actor: AgentActor) => createTool({
     "List the organization's task statuses from the app database, in " +
     "workflow order. Returns each status's id, name, category (backlog | " +
     "unstarted | started | completed | canceled — every status belongs to " +
-    "exactly one), whether it is its category's default, and archived " +
-    "state. Use it to resolve status names to ids for task filters — never " +
-    "answer from memory.",
+    "exactly one), whether it is its category's default, its workflow role " +
+    "(admin_review | client_review | blocked | null — what review / stuck " +
+    "rules mean by it) and archived state. Use it to resolve status names " +
+    "to ids — never answer from memory.",
   inputSchema: z.object({
     includeArchived: z
       .boolean()
@@ -850,6 +1022,7 @@ const listStatusesTool = (actor: AgentActor) => createTool({
       name: string;
       category: string;
       isDefault: boolean;
+      workflowRole: string | null;
       archived: boolean;
     }>
   > => {
@@ -864,6 +1037,7 @@ const listStatusesTool = (actor: AgentActor) => createTool({
         name: s.name,
         category: s.category,
         isDefault: s.isDefault,
+        workflowRole: s.workflowRole ?? null,
         archived: s.archived,
       }));
   },
@@ -1933,6 +2107,32 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
     kind: "propose",
     background: true,
     makeTool: proposeCreateTasksTool,
+  },
+  proposeTaskUpdate: {
+    name: "proposeTaskUpdate",
+    humanDescription:
+      "Propose changes to an existing task (fields, subtasks added / ticked / " +
+      "cancelled, reopen) as an approval card.",
+    scope: "member",
+    kind: "propose",
+    background: true,
+    makeTool: proposeTaskUpdateTool,
+  },
+  proposeComment: {
+    name: "proposeComment",
+    humanDescription: "Propose a task comment, posted as the approving user.",
+    scope: "member",
+    kind: "propose",
+    background: true,
+    makeTool: proposeCommentTool,
+  },
+  proposeSkill: {
+    name: "proposeSkill",
+    humanDescription: "Propose a new skill (standing instruction) — an admin approves it.",
+    scope: "admin",
+    kind: "propose",
+    background: true,
+    makeTool: proposeSkillTool,
   },
   proposeArchiveTask: {
     name: "proposeArchiveTask",

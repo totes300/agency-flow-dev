@@ -1,7 +1,7 @@
 import { query, type QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { getAuthContext, type AuthContext } from "./lib/auth";
-import { categoryOfStatus, statusIconFor, TASK_CATEGORIES, type StatusIcon, type TaskCategory } from "./tasks/model";
+import { categoryOfStatus, statusIconFor, TASK_CATEGORIES, type StatusIcon, type TaskCategory, type WorkflowRole } from "./tasks/model";
 
 /**
  * The reference data every task surface renders rows with
@@ -28,6 +28,8 @@ export type WorkspaceStatusRef = {
   isDefault: boolean;
   icon: StatusIcon;
   archived: boolean;
+  /** Email-triage PRD §4.2: what the status means to workflow rules. */
+  workflowRole?: WorkflowRole | null;
 };
 
 /**
@@ -73,6 +75,7 @@ export async function getWorkspaceRefsForAuth(ctx: QueryCtx, auth: AuthContext) 
         isDefault: s.doc.isDefault === true,
         icon: statusIconFor(category, index === -1 ? active.length - 1 : index, active.length),
         archived: s.doc.archivedAt !== undefined,
+        workflowRole: s.doc.workflowRole ?? null,
       });
     }
   }

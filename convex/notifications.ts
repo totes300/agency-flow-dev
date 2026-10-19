@@ -113,6 +113,48 @@ export async function createNotifications(
   }
 }
 
+// ─── Deferred task notifications (email-triage D30) ────────────────────────────
+
+export const notificationTypeValidator = v.union(
+  v.literal("mention_comment"),
+  v.literal("mention_description"),
+  v.literal("assigned"),
+  v.literal("comment"),
+  v.literal("comment_reply"),
+);
+
+export const deferredNotificationEventValidator = v.object({
+  recipientId: v.string(),
+  type: notificationTypeValidator,
+  previewText: v.string(),
+});
+
+/**
+ * Fires the notifications `tasks/write.ts` `createTask` held back with
+ * `notify: { afterMs }` (D30: the 10 s Undo after Create). Delivers nothing
+ * when the task was removed or archived meanwhile (Undo), and drops an
+ * `assigned` event whose recipient is no longer assigned. Recipients run the
+ * usual `createNotifications` ladder (membership, task access, dedupe).
+ */
+export const deliverDeferredTaskNotifications = internalMutation({
+  args: {
+    orgId: v.string(),
+    taskId: v.id("tasks"),
+    actorId: v.id("users"),
+    events: v.array(deferredNotificationEventValidator),
+  },
+  handler: async (ctx, args): Promise<{ delivered: boolean }> => {
+    const task = await ctx.db.get(args.taskId);
+    if (!task || task.orgId !== args.orgId || task.archivedAt) return { delivered: false };
+    const assigned = new Set<string>(task.assigneeIds);
+    const events = args.events.filter((e) => e.type !== "assigned" || assigned.has(e.recipientId));
+    if (events.length > 0) {
+      await createNotifications(ctx, { orgId: args.orgId, actorId: args.actorId, task, events });
+    }
+    return { delivered: true };
+  },
+});
+
 // ─── Queries ────────────────────────────────────────────────────────────────────
 
 /**

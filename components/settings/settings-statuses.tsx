@@ -11,11 +11,20 @@ import {
   PlusIcon,
   StarIcon,
   Trash2Icon,
+  WorkflowIcon,
 } from "lucide-react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import type { StatusSettingsRow } from "@/convex/statuses"
-import { CATEGORY_LABELS, TASK_CATEGORIES, statusIconFor, type TaskCategory } from "@/convex/tasks/model"
+import {
+  CATEGORY_LABELS,
+  TASK_CATEGORIES,
+  WORKFLOW_ROLES,
+  WORKFLOW_ROLE_LABELS,
+  statusIconFor,
+  type TaskCategory,
+  type WorkflowRole,
+} from "@/convex/tasks/model"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
@@ -23,6 +32,8 @@ import {
   DropdownMenuContent,
   DropdownMenuGroup,
   DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuSub,
   DropdownMenuSubContent,
@@ -54,7 +65,8 @@ import { toastError } from "@/lib/toast-helpers"
  * org's statuses inside it in their order. Admins add, edit inline, reorder
  * (drag inside the category), set the default, archive/restore, delete
  * unused ones and move unused ones to another category; the server enforces
- * every rule. Members see the same list read-only.
+ * every rule. Members see the same list read-only. The row menu also sets
+ * the status's workflow role (email-triage PRD §11 O7) — one per org.
  */
 
 /** icon · name · description · marker · menu */
@@ -108,7 +120,7 @@ export function SettingsStatuses() {
 
   const rows: StatusSettingsRow[] | undefined = isAdmin
     ? adminRows
-    : refs?.statuses.map((s) => ({ ...s, inUse: true }))
+    : refs?.statuses.map((s) => ({ ...s, workflowRole: s.workflowRole ?? null, inUse: true }))
   if (isAdmin === undefined || rows === undefined) return <StatusesSkeleton />
 
   const canEdit = isAdmin
@@ -203,6 +215,9 @@ export function SettingsStatuses() {
                     onChangeCategory={(category) =>
                       void run(() => updateStatus({ id: row._id, category }), "Failed to change category")
                     }
+                    onSetRole={(workflowRole) =>
+                      void run(() => updateStatus({ id: row._id, workflowRole }), "Failed to set workflow role")
+                    }
                     onArchive={() => void run(() => archiveStatus({ id: row._id }), "Failed to archive status")}
                     onRestore={() => void run(() => restoreStatus({ id: row._id }), "Failed to restore status")}
                     onDelete={() => setDeleteTarget(row)}
@@ -284,6 +299,7 @@ function StatusRowMenu({
   onEdit,
   onMakeDefault,
   onChangeCategory,
+  onSetRole,
   onArchive,
   onRestore,
   onDelete,
@@ -293,6 +309,7 @@ function StatusRowMenu({
   onEdit: () => void
   onMakeDefault: () => void
   onChangeCategory: (category: TaskCategory) => void
+  onSetRole: (role: WorkflowRole | null) => void
   onArchive: () => void
   onRestore: () => void
   onDelete: () => void
@@ -345,6 +362,28 @@ function StatusRowMenu({
               </DropdownMenuSubContent>
             </DropdownMenuSub>
           ) : null}
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger>
+              <WorkflowIcon />
+              <span className="flex-1">Workflow role</span>
+              <span className="text-xs text-muted-foreground">
+                {row.workflowRole ? WORKFLOW_ROLE_LABELS[row.workflowRole] : "None"}
+              </span>
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent>
+              <DropdownMenuRadioGroup
+                value={row.workflowRole ?? "none"}
+                onValueChange={(value) => onSetRole(value === "none" ? null : (value as WorkflowRole))}
+              >
+                <DropdownMenuRadioItem value="none">None</DropdownMenuRadioItem>
+                {WORKFLOW_ROLES.map((role) => (
+                  <DropdownMenuRadioItem key={role} value={role}>
+                    {WORKFLOW_ROLE_LABELS[role]}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
         <DropdownMenuGroup>

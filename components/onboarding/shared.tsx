@@ -1,5 +1,5 @@
 import type { StatusColorName, CategoryColor } from "@/convex/lib/constants"
-import { TASK_CATEGORIES, type TaskCategory } from "@/convex/tasks/model"
+import { TASK_CATEGORIES, type TaskCategory, type WorkflowRole } from "@/convex/tasks/model"
 
 // Re-export shared dot components for backward compatibility
 export { StatusDot } from "@/components/status-dot"
@@ -12,6 +12,8 @@ export type StatusDraft = {
   name: string
   color: StatusColorName
   category: TaskCategory
+  /** From the seed (Admin review / Client review / Stuck); editable later in Settings. */
+  workflowRole?: WorkflowRole
 }
 
 export type CategoryDraft = {

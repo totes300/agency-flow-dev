@@ -22,6 +22,7 @@ import {
   reorderSubtasks as reorderSubtasksWrite,
   reorderTask as reorderTaskWrite,
   restoreTask,
+  reviewGateRefusalFor,
   updateTask,
   type TimerRescue,
 } from "./tasks/write";
@@ -294,9 +295,14 @@ export const bulkUpdate = mutation({
       const skip = (reason: string) => skipped.push({ taskId, title: task.title, reason });
 
       switch (action.type) {
-        case "status":
+        case "status": {
+          // I3: a task with open sub-tasks can't enter the admin-review role
+          // (updateTask enforces it too; checked here so the batch skips it).
+          const refusal = await reviewGateRefusalFor(ctx, task, action.statusId);
+          if (refusal) { skip(refusal); continue; }
           await updateTask(ctx, access, { statusId: action.statusId });
           break;
+        }
         case "addAssignee":
           if (!task.assigneeIds.includes(action.userId)) {
             await updateTask(ctx, access, { assigneeIds: [...task.assigneeIds, action.userId] });

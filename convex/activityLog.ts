@@ -8,6 +8,15 @@ import { onActivity } from "./tasks/derived";
 // ─── Helper (called from other mutations) ───────────────────────────────────────
 
 /**
+ * Marks activity written by approving an agent proposal (email-triage PRD
+ * §4.2, §11 O1 / E2). The row's actor stays the approving user.
+ */
+export type ActivityAttribution = {
+  via: "agent";
+  agentProposalId: Id<"agentProposals">;
+};
+
+/**
  * Append a typed activity event (tasks/model.ts activityLogValidator) and
  * move the task's `lastActivity` forward + fan out the unseen-change flag
  * (§5.5, §4.3). Called from tasks/write.ts,
@@ -20,11 +29,16 @@ export async function logActivity(
     orgId: string;
     userId: Id<"users">;
     at?: number;
+    attribution?: ActivityAttribution;
   } & ActivityEvent,
 ) {
-  const { at, ...event } = args;
+  const { at, attribution, ...event } = args;
   const createdAt = at ?? Date.now();
-  await ctx.db.insert("activityLog", { ...event, createdAt });
+  await ctx.db.insert("activityLog", {
+    ...event,
+    createdAt,
+    ...(attribution ? { via: attribution.via, agentProposalId: attribution.agentProposalId } : {}),
+  });
   await onActivity(ctx, args.taskId, { kind: args.type, actorId: args.userId, at: createdAt });
 }
 
@@ -62,6 +76,8 @@ export const byTask = query({
       createdAt: event.createdAt,
       userId: event.userId,
       userName: userCache.get(event.userId) ?? "Unknown",
+      // "Agent · approved by X" (the actor is the approving user).
+      via: event.via ?? null,
     }));
   },
 });

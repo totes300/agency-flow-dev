@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useState } from "react"
 import Link from "next/link"
 import { useMutation, useQuery } from "convex/react"
 import {
@@ -8,6 +8,7 @@ import {
   ArchiveIcon,
   CheckCircle2Icon,
   CircleAlertIcon,
+  CircleIcon,
   XIcon,
 } from "lucide-react"
 import { toast } from "sonner"
@@ -17,6 +18,7 @@ import type { ProposalCard as ProposalCardData } from "@/convex/agentProposals"
 import {
   PROPOSAL_KIND_META,
   type ProposalPayload,
+  type ProposedSubtask,
 } from "@/lib/agents/proposals"
 import { buildTaskDeepLink } from "@/lib/task-detail"
 import {
@@ -34,6 +36,15 @@ import {
   projectPickerLabel,
 } from "@/components/tasks/task-property-pickers"
 import { cn } from "@/lib/utils"
+import { useIsAdmin } from "@/lib/hooks/use-is-admin"
+import { FailureNote, ProposalFooter } from "./proposal-card-chrome"
+import {
+  PostCommentCard,
+  ProposeSkillCard,
+  UpdateTaskCard,
+  subtaskLine,
+} from "./proposal-change-cards"
+import { useProposalDecision } from "./use-proposal-decision"
 
 /**
  * `proposal` block (PRD Module 3 · slice 08) — a batch of write-intent
@@ -43,9 +54,12 @@ import { cn } from "@/lib/utils"
  * The create-task card is the app's ONE task-draft language — borderless
  * title, quiet description affordance, property pills — composed from the
  * same shared pickers as `task-form-modal.tsx` and fed by the same
- * reference queries `/tasks` uses. Only the proposal chrome is new here:
- * per-card Approve + Discard, the sticky "Approve all (N)" bar, the
- * destructive confirm step, and the committed / failed / discarded states.
+ * reference queries `/tasks` uses; its proposed sub-tasks are a quiet list
+ * (title · owner · due) with remove-one. The change kinds (update, comment,
+ * skill) are compact summary cards (`proposal-change-cards.tsx`). Only the
+ * proposal chrome is new here: per-card Approve + Discard, the sticky
+ * "Approve all (N)" bar, the destructive confirm step, and the committed /
+ * failed / discarded states.
  */
 export function ProposalBlock({
   proposalIds,
@@ -59,6 +73,8 @@ export function ProposalBlock({
   const projects = useQuery(api.projects.list, {})
   const categories = useQuery(api.workCategories.list, {})
   const orgMembers = useQuery(api.orgMembers.listOrgMembers, {})
+  // Admin-scoped kinds (proposeSkill, archiveTask) show Approve to admins only.
+  const isAdmin = useIsAdmin() === true
 
   if (cards === undefined) {
     return <ProposalBlockSkeleton count={Math.min(proposalIds.length, 3)} />
@@ -86,10 +102,13 @@ export function ProposalBlock({
   }
 
   const pending = cards.filter((c) => c.status === "pending")
-  const batchable = pending.filter(
+  const canApproveKind = (kind: ProposalPayload["kind"]) =>
+    isAdmin || PROPOSAL_KIND_META[kind].approveScope !== "admin"
+  const approvable = pending.filter((c) => canApproveKind(c.payload.kind))
+  const batchable = approvable.filter(
     (c) => !PROPOSAL_KIND_META[c.payload.kind].destructive,
   )
-  const confirmOnly = pending.length - batchable.length
+  const confirmOnly = approvable.length - batchable.length
   const reference: ReferenceData = {
     projects: projects ?? [],
     categories: categories ?? [],
@@ -110,7 +129,12 @@ export function ProposalBlock({
         />
       )}
       {cards.map((card) => (
-        <ProposalCard key={card._id} card={card} reference={reference} />
+        <ProposalCard
+          key={card._id}
+          card={card}
+          reference={reference}
+          canApprove={canApproveKind(card.payload.kind)}
+        />
       ))}
     </div>
   )
@@ -153,6 +177,12 @@ function ApproveAllBar({
       .then((outcomes) => {
         const approved = outcomes.filter((o) => o.result === "approved").length
         const failed = outcomes.filter((o) => o.result === "failed").length
+        const needsAdmin = outcomes.filter((o) => o.result === "needs_admin").length
+        if (needsAdmin > 0) {
+          toast.info(
+            `${needsAdmin} proposal${needsAdmin === 1 ? " needs" : "s need"} an admin — left pending`,
+          )
+        }
         if (failed > 0) {
           toast.warning(
             `${approved} approved · ${failed} failed — see the cards for details`,
@@ -192,28 +222,67 @@ function ApproveAllBar({
 function ProposalCard({
   card,
   reference,
+  canApprove,
 }: {
   card: ProposalCardData
   reference: ReferenceData
+  /** False for an admin-scoped kind viewed by a member: no Approve. */
+  canApprove: boolean
 }) {
   if (card.status === "approved") return <CommittedRow card={card} />
   if (card.status === "discarded") return <DiscardedRow card={card} />
   // pending | failed — the editable/confirmable card (failed = retryable)
-  if (card.payload.kind === "createTask") {
-    return (
-      <CreateTaskCard
-        card={card}
-        payload={card.payload}
-        reference={reference}
-      />
-    )
+  switch (card.payload.kind) {
+    case "createTask":
+      return (
+        <CreateTaskCard
+          card={card}
+          payload={card.payload}
+          reference={reference}
+        />
+      )
+    case "updateTask":
+      return (
+        <UpdateTaskCard
+          card={card}
+          payload={card.payload}
+          members={reference.orgMembers}
+        />
+      )
+    case "postComment":
+      return <PostCommentCard card={card} payload={card.payload} />
+    case "proposeSkill":
+      return (
+        <ProposeSkillCard
+          card={card}
+          payload={card.payload}
+          canApprove={canApprove}
+        />
+      )
+    case "archiveTask":
+      return (
+        <ArchiveTaskCard
+          card={card}
+          payload={card.payload}
+          canApprove={canApprove}
+        />
+      )
   }
-  return <ArchiveTaskCard card={card} payload={card.payload} />
 }
 
 /** One-line title for compact rows, from the effective payload. */
 function payloadTitle(payload: ProposalPayload): string {
-  return payload.kind === "createTask" ? payload.title : payload.taskTitle
+  switch (payload.kind) {
+    case "createTask":
+      return payload.title
+    case "proposeSkill":
+      return payload.name
+    case "updateTask":
+    case "postComment":
+      return payload.taskTitle ?? "Task"
+    case "archiveTask":
+      return payload.taskTitle
+  }
 }
 
 // ─── Create-task card (the app's task-draft language) ──────────────────────
@@ -225,6 +294,7 @@ type CreateTaskDraft = {
   assigneeIds: string[]
   workCategoryId: string | undefined
   dueDate: string // YYYY-MM-DD or ""
+  subtasks: ProposedSubtask[]
 }
 
 function draftFromPayload(
@@ -237,6 +307,7 @@ function draftFromPayload(
     assigneeIds: payload.assigneeIds ?? [],
     workCategoryId: payload.workCategoryId,
     dueDate: payload.dueDate ?? "",
+    subtasks: payload.subtasks ?? [],
   }
 }
 
@@ -249,10 +320,6 @@ function CreateTaskCard({
   payload: Extract<ProposalPayload, { kind: "createTask" }>
   reference: ReferenceData
 }) {
-  const approve = useMutation(api.agentProposals.approve)
-  const discard = useMutation(api.agentProposals.discard)
-  const updateDraft = useMutation(api.agentProposals.updateDraft)
-  const [busy, setBusy] = useState(false)
   // Inline-edit state, seeded from the effective payload (edits included).
   const [draft, setDraft] = useState<CreateTaskDraft>(() =>
     draftFromPayload(payload),
@@ -260,25 +327,10 @@ function CreateTaskCard({
   const [showDescription, setShowDescription] = useState(
     Boolean(payload.description),
   )
-
-  // I11: the revision the on-screen draft reflects — what saves and approve
-  // send back. Own saves run one at a time (each on the previous one's
-  // revision); a refused one toasts "This changed — review it again."
-  const [baseRevision, setBaseRevision] = useState(card.revision)
-  const [savesInFlight, setSavesInFlight] = useState(0)
-  const baseRef = useRef(card.revision)
-  const saveChain = useRef<Promise<void>>(Promise.resolve())
-  useEffect(() => {
-    baseRef.current = baseRevision
-  }, [baseRevision])
-
-  // Someone else changed the card (another admin's edit, the agent revising
-  // its plan): show their version, so what is on screen is what approve
-  // commits.
-  if (card.revision > baseRevision && savesInFlight === 0) {
-    setBaseRevision(card.revision)
-    setDraft(draftFromPayload(payload))
-  }
+  // Someone else changed the card: show their version.
+  const { busy, save, approve, discard } = useProposalDecision(card, () =>
+    setDraft(draftFromPayload(payload)),
+  )
 
   // Resolved display values (client-side, same lists /tasks uses)
   const selectedProject = reference.projects.find(
@@ -302,6 +354,7 @@ function CreateTaskCard({
     assigneeIds: d.assigneeIds,
     workCategoryId: d.workCategoryId ?? "",
     dueDate: d.dueDate,
+    subtasks: d.subtasks,
   })
 
   // Persist edits so they survive thread close/reopen and so Approve-all
@@ -310,49 +363,10 @@ function CreateTaskCard({
   const applyDraft = (patch: Partial<CreateTaskDraft>, persist: boolean) => {
     const next = { ...draft, ...patch }
     setDraft(next)
-    if (persist) {
-      setSavesInFlight((n) => n + 1)
-      saveChain.current = saveChain.current
-        .then(() =>
-          updateDraft({
-            proposalId: card._id,
-            editedPayload: toEditedPayload(next),
-            revision: baseRef.current,
-          }),
-        )
-        .then(({ revision }) => {
-          baseRef.current = revision
-          setBaseRevision(revision)
-        })
-        .catch((err) => toastError(err, "Failed to save edit"))
-        .finally(() => setSavesInFlight((n) => n - 1))
-    }
+    if (persist) save(toEditedPayload(next))
   }
 
-  const onApprove = () => {
-    setBusy(true)
-    // After any pending save, so the revision sent is the one on screen.
-    saveChain.current
-      .then(() =>
-        approve({
-          proposalId: card._id,
-          revision: baseRef.current,
-          editedPayload: toEditedPayload(draft),
-        }),
-      )
-      // A stale reference flips the card to its inline failed state
-      // reactively; an outdated revision toasts "This changed — review it
-      // again." and the card shows the new version.
-      .catch((err) => toastError(err, "Failed to approve proposal"))
-      .finally(() => setBusy(false))
-  }
-
-  const onDiscard = () => {
-    setBusy(true)
-    discard({ proposalId: card._id })
-      .catch((err) => toastError(err, "Failed to discard proposal"))
-      .finally(() => setBusy(false))
-  }
+  const onApprove = () => void approve({ editedPayload: toEditedPayload(draft) })
 
   return (
     <div className="rounded-lg border">
@@ -399,6 +413,39 @@ function CreateTaskCard({
         )}
       </div>
 
+      {draft.subtasks.length > 0 && (
+        <ul
+          aria-label="Proposed subtasks"
+          className="mx-4 mt-2 flex flex-col border-t pt-1.5"
+        >
+          {draft.subtasks.map((sub, index) => (
+            <li
+              key={`${index}-${sub.title}`}
+              className="flex items-center gap-2 py-0.5 text-xs"
+            >
+              <CircleIcon className="size-3 shrink-0 text-muted-foreground/50" />
+              <span className="min-w-0 flex-1 truncate text-muted-foreground">
+                {subtaskLine(sub, reference.orgMembers)}
+              </span>
+              <button
+                type="button"
+                aria-label={`Remove subtask ${sub.title}`}
+                disabled={busy}
+                onClick={() =>
+                  applyDraft(
+                    { subtasks: draft.subtasks.filter((_, i) => i !== index) },
+                    true,
+                  )
+                }
+                className="shrink-0 rounded text-muted-foreground/50 transition-colors hover:text-foreground"
+              >
+                <XIcon className="size-3.5" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
       {/* Property pills — the shared task-draft pickers */}
       <div className="flex flex-wrap items-center gap-1.5 px-4 pb-3 pt-2">
         <ProjectPicker
@@ -430,31 +477,20 @@ function CreateTaskCard({
       </div>
 
       {/* Proposal chrome: failure state + decision actions */}
-      <div className="flex items-center gap-2 border-t bg-muted/30 px-4 py-2">
-        {card.status === "failed" && card.failureReason ? (
-          <FailureNote reason={card.failureReason} />
-        ) : staleProject ? (
-          <FailureNote reason="The referenced project no longer exists — pick another before approving." />
-        ) : (
-          <span className="text-xs text-muted-foreground/60">
-            Proposed by the agent — nothing is created until you approve.
-          </span>
-        )}
-        <div className="ml-auto flex shrink-0 items-center gap-1.5">
-          <Button
-            size="sm"
-            variant="ghost"
-            className="h-7 text-muted-foreground"
-            disabled={busy}
-            onClick={onDiscard}
-          >
-            Discard
-          </Button>
-          <Button size="sm" className="h-7" disabled={busy} onClick={onApprove}>
-            {card.status === "failed" ? "Retry" : "Approve"}
-          </Button>
-        </div>
-      </div>
+      <ProposalFooter
+        failed={card.status === "failed"}
+        failureReason={card.failureReason}
+        note={
+          staleProject ? (
+            <FailureNote reason="The referenced project no longer exists — pick another before approving." />
+          ) : (
+            "Proposed by the agent — nothing is created until you approve."
+          )
+        }
+        busy={busy}
+        onDiscard={discard}
+        onApprove={onApprove}
+      />
     </div>
   )
 }
@@ -464,34 +500,17 @@ function CreateTaskCard({
 function ArchiveTaskCard({
   card,
   payload,
+  canApprove,
 }: {
   card: ProposalCardData
   payload: Extract<ProposalPayload, { kind: "archiveTask" }>
+  canApprove: boolean
 }) {
-  const approve = useMutation(api.agentProposals.approve)
-  const discard = useMutation(api.agentProposals.discard)
-  const [busy, setBusy] = useState(false)
+  const { busy, approve, discard: onDiscard } = useProposalDecision(card)
   const [confirming, setConfirming] = useState(false)
 
   const onConfirm = () => {
-    setBusy(true)
-    approve({
-      proposalId: card._id,
-      revision: card.revision,
-      confirmDestructive: true,
-    })
-      .catch((err) => toastError(err, "Failed to approve proposal"))
-      .finally(() => {
-        setBusy(false)
-        setConfirming(false)
-      })
-  }
-
-  const onDiscard = () => {
-    setBusy(true)
-    discard({ proposalId: card._id })
-      .catch((err) => toastError(err, "Failed to discard proposal"))
-      .finally(() => setBusy(false))
+    void approve({ confirmDestructive: true }).finally(() => setConfirming(false))
   }
 
   return (
@@ -539,15 +558,21 @@ function ArchiveTaskCard({
               >
                 Discard
               </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-7"
-                disabled={busy}
-                onClick={() => setConfirming(true)}
-              >
-                {card.status === "failed" ? "Retry…" : "Archive…"}
-              </Button>
+              {canApprove ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7"
+                  disabled={busy}
+                  onClick={() => setConfirming(true)}
+                >
+                  {card.status === "failed" ? "Retry…" : "Archive…"}
+                </Button>
+              ) : (
+                <span className="text-xs text-muted-foreground/60">
+                  An admin approves this
+                </span>
+              )}
             </>
           )}
         </div>
@@ -566,6 +591,11 @@ function ArchiveTaskCard({
 function CommittedRow({ card }: { card: ProposalCardData }) {
   const meta = PROPOSAL_KIND_META[card.payload.kind]
   const isCreate = card.payload.kind === "createTask"
+  // committedRef is the task id for every task-bound kind except archive.
+  const opensTask =
+    card.payload.kind === "createTask" ||
+    card.payload.kind === "updateTask" ||
+    card.payload.kind === "postComment"
   return (
     <div className="flex items-center gap-2 rounded-lg border px-3 py-2">
       <CheckCircle2Icon
@@ -578,12 +608,12 @@ function CommittedRow({ card }: { card: ProposalCardData }) {
       <span className="min-w-0 flex-1 truncate text-sm">
         {payloadTitle(card.payload)}
       </span>
-      {isCreate && card.committedRef && (
+      {opensTask && card.committedRef && (
         <Button asChild size="sm" variant="ghost" className="h-7 text-xs">
           <Link href={buildTaskDeepLink(card.committedRef)}>Open task</Link>
         </Button>
       )}
-      {!isCreate && (
+      {card.payload.kind === "archiveTask" && (
         <ArchiveIcon className="size-3.5 shrink-0 text-muted-foreground" />
       )}
     </div>
@@ -619,15 +649,6 @@ function DiscardedRow({ card }: { card: ProposalCardData }) {
       <span className="min-w-0 flex-1 truncate text-sm line-through">
         {payloadTitle(card.payload)}
       </span>
-    </div>
-  )
-}
-
-function FailureNote({ reason }: { reason: string }) {
-  return (
-    <div className="flex min-w-0 items-start gap-1.5 text-xs text-destructive">
-      <CircleAlertIcon className="mt-0.5 size-3.5 shrink-0" />
-      <span>{reason}</span>
     </div>
   )
 }

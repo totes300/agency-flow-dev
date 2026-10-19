@@ -214,12 +214,15 @@ export async function seedTaskFoundations(
   for (const s of missingSeeds) {
     const position = generateKeyBetween(lastPosition.get(s.category) ?? null, null);
     lastPosition.set(s.category, position);
+    // At most one status per workflow role per org (statuses.ts).
+    const roleTaken = s.workflowRole !== undefined && statuses.some((x) => !x.archivedAt && x.workflowRole === s.workflowRole);
     await ctx.db.insert("statuses", {
       orgId,
       name: s.name,
       color: s.color,
       category: s.category,
       position,
+      workflowRole: roleTaken ? undefined : s.workflowRole,
       isDefault: false, // decided per category below
       createdAt: now,
       updatedAt: now,

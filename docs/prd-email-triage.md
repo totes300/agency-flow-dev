@@ -3,8 +3,10 @@
 Status: **ready for implementation — start with slice P-0 (§9)** · Owner: Ádám · Written 2026-10-18 ·
 Revised 2026-10-18 (consolidation after canvas v5–v7) and 2026-10-19 (Codex engineering review: platform
 foundation, request ledger, send states, sync, gate table; Codex prototype details; kickoff reply; widgets;
-chat attachments; standup notes and call transcripts in the Agents workspace). Superseded decisions are
-logged in §12.
+chat attachments; standup notes and call transcripts in the Agents workspace) and 2026-10-19 (owner
+grilling: D23–D37 — V1 for our agency only, what enters Triage, `triageItems`, list lifecycle, snooze,
+decline, merge, undo Create, approve without email, client approval → done, Gmail-side replies, first
+sync, sending mailbox, polling sync, working-hour clocks). Superseded decisions are logged in §12.
 
 Scope: the email flow (Triage → task → Reviews → reply) **and** the shared assistant pieces it needs and
 that the Agents workspace reuses — conversation kit, widgets, chat attachments, change lists (§6.9–6.10,
@@ -138,6 +140,60 @@ Locked by the owner unless marked *amended* (then the newer wording is binding; 
   same conversation kit, widgets, proposals, drafts in the drawer and change lists; only the entry point
   differs.
 
+**Owner grilling, 2026-10-19 (D23–D37).**
+
+- **D23 V1 is for our agency only.** The Google OAuth client is an *Internal* app on our Workspace, so only
+  our users can connect Gmail. `orgSettings.emailTriageEnabled` (default off; set on our org by an internal
+  mutation, no UI) gates Triage, Reviews, the Gmail connector row and every email cron. Other tenants never
+  see any of it. An External app (Google verification + restricted-scope security assessment) is a separate,
+  later decision.
+- **D24 What enters Triage.** Three layers (§5.2): (1) skip — read only `INBOX`; skip Gmail's Promotions,
+  Social, Updates and Forums categories, spam, auto-replies and bulk mail (`List-Unsubscribe`, `Precedence:
+  bulk`, `Auto-Submitted`); (2) known client — a contact email, a client domain or a reply on a tracked
+  thread → Triage; (3) unknown sender — in an **admin's** mailbox one short agent check ("a work request from
+  a possible new client?") → yes: a "new sender" item, no: the quiet **Filtered** view of Triage, from which
+  the owner can promote it; in a **member's** mailbox it is never stored. Filtered messages are deleted after
+  30 days unless promoted.
+- **D25 One open Triage item per conversation.** A Triage item is a row in `triageItems` (§4.1). A new
+  message on a conversation that already has an open item joins that item: the agent re-reads the whole
+  thread and makes a new plan revision (the owner's edits survive unless the new email changes them); the
+  row says "Updated · 2 emails". A new item opens only after the previous one is done.
+- **D26 The Triage list holds only what needs you.** An item leaves the list when its last step is done
+  (Created or Merged and the kickoff sent or discarded, Declined, reply sent, Mark done / Keep). Two quiet
+  views behind the list header: **Snoozed** and **Done** (last 30 days); plus **Filtered** (D24). The
+  sidebar badge counts only open items.
+- **D27 Snooze** — Tomorrow 9:00 · Next Monday 9:00 · Pick a date. A new client message on the thread wakes
+  the item early.
+- **D28 Decline** needs no reason. Its open ledger rows become `dismissed` ("declined"). A later email on
+  the thread opens a new item.
+- **D29 Merge = a change proposal.** `Merge into…` builds the same `changeFromEmail` proposal as a client
+  reply on a linked task (new subtasks, plus a reopen when the task is in review or done) — one code path,
+  the same gates (I9).
+- **D30 Undo after Create.** A 10 s toast "Created PRG-132 · Undo". Undo deletes the task and its subtasks
+  and returns the item to its plan; assignee notifications and the kickoff draft wait until the toast ends.
+- **D31 Approve without email.** In Reviews a *review only* task gets `Approve` → the default status of the
+  done category (a small menu offers "Approve → Client review"); an *email ready* task also gets a quiet
+  `Approve without email` (discards the draft, → done).
+- **D32 Client approval closes the loop by one click.** A client reply with intent *approve* without an
+  action on a task in the `client_review` role becomes a light Triage item "Réka approved PRG-132" with
+  `Mark done` (⌘↵) / `Keep in Client review`. A plain *acknowledge* only informs (Inbox); the task stays.
+- **D33 Replies written in Gmail count.** An outbound message a team member sends from Gmail on a tracked
+  thread is synced into the thread: open drafts on it become stale ("You replied in Gmail at 14:05"), a
+  pending kickoff item closes as "Replied in Gmail", `waitingOn: "client"`. No promise is extracted from it
+  (I8).
+- **D34 First connect starts from now.** No backfill into Triage; `Resync last 7 days` stays as a manual
+  recovery button (§7.6).
+- **D35 Sending mailbox.** When the conversation lives in several mailboxes, the reply goes from the sending
+  admin's own mailbox if it holds the thread, otherwise from the mailbox the client wrote to. The From line
+  shows it and can switch among the mailboxes that hold the thread; when an admin sends from a colleague's
+  mailbox, that colleague gets an Inbox note. (Refines O3.)
+- **D36 Polling sync in V1.** Each mailbox is synced every minute from its Gmail history cursor — no Gmail
+  push / Pub/Sub in V1 (no extra Google Cloud setup, no webhook to secure). Push comes later, when many
+  mailboxes make it worth it. (Supersedes Q2.)
+- **D37 Working-hour clocks.** "Client waiting 24 h", the 3-day nudge and the 2-working-hour reopen signal
+  count working days only (weekends skipped, org timezone), like the default due date: a Friday 16:00 email
+  is flagged Monday 16:00.
+
 ### 3.2 UI and interaction (owner, 2026-10-18 — replaces the v4 UI list, see §12)
 
 - **D12 Chat-first details.** Each Triage item is a conversation in the style of Claude Code / Codex:
@@ -203,6 +259,29 @@ emailThreadTasks: defineTable({             // a thread ↔ its tasks (split, me
 })
   .index("by_threadId", ["threadId"])
   .index("by_orgId_taskId", ["orgId", "taskId"]),
+
+triageItems: defineTable({                  // one row in the Triage list (D25, D26)
+  orgId: v.string(),
+  threadId: v.id("emailThreads"),           // the conversation; at most one `open` item per conversation
+  kind: v.union(v.literal("request"), v.literal("change"), v.literal("question"), v.literal("approval"),
+                v.literal("needs_look"), v.literal("waiting"), v.literal("attention"), v.literal("new_sender")),
+  status: v.union(v.literal("open"), v.literal("snoozed"), v.literal("done"), v.literal("filtered")),
+  // the row label (Preparing… / A question for you / N tasks ready / Kickoff ready …) is derived from the
+  // linked run, question, proposal and draft — not stored
+  outcome: v.optional(v.union(v.literal("created"), v.literal("merged"), v.literal("declined"),
+                              v.literal("replied"), v.literal("replied_in_gmail"), v.literal("marked_done"),
+                              v.literal("kept"), v.literal("applied"), v.literal("not_a_change"))),
+  messageIds: v.array(v.id("emailMessages")),   // every message the item covers ("Updated · 2 emails")
+  taskId: v.optional(v.id("tasks")),        // linked task (change / approval / waiting) or the created one
+  proposalId: v.optional(v.id("agentProposals")),
+  draftId: v.optional(v.id("emailDrafts")), // reply / kickoff
+  snoozedUntil: v.optional(v.number()),     // D27; a new client message wakes it early
+  decidedBy: v.optional(v.id("users")), decidedAt: v.optional(v.number()),
+  createdAt: v.number(), updatedAt: v.number(),
+})
+  .index("by_orgId_status_updatedAt", ["orgId", "status", "updatedAt"])
+  .index("by_threadId_status", ["threadId", "status"])
+  .index("by_status_snoozedUntil", ["status", "snoozedUntil"]),
 
 emailMessages: defineTable({
   orgId: v.string(),
@@ -322,8 +401,7 @@ clientRequests: defineTable({               // the request ledger: nothing the c
 
 mailboxSync: defineTable({                  // per-mailbox Gmail sync state (§5.2)
   orgId: v.string(), connectorId: v.id("connectors"),
-  historyId: v.optional(v.string()),        // Gmail history cursor
-  watchExpiresAt: v.optional(v.number()),
+  historyId: v.optional(v.string()),        // Gmail history cursor; set to "now" on first connect (D34)
   lastSyncAt: v.optional(v.number()), lastFullSyncAt: v.optional(v.number()),
   error: v.optional(v.string()),
 })
@@ -401,8 +479,10 @@ handoverChecks: defineTable({               // hand-over QA result per task revi
 
 ### 4.2 Reused tables (extended, not replaced)
 
-- **`orgSettings`** — add `ignoredEmailDomains: v.optional(v.array(v.string()))` (§5.2) and
-  `emailDefaultDueWorkingDays: v.optional(v.number())` (default 2 when unset; §6.1). Edited in Settings (§7.6).
+- **`orgSettings`** — add `emailTriageEnabled: v.optional(v.boolean())` (D23; off when unset, no UI),
+  `ignoredEmailDomains: v.optional(v.array(v.string()))` (§5.2) and
+  `emailDefaultDueWorkingDays: v.optional(v.number())` (default 2 when unset; §6.1). The last two are edited
+  in Settings (§7.6).
 
 - **`statuses`** — add `workflowRole: v.optional(v.union(v.literal("admin_review"), v.literal("client_review"), v.literal("blocked")))`,
   at most one status per role per org; the seed sets it on Admin review, Client review and Stuck. Every rule in
@@ -480,6 +560,10 @@ handoverChecks: defineTable({               // hand-over QA result per task revi
   decision on an outdated revision is refused.
 - I12 Every `clientRequests` row has a disposition other than `open` before Create (in Triage or an Agents
   conversation) and before Send (Reviews); `dismissed` needs a reason.
+- I13 At most one `open` or `snoozed` `triageItems` row per conversation (D25); a new message joins it.
+  Nothing from a member's mailbox is stored unless it is from a known client or on a tracked thread (D24).
+- I14 Every email feature checks `orgSettings.emailTriageEnabled` on the server — routes, queries, mutations
+  and crons — not only in the UI (D23).
 
 ## 5. Backend architecture
 
@@ -496,15 +580,16 @@ convex/attachmentContents.ts  "use node" extraction action (PDF, DOCX, TXT/MD, i
 convex/agentChatFiles.ts    I-5: upload URL, record per thread, list for the run, re-checked on `attachFiles` approve
 convex/oauth.ts + http.ts   connector OAuth start / callback routes (PKCE, `oauthStates`), token refresh
 convex/email/
-  gmail.ts        actions: history sync from `mailboxSync.historyId`, watch/renew, fetch thread/message, send
+  gmail.ts        actions: history sync from `mailboxSync.historyId` (D36), fetch thread/message, send
                   (In-Reply-To / References), confirm by Message-ID, attachment download to _storage
   ingest.ts       upsert thread + message (stage `received`), strip quoted history, link client/contact/task
                   (§5.2), then attachment extraction (`extracted`)
   classify.ts     agent run "classifyInbound" (§6.3) → intents + ledger rows (`classified`) → dispatch (§5.3)
   requests.ts     the request ledger (`clientRequests`): add, cover, answer, supersede, dismiss; the
                   completeness pass (§6.1)
-  triage.ts       createTaskFromEmail proposal (run "prepareTask" §6.1), create / decline / snooze / merge,
-                  reply from Triage
+  triage.ts       `triageItems` (open / join / snooze / wake / done, D25–D27), createTaskFromEmail proposal
+                  (run "prepareTask" §6.1), create (+ 10 s undo, D30) / decline / snooze / merge (D29),
+                  reply from Triage, approval → Mark done (D32), Filtered promote
   changes.ts      D4 on linked tasks: builds the `changeFromEmail` proposal (add / amend / cancel subtasks,
                   reopen), applies it on approve, escalates an undecided one (§6.8.3)
   drafts.ts       emailDrafts versions, approval snapshot, pre-send review, queue (15 s), undo, dispatch,
@@ -514,8 +599,9 @@ convex/email/
   reviews.ts      read model for Reviews (tasks in the admin_review role joined with drafts and checks)
   model.ts        pure helpers: hard triggers (HU + EN), quoted-history stripping, address parsing,
                   domain → client matching, subject normalisation, date extraction. 100% unit-tested.
-convex/crons.ts   2 min: history sync per mailbox (the fallback when push is late) · daily: watch renewal ·
-                  5 min: retry failed stages, confirm `unknown` sends · hourly: watcher · 9:00: digest
+convex/crons.ts   1 min: history sync per mailbox (D36) and wake snoozed items · 5 min: retry failed stages,
+                  confirm `unknown` sends · hourly: watcher · 9:00: digest · daily: delete Filtered messages
+                  older than 30 days (D24). Every job skips orgs without `emailTriageEnabled` (I14).
 ```
 Task writes go through `convex/tasks/write.ts` (refactor PRD §5.1). Add entry points there
 (`createFromEmail`, `changeFromEmail`, `sendBack`, `handOverPartially`); never write `tasks`,
@@ -523,15 +609,22 @@ Task writes go through `convex/tasks/write.ts` (refactor PRD §5.1). Add entry p
 
 ### 5.2 Ingestion and linking
 
-1. **Sync.** Per mailbox, Gmail push (watch) wakes `gmail.ts`; it reads the history since
-   `mailboxSync.historyId` and advances the cursor only after the messages are stored. The 2-minute cron runs
-   the same sync, so a missed push only delays. An expired cursor triggers a bounded resync (last 7 days)
-   that is idempotent through I1. The watch is renewed daily. A sync error shows on the connector row (§7.6)
-   and in Triage as "Mailbox not syncing".
-2. Skip: messages from domains in `orgSettings.ignoredEmailDomains`, and messages whose sender is a team
-   member (outbound ones are stored for the thread).
+1. **Sync (D36).** Every minute, per mailbox, `gmail.ts` reads the history since `mailboxSync.historyId` and
+   advances the cursor only after the messages are stored. On first connect the cursor starts at "now" —
+   no backfill (D34). An expired cursor triggers a bounded resync (last 7 days) that is idempotent through
+   I1. A sync error shows on the connector row (§7.6) and in Triage as "Mailbox not syncing". No Gmail push
+   in V1.
+2. **Filter (D24).** Read only `INBOX` and our own sent mail. Skip Gmail categories Promotions / Social /
+   Updates / Forums, spam, auto-replies and bulk mail (`List-Unsubscribe`, `Precedence: bulk`,
+   `Auto-Submitted`), and domains in `orgSettings.ignoredEmailDomains`. Then:
+   - **known client** (contact email, client domain, or a tracked thread) → continue;
+   - **unknown sender, admin's mailbox** → one short agent check; a possible new client → continue as a
+     "new sender" item, otherwise store as a `filtered` item (deleted after 30 days unless promoted);
+   - **unknown sender, member's mailbox** → not stored (I13).
+   A message whose sender is a team member is stored for the thread as outbound; on a tracked thread it
+   applies D33 (drafts stale, kickoff closed as "Replied in Gmail", `waitingOn: "client"`).
 3. Store (`received`). The same email reaching two connected mailboxes (same `rfcMessageId`) makes one
-   Triage item (I1).
+   Triage item (I1); a message on a conversation with an open item joins that item (D25, I13).
 4. Strip quoted history into `bodyText` (`model.stripQuoted`: Gmail quote markers, "On … wrote:",
    "… írta:", `>` lines, signatures); keep the full body in `bodyHtml` for the Gmail-style view.
 5. Link thread → client: existing thread, else contact email, else `clients.emailDomains`, else unknown
@@ -551,10 +644,12 @@ Task writes go through `convex/tasks/write.ts` (refactor PRD §5.1). Add entry p
 | unlinked | acknowledge only, no hard trigger | Inbox `email_no_action` with reasons |
 | linked | add / clarify / replace / cancel, or approve with an action ("mehet élesbe" → "Élesítés …") | `changeFromEmail` proposal as a top-of-Triage "Reply on ‹task›" item (reopen when the task held the `admin_review` / `client_review` role or was done); Inbox informs; the task's drafts become stale (D9); I9 until decided |
 | linked | ask only, answerable from the task | reply draft → Triage "Reply ready" |
-| linked | approve without an action, or acknowledge, no hard trigger | Inbox `email_no_action` "checked for…" reasons; `waitingOn: none` |
+| linked, task in the `client_review` role | approve without an action, no hard trigger | Triage item kind `approval` "Réka approved ‹task›" → `Mark done` / `Keep in Client review` (D32) |
+| linked | approve without an action (task not in `client_review`), or acknowledge, no hard trigger | Inbox `email_no_action` "checked for…" reasons; `waitingOn: none` |
 | any | hard trigger, nothing recognised | Triage item "needs a look" (D4) |
-| linked, no answer from us > 24 h | — | Triage item with a drafted reply; Inbox `client_waiting_24h` |
-| linked, our last mail unanswered > 3 d | — | `emailDrafts` kind `nudge` → Reviews |
+| conversation already has an open / snoozed item | any | joins that item: new plan revision, snoozed item wakes (D25, D27) |
+| linked, no answer from us > 24 working hours (D37) | — | Triage item with a drafted reply; Inbox `client_waiting_24h` |
+| linked, our last mail unanswered > 3 working days (D37) | — | `emailDrafts` kind `nudge` → Reviews |
 
 With several tasks on a thread, each new request is routed to the task whose work category fits; when
 unclear the agent asks (D16, D18).
@@ -567,6 +662,9 @@ draft ──Approve & send──▶ queued (15 s, Undo) ──▶ dispatching �
   └─────────────────────────┘                        └ no answer ──▶ unknown ──confirm──▶ sent | failed
 ```
 
+- **Sending mailbox (D35).** `fromConnectorId` defaults to the sending admin's own mailbox when it holds
+  the conversation, else the mailbox the client wrote to; it can switch only among mailboxes that hold the
+  conversation. Sending from a colleague's mailbox leaves that colleague an Inbox note.
 - **Approve & send** stores `approval` (version + hash of subject, From, To, Cc, body, attachments), sets
   `queued`, `sendAt = now + 15 000` and schedules the send. The countdown is read from `sendAt`, so it
   survives a reload. Undo or any edit before `sendAt` → `draft`, approval cleared.
@@ -950,7 +1048,9 @@ never the retainer card.
   small dot (amber = waits on you, green = done, grey = in progress) — New / Preparing… (live dots) / A
   question for you / N tasks ready / Reply ready / Kickoff ready / Created / Merged / Declined / Snoozed. The title is the
   email subject until the agent has a plan, then the proposed task title (from the proposal; no new
-  field). J/K move.
+  field); "Updated · N emails" when later messages joined the item (D25). J/K move. The list shows only
+  open items (D26); quiet views behind the header: **Snoozed**, **Done** (last 30 days), **Filtered** (D24,
+  each row with `Move to Triage`). The sidebar badge counts open items only.
 - **Middle: the conversation.** The whole email Gmail-style (D14), then the run line, the agent's plan,
   questions, Create. Folds the email after the plan; "Show the original email" restores it.
 - **Right: the draft drawer, on demand** (D15): clicking a plan task or "Open as draft" opens the task
@@ -960,13 +1060,16 @@ never the retainer card.
   header toggles it, `Esc` closes it.
 - **Layout when the drawer opens:** the Triage inbox column hides and the conversation and drawer share
   the space; the app sidebar stays. Closing the drawer brings the inbox back. Reviews behaves the same.
-- **Under the composer, quiet:** `Merge into…` (the agent asks which open task of the client) · `Decline`
-  · `Snooze`, with Undo. `Create` lives in the conversation (⌘↵).
-- **After Create** the conversation shows the event line ("Created PRG-132 · Frances, Lili, Bence
-  notified") and directly under it the kickoff reply as the email component with `Send` as the primary
-  action (D21); `Discard` is the quiet way out.
+- **Under the composer, quiet:** `Merge into…` (the agent asks which open task of the client; builds a
+  `changeFromEmail` proposal, D29) · `Decline` (no reason, D28) · `Snooze` (Tomorrow 9:00 · Next Monday ·
+  Pick a date, D27), with Undo. `Create` lives in the conversation (⌘↵).
+- **After Create** a 10 s toast "Created PRG-132 · Undo" (D30); when it ends, assignees are notified and the
+  conversation shows the event line ("Created PRG-132 · Frances, Lili, Bence notified") and directly under it
+  the kickoff reply as the email component with `Send` as the primary action (D21); `Discard` is the quiet
+  way out.
 - **Item types:** request (plan → Create → kickoff reply), "Reply on ‹task›" (a change proposal on a linked task, pinned to
-  the top → Apply / Not a change), question (reply draft → Send reply / Make it a task instead), "needs a
+  the top → Apply / Not a change), approval ("Réka approved ‹task›" → Mark done / Keep in Client review,
+  D32), question (reply draft → Send reply / Make it a task instead), "needs a
   look" (hard trigger, nothing recognised), urgent (one urgent task), new sender (Create also creates
   client + contact), attention (a failed processing stage or a mailbox that stopped syncing → Retry /
   Reconnect).
@@ -979,7 +1082,9 @@ conversation: who handed it over (with the hand-over QA result and any "submitte
 line for the pre-send review, the findings as the agent's message (what is fine, what to look at, with
 sources; when nothing needs a look, one green line instead — "3/3 subtasks done · exports attached · no
 open questions"), the draft as an email block with header and version, a fix as a diff and a new version, then
-`Approve & send vN · K warnings` / `Send back` (note → subtasks to tick). Sending / stale / crossed / failed
+`Approve & send vN · K warnings` / `Send back` (note → subtasks to tick), with a quiet `Approve without
+email` (draft discarded, task → done). A *review only* task has `Approve` → the default status of the done
+category, and a small menu "Approve → Client review" (D31). Sending / stale / crossed / failed
 appear as event lines with Undo / Reconnect (D9).
 
 ### 7.4 Inbox (`components/inbox/*` — a list, §11 O5; canvas v6 board 4)
@@ -1034,11 +1139,17 @@ bindings.
   ends as a ledger row), acknowledge precision 100 % (no real request ever classified acknowledge),
   duplicate sends 0, dropped messages 0. Recall below the bar blocks the release.
 - End-to-end scenarios (`convex-test` with a fake Gmail): two mailboxes receive the same email (one
-  item); a push is missed (the cron sync catches it); a cursor expires (bounded resync, no duplicates);
+  item); a sync run fails (the next minute catches up, no duplicates); a cursor expires (bounded resync, no duplicates);
   a send times out (unknown → confirmed, not resent); Undo after reload; an edit during the countdown voids
   the approval; a change proposal arrives during the countdown (dispatch refused, I9); partial hand-over →
   follow-up created only after Gmail accepts; a member asks the assistant about a task and cannot reach
-  the admin conversation (I10); two admins answer the same question (one run, I7/I11).
+  the admin conversation (I10); two admins answer the same question (one run, I7/I11); three emails on one
+  thread before a decision (one item, one plan revision per email, D25); a newsletter / Google notice /
+  vendor invoice never reaches Triage, an unknown sender in a member's mailbox is not stored (D24); a
+  snoozed item wakes on a client reply (D27); Undo within 10 s after Create deletes the task and sends no
+  notification (D30); a reply written in Gmail stales the open draft and closes the kickoff item (D33);
+  client "így jó" on a Client-review task → approval item → Mark done (D32); an org without
+  `emailTriageEnabled` gets nothing from any email query, mutation or cron (I14).
 - Convex tests (`convex-test`): ingest idempotency (I1), linking, dispatch table, multi-task threads (I2),
   change proposal on done, the gate table (§6.7), send states and approval hash (I4, D9), promises only
   from sent drafts (I8), question answer starts exactly one run (I7), stage retries (I5), access matrix
@@ -1064,29 +1175,30 @@ with the open tasks-refactor slices (7b).
 | I-3 | Attachment contents | `attachmentContents`, extraction action for task + comment attachments (PDF, DOCX, TXT/MD, image size), T2 | — |
 | I-4 | Gmail connect per user | `gmail` connector type, OAuth routes + `oauthStates`, encrypted tokens + refresh, Settings › Connectors UI, read-only Gmail tools for the chat | Google OAuth client (§11 owner action) |
 | I-5 | Chat attachments | composer accepts pasted screenshots, drag and drop and picked files (images, PDF, DOCX, TXT/MD/CSV; ≤ 10 per message, ≤ 25 MB each), `agentChatFiles`, extraction through I-3, images passed to the model as image input (verify `@convex-dev/agent` 0.6.4 file parts first), `attachFiles` proposal kind, batch update proposals from many files | I-3 |
-| 0 | Email schema + seed | §4.1 tables, §4.2 extensions incl. `statuses.workflowRole`, `model.ts` with tests, seed with the canvas scenarios (Réka 5 requests, Gábor price bug, Péter question, Judit new sender, Anna thanks) | — |
-| 1 | Sync + ingest + classify + Inbox | history sync with cursor, watch + renewal, 2-min cron sync, bounded resync, `rfcMessageId` dedupe, processing stages with retry (I5), attachment extraction for email, intents + ledger rows, dispatch for linked threads (change proposals), new Inbox types, I3 via the role, T1, T8 classify | P-0, I-3, I-4, 0 |
-| 2 | Triage | `createTaskFromEmail`, `prepareTask` with the ledger check, completeness pass and questions, conversation kit (§7.1), `/triage` (§7.2), create / merge / decline / snooze, new client, question reply, kickoff reply after Create / Merge (D21), widgets (request checklist, task status card, retainer card) + T15, T7 V1 | I-1, I-2, 1 |
-| 3 | Drafts + Reviews + sending | `draftCompletion`, versions, approval snapshot, pre-send review + `checks`, gate table, `/reviews` (§7.3), send states (§5.4) incl. unknown → confirm, D8 partial hand-over + follow-up on accept, send back → subtasks, `emailPromises` at send, T6, T12 | 2 |
+| 0 | Email schema + seed | §4.1 tables incl. `triageItems`, §4.2 extensions incl. `statuses.workflowRole` and `orgSettings.emailTriageEnabled` (I14 helper), `model.ts` with tests, seed with the canvas scenarios (Réka 5 requests, Gábor price bug, Péter question, Judit new sender, Anna thanks) | — |
+| 1 | Sync + ingest + classify + Inbox | 1-min history-cursor sync (D36, no push), start-from-now on connect (D34), bounded resync, the D24 filter (+ Filtered 30-day cleanup), Gmail-side replies (D33), `triageItems` open / join (D25), `rfcMessageId` dedupe, processing stages with retry (I5), attachment extraction for email, intents + ledger rows, dispatch for linked threads (change proposals), new Inbox types, I3 via the role, T1, T8 classify | P-0, I-3, I-4, 0 |
+| 2 | Triage | `createTaskFromEmail`, `prepareTask` with the ledger check, completeness pass and questions, conversation kit (§7.1), `/triage` (§7.2) with the open list + Snoozed / Done / Filtered views (D26), create (+ 10 s undo, D30) / merge as `changeFromEmail` (D29) / decline (D28) / snooze with wake (D27), approval item → Mark done (D32), new client, question reply, kickoff reply after Create / Merge (D21), widgets (request checklist, task status card, retainer card) + T15, T7 V1 | I-1, I-2, 1 |
+| 3 | Drafts + Reviews + sending | `draftCompletion`, versions, approval snapshot, pre-send review + `checks`, gate table, `/reviews` (§7.3) incl. Approve / Approve without email (D31), sending mailbox rule (D35), send states (§5.4) incl. unknown → confirm, D8 partial hand-over + follow-up on accept, send back → subtasks, `emailPromises` at send, T6, T12 | 2 |
 | M-1 | Change lists | proposal kinds `editTask`, `addSubtasks`, `tickSubtask`, `postComment` (shared with slice 1–2), change-list blocks per kind, task drawer "proposed change" state (values in place, highlighted, editable, Apply / Skip, next item), comment-draft state, §6.9 meeting-notes behaviour in the platform prompt, .md accepted in the composer, fixtures: 3 real standup notes; §6.10 client call transcripts (ledger rows from a transcript, the Triage plan + drafts, recap email in a new conversation) | I-1, I-2 (§6.9); 0, 2, 3 (§6.10) |
 | 4 | Task drawer + colleague side | Emails tab, activity events, composer tabs, assistant in the drawer for owner and members, hand-over QA + `handoverChecks`, T13 | 3 |
-| 5 | Watching | watcher signals, 9:00 digest, assignee reminders, nudges / interim drafts, T4, runbook | 3 |
+| 5 | Watching | watcher signals on working-hour clocks (D37), 9:00 digest, assignee reminders, nudges / interim drafts, T4, runbook | 3 |
 | 6 | Hardening | fixtures ≥ 30 + release metrics (§8), end-to-end scenarios, access matrix, send-failure drills, delete dead code, `docs/architecture.md` | 1–5 |
 | 7 | Learning | rule proposals (`proposeSkill`) from draft→sent diffs, send-backs, repeated QA warnings, Triage corrections; "Applied rule" in run steps; 30-day dismiss | 3 |
 
 ## 10. Resolved questions (defaults — change only with the owner)
 
 - Q1 *(superseded by D17)* — see §12.
-- Q2 Push or poll? Both, from slice 1: Gmail watch (Pub/Sub) plus the 2-minute history sync, idempotent
-  (I1), with a bounded resync on an expired cursor (§5.2).
+- Q2 *(superseded by D36)* — polling every minute from the history cursor; no push in V1. See §12.
 - Q3 Language: D19; UI strings English.
 - Q4 Undo window: 15 s, not configurable in V1.
-- Q5 Nudge 3 days; waiting 24 h; quiet task 2 working days; stuck 1 working day. Per-org later.
+- Q5 Nudge 3 working days; waiting 24 working hours (D37); quiet task 2 working days; stuck 1 working day.
+  Per-org later.
 - Q6 Attachments: stored in `_storage`, max 25 MB each; larger ones linked. Extracted text capped.
 - Q7 A question-kind email sends a reply in the thread, logged on the referenced task; no task unless the
   owner asks for one.
-- Q8 Merge into…: the agent asks which open task of the same client; the requests become subtasks there and
-  the thread links to it (`emailThreadTasks.role = "merged"`). Replies still answer one thread each (I2).
+- Q8 Merge into…: the agent asks which open task of the same client; the merge is a `changeFromEmail`
+  proposal on it (new subtasks, reopen when in review or done — D29) and the thread links to it
+  (`emailThreadTasks.role = "merged"`). Replies still answer one thread each (I2).
 
 ## 11. Owner decisions (all answered 2026-10-18)
 
@@ -1140,6 +1252,15 @@ I-4 slice prints. Blocks I-4.
 | "Only the I3 gate and a stale version block Approve" | the gate table in §6.7 (adds I9, I12, revisions, mailbox) | 2026-10-19 |
 | §6.9 one mixed change set with per-row checkboxes and `Apply N changes`; "Approve all" for many files | three change lists, every item opened, editable and approved in the task drawer (§6.9, §7.1) | 2026-10-19 |
 | One owner-private agent thread per email thread | `agentThreads.scope` (shared email thread, member_task threads, I10) | 2026-10-19 |
+| Q2 Gmail push (Pub/Sub watch) + 2-min poll from slice 1; daily watch renewal; `mailboxSync.watchExpiresAt` | 1-min history-cursor polling, no push in V1 (D36) | 2026-10-19 |
+| Filter = `ignoredEmailDomains` + team senders only; every colleague mailbox fully stored | Gmail categories / bulk skipped, known clients, vetted unknowns in admin mailboxes, nothing unknown from member mailboxes, Filtered view (D24) | 2026-10-19 |
+| One Triage item per inbound message; item states with no storage | `triageItems`, one open item per conversation (D25, I13) | 2026-10-19 |
+| Created / Merged / Declined rows stay in the Triage list | list = open items only; Snoozed / Done / Filtered views (D26) | 2026-10-19 |
+| Merge only adds subtasks | Merge = `changeFromEmail` proposal, reopen when in review or done (D29) | 2026-10-19 |
+| Client approval without an action → Inbox only, task stays in Client review | approval Triage item → Mark done / Keep (D32) | 2026-10-19 |
+| Reply mailbox = "the mailbox the thread lives in" (O3) with no rule for several | D35 sending-mailbox rule | 2026-10-19 |
+| 24 h / 3 d wall-clock | working-hour clocks (D37) | 2026-10-19 |
+| Available to every org | V1 for our agency only, `emailTriageEnabled` (D23, I14) | 2026-10-19 |
 
 ---
 

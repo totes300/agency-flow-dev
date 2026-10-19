@@ -4,6 +4,7 @@ import { getAuthContext } from "./lib/auth";
 import { loadTaskForReadOrNull, loadTaskForWrite } from "./tasks/access";
 import { isMimeTypeBlocked } from "./lib/content_validation";
 import { isSafeUrl } from "./lib/url";
+import { deleteContentForStorage, requestExtraction } from "./attachmentContents";
 
 // ─── Query ──────────────────────────────────────────────────────────────────────
 
@@ -133,7 +134,7 @@ export const save = mutation({
       throw new ConvexError("File exceeds 10MB limit");
     }
 
-    return await ctx.db.insert("attachments", {
+    const id = await ctx.db.insert("attachments", {
       taskId: args.taskId,
       orgId,
       userId,
@@ -143,6 +144,14 @@ export const save = mutation({
       mimeType: args.mimeType,
       createdAt: Date.now(),
     });
+    // What the agent can read inside the file (A6, T2).
+    await requestExtraction(ctx, {
+      orgId,
+      storageId: args.fileId,
+      mimeType: args.mimeType,
+      name: args.fileName,
+    });
+    return id;
   },
 });
 
@@ -159,6 +168,7 @@ export const remove = mutation({
     }
 
     await ctx.storage.delete(att.fileId);
+    await deleteContentForStorage(ctx, att.fileId);
     await ctx.db.delete(args.id);
   },
 });

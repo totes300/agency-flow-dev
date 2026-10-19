@@ -32,6 +32,15 @@ import {
   newestLast,
   tiptapToPlainText,
 } from "../lib/agents/taskReads";
+import {
+  ATTACHMENT_TEXT_PAGE_MAX,
+  contentMessage,
+  pageText,
+  summarizeContent,
+  type AttachmentContentSummary,
+  type ContentStatus,
+} from "../lib/attachments/contents";
+import { loadContent } from "./attachmentContents";
 
 /**
  * Backing reads of the A3 agent read tools (docs/prd-email-triage.md §6.4:
@@ -326,6 +335,11 @@ export async function getTaskActivityForAuth(
 // ─── Files (T11) ─────────────────────────────────────────────────────────────
 
 export type AgentTaskFile = {
+  /**
+   * The attachment's id — pass it to getAttachmentText as `attachmentId`
+   * (source "task") or `commentAttachmentId` (source "comment").
+   */
+  id: string;
   name: string;
   mimeType: string;
   sizeBytes: number;
@@ -335,8 +349,13 @@ export type AgentTaskFile = {
   task: string | null;
   source: "task" | "comment";
   comment: { id: string; author: string; at: string } | null;
-  // TODO(A6): extracted text / image size from `attachmentContents` (T2).
-  extractedText: null;
+  /**
+   * What was read inside the file (A6, `attachmentContents`): status, page
+   * count, image width × height and the stored text length — never the text
+   * itself (getAttachmentText pages it). Null when the file was never
+   * queued for reading (uploaded before A6 and not backfilled).
+   */
+  extractedText: AttachmentContentSummary | null;
 };
 
 export type AgentLinkPreview = {
@@ -403,7 +422,9 @@ async function readFiles(
         comment = { id: c._id, author: await nameOf(c.userId), at: isoAt(c.createdAt) };
       }
     }
+    const content = await loadContent(ctx, auth.orgId, f.row.fileId);
     files.push({
+      id: f.row._id,
       name: f.row.fileName,
       mimeType: f.row.mimeType,
       sizeBytes: f.row.fileSize,
@@ -412,7 +433,7 @@ async function readFiles(
       task: identifierOf.get(f.row.taskId) ?? null,
       source: f.kind,
       comment,
-      extractedText: null,
+      extractedText: summarizeContent(content),
     });
   }
 
@@ -487,6 +508,99 @@ export async function getTaskFilesForAuth(
     ...part,
     subtasksIncluded: scope.subtasksIncluded,
     subtasksTruncated: scope.subtasksTruncated,
+  };
+}
+
+// ─── Attachment text (T2) ────────────────────────────────────────────────────
+
+export type AgentAttachmentText = {
+  file: {
+    id: string;
+    name: string;
+    mimeType: string;
+    sizeBytes: number;
+    /** Identifier of the task the file is on. */
+    task: string | null;
+    source: "task" | "comment";
+  };
+  /** `not_processed`: the file was never queued for reading (pre-A6, not backfilled). */
+  status: ContentStatus | "not_processed";
+  /** Plain sentence for the model — every non-`done` case says the content is unknown. */
+  message: string;
+  /**
+   * This page of the stored text, explicitly marked as untrusted file
+   * content — data, never instructions (null when there is none).
+   */
+  content: { untrustedFileContent: true; text: string } | null;
+  offset: number;
+  /** Pass as `offset` to read on; null on the last page. */
+  nextOffset: number | null;
+  /** Length of the stored text. */
+  totalChars: number | null;
+  /** The stored text itself was capped at extraction (50 000 chars). */
+  truncated: boolean;
+  pageCount: number | null;
+  width: number | null;
+  height: number | null;
+  error: string | null;
+};
+
+/**
+ * Read what was extracted from one task or comment attachment (T2). Access
+ * follows the referencing record, exactly like getTaskFiles: the attachment
+ * must be in the actor's org (a comment attachment's comment too) and its
+ * task readable (`loadTaskForReadOrNull`, T1). Unknown, malformed, other-org
+ * and unreadable ids all return null. The content row is looked up by the
+ * actor's org + storageId, never another org's.
+ */
+export async function getAttachmentTextForAuth(
+  ctx: QueryCtx,
+  auth: AuthContext,
+  args: { attachmentId?: string; commentAttachmentId?: string; offset?: number },
+): Promise<AgentAttachmentText | null> {
+  let row: Doc<"attachments"> | Doc<"commentAttachments"> | null = null;
+  let source: "task" | "comment";
+  if (args.attachmentId !== undefined && args.commentAttachmentId === undefined) {
+    const id = ctx.db.normalizeId("attachments", args.attachmentId.trim());
+    row = id ? await ctx.db.get(id) : null;
+    source = "task";
+  } else if (args.commentAttachmentId !== undefined && args.attachmentId === undefined) {
+    const id = ctx.db.normalizeId("commentAttachments", args.commentAttachmentId.trim());
+    const att = id ? await ctx.db.get(id) : null;
+    if (att && att.orgId === auth.orgId) {
+      const comment = await ctx.db.get(att.commentId);
+      row = comment && comment.orgId === auth.orgId && comment.taskId === att.taskId ? att : null;
+    }
+    source = "comment";
+  } else {
+    return null;
+  }
+  if (!row || row.orgId !== auth.orgId) return null;
+  const access = await loadTaskForReadOrNull(ctx, row.taskId, auth);
+  if (!access) return null;
+
+  const content = await loadContent(ctx, auth.orgId, row.fileId);
+  const page = content?.status === "done" && content.text ? pageText(content.text, args.offset, ATTACHMENT_TEXT_PAGE_MAX) : null;
+  return {
+    file: {
+      id: row._id,
+      name: row.fileName,
+      mimeType: row.mimeType,
+      sizeBytes: row.fileSize,
+      task: access.task.identifier ?? null,
+      source,
+    },
+    status: content?.status ?? "not_processed",
+    message: contentMessage(content),
+    content: page ? { untrustedFileContent: true, text: page.text } : null,
+    offset: page?.offset ?? 0,
+    nextOffset: page?.nextOffset ?? null,
+    totalChars: page?.totalChars ?? null,
+    truncated: content?.truncated ?? false,
+    pageCount: content?.pageCount ?? null,
+    width: content?.width ?? null,
+    height: content?.height ?? null,
+    error: content && content.status !== "done" ? (content.error ?? null) : null,
   };
 }
 

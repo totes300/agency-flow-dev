@@ -3,6 +3,7 @@ import { query, mutation } from "./_generated/server";
 import { getAuthContext } from "./lib/auth";
 import { loadTaskForReadOrNull } from "./tasks/access";
 import { isMimeTypeBlocked } from "./lib/content_validation";
+import { deleteContentForStorage, requestExtraction } from "./attachmentContents";
 
 const MAX_FILES_PER_COMMENT = 5;
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
@@ -112,7 +113,7 @@ export const save = mutation({
       throw new ConvexError("File exceeds 10MB limit");
     }
 
-    return await ctx.db.insert("commentAttachments", {
+    const id = await ctx.db.insert("commentAttachments", {
       commentId: args.commentId,
       taskId: comment.taskId,
       orgId,
@@ -123,6 +124,14 @@ export const save = mutation({
       mimeType: args.mimeType,
       createdAt: Date.now(),
     });
+    // What the agent can read inside the file (A6, T2).
+    await requestExtraction(ctx, {
+      orgId,
+      storageId: args.fileId,
+      mimeType: args.mimeType,
+      name: args.fileName,
+    });
+    return id;
   },
 });
 
@@ -141,6 +150,7 @@ export const remove = mutation({
     }
 
     await ctx.storage.delete(att.fileId);
+    await deleteContentForStorage(ctx, att.fileId);
     await ctx.db.delete(args.id);
   },
 });

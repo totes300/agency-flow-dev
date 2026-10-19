@@ -710,6 +710,42 @@ export default defineSchema({
     .index("by_comment", ["commentId"])
     .index("by_orgId", ["orgId"]),
 
+  // ─── Attachment contents (A6, email-triage §4.1 / S5) ───────────────────────
+  // What the agent can read inside a stored file (T2): text of PDF / DOCX /
+  // TXT / MD / CSV, image width × height. ONE row per stored file per org,
+  // keyed by (orgId, storageId) — no FK to the referencing row: read access
+  // comes from the task attachment, comment attachment, email or chat file
+  // that references this storageId, re-checked at read time. Written only by
+  // `requestExtraction` (convex/attachmentContents.ts) and the extraction
+  // action (convex/attachmentExtraction.ts); deleted with the blob
+  // (`deleteContentForStorage`). Rules: lib/attachments/contents.ts.
+  attachmentContents: defineTable({
+    orgId: v.string(),
+    storageId: v.id("_storage"),
+    mimeType: v.string(),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("done"),
+      v.literal("unsupported"),
+      v.literal("failed"),
+    ),
+    text: v.optional(v.string()), // capped at EXTRACT_TEXT_MAX (50 000 chars)
+    truncated: v.optional(v.boolean()), // the cap was hit
+    pageCount: v.optional(v.number()), // PDF
+    width: v.optional(v.number()), // images
+    height: v.optional(v.number()),
+    // Readable reason for unsupported / failed (and the last transient error
+    // while a retry is pending).
+    error: v.optional(v.string()),
+    attempts: v.number(), // current attempt number, 0 = never attempted (max EXTRACT_MAX_ATTEMPTS)
+    queuedAt: v.optional(v.number()), // when the current attempt is due (stuck-row re-queue)
+    extractedAt: v.optional(v.number()), // set on a final status
+    createdAt: v.number(),
+  })
+    .index("by_orgId_storageId", ["orgId", "storageId"]) // unique: one row per file per org
+    .index("by_storageId", ["storageId"]) // blob deletion cleanup only
+    .index("by_orgId_status", ["orgId", "status"]),
+
   // ─── Notifications (inbox — mentions, assignments, comments) ─────────────
   notifications: defineTable({
     orgId: v.string(),

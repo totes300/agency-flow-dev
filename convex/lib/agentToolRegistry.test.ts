@@ -76,6 +76,8 @@ describe("agentToolRegistry", () => {
       getTaskActivity: "member",
       getTaskFiles: "member",
       getTaskBundle: "member",
+      // A6 attachment contents (T2)
+      getAttachmentText: "member",
       // Package C — time & utilization
       collectMemberTime: "member", // self-scoped for members inside the query
       collectTeamTime: "admin",
@@ -134,6 +136,20 @@ describe("task tools speak the new task layer (tasks refactor §7)", () => {
       expect(schema.safeParse({ task: "ARLO-21" }).success, name).toBe(true);
       expect(schema.safeParse({}).success, name).toBe(false);
     }
+  });
+});
+
+describe("getAttachmentText (A6, T2)", () => {
+  type Parseable = { safeParse: (input: unknown) => { success: boolean } };
+  const tool = () =>
+    buildEntryTool(agentToolRegistry.getAttachmentText, MEMBER) as unknown as { inputSchema: Parseable };
+
+  it("takes an attachment id or comment attachment id and an offset", () => {
+    const schema = tool().inputSchema;
+    expect(schema.safeParse({ attachmentId: "k1" }).success).toBe(true);
+    expect(schema.safeParse({ commentAttachmentId: "k2", offset: 12000 }).success).toBe(true);
+    expect(schema.safeParse({ attachmentId: "k1", offset: -1 }).success).toBe(false);
+    expect(schema.safeParse({ attachmentId: "k1", offset: 1.5 }).success).toBe(false);
   });
 });
 

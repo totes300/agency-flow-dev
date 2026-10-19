@@ -202,8 +202,9 @@ type ToolDisplay = {
   summarize: (output: unknown) => string | null;
   /**
    * What the call was about, appended to the verb ("Read comments on
-   * ARLO-21"). Derived from the tool's own output (or an identifier-shaped
-   * input), never model prose; absent → the bare verb.
+   * ARLO-21"; an empty join appends the target directly). Derived from the
+   * tool's own output (or an identifier-shaped input), never model prose;
+   * absent → the bare verb.
    */
   target?: { join: string; of: (input: unknown, output: unknown) => string | null };
 };
@@ -220,6 +221,12 @@ function taskTarget(input: unknown, output: unknown): string | null {
   if (typeof identifier === "string" && identifier) return identifier;
   const ref = field(input, "task");
   return typeof ref === "string" && IDENTIFIER_SHAPE.test(ref.trim()) ? ref.trim().toUpperCase() : null;
+}
+
+/** The file a getAttachmentText call read: its name from the output. */
+function fileTarget(_input: unknown, output: unknown): string | null {
+  const name = field(field(output, "file"), "name");
+  return typeof name === "string" && name ? name : null;
 }
 
 function projectTarget(_input: unknown, output: unknown): string | null {
@@ -356,6 +363,31 @@ const TOOL_DISPLAY: Record<string, ToolDisplay> = {
       return links > 0 ? `${plural(files, "file")} · ${plural(links, "link")}` : plural(files, "file");
     },
   },
+  // A6 attachment contents (T2): the file name from the output; the summary
+  // states what was actually read, never more.
+  getAttachmentText: {
+    runningLabel: "Reading file",
+    doneLabel: "Read file",
+    target: { join: "", of: fileTarget },
+    summarize: (output) => {
+      if (notFound(output)) return "not found";
+      const status = field(output, "status");
+      if (status === "pending") return "still being read";
+      if (status === "unsupported") return "can't be read";
+      if (status === "failed") return "couldn't be read";
+      if (status === "not_processed") return "not read yet";
+      if (status !== "done") return null;
+      const width = field(output, "width");
+      const height = field(output, "height");
+      if (typeof width === "number" && typeof height === "number") return `${width}×${height}`;
+      const pages = field(output, "pageCount");
+      const total = field(output, "totalChars");
+      const parts: string[] = [];
+      if (typeof pages === "number") parts.push(plural(pages, "page"));
+      parts.push(typeof total === "number" ? `${total.toLocaleString("en-US")} chars` : "no text");
+      return parts.join(" · ");
+    },
+  },
   getProjectRouting: {
     runningLabel: "Reading project routing",
     doneLabel: "Read routing",
@@ -414,7 +446,9 @@ export function toolLabel(
   if (!display) return humanizeToolName(toolName);
   const verb = phase === "running" ? display.runningLabel : display.doneLabel;
   const target = display.target?.of(call?.input, phase === "done" ? call?.output : undefined) ?? null;
-  return target ? `${verb} ${display.target!.join} ${target}` : verb;
+  if (!target) return verb;
+  const join = display.target!.join;
+  return join ? `${verb} ${join} ${target}` : `${verb} ${target}`;
 }
 
 /**

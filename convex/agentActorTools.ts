@@ -65,11 +65,13 @@ import {
   type TimesheetData,
 } from "./timesheets";
 import {
+  getAttachmentTextForAuth,
   getProjectRoutingForAuth,
   getTaskActivityForAuth,
   getTaskBundleForAuth,
   getTaskCommentsForAuth,
   getTaskFilesForAuth,
+  type AgentAttachmentText,
   type AgentProjectRouting,
   type AgentTaskActivity,
   type AgentTaskBundle,
@@ -194,6 +196,20 @@ export const getTaskBundle = internalQuery({
   args: { actor: agentActorRefValidator, task: v.string() },
   handler: async (ctx, { actor, ...args }): Promise<AgentTaskBundle | null> => {
     return await getTaskBundleForAuth(ctx, await loadAuthContextForActor(ctx, actor), args);
+  },
+});
+
+// ─── A6 — attachment contents (T2) — core in agentReads.ts ───────────────────
+
+export const getAttachmentText = internalQuery({
+  args: {
+    actor: agentActorRefValidator,
+    attachmentId: v.optional(v.string()),
+    commentAttachmentId: v.optional(v.string()),
+    offset: v.optional(v.number()),
+  },
+  handler: async (ctx, { actor, ...args }): Promise<AgentAttachmentText | null> => {
+    return await getAttachmentTextForAuth(ctx, await loadAuthContextForActor(ctx, actor), args);
   },
 });
 

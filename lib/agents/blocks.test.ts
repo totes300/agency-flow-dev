@@ -305,6 +305,32 @@ describe("A3 read-tool display", () => {
   });
 });
 
+describe("A6 getAttachmentText display", () => {
+  it("names the file from the output", () => {
+    expect(toolLabel("getAttachmentText", "running", { input: { attachmentId: "k1" } })).toBe("Reading file");
+    expect(
+      toolLabel("getAttachmentText", "done", { output: { found: true, file: { name: "brief.pdf" }, status: "done" } }),
+    ).toBe("Read file brief.pdf");
+  });
+
+  it("summarizes only what was actually read", () => {
+    expect(toolResultSummary("getAttachmentText", { status: "done", pageCount: 3, totalChars: 12345 })).toBe(
+      "3 pages · 12,345 chars",
+    );
+    expect(toolResultSummary("getAttachmentText", { status: "done", totalChars: 10, pageCount: null })).toBe("10 chars");
+    expect(toolResultSummary("getAttachmentText", { status: "done", width: 1200, height: 628 })).toBe("1200×628");
+    expect(toolResultSummary("getAttachmentText", { status: "done", totalChars: null, pageCount: 1 })).toBe(
+      "1 page · no text",
+    );
+    expect(toolResultSummary("getAttachmentText", { status: "pending" })).toBe("still being read");
+    expect(toolResultSummary("getAttachmentText", { status: "unsupported" })).toBe("can't be read");
+    expect(toolResultSummary("getAttachmentText", { status: "failed" })).toBe("couldn't be read");
+    expect(toolResultSummary("getAttachmentText", { status: "not_processed" })).toBe("not read yet");
+    expect(toolResultSummary("getAttachmentText", { found: false, message: "x" })).toBe("not found");
+    expect(toolResultSummary("getAttachmentText", { rows: 1 })).toBeNull();
+  });
+});
+
 describe("thoughtLabel", () => {
   it("formats measured durations, rounding to whole seconds", () => {
     expect(thoughtLabel(4200)).toBe("Thought for 4s");

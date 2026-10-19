@@ -8,4 +8,6 @@ export const adminRoutePatterns: string[] = [
   "/billing(.*)",
   "/invoices(.*)",
   "/settings(.*)",
+  // Email triage (B8b): admins only; the page also 404s without the org flag (D23).
+  "/triage(.*)",
 ]

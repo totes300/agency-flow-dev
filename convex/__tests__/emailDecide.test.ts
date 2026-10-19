@@ -283,8 +283,9 @@ describe("createFromTriage", () => {
     const t = createT();
     const f = await setup(t);
     const p = await planItem(t, f, { ask: true, fake: true });
-    const { undoUntil } = await create(t, p);
+    const { undoUntil, undoMs } = await create(t, p);
     expect(undoUntil).toBe(FRIDAY_10 + 10_000);
+    expect(undoMs).toBe(10_000); // the toast's duration, by the server clock (B8b)
 
     const tasks = await all(t, "tasks");
     const parent = tasks.find((x) => !x.parentTaskId)!;

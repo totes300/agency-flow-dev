@@ -9,6 +9,7 @@ import {
   ProjectsNavIcon,
   SettingsNavIcon,
   TasksNavIcon,
+  TriageNavIcon,
   WorkdayNavIcon,
 } from "@/components/icons/nav-icons"
 
@@ -18,6 +19,12 @@ export type NavItem = {
   /** The in-house Linear-style set (U1); any `currentColor` SVG component fits. */
   icon: ComponentType<{ className?: string }>
   adminOnly?: boolean
+  /**
+   * Shown only when the org has this feature (email triage, D23). The sidebar
+   * asks the server (`email/triageView.openCount` answers null otherwise);
+   * the route and every query enforce it anyway.
+   */
+  feature?: "emailTriage"
 }
 
 export type NavGroup = {
@@ -41,6 +48,7 @@ export const navigation: NavGroup[] = [
   {
     label: "Work",
     items: [
+      { title: "Triage", url: "/triage", icon: TriageNavIcon, adminOnly: true, feature: "emailTriage" },
       { title: "My Tasks", url: "/my-tasks", icon: MyTasksNavIcon },
       { title: "Tasks", url: "/tasks", icon: TasksNavIcon },
     ],

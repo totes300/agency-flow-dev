@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect } from "react"
+import { createContext, useContext, useEffect, useRef } from "react"
 import { FocusScope } from "@radix-ui/react-focus-scope"
 import { ErrorBoundary } from "@/components/error-boundary"
 import { cn } from "@/lib/utils"
@@ -15,6 +15,17 @@ import { cn } from "@/lib/utils"
  * stand down; `data-drawer-shell` lets the drawer's own keys tell it apart
  * from a dialog opened on top of it.
  */
+/**
+ * How the drawer sits on the page. `modal` (default): focus trapped, body
+ * scroll locked — the drawer owns the screen. `docked` (Triage, B8b): the
+ * conversation and the drawer share the space (§7.2), so focus moves freely
+ * between them and the page keeps scrolling; `Esc` and the drawer's own keys
+ * act only while focus is inside the drawer.
+ */
+export type DrawerShellMode = "modal" | "docked"
+
+export const DrawerShellModeContext = createContext<DrawerShellMode>("modal")
+
 export function DrawerShell({
   isOpen,
   label,
@@ -26,10 +37,15 @@ export function DrawerShell({
   onClose: () => void
   children: React.ReactNode
 }) {
+  const docked = useContext(DrawerShellModeContext) === "docked"
+  const rootRef = useRef<HTMLDivElement>(null)
   // Close on Escape
   useEffect(() => {
     if (!isOpen) return
     function handleKeyDown(e: KeyboardEvent) {
+      // Docked, the page beside it keeps its own Esc (the composer, a block):
+      // only an Esc from inside the drawer closes it.
+      if (docked && !(e.target instanceof Node && rootRef.current?.contains(e.target))) return
       // A menu or popover inside the drawer handled it (Radix prevents default).
       if (e.key === "Escape" && !e.defaultPrevented) {
         e.preventDefault()
@@ -39,27 +55,29 @@ export function DrawerShell({
     }
     document.addEventListener("keydown", handleKeyDown)
     return () => document.removeEventListener("keydown", handleKeyDown)
-  }, [isOpen, onClose])
+  }, [isOpen, onClose, docked])
 
-  // Lock body scroll when open
+  // Lock body scroll when open (a modal drawer only)
   useEffect(() => {
-    if (!isOpen) return
+    if (!isOpen || docked) return
     const prev = document.body.style.overflow
     document.body.style.overflow = "hidden"
     return () => {
       document.body.style.overflow = prev
     }
-  }, [isOpen])
+  }, [isOpen, docked])
 
   return (
     <div
+      ref={rootRef}
       role="dialog"
-      aria-modal="true"
+      aria-modal={docked ? undefined : "true"}
       aria-label={label}
       // List shortcuts treat an open dialog as owning the keyboard (`use-task-keyboard`
       // overlayOpen); the drawer's own keys skip `data-drawer-shell`.
       data-state={isOpen ? "open" : "closed"}
       data-drawer-shell=""
+      data-drawer-mode={docked ? "docked" : undefined}
       className={cn(
         "fixed top-0 right-0 bottom-0 z-40 w-[54vw] border-l border-border bg-background shadow-[-8px_0_24px_-12px_rgba(0,0,0,0.08)] flex flex-col max-md:w-full",
         "transition-transform duration-200 ease-out",
@@ -67,7 +85,7 @@ export function DrawerShell({
       )}
     >
       {isOpen ? (
-        <FocusScope trapped className="flex flex-1 flex-col min-h-0 overflow-hidden">
+        <FocusScope trapped={!docked} className="flex flex-1 flex-col min-h-0 overflow-hidden">
           <ErrorBoundary>{children}</ErrorBoundary>
         </FocusScope>
       ) : null}

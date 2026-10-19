@@ -141,31 +141,37 @@ export const ensureSystemAgent = internalMutation({
 export const setAgentActorUser = internalMutation({
   args: { orgId: v.string(), userId: v.union(v.id("users"), v.null()) },
   handler: async (ctx, args): Promise<null> => {
-    const settings = await ctx.db
-      .query("orgSettings")
-      .withIndex("by_orgId", (q) => q.eq("orgId", args.orgId))
-      .unique();
-    if (!settings) throw new ConvexError("Organization not found");
-    if (args.userId) {
-      const auth = await loadAuthContextForActor(ctx, {
-        orgId: args.orgId,
-        userId: args.userId,
-      });
-      if (!auth.isAdmin) {
-        throw new ConvexError("The agent actor must be an admin of the organization");
-      }
-    }
-    await ctx.db.patch(settings._id, {
-      agentActorUserId: args.userId ?? undefined,
-      updatedAt: Date.now(),
-    });
-    // Email items waiting for an actor plan now (B6a; the target checks the flag).
-    if (args.userId) {
-      await ctx.scheduler.runAfter(0, internal.email.prepare.replanAfterActorChange, { orgId: args.orgId });
-    }
+    await setAgentActorUserCore(ctx, args.orgId, args.userId);
     return null;
   },
 });
+
+/** The body of `setAgentActorUser` — also Settings › General (email/settings.setAgentActor). */
+export async function setAgentActorUserCore(
+  ctx: MutationCtx,
+  orgId: string,
+  userId: Id<"users"> | null,
+): Promise<void> {
+  const settings = await ctx.db
+    .query("orgSettings")
+    .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+    .unique();
+  if (!settings) throw new ConvexError("Organization not found");
+  if (userId) {
+    const auth = await loadAuthContextForActor(ctx, { orgId, userId });
+    if (!auth.isAdmin) {
+      throw new ConvexError("The agent actor must be an admin of the organization");
+    }
+  }
+  await ctx.db.patch(settings._id, {
+    agentActorUserId: userId ?? undefined,
+    updatedAt: Date.now(),
+  });
+  // Email items waiting for an actor plan now (B6a; the target checks the flag).
+  if (userId) {
+    await ctx.scheduler.runAfter(0, internal.email.prepare.replanAfterActorChange, { orgId });
+  }
+}
 
 /**
  * Settle hooks of `agent_run` jobs (B6a): the runner schedules this when a

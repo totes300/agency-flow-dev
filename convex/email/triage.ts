@@ -7,7 +7,6 @@ import {
   findFilteredItem,
   findLiveItem,
   joinItem,
-  loadItemForAdmin,
   OPEN_ATTENTION_MESSAGE,
   openAttentions,
   openItem,
@@ -15,7 +14,9 @@ import {
 } from "../agentItems";
 import { deleteContentForStorage } from "../attachmentContents";
 import { extractTaskIdentifiers } from "./model";
-import { DECLINED_REASON, dismissOpenRequestsOfThread } from "./requests";
+import { DECLINED_REASON, dismissOpenRequestsOfThread, threadRequests } from "./requests";
+import { loadEmailItemForAdmin } from "./items";
+import { UNSENT_DRAFT_STATES } from "./draftState";
 import { notifyAdminsOfEmailEvent } from "./inbox";
 import { markConversationDraftsStale, staleReasonForInbound } from "./drafts";
 import type { Intent } from "./jobs";
@@ -348,18 +349,22 @@ export async function dispatchMessage(
 
 // ─── Decline (D28) ────────────────────────────────────────────────────────────
 
+/** B8b: Decline's Undo toast lasts this long (`undoMs`); the server accepts the Undo a little longer. */
+export const DECLINE_UNDO_MS = 8_000;
+export const DECLINE_UNDO_GRACE_MS = 4_000;
+export const DECLINE_UNDO_EXPIRED_MESSAGE = "Too late to undo the decline.";
+export const DECLINE_UNDO_CHANGED_MESSAGE = "This conversation changed since — it can't be undone.";
+
 /**
  * Decline an email item — no reason needed. The item closes (`declined`) and
  * its conversation's unresolved ledger rows become `dismissed` ("declined").
  * A later email on the thread opens a new item (I13 counts only live rows).
+ * What it did is recorded (`declineUndo`) for the short Undo (B8b).
  */
 export const declineItem = mutation({
   args: { itemId: v.id("agentItems") },
-  handler: async (ctx, args): Promise<{ dismissed: number }> => {
-    const { auth, item } = await loadItemForAdmin(ctx, args.itemId);
-    if (item.source !== "email" || item.anchor.type !== "emailThread") {
-      throw new ConvexError("Only an email item can be declined");
-    }
+  handler: async (ctx, args): Promise<{ dismissed: number; undoMs: number }> => {
+    const { auth, item } = await loadEmailItemForAdmin(ctx, args.itemId);
     if (item.status !== "open" && item.status !== "snoozed") {
       throw new ConvexError("This item is already closed");
     }
@@ -367,14 +372,88 @@ export const declineItem = mutation({
     if (item.commit) throw new ConvexError("This item was already created — send or discard the kickoff reply instead.");
     const threadId = ctx.db.normalizeId("emailThreads", item.anchor.id);
     const thread = threadId ? await ctx.db.get(threadId) : null;
-    let dismissed: Id<"clientRequests">[] = [];
+    let requests: Array<{ requestId: Id<"clientRequests">; disposition: "open" | "question_pending" }> = [];
     if (thread && thread.orgId === auth.orgId) {
-      dismissed = await dismissOpenRequestsOfThread(ctx, auth.orgId, thread._id, DECLINED_REASON);
+      requests = (await threadRequests(ctx, auth.orgId, thread._id)).flatMap((r) =>
+        r.disposition === "open" || r.disposition === "question_pending" ? [{ requestId: r._id, disposition: r.disposition }] : [],
+      );
+      await dismissOpenRequestsOfThread(ctx, auth.orgId, thread._id, DECLINED_REASON);
       await ctx.db.patch(thread._id, { waitingOn: "none", updatedAt: Date.now() });
     }
+    // What the shared close is about to discard (only what is still undecided).
+    const proposal = item.changePlan ? await ctx.db.get(item.changePlan.proposalId) : null;
+    const proposalId = proposal && (proposal.status === "pending" || proposal.status === "failed") ? proposal._id : undefined;
+    const draft = item.draftId ? await ctx.db.get(item.draftId) : null;
+    const draftId = draft && draft.status === "draft" ? draft._id : undefined;
+    // An unsent draft past `draft` (queued / failed) is discarded too, but never brought back.
+    const undoable = !draft || draft.status === "draft" || !UNSENT_DRAFT_STATES.has(draft.status);
     // The shared close: a change item's pending proposal goes with it (I9 never stranded).
     await closeEmailItem(ctx, item, { outcome: "declined", userId: auth.userId });
-    return { dismissed: dismissed.length };
+    const closed = (await ctx.db.get(item._id))!;
+    if (undoable) {
+      await ctx.db.patch(item._id, {
+        declineUndo: {
+          at: closed.updatedAt,
+          requests,
+          ...(proposalId ? { proposalId } : {}),
+          ...(draftId ? { draftId } : {}),
+          waitingOn: thread?.waitingOn ?? "us",
+          status: item.status,
+          ...(item.snoozedUntil !== undefined ? { snoozedUntil: item.snoozedUntil } : {}),
+        },
+      });
+    }
+    return { dismissed: requests.length, undoMs: undoable ? DECLINE_UNDO_MS : 0 };
+  },
+});
+
+/**
+ * Decline's Undo (B8b): only for a few seconds, only while the item is still
+ * closed as declined and NOTHING else happened — no write on the item since,
+ * no newer message on the conversation, no new item on it, every dismissed
+ * row still dismissed as "declined", the discarded proposal / draft still
+ * discarded. Then exactly that is put back; otherwise it refuses (the owner
+ * opens the email again from Done).
+ */
+export const undoDecline = mutation({
+  args: { itemId: v.id("agentItems") },
+  handler: async (ctx, args): Promise<null> => {
+    const { item, thread } = await loadEmailItemForAdmin(ctx, args.itemId);
+    const undo = item.declineUndo;
+    if (item.status !== "done" || item.outcome !== "declined" || !undo) throw new ConvexError("There is no decline to undo.");
+    const now = Date.now();
+    if (now > undo.at + DECLINE_UNDO_MS + DECLINE_UNDO_GRACE_MS) throw new ConvexError(DECLINE_UNDO_EXPIRED_MESSAGE);
+    const changed = () => new ConvexError(DECLINE_UNDO_CHANGED_MESSAGE);
+    if (item.updatedAt !== undo.at) throw changed();
+    if (thread.lastMessageAt > undo.at) throw changed();
+    if (await findLiveItem(ctx, item.orgId, item.anchor)) throw changed();
+    const rows = [];
+    for (const r of undo.requests) {
+      const row = await ctx.db.get(r.requestId);
+      if (!row || row.orgId !== item.orgId || row.disposition !== "dismissed" || row.dismissedReason !== DECLINED_REASON) throw changed();
+      rows.push({ row, disposition: r.disposition });
+    }
+    const proposal = undo.proposalId ? await ctx.db.get(undo.proposalId) : null;
+    if (undo.proposalId && (!proposal || proposal.orgId !== item.orgId || proposal.status !== "discarded")) throw changed();
+    const draft = undo.draftId ? await ctx.db.get(undo.draftId) : null;
+    if (undo.draftId && (!draft || draft.orgId !== item.orgId || draft.status !== "discarded")) throw changed();
+
+    for (const { row, disposition } of rows) {
+      await ctx.db.patch(row._id, { disposition, dismissedReason: undefined, updatedAt: now });
+    }
+    if (proposal) await ctx.db.patch(proposal._id, { status: "pending", decidedBy: undefined, decidedAt: undefined });
+    if (draft) await ctx.db.patch(draft._id, { status: "draft", updatedAt: now });
+    await ctx.db.patch(thread._id, { waitingOn: undo.waitingOn, updatedAt: now });
+    await ctx.db.patch(item._id, {
+      status: undo.status,
+      snoozedUntil: undo.snoozedUntil,
+      outcome: undefined,
+      decidedBy: undefined,
+      decidedAt: undefined,
+      declineUndo: undefined,
+      updatedAt: now,
+    });
+    return null;
   },
 });
 

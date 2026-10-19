@@ -48,6 +48,11 @@ export const InboxNavIcon = createNavIcon("InboxNavIcon", <>
   <path d="M3.9 3.6 2.25 9v3.25a1.25 1.25 0 0 0 1.25 1.25h9a1.25 1.25 0 0 0 1.25-1.25V9L12.1 3.6a1 1 0 0 0-.95-.6h-6.3a1 1 0 0 0-.95.6z" />
 </>)
 
+/** Triage (email-triage B8b, canvas v7): a circle with the two sorting arrows. */
+export const TriageNavIcon = createNavIcon("TriageNavIcon", <>
+  <circle cx="8" cy="8" r="5.75" /><path d="M5 6.5h6l-1.5-1.5M11 9.5H5l1.5 1.5" />
+</>)
+
 export const MyTasksNavIcon = createNavIcon("MyTasksNavIcon", <>
   <circle cx="8" cy="8" r="5.6" strokeDasharray="2.2 1.6" /><circle cx="8" cy="8" r="2" />
 </>)

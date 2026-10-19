@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react"
 import { useConvexAuth, useMutation, useQuery } from "convex/react"
 import type { FunctionReturnType } from "convex/server"
 import { api } from "@/convex/_generated/api"
@@ -10,6 +10,7 @@ import { useOptionalQuery } from "@/lib/hooks/use-optional-query"
 import { buildRowModels, indexRefs, type MemberRef, type TaskRowModel } from "@/components/task-view/row-model"
 import type { PropertyMenuKind, PropertyMenuRequest } from "@/components/task-view/property-menus"
 import { sunStateFor, whoseToday, type SunState } from "@/components/task-view/sun"
+import { DrawerShellModeContext } from "@/components/task-detail/drawer-shell"
 import { useTaskActions } from "@/components/task-view/use-task-actions"
 import { useTodayActions } from "@/components/task-view/use-today-actions"
 import { useToggleTaskTimer } from "@/components/task-view/use-toggle-task-timer"
@@ -145,8 +146,11 @@ export function useTaskDetailKeys(handlers: {
   onTimer: () => void
 }) {
   const ref = useRef(handlers)
+  const docked = useContext(DrawerShellModeContext) === "docked"
+  const dockedRef = useRef(docked)
   useEffect(() => {
     ref.current = handlers
+    dockedRef.current = docked
   })
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -154,6 +158,8 @@ export function useTaskDetailKeys(handlers: {
       if (!h.enabled || e.defaultPrevented) return
       if (e.metaKey || e.ctrlKey || e.altKey) return
       const target = e.target
+      // A docked drawer (Triage) shares the screen: its keys only from inside it.
+      if (dockedRef.current && !(target instanceof Element && target.closest("[data-drawer-shell]"))) return
       if (
         target instanceof HTMLElement &&
         (target.isContentEditable || target.closest("input, textarea, select, [contenteditable='true']"))

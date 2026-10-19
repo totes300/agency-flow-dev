@@ -37,6 +37,30 @@ function MyTasksBadge() {
 }
 
 /**
+ * Triage (email-triage B8b, D26): the open items, on the shared sidebar badge.
+ * `count` null = the viewer has no Triage (not an admin, or the org flag is
+ * off) — the row itself is hidden then (`useEmailTriageNav`).
+ */
+function TriageBadge({ count, capped }: { count: number; capped: boolean }) {
+  if (count <= 0) return null
+  return (
+    <SidebarCountBadge
+      count={count}
+      isCapped={capped}
+      aria-label={`${count} ${count === 1 ? "email needs" : "emails need"} you in Triage`}
+    />
+  )
+}
+
+/** The Triage row's server answer: undefined while loading, null when hidden. */
+function useEmailTriageNav(isAdmin: boolean) {
+  const { isAuthenticated } = useConvexAuth()
+  // A failure (e.g. a deployment without the module) hides the row, never the sidebar.
+  const { data } = useOptionalQuery(api.email.triageView.openCount, isAuthenticated && isAdmin ? {} : "skip")
+  return data
+}
+
+/**
  * Sidebar signal block on the `Invoices` row — the shared red count badge,
  * with a hover tooltip that breaks the number down (ready to bill / to close /
  * overdue). The badge itself stays visually identical to every other sidebar
@@ -93,12 +117,16 @@ export function NavMain({
   isAdmin: boolean
 }) {
   const pathname = usePathname()
+  const triage = useEmailTriageNav(isAdmin)
 
   return (
     <>
       {groups.map((group) => {
         const visibleItems = group.items.filter(
-          (item) => !item.adminOnly || isAdmin
+          (item) =>
+            (!item.adminOnly || isAdmin) &&
+            // A feature row shows only once the server says the org has it.
+            (item.feature !== "emailTriage" || Boolean(triage))
         )
         if (visibleItems.length === 0) return null
 
@@ -118,6 +146,7 @@ export function NavMain({
                       <span>{item.title}</span>
                       {item.url === "/my-tasks" && <MyTasksBadge />}
                       {item.url === "/billing" && <InvoicesNavSignals />}
+                      {item.url === "/triage" && triage && <TriageBadge count={triage.count} capped={triage.capped} />}
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>

@@ -169,30 +169,38 @@ export const runStage = internalMutation({
  */
 export const retryStage = internalMutation({
   args: { messageId: v.id("emailMessages"), fakeModel: v.optional(v.boolean()) },
-  handler: async (ctx, args): Promise<{ retried: boolean; stage: Stage }> => {
-    const message = await ctx.db.get(args.messageId);
-    if (!message) throw new ConvexError("Message not found");
-    await requireEmailTriageEnabled(ctx, message.orgId);
-    if (message.stage !== "failed") return { retried: false, stage: message.stage };
-    const stage: WorkStage = isWorkStage(message.stageError?.stage) ? message.stageError.stage : "received";
-    // A new generation: watchdogs and late reports of the failed attempts are void.
-    await ctx.db.patch(message._id, {
-      stage,
-      stageError: undefined,
-      stageAt: Date.now(),
-      stageGeneration: generationOf(message) + 1,
-    });
-    // Clear only THIS message's attention; other failed messages stay open.
-    const live = await findLiveItem(ctx, message.orgId, { type: "emailThread", id: message.threadId });
-    const attentions = live ? openAttentions(live) : [];
-    if (live && attentions.some((a) => a.messageId === message._id)) {
-      const rest = attentions.filter((a) => a.messageId !== message._id);
-      await ctx.db.patch(live._id, { attentions: rest.length > 0 ? rest : undefined, updatedAt: Date.now() });
-    }
-    await scheduleNext(ctx, message._id, { fakeModel: args.fakeModel });
-    return { retried: true, stage };
-  },
+  handler: async (ctx, args): Promise<{ retried: boolean; stage: Stage }> =>
+    await retryStageCore(ctx, args.messageId, { fakeModel: args.fakeModel }),
 });
+
+/** The body of `retryStage` — also Triage's Retry on an attention (email/triageView.ts). */
+export async function retryStageCore(
+  ctx: MutationCtx,
+  messageId: Id<"emailMessages">,
+  opts: { fakeModel?: boolean } = {},
+): Promise<{ retried: boolean; stage: Stage }> {
+  const message = await ctx.db.get(messageId);
+  if (!message) throw new ConvexError("Message not found");
+  await requireEmailTriageEnabled(ctx, message.orgId);
+  if (message.stage !== "failed") return { retried: false, stage: message.stage };
+  const stage: WorkStage = isWorkStage(message.stageError?.stage) ? message.stageError.stage : "received";
+  // A new generation: watchdogs and late reports of the failed attempts are void.
+  await ctx.db.patch(message._id, {
+    stage,
+    stageError: undefined,
+    stageAt: Date.now(),
+    stageGeneration: generationOf(message) + 1,
+  });
+  // Clear only THIS message's attention; other failed messages stay open.
+  const live = await findLiveItem(ctx, message.orgId, { type: "emailThread", id: message.threadId });
+  const attentions = live ? openAttentions(live) : [];
+  if (live && attentions.some((a) => a.messageId === message._id)) {
+    const rest = attentions.filter((a) => a.messageId !== message._id);
+    await ctx.db.patch(live._id, { attentions: rest.length > 0 ? rest : undefined, updatedAt: Date.now() });
+  }
+  await scheduleNext(ctx, message._id, { fakeModel: opts.fakeModel });
+  return { retried: true, stage };
+}
 
 /** A failed attempt reported by the model action (stale attempts are ignored). */
 export const recordStageFailure = internalMutation({

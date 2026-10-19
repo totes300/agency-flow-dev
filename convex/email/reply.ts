@@ -13,6 +13,7 @@ import { loadAuthContextForActor, type AuthContext } from "../lib/auth";
 import { getOrgSettings } from "../lib/orgHelpers";
 import { ORG_TIMEZONE_FALLBACK } from "../lib/timer";
 import { closeEmailItem, findLiveItem } from "../agentItems";
+import { postEventLine } from "../agentEvents";
 import { startAgentJobCore, type PrepareResult, type StartAgentJobResult } from "../agentJobs";
 import { isClosedCategory } from "../tasks/model";
 import { AGENT_EMAIL_DRAFT_MARKER } from "../../lib/agents/emailDrafts";
@@ -287,10 +288,62 @@ export const startKickoffAfterCreate = internalMutation({
     if (item.status !== "open" && item.status !== "snoozed") return { started: false };
     if (!(await isEmailTriageEnabled(ctx, item.orgId))) return { started: false };
     await ctx.db.patch(item._id, { commit: { ...item.commit, kickoffFnId: undefined } });
+    // The undo window ended: the conversation records what Create did (B8b, §7.2).
+    await postCreatedEventLine(ctx, item, item.commit);
     const result = await requestPlanning(ctx, item._id, { trigger: "kickoff", messageIds: [], job: DRAFT_REPLY_JOB });
     return { started: result === "scheduled" || result === "already_queued" };
   },
 });
+
+/** "Created PRG-132 · Frances, Lili notified" (pure — unit-tested). */
+export function createdEventText(identifiers: readonly string[], notified: readonly string[]): string {
+  const created = `Created ${identifiers.join(", ")}`;
+  return notified.length > 0 ? `${created} · ${notified.join(", ")} notified` : created;
+}
+
+/**
+ * The event line after Create's undo window (§7.2 "when it ends, … the event
+ * line"): the created tasks and who the deferred assignment notifications
+ * reached (assignees of the tasks and their subtasks, the deciding admin
+ * excluded). Never fails the kickoff start.
+ */
+async function postCreatedEventLine(
+  ctx: MutationCtx,
+  item: Doc<"agentItems">,
+  commit: NonNullable<Doc<"agentItems">["commit"]>,
+): Promise<void> {
+  try {
+    const agentThread = item.agentThreadId ? await ctx.db.get(item.agentThreadId) : null;
+    if (!agentThread || agentThread.orgId !== item.orgId) return;
+    const identifiers: string[] = [];
+    const assignees = new Set<Id<"users">>();
+    for (const taskId of commit.taskIds) {
+      const task = await ctx.db.get(taskId);
+      if (!task || task.orgId !== item.orgId || task.archivedAt) continue;
+      identifiers.push(task.identifier);
+      task.assigneeIds.forEach((id) => assignees.add(id));
+      const subtasks = await ctx.db
+        .query("tasks")
+        .withIndex("by_orgId_parentTaskId", (q) => q.eq("orgId", item.orgId).eq("parentTaskId", task._id))
+        .take(50);
+      for (const sub of subtasks) sub.assigneeIds.forEach((id) => assignees.add(id));
+    }
+    if (identifiers.length === 0) return;
+    assignees.delete(commit.userId);
+    const names: string[] = [];
+    for (const id of assignees) {
+      const user = await ctx.db.get(id);
+      if (user && !user.deletedAt) names.push(user.name.split(/\s+/)[0]);
+    }
+    await postEventLine(ctx, {
+      componentThreadId: agentThread.componentThreadId,
+      userId: commit.userId,
+      text: createdEventText(identifiers, names),
+    });
+  } catch (err) {
+    console.error(`[kickoff] event line for item ${item._id} failed`, err);
+  }
+}
 
 export type DraftInput = { orgId: string; anchor: { type: string; id: string }; title: string; input: string };
 

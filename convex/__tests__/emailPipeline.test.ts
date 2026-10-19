@@ -922,7 +922,7 @@ describe("dispatch (§5.3 table)", () => {
     await expect(t.withIdentity(MEMBER).mutation(api.email.triage.declineItem, { itemId: item._id })).rejects.toThrow(
       "Admin access required",
     );
-    expect(await t.withIdentity(ADMIN).mutation(api.email.triage.declineItem, { itemId: item._id })).toEqual({ dismissed: 2 });
+    expect(await t.withIdentity(ADMIN).mutation(api.email.triage.declineItem, { itemId: item._id })).toMatchObject({ dismissed: 2 });
     let s = await snapshot(t, thread);
     expect(s.items[0]).toMatchObject({ status: "done", outcome: "declined", decidedBy: f.admin });
     expect(s.requests.map((r) => [r.disposition, r.dismissedReason])).toEqual([
@@ -1140,7 +1140,7 @@ describe("attentions: several failed messages on one conversation", () => {
     [item] = (await snapshot(t, thread)).items;
     expect(item.attentions).toBeUndefined();
     expect(item.kind).toBe("request");
-    expect(await t.withIdentity(ADMIN).mutation(api.email.triage.declineItem, { itemId: item._id })).toEqual({ dismissed: 2 });
+    expect(await t.withIdentity(ADMIN).mutation(api.email.triage.declineItem, { itemId: item._id })).toMatchObject({ dismissed: 2 });
   });
 
   it("an attention-only item closes as not_a_change when the retried message needs no action", async () => {

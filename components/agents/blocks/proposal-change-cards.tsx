@@ -16,6 +16,7 @@ import type {
 import { parseMentionText } from "@/lib/agents/composer"
 import { firstName, formatShortDate } from "@/lib/format"
 import { OpenInDrawerButton, ProposalFooter } from "./proposal-card-chrome"
+import { useConversationSurface } from "./conversation-surface"
 import { useProposalDecision } from "./use-proposal-decision"
 
 /**
@@ -103,6 +104,9 @@ export function UpdateTaskCard({
   members: readonly Member[]
 }) {
   const { busy, approve, discard } = useProposalDecision(card)
+  const fromEmail = payload.source?.kind === "email"
+  const inTriage = useConversationSurface() === "triage"
+  const failedNote = card.status === "failed" && card.failureReason ? card.failureReason : null
   // The current values (before) and the names behind ids — the same
   // reactive queries the task surfaces read, with the viewer's access.
   const task = useQuery(api.tasks.queries.getDetail, {
@@ -226,14 +230,25 @@ export function UpdateTaskCard({
       <div className="grid grid-cols-[6rem_minmax(0,1fr)] gap-x-3 gap-y-1 px-4 pb-3 pt-2 text-xs">
         {rows}
       </div>
-      <ProposalFooter
-        failed={card.status === "failed"}
-        failureReason={card.failureReason}
-        note={task === null ? "This task is no longer available to you." : "Nothing changes until you approve."}
-        busy={busy}
-        onDiscard={discard}
-        onApprove={() => void approve()}
-      />
+      {fromEmail ? (
+        // A change from a client email is decided in Triage (Apply change ·
+        // Not a change, B8b) — the server refuses the generic approve. Inside
+        // Triage the decision sits right below, so only a failure is said.
+        failedNote || !inTriage ? (
+          <div className="flex items-center border-t bg-muted/30 px-4 py-2 text-xs text-muted-foreground/60">
+            {failedNote ?? "Apply it from Triage."}
+          </div>
+        ) : null
+      ) : (
+        <ProposalFooter
+          failed={card.status === "failed"}
+          failureReason={card.failureReason}
+          note={task === null ? "This task is no longer available to you." : "Nothing changes until you approve."}
+          busy={busy}
+          onDiscard={discard}
+          onApprove={() => void approve()}
+        />
+      )}
     </div>
   )
 }

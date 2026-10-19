@@ -13,6 +13,7 @@ import {
   agentItemChangePlanValidator,
   agentItemCommitValidator,
   agentItemKickoffOutcomeValidator,
+  agentItemDeclineUndoValidator,
   agentItemMergeValidator,
   agentItemPlanIssueValidator,
   agentItemPlanRefusalValidator,
@@ -1428,6 +1429,8 @@ export default defineSchema({
     // B6b: a follow-up step that could not be done automatically (e.g. a
     // blocked subtask that could not be unblocked when its question was answered).
     decisionNote: v.optional(v.object({ message: v.string(), at: v.number() })),
+    // B8b: what Decline did, for its short Undo (cleared by the Undo).
+    declineUndo: v.optional(agentItemDeclineUndoValidator),
     decidedBy: v.optional(v.id("users")),
     decidedAt: v.optional(v.number()),
     createdAt: v.number(),
@@ -1437,6 +1440,8 @@ export default defineSchema({
     .index("by_orgId_status_updatedAt", ["orgId", "status", "updatedAt"])
     // … and per source (the Triage list: source email; Snoozed / Done / Filtered views).
     .index("by_orgId_source_status_updatedAt", ["orgId", "source", "status", "updatedAt"])
+    // B8b: the open changes pinned on top of the Triage list, whatever the paging.
+    .index("by_orgId_source_status_kind_updatedAt", ["orgId", "source", "status", "kind", "updatedAt"])
     // I13: the open / snoozed item of one anchor.
     .index("by_orgId_anchorType_anchorId_status", ["orgId", "anchor.type", "anchor.id", "status"])
     // Wake cron (D27): snoozed rows past their time, across orgs.

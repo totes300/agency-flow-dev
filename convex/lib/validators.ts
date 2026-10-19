@@ -411,6 +411,27 @@ export const agentItemKickoffOutcomeValidator = v.union(
   v.literal("replied_in_gmail"),
 );
 
+/**
+ * B8b: what a Decline did, so its Undo (`email/triageView.undoDecline`, a few
+ * seconds) can put exactly that back — the ledger rows it dismissed (with
+ * their state before), the change proposal and the unsent draft it
+ * discarded, the conversation's `waitingOn`, and the item's live state.
+ */
+export const agentItemDeclineUndoValidator = v.object({
+  at: v.number(),
+  requests: v.array(
+    v.object({
+      requestId: v.id("clientRequests"),
+      disposition: v.union(v.literal("open"), v.literal("question_pending")),
+    }),
+  ),
+  proposalId: v.optional(v.id("agentProposals")),
+  draftId: v.optional(v.id("emailDrafts")),
+  waitingOn: emailWaitingOnValidator,
+  status: v.union(v.literal("open"), v.literal("snoozed")),
+  snoozedUntil: v.optional(v.number()),
+});
+
 /** The gaps of the latest REFUSED submit (B6a) — kept for `run_incomplete`. */
 export const agentItemPlanRefusalValidator = v.object({
   gaps: v.array(triagePlanGapValidator),

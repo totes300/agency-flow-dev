@@ -46,10 +46,28 @@ import { cleanErrorText } from "@/lib/agents/providerErrors"
 export function ThreadView({
   threadId,
   suggestions,
+  header,
+  lead,
+  trailing,
+  belowComposer,
+  proposalDrawer = true,
 }: {
   threadId: string
   /** Composer suggestion chips for the current state (Triage provides them, B8b). */
   suggestions?: readonly ComposerSuggestion[]
+  /** Replaces the default title bar (Triage: the item title + the panel toggle). */
+  header?: React.ReactNode
+  /** Rendered first in the conversation, above the timeline (Triage: the original email, D14). */
+  lead?: React.ReactNode
+  /** Rendered after the timeline (Triage: the decision for the item — Create, Apply …). */
+  trailing?: React.ReactNode
+  /** Quiet actions under the composer (Triage: Merge into… · Decline · Snooze). */
+  belowComposer?: React.ReactNode
+  /**
+   * Mount the proposal drawer here (default). Off when the page mounts its
+   * own (Triage's `TaskDetailDrawer` carries the `?draft=` / `?change=` drawer).
+   */
+  proposalDrawer?: boolean
 }) {
   const thread = useQuery(api.agentThreads.get, { threadId })
   const runs = useQuery(api.agentThreads.listRuns, { threadId })
@@ -79,7 +97,28 @@ export function ThreadView({
   }, [streamSignature])
 
   if (thread === undefined || loadStatus === "LoadingFirstPage") {
-    return <ThreadViewSkeleton />
+    // A surface's own header / lead stay mounted at the same place while the
+    // thread loads (Triage's email keeps its scroll, selection and fold).
+    return (
+      <ThreadFrame
+        header={header ?? <SkeletonHeader />}
+        lead={lead}
+        trailing={trailing}
+        bridge={null}
+        draftOrder={NO_DRAFTS}
+        bottomRef={bottomRef}
+        footer={
+          <>
+            <div className="border-t p-4">
+              <Skeleton className="mx-auto h-24 w-full max-w-2xl rounded-lg" />
+            </div>
+            {belowComposer}
+          </>
+        }
+      >
+        <SkeletonTurns />
+      </ThreadFrame>
+    )
   }
 
   // Without write access (an admin auditing a member's private thread) the
@@ -282,45 +321,120 @@ export function ThreadView({
   timeline.sort((a, b) => a.at - b.at || a.rank - b.rank)
 
   return (
+    <ThreadFrame
+      header={
+        header ?? (
+          <div className="flex h-12 shrink-0 items-center border-b px-4">
+            <span className="truncate text-sm font-medium">{thread.title}</span>
+            <span className="ml-2 truncate text-xs text-muted-foreground">
+              {thread.agentName}
+            </span>
+          </div>
+        )
+      }
+      lead={lead}
+      trailing={trailing}
+      bridge={readOnly ? null : composerBridge}
+      draftOrder={draftOrder}
+      bottomRef={bottomRef}
+      footer={
+        <>
+          {readOnly ? (
+            <div className="flex items-center justify-center gap-2 border-t px-4 py-3 text-xs text-muted-foreground">
+              <EyeIcon className="size-3.5" aria-hidden />
+              Viewing another member&apos;s thread — read-only.
+            </div>
+          ) : (
+            <ThreadComposer
+              threadId={threadId}
+              agentName={thread.agentName}
+              isRunning={thread.status === "running"}
+              activeRun={thread.activeRun}
+              composerRef={composerRef}
+              suggestions={suggestions}
+            />
+          )}
+          {belowComposer}
+          {/* A proposal card's "Open" (`?draft=` / `?change=`, email-triage B7). */}
+          {proposalDrawer && <ProposalDrawer readOnly={readOnly} />}
+        </>
+      }
+    >
+      {timeline.map((entry) => (
+        <div key={entry.key} className="flex flex-col">
+          {entry.node}
+        </div>
+      ))}
+    </ThreadFrame>
+  )
+}
+
+const NO_DRAFTS: readonly string[] = []
+
+/**
+ * The conversation's one structure, loading or loaded — header, the scroll
+ * column (lead, the timeline, trailing), then the composer area — so what a
+ * surface passes in keeps its place (and its state) when the thread arrives.
+ */
+function ThreadFrame({
+  header,
+  lead,
+  trailing,
+  bridge,
+  draftOrder,
+  bottomRef,
+  footer,
+  children,
+}: {
+  header: React.ReactNode
+  lead?: React.ReactNode
+  trailing?: React.ReactNode
+  bridge: ComposerBridge | null
+  draftOrder: readonly string[]
+  bottomRef: React.RefObject<HTMLDivElement | null>
+  footer: React.ReactNode
+  children: React.ReactNode
+}) {
+  return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex h-12 shrink-0 items-center border-b px-4">
-        <span className="truncate text-sm font-medium">{thread.title}</span>
-        <span className="ml-2 truncate text-xs text-muted-foreground">
-          {thread.agentName}
-        </span>
-      </div>
+      {header}
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <ComposerBridgeContext.Provider value={readOnly ? null : composerBridge}>
+        <ComposerBridgeContext.Provider value={bridge}>
           <DraftPrimaryProvider order={draftOrder}>
             <div className="mx-auto flex max-w-2xl flex-col gap-4 px-4 py-6">
-              {timeline.map((entry) => (
-                <div key={entry.key} className="flex flex-col">
-                  {entry.node}
-                </div>
-              ))}
+              {lead}
+              {children}
+              {trailing}
               <div ref={bottomRef} />
             </div>
           </DraftPrimaryProvider>
         </ComposerBridgeContext.Provider>
       </div>
-      {readOnly ? (
-        <div className="flex items-center justify-center gap-2 border-t px-4 py-3 text-xs text-muted-foreground">
-          <EyeIcon className="size-3.5" aria-hidden />
-          Viewing another member&apos;s thread — read-only.
-        </div>
-      ) : (
-        <ThreadComposer
-          threadId={threadId}
-          agentName={thread.agentName}
-          isRunning={thread.status === "running"}
-          activeRun={thread.activeRun}
-          composerRef={composerRef}
-          suggestions={suggestions}
-        />
-      )}
-      {/* A proposal card's "Open" (`?draft=` / `?change=`, email-triage B7). */}
-      <ProposalDrawer readOnly={readOnly} />
+      {footer}
     </div>
+  )
+}
+
+function SkeletonHeader() {
+  return (
+    <div className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
+      <Skeleton className="h-4 w-40" />
+      <Skeleton className="h-3 w-20" />
+    </div>
+  )
+}
+
+function SkeletonTurns() {
+  return (
+    <>
+      <Skeleton className="ml-12 h-9 w-48 self-end rounded-lg" />
+      <div className="space-y-2">
+        <Skeleton className="h-3 w-36" />
+        <Skeleton className="h-4 w-full" />
+        <Skeleton className="h-4 w-5/6" />
+        <Skeleton className="h-4 w-2/3" />
+      </div>
+    </>
   )
 }
 
@@ -344,18 +458,9 @@ function AssistantBlocks({
 export function ThreadViewSkeleton() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
-        <Skeleton className="h-4 w-40" />
-        <Skeleton className="h-3 w-20" />
-      </div>
+      <SkeletonHeader />
       <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-4 px-4 py-6">
-        <Skeleton className="ml-12 h-9 w-48 self-end rounded-lg" />
-        <div className="space-y-2">
-          <Skeleton className="h-3 w-36" />
-          <Skeleton className="h-4 w-full" />
-          <Skeleton className="h-4 w-5/6" />
-          <Skeleton className="h-4 w-2/3" />
-        </div>
+        <SkeletonTurns />
       </div>
       <div className="border-t p-4">
         <Skeleton className="mx-auto h-24 w-full max-w-2xl rounded-lg" />

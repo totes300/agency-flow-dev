@@ -7,6 +7,7 @@ import { SettingsGeneral } from "@/components/settings/settings-general"
 import { SettingsCompanyDetails } from "@/components/settings/settings-company-details"
 import { SettingsInvoicing } from "@/components/settings/settings-invoicing"
 import { SettingsIntegrations } from "@/components/settings/settings-integrations"
+import { SettingsEmailTriage } from "@/components/settings/settings-email-triage"
 
 // ─── Content-aware loading skeletons ────────────────────────────────────────────
 
@@ -187,6 +188,8 @@ export default function SettingsPage() {
           <div className="border-t pt-8">
             <SettingsInvoicing />
           </div>
+          {/* Admins of an org with email triage only (renders nothing otherwise). */}
+          <SettingsEmailTriage />
         </TabsContent>
 
         <TabsContent value="team" className="mt-6">

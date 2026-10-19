@@ -629,6 +629,8 @@ function Footer({
             variant={isPrimary ? "default" : "outline"}
             className="h-9 rounded-full px-5"
             disabled={sendDisabled}
+            // Triage's ⌘↵ presses the item's send button (B8b) — the block keeps the logic.
+            data-email-primary={draft._id}
             // Keep focus in the field: its blur must not eat this click (Send flushes the saves itself).
             onMouseDown={(e) => e.preventDefault()}
             onClick={onSend}

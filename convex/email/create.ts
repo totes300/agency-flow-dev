@@ -459,10 +459,17 @@ async function createOrLinkClient(
 
 export const createFromTriage = mutation({
   args: { itemId: v.id("agentItems"), proposals: v.array(proposalRefValidator) },
-  handler: async (ctx, args): Promise<{ undoUntil: number }> => {
+  handler: async (ctx, args): Promise<{ undoUntil: number; undoMs: number; identifiers: string[] }> => {
     const { auth, item, thread } = await loadEmailItemForAdmin(ctx, args.itemId);
-    const { undoUntil } = await createFromTriageCore(ctx, { auth, item, thread, proposals: args.proposals });
-    return { undoUntil };
+    const { undoUntil, taskIds } = await createFromTriageCore(ctx, { auth, item, thread, proposals: args.proposals });
+    // The toast names what was created ("Created PRG-132 · Undo", D30).
+    const identifiers: string[] = [];
+    for (const id of taskIds) {
+      const task = await ctx.db.get(id);
+      if (task) identifiers.push(task.identifier);
+    }
+    // `undoMs`: what is left of the window by the SERVER clock — the toast's duration.
+    return { undoUntil, undoMs: Math.max(0, undoUntil - Date.now()), identifiers };
   },
 });
 

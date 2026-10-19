@@ -160,6 +160,11 @@ subagent** fut, a kis phase-eknél szekvenciálisan; párhuzam csak read-only fe
 | **D3** Hardening | slice 6: ≥30 HU/EN fixture + release metrikák (recall ≥98%, acknowledge precision 100%), E2E, access mátrix, runbook | D1, D2 |
 | **D4** Learning | slice 7: `proposeSkill` | C2 |
 
+**Végrehajtási sorrend (owner, 2026-10-19: „haladjunk logikusan"; a Google OAuth client elkészült, ezért a B1 előrébb került):** B2 → B1 → B4 → B5 → B6 → B7 → B8 → B3.
+A Triage inbox seedelt levelekkel lesz előbb látható és használható. A classify és a prepareTask nem
+igényel Gmailt. A send pipeline egy Gmail-transport interfészen át készül, tesztben fake-kel. A valódi
+Gmail (B1 OAuth, B3 sync) a végén jön, amikor megvan a Google OAuth client.
+
 **Az első valódi érték:** a B mérföldkő végén a saját Gmail-ünkből jönnek a levelek, Triage-ban taskká
 válnak, és a kickoff kimegy. Ezért a B1-hez szükséges Google OAuth clientet **most** érdemes elindítani,
 hogy ne ott álljunk meg.

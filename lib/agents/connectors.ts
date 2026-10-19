@@ -3,7 +3,8 @@
  * chassis lets a user authenticate an external account once (per-user, V1);
  * connector-backed tools then resolve THAT user's live credentials at run
  * time. Wave 1 ships the framework and one dev/mock connector ("Echo"); the
- * first real provider (Gmail) is pure addition in Wave 3.
+ * first real provider (Gmail, email triage) is catalogued hidden until its
+ * OAuth flow lands (B1).
  *
  * This module owns everything about connectors that needs no I/O: the
  * type catalog (code, like the tool registry), the status vocabulary, the
@@ -18,7 +19,7 @@
 // ─── Type catalog (code, not data) ──────────────────────────────────────────
 
 /** Every connector type the platform knows (grows per wave). */
-export type ConnectorType = "echo";
+export type ConnectorType = "echo" | "gmail";
 
 /**
  * How a connector is authenticated. `token` = the user pastes a secret we
@@ -51,6 +52,13 @@ export type ConnectorTypeMeta = {
   toolNames: readonly string[];
   /** Scopes stored on the connection at connect time (audit + future OAuth). */
   defaultScopes: readonly string[];
+  /**
+   * Not on the Connectors surface (`getConnectorCatalog` leaves it out). For
+   * a type whose connect flow does not exist yet, so the surface never shows
+   * a Connect button that cannot work. Rows of the type may still exist
+   * (e.g. the email-triage dev seed mailbox).
+   */
+  hidden?: true;
 };
 
 /**
@@ -70,11 +78,31 @@ export const CONNECTOR_CATALOG: Record<ConnectorType, ConnectorTypeMeta> = {
     toolNames: ["echo"],
     defaultScopes: ["echo:read"],
   },
+  // Email triage (docs/prd-email-triage.md §4.2, D17, D23): one mailbox per
+  // user, access + refresh token encrypted with convex/lib/secretCrypto.ts.
+  // Hidden until B1 ships the OAuth flow (PKCE, `oauthStates`, callback
+  // routes) — TODO(B1): unhide behind `emailTriageEnabled` (I14), so other
+  // tenants never see the row. No registry tools: the email jobs read
+  // through convex/email/*, not through the model.
+  gmail: {
+    type: "gmail",
+    displayName: "Gmail",
+    description:
+      "Your Gmail mailbox. Client emails become Triage items; replies you " +
+      "approve are sent from it.",
+    authKind: "oauth",
+    toolNames: [],
+    defaultScopes: [
+      "https://www.googleapis.com/auth/gmail.readonly",
+      "https://www.googleapis.com/auth/gmail.send",
+    ],
+    hidden: true,
+  },
 };
 
-/** Catalog as an ordered array — what a Convex query hands the surface. */
+/** The surfaced catalog as an ordered array — what a Convex query hands the surface. */
 export function getConnectorCatalog(): ConnectorTypeMeta[] {
-  return Object.values(CONNECTOR_CATALOG);
+  return Object.values(CONNECTOR_CATALOG).filter((meta) => !meta.hidden);
 }
 
 export function isConnectorType(value: unknown): value is ConnectorType {

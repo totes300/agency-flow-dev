@@ -12,19 +12,28 @@ import {
 } from "./connectors";
 
 describe("connector catalog", () => {
-  it("ships exactly the Echo dev connector in Wave 1", () => {
+  it("surfaces exactly the Echo dev connector (Gmail stays hidden until B1)", () => {
     const catalog = getConnectorCatalog();
     expect(catalog).toHaveLength(1);
     expect(catalog.map((c) => c.type)).toEqual(["echo"]);
   });
 
-  it("every entry's key matches its type and backs at least one tool", () => {
+  it("every entry's key matches its type; token connectors back at least one tool", () => {
     for (const [key, meta] of Object.entries(CONNECTOR_CATALOG)) {
       expect(meta.type).toBe(key);
       expect(meta.displayName.length).toBeGreaterThan(0);
       expect(meta.description.length).toBeGreaterThan(0);
-      expect(meta.toolNames.length).toBeGreaterThan(0);
+      if (meta.authKind === "token") expect(meta.toolNames.length).toBeGreaterThan(0);
     }
+  });
+
+  it("Gmail is a hidden OAuth connector with read + send scopes", () => {
+    const gmail = CONNECTOR_CATALOG.gmail;
+    expect(gmail).toMatchObject({ authKind: "oauth", hidden: true, toolNames: [] });
+    expect(gmail.defaultScopes).toEqual([
+      "https://www.googleapis.com/auth/gmail.readonly",
+      "https://www.googleapis.com/auth/gmail.send",
+    ]);
   });
 
   it("Echo is trivial token auth with one tool", () => {
@@ -36,7 +45,8 @@ describe("connector catalog", () => {
 
   it("recognizes live types and rejects unknown ones", () => {
     expect(isConnectorType("echo")).toBe(true);
-    expect(isConnectorType("gmail")).toBe(false);
+    expect(isConnectorType("gmail")).toBe(true);
+    expect(isConnectorType("slack")).toBe(false);
     expect(isConnectorType("")).toBe(false);
     expect(isConnectorType(null)).toBe(false);
     expect(getConnectorMeta("echo")?.displayName).toBe("Echo");

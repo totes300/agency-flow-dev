@@ -5,6 +5,32 @@ import {
   proposalStatusValidator,
 } from "./lib/proposalValidators";
 import {
+  agentAnchorValidator,
+  agentCheckKindValidator,
+  agentCheckResultValidator,
+  agentCheckSubjectValidator,
+  agentItemKindValidator,
+  agentItemOutcomeValidator,
+  agentItemSourceValidator,
+  agentItemStatusValidator,
+  agentSignalValidator,
+  clientRequestConstraintValidator,
+  clientRequestDispositionValidator,
+  emailAddressValidator,
+  emailClassificationValidator,
+  emailDirectionValidator,
+  emailDraftAttachmentValidator,
+  emailDraftFailureKindValidator,
+  emailDraftKindValidator,
+  emailDraftStatusValidator,
+  emailEventSubtypeValidator,
+  emailMessageAttachmentValidator,
+  emailMessageStageValidator,
+  emailPromiseStatusValidator,
+  emailThreadTaskRoleValidator,
+  emailWaitingOnValidator,
+} from "./lib/validators";
+import {
   activityLogValidator,
   numberScopeValidator,
   taskCategoryValidator,
@@ -94,6 +120,16 @@ export default defineSchema({
     // every job start; unset / demoted → jobs fail closed. Set through
     // `internal.agentJobs.setAgentActorUser` (Settings UI later).
     agentActorUserId: v.optional(v.id("users")),
+    // Email triage (docs/prd-email-triage.md §4.2, D23). Off when unset; set
+    // on our own org by `internal.email.gate.setEmailTriageEnabled` (no UI).
+    // Every email route, query, mutation and cron checks it server-side
+    // (I14, convex/email/gate.ts).
+    emailTriageEnabled: v.optional(v.boolean()),
+    // §5.2 filter: sender domains never stored (lower-case, no "@").
+    ignoredEmailDomains: v.optional(v.array(v.string())),
+    // §6.1 default due: arrival + N working days (convex/lib/workingDays.ts).
+    // Unset = DEFAULT_DUE_WORKING_DAYS (2).
+    emailDefaultDueWorkingDays: v.optional(v.number()),
     // Base
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -282,6 +318,14 @@ export default defineSchema({
     taxId: v.optional(v.string()),
     logoStorageId: v.optional(v.id("_storage")),
     notes: v.optional(v.string()),
+    // Email triage §4.2 / §5.2: sender → client routing. `emailDomains` are
+    // lower-case bare domains ("pragmatico.hu"; subdomains match too, public
+    // mail domains never — email/model.ts matchClientByDomain).
+    emailDomains: v.optional(v.array(v.string())),
+    // The project an email task lands in when routing has nothing better.
+    defaultProjectId: v.optional(v.id("projects")),
+    // Always copied on replies to this client (§6.2).
+    replyCcEmails: v.optional(v.array(v.string())),
     archivedAt: v.optional(v.number()),
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -757,8 +801,29 @@ export default defineSchema({
       v.literal("assigned"),
       v.literal("comment"),
       v.literal("comment_reply"),
+      // Email triage §4.2 (S8). One renderer for all three; the variant is
+      // `subtype` (email_event) / `signal` (agent_signal).
+      v.literal("email_event"),
+      v.literal("agent_signal"),
+      v.literal("daily_digest"),
     ),
-    taskId: v.id("tasks"),
+    // Which inbox the row belongs to (email triage §4.2): "task" = the five
+    // task types above, "email" = email_event, "agent" = agent_signal /
+    // daily_digest. Every writer sets it (notifications.ts
+    // `notificationKindOf`); rows written before the field existed are unset
+    // and count as "task" — readers query both, no backfill
+    // (`readTaskInboxRows`). The task Inbox and its badge read only "task".
+    kind: v.optional(v.union(v.literal("task"), v.literal("email"), v.literal("agent"))),
+    // Optional since email triage: a digest, a watcher signal or "Mailbox not
+    // syncing" is not tied to a task — those carry `subject` instead.
+    taskId: v.optional(v.id("tasks")),
+    // General subject ref for task-less rows ({ type: "emailThread", id } …).
+    subject: v.optional(agentAnchorValidator),
+    subtype: v.optional(emailEventSubtypeValidator), // email_event only
+    signal: v.optional(agentSignalValidator), // agent_signal only
+    reasonText: v.optional(v.string()), // the Inbox reason line ("checked for…")
+    threadId: v.optional(v.id("emailThreads")),
+    messageId: v.optional(v.id("emailMessages")),
     commentId: v.optional(v.id("comments")),
     // Plain-text snapshot at fan-out time (survives comment edits/deletes)
     previewText: v.string(),
@@ -775,6 +840,8 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_recipient_org_state", ["recipientId", "orgId", "inboxState", "createdAt"])
+    // The task Inbox + badge (kind "task", or unset on pre-kind rows).
+    .index("by_recipient_org_kind_state", ["recipientId", "orgId", "kind", "inboxState", "createdAt"])
     .index("by_task", ["taskId"])
     .index("by_orgId", ["orgId"]),
 
@@ -1210,9 +1277,267 @@ export default defineSchema({
     scopes: v.array(v.string()),
     connectedAt: v.number(),
     lastUsedAt: v.optional(v.number()),
+    // Polling sync state (email triage S4, D34, D36) — any polling connector
+    // syncs the same way. Gmail: `cursor` = history id, set to "now" on first
+    // connect (no backfill). `error` shows on the connector row and as
+    // "Mailbox not syncing" in Triage. TODO(B3): written by email/gmail.ts.
+    sync: v.optional(
+      v.object({
+        cursor: v.optional(v.string()),
+        lastSyncAt: v.optional(v.number()),
+        lastFullSyncAt: v.optional(v.number()),
+        error: v.optional(v.object({ message: v.string(), at: v.number() })),
+      }),
+    ),
+    // A dev seed row (convex/devSeedEmail.ts) — never connected to the
+    // provider; sync / send must skip it. Unset on every real connection.
+    devSeed: v.optional(v.boolean()),
     updatedAt: v.number(),
   })
     .index("by_orgId", ["orgId"])
     .index("by_orgId_userId", ["orgId", "userId"])
     .index("by_orgId_userId_type", ["orgId", "userId", "type"]),
+
+
+  // ─── Email triage (docs/prd-email-triage.md §4.1) ──────────────────────────
+  // Every table is org-scoped; lists read org-prefixed indexes, id reads
+  // verify `orgId` before returning or relating (AGENTS.md). Validators:
+  // convex/lib/validators.ts. Pure rules: convex/email/model.ts. Every email
+  // read/write checks `orgSettings.emailTriageEnabled` (I14, email/gate.ts).
+
+  // One row per Gmail thread per mailbox (I1, §11 O6).
+  emailThreads: defineTable({
+    orgId: v.string(),
+    connectorId: v.id("connectors"), // the mailbox the thread lives in
+    gmailThreadId: v.string(), // provider id, unique per connector
+    subject: v.string(),
+    clientId: v.optional(v.id("clients")), // resolved from contact / domain (§5.2)
+    contactId: v.optional(v.id("clientContacts")),
+    participants: v.array(emailAddressValidator),
+    lastMessageAt: v.number(),
+    lastInboundAt: v.optional(v.number()),
+    lastOutboundAt: v.optional(v.number()),
+    waitingOn: emailWaitingOnValidator,
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_orgId", ["orgId"])
+    // I1 idempotency key (connector + provider thread id).
+    .index("by_orgId_connectorId_gmailThreadId", ["orgId", "connectorId", "gmailThreadId"])
+    // D37 clocks: "client waiting 24 working hours".
+    .index("by_orgId_waitingOn_lastInboundAt", ["orgId", "waitingOn", "lastInboundAt"]),
+
+  // A conversation ↔ its tasks (I2: split, merge). The primary thread of a
+  // task is its `created` row. Replaces a tasks.emailThreadId cache (S6).
+  emailThreadTasks: defineTable({
+    orgId: v.string(),
+    threadId: v.id("emailThreads"),
+    taskId: v.id("tasks"),
+    role: emailThreadTaskRoleValidator,
+    createdAt: v.number(),
+  })
+    .index("by_orgId_threadId", ["orgId", "threadId"])
+    .index("by_orgId_taskId", ["orgId", "taskId"]),
+
+  // The platform attention queue (P5). Triage = `source: "email"` anchored on
+  // the conversation `{ type: "emailThread", id }` (D25). I13: at most one
+  // `open` / `snoozed` row per anchor — enforced by the writer through
+  // `by_orgId_anchorType_anchorId_status`. The row label (Preparing… /
+  // A question for you / Kickoff ready …) is derived from the linked run,
+  // question, proposal and draft, never stored.
+  agentItems: defineTable({
+    orgId: v.string(),
+    source: agentItemSourceValidator,
+    anchor: agentAnchorValidator,
+    kind: agentItemKindValidator,
+    status: agentItemStatusValidator,
+    outcome: v.optional(agentItemOutcomeValidator),
+    // Email items: every message covered ("Updated · 2 emails").
+    messageIds: v.optional(v.array(v.id("emailMessages"))),
+    agentThreadId: v.optional(v.id("agentThreads")), // the item's conversation
+    taskId: v.optional(v.id("tasks")), // linked task, or the one created
+    proposalId: v.optional(v.id("agentProposals")),
+    draftId: v.optional(v.id("emailDrafts")), // reply / kickoff
+    snoozedUntil: v.optional(v.number()), // D27; a new client message wakes it early
+    decidedBy: v.optional(v.id("users")),
+    decidedAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    // Open items of an org, newest first (all sources) …
+    .index("by_orgId_status_updatedAt", ["orgId", "status", "updatedAt"])
+    // … and per source (the Triage list: source email; Snoozed / Done / Filtered views).
+    .index("by_orgId_source_status_updatedAt", ["orgId", "source", "status", "updatedAt"])
+    // I13: the open / snoozed item of one anchor.
+    .index("by_orgId_anchorType_anchorId_status", ["orgId", "anchor.type", "anchor.id", "status"])
+    // Wake cron (D27): snoozed rows past their time, across orgs.
+    .index("by_status_snoozedUntil", ["status", "snoozedUntil"]),
+
+  // One row per Gmail message per mailbox (I1). The same email in two
+  // colleagues' mailboxes shares `rfcMessageId` → one Triage item, both
+  // copies kept for provenance. What a message led to lives on the
+  // agentItem / proposal / draft, not here (S7).
+  emailMessages: defineTable({
+    orgId: v.string(),
+    threadId: v.id("emailThreads"),
+    connectorId: v.id("connectors"), // the mailbox it arrived in
+    gmailMessageId: v.string(), // unique per connector, not org-wide
+    rfcMessageId: v.string(), // Message-ID header
+    direction: emailDirectionValidator,
+    from: emailAddressValidator,
+    to: v.array(emailAddressValidator),
+    cc: v.array(emailAddressValidator),
+    subject: v.string(),
+    bodyText: v.string(), // quoted history stripped (email/model.ts stripQuoted) — what the agent reads
+    bodyHtml: v.optional(v.string()), // full body for the Gmail-style view (sanitised on render)
+    attachments: v.array(emailMessageAttachmentValidator),
+    sentAt: v.number(),
+    classification: v.optional(emailClassificationValidator), // inbound only (§6.3)
+    stage: emailMessageStageValidator, // I5
+    stageError: v.optional(
+      v.object({ stage: v.string(), message: v.string(), attempts: v.number() }),
+    ),
+    createdAt: v.number(),
+  })
+    .index("by_orgId_threadId_sentAt", ["orgId", "threadId", "sentAt"])
+    .index("by_orgId_connectorId_gmailMessageId", ["orgId", "connectorId", "gmailMessageId"])
+    .index("by_orgId_rfcMessageId", ["orgId", "rfcMessageId"])
+    .index("by_orgId_stage", ["orgId", "stage"]),
+
+  // Agent-drafted outbound email awaiting a person (§5.4, D9). Approval binds
+  // a snapshot hash; any edit voids it. The pre-send review of a version is an
+  // `agentChecks` row (subject draft, kind presend, revision = version).
+  emailDrafts: defineTable({
+    orgId: v.string(),
+    taskId: v.optional(v.id("tasks")), // absent for a Triage reply / question with no task yet
+    threadId: v.optional(v.id("emailThreads")), // absent for a new conversation (recap) until sent
+    agentThreadId: v.optional(v.id("agentThreads")), // the conversation it was drafted in
+    kind: emailDraftKindValidator,
+    version: v.number(),
+    to: v.array(emailAddressValidator),
+    cc: v.array(emailAddressValidator),
+    subject: v.string(),
+    bodyText: v.string(),
+    attachments: v.array(emailDraftAttachmentValidator),
+    sourceSummary: v.string(),
+    stale: v.optional(v.object({ reason: v.string(), at: v.number() })),
+    subjectLocked: v.boolean(), // a reply in an existing Gmail thread (D9)
+    fromConnectorId: v.id("connectors"), // the sending mailbox (D35)
+    status: emailDraftStatusValidator,
+    approval: v.optional(
+      v.object({
+        version: v.number(),
+        hash: v.string(), // subject, from, to, cc, body, attachments
+        userId: v.id("users"),
+        at: v.number(),
+      }),
+    ),
+    sendAt: v.optional(v.number()),
+    scheduledFnId: v.optional(v.id("_scheduled_functions")),
+    followUp: v.optional(
+      v.object({
+        // D8: created only when Gmail accepts the email
+        title: v.string(),
+        assigneeIds: v.array(v.id("users")),
+        dueDate: v.optional(v.string()),
+        subtaskIds: v.array(v.id("tasks")),
+      }),
+    ),
+    failure: v.optional(
+      v.object({ kind: emailDraftFailureKindValidator, message: v.string() }),
+    ),
+    sentMessageId: v.optional(v.id("emailMessages")),
+    createdBy: v.union(v.literal("agent"), v.id("users")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_orgId_taskId", ["orgId", "taskId"])
+    .index("by_orgId_status", ["orgId", "status"]),
+
+  // What we told the client, with a date (§6.8.3). Written only from an
+  // approved, sent draft — never from model output alone (I8).
+  emailPromises: defineTable({
+    orgId: v.string(),
+    threadId: v.id("emailThreads"),
+    messageId: v.id("emailMessages"), // the outbound message that made the promise
+    taskId: v.optional(v.id("tasks")),
+    text: v.string(), // "a visszaszámláló hétfőn élesedik"
+    dueDate: v.string(), // YYYY-MM-DD (org timezone)
+    status: emailPromiseStatusValidator,
+    createdAt: v.number(),
+    resolvedAt: v.optional(v.number()),
+  })
+    .index("by_orgId_threadId", ["orgId", "threadId"])
+    .index("by_orgId_status_dueDate", ["orgId", "status", "dueDate"]),
+
+  // The request ledger: nothing the client asked can get lost (§6.1, I12).
+  clientRequests: defineTable({
+    orgId: v.string(),
+    clientId: v.optional(v.id("clients")),
+    // Where it was asked: an email, or a transcript / note given to the
+    // assistant (§6.10).
+    threadId: v.optional(v.id("emailThreads")),
+    messageId: v.optional(v.id("emailMessages")),
+    // Id<"agentChatFiles"> once that table lands (D1, its own phase) — a
+    // plain string until then, normalised by the reader.
+    chatFileId: v.optional(v.string()),
+    agentThreadId: v.optional(v.id("agentThreads")), // pasted text: the conversation
+    text: v.string(), // the request in the client's words
+    constraints: v.optional(v.array(clientRequestConstraintValidator)),
+    disposition: clientRequestDispositionValidator,
+    taskId: v.optional(v.id("tasks")),
+    subtaskId: v.optional(v.id("tasks")),
+    supersededBy: v.optional(v.id("clientRequests")), // "use 15% instead of 20%"
+    dismissedReason: v.optional(v.string()), // required when dismissed (I12)
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_orgId_threadId", ["orgId", "threadId"])
+    .index("by_orgId_agentThreadId", ["orgId", "agentThreadId"])
+    .index("by_orgId_disposition", ["orgId", "disposition"]),
+
+  // One-time OAuth state for connector sign-in (PKCE). Looked up by the
+  // random `state` on the callback, which carries no org context; the row's
+  // orgId / userId / expiresAt are checked after the read. TODO(B1).
+  oauthStates: defineTable({
+    orgId: v.string(),
+    userId: v.id("users"),
+    connectorType: v.string(),
+    state: v.string(),
+    codeVerifier: v.string(),
+    createdAt: v.number(),
+    expiresAt: v.number(),
+  }).index("by_state", ["state"]),
+
+  // One QA result shape (S3): hand-over QA (§6.8.1) and pre-send review
+  // (§6.7). Keyed by subject (task | draft) + kind + revision (presend: the
+  // draft version; handover: the task revision checked). One renderer, one
+  // gate reader; later QA agents write here too.
+  agentChecks: defineTable({
+    orgId: v.string(),
+    subject: agentCheckSubjectValidator,
+    kind: agentCheckKindValidator,
+    revision: v.number(),
+    runId: v.optional(v.id("agentRuns")),
+    results: v.array(agentCheckResultValidator),
+    submittedAnyway: v.optional(
+      v.object({ note: v.string(), userId: v.id("users"), at: v.number() }),
+    ),
+    partial: v.optional(
+      v.object({
+        // handover only — D8 "Hand over partially"
+        followUpSubtaskIds: v.array(v.id("tasks")),
+        reason: v.string(),
+        userId: v.id("users"),
+        at: v.number(),
+      }),
+    ),
+    createdAt: v.number(),
+  }).index("by_orgId_subjectType_subjectId_kind_revision", [
+    "orgId",
+    "subject.type",
+    "subject.id",
+    "kind",
+    "revision",
+  ]),
 });

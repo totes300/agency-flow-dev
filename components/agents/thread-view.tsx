@@ -18,6 +18,7 @@ import { ErrorBlock } from "@/components/agents/blocks/error-block"
 import { SystemBlock } from "@/components/agents/blocks/system-block"
 import { UserMessage } from "@/components/agents/user-message"
 import { classifyParts, type MessagePartLike } from "@/lib/agents/blocks"
+import { cleanErrorText } from "@/lib/agents/providerErrors"
 
 /**
  * The designed chat experience (slice 02): typed block renderers over the
@@ -151,10 +152,17 @@ export function ThreadView({ threadId }: { threadId: string }) {
         ),
       })
     } else if (run.status === "failed" && run.error) {
+      // Shown as stored (classified server-side); only cleaned, so an older
+      // row can never show a stack trace (providerErrors.ts).
       timeline.push({
         key: run._id,
         at: run.finishedAt,
-        node: <ErrorBlock message={run.error} hint={run.errorHint} />,
+        node: (
+          <ErrorBlock
+            message={cleanErrorText(run.error)}
+            hint={run.errorHint ? cleanErrorText(run.errorHint) : null}
+          />
+        ),
       })
     } else if (run.cancelledBeforeStart) {
       timeline.push({

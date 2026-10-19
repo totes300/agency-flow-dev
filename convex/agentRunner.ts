@@ -4,6 +4,7 @@ import {
   gateway,
   type LanguageModel,
   type StopCondition,
+  type StreamTextTransform,
   type Tool,
   type ToolSet,
 } from "ai";
@@ -42,6 +43,13 @@ import {
   type AgentRunJob,
 } from "./lib/agentJobs";
 import { InvalidModelSlugError } from "../lib/agents/modelSlug";
+import {
+  classifyProviderError,
+  cleanErrorText,
+  describeErrorForLog,
+  genericRunError,
+  isModelCallError,
+} from "../lib/agents/providerErrors";
 import {
   assembleSkillPrompt,
   matchClientForRun,
@@ -845,10 +853,14 @@ export const failQueuedHead = internalMutation({
   },
 });
 
-/** Plain text of a thrown ConvexError / Error. */
+/**
+ * Plain text of a thrown ConvexError / Error — cleaned of the Convex wrapper
+ * ("Uncaught Error: …") and stack frames, since it ends up in a run's
+ * user-facing `error` (lib/agents/providerErrors.ts).
+ */
 export function errorText(err: unknown): string {
   if (err instanceof ConvexError) return String(err.data);
-  if (err instanceof Error) return err.message;
+  if (err instanceof Error) return cleanErrorText(err.message);
   return "unknown error";
 }
 
@@ -1098,11 +1110,13 @@ async function settleRun(
   args: { status: SettleStatus; error?: string; errorHint?: string },
 ): Promise<void> {
   const now = Date.now();
+  // The error block is user-facing: never store stack frames or the
+  // Convex wrapper, whatever the caller passed (providerErrors.ts).
   await ctx.db.patch(run._id, {
     status: args.status,
     finishedAt: now,
-    error: args.error,
-    errorHint: args.errorHint,
+    error: args.error === undefined ? undefined : cleanErrorText(args.error).slice(0, 500),
+    errorHint: args.errorHint === undefined ? undefined : cleanErrorText(args.errorHint),
   });
   const thread = await ctx.db.get(run.threadId);
   if (!thread) return;
@@ -1268,6 +1282,53 @@ export async function executeRun(
       runId: run.runId,
     });
 
+  // A provider failure mid-run (credit balance, invalid key, rate limit,
+  // overload…) arrives as an `error` part on the model stream. Left alone it
+  // is saved into the component's delta stream, and the CLIENT stream reader
+  // (ai's readUIMessageStream inside useUIMessages) re-throws it — a raw
+  // "Uncaught Error: … at node_modules/ai/…" in the thread. So it is
+  // captured here and never forwarded: the run is aborted (the component
+  // finalizes the pending message as failed with the clean reason) and
+  // settles as a classified in-thread error block below.
+  let streamError: { error: unknown } | null = null;
+  const captureStreamError: StreamTextTransform<ToolSet> = () =>
+    new TransformStream({
+      transform(part, controller) {
+        if (part.type === "error") {
+          // After a deliberate halt (user Stop, skill stop-condition) a late
+          // error is noise: dropped, and the run settles as that halt.
+          if (!streamError && !cancel.signal.aborted) {
+            // The raw error stays in the server log; the UI gets the class.
+            console.error(`[agentRunner] model stream error (run ${run.runId}): ${describeErrorForLog(part.error)}`);
+            streamError = { error: part.error };
+            cancel.abort(classifyProviderError(part.error).message);
+          }
+          return;
+        }
+        controller.enqueue(part);
+      },
+    });
+  const settleStreamError = async (): Promise<{ runId: Id<"agentRuns"> } | null> => {
+    if (!streamError) return null;
+    // A Stop (or skill stop) that raced the error wins: the run is a halt.
+    const ctl = await checkControl();
+    if (ctl.cancelRequested || ctl.stoppedBySkill) {
+      await ctx.runMutation(internal.agentRunner.finishRun, {
+        runId: run.runId,
+        status: ctl.stoppedBySkill ? "stopped_by_skill" : "cancelled",
+      });
+      return { runId: run.runId };
+    }
+    const display = classifyProviderError(streamError.error);
+    await ctx.runMutation(internal.agentRunner.finishRun, {
+      runId: run.runId,
+      status: "failed",
+      error: display.message,
+      errorHint: display.hint,
+    });
+    return { runId: run.runId };
+  };
+
   try {
     // Phase 9 BYOK chain: per-org key → gateway env → direct env.
     // Throws WorksheetAiUnavailableError when nothing is configured.
@@ -1329,6 +1390,7 @@ export async function executeRun(
       {
         promptMessageId: run.promptMessageId,
         abortSignal: cancel.signal,
+        experimental_transform: captureStreamError,
         // Runs AFTER the component saved the step's messages — partial
         // output is already persisted when we pull the plug here.
         onStepFinish: async () => {
@@ -1342,6 +1404,10 @@ export async function executeRun(
     // Drain the stream so the action stays alive until the response
     // (including tool steps) fully lands in the component's storage.
     await result.consumeStream();
+
+    // A provider error captured from the stream fails the run (classified).
+    const failed = await settleStreamError();
+    if (failed) return failed;
 
     // The mid-prose stop path aborts the streamer, not our signal — ask
     // the DB, not the controller, how this run ended. A skill stop-condition
@@ -1358,6 +1424,9 @@ export async function executeRun(
     });
     return { runId: run.runId };
   } catch (err) {
+    // Our own abort after a captured provider error: report that error.
+    const failed = await settleStreamError();
+    if (failed) return failed;
     // An abort that escapes as an exception is a deliberate halt — a skill
     // stop-condition or a user Stop, not a failure.
     const ctl = await checkControl();
@@ -1370,11 +1439,18 @@ export async function executeRun(
     }
     const aiUnavailable = err instanceof WorksheetAiUnavailableError;
     const badModel = err instanceof InvalidModelSlugError;
+    // A provider / gateway API error thrown outside the stream is
+    // classified; a tool or bookkeeping failure keeps its own message
+    // (without stack frames) — never a provider message by accident.
+    if (isModelCallError(err)) {
+      console.error(`[agentRunner] model call error (run ${run.runId}): ${describeErrorForLog(err)}`);
+    }
+    const display = isModelCallError(err) ? classifyProviderError(err) : genericRunError(err);
     const message = aiUnavailable
       ? "No AI key is configured for this organization."
-      : err instanceof Error
+      : badModel && err instanceof Error
         ? err.message
-        : "Unknown error";
+        : display.message;
     // Settle as an in-thread error block (agentThreads.listRuns) rather
     // than a rejected promise — the thread stays continuable.
     await ctx.runMutation(internal.agentRunner.finishRun, {
@@ -1385,7 +1461,7 @@ export async function executeRun(
         ? "Add an Anthropic API key in Settings → Integrations, then try again."
         : badModel
           ? "Fix this agent's model in the agent builder (for example anthropic/claude-sonnet-4.6), or clear it to use the platform default."
-          : "You can send a follow-up message in this thread to retry.",
+          : display.hint,
     });
     return { runId: run.runId };
   }

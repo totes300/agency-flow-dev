@@ -78,6 +78,24 @@ async function loadOwnConnection(
     .unique();
 }
 
+/** The refusal while the email-triage demo mailbox occupies the (org, user, type) slot. */
+export const DEV_SEED_CONNECTION_MESSAGE = "Remove the demo mailbox first (devSeedEmail:reset)";
+
+/**
+ * Every connect path for (org, user, type) must find NO dev-seed row
+ * (`connectors.devSeed`, convex/devSeedEmail.ts) — a real connection must
+ * never silently adopt the demo mailbox and its seeded threads.
+ * TODO(B1): the Gmail OAuth callback calls this before it upserts.
+ */
+export async function assertNoDevSeedConnection(
+  ctx: QueryCtx | MutationCtx,
+  auth: AuthContext,
+  type: string,
+): Promise<void> {
+  const row = await loadOwnConnection(ctx, auth, type);
+  if (row?.devSeed) throw new ConvexError(DEV_SEED_CONNECTION_MESSAGE);
+}
+
 // ─── Surface: list (catalog + own state) ────────────────────────────────────
 
 export type ConnectorListItem = {
@@ -146,6 +164,7 @@ export const connect = mutation({
     const auth = await getAuthContext(ctx);
     const meta = getConnectorMeta(args.type);
     if (!meta) throw new ConvexError("Unknown connector type");
+    await assertNoDevSeedConnection(ctx, auth, meta.type);
     if (meta.authKind !== "token") {
       throw new ConvexError(
         `${meta.displayName} connects through a sign-in flow, not a pasted token.`,

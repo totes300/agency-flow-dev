@@ -6,12 +6,78 @@ import { getAuthContext } from "./lib/auth";
 import { loadTaskForRead, userCanReadTask } from "./tasks/access";
 import { getUserState, setTaskMuted } from "./tasks/userState";
 
+/** The task-bound types `createNotifications` fans out (the Inbox's original five). */
 export type NotificationType =
   | "mention_comment"
   | "mention_description"
   | "assigned"
   | "comment"
   | "comment_reply";
+
+/** Every notification type (schema `notifications.type`). */
+export type AnyNotificationType = Doc<"notifications">["type"];
+export type NotificationKind = "task" | "email" | "agent";
+
+/** The inbox a type belongs to — every writer stamps `kind` with this. */
+export function notificationKindOf(type: AnyNotificationType): NotificationKind {
+  switch (type) {
+    case "email_event":
+      return "email";
+    case "agent_signal":
+    case "daily_digest":
+      return "agent";
+    default:
+      return "task";
+  }
+}
+
+type InboxState = Doc<"notifications">["inboxState"];
+
+/**
+ * The recipient's TASK-inbox rows in one state, newest first, bounded. Read
+ * through `by_recipient_org_kind_state` — kind "task" plus unset (rows from
+ * before `kind` existed count as task) — so email / agent rows can never
+ * crowd task rows out of the slice, and the badge and the list read the
+ * same rows. TODO: drop the unset range after a backfill.
+ */
+export async function readTaskInboxRows(
+  ctx: QueryCtx | MutationCtx,
+  args: { userId: Id<"users">; orgId: string; state: InboxState; limit: number },
+): Promise<Doc<"notifications">[]> {
+  const range = (kind: "task" | undefined) =>
+    ctx.db
+      .query("notifications")
+      .withIndex("by_recipient_org_kind_state", (q) =>
+        q.eq("recipientId", args.userId).eq("orgId", args.orgId).eq("kind", kind).eq("inboxState", args.state),
+      )
+      .order("desc")
+      .take(args.limit);
+  const [stamped, legacy] = await Promise.all([range("task"), range(undefined)]);
+  return [...stamped, ...legacy]
+    .filter(isTaskBound)
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .slice(0, args.limit);
+}
+
+/** The task-bound types the Inbox renders (lib/inbox.ts groups by task). */
+const TASK_NOTIFICATION_TYPES: ReadonlySet<string> = new Set<NotificationType>([
+  "mention_comment",
+  "mention_description",
+  "assigned",
+  "comment",
+  "comment_reply",
+]);
+
+/**
+ * Defensive: a task-kind row must be one of the five task types and name a
+ * task. Anything else (a writer bug) is skipped rather than crashing the
+ * Inbox, which groups by task.
+ */
+function isTaskBound(
+  row: Doc<"notifications">,
+): row is Doc<"notifications"> & { taskId: Id<"tasks">; type: NotificationType } {
+  return row.taskId !== undefined && TASK_NOTIFICATION_TYPES.has(row.type);
+}
 
 // Hot queries read bounded slices of the recipient's index; the badge shows
 // "99+" when the unread slice is capped.
@@ -83,12 +149,9 @@ export async function createNotifications(
       // description autosave churn. Comment-family events are never deduped:
       // each comment is a distinct event.
       if (event.type === "assigned" || event.type === "mention_description") {
-        const unread = await ctx.db
-          .query("notifications")
-          .withIndex("by_recipient_org_state", (q) =>
-            q.eq("recipientId", recipientId).eq("orgId", orgId).eq("inboxState", "unread")
-          )
-          .take(SLICE_LIMIT);
+        const unread = await readTaskInboxRows(ctx, {
+          userId: recipientId, orgId, state: "unread", limit: SLICE_LIMIT,
+        });
         if (unread.some((n) => n.type === event.type && n.taskId === task._id)) {
           continue;
         }
@@ -100,6 +163,7 @@ export async function createNotifications(
         recipientId,
         actorId,
         type: event.type,
+        kind: notificationKindOf(event.type),
         taskId: task._id,
         commentId: event.commentId,
         previewText: event.previewText,
@@ -166,13 +230,8 @@ export const unreadCount = query({
   handler: async (ctx) => {
     const { orgId, userId } = await getAuthContext(ctx);
 
-    const unread = await ctx.db
-      .query("notifications")
-      .withIndex("by_recipient_org_state", (q) =>
-        q.eq("recipientId", userId).eq("orgId", orgId).eq("inboxState", "unread")
-      )
-      .take(SLICE_LIMIT);
-
+    // The same task-inbox rows the list reads (readTaskInboxRows).
+    const unread = await readTaskInboxRows(ctx, { userId, orgId, state: "unread", limit: SLICE_LIMIT });
     return { count: unread.length, isCapped: unread.length >= SLICE_LIMIT };
   },
 });
@@ -188,13 +247,7 @@ export const listInbox = query({
     const { orgId, userId } = await getAuthContext(ctx);
 
     const readSlice = async (state: "unread" | "read") =>
-      await ctx.db
-        .query("notifications")
-        .withIndex("by_recipient_org_state", (q) =>
-          q.eq("recipientId", userId).eq("orgId", orgId).eq("inboxState", state)
-        )
-        .order("desc")
-        .take(SLICE_LIMIT);
+      await readTaskInboxRows(ctx, { userId, orgId, state, limit: SLICE_LIMIT });
 
     const rows = [...(await readSlice("unread")), ...(await readSlice("read"))].sort(
       (a, b) => b.createdAt - a.createdAt
@@ -210,13 +263,7 @@ export const listArchived = query({
   handler: async (ctx) => {
     const { orgId, userId } = await getAuthContext(ctx);
 
-    const rows = await ctx.db
-      .query("notifications")
-      .withIndex("by_recipient_org_state", (q) =>
-        q.eq("recipientId", userId).eq("orgId", orgId).eq("inboxState", "archived")
-      )
-      .order("desc")
-      .take(SLICE_LIMIT);
+    const rows = await readTaskInboxRows(ctx, { userId, orgId, state: "archived", limit: SLICE_LIMIT });
 
     return await enrichRows(ctx, rows);
   },
@@ -233,6 +280,7 @@ async function enrichRows(ctx: QueryCtx, rows: Doc<"notifications">[]) {
 
   const enriched = [];
   for (const row of rows) {
+    if (!isTaskBound(row)) continue; // defensive — readTaskInboxRows already filters
     if (!taskCache.has(row.taskId)) {
       taskCache.set(row.taskId, await ctx.db.get(row.taskId));
     }
@@ -340,12 +388,8 @@ export const markAllRead = mutation({
   handler: async (ctx) => {
     const { orgId, userId } = await getAuthContext(ctx);
 
-    const unread = await ctx.db
-      .query("notifications")
-      .withIndex("by_recipient_org_state", (q) =>
-        q.eq("recipientId", userId).eq("orgId", orgId).eq("inboxState", "unread")
-      )
-      .take(200);
+    // Task inbox only: email / agent rows have their own surfaces.
+    const unread = await readTaskInboxRows(ctx, { userId, orgId, state: "unread", limit: 200 });
 
     const now = Date.now();
     for (const row of unread) {
@@ -364,12 +408,9 @@ export async function markTaskNotificationsRead(
   ctx: MutationCtx,
   args: { userId: Id<"users">; orgId: string; taskId: Id<"tasks"> }
 ): Promise<void> {
-  const unread = await ctx.db
-    .query("notifications")
-    .withIndex("by_recipient_org_state", (q) =>
-      q.eq("recipientId", args.userId).eq("orgId", args.orgId).eq("inboxState", "unread")
-    )
-    .take(SLICE_LIMIT);
+  const unread = await readTaskInboxRows(ctx, {
+    userId: args.userId, orgId: args.orgId, state: "unread", limit: SLICE_LIMIT,
+  });
 
   const now = Date.now();
   for (const row of unread) {

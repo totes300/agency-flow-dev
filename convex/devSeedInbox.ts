@@ -70,6 +70,7 @@ export const seed = internalMutation({
         recipientId: recipient._id,
         actorId,
         type: item.type,
+        kind: "task",
         taskId: task._id,
         previewText: item.preview,
         inboxState: "unread",

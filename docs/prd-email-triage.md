@@ -1455,7 +1455,7 @@ B1 phase prints. Started during milestone A (E4); blocks B1.
 | A6 | Attachment contents | done | (this commit) | attachmentContents keyed by (orgId, storageId); requestExtraction on task + comment attachment save; node extraction (unpdf 1.8.1, mammoth, image-size) with watchdog + permanent-failure classes; getAttachmentText (untrusted-content marker); content deleted with the file; reviewed. Manual: attachmentContents:backfillExtractions |
 | A7 | All tools on the actor path | done | (this commit) | added after the A5 review: every registry tool on *ForAuth cores + actor variants, static ctx.auth path and background flag removed, connector tools interactive-only, interactive role = orgMembers AND JWT; reviewed |
 | B1 | Gmail connect | pending | | waits on the Google OAuth client (E4) |
-| B2 | Email schema + pure model | pending | | |
+| B2 | Email schema + pure model | done | (this commit) | all §4.1 tables + extensions, notifications.kind + optional taskId, I14 gate, workingDays, email/model (HU/EN strip, triggers, dates, bulk signals), idempotent seed (devSeedEmail:seed / reset), provider-error settle fix; reviewed |
 | B3 | Sync + ingest + filter | pending | | |
 | B4 | Classify + ledger + dispatch | pending | | |
 | B5 | Send pipeline (backend) | pending | | independent code review |

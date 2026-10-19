@@ -1,5 +1,9 @@
 # My Tasks — Personal Focus View
 
+> **Historical.** Superseded by `docs/prd-tasks-refactor.md` (tasks refactor, 2026-10-18,
+> completed in slice 7b). Kept for context only; where they differ, the refactor PRD and
+> the code win.
+
 > ⚠️ **SUPERSEDED (2026-07-06)** by `docs/today-planner-prd.md` — "Today" is no longer a
 > status; it is a derived per-user daily plan computed from Planner `planSegments`.
 > This document remains for historical context on the original My Tasks design.

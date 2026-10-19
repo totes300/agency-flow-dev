@@ -1,5 +1,9 @@
 # My Tasks — Implementation Plan
 
+> **Historical.** Superseded by `docs/prd-tasks-refactor.md` (tasks refactor, 2026-10-18,
+> completed in slice 7b). Kept for context only; where they differ, the refactor PRD and
+> the code win.
+
 > **PRD**: `docs/today-tab-prd.md`
 > **Test runner**: Vitest (`npm run test` / `npm run test:watch`)
 > **Test pattern**: Write tests FIRST → implement → run tests → commit when green

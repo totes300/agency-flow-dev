@@ -1,3 +1,7 @@
+> **Historical.** Superseded by `docs/prd-tasks-refactor.md` (tasks refactor, 2026-10-18,
+> completed in slice 7b). Kept for context only; where they differ, the refactor PRD and
+> the code win.
+
 Implement the "My Tasks" feature for this Agency Flow app. This is a personal, distraction-free task view at `/my-tasks`.
 
 ### Required reading BEFORE you start

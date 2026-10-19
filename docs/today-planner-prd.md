@@ -1,5 +1,9 @@
 # PRD: Today × Planner Unification
 
+> **Partly historical.** Its My Tasks list/row parts and the Today semantics are
+> superseded by `docs/prd-tasks-refactor.md` (§5.6, completed in slice 7b); the Planner
+> board parts still describe the Planner.
+
 > **Supersedes**: `docs/today-tab-prd.md` (the original status-based "Today focus" My Tasks spec).
 > **Companion artifacts**: interactive HTML prototype (Claude artifact, 2026-07-06) demonstrating every interaction below; the long design-review conversation that produced these decisions.
 > **Status**: Approved for implementation.

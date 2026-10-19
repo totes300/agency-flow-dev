@@ -1,5 +1,9 @@
 # Task Row Activity Refactor — Implementation Plan
 
+> **Historical.** Superseded by `docs/prd-tasks-refactor.md` (tasks refactor, 2026-10-18,
+> completed in slice 7b). Kept for context only; where they differ, the refactor PRD and
+> the code win.
+
 > **Design reference:** `design/activity-icons-spec.html` Section "1. Full Table — All States"
 > **Scope:** `/tasks` page task rows — activity icons, unseen state, subtitles, hover popovers
 

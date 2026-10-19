@@ -11,6 +11,7 @@ import {
   internalMutation,
   mutation,
   query,
+  type MutationCtx,
   type QueryCtx,
 } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -85,13 +86,15 @@ export async function requireThreadAccess(
  * Current user's threads, newest activity first — the rail's Recent list.
  * Threads the viewer OWNS and can still read: a demoted owner of an
  * `admins` thread no longer lists it. Other admins' shared threads never
- * appear here — they get their own surfaces (e.g. Triage).
+ * appear here — they get their own surfaces (e.g. Triage). Threads of a
+ * SYSTEM agent (agent jobs, A2b) never list here either, even for their
+ * nominal owner (the designated agent actor) — same reason.
  */
 export const listMine = query({
   args: {},
   handler: async (ctx) => {
     const auth = await getAuthContext(ctx);
-    const threads = (
+    const owned = (
       await ctx.db
         .query("agentThreads")
         .withIndex("by_orgId_userId", (q) =>
@@ -101,10 +104,16 @@ export const listMine = query({
     ).filter((t) => threadAccess(t, auth).canRead);
 
     // Resolve agent names for the rail rows (agent icon + title + time).
-    const agentIds = [...new Set(threads.map((t) => t.agentId))];
+    const agentIds = [...new Set(owned.map((t) => t.agentId))];
     const agents = await Promise.all(agentIds.map((id) => ctx.db.get(id)));
     const agentNameById = new Map(
       agents.filter(Boolean).map((a) => [a!._id.toString(), a!.name]),
+    );
+    const systemAgentIds = new Set(
+      agents.filter((a) => a?.systemKey).map((a) => a!._id.toString()),
+    );
+    const threads = owned.filter(
+      (t) => !systemAgentIds.has(t.agentId.toString()),
     );
 
     return threads
@@ -227,6 +236,8 @@ export const listRuns = query({
       stoppedBySkill: r.stoppedBySkill ?? null,
       // Stale tool refs dropped at runtime (slice 09) → a "system" block.
       droppedTools: r.droppedTools ?? [],
+      // The agent job this run executed (A2b) — keys its stage line (B8).
+      job: r.job ?? null,
     }));
   },
 });
@@ -272,7 +283,14 @@ export const create = mutation({
   handler: async (ctx, args) => {
     const auth = await getAuthContext(ctx);
     const agent = await ctx.db.get(args.agentId);
-    if (!agent || agent.orgId !== auth.orgId || agent.archivedAt) {
+    // System agents (A2b) are not pickable: their threads are created by
+    // agent jobs only (ensureAnchoredThread).
+    if (
+      !agent ||
+      agent.orgId !== auth.orgId ||
+      agent.archivedAt ||
+      agent.systemKey
+    ) {
       throw new ConvexError("Agent not found");
     }
     if (agent.runPermission === "admins" && !auth.isAdmin) {
@@ -334,58 +352,76 @@ export const ensureAnchoredThread = internalMutation({
     ownerUserId: v.id("users"),
     title: v.optional(v.string()),
   },
-  handler: async (ctx, args): Promise<Id<"agentThreads">> => {
-    const agent = await ctx.db.get(args.agentId);
-    if (!agent || agent.orgId !== args.orgId || agent.archivedAt) {
-      throw new ConvexError("Agent not found");
-    }
-    const owner = await loadAuthContextForActor(ctx, {
-      orgId: args.orgId,
-      userId: args.ownerUserId,
-    });
-    if (args.visibility === "admins" && !owner.isAdmin) {
-      throw new ConvexError("An admins thread must be owned by an admin");
-    }
-    if (agent.runPermission === "admins" && !owner.isAdmin) {
-      throw new ConvexError("This agent can only run in an admin's thread");
-    }
-
-    // Exact key through the index: (org, anchor, agent, visibility) for an
-    // `admins` thread, plus the owner for a private one.
-    const byKey = ctx.db
-      .query("agentThreads")
-      .withIndex("by_orgId_anchorType_anchorId_agentId_visibility_userId", (q) => {
-        const prefix = q
-          .eq("orgId", args.orgId)
-          .eq("anchor.type", args.anchor.type)
-          .eq("anchor.id", args.anchor.id)
-          .eq("agentId", args.agentId)
-          .eq("visibility", args.visibility);
-        return args.visibility === "private"
-          ? prefix.eq("userId", args.ownerUserId)
-          : prefix;
-      });
-    const existing = await byKey.first();
-    if (existing) return existing._id;
-
-    const title = args.title?.trim().slice(0, 120) || UNTITLED_THREAD;
-    const componentThreadId = await createComponentThread(
-      ctx,
-      components.agent,
-      { userId: args.ownerUserId, title },
-    );
-    const now = Date.now();
-    return await ctx.db.insert("agentThreads", {
-      orgId: args.orgId,
-      componentThreadId,
-      agentId: agent._id,
-      userId: args.ownerUserId,
-      title,
-      status: "idle",
-      lastActivityAt: now,
-      createdAt: now,
-      visibility: args.visibility,
-      anchor: { type: args.anchor.type, id: args.anchor.id },
-    });
-  },
+  handler: async (ctx, args): Promise<Id<"agentThreads">> =>
+    await ensureAnchoredThreadCore(ctx, args),
 });
+
+/**
+ * The body of `ensureAnchoredThread`, callable inside another mutation (the
+ * agent job start, convex/agentJobs.ts) so the thread lands in the same
+ * transaction as the actor check.
+ */
+export async function ensureAnchoredThreadCore(
+  ctx: MutationCtx,
+  args: {
+    orgId: string;
+    agentId: Id<"agents">;
+    anchor: { type: string; id: string };
+    visibility: ThreadVisibility;
+    ownerUserId: Id<"users">;
+    title?: string;
+  },
+): Promise<Id<"agentThreads">> {
+  const agent = await ctx.db.get(args.agentId);
+  if (!agent || agent.orgId !== args.orgId || agent.archivedAt) {
+    throw new ConvexError("Agent not found");
+  }
+  const owner = await loadAuthContextForActor(ctx, {
+    orgId: args.orgId,
+    userId: args.ownerUserId,
+  });
+  if (args.visibility === "admins" && !owner.isAdmin) {
+    throw new ConvexError("An admins thread must be owned by an admin");
+  }
+  if (agent.runPermission === "admins" && !owner.isAdmin) {
+    throw new ConvexError("This agent can only run in an admin's thread");
+  }
+
+  // Exact key through the index: (org, anchor, agent, visibility) for an
+  // `admins` thread, plus the owner for a private one.
+  const byKey = ctx.db
+    .query("agentThreads")
+    .withIndex("by_orgId_anchorType_anchorId_agentId_visibility_userId", (q) => {
+      const prefix = q
+        .eq("orgId", args.orgId)
+        .eq("anchor.type", args.anchor.type)
+        .eq("anchor.id", args.anchor.id)
+        .eq("agentId", args.agentId)
+        .eq("visibility", args.visibility);
+      return args.visibility === "private"
+        ? prefix.eq("userId", args.ownerUserId)
+        : prefix;
+    });
+  const existing = await byKey.first();
+  if (existing) return existing._id;
+
+  const title = args.title?.trim().slice(0, 120) || UNTITLED_THREAD;
+  const componentThreadId = await createComponentThread(
+    ctx,
+    components.agent,
+    { userId: args.ownerUserId, title },
+  );
+  const now = Date.now();
+  return await ctx.db.insert("agentThreads", {
+    orgId: args.orgId,
+    componentThreadId,
+    agentId: agent._id,
+    userId: args.ownerUserId,
+    title,
+    status: "idle",
+    lastActivityAt: now,
+    createdAt: now,
+    visibility: args.visibility,
+    anchor: { type: args.anchor.type, id: args.anchor.id },
+  });
+}

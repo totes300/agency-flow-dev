@@ -7,8 +7,9 @@
  * back to a title-derived value when content is missing.
  */
 
-import { describe, expect, it } from "vitest"
-import { hasMeaningfulAiInput, parseResponse } from "./worksheetAi"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { hasMeaningfulAiInput, parseResponse, resolveModel } from "./worksheetAi"
+import { InvalidModelSlugError } from "../../lib/agents/modelSlug"
 import type { WorksheetAiInput } from "../worksheetsHelpers"
 
 const TITLE = "Homepage hero redesign"
@@ -151,5 +152,39 @@ describe("parseResponse — length caps", () => {
     const result = parseResponse(raw, TITLE)
     expect(result.taskSummary.endsWith("…")).toBe(false)
     expect(result.whatWeDid.endsWith("…")).toBe(false)
+  })
+})
+
+describe("resolveModel — model override (A2b)", () => {
+  beforeEach(() => {
+    vi.stubEnv("AI_GATEWAY_API_KEY", "")
+    vi.stubEnv("VERCEL_OIDC_TOKEN", "")
+    vi.stubEnv("ANTHROPIC_API_KEY", "")
+  })
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  const modelId = (m: ReturnType<typeof resolveModel>) =>
+    typeof m === "string" ? m : m.modelId
+
+  it("keeps the platform default when no override is given", () => {
+    expect(modelId(resolveModel("sk-ant-test"))).toBe("claude-sonnet-4-6")
+    vi.stubEnv("AI_GATEWAY_API_KEY", "gw")
+    expect(resolveModel(null)).toBe("anthropic/claude-sonnet-4.6")
+  })
+
+  it("maps an override to each transport's naming", () => {
+    expect(modelId(resolveModel("sk-ant-test", "anthropic/claude-haiku-4.5"))).toBe("claude-haiku-4-5")
+    vi.stubEnv("AI_GATEWAY_API_KEY", "gw")
+    expect(resolveModel(null, "claude-haiku-4-5")).toBe("anthropic/claude-haiku-4.5")
+    expect(resolveModel(null, "claude-3-5-sonnet-20241022")).toBe("anthropic/claude-3.5-sonnet")
+  })
+
+  it("rejects a malformed or non-Claude model on every path", () => {
+    expect(() => resolveModel("sk-ant-test", "not a model")).toThrow(InvalidModelSlugError)
+    expect(() => resolveModel("sk-ant-test", "openai/gpt-5")).toThrow(InvalidModelSlugError)
+    vi.stubEnv("AI_GATEWAY_API_KEY", "gw")
+    expect(() => resolveModel(null, "openai/gpt-5")).toThrow(/only Anthropic Claude models/)
   })
 })

@@ -15,7 +15,32 @@ import {
   normalizeExamplePrompts,
   validateAgentDraft,
 } from "../lib/agents/builder";
-import type { Id } from "./_generated/dataModel";
+import {
+  InvalidModelSlugError,
+  parseModelSlug,
+} from "../lib/agents/modelSlug";
+import type { Doc, Id } from "./_generated/dataModel";
+
+/**
+ * System agents (A2b, convex/lib/systemAgents.ts) are code-defined and run
+ * only by agent jobs: never listed or pickable here, never editable by the
+ * builder. Their runs still show in the audit view.
+ */
+const SYSTEM_AGENT_LOCKED = "System agents are managed by Agency Flow and can't be changed";
+
+/** Load an org agent for a builder write; refuses system agents. */
+async function loadEditableAgent(
+  ctx: MutationCtx,
+  orgId: string,
+  agentId: Id<"agents">,
+): Promise<Doc<"agents">> {
+  const agent = await ctx.db.get(agentId);
+  if (!agent || agent.orgId !== orgId) {
+    throw new ConvexError("Agent not found");
+  }
+  if (agent.systemKey) throw new ConvexError(SYSTEM_AGENT_LOCKED);
+  return agent;
+}
 
 const runPermissionValidator = v.union(
   v.literal("admins"),
@@ -39,7 +64,7 @@ export const listRunnable = query({
       .withIndex("by_orgId", (q) => q.eq("orgId", auth.orgId))
       .collect();
     return agents
-      .filter((a) => !a.archivedAt)
+      .filter((a) => !a.archivedAt && !a.systemKey)
       .filter((a) => auth.isAdmin || a.runPermission === "everyone")
       .map((a) => ({
         _id: a._id,
@@ -66,6 +91,7 @@ export const get = query({
     if (!agent || agent.orgId !== auth.orgId || agent.archivedAt) {
       return null;
     }
+    if (agent.systemKey) return null; // not pickable (A2b)
     if (agent.runPermission === "admins" && !auth.isAdmin) {
       return null; // don't leak existence
     }
@@ -92,7 +118,7 @@ export const listWithSkills = query({
       .withIndex("by_orgId", (q) => q.eq("orgId", auth.orgId))
       .collect();
     return agents
-      .filter((a) => !a.archivedAt)
+      .filter((a) => !a.archivedAt && !a.systemKey)
       .sort((a, b) => a.name.localeCompare(b.name))
       .map((a) => ({
         _id: a._id,
@@ -112,10 +138,8 @@ export const setSkills = mutation({
   args: { agentId: v.id("agents"), skillIds: v.array(v.id("skills")) },
   handler: async (ctx, args) => {
     const auth = await requireAdmin(ctx);
-    const agent = await ctx.db.get(args.agentId);
-    if (!agent || agent.orgId !== auth.orgId || agent.archivedAt) {
-      throw new ConvexError("Agent not found");
-    }
+    const agent = await loadEditableAgent(ctx, auth.orgId, args.agentId);
+    if (agent.archivedAt) throw new ConvexError("Agent not found");
     const unique = [...new Set(args.skillIds)];
     for (const skillId of unique) {
       const skill = await ctx.db.get(skillId);
@@ -150,16 +174,19 @@ export const toolCatalog = query({
  * Every org agent — INCLUDING archived — for the manage-agents list
  * (admin-only). Archived agents disappear from runners' rails (`listRunnable`)
  * but must stay visible and restorable here. Newest activity first.
+ * System agents are left out unless `includeSystem` (the audit view's agent
+ * filter, which must cover every agent that has runs).
  */
 export const listAll = query({
-  args: {},
-  handler: async (ctx) => {
+  args: { includeSystem: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
     const auth = await requireAdmin(ctx);
     const agents = await ctx.db
       .query("agents")
       .withIndex("by_orgId", (q) => q.eq("orgId", auth.orgId))
       .collect();
     return agents
+      .filter((a) => args.includeSystem === true || !a.systemKey)
       .sort((a, b) => b.updatedAt - a.updatedAt)
       .map((a) => ({
         _id: a._id,
@@ -185,7 +212,7 @@ export const getForEdit = query({
     const id = ctx.db.normalizeId("agents", args.agentId);
     if (!id) return null;
     const agent = await ctx.db.get(id);
-    if (!agent || agent.orgId !== auth.orgId) return null;
+    if (!agent || agent.orgId !== auth.orgId || agent.systemKey) return null;
     return {
       _id: agent._id,
       name: agent.name,
@@ -243,7 +270,17 @@ async function normalizeAgentConfig(
     }
   }
 
+  // A set model must parse (gateway slug or bare Anthropic id) — the same
+  // parser the run uses, so a saved slug always resolves (A2b).
   const model = args.model?.trim();
+  if (model) {
+    try {
+      parseModelSlug(model);
+    } catch (err) {
+      if (err instanceof InvalidModelSlugError) throw new ConvexError(err.message);
+      throw err;
+    }
+  }
   return {
     name: args.name.trim(),
     description: args.description.trim(),
@@ -296,10 +333,7 @@ export const update = mutation({
   },
   handler: async (ctx, args) => {
     const auth = await requireAdmin(ctx);
-    const agent = await ctx.db.get(args.agentId);
-    if (!agent || agent.orgId !== auth.orgId) {
-      throw new ConvexError("Agent not found");
-    }
+    await loadEditableAgent(ctx, auth.orgId, args.agentId);
     const config = await normalizeAgentConfig(ctx, auth.orgId, args);
     // `model` clears when empty (patch with undefined removes the field).
     await ctx.db.patch(args.agentId, { ...config, updatedAt: Date.now() });
@@ -315,10 +349,7 @@ export const archive = mutation({
   args: { agentId: v.id("agents") },
   handler: async (ctx, args) => {
     const auth = await requireAdmin(ctx);
-    const agent = await ctx.db.get(args.agentId);
-    if (!agent || agent.orgId !== auth.orgId) {
-      throw new ConvexError("Agent not found");
-    }
+    const agent = await loadEditableAgent(ctx, auth.orgId, args.agentId);
     if (agent.archivedAt) return null;
     const now = Date.now();
     await ctx.db.patch(args.agentId, { archivedAt: now, updatedAt: now });
@@ -330,10 +361,7 @@ export const restore = mutation({
   args: { agentId: v.id("agents") },
   handler: async (ctx, args) => {
     const auth = await requireAdmin(ctx);
-    const agent = await ctx.db.get(args.agentId);
-    if (!agent || agent.orgId !== auth.orgId) {
-      throw new ConvexError("Agent not found");
-    }
+    await loadEditableAgent(ctx, auth.orgId, args.agentId);
     await ctx.db.patch(args.agentId, {
       archivedAt: undefined,
       updatedAt: Date.now(),
@@ -539,7 +567,9 @@ export const devSeedAgents = internalMutation({
     const ids = [];
     for (const seed of seeds) {
       const config = { ...seed, trigger: "manual" as const };
-      const current = existing.find((a) => a.name === seed.name);
+      const current = existing.find(
+        (a) => a.name === seed.name && !a.systemKey,
+      );
       if (current) {
         await ctx.db.patch(current._id, { ...config, updatedAt: now });
         agentIdByName.set(seed.name, current._id);

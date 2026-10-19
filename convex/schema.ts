@@ -88,6 +88,11 @@ export default defineSchema({
     // project (`KON-7`). Incremented in the mutation that creates/moves the task.
     taskKey: v.optional(v.string()),
     nextTaskNumber: v.optional(v.number()),
+    // The designated agent actor (A2b, E2): the admin on whose behalf
+    // `admins`-visibility agent jobs run. Re-checked as a CURRENT admin at
+    // every job start; unset / demoted → jobs fail closed. Set through
+    // `internal.agentJobs.setAgentActorUser` (Settings UI later).
+    agentActorUserId: v.optional(v.id("users")),
     // Base
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -810,15 +815,23 @@ export default defineSchema({
     runPermission: v.union(v.literal("admins"), v.literal("everyone")),
     // Clickable chips on the first-run empty state; pre-fill the composer.
     examplePrompts: v.optional(v.array(v.string())),
-    // Per-agent model override (registry default when unset).
+    // Per-agent model override (platform default when unset). A gateway slug
+    // or bare Anthropic id, parsed by lib/agents/modelSlug.ts; a run uses
+    // `job.model ?? agent.model ?? default` (A2b).
     model: v.optional(v.string()),
     // Schema-ready for Wave 4 scheduled runs — no migration needed then.
     trigger: v.union(v.literal("manual"), v.literal("scheduled")),
+    // Set on a SYSTEM agent (A2b): defined in code (convex/lib/systemAgents.ts),
+    // created per org by `ensureSystemAgent`, run by agent jobs. Hidden from
+    // every user-facing agent list / picker; the builder can't edit it.
+    systemKey: v.optional(v.string()),
     archivedAt: v.optional(v.number()),
     createdBy: v.id("users"),
     createdAt: v.number(),
     updatedAt: v.number(),
-  }).index("by_orgId", ["orgId"]),
+  })
+    .index("by_orgId", ["orgId"])
+    .index("by_orgId_systemKey", ["orgId", "systemKey"]),
 
   // Skills (PRD D2, Module 7) — plain-English SOPs, global or per-client,
   // attached to agents by id. They steer judgment (grouping, tone, when to
@@ -902,6 +915,9 @@ export default defineSchema({
     // (they were all interactive).
     actorIsAdmin: v.optional(v.boolean()),
     via: v.optional(v.union(v.literal("user"), v.literal("background"))),
+    // The agent job this run executes (A2b, convex/lib/agentJobs.ts) — set on
+    // job runs (and their queued rows); unset for plain chat turns.
+    job: v.optional(v.string()),
     status: v.union(
       // A background start that arrived while the thread was busy (A2a,
       // I11 per-thread serialization). It holds its message in
@@ -955,6 +971,27 @@ export default defineSchema({
     .index("by_threadId_status", ["threadId", "status"])
     // Stale-run sweep (crons.ts): runs stuck in `running` past a cutoff.
     .index("by_status_startedAt", ["status", "startedAt"]),
+
+  // Light audit row per agent job outside a runner run (A2b,
+  // convex/lib/agentJobs.ts): every `llm_step` call (one structured model
+  // call, no thread), and an `agent_run` job that failed closed before a run
+  // could exist (e.g. no designated agent actor). Runner runs themselves are
+  // audited in `agentRuns` (with `job`).
+  agentJobRuns: defineTable({
+    orgId: v.string(),
+    job: v.string(),
+    tier: v.union(v.literal("llm_step"), v.literal("agent_run")),
+    anchor: v.optional(v.object({ type: v.string(), id: v.string() })),
+    status: v.union(v.literal("succeeded"), v.literal("failed")),
+    startedAt: v.number(),
+    finishedAt: v.optional(v.number()),
+    // Model calls made (an llm_step retries once on a schema failure).
+    attempts: v.optional(v.number()),
+    inputTokens: v.optional(v.number()),
+    outputTokens: v.optional(v.number()),
+    totalTokens: v.optional(v.number()),
+    error: v.optional(v.string()),
+  }).index("by_orgId_job", ["orgId", "job"]),
 
   // Big code-authored outputs a run produces (PRD Module 5 · canvas). One
   // row per artifact; the chat carries a lightweight `artifact` block that

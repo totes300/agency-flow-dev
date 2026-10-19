@@ -75,7 +75,7 @@ function AgentList({
   onNew: () => void
   onEdit: (agentId: string) => void
 }) {
-  const agents = useQuery(api.agents.listAll)
+  const agents = useQuery(api.agents.listAll, {})
   const active = agents?.filter((a) => !a.archived) ?? []
   const archived = agents?.filter((a) => a.archived) ?? []
 

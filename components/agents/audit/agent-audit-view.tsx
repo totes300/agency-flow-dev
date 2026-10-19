@@ -90,7 +90,7 @@ function AuditContent() {
     dateFrom: from || undefined,
     dateTo: to || undefined,
   })
-  const agents = useQuery(api.agents.listAll)
+  const agents = useQuery(api.agents.listAll, { includeSystem: true })
   const members = useQuery(api.orgMembers.listOrgMembers, {})
 
   return (

@@ -363,6 +363,20 @@ export const loadDecryptedKeyForActor = internalQuery({
   },
 });
 
+/**
+ * Org-level key loader for agent jobs with no acting user (A2b): an
+ * `llm_step` (convex/lib/agentJobs.ts `runLlmStep`) is one model call on the
+ * org's behalf, and the key is org-scoped infrastructure. The `orgId` comes
+ * from server code (the job's caller), never from a client — internal only,
+ * and the plaintext never leaves the server.
+ */
+export const loadDecryptedKeyForOrg = internalQuery({
+  args: { orgId: v.string() },
+  handler: async (ctx, args): Promise<string | null> => {
+    return await loadOrgAiKey(ctx, args.orgId);
+  },
+});
+
 /** Decrypt an org's stored Anthropic key; `null` when absent/undecryptable. */
 async function loadOrgAiKey(ctx: QueryCtx, orgId: string): Promise<string | null> {
   const settings = await ctx.db

@@ -1448,7 +1448,7 @@ B1 phase prints. Started during milestone A (E4); blocks B1.
 | Phase | Name | Status | Commit | Notes |
 |---|---|---|---|---|
 | A1 | Actor + background runs | done | (this commit) | actor on agentRuns, internal agentBackground.start, 8 tools on the actor path, single role source (orgMembers); reviewed |
-| A2 | Threads + jobs | in progress | | A2a done: visibility + anchor, one access policy, proposal revisions, queued background runs, stale-run cron (reviewed); A2b job registry next |
+| A2 | Threads + jobs | done | (this commit) | A2a visibility + anchor, one access policy, proposal revisions, run queue, stale-run cron; A2b job registry (llm_step + agent_run), system agents, designated agent actor (E2), Claude-only model allowlist, stages from tool events; both reviewed |
 | A3 | Read layer | pending | | |
 | A4 | Proposal consolidation | pending | | |
 | A5 | Question block | pending | | |

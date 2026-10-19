@@ -30,6 +30,7 @@
 import { generateText } from "ai";
 import { anthropic, createAnthropic } from "@ai-sdk/anthropic";
 import type { WorksheetAiInput } from "../worksheetsHelpers";
+import { parseModelSlug } from "../../lib/agents/modelSlug";
 
 /**
  * Model identifiers — same Claude Sonnet 4.6 model, two transports, two
@@ -219,16 +220,28 @@ export function parseResponse(
  * The customer-key path uses `createAnthropic({ apiKey })` so the SDK
  * scopes the call to that explicit key — no chance of accidentally
  * reading the operator's env-var key when a customer key is set.
+ *
+ * `modelSlug` (A2b, P2) is an optional override — a job's `model` or an
+ * agent's `agents.model`. Unset keeps the platform default above. It is
+ * parsed by `parseModelSlug` (Anthropic Claude models only, from an
+ * explicit family list, mapped to each transport's naming); anything else
+ * throws `InvalidModelSlugError` — a clear, fixable failure, never a
+ * provider 404 mid-run.
  */
-export function resolveModel(apiKey?: string | null): string | ReturnType<typeof anthropic> {
+export function resolveModel(
+  apiKey?: string | null,
+  modelSlug?: string | null,
+): string | ReturnType<typeof anthropic> {
+  const parsed = modelSlug ? parseModelSlug(modelSlug) : null;
+  const directId = parsed?.anthropicModelId ?? DIRECT_MODEL_ID;
   if (apiKey) {
-    return createAnthropic({ apiKey })(DIRECT_MODEL_ID);
+    return createAnthropic({ apiKey })(directId);
   }
   if (process.env.AI_GATEWAY_API_KEY || process.env.VERCEL_OIDC_TOKEN) {
-    return GATEWAY_MODEL_SLUG;
+    return parsed?.gatewaySlug ?? GATEWAY_MODEL_SLUG;
   }
   if (process.env.ANTHROPIC_API_KEY) {
-    return anthropic(DIRECT_MODEL_ID);
+    return anthropic(directId);
   }
   throw new WorksheetAiUnavailableError(
     "No AI key configured for this organization. Set one in Settings → Integrations.",

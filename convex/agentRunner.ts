@@ -30,6 +30,13 @@ import { loadTaskForReadOrNull } from "./tasks/access";
 import { requireThreadAccess, UNTITLED_THREAD } from "./agentThreads";
 import { getToolsForAgent } from "./lib/agentToolRegistry";
 import {
+  getAgentRunJob,
+  NO_AGENT_ACTOR_MESSAGE,
+  resolveJobActor,
+  type AgentRunJob,
+} from "./lib/agentJobs";
+import { InvalidModelSlugError } from "../lib/agents/modelSlug";
+import {
   assembleSkillPrompt,
   matchClientForRun,
   resolveSkills,
@@ -145,6 +152,15 @@ export type BeginRunResult = {
   actor: AgentActor;
   agent: { name: string; instructions: string; tools: string[] };
   hasStopConditions: boolean;
+  /**
+   * Model slug override for `resolveModel` (A2b): `job.model ?? agent.model`;
+   * null = the platform default.
+   */
+  model: string | null;
+  /** Tool-loop step cap: the job's `maxSteps`, else MAX_STEPS. */
+  maxSteps: number;
+  /** The agent job this run executes, if any (`agentRuns.job`). */
+  job: string | null;
 };
 
 /**
@@ -214,8 +230,14 @@ async function openRun(
   thread: Doc<"agentThreads">,
   agent: Doc<"agents">,
   args: Omit<ObjectType<typeof beginRunArgs>, "threadId">,
-  queuedRunId?: Id<"agentRuns">,
+  opts: {
+    /** Claim this queued row instead of inserting a new run row. */
+    queuedRunId?: Id<"agentRuns">;
+    /** An agent job run (A2b): job instructions, tools, steps, model. */
+    job?: AgentRunJob;
+  } = {},
 ): Promise<BeginRunResult> {
+  const { queuedRunId, job } = opts;
   // ─── Skills (slice 04) ───────────────────────────────────────────────
   // Resolve the agent's attached skills for THIS run: global skills always
   // load; client-scoped skills load only when the opening message names
@@ -236,10 +258,12 @@ async function openRun(
   }
   const resolved = resolveSkills(skills, clientId);
   const skillPrompt = assembleSkillPrompt(resolved);
-  // Agent identity first, then the platform's rendering-surface
-  // capabilities (markdown/tables), then per-run skill prompts.
+  // Agent identity first (+ the job's instructions for a job run, A2b), then
+  // the platform's rendering-surface capabilities (markdown/tables), then
+  // per-run skill prompts.
   const baseInstructions = [
     agent.instructions,
+    job?.instructions,
     PLATFORM_FORMATTING_PROMPT,
     skillPrompt,
   ]
@@ -283,7 +307,10 @@ async function openRun(
     isAdmin: auth.isAdmin,
     via,
   };
-  const { dropped: droppedTools } = getToolsForAgent(agent.tools, actor);
+  // A job run uses the JOB's tool list (background-capable by
+  // construction, validateAgentJob); a plain turn uses the agent's.
+  const toolNames = job ? job.tools : agent.tools;
+  const { dropped: droppedTools } = getToolsForAgent(toolNames, actor);
 
   const now = Date.now();
   const runFields = {
@@ -291,6 +318,7 @@ async function openRun(
     // re-derive the role from orgMembers per call; this is the audit record.
     actorIsAdmin: auth.isAdmin,
     via,
+    ...(job ? { job: job.name } : {}),
     status: "running" as const,
     startedAt: now,
     ...(resolved.loaded.length > 0
@@ -334,11 +362,16 @@ async function openRun(
     agent: {
       name: agent.name,
       instructions,
-      tools: agent.tools,
+      tools: toolNames,
     },
     // The runner adds the stop tool + honours halts only when a loaded skill
     // declares a stop-condition.
     hasStopConditions: resolved.stopConditions.length > 0,
+    // job.model ?? agent.model ?? platform default (resolveModel). The slug
+    // is parsed at model-resolution time; a bad one fails the run with a hint.
+    model: job?.model ?? agent.model ?? null,
+    maxSteps: job?.maxSteps ?? MAX_STEPS,
+    job: job?.name ?? null,
   };
   return result;
 }
@@ -398,6 +431,10 @@ export const beginBackgroundRun = internalMutation({
     threadId: v.string(),
     actingUserId: v.id("users"),
     message: v.string(),
+    // An agent job (A2b, convex/lib/agentJobs.ts) — by name, so a queued row
+    // can re-resolve it when it starts. Must be an `agent_run` job of the
+    // thread's system agent.
+    job: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<BackgroundBeginResult> => {
     const threadId = ctx.db.normalizeId("agentThreads", args.threadId);
@@ -408,6 +445,8 @@ export const beginBackgroundRun = internalMutation({
       userId: args.actingUserId,
     });
     const { thread, agent } = await checkRunStart(ctx, auth, args.threadId);
+    const job = args.job ? requireJobForAgent(args.job, agent) : undefined;
+    if (job) await requireJobActor(ctx, job, thread, auth.userId);
 
     const ahead = await nextQueuedRun(ctx, thread._id);
     if (thread.status === "running" || ahead) {
@@ -419,6 +458,7 @@ export const beginBackgroundRun = internalMutation({
         userId: auth.userId,
         actorIsAdmin: auth.isAdmin,
         via: "background",
+        ...(job ? { job: job.name } : {}),
         status: "queued",
         startedAt: now,
         queuedAt: now,
@@ -433,12 +473,81 @@ export const beginBackgroundRun = internalMutation({
       }
       return { queued: true, runId };
     }
-    const run = await openRun(ctx, auth, "background", thread, agent, {
-      message: args.message,
-    });
+    const run = await openRun(
+      ctx,
+      auth,
+      "background",
+      thread,
+      agent,
+      { message: args.message },
+      { job },
+    );
     return { queued: false, run };
   },
 });
+
+/**
+ * A job run that must not start, with the error + hint its row settles with
+ * (a queued claim) — thrown by the job checks below.
+ */
+class JobRunRejection extends ConvexError<string> {
+  constructor(
+    message: string,
+    readonly hint: string,
+  ) {
+    super(message);
+  }
+}
+
+/**
+ * Resolve a job name for a run on `agent`: it must be a known `agent_run`
+ * job (a removed job's queued row fails cleanly) whose system agent is the
+ * thread's agent — a job never runs on someone else's agent.
+ */
+function requireJobForAgent(name: string, agent: Doc<"agents">): AgentRunJob {
+  const job = getAgentRunJob(name);
+  if (!job) {
+    throw new JobRunRejection(
+      `Queued run not started: unknown agent job "${name}"`,
+      "This job no longer exists",
+    );
+  }
+  if (agent.systemKey !== job.systemAgentKey) {
+    throw new ConvexError(`Agent job "${name}" doesn't run on this agent`);
+  }
+  return job;
+}
+
+/**
+ * E2 at (re)start: a job run may only start as the actor the job resolves to
+ * NOW (`resolveJobActor`, shared with the job start) — the designated agent
+ * actor for an `admins` job, the thread owner for a `private` one. A queued
+ * job whose designated actor was replaced, cleared or demoted meanwhile fails
+ * closed with NO_AGENT_ACTOR_MESSAGE.
+ */
+async function requireJobActor(
+  ctx: MutationCtx,
+  job: AgentRunJob,
+  thread: Doc<"agentThreads">,
+  runUserId: Id<"users">,
+): Promise<void> {
+  const hint = "Set the agent actor in Settings, then run the job again.";
+  const actor = await resolveJobActor(
+    ctx,
+    job,
+    thread.orgId,
+    job.visibility === "private" ? thread.userId : undefined,
+  );
+  if (!actor.ok) throw new JobRunRejection(actor.error, hint);
+  if (actor.userId !== runUserId) {
+    throw new JobRunRejection(
+      job.visibility === "admins"
+        ? `${NO_AGENT_ACTOR_MESSAGE} (the designated agent actor changed since this run was queued)`
+        : "This job runs as its thread owner",
+      hint,
+    );
+  }
+}
 
 /** The oldest queued run of a thread (FIFO by creation time), if any. */
 async function nextQueuedRun(
@@ -476,12 +585,15 @@ export const beginNextQueuedRun = internalMutation({
       if (!next) return null;
       let auth: AuthContext;
       let agent: Doc<"agents">;
+      let job: AgentRunJob | undefined;
       try {
         auth = await loadAuthContextForActor(ctx, {
           orgId: thread.orgId,
           userId: next.userId,
         });
         ({ agent } = await checkRunStart(ctx, auth, thread._id));
+        job = next.job ? requireJobForAgent(next.job, agent) : undefined;
+        if (job) await requireJobActor(ctx, job, thread, next.userId);
       } catch (err) {
         // Nothing was written by the checks. Post the queued message so the
         // error block has its context, then settle the queued row.
@@ -492,13 +604,20 @@ export const beginNextQueuedRun = internalMutation({
             prompt: next.queuedMessage,
           });
         }
+        // Job checks carry their own error + hint (unknown job, actor
+        // changed); everything else is an access re-check failure.
+        const rejection = err instanceof JobRunRejection ? err : null;
         await ctx.db.patch(next._id, {
           status: "failed",
           finishedAt: Date.now(),
           queuedMessage: undefined,
-          error: `Queued run not started: ${errorText(err)}`.slice(0, 500),
-          errorHint:
-            "The run's acting user no longer has access to this thread or agent.",
+          error: (rejection
+            ? rejection.data
+            : `Queued run not started: ${errorText(err)}`
+          ).slice(0, 500),
+          errorHint: rejection
+            ? rejection.hint
+            : "The run's acting user no longer has access to this thread or agent.",
         });
         continue;
       }
@@ -509,7 +628,7 @@ export const beginNextQueuedRun = internalMutation({
         thread,
         agent,
         { message: next.queuedMessage ?? "" },
-        next._id,
+        { queuedRunId: next._id, job },
       );
     }
   },
@@ -926,7 +1045,8 @@ export async function executeRun(
     );
     // resolveModel returns a bare gateway slug on the gateway path;
     // the component requires a LanguageModel instance, so wrap it.
-    const resolved = resolveModel(orgKey);
+    // Model override: job.model ?? agent.model (A2b); null → default.
+    const resolved = resolveModel(orgKey, run.model);
     const languageModel: LanguageModel =
       typeof resolved === "string" ? gateway(resolved) : resolved;
 
@@ -950,7 +1070,7 @@ export async function executeRun(
       languageModel,
       instructions: run.agent.instructions,
       tools: agentTools,
-      stopWhen: stepCountIs(MAX_STEPS),
+      stopWhen: stepCountIs(run.maxSteps),
       usageHandler: async (handlerCtx, { usage }) => {
         await handlerCtx.runMutation(internal.agentRunner.recordUsage, {
           runId: run.runId,
@@ -1007,6 +1127,7 @@ export async function executeRun(
       return { runId: run.runId };
     }
     const aiUnavailable = err instanceof WorksheetAiUnavailableError;
+    const badModel = err instanceof InvalidModelSlugError;
     const message = aiUnavailable
       ? "No AI key is configured for this organization."
       : err instanceof Error
@@ -1020,7 +1141,9 @@ export async function executeRun(
       error: message.slice(0, 500),
       errorHint: aiUnavailable
         ? "Add an Anthropic API key in Settings → Integrations, then try again."
-        : "You can send a follow-up message in this thread to retry.",
+        : badModel
+          ? "Fix this agent's model in the agent builder (for example anthropic/claude-sonnet-4.6), or clear it to use the platform default."
+          : "You can send a follow-up message in this thread to retry.",
     });
     return { runId: run.runId };
   }

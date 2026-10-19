@@ -456,6 +456,18 @@ export const activityLogValidator = v.union(
   ),
   activity("time_entry_deleted", v.object({ entryId: v.id("timeEntries"), duration: v.string() })),
   activity("description_changed", v.object({})),
+  // Email triage B5 (§5.4): Gmail accepted an approved draft for this task.
+  activity(
+    "email_sent",
+    v.object({
+      draftId: v.id("emailDrafts"),
+      messageId: v.id("emailMessages"),
+      threadId: v.id("emailThreads"),
+      kind: v.string(), // the draft kind (completion / kickoff / reply …)
+      // Who it went to, for the label "sent an email to ‹to›" (first To + "+N").
+      to: v.optional(v.string()),
+    }),
+  ),
 );
 
 type ActivityLogRow = Infer<typeof activityLogValidator>;

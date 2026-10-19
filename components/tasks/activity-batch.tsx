@@ -1,6 +1,6 @@
 "use client"
 
-import { Activity, ChevronRight, CircleCheck, CircleCheckBig, Clock3, FolderOpen, MessageSquare, Tags, UserRound } from "lucide-react"
+import { Activity, ChevronRight, CircleCheck, CircleCheckBig, Clock3, FolderOpen, Mail, MessageSquare, Tags, UserRound } from "lucide-react"
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible"
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip"
 import { formatActivityText, type ActivityEventType } from "@/lib/activity"
@@ -61,6 +61,8 @@ function getBatchSummary(batch: AuditBatch): { label: string; highlight?: string
         return { label: `${count} ${count === 1 ? "comment resolved" : "comments resolved"}` }
       case "comment_reopened":
         return { label: `${count} ${count === 1 ? "comment re-opened" : "comments re-opened"}` }
+      case "email_sent":
+        return { label: `${count} ${count === 1 ? "email sent" : "emails sent"}` }
       default:
         return { label: `${count} ${count === 1 ? "update" : "updates"}` }
     }
@@ -104,6 +106,8 @@ function getRowIcon(type: string) {
       return CircleCheck
     case "comment_reopened":
       return MessageSquare
+    case "email_sent":
+      return Mail
     default:
       return Activity
   }

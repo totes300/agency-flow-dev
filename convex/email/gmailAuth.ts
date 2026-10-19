@@ -19,7 +19,7 @@
  */
 
 import { v, ConvexError } from "convex/values";
-import { internalAction, internalMutation, internalQuery, type ActionCtx } from "../_generated/server";
+import { internalAction, internalMutation, internalQuery, type ActionCtx, type MutationCtx } from "../_generated/server";
 import { internal } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
 import {
@@ -63,11 +63,16 @@ type LoadResult =
 
 /** The live grant of a gmail connector, or why there is none. */
 export const loadGmailGrant = internalQuery({
-  args: { connectorId: v.id("connectors") },
+  args: {
+    connectorId: v.id("connectors"),
+    // B5: settling an in-flight send (search by Message-ID only — never a
+    // send) must finish even after the org flag was switched off.
+    confirmOnly: v.optional(v.boolean()),
+  },
   handler: async (ctx, args): Promise<LoadResult> => {
     const row = await ctx.db.get(args.connectorId);
     if (!row || row.type !== "gmail") return { ok: false, why: "missing" };
-    if (!(await isEmailTriageEnabled(ctx, row.orgId))) return { ok: false, why: "disabled" };
+    if (!args.confirmOnly && !(await isEmailTriageEnabled(ctx, row.orgId))) return { ok: false, why: "disabled" };
     if (row.devSeed || row.status !== "connected" || !row.credentialsCiphertext) {
       return { ok: false, why: "not_connected" };
     }
@@ -106,12 +111,28 @@ export const markGmailGrantStatus = internalMutation({
     status: v.union(v.literal("expired"), v.literal("error")),
   },
   handler: async (ctx, args): Promise<null> => {
-    const row = await ctx.db.get(args.connectorId);
-    if (!isSameLiveGrant(row, args.connectedAt)) return null;
-    await ctx.db.patch(args.connectorId, { status: args.status, updatedAt: Date.now() });
+    await markGrantStatus(ctx, args.connectorId, args.connectedAt, args.status);
     return null;
   },
 });
+
+/**
+ * The `markGmailGrantStatus` write for a mutation already running — B5's
+ * send pipeline: Gmail answered a send with 401 (`expired` → Reconnect) or a
+ * missing-scope 403 (`error` → reconnect with the send scope). A no-op
+ * unless the row is still the live grant `connectedAt` names.
+ */
+export async function markGrantStatus(
+  ctx: MutationCtx,
+  connectorId: Id<"connectors">,
+  connectedAt: number,
+  status: "expired" | "error",
+): Promise<boolean> {
+  const row = await ctx.db.get(connectorId);
+  if (!isSameLiveGrant(row, connectedAt)) return false;
+  await ctx.db.patch(connectorId, { status, updatedAt: Date.now() });
+  return true;
+}
 
 // ─── The helper ─────────────────────────────────────────────────────────────
 
@@ -140,10 +161,18 @@ const CRYPTO_UNAVAILABLE = "Server-side encryption isn't configured on this depl
 export async function getGmailAccessToken(
   ctx: ActionCtx,
   connectorId: Id<"connectors">,
-  options: { fetch?: FetchLike; now?: () => number } = {},
+  options: {
+    fetch?: FetchLike;
+    now?: () => number;
+    /** B5 sweep only: a token for the Message-ID search even when the org flag is off. */
+    confirmOnly?: boolean;
+  } = {},
 ): Promise<string> {
   const now = options.now ?? Date.now;
-  const loaded: LoadResult = await ctx.runQuery(internal.email.gmailAuth.loadGmailGrant, { connectorId });
+  const loaded: LoadResult = await ctx.runQuery(internal.email.gmailAuth.loadGmailGrant, {
+    connectorId,
+    confirmOnly: options.confirmOnly,
+  });
   if (!loaded.ok) {
     if (loaded.why === "disabled") throw new ConvexError(EMAIL_TRIAGE_DISABLED_MESSAGE);
     throw new GmailAuthError("disconnected", "Gmail is not connected for this mailbox.");

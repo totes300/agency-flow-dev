@@ -114,6 +114,8 @@ export function InboxPanel({
         toastError(err, "Failed to mark notification as read"),
       )
     }
+    // A member's colleague note (D35) opens nothing — Triage is admin-only.
+    if (!row.href) return
     if (variant === "sheet") onClose()
     router.push(row.href)
   }

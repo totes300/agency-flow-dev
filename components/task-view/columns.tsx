@@ -149,6 +149,7 @@ const ACTIVITY_VERBS: Record<string, string> = {
   time_entry_deleted: "deleted time",
   task_archived: "archived the task",
   task_restored: "restored the task",
+  email_sent: "sent an email",
 }
 
 function AssigneeStack({ assignees }: { assignees: MemberRef[] }) {

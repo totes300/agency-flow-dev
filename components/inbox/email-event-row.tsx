@@ -14,6 +14,8 @@ function emailEventVerb(subtype: string | null): string {
       return "wrote — no action needed on"
     case "change":
       return "asked for a change on"
+    case "sent_from_your_mailbox":
+      return "sent an email from your mailbox:"
     default:
       return "wrote on"
   }
@@ -23,7 +25,9 @@ function emailEventVerb(subtype: string | null): string {
  * One email Inbox row (email triage §7.4, D10 — the Inbox only informs):
  * sender avatar, sentence, the email's own words as a quote, the reason
  * line and the time. The row opens Triage (`row.href`: the item, or the
- * conversation when there is none). Same layout as the task NotificationRow,
+ * conversation when there is none); a member's D35 colleague note
+ * (`sent_from_your_mailbox`) has no href and no quote — who, which mailbox
+ * (`row.mailbox`), the subject. Same layout as the task NotificationRow,
  * no extra chrome.
  */
 export function EmailEventRow({
@@ -52,7 +56,10 @@ export function EmailEventRow({
         {row.previewText && (
           <p className="line-clamp-2 text-xs text-muted-foreground">“{row.previewText}”</p>
         )}
-        {row.reasonText && (
+        {row.mailbox && (
+          <p className="line-clamp-1 text-xs text-muted-foreground">From {row.mailbox}</p>
+        )}
+        {row.reasonText && !row.mailbox && (
           <p className="line-clamp-1 text-xs text-muted-foreground">{row.reasonText}</p>
         )}
         <p className="text-xs text-muted-foreground/70">

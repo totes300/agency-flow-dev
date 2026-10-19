@@ -25,6 +25,17 @@ crons.interval(
   {},
 );
 
+// Email triage §5.4 / I4: confirm `unknown` sends by Message-ID in the
+// mailbox (found → sent, 10 min → failed with Retry; never resent), turn a
+// `dispatching` draft whose action died into `unknown`, and re-dispatch a
+// queued draft whose scheduled run was lost. Flagged orgs only (I14).
+crons.interval(
+  "confirm email send states",
+  { minutes: 2 },
+  internal.email.send.sweepSendStates,
+  {},
+);
+
 // Email triage D24: Filtered messages are deleted after 30 days unless
 // promoted. Visits only orgs with `emailTriageEnabled` (I14).
 crons.cron(

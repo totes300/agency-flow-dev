@@ -281,6 +281,8 @@ export function describeActivity(event: ActivityEvent): ActivityLine {
       return { type: event.type, summary: `Deleted a ${event.metadata.duration} time entry`, before: event.metadata.duration, after: null };
     case "description_changed":
       return plain(event.type, "Edited the description");
+    case "email_sent":
+      return plain(event.type, `Sent an email to ${event.metadata.to || "the client"}`);
     default: {
       const type = (event as { type: string }).type;
       return plain(type, type.replace(/_/g, " "));

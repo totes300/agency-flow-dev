@@ -4,7 +4,7 @@
  * registry (`convex/lib/agentJobs.ts` AGENT_JOBS) and run with `runLlmStep`
  * from the classify action (email/classify.ts).
  *
- * All three use the cheap Claude tier: one short structured call each, no
+ * All four use the cheap Claude tier: one short structured call each, no
  * tools, no thread. `EMAIL_TRIAGE_MODEL` must stay in the allowlist
  * (lib/agents/modelSlug.ts) — `validateAgentJob` checks it at load time.
  *
@@ -18,6 +18,7 @@ import type { LlmStepJob } from "../lib/agentJobs";
 import {
   CHECK_COMPLETENESS_INSTRUCTIONS,
   CLASSIFY_INBOUND_INSTRUCTIONS,
+  EXTRACT_PROMISES_INSTRUCTIONS,
   SCREEN_SENDER_INSTRUCTIONS,
 } from "./prompts";
 
@@ -89,9 +90,33 @@ export const screenSenderJob: LlmStepJob<ScreenSenderOutput> = {
   model: EMAIL_TRIAGE_MODEL,
 };
 
+/** B5 (I8): dated commitments in a SENT email — never a draft, never inbound mail. */
+export const extractPromisesSchema = z.object({
+  promises: z
+    .array(
+      z.object({
+        quote: z.string().min(1).max(300),
+        workingDays: z.number().int().min(0).max(60).nullable(),
+        calendarDays: z.number().int().min(0).max(120).nullable(),
+        date: z.string().max(10).nullable(),
+      }),
+    )
+    .max(10),
+});
+export type ExtractPromisesOutput = z.infer<typeof extractPromisesSchema>;
+
+export const extractPromisesJob: LlmStepJob<ExtractPromisesOutput> = {
+  name: "extractPromises",
+  tier: "llm_step",
+  instructions: EXTRACT_PROMISES_INSTRUCTIONS,
+  outputSchema: extractPromisesSchema,
+  model: EMAIL_TRIAGE_MODEL,
+};
+
 /** Registered in AGENT_JOBS (convex/lib/agentJobs.ts). */
 export const EMAIL_LLM_JOBS = {
   classifyInbound: classifyInboundJob,
   checkCompleteness: checkCompletenessJob,
   screenSender: screenSenderJob,
+  extractPromises: extractPromisesJob,
 } as const;

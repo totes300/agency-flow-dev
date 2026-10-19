@@ -17,7 +17,9 @@ import { isClosedCategory } from "./tasks/model";
  *   - turns `orgSettings.emailTriageEnabled` on (D23);
  *   - one SEED mailbox: a `connectors` row of type `gmail`, `devSeed: true`,
  *     status `revoked`, no credentials — never connected to Google, so sync
- *     and send must skip it;
+ *     and send must skip it (B5: Approve & send on a seed draft is blocked
+ *     with "Reconnect"; a forced dispatch fails as `disconnected` — see the
+ *     TODO(B8) demo note at the end of email/drafts.ts);
  *   - five conversations (`emailThreads` + `emailMessages`, the new client
  *     messages at stage `received`, bodies with quoted history stripped by
  *     `email/model.stripQuoted`, the full text kept in `bodyHtml`):
@@ -44,7 +46,7 @@ import { isClosedCategory } from "./tasks/model";
  * Idempotent: every row has a deterministic provider id (`seed-…`) and is
  * looked up before insert. `reset` deletes ONLY the seed mailbox and the
  * email rows hanging off it (threads, messages, thread↔task links, agent
- * items, requests, promises, email Inbox rows); clients, contacts, domains
+ * items, requests, promises, drafts, email Inbox rows); clients, contacts, domains
  * and the feature flag stay.
  *
  * Run:   npx convex run devSeedEmail:seed '{}'                (single-org deployment)
@@ -742,6 +744,7 @@ export const reset = internalMutation({
       agentItems: 0,
       clientRequests: 0,
       emailPromises: 0,
+      emailDrafts: 0,
       notifications: 0,
     };
     // Email Inbox rows of the seed conversations (task-less, keyed by thread).
@@ -776,6 +779,10 @@ export const reset = internalMutation({
             .take(READ_CAP),
           emailPromises: await ctx.db
             .query("emailPromises")
+            .withIndex("by_orgId_threadId", (q) => q.eq("orgId", orgId).eq("threadId", thread._id))
+            .take(READ_CAP),
+          emailDrafts: await ctx.db
+            .query("emailDrafts")
             .withIndex("by_orgId_threadId", (q) => q.eq("orgId", orgId).eq("threadId", thread._id))
             .take(READ_CAP),
         };

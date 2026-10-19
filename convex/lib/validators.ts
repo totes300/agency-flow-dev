@@ -137,6 +137,28 @@ export const emailDraftStatusValidator = v.union(
   v.literal("discarded"),
 );
 
+/**
+ * A draft recipient (I2): an address from the thread's participants or the
+ * client's `replyCcEmails` — or a manual addition, flagged `newRecipient`
+ * (a send warning). The flag is dropped from the sent snapshot.
+ */
+export const emailDraftRecipientValidator = v.object({
+  name: v.optional(v.string()),
+  email: v.string(),
+  newRecipient: v.optional(v.boolean()),
+});
+
+/**
+ * A dated commitment the drafting agent knows it wrote ("we'll get back by
+ * Wednesday"). A HINT for `extractPromises` only: it becomes an
+ * `emailPromises` row only when its text is found verbatim in the SENT body
+ * (I8) — never from the draft or model output alone.
+ */
+export const emailPromiseCandidateValidator = v.object({
+  text: v.string(),
+  dueDate: v.optional(v.string()), // YYYY-MM-DD (org timezone)
+});
+
 export const emailDraftAttachmentValidator = v.object({
   label: v.string(),
   url: v.optional(v.string()),

@@ -23,6 +23,7 @@ export type ActivityEventType =
   | "comment_added"
   | "comment_resolved"
   | "comment_reopened"
+  | "email_sent"
 
 /**
  * Format an activity event into a human-readable description.
@@ -125,6 +126,11 @@ export function formatActivityText(
 
     case "comment_reopened":
       return { text: `${userName} re-opened a comment` }
+
+    case "email_sent": {
+      const to = typeof metadata.to === "string" && metadata.to ? metadata.to : "the client"
+      return { text: `${userName} sent an email to`, highlight: to }
+    }
 
     default:
       return { text: `${userName} updated the task` }

@@ -95,6 +95,15 @@ describe("newestLast", () => {
 });
 
 describe("describeActivity", () => {
+  it("labels a sent email with its recipient (email triage B5)", () => {
+    expect(
+      describeActivity({
+        type: "email_sent",
+        metadata: { draftId: "d" as never, messageId: "m" as never, threadId: "t" as never, kind: "kickoff", to: "Kovács Réka" },
+      }).summary,
+    ).toBe("Sent an email to Kovács Réka");
+  });
+
   it("renders before → after where the metadata has them", () => {
     expect(
       describeActivity({ type: "status_changed", metadata: { from: "Backlog", to: "In progress" } }),

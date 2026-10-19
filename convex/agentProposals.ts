@@ -547,6 +547,16 @@ export async function loadThreadByComponentId(
 }
 
 /**
+ * The task an `updateTask` proposal changes, as a real id (the payload keeps
+ * a normalised string) — indexed for the I9 "change pending on this task"
+ * lookup (email-triage B5, `email/send.hasPendingChangeProposal`).
+ */
+function changedTaskId(ctx: MutationCtx, payload: ProposalPayload): Id<"tasks"> | undefined {
+  if (payload.kind !== "updateTask") return undefined;
+  return ctx.db.normalizeId("tasks", payload.taskId) ?? undefined;
+}
+
+/**
  * Insert a batch of pending proposals for a thread — the core behind
  * `agentActorTools.createProposals`, the one path every propose-kind tool
  * records through. The tool ctx exposes the component thread id, so the
@@ -581,6 +591,7 @@ export async function insertProposalsForThread(
       threadId: thread._id,
       userId: thread.userId,
       payload,
+      taskId: changedTaskId(ctx, payload),
       status: "pending",
       revision: 1,
       createdAt: now,
@@ -623,6 +634,7 @@ export const updateProposalPayload = internalMutation({
     const revision = proposalRevision(proposal) + 1;
     await ctx.db.patch(proposal._id, {
       payload,
+      taskId: changedTaskId(ctx, payload),
       editedPayload: undefined,
       revision,
       status: "pending",

@@ -151,3 +151,13 @@ describe("getActivityIcon", () => {
     expect(getActivityIcon("project_changed")).toBe("default")
   })
 })
+
+describe("formatActivityText · email_sent (email triage B5)", () => {
+  it("names the recipient", () => {
+    expect(formatActivityText("email_sent", "Ádám", { to: "Kovács Réka +1" })).toEqual({
+      text: "Ádám sent an email to",
+      highlight: "Kovács Réka +1",
+    })
+    expect(formatActivityText("email_sent", "Ádám", {}).highlight).toBe("the client")
+  })
+})

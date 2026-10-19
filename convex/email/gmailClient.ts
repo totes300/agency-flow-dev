@@ -1,6 +1,6 @@
 /**
- * A minimal Gmail REST client (docs/prd-email-triage.md B1; B3 adds history /
- * messages, B5 adds send). Plain `fetch` against
+ * A minimal Gmail REST client (docs/prd-email-triage.md B1; B5 adds send +
+ * the Message-ID search; B3 adds history / messages). Plain `fetch` against
  * `https://gmail.googleapis.com/gmail/v1` — no SDK — so it runs in the default
  * Convex runtime (no "use node").
  *
@@ -46,10 +46,32 @@ export type GmailProfile = {
   threadsTotal: number | null;
 };
 
-/** What the email jobs depend on. B3 / B5 extend it. */
+/** A message Gmail accepted / found: its provider ids. */
+export type GmailMessageRef = { id: string; threadId: string };
+
+/** What the email jobs depend on. B3 extends it (history, messages). */
 export interface GmailClient {
   getProfile(): Promise<GmailProfile>;
+  /**
+   * users.messages.send (B5). `raw` = the RFC 2822 message, base64url
+   * (email/mime.ts `buildGmailRaw`); `threadId` keeps a reply in the
+   * sending mailbox's Gmail thread. A network failure or timeout here is
+   * AMBIGUOUS — Gmail may have accepted it — and throws kind `unknown`
+   * (never `transient`), as does a 5xx / 408 answer, so the caller confirms
+   * by Message-ID before any retry (I4).
+   */
+  sendMessage(args: { raw: string; threadId?: string }): Promise<GmailMessageRef>;
+  /**
+   * The mailbox's message with this RFC Message-ID (Gmail search
+   * `rfc822msgid:`, any folder), or null. Confirms an unknown send (§5.4).
+   */
+  findSentByMessageId(rfcMessageId: string): Promise<GmailMessageRef | null>;
 }
+
+/** A send that got no answer within this long counts as an unknown outcome. */
+export const GMAIL_SEND_TIMEOUT_MS = 60_000;
+/** Other calls (profile, search) time out sooner; that is a plain transient error. */
+export const GMAIL_REQUEST_TIMEOUT_MS = 30_000;
 
 const RATE_LIMIT_REASONS = new Set([
   "rateLimitExceeded",
@@ -104,19 +126,37 @@ export function createGmailClient(
   accessToken: string | (() => Promise<string>),
   transport: GmailTransport = (url, init) => fetch(url, init),
 ): GmailClient {
-  async function request<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
+  async function request<T>(
+    method: "GET" | "POST",
+    path: string,
+    body?: unknown,
+    opts: { timeoutMs?: number; ambiguous?: boolean } = {},
+  ): Promise<T> {
     const token = typeof accessToken === "string" ? accessToken : await accessToken();
     const headers: Record<string, string> = { Authorization: `Bearer ${token}`, Accept: "application/json" };
     if (body !== undefined) headers["Content-Type"] = "application/json";
+    // The path may carry a query string; log only the route, never its values.
+    const route = path.split("?")[0];
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? GMAIL_REQUEST_TIMEOUT_MS);
     let res: Response;
     try {
       res = await transport(`${GMAIL_API_BASE}${path}`, {
         method,
         headers,
         body: body === undefined ? undefined : JSON.stringify(body),
+        signal: controller.signal,
       });
     } catch {
-      throw new GmailApiError("transient", 0, null, `Gmail ${method} ${path} failed: network error`);
+      // A send that may have reached Gmail is not "transient": it is unknown.
+      throw new GmailApiError(
+        opts.ambiguous ? "unknown" : "transient",
+        0,
+        null,
+        `Gmail ${method} ${route} failed: network error or timeout`,
+      );
+    } finally {
+      clearTimeout(timer);
     }
     let parsed: unknown = null;
     try {
@@ -126,10 +166,15 @@ export function createGmailClient(
     }
     if (!res.ok) {
       const { kind, reason } = classifyGmailHttpError(res.status, parsed);
-      throw new GmailApiError(kind, res.status, reason, `Gmail ${method} ${path} failed (${res.status}${reason ? ` ${reason}` : ""})`);
+      throw new GmailApiError(kind, res.status, reason, `Gmail ${method} ${route} failed (${res.status}${reason ? ` ${reason}` : ""})`);
     }
     return parsed as T;
   }
+
+  const readRef = (raw: Record<string, unknown> | null): GmailMessageRef | null =>
+    raw && typeof raw.id === "string" && raw.id
+      ? { id: raw.id, threadId: typeof raw.threadId === "string" ? raw.threadId : "" }
+      : null;
 
   return {
     async getProfile() {
@@ -144,6 +189,45 @@ export function createGmailClient(
         messagesTotal: typeof raw?.messagesTotal === "number" ? raw.messagesTotal : null,
         threadsTotal: typeof raw?.threadsTotal === "number" ? raw.threadsTotal : null,
       };
+    },
+
+    async sendMessage({ raw, threadId }) {
+      const body: Record<string, string> = { raw };
+      if (threadId) body.threadId = threadId;
+      let res: Record<string, unknown> | null;
+      try {
+        res = await request<Record<string, unknown> | null>("POST", "/users/me/messages/send", body, {
+          timeoutMs: GMAIL_SEND_TIMEOUT_MS,
+          ambiguous: true,
+        });
+      } catch (err) {
+        // A 5xx / 408 on SEND may still have delivered the message: it is an
+        // unknown outcome (confirm by Message-ID), never a blind resend.
+        if (err instanceof GmailApiError && (err.status >= 500 || err.status === 408)) {
+          throw new GmailApiError("unknown", err.status, err.reason, err.message);
+        }
+        throw err;
+      }
+      const ref = readRef(res);
+      // 2xx without an id: Gmail took it, but we can't prove it — confirm later.
+      if (!ref) throw new GmailApiError("unknown", 200, null, "Gmail accepted the send without a message id");
+      return ref;
+    },
+
+    async findSentByMessageId(rfcMessageId) {
+      const bare = rfcMessageId.trim().replace(/^<|>$/g, "");
+      if (!bare) return null;
+      const q = encodeURIComponent(`rfc822msgid:${bare}`);
+      const res = await request<{ messages?: unknown } | null>(
+        "GET",
+        `/users/me/messages?q=${q}&maxResults=5&includeSpamTrash=true`,
+      );
+      const list = Array.isArray(res?.messages) ? (res.messages as Record<string, unknown>[]) : [];
+      for (const m of list) {
+        const ref = readRef(m);
+        if (ref) return ref;
+      }
+      return null;
     },
   };
 }

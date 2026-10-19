@@ -305,6 +305,39 @@ export const answer = internalMutation({
   },
 });
 
+/**
+ * A sent reply answered these rows (B5, §5.4 "mark the answered ledger
+ * rows"). Lenient on purpose — Gmail already accepted the email, so nothing
+ * here may throw: rows that are gone, of another org, of another
+ * conversation, or already final (superseded / dismissed) are skipped. A row
+ * belongs when it is on one of `threadIds`, or — an Agents-workspace row
+ * with no email thread (§6.10) — on the draft's `agentThreadId`. Returns
+ * the rows it marked.
+ */
+export async function markRequestsAnsweredBySend(
+  ctx: MutationCtx,
+  args: {
+    orgId: string;
+    threadIds: readonly Id<"emailThreads">[];
+    agentThreadId?: Id<"agentThreads">;
+    requestIds: readonly Id<"clientRequests">[];
+  },
+): Promise<Id<"clientRequests">[]> {
+  const marked: Id<"clientRequests">[] = [];
+  const now = Date.now();
+  for (const id of args.requestIds.slice(0, THREAD_ROWS_CAP)) {
+    const row = await ctx.db.get(id);
+    if (!row || row.orgId !== args.orgId) continue;
+    const onThread = row.threadId !== undefined && args.threadIds.includes(row.threadId);
+    const onAgentThread = !row.threadId && !!args.agentThreadId && row.agentThreadId === args.agentThreadId;
+    if (!onThread && !onAgentThread) continue;
+    if (row.disposition === "superseded" || row.disposition === "dismissed" || row.disposition === "answered") continue;
+    await ctx.db.patch(row._id, { disposition: "answered", updatedAt: now });
+    marked.push(row._id);
+  }
+  return marked;
+}
+
 /** Dismissed — always with a reason (I12). */
 export const dismiss = internalMutation({
   args: { orgId: v.string(), requestId: v.id("clientRequests"), reason: v.string() },

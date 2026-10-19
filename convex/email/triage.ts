@@ -17,6 +17,7 @@ import { deleteContentForStorage } from "../attachmentContents";
 import { extractTaskIdentifiers } from "./model";
 import { DECLINED_REASON, dismissOpenRequestsOfThread } from "./requests";
 import { notifyAdminsOfEmailEvent } from "./inbox";
+import { markConversationDraftsStale, staleReasonForInbound } from "./drafts";
 import type { Intent } from "./jobs";
 
 /**
@@ -236,6 +237,12 @@ export async function dispatchMessage(ctx: MutationCtx, message: Doc<"emailMessa
     classification.triggers.length === 0 &&
     classification.intents.length > 0 &&
     classification.intents.every((i) => i === "acknowledge");
+  // D9 / §5.3: a client message that is not a quiet acknowledge makes the
+  // conversation's open drafts stale ("Kovács Réka wrote at 14:05") — and
+  // stops a send still inside its undo window (email/drafts.ts).
+  const staleOpenDrafts = async () => {
+    await markConversationDraftsStale(ctx, thread, await staleReasonForInbound(ctx, message));
+  };
   // §5.3: a change proposal on a linked task — "Inbox informs".
   const informChange = async (itemId: Id<"agentItems">) => {
     if (decision.action !== "item" || decision.kind !== "change") return;
@@ -261,7 +268,10 @@ export async function dispatchMessage(ctx: MutationCtx, message: Doc<"emailMessa
       quiet: quietJoin,
       patch: Object.keys(patch).length > 0 ? patch : undefined,
     });
-    if (!quietJoin) await ctx.db.patch(thread._id, { waitingOn: "us", updatedAt: now });
+    if (!quietJoin) {
+      await ctx.db.patch(thread._id, { waitingOn: "us", updatedAt: now });
+      await staleOpenDrafts();
+    }
     await informChange(live._id);
     return { kind: "joined", itemId: live._id };
   }
@@ -301,6 +311,7 @@ export async function dispatchMessage(ctx: MutationCtx, message: Doc<"emailMessa
     urgent,
   });
   await ctx.db.patch(thread._id, { waitingOn: "us", updatedAt: now });
+  await staleOpenDrafts();
   await informChange(itemId);
   return { kind: "opened", itemId };
 }

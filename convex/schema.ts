@@ -25,10 +25,12 @@ import {
   emailDraftAttachmentValidator,
   emailDraftFailureKindValidator,
   emailDraftKindValidator,
+  emailDraftRecipientValidator,
   emailDraftStatusValidator,
   emailEventSubtypeValidator,
   emailMessageAttachmentValidator,
   emailMessageStageValidator,
+  emailPromiseCandidateValidator,
   emailPromiseStatusValidator,
   emailThreadTaskRoleValidator,
   emailWaitingOnValidator,
@@ -1165,6 +1167,9 @@ export default defineSchema({
     // (`updateProposalPayload`) replaces it.
     payload: proposalPayloadValidator,
     editedPayload: v.optional(proposalPayloadValidator),
+    // The task an `updateTask` proposal changes (normalised at insert) — the
+    // I9 lookup "a change proposal is pending on this task" (email-triage B5).
+    taskId: v.optional(v.id("tasks")),
     // I11: bumped on every change to the effective payload (a human
     // updateDraft, the agent revising its plan). Decisions carry the revision
     // the client rendered; a mismatch is refused. Unset = revision 1.
@@ -1180,7 +1185,8 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_orgId", ["orgId"])
-    .index("by_threadId_status", ["threadId", "status"]),
+    .index("by_threadId_status", ["threadId", "status"])
+    .index("by_orgId_taskId_status", ["orgId", "taskId", "status"]),
 
   // The question block (A5; PRD D16, D18, §6.6, I7, I11). `askUser` writes a
   // row and ENDS its run; the block renders from this record. An answer
@@ -1441,12 +1447,18 @@ export default defineSchema({
     agentThreadId: v.optional(v.id("agentThreads")), // the conversation it was drafted in
     kind: emailDraftKindValidator,
     version: v.number(),
-    to: v.array(emailAddressValidator),
-    cc: v.array(emailAddressValidator),
+    // I2: participants + `clients.replyCcEmails`; manual additions flagged.
+    to: v.array(emailDraftRecipientValidator),
+    cc: v.array(emailDraftRecipientValidator),
     subject: v.string(),
     bodyText: v.string(),
     attachments: v.array(emailDraftAttachmentValidator),
     sourceSummary: v.string(),
+    // B5: the ledger rows of THIS thread the draft answers — marked
+    // `answered` when Gmail accepts it (I12 send gate reads them).
+    answersRequestIds: v.optional(v.array(v.id("clientRequests"))),
+    // B5: hints for `extractPromises` (I8 — verified against the SENT body).
+    promiseCandidates: v.optional(v.array(emailPromiseCandidateValidator)),
     stale: v.optional(v.object({ reason: v.string(), at: v.number() })),
     subjectLocked: v.boolean(), // a reply in an existing Gmail thread (D9)
     fromConnectorId: v.id("connectors"), // the sending mailbox (D35)
@@ -1457,10 +1469,33 @@ export default defineSchema({
         hash: v.string(), // subject, from, to, cc, body, attachments
         userId: v.id("users"),
         at: v.number(),
+        // §6.7: the send warnings shown when this approval was given.
+        warningsAcknowledged: v.optional(v.array(v.string())),
+        // The sending address + grant generation the approval was given for:
+        // a different mailbox address or a reconnect means "review again".
+        fromAddress: v.optional(v.string()),
+        fromConnectedAt: v.optional(v.number()),
       }),
     ),
     sendAt: v.optional(v.number()),
+    // The pending dispatch (queued) or automatic retry (failed) — cancelled
+    // by Undo / an edit.
     scheduledFnId: v.optional(v.id("_scheduled_functions")),
+    // B5 send bookkeeping (§5.4, I4). `messageIdHeader` is OUR Message-ID,
+    // minted per approval and kept across retries of it, so an unknown
+    // outcome is confirmed against the mailbox before anything is resent.
+    messageIdHeader: v.optional(v.string()),
+    sendAttempts: v.optional(v.number()), // Gmail attempts of the current approval
+    // Every Message-ID that was ever handed to Gmail for this draft (never
+    // cleared, capped). The first attempt of ANY later approval searches the
+    // mailbox for them first, so an uncertain earlier send is never doubled.
+    priorMessageIds: v.optional(v.array(v.string())),
+    dispatchingAt: v.optional(v.number()),
+    unknownSince: v.optional(v.number()),
+    autoRetryAt: v.optional(v.number()), // transient / quota: one automatic retry
+    sentAt: v.optional(v.number()),
+    // Effects after Gmail accepted that did not apply (the send stands).
+    postSendErrors: v.optional(v.array(v.string())),
     followUp: v.optional(
       v.object({
         // D8: created only when Gmail accepts the email
@@ -1479,7 +1514,11 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_orgId_taskId", ["orgId", "taskId"])
-    .index("by_orgId_status", ["orgId", "status"]),
+    .index("by_orgId_status", ["orgId", "status"])
+    // B5: the drafts of a conversation (stale on a new message, D9 / D33).
+    .index("by_orgId_threadId", ["orgId", "threadId"])
+    // B5 sweep: settle dispatching / unknown sends across orgs, flag or not.
+    .index("by_status_updatedAt", ["status", "updatedAt"]),
 
   // What we told the client, with a date (§6.8.3). Written only from an
   // approved, sent draft — never from model output alone (I8).

@@ -35,6 +35,7 @@ import { getSystemAgentDefinition } from "./systemAgents";
 import { resolveModel, WorksheetAiUnavailableError } from "./worksheetAi";
 import { parseModelSlug } from "../../lib/agents/modelSlug";
 import { JOB_STAGES, type JobStage } from "../../lib/agents/jobStages";
+import { EMAIL_LLM_JOBS } from "../email/jobs";
 
 export type AgentJobAnchor = { type: string; id: string };
 
@@ -121,11 +122,14 @@ export function validateAgentJob(
 }
 
 /**
- * The production registry. Empty in A2b (platform only); the B-phase email
- * jobs (classifyInbound, checkCompleteness, screenSender, extractPromises ·
- * prepareTask, draftReply, presendReview, handoverQA) are added here.
+ * The production registry. B4 adds the email `llm_step` jobs
+ * (classifyInbound, checkCompleteness, screenSender — convex/email/jobs.ts);
+ * the later B-phase jobs (extractPromises · prepareTask, draftReply,
+ * presendReview, handoverQA) are added here too.
  */
-export const AGENT_JOBS: Readonly<Record<string, AgentJob>> = {};
+export const AGENT_JOBS: Readonly<Record<string, AgentJob>> = {
+  ...EMAIL_LLM_JOBS,
+};
 for (const job of Object.values(AGENT_JOBS)) validateAgentJob(job);
 for (const name of Object.keys(JOB_STAGES)) {
   if (AGENT_JOBS[name]?.tier !== "agent_run") {

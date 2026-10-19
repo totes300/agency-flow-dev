@@ -1457,7 +1457,7 @@ B1 phase prints. Started during milestone A (E4); blocks B1.
 | B1 | Gmail connect | done | (this commit) | PKCE OAuth (state in an action), callback stores a pending grant finished by the signed-in user (login-CSRF safe), encrypted tokens + refresh with generation guard, revoke on refusals, one live connection per address, Connectors row behind the flag; security reviewed. Not yet tried against real Google |
 | B2 | Email schema + pure model | done | (this commit) | all §4.1 tables + extensions, notifications.kind + optional taskId, I14 gate, workingDays, email/model (HU/EN strip, triggers, dates, bulk signals), idempotent seed (devSeedEmail:seed / reset), provider-error settle fix; reviewed |
 | B3 | Sync + ingest + filter | pending | | |
-| B4 | Classify + ledger + dispatch | pending | | |
+| B4 | Classify + ledger + dispatch | done | (this commit) | stage machine with retries, generations, watchdog + stuck sweep; rules-first acknowledge, llm_step classifyInbound / checkCompleteness / screenSender (claude-haiku-4.5); clientRequests ledger; §5.3 dispatch into agentItems (I13 join, quiet ack, attentions); email_event Inbox rows; filtered purge; seed runs the pipeline (fakeModel option); reviewed |
 | B5 | Send pipeline (backend) | pending | | independent code review |
 | B6 | prepareTask + Triage backend | pending | | |
 | B7 | Drawer Draft mode | pending | | |

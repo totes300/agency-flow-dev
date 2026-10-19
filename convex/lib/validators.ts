@@ -89,10 +89,26 @@ export const emailMessageAttachmentValidator = v.object({
   storageId: v.optional(v.id("_storage")),
 });
 
+/** The B4 unknown-sender check (llm_step `screenSender`, D24). */
+export const emailSenderScreenValidator = v.object({
+  possibleClient: v.boolean(),
+  reason: v.string(),
+});
+
 export const emailClassificationValidator = v.object({
   intents: v.array(emailIntentValidator),
   triggers: v.array(v.string()), // hard triggers hit (D4) — email/model.ts hardTriggers
   reasons: v.array(v.string()), // the Inbox reason line
+  // B4 (email/classify.ts). Optional so rows written before B4 still load.
+  urgent: v.optional(v.boolean()), // model or `detectUrgency` (§6.1 urgent → today)
+  // An approve that asks for an action ("mehet élesbe" → "Élesítés"), D4 / D32.
+  approveAction: v.optional(v.string()),
+  // Who decided: the deterministic layer only, the model, or the dev fake model.
+  source: v.optional(v.union(v.literal("rules"), v.literal("model"), v.literal("fake"))),
+  senderScreen: v.optional(emailSenderScreenValidator), // unknown sender, admin mailbox
+  // Another mailbox's copy of the same email (same rfcMessageId) was already
+  // classified: this copy reused it and wrote no ledger rows (I1).
+  duplicateOf: v.optional(v.id("emailMessages")),
 });
 
 export const emailDraftKindValidator = v.union(
@@ -159,6 +175,26 @@ export const clientRequestConstraintValidator = v.object({
   value: v.string(),
 });
 
+/**
+ * A code-side check that failed on a ledger row — the row is kept, the flag
+ * is shown (B4: a constraint value not found verbatim in the request text or
+ * the source email).
+ */
+export const clientRequestWarningValidator = v.object({
+  kind: v.literal("constraint_not_verbatim"),
+  detail: v.string(), // "size: 1200x628"
+});
+
+/** The ledger-row intents (a request never has intent acknowledge). */
+export const clientRequestIntentValidator = v.union(
+  v.literal("add"),
+  v.literal("clarify"),
+  v.literal("replace"),
+  v.literal("cancel"),
+  v.literal("approve"),
+  v.literal("ask"),
+);
+
 // ─── agentItems — the platform attention queue (P5, D25–D27) ──────────────────
 
 /** What the record is about. Open set of types; the id is the record's id. */
@@ -191,6 +227,18 @@ export const agentItemStatusValidator = v.union(
   v.literal("done"),
   v.literal("filtered"),
 );
+
+/**
+ * An inbound message whose processing stage failed 3 times (I5): which stage,
+ * why, and the message to Retry (`email/pipeline.retryStage`).
+ */
+export const agentItemAttentionValidator = v.object({
+  messageId: v.id("emailMessages"),
+  stage: v.string(),
+  message: v.string(),
+  attempts: v.number(),
+  at: v.number(),
+});
 
 export const agentItemOutcomeValidator = v.union(
   v.literal("created"),
@@ -236,6 +284,7 @@ export const emailEventSubtypeValidator = v.union(
   v.literal("reopened"),
   v.literal("subtasks_added"),
   v.literal("no_action"),
+  v.literal("change"), // B4: a client reply proposes a change on a linked task (§5.3 "Inbox informs")
   v.literal("unlinked"),
   v.literal("review_ready"),
   v.literal("sent"),

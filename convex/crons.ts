@@ -16,4 +16,22 @@ crons.interval(
   {},
 );
 
+// Email triage I5: an inbound message stuck in a work stage for 30 min (its
+// scheduled work was lost) is re-kicked. Flagged orgs only (I14).
+crons.interval(
+  "sweep stuck email messages",
+  { minutes: 10 },
+  internal.email.pipeline.sweepStuckMessages,
+  {},
+);
+
+// Email triage D24: Filtered messages are deleted after 30 days unless
+// promoted. Visits only orgs with `emailTriageEnabled` (I14).
+crons.cron(
+  "purge filtered email items",
+  "30 2 * * *", // daily 02:30 UTC
+  internal.email.triage.purgeFiltered,
+  {},
+);
+
 export default crons;

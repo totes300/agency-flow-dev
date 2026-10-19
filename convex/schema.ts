@@ -9,12 +9,15 @@ import {
   agentCheckKindValidator,
   agentCheckResultValidator,
   agentCheckSubjectValidator,
+  agentItemAttentionValidator,
   agentItemKindValidator,
   agentItemOutcomeValidator,
   agentItemSourceValidator,
   agentItemStatusValidator,
   agentSignalValidator,
   clientRequestConstraintValidator,
+  clientRequestIntentValidator,
+  clientRequestWarningValidator,
   clientRequestDispositionValidator,
   emailAddressValidator,
   emailClassificationValidator,
@@ -134,7 +137,10 @@ export default defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
     createdBy: v.id("users"),
-  }).index("by_orgId", ["orgId"]),
+  })
+    .index("by_orgId", ["orgId"])
+    // Email crons visit only orgs with the feature on (I14).
+    .index("by_emailTriageEnabled", ["emailTriageEnabled"]),
 
   // ─── Task Statuses (per org) ───────────────────────────────────────────────
   // Tasks refactor §4.1 (D3): org-defined statuses inside 5 fixed categories
@@ -1355,13 +1361,24 @@ export default defineSchema({
     kind: agentItemKindValidator,
     status: agentItemStatusValidator,
     outcome: v.optional(agentItemOutcomeValidator),
-    // Email items: every message covered ("Updated · 2 emails").
+    // Email items: the latest covered messages (capped at ITEM_MESSAGE_IDS_CAP,
+    // agentItems.ts) — the full set is the conversation's messages, read by
+    // thread index. `messageCount` counts every message that joined
+    // ("Updated · 2 emails"); unset = messageIds.length.
     messageIds: v.optional(v.array(v.id("emailMessages"))),
+    messageCount: v.optional(v.number()),
     agentThreadId: v.optional(v.id("agentThreads")), // the item's conversation
     taskId: v.optional(v.id("tasks")), // linked task, or the one created
     proposalId: v.optional(v.id("agentProposals")),
     draftId: v.optional(v.id("emailDrafts")), // reply / kickoff
     snoozedUntil: v.optional(v.number()), // D27; a new client message wakes it early
+    // B4: a message joined the item after it was opened (D25) — the plan must
+    // be redone. Set to the first unplanned join; the planner (B6) clears it.
+    needsReplanSince: v.optional(v.number()),
+    urgent: v.optional(v.boolean()), // any covered message is urgent (§6.1)
+    // Messages of this conversation that failed a stage 3 times (I5), one entry
+    // per message → Retry. Done / Decline are refused while any is open.
+    attentions: v.optional(v.array(agentItemAttentionValidator)),
     decidedBy: v.optional(v.id("users")),
     decidedAt: v.optional(v.number()),
     createdAt: v.number(),
@@ -1400,12 +1417,19 @@ export default defineSchema({
     stageError: v.optional(
       v.object({ stage: v.string(), message: v.string(), attempts: v.number() }),
     ),
+    // B4: last progress of the stage machine (a stage change, a failed
+    // attempt, a sweep re-kick). The stuck-stage sweep reads it; unset on rows
+    // written before it existed (the sweep falls back to `createdAt`).
+    stageAt: v.optional(v.number()),
+    // Bumped by Retry: a watchdog or late report of an older generation is ignored.
+    stageGeneration: v.optional(v.number()),
     createdAt: v.number(),
   })
     .index("by_orgId_threadId_sentAt", ["orgId", "threadId", "sentAt"])
     .index("by_orgId_connectorId_gmailMessageId", ["orgId", "connectorId", "gmailMessageId"])
     .index("by_orgId_rfcMessageId", ["orgId", "rfcMessageId"])
-    .index("by_orgId_stage", ["orgId", "stage"]),
+    // Stuck-stage sweep (I5): per org, a work stage, oldest progress first.
+    .index("by_orgId_stage_stageAt", ["orgId", "stage", "stageAt"]),
 
   // Agent-drafted outbound email awaiting a person (§5.4, D9). Approval binds
   // a snapshot hash; any edit voids it. The pre-send review of a version is an
@@ -1487,6 +1511,9 @@ export default defineSchema({
     agentThreadId: v.optional(v.id("agentThreads")), // pasted text: the conversation
     text: v.string(), // the request in the client's words
     constraints: v.optional(v.array(clientRequestConstraintValidator)),
+    // B4: the intent that created the row (add / replace / approve / ask …).
+    intent: v.optional(clientRequestIntentValidator),
+    warnings: v.optional(v.array(clientRequestWarningValidator)), // code checks that failed
     disposition: clientRequestDispositionValidator,
     taskId: v.optional(v.id("tasks")),
     subtaskId: v.optional(v.id("tasks")),

@@ -1,0 +1,635 @@
+[
+  {
+    "id": "thanks-01-koszonjuk",
+    "category": "thanks",
+    "subject": "Re: Szeptemberi riport",
+    "body": "Köszönjük!\n\nRéka",
+    "expect": {
+      "acknowledgeShortcut": true,
+      "noTriggers": true
+    }
+  },
+  {
+    "id": "thanks-02-koszi-szepen",
+    "category": "thanks",
+    "subject": "Re: Bannerek",
+    "body": "Köszi szépen!",
+    "expect": {
+      "acknowledgeShortcut": true,
+      "noTriggers": true
+    }
+  },
+  {
+    "id": "thanks-03-gyors-valasz",
+    "category": "thanks",
+    "subject": "Re: Árajánlat",
+    "body": "Nagyon szépen köszönöm a gyors választ!\n\nÜdv,\nPéter",
+    "expect": {
+      "acknowledgeShortcut": true,
+      "noTriggers": true
+    }
+  },
+  {
+    "id": "thanks-04-megkaptuk",
+    "category": "thanks",
+    "subject": "Re: Számla",
+    "body": "Köszönjük, megkaptuk!",
+    "expect": {
+      "acknowledgeShortcut": true,
+      "noTriggers": true
+    }
+  },
+  {
+    "id": "thanks-05-greeting-and-name",
+    "category": "thanks",
+    "subject": "Re: Októberi hírlevél",
+    "body": "Szia Ádám!\n\nKöszi a munkátokat!\n\nAnna",
+    "expect": {
+      "acknowledgeShortcut": true,
+      "noTriggers": true
+    }
+  },
+  {
+    "id": "thanks-06-gmail-quote",
+    "category": "thanks",
+    "subject": "Re: Szeptemberi riport",
+    "body": "Köszönöm szépen! 🙏\n\nAnna\n\nOn Mon, Oct 12, 2026 at 9:41 AM Tóth Ádám <office@agency.test> wrote:\n> Szia Anna!\n>\n> Csatolom a szeptemberi riportot, kérlek nézd át.\n>\n> Ádám",
+    "expect": {
+      "acknowledgeShortcut": true,
+      "noTriggers": true
+    }
+  },
+  {
+    "id": "thanks-07-hu-gmail-quote",
+    "category": "thanks",
+    "subject": "Re: Logó",
+    "body": "Köszönjük szépen!\n\nKovács Réka <reka@pragmatico.hu> ezt írta (időpont: 2026. okt. 16., P 15:12):\n> Sziasztok, kérnénk még egy logó változatot?",
+    "expect": {
+      "acknowledgeShortcut": true,
+      "noTriggers": true
+    }
+  },
+  {
+    "id": "thanks-08-english",
+    "category": "thanks",
+    "subject": "Re: Draft",
+    "body": "Thank you so much for the quick reply!",
+    "expect": {
+      "acknowledgeShortcut": true,
+      "noTriggers": true
+    }
+  },
+  {
+    "id": "request-01-banner-sizes",
+    "category": "request",
+    "subject": "Tavaszi akció bannerek",
+    "body": "Sziasztok!\n\nKérnénk két bannert a tavaszi akcióhoz: 1200×628 és 1080×1080. Jövő péntekig kellene.\n\nKöszi,\nRéka",
+    "expect": {
+      "acknowledgeShortcut": false,
+      "triggers": [
+        "word:kérnénk",
+        "word:kellene"
+      ],
+      "minRequests": 1,
+      "intents": [
+        "add"
+      ]
+    }
+  },
+  {
+    "id": "request-02-slider-attachment",
+    "category": "request",
+    "subject": "Főoldali slider",
+    "body": "Szia Ádám!\n\nLehetne a főoldali slidert lecserélni az új kampányképre? Csatoltam a képet.\n\nPéter",
+    "hasAttachment": true,
+    "expect": {
+      "acknowledgeShortcut": false,
+      "triggers": [
+        "question_mark",
+        "word:lehetne",
+        "attachment"
+      ],
+      "minRequests": 1,
+      "intents": [
+        "add"
+      ]
+    }
+  },
+  {
+    "id": "request-03-jo-lenne",
+    "category": "request",
+    "subject": "Novemberi hírlevél",
+    "body": "Jó lenne, ha a novemberi hírlevélbe bekerülne a Black Friday akció is.",
+    "expect": {
+      "acknowledgeShortcut": false,
+      "triggers": [
+        "word:lenne",
+        "word:jó lenne"
+      ],
+      "minRequests": 1,
+      "intents": [
+        "add"
+      ]
+    }
+  },
+  {
+    "id": "request-04-szeretnenk",
+    "category": "request",
+    "subject": "Karácsonyi landing",
+    "body": "Szeretnénk egy új landing oldalt a karácsonyi kampányhoz, a múltkori mintájára.\n\nÜdvözlettel,\nNagy Gábor",
+    "expect": {
+      "acknowledgeShortcut": false,
+      "triggers": [
+        "word:szeretnénk"
+      ],
+      "minRequests": 1,
+      "intents": [
+        "add"
+      ]
+    }
+  },
+  {
+    "id": "request-05-kuldjetek",
+    "category": "request",
+    "subject": "Logó",
+    "body": "Küldjétek át légyszi a logó vektoros változatát is!",
+    "expect": {
+      "acknowledgeShortcut": false,
+      "triggers": [
+        "word:küldjétek"
+      ],
+      "minRequests": 1,
+      "intents": [
+        "add"
+      ]
+    }
+  },
+  {
+    "id": "request-06-english-could-you",
+    "category": "request",
+    "subject": "Pricing table",
+    "body": "Hi Adam,\n\ncould you please add the new pricing table to the landing page?\n\nThanks,\nMark",
+    "expect": {
+      "acknowledgeShortcut": false,
+      "triggers": [
+        "question_mark",
+        "word:please",
+        "word:change",
+        "word:could you"
+      ],
+      "minRequests": 1,
+      "intents": [
+        "add"
+      ]
+    }
+  },
+  {
+    "id": "request-07-tudnatok-csinalni",
+    "category": "request",
+    "subject": "Instagram story",
+    "body": "Tudnátok csinálni egy rövid videót az Instagram storyba a kampányhoz?",
+    "expect": {
+      "acknowledgeShortcut": false,
+      "triggers": [
+        "question_mark",
+        "word:csináljátok",
+        "word:tudnátok"
+      ],
+      "minRequests": 1,
+      "intents": [
+        "add"
+      ]
+    }
+  },
+  {
+    "id": "request-08-meg-egy-dolog",
+    "category": "request",
+    "subject": "Re: Weboldal",
+    "body": "Még egy dolog: a láblécből hiányzik az adószám, azt is tegyétek be.",
+    "expect": {
+      "acknowledgeShortcut": false,
+      "triggers": [
+        "word:még",
+        "word:tegyétek"
+      ],
+      "minRequests": 1,
+      "intents": [
+        "add"
+      ]
+    }
+  },
+  {
+    "id": "request-09-urgent-checkout",
+    "category": "request",
+    "subject": "SÜRGŐS: nem lehet fizetni",
+    "body": "Szia Ádám!\n\nÉlesben hibás a kosár, nem működik a fizetés! Kérlek nézzétek meg minél előbb.\n\nGábor\n\nKüldve az iPhone-omról",
+    "expect": {
+      "acknowledgeShortcut": false,
+      "triggers": [
+        "word:kérnénk",
+        "word:hiba",
+        "word:nem működik"
+      ],
+      "urgent": true,
+      "minRequests": 1,
+      "intents": [
+        "add"
+      ]
+    }
+  },
+  {
+    "id": "request-10-javitsatok",
+    "category": "request",
+    "subject": "Rossz ár",
+    "body": "A webshopban rossz ár jelenik meg a téli kabátnál (8 999 Ft helyett 89 990 Ft kellene), javítsátok ki légyszi.",
+    "expect": {
+      "acknowledgeShortcut": false,
+      "triggers": [
+        "word:kellene",
+        "word:javítsátok"
+      ],
+      "minRequests": 1,
+      "intents": [
+        "add"
+      ]
+    }
+  },
+  {
+    "id": "request-11-surgos-leallt",
+    "category": "request",
+    "subject": "Leállt az oldal",
+    "body": "Sürgős: leállt a weboldal, csak fehér képernyő jön be.",
+    "expect": {
+      "acknowledgeShortcut": false,
+      "triggers": [
+        "word:sürgős"
+      ],
+      "urgent": true,
+      "minRequests": 1,
+      "intents": [
+        "add"
+      ]
+    }
+  },
+  {
+    "id": "request-12-forwarded",
+    "category": "request",
+    "subject": "Fwd: Árlista",
+    "body": "Továbbítom Gábor kérését.\n\n---------- Forwarded message ---------\nFrom: Nagy Gábor <gabor@pragmatico.hu>\nDate: 2026. okt. 15.\nSubject: Árlista\n\nKérnénk az árlistát frissíteni a weboldalon.",
+    "expect": {
+      "acknowledgeShortcut": false,
+      "triggers": [
+        "word:kérnénk"
+      ],
+      "minRequests": 1,
+      "intents": [
+        "add"
+      ]
+    }
+  },
+  {
+    "id": "request-13-figma-link",
+    "category": "request",
+    "subject": "Banner design",
+    "body": "Itt a Figma: https://www.figma.com/file/abc123/banner — ez alapján készüljön el a banner.",
+    "expect": {
+      "acknowledgeShortcut": false,
+      "triggers": [
+        "link"
+      ],
+      "minRequests": 1,
+      "intents": [
+        "add"
+      ]
+    }
+  },
+  {
+    "id": "request-14-english-fix",
+    "category": "request",
+    "subject": "Typo",
+    "body": "Please fix the typo on the About page, it says Budpest instead of Budapest.",
+    "expect": {
+      "acknowledgeShortcut": false,
+      "triggers": [
+        "word:please",
+        "word:change"
+      ],
+      "minRequests": 1,
+      "intents": [
+        "add"
+      ]
+    }
+  },
+  {
+    "id": "request-15-thanks-plus-request",
+    "category": "request",
+    "subject": "Re: Bannerek",
+    "body": "Köszi a bannereket! Még a story méretet kérnénk 1080×1920-ban.",
+    "expect": {
+      "acknowledgeShortcut": false,
+      "triggers": [
+        "word:kérnénk",
+        "word:még"
+      ],
+      "minRequests": 1,
+      "intents": [
+        "add"
+      ]
+    }
+  },
+  {
+    "id": "request-16-five-items",
+    "category": "request",
+    "subject": "Re: Black Friday kampány – anyagok",
+    "body": "Sziasztok!\n\nJövő szerdáig kellene a Black Friday kampányhoz pár dolog:\n\n1. Bannerek két méretben: 1200×628 és 1080×1920.\n2. A 20% kedvezmény csak a webshopra vonatkozik, az üzletekre nem – ezt kérnénk a bannereken is jelezni.\n3. A landing oldalra kellene egy visszaszámláló, ami péntek éjfélig fut.\n4. Egy hírlevél a meglévő feliratkozóknak, a bannerek vizuáljával.\n5. És még egy story méret is kellene az Instagramra.\n\nCsatoltam a brand színeket PDF-ben.\n\nKöszi előre is!\n\nÜdvözlettel,\nKovács Réka",
+    "hasAttachment": true,
+    "expect": {
+      "acknowledgeShortcut": false,
+      "triggers": [
+        "word:kérnénk",
+        "word:még",
+        "word:kellene",
+        "attachment"
+      ],
+      "minRequests": 5,
+      "intents": [
+        "add"
+      ]
+    }
+  },
+  {
+    "id": "clarify-01-scope",
+    "category": "clarify",
+    "subject": "Re: Black Friday kampány – anyagok",
+    "body": "A 20% csak a webshopra vonatkozik, az üzletekre nem.",
+    "expect": {
+      "acknowledgeShortcut": false,
+      "noTriggers": true,
+      "minRequests": 1,
+      "intents": [
+        "clarify",
+        "add"
+      ]
+    }
+  },
+  {
+    "id": "replace-01-15-percent",
+    "category": "replace",
+    "subject": "Re: Black Friday kampány – anyagok",
+    "body": "Mégis 15% legyen a kedvezmény, ne 20%.",
+    "expect": {
+      "acknowledgeShortcut": false,
+      "triggers": [
+        "word:még",
+        "word:legyen"
+      ],
+      "minRequests": 1,
+      "intents": [
+        "replace",
+        "add"
+      ]
+    }
+  },
+  {
+    "id": "cancel-01-newsletter",
+    "category": "cancel",
+    "subject": "Re: Black Friday kampány – anyagok",
+    "body": "A hírlevél mégsem kell, azt hagyjuk ki.",
+    "expect": {
+      "acknowledgeShortcut": false,
+      "triggers": [
+        "word:még",
+        "word:kellene"
+      ],
+      "minRequests": 1,
+      "intents": [
+        "cancel"
+      ]
+    }
+  },
+  {
+    "id": "approve-action-01-mehet-elesbe",
+    "category": "approve_action",
+    "subject": "Re: Őszi aloldal",
+    "body": "Mehet élesbe!",
+    "expect": {
+      "acknowledgeShortcut": false,
+      "triggers": [
+        "word:mehet"
+      ],
+      "minRequests": 1,
+      "intents": [
+        "approve"
+      ]
+    }
+  },
+  {
+    "id": "approve-01-igy-jo",
+    "category": "approve",
+    "subject": "Re: Őszi aloldal",
+    "body": "Így jó, köszönjük!",
+    "expect": {
+      "acknowledgeShortcut": false,
+      "noTriggers": true,
+      "intents": [
+        "approve"
+      ]
+    }
+  },
+  {
+    "id": "approve-02-jovahagyom",
+    "category": "approve",
+    "subject": "Re: Bannerek v2",
+    "body": "Tökéletes, jóváhagyom.",
+    "expect": {
+      "acknowledgeShortcut": false,
+      "noTriggers": true,
+      "intents": [
+        "approve"
+      ]
+    }
+  },
+  {
+    "id": "ask-01-mikorra",
+    "category": "ask",
+    "subject": "Re: Őszi aloldal",
+    "body": "Mikorra lesz kész az új aloldal?",
+    "expect": {
+      "acknowledgeShortcut": false,
+      "triggers": [
+        "question_mark"
+      ],
+      "minRequests": 1,
+      "intents": [
+        "ask"
+      ]
+    }
+  },
+  {
+    "id": "ask-02-price",
+    "category": "ask",
+    "subject": "SEO",
+    "body": "Mennyibe kerülne egy havi SEO csomag?",
+    "expect": {
+      "acknowledgeShortcut": false,
+      "triggers": [
+        "question_mark"
+      ],
+      "minRequests": 1,
+      "intents": [
+        "ask"
+      ]
+    }
+  },
+  {
+    "id": "ask-03-english",
+    "category": "ask",
+    "subject": "Re: Website",
+    "body": "When can we expect the first draft?",
+    "expect": {
+      "acknowledgeShortcut": false,
+      "triggers": [
+        "question_mark"
+      ],
+      "minRequests": 1,
+      "intents": [
+        "ask"
+      ]
+    }
+  },
+  {
+    "id": "ask-04-thanks-plus-question",
+    "category": "ask",
+    "subject": "Re: Számla",
+    "body": "Köszönöm! Mikor küldöd a számlát?",
+    "expect": {
+      "acknowledgeShortcut": false,
+      "triggers": [
+        "question_mark"
+      ],
+      "minRequests": 1,
+      "intents": [
+        "ask"
+      ]
+    }
+  },
+  {
+    "id": "ack-model-01-rendben",
+    "category": "acknowledge_model",
+    "subject": "Re: Időpont",
+    "body": "Rendben, várjuk.",
+    "expect": {
+      "acknowledgeShortcut": false,
+      "noTriggers": true,
+      "intents": [
+        "acknowledge",
+        "approve"
+      ]
+    }
+  },
+  {
+    "id": "ack-model-02-outlook-quote",
+    "category": "acknowledge_model",
+    "subject": "RE: Egyeztetés",
+    "body": "Rendben, akkor jövő héten.\n\n-----Original Message-----\nFrom: Tóth Ádám <office@agency.test>\nSent: Thursday, October 15, 2026 10:02 AM\nTo: Kiss Anna <anna@arlo.hu>\nSubject: Egyeztetés\n\nKérnénk egy időpontot a jövő hétre, megfelel a kedd?",
+    "expect": {
+      "acknowledgeShortcut": false,
+      "noTriggers": true,
+      "absentTriggers": [
+        "word:kérnénk",
+        "question_mark"
+      ],
+      "intents": [
+        "acknowledge",
+        "approve"
+      ]
+    }
+  },
+  {
+    "id": "look-01-attachment-only",
+    "category": "needs_look",
+    "subject": "Re: Anyagok",
+    "body": "Csatolva.",
+    "hasAttachment": true,
+    "expect": {
+      "acknowledgeShortcut": false,
+      "triggers": [
+        "attachment"
+      ]
+    }
+  },
+  {
+    "id": "look-02-thanks-with-attachment",
+    "category": "needs_look",
+    "subject": "Re: Anyagok",
+    "body": "Köszi!",
+    "hasAttachment": true,
+    "expect": {
+      "acknowledgeShortcut": false,
+      "triggers": [
+        "attachment"
+      ]
+    }
+  },
+  {
+    "id": "forward-01-outlook-hu-koszi",
+    "category": "forward",
+    "subject": "FW: Árlista",
+    "body": "Köszi!\n\n________________________________\nFeladó: Nagy Gábor <gabor@pragmatico.hu>\nElküldve: 2026. október 15., csütörtök 10:02\nCímzett: Kovács Réka <reka@pragmatico.hu>\nTárgy: Árlista\n\nKérnénk az árlistát frissíteni a weboldalon.",
+    "expect": {
+      "acknowledgeShortcut": false,
+      "triggers": [
+        "forward",
+        "word:kérnénk"
+      ],
+      "minRequests": 1,
+      "intents": [
+        "add"
+      ]
+    }
+  },
+  {
+    "id": "forward-02-outlook-en",
+    "category": "forward",
+    "subject": "Fwd: Homepage",
+    "body": "See below.\n\n________________________________\nFrom: Mark Smith <mark@pragmatico.hu>\nSent: Thursday, October 15, 2026 10:02 AM\nTo: Kovács Réka <reka@pragmatico.hu>\nSubject: Homepage\n\nCould you please update the homepage hero image?",
+    "expect": {
+      "acknowledgeShortcut": false,
+      "triggers": [
+        "forward",
+        "question_mark",
+        "word:please"
+      ],
+      "minRequests": 1,
+      "intents": [
+        "add"
+      ]
+    }
+  },
+  {
+    "id": "forward-03-tovabbitas",
+    "category": "forward",
+    "subject": "Továbbítás: Hírlevél",
+    "body": "Ezt kaptam, nézzétek meg.\n\n________________________________\nFeladó: Igazgató <ceo@pragmatico.hu>\nElküldve: 2026. október 14., szerda 09:00\nCímzett: Kovács Réka <reka@pragmatico.hu>\nTárgy: Hírlevél\n\nA decemberi hírlevélbe kerüljön be az új kollekció is.",
+    "expect": {
+      "acknowledgeShortcut": false,
+      "triggers": [
+        "forward"
+      ],
+      "minRequests": 1,
+      "intents": [
+        "add"
+      ]
+    }
+  },
+  {
+    "id": "reply-01-outlook-hu-thanks",
+    "category": "thanks",
+    "subject": "RE: Árlista",
+    "body": "Köszönjük!\n\n________________________________\nFeladó: Tóth Ádám <office@agency.test>\nElküldve: 2026. október 15., csütörtök 10:02\nCímzett: Kovács Réka <reka@pragmatico.hu>\nTárgy: Árlista\n\nKérnénk, hogy nézzétek át az új árlistát.",
+    "expect": {
+      "acknowledgeShortcut": true,
+      "noTriggers": true
+    }
+  }
+]

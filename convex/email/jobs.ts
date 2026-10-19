@@ -1,0 +1,97 @@
+/**
+ * The email `llm_step` jobs (docs/prd-email-triage.md §5.1, §6, §6.3, D24;
+ * implementation plan §2 S1, §3 P2). Registered in the production job
+ * registry (`convex/lib/agentJobs.ts` AGENT_JOBS) and run with `runLlmStep`
+ * from the classify action (email/classify.ts).
+ *
+ * All three use the cheap Claude tier: one short structured call each, no
+ * tools, no thread. `EMAIL_TRIAGE_MODEL` must stay in the allowlist
+ * (lib/agents/modelSlug.ts) — `validateAgentJob` checks it at load time.
+ *
+ * Structured-output schemas use `nullable` (never `optional`) for absent
+ * values: every field is always present, which keeps provider JSON schemas
+ * strict.
+ */
+
+import { z } from "zod";
+import type { LlmStepJob } from "../lib/agentJobs";
+import {
+  CHECK_COMPLETENESS_INSTRUCTIONS,
+  CLASSIFY_INBOUND_INSTRUCTIONS,
+  SCREEN_SENDER_INSTRUCTIONS,
+} from "./prompts";
+
+/** Claude Haiku 4.5 — the cheapest allowlisted model; enough for classification. */
+export const EMAIL_TRIAGE_MODEL = "anthropic/claude-haiku-4.5";
+
+export const INTENTS = ["add", "clarify", "replace", "cancel", "approve", "ask", "acknowledge"] as const;
+export const REQUEST_INTENTS = ["add", "clarify", "replace", "cancel", "approve", "ask"] as const;
+export type Intent = (typeof INTENTS)[number];
+export type RequestIntent = (typeof REQUEST_INTENTS)[number];
+
+const constraintSchema = z.object({
+  kind: z.string().min(1).max(40),
+  value: z.string().min(1).max(300),
+});
+
+export const requestSchema = z.object({
+  text: z.string().min(1).max(2000),
+  constraints: z.array(constraintSchema).max(20),
+  intent: z.enum(REQUEST_INTENTS),
+  refersToRequestId: z.string().max(64).nullable(),
+});
+export type ModelRequest = z.infer<typeof requestSchema>;
+
+export const classifyInboundSchema = z.object({
+  intents: z.array(z.enum(INTENTS)).max(7),
+  requests: z.array(requestSchema).max(40),
+  approveHasAction: z.object({
+    hasAction: z.boolean(),
+    action: z.string().max(200).nullable(),
+  }),
+  reasons: z.array(z.string().max(200)).max(4),
+  urgent: z.boolean(),
+});
+export type ClassifyInboundOutput = z.infer<typeof classifyInboundSchema>;
+
+export const checkCompletenessSchema = z.object({
+  missing: z.array(requestSchema).max(20),
+});
+export type CheckCompletenessOutput = z.infer<typeof checkCompletenessSchema>;
+
+export const screenSenderSchema = z.object({
+  possibleClient: z.boolean(),
+  reason: z.string().max(200),
+});
+export type ScreenSenderOutput = z.infer<typeof screenSenderSchema>;
+
+export const classifyInboundJob: LlmStepJob<ClassifyInboundOutput> = {
+  name: "classifyInbound",
+  tier: "llm_step",
+  instructions: CLASSIFY_INBOUND_INSTRUCTIONS,
+  outputSchema: classifyInboundSchema,
+  model: EMAIL_TRIAGE_MODEL,
+};
+
+export const checkCompletenessJob: LlmStepJob<CheckCompletenessOutput> = {
+  name: "checkCompleteness",
+  tier: "llm_step",
+  instructions: CHECK_COMPLETENESS_INSTRUCTIONS,
+  outputSchema: checkCompletenessSchema,
+  model: EMAIL_TRIAGE_MODEL,
+};
+
+export const screenSenderJob: LlmStepJob<ScreenSenderOutput> = {
+  name: "screenSender",
+  tier: "llm_step",
+  instructions: SCREEN_SENDER_INSTRUCTIONS,
+  outputSchema: screenSenderSchema,
+  model: EMAIL_TRIAGE_MODEL,
+};
+
+/** Registered in AGENT_JOBS (convex/lib/agentJobs.ts). */
+export const EMAIL_LLM_JOBS = {
+  classifyInbound: classifyInboundJob,
+  checkCompleteness: checkCompletenessJob,
+  screenSender: screenSenderJob,
+} as const;

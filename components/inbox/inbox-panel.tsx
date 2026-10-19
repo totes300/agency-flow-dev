@@ -10,6 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Separator } from "@/components/ui/separator"
 import { InboxEmptyState } from "@/components/inbox/inbox-empty-state"
 import { NotificationRow } from "@/components/inbox/notification-row"
+import { EmailEventRow, type EmailEventRowData } from "@/components/inbox/email-event-row"
 import { InboxActionButton } from "@/components/inbox/notification-row-actions"
 import { groupInbox, type InboxGroup, type InboxRowBase } from "@/lib/inbox"
 import { buildTaskDeepLink } from "@/lib/task-detail"
@@ -75,10 +76,16 @@ export function InboxPanel({
     api.notifications.listArchived,
     isAuthenticated && view === "archived" ? {} : "skip",
   )
+  // Email rows (email triage §7.4): empty unless the org has the feature (I14).
+  const emailRows = useQuery(
+    api.email.inbox.listEmailEvents,
+    isAuthenticated && view === "inbox" ? {} : "skip",
+  )
   const markRead = useMutation(api.notifications.markRead)
   const markAllRead = useMutation(api.notifications.markAllRead)
 
   const rows = view === "inbox" ? inboxRows : archivedRows
+  // Task rows only: "Mark all as read" and the badge are the task inbox's.
   const unreadCount = (inboxRows ?? []).filter(
     (r) => r.inboxState === "unread",
   ).length
@@ -96,6 +103,20 @@ export function InboxPanel({
           : section.groups,
     }))
     .filter((section) => section.groups.length > 0)
+  const visibleEmailRows =
+    view === "inbox"
+      ? (emailRows ?? []).filter((r) => !unreadOnly || r.inboxState === "unread")
+      : []
+
+  function handleOpenEmail(row: EmailEventRowData) {
+    if (row.inboxState === "unread") {
+      void markRead({ ids: [row._id] }).catch((err) =>
+        toastError(err, "Failed to mark notification as read"),
+      )
+    }
+    if (variant === "sheet") onClose()
+    router.push(row.href)
+  }
 
   function handleOpen(group: InboxGroup<InboxRowBase>) {
     if (group.unreadMemberIds.length > 0) {
@@ -164,12 +185,20 @@ export function InboxPanel({
       <div className="flex flex-1 flex-col overflow-y-auto">
         {visibleSections === undefined ? (
           <InboxSkeleton />
-        ) : visibleSections.length === 0 ? (
+        ) : visibleSections.length === 0 && visibleEmailRows.length === 0 ? (
           <div className="flex flex-1 flex-col py-10">
             <InboxEmptyState view={view} />
           </div>
         ) : (
           <div className="flex flex-col p-2">
+            {visibleEmailRows.length > 0 && (
+              <div className="flex flex-col">
+                <p className="px-2 pb-1 pt-1 text-xs font-medium text-muted-foreground">Email</p>
+                {visibleEmailRows.map((row) => (
+                  <EmailEventRow key={row._id} row={row} onOpen={handleOpenEmail} />
+                ))}
+              </div>
+            )}
             {visibleSections.map((section) => (
               <div key={section.key} className="flex flex-col">
                 <p className="px-2 pb-1 pt-3 text-xs font-medium text-muted-foreground first:pt-1">

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  isForwardSubject,
   containsLink,
   detectUrgency,
   emailDomain,
@@ -195,10 +196,50 @@ describe("stripQuoted", () => {
       "Subject: BF",
       "To: Réka <reka@pragmatico.hu>",
     ].join("\n");
-    // The Outlook-style block INSIDE the forward is still a header block —
-    // but the forward marker line itself and the author's lines above stay.
+    // The header block INSIDE the forward belongs to the forwarded mail: the
+    // whole forward stays (B4 — its request must reach the ledger).
     expect(stripQuoted(body).text).toContain("Nézzétek meg lent");
     expect(stripQuoted(body).text).toContain("Forwarded message");
+    expect(stripQuoted(`${body}\n\nKérnénk az árlistát frissíteni.`).text).toContain("Kérnénk az árlistát");
+  });
+
+  it("Outlook forwards (EN + HU labels): kept whole when the subject is a forward, stripped as a reply otherwise", () => {
+    const hu = [
+      "Köszi!",
+      "",
+      "________________________________",
+      "Feladó: Nagy Gábor <gabor@pragmatico.hu>",
+      "Elküldve: 2026. október 15., csütörtök 10:02",
+      "Címzett: Kovács Réka <reka@pragmatico.hu>",
+      "Tárgy: Árlista",
+      "",
+      "Kérnénk az árlistát frissíteni.",
+    ].join("\n");
+    const en = hu
+      .replace("Feladó:", "From:")
+      .replace("Elküldve:", "Sent:")
+      .replace("Címzett:", "To:")
+      .replace("Tárgy:", "Subject:");
+    for (const body of [hu, en]) {
+      // As a reply the block is history …
+      expect(stripQuoted(body, { subject: "RE: Árlista" }).text).toBe("Köszi!");
+      expect(stripQuoted(body).text).toBe("Köszi!");
+      // … as a forward it is the content.
+      for (const subject of ["FW: Árlista", "Fwd: Árlista", "Továbbítás: Árlista", "TR: Árlista", "VS: Árlista"]) {
+        expect(stripQuoted(body, { subject }).text, subject).toContain("Kérnénk az árlistát frissíteni.");
+      }
+    }
+    // HU Outlook "Küldés ideje:" is a date line too.
+    expect(stripQuoted(hu.replace("Elküldve:", "Küldés ideje:")).text).toBe("Köszi!");
+  });
+
+  it("isForwardSubject", () => {
+    expect(["FW: x", "Fwd: x", "fwd:x", "Továbbítás: x", "TR: x", "VS: x", "Re: Fw: x"].map(isForwardSubject)).toEqual(
+      [true, true, true, true, true, true, true],
+    );
+    expect(["Re: x", "Válasz: x", "Forward planning", "Fwd", undefined, ""].map(isForwardSubject)).toEqual(
+      [false, false, false, false, false, false],
+    );
   });
 
   it("an \"… írta:\" line that is not a reply header keeps everything (low confidence)", () => {

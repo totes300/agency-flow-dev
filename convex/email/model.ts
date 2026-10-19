@@ -238,6 +238,20 @@ export function matchClientByDomain<C extends ClientMatchCandidate>(
 const SUBJECT_PREFIX_RE =
   /^\s*(?:re|fwd?|fw|valasz|va|tovabbitas|tovabbitva|tovabbitott|vs|sv|aw|wg|tr)\s*(?:\[\d+\]|\(\d+\))?\s*:\s*/;
 
+/**
+ * A forwarded email by its subject: FW: / Fwd: / Továbbítás: / TR: / VS:
+ * (after any Re: / Válasz: prefixes). Outlook forwards carry no marker line —
+ * their body is the same `____` + From: / Sent: / To: block (HU: Feladó: /
+ * Elküldve: / Címzett: / Tárgy:) as an Outlook reply — so the subject is the
+ * only reliable signal that the block below is content, not history.
+ */
+export function isForwardSubject(subject: string | undefined): boolean {
+  if (!subject) return false;
+  return /^\s*(?:(?:re|valasz|va|aw|sv)\s*:\s*)*(?:fwd?|fw|tovabbitas|tovabbitva|tovabbitott|tr|vs|wg)\s*:/.test(
+    foldText(subject),
+  );
+}
+
 /** "Re: RE: Fwd: Válasz: Black Friday" → "Black Friday" (repeats removed, spaces collapsed). */
 export function normalizeSubject(subject: string): string {
   let rest = subject.replace(/\s+/g, " ").trim();
@@ -284,8 +298,13 @@ const REPLY_HEADER_START_RE = /^(?:on\s|am\s|le\s|\d{4}\.|\d{1,2}[./]|[a-z]{2,9}
 const ORIGINAL_MESSAGE_RE =
   /^-{2,}\s*(?:original message|eredeti uzenet|eredeti level|ursprungliche nachricht|message d'origine)\s*-{2,}\s*$/;
 const UNDERSCORE_RULE_RE = /^_{10,}\s*$/;
+// A forward marker: everything below it is the forwarded content, never quoted
+// history (Gmail "---------- Forwarded message ---------", HU Gmail
+// "Továbbított üzenet", Apple Mail "Begin forwarded message:").
+const FORWARD_MARKER_RE =
+  /^(?:-{2,}\s*(?:forwarded message|tovabbitott (?:uzenet|level)|weitergeleitete nachricht|message transfere)\s*-{2,}|begin forwarded message:?)\s*$/;
 const HEADER_FROM_RE = /^\**(?:from|felado|von|de)\s*:\**\s*\S/;
-const HEADER_DATE_RE = /^\**(?:sent|date|elkuldve|kuldve|datum|gesendet|envoye)\s*:\**\s*\S/;
+const HEADER_DATE_RE = /^\**(?:sent|date|elkuldve|kuldve|kuldes ideje|datum|gesendet|envoye)\s*:\**\s*\S/;
 const HEADER_TO_RE = /^\**(?:to|cimzett|an|a|subject|targy|betreff|objet)\s*:\**/;
 const MOBILE_SIGNATURE_RE =
   /^(?:sent from my \w+|sent from (?:outlook|mail|yahoo mail|gmail)\b.*|get outlook for \w+.*|kuldve (?:az |a )?(?:iphone|ipad|android|samsung)[\w-]*.*|elkuldve (?:az |a )?(?:iphone|ipad|android)[\w-]*.*|(?:iphone|ipad|android)[\w-]*(?:rol|rol kuldve)\b.*)$/;
@@ -312,6 +331,8 @@ function findQuoteHeader(lines: string[], folded: string[]): { index: number; su
   for (let i = 0; i < lines.length; i++) {
     const f = folded[i].trim();
     if (!f || isQuoteLine(lines[i])) continue;
+    // B4: the header block INSIDE a forward is the forwarded mail's own — stop here.
+    if (FORWARD_MARKER_RE.test(f)) return { index: -1, suspicious };
     if (ORIGINAL_MESSAGE_RE.test(f)) return { index: i, suspicious };
     if (HEADER_FROM_RE.test(f)) {
       const window = folded.slice(i + 1, i + 6).map((l) => l.trim());
@@ -399,11 +420,16 @@ function tidy(lines: string[]): string {
  * signature ("-- ", "Sent from my iPhone", a closing "Üdvözlettel," block).
  * Text above the quote is kept; inline replies interleaved with `>` quotes
  * are kept too (flagged `lowConfidence`). A forwarded message ("----------
- * Forwarded message ---------") is NOT stripped — it is the content.
+ * Forwarded message ---------", or any body whose `subject` is a forward —
+ * `isForwardSubject`, e.g. an Outlook "FW:") is NOT stripped — it is the
+ * content.
  */
-export function stripQuoted(input: string): StripResult {
+export function stripQuoted(input: string, opts: { subject?: string } = {}): StripResult {
   const original = input.replace(/\r\n?/g, "\n");
   const lines = original.split("\n");
+  if (isForwardSubject(opts.subject)) {
+    return { text: tidy(lines), strippedSomething: false, lowConfidence: false };
+  }
   const folded = lines.map((l) => foldText(l));
   let lowConfidence = false;
   let stripped = false;

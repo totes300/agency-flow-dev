@@ -4,7 +4,7 @@
 // canvas seed, the seed is idempotent and its reset removes only seed rows,
 // the I14 gate, and task-less notifications never break the Inbox queries.
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { convexTest } from "convex-test";
 import schema from "../schema";
 import { api, internal } from "../_generated/api";
@@ -117,11 +117,11 @@ describe("devSeedEmail.seed", () => {
       contactsCreated: ["Kovács Réka", "Nagy Gábor", "Szabó Péter", "Kiss Anna"],
       threadsCreated: 5,
       messagesCreated: 8,
-      itemsCreated: 4,
       linkedTaskId: f.arloTask,
     });
     expect(await emailCounts(t)).toEqual({
-      connectors: 1, emailThreads: 5, emailMessages: 8, emailThreadTasks: 1, agentItems: 4,
+      // B4: items, ledger rows and Inbox rows come from the pipeline (`process`).
+      connectors: 1, emailThreads: 5, emailMessages: 8, emailThreadTasks: 1, agentItems: 0,
       clientRequests: 0, emailPromises: 0,
     });
 
@@ -200,16 +200,8 @@ describe("devSeedEmail.seed", () => {
     expect(annaThanks.bodyText).toBe("Köszönöm szépen! 🙏\n\nAnna");
     expect(isAcknowledgeCandidate(annaThanks.bodyText, hardTriggers(annaThanks.bodyText))).toBe(true);
 
-    // One open email item per conversation (I13), newest first.
-    expect(data.items.map((i) => i.anchor.id).sort()).toEqual([reka._id, gabor.threadId, peter._id, judit._id].sort());
-    expect(data.items.every((i) => i.source === "email" && i.anchor.type === "emailThread")).toBe(true);
-    const itemOf = (threadId: Id<"emailThreads">) => data.items.find((i) => i.anchor.id === threadId)!;
-    expect(itemOf(reka._id)).toMatchObject({ kind: "request", messageIds: [rekaMsg._id] });
-    expect(itemOf(peter._id)).toMatchObject({ kind: "question", taskId: f.arloTask });
-    expect(itemOf(judit._id).kind).toBe("new_sender");
-    expect(data.items.some((i) => i.anchor.id === anna._id)).toBe(false);
-    const updated = data.items.map((i) => i.updatedAt);
-    expect(updated).toEqual([...updated].sort((a, b) => b - a));
+    // The seed opens no Triage item itself (B4 owns item creation).
+    expect(data.items).toEqual([]);
 
     // The near-miss client got nothing.
     expect(data.clients.find((c) => c.name === "Pragmatico Holding")?.emailDomains).toBeUndefined();
@@ -228,7 +220,7 @@ describe("devSeedEmail.seed", () => {
     const before = await emailCounts(t);
     const again = await t.mutation(internal.devSeedEmail.seed, { orgId: ORG });
     expect(again).toMatchObject({
-      clientsCreated: [], contactsCreated: [], threadsCreated: 0, messagesCreated: 0, itemsCreated: 0,
+      clientsCreated: [], contactsCreated: [], threadsCreated: 0, messagesCreated: 0,
     });
     expect(await emailCounts(t)).toEqual(before);
     expect(await t.run((ctx) => ctx.db.query("clientContacts").collect())).toHaveLength(4);
@@ -245,11 +237,8 @@ describe("devSeedEmail.seed", () => {
       });
     });
     const result = await t.mutation(internal.devSeedEmail.seed, {});
-    expect(result).toMatchObject({ orgId: "org_solo", clientsCreated: ["Pragmatico", "Arlo"], linkedTaskId: null, itemsCreated: 4 });
-    const peterItem = await t.run(async (ctx) =>
-      (await ctx.db.query("agentItems").collect()).find((i) => i.kind === "question"),
-    );
-    expect(peterItem?.taskId).toBeUndefined();
+    expect(result).toMatchObject({ orgId: "org_solo", clientsCreated: ["Pragmatico", "Arlo"], linkedTaskId: null });
+    expect(await t.run((ctx) => ctx.db.query("emailThreadTasks").collect())).toEqual([]);
   });
 
   it("adopts a client by an exact name passed in clientNames", async () => {
@@ -302,6 +291,90 @@ describe("devSeedEmail.seed", () => {
   });
 });
 
+// ─── Process (B4): the canvas scenarios through the real pipeline ─────────────
+
+describe("devSeedEmail.process (fake model)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Drain the pipeline in time order (each action finishes before the clock moves). */
+  async function settle(t: T): Promise<void> {
+    for (let i = 0; i < 200; i++) {
+      await vi.advanceTimersByTimeAsync(0);
+      await t.finishInProgressScheduledFunctions();
+      const pending = await t.run(async (ctx) =>
+        (await ctx.db.system.query("_scheduled_functions").collect()).filter((s) => s.state.kind === "pending"),
+      );
+      if (pending.length === 0) return;
+      const next = Math.min(...pending.map((p) => p.scheduledTime));
+      await vi.advanceTimersByTimeAsync(Math.max(0, next - Date.now()) + 1);
+    }
+    throw new Error("pipeline did not drain");
+  }
+
+  it("ends in the canvas outcomes: Réka, Gábor, Péter, Judit items; Anna in the Inbox", async () => {
+    vi.useFakeTimers();
+    const t = createT();
+    const f = await setup(t);
+    await t.mutation(internal.devSeedEmail.seed, { orgId: ORG });
+    expect(await t.mutation(internal.devSeedEmail.process, { orgId: ORG, fakeModel: true })).toEqual({
+      orgId: ORG, scheduled: 5, retried: 0,
+    });
+    await settle(t);
+
+    const data = await t.run(async (ctx) => ({
+      threads: await ctx.db.query("emailThreads").withIndex("by_orgId", (q) => q.eq("orgId", ORG)).collect(),
+      messages: await ctx.db.query("emailMessages").collect(),
+      items: await ctx.db.query("agentItems").collect(),
+      requests: await ctx.db.query("clientRequests").collect(),
+      notifications: (await ctx.db.query("notifications").collect()).filter((n) => n.type === "email_event"),
+      jobRuns: await ctx.db.query("agentJobRuns").collect(),
+    }));
+    const thread = (needle: string) => data.threads.find((th) => th.subject.includes(needle))!;
+    const itemOf = (needle: string) => data.items.filter((i) => i.anchor.id === thread(needle)._id);
+    const rowsOf = (needle: string) => data.requests.filter((r) => r.threadId === thread(needle)._id);
+
+    expect(data.messages.every((m) => m.stage === "handled")).toBe(true);
+    expect(data.jobRuns).toEqual([]); // no model call with the fake model
+
+    // Réka: request item, 5 ledger rows with the sizes and the 20% verbatim.
+    expect(itemOf("Black Friday")).toEqual([expect.objectContaining({ kind: "request", status: "open" })]);
+    const reka = rowsOf("Black Friday");
+    expect(reka).toHaveLength(5);
+    const values = reka.flatMap((r) => (r.constraints ?? []).map((c) => c.value));
+    expect(values).toEqual(expect.arrayContaining(["1200×628", "1080×1920", "20%"]));
+    expect(reka.every((r) => r.disposition === "open" && r.warnings === undefined && r.clientId)).toBe(true);
+
+    // Gábor: urgent request.
+    expect(itemOf("rossz ár")).toEqual([expect.objectContaining({ kind: "request", status: "open", urgent: true })]);
+    // Péter: a question on the linked task.
+    expect(itemOf("Őszi kampány aloldal")).toEqual([
+      expect.objectContaining({ kind: "question", status: "open", taskId: f.arloTask }),
+    ]);
+    expect(rowsOf("Őszi kampány aloldal").map((r) => r.intent)).toEqual(["ask"]);
+    // Judit: new sender.
+    expect(itemOf("Bemutatkozás")).toEqual([expect.objectContaining({ kind: "new_sender", status: "open" })]);
+    // Anna: no item, an Inbox no_action row for the admin.
+    expect(itemOf("Szeptemberi riport")).toEqual([]);
+    expect(data.notifications).toEqual([
+      expect.objectContaining({
+        recipientId: f.admin, kind: "email", subtype: "no_action", threadId: thread("Szeptemberi riport")._id,
+      }),
+    ]);
+    const anna = data.messages.find((m) => m.threadId === thread("Szeptemberi riport")._id && m.direction === "inbound")!;
+    expect(anna.classification).toMatchObject({ intents: ["acknowledge"], source: "rules" });
+
+    // Re-running process touches nothing (every message is handled).
+    expect(await t.mutation(internal.devSeedEmail.process, { orgId: ORG, fakeModel: true })).toMatchObject({
+      scheduled: 0, retried: 0,
+    });
+    // Reset removes the pipeline's rows too.
+    const reset = await t.mutation(internal.devSeedEmail.reset, { orgId: ORG });
+    expect(reset.deleted).toMatchObject({ agentItems: 4, clientRequests: 9, notifications: 1 });
+  });
+});
+
 // ─── Reset ───────────────────────────────────────────────────────────────────
 
 describe("devSeedEmail.reset", () => {
@@ -340,7 +413,8 @@ describe("devSeedEmail.reset", () => {
 
     const result = await t.mutation(internal.devSeedEmail.reset, { orgId: ORG });
     expect(result.deleted).toEqual({
-      connectors: 1, emailThreads: 5, emailMessages: 8, emailThreadTasks: 1, agentItems: 4, clientRequests: 0, emailPromises: 0,
+      connectors: 1, emailThreads: 5, emailMessages: 8, emailThreadTasks: 1, agentItems: 0, clientRequests: 0, emailPromises: 0,
+      notifications: 0,
     });
     expect(await emailCounts(t)).toEqual({
       connectors: 1, emailThreads: 1, emailMessages: 0, emailThreadTasks: 0, agentItems: 1, clientRequests: 1, emailPromises: 0,

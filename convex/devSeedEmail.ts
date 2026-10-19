@@ -1,5 +1,6 @@
 import { v, ConvexError } from "convex/values";
 import { internalMutation, type MutationCtx } from "./_generated/server";
+import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { CONNECTOR_CATALOG } from "../lib/agents/connectors";
 import { requireEmailTriageEnabled, setEmailTriageFlag } from "./email/gate";
@@ -25,10 +26,15 @@ import { isClosedCategory } from "./tasks/model";
  *       Szabó Péter (Arlo)       — "mikorra lesz kész?" on a thread linked to a task
  *       Molnár Judit (unknown)   — a new sender from an unknown domain
  *       Kiss Anna   (Arlo)       — a pure thank-you
- *   - one open `agentItems` row (`source: "email"`, anchored on the
- *     conversation) for Réka, Gábor, Péter and Judit. Anna's thank-you gets
- *     none: an acknowledge never becomes a Triage item (D4, §5.3 — the B4
- *     dispatch sends it to the Inbox).
+ *   - NO Triage items, ledger rows or Inbox rows: since B4 the inbound
+ *     pipeline (email/pipeline.ts) owns them. `process` runs it on the seeded
+ *     `received` messages, so the canvas outcomes come from the real code:
+ *       Réka  → `request` item, 5 ledger rows (sizes, 20% verbatim)
+ *       Gábor → `request` item, urgent
+ *       Péter → `question` item on the linked task
+ *       Judit → `new_sender` item (screenSender)
+ *       Anna  → Inbox `email_event` · `no_action`, no item (deterministic
+ *               acknowledge — no model call)
  *
  * Uses the org's existing clients (Pragmatico, Arlo — matched by EXACT name,
  * see SEED_CLIENTS / the `clientNames` arg; created when missing) and adds
@@ -38,12 +44,14 @@ import { isClosedCategory } from "./tasks/model";
  * Idempotent: every row has a deterministic provider id (`seed-…`) and is
  * looked up before insert. `reset` deletes ONLY the seed mailbox and the
  * email rows hanging off it (threads, messages, thread↔task links, agent
- * items, requests, promises); clients, contacts, domains and the feature
- * flag stay.
+ * items, requests, promises, email Inbox rows); clients, contacts, domains
+ * and the feature flag stay.
  *
  * Run:   npx convex run devSeedEmail:seed '{}'                (single-org deployment)
  *        npx convex run devSeedEmail:seed '{"orgId":"org_…"}'
  *        npx convex run devSeedEmail:seed '{"orgId":"org_…","clientNames":{"arlo":"Arlow Kft."}}'
+ * Then:  npx convex run devSeedEmail:process '{"fakeModel":true}'   (canned outputs, no AI credit)
+ *        npx convex run devSeedEmail:process '{}'                   (the real model — needs the org's AI key)
  * Reset: npx convex run devSeedEmail:reset '{"orgId":"org_…"}'
  *
  * Reads whole-org tables on purpose (bounded): a dummy-data dev tool.
@@ -104,7 +112,6 @@ type SeedThread = {
   contact: PersonKey | null;
   subject: (task: Doc<"tasks"> | null) => string;
   messages: (subject: string) => SeedMessage[];
-  item: { kind: "request" | "question" | "new_sender"; linkTask?: boolean } | null;
   linkTask?: boolean;
 };
 
@@ -221,7 +228,6 @@ const THREADS: readonly SeedThread[] = [
         stage: "received",
       },
     ],
-    item: { kind: "request" },
   },
   {
     key: "gabor-price-bug",
@@ -240,7 +246,6 @@ const THREADS: readonly SeedThread[] = [
         stage: "received",
       },
     ],
-    item: { kind: "request" },
   },
   {
     key: "peter-question",
@@ -280,7 +285,6 @@ const THREADS: readonly SeedThread[] = [
         stage: "received",
       },
     ],
-    item: { kind: "question", linkTask: true },
   },
   {
     key: "judit-new-sender",
@@ -299,7 +303,6 @@ const THREADS: readonly SeedThread[] = [
         stage: "received",
       },
     ],
-    item: { kind: "new_sender" },
   },
   {
     key: "anna-thanks",
@@ -328,7 +331,6 @@ const THREADS: readonly SeedThread[] = [
         stage: "received",
       },
     ],
-    item: null,
   },
 ];
 
@@ -408,7 +410,6 @@ export type EmailSeedResult = {
   contactsCreated: string[];
   threadsCreated: number;
   messagesCreated: number;
-  itemsCreated: number;
   linkedTaskId: Id<"tasks"> | null;
 };
 
@@ -534,13 +535,12 @@ export const seed = internalMutation({
     // 4. Péter's linked task: the latest open top-level task of an Arlo project.
     const linkedTask = await findLinkTask(ctx, orgId, clientIds.arlo);
 
-    // 5. Conversations, messages, thread ↔ task links, Triage items.
+    // 5. Conversations, messages, thread ↔ task links (items come from `process`).
     const clock: SeedClock = { now, lastFriday1512: lastFriday1512(now, tz), tz };
     const address = (who: PersonKey | "us"): EmailAddress =>
       who === "us" ? us : { name: PEOPLE[who].name, email: PEOPLE[who].email };
     let threadsCreated = 0;
     let messagesCreated = 0;
-    let itemsCreated = 0;
 
     for (const spec of THREADS) {
       const gmailThreadId = `${SEED_PREFIX}${spec.key}`;
@@ -581,7 +581,6 @@ export const seed = internalMutation({
         threadsCreated++;
       }
 
-      const newMessageIds: Id<"emailMessages">[] = [];
       for (const [i, message] of messages.entries()) {
         const gmailMessageId = `${SEED_PREFIX}${message.key}`;
         const existing = await ctx.db
@@ -590,11 +589,8 @@ export const seed = internalMutation({
             q.eq("orgId", orgId).eq("connectorId", mailbox._id).eq("gmailMessageId", gmailMessageId),
           )
           .unique();
-        if (existing) {
-          if (message.stage === "received") newMessageIds.push(existing._id);
-          continue;
-        }
-        const id = await ctx.db.insert("emailMessages", {
+        if (existing) continue;
+        await ctx.db.insert("emailMessages", {
           orgId,
           threadId: thread._id,
           connectorId: mailbox._id,
@@ -605,7 +601,7 @@ export const seed = internalMutation({
           to: message.to.map(address),
           cc: (message.cc ?? []).map(address),
           subject: message.subject,
-          bodyText: stripQuoted(message.raw).text,
+          bodyText: stripQuoted(message.raw, { subject: message.subject }).text,
           bodyHtml: toSimpleHtml(message.raw),
           attachments: message.attachments ?? [],
           sentAt: times[i],
@@ -613,7 +609,6 @@ export const seed = internalMutation({
           createdAt: now,
         });
         messagesCreated++;
-        if (message.stage === "received") newMessageIds.push(id);
       }
 
       if (task) {
@@ -631,42 +626,8 @@ export const seed = internalMutation({
           });
         }
       }
-
-      if (spec.item) {
-        // I13: at most one open / snoozed item per conversation.
-        const anchor = { type: "emailThread", id: thread._id as string };
-        const live = [];
-        for (const status of ["open", "snoozed"] as const) {
-          live.push(
-            ...(await ctx.db
-              .query("agentItems")
-              .withIndex("by_orgId_anchorType_anchorId_status", (q) =>
-                q.eq("orgId", orgId).eq("anchor.type", anchor.type).eq("anchor.id", anchor.id).eq("status", status),
-              )
-              .take(1)),
-          );
-        }
-        if (live.length === 0) {
-          const updatedAt = Math.max(...times);
-          await ctx.db.insert("agentItems", {
-            orgId,
-            source: "email",
-            anchor,
-            kind: spec.item.kind,
-            status: "open",
-            messageIds: newMessageIds,
-            taskId: spec.item.linkTask && task ? task._id : undefined,
-            createdAt: updatedAt,
-            updatedAt,
-          });
-          itemsCreated++;
-        }
-      }
     }
 
-    // TODO(B4): classification (stage → classified), the request ledger
-    // (Réka's 5 `clientRequests`) and dispatch (Anna → Inbox `no_action`)
-    // run on these messages once `email/classify.ts` exists.
     return {
       orgId,
       mailboxId: mailbox._id,
@@ -674,7 +635,6 @@ export const seed = internalMutation({
       contactsCreated,
       threadsCreated,
       messagesCreated,
-      itemsCreated,
       linkedTaskId: linkedTask?._id ?? null,
     };
   },
@@ -710,6 +670,61 @@ async function findLinkTask(
   return best;
 }
 
+// ─── process ────────────────────────────────────────────────────────────────
+
+export type EmailSeedProcessResult = { orgId: string; scheduled: number; retried: number };
+
+/**
+ * Run the inbound pipeline (email/pipeline.ts) on the seed mailbox's
+ * messages: every message still in a work stage is (re)started, a `failed`
+ * one is retried. Handled messages are left alone — to replay the scenario
+ * from scratch: reset → seed → process.
+ *
+ * `fakeModel: true` uses the canned outputs of email/fakeClassifier.ts
+ * instead of model calls (demo without AI credit); without it the real
+ * model runs and the org needs an AI key (Settings → Integrations).
+ *
+ *   npx convex run devSeedEmail:process '{"fakeModel":true}'
+ */
+export const process = internalMutation({
+  args: { orgId: v.optional(v.string()), fakeModel: v.optional(v.boolean()) },
+  handler: async (ctx, args): Promise<EmailSeedProcessResult> => {
+    const orgId = await resolveOrgId(ctx, args.orgId);
+    await requireEmailTriageEnabled(ctx, orgId);
+    let scheduled = 0;
+    let retried = 0;
+    for (const mailbox of await findSeedMailbox(ctx, orgId)) {
+      const threads = await ctx.db
+        .query("emailThreads")
+        .withIndex("by_orgId_connectorId_gmailThreadId", (q) => q.eq("orgId", orgId).eq("connectorId", mailbox._id))
+        .take(READ_CAP);
+      for (const thread of threads) {
+        const messages = await ctx.db
+          .query("emailMessages")
+          .withIndex("by_orgId_threadId_sentAt", (q) => q.eq("orgId", orgId).eq("threadId", thread._id))
+          .take(READ_CAP);
+        for (const message of messages) {
+          if (message.stage === "handled") continue;
+          if (message.stage === "failed") {
+            await ctx.scheduler.runAfter(0, internal.email.pipeline.retryStage, {
+              messageId: message._id,
+              fakeModel: args.fakeModel,
+            });
+            retried++;
+            continue;
+          }
+          await ctx.scheduler.runAfter(0, internal.email.pipeline.processInboundMessage, {
+            messageId: message._id,
+            fakeModel: args.fakeModel,
+          });
+          scheduled++;
+        }
+      }
+    }
+    return { orgId, scheduled, retried };
+  },
+});
+
 // ─── reset ──────────────────────────────────────────────────────────────────
 
 export type EmailSeedResetResult = { orgId: string; deleted: Record<string, number> };
@@ -727,7 +742,13 @@ export const reset = internalMutation({
       agentItems: 0,
       clientRequests: 0,
       emailPromises: 0,
+      notifications: 0,
     };
+    // Email Inbox rows of the seed conversations (task-less, keyed by thread).
+    const notifications = await ctx.db
+      .query("notifications")
+      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+      .take(READ_CAP * 4);
     for (const mailbox of await findSeedMailbox(ctx, orgId)) {
       const threads = await ctx.db
         .query("emailThreads")
@@ -761,6 +782,11 @@ export const reset = internalMutation({
         for (const [table, rows] of Object.entries(byThread)) {
           for (const row of rows) await ctx.db.delete(row._id);
           deleted[table] += rows.length;
+        }
+        for (const row of notifications) {
+          if (row.threadId !== thread._id) continue;
+          await ctx.db.delete(row._id);
+          deleted.notifications++;
         }
         await ctx.db.delete(thread._id);
         deleted.emailThreads++;

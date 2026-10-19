@@ -8,11 +8,12 @@ import { requireAdmin } from "./lib/auth";
  * A separate, admin-only view over EVERY run in the org — who ran which agent,
  * when, outcome, and token usage — with server-side filters. It never relaxes
  * the owner-only chat/rail surfaces: those stay `listMine`/owner-scoped. From
- * a row an admin opens the thread read-only (`requireReadableThread` grants
+ * a row an admin opens the thread read-only (`threadAccess` grants
  * admins read access; the composer + proposal controls are inert).
  */
 
 const RUN_STATUS = new Set([
+  "queued",
   "running",
   "succeeded",
   "failed",

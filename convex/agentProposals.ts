@@ -10,6 +10,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { getAuthContext, type AuthContext } from "./lib/auth";
 import { proposalPayloadValidator } from "./lib/proposalValidators";
 import { resolveTaskRef } from "./tasks/agent";
+import { requireThreadAccess, threadAccess } from "./agentThreads";
 import {
   mergeEditedPayload,
   plainTextToTiptapDoc,
@@ -148,12 +149,17 @@ async function settleProposal(
 ): Promise<ExecuteOutcome> {
   const now = Date.now();
   // Persist the human's edits on failure too, so Retry (and a reload)
-  // keeps what they typed instead of reverting to the agent's draft.
+  // keeps what they typed instead of reverting to the agent's draft. Edits
+  // change the effective payload → the revision moves with them (I11).
   const editedPayload = hadEdits ? merged : proposal.editedPayload;
+  const revision = hadEdits
+    ? proposalRevision(proposal) + 1
+    : proposalRevision(proposal);
   if (outcome.ok) {
     await ctx.db.patch(proposal._id, {
       status: "approved",
       editedPayload,
+      revision,
       committedRef: outcome.committedRef,
       failureReason: undefined,
       decidedBy: auth.userId,
@@ -163,6 +169,7 @@ async function settleProposal(
     await ctx.db.patch(proposal._id, {
       status: "failed",
       editedPayload,
+      revision,
       failureReason: outcome.reason,
       decidedBy: auth.userId,
       decidedAt: now,
@@ -171,22 +178,64 @@ async function settleProposal(
   return outcome;
 }
 
-/** Owner-only load; a foreign/garbage id 404s without leaking existence. */
-async function requireOwnProposal(
+/** I11: rows written before revisions existed read as revision 1. */
+export function proposalRevision(proposal: Doc<"agentProposals">): number {
+  return proposal.revision ?? 1;
+}
+
+/** Refusal for a decision made on an outdated revision (I11). */
+export const STALE_REVISION_MESSAGE = "This changed — review it again.";
+
+/**
+ * Load a proposal the caller may DECIDE: write access to its thread under
+ * the thread policy (`threadAccess` — the owner of a private thread, any
+ * admin in an `admins` thread). The kind's `approveScope` applies on top, in
+ * the deciding mutation. A foreign/garbage/forbidden id 404s alike.
+ */
+async function requireDecidableProposal(
   ctx: MutationCtx,
   auth: AuthContext,
   proposalId: string,
 ): Promise<Doc<"agentProposals">> {
   const id = ctx.db.normalizeId("agentProposals", proposalId);
   const proposal = id ? await ctx.db.get(id) : null;
-  if (
-    !proposal ||
-    proposal.orgId !== auth.orgId ||
-    proposal.userId !== auth.userId
-  ) {
+  if (!proposal || proposal.orgId !== auth.orgId) {
     throw new ConvexError("Proposal not found");
   }
+  const thread = await ctx.db.get(proposal.threadId);
+  if (!thread || !threadAccess(thread, auth).canWrite) {
+    throw new ConvexError("Proposal not found"); // don't leak existence
+  }
   return proposal;
+}
+
+/**
+ * Normalize an agent-drafted payload for a thread: structural validation,
+ * then `archiveTask` resolves its task reference (an id, or an identifier
+ * like `ARLO-21`) to the real id in the thread's org and snapshots the
+ * title so the card stays renderable after the task is gone. Throws a
+ * model-actionable error (the model corrects and retries).
+ */
+async function normalizeAgentPayload(
+  ctx: MutationCtx,
+  thread: Doc<"agentThreads">,
+  raw: Infer<typeof proposalPayloadValidator>,
+): Promise<ProposalPayload> {
+  const validated = validateProposalPayload(raw);
+  if (!validated.ok) {
+    throw new Error(`Invalid proposal: ${validated.reason}`);
+  }
+  const payload = validated.payload;
+  if (payload.kind !== "archiveTask") return payload;
+  const taskId = await resolveTaskRef(ctx, thread.orgId, payload.taskId);
+  const task = taskId ? await ctx.db.get(taskId) : null;
+  if (!task || task.orgId !== thread.orgId) {
+    throw new Error(
+      `No task found for ${payload.taskId}. Use the task's identifier ` +
+        "(e.g. ARLO-21) or an @-mentioned task.",
+    );
+  }
+  return { ...payload, taskId: task._id, taskTitle: task.title };
 }
 
 // ─── Write (internal — called from propose-kind tools) ──────────────────────
@@ -248,34 +297,62 @@ export async function insertProposalsForThread(
   const now = Date.now();
   const ids: string[] = [];
   for (const raw of proposals) {
-    const validated = validateProposalPayload(raw);
-    if (!validated.ok) {
-      throw new Error(`Invalid proposal: ${validated.reason}`);
-    }
-    let payload = validated.payload;
-    if (payload.kind === "archiveTask") {
-      const taskId = await resolveTaskRef(ctx, thread.orgId, payload.taskId);
-      const task = taskId ? await ctx.db.get(taskId) : null;
-      if (!task || task.orgId !== thread.orgId) {
-        throw new Error(
-          `No task found for ${payload.taskId}. Use the task's identifier ` +
-            "(e.g. ARLO-21) or an @-mentioned task.",
-        );
-      }
-      payload = { ...payload, taskId: task._id, taskTitle: task.title };
-    }
+    const payload = await normalizeAgentPayload(ctx, thread, raw);
     const id = await ctx.db.insert("agentProposals", {
       orgId: thread.orgId,
       threadId: thread._id,
       userId: thread.userId,
       payload,
       status: "pending",
+      revision: 1,
       createdAt: now,
     });
     ids.push(id);
   }
   return ids;
 }
+
+/**
+ * The agent revises its OWN plan (A2a; for A2b jobs and B6): replace the
+ * agent's payload of a still-open proposal in the calling run's thread and
+ * bump the revision, so any decision made on the old card is refused (I11).
+ * Human edits made on the old draft are dropped — the card now shows the
+ * agent's new plan, which the humans review again. The kind cannot change.
+ *
+ * TODO(B6): plan-revision merging is defined there — owner edits survive a
+ * re-plan (PRD D25). Until then a re-plan replaces the effective payload.
+ */
+export const updateProposalPayload = internalMutation({
+  args: {
+    componentThreadId: v.string(),
+    proposalId: v.string(),
+    payload: proposalPayloadValidator,
+  },
+  handler: async (ctx, args): Promise<{ revision: number }> => {
+    const thread = await loadThreadByComponentId(ctx, args.componentThreadId);
+    const id = ctx.db.normalizeId("agentProposals", args.proposalId);
+    const proposal = id ? await ctx.db.get(id) : null;
+    if (!proposal || proposal.threadId !== thread._id) {
+      throw new Error(`No proposal ${args.proposalId} in this conversation.`);
+    }
+    if (proposal.status !== "pending" && proposal.status !== "failed") {
+      throw new Error("That proposal has already been decided.");
+    }
+    const payload = await normalizeAgentPayload(ctx, thread, args.payload);
+    if (payload.kind !== proposal.payload.kind) {
+      throw new Error("A proposal's kind cannot change — propose a new one.");
+    }
+    const revision = proposalRevision(proposal) + 1;
+    await ctx.db.patch(proposal._id, {
+      payload,
+      editedPayload: undefined,
+      revision,
+      status: "pending",
+      failureReason: undefined,
+    });
+    return { revision };
+  },
+});
 
 // ─── Read (cards) ───────────────────────────────────────────────────────────
 
@@ -288,14 +365,16 @@ export type ProposalCard = {
   payload: ProposalPayload;
   failureReason: string | null;
   committedRef: string | null;
+  /** I11: echo it back on approve/updateDraft; a mismatch is refused. */
+  revision: number;
 };
 
 /**
  * Live card data for a batch of proposal ids (from a tool output's marker).
  * Reactive — status flips and edits update cards in place, and pending
  * cards persist across thread close/reopen because this reads the records,
- * not the message. Owner or org admin; unknown/foreign ids are silently
- * omitted (the card renderer treats a missing id as "no longer available").
+ * not the message. Readable under the thread policy (`threadAccess`);
+ * unknown/foreign/forbidden ids are silently omitted (the card renderer treats a missing id as "no longer available").
  *
  * Ids inside the payload are resolved to display values CLIENT-SIDE from
  * the same reference queries `/tasks` uses — the card shares the app's
@@ -306,11 +385,18 @@ export const listForCards = query({
   handler: async (ctx, args): Promise<ProposalCard[]> => {
     const auth = await getAuthContext(ctx);
     const cards: ProposalCard[] = [];
+    const readableThreads = new Map<Id<"agentThreads">, boolean>();
     for (const rawId of args.proposalIds.slice(0, 50)) {
       const id = ctx.db.normalizeId("agentProposals", rawId);
       const proposal = id ? await ctx.db.get(id) : null;
       if (!proposal || proposal.orgId !== auth.orgId) continue;
-      if (proposal.userId !== auth.userId && !auth.isAdmin) continue;
+      let readable = readableThreads.get(proposal.threadId);
+      if (readable === undefined) {
+        const thread = await ctx.db.get(proposal.threadId);
+        readable = thread ? threadAccess(thread, auth).canRead : false;
+        readableThreads.set(proposal.threadId, readable);
+      }
+      if (!readable) continue;
 
       // Normalize on the way out (folds the legacy single-assignee field)
       // so the card always sees the current payload shape.
@@ -323,13 +409,20 @@ export const listForCards = query({
         payload: validated.ok ? validated.payload : raw,
         failureReason: proposal.failureReason ?? null,
         committedRef: proposal.committedRef ?? null,
+        revision: proposalRevision(proposal),
       });
     }
     return cards;
   },
 });
 
-// ─── Decisions (owner-only mutations) ───────────────────────────────────────
+// ─── Decisions (thread write access + revision) ─────────────────────────────
+//
+// Who decides = who may WRITE in the proposal's thread (owner of a private
+// thread, any admin in an `admins` thread); the kind's approveScope applies
+// on top. Approval executes the domain mutation as the DECIDING user, so the
+// activity log shows them. Every decision carries the revision the client
+// rendered; an outdated one is refused (I11).
 
 /**
  * Approve one proposal, optionally with inline edits. Outcomes:
@@ -345,14 +438,19 @@ export const listForCards = query({
 export const approve = mutation({
   args: {
     proposalId: v.string(),
+    // The revision the client rendered (I11).
+    revision: v.number(),
     editedPayload: v.optional(proposalPayloadValidator),
     confirmDestructive: v.optional(v.boolean()),
   },
   handler: async (ctx, args): Promise<ExecuteOutcome> => {
     const auth = await getAuthContext(ctx);
-    const proposal = await requireOwnProposal(ctx, auth, args.proposalId);
+    const proposal = await requireDecidableProposal(ctx, auth, args.proposalId);
     if (proposal.status !== "pending" && proposal.status !== "failed") {
       throw new ConvexError("This proposal has already been decided");
+    }
+    if (args.revision !== proposalRevision(proposal)) {
+      throw new ConvexError(STALE_REVISION_MESSAGE);
     }
     const meta = PROPOSAL_KIND_META[proposal.payload.kind];
     if (meta.approveScope === "admin" && !auth.isAdmin) {
@@ -364,7 +462,13 @@ export const approve = mutation({
       throw new ConvexError("This destructive action requires confirmation");
     }
 
-    const merged = mergeEditedPayload(proposal.payload, args.editedPayload);
+    // Edits apply over the EFFECTIVE payload: an approve without inline
+    // edits commits the stored ones (e.g. another admin's), never silently
+    // the agent's original draft.
+    const merged = mergeEditedPayload(
+      proposal.editedPayload ?? proposal.payload,
+      args.editedPayload,
+    );
     const validated = validateProposalPayload(merged);
     if (!validated.ok) {
       // Structural problem with the inline edit (e.g. cleared title) — the
@@ -390,23 +494,40 @@ export const approve = mutation({
  * commits what the human typed, not the agent's original draft. Merge is
  * whitelisted per kind; a structurally invalid draft (e.g. cleared title)
  * throws so the field error surfaces immediately instead of at approve.
+ *
+ * I11: bumps the revision and returns it. `revision` is the base the edit
+ * was made on — when outdated (another admin edited, or the agent revised its
+ * plan), the edit is refused instead of silently overwriting theirs. Merges
+ * over the EFFECTIVE payload, exactly like `approve`.
  */
 export const updateDraft = mutation({
   args: {
     proposalId: v.string(),
     editedPayload: proposalPayloadValidator,
+    revision: v.number(),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<{ revision: number }> => {
     const auth = await getAuthContext(ctx);
-    const proposal = await requireOwnProposal(ctx, auth, args.proposalId);
+    const proposal = await requireDecidableProposal(ctx, auth, args.proposalId);
     if (proposal.status !== "pending" && proposal.status !== "failed") {
       throw new ConvexError("This proposal has already been decided");
     }
-    const merged = mergeEditedPayload(proposal.payload, args.editedPayload);
+    const current = proposalRevision(proposal);
+    if (args.revision !== current) {
+      throw new ConvexError(STALE_REVISION_MESSAGE);
+    }
+    const merged = mergeEditedPayload(
+      proposal.editedPayload ?? proposal.payload,
+      args.editedPayload,
+    );
     const validated = validateProposalPayload(merged);
     if (!validated.ok) throw new ConvexError(validated.reason);
-    await ctx.db.patch(proposal._id, { editedPayload: validated.payload });
-    return null;
+    const revision = current + 1;
+    await ctx.db.patch(proposal._id, {
+      editedPayload: validated.payload,
+      revision,
+    });
+    return { revision };
   },
 });
 
@@ -415,7 +536,7 @@ export const discard = mutation({
   args: { proposalId: v.string() },
   handler: async (ctx, args) => {
     const auth = await getAuthContext(ctx);
-    const proposal = await requireOwnProposal(ctx, auth, args.proposalId);
+    const proposal = await requireDecidableProposal(ctx, auth, args.proposalId);
     if (proposal.status !== "pending" && proposal.status !== "failed") {
       throw new ConvexError("This proposal has already been decided");
     }
@@ -436,9 +557,17 @@ export type ApproveAllOutcome = {
 };
 
 /**
- * Approve every PENDING proposal in a thread, oldest first, with per-item
- * outcomes and no all-or-nothing rollback: one item failing (stale
- * reference) settles that row as `failed` and the loop continues.
+ * Approve the PENDING proposals the client rendered in its "Approve all"
+ * bar, oldest first, with per-item outcomes and no all-or-nothing rollback:
+ * one item failing (stale reference) settles that row as `failed` and the
+ * loop continues.
+ *
+ * I11: `items` carries the revision of each card as rendered. Only those
+ * proposals are considered — one that arrived after the render is never
+ * approved unseen — and if any of them changed since (edited by another
+ * admin, revised by the agent) the WHOLE call is refused before anything is
+ * executed. Items already decided meanwhile, and repeated ids, are skipped;
+ * each row is re-read right before it executes.
  *
  * Two kinds are never mass-committed: destructive kinds (they demand their
  * per-card confirm step even under Approve-all — enforced here, not just
@@ -446,29 +575,47 @@ export type ApproveAllOutcome = {
  * skipped and stay pending.
  */
 export const approveAll = mutation({
-  args: { threadId: v.string() },
+  args: {
+    threadId: v.string(),
+    items: v.array(
+      v.object({ proposalId: v.string(), revision: v.number() }),
+    ),
+  },
   handler: async (ctx, args): Promise<ApproveAllOutcome[]> => {
     const auth = await getAuthContext(ctx);
     const threadId = ctx.db.normalizeId("agentThreads", args.threadId);
-    const thread = threadId ? await ctx.db.get(threadId) : null;
-    if (
-      !thread ||
-      thread.orgId !== auth.orgId ||
-      thread.userId !== auth.userId
-    ) {
-      throw new ConvexError("Thread not found");
-    }
+    if (!threadId) throw new ConvexError("Thread not found");
+    const { thread } = await requireThreadAccess(ctx, auth, threadId, "write");
 
-    const pending = await ctx.db
-      .query("agentProposals")
-      .withIndex("by_threadId_status", (q) =>
-        q.eq("threadId", thread._id).eq("status", "pending"),
-      )
-      .take(100);
+    const pending: Doc<"agentProposals">[] = [];
+    const seen = new Set<string>();
+    for (const item of args.items.slice(0, 100)) {
+      // A repeated id would execute the same proposal twice — skip repeats.
+      if (seen.has(item.proposalId)) continue;
+      seen.add(item.proposalId);
+      const id = ctx.db.normalizeId("agentProposals", item.proposalId);
+      const proposal = id ? await ctx.db.get(id) : null;
+      if (!proposal || proposal.threadId !== thread._id) continue;
+      if (proposal.status !== "pending") continue; // decided meanwhile
+      if (proposalRevision(proposal) !== item.revision) {
+        throw new ConvexError(STALE_REVISION_MESSAGE);
+      }
+      pending.push(proposal);
+    }
     pending.sort((a, b) => a.createdAt - b.createdAt);
 
     const outcomes: ApproveAllOutcome[] = [];
-    for (const proposal of pending) {
+    for (const checked of pending) {
+      // Re-read right before executing: an earlier item's domain mutation
+      // runs nested in this transaction, so never trust the pre-check row.
+      const proposal = await ctx.db.get(checked._id);
+      if (
+        !proposal ||
+        proposal.status !== "pending" ||
+        proposalRevision(proposal) !== proposalRevision(checked)
+      ) {
+        continue;
+      }
       const meta = PROPOSAL_KIND_META[proposal.payload.kind];
       if (meta.destructive) {
         outcomes.push({
@@ -487,7 +634,7 @@ export const approveAll = mutation({
         continue;
       }
       // Approve with the stored edits (the card auto-saves edits into
-      // editedPayload via `approve`; here we take whatever is on the row).
+      // editedPayload via `updateDraft`; here we take whatever is on the row).
       const merged = proposal.editedPayload ?? proposal.payload;
       const validated = validateProposalPayload(merged);
       const outcome = validated.ok

@@ -36,6 +36,7 @@ import type * as commentAttachments from "../commentAttachments.js";
 import type * as commentReactions from "../commentReactions.js";
 import type * as comments from "../comments.js";
 import type * as connectors from "../connectors.js";
+import type * as crons from "../crons.js";
 import type * as dailyNotes from "../dailyNotes.js";
 import type * as devSeedArloJune from "../devSeedArloJune.js";
 import type * as devSeedInbox from "../devSeedInbox.js";
@@ -162,6 +163,7 @@ declare const fullApi: ApiFromModules<{
   commentReactions: typeof commentReactions;
   comments: typeof comments;
   connectors: typeof connectors;
+  crons: typeof crons;
   dailyNotes: typeof dailyNotes;
   devSeedArloJune: typeof devSeedArloJune;
   devSeedInbox: typeof devSeedInbox;

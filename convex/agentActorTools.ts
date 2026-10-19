@@ -4,7 +4,7 @@ import type { Doc } from "./_generated/dataModel";
 import { agentActorRefValidator, loadAuthContextForActor } from "./lib/auth";
 import { billingTypeValidator } from "./lib/validators";
 import { proposalPayloadValidator } from "./lib/proposalValidators";
-import { requireOwnedThread } from "./agentThreads";
+import { requireThreadAccess } from "./agentThreads";
 import { listClientsForAuth } from "./clients";
 import { listProjectsForAuth } from "./projects";
 import type { ResolvedProjectListItem } from "./lib/types";
@@ -93,9 +93,9 @@ export const getTaskDetail = internalQuery({
 
 /**
  * Record proposals for the run's thread. Beyond the shared core's checks,
- * the actor must own the thread in its org (A1 policy — A2's shared `admins`
- * visibility will widen this), so a tool can never drop cards into a thread
- * the acting user can't decide.
+ * the actor must have WRITE access to the thread under the thread policy
+ * (owner of a private thread, any admin in an `admins` thread), so a tool
+ * can never drop cards into a thread the acting user can't decide.
  */
 export const createProposals = internalMutation({
   args: {
@@ -106,7 +106,7 @@ export const createProposals = internalMutation({
   handler: async (ctx, args): Promise<string[]> => {
     const auth = await loadAuthContextForActor(ctx, args.actor);
     const found = await loadThreadByComponentId(ctx, args.componentThreadId);
-    const thread = await requireOwnedThread(ctx, auth, found._id);
+    const { thread } = await requireThreadAccess(ctx, auth, found._id, "write");
     return await insertProposalsForThread(ctx, thread, args.proposals);
   },
 });

@@ -1,6 +1,7 @@
 import { v, ConvexError } from "convex/values";
 import { internalMutation, query } from "./_generated/server";
 import { getAuthContext } from "./lib/auth";
+import { threadAccess } from "./agentThreads";
 import {
   AGENT_TABLE_MARKER,
   isAgentTableOutput,
@@ -16,8 +17,9 @@ import {
  * download). Every field is code-authored from deterministic row data — the
  * model never re-serializes a number (D1).
  *
- * Tenancy: orgId-scoped; read access is the thread OWNER or an org admin
- * (US: artifacts readable by owner + admin). Writes happen only through the
+ * Tenancy: orgId-scoped; read access follows the artifact's THREAD under the
+ * thread policy (`threadAccess`): owner or admin on a private thread, any
+ * admin on an `admins` thread. Writes happen only through the
  * internal mutation the timesheet tool calls — never from the client.
  */
 
@@ -59,7 +61,7 @@ export const createForThread = internalMutation({
   },
 });
 
-// ─── Reads (owner + admin) ──────────────────────────────────────────────────
+// ─── Reads (thread read access) ─────────────────────────────────────────────
 
 /**
  * One artifact for the canvas: parsed sheet + the download-ready CSV. Owner
@@ -83,9 +85,10 @@ export const getForCanvas = query({
     if (!id) return null;
     const artifact = await ctx.db.get(id);
     if (!artifact || artifact.orgId !== auth.orgId) return null;
-    // Owner or admin — the chat/canvas are owner surfaces; admins additionally
-    // read for the audit view. A member never sees another user's artifact.
-    if (artifact.userId !== auth.userId && !auth.isAdmin) return null;
+    // Readable exactly when its thread is (threadAccess) — never via the
+    // artifact's own userId, so a shared thread's artifacts follow the thread.
+    const thread = await ctx.db.get(artifact.threadId);
+    if (!thread || !threadAccess(thread, auth).canRead) return null;
 
     const parsed = safeParseTable(artifact.sheetJson);
     if (!parsed) return null; // corrupt payload → treat as gone, don't crash
@@ -103,7 +106,7 @@ export const getForCanvas = query({
 /**
  * Artifact ids for a thread, oldest-first — the canvas uses this only to
  * detect a freshly-arrived artifact and auto-open it once (it never needs the
- * payloads here). Owner-only, orgId-scoped.
+ * payloads here). Thread read access (`threadAccess`), orgId-scoped.
  */
 export const listByThread = query({
   args: { threadId: v.string() },
@@ -115,13 +118,7 @@ export const listByThread = query({
     const id = ctx.db.normalizeId("agentThreads", args.threadId);
     if (!id) return [];
     const thread = await ctx.db.get(id);
-    if (
-      !thread ||
-      thread.orgId !== auth.orgId ||
-      thread.userId !== auth.userId
-    ) {
-      return [];
-    }
+    if (!thread || !threadAccess(thread, auth).canRead) return [];
     const artifacts = await ctx.db
       .query("agentArtifacts")
       .withIndex("by_threadId", (q) => q.eq("threadId", thread._id))

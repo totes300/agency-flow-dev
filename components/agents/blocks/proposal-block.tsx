@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import Link from "next/link"
 import { useMutation, useQuery } from "convex/react"
 import {
@@ -65,9 +65,10 @@ export function ProposalBlock({
   }
   if (cards.length === 0) return null
 
-  // Audit read-only (non-owner admin): show each card's outcome as a compact
-  // row — no editors, no Approve/Discard, no Approve-all. The decision
-  // mutations are owner-only server-side anyway; this keeps the surface honest.
+  // Read-only (no write access to the thread, e.g. an admin auditing a
+  // member's private thread): each card's outcome as a compact row — no
+  // editors, no Approve/Discard, no Approve-all. The decision mutations
+  // check thread write access server-side anyway; this keeps it honest.
   if (readOnly) {
     return (
       <div className="flex flex-col gap-2">
@@ -101,7 +102,10 @@ export function ProposalBlock({
       {batchable.length > 1 && (
         <ApproveAllBar
           threadId={cards[0].threadId}
-          count={batchable.length}
+          items={batchable.map((c) => ({
+            proposalId: c._id,
+            revision: c.revision,
+          }))}
           confirmOnly={confirmOnly}
         />
       )}
@@ -131,19 +135,21 @@ type ReferenceData = {
 
 function ApproveAllBar({
   threadId,
-  count,
+  items,
   confirmOnly,
 }: {
   threadId: string
-  count: number
+  /** The rendered cards + their revisions — only these are approved (I11). */
+  items: Array<{ proposalId: string; revision: number }>
   confirmOnly: number
 }) {
   const approveAll = useMutation(api.agentProposals.approveAll)
   const [busy, setBusy] = useState(false)
+  const count = items.length
 
   const onApproveAll = () => {
     setBusy(true)
-    approveAll({ threadId })
+    approveAll({ threadId, items })
       .then((outcomes) => {
         const approved = outcomes.filter((o) => o.result === "approved").length
         const failed = outcomes.filter((o) => o.result === "failed").length
@@ -221,6 +227,19 @@ type CreateTaskDraft = {
   dueDate: string // YYYY-MM-DD or ""
 }
 
+function draftFromPayload(
+  payload: Extract<ProposalPayload, { kind: "createTask" }>,
+): CreateTaskDraft {
+  return {
+    title: payload.title,
+    description: payload.description ?? "",
+    projectId: payload.projectId,
+    assigneeIds: payload.assigneeIds ?? [],
+    workCategoryId: payload.workCategoryId,
+    dueDate: payload.dueDate ?? "",
+  }
+}
+
 function CreateTaskCard({
   card,
   payload,
@@ -235,17 +254,31 @@ function CreateTaskCard({
   const updateDraft = useMutation(api.agentProposals.updateDraft)
   const [busy, setBusy] = useState(false)
   // Inline-edit state, seeded from the effective payload (edits included).
-  const [draft, setDraft] = useState<CreateTaskDraft>({
-    title: payload.title,
-    description: payload.description ?? "",
-    projectId: payload.projectId,
-    assigneeIds: payload.assigneeIds ?? [],
-    workCategoryId: payload.workCategoryId,
-    dueDate: payload.dueDate ?? "",
-  })
+  const [draft, setDraft] = useState<CreateTaskDraft>(() =>
+    draftFromPayload(payload),
+  )
   const [showDescription, setShowDescription] = useState(
     Boolean(payload.description),
   )
+
+  // I11: the revision the on-screen draft reflects — what saves and approve
+  // send back. Own saves run one at a time (each on the previous one's
+  // revision); a refused one toasts "This changed — review it again."
+  const [baseRevision, setBaseRevision] = useState(card.revision)
+  const [savesInFlight, setSavesInFlight] = useState(0)
+  const baseRef = useRef(card.revision)
+  const saveChain = useRef<Promise<void>>(Promise.resolve())
+  useEffect(() => {
+    baseRef.current = baseRevision
+  }, [baseRevision])
+
+  // Someone else changed the card (another admin's edit, the agent revising
+  // its plan): show their version, so what is on screen is what approve
+  // commits.
+  if (card.revision > baseRevision && savesInFlight === 0) {
+    setBaseRevision(card.revision)
+    setDraft(draftFromPayload(payload))
+  }
 
   // Resolved display values (client-side, same lists /tasks uses)
   const selectedProject = reference.projects.find(
@@ -278,18 +311,38 @@ function CreateTaskCard({
     const next = { ...draft, ...patch }
     setDraft(next)
     if (persist) {
-      updateDraft({
-        proposalId: card._id,
-        editedPayload: toEditedPayload(next),
-      }).catch((err) => toastError(err, "Failed to save edit"))
+      setSavesInFlight((n) => n + 1)
+      saveChain.current = saveChain.current
+        .then(() =>
+          updateDraft({
+            proposalId: card._id,
+            editedPayload: toEditedPayload(next),
+            revision: baseRef.current,
+          }),
+        )
+        .then(({ revision }) => {
+          baseRef.current = revision
+          setBaseRevision(revision)
+        })
+        .catch((err) => toastError(err, "Failed to save edit"))
+        .finally(() => setSavesInFlight((n) => n - 1))
     }
   }
 
   const onApprove = () => {
     setBusy(true)
-    approve({ proposalId: card._id, editedPayload: toEditedPayload(draft) })
+    // After any pending save, so the revision sent is the one on screen.
+    saveChain.current
+      .then(() =>
+        approve({
+          proposalId: card._id,
+          revision: baseRef.current,
+          editedPayload: toEditedPayload(draft),
+        }),
+      )
       // A stale reference flips the card to its inline failed state
-      // reactively — no toast needed for that path.
+      // reactively; an outdated revision toasts "This changed — review it
+      // again." and the card shows the new version.
       .catch((err) => toastError(err, "Failed to approve proposal"))
       .finally(() => setBusy(false))
   }
@@ -422,7 +475,11 @@ function ArchiveTaskCard({
 
   const onConfirm = () => {
     setBusy(true)
-    approve({ proposalId: card._id, confirmDestructive: true })
+    approve({
+      proposalId: card._id,
+      revision: card.revision,
+      confirmDestructive: true,
+    })
       .catch((err) => toastError(err, "Failed to approve proposal"))
       .finally(() => {
         setBusy(false)

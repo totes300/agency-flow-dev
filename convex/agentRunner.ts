@@ -18,7 +18,7 @@ import {
   type MutationCtx,
 } from "./_generated/server";
 import { components, internal } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import {
   actorRef,
   getAuthContext,
@@ -27,7 +27,7 @@ import {
   type AuthContext,
 } from "./lib/auth";
 import { loadTaskForReadOrNull } from "./tasks/access";
-import { requireOwnedThread, UNTITLED_THREAD } from "./agentThreads";
+import { requireThreadAccess, UNTITLED_THREAD } from "./agentThreads";
 import { getToolsForAgent } from "./lib/agentToolRegistry";
 import {
   assembleSkillPrompt,
@@ -88,7 +88,8 @@ const MENTION_TABLE: Record<MentionType, "tasks" | "projects" | "clients" | "use
  * client, whose actor is the signed-in caller. `agentBackground.start` is
  * the internal (server-only) entry for runs without a signed-in user (A1);
  * it acts as a named org member whose membership is re-checked from the DB.
- * Both share `beginRunCore` + `executeRun`.
+ * Both share `checkRunStart` + `openRun` + `executeRun`; a background start
+ * on a busy thread is queued instead of rejected (A2a, I11).
  *
  * D6 (permission intersection): the run carries an `AgentActor`. Actor-path
  * tools receive it through a run-scoped closure and call internal variants
@@ -147,28 +148,21 @@ export type BeginRunResult = {
 };
 
 /**
- * Validate + open a run for an already-established AuthContext — the shared
- * core of both entry points (interactive `beginRun`, background
- * `beginBackgroundRun`). Re-checks everything so the action layer can't be
- * mis-trusted: thread ownership, agent run permission, no concurrent run.
- *
- * Also SAVES the user message here (not in the action): the message lands
- * transactionally with the run row, appears in the thread immediately, and
- * survives a later failure (e.g. missing AI key) so the error block has
- * its question above it.
+ * Every check that gates starting a run, for an already-established
+ * AuthContext: write access to the thread (`threadAccess` — the owner on a
+ * private thread, any admin on an `admins` thread), and the agent is live
+ * and runnable by the actor's role. READ-ONLY by design: callers rely on a
+ * throw here leaving nothing written (the queued-run claim catches it and
+ * settles the queued row instead).
  */
-async function beginRunCore(
+async function checkRunStart(
   ctx: MutationCtx,
   auth: AuthContext,
-  via: AgentActor["via"],
-  args: ObjectType<typeof beginRunArgs>,
-): Promise<BeginRunResult> {
-  const threadId = ctx.db.normalizeId("agentThreads", args.threadId);
+  rawThreadId: string,
+): Promise<{ thread: Doc<"agentThreads">; agent: Doc<"agents"> }> {
+  const threadId = ctx.db.normalizeId("agentThreads", rawThreadId);
   if (!threadId) throw new ConvexError("Thread not found");
-  const thread = await requireOwnedThread(ctx, auth, threadId);
-  if (thread.status === "running") {
-    throw new ConvexError("A run is already in progress on this thread");
-  }
+  const { thread } = await requireThreadAccess(ctx, auth, threadId, "write");
   const agent = await ctx.db.get(thread.agentId);
   if (!agent || agent.orgId !== auth.orgId) {
     throw new ConvexError("Agent not found");
@@ -179,7 +173,49 @@ async function beginRunCore(
   if (agent.runPermission === "admins" && !auth.isAdmin) {
     throw new ConvexError("You don't have permission to run this agent");
   }
+  return { thread, agent };
+}
 
+/** Shown when a run is attempted while another one is active (I11). */
+const RUN_IN_PROGRESS_MESSAGE = "A run is already in progress on this thread";
+
+/**
+ * Validate + open a run for an already-established AuthContext — the shared
+ * core of the interactive entry (`beginRun`). Interactive runs never queue:
+ * a busy thread rejects with "a run is in progress" (I11).
+ */
+async function beginRunCore(
+  ctx: MutationCtx,
+  auth: AuthContext,
+  via: AgentActor["via"],
+  args: ObjectType<typeof beginRunArgs>,
+): Promise<BeginRunResult> {
+  const { thread, agent } = await checkRunStart(ctx, auth, args.threadId);
+  if (thread.status === "running") {
+    throw new ConvexError(RUN_IN_PROGRESS_MESSAGE);
+  }
+  return await openRun(ctx, auth, via, thread, agent, args);
+}
+
+/**
+ * Open a run on a checked thread: resolve skills + composer context, SAVE the
+ * user message, record the run row (insert, or claim `queuedRunId`) and flip
+ * the thread to running.
+ *
+ * The user message is saved here (not in the action): it lands
+ * transactionally with the run row, appears in the thread immediately, and
+ * survives a later failure (e.g. missing AI key) so the error block has
+ * its question above it.
+ */
+async function openRun(
+  ctx: MutationCtx,
+  auth: AuthContext,
+  via: AgentActor["via"],
+  thread: Doc<"agentThreads">,
+  agent: Doc<"agents">,
+  args: Omit<ObjectType<typeof beginRunArgs>, "threadId">,
+  queuedRunId?: Id<"agentRuns">,
+): Promise<BeginRunResult> {
   // ─── Skills (slice 04) ───────────────────────────────────────────────
   // Resolve the agent's attached skills for THIS run: global skills always
   // load; client-scoped skills load only when the opening message names
@@ -250,16 +286,12 @@ async function beginRunCore(
   const { dropped: droppedTools } = getToolsForAgent(agent.tools, actor);
 
   const now = Date.now();
-  const runId = await ctx.db.insert("agentRuns", {
-    orgId: auth.orgId,
-    threadId: thread._id,
-    agentId: agent._id,
-    userId: auth.userId,
+  const runFields = {
     // The actor this run acts as (A1): role at begin + entry mode. Tools
     // re-derive the role from orgMembers per call; this is the audit record.
     actorIsAdmin: auth.isAdmin,
     via,
-    status: "running",
+    status: "running" as const,
     startedAt: now,
     ...(resolved.loaded.length > 0
       ? {
@@ -270,7 +302,21 @@ async function beginRunCore(
         }
       : {}),
     ...(droppedTools.length > 0 ? { droppedTools } : {}),
-  });
+  };
+  let runId: Id<"agentRuns">;
+  if (queuedRunId) {
+    // Claim the queued row in place: one audit row per run, queued → running.
+    await ctx.db.patch(queuedRunId, { ...runFields, queuedMessage: undefined });
+    runId = queuedRunId;
+  } else {
+    runId = await ctx.db.insert("agentRuns", {
+      orgId: auth.orgId,
+      threadId: thread._id,
+      agentId: agent._id,
+      userId: auth.userId,
+      ...runFields,
+    });
+  }
   await ctx.db.patch(thread._id, {
     status: "running",
     lastActivityAt: now,
@@ -330,13 +376,22 @@ export const beginRun = internalMutation({
   },
 });
 
+/** What a background start opened: a live run, or a queued one (I11). */
+export type BackgroundBeginResult =
+  | { queued: false; run: BeginRunResult }
+  | { queued: true; runId: Id<"agentRuns"> };
+
 /**
- * Background entry (A1): no `ctx.auth`. The thread's org is the run's org;
- * the acting user's membership + role are re-derived from `orgMembers` NOW
- * (`loadAuthContextForActor` throws for a non-member), and the core's
- * `requireOwnedThread` requires them to own the thread (A2 widens this to
- * shared `admins` threads). Internal only — reached solely through
- * `internal.agentBackground.start`.
+ * Background entry (A1, A2a): no `ctx.auth`. The thread's org is the run's
+ * org; the acting user's membership + role are re-derived from `orgMembers`
+ * NOW (`loadAuthContextForActor` throws for a non-member), and
+ * `checkRunStart` requires write access under the thread policy — the owner
+ * on a private thread, a CURRENT admin on an `admins` thread. Internal only —
+ * reached solely through `internal.agentBackground.start`.
+ *
+ * Per-thread serialization (I11): when the thread is busy — a run is active
+ * or earlier background runs are still queued — the run is recorded as
+ * `queued` (FIFO) instead of rejected; `finishRun` pumps the queue.
  */
 export const beginBackgroundRun = internalMutation({
   args: {
@@ -344,20 +399,153 @@ export const beginBackgroundRun = internalMutation({
     actingUserId: v.id("users"),
     message: v.string(),
   },
-  handler: async (ctx, args): Promise<BeginRunResult> => {
+  handler: async (ctx, args): Promise<BackgroundBeginResult> => {
     const threadId = ctx.db.normalizeId("agentThreads", args.threadId);
-    const thread = threadId ? await ctx.db.get(threadId) : null;
-    if (!thread) throw new ConvexError("Thread not found");
+    const found = threadId ? await ctx.db.get(threadId) : null;
+    if (!found) throw new ConvexError("Thread not found");
     const auth = await loadAuthContextForActor(ctx, {
-      orgId: thread.orgId,
+      orgId: found.orgId,
       userId: args.actingUserId,
     });
-    return await beginRunCore(ctx, auth, "background", {
-      threadId: args.threadId,
+    const { thread, agent } = await checkRunStart(ctx, auth, args.threadId);
+
+    const ahead = await nextQueuedRun(ctx, thread._id);
+    if (thread.status === "running" || ahead) {
+      const now = Date.now();
+      const runId = await ctx.db.insert("agentRuns", {
+        orgId: thread.orgId,
+        threadId: thread._id,
+        agentId: agent._id,
+        userId: auth.userId,
+        actorIsAdmin: auth.isAdmin,
+        via: "background",
+        status: "queued",
+        startedAt: now,
+        queuedAt: now,
+        queuedMessage: args.message,
+      });
+      // Idle thread with a backlog (the pump between a finish and its
+      // scheduled claim): make sure the queue moves.
+      if (thread.status !== "running") {
+        await ctx.scheduler.runAfter(0, internal.agentBackground.runNextQueued, {
+          threadId: thread._id,
+        });
+      }
+      return { queued: true, runId };
+    }
+    const run = await openRun(ctx, auth, "background", thread, agent, {
       message: args.message,
     });
+    return { queued: false, run };
   },
 });
+
+/** The oldest queued run of a thread (FIFO by creation time), if any. */
+async function nextQueuedRun(
+  ctx: MutationCtx,
+  threadId: Id<"agentThreads">,
+): Promise<Doc<"agentRuns"> | null> {
+  return await ctx.db
+    .query("agentRuns")
+    .withIndex("by_threadId_status", (q) =>
+      q.eq("threadId", threadId).eq("status", "queued"),
+    )
+    .first();
+}
+
+/**
+ * Claim the thread's next queued run (A2a) — called by
+ * `agentBackground.runNextQueued`, which `finishRun` schedules. Returns null
+ * when there is nothing to do: the thread is busy again (an interactive run
+ * slipped in — its finish pumps the queue) or the queue is empty.
+ *
+ * Exactly-once: the claim flips the row queued → running in this
+ * transaction; a concurrent claim conflicts (OCC) and re-runs to find the
+ * thread running. The actor is RE-CHECKED now (membership, role, thread
+ * write access, agent permission): a queued run whose actor lost access
+ * settles as `failed` with the reason — an in-thread error block — and the
+ * next queued run is tried.
+ */
+export const beginNextQueuedRun = internalMutation({
+  args: { threadId: v.id("agentThreads") },
+  handler: async (ctx, args): Promise<BeginRunResult | null> => {
+    const thread = await ctx.db.get(args.threadId);
+    if (!thread || thread.status === "running") return null;
+    for (;;) {
+      const next = await nextQueuedRun(ctx, thread._id);
+      if (!next) return null;
+      let auth: AuthContext;
+      let agent: Doc<"agents">;
+      try {
+        auth = await loadAuthContextForActor(ctx, {
+          orgId: thread.orgId,
+          userId: next.userId,
+        });
+        ({ agent } = await checkRunStart(ctx, auth, thread._id));
+      } catch (err) {
+        // Nothing was written by the checks. Post the queued message so the
+        // error block has its context, then settle the queued row.
+        if (next.queuedMessage) {
+          await saveMessage(ctx, components.agent, {
+            threadId: thread.componentThreadId,
+            userId: next.userId,
+            prompt: next.queuedMessage,
+          });
+        }
+        await ctx.db.patch(next._id, {
+          status: "failed",
+          finishedAt: Date.now(),
+          queuedMessage: undefined,
+          error: `Queued run not started: ${errorText(err)}`.slice(0, 500),
+          errorHint:
+            "The run's acting user no longer has access to this thread or agent.",
+        });
+        continue;
+      }
+      return await openRun(
+        ctx,
+        auth,
+        "background",
+        thread,
+        agent,
+        { message: next.queuedMessage ?? "" },
+        next._id,
+      );
+    }
+  },
+});
+
+/**
+ * Fallback for a queued head whose OPEN threw after its checks passed (the
+ * claim transaction rolled back, so the row is still `queued`): settle it as
+ * `failed` with the error so a bad head never blocks the queue. Called by
+ * `agentBackground.runNextQueued` in its own transaction; a no-op when the
+ * thread is busy again.
+ */
+export const failQueuedHead = internalMutation({
+  args: { threadId: v.id("agentThreads"), error: v.string() },
+  handler: async (ctx, args): Promise<boolean> => {
+    const thread = await ctx.db.get(args.threadId);
+    if (!thread || thread.status === "running") return false;
+    const head = await nextQueuedRun(ctx, thread._id);
+    if (!head) return false;
+    await ctx.db.patch(head._id, {
+      status: "failed",
+      finishedAt: Date.now(),
+      queuedMessage: undefined,
+      error: `Queued run not started: ${args.error}`.slice(0, 500),
+      errorHint: "Something went wrong starting this run.",
+    });
+    return true;
+  },
+});
+
+/** Plain text of a thrown ConvexError / Error. */
+export function errorText(err: unknown): string {
+  if (err instanceof ConvexError) return String(err.data);
+  if (err instanceof Error) return err.message;
+  return "unknown error";
+}
 
 /**
  * Fetch an agent's attached skills as resolver input (slice 04). Skips any
@@ -544,7 +732,44 @@ export const recordUsage = internalMutation({
   },
 });
 
-/** Close a run and settle the thread status. */
+type SettleStatus = "succeeded" | "failed" | "cancelled" | "stopped_by_skill";
+
+/**
+ * Settle a running run: close the row, free the thread, and — I11 — start
+ * the thread's next queued background run. Shared by `finishRun` (every
+ * settle path of `executeRun`) and the stale-run sweep, so the queue can't
+ * stall behind a finished or dead run.
+ */
+async function settleRun(
+  ctx: MutationCtx,
+  run: Doc<"agentRuns">,
+  args: { status: SettleStatus; error?: string; errorHint?: string },
+): Promise<void> {
+  const now = Date.now();
+  await ctx.db.patch(run._id, {
+    status: args.status,
+    finishedAt: now,
+    error: args.error,
+    errorHint: args.errorHint,
+  });
+  const thread = await ctx.db.get(run.threadId);
+  if (!thread) return;
+  await ctx.db.patch(run.threadId, {
+    status: args.status === "failed" ? "error" : "idle",
+    lastActivityAt: now,
+  });
+  if (await nextQueuedRun(ctx, run.threadId)) {
+    await ctx.scheduler.runAfter(0, internal.agentBackground.runNextQueued, {
+      threadId: run.threadId,
+    });
+  }
+}
+
+/**
+ * Close a run and settle the thread status. A no-op for a run that already
+ * left `running` (e.g. the stale-run sweep timed it out first), so a late
+ * finish never resurrects it or clobbers a newer run's thread status.
+ */
 export const finishRun = internalMutation({
   args: {
     runId: v.id("agentRuns"),
@@ -559,23 +784,67 @@ export const finishRun = internalMutation({
   },
   handler: async (ctx, args) => {
     const run = await ctx.db.get(args.runId);
-    if (!run) return;
-    const now = Date.now();
-    await ctx.db.patch(args.runId, {
+    if (!run || run.status !== "running") return;
+    await settleRun(ctx, run, {
       status: args.status,
-      finishedAt: now,
       error: args.error,
       errorHint: args.errorHint,
     });
-    const thread = await ctx.db.get(run.threadId);
-    if (thread) {
-      await ctx.db.patch(run.threadId, {
-        status: args.status === "failed" ? "error" : "idle",
-        lastActivityAt: now,
-      });
-    }
   },
 });
+
+/** A run still `running` after this long is dead (actions cap at 10 min). */
+export const STALE_RUN_MS = 15 * 60 * 1000;
+const STALE_SWEEP_BATCH = 100;
+
+/**
+ * Stale-run sweep (crons.ts, every 5 min): a run stuck in `running` past
+ * STALE_RUN_MS — its action died without settling — is failed as "Run timed
+ * out", its live stream is aborted, the thread is freed and its queue
+ * pumped. Index range on (status, startedAt), bounded batch; a larger
+ * backlog drains on the following ticks.
+ */
+export const sweepStaleRuns = internalMutation({
+  args: {},
+  handler: async (ctx): Promise<number> => {
+    const cutoff = Date.now() - STALE_RUN_MS;
+    const stale = await ctx.db
+      .query("agentRuns")
+      .withIndex("by_status_startedAt", (q) =>
+        q.eq("status", "running").lt("startedAt", cutoff),
+      )
+      .take(STALE_SWEEP_BATCH);
+    for (const run of stale) {
+      const thread = await ctx.db.get(run.threadId);
+      if (thread) await abortThreadStreams(ctx, thread, "Run timed out");
+      await settleRun(ctx, run, {
+        status: "failed",
+        error: "Run timed out",
+        errorHint: "You can send a follow-up message in this thread to retry.",
+      });
+    }
+    return stale.length;
+  },
+});
+
+/** Abort the component's live delta streams of a thread (Stop, timeout). */
+async function abortThreadStreams(
+  ctx: MutationCtx,
+  thread: Doc<"agentThreads">,
+  reason: string,
+): Promise<void> {
+  const streams = await listStreams(ctx, components.agent, {
+    threadId: thread.componentThreadId,
+  });
+  for (const stream of streams) {
+    if (stream.status === "streaming") {
+      await abortStream(ctx, components.agent, {
+        streamId: stream.streamId,
+        reason,
+      });
+    }
+  }
+}
 
 // ─── The runner action ──────────────────────────────────────────────────────
 
@@ -820,7 +1089,8 @@ function synthesizePrompt(
 }
 
 /**
- * Stop the active run (owner-only). Two levers, per the PRD's cooperative
+ * Stop the active run — or cancel a queued one — (thread write access: the
+ * owner of a private thread, any admin in an `admins` thread). Two levers, per the PRD's cooperative
  * model: (1) the cancel flag — the loop checks it between steps; (2) abort
  * the component's live delta stream so mid-prose generation halts on its
  * next delta write instead of finishing the step. Partial output stays;
@@ -831,26 +1101,28 @@ export const stopRun = mutation({
   handler: async (ctx, args) => {
     const auth = await getAuthContext(ctx);
     const run = await ctx.db.get(args.runId);
-    if (!run || run.orgId !== auth.orgId || run.userId !== auth.userId) {
+    if (!run || run.orgId !== auth.orgId) {
       throw new ConvexError("Run not found");
+    }
+    try {
+      await requireThreadAccess(ctx, auth, run.threadId, "write");
+    } catch {
+      throw new ConvexError("Run not found"); // don't leak existence
+    }
+    if (run.status === "queued") {
+      // Never started: cancel it in place. Its message is not posted to the
+      // thread; `queuedMessage` stays on the row as the never-started marker.
+      await ctx.db.patch(run._id, {
+        status: "cancelled",
+        finishedAt: Date.now(),
+      });
+      return null;
     }
     if (run.status !== "running" || run.cancelRequested) return null;
     await ctx.db.patch(run._id, { cancelRequested: true });
 
     const thread = await ctx.db.get(run.threadId);
-    if (thread) {
-      const streams = await listStreams(ctx, components.agent, {
-        threadId: thread.componentThreadId,
-      });
-      for (const stream of streams) {
-        if (stream.status === "streaming") {
-          await abortStream(ctx, components.agent, {
-            streamId: stream.streamId,
-            reason: "Stopped by user",
-          });
-        }
-      }
-    }
+    if (thread) await abortThreadStreams(ctx, thread, "Stopped by user");
     return null;
   },
 });

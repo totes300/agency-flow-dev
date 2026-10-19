@@ -41,10 +41,17 @@ export function ThreadView({ threadId }: { threadId: string }) {
     return <ThreadViewSkeleton />
   }
 
-  // A non-owner admin views the thread read-only (audit): the composer is
-  // replaced with a notice and proposal cards render inert. Every write path
-  // is owner-checked server-side too, so this is UX, not the security gate.
-  const readOnly = thread.viewerIsOwner === false
+  // Without write access (an admin auditing a member's private thread) the
+  // composer is replaced with a notice and proposal cards render inert. Every
+  // write path re-checks the thread policy server-side, so this is UX, not
+  // the security gate.
+  const readOnly = !thread.viewerCanWrite
+
+  // A shared (admins) thread names the sender of each user turn.
+  const authorNames =
+    thread.visibility === "admins"
+      ? new Map(thread.authors.map((a) => [a.userId as string, a.name]))
+      : null
 
   // One timeline: messages by creation time + settled-run outcomes by
   // finish time, so an error/stop note lands under the run it closes.
@@ -52,9 +59,33 @@ export function ThreadView({ threadId }: { threadId: string }) {
     messages.map((message) => ({
       key: message.key,
       at: message._creationTime,
-      node: <MessageRow message={message} readOnly={readOnly} />,
+      node: (
+        <MessageRow
+          message={message}
+          readOnly={readOnly}
+          authorName={
+            authorNames && message.userId
+              ? authorNames.get(message.userId)
+              : undefined
+          }
+        />
+      ),
     }))
   for (const run of runs ?? []) {
+    // A background run waiting for the active one (I11) — its message is
+    // posted when it starts, so only a quiet note shows meanwhile.
+    if (run.queuedAt !== null) {
+      timeline.push({
+        key: `${run._id}-queued`,
+        at: run.queuedAt,
+        node: (
+          <SystemBlock>
+            Background run queued — starts when the current run finishes.
+          </SystemBlock>
+        ),
+      })
+      continue
+    }
     // "Skill loaded" notes anchor to run start, so they sort right after the
     // triggering user message and above the agent's response (slice 04).
     for (const skill of run.loadedSkills) {
@@ -104,6 +135,12 @@ export function ThreadView({ threadId }: { threadId: string }) {
         at: run.finishedAt,
         node: <ErrorBlock message={run.error} hint={run.errorHint} />,
       })
+    } else if (run.cancelledBeforeStart) {
+      timeline.push({
+        key: run._id,
+        at: run.finishedAt,
+        node: <SystemBlock>Queued background run cancelled.</SystemBlock>,
+      })
     } else if (run.status === "cancelled") {
       timeline.push({
         key: run._id,
@@ -152,12 +189,14 @@ export function ThreadView({ threadId }: { threadId: string }) {
 function MessageRow({
   message,
   readOnly,
+  authorName,
 }: {
   message: UIMessage
   readOnly: boolean
+  authorName?: string
 }) {
   if (message.role === "user") {
-    return <UserMessage text={message.text} />
+    return <UserMessage text={message.text} authorName={authorName} />
   }
   const blocks = classifyParts(message.parts as unknown as MessagePartLike[])
   if (blocks.length === 0) return null

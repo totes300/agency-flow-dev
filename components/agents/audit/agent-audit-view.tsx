@@ -5,7 +5,7 @@
  * in the org — who ran which agent, when, outcome, token usage — with
  * URL-persisted filters (agent / user / status / date range) per repo
  * convention. A row opens the thread read-only (admins get read access via
- * `requireReadableThread`; the composer + proposal controls are inert there).
+ * `threadAccess` (read, not write); the composer + proposal controls are inert there).
  * Admin-gated: members never reach the data query (server-enforced too).
  */
 
@@ -40,6 +40,7 @@ import { cn } from "@/lib/utils"
 const ALL = "all"
 
 const STATUS_OPTIONS: { value: string; label: string }[] = [
+  { value: "queued", label: "Queued" },
   { value: "running", label: "Running" },
   { value: "succeeded", label: "Succeeded" },
   { value: "failed", label: "Failed" },

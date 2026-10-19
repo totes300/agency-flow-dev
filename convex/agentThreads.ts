@@ -7,9 +7,18 @@ import {
   vStreamArgs,
 } from "@convex-dev/agent";
 import { components } from "./_generated/api";
-import { mutation, query, type QueryCtx } from "./_generated/server";
+import {
+  internalMutation,
+  mutation,
+  query,
+  type QueryCtx,
+} from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
-import { getAuthContext, type AuthContext } from "./lib/auth";
+import {
+  getAuthContext,
+  loadAuthContextForActor,
+  type AuthContext,
+} from "./lib/auth";
 
 /**
  * App-side thread lifecycle. Message storage lives in the @convex-dev/agent
@@ -20,64 +29,76 @@ import { getAuthContext, type AuthContext } from "./lib/auth";
 /** Placeholder until the first user message auto-titles the thread. */
 export const UNTITLED_THREAD = "New chat";
 
+export type ThreadVisibility = "private" | "admins";
+export type ThreadAccessMode = "read" | "write";
+
 /**
- * Owner-only access check shared by every thread-scoped WRITE (create a run,
- * stop a run). Ownership is non-negotiable for mutations: an admin may READ
- * any thread (audit) but may never act inside one they don't own — sends stay
- * owner-only server-side (US 51, D6).
+ * THE thread access policy (A2a; PRD §4.2, §5.5, I10) — every thread-scoped
+ * read and write goes through it:
+ *
+ * | visibility          | read                  | write (send, stop, decide) |
+ * |---------------------|-----------------------|----------------------------|
+ * | private (or unset)  | owner, any org admin  | owner only                 |
+ * | admins              | any org admin         | any org admin              |
+ *
+ * A private thread's admin read is the audit view (US 52): the transcript
+ * is visible, the composer + proposal controls are inert. Members never
+ * reach an `admins` thread. Pure — `auth` must already be resolved for the
+ * thread's org (role from the JWT for queries, from `orgMembers` for runs).
  */
-export async function requireOwnedThread(
-  ctx: QueryCtx,
-  auth: AuthContext,
-  threadId: Id<"agentThreads">,
-): Promise<Doc<"agentThreads">> {
-  const thread = await ctx.db.get(threadId);
-  if (!thread || thread.orgId !== auth.orgId) {
-    throw new ConvexError("Thread not found");
+export function threadAccess(
+  thread: Doc<"agentThreads">,
+  auth: Pick<AuthContext, "orgId" | "userId" | "isAdmin">,
+): { canRead: boolean; canWrite: boolean } {
+  if (thread.orgId !== auth.orgId) return { canRead: false, canWrite: false };
+  if (thread.visibility === "admins") {
+    return { canRead: auth.isAdmin, canWrite: auth.isAdmin };
   }
-  if (thread.userId !== auth.userId) {
-    throw new ConvexError("Thread not found"); // don't leak existence
-  }
-  return thread;
+  const isOwner = thread.userId === auth.userId;
+  return { canRead: isOwner || auth.isAdmin, canWrite: isOwner };
 }
 
 /**
- * Read access for thread-scoped QUERIES: the owner always, plus an org admin
- * (admin-sees-all, US 52 — powers the audit view's read-only thread open).
- * Returns `isOwner` so the caller can gate interactivity: a non-owner admin
- * views the transcript but the composer and proposal controls are inert
- * (and the underlying mutations reject them anyway). A foreign-tenant or
- * garbage id 404s without leaking existence.
+ * Load a thread and require `mode` access under `threadAccess`. A missing,
+ * foreign-tenant or forbidden thread all 404 the same way ("Thread not
+ * found") so existence never leaks. Returns `canWrite` so read callers can
+ * gate interactivity.
  */
-export async function requireReadableThread(
+export async function requireThreadAccess(
   ctx: QueryCtx,
   auth: AuthContext,
   threadId: Id<"agentThreads">,
-): Promise<{ thread: Doc<"agentThreads">; isOwner: boolean }> {
+  mode: ThreadAccessMode,
+): Promise<{ thread: Doc<"agentThreads">; canWrite: boolean }> {
   const thread = await ctx.db.get(threadId);
-  if (!thread || thread.orgId !== auth.orgId) {
-    throw new ConvexError("Thread not found");
-  }
-  const isOwner = thread.userId === auth.userId;
-  if (!isOwner && !auth.isAdmin) {
+  if (!thread) throw new ConvexError("Thread not found");
+  const access = threadAccess(thread, auth);
+  if (mode === "write" ? !access.canWrite : !access.canRead) {
     throw new ConvexError("Thread not found"); // don't leak existence
   }
-  return { thread, isOwner };
+  return { thread, canWrite: access.canWrite };
 }
 
 // ─── Queries ────────────────────────────────────────────────────────────────
 
-/** Current user's threads, newest activity first — the rail's Recent list. */
+/**
+ * Current user's threads, newest activity first — the rail's Recent list.
+ * Threads the viewer OWNS and can still read: a demoted owner of an
+ * `admins` thread no longer lists it. Other admins' shared threads never
+ * appear here — they get their own surfaces (e.g. Triage).
+ */
 export const listMine = query({
   args: {},
   handler: async (ctx) => {
     const auth = await getAuthContext(ctx);
-    const threads = await ctx.db
-      .query("agentThreads")
-      .withIndex("by_orgId_userId", (q) =>
-        q.eq("orgId", auth.orgId).eq("userId", auth.userId),
-      )
-      .collect();
+    const threads = (
+      await ctx.db
+        .query("agentThreads")
+        .withIndex("by_orgId_userId", (q) =>
+          q.eq("orgId", auth.orgId).eq("userId", auth.userId),
+        )
+        .collect()
+    ).filter((t) => threadAccess(t, auth).canRead);
 
     // Resolve agent names for the rail rows (agent icon + title + time).
     const agentIds = [...new Set(threads.map((t) => t.agentId))];
@@ -100,7 +121,7 @@ export const listMine = query({
 });
 
 /**
- * One thread (owner-only) — the chat pane's header + message source.
+ * One thread (readable per `threadAccess`) — the chat pane's header + message source.
  * `threadId` is a plain string (it arrives from the URL); garbage
  * normalizes to null and 404s cleanly.
  */
@@ -110,8 +131,9 @@ export const get = query({
     const auth = await getAuthContext(ctx);
     const id = ctx.db.normalizeId("agentThreads", args.threadId);
     if (!id) throw new ConvexError("Thread not found");
-    const { thread, isOwner } = await requireReadableThread(ctx, auth, id);
+    const { thread, canWrite } = await requireThreadAccess(ctx, auth, id, "read");
     const agent = await ctx.db.get(thread.agentId);
+    const visibility: ThreadVisibility = thread.visibility ?? "private";
 
     // The in-flight run, if any — the composer's Stop button target.
     // Newest-first so a stale stuck row can't shadow the live one.
@@ -120,12 +142,29 @@ export const get = query({
         ? (
             await ctx.db
               .query("agentRuns")
-              .withIndex("by_threadId", (q) => q.eq("threadId", thread._id))
-              .filter((q) => q.eq(q.field("orgId"), auth.orgId))
+              .withIndex("by_threadId_status", (q) =>
+                q.eq("threadId", thread._id).eq("status", "running"),
+              )
               .order("desc")
-              .collect()
-          ).find((r) => r.status === "running")
+              .take(1)
+          )[0]
         : undefined;
+
+    // Shared threads show who wrote each user turn. User messages carry the
+    // sender's userId (saveMessage in beginRunCore); the names come from the
+    // thread's run actors — exactly the set of users who can have sent one.
+    const authors: { userId: Id<"users">; name: string }[] = [];
+    if (visibility === "admins") {
+      const runs = await ctx.db
+        .query("agentRuns")
+        .withIndex("by_threadId", (q) => q.eq("threadId", thread._id))
+        .take(500);
+      const userIds = [...new Set(runs.map((r) => r.userId))];
+      for (const userId of userIds) {
+        const user = await ctx.db.get(userId);
+        if (user) authors.push({ userId, name: user.name });
+      }
+    }
 
     return {
       _id: thread._id,
@@ -134,9 +173,14 @@ export const get = query({
       status: thread.status,
       agentId: thread.agentId,
       agentName: agent?.name ?? "Agent",
-      // Non-owner admins view read-only (audit): the UI hides the composer and
-      // renders proposal cards inert. Every write path is owner-checked too.
-      viewerIsOwner: isOwner,
+      visibility,
+      anchor: thread.anchor ?? null,
+      // Without write access (an admin auditing a member's private thread)
+      // the UI hides the composer and renders proposal cards inert. Every
+      // write path re-checks `threadAccess` server-side.
+      viewerCanWrite: canWrite,
+      viewerIsOwner: thread.userId === auth.userId,
+      authors,
       activeRun: activeRun
         ? {
             _id: activeRun._id,
@@ -158,7 +202,7 @@ export const listRuns = query({
     const auth = await getAuthContext(ctx);
     const id = ctx.db.normalizeId("agentThreads", args.threadId);
     if (!id) throw new ConvexError("Thread not found");
-    const { thread } = await requireReadableThread(ctx, auth, id);
+    const { thread } = await requireThreadAccess(ctx, auth, id, "read");
     const runs = await ctx.db
       .query("agentRuns")
       .withIndex("by_threadId", (q) => q.eq("threadId", thread._id))
@@ -167,6 +211,12 @@ export const listRuns = query({
     return runs.map((r) => ({
       _id: r._id,
       status: r.status,
+      // A queued background run (A2a) has no outcome yet — a quiet line.
+      queuedAt: r.status === "queued" ? (r.queuedAt ?? r.startedAt) : null,
+      // Cancelled while still queued (stopRun) — it never ran; its message
+      // was never posted.
+      cancelledBeforeStart:
+        r.status === "cancelled" && r.queuedMessage !== undefined,
       startedAt: r.startedAt,
       finishedAt: r.finishedAt ?? null,
       error: r.error ?? null,
@@ -197,7 +247,7 @@ export const listMessages = query({
     const auth = await getAuthContext(ctx);
     const id = ctx.db.normalizeId("agentThreads", args.threadId);
     if (!id) throw new ConvexError("Thread not found");
-    const { thread } = await requireReadableThread(ctx, auth, id);
+    const { thread } = await requireThreadAccess(ctx, auth, id, "read");
     const paginated = await listUIMessages(ctx, components.agent, {
       threadId: thread.componentThreadId,
       paginationOpts: args.paginationOpts,
@@ -245,6 +295,97 @@ export const create = mutation({
       status: "idle",
       lastActivityAt: now,
       createdAt: now,
+    });
+  },
+});
+
+export const threadVisibilityValidator = v.union(
+  v.literal("private"),
+  v.literal("admins"),
+);
+export const threadAnchorValidator = v.object({
+  type: v.string(),
+  id: v.string(),
+});
+
+/**
+ * "The one thread for this anchor" (A2a) — e.g. the shared admin
+ * conversation of one email thread. Idempotent: returns the existing thread
+ * for the same (org, anchor, agent, visibility[, owner when private]) or
+ * creates it, component thread included. The owner is part of the key only
+ * for private threads, so each member gets their own task-anchored private
+ * thread (I10) while an `admins` anchor has exactly one.
+ *
+ * Concurrent calls are safe: both read the same index range, so Convex OCC
+ * serializes them and the loser re-runs and finds the winner's row. The
+ * agent's runPermission must fit the owner's role (an admins-only agent never
+ * gets a member-owned thread).
+ *
+ * INTERNAL: server code (job registry, email pipeline) decides anchors. The
+ * owner must be a current org member; an `admins` thread's owner must be an
+ * admin (it is the nominal owner — any admin may act in it).
+ */
+export const ensureAnchoredThread = internalMutation({
+  args: {
+    orgId: v.string(),
+    agentId: v.id("agents"),
+    anchor: threadAnchorValidator,
+    visibility: threadVisibilityValidator,
+    ownerUserId: v.id("users"),
+    title: v.optional(v.string()),
+  },
+  handler: async (ctx, args): Promise<Id<"agentThreads">> => {
+    const agent = await ctx.db.get(args.agentId);
+    if (!agent || agent.orgId !== args.orgId || agent.archivedAt) {
+      throw new ConvexError("Agent not found");
+    }
+    const owner = await loadAuthContextForActor(ctx, {
+      orgId: args.orgId,
+      userId: args.ownerUserId,
+    });
+    if (args.visibility === "admins" && !owner.isAdmin) {
+      throw new ConvexError("An admins thread must be owned by an admin");
+    }
+    if (agent.runPermission === "admins" && !owner.isAdmin) {
+      throw new ConvexError("This agent can only run in an admin's thread");
+    }
+
+    // Exact key through the index: (org, anchor, agent, visibility) for an
+    // `admins` thread, plus the owner for a private one.
+    const byKey = ctx.db
+      .query("agentThreads")
+      .withIndex("by_orgId_anchorType_anchorId_agentId_visibility_userId", (q) => {
+        const prefix = q
+          .eq("orgId", args.orgId)
+          .eq("anchor.type", args.anchor.type)
+          .eq("anchor.id", args.anchor.id)
+          .eq("agentId", args.agentId)
+          .eq("visibility", args.visibility);
+        return args.visibility === "private"
+          ? prefix.eq("userId", args.ownerUserId)
+          : prefix;
+      });
+    const existing = await byKey.first();
+    if (existing) return existing._id;
+
+    const title = args.title?.trim().slice(0, 120) || UNTITLED_THREAD;
+    const componentThreadId = await createComponentThread(
+      ctx,
+      components.agent,
+      { userId: args.ownerUserId, title },
+    );
+    const now = Date.now();
+    return await ctx.db.insert("agentThreads", {
+      orgId: args.orgId,
+      componentThreadId,
+      agentId: agent._id,
+      userId: args.ownerUserId,
+      title,
+      status: "idle",
+      lastActivityAt: now,
+      createdAt: now,
+      visibility: args.visibility,
+      anchor: { type: args.anchor.type, id: args.anchor.id },
     });
   },
 });

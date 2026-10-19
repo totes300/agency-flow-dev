@@ -7,9 +7,16 @@ import { cn } from "@/lib/utils"
  * reference chips so the sent bubble mirrors the composer — and it survives a
  * reload because the refs live in the message text, not a side table.
  */
-export function UserMessage({ text }: { text: string }) {
+export function UserMessage({
+  text,
+  authorName,
+}: {
+  text: string
+  /** Shared (admins) threads: who sent this turn. */
+  authorName?: string
+}) {
   const segments = parseMentionText(text)
-  return (
+  const bubble = (
     <div className="ml-12 self-end whitespace-pre-wrap rounded-lg bg-muted px-3 py-2 text-sm leading-relaxed">
       {segments.map((seg, i) =>
         seg.kind === "text" ? (
@@ -26,6 +33,13 @@ export function UserMessage({ text }: { text: string }) {
           </span>
         ),
       )}
+    </div>
+  )
+  if (!authorName) return bubble
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <span className="text-xs text-muted-foreground">{authorName}</span>
+      {bubble}
     </div>
   )
 }

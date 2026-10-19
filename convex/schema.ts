@@ -861,10 +861,32 @@ export default defineSchema({
     ),
     lastActivityAt: v.number(),
     createdAt: v.number(),
+    // Who may read / write / decide in the thread (A2a, PRD §4.2, §5.5).
+    // Unset = "private" (every pre-A2 row): the owner writes, the owner or
+    // any org admin reads (audit). "admins": any org admin reads, writes and
+    // decides; members get neither. One policy: `threadAccess` in
+    // convex/agentThreads.ts.
+    visibility: v.optional(v.union(v.literal("private"), v.literal("admins"))),
+    // What the thread is ABOUT, for "the one thread for X" lookups (e.g. the
+    // shared admin conversation of one email thread). Plain strings: the
+    // anchor type set is open (emailThread | task | project | …) and the id
+    // is the anchored record's id. `ensureAnchoredThread` is idempotent on
+    // (orgId, anchor).
+    anchor: v.optional(v.object({ type: v.string(), id: v.string() })),
   })
     .index("by_orgId_userId", ["orgId", "userId"])
     .index("by_orgId_agentId", ["orgId", "agentId"])
-    .index("by_componentThreadId", ["componentThreadId"]),
+    .index("by_componentThreadId", ["componentThreadId"])
+    // Exact anchored-thread key (ensureAnchoredThread); its prefix also finds
+    // every thread of an anchor in an org.
+    .index("by_orgId_anchorType_anchorId_agentId_visibility_userId", [
+      "orgId",
+      "anchor.type",
+      "anchor.id",
+      "agentId",
+      "visibility",
+      "userId",
+    ]),
 
   // One row per agent response cycle — the audit unit (who ran which agent,
   // when, outcome, token usage).
@@ -881,6 +903,12 @@ export default defineSchema({
     actorIsAdmin: v.optional(v.boolean()),
     via: v.optional(v.union(v.literal("user"), v.literal("background"))),
     status: v.union(
+      // A background start that arrived while the thread was busy (A2a,
+      // I11 per-thread serialization). It holds its message in
+      // `queuedMessage` and is claimed — actor re-checked — when the active
+      // run settles (`finishRun` → `agentBackground.runNextQueued`). A claim
+      // that fails the re-check settles it as `failed`.
+      v.literal("queued"),
       v.literal("running"),
       v.literal("succeeded"),
       v.literal("failed"),
@@ -889,8 +917,13 @@ export default defineSchema({
       // user Stop (cancelled) and a failure; the thread stays continuable.
       v.literal("stopped_by_skill"),
     ),
+    // Enqueue time while `queued`; re-stamped when the run is claimed.
     startedAt: v.number(),
     finishedAt: v.optional(v.number()),
+    // The prompt of a `queued` run — saved to the thread only when the run
+    // starts (so it never lands inside the active run's turn); cleared then.
+    queuedMessage: v.optional(v.string()),
+    queuedAt: v.optional(v.number()),
     // Cooperative Stop: set by stopRun, checked by the loop between steps.
     cancelRequested: v.optional(v.boolean()),
     // Skills loaded into this run's system prompt (slice 04) — surfaced as
@@ -918,7 +951,10 @@ export default defineSchema({
     errorHint: v.optional(v.string()),
   })
     .index("by_orgId", ["orgId"])
-    .index("by_threadId", ["threadId"]),
+    .index("by_threadId", ["threadId"])
+    .index("by_threadId_status", ["threadId", "status"])
+    // Stale-run sweep (crons.ts): runs stuck in `running` past a cutoff.
+    .index("by_status_startedAt", ["status", "startedAt"]),
 
   // Big code-authored outputs a run produces (PRD Module 5 · canvas). One
   // row per artifact; the chat carries a lightweight `artifact` block that
@@ -964,13 +1000,20 @@ export default defineSchema({
     threadId: v.id("agentThreads"),
     // The run that proposed it, when known — audit only.
     runId: v.optional(v.id("agentRuns")),
-    // Thread owner at propose time; the only user who can decide the card.
+    // Thread owner at propose time. Who may DECIDE follows write access to
+    // the thread (A2a): the owner on a private thread, any admin on an
+    // `admins` thread — plus the kind's approveScope.
     userId: v.id("users"),
-    // The agent's draft (kind-discriminated). Never mutated after insert —
-    // human edits land in editedPayload so the original intent stays
-    // auditable next to what was actually committed.
+    // The agent's draft (kind-discriminated). Human edits land in
+    // editedPayload so the agent's intent stays auditable next to what was
+    // committed; only the agent revising its own plan
+    // (`updateProposalPayload`) replaces it.
     payload: proposalPayloadValidator,
     editedPayload: v.optional(proposalPayloadValidator),
+    // I11: bumped on every change to the effective payload (a human
+    // updateDraft, the agent revising its plan). Decisions carry the revision
+    // the client rendered; a mismatch is refused. Unset = revision 1.
+    revision: v.optional(v.number()),
     // pending → approved | discarded | failed. `failed` (stale reference,
     // domain-mutation rejection) is retryable — approve may run again.
     status: proposalStatusValidator,

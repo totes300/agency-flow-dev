@@ -1238,7 +1238,7 @@ export async function reorderSubtasks(
   }
 }
 
-// ─── Maintenance (seeds, dev cleanup) ────────────────────────────────────────
+// ─── Maintenance (seeds) ─────────────────────────────────────────────────────
 
 /**
  * Seeds only: inserts a task row as given; the reseed then computes and
@@ -1258,31 +1258,4 @@ export async function patchTaskForSeed(
   fields: TaskPatchFields,
 ): Promise<void> {
   await ctx.db.patch(taskId, fields);
-}
-
-/**
- * Dev cleanup only (`devCleanupTasks:stripLegacy`, slice 7b): a number +
- * identifier for a task row that predates identifiers, allocated like a
- * create (counter bumped, aliases skipped).
- */
-export async function allocateIdentifierForCleanup(
-  ctx: MutationCtx,
-  orgId: string,
-  projectId: Id<"projects"> | undefined,
-): Promise<{ numberScope: NumberScope; number: number; identifier: string }> {
-  const numberScope = numberScopeFor(projectId);
-  return { numberScope, ...(await allocateNumber(ctx, orgId, numberScope)) };
-}
-
-/**
- * Dev cleanup only: rewrites a task row to exactly `doc` (dropping the
- * pre-refactor fields the narrowed schema no longer has). The caller keeps
- * T3–T6 (category from the status, counters recomputed, edges synced).
- */
-export async function replaceTaskForCleanup(
-  ctx: MutationCtx,
-  taskId: Id<"tasks">,
-  doc: TaskDocFields,
-): Promise<void> {
-  await ctx.db.replace(taskId, doc);
 }

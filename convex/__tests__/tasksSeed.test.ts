@@ -3,8 +3,7 @@
 // The tasks reseed (convex/devSeedTasks.ts) on the narrowed schema: a fresh
 // org gets the §4.1 statuses, labels and demo tasks; an existing org's caches,
 // edges, counters and identifiers are re-derived (T3–T6) and a second run
-// changes nothing. Pre-refactor rows are not the seed's job any more — they
-// are normalised by `devCleanupTasks:stripLegacy` (devCleanupTasks.test.ts).
+// changes nothing.
 
 import { describe, it, expect } from "vitest";
 import { convexTest } from "convex-test";

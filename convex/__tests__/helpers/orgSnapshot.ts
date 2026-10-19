@@ -1,16 +1,11 @@
 import { expect } from "vitest";
-import type { GenericValidator } from "convex/values";
 import type { GenericDatabaseReader } from "convex/server";
-import schema from "../../schema";
 import type { DataModel, Doc, Id } from "../../_generated/dataModel";
 import { TASK_CATEGORIES, isClosedCategory, isValidIdentifierKey, parseIdentifier } from "../../tasks/model";
 
 /**
- * Shared checks for the seed (`devSeedTasks`) and the slice 7b cleanup
- * (`devCleanupTasks`) tests: one org's task data as rows, the §4 invariants
- * every org must satisfy, and a validator walker that checks raw rows
- * against `convex/schema.ts` (the tests insert legacy rows with schema
- * validation off, so validity is asserted explicitly).
+ * Shared checks for the seed (`devSeedTasks`) tests: one org's task data as
+ * rows and the §4 invariants every org must satisfy.
  */
 
 export type Snapshot = {
@@ -35,7 +30,7 @@ export async function snapshotOrg(db: GenericDatabaseReader<DataModel>, orgId: s
   };
 }
 
-/** The invariants every seeded / cleaned org must satisfy (§4.1, §4.2, T3–T6). */
+/** The invariants every seeded org must satisfy (§4.1, §4.2, T3–T6). */
 export function expectInvariants(s: Snapshot) {
   for (const category of TASK_CATEGORIES) {
     const active = s.statuses.filter((x) => x.category === category && !x.archivedAt);
@@ -100,75 +95,4 @@ export function expectInvariants(s: Snapshot) {
 
   const taskIds = new Set(s.tasks.map((x) => x._id));
   for (const e of [...s.assigneeEdges, ...s.labelEdges]) expect(taskIds.has(e.taskId)).toBe(true);
-}
-
-type AnyValidator = GenericValidator & {
-  kind: string;
-  isOptional: "optional" | "required";
-  fields?: Record<string, AnyValidator>;
-  members?: AnyValidator[];
-  element?: AnyValidator;
-  value?: unknown;
-  tableName?: string;
-};
-
-/** Problems of `value` against a Convex validator (empty = valid). */
-export function validatorProblems(validator: GenericValidator, value: unknown, path = "doc"): string[] {
-  const v = validator as AnyValidator;
-  switch (v.kind) {
-    case "any":
-      return [];
-    case "null":
-      return value === null ? [] : [`${path}: expected null`];
-    case "float64":
-      return typeof value === "number" ? [] : [`${path}: expected number`];
-    case "int64":
-      return typeof value === "bigint" ? [] : [`${path}: expected bigint`];
-    case "boolean":
-      return typeof value === "boolean" ? [] : [`${path}: expected boolean`];
-    case "string":
-    case "id":
-      return typeof value === "string" ? [] : [`${path}: expected string`];
-    case "bytes":
-      return value instanceof ArrayBuffer ? [] : [`${path}: expected bytes`];
-    case "literal":
-      return value === v.value ? [] : [`${path}: expected ${JSON.stringify(v.value)}`];
-    case "array":
-      return Array.isArray(value)
-        ? value.flatMap((x, i) => validatorProblems(v.element!, x, `${path}[${i}]`))
-        : [`${path}: expected array`];
-    case "union":
-      return v.members!.some((m) => validatorProblems(m, value, path).length === 0)
-        ? []
-        : [`${path}: matches no union member (${JSON.stringify(value)})`];
-    case "record":
-      return value !== null && typeof value === "object" ? [] : [`${path}: expected record`];
-    case "object": {
-      if (value === null || typeof value !== "object" || Array.isArray(value)) return [`${path}: expected object`];
-      const obj = value as Record<string, unknown>;
-      const problems: string[] = [];
-      for (const [k, field] of Object.entries(v.fields!)) {
-        if (obj[k] === undefined) {
-          if (field.isOptional !== "optional") problems.push(`${path}.${k}: required`);
-        } else {
-          problems.push(...validatorProblems(field, obj[k], `${path}.${k}`));
-        }
-      }
-      for (const k of Object.keys(obj)) {
-        if (path === "doc" && (k === "_id" || k === "_creationTime")) continue;
-        if (!(k in v.fields!)) problems.push(`${path}.${k}: not in the schema`);
-      }
-      return problems;
-    }
-    default:
-      return [`${path}: unsupported validator kind ${(validator as { kind: string }).kind}`];
-  }
-}
-
-/** Every row of `table` belonging to `orgId` passes the table's validator in `convex/schema.ts`. */
-export function expectRowsMatchSchema(table: keyof typeof schema.tables, rows: readonly object[]) {
-  const validator = schema.tables[table].validator as GenericValidator;
-  for (const row of rows) {
-    expect(validatorProblems(validator, row), `${table} ${(row as { _id?: string })._id}`).toEqual([]);
-  }
 }

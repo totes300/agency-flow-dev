@@ -76,11 +76,7 @@ export const DEFAULT_STATUS_SEED: readonly DefaultStatusSeed[] = [
   { name: "Canceled", category: "canceled", color: "gray", isDefault: true },
 ];
 
-/**
- * The category of a status (T3). Every status has one; the field is typed
- * optional only until the schema narrowing (slice 7b commit B), and
- * `devCleanupTasks:stripLegacy` backfills it before that.
- */
+/** The category of a status (T3). */
 export function categoryOfStatus(status: { category?: TaskCategory }): TaskCategory {
   return status.category ?? "backlog";
 }

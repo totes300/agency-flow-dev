@@ -51,9 +51,6 @@ import {
  *     assignee (D1 demo).
  *  5b. Every task's `taskUserState` rows are rebuilt from the comment
  *     receipts (subscribers, unread comments, unseen dot); mutes are kept.
- *
- * Rows still carrying the pre-refactor fields are normalised by
- * `devCleanupTasks:stripLegacy` (slice 7b), not here.
  *  6. Project and org counters are set past the highest number.
  *
  * Idempotent: a second run changes nothing (existing numbers, positions,
@@ -112,7 +109,7 @@ export type SeedTaskFoundationsResult = {
 };
 
 /** The given org, else the deployment's only org (dev tools). */
-export async function resolveOrgId(ctx: MutationCtx, orgId: string | undefined): Promise<string> {
+async function resolveOrgId(ctx: MutationCtx, orgId: string | undefined): Promise<string> {
   if (orgId) return orgId;
   const settings = await ctx.db.query("orgSettings").collect();
   const orgIds = Array.from(new Set(settings.map((s) => s.orgId)));

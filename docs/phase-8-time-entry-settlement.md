@@ -1,5 +1,10 @@
 # Phase 8 — Time Entry Settlement
 
+> **Historical (superseded 2026-10-17).** The data model and write paths described
+> here were replaced by the close model in `docs/prd-billing-refactor.md`, and the
+> code this document refers to has been deleted (billing refactor slice 5). Read it
+> for business intent only; `docs/prd-billing-refactor.md` is the source of truth.
+
 > **Goal**: Fix the reporting/stats bug where time entries on within-budget retainer periods and Fixed projects stay forever in an "open / not invoiced" state, by introducing a lightweight settlement model that cleanly separates *invoice linkage* from *client-facing work closure*.
 > **Depends on**: Phase 3 (Projects Core), Phase 4 (Projects Retainer), Phase 7 (Time Tracking)
 > **Scope**: Schema additions + settlement/guard/UI wiring — no new tables. Backward-compatible with the existing `invoiceId`-based lock.

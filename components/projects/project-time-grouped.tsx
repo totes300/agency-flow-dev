@@ -1,23 +1,20 @@
 "use client"
 
 import { useState, useMemo } from "react"
-import { Button } from "@/components/ui/button"
 import {
   ProjectTimeTable,
   type TimeEntryRow,
   type ProjectTimeTableProps,
 } from "@/components/projects/project-time-table"
-import { formatHoursCompact } from "@/lib/format"
+import { TimeEntryGroupHeader } from "@/components/projects/time-entry-group-header"
 import type { Grouping } from "@/lib/date-buckets"
 import {
   groupTimeEntries,
   type TimeEntryGroupAxis,
 } from "@/lib/time-entry-grouping"
-import { deriveGroupReference, type GroupReference } from "@/lib/group-reference"
-import { CalendarIcon, ChevronDownIcon, ChevronRightIcon, LockIcon } from "lucide-react"
-import { cn } from "@/lib/utils"
+import { deriveGroupReference } from "@/lib/group-reference"
 
-type SharedTableProps = Omit<ProjectTimeTableProps, "entries">
+type SharedTableProps = Omit<ProjectTimeTableProps<TimeEntryRow>, "entries">
 
 export function ProjectTimeGrouped({
   entries,
@@ -67,7 +64,7 @@ export function ProjectTimeGrouped({
         const groupRef = deriveGroupReference(g.entries)
         return (
           <div key={g.key} className="flex flex-col">
-            <GroupHeader
+            <TimeEntryGroupHeader
               label={g.label}
               icon={g.icon}
               totalMinutes={g.totalMinutes}
@@ -88,66 +85,4 @@ export function ProjectTimeGrouped({
   )
 }
 
-function GroupHeader({
-  label,
-  icon,
-  totalMinutes,
-  entryCount,
-  groupRef,
-  collapsed,
-  onToggle,
-}: {
-  label: string
-  icon: "calendar" | null
-  totalMinutes: number
-  entryCount: number
-  groupRef: GroupReference
-  collapsed: boolean
-  onToggle: () => void
-}) {
-  const Caret = collapsed ? ChevronRightIcon : ChevronDownIcon
-  return (
-    <Button
-      type="button"
-      variant="ghost"
-      aria-expanded={!collapsed}
-      aria-label={`Toggle ${label} entries`}
-      onClick={onToggle}
-      className={cn(
-        "group h-auto w-full select-none justify-start gap-2 rounded-md border bg-muted/30 px-3 py-2 text-sm font-normal hover:bg-muted/50",
-      )}
-    >
-      <Caret aria-hidden className="size-3.5 text-muted-foreground" />
-      {icon === "calendar" && (
-        <span className="flex size-6 items-center justify-center rounded-md bg-primary/10 text-primary">
-          <CalendarIcon aria-hidden className="size-3.5" />
-        </span>
-      )}
-      <span className="font-medium">{label}</span>
-      <span className="text-xs text-muted-foreground">
-        · {entryCount} {entryCount === 1 ? "entry" : "entries"}
-      </span>
-      {groupRef && (
-        <span
-          className={cn(
-            "ml-2 inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] font-medium",
-            // Closed (period or invoice) reads as a confirmed lock —
-            // muted but visible. Draft is still "in motion" → neutral.
-            groupRef.kind === "invoice" && groupRef.isDraft
-              ? "border-border bg-muted text-muted-foreground"
-              : "border-border bg-muted text-muted-foreground",
-          )}
-          // Aria-label spells out the abbreviation for screen readers.
-          aria-label={`This day's entries are ${groupRef.label}`}
-        >
-          <LockIcon aria-hidden className="size-3" />
-          {groupRef.label}
-        </span>
-      )}
-      <span className="ml-auto tabular-nums text-sm font-medium">
-        {formatHoursCompact(totalMinutes)}
-      </span>
-    </Button>
-  )
-}
 

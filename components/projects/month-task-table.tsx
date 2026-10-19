@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react"
 import { StatusTag } from "@/components/ui/status-tag"
+import { TaskTitleButton } from "@/components/task-title-button"
 import {
   Tooltip,
   TooltipContent,
@@ -10,7 +11,7 @@ import {
 import { formatMinutes, formatCurrencyPrecise, formatShortDate } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import {
-  CELL_KEY, CELL_PRIMARY, CELL_SECONDARY,
+  CELL_KEY, CELL_PRIMARY,
   TABLE_HEAD, TABLE_HEAD_ROW, TABLE_CELL, TABLE_FOOTER,
 } from "@/lib/table-tokens"
 import { ChevronRightIcon } from "lucide-react"
@@ -197,17 +198,10 @@ function CategorySection({
             )}
           >
             <div role="cell" className="flex flex-1 items-center gap-2 overflow-hidden">
-              <button
-                type="button"
+              <TaskTitleButton
+                title={task.taskTitle}
                 onClick={() => onTaskClick(task.taskId)}
-                className={cn(
-                  CELL_PRIMARY,
-                  "min-w-0 cursor-pointer truncate rounded-sm text-left transition-colors hover:text-foreground/70",
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-offset-1",
-                )}
-              >
-                {task.taskTitle}
-              </button>
+              />
             </div>
             <div role="cell" className={cn(COL.status, "hidden items-center sm:flex")}>
               {isMixed ? (

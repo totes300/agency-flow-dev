@@ -3,7 +3,7 @@
 import { useMemo } from "react"
 import { SearchIcon } from "lucide-react"
 import type { Id } from "@/convex/_generated/dataModel"
-import type { TaskPanelItem } from "@/convex/planner"
+import { isClosedCategory } from "@/convex/tasks/model"
 import type { PlannerDragEngine, PlannerPanelTask } from "@/lib/hooks/use-planner-drag"
 import { usePlannerPanelFilters } from "@/lib/hooks/use-planner-panel-filters"
 import { useUrlDebouncedParam } from "@/lib/hooks/use-url-debounced-param"
@@ -12,6 +12,7 @@ import {
   defaultSpanDays,
   isUnscheduledTask,
   passesPanelFilters,
+  type TaskPanelItem,
 } from "@/lib/planner"
 import { PlannerPanelFilters } from "./planner-panel-filters"
 import { PlannerQuickAdd } from "./planner-quick-add"
@@ -29,8 +30,8 @@ function toPanelTask(t: TaskPanelItem): PlannerPanelTask {
     projectName: t.projectName,
     clientName: t.clientName,
     categoryColor: t.categoryColor,
-    statusType: t.statusType,
-    spanDays: defaultSpanDays(t.estimate, t.plannedDays),
+    statusCategory: t.statusCategory,
+    spanDays: defaultSpanDays(t.estimateMinutes, t.plannedDays),
   }
 }
 
@@ -132,7 +133,7 @@ export function PlannerTaskPanel({
                   title={t.title}
                   clientName={t.clientName}
                   categoryColor={t.categoryColor}
-                  isDone={t.statusType === "done"}
+                  isDone={isClosedCategory(t.statusCategory)}
                   showPlannedMark={t.segmentCount > 0}
                   draggable={isAdmin}
                   lifted={draggedTaskId === t._id}

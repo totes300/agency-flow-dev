@@ -5,7 +5,7 @@ import { useMutation, useQuery, useConvexAuth } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { ConfirmDialog } from "@/components/confirm-dialog"
-import { useTaskReferenceData } from "@/components/tasks/task-reference-data"
+import { useWorkspaceMembers } from "@/lib/hooks/use-workspace-members"
 import { extractMentionIds } from "@/lib/tiptap-utils"
 import { toastError } from "@/lib/toast-helpers"
 
@@ -40,12 +40,12 @@ type PendingGrant = {
  */
 export function useMentionAccessGuard(taskId: Id<"tasks"> | undefined) {
   const { isAuthenticated } = useConvexAuth()
-  // Dedupes with the drawer/modal's own getDetail subscription (same args)
+  // The task's assignees (T1 via tasks/access.ts on the server).
   const task = useQuery(
-    api.tasks.getDetail,
-    isAuthenticated && taskId ? { id: taskId } : "skip",
+    api.tasks.queries.getDetail,
+    isAuthenticated && taskId ? { taskId } : "skip",
   )
-  const { orgMembers } = useTaskReferenceData()
+  const orgMembers = useWorkspaceMembers()
   const updateTask = useMutation(api.tasks.update)
   const [pending, setPending] = useState<PendingGrant | null>(null)
 

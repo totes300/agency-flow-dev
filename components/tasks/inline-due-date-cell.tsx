@@ -1,15 +1,9 @@
 "use client"
 
-import { useState } from "react"
-import { useMutation } from "convex/react"
-import { api } from "@/convex/_generated/api"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { MiniCalendar, addDays, nextDayOfWeek } from "@/components/ui/mini-calendar"
 import { CalendarIcon, ClockIcon, ArrowRightIcon, XIcon, RepeatIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { formatDateToYMD, formatShortDate } from "@/lib/format"
-import { toastError } from "@/lib/toast-helpers"
-import type { Id } from "@/convex/_generated/dataModel"
+import { formatDateToYMD } from "@/lib/format"
 
 // ─── Presets ─────────────────────────────────────────────────────────────────
 
@@ -35,120 +29,63 @@ function PresetIcon({ type, className }: { type: Preset["icon"]; className?: str
   }
 }
 
-// ─── Main Component ─────────────────────────────────────────────────────────
-
-export function InlineDueDateCell({
-  taskId,
+/**
+ * The due-date picker body (quick presets + month calendar), shown by the
+ * shared `PropertyMenu` for the due and start dates.
+ */
+export function DueDatePanel({
   dueDate,
-  isOverdue,
-  onSelect: onSelectProp,
-  emptyLabel,
-  align = "start",
+  onSelect,
 }: {
-  taskId?: Id<"tasks">
   dueDate: string | null // YYYY-MM-DD
-  isOverdue?: boolean
-  onSelect?: (date: string | null) => void
-  emptyLabel?: string
-  align?: "start" | "end"
+  onSelect: (date: string | null) => void
 }) {
-  const [open, setOpen] = useState(false)
-  const updateTask = useMutation(api.tasks.update)
-
-  async function handleSelect(date: string | null) {
-    setOpen(false)
-    if (onSelectProp) {
-      onSelectProp(date)
-      return
-    }
-    if (!taskId) return
-    try {
-      await updateTask({ id: taskId, dueDate: date })
-    } catch (err) {
-      toastError(err, "Failed to update")
-    }
-  }
-
-  function handlePreset(preset: Preset) {
-    const date = preset.getDate(new Date())
-    handleSelect(formatDateToYMD(date))
-  }
-
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          className={cn("flex w-full items-center py-0.5", align === "end" && "justify-end text-right")}
-          onClick={(e) => e.stopPropagation()}
-        >
-          {dueDate ? (
-            <span
+    <div className="flex">
+      {/* Left: Presets */}
+      <div className="flex w-[140px] flex-col gap-0.5 border-r bg-muted/30 p-2">
+        <div className="px-2 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+          Quick set
+        </div>
+        {PRESETS.map((preset) => {
+          const presetDate = formatDateToYMD(preset.getDate(new Date()))
+          const isActive = dueDate === presetDate
+          return (
+            <button
+              key={preset.label}
+              type="button"
+              onClick={() => onSelect(formatDateToYMD(preset.getDate(new Date())))}
               className={cn(
-                "inline-flex items-center gap-1.5 text-[13px]",
-                isOverdue ? "font-medium text-red-600" : "text-muted-foreground",
+                "flex items-center gap-2 rounded-md px-2 py-1.5 text-xs font-medium transition-colors",
+                isActive
+                  ? "bg-primary/10 text-primary"
+                  : "text-foreground hover:bg-muted",
               )}
             >
-              <CalendarIcon
-                className={cn("size-4 shrink-0", isOverdue ? "opacity-70" : "opacity-40")}
-                strokeWidth={1.75}
-              />
-              {formatShortDate(dueDate)}
-            </span>
-          ) : (
-            <span className="flex items-center gap-1.5 rounded-md border border-dashed border-border/55 bg-muted/[0.12] px-2 py-1 text-muted-foreground/60 transition-colors group-hover/row:border-border/80 group-hover/row:bg-muted/[0.22] group-hover/row:text-muted-foreground">
-              <CalendarIcon className="size-4 shrink-0" strokeWidth={1.75} />
-              {emptyLabel && <span className="text-[13px]">{emptyLabel}</span>}
-            </span>
-          )}
-        </button>
-      </PopoverTrigger>
-      <PopoverContent className="w-[380px] p-0" align="end">
-        <div className="flex">
-          {/* Left: Presets */}
-          <div className="flex w-[140px] flex-col gap-0.5 border-r bg-muted/30 p-2">
-            <div className="px-2 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-              Quick set
-            </div>
-            {PRESETS.map((preset) => {
-              const presetDate = formatDateToYMD(preset.getDate(new Date()))
-              const isActive = dueDate === presetDate
-              return (
-                <button
-                  key={preset.label}
-                  onClick={() => handlePreset(preset)}
-                  className={cn(
-                    "flex items-center gap-2 rounded-md px-2 py-1.5 text-xs font-medium transition-colors",
-                    isActive
-                      ? "bg-primary/10 text-primary"
-                      : "text-foreground hover:bg-muted",
-                  )}
-                >
-                  <PresetIcon type={preset.icon} className={isActive ? "text-primary" : "text-muted-foreground"} />
-                  {preset.label}
-                </button>
-              )
-            })}
-            <div className="mt-1 border-t pt-1">
-              <button
-                onClick={() => handleSelect(null)}
-                className="flex items-center gap-2 rounded-md px-2 py-1.5 text-xs font-medium text-red-500 transition-colors hover:bg-red-500/10"
-              >
-                <XIcon className="size-3.5 shrink-0" />
-                No date
-              </button>
-            </div>
-          </div>
-
-          {/* Right: Calendar */}
-          <div className="flex-1 p-3">
-            <MiniCalendar
-              selected={dueDate}
-              onSelect={handleSelect}
-            />
-          </div>
+              <PresetIcon type={preset.icon} className={isActive ? "text-primary" : "text-muted-foreground"} />
+              {preset.label}
+            </button>
+          )
+        })}
+        <div className="mt-1 border-t pt-1">
+          <button
+            type="button"
+            onClick={() => onSelect(null)}
+            className="flex items-center gap-2 rounded-md px-2 py-1.5 text-xs font-medium text-destructive transition-colors hover:bg-destructive/10"
+          >
+            <XIcon className="size-3.5 shrink-0" />
+            No date
+          </button>
         </div>
-      </PopoverContent>
-    </Popover>
+      </div>
+
+      {/* Right: Calendar */}
+      <div className="flex-1 p-3">
+        <MiniCalendar
+          selected={dueDate}
+          onSelect={onSelect}
+        />
+      </div>
+    </div>
   )
 }

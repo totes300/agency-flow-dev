@@ -1,5 +1,10 @@
 # Phase 8 — Slice 1: Settlement foundation + invoice transitions
 
+> **Historical (superseded 2026-10-17).** The data model and write paths described
+> here were replaced by the close model in `docs/prd-billing-refactor.md`, and the
+> code this document refers to has been deleted (billing refactor slice 5). Read it
+> for business intent only; `docs/prd-billing-refactor.md` is the source of truth.
+
 > **Type:** AFK
 > **Blocked by:** None — can start immediately (parallelizable with Slice 2)
 > **Blocks:** Slice 3, Slice 4

@@ -1,25 +1,25 @@
 "use client"
 
 import * as React from "react"
+import { Suspense } from "react"
 import { useOrganization } from "@clerk/nextjs"
 
 import { InboxButton } from "@/components/inbox/inbox-button"
 import { NavMain } from "@/components/nav-main"
+import { NavSavedViews } from "@/components/nav-saved-views"
 import { NavUser } from "@/components/nav-user"
 import { TeamSwitcher } from "@/components/team-switcher"
+import { SidebarTimer } from "@/components/timer/sidebar-timer"
+import { WorkspaceSwitch } from "@/components/workspace-switch"
 import { navigation } from "@/lib/navigation"
 import {
   Sidebar,
   SidebarContent,
   SidebarFooter,
-  SidebarGroup,
-  SidebarGroupLabel,
   SidebarHeader,
-  SidebarMenu,
   SidebarRail,
   SidebarSeparator,
 } from "@/components/ui/sidebar"
-import { BookmarkIcon } from "lucide-react"
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const { membership } = useOrganization()
@@ -28,24 +28,18 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   return (
     <Sidebar collapsible="icon" {...props}>
       <SidebarHeader>
+        <WorkspaceSwitch />
         <TeamSwitcher />
         <InboxButton />
+        <SidebarTimer />
         <SidebarSeparator className="mt-1" />
       </SidebarHeader>
       <SidebarContent>
         <NavMain groups={navigation} isAdmin={isAdmin} />
-        {/* Saved Views placeholder — becomes functional in Phase 5 */}
-        <SidebarGroup>
-          <SidebarGroupLabel>
-            <BookmarkIcon className="mr-1 size-3" />
-            Saved Views
-          </SidebarGroupLabel>
-          <SidebarMenu>
-            <p className="px-3 py-1.5 text-xs text-muted-foreground">
-              No saved views yet
-            </p>
-          </SidebarMenu>
-        </SidebarGroup>
+        {/* useSearchParams (active view) needs a Suspense boundary. */}
+        <Suspense fallback={null}>
+          <NavSavedViews />
+        </Suspense>
       </SidebarContent>
       <SidebarFooter>
         <NavUser />

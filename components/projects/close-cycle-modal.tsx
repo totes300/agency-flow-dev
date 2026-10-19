@@ -23,9 +23,9 @@ import { toast } from "sonner"
  * Phase 8 Slice 4 — "Close cycle" confirm modal for rollover retainer
  * cycles. Sibling of `ClosePeriodModal` (Slice 3) with three differences:
  *
- *   1. Calls `closeRetainerCycle` (bulk-closes N monthly periods with
- *      identical `closedAt`) instead of `closePeriod`.
- *   2. The preview reads `getRetainerStatement` for the CYCLE-END month —
+ *   1. Commits the whole cycle as one close (`commitClose` on the cycle's
+ *      first month — the cycle is the period on a rollover grid).
+ *   2. The preview reads `getMonthlyReport` for the CYCLE-END month —
  *      rollover statements already include `cycleToDate` aggregates, so a
  *      single statement render shows both the closing month AND the
  *      cycle-wide totals admins need to review before locking.
@@ -49,14 +49,14 @@ export function CloseCycleModal({
   open: boolean
   onOpenChange: (next: boolean) => void
   projectId: Id<"projects">
-  cycleStart: string         // YYYY-MM-01 — the natural key for `closeRetainerCycle`
+  cycleStart: string         // YYYY-MM-01 — the cycle `commitClose` settles
   cycleEndYear: number
   cycleEndMonth: number      // 1-indexed — final month of the cycle
   cycleLabel: string         // e.g. "Q1 2026" or "Jan-Mar 2026"
 }) {
-  const closeCycle = useMutation(api.retainerPeriods.closeRetainerCycle)
+  const commitClose = useMutation(api.billingCloses.commitClose)
   const report = useQuery(
-    api.statements.getRetainerStatement,
+    api.billingReports.getMonthlyReport,
     open ? { projectId, year: cycleEndYear, month: cycleEndMonth } : "skip",
   )
   const [pending, setPending] = useState(false)
@@ -65,20 +65,11 @@ export function CloseCycleModal({
     if (pending) return
     setPending(true)
     try {
-      const { closedPeriods, settledCount } = await closeCycle({
-        projectId,
-        cycleStart,
-      })
+      const { entryCount } = await commitClose({ projectId, periodStart: cycleStart })
       toast.success(
-        settledCount > 0
-          ? `Closed ${cycleLabel} — ${closedPeriods} ${
-              closedPeriods === 1 ? "month" : "months"
-            }, ${settledCount} ${
-              settledCount === 1 ? "entry" : "entries"
-            } settled.`
-          : `Closed ${cycleLabel} — ${closedPeriods} ${
-              closedPeriods === 1 ? "month" : "months"
-            }.`,
+        entryCount > 0
+          ? `Closed ${cycleLabel} — ${entryCount} ${entryCount === 1 ? "entry" : "entries"} settled.`
+          : `Closed ${cycleLabel}.`,
         {
           // Cycle statements render on the cycle-end month's report page
           // (it includes the cycle-to-date aggregates). Direct path matters

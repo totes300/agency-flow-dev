@@ -19,7 +19,7 @@ import { BillingTypeBadge } from "@/components/billing-type-badge"
 import { RetainerStatusBadge } from "@/components/retainer-status-badge"
 import { AdHocExportDialog } from "@/components/worksheet/ad-hoc-export-dialog"
 import { toast } from "sonner"
-import { toastError } from "@/lib/toast-helpers"
+import { toastError, toastArchiveSuccess } from "@/lib/toast-helpers"
 import { formatShortDate, formatMinutes } from "@/lib/format"
 import {
   MoreHorizontalIcon,
@@ -61,8 +61,8 @@ export function ProjectDetailHeader({
 
   async function handleArchive() {
     try {
-      await archiveProject({ id: projectId })
-      toast.success("Project archived")
+      const result = await archiveProject({ id: projectId })
+      toastArchiveSuccess(result, "Project archived")
     } catch (err) {
       toastError(err, "Failed to archive")
     }

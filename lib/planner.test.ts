@@ -1,3 +1,4 @@
+import type { TaskCategory } from "@/convex/tasks/model"
 import { describe, it, expect } from "vitest"
 import {
   addDaysYmd,
@@ -79,7 +80,7 @@ describe("passesPanelFilters", () => {
     categoryId: "cat1",
     dueDate: null as string | null,
     segmentCount: 0,
-    statusType: "backlog",
+    statusCategory: "backlog" as TaskCategory,
   }
   const f = (over: Partial<PlannerPanelFilters>): PlannerPanelFilters => ({
     ...EMPTY_PANEL_FILTERS,
@@ -156,7 +157,7 @@ describe("passesPanelFilters", () => {
       passesPanelFilters({ ...task, segmentCount: 2 }, unsched, TODAY),
     ).toBe(false)
     expect(
-      passesPanelFilters({ ...task, statusType: "done" }, unsched, TODAY),
+      passesPanelFilters({ ...task, statusCategory: "completed" }, unsched, TODAY),
     ).toBe(false)
   })
 
@@ -176,7 +177,7 @@ describe("derivePanelFacets", () => {
     clientId: null, clientName: null,
     categoryId: null, categoryName: null, categoryColor: null,
     dueDate: null,
-    segmentCount: 0, statusType: "backlog",
+    segmentCount: 0, statusCategory: "backlog",
     ...over,
   })
   // Two clients: Arlow (2 tasks, 2 projects), Pragmatico (1 task, 1 project).

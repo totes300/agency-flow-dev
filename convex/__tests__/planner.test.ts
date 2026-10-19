@@ -11,6 +11,7 @@ import schema from "../schema";
 import { api } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
 import { assertSegmentRange } from "../planner";
+import { statusRow, taskRow } from "./helpers/taskFixtures";
 
 // See invoiceTransitions.test.ts for why the explicit module map is needed.
 const modules = (
@@ -61,10 +62,7 @@ async function seed(t: T): Promise<Seed> {
       createdBy: Id<"users">,
       archivedAt?: number,
     ) =>
-      await ctx.db.insert("tasks", {
-        orgId, title, statusId, statusType: "backlog", assigneeIds: [],
-        billable: true, archivedAt, createdAt: now, updatedAt: now, createdBy,
-      });
+      await ctx.db.insert("tasks", taskRow({ orgId, title, statusId, archivedAt, createdAt: now, createdBy }));
     const mkSegment = async (
       orgId: string,
       taskId: Id<"tasks">,
@@ -82,10 +80,9 @@ async function seed(t: T): Promise<Seed> {
     await mkMember(ORG_ID, admin, "clerk_admin", "admin");
     await mkMember(ORG_ID, member, "clerk_member", "member");
 
-    const statusId = await ctx.db.insert("statuses", {
-      orgId: ORG_ID, name: "Todo", type: "backlog", color: "#000",
-      sortOrder: 0, createdAt: now, updatedAt: now, createdBy: admin,
-    });
+    const statusId = await ctx.db.insert("statuses", statusRow({
+      orgId: ORG_ID, name: "Todo", color: "gray", isDefault: true, createdAt: now, createdBy: admin,
+    }));
 
     const taskA = await mkTask(ORG_ID, "Task A (split)", statusId, admin);
     const taskB = await mkTask(ORG_ID, "Task B", statusId, admin);
@@ -102,10 +99,9 @@ async function seed(t: T): Promise<Seed> {
     // A second org with its own member, task, and overlapping segment.
     const otherOrgUser = await mkUser("Other Org User", "clerk_other");
     await mkMember(OTHER_ORG_ID, otherOrgUser, "clerk_other", "admin");
-    const otherStatus = await ctx.db.insert("statuses", {
-      orgId: OTHER_ORG_ID, name: "Todo", type: "backlog", color: "#000",
-      sortOrder: 0, createdAt: now, updatedAt: now, createdBy: otherOrgUser,
-    });
+    const otherStatus = await ctx.db.insert("statuses", statusRow({
+      orgId: OTHER_ORG_ID, name: "Todo", color: "gray", isDefault: true, createdAt: now, createdBy: otherOrgUser,
+    }));
     const otherOrgTask = await mkTask(OTHER_ORG_ID, "Other org task", otherStatus, otherOrgUser);
     await mkSegment(OTHER_ORG_ID, otherOrgTask, otherOrgUser, "2026-07-06", "2026-07-10");
 
@@ -148,7 +144,7 @@ describe("planner.weekGrid", () => {
       taskTitle: "Task A (split)",
       startDate: "2026-07-06",
       endDate: "2026-07-08",
-      statusType: "backlog",
+      statusCategory: "backlog",
     });
   });
 
@@ -264,82 +260,56 @@ describe("part badges", () => {
   });
 });
 
-// ─── taskPanel ──────────────────────────────────────────────────────────────────
+// ─── Tasks panel: listView "planner" preset + planStats (§10) ─────────────────
 
-describe("planner.taskPanel", () => {
-  it("returns only the org's active tasks with plan rollups", async () => {
+describe("planner panel", () => {
+  it("lists the org's active top-level tasks; planStats has the plan rollups", async () => {
     const t = createT();
     const s = await seed(t);
-    const asMember = t.withIdentity(identityFor("clerk_member", "member"));
+    const asAdmin = t.withIdentity(identityFor("clerk_admin", "admin"));
 
-    const panel = await asMember.query(api.planner.taskPanel, {});
-
-    const ids = panel.map((p) => p._id);
+    const ids = (await asAdmin.query(api.tasks.queries.listView, { surface: "planner" })).rows.map((r) => r._id);
     expect(ids).toContain(s.taskA);
     expect(ids).toContain(s.taskB);
     expect(ids).not.toContain(s.archivedTask);
     expect(ids).not.toContain(s.otherOrgTask);
 
     // Split task A: two sittings of 3 + 2 days; task B: one 4-day sitting.
-    const a = panel.find((p) => p._id === s.taskA);
-    expect(a).toMatchObject({ segmentCount: 2, plannedDays: 5 });
-    const b = panel.find((p) => p._id === s.taskB);
-    expect(b).toMatchObject({
-      segmentCount: 1,
-      plannedDays: 4,
-      projectName: null,
-      clientName: null,
-      categoryColor: null,
-      estimate: null,
-    });
+    const stats = await asAdmin.query(api.planner.planStats, {});
+    expect(stats.find((p) => p.taskId === s.taskA)).toMatchObject({ segmentCount: 2, plannedDays: 5 });
+    expect(stats.find((p) => p.taskId === s.taskB)).toMatchObject({ segmentCount: 1, plannedDays: 4 });
+    expect(stats.find((p) => p.taskId === s.otherOrgTask)).toBeUndefined();
   });
 
-  it("joins project/client/category, excludes subtasks, sorts newest first", async () => {
+  it("a member sees only the tasks they can read (T1, slice 2)", async () => {
     const t = createT();
     const s = await seed(t);
+    await t.run(async (ctx) => {
+      await ctx.db.insert("taskAssignees", {
+        orgId: ORG_ID, taskId: s.taskB, userId: s.member, assignedAt: Date.now(), assignedBy: s.admin,
+      });
+    });
+    const asMember = t.withIdentity(identityFor("clerk_member", "member"));
 
+    const ids = (await asMember.query(api.tasks.queries.listView, { surface: "planner" })).rows.map((r) => r._id);
+
+    // A segment on the member's row does not grant access; the edge does.
+    expect(ids).toEqual([s.taskB]);
+  });
+
+  it("excludes sub-tasks (they are planned with their parent)", async () => {
+    const t = createT();
+    const s = await seed(t);
     await t.run(async (ctx) => {
       const now = Date.now();
-      const clientId = await ctx.db.insert("clients", {
-        orgId: ORG_ID, name: "Acme Corp", currency: "EUR",
-        createdAt: now, updatedAt: now, createdBy: s.admin,
-      });
-      const projectId = await ctx.db.insert("projects", {
-        orgId: ORG_ID, clientId, name: "Website", code: "PRJ-001",
-        billingType: "t_and_m", createdAt: now, updatedAt: now, createdBy: s.admin,
-      });
-      const categoryId = await ctx.db.insert("workCategories", {
-        orgId: ORG_ID, name: "Design", color: "violet",
-        sortOrder: 0, createdAt: now, updatedAt: now, createdBy: s.admin,
-      });
-      const parentId = await ctx.db.insert("tasks", {
-        orgId: ORG_ID, title: "Newest with project", statusId: s.statusId,
-        statusType: "backlog", assigneeIds: [], billable: true,
-        projectId, workCategoryId: categoryId, estimate: 960,
-        createdAt: now + 60_000, updatedAt: now, createdBy: s.admin,
-      });
-      await ctx.db.insert("tasks", {
-        orgId: ORG_ID, title: "Subtask (hidden)", statusId: s.statusId,
-        statusType: "backlog", assigneeIds: [], billable: true,
-        parentTaskId: parentId,
-        createdAt: now + 120_000, updatedAt: now, createdBy: s.admin,
-      });
+      await ctx.db.insert("tasks", taskRow({
+        orgId: ORG_ID, title: "Subtask (hidden)", statusId: s.statusId, parentTaskId: s.taskA,
+        createdAt: now, createdBy: s.admin,
+      }));
     });
-
     const asAdmin = t.withIdentity(identityFor("clerk_admin", "admin"));
-    const panel = await asAdmin.query(api.planner.taskPanel, {});
-
-    expect(panel.map((p) => p.title)).not.toContain("Subtask (hidden)");
-    // Newest createdAt wins the top slot.
-    expect(panel[0]).toMatchObject({
-      title: "Newest with project",
-      projectName: "Website",
-      clientName: "Acme Corp",
-      categoryColor: "violet",
-      estimate: 960,
-      plannedDays: 0,
-      segmentCount: 0,
-    });
+    const rows = (await asAdmin.query(api.tasks.queries.listView, { surface: "planner" })).rows;
+    expect(rows.map((r) => r.title)).not.toContain("Subtask (hidden)");
   });
 });
 
@@ -371,7 +341,7 @@ describe("planner.taskSegments", () => {
     expect(sittings.every((seg) => seg.isMine === false)).toBe(true);
   });
 
-  it("returns an empty list + canAddToToday for an unscheduled task", async () => {
+  it("returns an empty list for an unscheduled task", async () => {
     const t = createT();
     const s = await seed(t);
     const asAdmin = t.withIdentity(identityFor("clerk_admin", "admin"));
@@ -384,7 +354,6 @@ describe("planner.taskSegments", () => {
       taskId: s.taskB,
     });
     expect(plan.segments).toEqual([]);
-    expect(plan.canAddToToday).toBe(true);
   });
 
   it("rejects another org's task", async () => {
@@ -680,7 +649,7 @@ describe("createTaskWithSegment", () => {
       orgId: ORG_ID,
       title: "Drawn on the board", // trimmed
       statusId: twin!.statusId,
-      statusType: twin!.statusType,
+      statusCategory: twin!.statusCategory,
       assigneeIds: [],
       billable: true,
       createdBy: s.admin,
@@ -690,7 +659,7 @@ describe("createTaskWithSegment", () => {
     expect(task!.dueDate).toBeUndefined();
     expect(task!.description).toBeUndefined();
     // Fractional sort key appended after the twin's (newest last).
-    expect(task!.manualSortKey! > twin!.manualSortKey!).toBe(true);
+    expect(task!.sortKey! > twin!.sortKey!).toBe(true);
 
     expect(segment).toMatchObject({
       orgId: ORG_ID,
@@ -715,7 +684,7 @@ describe("createTaskWithSegment", () => {
         createdAt: now, updatedAt: now, createdBy: s.admin,
       });
       const projectId = await ctx.db.insert("projects", {
-        orgId: ORG_ID, clientId, name: "Website", code: "PRJ-001",
+        orgId: ORG_ID, clientId, name: "Website", code: "WEB",
         billingType: "t_and_m", createdAt: now, updatedAt: now, createdBy: s.admin,
       });
       const otherClientId = await ctx.db.insert("clients", {
@@ -790,7 +759,8 @@ describe("createTaskWithSegment", () => {
     });
     const created = await t.run(async (ctx) => await ctx.db.get(taskId));
     expect(created?.title).toBe("Member draw");
-    expect(created?.assigneeIds).toEqual([]); // Planner never auto-assigns
+    // §5.3: a member is assigned to what they create (else they could not see it, T1).
+    expect(created?.assigneeIds).toEqual([s.member]);
 
     // Member drawing on ANOTHER user's row → rejected
     await expect(

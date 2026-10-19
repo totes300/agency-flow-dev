@@ -119,6 +119,28 @@ export function formatHoursCompact(minutes: number): string {
 }
 
 /**
+ * Short hours for summaries: 1800 → "30h", 630 → "10h 30m", 45 → "45m", 0 → "0h".
+ */
+export function formatHoursShort(minutes: number): string {
+  const negative = minutes < 0
+  const abs = Math.abs(minutes)
+  const h = Math.floor(abs / 60)
+  const m = abs % 60
+  const body = h === 0 ? (m === 0 ? "0h" : `${m}m`) : m === 0 ? `${h}h` : `${h}h ${m}m`
+  return negative ? `-${body}` : body
+}
+
+/**
+ * "+4h 20m" / "-1h 50m" / "0h 0m" — `formatHoursCompact` with an explicit
+ * plus, for running-balance ledgers where the sign carries the arithmetic.
+ */
+export function formatSignedHours(minutes: number): string {
+  return minutes > 0
+    ? `+${formatHoursCompact(minutes)}`
+    : formatHoursCompact(minutes)
+}
+
+/**
  * Format minutes as HH:MM display string.
  * e.g., 630 → "10:30", 90 → "01:30", 0 → "00:00"
  */

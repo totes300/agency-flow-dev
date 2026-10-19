@@ -1,20 +1,18 @@
 "use client"
 
-import { CalendarClockIcon, PlusIcon } from "lucide-react"
+import { CalendarClockIcon } from "lucide-react"
 import type { Id } from "@/convex/_generated/dataModel"
 import { Button } from "@/components/ui/button"
-import { useGenerateInvoice } from "@/lib/hooks/use-generate-invoice"
+import { useBillingActions } from "@/lib/hooks/use-billing-actions"
 import { pluralize } from "@/lib/format"
 
 export type UninvoicedMonth = { year: number; month: number; label: string }
 
 /**
  * Callout bar above the invoice list for retainer projects with one or more
- * uninvoiced closed months. Surfaces the month labels for context and offers
- * a single primary action — "Create <next month> invoice" — that calls
- * `createInvoice` directly and routes to the resulting draft (D10 in
- * `docs/invoicing-refactor.md` — the modal preview surface is gone; the draft
- * IS the preview surface).
+ * elapsed, unclosed periods with overage. Surfaces the month labels for
+ * context and links the next one to the Close workspace, where the close is
+ * committed (docs/prd-billing-refactor.md D8).
  */
 export function ProjectInvoicesRetainerCallout({
   projectId,
@@ -23,7 +21,7 @@ export function ProjectInvoicesRetainerCallout({
   projectId: Id<"projects">
   uninvoicedMonths: UninvoicedMonth[]
 }) {
-  const { generate, pending } = useGenerateInvoice()
+  const { reviewClose } = useBillingActions()
 
   if (uninvoicedMonths.length === 0) return null
 
@@ -51,19 +49,8 @@ export function ProjectInvoicesRetainerCallout({
         </p>
         <p className="truncate text-xs text-muted-foreground">{summary}</p>
       </div>
-      <Button
-        size="sm"
-        disabled={pending}
-        onClick={() =>
-          void generate({
-            projectId,
-            retainerYear: next.year,
-            retainerMonth: next.month,
-          })
-        }
-      >
-        <PlusIcon data-icon="inline-start" className="size-3.5" />
-        Create {next.label} invoice
+      <Button size="sm" onClick={() => reviewClose(projectId, next)}>
+        Review {next.label}
       </Button>
     </div>
   )

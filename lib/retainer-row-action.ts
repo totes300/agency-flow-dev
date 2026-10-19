@@ -28,7 +28,8 @@ export type RetainerRowMonthInput = {
    */
   periodEnded: boolean;
   cyclePosition: number; // 1-indexed within the cycle (1…cycleLength)
-  endBalance: number; // minutes; positive = within budget
+  /** The month's overage minutes from the server balance ladder (0 = within budget). */
+  overageMinutes: number;
   invoice: { status: "draft" | "invoiced" | "paid" | "void" } | null;
 };
 
@@ -59,8 +60,7 @@ export function decideRetainerRowAction(
     return isCycleEndRow && ctx.cycleHasOverage ? "generate" : "report";
   }
 
-  const monthOverageMinutes = month.endBalance < 0 ? -month.endBalance : 0;
-  return monthOverageMinutes > 0 ? "generate" : "report";
+  return month.overageMinutes > 0 ? "generate" : "report";
 }
 
 /**
@@ -166,6 +166,6 @@ export function decideRetainerRowCloseAction(
   // ignores the rate), so offering the button without a rate was a dead-end
   // loop — Close always errored and Generate was unavailable. The
   // config-issue inbox row routes the user to set the rate instead.
-  if (month.endBalance < 0) return null;
+  if (month.overageMinutes > 0) return null;
   return "close-month";
 }

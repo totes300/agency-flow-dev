@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { useRouter, useSearchParams } from "next/navigation"
+import { useRouter } from "next/navigation"
 import { useQuery, useMutation, useConvexAuth } from "convex/react"
 import { ArchiveIcon, CheckCheckIcon, ListFilterIcon, XIcon } from "lucide-react"
 import { api } from "@/convex/_generated/api"
@@ -12,7 +12,8 @@ import { InboxEmptyState } from "@/components/inbox/inbox-empty-state"
 import { NotificationRow } from "@/components/inbox/notification-row"
 import { InboxActionButton } from "@/components/inbox/notification-row-actions"
 import { groupInbox, type InboxGroup, type InboxRowBase } from "@/lib/inbox"
-import { buildTaskDeepLink, parseDetailParam } from "@/lib/task-detail"
+import { buildTaskDeepLink } from "@/lib/task-detail"
+import { useOpenTaskId } from "@/components/task-detail/open-task-store"
 import { useOrgTimezone } from "@/lib/hooks/use-org-timezone"
 import { toastError } from "@/lib/toast-helpers"
 import { cn } from "@/lib/utils"
@@ -57,7 +58,6 @@ export function InboxPanel({
   now?: number
 }) {
   const router = useRouter()
-  const searchParams = useSearchParams()
   const { isAuthenticated } = useConvexAuth()
   const { timezone } = useOrgTimezone()
 
@@ -83,7 +83,7 @@ export function InboxPanel({
     (r) => r.inboxState === "unread",
   ).length
   const hasUnread = unreadCount > 0
-  const activeTaskId = parseDetailParam(searchParams)
+  const activeTaskId = useOpenTaskId()
 
   const sections =
     rows === undefined ? undefined : groupInbox(rows, timezone, bucketAnchor)

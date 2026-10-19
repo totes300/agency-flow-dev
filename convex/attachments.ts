@@ -1,6 +1,7 @@
 import { v, ConvexError } from "convex/values";
 import { query, mutation, action } from "./_generated/server";
 import { getAuthContext } from "./lib/auth";
+import { loadTaskForReadOrNull, loadTaskForWrite } from "./tasks/access";
 import { isMimeTypeBlocked } from "./lib/content_validation";
 import { isSafeUrl } from "./lib/url";
 
@@ -9,13 +10,8 @@ import { isSafeUrl } from "./lib/url";
 export const byTask = query({
   args: { taskId: v.id("tasks") },
   handler: async (ctx, { taskId }) => {
-    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
-
-    const task = await ctx.db.get(taskId);
-    if (!task || task.orgId !== orgId) return [];
-
-    // Member access check — non-admin can only see attachments on assigned tasks
-    if (!isAdmin && !task.assigneeIds.includes(userId)) return [];
+    // Access via tasks/access.ts (T1, incl. sub-tasks of an assigned parent).
+    if (!(await loadTaskForReadOrNull(ctx, taskId))) return [];
 
     const attachments = await ctx.db
       .query("attachments")
@@ -116,13 +112,7 @@ export const save = mutation({
     mimeType: v.string(),
   },
   handler: async (ctx, args) => {
-    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
-
-    const task = await ctx.db.get(args.taskId);
-    if (!task || task.orgId !== orgId) throw new ConvexError("Task not found");
-    if (!isAdmin && !task.assigneeIds.includes(userId)) {
-      throw new ConvexError("Task not found");
-    }
+    const { orgId, userId } = (await loadTaskForWrite(ctx, args.taskId)).auth;
 
     // Block dangerous MIME types (XSS prevention)
     if (isMimeTypeBlocked(args.mimeType)) {

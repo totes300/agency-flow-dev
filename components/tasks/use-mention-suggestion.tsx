@@ -3,7 +3,7 @@
 import { useState, useMemo, useRef } from "react"
 import Mention from "@tiptap/extension-mention"
 import { SuggestionDropdown } from "@/components/tasks/suggestion-dropdown"
-import { useTaskReferenceData } from "@/components/tasks/task-reference-data"
+import { useWorkspaceMembers } from "@/lib/hooks/use-workspace-members"
 import type { SuggestionKeyDownProps } from "@tiptap/suggestion"
 
 type MentionItem = { id: string; label: string; role: "admin" | "member" }
@@ -33,7 +33,7 @@ export function useMentionSuggestion(options?: {
    */
   onNoAccessSelect?: (user: { id: string; label: string }) => void
 }) {
-  const { orgMembers } = useTaskReferenceData()
+  const orgMembers = useWorkspaceMembers()
   const [state, setState] = useState<MentionSuggestionState | null>(null)
   const keyDownRef = useRef<((e: SuggestionKeyDownProps) => boolean) | null>(null)
   const isOpenRef = useRef(false)

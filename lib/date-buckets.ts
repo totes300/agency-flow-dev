@@ -15,9 +15,40 @@ export type DateRangePreset =
   | "last_week"
   | "this_month"
   | "last_month"
+  | "last_90_days"
   | "this_year"
   | "all"
   | "custom"
+
+/**
+ * Default period for the project Time tab. "This month" per owner decision
+ * (2026-07-12): the tab's job is reviewing the current/last month, and the
+ * range is a first-class, always-visible toolbar control — not a silent
+ * filter, so the "lists default to ALL entries" rule doesn't apply here.
+ */
+export const DEFAULT_TIME_DATE_RANGE: DateRangePreset = "this_month"
+
+/**
+ * Parse a `?dateRange=` URL param into a preset, defaulting to
+ * `DEFAULT_TIME_DATE_RANGE`. Shared by the Time tab orchestrator, its
+ * toolbar, and the worksheet export button so all three agree on what the
+ * URL means.
+ */
+export function parseDateRangePreset(value: string | null): DateRangePreset {
+  if (
+    value === "all" ||
+    value === "this_week" ||
+    value === "last_week" ||
+    value === "this_month" ||
+    value === "last_month" ||
+    value === "last_90_days" ||
+    value === "this_year" ||
+    value === "custom"
+  ) {
+    return value
+  }
+  return DEFAULT_TIME_DATE_RANGE
+}
 
 const MONTHS_SHORT = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -208,6 +239,12 @@ export function resolveDateRangePreset(
       }
     }
 
+    case "last_90_days": {
+      const d = toUtcDate(today)
+      d.setUTCDate(d.getUTCDate() - 89)
+      return { from: utcYmd(d), to: today }
+    }
+
     case "this_year": {
       return { from: `${y}-01-01`, to: `${y}-12-31` }
     }
@@ -219,6 +256,7 @@ export const DATE_RANGE_PRESET_LABELS: Record<DateRangePreset, string> = {
   last_week: "Last week",
   this_month: "This month",
   last_month: "Last month",
+  last_90_days: "Last 90 days",
   this_year: "This year",
   all: "All time",
   custom: "Custom…",

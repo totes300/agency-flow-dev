@@ -1,45 +1,87 @@
 /**
- * Pure utility functions for task detail modal.
- * Extracted for testability — used by task-detail-modal.tsx and related components.
+ * Pure helpers for task detail (drawer + full page): URL params, J/K
+ * stepping, feed merge, sub-task progress. Extracted for testability.
  */
 
 import type { Id } from "@/convex/_generated/dataModel"
 
 // ─── URL helpers ────────────────────────────────────────────────────────────────
 
-/** Search param carrying a comment deep-link alongside `detail`. */
+/** Search param carrying a comment deep-link alongside the open task. */
 export const COMMENT_PARAM = "comment"
 
+/** The drawer param (docs/prd-tasks-refactor.md §6.1): `?task=<identifier>` on any route. */
+export const TASK_PARAM = "task"
+
+/** Legacy drawer param (`?detail=<taskId>`). Still accepted; the drawer canonicalises it to `?task=`. */
+export const LEGACY_DETAIL_PARAM = "detail"
+
+/** Which task the URL opens: by identifier (`?task=`) or, from old links, by id (`?detail=`). */
+export type TaskRef = { kind: "identifier"; identifier: string } | { kind: "id"; id: string }
+
+/** The task the URL opens in the drawer, or null. `?task=` wins over `?detail=`. */
+export function parseTaskRef(searchParams: URLSearchParams): TaskRef | null {
+  const identifier = searchParams.get(TASK_PARAM)?.trim()
+  if (identifier) return { kind: "identifier", identifier }
+  const id = parseDetailParam(searchParams)
+  return id ? { kind: "id", id } : null
+}
+
+/** True when the URL opens a task in the drawer (either param). */
+export function isTaskDetailOpen(searchParams: URLSearchParams): boolean {
+  return parseTaskRef(searchParams) !== null
+}
+
 /**
- * Build a URL search string with the detail param set.
- * Preserves existing params (tab, filters, etc). The comment deep-link param
- * is always dropped — it is only meaningful for the navigation that set it.
+ * The search string that opens `target` in the drawer (or closes it for
+ * null). Writes `?task=<identifier>`; a task without an identifier falls back
+ * to `?detail=<id>`. Preserves the other params; the comment deep-link is
+ * dropped unless `keepComment` (it only belongs to the navigation that set it).
  */
-export function buildDetailUrl(
+export function buildTaskUrl(
   currentParams: URLSearchParams,
-  taskId: Id<"tasks"> | null
+  target: { id: string; identifier: string | null } | null,
+  { keepComment = false }: { keepComment?: boolean } = {},
 ): string {
   const params = new URLSearchParams(currentParams.toString())
-  params.delete(COMMENT_PARAM)
-  if (taskId) {
-    params.set("detail", taskId)
-  } else {
-    params.delete("detail")
+  if (!keepComment) params.delete(COMMENT_PARAM)
+  params.delete(TASK_PARAM)
+  params.delete(LEGACY_DETAIL_PARAM)
+  if (target) {
+    if (target.identifier) params.set(TASK_PARAM, target.identifier)
+    else params.set(LEGACY_DETAIL_PARAM, target.id)
   }
   const str = params.toString()
   return str ? `?${str}` : ""
 }
 
 /**
- * Absolute deep link to a task's detail drawer on /tasks, optionally
- * anchored to a comment (inbox row click).
+ * Legacy builder: opens a task by id (`?detail=<id>`), for callers that only
+ * know the id. The drawer resolves it and rewrites the URL to `?task=`.
+ */
+export function buildDetailUrl(
+  currentParams: URLSearchParams,
+  taskId: Id<"tasks"> | null
+): string {
+  return buildTaskUrl(currentParams, taskId ? { id: taskId, identifier: null } : null)
+}
+
+/** The full-page route of a task (`/tasks/ARLO-21`, §6.1). */
+export function taskPagePath(identifier: string, commentId?: string | null): string {
+  const path = `/tasks/${encodeURIComponent(identifier)}`
+  return commentId ? `${path}?${COMMENT_PARAM}=${encodeURIComponent(commentId)}` : path
+}
+
+/**
+ * Absolute deep link to a task's detail on /tasks, optionally anchored to a
+ * comment (inbox row click). By id; the drawer canonicalises it.
  */
 export function buildTaskDeepLink(
   taskId: string,
   commentId?: string | null
 ): string {
   const params = new URLSearchParams()
-  params.set("detail", taskId)
+  params.set(LEGACY_DETAIL_PARAM, taskId)
   if (commentId) params.set(COMMENT_PARAM, commentId)
   return `/tasks?${params.toString()}`
 }
@@ -52,13 +94,13 @@ export function parseCommentParam(searchParams: URLSearchParams): string | null 
 }
 
 /**
- * Extract the task ID from the detail query param.
+ * Extract the task ID from the legacy `?detail=` param.
  * Returns null if not present or empty.
  */
 export function parseDetailParam(
   searchParams: URLSearchParams
 ): string | null {
-  const value = searchParams.get("detail")
+  const value = searchParams.get(LEGACY_DETAIL_PARAM)
   if (!value || !value.trim()) return null
   return value.trim()
 }
@@ -143,32 +185,4 @@ export function mergeActivityFeed(
     ...comments.map((c) => ({ ...c, kind: "comment" as const })),
   ]
   return tagged.sort((a, b) => a.createdAt - b.createdAt)
-}
-
-// ─── Subtask validation ─────────────────────────────────────────────────────────
-
-/**
- * Validate whether a task can have subtasks created under it.
- * Returns an error message or null if valid.
- */
-export function validateSubtaskCreation(
-  parentTaskId: string | null | undefined,
-  parentParentTaskId: string | null | undefined
-): string | null {
-  if (!parentTaskId) return "Parent task ID is required"
-  if (parentParentTaskId) return "Subtasks cannot have subtasks (max 1 level)"
-  return null
-}
-
-/**
- * Compute subtask progress from a list of subtasks.
- * Returns { done, total, percent }.
- */
-export function computeSubtaskProgress(
-  subtasks: { statusType: string }[]
-): { done: number; total: number; percent: number } {
-  const total = subtasks.length
-  if (total === 0) return { done: 0, total: 0, percent: 0 }
-  const done = subtasks.filter((s) => s.statusType === "done").length
-  return { done, total, percent: Math.round((done / total) * 100) }
 }

@@ -2,24 +2,17 @@ import { formatShortDate, formatInvoiceNumber } from "@/lib/format"
 import { entryStatus } from "@/convex/lib/entryStatus"
 
 /**
- * Phase 8 Slice 4 — derive the day-group header's "reference" subtitle.
- *
- * Parent PRD § UI Changes → Time entry list:
- *
- *   The day-group header carries the reference, not the row. A closed
- *   day shows `Closed · Mar 1–31` (period boundary). An invoiced day
- *   shows `Closed · INV-038` (invoice number). The row badge isn't
- *   repeated per row in the header text — the header is the consolidated
- *   label.
+ * Day-group header "reference" subtitle. The header carries the reference,
+ * not the row: a day closed within a retainer budget shows `Closed · Mar 1–31`
+ * (the close's period); a day on one invoice shows `Closed · INV-038`
+ * (`Draft · INV-038` while that invoice is a draft).
  *
  * Rules (in order):
- *   1. If every billable entry in the group is settled by the SAME
- *      retainer period (matching `settledPeriodStart/End`) → period ref.
- *   2. If every billable entry is settled by (or staged on) the SAME
- *      invoice → invoice ref ("Draft · INV-038" if any entry is still
- *      `draft`, "Closed · INV-038" otherwise).
- *   3. Otherwise → null (no consolidated reference; group has mixed
- *      states and falls back to per-row badges).
+ *   1. Every billable entry settled by a final close with no invoice, all
+ *      for the SAME period → period ref.
+ *   2. Every billable entry on the SAME invoice → invoice ref ("Draft" if
+ *      any entry's close is still a draft).
+ *   3. Otherwise → null (mixed states fall back to per-row badges).
  *
  * Non-billable-only groups → null (the row badges already say so).
  */
@@ -29,10 +22,9 @@ type EntryShape = {
   invoiceId?: string
   invoicePrefix?: string
   invoiceNumber?: number
-  settledAt?: number
-  settledReason?: "invoiced" | "retainer_included" | "fixed_included"
-  settledPeriodStart?: string
-  settledPeriodEnd?: string
+  closeStatus?: "draft" | "final"
+  closePeriodStart?: string
+  closePeriodEnd?: string
 }
 
 export type GroupReference =
@@ -46,38 +38,31 @@ export function deriveGroupReference(
   const billable = entries.filter((e) => e.isBillable)
   if (billable.length === 0) return null
 
-  // Period reference: every billable entry shares the same monthly
-  // boundary AND every entry has `settledReason === "retainer_included"`
-  // (the period close is what gives a consolidated period reference —
-  // an invoiced overage entry that happens to fall in March wouldn't
-  // share a period ref because its surface is the invoice).
-  const allRetainerIncluded = billable.every(
-    (e) => e.settledReason === "retainer_included",
-  )
-  if (allRetainerIncluded) {
-    const first = billable[0]
-    if (first.settledPeriodStart && first.settledPeriodEnd) {
-      const sameBoundary = billable.every(
-        (e) =>
-          e.settledPeriodStart === first.settledPeriodStart &&
-          e.settledPeriodEnd === first.settledPeriodEnd,
-      )
-      if (sameBoundary) {
-        const label = `Closed · ${formatShortDate(first.settledPeriodStart)}–${formatShortDate(first.settledPeriodEnd)}`
-        return {
-          kind: "period",
-          label,
-          periodStart: first.settledPeriodStart,
-          periodEnd: first.settledPeriodEnd,
-        }
-      }
+  // Period reference: every billable entry was closed without an invoice
+  // (within budget) in the same period.
+  const first = billable[0]
+  const samePeriodNoInvoice =
+    first.closePeriodStart !== undefined &&
+    first.closePeriodEnd !== undefined &&
+    billable.every(
+      (e) =>
+        e.closeStatus === "final" &&
+        e.invoiceId === undefined &&
+        e.closePeriodStart === first.closePeriodStart &&
+        e.closePeriodEnd === first.closePeriodEnd,
+    )
+  if (samePeriodNoInvoice && first.closePeriodStart && first.closePeriodEnd) {
+    return {
+      kind: "period",
+      label: `Closed · ${formatShortDate(first.closePeriodStart)}–${formatShortDate(first.closePeriodEnd)}`,
+      periodStart: first.closePeriodStart,
+      periodEnd: first.closePeriodEnd,
     }
   }
 
-  // Invoice reference: every billable entry shares the same invoiceId
-  // (the group has been routed onto one invoice, regardless of finalize
-  // status). Use whichever entry has the prefix/number — they all do if
-  // they all share invoiceId since `listProjectEntries` denormalizes.
+  // Invoice reference: every billable entry shares the same invoice (its
+  // close's), draft or final. `listProjectEntries` denormalizes the number;
+  // an unnumbered draft has none and gets no consolidated reference.
   const allSameInvoice = billable.every(
     (e) => e.invoiceId !== undefined && e.invoiceId === billable[0].invoiceId,
   )
@@ -87,17 +72,9 @@ export function deriveGroupReference(
     )
     if (sample && sample.invoicePrefix && sample.invoiceNumber != null) {
       const invoiceLabel = formatInvoiceNumber(sample.invoicePrefix, sample.invoiceNumber)
-      // Use `entryStatus()` to detect any draft entry — even one draft
-      // forces the header to read "Draft" so the user doesn't think the
-      // invoice is final.
-      const hasDraft = billable.some(
-        (e) =>
-          entryStatus({
-            isBillable: e.isBillable,
-            invoiceId: e.invoiceId as never,
-            settledAt: e.settledAt,
-          }) === "draft",
-      )
+      // Even one draft entry forces the header to read "Draft" so the user
+      // doesn't think the invoice is final.
+      const hasDraft = billable.some((e) => entryStatus(e) === "draft")
       return {
         kind: "invoice",
         label: `${hasDraft ? "Draft" : "Closed"} · ${invoiceLabel}`,

@@ -43,7 +43,7 @@ import { CloseCycleModal } from "@/components/projects/close-cycle-modal"
 import { ReopenPeriodDialog } from "@/components/projects/reopen-period-dialog"
 import { PeriodDetailSheet } from "@/components/projects/period-detail-sheet"
 import { WorksheetMenuItem } from "@/components/worksheet/worksheet-menu-item"
-import { useGenerateInvoice } from "@/lib/hooks/use-generate-invoice"
+import { useBillingActions } from "@/lib/hooks/use-billing-actions"
 import {
   formatCurrency,
   formatCycleLabel,
@@ -92,16 +92,16 @@ type MonthInvoice = NonNullable<MonthData["invoice"]>
 // `rolling` communicates "tracked, deferred to cycle-end" without lying about
 // where the action is.
 //
-// Why `draft` exists: once `createInvoice` runs, EVERY included entry gets
-// `invoiceId` stamped (`convex/invoices.ts:1880`) — so backend-wise those
-// entries are in the billing flow. The pill must reflect this honestly.
+// Why `draft` exists: once a close is committed with a draft invoice, EVERY
+// entry in its scope is locked by the close — so backend-wise those entries
+// are in the billing flow. The pill must reflect this honestly.
 // Leaving them as `rolling` would lie ("nothing has started yet") when the
 // truth is "a draft invoice exists and links to these entries." On rollover
 // mid-cycle rows the draft state INHERITS from the cycle-end row's invoice
 // (only the anchor carries the link, but all cycle rows are in the flow).
 //
 // Mid-cycle rows ALSO inherit the `invoiced` terminal state from the cycle's
-// finalized invoice. `closed` is per-row (each `retainerPeriods.closedAt`).
+// finalized invoice. `closed` is per-row (a live close covers the month).
 //
 // `closed` and `invoiced` share green: both are "done." Different reopen
 // paths (Reopen period vs void invoice) drive the distinct labels.
@@ -157,8 +157,8 @@ function lifecycleStateOf(month: MonthData, ctx: LifecycleCtx): LifecycleState {
 
   // Rollover mid-cycle rows: state inherits from the CYCLE (not from this
   // row's `month.invoice`, which is null for non-anchor rows). The cycle
-  // invoice — draft or finalized — covers EVERY entry in the cycle (each
-  // gets `invoiceId` stamped at `createInvoice`), so mid-cycle rows must
+  // invoice — draft or finalized — covers EVERY entry in the cycle (the
+  // cycle's close locks them all), so mid-cycle rows must
   // reflect that. `rolling` is the residual state for "cycle has ended but
   // no billing flow has started yet."
   if (ctx.isRollover && !ctx.isCycleEndRow) {
@@ -265,7 +265,7 @@ export function MonthlyBreakdownCard({
   // (PRD § Further Notes): the toggle is a transient per-visit preference, not
   // part of the page's shareable view.
   const [sortDir, setSortDir] = useState<"oldest" | "newest">("oldest")
-  const { generate, pending } = useGenerateInvoice()
+  const { reviewClose } = useBillingActions()
   // Phase 8 Slice 3 — close/reopen are admin-only actions. Members render
   // the row without `Close` / `Reopen` affordances; the read-only `↓ Report`
   // primary stays for them on `open` rows.
@@ -429,20 +429,12 @@ export function MonthlyBreakdownCard({
                   cycleLabel={cycleLabel}
                   cycleEndInvoice={cycleEndInvoice}
                   currency={currency}
-                  overageRate={overageRate}
                   isRollover={rolloverEnabled}
                   isCycleEndRow={month.cyclePosition === cycleLength}
                   projectId={projectId}
                   isAdmin={isAdmin}
                   isHighlighted={key === highlightKey}
-                  isPending={pending}
-                  onGenerate={() =>
-                    void generate({
-                      projectId,
-                      retainerYear: month.year,
-                      retainerMonth: month.month,
-                    })
-                  }
+                  onGenerate={() => reviewClose(projectId, month)}
                 />
               )
             })}
@@ -479,13 +471,11 @@ function MonthRow({
   cycleLabel,
   cycleEndInvoice,
   currency,
-  overageRate,
   isRollover,
   isCycleEndRow,
   projectId,
   isAdmin,
   isHighlighted,
-  isPending,
   onGenerate,
 }: {
   month: MonthData
@@ -497,13 +487,11 @@ function MonthRow({
   cycleLabel: string
   cycleEndInvoice: MonthInvoice | null
   currency: string
-  overageRate: number
   isRollover: boolean
   isCycleEndRow: boolean
   projectId: Id<"projects">
   isAdmin: boolean
   isHighlighted: boolean
-  isPending: boolean
   onGenerate: () => void
 }) {
   const state = lifecycleStateOf(month, {
@@ -552,7 +540,6 @@ function MonthRow({
           month={month}
           state={state}
           currency={currency}
-          overageRate={overageRate}
           isRollover={isRollover}
           isCycleEndRow={isCycleEndRow}
         />
@@ -564,7 +551,6 @@ function MonthRow({
           month={month}
           state={state}
           isAdmin={isAdmin}
-          isPending={isPending}
           onGenerate={onGenerate}
           onOpenDrillDown={() => setDrillDownOpen(true)}
           cycleStart={cycleStart}
@@ -572,7 +558,6 @@ function MonthRow({
           cycleEndMonth={cycleEndMonth}
           cycleLabel={cycleLabel}
           isRollover={isRollover}
-          isCycleEndRow={isCycleEndRow}
         />
       </li>
       <PeriodDetailSheet
@@ -592,14 +577,12 @@ function AmountCell({
   month,
   state,
   currency,
-  overageRate,
   isRollover,
   isCycleEndRow,
 }: {
   month: MonthData
   state: LifecycleState
   currency: string
-  overageRate: number
   isRollover: boolean
   isCycleEndRow: boolean
 }) {
@@ -633,13 +616,11 @@ function AmountCell({
     )
   }
 
-  // Raw ledger view — no rounding (CLAUDE.md: rounding only at invoice generation).
-  // Over-budget = overage hours × project overageRate; otherwise $0 (the
-  // retainer fee covered the work). For non-rollover this is the per-month
-  // overage; for rollover cycle-end the chained `endBalance` equals the
-  // cycle aggregate, so the same formula yields the cycle total.
-  const overageHours = month.endBalance < 0 ? Math.abs(month.endBalance) / 60 : 0
-  const amount = overageHours * overageRate
+  // Server-priced overage of the row (raw minutes, priced like the close that
+  // bills it); $0 when the retainer fee covered the work. For rollover
+  // cycle-end the ladder balance is the cycle aggregate, so this is the
+  // cycle total.
+  const amount = month.overageAmount
 
   return (
     <span
@@ -675,7 +656,6 @@ function ActionCell({
   month,
   state,
   isAdmin,
-  isPending,
   onGenerate,
   onOpenDrillDown,
   cycleStart,
@@ -683,7 +663,6 @@ function ActionCell({
   cycleEndMonth,
   cycleLabel,
   isRollover,
-  isCycleEndRow,
 }: {
   action: RetainerRowAction
   closeAction: RetainerRowCloseAction
@@ -692,7 +671,6 @@ function ActionCell({
   month: MonthData
   state: LifecycleState
   isAdmin: boolean
-  isPending: boolean
   onGenerate: () => void
   onOpenDrillDown: () => void
   cycleStart: string
@@ -700,7 +678,6 @@ function ActionCell({
   cycleEndMonth: number
   cycleLabel: string
   isRollover: boolean
-  isCycleEndRow: boolean
 }) {
   // Modal/dialog state lives at the cell level — each row has its own
   // instance so the modal anchors visually to the row that triggered it
@@ -709,40 +686,30 @@ function ActionCell({
   const [closeCycleOpen, setCloseCycleOpen] = useState(false)
   const [reopenDialogOpen, setReopenDialogOpen] = useState(false)
 
-  // Slice 1 — every monthly row gets a `Download worksheet` overflow item.
-  // The action is admin-gated server-side (`requireAdmin`); we mirror the
-  // gate in the UI so members never see a control they can't use.
-  // `useAction` returns a stable function; the `WorksheetMenuItem` owns the
-  // loading state, Blob download, and error toast.
-  const exportMonth = useAction(api.worksheets.exportMonth)
-  const exportCycle = useAction(api.worksheets.exportCycle)
+  // Every row gets a worksheet item (D10's two exports): a closed month
+  // exports its close's snapshot — for a cycle close, the whole cycle — and
+  // an open month exports its date range. Admin-gated server-side
+  // (`requireAdmin`); mirrored here so members never see it.
+  const exportClose = useAction(api.worksheets.exportClose)
+  const exportRange = useAction(api.worksheets.exportRange)
+  const closeId = month.closeId
   const worksheetItem = isAdmin ? (
     <WorksheetMenuItem
-      label="Download worksheet"
+      label={closeId && isRollover ? "Download cycle worksheet" : "Download worksheet"}
       icon={<FileSpreadsheetIcon className="size-3.5" aria-hidden />}
       run={() =>
-        exportMonth({
-          projectId,
-          year: month.year,
-          month: month.month,
-        })
+        closeId
+          ? exportClose({ closeId })
+          : exportRange({
+              projectId,
+              periodStart: month.startDate,
+              periodEnd: month.endDate,
+              periodSlug: month.startDate.slice(0, 7),
+              periodLabel: month.label,
+            })
       }
     />
   ) : null
-
-  // Slice 3 — full-cycle export. Available only on the cycle-end row of
-  // rollover retainer projects (per PRD §Trigger placement table). On
-  // 1-month cycles every row is a cycle-end row, so this item ALSO appears
-  // there — the verification explicitly calls for "1-month cycle exports
-  // identically from cycle-close row and from monthly row".
-  const cycleWorksheetItem =
-    isAdmin && isRollover && isCycleEndRow ? (
-      <WorksheetMenuItem
-        label="Download cycle worksheet"
-        icon={<FileSpreadsheetIcon className="size-3.5" aria-hidden />}
-        run={() => exportCycle({ projectId, cycleStart })}
-      />
-    ) : null
 
   const viewEntriesItem = (
     <DropdownMenuItem onSelect={onOpenDrillDown}>
@@ -764,7 +731,6 @@ function ActionCell({
         </Link>
         <RowOverflow ariaLabel={`More actions for ${month.label}`}>
           {worksheetItem}
-          {cycleWorksheetItem}
           {viewEntriesItem}
         </RowOverflow>
       </div>
@@ -775,12 +741,11 @@ function ActionCell({
   if (action === "generate") {
     return (
       <div className="flex items-center justify-end gap-1">
-        <Button size="sm" onClick={onGenerate} disabled={isPending}>
-          Generate
+        <Button size="sm" onClick={onGenerate}>
+          Review
         </Button>
         <RowOverflow ariaLabel={`More actions for ${month.label}`}>
           {worksheetItem}
-          {cycleWorksheetItem}
           {viewEntriesItem}
         </RowOverflow>
       </div>
@@ -794,7 +759,6 @@ function ActionCell({
         <ReportLink projectId={projectId} month={month} />
         <RowOverflow ariaLabel={`More actions for ${month.label}`}>
           {worksheetItem}
-          {cycleWorksheetItem}
           {isAdmin && (
             <DropdownMenuItem onSelect={() => setReopenDialogOpen(true)}>
               <RotateCcwIcon className="size-3.5" aria-hidden />
@@ -834,7 +798,6 @@ function ActionCell({
         </Button>
         <RowOverflow ariaLabel={`More actions for ${month.label}`}>
           {worksheetItem}
-          {cycleWorksheetItem}
           <DropdownMenuItem asChild>
             <Link
               href={`/projects/${projectId}/reports/${periodToken(month)}`}
@@ -878,7 +841,6 @@ function ActionCell({
       <ReportLink projectId={projectId} month={month} />
       <RowOverflow ariaLabel={`More actions for ${month.label}`}>
         {worksheetItem}
-        {cycleWorksheetItem}
         {viewEntriesItem}
       </RowOverflow>
     </div>

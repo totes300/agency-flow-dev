@@ -1,19 +1,28 @@
 "use client"
 
-import { useState, useRef, useEffect } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useMutation } from "convex/react"
+import { ArrowUpIcon } from "lucide-react"
 import { api } from "@/convex/_generated/api"
-import { Button } from "@/components/ui/button"
-import { PlusIcon, SendIcon } from "lucide-react"
-import { toastError } from "@/lib/toast-helpers"
 import type { Id } from "@/convex/_generated/dataModel"
+import { toastError } from "@/lib/toast-helpers"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { PlusNavIcon } from "@/components/icons/nav-icons"
 
+/**
+ * My Tasks quick add on phones (§11.11, the old My Tasks FAB): a round "+"
+ * at the bottom right opens a one-line title field; Enter creates the task
+ * assigned to the caller, Escape closes. `onCreated` lets the Today tab plan
+ * the new task for the caller's day. Hidden from `md` up, where C and the
+ * toolbar's compose button do the same.
+ */
 export function MobileFab({
-  todayStatusId,
-  currentUserId,
+  me,
+  onCreated,
 }: {
-  todayStatusId?: Id<"statuses">
-  currentUserId: Id<"users">
+  me: Id<"users"> | null
+  onCreated?: (taskId: Id<"tasks">) => void
 }) {
   const [open, setOpen] = useState(false)
   const [title, setTitle] = useState("")
@@ -24,20 +33,18 @@ export function MobileFab({
     if (open) inputRef.current?.focus()
   }, [open])
 
-  async function handleSubmit() {
-    const trimmed = title.trim()
-    if (!trimmed) return
-
+  function close() {
     setTitle("")
     setOpen(false)
+  }
 
+  async function submit() {
+    const trimmed = title.trim()
+    if (!trimmed || !me) return
+    close()
     try {
-      await createTask({
-        title: trimmed,
-        statusId: todayStatusId,
-        assigneeIds: [currentUserId],
-        billable: true,
-      })
+      const taskId = await createTask({ title: trimmed, assigneeIds: [me] })
+      onCreated?.(taskId)
     } catch (err) {
       toastError(err, "Failed to create task")
     }
@@ -45,37 +52,43 @@ export function MobileFab({
 
   if (open) {
     return (
-      <div className="fixed bottom-6 left-4 right-4 z-40 flex gap-2 md:hidden">
-        <input
+      <form
+        className="fixed right-4 bottom-6 left-4 z-40 flex gap-2 md:hidden"
+        onSubmit={(e) => {
+          e.preventDefault()
+          void submit()
+        }}
+      >
+        <Input
           ref={inputRef}
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter") void handleSubmit()
-            if (e.key === "Escape") { setTitle(""); setOpen(false) }
+            if (e.key === "Escape") close()
           }}
-          placeholder="Task name..."
-          className="flex-1 rounded-full border bg-background px-4 py-3 text-sm shadow-lg outline-none focus:ring-2 focus:ring-primary"
+          onBlur={() => {
+            if (!title.trim()) close()
+          }}
+          placeholder="Task name…"
+          aria-label="New task title"
+          className="h-12 flex-1 rounded-full bg-background px-4 shadow-lg"
         />
-        <Button
-          onClick={() => void handleSubmit()}
-          disabled={!title.trim()}
-          className="size-12 rounded-full shadow-lg"
-          size="icon"
-        >
-          <SendIcon className="size-5" />
+        <Button type="submit" size="icon" className="size-12 rounded-full shadow-lg" disabled={!title.trim()} aria-label="Create task">
+          <ArrowUpIcon />
         </Button>
-      </div>
+      </form>
     )
   }
 
   return (
     <Button
-      onClick={() => setOpen(true)}
-      className="fixed bottom-6 right-6 z-40 size-12 rounded-full shadow-lg md:hidden"
       size="icon"
+      className="fixed right-6 bottom-6 z-40 size-12 rounded-full shadow-lg md:hidden"
+      aria-label="New task"
+      disabled={!me}
+      onClick={() => setOpen(true)}
     >
-      <PlusIcon className="size-5" />
+      <PlusNavIcon size={20} />
     </Button>
   )
 }

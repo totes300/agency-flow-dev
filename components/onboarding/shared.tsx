@@ -1,4 +1,5 @@
 import type { StatusColorName, CategoryColor } from "@/convex/lib/constants"
+import { TASK_CATEGORIES, type TaskCategory } from "@/convex/tasks/model"
 
 // Re-export shared dot components for backward compatibility
 export { StatusDot } from "@/components/status-dot"
@@ -10,7 +11,7 @@ export type StatusDraft = {
   id: string
   name: string
   color: StatusColorName
-  type: import("@/convex/lib/constants").StatusType
+  category: TaskCategory
 }
 
 export type CategoryDraft = {
@@ -22,8 +23,12 @@ export type CategoryDraft = {
 
 // ─── Validation ─────────────────────────────────────────────────────────────────
 
+/** Every category keeps at least one status (§4.1), and every status has a name. */
 export function validateStatuses(statuses: StatusDraft[]): boolean {
-  return statuses.length > 0 && statuses.every((s) => s.name.trim())
+  return (
+    statuses.every((s) => s.name.trim()) &&
+    TASK_CATEGORIES.every((c) => statuses.some((s) => s.category === c))
+  )
 }
 
 export function validateCategories(categories: CategoryDraft[]): boolean {

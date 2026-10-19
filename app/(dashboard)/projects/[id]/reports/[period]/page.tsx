@@ -2,7 +2,7 @@
 
 import { useParams } from "next/navigation"
 import Link from "next/link"
-import { useQuery } from "convex/react"
+import { useAction, useQuery } from "convex/react"
 import { useConvexAuth } from "convex/react"
 import { notFound } from "next/navigation"
 import { ArrowLeftIcon, PrinterIcon } from "lucide-react"
@@ -11,16 +11,17 @@ import type { Id } from "@/convex/_generated/dataModel"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { MonthlyReportDocument } from "@/components/projects/monthly-report-document"
+import { WorksheetDownloadButton } from "@/components/worksheet/worksheet-download-button"
 import { useBreadcrumbTitle } from "@/lib/hooks/use-breadcrumb-title"
 
 /**
- * Retainer Monthly Report page (D8 in `docs/invoicing-refactor.md`).
+ * Retainer Monthly Report page.
  *
  * URL: /projects/[id]/reports/[period] where period = "YYYY-MM".
  *
- * The report is rendered live from `getRetainerStatement` (server symbol
- * kept; only the visible header + this route URL are rebranded — see Open
- * Question 1). The "Save as PDF" path uses the browser-native print dialog
+ * The report is rendered from `billingReports.getMonthlyReport`: a closed
+ * month reads its close snapshot, an open month is priced live
+ * (docs/prd-billing-refactor.md N8). The "Save as PDF" path uses the browser-native print dialog
  * (window.print) — same pattern invoices use, no PDF library, no server
  * render. A sibling `print:hidden` class on the chrome keeps the printed
  * output to just the MonthlyReportDocument card.
@@ -34,12 +35,14 @@ export default function ProjectMonthlyReportPage() {
 
   // Skip the query for malformed period strings — the page will 404 below.
   const report = useQuery(
-    api.statements.getRetainerStatement,
+    api.billingReports.getMonthlyReport,
     isAuthenticated && parsed
       ? { projectId, year: parsed.year, month: parsed.month }
       : "skip",
   )
   useBreadcrumbTitle(report ? `Report · ${report.period.label}` : null)
+
+  const exportClose = useAction(api.worksheets.exportClose)
 
   if (!parsed) notFound()
   if (report === undefined) return <ReportSkeleton />
@@ -59,15 +62,44 @@ export default function ProjectMonthlyReportPage() {
             <ArrowLeftIcon className="size-4" />
           </Link>
         </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => window.print()}
-        >
-          <PrinterIcon data-icon="inline-start" className="size-3.5" />
-          Save as PDF
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => window.print()}
+          >
+            <PrinterIcon data-icon="inline-start" className="size-3.5" />
+            Save as PDF
+          </Button>
+          {/* Worksheets exist only for FINAL statements: the close's snapshot
+              is exactly this report's membership. Non-final months are live
+              previews with nothing immutable to export. A cycle close exports
+              the whole cycle. */}
+          {report.isFinal && report.closeId && (
+            <WorksheetDownloadButton
+              label={report.cycleToDate ? "Cycle worksheet" : undefined}
+              run={() => exportClose({ closeId: report.closeId! })}
+            />
+          )}
+        </div>
       </nav>
+
+      {/* Preview mode — the Stripe "upcoming invoice" pattern: mid-cycle and
+          unclosed months are explicitly live, never mistakable for the final
+          record. Chrome-only (print:hidden), the document stays clean. */}
+      {!report.isFinal && (
+        <p className="-mt-3 text-xs text-muted-foreground print:hidden">
+          {report.cycleToDate
+            ? `Cycle in progress${
+                report.cycleToDate.cycleLabel
+                  ? ` (${report.cycleToDate.cycleLabel})`
+                  : ""
+              } — figures update live until the cycle closes.`
+            : report.inProgress
+              ? "Month in progress — figures update live."
+              : "Period not closed yet — figures update until you close it."}
+        </p>
+      )}
 
       <MonthlyReportDocument report={report} />
     </div>

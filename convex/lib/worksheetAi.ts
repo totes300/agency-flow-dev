@@ -46,6 +46,22 @@ import type { WorksheetAiInput } from "../worksheetsHelpers";
 const GATEWAY_MODEL_SLUG = "anthropic/claude-sonnet-4.6";
 const DIRECT_MODEL_ID = "claude-sonnet-4-6";
 
+/**
+ * Is a task's AI input substantive enough to summarize? A task with logged
+ * time but no description, subtasks, comments, or entry notes has nothing to
+ * ground a summary on — the caller flags it rather than invent prose (the
+ * timesheet-format skill's per-row rule, slice 05). Pure; shared by the
+ * worksheet export and the timesheet agent tool so the eligibility rule can
+ * never drift between the two surfaces.
+ */
+export function hasMeaningfulAiInput(input: WorksheetAiInput): boolean {
+  if (input.descriptionText.trim().length > 0) return true;
+  if (input.subtasks.length > 0) return true;
+  if (input.commentTexts.length > 0) return true;
+  if (input.entryNotes.length > 0) return true;
+  return false;
+}
+
 /** Sentinel thrown when the AI service can't be reached at all. */
 export class WorksheetAiUnavailableError extends Error {
   constructor(message: string) {
@@ -204,7 +220,7 @@ export function parseResponse(
  * scopes the call to that explicit key — no chance of accidentally
  * reading the operator's env-var key when a customer key is set.
  */
-function resolveModel(apiKey?: string | null): string | ReturnType<typeof anthropic> {
+export function resolveModel(apiKey?: string | null): string | ReturnType<typeof anthropic> {
   if (apiKey) {
     return createAnthropic({ apiKey })(DIRECT_MODEL_ID);
   }

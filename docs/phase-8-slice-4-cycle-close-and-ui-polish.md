@@ -1,5 +1,10 @@
 # Phase 8 — Slice 4: Cycle close + period drill-down + entry list polish
 
+> **Historical (superseded 2026-10-17).** The data model and write paths described
+> here were replaced by the close model in `docs/prd-billing-refactor.md`, and the
+> code this document refers to has been deleted (billing refactor slice 5). Read it
+> for business intent only; `docs/prd-billing-refactor.md` is the source of truth.
+
 > **Type:** AFK
 > **Blocked by:** Slice 3 (`closePeriodInternal` helper, period-row infrastructure, Monthly Breakdown row layout)
 > **Blocks:** Nothing — this closes out Phase 8

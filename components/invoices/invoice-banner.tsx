@@ -1,7 +1,7 @@
 "use client"
 
 import { Button } from "@/components/ui/button"
-import { useGenerateInvoice } from "@/lib/hooks/use-generate-invoice"
+import { useBillingActions } from "@/lib/hooks/use-billing-actions"
 import type { Id } from "@/convex/_generated/dataModel"
 import { cn } from "@/lib/utils"
 import {
@@ -22,9 +22,9 @@ export type { InvoiceBannerState } from "@/lib/invoice-banner-view"
  * render nothing (mid-cycle rollover retainer, fully invoiced Fixed, no
  * uninvoiced T&M hours, etc.).
  *
- * After the invoicing refactor (D10 in `docs/invoicing-refactor.md`) the CTA
- * calls `createInvoice` directly and routes to the resulting draft; the
- * draft page is the edit/preview surface (no modal).
+ * The CTA opens the Close workspace for retainer / T&M (the only place a
+ * close is committed, docs/prd-billing-refactor.md D8) and bills a fixed fee
+ * via `createFixedInvoice`.
  */
 const ICON_BY_KIND: Record<InvoiceBannerState["kind"], LucideIcon> = {
   fixed: ReceiptIcon,
@@ -60,7 +60,7 @@ export function InvoiceBanner({
   currency: string
   timezone: string
 }) {
-  const { generate, pending } = useGenerateInvoice()
+  const { reviewClose, billFixedFee, pending } = useBillingActions()
 
   if (!state) return null
 
@@ -71,26 +71,18 @@ export function InvoiceBanner({
     state.daysSinceLastInvoice !== null &&
     state.daysSinceLastInvoice >= CADENCE_THRESHOLD_DAYS
 
-  // Both retainer kinds carry `targetYear`/`targetMonth`. For monthly the
-  // target is the over-budget month; for cycle the target is the cycle-end
-  // month (the row `createInvoice` keys on). Either way `useGenerateInvoice`
-  // hands them to `createInvoice`, which resolves "month vs cycle" from the
-  // project's `rolloverEnabled` flag.
-  const retainerYear =
-    state.kind === "retainer-monthly" || state.kind === "retainer-cycle"
-      ? state.targetYear
-      : undefined
-  const retainerMonth =
-    state.kind === "retainer-monthly" || state.kind === "retainer-cycle"
-      ? state.targetMonth
-      : undefined
-
+  // Retainer and T&M periods are reviewed and committed in the Close
+  // workspace (D8); a fixed fee bills straight to a draft (D5). Retainer
+  // targets are the period's last month — the workspace snaps it to the grid.
   function handleGenerate() {
-    void generate({
-      projectId,
-      retainerYear,
-      retainerMonth,
-    })
+    if (!state) return
+    if (state.kind === "fixed") {
+      void billFixedFee(projectId)
+    } else if (state.kind === "tm") {
+      reviewClose(projectId)
+    } else {
+      reviewClose(projectId, { year: state.targetYear, month: state.targetMonth })
+    }
   }
 
   return (
@@ -137,7 +129,7 @@ export function InvoiceBanner({
         </div>
       </div>
       <Button size="sm" disabled={pending} onClick={handleGenerate}>
-        Generate invoice
+        {state.kind === "fixed" ? "Generate invoice" : "Review to invoice"}
       </Button>
     </div>
   )

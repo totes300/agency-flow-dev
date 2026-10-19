@@ -1,7 +1,7 @@
 /**
- * Worksheet export actions (Phase 9).
- *
- * Each action is a thin renderer:
+ * Worksheet export actions. Two exports (docs/prd-billing-refactor.md D10):
+ * `exportClose` (what a close committed) and `exportRange` (an ad-hoc date
+ * range). Each action is a thin renderer:
  *   1. Delegate auth + DB reads to the `collectWorksheetData` internalQuery
  *      in `worksheetsHelpers.ts` (the auth + cross-tenant guard lives there).
  *   2. (Slice 2) Call the Vercel AI Gateway to summarize each task in
@@ -29,10 +29,8 @@ import {
   buildSingleScopeCsv,
   fallbackAiOutputs,
   filenameForAdHoc,
-  filenameForCycle,
-  filenameForInvoice,
-  filenameForMonth,
-  formatMonthScopeLabel,
+  filenameForClose,
+  groupWorksheetRowsByTaskId,
   type WorksheetAiOutputs,
   type WorksheetCycleData,
   type WorksheetData,
@@ -42,31 +40,15 @@ import {
 import { getDateInTimezone } from "./lib/timer";
 import {
   WorksheetAiUnavailableError,
+  hasMeaningfulAiInput,
   summarizeTasksWithBoundedConcurrency,
 } from "./lib/worksheetAi";
-
-// ─── Date helpers (local) ───────────────────────────────────────────────────
-
-/** First and last day of `(year, month=1-12)` as `YYYY-MM-DD`. */
-function monthBounds(year: number, month: number): { start: string; end: string } {
-  const lastDay = new Date(year, month, 0).getDate();
-  const mm = String(month).padStart(2, "0");
-  return {
-    start: `${year}-${mm}-01`,
-    end: `${year}-${mm}-${String(lastDay).padStart(2, "0")}`,
-  };
-}
 
 // ─── AI orchestration ──────────────────────────────────────────────────────
 
 /** Is a row's AI input substantive enough to warrant an AI call? */
 function hasMeaningfulContent(row: WorksheetTaskRow): boolean {
-  const ai = row.aiInput;
-  if (ai.descriptionText.trim().length > 0) return true;
-  if (ai.subtasks.length > 0) return true;
-  if (ai.commentTexts.length > 0) return true;
-  if (ai.entryNotes.length > 0) return true;
-  return false;
+  return hasMeaningfulAiInput(row.aiInput);
 }
 
 /**
@@ -133,18 +115,21 @@ async function resolveAiOutputs(
   apiKey: string | null,
 ): Promise<{ outputs: WorksheetAiOutputs; stats: WorksheetStats }> {
   const outputs: WorksheetAiOutputs = new Map();
-  const eligible: Array<{ row: WorksheetTaskRow }> = [];
+  const eligible: Array<{
+    row: WorksheetTaskRow;
+    occurrenceCount: number;
+  }> = [];
   let aiSkipped = 0;
 
-  for (const row of rows) {
+  for (const { row, occurrenceCount } of groupWorksheetRowsByTaskId(rows)) {
     if (hasMeaningfulContent(row)) {
-      eligible.push({ row });
+      eligible.push({ row, occurrenceCount });
     } else {
       outputs.set(row.taskId as unknown as string, {
         taskSummary: `${row.title}.`,
         whatWeDid: `Worked on ${row.title}.`,
       });
-      aiSkipped++;
+      aiSkipped += occurrenceCount;
     }
   }
 
@@ -163,17 +148,17 @@ async function resolveAiOutputs(
   let aiSucceeded = 0;
   let aiFailed = 0;
   for (let i = 0; i < eligible.length; i++) {
-    const { row } = eligible[i];
+    const { row, occurrenceCount } = eligible[i];
     const r = results[i];
     if (r) {
       outputs.set(row.taskId as unknown as string, r);
-      aiSucceeded++;
+      aiSucceeded += occurrenceCount;
     } else {
       outputs.set(row.taskId as unknown as string, {
         taskSummary: `${row.title}.`,
         whatWeDid: "[summary unavailable]",
       });
-      aiFailed++;
+      aiFailed += occurrenceCount;
     }
   }
 
@@ -184,129 +169,91 @@ async function resolveAiOutputs(
 }
 
 
-// ─── Action: exportMonth ────────────────────────────────────────────────────
+// ─── Action: exportClose ────────────────────────────────────────────────────
 
-export const exportMonth = action({
-  args: {
-    projectId: v.id("projects"),
-    year: v.number(),
-    month: v.number(),
-  },
+/**
+ * Worksheet for one close (D10): exactly the entries it committed — its
+ * frozen snapshot, carried-in work included, skipped-out work excluded — so
+ * it always agrees with the Monthly Report and the invoice for the period. A
+ * cycle close renders per-month sections with the cycle ledger.
+ */
+export const exportClose = action({
+  args: { closeId: v.id("billingCloses") },
   handler: async (ctx, args): Promise<WorksheetExportResult> => {
-    const { start, end } = monthBounds(args.year, args.month);
+    const collected = await ctx.runQuery(
+      internal.worksheetsHelpers.collectCloseWorksheetData,
+      args,
+    );
+    const apiKey = await ctx.runQuery(internal.aiIntegration.loadDecryptedKey, {});
 
-    const data: WorksheetData = await ctx.runQuery(
-      internal.worksheetsHelpers.collectWorksheetData,
-      {
-        scope: {
-          kind: "period",
-          projectId: args.projectId,
-          periodStart: start,
-          periodEnd: end,
+    if (collected.layout === "cycle") {
+      const data: WorksheetCycleData = collected.data;
+      if (data.allRows.length === 0) throw new ConvexError("This close has no time entries to export");
+      const ai = await summarizeAndFillGaps(data.allRows, apiKey);
+      const csv = buildFullCycleCsv({
+        meta: {
+          client: data.client.name,
+          project: data.project.name,
+          scopeKey: "Cycle",
+          scopeValue:
+            `${data.cycleRangeLabel} (${data.cycleLengthLabel})` +
+            (data.invoiceIdentifier ? ` (invoice ${data.invoiceIdentifier})` : " (closed)"),
+          generatedDate: getDateInTimezone(Date.now(), data.timezone),
         },
-      },
-    );
-
-    if (data.rows.length === 0) {
-      throw new ConvexError("No time entries in this period");
+        data,
+        ai: ai.outputs,
+      });
+      return {
+        csv,
+        filename: filenameForClose(data.slugs, {
+          periodStart: data.cycleStart,
+          periodEnd: data.cycleEnd,
+          invoiceIdentifier: data.invoiceIdentifier,
+        }),
+        stats: ai.stats,
+      };
     }
 
-    const apiKey = await ctx.runQuery(
-      internal.aiIntegration.loadDecryptedKey,
-      {},
-    );
+    const data: WorksheetData = collected.data;
+    if (data.rows.length === 0) throw new ConvexError("This close has no time entries to export");
     const ai = await summarizeAndFillGaps(data.rows, apiKey);
-
-    const generatedDate = getDateInTimezone(Date.now(), data.timezone);
+    const close = data.closeContext!;
     const csv = buildSingleScopeCsv({
       meta: {
         client: data.client.name,
         project: data.project.name,
         scopeKey: "Period",
-        scopeValue: formatMonthScopeLabel(args.year, args.month),
-        generatedDate,
+        scopeValue: close.invoiceIdentifier
+          ? `${close.scopeLabel} (invoice ${close.invoiceIdentifier})`
+          : `${close.scopeLabel} (closed)`,
+        generatedDate: getDateInTimezone(Date.now(), data.timezone),
       },
       rows: data.rows,
       ai: ai.outputs,
     });
-
-    return {
-      csv,
-      filename: filenameForMonth(data.slugs, args.year, args.month),
-      stats: ai.stats,
-    };
+    return { csv, filename: filenameForClose(data.slugs, close), stats: ai.stats };
   },
 });
 
-// ─── Action: exportInvoice ──────────────────────────────────────────────────
+// ─── Action: exportRange ────────────────────────────────────────────────────
 
-export const exportInvoice = action({
-  args: { invoiceId: v.id("invoices") },
-  handler: async (ctx, args): Promise<WorksheetExportResult> => {
-    const data: WorksheetData = await ctx.runQuery(
-      internal.worksheetsHelpers.collectWorksheetData,
-      { scope: { kind: "invoice", invoiceId: args.invoiceId } },
-    );
-
-    if (data.rows.length === 0) {
-      throw new ConvexError("This invoice has no time entries to export");
-    }
-
-    const apiKey = await ctx.runQuery(
-      internal.aiIntegration.loadDecryptedKey,
-      {},
-    );
-    const ai = await summarizeAndFillGaps(data.rows, apiKey);
-
-    const generatedDate = getDateInTimezone(Date.now(), data.timezone);
-
-    // `invoiceContext` is always populated for `kind: "invoice"` scope —
-    // the internal query sets it after the auth-guarded read. Defensive
-    // fallback below mirrors the field's `Optional` typing.
-    const invoiceContext = data.invoiceContext ?? {
-      identifier: "INV",
-      scopeLabel: "Invoice scope",
-    };
-
-    const csv = buildSingleScopeCsv({
-      meta: {
-        client: data.client.name,
-        project: data.project.name,
-        scopeKey: "Period",
-        scopeValue: `${invoiceContext.scopeLabel} (invoice ${invoiceContext.identifier})`,
-        generatedDate,
-      },
-      rows: data.rows,
-      ai: ai.outputs,
-    });
-
-    return {
-      csv,
-      filename: filenameForInvoice(data.slugs, invoiceContext.identifier),
-      stats: ai.stats,
-    };
-  },
-});
-
-// ─── Action: exportAdHoc ────────────────────────────────────────────────────
-
-export const exportAdHoc = action({
+/**
+ * Worksheet for an ad-hoc date range (D10), with optional category and
+ * billability filters. Selects by entry date — for a closed period's exact
+ * membership use `exportClose`.
+ */
+export const exportRange = action({
   args: {
     projectId: v.id("projects"),
     periodStart: v.string(),
     periodEnd: v.string(),
     /**
-     * Slugified label of the picker's resolved period — e.g. `2026-q1`,
-     * `2026-may`, `2025-2026-all-time`, or `2026-01-15-to-2026-04-30`
-     * (custom). Computed client-side so the action doesn't need to know
-     * which preset the user clicked.
+     * Slugified label of the resolved period — e.g. `2026-q1`, `2026-05`,
+     * or `2026-01-15-to-2026-04-30` (custom). Computed client-side so the
+     * action doesn't need to know which preset the user clicked.
      */
     periodSlug: v.string(),
-    /**
-     * Human-readable label shown in the CSV `Period:` row. e.g.
-     * `"Q1 2026 (Jan 1 – Mar 31, 2026)"`. Client-side so we don't have to
-     * round-trip the preset id.
-     */
+    /** Human-readable label shown in the CSV `Period:` row. */
     periodLabel: v.string(),
     categoryIds: v.optional(v.array(v.id("workCategories"))),
     billable: v.optional(
@@ -376,9 +323,7 @@ export const exportAdHoc = action({
 
 /**
  * Compose the `Filters:` header value. Omitted (returns `undefined`) when
- * no filters narrow the result — keeps the CSV header tight per PRD §Ad-hoc
- * range export ("If no filters are applied beyond the period, the
- * `Filters:` header line is omitted").
+ * no filters narrow the result — keeps the CSV header tight.
  */
 function buildFiltersLabel(
   categoryLabels: string[] | undefined,
@@ -392,50 +337,3 @@ function buildFiltersLabel(
   if (billable === "nonBillable") parts.push("Non-billable only");
   return parts.length > 0 ? parts.join("; ") : undefined;
 }
-
-// ─── Action: exportCycle ────────────────────────────────────────────────────
-
-export const exportCycle = action({
-  args: {
-    projectId: v.id("projects"),
-    cycleStart: v.string(),
-  },
-  handler: async (ctx, args): Promise<WorksheetExportResult> => {
-    const data: WorksheetCycleData = await ctx.runQuery(
-      internal.worksheetsHelpers.collectCycleWorksheetData,
-      args,
-    );
-
-    if (data.allRows.length === 0) {
-      throw new ConvexError("No time entries in this cycle");
-    }
-
-    // ONE AI batch for the whole cycle — the `data.allRows` array is the
-    // union of every section's rows in chronological order. We resolve
-    // summaries once, then look up per-row in each section when rendering.
-    const apiKey = await ctx.runQuery(
-      internal.aiIntegration.loadDecryptedKey,
-      {},
-    );
-    const ai = await summarizeAndFillGaps(data.allRows, apiKey);
-
-    const generatedDate = getDateInTimezone(Date.now(), data.timezone);
-    const csv = buildFullCycleCsv({
-      meta: {
-        client: data.client.name,
-        project: data.project.name,
-        scopeKey: "Cycle",
-        scopeValue: `${data.cycleRangeLabel} (${data.cycleLengthLabel})`,
-        generatedDate,
-      },
-      data,
-      ai: ai.outputs,
-    });
-
-    return {
-      csv,
-      filename: filenameForCycle(data.slugs, data.cycleStart),
-      stats: ai.stats,
-    };
-  },
-});

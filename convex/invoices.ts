@@ -1,105 +1,23 @@
-import { query, mutation, type MutationCtx, type QueryCtx } from "./_generated/server";
+import { query, mutation } from "./_generated/server";
 import { v, ConvexError } from "convex/values";
 import { requireAdmin, validateStringLength } from "./lib/auth";
 import { getOrgSettings, getProjectCurrency } from "./lib/orgHelpers";
 import { getDateInTimezone, ORG_TIMEZONE_FALLBACK } from "./lib/timer";
 import {
-  canEditInvoiceMessage,
-  findResumableInvoice,
-  assertRetainerInvoiceable,
-  assertRolloverCycleEnd,
-} from "./lib/invoiceCreation";
-import {
-  computeRetainerBalance,
-  getRetainerRecalcCyclePosition,
-  getRetainerCyclePosition,
-  getRetainerCycleStartMonth,
-} from "./lib/retainerBalance";
-import {
-  buildFixedReadyRow,
-  buildRetainerCycleReadyRows,
-  buildRetainerMonthlyReadyRows,
-  buildTmReadyRows,
-  enumerateRetainerCycleState,
-  isCloseRow,
-  shouldAppearInInbox,
-  sortReadyRows,
-  type ReadyRow,
-} from "./lib/readyToInvoice";
-import { getInvoiceAnchorMonthKey } from "./lib/invoiceAnchor";
-import { getFixedBilledFinalized } from "./lib/fixedBilling";
-import {
-  settleInvoiceEntries,
-  unsettleInvoiceEntries,
-} from "./lib/settleEntries";
-import {
   classifyMarkPaid,
   classifyUndo,
   type PriorState,
 } from "./lib/markPaid";
-import {
-  buildRetainerUsageRows,
-  monthRangeFrom,
-  reconcileUsedMinutesToTotal,
-  type YearMonth,
-} from "./lib/retainerUsage";
 import { resolveInvoiceByIdentifier } from "./lib/invoiceIdentifier";
 import type { Doc, Id } from "./_generated/dataModel";
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-/** Round minutes UP to the nearest `roundTo` block. 0 or 1 = no rounding. */
-function roundMinutesUp(minutes: number, roundTo: number): number {
-  if (roundTo <= 1) return minutes;
-  return Math.ceil(minutes / roundTo) * roundTo;
-}
-
-/** Round a number to 2 decimal places. */
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
-}
-
-/** Format a month label from a YYYY-MM-DD date string. */
-function monthLabel(dateStr: string): string {
-  const [year, month] = dateStr.split("-");
-  const date = new Date(Number(year), Number(month) - 1, 1);
-  return date.toLocaleDateString("en-US", { month: "long", year: "numeric" });
-}
-
-function monthShortLabel(dateStr: string): string {
-  const [, month] = dateStr.split("-");
-  const date = new Date(2000, Number(month) - 1, 1);
-  return date.toLocaleDateString("en-US", { month: "short" });
-}
-
-function periodSubjectLabel(periodStart: string, periodEnd: string): string {
-  if (periodStart.slice(0, 7) === periodEnd.slice(0, 7)) {
-    return monthLabel(periodStart);
-  }
-  const startYear = periodStart.slice(0, 4);
-  const endYear = periodEnd.slice(0, 4);
-  const startMonth = monthShortLabel(periodStart);
-  const endMonth = monthShortLabel(periodEnd);
-  if (startYear === endYear) return `${startMonth}-${endMonth} ${endYear}`;
-  return `${startMonth} ${startYear}-${endMonth} ${endYear}`;
-}
-
-/** Inclusive month list from a YYYY-MM-DD periodStart to periodEnd. */
-function invoiceMonthRange(
-  periodStart: string | undefined,
-  periodEnd: string | undefined,
-): YearMonth[] {
-  if (!periodStart || !periodEnd) return [];
-  const [startYear, startMonth] = periodStart.split("-").map(Number);
-  const [endYear, endMonth] = periodEnd.split("-").map(Number);
-  const span = (endYear * 12 + (endMonth - 1)) - (startYear * 12 + (startMonth - 1)) + 1;
-  return monthRangeFrom({ year: startYear, month: startMonth }, span);
-}
-
-/** Format an invoice number for display/search, matching lib/format.ts:formatInvoiceNumber. */
-function formatInvoiceNumber(prefix: string, number: number): string {
-  return `${prefix}${String(number).padStart(3, "0")}`;
-}
+import { fromMinor, toMinor } from "./lib/billing/money";
+import { formatInvoiceNumber, periodSubjectLabel } from "./lib/billing/labels";
+import { loadCloseContext } from "./lib/billing/closeData";
+import { closeRetainerUsage } from "./lib/billing/usageBlock";
+import { openElapsedRetainerPeriods } from "./lib/billing/periodView";
+import { absMonthOf } from "./lib/billing/periods";
+import { deleteDraftInvoice, transitionInvoice } from "./lib/billing/invoiceLifecycle";
+import { toInvoiceView, toLineView } from "./lib/billing/invoiceView";
 
 // ─── Queries ──────────────────────────────────────────────────────────────────
 
@@ -139,7 +57,7 @@ export const listInvoices = query({
         const safeProject = project && project.orgId === orgId ? project : null;
         const safeClient = client && client.orgId === orgId ? client : null;
         return {
-          ...inv,
+          ...toInvoiceView(inv),
           projectName: safeProject?.name ?? "Unknown",
           projectBillingType: safeProject?.billingType ?? "t_and_m",
           clientName: safeClient?.name ?? "Unknown",
@@ -255,7 +173,7 @@ export const listAllInvoices = query({
         const safeProject = project && project.orgId === orgId ? project : null;
         const safeClient = client && client.orgId === orgId ? client : null;
         return {
-          ...inv,
+          ...toInvoiceView(inv),
           projectName: safeProject?.name ?? "Unknown",
           projectBillingType: safeProject?.billingType ?? "t_and_m",
           clientName: safeClient?.name ?? "Unknown",
@@ -312,6 +230,7 @@ export const getInvoiceMetrics = query({
     // Current month in org timezone, e.g. "2026-04"
     const currentYearMonth = todayStr.slice(0, 7);
 
+    // Sums run in minor units per currency, converted once for display.
     type Bucket = { count: number; currencySums: Record<string, number> };
     const empty = (): Bucket => ({ count: 0, currencySums: {} });
     const draft = empty();
@@ -322,8 +241,14 @@ export const getInvoiceMetrics = query({
     function accumulate(bucket: Bucket, inv: Doc<"invoices">) {
       bucket.count += 1;
       bucket.currencySums[inv.currency] =
-        round2((bucket.currencySums[inv.currency] ?? 0) + inv.total);
+        (bucket.currencySums[inv.currency] ?? 0) + inv.totalMinor;
     }
+    const toDisplay = (bucket: Bucket): Bucket => ({
+      count: bucket.count,
+      currencySums: Object.fromEntries(
+        Object.entries(bucket.currencySums).map(([cur, minor]) => [cur, fromMinor(minor, cur)]),
+      ),
+    });
 
     for (const inv of invoices) {
       if (inv.status === "void") continue;
@@ -349,7 +274,22 @@ export const getInvoiceMetrics = query({
       }
     }
 
-    return { draft, unpaid, pastDue, paidThisMonth };
+    // Everything issued and unpaid (unpaid + past due), for the hub summary.
+    const outstanding = empty();
+    for (const b of [unpaid, pastDue]) {
+      outstanding.count += b.count;
+      for (const [cur, minor] of Object.entries(b.currencySums)) {
+        outstanding.currencySums[cur] = (outstanding.currencySums[cur] ?? 0) + minor;
+      }
+    }
+
+    return {
+      draft: toDisplay(draft),
+      unpaid: toDisplay(unpaid),
+      pastDue: toDisplay(pastDue),
+      outstanding: toDisplay(outstanding),
+      paidThisMonth: toDisplay(paidThisMonth),
+    };
   },
 });
 
@@ -423,331 +363,6 @@ export const getInboxEmptyStateContext = query({
 });
 
 /**
- * Walk every billable project in the org and emit its ready-to-invoice rows.
- *
- * Single source of truth for both `getReadyToInvoiceUnified` (returns the
- * rows themselves) and `getInvoicingNavSignals` (returns just the length).
- * Pulling the iteration into one helper is what keeps the sidebar count and
- * the Inbox feed from drifting — adding a new row condition or a new project
- * filter only happens in one place.
- *
- * Row decision logic still lives in `convex/lib/readyToInvoice.ts` (pure,
- * unit-tested); this shim is responsible for fetching docs, computing
- * per-month retainer balances, and feeding the helpers.
- *
- * Output: rows already labelled `kind` ("retainer-monthly" | "retainer-cycle"
- * | "fixed" | "tm"), sorted oldest-first by period (Fixed/no-period rows
- * trail by client+project name). Multi-currency rows are NOT aggregated —
- * each row carries its own currency.
- */
-async function enumerateReadyRows(
-  ctx: QueryCtx,
-  orgId: string,
-  todayStr: string,
-): Promise<ReadyRow[]> {
-  const projects = await ctx.db
-    .query("projects")
-    .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
-    .collect();
-
-  // Promise = invoice: T&M row amounts use the workspace default rounding
-  // (the same math createInvoice runs), so a "$1,200 ready" row generates
-  // a $1,200 draft. See the 2026-07-05 rounding-policy decision.
-  const readySettings = await getOrgSettings(ctx, orgId);
-  const defaultRounding = readySettings?.roundingMinutes ?? 1;
-
-  // Cache clients once — many projects may share one.
-  const clientCache = new Map<string, Doc<"clients"> | null>();
-  async function getClient(clientId: Id<"clients">) {
-    const key = clientId.toString();
-    if (clientCache.has(key)) return clientCache.get(key) ?? null;
-    const c = await ctx.db.get(clientId);
-    const safe = c && c.orgId === orgId ? c : null;
-    clientCache.set(key, safe);
-    return safe;
-  }
-
-  const allRows: ReadyRow[] = [];
-
-  for (const project of projects) {
-    // Skip non-billable, archived, or orphaned projects. The orphan guard
-    // (deleted client) keeps the query crash-free per the test spec.
-    if (project.billingType === "non_billable") continue;
-    if (project.archivedAt) continue;
-    const client = await getClient(project.clientId);
-    if (!client) continue;
-
-    const projectInvoices = await ctx.db
-      .query("invoices")
-      .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
-      .filter((q) => q.eq(q.field("orgId"), orgId))
-      .collect();
-
-    // Map Convex doc shape → helper input shape (drops fields we don't need
-    // for row decisions, lets the helper stay free of `Doc<>` coupling).
-    const invoiceInputs = projectInvoices.map((inv) => ({
-      _id: inv._id,
-      status: inv.status,
-      total: inv.total,
-      issueDate: inv.issueDate,
-      periodStart: inv.periodStart,
-      periodEnd: inv.periodEnd,
-    }));
-
-    const projectInput = {
-      _id: project._id,
-      name: project.name,
-      billingType: project.billingType,
-      archivedAt: project.archivedAt,
-      clientId: project.clientId,
-      startDate: project.startDate,
-      fixedPrice: project.fixedPrice,
-      monthlyFee: project.monthlyFee,
-      includedMinutesPerMonth: project.includedMinutesPerMonth,
-      overageRate: project.overageRate,
-      rolloverEnabled: project.rolloverEnabled,
-      cycleLength: project.cycleLength,
-    };
-    const clientInput = {
-      _id: client._id,
-      name: client.name,
-      currency: client.currency,
-    };
-
-    if (project.billingType === "fixed") {
-      // Sum lineType:"fixed" amounts on finalized (non-draft, non-void)
-      // invoices. Same logic as `getProjectInvoiceMetrics` Fixed branch.
-      let fixedBilledFinalized = 0;
-      for (const inv of projectInvoices) {
-        if (inv.status === "draft" || inv.status === "void") continue;
-        const items = await ctx.db
-          .query("invoiceLineItems")
-          .withIndex("by_invoiceId", (q) => q.eq("invoiceId", inv._id))
-          .collect();
-        for (const item of items) {
-          if (item.lineType === "fixed") fixedBilledFinalized += item.amount;
-        }
-      }
-      const row = buildFixedReadyRow({
-        project: projectInput,
-        client: clientInput,
-        invoices: invoiceInputs,
-        fixedBilledFinalized: round2(fixedBilledFinalized),
-      });
-      if (row) allRows.push(row);
-      continue;
-    }
-
-    if (project.billingType === "t_and_m") {
-      const tasks = await ctx.db
-        .query("tasks")
-        .withIndex("by_orgId_projectId", (q) =>
-          q.eq("orgId", orgId).eq("projectId", project._id),
-        )
-        .collect();
-      const entries = (
-        await Promise.all(
-          tasks.map((t) =>
-            ctx.db
-              .query("timeEntries")
-              .withIndex("by_taskId", (q) => q.eq("taskId", t._id))
-              .filter((q) => q.eq(q.field("orgId"), orgId))
-              .collect(),
-          ),
-        )
-      ).flat();
-      const entryInputs = entries.map((e) => ({
-        _id: e._id,
-        date: e.date,
-        durationMinutes: e.durationMinutes,
-        isBillable: e.isBillable,
-        invoiceId: e.invoiceId,
-        settledAt: e.settledAt ?? null,
-        billableRate: e.billableRate,
-        taskId: e.taskId.toString(),
-        workCategoryId: e.snapshotCategoryId?.toString() ?? null,
-      }));
-      const rows = buildTmReadyRows({
-        project: projectInput,
-        client: clientInput,
-        invoices: invoiceInputs,
-        entries: entryInputs,
-        todayStr,
-        roundingMinutes: defaultRounding,
-      });
-      allRows.push(...rows);
-      continue;
-    }
-
-    if (project.billingType === "retainer") {
-      // Compute per-month worked minutes for every closed month from project
-      // start onward. Used by both rollover modes — only the chaining
-      // differs, which we do here once.
-      if (!project.startDate) continue;
-      const tasks = await ctx.db
-        .query("tasks")
-        .withIndex("by_orgId_projectId", (q) =>
-          q.eq("orgId", orgId).eq("projectId", project._id),
-        )
-        .collect();
-      const entries = (
-        await Promise.all(
-          tasks.map((t) =>
-            ctx.db
-              .query("timeEntries")
-              .withIndex("by_taskId", (q) => q.eq("taskId", t._id))
-              .filter((q) => q.eq(q.field("orgId"), orgId))
-              .collect(),
-          ),
-        )
-      ).flat();
-      const billableByMonth = new Map<string, number>(); // YYYY-MM → minutes
-      for (const e of entries) {
-        if (!e.isBillable) continue;
-        const key = e.date.slice(0, 7);
-        billableByMonth.set(key, (billableByMonth.get(key) ?? 0) + e.durationMinutes);
-      }
-
-      // Read-path defaults mirror `projects.create`: `cycleLength ?? 1` and
-      // rollover only meaningful for multi-month cycles. (Previously `?? true`
-      // / `?? 3` here silently treated a misconfigured retainer as a 3-month
-      // rollover — inconsistent with what creation writes.)
-      const { closedMonths, cycles } = enumerateRetainerCycleState({
-        startDate: project.startDate,
-        todayStr,
-        includedMinutes: project.includedMinutesPerMonth ?? 0,
-        cycleLength: project.cycleLength ?? 1,
-        rolloverEnabled: project.rolloverEnabled ?? false,
-        billableByMonth,
-      });
-
-      // Admin-settlement state — a month with a `closedAt`-stamped
-      // `retainerPeriods` row no longer needs a "Close & report" inbox row.
-      const periodRows = await ctx.db
-        .query("retainerPeriods")
-        .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
-        .filter((q) => q.eq(q.field("orgId"), orgId))
-        .collect();
-      const closedPeriodStarts = new Set(
-        periodRows.filter((p) => p.closedAt !== undefined).map((p) => p.periodStart),
-      );
-      const monthStart = (y: number, m: number) =>
-        `${y}-${String(m).padStart(2, "0")}-01`;
-
-      if (project.rolloverEnabled ?? false) {
-        allRows.push(
-          ...buildRetainerCycleReadyRows({
-            project: projectInput,
-            client: clientInput,
-            invoices: invoiceInputs,
-            cycles: cycles.map((c) => ({
-              ...c,
-              // Cycle close stamps every month in the cycle, so the closing
-              // month's period row is a sufficient "cycle settled" signal.
-              isAdminClosed: closedPeriodStarts.has(
-                monthStart(c.closingYear, c.closingMonth),
-              ),
-            })),
-          }),
-        );
-      } else {
-        allRows.push(
-          ...buildRetainerMonthlyReadyRows({
-            project: projectInput,
-            client: clientInput,
-            invoices: invoiceInputs,
-            monthBalances: closedMonths.map((cm) => ({
-              ...cm,
-              isAdminClosed: closedPeriodStarts.has(
-                monthStart(cm.year, cm.month),
-              ),
-            })),
-          }),
-        );
-      }
-    }
-  }
-
-  // Keep every row with a pending action: money-bearing Generate rows,
-  // config-issue rows (over budget but no overage rate — must not vanish),
-  // and within-budget Close rows. See `shouldAppearInInbox`.
-  return sortReadyRows(allRows.filter(shouldAppearInInbox));
-}
-
-/**
- * Unified Inbox feed — one row per pending billing unit across all 4 project
- * types in the org. Admin-only.
- *
- * Iteration body is shared with `getInvoicingNavSignals` via
- * `enumerateReadyRows`. See that helper for the row decision logic.
- */
-export const getReadyToInvoiceUnified = query({
-  args: {},
-  handler: async (ctx): Promise<ReadyRow[]> => {
-    const { orgId } = await requireAdmin(ctx);
-    const orgSettings = await getOrgSettings(ctx, orgId);
-    const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
-    const todayStr = getDateInTimezone(Date.now(), timezone);
-    return enumerateReadyRows(ctx, orgId, todayStr);
-  },
-});
-
-/**
- * Sidebar nav signals — feeds the `Invoices` row badge + calendar-clock icon.
- * Admin-only (the row itself is hidden for members).
- *
- * Two signals:
- *   - `toGenerateCount` — number of pending billing units across all project
- *     types. Composed from the same logic as `getReadyToInvoiceUnified` so
- *     the badge can never disagree with the Inbox.
- *   - `overdueCount` — number of `invoiced` rows whose `dueDate < today` in
- *     the org timezone. Same rule the Overdue section applies, kept here
- *     so the icon state and Inbox count never diverge.
- *
- * Spec text describes `hasOverdue: boolean`, but the user-facing tooltip
- * needs the count (`"3 ready to bill · 2 overdue"`). Returning the count
- * lets the UI derive `hasOverdue = overdueCount > 0` while still satisfying
- * the tooltip copy. One round-trip, both signals.
- */
-export const getInvoicingNavSignals = query({
-  args: {},
-  handler: async (ctx) => {
-    const { orgId } = await requireAdmin(ctx);
-    const orgSettings = await getOrgSettings(ctx, orgId);
-    const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
-    const todayStr = getDateInTimezone(Date.now(), timezone);
-
-    // Count overdue invoices via the org-status index — narrows the scan to
-    // `invoiced` only, then filters dueDate. No need to inspect drafts/paid/void.
-    const invoicedRows = await ctx.db
-      .query("invoices")
-      .withIndex("by_orgId_status", (q) =>
-        q.eq("orgId", orgId).eq("status", "invoiced"),
-      )
-      .collect();
-    let overdueCount = 0;
-    for (const inv of invoicedRows) {
-      if (inv.dueDate != null && inv.dueDate < todayStr) overdueCount += 1;
-    }
-
-    // Reuse the same iteration as `getReadyToInvoiceUnified` so the badge
-    // count can never disagree with the Inbox feed. Convex caches identical
-    // query bodies; both queries materialize from the same in-memory pass
-    // when both are subscribed (the typical "open /invoices" flow).
-    const rows = await enumerateReadyRows(ctx, orgId, todayStr);
-    const toCloseCount = rows.filter((r) => isCloseRow(r.kind)).length;
-
-    return {
-      toGenerateCount: rows.length - toCloseCount,
-      // Within-budget "Close & report" actions — part of the badge total so
-      // the sidebar surfaces every month-end task, not just the invoiced ones.
-      toCloseCount,
-      overdueCount,
-    };
-  },
-});
-
-/**
  * Get invoice metrics for a project — feeds the project's Invoices tab.
  *
  * Three payment-health buckets (all single-currency — project has exactly one
@@ -759,9 +374,8 @@ export const getInvoicingNavSignals = query({
  *
  * Plus billing-type-specific context:
  *   Fixed    → fixedBilled / fixedRemaining / fixedPercentInvoiced
- *   Retainer → uninvoicedMonths (full {year, month, label} objects so the
- *              callout bar can hand the next billable period to
- *              `useGenerateInvoice` and route directly to its draft)
+ *   Retainer → uninvoicedMonths: elapsed, unclosed periods with overage (the
+ *              callout links them to the Close workspace)
  *
  * Void invoices are excluded everywhere.
  * "Today" resolved in org timezone so the past-due line matches the badge.
@@ -789,6 +403,10 @@ export const getProjectInvoiceMetrics = query({
     const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
     const todayStr = getDateInTimezone(Date.now(), timezone);
 
+    // Money is summed in minor units (one currency per project, D1) and
+    // converted once at the end for display.
+    const currency = await getProjectCurrency(ctx, project);
+    const display = (minor: number) => fromMinor(minor, currency);
     type Bucket = { count: number; amount: number };
     const empty = (): Bucket => ({ count: 0, amount: 0 });
     const unpaid = empty();
@@ -800,16 +418,16 @@ export const getProjectInvoiceMetrics = query({
     // Drafts don't count — they aren't sent yet. Voids are already excluded.
     let lastInvoicedYMD: string | null = null;
     for (const inv of orgInvoices) {
-      totalInvoiced += inv.total;
+      totalInvoiced += inv.totalMinor;
 
       if (inv.status === "invoiced") {
         const overdue = inv.dueDate != null && inv.dueDate < todayStr;
         const bucket = overdue ? pastDue : unpaid;
         bucket.count += 1;
-        bucket.amount = round2(bucket.amount + inv.total);
+        bucket.amount += inv.totalMinor;
       } else if (inv.status === "paid") {
         paidLifetime.count += 1;
-        paidLifetime.amount = round2(paidLifetime.amount + inv.total);
+        paidLifetime.amount += inv.totalMinor;
       }
       if (inv.status !== "draft" && (lastInvoicedYMD === null || inv.issueDate > lastInvoicedYMD)) {
         lastInvoicedYMD = inv.issueDate;
@@ -835,65 +453,57 @@ export const getProjectInvoiceMetrics = query({
           .withIndex("by_invoiceId", (q) => q.eq("invoiceId", inv._id))
           .collect();
         for (const item of items) {
-          if (item.lineType === "fixed") fixedBilled += item.amount;
-          else fixedExtraBilled += item.amount;
+          if (item.lineType === "fixed") fixedBilled += item.amountMinor;
+          else fixedExtraBilled += item.amountMinor;
         }
       }
-      fixedBilled = round2(fixedBilled);
-      fixedExtraBilled = round2(fixedExtraBilled);
     }
 
-    const fixedPrice = project.fixedPrice ?? 0;
+    const fixedPriceMinor = toMinor(project.fixedPrice ?? 0, currency);
 
     // Retainer: compute uninvoiced closed months
     type UninvoicedMonth = { year: number; month: number; label: string };
     let uninvoicedMonths: UninvoicedMonth[] = [];
     let uninvoicedOverageTotal = 0;
     if (project.billingType === "retainer") {
-      const closedUninvoiced = await getClosedUninvoicedMonths(
-        ctx,
-        orgId,
-        args.projectId,
-        project,
-        timezone,
-      );
-      uninvoicedMonths = closedUninvoiced.map((m) => ({
-        year: m.year,
-        month: m.month,
-        label: m.label,
+      // Elapsed, unclosed periods with overage — priced exactly as the Close
+      // queue and `commitClose` price them. A period is listed by its last
+      // month (where a cycle bills). The project-level total stays stable
+      // across cycle navigation in the UI.
+      const c = await loadCloseContext(ctx, orgId, args.projectId);
+      const pending = (
+        await openElapsedRetainerPeriods(ctx, c, { todayStr, roundingMinutes: 1 })
+      ).filter((view) => view.price.overageMinutes > 0);
+      uninvoicedMonths = pending.map((view) => ({
+        year: Number(view.period.end.slice(0, 4)),
+        month: Number(view.period.end.slice(5, 7)),
+        label: periodSubjectLabel(view.period.start, view.period.end),
       }));
-      // Project-level overage total — the InvoiceBanner displays this so the
-      // amount stays stable across cycle navigation. Reading the
-      // currently-viewed cycle's overage instead (the pre-fix behavior)
-      // produced lying "$0.00 within budget" labels whenever the user was
-      // on a within-budget month while an over-budget month elsewhere
-      // remained unbilled. See `lib/invoice-banner-view.ts:retainer-monthly`.
-      uninvoicedOverageTotal = round2(
-        closedUninvoiced.reduce((sum, m) => sum + m.overageAmount, 0),
+      uninvoicedOverageTotal = fromMinor(
+        pending.reduce((sum, view) => sum + view.price.amountMinor, 0),
+        c.currency,
       );
     }
 
-    const currency = await getProjectCurrency(ctx, project);
+    const bucketView = (b: Bucket): Bucket => ({ count: b.count, amount: display(b.amount) });
 
     return {
-      totalInvoiced,
+      totalInvoiced: display(totalInvoiced),
       invoiceCount: orgInvoices.length,
       currency,
       // Payment-health buckets (single-currency per D1 invariant)
-      unpaid,
-      pastDue,
-      paidLifetime,
+      unpaid: bucketView(unpaid),
+      pastDue: bucketView(pastDue),
+      paidLifetime: bucketView(paidLifetime),
       // Fixed Fee specific
-      fixedPrice,
-      fixedBilled,
-      fixedExtraBilled,
-      fixedRemaining: round2(fixedPrice - fixedBilled),
-      fixedPercentInvoiced: fixedPrice > 0
-        ? Math.round((fixedBilled / fixedPrice) * 100)
+      fixedPrice: display(fixedPriceMinor),
+      fixedBilled: display(fixedBilled),
+      fixedExtraBilled: display(fixedExtraBilled),
+      fixedRemaining: display(fixedPriceMinor - fixedBilled),
+      fixedPercentInvoiced: fixedPriceMinor > 0
+        ? Math.round((fixedBilled / fixedPriceMinor) * 100)
         : 0,
-      // Retainer specific — full {year, month, label} so the callout bar
-      // can hand the next billable period to `useGenerateInvoice` and
-      // route directly to its draft.
+      // Retainer specific — elapsed periods with overage still to close.
       uninvoicedMonths,
       // Project-level overage total across `uninvoicedMonths` (rounded once,
       // currency = project currency by D1 invariant). The InvoiceBanner reads
@@ -902,1223 +512,6 @@ export const getProjectInvoiceMetrics = query({
       // Latest finalized issueDate as a UTC-midnight ms timestamp (or null).
       // Consumed by the InvoiceBanner subline via `formatLastInvoiced(..., { timezone })`.
       lastInvoicedAt: lastInvoicedYMD ? Date.parse(lastInvoicedYMD + "T00:00:00Z") : null,
-    };
-  },
-});
-
-// (getInvoicePreview was deleted 2026-07-05 — dead code with no UI caller,
-// already divergent from createInvoice's math. The draft page IS the preview.)
-
-
-// ─── Shared Retainer Math ─────────────────────────────────────────────────────
-//
-// `computeRetainerBalance`, `getRetainerCyclePosition`, and
-// `getRetainerCycleStartMonth` live in `convex/lib/retainerBalance.ts` so they
-// can be imported by unit tests without convex-test scaffolding. Imports above.
-
-// Collapse a YYYY-MM-DD start date to its month boundary (YYYY-MM-01) so
-// validation guards compare at month granularity. The rest of the retainer
-// system (cycle position, sequential finalization) already ignores day-of-month.
-function projectStartMonth(startDate: string | undefined): string | undefined {
-  return startDate ? `${startDate.slice(0, 7)}-01` : undefined;
-}
-
-/**
- * Start-balance for a retainer invoice. Always 0 after the invoicing refactor.
- *
- *   - Rollover OFF  → each month independent.
- *   - Rollover ON   → cycle invoices cover the **entire** cycle in one row, so
- *     the cycle's effective start balance is 0 too. The previous per-month
- *     `retainerEndBalanceMinutes` chain (and its `cascadeRetainerChain`
- *     re-snapshot) was deleted with the refactor; mid-cycle months never
- *     produce an invoice anymore.
- *
- * Kept as a function (not inlined) so call sites stay legible and any future
- * change to the rule lands in one place.
- */
-function getRetainerStartBalance(): number {
-  return 0;
-}
-
-// ─── Retainer Helpers ─────────────────────────────────────────────────────────
-
-/**
- * Recalculate retainer balance fields on a draft retainer invoice
- * when time line items are edited or removed.
- *
- * Updates: retainerUsedMinutes, retainerEndBalanceMinutes, overage line item, subtotal/total.
- * Frozen fields: retainerStartBalanceMinutes, retainerIncludedMinutes, retainerMonthlyFee, retainerOverageRate.
- */
-async function recalcRetainerBalance(
-  ctx: MutationCtx,
-  invoiceId: Id<"invoices">,
-  invoice: Doc<"invoices">,
-  project: Doc<"projects">,
-  excludeLineItemId?: Id<"invoiceLineItems">,
-) {
-  const items: Doc<"invoiceLineItems">[] = await ctx.db
-    .query("invoiceLineItems")
-    .withIndex("by_invoiceId", (q) => q.eq("invoiceId", invoiceId))
-    .collect();
-
-  // Build task minutes map from time line items. `quantityMinutes` is the
-  // source of truth — RAW summed entry minutes since the 2026-07-05 rounding
-  // rework (kept in sync on manual hours edits, where an explicit hours edit
-  // overrides it). Fall back to `quantity × 60` for legacy rows created
-  // before the field existed. Rounding is applied here per row via the
-  // invoice's own `roundingMinutes` snapshot — same math as creation.
-  const taskMinutesMap = new Map<string, number>();
-  for (const item of items) {
-    if (item._id === excludeLineItemId) continue;
-    if (item.lineType === "time") {
-      const key = `${item.workCategoryId ?? "none"}::recalc-${item._id}`;
-      const minutes = item.quantityMinutes ?? Math.round(item.quantity * 60);
-      taskMinutesMap.set(key, minutes);
-    }
-  }
-
-  // Read retainer config from the invoice snapshot so draft balances stay
-  // stable if the admin toggles `rolloverEnabled` or changes `cycleLength`
-  // mid-cycle. Legacy drafts without snapshots fall back to live project.
-  const cycleLength =
-    invoice.retainerCycleLength ?? project.cycleLength ?? 1;
-  const rolloverEnabled =
-    invoice.retainerRolloverEnabled ?? project.rolloverEnabled ?? false;
-
-  const positionInCycle = getRetainerRecalcCyclePosition({
-    rolloverEnabled,
-    cycleLength,
-  });
-
-  const result = computeRetainerBalance({
-    taskMinutesMap,
-    roundingMinutes: invoice.roundingMinutes ?? 0,
-    startBalance: invoice.retainerStartBalanceMinutes ?? 0,
-    includedMinutes: invoice.retainerIncludedMinutes ?? 0,
-    monthlyFee: invoice.retainerMonthlyFee ?? 0,
-    overageRate: invoice.retainerOverageRate ?? 0,
-    rolloverEnabled,
-    cycleLength,
-    positionInCycle,
-  });
-
-  // Find existing overage line item
-  const existingOverage = items.find(
-    (li) => li.lineType === "overage" && li._id !== excludeLineItemId,
-  );
-
-  const now = Date.now();
-  const overageRate = invoice.retainerOverageRate ?? 0;
-
-  if (result.isOverageDue) {
-    if (existingOverage) {
-      await ctx.db.patch(existingOverage._id, {
-        description: `Overage (${result.overageHours}h × ${overageRate}/h)`,
-        quantity: result.overageHours,
-        unitPrice: overageRate,
-        amount: result.overageAmount,
-        updatedAt: now,
-      });
-    } else {
-      const maxSort = items.reduce((max: number, li: Doc<"invoiceLineItems">) => Math.max(max, li.sortOrder), -1);
-      await ctx.db.insert("invoiceLineItems", {
-        orgId: invoice.orgId,
-        invoiceId,
-        sortOrder: maxSort + 1,
-        lineType: "overage" as const,
-        description: `Overage (${result.overageHours}h × ${overageRate}/h)`,
-        quantity: result.overageHours,
-        unitPrice: overageRate,
-        amount: result.overageAmount,
-        createdAt: now,
-        updatedAt: now,
-      });
-    }
-  } else if (existingOverage) {
-    await ctx.db.delete(existingOverage._id);
-  }
-
-  // Recalculate subtotal/total from all billing items
-  const updatedItems: Doc<"invoiceLineItems">[] = await ctx.db
-    .query("invoiceLineItems")
-    .withIndex("by_invoiceId", (q) => q.eq("invoiceId", invoiceId))
-    .collect();
-  let subtotal = 0;
-  for (const item of updatedItems) {
-    if (item._id === excludeLineItemId) continue;
-    if (item.lineType !== "time") subtotal += item.amount;
-  }
-  subtotal = round2(subtotal);
-
-  await ctx.db.patch(invoiceId, {
-    retainerUsedMinutes: result.usedMinutes,
-    retainerEndBalanceMinutes: result.endBalance,
-    subtotal,
-    total: subtotal,
-    updatedAt: now,
-  });
-}
-
-/**
- * Enumerate all closed months from project start to today that don't have an invoice.
- * Used by both the retainer preview query and the metrics query.
- */
-/**
- * Closed retainer periods that still need an invoice. Same model the Ready
- * feed uses (`buildRetainerMonthlyReadyRows` / `buildRetainerCycleReadyRows`):
- *
- *   - Rollover OFF → one entry per closed over-budget month.
- *   - Rollover ON  → one entry per closed cycle whose `cycleBalance < 0`,
- *                     anchored to the cycle's closing month (the row
- *                     `createInvoice` keys on).
- *
- * Dedup is keyed on `getInvoiceAnchorMonthKey` so a cycle invoice (which
- * spans multiple months) correctly hides every month it covers — same
- * convention the Ready feed and Monthly Breakdown card use.
- */
-async function getClosedUninvoicedMonths(
-  ctx: QueryCtx,
-  orgId: string,
-  projectId: Id<"projects">,
-  project: Doc<"projects">,
-  timezone: string,
-) {
-  const startDate = project.startDate;
-  if (!startDate) return [];
-
-  const overageRate = project.overageRate ?? 0;
-  if (overageRate === 0) return [];
-
-  const todayStr = getDateInTimezone(Date.now(), timezone);
-
-  // Walk the project once: gather billable minutes per YYYY-MM, then run the
-  // same cycle-state enumerator the Ready feed uses.
-  const tasks = await ctx.db
-    .query("tasks")
-    .withIndex("by_orgId_projectId", (q) =>
-      q.eq("orgId", orgId).eq("projectId", projectId),
-    )
-    .collect();
-  const entries = (
-    await Promise.all(
-      tasks.map((t) =>
-        ctx.db
-          .query("timeEntries")
-          .withIndex("by_taskId", (q) => q.eq("taskId", t._id))
-          .filter((q) => q.eq(q.field("orgId"), orgId))
-          .collect(),
-      ),
-    )
-  ).flat();
-  const billableByMonth = new Map<string, number>();
-  for (const e of entries) {
-    if (!e.isBillable) continue;
-    const key = e.date.slice(0, 7);
-    billableByMonth.set(key, (billableByMonth.get(key) ?? 0) + e.durationMinutes);
-  }
-
-  // Defaults mirror `projects.create` (cycleLength 1 → monthly, no rollover).
-  const rolloverEnabled = project.rolloverEnabled ?? false;
-  const cycleLength = project.cycleLength ?? 1;
-  const { closedMonths, cycles } = enumerateRetainerCycleState({
-    startDate,
-    todayStr,
-    includedMinutes: project.includedMinutesPerMonth ?? 0,
-    cycleLength,
-    rolloverEnabled,
-    billableByMonth,
-  });
-
-  // Anchor-keyed dedup: rollover cycle invoices span multiple months but
-  // anchor on `periodEnd`'s YYYY-MM (the cycle-end). Mirrors the Ready feed.
-  const projectInvoices = await ctx.db
-    .query("invoices")
-    .withIndex("by_projectId", (q) => q.eq("projectId", projectId))
-    .filter((q) => q.eq(q.field("orgId"), orgId))
-    .collect();
-  const invoicedKeys = new Set<string>();
-  for (const inv of projectInvoices) {
-    if (inv.status === "void") continue;
-    const key = getInvoiceAnchorMonthKey(inv);
-    if (key) invoicedKeys.add(key);
-  }
-
-  // Build invoiceable periods, anchored to the row `createInvoice` keys on.
-  // Rollover ON: one entry per closed over-budget cycle (cycle-end row).
-  // Rollover OFF: one entry per closed over-budget month.
-  //
-  // Each period carries `overageAmount` (= |balance|/60 × overageRate). This
-  // is critical for the InvoiceBanner: the banner displays a project-level
-  // "ready to bill" total, which must NOT vary with the currently-viewed
-  // cycle. Before this field existed, the banner pulled `overageDue` from
-  // `getRetainerData` (cycle-view-scoped) and produced lying "$0.00 within
-  // budget" labels whenever the user navigated to a within-budget cycle.
-  type Period = { year: number; month: number; overageAmount: number };
-  const invoiceablePeriods: Period[] = rolloverEnabled
-    ? cycles
-        .filter((c) => c.isCycleClosed && c.cycleBalance < 0)
-        .map((c) => ({
-          year: c.closingYear,
-          month: c.closingMonth,
-          overageAmount: round2((Math.abs(c.cycleBalance) / 60) * overageRate),
-        }))
-    : closedMonths
-        .filter((cm) => cm.endBalance < 0)
-        .map((cm) => ({
-          year: cm.year,
-          month: cm.month,
-          overageAmount: round2((Math.abs(cm.endBalance) / 60) * overageRate),
-        }));
-
-  return invoiceablePeriods
-    .filter((p) => !invoicedKeys.has(`${p.year}-${String(p.month).padStart(2, "0")}`))
-    .map((p) => ({
-      year: p.year,
-      month: p.month,
-      label: monthLabel(`${p.year}-${String(p.month).padStart(2, "0")}-01`),
-      startDate: `${p.year}-${String(p.month).padStart(2, "0")}-01`,
-      endDate: `${p.year}-${String(p.month).padStart(2, "0")}-${String(new Date(p.year, p.month, 0).getDate()).padStart(2, "0")}`,
-      overageAmount: p.overageAmount,
-    }));
-}
-
-/**
- * Get closed uninvoiced months for a retainer project.
- */
-export const getRetainerUninvoicedMonths = query({
-  args: { projectId: v.id("projects") },
-  handler: async (ctx, args) => {
-    const { orgId } = await requireAdmin(ctx);
-    const project = await ctx.db.get(args.projectId);
-    if (!project || project.orgId !== orgId || project.billingType !== "retainer") return [];
-    const orgSettings = await getOrgSettings(ctx, orgId);
-    const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
-    return getClosedUninvoicedMonths(ctx, orgId, args.projectId, project, timezone);
-  },
-});
-
-// ─── Mutations ────────────────────────────────────────────────────────────────
-
-/**
- * Create an invoice from a date range.
- * Supports T&M and Fixed billing types.
- *
- * T&M: line items = hours × rate per task (billable)
- * Fixed: one lineType:"fixed" item (remaining balance) + lineType:"time" items (hours only, no billing)
- */
-export const createInvoice = mutation({
-  args: {
-    projectId: v.id("projects"),
-    startDate: v.optional(v.string()),
-    endDate: v.optional(v.string()),
-    // Invoice-time rounding increment. Omitted → workspace default
-    // (orgSettings.roundingMinutes). The ledger itself is always raw.
-    roundingMinutes: v.optional(v.number()),
-    // Retainer-specific: month to invoice
-    retainerYear: v.optional(v.number()),
-    retainerMonth: v.optional(v.number()), // 1-12
-    // Path B (T&M only): invoice from explicitly selected time entries.
-    // When provided, startDate/endDate/retainer args are ignored.
-    timeEntryIds: v.optional(v.array(v.id("timeEntries"))),
-  },
-  handler: async (ctx, args) => {
-    const { orgId, userId } = await requireAdmin(ctx);
-
-    const project = await ctx.db.get(args.projectId);
-    if (!project || project.orgId !== orgId) {
-      throw new ConvexError("Project not found.");
-    }
-
-    const billingType = project.billingType;
-    if (billingType !== "t_and_m" && billingType !== "fixed" && billingType !== "retainer") {
-      throw new ConvexError("This project type does not support invoicing.");
-    }
-
-    // Path B guard: explicit timeEntryIds only supported for T&M.
-    if (args.timeEntryIds !== undefined && billingType !== "t_and_m") {
-      throw new ConvexError(
-        "Selecting specific time entries is only supported for Time & Materials projects.",
-      );
-    }
-
-    const client = await ctx.db.get(project.clientId);
-    if (!client || client.orgId !== orgId) {
-      throw new ConvexError("Client not found for project.");
-    }
-
-    // Pre-fetch invoices on this project once. Used by:
-    //   (a) the resume-existing-draft check (all billing types)
-    //   (b) the retainer sequential-month / start-month guards (later)
-    //   (c) the Fixed `alreadyInvoiced` accumulator (later)
-    const projectInvoices = await ctx.db
-      .query("invoices")
-      .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
-      .filter((q) => q.eq(q.field("orgId"), orgId))
-      .collect();
-
-    // Resume-existing-draft: Fixed has no period; T&M Path A keys on the
-    // requested date range. Both must run BEFORE the "no uninvoiced entries"
-    // guard for T&M, because already-stamped entries on the existing draft
-    // would otherwise short-circuit the call with a misleading error.
-    // Retainer is checked after its month boundaries are derived.
-    // Path B (timeEntryIds) can't collide with a draft because already-invoiced
-    // entries are rejected during entry resolution.
-    if (billingType === "fixed") {
-      const resume = findResumableInvoice(projectInvoices, {
-        orgId,
-        billingType: "fixed",
-      });
-      if (resume.kind === "resume-draft") {
-        return {
-          invoiceId: resume.invoice._id,
-          resumed: true,
-          prefix: resume.invoice.prefix,
-          number: resume.invoice.number ?? null,
-        };
-      }
-    } else if (billingType === "t_and_m" && args.timeEntryIds === undefined) {
-      const resume = findResumableInvoice(projectInvoices, {
-        orgId,
-        billingType: "t_and_m",
-        requestedPeriodStart: args.startDate,
-        requestedPeriodEnd: args.endDate,
-      });
-      if (resume.kind === "resume-draft") {
-        return {
-          invoiceId: resume.invoice._id,
-          resumed: true,
-          prefix: resume.invoice.prefix,
-          number: resume.invoice.number ?? null,
-        };
-      }
-    }
-
-    // 1. Get all tasks for this project
-    const tasks = await ctx.db
-      .query("tasks")
-      .withIndex("by_orgId_projectId", (q) =>
-        q.eq("orgId", orgId).eq("projectId", args.projectId),
-      )
-      .collect();
-
-    const taskMap = new Map<string, Doc<"tasks">>();
-    for (const t of tasks) taskMap.set(t._id, t);
-
-    // 2. Fetch all billable, uninvoiced entries
-    // Tenancy: `by_taskId` doesn't narrow by orgId; filter explicitly (CLAUDE.md).
-    // Phase 8 — `settledAt` joins `invoiceId` as a lock signal (same
-    // reasoning as the recalc path above — a period-closed entry must not
-    // get pulled onto a fresh draft).
-    const allEntries = (
-      await Promise.all(
-        tasks.map(async (task) => {
-          const entries = await ctx.db
-            .query("timeEntries")
-            .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
-            .filter((q) => q.eq(q.field("orgId"), orgId))
-            .collect();
-          return entries
-            .filter(
-              (e) =>
-                e.isBillable &&
-                e.invoiceId === undefined &&
-                // Retainer: entries settled by a PERIOD CLOSE
-                // (retainer_included) still belong to this cycle's story —
-                // excluding them made the invoice's used-minutes disagree
-                // with the close gate's (which counts ALL billable work)
-                // and produced the reopen deadlock: "close blocked: overage"
-                // vs "invoice blocked: no overage". Including them means the
-                // invoice bills the true cycle aggregate and the document
-                // shows the full cycle's work. Entries on another DOCUMENT
-                // (invoiceId set / settledReason "invoiced") stay excluded.
-                (e.settledAt === undefined ||
-                  (billingType === "retainer" &&
-                    e.settledReason === "retainer_included")),
-            )
-            .map((e) => ({
-              ...e,
-              workCategoryId: e.snapshotCategoryId,
-            }));
-        }),
-      )
-    ).flat();
-
-    // 3. Apply date range filter
-    // Retainer: derive period from `retainerYear` / `retainerMonth`. After the
-    // invoicing refactor (`docs/invoicing-refactor.md`):
-    //   - Rollover OFF → period = the requested month's boundaries.
-    //   - Rollover ON  → period = the **entire cycle range** ending in the
-    //     requested month. Caller MUST pass the cycle-end month; mid-cycle
-    //     months are rejected.
-    let effectiveStart = args.startDate;
-    let effectiveEnd = args.endDate;
-    if (billingType === "retainer") {
-      if (!args.retainerYear || !args.retainerMonth) {
-        throw new ConvexError("Retainer invoices require a month selection.");
-      }
-      const y = args.retainerYear;
-      const m = args.retainerMonth;
-      // Creation-consistent defaults (`projects.create` writes ?? 1 /
-      // rollover only for multi-month cycles). `?? true / ?? 3` here would
-      // bill a misconfigured retainer as a 3-month rollover while every
-      // screen shows it as monthly.
-      const rolloverEnabled = project.rolloverEnabled ?? false;
-      const cycleLength = project.cycleLength ?? 1;
-
-      if (rolloverEnabled) {
-        // Cycle invoice — must be cycle-end. Positions 0…cycleLength-1; only
-        // the closing position produces an invoice.
-        const position = getRetainerCyclePosition(project.startDate, y, m, cycleLength);
-        assertRolloverCycleEnd({
-          rolloverEnabled,
-          cyclePosition: position,
-          cycleLength,
-        });
-        const cycleStart = getRetainerCycleStartMonth(project.startDate, y, m, cycleLength);
-        if (!cycleStart) {
-          throw new ConvexError("Retainer project is missing a start date.");
-        }
-        effectiveStart = `${cycleStart.year}-${String(cycleStart.month).padStart(2, "0")}-01`;
-        const lastDay = new Date(y, m, 0).getDate();
-        effectiveEnd = `${y}-${String(m).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
-      } else {
-        effectiveStart = `${y}-${String(m).padStart(2, "0")}-01`;
-        const lastDay = new Date(y, m, 0).getDate();
-        effectiveEnd = `${y}-${String(m).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
-      }
-
-      // Resume-or-block: one live invoice per period (month for rollover-OFF,
-      // cycle range for rollover-ON).
-      //  - Existing draft → return its id (caller resumes editing).
-      //  - Existing invoiced/paid → throw (re-invoicing requires void first).
-      //  - Voided → historical only, the period is re-invoiceable.
-      const resumeRetainer = findResumableInvoice(projectInvoices, {
-        orgId,
-        billingType: "retainer",
-        requestedPeriodStart: effectiveStart,
-        requestedPeriodEnd: effectiveEnd,
-      });
-      if (resumeRetainer.kind === "resume-draft") {
-        return {
-          invoiceId: resumeRetainer.invoice._id,
-          resumed: true,
-          prefix: resumeRetainer.invoice.prefix,
-          number: resumeRetainer.invoice.number ?? null,
-        };
-      }
-      if (resumeRetainer.kind === "blocked-duplicate") {
-        const label = monthLabel(effectiveStart);
-        throw new ConvexError(`An invoice for ${label} already exists.`);
-      }
-
-      // Validate window: effectiveStart must not precede project start month;
-      // effectiveEnd (cycle-end or month-end) must be in the past.
-      const orgSettingsForValidation = await getOrgSettings(ctx, orgId);
-      const validationTimezone = orgSettingsForValidation?.timezone ?? ORG_TIMEZONE_FALLBACK;
-      const todayStr = getDateInTimezone(Date.now(), validationTimezone);
-
-      const projectStart = projectStartMonth(project.startDate);
-      if (projectStart && effectiveStart < projectStart) {
-        throw new ConvexError("Cannot create an invoice for a month before the retainer start date.");
-      }
-
-      if (effectiveEnd >= todayStr) {
-        throw new ConvexError(
-          rolloverEnabled
-            ? "Cannot create a cycle invoice before the cycle's closing month has ended."
-            : "Cannot create an invoice for a month that hasn't ended yet.",
-        );
-      }
-    }
-
-    // Build `filtered` set — either from explicit IDs (Path B) or date range.
-    let filtered: typeof allEntries;
-    if (args.timeEntryIds !== undefined) {
-      if (args.timeEntryIds.length === 0) {
-        throw new ConvexError("No entries selected.");
-      }
-      // Dedupe defensively: a duplicate ID would double-count minutes/amount.
-      const dedupedIds = [...new Set(args.timeEntryIds.map((id) => id.toString()))];
-      const entryMap = new Map(allEntries.map((e) => [e._id.toString(), e]));
-      filtered = [];
-      for (const idStr of dedupedIds) {
-        const entry = entryMap.get(idStr);
-        if (!entry) {
-          // Either not on this project, not billable, already invoiced, or cross-tenant.
-          // Load directly to produce a precise error.
-          const stray = await ctx.db.get(idStr as Id<"timeEntries">);
-          if (!stray || stray.orgId !== orgId) {
-            throw new ConvexError("One or more selected entries are not available.");
-          }
-          if (stray.invoiceId) {
-            throw new ConvexError("One or more selected entries are already invoiced.");
-          }
-          if (!stray.isBillable) {
-            throw new ConvexError("Only billable entries can be invoiced.");
-          }
-          // Not on this project (task belongs elsewhere)
-          throw new ConvexError("Selected entries must belong to this project.");
-        }
-        filtered.push(entry);
-      }
-      // Derive period from selected entries' min/max dates.
-      effectiveStart = filtered.reduce((min, e) => (e.date < min ? e.date : min), filtered[0].date);
-      effectiveEnd = filtered.reduce((max, e) => (e.date > max ? e.date : max), filtered[0].date);
-    } else {
-      filtered = allEntries.filter((e) => {
-        if (effectiveStart && e.date < effectiveStart) return false;
-        if (effectiveEnd && e.date > effectiveEnd) return false;
-        return true;
-      });
-    }
-
-    // T&M requires entries; Fixed/Retainer allow zero entries
-    if (billingType === "t_and_m" && filtered.length === 0) {
-      throw new ConvexError("No uninvoiced time entries found for this period.");
-    }
-
-    // 4. Group entries for time line items
-    // T&M: group by (workCategoryId, taskId, billableRate) — separate rows per rate
-    // Fixed: group by (workCategoryId, taskId) only — rate is irrelevant for work report
-    type LineGroup = {
-      taskId: Id<"tasks">;
-      workCategoryId: Id<"workCategories"> | undefined;
-      rate: number;
-      minutes: number;
-      entryIds: Id<"timeEntries">[];
-      taskTitle: string;
-    };
-
-    const groupMap = new Map<string, LineGroup>();
-    for (const e of filtered) {
-      const key = billingType === "t_and_m"
-        ? `${e.workCategoryId ?? "none"}::${e.taskId}::${e.billableRate}`
-        : `${e.workCategoryId ?? "none"}::${e.taskId}`; // Fixed + Retainer: no rate key
-      const existing = groupMap.get(key);
-      if (existing) {
-        existing.minutes += e.durationMinutes;
-        existing.entryIds.push(e._id);
-      } else {
-        const task = taskMap.get(e.taskId);
-        groupMap.set(key, {
-          taskId: e.taskId,
-          workCategoryId: e.workCategoryId,
-          rate: e.billableRate,
-          minutes: e.durationMinutes,
-          entryIds: [e._id],
-          taskTitle: task?.title ?? "Unknown task",
-        });
-      }
-    }
-
-    // 5. Compute period
-    let periodStart: string | undefined;
-    let periodEnd: string | undefined;
-    if (billingType === "retainer") {
-      // Retainer: period = exact month boundaries
-      periodStart = effectiveStart;
-      periodEnd = effectiveEnd;
-    } else if (filtered.length > 0) {
-      // T&M/Fixed: period from min/max entry dates
-      periodStart = filtered[0].date;
-      periodEnd = filtered[0].date;
-      for (const e of filtered) {
-        if (e.date < periodStart!) periodStart = e.date;
-        if (e.date > periodEnd!) periodEnd = e.date;
-      }
-    }
-
-    // 6. Read org settings for prefix + payment terms. The invoice NUMBER is
-    // NOT allocated here — drafts are unnumbered; the sequence number is
-    // claimed at finalization (draft → invoiced, see `applyStatusTransition`)
-    // so deleted/abandoned drafts never leave gaps in the issued series.
-    const orgSettings = await getOrgSettings(ctx, orgId);
-    const prefix = orgSettings?.invoicePrefix ?? "INV-";
-    const paymentTermsDays = orgSettings?.defaultPaymentTermsDays ?? 30;
-    // Rounding policy (2026-07-05): the workspace setting is the DEFAULT
-    // invoice rounding; a caller-provided value (the draft picker) wins.
-    // RETAINER is always raw (exact minutes): its budget math must be ONE
-    // number across meters, close gates, ready-feed promises and the
-    // invoice — rounding any single side reintroduces the close/generate
-    // dead-end at the rounding boundary (review H1). Rounding stays an
-    // hourly-line presentation for T&M.
-    const effectiveRounding =
-      billingType === "retainer"
-        ? 1
-        : args.roundingMinutes ?? orgSettings?.roundingMinutes ?? 1;
-
-    // 7. Compute issue date and due date
-    const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
-    const issueDate = getDateInTimezone(Date.now(), timezone);
-    const issueDateObj = new Date(issueDate + "T00:00:00Z");
-    issueDateObj.setUTCDate(issueDateObj.getUTCDate() + paymentTermsDays);
-    const dueDate = issueDateObj.toISOString().slice(0, 10);
-
-    // 8. Auto-prefill subject. Keep this as the billing unit only; Client and
-    // Project are separate columns on the invoice list, so repeating them here
-    // makes the table slower to scan.
-    const subject =
-      billingType === "fixed"
-        ? "Fixed fee"
-        : billingType === "retainer" && periodStart && periodEnd
-          ? `${periodSubjectLabel(periodStart, periodEnd)} overage`
-          : periodStart
-            ? monthLabel(periodStart)
-            : project.name;
-
-    // 9. Build line items
-    const now = Date.now();
-    let subtotal = 0;
-
-    type LineItem = {
-      lineType: "time" | "fixed" | "overage";
-      description: string;
-      quantity: number;
-      unitPrice: number;
-      amount: number;
-      /** Source-of-truth minutes on time rows; omitted on derived rows. */
-      quantityMinutes?: number;
-      workCategoryId: Id<"workCategories"> | undefined;
-      entryIds: Id<"timeEntries">[];
-    };
-
-    const lineItems: LineItem[] = [];
-
-    // Time line items (work breakdown). Retainer balance is derived from the
-    // stamped `quantityMinutes` field on each line item (read back by
-    // `recalcRetainerBalance`); no running total needs to be tracked here.
-    for (const group of groupMap.values()) {
-      // `quantityMinutes` stays RAW (true source of truth — summed entry
-      // minutes); `quantity`/`amount` are DERIVED with the invoice's
-      // rounding so the draft picker can re-round losslessly later.
-      // Amount is computed from minutes, not from the 2-decimal display
-      // hours — one precision path from ledger to document.
-      const roundedMinutes = roundMinutesUp(group.minutes, effectiveRounding);
-      const hours = round2(roundedMinutes / 60);
-
-      if (billingType === "t_and_m") {
-        const amount = round2((roundedMinutes / 60) * group.rate);
-        subtotal += amount;
-        lineItems.push({
-          lineType: "time",
-          description: group.taskTitle,
-          quantity: hours,
-          unitPrice: group.rate,
-          amount,
-          quantityMinutes: group.minutes,
-          workCategoryId: group.workCategoryId,
-          entryIds: group.entryIds,
-        });
-      } else {
-        // Fixed + Retainer: hours only — no billing on time items
-        lineItems.push({
-          lineType: "time",
-          description: group.taskTitle,
-          quantity: hours,
-          unitPrice: 0,
-          amount: 0,
-          quantityMinutes: group.minutes,
-          workCategoryId: group.workCategoryId,
-          entryIds: group.entryIds,
-        });
-      }
-    }
-
-    // Retainer balance & billing line items — uses shared computeRetainerBalance
-    let retainerStartBalance = 0;
-    let retainerIncluded = 0;
-    let retainerUsed = 0;
-    let retainerEndBalance = 0;
-    let retainerFee = 0;
-    let retainerOverageRate = 0;
-
-    if (billingType === "retainer") {
-      const rolloverEnabled = project.rolloverEnabled ?? false;
-      const cycleLength = project.cycleLength ?? 1;
-
-      retainerFee = project.monthlyFee ?? 0;
-      retainerOverageRate = project.overageRate ?? 0;
-      // Cycle invoice covers the full cycle, so the included bucket scales
-      // with `cycleLength`. Monthly (rollover-OFF) keeps the per-month bucket.
-      const monthlyIncluded = project.includedMinutesPerMonth ?? 0;
-      retainerIncluded = rolloverEnabled
-        ? monthlyIncluded * cycleLength
-        : monthlyIncluded;
-
-      // Build task minutes map from grouped entries (same grouping as line items above)
-      const taskMinutesMap = new Map<string, number>();
-      for (const group of groupMap.values()) {
-        const key = `${group.workCategoryId ?? "none"}::${group.taskId}`;
-        taskMinutesMap.set(key, (taskMinutesMap.get(key) ?? 0) + group.minutes);
-      }
-
-      // Refactor: cycle invoices start at 0, monthly invoices start at 0 too —
-      // the per-month chain is gone. See `getRetainerStartBalance` docstring.
-      retainerStartBalance = getRetainerStartBalance();
-
-      // For rollover ON, the closing-month position triggers `isOverageDue`.
-      // For rollover OFF, position is irrelevant — overage settles per-month.
-      const positionInCycle = rolloverEnabled
-        ? cycleLength - 1
-        : -1;
-
-      const retainerResult = computeRetainerBalance({
-        taskMinutesMap,
-        roundingMinutes: effectiveRounding,
-        startBalance: retainerStartBalance,
-        includedMinutes: retainerIncluded,
-        monthlyFee: retainerFee,
-        overageRate: retainerOverageRate,
-        rolloverEnabled,
-        cycleLength,
-        positionInCycle,
-      });
-
-      retainerUsed = retainerResult.usedMinutes;
-      retainerEndBalance = retainerResult.endBalance;
-
-      // Within-budget guard — D3 in `docs/invoicing-refactor.md`. The bouncer
-      // is at the door of *creation*: a within-budget period produces no
-      // invoice. The owner downloads the Monthly Report instead.
-      assertRetainerInvoiceable({
-        isOverageDue: retainerResult.isOverageDue,
-      });
-
-      // Single Overage line item — the monthly retainer fee is collected via
-      // Stripe and surfaces only as disclaimer text on the doc, never as a
-      // chargeable line.
-      subtotal += retainerResult.overageAmount;
-      lineItems.push({
-        lineType: "overage",
-        description: `Overage (${retainerResult.overageHours}h × ${retainerOverageRate}/h)`,
-        quantity: retainerResult.overageHours,
-        unitPrice: retainerOverageRate,
-        amount: retainerResult.overageAmount,
-        workCategoryId: undefined,
-        entryIds: [],
-      });
-    }
-
-    // Fixed: add the fixed fee line item
-    if (billingType === "fixed") {
-      const fixedPrice = project.fixedPrice ?? 0;
-
-      const alreadyInvoiced = await getFixedBilledFinalized(
-        ctx,
-        orgId,
-        args.projectId,
-      );
-
-      const remaining = round2(fixedPrice - alreadyInvoiced);
-      // Fully billed (or fee lowered): never mint a zero/negative invoice —
-      // each finalized invoice consumes a gapless sequence number.
-      if (remaining <= 0) {
-        throw new ConvexError(
-          "This project's fixed fee is fully invoiced — there is nothing left to bill.",
-        );
-      }
-      subtotal = remaining;
-      lineItems.push({
-        lineType: "fixed",
-        description: project.name,
-        quantity: 1,
-        unitPrice: remaining,
-        amount: remaining,
-        workCategoryId: undefined,
-        entryIds: [],
-      });
-    }
-
-    subtotal = round2(subtotal);
-    const total = subtotal; // no tax in v1
-
-    // Within-budget retainer periods are rejected at the bouncer (see
-    // `assertRetainerInvoiceable` in the retainer branch above) — by the time
-    // we reach this point, retainer invoices always have overage > 0.
-
-    // 10. Create the invoice
-    const messageToClient = orgSettings?.invoiceMessageTemplate || undefined;
-    const invoiceData: Record<string, unknown> = {
-      orgId,
-      projectId: args.projectId,
-      clientId: project.clientId,
-      prefix,
-      subject,
-      status: "draft",
-      currency: client.currency,
-      subtotal,
-      total,
-      issueDate,
-      dueDate,
-      periodStart,
-      periodEnd,
-      roundingMinutes: effectiveRounding,
-      createdAt: now,
-      updatedAt: now,
-      createdBy: userId,
-    };
-    if (messageToClient !== undefined) invoiceData.messageToClient = messageToClient;
-
-    // Retainer: snapshot balance, rate, AND cycle config. Recalc reads these
-    // snapshots instead of live project fields so the draft's balance meaning
-    // stays stable if the admin toggles rollover / changes cycleLength later.
-    if (billingType === "retainer") {
-      invoiceData.retainerStartBalanceMinutes = retainerStartBalance;
-      invoiceData.retainerIncludedMinutes = retainerIncluded;
-      invoiceData.retainerUsedMinutes = retainerUsed;
-      invoiceData.retainerEndBalanceMinutes = retainerEndBalance;
-      invoiceData.retainerMonthlyFee = retainerFee;
-      invoiceData.retainerOverageRate = retainerOverageRate;
-      invoiceData.retainerRolloverEnabled = project.rolloverEnabled ?? false;
-      invoiceData.retainerCycleLength = project.cycleLength ?? 1;
-    }
-
-    const invoiceId = await ctx.db.insert("invoices", invoiceData as never);
-
-    // 11. Create line items
-    let sortOrder = 0;
-    for (const item of lineItems) {
-      await ctx.db.insert("invoiceLineItems", {
-        orgId,
-        invoiceId,
-        sortOrder,
-        lineType: item.lineType,
-        description: item.description,
-        quantity: item.quantity,
-        unitPrice: item.unitPrice,
-        amount: item.amount,
-        quantityMinutes: item.quantityMinutes,
-        workCategoryId: item.workCategoryId,
-        timeEntryIds: item.entryIds.length > 0 ? item.entryIds : undefined,
-        createdAt: now,
-        updatedAt: now,
-      });
-      sortOrder++;
-    }
-
-    // 12. Stamp all included time entries with invoiceId
-    for (const e of filtered) {
-      await ctx.db.patch(e._id, { invoiceId, updatedAt: now });
-    }
-
-    // `number: null` — drafts are unnumbered; callers build the draft URL
-    // from `invoiceId` (getInvoice accepts a doc ID as identifier).
-    return { invoiceId, resumed: false, prefix, number: null };
-  },
-});
-
-/**
- * Change a draft's time-rounding increment. Re-derives every non-overridden
- * time line's `quantity`/`amount` from its RAW `quantityMinutes`, then
- * recomputes totals (retainer: full balance recalc). Lossless in both
- * directions because the ledger minutes are never rounded.
- */
-export const updateInvoiceRounding = mutation({
-  args: {
-    invoiceId: v.id("invoices"),
-    roundingMinutes: v.number(),
-  },
-  handler: async (ctx, args) => {
-    const { orgId } = await requireAdmin(ctx);
-
-    const allowedIncrements = [0, 1, 5, 6, 15, 30];
-    if (!allowedIncrements.includes(args.roundingMinutes)) {
-      throw new ConvexError("Invalid rounding increment.");
-    }
-
-    const invoice = await ctx.db.get(args.invoiceId);
-    if (!invoice || invoice.orgId !== orgId) {
-      throw new ConvexError("Invoice not found.");
-    }
-    if (invoice.status !== "draft") {
-      throw new ConvexError("Only draft invoices can change rounding.");
-    }
-    const project = await ctx.db.get(invoice.projectId);
-    if (!project || project.orgId !== orgId) {
-      throw new ConvexError("Project not found.");
-    }
-    if (project.billingType === "retainer") {
-      // Retainer budget math is raw everywhere (see createInvoice) —
-      // rounding a retainer draft would desync it from the close gates
-      // and the balance meters.
-      throw new ConvexError("Retainer invoices bill exact time and cannot be rounded.");
-    }
-
-    const now = Date.now();
-    await ctx.db.patch(invoice._id, {
-      roundingMinutes: args.roundingMinutes,
-      updatedAt: now,
-    });
-
-    const items = await ctx.db
-      .query("invoiceLineItems")
-      .withIndex("by_invoiceId", (q) => q.eq("invoiceId", invoice._id))
-      .collect();
-
-    let subtotal = 0;
-    for (const item of items) {
-      if (item.lineType !== "time") {
-        subtotal += item.amount;
-        continue;
-      }
-      // Manually-edited rows keep the admin's numbers; rounding only steers
-      // derived rows.
-      if (item.amountOverridden) {
-        subtotal += item.amount;
-        continue;
-      }
-      const rawMinutes = item.quantityMinutes ?? Math.round(item.quantity * 60);
-      const roundedMinutes = roundMinutesUp(rawMinutes, args.roundingMinutes);
-      const hours = round2(roundedMinutes / 60);
-      const amount =
-        item.unitPrice > 0 ? round2((roundedMinutes / 60) * item.unitPrice) : 0;
-      await ctx.db.patch(item._id, {
-        quantity: hours,
-        amount,
-        updatedAt: now,
-      });
-      subtotal += amount;
-    }
-
-    // Retainer drafts are rejected up front (raw budget math) — the F6
-    // "$0 retainer invoice via rounding" hazard is unreachable by design.
-    await ctx.db.patch(invoice._id, {
-      subtotal: round2(subtotal),
-      total: round2(subtotal),
-      updatedAt: now,
-    });
-  },
-});
-
-// ─── Draft refresh (stale-draft reconciliation) ──────────────────────────────
-
-/**
- * Entries that WOULD be swept onto this draft if it were generated right now
- * but aren't on it: billable, unstamped, unsettled, on the invoice's project
- * — and, for retainer + T&M, inside the invoice's stored period (a cycle or
- * month invoice must never grow past its period; leftover T&M time rolls
- * onto the next invoice). Fixed drafts are periodless sweeps: their time
- * lines are a $0 work report, so refresh considers ALL open entries and the
- * period widens accordingly.
- *
- * Shared by `getInvoice` (staleness signal), `refreshInvoiceDraft` (the
- * one-click fix) and the retainer finalize gate — one definition, no drift.
- */
-async function collectRefreshableEntries(
-  ctx: QueryCtx,
-  orgId: string,
-  invoice: Doc<"invoices">,
-  billingType: string,
-): Promise<{ entries: Doc<"timeEntries">[]; taskMap: Map<string, Doc<"tasks">> }> {
-  const tasks = await ctx.db
-    .query("tasks")
-    .withIndex("by_orgId_projectId", (q) =>
-      q.eq("orgId", orgId).eq("projectId", invoice.projectId),
-    )
-    .collect();
-  const taskMap = new Map(tasks.map((t) => [t._id.toString(), t]));
-
-  const open = (
-    await Promise.all(
-      tasks.map(async (task) => {
-        const entries = await ctx.db
-          .query("timeEntries")
-          .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
-          .filter((q) => q.eq(q.field("orgId"), orgId))
-          .collect();
-        return entries.filter(
-          (e) =>
-            e.isBillable &&
-            e.invoiceId === undefined &&
-            e.settledAt === undefined,
-        );
-      }),
-    )
-  ).flat();
-
-  // Period scope: retainer AND T&M drafts are bound to their stored period
-  // — the inbox month rows promise ONE month, so a one-click refresh must
-  // never widen a "June" draft with July work (2026-07-05 review F4).
-  // Leftover T&M time simply rolls onto the next invoice. Fixed drafts stay
-  // periodless: their time lines are a $0 work report and should show all
-  // work delivered up to finalization.
-  const periodBound = billingType === "retainer" || billingType === "t_and_m";
-  const entries = periodBound
-    ? open.filter(
-        (e) =>
-          (!invoice.periodStart || e.date >= invoice.periodStart) &&
-          (!invoice.periodEnd || e.date <= invoice.periodEnd),
-      )
-    : open;
-  return { entries, taskMap };
-}
-
-/**
- * Pull entries logged since this draft was created onto the draft.
- *
- * Append-only: fresh entries become NEW time lines (grouped the same way as
- * `createInvoice`); existing lines — including relabeled descriptions,
- * manual rows and a partially-billed fixed amount — are never touched.
- * Retainer drafts recompute their balance/overage afterwards.
- */
-export const refreshInvoiceDraft = mutation({
-  args: { invoiceId: v.id("invoices") },
-  handler: async (ctx, args) => {
-    const { orgId } = await requireAdmin(ctx);
-
-    const invoice = await ctx.db.get(args.invoiceId);
-    if (!invoice || invoice.orgId !== orgId) {
-      throw new ConvexError("Invoice not found.");
-    }
-    if (invoice.status !== "draft") {
-      throw new ConvexError("Only draft invoices can be refreshed.");
-    }
-    const project = await ctx.db.get(invoice.projectId);
-    if (!project || project.orgId !== orgId) {
-      throw new ConvexError("Project not found.");
-    }
-    const billingType = project.billingType;
-
-    const { entries: fresh, taskMap } = await collectRefreshableEntries(
-      ctx,
-      orgId,
-      invoice,
-      billingType,
-    );
-    if (fresh.length === 0) {
-      return { added: 0, addedMinutes: 0 };
-    }
-
-    // Group exactly like createInvoice: T&M splits by rate, Fixed/Retainer
-    // don't (their time rows are $0 work-report rows).
-    type FreshGroup = {
-      taskTitle: string;
-      workCategoryId: Id<"workCategories"> | undefined;
-      rate: number;
-      minutes: number;
-      entryIds: Id<"timeEntries">[];
-    };
-    const groupMap = new Map<string, FreshGroup>();
-    for (const e of fresh) {
-      const cat = e.snapshotCategoryId;
-      const key =
-        billingType === "t_and_m"
-          ? `${cat ?? "none"}::${e.taskId}::${e.billableRate}`
-          : `${cat ?? "none"}::${e.taskId}`;
-      const existing = groupMap.get(key);
-      if (existing) {
-        existing.minutes += e.durationMinutes;
-        existing.entryIds.push(e._id);
-      } else {
-        groupMap.set(key, {
-          taskTitle: taskMap.get(e.taskId.toString())?.title ?? "Unknown task",
-          workCategoryId: cat,
-          rate: e.billableRate,
-          minutes: e.durationMinutes,
-          entryIds: [e._id],
-        });
-      }
-    }
-
-    const existingItems = await ctx.db
-      .query("invoiceLineItems")
-      .withIndex("by_invoiceId", (q) => q.eq("invoiceId", invoice._id))
-      .collect();
-    let sortOrder =
-      existingItems.reduce((max, li) => Math.max(max, li.sortOrder), -1) + 1;
-
-    const rounding = invoice.roundingMinutes ?? 0;
-    const now = Date.now();
-    const isTm = billingType === "t_and_m";
-    for (const group of groupMap.values()) {
-      // MERGE into the matching existing line when possible. Appending a
-      // duplicate line for the same (category, task, rate) group would make
-      // per-line rounding fire twice for one group — over-billing vs a
-      // freshly generated draft (2026-07-05 review F2). Relabeled or
-      // manually-overridden lines never match, so admin edits stay safe.
-      const groupRate = isTm ? group.rate : 0;
-      const target = existingItems.find(
-        (li) =>
-          li.lineType === "time" &&
-          !li.amountOverridden &&
-          li.description === group.taskTitle &&
-          li.unitPrice === groupRate &&
-          (li.workCategoryId?.toString() ?? "none") ===
-            (group.workCategoryId?.toString() ?? "none"),
-      );
-
-      if (target) {
-        const mergedRaw =
-          (target.quantityMinutes ?? Math.round(target.quantity * 60)) +
-          group.minutes;
-        const mergedRounded = roundMinutesUp(mergedRaw, rounding);
-        await ctx.db.patch(target._id, {
-          quantityMinutes: mergedRaw,
-          quantity: round2(mergedRounded / 60),
-          amount: isTm ? round2((mergedRounded / 60) * group.rate) : 0,
-          timeEntryIds: [...(target.timeEntryIds ?? []), ...group.entryIds],
-          updatedAt: now,
-        });
-        continue;
-      }
-
-      const roundedMinutes = roundMinutesUp(group.minutes, rounding);
-      await ctx.db.insert("invoiceLineItems", {
-        orgId,
-        invoiceId: invoice._id,
-        sortOrder,
-        lineType: "time",
-        description: group.taskTitle,
-        quantity: round2(roundedMinutes / 60),
-        unitPrice: groupRate,
-        amount: isTm ? round2((roundedMinutes / 60) * group.rate) : 0,
-        quantityMinutes: group.minutes,
-        workCategoryId: group.workCategoryId,
-        timeEntryIds: group.entryIds,
-        createdAt: now,
-        updatedAt: now,
-      });
-      sortOrder++;
-    }
-
-    // Stamp the fresh entries onto this draft.
-    for (const e of fresh) {
-      await ctx.db.patch(e._id, { invoiceId: invoice._id, updatedAt: now });
-    }
-
-    // Recompute totals + (T&M/Fixed) widen the stored period to the new
-    // entry span. Retainer keeps its period and recomputes balance/overage
-    // from the updated time lines.
-    if (billingType === "retainer") {
-      await recalcRetainerBalance(ctx, invoice._id, invoice, project);
-    } else {
-      const items = await ctx.db
-        .query("invoiceLineItems")
-        .withIndex("by_invoiceId", (q) => q.eq("invoiceId", invoice._id))
-        .collect();
-      const subtotal = round2(items.reduce((sum, li) => sum + li.amount, 0));
-      const patch: Record<string, unknown> = {
-        subtotal,
-        total: subtotal,
-        updatedAt: now,
-      };
-      let periodStart = invoice.periodStart;
-      let periodEnd = invoice.periodEnd;
-      // Only Fixed drafts are periodless (see collectRefreshableEntries);
-      // T&M entries are pre-filtered to the stored period, so this widening
-      // can only fill in missing bounds, never move a month boundary.
-      for (const e of fresh) {
-        if (!periodStart || e.date < periodStart) periodStart = e.date;
-        if (!periodEnd || e.date > periodEnd) periodEnd = e.date;
-      }
-      if (periodStart !== invoice.periodStart) patch.periodStart = periodStart;
-      if (periodEnd !== invoice.periodEnd) patch.periodEnd = periodEnd;
-      await ctx.db.patch(invoice._id, patch);
-    }
-
-    return {
-      added: fresh.length,
-      addedMinutes: fresh.reduce((sum, e) => sum + e.durationMinutes, 0),
     };
   },
 });
@@ -2143,12 +536,15 @@ export const getInvoice = query({
     const invoice = await resolveInvoiceByIdentifier(ctx, orgId, args.identifier);
     if (!invoice) return null;
 
-    // Fetch line items
-    const lineItems = await ctx.db
-      .query("invoiceLineItems")
-      .withIndex("by_invoiceId", (q) => q.eq("invoiceId", invoice._id))
-      .collect();
-    lineItems.sort((a, b) => a.sortOrder - b.sortOrder);
+    // Fetch line items (display amounts derived from minor units).
+    const lineItems = (
+      await ctx.db
+        .query("invoiceLineItems")
+        .withIndex("by_invoiceId", (q) => q.eq("invoiceId", invoice._id))
+        .collect()
+    )
+      .sort((a, b) => a.sortOrder - b.sortOrder)
+      .map((li) => toLineView(li, invoice.currency));
 
     // Group line items by workCategoryId for category headers
     const categoryIds = new Set<string>();
@@ -2201,9 +597,9 @@ export const getInvoice = query({
       if (li.lineType === "time") group.subtotalHours += li.quantity;
     }
 
-    // Round subtotal hours
+    // Round subtotal hours (display only)
     for (const g of grouped) {
-      g.subtotalHours = round2(g.subtotalHours);
+      g.subtotalHours = Math.round(g.subtotalHours * 100) / 100;
     }
 
     // Fetch related data (tenancy-guarded — a doc ID collision or data-drift
@@ -2222,9 +618,9 @@ export const getInvoice = query({
       .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
       .take(2);
 
-    // Fixed Fee: compute total billed from lineType:"fixed" items across
-    // finalized project invoices only. Drafts are provisional (see createInvoice).
-    let fixedBilled = 0;
+    // Fixed Fee: total billed from lineType:"fixed" items across finalized
+    // project invoices only (drafts are provisional).
+    let fixedBilledMinor = 0;
     if (project && project.billingType === "fixed") {
       const projectInvoices = await ctx.db
         .query("invoices")
@@ -2238,133 +634,43 @@ export const getInvoice = query({
           .withIndex("by_invoiceId", (q) => q.eq("invoiceId", inv._id))
           .collect();
         for (const item of invItems) {
-          if (item.lineType === "fixed") fixedBilled += item.amount;
+          if (item.lineType === "fixed") fixedBilledMinor += item.amountMinor;
         }
       }
-      fixedBilled = round2(fixedBilled);
     }
 
-    // Same shape as `convex/statements.ts` returns; frontend
-    // (`lib/retainerLabels.ts`) renders both via the same component.
-    let retainerUsage: {
-      kind: "month" | "cycle";
-      closed: boolean;
-      monthlyIncludedMinutes: number;
-      rows: Array<{
-        label: string;
-        availableMinutes: number;
-        usedMinutes: number;
-        balanceMinutes: number;
-      }>;
-      total: {
-        availableMinutes: number;
-        usedMinutes: number;
-        balanceMinutes: number;
-        amountDue: number;
-      };
-    } | null = null;
-    if (
-      project &&
-      project.billingType === "retainer" &&
-      invoice.retainerIncludedMinutes != null &&
-      invoice.retainerUsedMinutes != null &&
-      invoice.retainerEndBalanceMinutes != null
-    ) {
-      const rolloverEnabled =
-        invoice.retainerRolloverEnabled ?? project.rolloverEnabled ?? false;
-      const cycleLength =
-        invoice.retainerCycleLength ?? project.cycleLength ?? 1;
-      const months = invoiceMonthRange(invoice.periodStart, invoice.periodEnd);
-      const effectiveMonths: YearMonth[] =
-        months.length > 0
-          ? months
-          : [{ year: Number(invoice.issueDate.slice(0, 4)), month: Number(invoice.issueDate.slice(5, 7)) }];
-      // For rollover invoices the snapshot stores the cycle total
-      // (monthly × cycleLength). Reverse-divide to get the per-month budget.
-      // Assumes integer monthly minutes — every supported retainer size
-      // (5h/8h/10h/15h/20h/30h/40h/50h) is divisible, and the project form
-      // doesn't allow fractional input.
-      const monthlyIncluded = rolloverEnabled
-        ? Math.round(invoice.retainerIncludedMinutes / cycleLength)
-        : invoice.retainerIncludedMinutes;
-
-      // Raw per-month usage from the time entries this invoice line items
-      // reference. May not sum exactly to `invoice.retainerUsedMinutes`
-      // (snapshot is rounded at invoice generation per
-      // `feedback_no_rounding_on_reporting.md`).
-      const entryIds = new Set<Id<"timeEntries">>();
-      for (const item of lineItems) {
-        if (item.lineType !== "time") continue;
-        for (const entryId of item.timeEntryIds ?? []) entryIds.add(entryId);
-      }
-      const rawByMonth = new Map<string, number>();
-      const entryDocs = await Promise.all(
-        Array.from(entryIds).map((entryId) => ctx.db.get(entryId)),
-      );
-      for (const entry of entryDocs) {
-        if (!entry || entry.orgId !== orgId || !entry.isBillable) continue;
-        const key = entry.date.slice(0, 7);
-        rawByMonth.set(key, (rawByMonth.get(key) ?? 0) + entry.durationMinutes);
-      }
-
-      // Round per row so the per-month rows reconcile to the billed snapshot
-      // total exactly (decision 2026-05-03 Q1). The previous implementation
-      // dumped the rounding delta silently on the last month.
-      const usedByMonth = reconcileUsedMinutesToTotal({
-        months: effectiveMonths,
-        rawByMonth,
-        totalUsedMinutes: invoice.retainerUsedMinutes,
-      });
-
-      const rows = buildRetainerUsageRows({
-        months: effectiveMonths,
-        monthlyIncludedMinutes: monthlyIncluded,
-        usedMinutesByMonth: usedByMonth,
-      });
-
-      retainerUsage = {
-        kind: rolloverEnabled ? "cycle" : "month",
-        closed: true, // an invoice doc only renders for an issued invoice
-        monthlyIncludedMinutes: monthlyIncluded,
-        rows,
-        total: {
-          // Footer values come from the frozen snapshot — never recomputed —
-          // so the document always matches what the client was billed.
-          availableMinutes: invoice.retainerIncludedMinutes,
-          usedMinutes: invoice.retainerUsedMinutes,
-          balanceMinutes: invoice.retainerEndBalanceMinutes,
-          amountDue: invoice.total,
-        },
-      };
-    }
-
-    // Staleness signal: entries that would be swept onto this draft if it
-    // were generated now but aren't on it (logged after draft creation).
-    // Powers the "Refresh draft" callout + the finalize confirmation.
-    let staleEntries: { count: number; totalMinutes: number } | null = null;
-    if (invoice.status === "draft" && project && project.billingType !== "non_billable") {
-      const { entries } = await collectRefreshableEntries(
-        ctx,
-        orgId,
-        invoice,
-        project.billingType,
-      );
-      staleEntries = {
-        count: entries.length,
-        totalMinutes: entries.reduce((sum, e) => sum + e.durationMinutes, 0),
-      };
-    }
+    // The close that produced the invoice (absent on fixed-fee invoices):
+    // its period, and for a retainer its frozen usage block — same shape as
+    // `billingReports.getMonthlyReport`, rendered by the same component.
+    const closeRaw = invoice.closeId !== undefined ? await ctx.db.get(invoice.closeId) : null;
+    const close = closeRaw && closeRaw.orgId === orgId ? closeRaw : null;
+    const view = toInvoiceView(invoice);
+    const retainerUsage =
+      close && close.kind === "retainer"
+        ? await closeRetainerUsage(ctx, close, view.total)
+        : null;
 
     return {
-      invoice,
+      invoice: view,
       lineItems,
       categoryGroups: grouped,
       orgInvoiceCount: orgInvoiceSample.length,
-      fixedBilled,
+      fixedBilled: fromMinor(fixedBilledMinor, invoice.currency),
+      period: close
+        ? {
+            start: close.periodStart,
+            end: close.periodEnd,
+            months: absMonthOf(close.periodEnd) - absMonthOf(close.periodStart) + 1,
+          }
+        : null,
       retainerUsage,
-      staleEntries,
       project: project
-        ? { name: project.name, billingType: project.billingType, fixedPrice: project.fixedPrice }
+        ? {
+            name: project.name,
+            billingType: project.billingType,
+            fixedPrice: project.fixedPrice,
+            monthlyFee: project.monthlyFee,
+          }
         : null,
       client: client
         ? {
@@ -2460,8 +766,7 @@ export const updateInvoice = mutation({
 
 /**
  * Update the editable `messageToClient` block on an invoice. Editable on
- * drafts only (`canEditInvoiceMessage`); finalized, paid, and voided
- * invoices are locked. Trims input; empty (after trim) clears the field.
+ * drafts only; finalized, paid, and voided invoices are locked. Trims input; empty (after trim) clears the field.
  */
 export const updateInvoiceMessage = mutation({
   args: {
@@ -2481,7 +786,7 @@ export const updateInvoiceMessage = mutation({
       throw new ConvexError("Invoice not found.");
     }
 
-    if (!canEditInvoiceMessage(invoice)) {
+    if (invoice.status !== "draft") {
       throw new ConvexError("This invoice's message is locked.");
     }
 
@@ -2492,550 +797,33 @@ export const updateInvoiceMessage = mutation({
   },
 });
 
-/**
- * Update a single line item on a draft invoice.
- * Auto-computes amount = quantity × unitPrice unless explicit amount is provided.
- * Recalculates invoice totals.
- */
-export const updateInvoiceLineItem = mutation({
-  args: {
-    id: v.id("invoiceLineItems"),
-    description: v.optional(v.string()),
-    quantity: v.optional(v.number()),
-    unitPrice: v.optional(v.number()),
-    amount: v.optional(v.number()),
-  },
-  handler: async (ctx, args) => {
-    const { orgId } = await requireAdmin(ctx);
-
-    const lineItem = await ctx.db.get(args.id);
-    if (!lineItem || lineItem.orgId !== orgId) {
-      throw new ConvexError("Line item not found.");
-    }
-
-    const invoice = await ctx.db.get(lineItem.invoiceId);
-    if (!invoice || invoice.orgId !== orgId || invoice.status !== "draft") {
-      throw new ConvexError("Only draft invoices can be edited.");
-    }
-
-    // Derived line types are anchored to project/invoice snapshots
-    // (retainerOverageRate etc.) — editing their numeric fields would silently
-    // desync the total from the snapshot. Discounts/adjustments must be
-    // expressed as a manual line. Description stays editable so admins can
-    // relabel. ONE exception: the `fixed` line's AMOUNT is editable on drafts
-    // — that's how partial/milestone billing works (50% deposit etc., per
-    // docs/invoicing-prd.md §fixed). It's clamped to the unbilled remainder
-    // below, so the finalized series can never exceed the fee.
-    if (lineItem.lineType !== "time" && lineItem.lineType !== "manual") {
-      const isFixedAmountEdit =
-        lineItem.lineType === "fixed" &&
-        args.amount !== undefined &&
-        args.quantity === undefined &&
-        args.unitPrice === undefined;
-      if (
-        !isFixedAmountEdit &&
-        (args.quantity !== undefined ||
-          args.unitPrice !== undefined ||
-          args.amount !== undefined)
-      ) {
-        throw new ConvexError(
-          "This line is derived from the project and its amount cannot be edited. Add a manual adjustment line instead.",
-        );
-      }
-    }
-
-    // Non-negative guard: prevents negative hours/rates/amounts from corrupting
-    // retainer balance math and invoice totals.
-    if (args.quantity !== undefined && args.quantity < 0) {
-      throw new ConvexError("Quantity cannot be negative.");
-    }
-    if (args.unitPrice !== undefined && args.unitPrice < 0) {
-      throw new ConvexError("Rate cannot be negative.");
-    }
-    if (args.amount !== undefined && args.amount < 0) {
-      throw new ConvexError("Amount cannot be negative.");
-    }
-
-    // Fixed-fee partial billing bounds: the edited amount must stay within
-    // the project's unbilled remainder (fee − finalized fixed lines), so no
-    // sequence of drafts can ever over-bill the fee.
-    if (lineItem.lineType === "fixed" && args.amount !== undefined) {
-      const fixedProject = await ctx.db.get(invoice.projectId);
-      if (!fixedProject || fixedProject.orgId !== orgId) {
-        throw new ConvexError("Project not found.");
-      }
-      const billed = await getFixedBilledFinalized(ctx, orgId, invoice.projectId);
-      const remaining = round2((fixedProject.fixedPrice ?? 0) - billed);
-      const nextAmount = round2(args.amount);
-      if (nextAmount <= 0) {
-        throw new ConvexError("Amount must be greater than zero.");
-      }
-      if (nextAmount > remaining) {
-        throw new ConvexError(
-          `Amount exceeds the unbilled remainder of the fixed fee (${remaining} ${invoice.currency}).`,
-        );
-      }
-    }
-
-    const patch: Record<string, unknown> = { updatedAt: Date.now() };
-    if (args.description !== undefined) patch.description = args.description;
-    if (args.quantity !== undefined) patch.quantity = args.quantity;
-    if (args.unitPrice !== undefined) patch.unitPrice = args.unitPrice;
-
-    // Keep `quantityMinutes` (Harvest/Bonsai-style source of truth) in lockstep
-    // with `quantity`. A manual hours edit decouples the row from its source
-    // time entries; re-derive minutes from the new hours so retainer recalc
-    // sees the right value without hours→minutes reconstruction drift.
-    // The edit also takes manual ownership of the row (`amountOverridden`),
-    // so the draft's rounding picker won't re-derive hours the admin
-    // explicitly typed (2026-07-05 review F5).
-    if (args.quantity !== undefined && lineItem.lineType === "time") {
-      patch.quantityMinutes = Math.max(0, Math.round(args.quantity * 60));
-      patch.amountOverridden = true;
-    }
-
-    // Amount computation rules:
-    //   - Explicit `amount` arg: apply it. Flag as overridden ONLY if the value
-    //     diverges from `quantity × unitPrice`; passing the computed value back
-    //     (e.g. after a correction round-trip) clears the override so future
-    //     qty/rate edits resume auto-compute.
-    //   - Qty/price changed without an amount arg: auto-compute as long as the
-    //     row isn't locked by a prior override.
-    if (args.amount !== undefined && lineItem.lineType === "fixed") {
-      // Partial fixed billing: keep the row internally coherent
-      // (1 × amount = amount) and flag the manual choice.
-      const nextAmount = round2(args.amount);
-      patch.amount = nextAmount;
-      patch.unitPrice = nextAmount;
-      patch.quantity = 1;
-      patch.amountOverridden = true;
-    } else if (args.amount !== undefined) {
-      const qty = args.quantity ?? lineItem.quantity;
-      const price = args.unitPrice ?? lineItem.unitPrice;
-      const computed = round2(qty * price);
-      const nextAmount = round2(args.amount);
-      patch.amount = nextAmount;
-      patch.amountOverridden = nextAmount !== computed;
-    } else if (args.quantity !== undefined || args.unitPrice !== undefined) {
-      if (!lineItem.amountOverridden) {
-        const qty = args.quantity ?? lineItem.quantity;
-        const price = args.unitPrice ?? lineItem.unitPrice;
-        patch.amount = round2(qty * price);
-      }
-    }
-
-    await ctx.db.patch(args.id, patch);
-
-    // Recalculate invoice totals. Project is tenancy-guarded so recalc never
-    // reads snapshot config from a foreign project (defense-in-depth).
-    const projectRaw = await ctx.db.get(invoice.projectId);
-    const project =
-      projectRaw && projectRaw.orgId === orgId ? projectRaw : null;
-
-    if (project?.billingType === "retainer" && lineItem.lineType === "time") {
-      // Retainer: full balance recalculation when time rows change
-      await recalcRetainerBalance(ctx, lineItem.invoiceId, invoice, project);
-    } else {
-      // T&M / Fixed / non-time rows: simple subtotal recalc
-      const items = await ctx.db
-        .query("invoiceLineItems")
-        .withIndex("by_invoiceId", (q) => q.eq("invoiceId", lineItem.invoiceId))
-        .collect();
-      let subtotal = 0;
-      for (const item of items) {
-        subtotal += item._id === args.id ? (patch.amount as number ?? item.amount) : item.amount;
-      }
-      subtotal = round2(subtotal);
-      await ctx.db.patch(lineItem.invoiceId, { subtotal, total: subtotal, updatedAt: Date.now() });
-    }
-  },
-});
-
-/**
- * Add a manual line item to a draft invoice.
- */
-export const addInvoiceLineItem = mutation({
-  args: {
-    invoiceId: v.id("invoices"),
-    description: v.optional(v.string()),
-  },
-  handler: async (ctx, args) => {
-    const { orgId } = await requireAdmin(ctx);
-
-    const invoice = await ctx.db.get(args.invoiceId);
-    if (!invoice || invoice.orgId !== orgId) {
-      throw new ConvexError("Invoice not found.");
-    }
-    if (invoice.status !== "draft") {
-      throw new ConvexError("Only draft invoices can be edited.");
-    }
-
-    // Get max sortOrder
-    const existing = await ctx.db
-      .query("invoiceLineItems")
-      .withIndex("by_invoiceId", (q) => q.eq("invoiceId", args.invoiceId))
-      .collect();
-    const maxSort = existing.reduce((max, li) => Math.max(max, li.sortOrder), -1);
-
-    const now = Date.now();
-    await ctx.db.insert("invoiceLineItems", {
-      orgId,
-      invoiceId: args.invoiceId,
-      sortOrder: maxSort + 1,
-      lineType: "manual",
-      description: args.description ?? "New line item",
-      quantity: 0,
-      unitPrice: 0,
-      amount: 0,
-      createdAt: now,
-      updatedAt: now,
-    });
-
-    // Totals unchanged (amount = 0)
-  },
-});
-
-/**
- * Remove a line item from a draft invoice. Recalculates totals.
- */
-export const removeInvoiceLineItem = mutation({
-  args: {
-    id: v.id("invoiceLineItems"),
-  },
-  handler: async (ctx, args) => {
-    const { orgId } = await requireAdmin(ctx);
-
-    const lineItem = await ctx.db.get(args.id);
-    if (!lineItem || lineItem.orgId !== orgId) {
-      throw new ConvexError("Line item not found.");
-    }
-
-    const invoice = await ctx.db.get(lineItem.invoiceId);
-    if (!invoice || invoice.orgId !== orgId || invoice.status !== "draft") {
-      throw new ConvexError("Only draft invoices can be edited.");
-    }
-
-    // Guard core billing rows: `fixed` is derived from the project and anchors
-    // the invoice total — removing it leaves the invoice in an incoherent
-    // state. `overage` is auto-managed by `recalcRetainerBalance`. Only `time`
-    // and `manual` rows can be removed by the user.
-    if (lineItem.lineType === "fixed" || lineItem.lineType === "overage") {
-      throw new ConvexError(
-        "This line item is derived from the project and cannot be removed.",
-      );
-    }
-
-    // Retainer drafts bill the WHOLE period: removing a time line would
-    // free its entries, the finalize stale-gate would then block with a
-    // misleading "logged after the draft" message, and the only offered
-    // remediation (Refresh) would re-add exactly what was removed — an
-    // unwinnable loop (2026-07-05 review M1). Fix the underlying entries
-    // instead: delete the draft, edit the time, regenerate.
-    if (
-      lineItem.lineType === "time" &&
-      (lineItem.timeEntryIds?.length ?? 0) > 0
-    ) {
-      const lineProject = await ctx.db.get(invoice.projectId);
-      if (lineProject?.billingType === "retainer") {
-        throw new ConvexError(
-          "A retainer invoice bills the whole period, so time lines can't be removed. To exclude time: delete this draft, edit or delete the entries, then generate again.",
-        );
-      }
-    }
-
-    // Clear invoiceId on linked time entries so they become available for future invoicing
-    if (lineItem.timeEntryIds && lineItem.timeEntryIds.length > 0) {
-      const now = Date.now();
-      for (const entryId of lineItem.timeEntryIds) {
-        const entry = await ctx.db.get(entryId);
-        // Explicit tenancy gate on the linked entry (defense-in-depth — the
-        // lineItem is already org-scoped, so this should always hold).
-        if (
-          entry &&
-          entry.orgId === orgId &&
-          entry.invoiceId === lineItem.invoiceId
-        ) {
-          await ctx.db.patch(entryId, { invoiceId: undefined, updatedAt: now });
-        }
-      }
-    }
-
-    await ctx.db.delete(args.id);
-
-    // Recalculate invoice totals (tenancy-guarded project lookup).
-    const projectRaw = await ctx.db.get(invoice.projectId);
-    const project =
-      projectRaw && projectRaw.orgId === orgId ? projectRaw : null;
-
-    if (project?.billingType === "retainer" && lineItem.lineType === "time") {
-      // Retainer: full balance recalculation (pass excludeLineItemId since item is deleted)
-      await recalcRetainerBalance(ctx, lineItem.invoiceId, invoice, project, args.id);
-    } else {
-      const remaining = await ctx.db
-        .query("invoiceLineItems")
-        .withIndex("by_invoiceId", (q) => q.eq("invoiceId", lineItem.invoiceId))
-        .collect();
-      let subtotal = 0;
-      for (const item of remaining) {
-        if (item._id !== args.id) subtotal += item.amount;
-      }
-      subtotal = round2(subtotal);
-      await ctx.db.patch(lineItem.invoiceId, { subtotal, total: subtotal, updatedAt: Date.now() });
-    }
-  },
-});
-
 // ─── Lifecycle Mutations ───────────────────────────────────────────────────────
+//
+// Every status change goes through `lib/billing/invoiceLifecycle` (PRD §8.2):
+// it owns the transition table, numbering (N9), the close side-effects and
+// the billing event (N10).
 
-/** Valid status transitions for the invoice state machine.
- *
- *   draft    → invoiced | void
- *   invoiced → paid | draft | void
- *   paid     → invoiced                 (undo mark-paid only)
- *   void     → —                        (terminal; retainer chain already re-opened)
- *
- * `paid → void` is intentionally disallowed: a settled invoice is reconciled
- * with an external payment. Reversing it is "refund / credit note" territory,
- * not a plain void, and should flow through a correction state if ever needed.
- *
- * `paid → draft` is likewise disallowed (lifecycle-tightening, 2026-07-04):
- * a paid invoice re-entering the editable draft state breaks the audit
- * trail. Correction path: paid → invoiced (undo the payment mark) → void →
- * re-bill.
- */
-const VALID_TRANSITIONS: Record<string, string[]> = {
-  draft: ["invoiced", "void"],
-  invoiced: ["paid", "draft", "void"],
-  paid: ["invoiced"],
-  void: [],
-};
-
-/**
- * Change invoice status following the state machine:
- *   draft → invoiced → paid
- *   invoiced → draft (revert)
- *   paid → invoiced (undo mark-paid)
- */
-type InvoiceStatus = "draft" | "invoiced" | "paid" | "void";
-type TransitionResult = { ok: true } | { ok: false; reason: string };
-
-/**
- * Apply a status transition to a single invoice. Factored out of
- * `changeInvoiceStatus` so `bulkChangeInvoiceStatus` can accumulate per-row
- * failures without aborting the whole mutation.
- *
- * Returns a result object rather than throwing — the single-row mutation
- * still throws on failure to preserve its existing contract.
- */
-/**
- * Exported for tests in `convex/__tests__/invoiceTransitions.test.ts` —
- * production callers go through `changeInvoiceStatus` / `bulkChangeInvoiceStatus`
- * / `markInvoicesPaid` / `undoMarkInvoicesPaid` which add auth + per-row
- * skip handling on top.
- */
-export async function applyStatusTransition(
-  ctx: MutationCtx,
-  orgId: string,
-  invoice: Doc<"invoices">,
-  newStatus: InvoiceStatus,
-): Promise<TransitionResult> {
-  const allowed = VALID_TRANSITIONS[invoice.status];
-  if (!allowed || !allowed.includes(newStatus)) {
-    return {
-      ok: false,
-      reason: `Cannot transition from "${invoice.status}" to "${newStatus}".`,
-    };
-  }
-
-  // No LIFO retainer-chain guard after the invoicing refactor
-  // (`docs/invoicing-refactor.md` D5): every retainer invoice now starts
-  // from a 0 balance (`getRetainerStartBalance()`), so voiding or reverting
-  // an earlier invoice does not strand any later invoice's snapshot. The
-  // period frees up and can be re-billed — exactly user story 12.
-  const now = Date.now();
-  const patch: Record<string, unknown> = { status: newStatus, updatedAt: now };
-  if (newStatus === "paid") patch.paidAt = now;
-  if (invoice.status === "paid" && newStatus !== "paid") patch.paidAt = undefined;
-
-  if (invoice.status === "draft" && newStatus === "invoiced") {
-    const orgSettings = await getOrgSettings(ctx, orgId);
-
-    // Seller-identity gate: an issued invoice must name its seller. Stripe
-    // applies the same rule (no finalize without account details). The
-    // company name is set in Settings → General → Company details; address
-    // and tax ID are nudged in the UI but don't block.
-    if (!orgSettings?.brandName?.trim()) {
-      return {
-        ok: false,
-        reason:
-          "Add your company details (Settings → General → Company details) " +
-          "before issuing — an invoice needs a seller name.",
-      };
-    }
-
-    // Fixed-fee stale-draft gate: the fee or sibling invoices may have
-    // changed since this draft was created. Never let the finalized series
-    // exceed `fixedPrice` — recheck the fixed line against the live remainder.
-    const transitionProject = await ctx.db.get(invoice.projectId);
-    if (
-      transitionProject &&
-      transitionProject.orgId === orgId &&
-      transitionProject.billingType === "fixed"
-    ) {
-      const draftItems = await ctx.db
-        .query("invoiceLineItems")
-        .withIndex("by_invoiceId", (q) => q.eq("invoiceId", invoice._id))
-        .collect();
-      const fixedAmount = draftItems
-        .filter((li) => li.lineType === "fixed")
-        .reduce((sum, li) => sum + li.amount, 0);
-      if (fixedAmount > 0) {
-        const billed = await getFixedBilledFinalized(
-          ctx,
-          orgId,
-          invoice.projectId,
-        );
-        const remaining = round2((transitionProject.fixedPrice ?? 0) - billed);
-        if (round2(fixedAmount) > remaining) {
-          return {
-            ok: false,
-            reason:
-              `The fixed-fee line (${fixedAmount} ${invoice.currency}) exceeds the ` +
-              `project's unbilled remainder (${remaining} ${invoice.currency}). ` +
-              "Update the draft's amount first.",
-          };
-        }
-      }
-    }
-
-    // Retainer stale-draft gate: entries logged in the period AFTER the
-    // draft was created are not on it. Finalizing would strand them forever
-    // (the period becomes invoice-covered and unreachable) and undercount
-    // the overage — hard-block until the draft is refreshed. T&M/Fixed get
-    // a soft client-side confirmation instead (their leftovers stay
-    // billable / are report-only).
-    if (
-      transitionProject &&
-      transitionProject.orgId === orgId &&
-      transitionProject.billingType === "retainer"
-    ) {
-      const { entries: stale } = await collectRefreshableEntries(
-        ctx,
-        orgId,
-        invoice,
-        "retainer",
-      );
-      if (stale.length > 0) {
-        const staleMinutes = stale.reduce((sum, e) => sum + e.durationMinutes, 0);
-        const hours = Math.round((staleMinutes / 60) * 100) / 100;
-        return {
-          ok: false,
-          reason:
-            `${stale.length} ${stale.length === 1 ? "entry was" : "entries were"} logged in this period ` +
-            `after the draft was created (${hours}h). Refresh the draft so they're included, ` +
-            "then finalize.",
-        };
-      }
-    }
-
-    // Allocate the sequence number at FINALIZATION. Drafts are unnumbered
-    // (see `createInvoice`), so the issued series is gapless: only invoices
-    // that actually reach `invoiced` consume a number. Idempotent — an
-    // invoice that was reverted to draft keeps its number, so re-finalizing
-    // does not claim a second one. The prefix is also refreshed here so the
-    // issued document reflects the org's prefix at issue time, not at draft
-    // time. Bulk transitions are safe: Convex mutations read their own
-    // writes, so sequential allocations inside one mutation see the bumped
-    // counter.
-    if (invoice.number == null) {
-      const nextNumber = orgSettings.nextInvoiceNumber ?? 1;
-      patch.number = nextNumber;
-      patch.prefix = orgSettings.invoicePrefix ?? invoice.prefix;
-      await ctx.db.patch(orgSettings._id, {
-        nextInvoiceNumber: nextNumber + 1,
-        updatedAt: now,
-      });
-    }
-  }
-
-  await ctx.db.patch(invoice._id, patch);
-
-  // ─── Phase 8 — settlement side-effects ────────────────────────────────
-  //
-  // Patch the invoice doc first, then settle/unsettle the entries it owns.
-  // Rules per the transition table in `docs/phase-8-time-entry-settlement.md`:
-  //
-  //   draft → invoiced       settle (Fixed → "fixed_included", else "invoiced")
-  //   draft → void           unsettle + clear invoiceId
-  //   invoiced → draft       unsettle, keep invoiceId  → entries become "draft"
-  //   invoiced → paid        no settlement change       (already settled)
-  //   invoiced → void        unsettle + clear invoiceId
-  //   paid → invoiced        no settlement change
-  //   (paid → draft removed from VALID_TRANSITIONS — 2026-07-04)
-  //
-  // `paid → void` is in `VALID_TRANSITIONS[invoice.status]` only when
-  // `invoice.status === "void"` (terminal) — never reached here.
-  const wentToVoid = newStatus === "void";
-  const wentToDraft = newStatus === "draft";
-  const wasFinalized =
-    invoice.status === "invoiced" || invoice.status === "paid";
-  const draftBecameInvoiced =
-    invoice.status === "draft" && newStatus === "invoiced";
-
-  if (draftBecameInvoiced) {
-    // Resolve project.billingType to pick the right reason for Fixed.
-    // `invoice.projectId` is `v.id("projects")` in the schema (non-
-    // optional), so the only way `ctx.db.get` returns `null` is if the
-    // project was deleted between read and write — treat as "non-Fixed"
-    // and let the entries settle with the default reason rather than
-    // throwing mid-transition.
-    const project = await ctx.db.get(invoice.projectId);
-    const reason = project?.billingType === "fixed"
-      ? "fixed_included"
-      : "invoiced";
-    await settleInvoiceEntries(
-      ctx,
-      invoice._id,
-      orgId,
-      invoice.periodStart,
-      invoice.periodEnd,
-      reason,
-    );
-  } else if (wentToVoid) {
-    // Free the period — entries become eligible for a fresh invoice run.
-    await unsettleInvoiceEntries(ctx, invoice._id, orgId, {
-      clearInvoiceId: true,
-    });
-  } else if (wentToDraft && wasFinalized) {
-    // Demote: entries display as "draft" (still owned by the invoice).
-    await unsettleInvoiceEntries(ctx, invoice._id, orgId, {
-      clearInvoiceId: false,
-    });
-  }
-  // invoiced ↔ paid: no settlement change (entries stay closed either way).
-
-  return { ok: true };
-}
+const statusValidator = v.union(
+  v.literal("draft"),
+  v.literal("invoiced"),
+  v.literal("paid"),
+  v.literal("void"),
+);
 
 export const changeInvoiceStatus = mutation({
   args: {
     id: v.id("invoices"),
-    newStatus: v.union(
-      v.literal("draft"),
-      v.literal("invoiced"),
-      v.literal("paid"),
-      v.literal("void"),
-    ),
+    newStatus: statusValidator,
   },
   handler: async (ctx, args) => {
-    const { orgId } = await requireAdmin(ctx);
+    const { orgId, userId } = await requireAdmin(ctx);
 
     const invoice = await ctx.db.get(args.id);
     if (!invoice || invoice.orgId !== orgId) {
       throw new ConvexError("Invoice not found.");
     }
 
-    const result = await applyStatusTransition(ctx, orgId, invoice, args.newStatus);
+    const result = await transitionInvoice(ctx, { orgId, userId }, invoice, args.newStatus);
     if (!result.ok) throw new ConvexError(result.reason);
   },
 });
@@ -3050,15 +838,10 @@ export const changeInvoiceStatus = mutation({
 export const bulkChangeInvoiceStatus = mutation({
   args: {
     ids: v.array(v.id("invoices")),
-    newStatus: v.union(
-      v.literal("draft"),
-      v.literal("invoiced"),
-      v.literal("paid"),
-      v.literal("void"),
-    ),
+    newStatus: statusValidator,
   },
   handler: async (ctx, args) => {
-    const { orgId } = await requireAdmin(ctx);
+    const { orgId, userId } = await requireAdmin(ctx);
 
     const succeeded: Id<"invoices">[] = [];
     const failed: { id: Id<"invoices">; reason: string }[] = [];
@@ -3069,7 +852,7 @@ export const bulkChangeInvoiceStatus = mutation({
         failed.push({ id, reason: "Invoice not found." });
         continue;
       }
-      const result = await applyStatusTransition(ctx, orgId, invoice, args.newStatus);
+      const result = await transitionInvoice(ctx, { orgId, userId }, invoice, args.newStatus);
       if (result.ok) {
         succeeded.push(id);
       } else {
@@ -3104,7 +887,7 @@ export const markInvoicesPaid = mutation({
     invoiceIds: v.array(v.id("invoices")),
   },
   handler: async (ctx, args) => {
-    const { orgId } = await requireAdmin(ctx);
+    const { orgId, userId } = await requireAdmin(ctx);
     const now = Date.now();
 
     let updated = 0;
@@ -3132,14 +915,9 @@ export const markInvoicesPaid = mutation({
       });
       updated += 1;
       if (outcome.kind === "patch") {
-        // Route through applyStatusTransition so the Phase 8 settlement
-        // contract (invoiced → paid: no settlement change) is enforced by
-        // the same code path as `changeInvoiceStatus`. Today this is
-        // equivalent to a direct patch, but routing centrally means a
-        // future widening of classifyMarkPaid can't silently bypass
-        // settle/unsettle. `setPaidAt` is unused — applyStatusTransition
-        // computes `paidAt = now` from its own `now` (identical here).
-        const result = await applyStatusTransition(ctx, orgId, invoice, "paid");
+        // Same lifecycle as `changeInvoiceStatus`, so the paid event (N10)
+        // is written exactly once. `paidAt` comes from the lifecycle's `now`.
+        const result = await transitionInvoice(ctx, { orgId, userId }, invoice, "paid");
         if (!result.ok) {
           // Should be unreachable — classifyMarkPaid only patches when
           // current=invoiced, and invoiced → paid is in VALID_TRANSITIONS.
@@ -3180,7 +958,7 @@ export const undoMarkInvoicesPaid = mutation({
     ),
   },
   handler: async (ctx, args) => {
-    const { orgId } = await requireAdmin(ctx);
+    const { orgId, userId } = await requireAdmin(ctx);
     const now = Date.now();
 
     let reverted = 0;
@@ -3200,16 +978,10 @@ export const undoMarkInvoicesPaid = mutation({
         skipped.push({ id: snapshot.id, reason: outcome.reason });
         continue;
       }
-      // Route through applyStatusTransition so the Phase 8 settlement
-      // contract is enforced centrally. In practice undo only reverts
-      // paid → invoiced (snapshot.status is always "invoiced" given how
-      // classifyMarkPaid gates the mark side); applyStatusTransition's
-      // `paid → invoiced` branch clears paidAt to `undefined`, which
-      // matches snapshot.paidAt === null for that case. For the rare
-      // snapshot.status === "paid" case (idempotent mark — current and
-      // snapshot agree) the transition is paid → paid (not in
-      // VALID_TRANSITIONS) so we fall back to a direct paidAt restoration
-      // without changing status.
+      // Through the lifecycle, like the mark side. In practice undo only
+      // reverts paid → invoiced, which clears paidAt (snapshot.paidAt is
+      // null then). An idempotent mark (snapshot already "paid") has no
+      // transition to undo, so it restores paidAt directly.
       if (outcome.setStatus === invoice.status) {
         // No status change — just restore paidAt from snapshot (covers
         // the idempotent-mark noop revert case).
@@ -3220,12 +992,7 @@ export const undoMarkInvoicesPaid = mutation({
         reverted += 1;
         continue;
       }
-      const result = await applyStatusTransition(
-        ctx,
-        orgId,
-        invoice,
-        outcome.setStatus,
-      );
+      const result = await transitionInvoice(ctx, { orgId, userId }, invoice, outcome.setStatus);
       if (!result.ok) {
         skipped.push({ id: snapshot.id, reason: result.reason });
         continue;
@@ -3238,60 +1005,20 @@ export const undoMarkInvoicesPaid = mutation({
 });
 
 /**
- * Delete a DRAFT invoice:
- * 1. Unlink time entries (clear invoiceId) — must happen BEFORE deleting line items
- * 2. Delete all line items
- * 3. Delete the invoice
- *
- * Drafts only (lifecycle-tightening, 2026-07-04). A finalized invoice has a
- * sequence number and represents an issued document — hard-deleting one
- * destroys the audit trail and punches a hole in the gapless series. The
- * correction path for issued invoices is: (paid →) invoiced → void, which
- * keeps the numbered record and frees the period for re-billing.
- *
- * No LIFO retainer-chain guard after the invoicing refactor
- * (`docs/invoicing-refactor.md` D5): every retainer invoice starts from a 0
- * balance, so deleting an earlier one does not strand a later invoice's
- * snapshot. The period frees up and can be re-billed.
+ * Delete a never-numbered DRAFT invoice and release its close (N9, §8.2).
+ * A numbered or finalized invoice is voided instead, which keeps the record.
  */
 export const deleteInvoice = mutation({
   args: {
     id: v.id("invoices"),
   },
   handler: async (ctx, args) => {
-    const { orgId } = await requireAdmin(ctx);
+    const { orgId, userId } = await requireAdmin(ctx);
 
     const invoice = await ctx.db.get(args.id);
     if (!invoice || invoice.orgId !== orgId) {
       throw new ConvexError("Invoice not found.");
     }
-    if (invoice.status !== "draft") {
-      throw new ConvexError(
-        "Only draft invoices can be deleted. Void a finalized invoice instead — " +
-          "that keeps the numbered record and frees the period for re-billing.",
-      );
-    }
-
-    // 1. Unlink + unsettle time entries via the shared helper. Same
-    //    tenancy + canonical-set guarantees as the inline loop this
-    //    replaced, plus it clears the four Phase 8 settlement fields so
-    //    a previously-settled entry doesn't drag stale snapshot data
-    //    into its next invoice run.
-    await unsettleInvoiceEntries(ctx, args.id, orgId, {
-      clearInvoiceId: true,
-    });
-
-    // 2. Delete all line items (now read separately — settle helper
-    //    consumed them but didn't delete them).
-    const lineItems = await ctx.db
-      .query("invoiceLineItems")
-      .withIndex("by_invoiceId", (q) => q.eq("invoiceId", args.id))
-      .collect();
-    for (const li of lineItems) {
-      await ctx.db.delete(li._id);
-    }
-
-    // 3. Delete the invoice
-    await ctx.db.delete(args.id);
+    await deleteDraftInvoice(ctx, { orgId, userId }, invoice);
   },
 });

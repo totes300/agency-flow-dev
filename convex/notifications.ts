@@ -3,6 +3,8 @@ import { query, mutation, internalMutation, MutationCtx, QueryCtx } from "./_gen
 import { internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { getAuthContext } from "./lib/auth";
+import { loadTaskForRead, userCanReadTask } from "./tasks/access";
+import { getUserState, setTaskMuted } from "./tasks/userState";
 
 export type NotificationType =
   | "mention_comment"
@@ -61,22 +63,20 @@ export async function createNotifications(
         .unique();
       if (!membership) continue;
 
-      // 3. Task access: assignee or org admin (defense in depth — a mention
-      // must never leak a notification to someone who can't open the task)
-      const hasAccess =
-        membership.role === "admin" || task.assigneeIds.includes(recipientId);
+      // 3. Task access via tasks/access.ts (defense in depth — a mention
+      // must never leak a notification to someone who can't open the task;
+      // a parent's assignee can open its sub-tasks, §11.5)
+      const hasAccess = await userCanReadTask(ctx, task, {
+        userId: recipientId,
+        isAdmin: membership.role === "admin",
+      });
       if (!hasAccess) continue;
 
-      // 4. Mute check — only comment/comment_reply respect mutes; mentions
-      // and assignments break through (Notion behavior)
+      // 4. Mute check (`taskUserState.muted`, §4.3) — only comment/comment_reply
+      // respect mutes; mentions and assignments break through (Notion behavior)
       if (event.type === "comment" || event.type === "comment_reply") {
-        const mute = await ctx.db
-          .query("taskMutes")
-          .withIndex("by_user_task", (q) =>
-            q.eq("userId", recipientId).eq("taskId", task._id)
-          )
-          .unique();
-        if (mute) continue;
+        const state = await getUserState(ctx, task._id, recipientId);
+        if (state?.muted) continue;
       }
 
       // 5. Unread dedupe — absorbs remove→re-add assignment cycles and
@@ -314,8 +314,9 @@ export const markAllRead = mutation({
 
 /**
  * Honest badge: mark all of the viewer's unread notifications for one task
- * as read. Called from taskViewReceipts.markViewed, which fires on EVERY
- * task-detail open path — organically reading a task clears its inbox dots.
+ * as read. Called from tasks/userState.markViewed (the task detail's open
+ * stamp, drawer and full page) — organically reading a task clears its
+ * inbox dots.
  */
 export async function markTaskNotificationsRead(
   ctx: MutationCtx,
@@ -387,26 +388,10 @@ export const wake = internalMutation({
 export const muteTask = mutation({
   args: { taskId: v.id("tasks") },
   handler: async (ctx, args) => {
-    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
-
-    const task = await ctx.db.get(args.taskId);
-    if (!task || task.orgId !== orgId) throw new ConvexError("Task not found");
-    if (!isAdmin && !task.assigneeIds.includes(userId)) {
-      throw new ConvexError("Task not found");
-    }
-
-    const existing = await ctx.db
-      .query("taskMutes")
-      .withIndex("by_user_task", (q) => q.eq("userId", userId).eq("taskId", args.taskId))
-      .unique();
-    if (existing) return; // idempotent
-
-    await ctx.db.insert("taskMutes", {
-      orgId,
-      taskId: args.taskId,
-      userId,
-      createdAt: Date.now(),
-    });
+    const { task, auth } = await loadTaskForRead(ctx, args.taskId);
+    // The mute lives on the caller's per-user state (§4.3): muted subscribers
+    // get no fan-out and no comment notifications. Idempotent.
+    await setTaskMuted(ctx, task, auth.userId, true);
   },
 });
 
@@ -414,14 +399,8 @@ export const unmuteTask = mutation({
   args: { taskId: v.id("tasks") },
   handler: async (ctx, args) => {
     const { orgId, userId } = await getAuthContext(ctx);
-
-    const existing = await ctx.db
-      .query("taskMutes")
-      .withIndex("by_user_task", (q) => q.eq("userId", userId).eq("taskId", args.taskId))
-      .unique();
-    if (existing && existing.orgId === orgId) {
-      await ctx.db.delete(existing._id);
-    }
+    const task = await ctx.db.get(args.taskId);
+    if (task && task.orgId === orgId) await setTaskMuted(ctx, task, userId, false);
   },
 });
 
@@ -429,12 +408,10 @@ export const unmuteTask = mutation({
 export const isTaskMuted = query({
   args: { taskId: v.id("tasks") },
   handler: async (ctx, args) => {
-    const { userId } = await getAuthContext(ctx);
-
-    const existing = await ctx.db
-      .query("taskMutes")
-      .withIndex("by_user_task", (q) => q.eq("userId", userId).eq("taskId", args.taskId))
-      .unique();
-    return existing !== null;
+    const { orgId, userId } = await getAuthContext(ctx);
+    const task = await ctx.db.get(args.taskId);
+    if (!task || task.orgId !== orgId) return false;
+    const state = await getUserState(ctx, task._id, userId);
+    return state?.muted === true;
   },
 });

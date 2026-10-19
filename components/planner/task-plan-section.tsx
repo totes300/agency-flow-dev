@@ -4,20 +4,21 @@ import { useQuery, useMutation, useConvexAuth } from "convex/react"
 import { XIcon, CalendarRangeIcon, SunIcon } from "lucide-react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
-import { MetadataRow } from "@/components/tasks/task-detail-metadata"
+import { MetadataRow } from "@/components/task-detail/task-properties"
 import { Skeleton } from "@/components/ui/skeleton"
 import { formatSegmentRange, spanDays } from "@/lib/planner"
-import { toast } from "sonner"
 import { toastError } from "@/lib/toast-helpers"
 import { cn } from "@/lib/utils"
 
 /**
- * The task drawer's "Plan" section: every sitting of the task on the
+ * The task detail's "Plan" section: every sitting of the task on the
  * Planner board — date range · person · duration · part n/m. Segments
- * covering today are highlighted. A member can unschedule (×) and add to
- * today for their OWN segments (self-service — the server enforces the same
- * admin-or-self rule); other people's sittings stay read-only for members,
- * admins keep full control. Updates live via the weekGrid subscription.
+ * covering today are highlighted. A member can unschedule (×) their OWN
+ * segments (self-service — the server enforces the same admin-or-self rule);
+ * other people's sittings stay read-only for members, admins keep full
+ * control. Updates live via the weekGrid subscription. Adding to today is
+ * the property panel's Today row (the sun, D9: for the assignees, not gated
+ * on the caller's own segments).
  */
 export function TaskPlanSection({
   taskId,
@@ -34,20 +35,11 @@ export function TaskPlanSection({
     isAuthenticated ? { taskId } : "skip",
   )
   const removeSegment = useMutation(api.planner.removeSegment)
-  const addToToday = useMutation(api.planner.addToToday)
 
   const handleRemove = (segmentId: Id<"planSegments">) => {
     void removeSegment({ id: segmentId }).catch((err) =>
       toastError(err, "Couldn't unschedule the segment"),
     )
-  }
-
-  const handleAddToday = () => {
-    void addToToday({ taskId })
-      .then((r) => {
-        if (r.added) toast.success("Added to today — visible in your Planner row")
-      })
-      .catch((err) => toastError(err, "Failed to add to today"))
   }
 
   const segments = plan?.segments
@@ -61,9 +53,6 @@ export function TaskPlanSection({
       ) : segments.length === 0 ? (
         <div className="flex items-center gap-2 py-0.5">
           <span className="text-[13px] text-foreground/50">Not scheduled</span>
-          {plan.canAddToToday ? (
-            <AddTodayButton onClick={handleAddToday} />
-          ) : null}
         </div>
       ) : (
         <ul className="flex flex-col gap-1 py-0.5">
@@ -110,27 +99,8 @@ export function TaskPlanSection({
               </li>
             )
           })}
-          {plan.canAddToToday ? (
-            <li className="pt-0.5">
-              <AddTodayButton onClick={handleAddToday} />
-            </li>
-          ) : null}
         </ul>
       )}
     </MetadataRow>
-  )
-}
-
-/** Quiet dashed "Add to today" affordance (self-service, no pills). */
-function AddTodayButton({ onClick }: { onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="flex items-center gap-1 rounded border border-dashed border-border px-1.5 py-0.5 text-[12px] text-muted-foreground transition-colors hover:border-amber-500/50 hover:text-foreground"
-    >
-      <SunIcon className="size-3" />
-      Add to today
-    </button>
   )
 }

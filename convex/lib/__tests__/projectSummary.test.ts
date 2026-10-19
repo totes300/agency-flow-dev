@@ -23,7 +23,7 @@ function entry(overrides: Partial<EntryInput> = {}): EntryInput {
   return {
     durationMinutes: 60,
     isBillable: true,
-    invoiceId: null,
+    closed: false,
     costRate: 50,
     billableRate: 120,
     date: "2026-04-01",
@@ -65,9 +65,9 @@ describe("computeTmSummary", () => {
 
   it("happy path — 3 billable (1 invoiced), 1 non-billable", () => {
     const entries: EntryInput[] = [
-      entry({ durationMinutes: 120, isBillable: true, invoiceId: "inv1", billableRate: 100, costRate: 40 }),
-      entry({ durationMinutes: 60,  isBillable: true, invoiceId: null,   billableRate: 100, costRate: 40 }),
-      entry({ durationMinutes: 180, isBillable: true, invoiceId: null,   billableRate: 150, costRate: 60 }),
+      entry({ durationMinutes: 120, isBillable: true, closed: true, billableRate: 100, costRate: 40 }),
+      entry({ durationMinutes: 60,  isBillable: true, closed: false, billableRate: 100, costRate: 40 }),
+      entry({ durationMinutes: 180, isBillable: true, closed: false, billableRate: 150, costRate: 60 }),
       entry({ durationMinutes: 30,  isBillable: false, costRate: 40 }),
     ];
     const result = computeTmSummary({ ...defaultArgs, entries });
@@ -464,17 +464,16 @@ describe("computeRetainerSummary", () => {
     hasNextCycle: false,
     hasUninvoicedClosedMonth: false,
   };
+  // Budget and overage arrive from the balance ladder (pricing.ts); this
+  // layer only assembles time, cost and revenue around them.
   const defaultArgs = {
     currency: "EUR",
     subtitle: "Apr 2026 · 1-month monthly",
     isAdmin: true,
     monthlyFee: 2000,
-    overageRate: 150,
-    includedMinutesPerMonth: 600, // 10 hours
+    cycleBudgetMinutes: 600, // 10 hours
+    overage: { minutes: 0, amount: 0 },
     cycle,
-    // Pooled-cycle math (the pre-2026-07-05 behavior all tests below
-    // assert). Non-rollover per-month overage has its own cases at the end.
-    rolloverEnabled: true,
   };
 
   it("empty cycle — revenue = fee only, cost 0, no overage", () => {
@@ -488,45 +487,32 @@ describe("computeRetainerSummary", () => {
     expect(result.profitability?.totalCost).toBe(0);
   });
 
-  it("half-consumed cycle — no overage", () => {
+  it("half-consumed cycle — time and cost from entries", () => {
     const entries: EntryInput[] = [
       entry({ durationMinutes: 300, isBillable: true, costRate: 60 }),
     ];
     const result = computeRetainerSummary({ ...defaultArgs, entries });
     expect(result.timeBreakdown.billableMinutes).toBe(300);
     expect(result.overage?.overBudgetMinutes).toBe(0);
-    expect(result.overage?.overageDueAmount).toBe(0);
     expect(result.profitability?.revenue).toBe(2000);
     expect(result.profitability?.totalCost).toBe(300);
   });
 
-  it("over-budget open cycle — live overage reflected in revenue", () => {
-    // 720 min billable, budget 600 → 120 min over, @150€/h = 300€ overage
-    const entries: EntryInput[] = [
-      entry({ durationMinutes: 720, isBillable: true, costRate: 60 }),
-    ];
-    const result = computeRetainerSummary({ ...defaultArgs, entries });
-    expect(result.overage?.overBudgetMinutes).toBe(120);
-    expect(result.overage?.overageDueAmount).toBe(300);
-    expect(result.profitability?.revenue).toBe(2300); // fee 2000 + overage 300
-  });
-
-  it("closed cycle — same formula (fee + settled overage)", () => {
-    const closed: RetainerCycleContext = { ...cycle, isCycleClosed: true };
+  it("priced overage is reflected in revenue", () => {
     const entries: EntryInput[] = [
       entry({ durationMinutes: 720, isBillable: true, costRate: 60 }),
     ];
     const result = computeRetainerSummary({
       ...defaultArgs,
-      cycle: closed,
       entries,
+      overage: { minutes: 120, amount: 300 },
     });
-    expect(result.cycle.isCycleClosed).toBe(true);
+    expect(result.overage?.overBudgetMinutes).toBe(120);
     expect(result.overage?.overageDueAmount).toBe(300);
-    expect(result.profitability?.revenue).toBe(2300);
+    expect(result.profitability?.revenue).toBe(2300); // fee 2000 + overage 300
   });
 
-  it("multi-month cycle — budget = monthly × length", () => {
+  it("multi-month cycle — revenue = fee × length", () => {
     const threeMonthCycle: RetainerCycleContext = {
       ...cycle,
       length: 3,
@@ -536,24 +522,23 @@ describe("computeRetainerSummary", () => {
     const result = computeRetainerSummary({
       ...defaultArgs,
       cycle: threeMonthCycle,
+      cycleBudgetMinutes: 1800,
       entries: [],
     });
-    expect(result.timeBreakdown.cycleBudgetMinutes).toBe(1800); // 600 × 3
+    expect(result.timeBreakdown.cycleBudgetMinutes).toBe(1800);
     expect(result.profitability?.revenue).toBe(6000); // 2000 × 3
   });
 
-  it("non-billable time does not consume budget but contributes to cost", () => {
+  it("non-billable time contributes to cost, not billable minutes", () => {
     const entries: EntryInput[] = [
       entry({ durationMinutes: 600, isBillable: true,  costRate: 60 }),
       entry({ durationMinutes: 120, isBillable: false, costRate: 60 }),
     ];
     const result = computeRetainerSummary({ ...defaultArgs, entries });
-    // Billable = 600 → exactly at budget, no overage.
-    expect(result.overage?.overBudgetMinutes).toBe(0);
+    expect(result.timeBreakdown.billableMinutes).toBe(600);
+    expect(result.timeBreakdown.nonBillableMinutes).toBe(120);
     // Cost = (600+120)/60 × 60 = 720
     expect(result.profitability?.totalCost).toBe(720);
-    // Revenue = fee, no overage.
-    expect(result.profitability?.revenue).toBe(2000);
   });
 
   it("hasUninvoicedClosedMonth flag propagates", () => {
@@ -580,42 +565,6 @@ describe("computeRetainerSummary", () => {
     expect(result.cycle.number).toBe(1);
     expect(result.overage).toBeUndefined();
     expect(result.profitability).toBeUndefined();
-  });
-
-  it("non-rollover multi-month: overage sums per-month excess (idle months don't absorb)", () => {
-    // 3-month cycle, 10h/month budget. Month 1 works 20h (10h over),
-    // months 2–3 idle. Pooled math would report 0 overage (20h < 30h
-    // budget) — the bug this fixes. Per-month math reports 10h.
-    const threeMonthCycle: RetainerCycleContext = {
-      ...cycle,
-      end: "2026-06-30",
-      length: 3,
-    };
-    const result = computeRetainerSummary({
-      ...defaultArgs,
-      cycle: threeMonthCycle,
-      rolloverEnabled: false,
-      monthBillableMinutes: new Map([["2026-04", 1200]]),
-      entries: [entry({ durationMinutes: 1200, isBillable: true })],
-    });
-    expect(result.overage?.overBudgetMinutes).toBe(600);
-    expect(result.overage?.overageDueAmount).toBe((600 / 60) * 150);
-  });
-
-  it("rollover multi-month: same shape stays pooled (no overage under aggregate budget)", () => {
-    const threeMonthCycle: RetainerCycleContext = {
-      ...cycle,
-      end: "2026-06-30",
-      length: 3,
-    };
-    const result = computeRetainerSummary({
-      ...defaultArgs,
-      cycle: threeMonthCycle,
-      rolloverEnabled: true,
-      monthBillableMinutes: new Map([["2026-04", 1200]]),
-      entries: [entry({ durationMinutes: 1200, isBillable: true })],
-    });
-    expect(result.overage?.overBudgetMinutes).toBe(0);
   });
 });
 

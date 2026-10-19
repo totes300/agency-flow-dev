@@ -283,8 +283,6 @@ export const remove = mutation({
     const client = await ctx.db.get(args.id);
     if (!client || client.orgId !== orgId) throw new ConvexError("Client not found");
 
-    // TODO Phase 7: block if time entries exist on any project of this client
-
     // Explicit `orgId` filter on the projects query (defense-in-depth per
     // CLAUDE.md "no exceptions"). The by_clientId index narrows to the
     // client, and the client was already org-checked above, but the filter
@@ -307,6 +305,46 @@ export const remove = mutation({
       if (existingInvoice) {
         throw new ConvexError(
           "Cannot delete this client — invoices exist on one or more of its projects. Delete those invoices first.",
+        );
+      }
+    }
+
+    // Block on logged time and running timers across ALL of this client's
+    // projects (same two guards as `projects.remove`). Deleting the client
+    // cascades away its projects; without these guards the tasks/entries under
+    // them would be orphaned from every project-scoped billing surface, and a
+    // running timer would dangle — its stop silently discards the measured
+    // hours. Delete is destructive, so we block rather than auto-save (entry
+    // creation is exactly what the entries guard forbids); archive the client
+    // to rescue timers instead.
+    const clientTaskIds = new Set<string>();
+    for (const project of projects) {
+      const projectTasks = await ctx.db
+        .query("tasks")
+        .withIndex("by_orgId_projectId", (q) => q.eq("orgId", orgId).eq("projectId", project._id))
+        .collect();
+      for (const task of projectTasks) clientTaskIds.add(task._id.toString());
+      const hasEntries = await ctx.db
+        .query("timeEntries")
+        .withIndex("by_orgId_projectId_closeId", (q) => q.eq("orgId", orgId).eq("projectId", project._id))
+        .first();
+      if (hasEntries) {
+        throw new ConvexError(
+          "Cannot delete a client with time entries on its projects — archive it instead",
+        );
+      }
+    }
+
+    const clientMembers = await ctx.db
+      .query("orgMembers")
+      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+      .collect();
+    for (const member of clientMembers) {
+      if (!member.userId) continue;
+      const memberUser = await ctx.db.get(member.userId);
+      if (memberUser?.timerTaskId && clientTaskIds.has(memberUser.timerTaskId.toString())) {
+        throw new ConvexError(
+          `${memberUser.name} has a running timer on one of this client's projects — it must be stopped or discarded first.`,
         );
       }
     }

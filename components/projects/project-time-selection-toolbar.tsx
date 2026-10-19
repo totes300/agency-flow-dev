@@ -10,7 +10,7 @@ import { Separator } from "@/components/ui/separator"
 import { toast } from "sonner"
 import { toastError } from "@/lib/toast-helpers"
 import { formatCurrency, formatMinutes } from "@/lib/format"
-import { BanIcon, DollarSignIcon, LoaderIcon, PlusIcon, XIcon } from "lucide-react"
+import { BanIcon, DollarSignIcon, LoaderIcon, ReceiptIcon, XIcon } from "lucide-react"
 import type { TimeEntryRow } from "@/components/projects/project-time-table"
 
 /**
@@ -30,10 +30,10 @@ export function ProjectTimeSelectionToolbar({
   currency: string
   onDeselectAll: () => void
   /**
-   * Generates a draft invoice from the selected time entries via
-   * `useGenerateInvoice` (the parent owns the hook). Receives the ids to
-   * invoice and how many of the selected rows were skipped (non-billable /
-   * already invoiced) so the parent can show "N of M".
+   * Routes the admin to the Billing → Close queue to review the period before
+   * invoicing (PRD slice 08 — no one-click draft from an arbitrary selection;
+   * scope rule I2 governs which entries bill). Receives the billable-open ids
+   * and how many selected rows were skipped, kept for the parent's discretion.
    */
   onCreateInvoice: (ids: Id<"timeEntries">[], skipped: number) => void
 }) {
@@ -44,20 +44,16 @@ export function ProjectTimeSelectionToolbar({
 
   const count = selectedEntries.length
   const totalMinutes = selectedEntries.reduce((sum, e) => sum + e.durationMinutes, 0)
-  const totalAmount = selectedEntries.reduce(
-    (sum, e) => sum + (e.durationMinutes / 60) * e.billableRate,
-    0,
-  )
+  const totalAmount = selectedEntries.reduce((sum, e) => sum + e.amount, 0)
 
   // Bulk button visibility: only show when there's something to flip, and
-  // skip locked rows (backend blocks both axes: `invoiceId` and `settledAt`).
-  // UI filters for consistency so the count badge never promises an action
-  // the backend will reject.
+  // skip close-locked rows (the backend rejects them). UI filters for
+  // consistency so the count badge never promises a rejected action.
   const flippableToBillable = selectedEntries.filter(
-    (e) => !e.isBillable && e.invoiceId === undefined && e.settledAt === undefined,
+    (e) => !e.isBillable && e.closeStatus === undefined,
   )
   const flippableToNonBillable = selectedEntries.filter(
-    (e) => e.isBillable && e.invoiceId === undefined && e.settledAt === undefined,
+    (e) => e.isBillable && e.closeStatus === undefined,
   )
 
   async function runBulk(
@@ -93,10 +89,7 @@ export function ProjectTimeSelectionToolbar({
   function handleCreate() {
     if (count === 0) return
     const billableOpen = selectedEntries
-      .filter(
-        (e) =>
-          e.isBillable && e.invoiceId === undefined && e.settledAt === undefined,
-      )
+      .filter((e) => e.isBillable && e.closeStatus === undefined)
       .map((e) => e._id as Id<"timeEntries">)
     if (billableOpen.length === 0) {
       toast.error("Selection has no open billable entries.")
@@ -172,8 +165,8 @@ export function ProjectTimeSelectionToolbar({
             )}
 
             <Button size="sm" onClick={handleCreate} className="ml-1">
-              <PlusIcon data-icon="inline-start" className="size-3.5" />
-              Create Invoice
+              <ReceiptIcon data-icon="inline-start" className="size-3.5" />
+              Review to invoice
             </Button>
           </div>
         </motion.div>

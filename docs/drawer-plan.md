@@ -1,5 +1,9 @@
 # Task Detail Drawer — Implementation Plan
 
+> **Historical.** Superseded by `docs/prd-tasks-refactor.md` (tasks refactor, 2026-10-18,
+> completed in slice 7b). Kept for context only; where they differ, the refactor PRD and
+> the code win.
+
 ## 1. Goal
 
 Replace the current fullscreen modal task detail with a **Bonsai-style side drawer** that slides in from the right, keeping the task list visible and interactive on the left. The user can toggle between "modal" and "drawer" views — persisted as a per-user preference.

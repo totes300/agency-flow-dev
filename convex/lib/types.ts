@@ -1,21 +1,20 @@
+import type { EntryCloseStatus } from "./entryStatus";
 import type { Doc } from "../_generated/dataModel";
-import type { SettledReason } from "./settleEntries";
 
 /**
- * Phase 8 — the four settlement fields that ride along with a time entry
- * from the listProjectEntries Row, through the project Time-tab table,
- * into the entry-edit modal. Defined once here so adding a field (or
- * tightening a type) propagates without three coordinated edits.
- *
- * `undefined` not `null` — matches Convex's `v.optional` storage shape so
- * a row with no settlement reads `{ settledAt: undefined, ... }` without
- * a per-field nullish coalesce.
+ * What a ledger row knows about the live close settling its entry
+ * (docs/prd-billing-refactor.md §5). Rides along from `listProjectEntries`
+ * and the Close workspace through the Time-tab table into the edit modal and
+ * tooltips. All unset = the entry is open.
  */
-export type EntrySettlementSnapshot = {
-  settledAt: number | undefined;
-  settledReason: SettledReason | undefined;
-  settledPeriodStart: string | undefined;
-  settledPeriodEnd: string | undefined;
+export type EntryCloseSnapshot = {
+  closeStatus?: EntryCloseStatus;
+  closeKind?: "retainer" | "t_and_m";
+  /** The close's period (YYYY-MM-DD bounds). */
+  closePeriodStart?: string;
+  closePeriodEnd?: string;
+  /** When the close was committed (epoch ms). */
+  closedAt?: number;
 };
 
 /**

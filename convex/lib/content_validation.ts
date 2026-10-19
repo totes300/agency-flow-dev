@@ -67,49 +67,6 @@ export function getBlockedMimeTypes(): ReadonlySet<string> {
   return BLOCKED_MIME_TYPES;
 }
 
-// ─── Count adjustment (pure logic) ─────────────────────────────────────────────
-
-type StatusType = "backlog" | "in_progress" | "review" | "blocked" | "done";
-
-export type CountRecord = Record<StatusType, number>;
-
-/**
- * Apply count deltas to an existing count record, clamping negative values to 0.
- * Returns a new record (does not mutate input) and a list of drift warnings.
- */
-export function applyCountChanges(
-  existing: CountRecord,
-  changes: Partial<Record<StatusType, number>>,
-): { result: CountRecord; drifts: string[] } {
-  const result = { ...existing };
-  const drifts: string[] = [];
-
-  for (const [type, delta] of Object.entries(changes) as [StatusType, number][]) {
-    if (!delta) continue;
-    const current = result[type] ?? 0;
-    const newVal = current + delta;
-    if (newVal < 0) {
-      drifts.push(`${type} would be ${newVal}, clamped to 0`);
-    }
-    result[type] = Math.max(0, newVal);
-  }
-
-  return { result, drifts };
-}
-
-/**
- * Build an initial count record from a set of changes (for first task in org).
- */
-export function buildInitialCounts(
-  changes: Partial<Record<StatusType, number>>,
-): CountRecord {
-  const counts: CountRecord = { backlog: 0, in_progress: 0, review: 0, blocked: 0, done: 0 };
-  for (const [type, delta] of Object.entries(changes) as [StatusType, number][]) {
-    if (delta) counts[type] = Math.max(0, delta);
-  }
-  return counts;
-}
-
 // ─── Plain text extraction from Tiptap JSON ─────────────────────────────────────
 
 // Re-export from the shared pure utility so existing imports keep working

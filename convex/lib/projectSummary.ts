@@ -20,12 +20,8 @@
 export type EntryInput = {
   durationMinutes: number;
   isBillable: boolean;
-  invoiceId: string | null;
-  // Phase 8 — settlement axis (independent of invoice linkage). An entry
-  // is "billed" for summary purposes when either field is set: invoiced
-  // covers T&M/Fixed/overage, settledAt covers retainer within-budget
-  // close (Slice 3) and Fixed coverage (Slice 1).
-  settledAt?: number | null;
+  /** In a live close (billing refactor): billed or covered, no longer open. */
+  closed: boolean;
   costRate: number;
   billableRate: number;
   date: string; // YYYY-MM-DD
@@ -194,13 +190,7 @@ export function computeTmSummary(args: {
     if (e.isBillable) {
       billableMinutes += e.durationMinutes;
       const amount = (e.durationMinutes / 60) * e.billableRate;
-      // Phase 8 — "billed" for T&M summary purposes means either
-      // invoice-anchored OR settled (period-closed). A retainer-included
-      // hour is no longer "unbilled" — it's covered by the monthly fee.
-      const isBilled =
-        (e.invoiceId !== undefined && e.invoiceId !== null) ||
-        (e.settledAt !== undefined && e.settledAt !== null);
-      if (isBilled) {
+      if (e.closed) {
         billedMinutes += e.durationMinutes;
         billedAmount += amount;
       } else {
@@ -385,38 +375,26 @@ export function computeFixedSummary(args: {
 /**
  * Compute Retainer project summary (per selected cycle).
  *
- * Formulas (per PRD §4):
- *   cycleBudgetMinutes: includedMinutesPerMonth × cycleLength.
- *   Time breakdown: entries where date ∈ [cycle.start, cycle.end], split by billable.
- *   Over budget: max(0, billableMinutes − cycleBudgetMinutes).
- *   Overage due: overBudgetMinutes/60 × overageRate (live, regardless of cycle state).
+ * Formulas (per PRD §4; budget and overage come from the balance ladder,
+ * docs/prd-billing-refactor.md §8.3 — this layer never pools minutes):
+ *   cycleBudgetMinutes: Σ included minutes of the cycle's ladder months.
+ *   Time breakdown: the cycle's report-month entries, split by billable.
+ *   Overage: the priced overage of the cycle's periods (caller-selected).
  *   Earned Cycle Revenue: monthlyFee × cycleLength + overageDue.
  *   Total Cost: sum(all cycle-range entries × costRate).
  */
 export function computeRetainerSummary(args: {
   entries: EntryInput[];
   monthlyFee: number;
-  overageRate: number;
-  includedMinutesPerMonth: number;
+  cycleBudgetMinutes: number;
+  /** Overage minutes and their price (display units), from `priceScope`. */
+  overage: { minutes: number; amount: number };
   cycle: RetainerCycleContext;
-  /**
-   * Overage unit: rollover pools the whole cycle; non-rollover settles
-   * per month, so its overage is the SUM of monthly excesses (idle months
-   * don't absorb another month's overrun).
-   */
-  rolloverEnabled: boolean;
-  /**
-   * Billable minutes per YYYY-MM within the cycle (non-rollover math).
-   * Caller passes ENDED months only — an in-progress month has no overage
-   * due yet (matches getRetainerData's `periodEnded` gate and the inbox).
-   */
-  monthBillableMinutes?: ReadonlyMap<string, number>;
   currency: string;
   subtitle: string;
   isAdmin: boolean;
 }): RetainerSummary {
-  const cycleBudgetMinutes =
-    args.includedMinutesPerMonth * args.cycle.length;
+  const { cycleBudgetMinutes } = args;
 
   let totalMinutes = 0;
   let billableMinutes = 0;
@@ -430,21 +408,8 @@ export function computeRetainerSummary(args: {
     else nonBillableMinutes += e.durationMinutes;
   }
 
-  // Rollover: pooled cycle budget. Non-rollover: overage is per-month —
-  // month 1 running 10h over is billable even if months 2–3 sit idle.
-  // (Previously the pooled formula was applied to both, so the Summary
-  // card showed 0 overage while the Monthly Breakdown and billing inbox
-  // correctly demanded an invoice.)
-  let overBudgetMinutes: number;
-  if (args.rolloverEnabled || !args.monthBillableMinutes) {
-    overBudgetMinutes = Math.max(0, billableMinutes - cycleBudgetMinutes);
-  } else {
-    overBudgetMinutes = 0;
-    for (const worked of args.monthBillableMinutes.values()) {
-      overBudgetMinutes += Math.max(0, worked - args.includedMinutesPerMonth);
-    }
-  }
-  const overageDueAmount = (overBudgetMinutes / 60) * args.overageRate;
+  const overBudgetMinutes = args.overage.minutes;
+  const overageDueAmount = args.overage.amount;
   const earnedCycleRevenue =
     args.monthlyFee * args.cycle.length + overageDueAmount;
 

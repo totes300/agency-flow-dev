@@ -26,10 +26,43 @@ export async function getProjectCurrency(
 }
 
 /**
+ * Billing category for a new time entry — the single source for both the
+ * rate lookup and the stored snapshotCategoryId. Chain (locked decision):
+ * explicit selection ?? entry OWNER's default ?? task category.
+ * `explicit` must already be org-validated by the caller when provided.
+ */
+export async function resolveEntryCategory(
+  ctx: QueryCtx | MutationCtx,
+  args: {
+    ownerUserId: Id<"users">;
+    orgId: string;
+    task: Doc<"tasks">;
+    explicit?: Id<"workCategories">;
+  },
+): Promise<Id<"workCategories"> | undefined> {
+  if (args.explicit) return args.explicit;
+  const member = await ctx.db
+    .query("orgMembers")
+    .withIndex("by_userId", (q) => q.eq("userId", args.ownerUserId))
+    .filter((q) => q.eq(q.field("orgId"), args.orgId))
+    .first();
+  if (member?.defaultWorkCategoryId) {
+    // Defensive: default may point at a deleted/foreign category.
+    const cat = await ctx.db.get(member.defaultWorkCategoryId);
+    if (cat && cat.orgId === args.orgId) return member.defaultWorkCategoryId;
+  }
+  return args.task.workCategoryId;
+}
+
+/**
  * Resolve a rate snapshot for a time entry.
  *
  * Looks up: userRates for costRate, projectRateOverrides → categoryRates for billableRate.
  * Throws ConvexError with a user-friendly message if a required rate is missing.
+ *
+ * The billing category is supplied by the caller (resolved via
+ * resolveEntryCategory), not read from the task — the entry's category, not
+ * the to-do item's, decides the billable rate.
  *
  * Read-only — accepts QueryCtx so a timer-start preview can call it before
  * any write happens.
@@ -39,12 +72,12 @@ export async function resolveRateSnapshot(
   args: {
     userId: Id<"users">;
     orgId: string;
-    task: Doc<"tasks">;
+    workCategoryId: Id<"workCategories"> | undefined;
     project: Doc<"projects">;
     isBillable: boolean;
   },
 ): Promise<RateSnapshot> {
-  const { userId, orgId, task, project, isBillable } = args;
+  const { userId, orgId, workCategoryId, project, isBillable } = args;
 
   // 1. Get currency from client
   const currency = await getProjectCurrency(ctx, project);
@@ -69,15 +102,15 @@ export async function resolveRateSnapshot(
       // Retainer revenue is cycle-level (monthlyFee + overageDue), not entry-level.
       // Overage is computed from cycle balance in getRetainerData, not per-entry.
       resolvedBillableRate = 0;
-    } else if (!task.workCategoryId) {
+    } else if (!workCategoryId) {
       // T&M / Fixed without category — can't resolve billable rate
-      billableRateError = "Set a category on this task before logging billable time";
+      billableRateError = "Choose a work category before logging billable time";
     } else {
       // T&M / Fixed: project override → category default
       const override = await ctx.db
         .query("projectRateOverrides")
         .withIndex("by_projectId_workCategoryId", (q) =>
-          q.eq("projectId", project._id).eq("workCategoryId", task.workCategoryId!)
+          q.eq("projectId", project._id).eq("workCategoryId", workCategoryId)
         )
         .unique();
 
@@ -87,7 +120,7 @@ export async function resolveRateSnapshot(
         const catRate = await ctx.db
           .query("categoryRates")
           .withIndex("by_orgId_workCategoryId_currency", (q) =>
-            q.eq("orgId", orgId).eq("workCategoryId", task.workCategoryId!).eq("currency", currency)
+            q.eq("orgId", orgId).eq("workCategoryId", workCategoryId).eq("currency", currency)
           )
           .unique();
         resolvedBillableRate = catRate?.defaultBillRate ?? null;

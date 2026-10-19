@@ -132,18 +132,21 @@ export function InvoiceRowActions({
   invoiceId,
   identifier,
   status,
+  closeId,
 }: {
   invoiceId: Id<"invoices">
   /** Friendly URL identifier (e.g. "INV-035") for navigation. */
   identifier: string
   status: InvoiceStatus
+  /** The invoice's close — its worksheet. Absent on fixed-fee invoices. */
+  closeId: Id<"billingCloses"> | undefined
 }) {
   const changeStatus = useMutation(api.invoices.changeInvoiceStatus)
   const deleteInvoice = useMutation(api.invoices.deleteInvoice)
-  // Phase 9 Slice 4 — worksheet companion. Available for draft / invoiced /
-  // paid (every status with line items); skipped for `void` because the
-  // component short-circuits to null below before the menu renders.
-  const exportInvoice = useAction(api.worksheets.exportInvoice)
+  // Worksheet companion: the invoice's close snapshot. Draft / invoiced /
+  // paid only (a void invoice's close is released); fixed-fee invoices have
+  // no close and no worksheet.
+  const exportClose = useAction(api.worksheets.exportClose)
   const [open, setOpen] = useState(false)
   const [confirmAction, setConfirmAction] = useState<"delete" | null>(null)
 
@@ -151,7 +154,7 @@ export function InvoiceRowActions({
   const secondary = SECONDARY_ACTIONS[status]
 
   if (!primary && secondary.length === 0) return null
-  const showWorksheet = status !== "void"
+  const showWorksheet = status !== "void" && closeId !== undefined
 
   async function run(target: InvoiceStatus) {
     try {
@@ -237,7 +240,7 @@ export function InvoiceRowActions({
                     icon={
                       <FileSpreadsheetIcon className="size-3.5" aria-hidden />
                     }
-                    run={() => exportInvoice({ invoiceId })}
+                    run={() => exportClose({ closeId: closeId! })}
                   />
                 )}
                 {showWorksheet && regularActions.length > 0 && (

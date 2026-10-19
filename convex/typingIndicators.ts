@@ -1,7 +1,8 @@
-import { v, ConvexError } from "convex/values";
+import { v } from "convex/values";
 import { query, mutation, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { getAuthContext } from "./lib/auth";
+import { loadTaskForReadOrNull, loadTaskForWrite } from "./tasks/access";
 
 // ─── Mutations ───────────────────────────────────────────────────────────────
 
@@ -12,13 +13,8 @@ import { getAuthContext } from "./lib/auth";
 export const setTyping = mutation({
   args: { taskId: v.id("tasks") },
   handler: async (ctx, { taskId }) => {
-    const { userId, orgId } = await getAuthContext(ctx);
-
-    // Verify task exists and belongs to org
-    const task = await ctx.db.get(taskId);
-    if (!task || task.orgId !== orgId) {
-      throw new ConvexError("Task not found");
-    }
+    // Org + task access (tasks/access.ts)
+    const { userId, orgId } = (await loadTaskForWrite(ctx, taskId)).auth;
 
     const now = Date.now();
 
@@ -113,11 +109,9 @@ export const autoClear = internalMutation({
 export const getTyping = query({
   args: { taskId: v.id("tasks") },
   handler: async (ctx, { taskId }) => {
-    const { orgId, userId } = await getAuthContext(ctx);
-
-    // Verify task belongs to org
-    const task = await ctx.db.get(taskId);
-    if (!task || task.orgId !== orgId) return [];
+    const access = await loadTaskForReadOrNull(ctx, taskId);
+    if (!access) return [];
+    const { userId } = access.auth;
 
     const records = await ctx.db
       .query("typingIndicators")

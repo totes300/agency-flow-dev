@@ -30,8 +30,10 @@ export function InboxSidebar() {
       inert={!inboxOpen}
       aria-hidden={!inboxOpen}
       className={cn(
-        "sticky top-0 hidden h-svh shrink-0 overflow-hidden bg-background transition-[width] duration-200 ease-linear md:block",
-        inboxOpen ? "w-(--inbox-sidebar-width) border-r" : "w-0"
+        // U1 shell: on the grey canvas the open inbox is its own inset panel
+        // next to the page panel.
+        "sticky top-2 my-2 hidden h-[calc(100svh-1rem)] shrink-0 overflow-hidden rounded-xl bg-background transition-[width,margin] duration-200 ease-linear md:block",
+        inboxOpen ? "mr-2 w-(--inbox-sidebar-width) ring-1 ring-sidebar-border" : "w-0"
       )}
       style={{ "--inbox-sidebar-width": INBOX_SIDEBAR_WIDTH } as React.CSSProperties}
     >

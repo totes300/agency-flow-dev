@@ -34,6 +34,7 @@ function row(over: Partial<TimeEntryRow>): TimeEntryRow {
     isBillable: true,
     billableRate: 100,
     costRate: 50,
+    amount: 100,
     workCategoryId: undefined,
     workCategoryName: undefined,
     workCategoryColor: undefined,
@@ -42,10 +43,6 @@ function row(over: Partial<TimeEntryRow>): TimeEntryRow {
     invoiceNumber: undefined,
     invoiceStatus: undefined,
     invoiceDueDate: undefined,
-    settledAt: undefined,
-    settledReason: undefined,
-    settledPeriodStart: undefined,
-    settledPeriodEnd: undefined,
     ...over,
   }
 }
@@ -55,11 +52,7 @@ describe("ProjectTimeStats — Open figure", () => {
     // 1h open + 2h closed + 1h non-billable → Open = 1h.
     const entries: TimeEntryRow[] = [
       row({ durationMinutes: 60 }), // open
-      row({
-        durationMinutes: 120,
-        settledAt: 1,
-        settledReason: "retainer_included",
-      }), // closed
+      row({ durationMinutes: 120, closeStatus: "final", closeKind: "retainer" }), // closed
       row({ durationMinutes: 60, isBillable: false }), // non-billable
     ]
     const { getByText, getAllByText } = render(
@@ -90,12 +83,9 @@ describe("ProjectTimeStats — Open figure", () => {
         invoicePrefix: "INV-",
         invoiceNumber: 1,
         invoiceStatus: "draft",
+        closeStatus: "draft",
       }), // draft
-      row({
-        durationMinutes: 60,
-        settledAt: 1,
-        settledReason: "invoiced",
-      }), // closed
+      row({ durationMinutes: 60, closeStatus: "final", closeKind: "t_and_m" }), // closed
     ]
     const { getAllByText } = render(
       <ProjectTimeStats
@@ -115,7 +105,7 @@ describe("ProjectTimeStats — Open figure", () => {
     // T&M billers care about the revenue side — same `Open` bucket,
     // expressed as both hours and money.
     const entries: TimeEntryRow[] = [
-      row({ durationMinutes: 60, billableRate: 200 }), // open, $200 worth
+      row({ durationMinutes: 60, billableRate: 200, amount: 200 }), // open, $200 worth
     ]
     const { getByText } = render(
       <ProjectTimeStats

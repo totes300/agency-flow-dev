@@ -1,5 +1,10 @@
 # PRD: Invoicing Refactor — One Document Per Period
 
+> **Historical (superseded 2026-10-17).** The data model and write paths described
+> here were replaced by the close model in `docs/prd-billing-refactor.md`, and the
+> code this document refers to has been deleted (billing refactor slice 5). Read it
+> for business intent only; `docs/prd-billing-refactor.md` is the source of truth.
+
 > **One-liner**: One document per closed period. Overage > $0 → **invoice** (numbered, lifecycle, pay this). Overage = $0 → **monthly report** (no number, no lifecycle, FYI). Monthly retainer fee is **Stripe** — never billed here. Never two documents for the same period.
 >
 > **Status**: Spec finalized 2026-05-02 after grilling session. Replaces previous statement-first draft.

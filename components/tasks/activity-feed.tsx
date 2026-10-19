@@ -460,6 +460,12 @@ function CommentsView({
     return { hasLaneAbove, hasLaneBelow }
   }, [groupedFeed, newDividerAt, currentUserId])
 
+  // "N new since your last visit" (U4): comments by others after the frozen watermark.
+  const newCount = useMemo(() => {
+    if (newDividerAt === null || newDividerAt <= 0) return 0
+    return feed.filter((item) => item.kind === "comment" && item.createdAt > newDividerAt && item.userId !== currentUserId).length
+  }, [feed, newDividerAt, currentUserId])
+
   const lastGroupedCommentIndex = groupedFeed.findLastIndex((item) => item.kind === "comment")
   let newDividerRendered = false
   let lastDayLabel = ""
@@ -483,7 +489,7 @@ function CommentsView({
       item.createdAt > newDividerAt &&
       item.userId !== currentUserId
     ) {
-      rendered.push(<NewDivider key="new-divider" fading={dividerFading} onFaded={onDividerFaded} />)
+      rendered.push(<NewDivider key="new-divider" count={newCount} fading={dividerFading} onFaded={onDividerFaded} />)
       newDividerRendered = true
     }
 
@@ -576,7 +582,7 @@ function DayDivider({ label }: { label: string }) {
 
 // ─── New divider ────────────────────────────────────────────────────────────────
 
-function NewDivider({ fading, onFaded }: { fading: boolean; onFaded: () => void }) {
+function NewDivider({ count, fading, onFaded }: { count: number; fading: boolean; onFaded: () => void }) {
   return (
     <div
       className={cn(
@@ -588,7 +594,9 @@ function NewDivider({ fading, onFaded }: { fading: boolean; onFaded: () => void 
       }}
     >
       <div className="h-px flex-1 bg-destructive/50" />
-      <span className="text-[9px] font-medium text-destructive/70">New</span>
+      <span className="text-xs font-medium text-destructive">
+        {count} new since your last visit
+      </span>
       <div className="h-px flex-1 bg-destructive/50" />
     </div>
   )

@@ -1,4 +1,4 @@
-import type { StatusType, CategoryColor } from "@/convex/lib/constants"
+import type { CategoryColor } from "@/convex/lib/constants"
 
 // ─── Shared display constants (used by onboarding + settings) ─────────────────
 
@@ -44,10 +44,3 @@ export const ROUNDING_LABELS: Record<number, string> = {
   30: "30 minutes (1/2 hour)",
 }
 
-export const TYPE_LABELS: Record<StatusType, string> = {
-  backlog: "Backlog",
-  in_progress: "In Progress",
-  review: "Review",
-  blocked: "Blocked",
-  done: "Done",
-}

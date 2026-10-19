@@ -25,13 +25,12 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { internalQuery, type QueryCtx } from "./_generated/server";
 import { requireAdmin } from "./lib/auth";
 import { getOrgSettings } from "./lib/orgHelpers";
+import { getProjectEntries } from "./lib/projectEntries";
+import { closeSnapshotEntries } from "./lib/billing/closeData";
 import { ORG_TIMEZONE_FALLBACK } from "./lib/timer";
-import { getCyclePeriods } from "./lib/retainerCycle";
-import {
-  buildRetainerUsageRows,
-  monthName,
-  type YearMonth,
-} from "./lib/retainerUsage";
+import { monthLabel } from "./lib/billing/labels";
+import { isClosedCategory } from "./tasks/model";
+import { priceClose } from "./lib/billing/periodView";
 import { CSV_BOM, joinCsvRow, joinCsvRows } from "../lib/csv";
 import { extractPlainText } from "../lib/tiptap-utils";
 
@@ -55,25 +54,28 @@ function slugify(name: string): string {
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-/** Discriminated scope for `collectWorksheetData`. */
+/**
+ * Discriminated scope for `collectWorksheetData` (D10: two exports).
+ *   - `period`: entries dated in [start, end], with optional filters — the
+ *     ad-hoc range export (and the agent timesheet collector).
+ *   - `close`: exactly the entries a close committed — its frozen snapshot
+ *     (carried-in work included, skipped-out work excluded), so the worksheet
+ *     agrees with the report and the invoice (N8). `monthKey` narrows it to
+ *     one report month of a cycle close.
+ */
 export type WorksheetScope =
   | {
       kind: "period";
       projectId: Id<"projects">;
       periodStart: string;
       periodEnd: string;
-      /** Active filters, optional — only set by the ad-hoc trigger. */
+      /** Active filters, optional — only set by the range export. */
       filters?: {
         categoryIds?: Id<"workCategories">[];
         billable?: "all" | "billable" | "nonBillable";
       };
     }
-  | {
-      kind: "cycle";
-      projectId: Id<"projects">;
-      cycleStart: string; // first month's `YYYY-MM-01`
-    }
-  | { kind: "invoice"; invoiceId: Id<"invoices"> };
+  | { kind: "close"; closeId: Id<"billingCloses">; monthKey?: string };
 
 /** Row shape passed from `collectWorksheetData` to the CSV builders. */
 export type WorksheetTaskRow = {
@@ -100,7 +102,10 @@ export type WorksheetAiInput = {
   subtasks: Array<{ title: string; done: boolean }>;
   /** Comments flattened by `createdAt`, text only (Tiptap → text). */
   commentTexts: string[];
-  /** Notes from the entries IN scope only — same order as `entries`. */
+  /**
+   * Notes from every current time entry on the task, across its full
+   * lifecycle. Worksheet hours remain scoped separately on the row.
+   */
   entryNotes: Array<{ date: string; minutes: number; isBillable: boolean; note: string }>;
 };
 
@@ -121,15 +126,38 @@ export type WorksheetData = {
    */
   orgId: string;
   /**
-   * Invoice-scope only: identifier (`"INV-035"`) and period label
-   * (`"Apr 1 – Apr 30, 2026"` or `"May 2026"`) for use in the CSV header
-   * + filename. Always present when `scope.kind === "invoice"`.
+   * Close scope only: the period label ("May 2026" / "Mar – May 2026") and,
+   * when the close billed a numbered invoice, its identifier ("INV-035"),
+   * for the CSV header and filename.
    */
-  invoiceContext?: {
-    identifier: string;
+  closeContext?: {
+    periodStart: string;
+    periodEnd: string;
     scopeLabel: string;
+    invoiceIdentifier: string | null;
   };
 };
+
+/**
+ * Group repeated worksheet rows for one task into a single AI call. Full-cycle
+ * exports can render the same task in multiple month sections, but lifecycle
+ * evidence and its client-facing summary are task-level.
+ */
+export function groupWorksheetRowsByTaskId(
+  rows: WorksheetTaskRow[],
+): Array<{ row: WorksheetTaskRow; occurrenceCount: number }> {
+  const grouped = new Map<
+    string,
+    { row: WorksheetTaskRow; occurrenceCount: number }
+  >();
+  for (const row of rows) {
+    const key = row.taskId as unknown as string;
+    const existing = grouped.get(key);
+    if (existing) existing.occurrenceCount++;
+    else grouped.set(key, { row, occurrenceCount: 1 });
+  }
+  return [...grouped.values()];
+}
 
 // ─── Internal query ─────────────────────────────────────────────────────────
 
@@ -142,10 +170,8 @@ export type WorksheetData = {
  *   - `cycle`: caller will iterate this internalQuery once per month and
  *     concat — Slice 3 wires that path. We expose `period` here so the
  *     cycle export reuses the same code by calling N times.
- *   - `invoice`: the canonical entry set is the union of
- *     `invoiceLineItems.timeEntryIds`, not entries with `invoiceId === X`
- *     (see schema.ts:379 — data drift is treated as a bug, not silently
- *     "healed").
+ *   - `invoice`: the entry set is the invoice's close snapshot
+ *     (`billingCloseEntries`); a fixed-fee invoice has none.
  */
 export const collectWorksheetData = internalQuery({
   args: {
@@ -169,70 +195,85 @@ export const collectWorksheetData = internalQuery({
         ),
       }),
       v.object({
-        kind: v.literal("cycle"),
-        projectId: v.id("projects"),
-        cycleStart: v.string(),
+        kind: v.literal("close"),
+        closeId: v.id("billingCloses"),
+        monthKey: v.optional(v.string()),
       }),
-      v.object({ kind: v.literal("invoice"), invoiceId: v.id("invoices") }),
     ),
   },
   handler: async (ctx, args): Promise<WorksheetData> => {
     const authCtx = await requireAdmin(ctx);
-
-    // Resolve project + scope-specific entries.
-    const { project, entries } = await resolveScopeEntries(ctx, args.scope, authCtx.orgId);
-
-    const client = await ctx.db.get(project.clientId);
-    if (!client || client.orgId !== authCtx.orgId) {
-      // Project's client is in another org → reject so the export can't leak
-      // cross-tenant data. Defensive — `project.orgId === orgId` is already
-      // checked, and `client.currency` is immutable, but a stale fixture
-      // could in theory survive. Belt-and-braces.
-      throw new ConvexError("Client not found for project");
-    }
-
-    const rows = await buildTaskRows(ctx, project, entries, authCtx.orgId);
-    const orgSettings = await getOrgSettings(ctx, authCtx.orgId);
-
-    // Invoice-scope: surface the invoice's identifier + a human-readable
-    // scope label so the action doesn't need a second query to format the
-    // CSV header line. Looking it up here keeps the action stateless and
-    // colocates the auth-guarded data on the internal-query boundary.
-    let invoiceContext: WorksheetData["invoiceContext"] = undefined;
-    if (args.scope.kind === "invoice") {
-      const inv = await ctx.db.get(args.scope.invoiceId);
-      if (inv && inv.orgId === authCtx.orgId) {
-        invoiceContext = {
-          identifier: `${inv.prefix}${String(inv.number).padStart(3, "0")}`,
-          scopeLabel: formatInvoiceScopeLabel(inv.periodStart, inv.periodEnd),
-        };
-      }
-    }
-
-    return {
-      client: { name: client.name, currency: client.currency },
-      project: { name: project.name, code: project.code, billingType: project.billingType },
-      scope: args.scope,
-      rows,
-      slugs: { client: slugify(client.name), project: slugify(project.name) },
-      timezone: orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK,
-      orgId: authCtx.orgId,
-      invoiceContext,
-    };
+    return collectScopeData(ctx, args.scope, authCtx.orgId);
   },
 });
 
+/** Shared body of the single-scope collectors. Auth stays with the caller. */
+async function collectScopeData(
+  ctx: QueryCtx,
+  scope: WorksheetScope,
+  orgId: string,
+): Promise<WorksheetData> {
+  const { project, entries } = await resolveScopeEntries(ctx, scope, orgId);
+
+  const client = await ctx.db.get(project.clientId);
+  if (!client || client.orgId !== orgId) {
+    // Project's client is in another org → reject so the export can't leak
+    // cross-tenant data. Defensive — `project.orgId === orgId` is already
+    // checked. Belt-and-braces.
+    throw new ConvexError("Client not found for project");
+  }
+
+  const rows = await buildTaskRows(ctx, project, entries, orgId);
+  const orgSettings = await getOrgSettings(ctx, orgId);
+  const closeContext =
+    scope.kind === "close" ? await loadCloseLabel(ctx, scope.closeId, orgId) : undefined;
+
+  return {
+    client: { name: client.name, currency: client.currency },
+    project: { name: project.name, code: project.code, billingType: project.billingType },
+    scope,
+    rows,
+    slugs: { client: slugify(client.name), project: slugify(project.name) },
+    timezone: orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK,
+    orgId,
+    closeContext,
+  };
+}
+
+/** A close the caller's org owns (live or released — released closes keep their snapshot). */
+async function loadClose(
+  ctx: QueryCtx,
+  closeId: Id<"billingCloses">,
+  orgId: string,
+): Promise<Doc<"billingCloses">> {
+  const close = await ctx.db.get(closeId);
+  if (!close || close.orgId !== orgId) throw new ConvexError("Close not found");
+  return close;
+}
+
+async function loadCloseLabel(
+  ctx: QueryCtx,
+  closeId: Id<"billingCloses">,
+  orgId: string,
+): Promise<NonNullable<WorksheetData["closeContext"]>> {
+  const close = await loadClose(ctx, closeId, orgId);
+  const invoice = close.invoiceId ? await ctx.db.get(close.invoiceId) : null;
+  const numbered = invoice && invoice.orgId === orgId && invoice.number != null ? invoice : null;
+  return {
+    periodStart: close.periodStart,
+    periodEnd: close.periodEnd,
+    scopeLabel: formatPeriodScopeLabel(close.periodStart, close.periodEnd),
+    invoiceIdentifier: numbered
+      ? `${numbered.prefix}${String(numbered.number).padStart(3, "0")}`
+      : null,
+  };
+}
+
 /**
- * Human-readable scope label for an invoice. Single-month invoices read
- * "May 2026"; multi-month invoices read "Mar – May 2026". When the invoice
- * has no period set we fall back to a generic label so the CSV header
- * doesn't render as "Period: undefined".
+ * Human-readable label for a period: "May 2026" for one month, "Mar – May
+ * 2026" (or "Dec 2025 – Feb 2026") for a cycle.
  */
-function formatInvoiceScopeLabel(
-  periodStart: string | undefined,
-  periodEnd: string | undefined,
-): string {
-  if (!periodStart || !periodEnd) return "Invoice scope";
+function formatPeriodScopeLabel(periodStart: string, periodEnd: string): string {
   const startYM = periodStart.slice(0, 7);
   const endYM = periodEnd.slice(0, 7);
   if (startYM === endYM) {
@@ -251,107 +292,64 @@ function formatInvoiceScopeLabel(
 
 // ─── Scope resolution ───────────────────────────────────────────────────────
 
-async function resolveScopeEntries(
+// Exported for the agent timesheet collector (convex/timesheets.ts), which
+// loops a client's projects over the same per-project period logic in one
+// transaction. Auth stays with the CALLER — these helpers assume orgId was
+// already derived from an authenticated context.
+export async function resolveScopeEntries(
   ctx: QueryCtx,
   scope: WorksheetScope,
   orgId: string,
 ): Promise<{ project: Doc<"projects">; entries: Doc<"timeEntries">[] }> {
-  if (scope.kind === "invoice") {
-    const invoice = await ctx.db.get(scope.invoiceId);
-    if (!invoice || invoice.orgId !== orgId) {
-      throw new ConvexError("Invoice not found");
-    }
-    const project = await ctx.db.get(invoice.projectId);
+  if (scope.kind === "close") {
+    const close = await loadClose(ctx, scope.closeId, orgId);
+    const project = await ctx.db.get(close.projectId);
     if (!project || project.orgId !== orgId) {
-      throw new ConvexError("Project not found for invoice");
+      throw new ConvexError("Project not found for close");
     }
-    // Canonical entry set = union of timeEntryIds from invoice's line items.
-    const lineItems = await ctx.db
-      .query("invoiceLineItems")
-      .withIndex("by_invoiceId", (q) => q.eq("invoiceId", invoice._id))
-      .collect();
-    const seen = new Set<string>();
-    const entries: Doc<"timeEntries">[] = [];
-    for (const li of lineItems) {
-      if (li.orgId !== orgId) continue;
-      for (const entryId of li.timeEntryIds ?? []) {
-        if (seen.has(entryId)) continue;
-        seen.add(entryId);
-        const e = await ctx.db.get(entryId);
-        if (e && e.orgId === orgId) entries.push(e);
-      }
-    }
-    return { project, entries };
+    return {
+      project,
+      entries: await closeSnapshotEntries(ctx, orgId, close._id, scope.monthKey),
+    };
   }
 
-  // `period` and `cycle` both walk the project's task fan-out. Cycle uses
-  // its first month → last month range; the caller (Slice 3) calls this
-  // internalQuery per-month and concatenates, so the cycle branch here
-  // returns the union for the entire cycle in one go.
   const project = await ctx.db.get(scope.projectId);
   if (!project || project.orgId !== orgId) {
     throw new ConvexError("Project not found");
   }
+  const { periodStart, periodEnd } = scope;
 
-  let periodStart: string;
-  let periodEnd: string;
-  if (scope.kind === "period") {
-    periodStart = scope.periodStart;
-    periodEnd = scope.periodEnd;
-  } else {
-    // cycle — derive end from start + cycleLength months. Caller passes the
-    // first month's `YYYY-MM-01`; we walk N months and use the last day.
-    const cycleLength = project.cycleLength ?? 1;
-    const [y, m] = scope.cycleStart.split("-").map(Number);
-    const absoluteEnd = y * 12 + (m - 1) + (cycleLength - 1);
-    const endY = Math.floor(absoluteEnd / 12);
-    const endM = (absoluteEnd % 12) + 1;
-    const endLastDay = new Date(endY, endM, 0).getDate();
-    periodStart = scope.cycleStart;
-    periodEnd = `${endY}-${String(endM).padStart(2, "0")}-${String(endLastDay).padStart(2, "0")}`;
-  }
-
-  const filters = scope.kind === "period" ? scope.filters : undefined;
+  const filters = scope.filters;
   const allowedCategoryIds = filters?.categoryIds && filters.categoryIds.length > 0
     ? new Set<string>(filters.categoryIds.map((id) => id as unknown as string))
     : null;
   const billableFilter = filters?.billable ?? "all";
 
-  const tasks = await ctx.db
-    .query("tasks")
-    .withIndex("by_orgId_projectId", (q) =>
-      q.eq("orgId", orgId).eq("projectId", project._id),
-    )
-    .collect();
-
   const entries: Doc<"timeEntries">[] = [];
-  for (const task of tasks) {
-    // Category filter operates on the TASK (not the entry's snapshot) —
-    // matches the ClickUp-style "filter by task category" mental model
-    // and avoids excluding entries whose snapshot drifted after a category
-    // rename. The PRD §Ad-hoc range export Picker UI describes filters as
-    // task-level facets.
-    if (allowedCategoryIds && !(task.workCategoryId && allowedCategoryIds.has(task.workCategoryId as unknown as string))) {
+  for (const e of await getProjectEntries(ctx, orgId, project._id)) {
+    if (e.date < periodStart || e.date > periodEnd) continue;
+    // Category filter operates on the entry's SNAPSHOT category — the same
+    // attribution rule as the Monthly Report / invoice grouping
+    // (statements.ts `snapshotCategoryId`), so a category-filtered
+    // worksheet selects the same hours as the report's category bucket
+    // even after a task was re-categorized over existing history.
+    if (
+      allowedCategoryIds &&
+      !(e.snapshotCategoryId && allowedCategoryIds.has(e.snapshotCategoryId as unknown as string))
+    ) {
       continue;
     }
-    const taskEntries = await ctx.db
-      .query("timeEntries")
-      .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
-      .collect();
-    for (const e of taskEntries) {
-      if (e.orgId !== orgId) continue;
-      if (e.date < periodStart || e.date > periodEnd) continue;
-      if (billableFilter === "billable" && !e.isBillable) continue;
-      if (billableFilter === "nonBillable" && e.isBillable) continue;
-      entries.push(e);
-    }
+    if (billableFilter === "billable" && !e.isBillable) continue;
+    if (billableFilter === "nonBillable" && e.isBillable) continue;
+    entries.push(e);
   }
   return { project, entries };
 }
 
 // ─── Task-row aggregation ───────────────────────────────────────────────────
 
-async function buildTaskRows(
+// Exported for convex/timesheets.ts — see resolveScopeEntries note above.
+export async function buildTaskRows(
   ctx: QueryCtx,
   project: Doc<"projects">,
   entries: Doc<"timeEntries">[],
@@ -409,7 +407,7 @@ async function buildTaskRows(
       .collect();
     const subtasks = subtaskDocs
       .filter((s) => s.archivedAt === undefined)
-      .map((s) => ({ title: s.title, done: s.statusType === "done" }));
+      .map((s) => ({ title: s.title, done: s.statusCategory !== undefined && isClosedCategory(s.statusCategory) }));
 
     // Comments — flattened by createdAt (text only). `comments.content` is
     // already structured Tiptap; no JSON.parse needed (schema.ts:479).
@@ -435,10 +433,40 @@ async function buildTaskRows(
       }
     }
 
+    // Summary evidence intentionally has a wider scope than the worksheet's
+    // financial row. Hours, dates and entryCount above still come exclusively
+    // from `taskEntries` (the selected period / invoice entry set), while the
+    // AI receives every current non-empty time-entry note on this task. This
+    // lets a closing/invoice summary describe the task's full lifecycle
+    // without changing a single billing number.
+    const lifecycleEntries: Doc<"timeEntries">[] = [];
+    for await (const entry of ctx.db
+      .query("timeEntries")
+      .withIndex("by_taskId", (q) => q.eq("taskId", task._id))) {
+      if (entry.orgId === orgId) lifecycleEntries.push(entry);
+    }
+    lifecycleEntries.sort((a, b) =>
+      a.date < b.date ? -1 : a.date > b.date ? 1 : a.startedAt - b.startedAt,
+    );
+
+    // Category label from the in-scope entries' snapshot categories (deduped,
+    // date order) — the report/invoice attribution rule. A task whose
+    // category changed mid-history lists every snapshot name it carries, so
+    // worksheet and Monthly Report subtotals bucket the same hours the same
+    // way instead of relabeling old hours under the task's current category.
+    const snapshotCategoryNames: string[] = [];
+    for (const e of taskEntries) {
+      const name = await categoryName(e.snapshotCategoryId);
+      if (name && !snapshotCategoryNames.includes(name)) {
+        snapshotCategoryNames.push(name);
+      }
+    }
+
     rows.push({
       taskId: task._id,
       title: task.title,
-      categoryName: await categoryName(task.workCategoryId),
+      categoryName:
+        snapshotCategoryNames.length > 0 ? snapshotCategoryNames.join(", ") : null,
       firstWorked: taskEntries[0].date,
       lastWorked: taskEntries[taskEntries.length - 1].date,
       entryCount: taskEntries.length,
@@ -450,7 +478,7 @@ async function buildTaskRows(
         descriptionText,
         subtasks,
         commentTexts,
-        entryNotes: taskEntries
+        entryNotes: lifecycleEntries
           .filter((e) => (e.note ?? "").trim().length > 0)
           .map((e) => ({
             date: e.date,
@@ -685,6 +713,10 @@ export type WorksheetCycleData = {
   cycleLengthLabel: string;
   /** First month's `YYYY-MM-01`. */
   cycleStart: string;
+  /** Last day of the cycle (`YYYY-MM-DD`). */
+  cycleEnd: string;
+  /** The close's numbered invoice ("INV-035"), if any — names the file. */
+  invoiceIdentifier: string | null;
   rolloverEnabled: boolean;
   /** Per-month sections in chronological order. */
   sections: WorksheetCycleSection[];
@@ -700,199 +732,87 @@ export type WorksheetCycleData = {
   allRows: WorksheetTaskRow[];
 };
 
-export const collectCycleWorksheetData = internalQuery({
-  args: {
-    projectId: v.id("projects"),
-    cycleStart: v.string(),
-  },
-  handler: async (ctx, args): Promise<WorksheetCycleData> => {
+/**
+ * Everything a close export needs, in the layout it renders with: one table
+ * for a monthly close, per-month sections for a cycle close. The sections
+ * split the close's snapshot by its stored report month (`monthKey`, §8.3),
+ * and the cycle ledger is built from those same minutes — so the final
+ * month's overage is the close's own `overageMinutes`.
+ */
+export const collectCloseWorksheetData = internalQuery({
+  args: { closeId: v.id("billingCloses") },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{ layout: "single"; data: WorksheetData } | { layout: "cycle"; data: WorksheetCycleData }> => {
     const authCtx = await requireAdmin(ctx);
-    const project = await ctx.db.get(args.projectId);
-    if (!project || project.orgId !== authCtx.orgId) {
-      throw new ConvexError("Project not found");
+    const orgId = authCtx.orgId;
+    const close = await loadClose(ctx, args.closeId, orgId);
+    // The close's balance ladder (§8.3): one row per month of its period.
+    const { price } = await priceClose(ctx, close);
+    const ladder = price.monthlyBalances;
+    if (ladder.length <= 1) {
+      return { layout: "single", data: await collectScopeData(ctx, { kind: "close", closeId: close._id }, orgId) };
     }
-    if (project.billingType !== "retainer") {
-      throw new ConvexError("Cycle export is only available for retainer projects");
-    }
+
+    const project = await ctx.db.get(close.projectId);
+    if (!project || project.orgId !== orgId) throw new ConvexError("Project not found for close");
     const client = await ctx.db.get(project.clientId);
-    if (!client || client.orgId !== authCtx.orgId) {
-      throw new ConvexError("Client not found for project");
-    }
+    if (!client || client.orgId !== orgId) throw new ConvexError("Client not found for project");
+    const orgSettings = await getOrgSettings(ctx, orgId);
 
-    const orgSettings = await getOrgSettings(ctx, authCtx.orgId);
-    const cycleLength = project.cycleLength ?? 1;
-    const includedMinutesPerMonth = project.includedMinutesPerMonth ?? 0;
-    const rolloverEnabled = project.rolloverEnabled === true;
-
-    // Walk the cycle's monthly periods. `getCyclePeriods` is pure — it
-    // builds the calendar shape from the project's startDate + cycleLength
-    // and an offset. We resolve the cycle by matching `cycleStart` to the
-    // first period's `periodStart` so the same cycle math drives both the
-    // monthly breakdown card and this export.
-    const todayStr = new Date().toISOString().slice(0, 10);
-    const months = resolveCycleMonths(
-      project.startDate ?? args.cycleStart,
-      cycleLength,
-      args.cycleStart,
-      todayStr,
-    );
-
-    // Per-month section building. We collect all rows along the way so the
-    // action can run a SINGLE bounded AI batch instead of N per-month ones.
+    // A cycle close is a rollover cycle: allowance carries month to month and
+    // the overage settles on the final month.
     const sections: WorksheetCycleSection[] = [];
     const allRows: WorksheetTaskRow[] = [];
-    const usedMinutesByMonth = new Map<string, number>();
-
-    for (const m of months) {
-      const periodStart = `${m.year}-${String(m.month).padStart(2, "0")}-01`;
-      const lastDay = new Date(m.year, m.month, 0).getDate();
-      const periodEnd = `${m.year}-${String(m.month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
-
-      const monthEntries: Doc<"timeEntries">[] = [];
-      const tasks = await ctx.db
-        .query("tasks")
-        .withIndex("by_orgId_projectId", (q) =>
-          q.eq("orgId", authCtx.orgId).eq("projectId", project._id),
-        )
-        .collect();
-      for (const task of tasks) {
-        const taskEntries = await ctx.db
-          .query("timeEntries")
-          .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
-          .collect();
-        for (const e of taskEntries) {
-          if (e.orgId !== authCtx.orgId) continue;
-          if (e.date < periodStart || e.date > periodEnd) continue;
-          monthEntries.push(e);
-        }
-      }
-
-      const rows = await buildTaskRows(ctx, project, monthEntries, authCtx.orgId);
-      const subtotalBillableMinutes = rows.reduce(
-        (s, r) => s + r.billableMinutes,
-        0,
-      );
-      usedMinutesByMonth.set(
-        `${m.year}-${String(m.month).padStart(2, "0")}`,
-        subtotalBillableMinutes,
-      );
+    for (const row of ladder) {
+      const entries = await closeSnapshotEntries(ctx, orgId, close._id, row.monthKey);
+      const rows = await buildTaskRows(ctx, project, entries, orgId);
       sections.push({
-        monthLabel: monthName(m.year, m.month) + ` ${m.year}`,
+        monthLabel: monthLabel(row.monthKey),
         rows,
-        subtotalBillableMinutes,
-        // Filled in after we've walked every month, when we have the
-        // rollover ledger in hand.
-        allocationMinutes: 0,
-        rolloverIntoNextMinutes: null,
-        overageMinutes: null,
+        subtotalBillableMinutes: rows.reduce((s, r) => s + r.billableMinutes, 0),
+        allocationMinutes: row.availableMinutes,
+        rolloverIntoNextMinutes: row.isLast ? null : row.balanceMinutes,
+        overageMinutes: row.isLast && row.overageMinutes > 0 ? row.overageMinutes : null,
       });
       allRows.push(...rows);
     }
 
-    // Per-month rollover ledger — only computed when rollover is on.
-    // For non-rollover cycles, allocation = includedMinutes flat, and
-    // overage is per-month.
-    if (rolloverEnabled) {
-      const usageRows = buildRetainerUsageRows({
-        months,
-        monthlyIncludedMinutes: includedMinutesPerMonth,
-        usedMinutesByMonth,
-      });
-      for (let i = 0; i < sections.length; i++) {
-        const section = sections[i];
-        const usage = usageRows[i];
-        section.allocationMinutes = usage.availableMinutes;
-        if (i === sections.length - 1) {
-          // Final month — overage settles here.
-          const netBalance = usage.balanceMinutes;
-          section.overageMinutes = netBalance < 0 ? Math.abs(netBalance) : null;
-        } else {
-          section.rolloverIntoNextMinutes = usage.balanceMinutes;
-        }
-      }
-    } else {
-      // Non-rollover: every month is its own billing unit. Allocation is
-      // the flat monthly budget; overage applies per-month.
-      for (const section of sections) {
-        section.allocationMinutes = includedMinutesPerMonth;
-        const balance =
-          includedMinutesPerMonth - section.subtotalBillableMinutes;
-        section.overageMinutes = balance < 0 ? Math.abs(balance) : null;
-      }
-    }
-
-    const cycleBillableMinutes = sections.reduce(
-      (s, sec) => s + sec.subtotalBillableMinutes,
-      0,
-    );
-    const cycleAllocationMinutes =
-      includedMinutesPerMonth * sections.length;
-    const cycleBalance = cycleAllocationMinutes - cycleBillableMinutes;
-
-    const lastMonth = months[months.length - 1];
-    const firstMonth = months[0];
-    const cycleRangeLabel = `${monthName(firstMonth.year, firstMonth.month)} 1, ${firstMonth.year} – ${monthName(lastMonth.year, lastMonth.month)} ${new Date(lastMonth.year, lastMonth.month, 0).getDate()}, ${lastMonth.year}`;
-
     return {
-      client: { name: client.name, currency: client.currency },
-      project: {
-        name: project.name,
-        code: project.code,
-        billingType: project.billingType,
+      layout: "cycle",
+      data: {
+        client: { name: client.name, currency: client.currency },
+        project: { name: project.name, code: project.code, billingType: project.billingType },
+        slugs: { client: slugify(client.name), project: slugify(project.name) },
+        timezone: orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK,
+        orgId,
+        cycleRangeLabel: `${longDate(close.periodStart)} – ${longDate(close.periodEnd)}`,
+        cycleLengthLabel: `${ladder.length}-month`,
+        cycleStart: close.periodStart,
+        cycleEnd: close.periodEnd,
+        invoiceIdentifier: (await loadCloseLabel(ctx, close._id, orgId)).invoiceIdentifier,
+        rolloverEnabled: true,
+        sections,
+        cycleTotal: {
+          billableMinutes: price.usageMinutes,
+          allocationMinutes: price.includedMinutes,
+          netOverageMinutes: price.overageMinutes,
+        },
+        allRows,
       },
-      slugs: { client: slugify(client.name), project: slugify(project.name) },
-      timezone: orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK,
-      orgId: authCtx.orgId,
-      cycleRangeLabel,
-      cycleLengthLabel: `${months.length}-month`,
-      cycleStart: args.cycleStart,
-      rolloverEnabled,
-      sections,
-      cycleTotal: {
-        billableMinutes: cycleBillableMinutes,
-        allocationMinutes: cycleAllocationMinutes,
-        netOverageMinutes: cycleBalance < 0 ? Math.abs(cycleBalance) : 0,
-      },
-      allRows,
     };
   },
 });
 
-/**
- * Resolve the cycle's monthly periods from `cycleStart`. We use the cycle
- * boundary helper (`getCyclePeriods`) by walking the offset that lands on
- * the matching `cycleStart`. This avoids a separate code path for "build
- * months from start date" — we always go through the same cycle math.
- */
-function resolveCycleMonths(
-  projectStartDate: string,
-  cycleLength: number,
-  cycleStart: string,
-  todayStr: string,
-): YearMonth[] {
-  // Try the obvious offsets around the current cycle. The retainer card
-  // never lets the user pick a cycle outside +/- a few cycles, so a small
-  // bounded search is fine and keeps the code resilient to clock skew.
-  for (let offset = -24; offset <= 24; offset++) {
-    const result = getCyclePeriods({
-      startDate: projectStartDate,
-      cycleLength,
-      todayStr,
-      cycleOffset: offset,
-    });
-    if (result && result.cycleStart === cycleStart) {
-      return result.periods.map((p) => ({ year: p.year, month: p.month }));
-    }
-  }
-  // Fallback: walk N months from the provided cycleStart directly. Used
-  // when the project doesn't have a `startDate` we can align to.
-  const [y, m] = cycleStart.split("-").map(Number);
-  const months: YearMonth[] = [];
-  for (let i = 0; i < cycleLength; i++) {
-    const idx = (y * 12 + (m - 1)) + i;
-    months.push({ year: Math.floor(idx / 12), month: (idx % 12) + 1 });
-  }
-  return months;
+/** "March 1, 2026" for a YYYY-MM-DD string. */
+function longDate(ymd: string): string {
+  const [y, m, d] = ymd.split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
 }
 
 /**
@@ -1009,30 +929,21 @@ function footerRow(label: string, value: string): string {
 
 // ─── Filename builders ──────────────────────────────────────────────────────
 
-/** `{client}-{project}-{YYYY-MM}-worksheet.csv` */
-export function filenameForMonth(
+/**
+ * `{client}-{project}-invoice-{INV-035}-worksheet.csv` when the close billed a
+ * numbered invoice, else `{client}-{project}-{YYYY-MM}[-to-{YYYY-MM}]-worksheet.csv`.
+ */
+export function filenameForClose(
   slugs: { client: string; project: string },
-  year: number,
-  month: number,
+  close: { periodStart: string; periodEnd: string; invoiceIdentifier: string | null },
 ): string {
-  const ym = `${year}-${String(month).padStart(2, "0")}`;
-  return `${slugs.client}-${slugs.project}-${ym}-worksheet.csv`;
-}
-
-/** `{client}-{project}-cycle-{YYYY-MM-DD}-worksheet.csv` */
-export function filenameForCycle(
-  slugs: { client: string; project: string },
-  cycleStart: string,
-): string {
-  return `${slugs.client}-${slugs.project}-cycle-${cycleStart}-worksheet.csv`;
-}
-
-/** `{client}-{project}-invoice-{INV-035}-worksheet.csv` */
-export function filenameForInvoice(
-  slugs: { client: string; project: string },
-  invoiceIdentifier: string,
-): string {
-  return `${slugs.client}-${slugs.project}-invoice-${invoiceIdentifier}-worksheet.csv`;
+  if (close.invoiceIdentifier) {
+    return `${slugs.client}-${slugs.project}-invoice-${close.invoiceIdentifier}-worksheet.csv`;
+  }
+  const start = close.periodStart.slice(0, 7);
+  const end = close.periodEnd.slice(0, 7);
+  const period = start === end ? start : `${start}-to-${end}`;
+  return `${slugs.client}-${slugs.project}-${period}-worksheet.csv`;
 }
 
 /** `{client}-{project}-{period-slug}-worksheet.csv` */

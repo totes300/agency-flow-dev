@@ -1,6 +1,7 @@
 import { v, ConvexError } from "convex/values";
 import { query, mutation } from "./_generated/server";
 import { getAuthContext } from "./lib/auth";
+import { loadTaskForReadOrNull } from "./tasks/access";
 
 // ─── Query ──────────────────────────────────────────────────────────────────────
 
@@ -11,10 +12,9 @@ import { getAuthContext } from "./lib/auth";
 export const byTask = query({
   args: { taskId: v.id("tasks") },
   handler: async (ctx, { taskId }) => {
-    const { orgId, userId } = await getAuthContext(ctx);
-
-    const task = await ctx.db.get(taskId);
-    if (!task || task.orgId !== orgId) return {};
+    const access = await loadTaskForReadOrNull(ctx, taskId);
+    if (!access) return {};
+    const { userId } = access.auth;
 
     const reactions = await ctx.db
       .query("commentReactions")
@@ -72,7 +72,8 @@ export const toggle = mutation({
     emoji: v.string(),
   },
   handler: async (ctx, { commentId, emoji }) => {
-    const { orgId, userId } = await getAuthContext(ctx);
+    const auth = await getAuthContext(ctx);
+    const { orgId, userId } = auth;
 
     // Validate emoji length (covers flags, ZWJ sequences)
     if (!emoji || emoji.length > 16) {
@@ -81,6 +82,9 @@ export const toggle = mutation({
 
     const comment = await ctx.db.get(commentId);
     if (!comment || comment.orgId !== orgId) {
+      throw new ConvexError("Comment not found");
+    }
+    if (!(await loadTaskForReadOrNull(ctx, comment.taskId, auth))) {
       throw new ConvexError("Comment not found");
     }
 

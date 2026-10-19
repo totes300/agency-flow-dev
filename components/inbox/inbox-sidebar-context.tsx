@@ -9,6 +9,7 @@ import {
   useState,
 } from "react"
 import { SidebarProvider } from "@/components/ui/sidebar"
+import { isTaskDetailOpen } from "@/lib/task-detail"
 import { useIsMobile } from "@/lib/hooks/use-is-mobile"
 
 type InboxSidebarContextValue = {
@@ -91,9 +92,9 @@ export function InboxSidebarProvider({ children }: { children: React.ReactNode }
     if (!inboxOpen) return
     function handleKeyDown(e: KeyboardEvent) {
       if (e.key !== "Escape") return
-      // Task drawer/modal open (both read the `detail` param) — its own
-      // Escape handler closes it; the inbox waits for the next press.
-      if (new URLSearchParams(window.location.search).has("detail")) return
+      // Task drawer open (`?task=` / `?detail=`) — its own Escape handler
+      // closes it; the inbox waits for the next press.
+      if (isTaskDetailOpen(new URLSearchParams(window.location.search))) return
       // Any open Radix overlay (dialog, alert, sheet, popover) wins too.
       if (
         document.querySelector(

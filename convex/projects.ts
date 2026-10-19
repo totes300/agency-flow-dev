@@ -1,18 +1,20 @@
 import { v, ConvexError } from "convex/values";
-import type { Doc } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { query, mutation } from "./_generated/server";
 import { getAuthContext, requireAdmin, validateStringLength } from "./lib/auth";
 import { billingTypeValidator, retainerStatusValidator } from "./lib/validators";
-import { generateNextProjectCode, ensureUniqueProjectCode } from "./lib/helpers";
+import { generateNextProjectCode, ensureUniqueProjectCode, normalizeProjectCode } from "./lib/helpers";
+import { rewriteProjectIdentifiers } from "./tasks/write";
 import { validateAssignees } from "./lib/task_helpers";
 import { getDateInTimezone, ORG_TIMEZONE_FALLBACK } from "./lib/timer";
 import { getOrgSettings, getProjectCurrency } from "./lib/orgHelpers";
-import { getFixedBilledFinalized } from "./lib/fixedBilling";
-import {
-  getInvoiceAnchorMonthKey,
-  invoiceCoversMonth,
-} from "./lib/invoiceAnchor";
-import { getCyclePeriods } from "./lib/retainerCycle";
+import { fixedBilledMinor } from "./lib/billing/invoiceLifecycle";
+import { fromMinor, toMinor } from "./lib/billing/money";
+import { loadCloseContext } from "./lib/billing/closeData";
+import { getCyclePeriods } from "./lib/billing/periods";
+import { monthBalances, type MonthBalance } from "./lib/billing/periodView";
+import { loadReportMonths } from "./lib/billing/reportMonths";
+import { autoSaveTimersForTasks } from "./lib/timerEntry";
 import type {
   ResolvedProjectListItem,
   ResolvedProjectDetail,
@@ -30,6 +32,7 @@ import {
   type RetainerCycleContext,
   type ProjectSummary,
 } from "./lib/projectSummary";
+import { getProjectEntries } from "./lib/projectEntries";
 
 const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -200,29 +203,19 @@ export const create = mutation({
       }
     }
 
-    // Validate or generate project code
+    // The code is the task identifier key (D2): validate a user-entered one,
+    // else suggest one from the client prefix / client or project name.
     const userCode = args.code?.trim();
     let code: string;
-
     if (userCode) {
-      await ensureUniqueProjectCode(ctx, orgId, userCode);
-      code = userCode;
+      code = normalizeProjectCode(userCode);
+      await ensureUniqueProjectCode(ctx, orgId, code);
     } else {
-      code = await generateNextProjectCode(ctx, orgId);
-      let attempts = 0;
-      const maxAttempts = 3;
-      while (attempts < maxAttempts) {
-        try {
-          await ensureUniqueProjectCode(ctx, orgId, code);
-          break;
-        } catch {
-          attempts++;
-          if (attempts >= maxAttempts) {
-            throw new ConvexError(`Could not generate a unique project code after ${maxAttempts} attempts`);
-          }
-          code = await generateNextProjectCode(ctx, orgId);
-        }
-      }
+      code = await generateNextProjectCode(ctx, orgId, {
+        clientPrefix: client.prefix,
+        clientName: client.name,
+        projectName: name,
+      });
     }
 
     const now = Date.now();
@@ -305,7 +298,7 @@ export const update = mutation({
     teamMembers: v.optional(v.array(v.id("users"))),
   },
   handler: async (ctx, args) => {
-    const { orgId } = await requireAdmin(ctx);
+    const { orgId, userId } = await requireAdmin(ctx);
     const project = await ctx.db.get(args.id);
     if (!project || project.orgId !== orgId) throw new ConvexError("Project not found");
 
@@ -318,11 +311,15 @@ export const update = mutation({
       updates.name = name;
     }
 
-    if (args.code !== undefined) {
-      const code = args.code.trim();
-      if (!code) throw new ConvexError("Project code is required");
-      await ensureUniqueProjectCode(ctx, orgId, code, args.id.toString());
-      updates.code = code;
+    let codeRename: string | undefined;
+    // Re-sending the unchanged code (even a legacy "PRJ-042") is a no-op.
+    if (args.code !== undefined && args.code.trim() !== project.code) {
+      const code = normalizeProjectCode(args.code);
+      if (code !== project.code) {
+        await ensureUniqueProjectCode(ctx, orgId, code, args.id.toString());
+        updates.code = code;
+        codeRename = code;
+      }
     }
 
     if (args.teamMembers !== undefined) {
@@ -352,52 +349,51 @@ export const update = mutation({
       }
       // Never below what's already been invoiced — the next generate would
       // otherwise emit a negative fixed line / negative-total invoice.
-      const billed = await getFixedBilledFinalized(ctx, orgId, args.id);
-      if (args.fixedPrice < billed) {
+      const currency = await getProjectCurrency(ctx, project);
+      const billedMinor = await fixedBilledMinor(ctx, orgId, args.id);
+      if (toMinor(args.fixedPrice, currency) < billedMinor) {
         throw new ConvexError(
-          `Fixed fee cannot be lower than the amount already invoiced (${billed}). Void the affected invoices first.`,
+          `Fixed fee cannot be lower than the amount already invoiced (${fromMinor(billedMinor, currency)}). Void the affected invoices first.`,
         );
       }
       updates.fixedPrice = args.fixedPrice;
     }
 
     await ctx.db.patch(args.id, updates);
+    // §11.1: a code rename rewrites every identifier in the project; the old
+    // ones become aliases (write path, T5).
+    if (codeRename) await rewriteProjectIdentifiers(ctx, userId, project, codeRename);
   },
 });
 
 export const archive = mutation({
   args: { id: v.id("projects") },
   handler: async (ctx, args) => {
-    const { orgId } = await requireAdmin(ctx);
+    const { orgId, userId } = await requireAdmin(ctx);
     const project = await ctx.db.get(args.id);
     if (!project || project.orgId !== orgId) throw new ConvexError("Project not found");
 
-    // Stop running timers on this project's tasks
+    // Running timers on this project's tasks: auto-save the measured time as
+    // entries instead of wiping it (identical rescue to tasks.archive — the
+    // 2026-07-05 hardening). Returned so the caller's toast can report whose
+    // time was saved / left running.
     const projectTasks = await ctx.db
       .query("tasks")
       .withIndex("by_orgId_projectId", (q) => q.eq("orgId", orgId).eq("projectId", args.id))
       .collect();
     const projectTaskIds = new Set(projectTasks.map((t) => t._id.toString()));
 
-    const orgMembers = await ctx.db
-      .query("orgMembers")
-      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
-      .collect();
-    for (const member of orgMembers) {
-      if (!member.userId) continue;
-      const user = await ctx.db.get(member.userId);
-      if (user?.timerTaskId && projectTaskIds.has(user.timerTaskId.toString())) {
-        await ctx.db.patch(member.userId, {
-          timerTaskId: undefined,
-          timerStartedAt: undefined,
-          timerAccumulatedMs: undefined,
-          timerStatus: undefined,
-        });
-      }
-    }
+    const timerRescue = await autoSaveTimersForTasks(ctx, {
+      orgId,
+      actorUserId: userId,
+      taskIds: projectTaskIds,
+      noteLabel: "Auto-saved when the project was archived",
+    });
 
     const now = Date.now();
     await ctx.db.patch(args.id, { archivedAt: now, updatedAt: now });
+
+    return { autoSavedTimers: timerRescue.saved, timerSaveFailures: timerRescue.failed };
   },
 });
 
@@ -540,11 +536,8 @@ export const getRetainerData = query({
     // Compute today in org timezone (same helper used by timer & time entries)
     const todayStr = getDateInTimezone(Date.now(), timezone);
 
-    // Resolve cycle boundaries via shared helper. See convex/lib/retainerCycle.ts
-    // for the rules — this is the only place we ask "what months belong to
-    // this cycle?", and the close mutations (Phase 8 Slice 3/4) consume the
-    // same helper so the read path and write path can never disagree on
-    // whether a date falls inside a given period.
+    // Resolve the navigated cycle's months (`lib/billing/periods`). Whether a
+    // month is closed comes from the close model below, never from here.
     //
     // Local `startDate`/`endDate` keys on `months[]` are kept (instead of the
     // helper's `periodStart`/`periodEnd`) so the downstream `monthlyData`
@@ -578,39 +571,33 @@ export const getRetainerData = query({
       )
       .collect();
 
-    // Fetch all time entries for those tasks
-    const allEntries = (
-      await Promise.all(
-        tasks.map(async (task) => {
-          const entries = await ctx.db
-            .query("timeEntries")
-            .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
-            .collect();
-          return entries.map((e) => ({
-            ...e,
-            taskTitle: task.title,
-            workCategoryId: e.snapshotCategoryId,
-          }));
-        }),
-      )
-    ).flat();
+    const taskById = new Map(tasks.map((t) => [t._id.toString(), t]));
+    const allEntries = (await getProjectEntries(ctx, orgId, args.id)).flatMap((e) => {
+      const task = taskById.get(e.taskId.toString());
+      if (!task) return [];
+      return [{ ...e, taskTitle: task.title, workCategoryId: e.snapshotCategoryId }];
+    });
 
     // Split billable and non-billable
     const billableEntries = allEntries.filter((e) => e.isBillable);
     const nonBillableEntries = allEntries.filter((e) => !e.isBillable);
 
-    // Group billable entries by month
+    // Group by REPORT month (billing refactor N8): the close's frozen bucket
+    // for closed work, the effective-period bucket for open work — so a
+    // skipped or late entry counts on the month its close bills it, exactly
+    // like the monthly report.
+    const closeContext = await loadCloseContext(ctx, orgId, args.id);
+    const reportMonths = await loadReportMonths(ctx, closeContext);
+    const reportMonthOf = (e: { _id: Id<"timeEntries">; date: string }) =>
+      reportMonths.get(e._id) ?? e.date.slice(0, 7);
+
     const billableByMonth: Record<string, typeof billableEntries> = {};
     for (const e of billableEntries) {
-      const monthKey = e.date.slice(0, 7);
-      (billableByMonth[monthKey] ??= []).push(e);
+      (billableByMonth[reportMonthOf(e)] ??= []).push(e);
     }
-
-    // Group non-billable entries by month
     const nonBillableByMonth: Record<string, typeof nonBillableEntries> = {};
     for (const e of nonBillableEntries) {
-      const monthKey = e.date.slice(0, 7);
-      (nonBillableByMonth[monthKey] ??= []).push(e);
+      (nonBillableByMonth[reportMonthOf(e)] ??= []).push(e);
     }
 
     // Fetch work categories for enrichment
@@ -620,42 +607,18 @@ export const getRetainerData = query({
       .collect();
     const catMap = new Map(categories.map((c) => [c._id.toString(), c]));
 
-    // Fetch retainer invoices for this project and attach each to its
-    // **anchor** month (the YYYY-MM of `periodEnd`). For monthly retainers
-    // (rollover OFF) the anchor is the single billed month. For rollover
-    // cycle invoices (multi-month period after Issue #01) the anchor is the
-    // cycle-end month — that's the row that carries the cycle's primary
-    // action ("Generate" before billing, invoice link after). Centralised in
-    // `convex/lib/invoiceAnchor.ts` so the Ready feed and Monthly Report
-    // queries agree on the same convention.
-    const projectInvoices = await ctx.db
-      .query("invoices")
-      .withIndex("by_projectId", (q) => q.eq("projectId", args.id))
-      .filter((q) => q.eq(q.field("orgId"), orgId))
-      .collect();
+    // Close state per month: the live close covering it (isClosed /
+    // closedAt), and its invoice anchored on the close's last month — the
+    // row that carries the period's action (a cycle bills on its last month).
+    const closeOfMonth = (start: string, end: string) =>
+      closeContext.liveCloses.find((c) => c.periodStart <= start && c.periodEnd >= end);
     const invoiceByMonthKey = new Map<string, Doc<"invoices">>();
-    for (const inv of projectInvoices) {
-      // Voided invoices free their period for re-billing (PRD § D5). The
-      // audit trail still lives on `/invoices` Voided tab — the project
-      // row should treat the period as unbilled so Generate can re-fire.
-      if (inv.status === "void") continue;
-      const key = getInvoiceAnchorMonthKey(inv);
-      if (!key) continue;
-      invoiceByMonthKey.set(key, inv);
-    }
-
-    // Phase 8 — admin-settled period rows. `isClosed`/`closedAt` on each
-    // displayed month reflects an explicit admin "Close period" action; it
-    // is independent of `periodEnded` (calendar). The close mutations
-    // (Slice 3/4) populate these via `retainerPeriods.closedAt`.
-    const retainerPeriodRows = await ctx.db
-      .query("retainerPeriods")
-      .withIndex("by_projectId", (q) => q.eq("projectId", args.id))
-      .filter((q) => q.eq(q.field("orgId"), orgId))
-      .collect();
-    const periodRowByStart = new Map<string, Doc<"retainerPeriods">>();
-    for (const row of retainerPeriodRows) {
-      periodRowByStart.set(row.periodStart, row);
+    for (const close of closeContext.liveCloses) {
+      if (!close.invoiceId) continue;
+      const inv = await ctx.db.get(close.invoiceId);
+      if (inv && inv.orgId === orgId && inv.status !== "void") {
+        invoiceByMonthKey.set(close.periodEnd.slice(0, 7), inv);
+      }
     }
 
     // Compute balances (sequential — each month depends on the previous)
@@ -686,6 +649,9 @@ export const getRetainerData = query({
       startBalance: number;
       available: number;
       endBalance: number;
+      /** Overage of this row (negative end balance) and its price, from the ladder. */
+      overageMinutes: number;
+      overageAmount: number;
       totalNonBillableMinutes: number;
       // Calendar truth: the month's last day has already passed in the org's
       // timezone. Drives financial due-ness (overage, "due" balanceStatus)
@@ -696,6 +662,8 @@ export const getRetainerData = query({
       // entry edits and the row's primary action. Independent of calendar.
       isClosed: boolean;
       closedAt: number | undefined; // ms timestamp when admin clicked Close
+      /** The live close covering the month (its worksheet export). */
+      closeId: Doc<"billingCloses">["_id"] | null;
       balanceStatus: "due" | "deficit" | "rollover" | "unused" | "on_track";
       cyclePosition: number;
       billableCategoryGroups: CategoryGroup[];
@@ -706,47 +674,45 @@ export const getRetainerData = query({
       invoice: MonthInvoice | null;
     };
     const monthlyData: MonthData[] = [];
+    const balances = await monthBalances(
+      ctx,
+      closeContext,
+      months.map((m) => `${m.year}-${String(m.month).padStart(2, "0")}`),
+      { todayStr, roundingMinutes: 1 },
+    );
 
     for (let i = 0; i < months.length; i++) {
       const m = months[i];
       const monthKey = `${m.year}-${String(m.month).padStart(2, "0")}`;
       const monthBillable = billableByMonth[monthKey] ?? [];
       const monthNonBillable = nonBillableByMonth[monthKey] ?? [];
-      const workedMinutes = monthBillable.reduce((s, e) => s + e.durationMinutes, 0);
       const totalNonBillableMinutes = monthNonBillable.reduce((s, e) => s + e.durationMinutes, 0);
-      // Phase 8 — `periodEnded` is calendar-only (was `isMonthClosed`); the
-      // new `isClosed`/`closedAt` carry the admin-settlement state read from
-      // `retainerPeriods`. `balanceStatus` continues to key on `periodEnded`
-      // — financial due-ness is a calendar question, not an admin one.
+      // `periodEnded` is calendar-only; `isClosed`/`closedAt` carry the live
+      // close's state. `balanceStatus` keys on the calendar too (the period
+      // has ended) — financial due-ness is not an admin question.
       const periodEnded = m.endDate < todayStr;
-      const periodRow = periodRowByStart.get(m.startDate);
-      const closedAt = periodRow?.closedAt;
-      const isClosed = closedAt !== undefined;
+      const close = closeOfMonth(m.startDate, m.endDate);
+      const closedAt = close?.committedAt;
+      const isClosed = close !== undefined;
 
-      let startBalance: number;
-      if (rolloverEnabled) {
-        startBalance = i === 0 ? 0 : monthlyData[i - 1].endBalance;
-      } else {
-        startBalance = 0;
-      }
-
-      const available = startBalance + includedMinutesPerMonth;
-      const endBalance = available - workedMinutes;
+      // The month's balance-ladder row (§8.3) from the period that settles it.
+      const balance = balances.get(monthKey);
+      const row = balance?.row;
+      const startBalance = row?.startBalanceMinutes ?? 0;
+      const available = row?.availableMinutes ?? 0;
+      const endBalance = row?.balanceMinutes ?? 0;
+      // The month settles its period's balance when it is the period's last
+      // month and the period has ended (a cycle settles on its closing month).
+      const settles =
+        balance !== undefined && balance.row.isLast && balance.view.period.end < todayStr;
+      const multiMonthPeriod = (balance?.view.price.monthlyBalances.length ?? 1) > 1;
 
       // Badge status
       let balanceStatus: MonthData["balanceStatus"];
       if (endBalance < 0) {
-        if (rolloverEnabled) {
-          balanceStatus = (i === cycleLength - 1 && isCycleClosed) ? "due" : "deficit";
-        } else {
-          balanceStatus = periodEnded ? "due" : "deficit";
-        }
+        balanceStatus = settles ? "due" : "deficit";
       } else if (endBalance > 0) {
-        if (rolloverEnabled) {
-          balanceStatus = (i === cycleLength - 1 && isCycleClosed) ? "unused" : "rollover";
-        } else {
-          balanceStatus = periodEnded ? "unused" : "on_track";
-        }
+        balanceStatus = settles ? "unused" : multiMonthPeriod ? "rollover" : "on_track";
       } else {
         balanceStatus = "on_track";
       }
@@ -765,14 +731,17 @@ export const getRetainerData = query({
       const monthInvoice = invoiceByMonthKey.get(monthKey);
       monthlyData.push({
         ...m,
-        workedMinutes,
+        workedMinutes: row?.usedMinutes ?? 0,
         startBalance,
         available,
         endBalance,
+        overageMinutes: row?.overageMinutes ?? 0,
+        overageAmount: fromMinor(row?.overageAmountMinor ?? 0, currency),
         totalNonBillableMinutes,
         periodEnded,
         isClosed,
         closedAt,
+        closeId: close?._id ?? null,
         balanceStatus,
         cyclePosition: i + 1,
         billableCategoryGroups,
@@ -791,46 +760,34 @@ export const getRetainerData = query({
       });
     }
 
-    // Cycle totals
-    const cycleBudget = includedMinutesPerMonth * cycleLength;
-    const cycleWorked = monthlyData.reduce((sum, m) => sum + m.workedMinutes, 0);
-    const cycleBalance = cycleBudget - cycleWorked;
+    // Cycle totals — read off the ladder. Each period in view contributes the
+    // balance of its last month shown (one period for a rollover cycle, one
+    // per month otherwise).
+    const shownRows = [...balances.values()]; // month order
+    const cycleBudget = shownRows.reduce((sum, b) => sum + b.row.includedMinutes, 0);
+    const cycleWorked = shownRows.reduce((sum, b) => sum + b.row.usedMinutes, 0);
+    const lastShownByPeriod = new Map<string, MonthBalance>();
+    for (const b of shownRows) lastShownByPeriod.set(b.view.period.start, b);
+    const cycleBalance = [...lastShownByPeriod.values()].reduce(
+      (sum, b) => sum + b.row.balanceMinutes,
+      0,
+    );
     const utilization = cycleBudget > 0 ? (cycleWorked / cycleBudget) * 100 : 0;
 
-    // Overage calculation. "Due" means STILL owed — months/cycles whose
-    // overage already sits on a non-void invoice are excluded, mirroring the
-    // Ready feed's `invoicedMonthKeys` dedup. Without this exclusion the
-    // project page kept summing overage for periods that were already
-    // invoiced or even paid, disagreeing with the InvoiceBanner and the
-    // Invoices inbox on the same screen.
+    // Overage calculation. "Due" means STILL owed: an ended period with
+    // overage whose closing month carries no non-void invoice. Each period's
+    // overage is its close price (snapshot when closed, scope when open) —
+    // the number the Close queue and the invoice show.
     const projectOverageRate = project.overageRate ?? 0;
     let overageMinutes = 0;
-    let overageDue = 0;
-    if (rolloverEnabled) {
-      // Rollover: overage only at end of closed cycle, and only while the
-      // cycle's anchor month (its closing month) is uninvoiced.
-      const closingMonth = monthlyData[monthlyData.length - 1];
-      const closingKey = closingMonth
-        ? `${closingMonth.year}-${String(closingMonth.month).padStart(2, "0")}`
-        : null;
-      const cycleInvoiced =
-        closingKey !== null && invoiceByMonthKey.has(closingKey);
-      if (isCycleClosed && cycleBalance < 0 && !cycleInvoiced) {
-        overageMinutes = Math.abs(cycleBalance);
-        overageDue = (overageMinutes / 60) * projectOverageRate;
-      }
-    } else {
-      // Non-rollover: each month settles independently. Calendar-driven —
-      // `periodEnded` (not `isClosed`) gates due-ness, so an unbilled
-      // overage month still shows due even before an admin clicks Close.
-      for (const m of monthlyData) {
-        if (m.periodEnded && m.endBalance < 0 && m.invoice === null) {
-          const monthOverage = Math.abs(m.endBalance);
-          overageMinutes += monthOverage;
-          overageDue += (monthOverage / 60) * projectOverageRate;
-        }
-      }
+    let overageDueMinor = 0;
+    for (const { view } of lastShownByPeriod.values()) {
+      if (view.period.end >= todayStr) continue;
+      if (invoiceByMonthKey.has(view.period.end.slice(0, 7))) continue;
+      overageMinutes += view.price.overageMinutes;
+      overageDueMinor += view.price.amountMinor;
     }
+    const overageDue = fromMinor(overageDueMinor, currency);
 
     // totalNonBillableMinutes scoped to current cycle months only
     const totalNonBillableMinutes = monthlyData.reduce(
@@ -908,28 +865,11 @@ export const getSummary = query({
 
     // Fetch all tasks + their entries once. Every branch needs the entries;
     // Fixed + Retainer slice the same set differently.
-    const tasks = await ctx.db
-      .query("tasks")
-      .withIndex("by_orgId_projectId", (q) =>
-        q.eq("orgId", orgId).eq("projectId", args.projectId),
-      )
-      .collect();
-    const rawEntries = (
-      await Promise.all(
-        tasks.map((task) =>
-          ctx.db
-            .query("timeEntries")
-            .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
-            .filter((q) => q.eq(q.field("orgId"), orgId))
-            .collect(),
-        ),
-      )
-    ).flat();
+    const rawEntries = await getProjectEntries(ctx, orgId, args.projectId);
     const entries: EntryInput[] = rawEntries.map((e) => ({
       durationMinutes: e.durationMinutes,
       isBillable: e.isBillable,
-      invoiceId: e.invoiceId ? e.invoiceId.toString() : null,
-      settledAt: e.settledAt ?? null,
+      closed: e.closeId !== undefined,
       costRate: e.costRate,
       billableRate: e.billableRate,
       date: e.date,
@@ -982,13 +922,13 @@ export const getSummary = query({
         .flat()
         .map(({ li, inv }) => ({
           lineType: li.lineType,
-          amount: li.amount,
+          amount: fromMinor(li.amountMinor, inv.currency),
           invoiceStatus: inv.status,
         }));
 
       const invoiceInputs: InvoiceInput[] = invoices.map((inv) => ({
         status: inv.status,
-        total: inv.total,
+        total: fromMinor(inv.totalMinor, inv.currency),
       }));
 
       const estimatedBudgetMinutes = estimates.length > 0
@@ -1009,9 +949,7 @@ export const getSummary = query({
 
     // Retainer
     const {
-      includedMinutesPerMonth = 0,
       monthlyFee = 0,
-      overageRate = 0,
       startDate,
       rolloverEnabled = false,
       cycleLength = 1,
@@ -1031,59 +969,41 @@ export const getSummary = query({
     });
     if (!cycleContext) return null;
 
-    // Entries within cycle range
-    const cycleEntries = entries.filter(
-      (e) => e.date >= cycleContext.start && e.date <= cycleContext.end,
+    // Report months (billing refactor N8): an entry counts on the month its
+    // close bills it — skipped and late work on the receiving month.
+    const closeContext = await loadCloseContext(ctx, orgId, args.projectId);
+    const reportMonths = await loadReportMonths(ctx, closeContext);
+    const inCycle = (key: string) =>
+      key >= cycleContext.start.slice(0, 7) && key <= cycleContext.end.slice(0, 7);
+    const cycleEntries = entries.filter((_, i) =>
+      inCycle(reportMonths.get(rawEntries[i]._id) ?? rawEntries[i].date.slice(0, 7)),
     );
 
-    // Badge semantics after the invoicing refactor: "Uninvoiced" means
-    // "there is an invoiceable overage period not covered by a live invoice",
-    // not merely "a closed calendar month has no invoice". Within-budget
-    // retainer periods produce Monthly Reports, so marking them Uninvoiced
-    // makes the owner think a billable action is missing when none exists.
-    const retainerInvoices = await ctx.db
-      .query("invoices")
-      .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
-      .filter((q) => q.eq(q.field("orgId"), orgId))
-      .collect();
-    const liveInvoices = retainerInvoices.filter((inv) => inv.status !== "void");
-
-    const monthBillableMinutes = new Map<string, number>();
-    for (const entry of cycleEntries) {
-      if (!entry.isBillable) continue;
-      const key = entry.date.slice(0, 7);
-      monthBillableMinutes.set(
-        key,
-        (monthBillableMinutes.get(key) ?? 0) + entry.durationMinutes,
-      );
-    }
-
+    // Budget and overage from the balance ladder (§8.3) of the periods that
+    // settle the cycle's months. A pooled rollover cycle shows its overage
+    // live; a single month's overage counts once the month has ended (an
+    // in-progress month must not flip the card to "overage due", review M2).
+    // "Uninvoiced" = an elapsed period with overage that no live close has
+    // billed yet — exactly what the Close queue would put in front of the
+    // owner. Within-budget periods produce reports, not invoices.
+    const balances = await monthBalances(ctx, closeContext, cycleContext.monthKeys, {
+      todayStr,
+      roundingMinutes: 1,
+    });
+    const shownRows = [...balances.values()];
+    const cycleBudgetMinutes = shownRows.reduce((sum, b) => sum + b.row.includedMinutes, 0);
+    const periodViews = new Map(shownRows.map((b) => [b.view.period.start, b.view]));
     let hasUninvoicedClosedMonth = false;
-    if (rolloverEnabled) {
-      const cycleBillableMinutes = Array.from(monthBillableMinutes.values()).reduce(
-        (sum, minutes) => sum + minutes,
-        0,
-      );
-      const cycleBudgetMinutes = includedMinutesPerMonth * cycleLength;
-      if (cycleContext.isCycleClosed && cycleBillableMinutes > cycleBudgetMinutes) {
-        const [y, m] = cycleContext.end.slice(0, 7).split("-").map(Number);
-        const covered = liveInvoices.some((inv) => invoiceCoversMonth(inv, y, m));
-        hasUninvoicedClosedMonth = !covered;
-      }
-    } else {
-      for (const monthKey of cycleContext.monthKeys) {
-        // Calendar-only check (was `isMonthClosed`; renamed in Phase 8 so
-        // the codebase has one name per concept — admin settlement lives on
-        // `retainerPeriods.closedAt`, not on a calendar comparison).
-        const periodEnded = lastDayOfMonth(monthKey) < todayStr;
-        if (!periodEnded) continue;
-        const billableMinutes = monthBillableMinutes.get(monthKey) ?? 0;
-        if (billableMinutes <= includedMinutesPerMonth) continue;
-        const [y, m] = monthKey.split("-").map(Number);
-        const covered = liveInvoices.some((inv) => invoiceCoversMonth(inv, y, m));
-        if (covered) continue;
+    let overageMinutes = 0;
+    let overageMinor = 0;
+    for (const view of periodViews.values()) {
+      const ended = view.period.end < todayStr;
+      if (!view.liveClose && ended && view.price.overageMinutes > 0) {
         hasUninvoicedClosedMonth = true;
-        break;
+      }
+      if (ended || view.price.monthlyBalances.length > 1) {
+        overageMinutes += view.price.overageMinutes;
+        overageMinor += view.price.amountMinor;
       }
     }
 
@@ -1108,25 +1028,12 @@ export const getSummary = query({
     // Never overload `closed` for both — same rule as Slice 2 Revision Pass #1.
     const subtitle = `${rangeLabel} · ${length}-month ${rolloverEnabled ? "rollover" : "monthly"}${isCycleClosed ? " (ended)" : ""}`;
 
-    // Overage is only DUE for ended months (same rule as getRetainerData's
-    // `periodEnded` gate and the billing inbox) — an in-progress month must
-    // not flip the Summary card to "overage due" mid-month (review M2).
-    const endedMonthBillableMinutes = new Map<string, number>();
-    for (const [monthKey, minutes] of monthBillableMinutes) {
-      const [my, mm] = monthKey.split("-").map(Number);
-      const lastDay = new Date(my, mm, 0).getDate();
-      const monthEnd = `${monthKey}-${String(lastDay).padStart(2, "0")}`;
-      if (monthEnd < todayStr) endedMonthBillableMinutes.set(monthKey, minutes);
-    }
-
     return computeRetainerSummary({
       entries: cycleEntries,
       monthlyFee,
-      overageRate,
-      includedMinutesPerMonth,
+      cycleBudgetMinutes,
+      overage: { minutes: overageMinutes, amount: fromMinor(overageMinor, currency) },
       cycle: cycleForSummary,
-      rolloverEnabled,
-      monthBillableMinutes: endedMonthBillableMinutes,
       currency,
       subtitle,
       isAdmin,
@@ -1137,10 +1044,10 @@ export const getSummary = query({
 /**
  * Resolve retainer cycle boundaries for a given project + offset.
  *
- * Thin adapter over `getCyclePeriods` (Phase 8 — Slice 2) that preserves the
+ * Thin adapter over `getCyclePeriods` that preserves the
  * pre-existing return shape `{ start, end, length, number, offset, ...,
  * monthKeys }` consumed by `getSummary`. The boundary math itself lives in
- * `convex/lib/retainerCycle.ts` so the read and write paths cannot drift.
+ * `convex/lib/billing/periods.ts`.
  */
 function resolveRetainerCycleContext(input: {
   startDate: string;
@@ -1180,12 +1087,6 @@ function resolveRetainerCycleContext(input: {
   };
 }
 
-function lastDayOfMonth(monthKey: string): string {
-  const [y, m] = monthKey.split("-").map(Number);
-  const lastDay = new Date(y, m, 0).getDate();
-  return `${monthKey}-${String(lastDay).padStart(2, "0")}`;
-}
-
 export const remove = mutation({
   args: { id: v.id("projects") },
   handler: async (ctx, args) => {
@@ -1193,25 +1094,23 @@ export const remove = mutation({
     const project = await ctx.db.get(args.id);
     if (!project || project.orgId !== orgId) throw new ConvexError("Project not found");
 
-    // Block if any task has time entries
-    const projectTasks = await ctx.db
-      .query("tasks")
-      .withIndex("by_orgId_projectId", (q) => q.eq("orgId", orgId).eq("projectId", args.id))
-      .collect();
-    for (const task of projectTasks) {
-      const hasEntries = await ctx.db
-        .query("timeEntries")
-        .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
-        .first();
-      if (hasEntries) {
-        throw new ConvexError("Cannot delete a project with time entries — archive it instead");
-      }
+    // Block if the project has any time entries
+    const hasEntries = await ctx.db
+      .query("timeEntries")
+      .withIndex("by_orgId_projectId_closeId", (q) => q.eq("orgId", orgId).eq("projectId", args.id))
+      .first();
+    if (hasEntries) {
+      throw new ConvexError("Cannot delete a project with time entries — archive it instead");
     }
 
     // Block on running timers too. Deleting the project would leave the
     // timer dangling — its stop would silently discard the measured hours
     // (and an auto-save is impossible: entry creation is exactly what the
     // entries-guard above forbids on delete).
+    const projectTasks = await ctx.db
+      .query("tasks")
+      .withIndex("by_orgId_projectId", (q) => q.eq("orgId", orgId).eq("projectId", args.id))
+      .collect();
     const projectTaskIds = new Set(projectTasks.map((t) => t._id.toString()));
     const projectMembers = await ctx.db
       .query("orgMembers")
@@ -1227,17 +1126,13 @@ export const remove = mutation({
       }
     }
 
-    // Cascade delete: fetch estimates, periods, and rate overrides in parallel
-    const [estimates, periods, rateOverrides] = await Promise.all([
+    // Cascade delete: fetch estimates and rate overrides in parallel
+    const [estimates, rateOverrides] = await Promise.all([
       ctx.db.query("projectCategoryEstimates").withIndex("by_projectId", (q) => q.eq("projectId", args.id)).collect(),
-      ctx.db.query("retainerPeriods").withIndex("by_projectId", (q) => q.eq("projectId", args.id)).collect(),
       ctx.db.query("projectRateOverrides").withIndex("by_projectId", (q) => q.eq("projectId", args.id)).collect(),
     ]);
     for (const est of estimates) {
       await ctx.db.delete(est._id);
-    }
-    for (const period of periods) {
-      await ctx.db.delete(period._id);
     }
     for (const override of rateOverrides) {
       await ctx.db.delete(override._id);

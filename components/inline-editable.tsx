@@ -194,8 +194,7 @@ export function InlineEditableNumber({
     onCommit: async (draft) => {
       const parsed = parseFloat(draft)
       if (Number.isNaN(parsed)) return false
-      // Clamp to non-negative — mirrors the server guard in
-      // convex/invoices.ts:updateInvoiceLineItem.
+      // Clamp to non-negative.
       const clamped = Math.max(0, parsed)
       if (clamped === value) return false
       try {

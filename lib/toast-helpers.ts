@@ -4,7 +4,10 @@ import { ConvexError } from "convex/values"
 /** Extract a user-friendly message from a ConvexError or standard Error. */
 export function extractErrorMessage(err: unknown, fallback: string): string {
   if (err instanceof ConvexError) {
-    return typeof err.data === "string" ? err.data : fallback
+    if (typeof err.data === "string") return err.data
+    // Typed errors carry `{ code, message }` (e.g. tasks/today NO_ASSIGNEE).
+    const data = err.data as { message?: unknown } | null
+    return data && typeof data.message === "string" ? data.message : fallback
   }
   if (err instanceof Error) {
     return err.message

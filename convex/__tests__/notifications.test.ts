@@ -10,6 +10,7 @@ import { convexTest } from "convex-test";
 import schema from "../schema";
 import { api, internal } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
+import { statusRow, taskRow } from "./helpers/taskFixtures";
 
 // See invoiceTransitions.test.ts for why the explicit module map is needed.
 const modules = (
@@ -80,15 +81,20 @@ async function seed(t: T): Promise<Seed> {
     await mkMember(memberC, "clerk_c", "member");
     await mkMember(memberD, "clerk_d", "member");
 
-    const statusId = await ctx.db.insert("statuses", {
-      orgId: ORG_ID, name: "Todo", type: "backlog", color: "#000",
-      sortOrder: 0, createdAt: now, updatedAt: now, createdBy: admin,
-    });
-    const taskId = await ctx.db.insert("tasks", {
-      orgId: ORG_ID, title: "Test Task", statusId, statusType: "backlog",
+    const statusId = await ctx.db.insert("statuses", statusRow({
+      orgId: ORG_ID, name: "Todo", category: "backlog", color: "#000",
+      createdAt: now, updatedAt: now, createdBy: admin,
+    }));
+    const taskId = await ctx.db.insert("tasks", taskRow({
+      orgId: ORG_ID, title: "Test Task", statusId,
+      statusCategory: "backlog",
       assigneeIds: [memberB, memberC], billable: true,
       createdAt: now, updatedAt: now, createdBy: admin,
-    });
+    }));
+    // Assignee edges are the access source of truth (tasks/access.ts, D1).
+    for (const userId of [memberB, memberC]) {
+      await ctx.db.insert("taskAssignees", { orgId: ORG_ID, taskId, userId, assignedAt: now, assignedBy: admin });
+    }
 
     return { admin, admin2, memberB, memberC, memberD, statusId, taskId };
   });
@@ -241,13 +247,11 @@ describe("task mutes", () => {
   it("muted user gets no comment notification, but a mention breaks through", async () => {
     const t = createT();
     const s = await seed(t);
+    const asB = t.withIdentity(identityFor("clerk_b", "member"));
     const asC = t.withIdentity(identityFor("clerk_c", "member"));
 
-    await t.run(async (ctx) => {
-      await ctx.db.insert("taskMutes", {
-        orgId: ORG_ID, taskId: s.taskId, userId: s.memberB, createdAt: Date.now(),
-      });
-    });
+    await asB.mutation(api.notifications.muteTask, { taskId: s.taskId });
+    expect(await asB.query(api.notifications.isTaskMuted, { taskId: s.taskId })).toBe(true);
 
     await asC.mutation(api.comments.create, {
       taskId: s.taskId,
@@ -261,6 +265,54 @@ describe("task mutes", () => {
     });
     const forB = await notificationsFor(t, s.memberB);
     expect(forB.map((n) => n.type)).toEqual(["mention_comment"]);
+  });
+
+  it("muted user still gets assignment notifications", async () => {
+    const t = createT();
+    const s = await seed(t);
+    const asAdmin = t.withIdentity(identityFor("clerk_admin", "admin"));
+    const asD = t.withIdentity(identityFor("clerk_d", "member"));
+
+    // Assign D (read the first notification), mute, unassign, re-assign:
+    // the mute only silences comments, so the re-assignment still notifies.
+    await asAdmin.mutation(api.tasks.update, {
+      id: s.taskId,
+      assigneeIds: [s.memberB, s.memberC, s.memberD],
+    });
+    await asD.mutation(api.notifications.markAllRead, {});
+    await asD.mutation(api.notifications.muteTask, { taskId: s.taskId });
+    await asAdmin.mutation(api.tasks.update, { id: s.taskId, assigneeIds: [s.memberB, s.memberC] });
+    await asAdmin.mutation(api.tasks.update, {
+      id: s.taskId,
+      assigneeIds: [s.memberB, s.memberC, s.memberD],
+    });
+
+    const unread = (await notificationsFor(t, s.memberD)).filter((n) => n.inboxState === "unread");
+    expect(unread.map((n) => n.type)).toEqual(["assigned"]);
+  });
+
+  it("unmute restores comment notifications", async () => {
+    const t = createT();
+    const s = await seed(t);
+    const asB = t.withIdentity(identityFor("clerk_b", "member"));
+    const asC = t.withIdentity(identityFor("clerk_c", "member"));
+
+    await asB.mutation(api.notifications.muteTask, { taskId: s.taskId });
+    await asC.mutation(api.comments.create, { taskId: s.taskId, content: doc("while muted") });
+    expect(await notificationsFor(t, s.memberB)).toHaveLength(0);
+
+    await asB.mutation(api.notifications.unmuteTask, { taskId: s.taskId });
+    expect(await asB.query(api.notifications.isTaskMuted, { taskId: s.taskId })).toBe(false);
+    const state = await t.run(async (ctx) =>
+      await ctx.db
+        .query("taskUserState")
+        .withIndex("by_taskId_userId", (q) => q.eq("taskId", s.taskId).eq("userId", s.memberB))
+        .first(),
+    );
+    expect(state?.muted).toBe(false);
+
+    await asC.mutation(api.comments.create, { taskId: s.taskId, content: doc("after unmute") });
+    expect((await notificationsFor(t, s.memberB)).map((n) => n.type)).toEqual(["comment"]);
   });
 });
 
@@ -383,20 +435,17 @@ describe("cascade delete", () => {
       taskId: s.taskId,
       content: doc("hi ", s.memberB),
     });
-    await t.run(async (ctx) => {
-      await ctx.db.insert("taskMutes", {
-        orgId: ORG_ID, taskId: s.taskId, userId: s.memberC, createdAt: Date.now(),
-      });
-    });
+    const asC = t.withIdentity(identityFor("clerk_c", "member"));
+    await asC.mutation(api.notifications.muteTask, { taskId: s.taskId });
     expect(await notificationsFor(t, s.memberB)).toHaveLength(1);
 
     await asAdmin.mutation(api.tasks.remove, { id: s.taskId });
 
     expect(await notificationsFor(t, s.memberB)).toHaveLength(0);
-    const mutes = await t.run(async (ctx) =>
-      await ctx.db.query("taskMutes").collect(),
+    const states = await t.run(async (ctx) =>
+      await ctx.db.query("taskUserState").collect(),
     );
-    expect(mutes).toHaveLength(0);
+    expect(states.filter((st) => st.taskId === s.taskId)).toHaveLength(0);
   });
 });
 
@@ -489,16 +538,21 @@ describe("state machine", () => {
     // Second task, also assigned to B, with its own notification
     const task2 = await t.run(async (ctx) => {
       const now = Date.now();
-      return await ctx.db.insert("tasks", {
-        orgId: ORG_ID, title: "Second Task", statusId: s.statusId, statusType: "backlog",
+      const id = await ctx.db.insert("tasks", taskRow({
+        orgId: ORG_ID, title: "Second Task", statusId: s.statusId,
+        statusCategory: "backlog",
         assigneeIds: [s.memberB], billable: true,
         createdAt: now, updatedAt: now, createdBy: s.admin,
+      }));
+      await ctx.db.insert("taskAssignees", {
+        orgId: ORG_ID, taskId: id, userId: s.memberB, assignedAt: now, assignedBy: s.admin,
       });
+      return id;
     });
     await asAdmin.mutation(api.comments.create, { taskId: s.taskId, content: doc("x ", s.memberB) });
     await asAdmin.mutation(api.comments.create, { taskId: task2, content: doc("y ", s.memberB) });
 
-    await asB.mutation(api.taskViewReceipts.markViewed, { taskId: s.taskId });
+    await asB.mutation(api.tasks.userState.markViewed, { taskId: s.taskId });
 
     const forB = await notificationsFor(t, s.memberB);
     const byTask = (id: Id<"tasks">) => forB.filter((n) => n.taskId === id);

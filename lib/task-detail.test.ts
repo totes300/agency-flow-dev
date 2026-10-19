@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest"
 import {
   buildDetailUrl,
+  buildTaskDeepLink,
+  buildTaskUrl,
+  isTaskDetailOpen,
   parseDetailParam,
+  parseTaskRef,
+  taskPagePath,
   getAdjacentTaskId,
   mergeActivityFeed,
-  validateSubtaskCreation,
-  computeSubtaskProgress,
 } from "./task-detail"
 
 // ─── buildDetailUrl ─────────────────────────────────────────────────────────────
@@ -47,6 +50,61 @@ describe("buildDetailUrl", () => {
     const params = new URLSearchParams("tab=all")
     buildDetailUrl(params, "task1" as any)
     expect(params.get("detail")).toBeNull()
+  })
+})
+
+// ─── ?task=<identifier> (slice 6) ───────────────────────────────────────────────
+
+describe("parseTaskRef", () => {
+  it("reads ?task= as an identifier", () => {
+    expect(parseTaskRef(new URLSearchParams("task=ARLO-21"))).toEqual({ kind: "identifier", identifier: "ARLO-21" })
+  })
+
+  it("falls back to the legacy ?detail= id", () => {
+    expect(parseTaskRef(new URLSearchParams("detail=abc"))).toEqual({ kind: "id", id: "abc" })
+  })
+
+  it("prefers ?task= when both are present", () => {
+    expect(parseTaskRef(new URLSearchParams("detail=abc&task=KON-7"))).toEqual({ kind: "identifier", identifier: "KON-7" })
+  })
+
+  it("is null without either param (or with blanks)", () => {
+    expect(parseTaskRef(new URLSearchParams("view=all"))).toBeNull()
+    expect(parseTaskRef(new URLSearchParams("task=%20&detail="))).toBeNull()
+    expect(isTaskDetailOpen(new URLSearchParams("view=all"))).toBe(false)
+    expect(isTaskDetailOpen(new URLSearchParams("task=KON-7"))).toBe(true)
+  })
+})
+
+describe("buildTaskUrl", () => {
+  it("writes ?task=<identifier>, keeps other params and drops a legacy ?detail=", () => {
+    const params = new URLSearchParams("view=all&detail=abc")
+    expect(buildTaskUrl(params, { id: "abc", identifier: "ARLO-21" })).toBe("?view=all&task=ARLO-21")
+  })
+
+  it("falls back to ?detail=<id> for a task without an identifier", () => {
+    expect(buildTaskUrl(new URLSearchParams(), { id: "abc", identifier: null })).toBe("?detail=abc")
+  })
+
+  it("closes (removes both params) for null", () => {
+    expect(buildTaskUrl(new URLSearchParams("task=KON-1&detail=x&tab=today"), null)).toBe("?tab=today")
+  })
+
+  it("drops the comment deep-link unless asked to keep it", () => {
+    const params = new URLSearchParams("detail=abc&comment=c1")
+    expect(buildTaskUrl(params, { id: "abc", identifier: "KON-2" })).toBe("?task=KON-2")
+    expect(buildTaskUrl(params, { id: "abc", identifier: "KON-2" }, { keepComment: true })).toBe("?comment=c1&task=KON-2")
+  })
+})
+
+describe("taskPagePath / buildTaskDeepLink", () => {
+  it("builds the full-page route, optionally anchored to a comment", () => {
+    expect(taskPagePath("ARLO-21")).toBe("/tasks/ARLO-21")
+    expect(taskPagePath("ARLO-21", "c 1")).toBe("/tasks/ARLO-21?comment=c%201")
+  })
+
+  it("deep links still open by id (the drawer canonicalises)", () => {
+    expect(buildTaskDeepLink("abc", "c1")).toBe("/tasks?detail=abc&comment=c1")
   })
 })
 
@@ -227,87 +285,5 @@ describe("mergeActivityFeed", () => {
     // Both present, order is stable (activities first since they're first in concat)
     expect(feed[0].id).toBe("a1")
     expect(feed[1].id).toBe("c1")
-  })
-})
-
-// ─── validateSubtaskCreation ────────────────────────────────────────────────────
-
-describe("validateSubtaskCreation", () => {
-  it("returns null for valid parent task", () => {
-    expect(validateSubtaskCreation("task_abc", null)).toBeNull()
-  })
-
-  it("returns null for valid parent task (undefined parentParent)", () => {
-    expect(validateSubtaskCreation("task_abc", undefined)).toBeNull()
-  })
-
-  it("rejects missing parent task ID", () => {
-    expect(validateSubtaskCreation(null, null)).toBe("Parent task ID is required")
-  })
-
-  it("rejects empty parent task ID", () => {
-    expect(validateSubtaskCreation(undefined, null)).toBe("Parent task ID is required")
-  })
-
-  it("rejects nested subtask (max 1 level)", () => {
-    expect(validateSubtaskCreation("task_child", "task_parent")).toBe(
-      "Subtasks cannot have subtasks (max 1 level)"
-    )
-  })
-})
-
-// ─── computeSubtaskProgress ─────────────────────────────────────────────────────
-
-describe("computeSubtaskProgress", () => {
-  it("computes 0/0 for empty array", () => {
-    expect(computeSubtaskProgress([])).toEqual({ done: 0, total: 0, percent: 0 })
-  })
-
-  it("computes progress for mixed statuses", () => {
-    const subtasks = [
-      { statusType: "done" },
-      { statusType: "in_progress" },
-      { statusType: "done" },
-      { statusType: "backlog" },
-    ]
-    expect(computeSubtaskProgress(subtasks)).toEqual({ done: 2, total: 4, percent: 50 })
-  })
-
-  it("computes 100% when all done", () => {
-    const subtasks = [
-      { statusType: "done" },
-      { statusType: "done" },
-    ]
-    expect(computeSubtaskProgress(subtasks)).toEqual({ done: 2, total: 2, percent: 100 })
-  })
-
-  it("computes 0% when none done", () => {
-    const subtasks = [
-      { statusType: "backlog" },
-      { statusType: "in_progress" },
-    ]
-    expect(computeSubtaskProgress(subtasks)).toEqual({ done: 0, total: 2, percent: 0 })
-  })
-
-  it("rounds percentage", () => {
-    const subtasks = [
-      { statusType: "done" },
-      { statusType: "backlog" },
-      { statusType: "backlog" },
-    ]
-    // 1/3 = 33.33... → 33
-    expect(computeSubtaskProgress(subtasks)).toEqual({ done: 1, total: 3, percent: 33 })
-  })
-
-  it("handles single subtask done", () => {
-    expect(computeSubtaskProgress([{ statusType: "done" }])).toEqual({
-      done: 1, total: 1, percent: 100,
-    })
-  })
-
-  it("handles single subtask not done", () => {
-    expect(computeSubtaskProgress([{ statusType: "review" }])).toEqual({
-      done: 0, total: 1, percent: 0,
-    })
   })
 })

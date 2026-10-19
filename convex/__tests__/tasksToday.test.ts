@@ -86,7 +86,7 @@ async function setup(t: T): Promise<Fixture> {
       });
       for (const [i, s] of DEFAULT_STATUS_SEED.entries()) {
         const id = await ctx.db.insert("statuses", {
-          orgId, name: s.name, color: s.color, type: s.legacyType, sortOrder: i,
+          orgId, name: s.name, color: s.color,
           category: s.category, position: `a${i}`, isDefault: s.isDefault,
           createdAt: now, updatedAt: now, createdBy,
         });

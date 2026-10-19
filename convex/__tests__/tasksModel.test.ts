@@ -8,7 +8,6 @@ import {
   PRIORITY,
   PRIORITY_VALUES,
   TASK_CATEGORIES,
-  categoryFromLegacyType,
   changesOpenness,
   completedAtAfterTransition,
   deriveIdentifierKey,
@@ -19,7 +18,6 @@ import {
   isTaskCategory,
   isTaskPriority,
   isValidIdentifierKey,
-  legacyTypeFromCategory,
   normalizeIdentifier,
   numberScopeFor,
   parseIdentifier,
@@ -43,16 +41,6 @@ describe("categories", () => {
     expect(changesOpenness("started", "completed")).toBe(true);
     expect(changesOpenness("completed", "canceled")).toBe(false);
     expect(changesOpenness("backlog", "started")).toBe(false);
-  });
-
-  it("bridges the legacy status type both ways", () => {
-    expect(categoryFromLegacyType("backlog")).toBe("backlog");
-    expect(categoryFromLegacyType("in_progress")).toBe("started");
-    expect(categoryFromLegacyType("review")).toBe("started");
-    expect(categoryFromLegacyType("blocked")).toBe("started");
-    expect(categoryFromLegacyType("done")).toBe("completed");
-    expect(legacyTypeFromCategory("unstarted")).toBe("in_progress");
-    expect(legacyTypeFromCategory("canceled")).toBe("done");
   });
 
   it("seeds the §4.1 default statuses with exactly one default per category", () => {

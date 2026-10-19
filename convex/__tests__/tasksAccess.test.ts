@@ -26,6 +26,7 @@ import {
   type TaskField,
   type TaskPolicySubject,
 } from "../tasks/access";
+import { taskRow } from "./helpers/taskFixtures";
 
 const modules = (
   import.meta as ImportMeta & {
@@ -105,7 +106,7 @@ async function setup(t: T): Promise<Fixture> {
 
     const mkStatus = async (orgId: string) =>
       await ctx.db.insert("statuses", {
-        orgId, name: "In progress", color: "amber", type: "in_progress", sortOrder: 0,
+        orgId, name: "In progress", color: "amber",
         category: "started", position: "a0", isDefault: true,
         createdAt: now, updatedAt: now, createdBy: admin,
       });
@@ -113,11 +114,9 @@ async function setup(t: T): Promise<Fixture> {
     const otherStatusId = await mkStatus(OTHER_ORG_ID);
 
     const mkTask = async (orgId: string, title: string, sId: Id<"statuses">, assigneeIds: Id<"users">[]) =>
-      await ctx.db.insert("tasks", {
-        orgId, title, statusId: sId, statusType: "in_progress", assigneeIds,
-        billable: true, createdAt: now, updatedAt: now, createdBy: admin,
-        statusCategory: "started",
-      });
+      await ctx.db.insert("tasks", taskRow({
+        orgId, title, statusId: sId, assigneeIds, createdAt: now, createdBy: admin, statusCategory: "started",
+      }));
     const edge = async (orgId: string, taskId: Id<"tasks">, userId: Id<"users">) =>
       await ctx.db.insert("taskAssignees", { orgId, taskId, userId, assignedAt: now, assignedBy: admin });
 
@@ -261,11 +260,10 @@ describe("sub-task access via the parent (§11.5)", () => {
       const now = Date.now();
       const parent = (await ctx.db.get(f.soloTask))!; // edge: assigned only
       const mkSub = async (title: string, parentTaskId: Id<"tasks">) =>
-        await ctx.db.insert("tasks", {
-          orgId: ORG_ID, title, statusId: parent.statusId, statusType: "in_progress", assigneeIds: [],
-          billable: true, parentTaskId, createdAt: now, updatedAt: now, createdBy: f.admin,
+        await ctx.db.insert("tasks", taskRow({
+          orgId: ORG_ID, title, statusId: parent.statusId, parentTaskId, createdAt: now, createdBy: f.admin,
           statusCategory: "started",
-        });
+        }));
       // Unassigned sub-task of the assigned member's parent.
       const sub = await mkSub("Parent-assigned only", f.soloTask);
       // Sub-task assigned to `unassigned`, whose parent they are NOT assigned to.

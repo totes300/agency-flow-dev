@@ -2,122 +2,106 @@ import { describe, expect, it } from "vitest";
 import {
   AGENT_TASK_LIMIT_DEFAULT,
   AGENT_TASK_LIMIT_MAX,
-  flattenTaskGroups,
-  mapAgentTaskFilters,
-  type TaskGroupLike,
+  agentTaskCategories,
+  agentTaskViewFilters,
+  clampAgentTaskLimit,
+  inDueRange,
 } from "./taskFilters";
+import { matchesFilters } from "../../convex/tasks/filters";
 
-describe("mapAgentTaskFilters", () => {
-  it("maps an empty input to the ungrouped 'all' tab with defaults", () => {
-    expect(mapAgentTaskFilters({})).toEqual({
-      tab: "all",
-      groupBy: null,
-      sortBy: "updatedAt",
-      sortOrder: "desc",
-      limit: AGENT_TASK_LIMIT_DEFAULT,
-    });
+describe("agentTaskCategories", () => {
+  it("defaults to the open categories", () => {
+    expect(agentTaskCategories({})).toEqual(["backlog", "unstarted", "started"]);
   });
 
-  it("maps each flat filter onto the tasks.list wire format", () => {
-    const mapped = mapAgentTaskFilters({
-      statusType: "review",
-      statusId: "st1",
-      clientId: "c1",
-      projectId: "p1",
-      assigneeId: "u1",
-      workCategoryId: "wc1",
-      dueAfter: "2026-06-01",
-      dueBefore: "2026-06-30",
-      search: "  logo  ",
-      limit: 10,
-    });
-    expect(mapped).toEqual({
-      tab: "review",
-      filters: {
-        statusId: { op: "is", value: ["st1"] },
-        clientId: { op: "is", value: "c1" },
-        projectId: { op: "is", value: ["p1"] },
-        assigneeIds: { op: "is", value: ["u1"] },
-        workCategoryId: { op: "is", value: ["wc1"] },
-        dateFrom: "2026-06-01",
-        dateTo: "2026-06-30",
-      },
-      groupBy: null,
-      search: "logo",
-      sortBy: "updatedAt",
-      sortOrder: "desc",
-      limit: 10,
-    });
+  it("adds the closed categories with includeClosed", () => {
+    expect(agentTaskCategories({ includeClosed: true })).toEqual([
+      "backlog",
+      "unstarted",
+      "started",
+      "completed",
+      "canceled",
+    ]);
   });
 
-  it("routes includeArchived to the archived tab (statusType ignored)", () => {
-    expect(
-      mapAgentTaskFilters({ includeArchived: true, statusType: "done" }).tab,
-    ).toBe("archived");
+  it("an explicit category wins, closed ones included without includeClosed", () => {
+    expect(agentTaskCategories({ category: "completed" })).toEqual(["completed"]);
+    expect(agentTaskCategories({ category: "started", includeClosed: true })).toEqual(["started"]);
   });
 
-  it("clamps the limit into [1, max]", () => {
-    expect(mapAgentTaskFilters({ limit: 9999 }).limit).toBe(AGENT_TASK_LIMIT_MAX);
-    expect(mapAgentTaskFilters({ limit: 0 }).limit).toBe(1);
-  });
-
-  it("drops a whitespace-only search", () => {
-    expect(mapAgentTaskFilters({ search: "   " })).not.toHaveProperty("search");
+  it("a pinned status scopes to its category", () => {
+    expect(agentTaskCategories({ statusCategory: "canceled" })).toEqual(["canceled"]);
+    // The explicit category still wins (a mismatch simply matches nothing).
+    expect(agentTaskCategories({ category: "started", statusCategory: "canceled" })).toEqual(["started"]);
   });
 });
 
-describe("flattenTaskGroups", () => {
-  const groups: TaskGroupLike[] = [
-    {
-      tasks: [
-        {
-          _id: "t1",
-          title: "Fix header",
-          statusType: "in_progress",
-          billable: true,
-          dueDate: "2026-06-30",
-          status: { name: "In Progress" },
-          project: { name: "Website" },
-          client: { name: "Pragmatico" },
-          category: { name: "Development" },
-          assignees: [{ name: "Anna" }, { name: "Ben" }],
-        },
-        {
-          _id: "t2",
-          title: "Untriaged idea",
-          statusType: "backlog",
-          billable: false,
-        },
-      ],
-    },
-  ];
-
-  it("flattens enriched tasks to plain rows with nulls for missing joins", () => {
-    expect(flattenTaskGroups(groups)).toEqual([
-      {
-        id: "t1",
-        title: "Fix header",
-        status: "In Progress",
-        statusType: "in_progress",
-        projectName: "Website",
-        clientName: "Pragmatico",
-        categoryName: "Development",
-        assigneeNames: ["Anna", "Ben"],
-        dueDate: "2026-06-30",
-        billable: true,
-      },
-      {
-        id: "t2",
-        title: "Untriaged idea",
-        status: null,
-        statusType: "backlog",
-        projectName: null,
-        clientName: null,
-        categoryName: null,
-        assigneeNames: [],
-        dueDate: null,
-        billable: false,
-      },
+describe("agentTaskViewFilters", () => {
+  it("always carries the category scope", () => {
+    expect(agentTaskViewFilters({}, ["started"])).toEqual([
+      { property: "statusCategory", operator: "is", values: ["started"] },
     ]);
+  });
+
+  it("maps each flat id onto one `is` filter", () => {
+    expect(
+      agentTaskViewFilters(
+        { statusId: "st1", clientId: "c1", projectId: "p1", assigneeId: "u1", workCategoryId: "wc1" },
+        ["backlog", "started"],
+      ),
+    ).toEqual([
+      { property: "statusCategory", operator: "is", values: ["backlog", "started"] },
+      { property: "status", operator: "is", values: ["st1"] },
+      { property: "client", operator: "is", values: ["c1"] },
+      { property: "project", operator: "is", values: ["p1"] },
+      { property: "assignee", operator: "is", values: ["u1"] },
+      { property: "workCategory", operator: "is", values: ["wc1"] },
+    ]);
+  });
+
+  it("matches tasks through the shared view matcher", () => {
+    const filters = agentTaskViewFilters({ assigneeId: "u1", projectId: "p1" }, ["started"]);
+    const task = {
+      statusId: "st1",
+      statusCategory: "started",
+      assigneeIds: ["u1", "u2"],
+      projectId: "p1",
+      createdBy: "u9",
+      billable: true,
+    };
+    expect(matchesFilters(task, filters, "me")).toBe(true);
+    expect(matchesFilters({ ...task, assigneeIds: ["u2"] }, filters, "me")).toBe(false);
+    expect(matchesFilters({ ...task, statusCategory: "completed" }, filters, "me")).toBe(false);
+    expect(matchesFilters({ ...task, projectId: null }, filters, "me")).toBe(false);
+  });
+});
+
+describe("inDueRange", () => {
+  it("passes everything without bounds", () => {
+    expect(inDueRange(undefined, {})).toBe(true);
+    expect(inDueRange("2026-06-01", {})).toBe(true);
+  });
+
+  it("is inclusive on both ends", () => {
+    const range = { dueAfter: "2026-06-01", dueBefore: "2026-06-30" };
+    expect(inDueRange("2026-06-01", range)).toBe(true);
+    expect(inDueRange("2026-06-30", range)).toBe(true);
+    expect(inDueRange("2026-05-31", range)).toBe(false);
+    expect(inDueRange("2026-07-01", range)).toBe(false);
+  });
+
+  it("a task without a due date never matches a set bound", () => {
+    expect(inDueRange(null, { dueAfter: "2026-06-01" })).toBe(false);
+    expect(inDueRange(undefined, { dueBefore: "2026-06-01" })).toBe(false);
+  });
+});
+
+describe("clampAgentTaskLimit", () => {
+  it("defaults and clamps", () => {
+    expect(clampAgentTaskLimit(undefined)).toBe(AGENT_TASK_LIMIT_DEFAULT);
+    expect(clampAgentTaskLimit(0)).toBe(1);
+    expect(clampAgentTaskLimit(10_000)).toBe(AGENT_TASK_LIMIT_MAX);
+    expect(clampAgentTaskLimit(12.7)).toBe(12);
+    expect(clampAgentTaskLimit(Number.NaN)).toBe(AGENT_TASK_LIMIT_DEFAULT);
   });
 });

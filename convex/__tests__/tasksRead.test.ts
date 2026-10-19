@@ -17,6 +17,7 @@ import schema from "../schema";
 import { api, internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
 import { DEFAULT_STATUS_SEED, SYSTEM_VIEWS, type TaskCategory } from "../tasks/model";
+import { taskRow } from "./helpers/taskFixtures";
 import {
   OPEN_ROW_CAP,
   loadAssignedTo,
@@ -112,7 +113,7 @@ async function setup(t: T): Promise<Fixture> {
     for (const [orgId, createdBy] of [[ORG, admin], [OTHER, other]] as const) {
       for (const [i, s] of DEFAULT_STATUS_SEED.entries()) {
         const id = await ctx.db.insert("statuses", {
-          orgId, name: s.name, color: s.color, type: s.legacyType, sortOrder: i,
+          orgId, name: s.name, color: s.color,
           category: s.category, position: `a${i}`, isDefault: s.isDefault,
           createdAt: now, updatedAt: now, createdBy,
         });
@@ -171,13 +172,13 @@ async function bulkInsert(
   await t.run(async (ctx) => {
     const now = Date.now();
     for (let i = 0; i < count; i++) {
-      await ctx.db.insert("tasks", {
-        orgId: ORG, title: `Bulk ${fields.category} ${i}`, statusId, statusType: "backlog",
-        statusCategory: fields.category, assigneeIds: [], billable: true,
+      await ctx.db.insert("tasks", taskRow({
+        orgId: ORG, title: `Bulk ${fields.category} ${i}`, statusId,
+        statusCategory: fields.category,
         projectId: fields.projectId, sortKey: `z${String(i).padStart(5, "0")}`,
         completedAt: fields.completedAt?.(i),
-        createdAt: now, updatedAt: now, createdBy: f.admin,
-      });
+        createdAt: now, createdBy: f.admin,
+      }));
     }
   });
 }
@@ -440,7 +441,7 @@ describe("T1: access matrix over the new read queries", () => {
   });
 });
 
-describe("T1: the switched old queries read through access.ts", () => {
+describe("T1: task-scoped reads go through access.ts", () => {
   it("task-scoped reads on a sub-task: assigned and via-parent allowed, others denied", async () => {
     const t = createT();
     const f = await setup(t);
@@ -452,11 +453,7 @@ describe("T1: the switched old queries read through access.ts", () => {
     for (const caller of CALLERS) {
       const q = as(t, caller);
       const ok = allowed.has(caller);
-      if (ok) {
-        expect((await q.query(api.tasks.getDetail, { id: f.S }))._id).toBe(f.S);
-      } else {
-        await expect(q.query(api.tasks.getDetail, { id: f.S }), caller).rejects.toThrow(/Task not found/);
-      }
+      expect((await q.query(api.tasks.queries.getDetail, { taskId: f.S }))?._id ?? null, caller).toBe(ok ? f.S : null);
       expect((await q.query(api.comments.byTask, { taskId: f.S })).length > 0, `comments ${caller}`).toBe(ok);
       expect((await q.query(api.comments.latestPreview, { taskId: f.S })).length > 0).toBe(ok);
       expect((await q.query(api.comments.unreadCount, { taskId: f.S })).total > 0).toBe(ok);
@@ -464,7 +461,6 @@ describe("T1: the switched old queries read through access.ts", () => {
       expect((await q.query(api.activityLog.latestForTask, { taskId: f.S })).length > 0).toBe(ok);
       expect(await q.query(api.tasks.getWorkCategoryId, { taskId: f.S })).toBe(ok ? f.design : null);
       expect((await q.query(api.tasks.deleteImpact, { id: f.S })) !== null, `deleteImpact ${caller}`).toBe(ok);
-      expect(Object.keys(await q.query(api.tasks.activityIndicators, { taskIds: [f.S] }))).toEqual(ok ? [f.S] : []);
       await q.query(api.attachments.byTask, { taskId: f.S }); // returns [] either way; must not throw
       await q.query(api.commentReactions.byTask, { taskId: f.S });
       await q.query(api.typingIndicators.getTyping, { taskId: f.S });
@@ -477,42 +473,39 @@ describe("T1: the switched old queries read through access.ts", () => {
     }
   });
 
-  it("parent-scoped reads: getSubtasks / subtaskPreview follow access to the parent", async () => {
+  it("parent-scoped reads: subtasks follow access to the parent", async () => {
     const t = createT();
     const f = await setup(t);
     for (const caller of CALLERS) {
       const q = as(t, caller);
       const ok = caller === "admin" || caller === "viaParent";
-      if (ok) expect((await q.query(api.tasks.getSubtasks, { parentTaskId: f.P })).map((s) => s._id)).toEqual([f.S]);
-      else await expect(q.query(api.tasks.getSubtasks, { parentTaskId: f.P }), caller).rejects.toThrow(/Task not found/);
-      expect((await q.query(api.tasks.subtaskPreview, { taskId: f.P })).map((s) => s._id)).toEqual(ok ? [f.S] : []);
+      const subs = await q.query(api.tasks.queries.subtasks, { parentTaskId: f.P });
+      expect(subs ? ids(subs.rows) : null, caller).toEqual(ok ? [f.S] : null);
     }
   });
 
-  it("list adapters scope members to their own (and via-parent) tasks", async () => {
+  it("the project surface (project Tasks tab) scopes members to their own and via-parent tasks", async () => {
     const t = createT();
     const f = await setup(t);
-    const listIds = async (caller: Caller) =>
-      ids(
-        (await as(t, caller).query(api.tasks.list, { tab: "all" })).groups.flatMap((g) => g.tasks),
-      );
-    expect(await listIds("admin")).toEqual(sorted([f.P, f.A, f.U]));
-    expect(await listIds("assigned")).toEqual([f.A]);
-    expect(await listIds("viaParent")).toEqual([f.P]);
-    expect(await listIds("unassigned")).toEqual([]);
-    expect(await listIds("otherOrg")).toEqual([f.X]);
-
+    const spec = { ...SYSTEM_VIEWS.project.all.spec, showSubtasks: true };
     const byProject = async (caller: Caller) =>
-      ids(await as(t, caller).query(api.tasks.listByProject, { projectId: f.arlo }));
+      ids((await as(t, caller).query(api.tasks.queries.listView, { surface: "project", projectId: f.arlo, spec })).rows);
     expect(await byProject("admin")).toEqual(sorted([f.P, f.S, f.A]));
     expect(await byProject("assigned")).toEqual(sorted([f.S, f.A]));
     expect(await byProject("viaParent")).toEqual(sorted([f.P, f.S]));
     expect(await byProject("unassigned")).toEqual([]);
-    expect(await byProject("otherOrg")).toEqual([]);
-
-    expect((await as(t, "assigned").query(api.tasks.counts, {})).all).toBe(1);
-    expect((await as(t, "admin").query(api.tasks.counts, {})).all).toBe(3);
-    expect((await as(t, "unassigned").query(api.tasks.counts, {})).all).toBe(0);
+    // Another org's project is refused; the surface needs a project.
+    await expect(
+      as(t, "otherOrg").query(api.tasks.queries.listView, { surface: "project", projectId: f.arlo, spec }),
+    ).rejects.toThrow(/Project not found/);
+    await expect(
+      as(t, "admin").query(api.tasks.queries.listView, { surface: "project", viewKey: "active" }),
+    ).rejects.toThrow(/projectId is required/);
+    // Only this project's rows, top-level by default (the Active view).
+    const active = await as(t, "admin").query(api.tasks.queries.listView, {
+      surface: "project", projectId: f.arlo, viewKey: "all",
+    });
+    expect(ids(active.rows)).toEqual(sorted([f.P, f.A]));
   });
 });
 
@@ -603,23 +596,16 @@ describe("taskUserState: fan-out on write, reset on open", () => {
       spec: { ...SYSTEM_VIEWS.tasks.all.spec, filters: [{ property: "newComments", operator: "is", values: ["true"] }] },
     });
     expect(ids(unreadOnly.rows)).toEqual([T1]);
-    // The old activity indicators read the same state.
-    expect((await alice.query(api.tasks.activityIndicators, { taskIds: [T1] }))[T1]).toMatchObject({
-      unreadCommentCount: 1, hasUnseenComments: true, hasUnseenNonComment: true, hasUnseen: true,
-    });
 
     // Admin deletes their comment → Alice's unread is recounted to 0.
     tick();
     await admin.mutation(api.comments.remove, { id: c1 });
     expect(await stateOf(t, T1, f.alice)).toMatchObject({ unreadComments: 0, hasUnseenChanges: true });
 
-    // Opening resets (new mutation and the old receipt path alike).
+    // Opening resets.
     tick();
     await alice.mutation(api.tasks.userState.markViewed, { taskId: T1 });
     expect(await stateOf(t, T1, f.alice)).toMatchObject({ unreadComments: 0, hasUnseenChanges: false });
-    tick();
-    await admin.mutation(api.taskViewReceipts.markViewed, { taskId: T1 });
-    expect(await stateOf(t, T1, f.admin)).toMatchObject({ unreadComments: 0, hasUnseenChanges: false });
 
     // An admin who opens a task they do not participate in is not subscribed.
     tick();
@@ -656,15 +642,15 @@ describe("taskUserState: fan-out on write, reset on open", () => {
     expect(await stateOf(t, T1, f.alice)).toBeNull();
   });
 
-  it("the reseed backfills state from legacy receipts and is idempotent", async () => {
+  it("the reseed backfills state from comment receipts and is idempotent", async () => {
     const t = createT();
     const f = await setup(t);
     tick();
     await as(t, "admin").mutation(api.comments.create, { taskId: f.A, content: text("old") });
-    // Simulate pre-slice-2 data: drop the state rows, keep a stale view receipt.
+    // Simulate missing state: drop the state rows, keep a stale comment receipt.
     await t.run(async (ctx) => {
       for (const s of await ctx.db.query("taskUserState").collect()) await ctx.db.delete(s._id);
-      await ctx.db.insert("taskViewReceipts", { orgId: ORG, taskId: f.A, userId: f.alice, lastViewedAt: 1 });
+      await ctx.db.insert("commentReadReceipts", { orgId: ORG, taskId: f.A, userId: f.alice, lastSeenAt: 1 });
     });
     const first = await t.mutation(internal.devSeedTasks.seed, { orgId: ORG });
     expect(first.userStatesInserted).toBeGreaterThan(0);
@@ -674,79 +660,25 @@ describe("taskUserState: fan-out on write, reset on open", () => {
   });
 });
 
-// ─── Adapter shape parity ────────────────────────────────────────────────────
+// ─── Planner panel preset (§10: planner.taskPanel → listView "planner") ─────
 
-describe("old queries keep their return shapes", () => {
-  const keys = (o: object) => Object.keys(o).sort();
-
-  it("tasks.list / counts / getDetail / getSubtasks / subtaskPreview / listByProject / activityIndicators", async () => {
+describe("planner surface", () => {
+  it("lists the caller's readable top-level tasks; planStats adds the plan totals", async () => {
     const t = createT();
     const f = await setup(t);
-    const admin = as(t, "admin");
+    const panel = async (caller: Caller) =>
+      ids((await as(t, caller).query(api.tasks.queries.listView, { surface: "planner" })).rows);
+    expect(await panel("admin")).toEqual(sorted([f.P, f.A, f.U]));
+    expect(await panel("assigned")).toEqual([f.A]);
+    expect(await panel("viaParent")).toEqual([f.P]);
+    expect(await panel("unassigned")).toEqual([]);
 
-    const list = await admin.query(api.tasks.list, { tab: "all", groupBy: "status" });
-    expect(keys(list)).toEqual(["groups", "hitScanLimit", "totalCount"]);
-    expect(keys(list.groups[0])).toEqual(["color", "count", "hasMore", "key", "label", "statusType", "tasks"]);
-    const row = list.groups.flatMap((g) => g.tasks).find((x) => x._id === f.A)!;
-    for (const k of ["status", "project", "client", "category", "assignees", "statusType", "assigneeIds", "manualSortKey"]) {
-      expect(row).toHaveProperty(k);
-    }
-    expect(row.project).toMatchObject({ _id: f.arlo, code: "ARLO" });
-    expect(row.assignees.map((a) => a._id)).toEqual([f.alice]);
-    // Tabs still filter by the legacy type.
-    const review = await admin.query(api.tasks.list, { tab: "in_progress" });
-    expect(review.groups.flatMap((g) => g.tasks).map((x) => x._id)).toEqual([f.A]);
-
-    expect(keys(await admin.query(api.tasks.counts, {}))).toEqual(
-      ["all", "archived", "backlog", "blocked", "done", "in_progress", "review"],
-    );
-
-    // Optional fields that are undefined are dropped on the wire, so the
-    // detail's keys are a subset of the old shape that includes the required ones.
-    const detailKeys = keys(await admin.query(api.tasks.getDetail, { id: f.S }));
-    const OLD_DETAIL_KEYS = [
-      "_id", "assigneeIds", "assignees", "billable", "category", "client", "clientName", "createdAt",
-      "createdBy", "createdByUser", "description", "dueDate", "estimate", "parentTaskId", "parentTaskTitle",
-      "project", "projectId", "projectName", "status", "statusType", "title", "totalMinutes", "updatedAt",
-      "workCategoryId",
-    ];
-    expect(OLD_DETAIL_KEYS).toEqual(expect.arrayContaining(detailKeys));
-    expect(detailKeys).toEqual(expect.arrayContaining([
-      "_id", "assigneeIds", "assignees", "billable", "category", "client", "createdAt", "createdBy",
-      "createdByUser", "parentTaskId", "parentTaskTitle", "project", "status", "statusType", "title",
-      "totalMinutes", "updatedAt",
-    ]));
-
-    const subs = await admin.query(api.tasks.getSubtasks, { parentTaskId: f.P });
-    // `dueDate` is undefined here and dropped on the wire.
-    expect(keys(subs[0])).toEqual(
-      ["_id", "assignees", "billable", "category", "sortOrder", "status", "statusType", "title", "totalMinutes"],
-    );
-    expect(keys((await admin.query(api.tasks.subtaskPreview, { taskId: f.P }))[0])).toEqual(
-      ["_id", "assignee", "statusType", "title"],
-    );
-    for (const r of await admin.query(api.tasks.listByProject, { projectId: f.arlo })) {
-      expect(["_id", "billable", "statusType", "title", "workCategoryId"]).toEqual(expect.arrayContaining(keys(r)));
-      expect(keys(r)).toEqual(expect.arrayContaining(["_id", "billable", "statusType", "title"]));
-    }
-    const indicators = await admin.query(api.tasks.activityIndicators, { taskIds: [f.P] });
-    expect(keys(indicators[f.P])).toEqual([
-      "commentCount", "hasAttachments", "hasDescription", "hasUnseen", "hasUnseenComments",
-      "hasUnseenDescription", "hasUnseenNonComment", "hasUnseenSubtasks", "lastActivity",
-      "subtaskDone", "subtaskTotal", "unreadCommentCount", "unseenActivityCount",
+    await as(t, "admin").mutation(api.planner.createSegment, {
+      taskId: f.A, userId: f.alice, startDate: "2026-10-19", endDate: "2026-10-21",
+    });
+    expect(await as(t, "admin").query(api.planner.planStats, {})).toEqual([
+      { taskId: f.A, plannedDays: 3, segmentCount: 1 },
     ]);
-    expect(indicators[f.P]).toMatchObject({ subtaskTotal: 1, subtaskDone: 0 });
-    expect(indicators[f.P].lastActivity).toMatchObject({ userName: "Admin", type: "subtask_created" });
-  });
-
-  it("planner.taskPanel", async () => {
-    const t = createT();
-    const f = await setup(t);
-    const panel = await as(t, "admin").query(api.planner.taskPanel, {});
-    expect(keys(panel[0])).toEqual([
-      "_id", "categoryColor", "categoryId", "categoryName", "clientId", "clientName", "createdAt", "dueDate",
-      "estimate", "plannedDays", "projectId", "projectName", "segmentCount", "statusType", "title",
-    ]);
-    expect(ids(panel)).toEqual(sorted([f.P, f.A, f.U]));
+    expect(await as(t, "otherOrg").query(api.planner.planStats, {})).toEqual([]);
   });
 });

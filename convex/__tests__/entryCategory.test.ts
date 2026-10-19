@@ -14,6 +14,7 @@ import { convexTest } from "convex-test";
 import schema from "../schema";
 import { api } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
+import { statusRow, taskRow } from "./helpers/taskFixtures";
 
 const modules = (
   import.meta as ImportMeta & {
@@ -86,16 +87,15 @@ async function baseSetup(t: ReturnType<typeof convexTest>): Promise<World> {
       createdAt: now,
       updatedAt: now,
     });
-    const statusId = await ctx.db.insert("statuses", {
+    const statusId = await ctx.db.insert("statuses", statusRow({
       orgId: ORG_ID,
       name: "Todo",
-      type: "backlog",
+      category: "backlog",
       color: "#000",
-      sortOrder: 0,
       createdAt: now,
       updatedAt: now,
       createdBy: admin,
-    });
+    }));
     const cat = async (name: string) =>
       ctx.db.insert("workCategories", {
         orgId: ORG_ID,
@@ -209,11 +209,10 @@ async function addTask(
 ): Promise<Id<"tasks">> {
   return await t.run(async (ctx) => {
     const now = Date.now();
-    const taskId = await ctx.db.insert("tasks", {
+    const taskId = await ctx.db.insert("tasks", taskRow({
       orgId: ORG_ID,
       title: "Task",
       statusId: w.statusId,
-      statusType: "backlog",
       statusCategory: "backlog",
       projectId: opts.projectId,
       assigneeIds: opts.assignees ?? [],
@@ -222,7 +221,7 @@ async function addTask(
       createdAt: now,
       updatedAt: now,
       createdBy: w.admin,
-    });
+    }));
     // Assignee edges are the access source of truth (tasks/access.ts, D1).
     for (const userId of opts.assignees ?? []) {
       await ctx.db.insert("taskAssignees", { orgId: ORG_ID, taskId, userId, assignedAt: now, assignedBy: w.admin });

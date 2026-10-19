@@ -1,10 +1,9 @@
 "use client"
 
-import { useState, useRef, useEffect } from "react"
-import { useMutation } from "convex/react"
+import { useState, useRef, useEffect, useMemo } from "react"
+import { useConvexAuth, useMutation, useQuery } from "convex/react"
 import dynamic from "next/dynamic"
 import { api } from "@/convex/_generated/api"
-import { useTaskReferenceData } from "@/components/tasks/task-reference-data"
 import {
   AssigneePicker,
   CategoryPicker,
@@ -78,7 +77,34 @@ export function TaskFormModal({
   const [showDescription, setShowDescription] = useState(false)
 
   const createTask = useMutation(api.tasks.create)
-  const { statuses, categories, projects, orgMembers } = useTaskReferenceData()
+  // Reference data for the pickers: the one `workspaceRefs` query every task
+  // surface reads (§5.4). Archived statuses/projects/categories are not offered.
+  const { isAuthenticated } = useConvexAuth()
+  const refs = useQuery(api.workspaceRefs.get, isAuthenticated && open ? {} : "skip")
+  const { statuses, categories, projects, orgMembers, defaultStatus } = useMemo(() => {
+    if (!refs) return { statuses: [], categories: [], projects: [], orgMembers: [], defaultStatus: undefined }
+    const clientById = new Map(refs.clients.map((c) => [c._id, c]))
+    const activeStatuses = refs.statuses.filter((st) => !st.archived)
+    return {
+      statuses: activeStatuses,
+      categories: refs.workCategories.filter((c) => !c.archived),
+      projects: refs.projects
+        .filter((p) => !p.archived)
+        .map((p) => {
+          const client = clientById.get(p.clientId)
+          return {
+            _id: p._id,
+            name: p.name,
+            clientName: client?.name ?? "",
+            clientPrefix: client?.prefix ?? undefined,
+            clientUsePrefix: client?.usePrefix,
+          }
+        }),
+      orgMembers: refs.members.map((m) => ({ _id: m._id, name: m.name, imageUrl: m.imageUrl ?? undefined })),
+      // What the server picks without a status: the backlog default (§4.1).
+      defaultStatus: activeStatuses.find((st) => st.category === "backlog" && st.isDefault),
+    }
+  }, [refs])
 
   // Focus title on open
   useEffect(() => {
@@ -142,10 +168,10 @@ export function TaskFormModal({
   }
 
   // Resolved display values
-  const selectedProject = projects?.find((p) => p._id === projectId)
-  const selectedStatus = statuses?.find((s) => s._id === statusId)
-  const selectedCategory = categories?.find((c) => c._id === workCategoryId)
-  const selectedAssignees = orgMembers?.filter((m) => assigneeIds.includes(m._id)) ?? []
+  const selectedProject = projects.find((p) => p._id === projectId)
+  const selectedStatus = statuses.find((s) => s._id === statusId)
+  const selectedCategory = categories.find((c) => c._id === workCategoryId)
+  const selectedAssignees = orgMembers.filter((m) => assigneeIds.includes(m._id))
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -168,7 +194,7 @@ export function TaskFormModal({
         {/* Project picker */}
         <div className="flex items-center gap-2 px-5 pt-4 pb-3">
           <ProjectPicker
-            projects={projects ?? []}
+            projects={projects}
             value={projectId}
             onChange={setProjectId}
             selectedLabel={selectedProject ? projectPickerLabel(selectedProject) : undefined}
@@ -222,19 +248,20 @@ export function TaskFormModal({
         {/* Property pills */}
         <div className="flex flex-wrap items-center gap-1.5 px-5 pb-4">
           <StatusPicker
-            statuses={statuses ?? []}
+            statuses={statuses}
             value={statusId}
             onChange={setStatusId}
             selected={selectedStatus}
+            placeholder={defaultStatus}
           />
           <AssigneePicker
-            members={orgMembers ?? []}
+            members={orgMembers}
             value={assigneeIds}
             onChange={setAssigneeIds}
             selected={selectedAssignees}
           />
           <CategoryPicker
-            categories={categories ?? []}
+            categories={categories}
             value={workCategoryId}
             onChange={setWorkCategoryId}
             selected={selectedCategory}

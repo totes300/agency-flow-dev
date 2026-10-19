@@ -13,6 +13,7 @@ import { convexTest } from "convex-test";
 import schema from "../schema";
 import { api } from "../_generated/api";
 import { getProjectEntries } from "../lib/projectEntries";
+import { statusRow, taskRow } from "./helpers/taskFixtures";
 
 const modules = (
   import.meta as ImportMeta & {
@@ -44,16 +45,15 @@ async function seed(t: ReturnType<typeof convexTest>) {
       role: "admin",
       joinedAt: now,
     });
-    const statusId = await ctx.db.insert("statuses", {
+    const statusId = await ctx.db.insert("statuses", statusRow({
       orgId: ORG_ID,
       name: "Todo",
-      type: "backlog",
+      category: "backlog",
       color: "#000",
-      sortOrder: 0,
       createdAt: now,
       updatedAt: now,
       createdBy: userId,
-    });
+    }));
     const clientId = await ctx.db.insert("clients", {
       orgId: ORG_ID,
       name: "Acme",
@@ -75,18 +75,18 @@ async function seed(t: ReturnType<typeof convexTest>) {
       });
     const projectA = await project("PRJ-A");
     const projectB = await project("PRJ-B");
-    const taskId = await ctx.db.insert("tasks", {
+    const taskId = await ctx.db.insert("tasks", taskRow({
       orgId: ORG_ID,
       title: "Build",
       statusId,
-      statusType: "backlog",
+      statusCategory: "backlog",
       projectId: projectA,
       assigneeIds: [userId],
       billable: true,
       createdAt: now,
       updatedAt: now,
       createdBy: userId,
-    });
+    }));
     const entryId = await ctx.db.insert("timeEntries", {
       orgId: ORG_ID,
       projectId: projectA,

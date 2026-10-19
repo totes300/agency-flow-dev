@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import type { Id } from "@/convex/_generated/dataModel"
 import type { PlannerSegmentBar } from "@/convex/planner"
-import type { StatusType } from "@/convex/lib/constants"
+import type { TaskCategory } from "@/convex/tasks/model"
 import {
   addDaysYmd,
   dayDiff,
@@ -66,7 +66,7 @@ export type PlannerPanelTask = {
   projectName: string | null
   clientName: string | null
   categoryColor: string | null
-  statusType: StatusType
+  statusCategory: TaskCategory
   /** Default span when dropped (from the remaining-estimate rule). */
   spanDays: number
 }

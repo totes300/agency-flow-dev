@@ -81,6 +81,8 @@ export function DisplayMenu({
   onSave,
   onSaveAsNew,
   onSetDefault,
+  hiddenGroupBy,
+  hiddenProperties,
 }: {
   display: DisplaySpec
   view: ViewOption
@@ -91,6 +93,9 @@ export function DisplayMenu({
   onSave: () => void
   onSaveAsNew: () => void
   onSetDefault: () => void
+  /** Groupings and properties the surface's context makes redundant (a project's own tab). */
+  hiddenGroupBy?: ReadonlySet<GroupBy>
+  hiddenProperties?: ReadonlySet<ViewProperty>
 }) {
   const board = display.layout === "board"
   const groupBy = board ? boardGroupBy(display.groupBy) : display.groupBy
@@ -146,7 +151,7 @@ export function DisplayMenu({
             <OptionSelect
               value={groupBy}
               disabled={locked}
-              options={GROUP_BY_ORDER.filter((g) => !board || g !== "none")}
+              options={GROUP_BY_ORDER.filter((g) => (!board || g !== "none") && !hiddenGroupBy?.has(g))}
               labels={GROUP_BY_LABELS}
               onSelect={(value) => onChange({ groupBy: value })}
             />
@@ -184,7 +189,7 @@ export function DisplayMenu({
         <Separator className="my-2.5 -mx-3 w-auto" />
         <p className="text-[13px] text-muted-foreground">Display properties</p>
         <div className="flex flex-wrap gap-1 pt-2">
-          {DISPLAY_PROPERTIES.map((p) => (
+          {DISPLAY_PROPERTIES.filter((p) => !hiddenProperties?.has(p.key)).map((p) => (
             <Toggle
               key={p.key}
               size="sm"

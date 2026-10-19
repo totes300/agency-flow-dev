@@ -420,8 +420,9 @@ export const devSeedAgents = internalMutation({
           "titles short and imperative; put supporting detail in the " +
           "description as plain text.\n" +
           "3. Use exact ids only: resolve project names via listProjects; " +
-          "take assignee or task ids only from @-mentions in the user's " +
-          "message. If you don't have an exact id, leave the field empty — " +
+          "take assignee ids only from @-mentions in the user's message; " +
+          "refer to tasks by their identifier (e.g. ARLO-21) from an " +
+          "@-mention or findTasks. If you don't have an exact id, leave the field empty — " +
           "the user can fill it on the card. Never guess ids.\n" +
           "4. Set a due date only when the source states one.\n" +
           "5. After proposing, add at most one short sentence — do not " +

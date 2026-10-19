@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import type { StatusType } from "@/convex/lib/constants"
+import type { StatusIcon as StatusIconShape } from "@/convex/tasks/model"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import {
   Command,
@@ -11,7 +11,7 @@ import {
   CommandGroup,
   CommandEmpty,
 } from "@/components/ui/command"
-import { StatusBadge } from "@/components/status-badge"
+import { StatusIcon } from "@/components/icons/status-icon"
 import { CategoryBadge } from "@/components/category-badge"
 import { UserAvatar } from "@/components/user-avatar"
 import { firstName, getClientDisplayName } from "@/lib/format"
@@ -108,42 +108,52 @@ export function ProjectPicker({
   )
 }
 
+type StatusOption = { _id: Id<"statuses">; name: string; color: string; icon: StatusIconShape }
+
+/** Status pill: the status icon (category + position, §4.1) and name. */
 export function StatusPicker({
   statuses,
   value,
   onChange,
   selected,
+  placeholder,
 }: {
-  statuses: Array<{ _id: Id<"statuses">; name: string; color: string; type: string }>
+  statuses: StatusOption[]
   value: Id<"statuses"> | undefined
   onChange: (id: Id<"statuses">) => void
-  selected: { name: string; color: string; type: string } | undefined
+  selected: StatusOption | undefined
+  /** Shown muted while nothing is picked: the status the server will use. */
+  placeholder?: StatusOption
 }) {
   const [open, setOpen] = useState(false)
+  const shown = selected ?? placeholder
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button className="flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[11px] font-medium transition-colors hover:bg-muted/30">
-          {selected ? (
-            <StatusBadge name={selected.name} color={selected.color} type={selected.type as StatusType} />
-          ) : (
+          {shown ? (
             <>
-              <div className="size-1.5 rounded-full bg-muted-foreground/40" />
-              <span className="text-muted-foreground">Inbox</span>
+              <StatusIcon icon={shown.icon} color={shown.color} size={12} />
+              <span className={selected ? "text-foreground" : "text-muted-foreground"}>{shown.name}</span>
             </>
+          ) : (
+            <span className="text-muted-foreground">Status</span>
           )}
         </button>
       </PopoverTrigger>
       <PopoverContent className="w-60 p-0" align="start">
         <Command>
+          <CommandInput placeholder="Change status..." />
           <CommandList>
+            <CommandEmpty>No statuses.</CommandEmpty>
             <CommandGroup>
               {statuses.map((s) => (
-                  <CommandItem key={s._id} onSelect={() => { onChange(s._id); setOpen(false) }} className="px-2 py-1.5">
-                    <StatusBadge name={s.name} color={s.color} type={s.type as StatusType} variant="inline" />
-                    {value === s._id && <CheckIcon className="ml-auto size-3.5 text-muted-foreground" />}
-                  </CommandItem>
+                <CommandItem key={s._id} value={s.name} onSelect={() => { onChange(s._id); setOpen(false) }} className="px-2 py-1.5">
+                  <StatusIcon icon={s.icon} color={s.color} size={14} />
+                  <span className="truncate text-xs">{s.name}</span>
+                  {value === s._id && <CheckIcon className="ml-auto size-3.5 text-muted-foreground" />}
+                </CommandItem>
               ))}
             </CommandGroup>
           </CommandList>

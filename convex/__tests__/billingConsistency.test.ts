@@ -24,6 +24,7 @@ import { api } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
 import { scopeOf, type ScopeEntry, type ScopeProject } from "../lib/billing/scope";
 import { reconcileOrg } from "../lib/billing/reconcile";
+import { statusRow, taskRow } from "./helpers/taskFixtures";
 
 const modules = (
   import.meta as ImportMeta & {
@@ -83,16 +84,15 @@ async function seedOrg(t: T, opts: { roundingMinutes?: number } = {}): Promise<O
       updatedAt: now,
       createdBy: userId,
     });
-    const statusId = await ctx.db.insert("statuses", {
+    const statusId = await ctx.db.insert("statuses", statusRow({
       orgId: ORG_ID,
       name: "Todo",
-      type: "backlog",
+      category: "backlog",
       color: "#000",
-      sortOrder: 0,
       createdAt: now,
       updatedAt: now,
       createdBy: userId,
-    });
+    }));
     const clientId = await ctx.db.insert("clients", {
       orgId: ORG_ID,
       name: "Acme",
@@ -156,18 +156,18 @@ async function seedTask(
 ): Promise<Id<"tasks">> {
   return t.run(async (ctx) => {
     const now = Date.now();
-    return ctx.db.insert("tasks", {
+    return ctx.db.insert("tasks", taskRow({
       orgId: ORG_ID,
       title,
       statusId: org.statusId,
-      statusType: "backlog",
+      statusCategory: "backlog",
       projectId,
       assigneeIds: [org.userId],
       billable: true,
       createdAt: now,
       updatedAt: now,
       createdBy: org.userId,
-    });
+    }));
   });
 }
 

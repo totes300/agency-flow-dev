@@ -83,6 +83,30 @@ describe("agentToolRegistry", () => {
   });
 });
 
+describe("task tools speak the new task layer (tasks refactor §7)", () => {
+  type Parseable = { safeParse: (input: unknown) => { success: boolean } };
+  const schemaOf = (name: string) =>
+    (agentToolRegistry[name].tool as unknown as { inputSchema: Parseable })
+      .inputSchema;
+
+  it("findTasks filters by status category, not the legacy status type", () => {
+    const schema = schemaOf("findTasks");
+    for (const category of ["backlog", "unstarted", "started", "completed", "canceled"]) {
+      expect(schema.safeParse({ category }).success, category).toBe(true);
+    }
+    expect(schema.safeParse({ category: "in_progress" }).success).toBe(false);
+    expect(schema.safeParse({ includeClosed: true, limit: 10 }).success).toBe(true);
+  });
+
+  it("task-addressed tools take an identifier or id as `task`", () => {
+    for (const name of ["getTaskDetail", "proposeArchiveTask"]) {
+      const schema = schemaOf(name);
+      expect(schema.safeParse({ task: "ARLO-21" }).success, name).toBe(true);
+      expect(schema.safeParse({}).success, name).toBe(false);
+    }
+  });
+});
+
 describe("getToolsForAgent", () => {
   it("resolves whitelisted names into a tool set", () => {
     const { tools, dropped } = getToolsForAgent(

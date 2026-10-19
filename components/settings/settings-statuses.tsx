@@ -1,410 +1,370 @@
 "use client"
 
 import { useState } from "react"
-import { useQuery, useMutation } from "convex/react"
+import { useMutation, useQuery } from "convex/react"
+import {
+  ArchiveIcon,
+  ArchiveRestoreIcon,
+  ArrowRightLeftIcon,
+  MoreHorizontalIcon,
+  PencilIcon,
+  PlusIcon,
+  StarIcon,
+  Trash2Icon,
+} from "lucide-react"
 import { api } from "@/convex/_generated/api"
+import type { Id } from "@/convex/_generated/dataModel"
+import type { StatusSettingsRow } from "@/convex/statuses"
+import { CATEGORY_LABELS, TASK_CATEGORIES, statusIconFor, type TaskCategory } from "@/convex/tasks/model"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { ConfirmDialog } from "@/components/confirm-dialog"
-import { cn } from "@/lib/utils"
-import { ColorPickerDropdown } from "@/components/color-picker-dropdown"
-import { STATUS_TYPES, STATUS_COLOR_NAMES } from "@/convex/lib/constants"
-import type { StatusType, StatusColorName } from "@/convex/lib/constants"
-import { TYPE_LABELS } from "@/lib/display-constants"
-import { STATUS_COLOR_CONFIG } from "@/lib/status-colors"
-import type { Id } from "@/convex/_generated/dataModel"
+import { StatusIcon } from "@/components/icons/status-icon"
+import { toStatusColor } from "@/components/settings/color-swatch-picker"
 import {
-  PlusIcon,
-  GripVerticalIcon,
-  Trash2Icon,
-  PencilIcon,
-  StarIcon,
-} from "lucide-react"
-import { toast } from "sonner"
+  InlineEditRow,
+  MenuItemWithHint,
+  SettingsListRow,
+  SortableSettingsList,
+  type InlineEditValues,
+} from "@/components/settings/settings-list-row"
+import {
+  NEW_STATUS_COLOR,
+  afterIdForMove,
+  groupByCategory,
+  reorderAfter,
+} from "@/components/settings/settings-list-model"
+import { useIsAdmin } from "@/lib/hooks/use-is-admin"
 import { toastError } from "@/lib/toast-helpers"
-import { StatusBadge } from "@/components/status-badge"
-import { StatusColorSwatch } from "@/components/status-color-swatch"
-import { StatusIcon } from "@/components/status-icon"
-import { getStatusColor } from "@/lib/status-colors"
 
-// ─── Sub-components ─────────────────────────────────────────────────────────────
+/**
+ * Settings → Statuses (docs/prd-tasks-refactor.md §4.1, D3), Linear's
+ * Workflow structure: one section per fixed category in workflow order, the
+ * org's statuses inside it in their order. Admins add, edit inline, reorder
+ * (drag inside the category), set the default, archive/restore, delete
+ * unused ones and move unused ones to another category; the server enforces
+ * every rule. Members see the same list read-only.
+ */
 
-function SettingsStatusesSkeleton() {
+/** icon · name · description · marker · menu */
+const COLUMNS = "grid min-w-0 flex-1 grid-cols-[16px_minmax(0,11rem)_minmax(0,1fr)_4.5rem_28px] items-center gap-3"
+
+type Editing = { kind: "edit"; id: Id<"statuses"> } | { kind: "create"; category: TaskCategory } | null
+
+function StatusesSkeleton() {
   return (
     <div className="flex flex-col gap-6">
       {Array.from({ length: 5 }).map((_, i) => (
-        <div key={i}>
-          <div className="flex items-center justify-between border-b pb-2">
-            <Skeleton className="h-4 w-20" />
-            <Skeleton className="size-4" />
-          </div>
-          <div className="flex flex-col gap-1 pt-2">
-            <Skeleton className="h-8 w-full" />
-            {i < 2 && <Skeleton className="h-8 w-full" />}
-          </div>
+        <div key={i} className="flex flex-col">
+          <Skeleton className="h-9 w-full rounded-md" />
+          {Array.from({ length: i === 2 ? 3 : 1 }).map((__, j) => (
+            <div key={j} className="flex h-10 items-center gap-3 border-b border-border/60 pl-6">
+              <Skeleton className="size-3.5 rounded-full" />
+              <Skeleton className="h-3.5 w-28" />
+            </div>
+          ))}
         </div>
       ))}
     </div>
   )
 }
-
-// ─── Main Component ─────────────────────────────────────────────────────────────
 
 export function SettingsStatuses() {
-  const statuses = useQuery(api.statuses.list, { includeArchived: true })
-  const orgSettings = useQuery(api.orgSettings.get)
+  const isAdmin = useIsAdmin()
+  const adminRows = useQuery(api.statuses.listForSettings, isAdmin ? {} : "skip")
+  // Members can't read the settings query; the workspace refs carry the same list.
+  const refs = useQuery(api.workspaceRefs.get, isAdmin === false ? {} : "skip")
+
   const createStatus = useMutation(api.statuses.create)
   const updateStatus = useMutation(api.statuses.update)
+  const setDefault = useMutation(api.statuses.setDefault)
+  const archiveStatus = useMutation(api.statuses.archive)
+  const restoreStatus = useMutation(api.statuses.restore)
   const removeStatus = useMutation(api.statuses.remove)
-  const setDefaultStatus = useMutation(api.statuses.setDefault)
-  const updateOrgSettings = useMutation(api.orgSettings.update)
+  const moveStatus = useMutation(api.statuses.move).withOptimisticUpdate((store, { id, afterId }) => {
+    const current = store.getQuery(api.statuses.listForSettings, {})
+    const moved = current?.find((row) => row._id === id)
+    if (!current || !moved) return
+    store.setQuery(
+      api.statuses.listForSettings,
+      {},
+      reorderAfter(current, id, afterId, (row) => row.category === moved.category),
+    )
+  })
 
-  const [createOpen, setCreateOpen] = useState(false)
-  const [createForType, setCreateForType] = useState<StatusType>("backlog")
-  const [editingId, setEditingId] = useState<Id<"statuses"> | null>(null)
-  const [deleteTarget, setDeleteTarget] = useState<{ id: Id<"statuses">; name: string } | null>(null)
+  const [editing, setEditing] = useState<Editing>(null)
+  const [deleteTarget, setDeleteTarget] = useState<StatusSettingsRow | null>(null)
 
-  if (!statuses || !orgSettings) return <SettingsStatusesSkeleton />
+  const rows: StatusSettingsRow[] | undefined = isAdmin
+    ? adminRows
+    : refs?.statuses.map((s) => ({ ...s, inUse: true }))
+  if (isAdmin === undefined || rows === undefined) return <StatusesSkeleton />
 
-  const activeStatuses = statuses.filter((s) => !s.archivedAt)
-  const defaultStatusId = orgSettings.defaultStatusId
-
-  const groupedStatuses = STATUS_TYPES.map((type) => ({
-    type,
-    statuses: activeStatuses.filter((s) => s.type === type),
-  }))
-
-  const editingStatus = editingId
-    ? statuses.find((s) => s._id === editingId)
-    : null
-
-  return (
-    <div>
-      {groupedStatuses.map(({ type, statuses: groupStatuses }, index) => (
-        <div key={type} className={cn(index > 0 ? "mt-6" : "")}>
-          {/* Section header */}
-          <div className="flex items-center justify-between border-b pb-2">
-            <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              {TYPE_LABELS[type]}
-            </span>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="size-7"
-              onClick={() => {
-                setCreateForType(type)
-                setCreateOpen(true)
-              }}
-              aria-label={`Add ${TYPE_LABELS[type]} status`}
-            >
-              <PlusIcon className="size-4" />
-            </Button>
-          </div>
-
-          {/* Status rows */}
-          {groupStatuses.map((status) => {
-            const isDefault = defaultStatusId === status._id
-            return (
-              <div
-                key={status._id}
-                className="group flex items-center gap-2 rounded-md px-1.5 py-2 transition-colors hover:bg-muted/40"
-              >
-                <GripVerticalIcon className="size-3.5 shrink-0 text-muted-foreground/30 group-hover:text-muted-foreground/60" />
-                <StatusBadge name={status.name} color={status.color} type={status.type} variant="solid" />
-                {isDefault && (
-                  <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Default</span>
-                )}
-                <span className="flex-1" />
-                {/* Actions — appear on hover, visible on touch/focus */}
-                <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100">
-                  {!isDefault && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="size-7"
-                      onClick={async () => {
-                        try {
-                          await setDefaultStatus({ id: status._id })
-                        } catch (err) {
-                          toastError(err, "Failed to set default status")
-                        }
-                      }}
-                      aria-label="Set as default"
-                    >
-                      <StarIcon className="size-3.5" />
-                    </Button>
-                  )}
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-7"
-                    onClick={() => setEditingId(status._id)}
-                    aria-label="Edit"
-                  >
-                    <PencilIcon className="size-3.5" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-7 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                    onClick={() => setDeleteTarget({ id: status._id, name: status.name })}
-                    aria-label="Delete"
-                  >
-                    <Trash2Icon className="size-3.5" />
-                  </Button>
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      ))}
-
-      {/* Completion Defaults */}
-      <CompletionDefaults
-        statuses={activeStatuses}
-        adminDefaultId={orgSettings.completionDefaultAdminStatusId}
-        memberDefaultId={orgSettings.completionDefaultMemberStatusId}
-        onUpdate={async (field, statusId) => {
-          try {
-            await updateOrgSettings({ [field]: statusId })
-            toast.success("Completion default updated")
-          } catch (err) {
-            toastError(err, "Failed to update completion default")
-          }
-        }}
-      />
-
-      {/* Delete confirmation */}
-      <ConfirmDialog
-        open={!!deleteTarget}
-        onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}
-        title="Delete status"
-        description={`Are you sure you want to delete \u201c${deleteTarget?.name}\u201d? This action cannot be undone.`}
-        confirmLabel="Delete"
-        variant="destructive"
-        onConfirm={async () => {
-          if (deleteTarget) {
-            try {
-              await removeStatus({ id: deleteTarget.id })
-              setDeleteTarget(null)
-            } catch (err) {
-              toastError(err, "Failed to delete status")
-            }
-          }
-        }}
-      />
-
-      {/* Create dialog */}
-      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Add Status</DialogTitle>
-            <DialogDescription>Create a new task status.</DialogDescription>
-          </DialogHeader>
-          <StatusForm
-            initialValues={{ name: "", color: "gray", type: createForType }}
-            submitLabel="Create Status"
-            onSubmit={async (values) => {
-              await createStatus(values)
-              setCreateOpen(false)
-            }}
-          />
-        </DialogContent>
-      </Dialog>
-
-      {/* Edit dialog */}
-      <Dialog
-        open={!!editingId}
-        onOpenChange={(open) => {
-          if (!open) setEditingId(null)
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Edit Status</DialogTitle>
-            <DialogDescription>Modify this status.</DialogDescription>
-          </DialogHeader>
-          {editingStatus && (
-            <StatusForm
-              key={editingId!}
-              initialValues={{
-                name: editingStatus.name,
-                color: editingStatus.color,
-                type: editingStatus.type,
-              }}
-              submitLabel="Save Changes"
-              onSubmit={async (values) => {
-                await updateStatus({ id: editingId!, ...values })
-                setEditingId(null)
-              }}
-            />
-          )}
-        </DialogContent>
-      </Dialog>
-    </div>
+  const canEdit = isAdmin
+  const groups = groupByCategory(rows)
+  const activeCount = new Map<TaskCategory, number>(
+    groups.map((g) => [g.category, g.rows.filter((r) => !r.archived).length]),
   )
-}
 
-// ─── Completion Defaults ────────────────────────────────────────────────────────
-
-function CompletionDefaults({
-  statuses,
-  adminDefaultId,
-  memberDefaultId,
-  onUpdate,
-}: {
-  statuses: { _id: Id<"statuses">; name: string; color: string; type: string }[]
-  adminDefaultId?: Id<"statuses">
-  memberDefaultId?: Id<"statuses">
-  onUpdate: (field: "completionDefaultAdminStatusId" | "completionDefaultMemberStatusId", statusId: Id<"statuses">) => Promise<void>
-}) {
-  const completionStatuses = statuses
-    .filter((s) => s.type === "done" || s.type === "review")
-    .sort((a, b) => {
-      // Review first, then done
-      if (a.type !== b.type) return a.type === "review" ? -1 : 1
-      return 0
-    })
-
-  return (
-    <div className="mt-8">
-      <div className="flex items-center justify-between border-b pb-2">
-        <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          Completion Defaults
-        </span>
-      </div>
-      <p className="mt-2 text-xs text-muted-foreground">
-        When a team member checks a task as complete, it moves to the default status for their role.
-      </p>
-      <div className="mt-4 flex flex-col gap-3">
-        {([
-          { label: "Admin completes to", field: "completionDefaultAdminStatusId" as const, value: adminDefaultId },
-          { label: "Member completes to", field: "completionDefaultMemberStatusId" as const, value: memberDefaultId },
-        ]).map(({ label, field, value }) => (
-          <div key={field} className="flex items-center gap-3">
-            <span className="w-40 shrink-0 text-sm text-muted-foreground">{label}</span>
-            <Select
-              value={value ?? ""}
-              onValueChange={(v) => {
-                if (v) onUpdate(field, v as Id<"statuses">)
-              }}
-            >
-              <SelectTrigger className="w-48">
-                <SelectValue placeholder="Not set" />
-              </SelectTrigger>
-              <SelectContent>
-                {completionStatuses.map((status) => (
-                  <SelectItem key={status._id} value={status._id}>
-                    <span className="flex items-center gap-2">
-                      <StatusIcon
-                        type={status.type as "done" | "review"}
-                        color={getStatusColor(status.color).dot}
-                        size={14}
-                      />
-                      {status.name}
-                    </span>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-// ─── Status Form (create + edit dialog) ─────────────────────────────────────────
-
-function StatusForm({
-  initialValues,
-  onSubmit,
-  submitLabel,
-}: {
-  initialValues?: { name: string; color: string; type: StatusType }
-  onSubmit: (values: { name: string; color: StatusColorName; type: StatusType }) => Promise<void>
-  submitLabel: string
-}) {
-  const [name, setName] = useState(initialValues?.name ?? "")
-  const [color, setColor] = useState<StatusColorName>((initialValues?.color ?? "gray") as StatusColorName)
-  const [type, setType] = useState<StatusType>(initialValues?.type ?? "backlog")
-  const [submitting, setSubmitting] = useState(false)
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault()
-    if (!name.trim()) return
-    setSubmitting(true)
+  async function run(action: () => Promise<unknown>, fallback: string) {
     try {
-      await onSubmit({ name: name.trim(), color, type })
+      await action()
     } catch (err) {
-      toastError(err, "Failed to save status")
-    } finally {
-      setSubmitting(false)
+      toastError(err, fallback)
     }
   }
 
+  async function submitEdit(row: StatusSettingsRow, values: InlineEditValues) {
+    try {
+      await updateStatus({
+        id: row._id,
+        name: values.name,
+        color: values.color,
+        description: values.description || null,
+      })
+      setEditing(null)
+    } catch (err) {
+      toastError(err, "Failed to save status")
+      throw err
+    }
+  }
+
+  async function submitCreate(category: TaskCategory, values: InlineEditValues) {
+    try {
+      await createStatus({
+        category,
+        name: values.name,
+        color: values.color,
+        description: values.description || undefined,
+      })
+      setEditing(null)
+    } catch (err) {
+      toastError(err, "Failed to create status")
+      throw err
+    }
+  }
+
+  function reorder(groupRows: StatusSettingsRow[], from: number, to: number) {
+    const afterId = afterIdForMove(
+      groupRows.map((r) => r._id),
+      from,
+      to,
+    )
+    if (afterId === undefined) return
+    void run(() => moveStatus({ id: groupRows[from]._id, afterId }), "Failed to reorder")
+  }
+
   return (
-    <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-      <div className="flex flex-col gap-2">
-        <Label>Name</Label>
-        <Input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="e.g. In Review"
-          autoFocus
-        />
-      </div>
+    <div className="flex flex-col gap-6">
+      {groups.map((group) => {
+        const sortable = canEdit && editing === null && group.rows.length > 1
+        const rowNodes = group.rows.map((row, index) =>
+          editing?.kind === "edit" && editing.id === row._id ? (
+            <InlineEditRow
+              key={row._id}
+              initial={{ name: row.name, color: toStatusColor(row.color), description: row.description ?? "" }}
+              withDescription
+              renderPreview={(color) => <StatusIcon icon={row.icon} color={color} />}
+              namePlaceholder="Status name"
+              submitLabel="Save"
+              onSubmit={(values) => submitEdit(row, values)}
+              onCancel={() => setEditing(null)}
+            />
+          ) : (
+            <SettingsListRow
+              key={row._id}
+              muted={row.archived}
+              sortable={sortable ? { id: row._id, index, label: row.name } : undefined}
+            >
+              <div className={COLUMNS}>
+                <StatusIcon icon={row.icon} color={row.color} className={row.archived ? "opacity-50" : undefined} />
+                <span className="truncate font-medium">{row.name}</span>
+                <span className="truncate text-muted-foreground">{row.description}</span>
+                <span className="text-right text-xs text-muted-foreground">
+                  {row.isDefault ? "Default" : row.archived ? "Archived" : null}
+                </span>
+                {canEdit ? (
+                  <StatusRowMenu
+                    row={row}
+                    isLastActive={!row.archived && (activeCount.get(row.category) ?? 0) <= 1}
+                    onEdit={() => setEditing({ kind: "edit", id: row._id })}
+                    onMakeDefault={() => void run(() => setDefault({ id: row._id }), "Failed to set default")}
+                    onChangeCategory={(category) =>
+                      void run(() => updateStatus({ id: row._id, category }), "Failed to change category")
+                    }
+                    onArchive={() => void run(() => archiveStatus({ id: row._id }), "Failed to archive status")}
+                    onRestore={() => void run(() => restoreStatus({ id: row._id }), "Failed to restore status")}
+                    onDelete={() => setDeleteTarget(row)}
+                  />
+                ) : (
+                  <span />
+                )}
+              </div>
+            </SettingsListRow>
+          ),
+        )
 
-      {/* Group (type) */}
-      <div className="flex flex-col gap-2">
-        <Label>Group</Label>
-        <Select value={type} onValueChange={(v) => setType(v as StatusType)}>
-          <SelectTrigger>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {STATUS_TYPES.map((t) => (
-              <SelectItem key={t} value={t}>
-                {TYPE_LABELS[t]}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
+        return (
+          <section key={group.category} aria-label={`${group.label} statuses`} className="flex flex-col">
+            <div className="flex h-9 items-center gap-2 rounded-md bg-muted/50 pr-1 pl-3">
+              <span className="text-[13px] font-medium">{group.label}</span>
+              <span className="text-xs text-muted-foreground tabular-nums">{group.rows.length}</span>
+              <span className="flex-1" />
+              {canEdit ? (
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={`Add ${group.label.toLowerCase()} status`}
+                  onClick={() => setEditing({ kind: "create", category: group.category })}
+                >
+                  <PlusIcon />
+                </Button>
+              ) : null}
+            </div>
+            {sortable ? (
+              <SortableSettingsList onReorder={(from, to) => reorder(group.rows, from, to)}>
+                {rowNodes}
+              </SortableSettingsList>
+            ) : (
+              rowNodes
+            )}
+            {editing?.kind === "create" && editing.category === group.category ? (
+              <InlineEditRow
+                initial={{ name: "", color: NEW_STATUS_COLOR[group.category], description: "" }}
+                withDescription
+                renderPreview={(color) => (
+                  <StatusIcon
+                    icon={statusIconFor(group.category, activeCount.get(group.category) ?? 0, (activeCount.get(group.category) ?? 0) + 1)}
+                    color={color}
+                  />
+                )}
+                namePlaceholder="Status name"
+                submitLabel="Create"
+                onSubmit={(values) => submitCreate(group.category, values)}
+                onCancel={() => setEditing(null)}
+              />
+            ) : null}
+          </section>
+        )
+      })}
 
-      {/* Color picker */}
-      <div className="flex flex-col gap-2">
-        <Label>Color</Label>
-        <ColorPickerDropdown
-          value={color}
-          onChange={setColor}
-          colors={STATUS_COLOR_NAMES}
-          renderSwatch={(c) => ({
-            swatch: <StatusColorSwatch color={c} />,
-            label: STATUS_COLOR_CONFIG[c]?.label ?? "Gray",
-          })}
-        />
-      </div>
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null)
+        }}
+        title="Delete status"
+        description={`Delete “${deleteTarget?.name ?? ""}”? This can't be undone.`}
+        confirmLabel="Delete"
+        variant="destructive"
+        onConfirm={() => {
+          const target = deleteTarget
+          setDeleteTarget(null)
+          if (target) void run(() => removeStatus({ id: target._id }), "Failed to delete status")
+        }}
+      />
+    </div>
+  )
+}
 
-      <Button type="submit" disabled={!name.trim() || submitting} className="w-full">
-        {submitting ? "Saving..." : submitLabel}
-      </Button>
-    </form>
+function StatusRowMenu({
+  row,
+  isLastActive,
+  onEdit,
+  onMakeDefault,
+  onChangeCategory,
+  onArchive,
+  onRestore,
+  onDelete,
+}: {
+  row: StatusSettingsRow
+  isLastActive: boolean
+  onEdit: () => void
+  onMakeDefault: () => void
+  onChangeCategory: (category: TaskCategory) => void
+  onArchive: () => void
+  onRestore: () => void
+  onDelete: () => void
+}) {
+  const archiveHint = row.isDefault
+    ? "Make another status the default first"
+    : isLastActive
+      ? "Last active status in this category"
+      : null
+  const deleteHint = row.inUse
+    ? "Used by tasks — archive instead"
+    : row.isDefault
+      ? "Make another status the default first"
+      : isLastActive
+        ? "Last active status in this category"
+        : null
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${row.name}`}>
+          <MoreHorizontalIcon />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-60" onCloseAutoFocus={(e) => e.preventDefault()}>
+        <DropdownMenuGroup>
+          <DropdownMenuItem onSelect={onEdit}>
+            <PencilIcon />
+            Edit
+          </DropdownMenuItem>
+          {!row.isDefault ? (
+            <DropdownMenuItem disabled={row.archived} onSelect={onMakeDefault}>
+              <StarIcon />
+              <MenuItemWithHint hint={row.archived ? "Restore it first" : null}>Make default</MenuItemWithHint>
+            </DropdownMenuItem>
+          ) : null}
+          {!row.inUse && !row.isDefault ? (
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <ArrowRightLeftIcon />
+                Change category
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                {TASK_CATEGORIES.filter((c) => c !== row.category).map((category) => (
+                  <DropdownMenuItem key={category} onSelect={() => onChangeCategory(category)}>
+                    <StatusIcon icon={statusIconFor(category, 0, 1)} color={row.color} />
+                    {CATEGORY_LABELS[category]}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+          ) : null}
+        </DropdownMenuGroup>
+        <DropdownMenuSeparator />
+        <DropdownMenuGroup>
+          {row.archived ? (
+            <DropdownMenuItem onSelect={onRestore}>
+              <ArchiveRestoreIcon />
+              Restore
+            </DropdownMenuItem>
+          ) : (
+            <DropdownMenuItem disabled={archiveHint !== null} onSelect={onArchive}>
+              <ArchiveIcon />
+              <MenuItemWithHint hint={archiveHint}>Archive</MenuItemWithHint>
+            </DropdownMenuItem>
+          )}
+          <DropdownMenuItem variant="destructive" disabled={deleteHint !== null} onSelect={onDelete}>
+            <Trash2Icon />
+            <MenuItemWithHint hint={deleteHint}>Delete</MenuItemWithHint>
+          </DropdownMenuItem>
+        </DropdownMenuGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }

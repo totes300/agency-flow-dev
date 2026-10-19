@@ -2,6 +2,9 @@
 // no Date-object timezone traps — all arithmetic runs on UTC epoch derived
 // from "YYYY-MM-DD" strings (same approach as convex/workday.ts eachDate).
 
+import type { Id } from "@/convex/_generated/dataModel"
+import type { TaskCategory } from "@/convex/tasks/model"
+
 export type DateSpan = {
   startDate: string // "YYYY-MM-DD" inclusive
   endDate: string   // "YYYY-MM-DD" inclusive
@@ -97,21 +100,45 @@ export function anyPanelFilterActive(f: PlannerPanelFilters): boolean {
   )
 }
 
+/**
+ * One card of the Planner's Tasks panel: a `planner`-preset `listView` row
+ * resolved against `workspaceRefs`, plus its plan totals (`planner.planStats`).
+ */
+export type TaskPanelItem = {
+  _id: Id<"tasks">
+  title: string
+  projectId: Id<"projects"> | null
+  projectName: string | null
+  clientId: Id<"clients"> | null
+  clientName: string | null
+  categoryId: Id<"workCategories"> | null
+  categoryName: string | null
+  categoryColor: string | null
+  statusCategory: TaskCategory
+  /** YYYY-MM-DD deadline; drives the panel's Due filter. */
+  dueDate: string | null
+  estimateMinutes: number | null
+  /** Sum of day-spans across ALL of the task's segments. */
+  plannedDays: number
+  segmentCount: number
+  createdAt: number
+}
+
 export type PanelFilterableTask = {
   projectId: string | null
   clientId: string | null
   categoryId: string | null
   dueDate: string | null
   segmentCount: number
-  statusType: string
+  statusCategory: TaskCategory
 }
 
-/** The to-plan inbox definition: nothing planned yet and not done. */
+/** The to-plan inbox definition: nothing planned yet and not closed (completed or canceled). */
 export function isUnscheduledTask(t: {
   segmentCount: number
-  statusType: string
+  statusCategory: TaskCategory
 }): boolean {
-  return t.segmentCount === 0 && t.statusType !== "done"
+  return t.segmentCount === 0 && t.statusCategory !== "completed" && t.statusCategory !== "canceled"
 }
 
 /**

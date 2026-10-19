@@ -178,8 +178,8 @@ export const subtasks = query({
 });
 
 function compareSortKeys(a: Doc<"tasks">, b: Doc<"tasks">): number {
-  const ak = a.sortKey ?? a.manualSortKey;
-  const bk = b.sortKey ?? b.manualSortKey;
+  const ak = a.sortKey;
+  const bk = b.sortKey;
   if (ak !== undefined && bk !== undefined && ak !== bk) return ak < bk ? -1 : 1;
   if (ak !== undefined && bk === undefined) return -1;
   if (ak === undefined && bk !== undefined) return 1;

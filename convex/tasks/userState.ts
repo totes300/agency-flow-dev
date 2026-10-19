@@ -14,8 +14,8 @@ import { markTaskNotificationsRead } from "../notifications";
  * - Subscribers of a task = its current assignees ∪ its creator ∪ anyone who
  *   commented on it ∪ anyone whose row already says `subscribed` (an
  *   assignee removed later stays subscribed, Linear-style).
- * - `muted` users stay subscribed but receive no fan-out (mirrors the
- *   `taskMutes` notification mute until slice 7 drops that table).
+ * - `muted` users stay subscribed but receive no fan-out and no comment
+ *   notifications (`notifications.muteTask` / `unmuteTask` set it).
  * - Rows are created lazily: the first fan-out to a subscriber, or the first
  *   time a user opens the task (an admin viewer who is not a participant gets
  *   a row with `subscribed: false` that only tracks `lastViewedAt`).
@@ -217,7 +217,7 @@ export async function markTaskViewed(ctx: MutationCtx, access: TaskAccess, now: 
   );
 }
 
-/** Mirrors the notification mute (`notifications.muteTask`/`unmuteTask`). */
+/** The task mute (`notifications.muteTask`/`unmuteTask`). */
 export async function setTaskMuted(
   ctx: MutationCtx,
   task: Doc<"tasks">,
@@ -335,16 +335,15 @@ export async function recomputeUserStates(
 
 /**
  * Called when the caller opens a task (drawer, full page). Resets the
- * caller's unread comments and unseen-change dot. The old UI's
- * `taskViewReceipts.markViewed` funnels here too.
+ * caller's unread comments and unseen-change dot.
  */
 export const markViewed = mutation({
   args: { taskId: v.id("tasks") },
   handler: async (ctx, { taskId }) => {
     const access = await loadTaskForRead(ctx, taskId);
     await markTaskViewed(ctx, access, Date.now());
-    // Honest badge (kept from `taskViewReceipts.markViewed`): opening a task
-    // clears the viewer's unread inbox notifications for it.
+    // Honest badge: opening a task clears the viewer's unread inbox
+    // notifications for it.
     await markTaskNotificationsRead(ctx, { userId: access.auth.userId, orgId: access.auth.orgId, taskId });
   },
 });

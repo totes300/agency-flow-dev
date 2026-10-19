@@ -1,7 +1,7 @@
 // @vitest-environment edge-runtime
 //
 // Today × Planner slice 02 gate: the admin-or-self permission matrix on the
-// generic segment mutations, and `createTodayTask`. The sun itself (add,
+// generic segment mutations. The sun itself (add,
 // remove, carried, reorder) moved to `tasks/today.ts` (tasks refactor slice 5,
 // convex/__tests__/tasksToday.test.ts).
 
@@ -12,6 +12,7 @@ import { api } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
 import { getDateInTimezone } from "../lib/timer";
 import { addDaysToDateString } from "../lib/todayPlan";
+import { statusRow, taskRow } from "./helpers/taskFixtures";
 
 // See invoiceTransitions.test.ts for why the explicit module map is needed.
 const modules = (
@@ -65,16 +66,15 @@ async function seed(t: T): Promise<Seed> {
       createdAt: now, updatedAt: now, createdBy: admin,
     });
 
-    const statusId = await ctx.db.insert("statuses", {
-      orgId: ORG_ID, name: "Next up", type: "in_progress", color: "blue",
-      sortOrder: 0, createdAt: now, updatedAt: now, createdBy: admin,
-    });
+    const statusId = await ctx.db.insert("statuses", statusRow({
+      orgId: ORG_ID, name: "Next up", color: "blue", category: "unstarted", isDefault: true,
+      createdAt: now, createdBy: admin,
+    }));
 
     const mkTask = async (title: string, archivedAt?: number) =>
-      await ctx.db.insert("tasks", {
-        orgId: ORG_ID, title, statusId, statusType: "in_progress", assigneeIds: [],
-        billable: true, archivedAt, createdAt: now, updatedAt: now, createdBy: admin,
-      });
+      await ctx.db.insert("tasks", taskRow({
+        orgId: ORG_ID, title, statusId, statusCategory: "unstarted", archivedAt, createdAt: now, createdBy: admin,
+      }));
     const taskA = await mkTask("Task A");
     const taskB = await mkTask("Task B");
     const archivedTask = await mkTask("Archived", now);
@@ -103,16 +103,6 @@ async function segmentsOf(t: T, taskId: Id<"tasks">, userId: Id<"users">) {
     return all
       .filter((s) => s.userId === userId)
       .sort((a, b) => a.startDate.localeCompare(b.startDate));
-  });
-}
-
-async function activityCount(t: T, taskId: Id<"tasks">) {
-  return await t.run(async (ctx) => {
-    const rows = await ctx.db
-      .query("activityLog")
-      .withIndex("by_task", (q) => q.eq("taskId", taskId))
-      .collect();
-    return rows.length;
   });
 }
 
@@ -193,50 +183,5 @@ describe("segment mutations — admin-or-self permissions", () => {
     });
     await asAdmin.mutation(api.planner.removeSegment, { id: s.memberSegment });
     expect(await segmentsOf(t, s.taskA, s.member)).toHaveLength(1);
-  });
-});
-
-// ─── createTodayTask (inline-add in the Today group) ──────────────────────────
-
-describe("planner.createTodayTask", () => {
-  it("creates an In progress task assigned to me, planned for today, in one gesture", async () => {
-    const t = createT();
-    const s = await seed(t);
-    const asMember = t.withIdentity(identityFor("clerk_member", "member"));
-
-    const { taskId, segmentId } = await asMember.mutation(api.planner.createTodayTask, {
-      title: "  Ship the thing  ",
-    });
-
-    const task = await t.run(async (ctx) => await ctx.db.get(taskId));
-    expect(task?.title).toBe("Ship the thing"); // trimmed
-    expect(task?.statusType).toBe("in_progress");
-    expect(task?.assigneeIds).toEqual([s.member]);
-
-    const seg = await t.run(async (ctx) => await ctx.db.get(segmentId));
-    expect(seg?.userId).toBe(s.member);
-    expect(seg?.startDate).toBe(TODAY);
-    expect(seg?.endDate).toBe(TODAY);
-  });
-
-  it("rejects an empty title", async () => {
-    const t = createT();
-    await seed(t);
-    const asMember = t.withIdentity(identityFor("clerk_member", "member"));
-    await expect(
-      asMember.mutation(api.planner.createTodayTask, { title: "   " }),
-    ).rejects.toThrow("title is required");
-  });
-
-  it("logs the task_created event (but not the segment)", async () => {
-    const t = createT();
-    const s = await seed(t);
-    const asMember = t.withIdentity(identityFor("clerk_member", "member"));
-
-    const { taskId } = await asMember.mutation(api.planner.createTodayTask, {
-      title: "New today task",
-    });
-    // Exactly one activity event: task_created (segment insert is never logged)
-    expect(await activityCount(t, taskId)).toBe(1);
   });
 });

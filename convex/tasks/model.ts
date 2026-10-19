@@ -46,45 +46,14 @@ export function isOpenCategory(category: TaskCategory): boolean {
   return !isClosedCategory(category);
 }
 
-// ─── Legacy status type bridge (removed in slice 7, §4.6) ────────────────────
-
-/** The old `statuses.type` / `tasks.statusType` union the current UI still reads. */
-export type LegacyStatusType = "backlog" | "in_progress" | "review" | "blocked" | "done";
-
-/**
- * Best-effort category for a status that predates categories. Used by the
- * seed only. "Next up" style statuses were `in_progress`; the seed maps the
- * known default names explicitly (DEFAULT_STATUS_SEED) before falling back here.
- */
-export function categoryFromLegacyType(type: LegacyStatusType): TaskCategory {
-  switch (type) {
-    case "backlog":
-      return "backlog";
-    case "done":
-      return "completed";
-    case "in_progress":
-    case "review":
-    case "blocked":
-      return "started";
-  }
-}
-
-/**
- * The legacy `type` a new-model status writes so old readers keep working
- * until slice 7. Canceled reads as `done` (finished) in the old UI.
- */
-export function legacyTypeFromCategory(category: TaskCategory): LegacyStatusType {
-  switch (category) {
-    case "backlog":
-      return "backlog";
-    case "unstarted":
-    case "started":
-      return "in_progress";
-    case "completed":
-    case "canceled":
-      return "done";
-  }
-}
+/** Display names of the categories (settings headings, menus). */
+export const CATEGORY_LABELS: Record<TaskCategory, string> = {
+  backlog: "Backlog",
+  unstarted: "Unstarted",
+  started: "Started",
+  completed: "Completed",
+  canceled: "Canceled",
+};
 
 // ─── Default statuses (§4.1) ─────────────────────────────────────────────────
 
@@ -93,36 +62,27 @@ export type DefaultStatusSeed = {
   category: TaskCategory;
   color: string;
   isDefault: boolean;
-  /** Legacy `type` kept on the row while old readers exist. */
-  legacyType: LegacyStatusType;
 };
 
 /** Default seed per org, in display order. One `isDefault` per category. */
 export const DEFAULT_STATUS_SEED: readonly DefaultStatusSeed[] = [
-  { name: "Inbox", category: "backlog", color: "gray", isDefault: true, legacyType: "backlog" },
-  { name: "Next up", category: "unstarted", color: "blue", isDefault: true, legacyType: "in_progress" },
-  { name: "In progress", category: "started", color: "amber", isDefault: true, legacyType: "in_progress" },
-  { name: "Admin review", category: "started", color: "purple", isDefault: false, legacyType: "review" },
-  { name: "Client review", category: "started", color: "coral", isDefault: false, legacyType: "review" },
-  { name: "Stuck", category: "started", color: "red", isDefault: false, legacyType: "blocked" },
-  { name: "Done", category: "completed", color: "green", isDefault: true, legacyType: "done" },
-  { name: "Canceled", category: "canceled", color: "gray", isDefault: true, legacyType: "done" },
+  { name: "Inbox", category: "backlog", color: "gray", isDefault: true },
+  { name: "Next up", category: "unstarted", color: "blue", isDefault: true },
+  { name: "In progress", category: "started", color: "amber", isDefault: true },
+  { name: "Admin review", category: "started", color: "purple", isDefault: false },
+  { name: "Client review", category: "started", color: "coral", isDefault: false },
+  { name: "Stuck", category: "started", color: "red", isDefault: false },
+  { name: "Done", category: "completed", color: "green", isDefault: true },
+  { name: "Canceled", category: "canceled", color: "gray", isDefault: true },
 ];
 
 /**
- * The category of a status. Statuses written by the old settings/onboarding
- * paths before slice 0 may lack `category`; for those the known default
- * names map explicitly ("Next up" → unstarted) before the legacy type. The
- * write path and the seed both use this, so T3 holds for every status.
+ * The category of a status (T3). Every status has one; the field is typed
+ * optional only until the schema narrowing (slice 7b commit B), and
+ * `devCleanupTasks:stripLegacy` backfills it before that.
  */
-export function categoryOfStatus(status: {
-  category?: TaskCategory;
-  name: string;
-  type: LegacyStatusType;
-}): TaskCategory {
-  if (status.category) return status.category;
-  const seed = DEFAULT_STATUS_SEED.find((s) => s.name.toLowerCase() === status.name.trim().toLowerCase());
-  return seed?.category ?? categoryFromLegacyType(status.type);
+export function categoryOfStatus(status: { category?: TaskCategory }): TaskCategory {
+  return status.category ?? "backlog";
 }
 
 // ─── Status icon (derived, §4.1) ─────────────────────────────────────────────

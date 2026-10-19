@@ -5,6 +5,7 @@ import { useMutation, useQuery } from "convex/react"
 import { useConvexAuth } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import type { Doc, Id } from "@/convex/_generated/dataModel"
+import { SYSTEM_VIEWS, TASK_CATEGORIES, type TaskCategory, type TaskViewSpec } from "@/convex/tasks/model"
 import { DialogClose } from "@/components/ui/dialog"
 import {
   FormModal,
@@ -129,9 +130,30 @@ export function TimeEntryModal({
 } & TimeEntryModalSharedProps &
   (CreateProps | EditProps)) {
   const { isAuthenticated } = useConvexAuth()
-  const projectTasks = useQuery(
-    api.tasks.listByProject,
-    isAuthenticated && open ? { projectId } : "skip",
+  // The project's non-archived tasks and sub-tasks (open + the newest closed),
+  // read through the project preset of `listView` (§5.4, access-filtered).
+  const projectList = useQuery(
+    api.tasks.queries.listView,
+    isAuthenticated && open
+      ? { surface: "project", projectId, spec: TASK_PICKER_SPEC, closedLimit: TASK_PICKER_CLOSED_LIMIT }
+      : "skip",
+  )
+  const projectTasks = useMemo(
+    () =>
+      projectList?.rows
+        .map((t): TaskOption => ({
+          _id: t._id,
+          title: t.title,
+          billable: t.billable,
+          workCategoryId: t.workCategoryId ?? undefined,
+          statusCategory: t.statusCategory ?? "backlog",
+        }))
+        .sort(
+          (a, b) =>
+            TASK_CATEGORIES.indexOf(a.statusCategory) - TASK_CATEGORIES.indexOf(b.statusCategory) ||
+            a.title.localeCompare(b.title),
+        ),
+    [projectList],
   )
   const { timezone, isReady: timezoneReady } = useOrgTimezone()
   const createEntry = useMutation(api.timeEntries.create)
@@ -192,12 +214,16 @@ export function TimeEntryModal({
   )
 }
 
+/** Every task of the project, sub-tasks included (time is logged on both). */
+const TASK_PICKER_SPEC: TaskViewSpec = { ...SYSTEM_VIEWS.project.all.spec, showSubtasks: true }
+const TASK_PICKER_CLOSED_LIMIT = 500
+
 type TaskOption = {
   _id: Id<"tasks">
   title: string
   billable: boolean
   workCategoryId: Id<"workCategories"> | undefined
-  statusType: string
+  statusCategory: TaskCategory
 }
 
 function TimeEntryModalForm({

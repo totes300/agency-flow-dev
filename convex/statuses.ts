@@ -1,67 +1,170 @@
-import { query, mutation, internalMutation } from "./_generated/server";
 import { v, ConvexError } from "convex/values";
-import { getAuthContext, requireAdmin, validateStringLength } from "./lib/auth";
-import { statusTypeValidator, statusColorValidator } from "./lib/validators";
-import { DEFAULT_STATUSES } from "./lib/constants";
+import { generateKeyBetween } from "fractional-indexing";
+import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
+import type { Doc, Id } from "./_generated/dataModel";
+import { requireAdmin, validateStringLength } from "./lib/auth";
+import { statusColorValidator } from "./lib/validators";
 import {
-  categoryFromLegacyType,
+  DEFAULT_STATUS_SEED,
+  TASK_CATEGORIES,
   categoryOfStatus,
+  statusIconFor,
+  taskCategoryValidator,
+  type StatusIcon,
   type TaskCategory,
 } from "./tasks/model";
-import { syncLegacyStatusType } from "./tasks/write";
 
-export const list = query({
-  args: {
-    includeArchived: v.optional(v.boolean()),
-  },
-  handler: async (ctx, args) => {
-    const { orgId } = await getAuthContext(ctx);
-    const statuses = await ctx.db
-      .query("statuses")
-      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
-      .collect();
+/**
+ * Status settings (docs/prd-tasks-refactor.md §4.1, D3, §5.3): admin-only,
+ * Linear's model. Statuses are org-defined inside the five fixed categories;
+ * business logic reads the category only (T3).
+ *
+ * Invariants kept here:
+ * - every category keeps at least one non-archived status;
+ * - exactly one default per category, never archived;
+ * - a status's category is immutable once a task uses it (§4.1) — moving
+ *   tasks between categories is a task write, not a settings change;
+ * - order inside a category is a fractional `position` key.
+ *
+ * No task row is written here: task status changes go through
+ * `tasks/write.ts` (T2), which also refuses archived statuses.
+ */
 
-    const filtered = args.includeArchived
-      ? statuses
-      : statuses.filter((s) => !s.archivedAt);
+const NAME_MAX_LENGTH = 60;
+const DESCRIPTION_MAX_LENGTH = 200;
+/** Statuses per category; orgs have a handful. */
+const CATEGORY_CAP = 50;
 
-    return filtered.sort((a, b) => a.sortOrder - b.sortOrder);
+type StatusCtx = QueryCtx | MutationCtx;
+
+async function loadCategory(ctx: StatusCtx, orgId: string, category: TaskCategory): Promise<Doc<"statuses">[]> {
+  return await ctx.db
+    .query("statuses")
+    .withIndex("by_orgId_category_position", (q) => q.eq("orgId", orgId).eq("category", category))
+    .take(CATEGORY_CAP);
+}
+
+async function loadOwnStatus(ctx: StatusCtx, orgId: string, id: Id<"statuses">): Promise<Doc<"statuses">> {
+  const status = await ctx.db.get(id);
+  if (!status || status.orgId !== orgId) throw new ConvexError("Status not found");
+  return status;
+}
+
+async function statusInUse(ctx: StatusCtx, orgId: string, id: Id<"statuses">): Promise<boolean> {
+  const task = await ctx.db
+    .query("tasks")
+    .withIndex("by_orgId_statusId", (q) => q.eq("orgId", orgId).eq("statusId", id))
+    .first();
+  return task !== null;
+}
+
+function normalizeName(raw: string): string {
+  const name = raw.trim().replace(/\s+/g, " ");
+  if (!name) throw new ConvexError("Name is required");
+  validateStringLength(name, NAME_MAX_LENGTH, "Status name");
+  return name;
+}
+
+function normalizeDescription(raw: string | null | undefined): string | undefined {
+  const description = raw?.trim();
+  if (!description) return undefined;
+  validateStringLength(description, DESCRIPTION_MAX_LENGTH, "Description");
+  return description;
+}
+
+function assertUniqueName(siblings: readonly Doc<"statuses">[], name: string, self?: Id<"statuses">): void {
+  if (siblings.some((s) => s._id !== self && s.name.toLowerCase() === name.toLowerCase())) {
+    throw new ConvexError(`A status named "${name}" already exists`);
+  }
+}
+
+/** Every status of the org, for the duplicate-name check (names are unique org-wide). */
+async function loadAll(ctx: StatusCtx, orgId: string): Promise<Doc<"statuses">[]> {
+  const all: Doc<"statuses">[] = [];
+  for (const category of TASK_CATEGORIES) all.push(...(await loadCategory(ctx, orgId, category)));
+  return all;
+}
+
+function positionAfterLast(statuses: readonly Doc<"statuses">[]): string {
+  let last: string | null = null;
+  for (const s of statuses) if (s.position !== undefined && (last === null || s.position > last)) last = s.position;
+  return generateKeyBetween(last, null);
+}
+
+// ─── Query ───────────────────────────────────────────────────────────────────
+
+export type StatusSettingsRow = {
+  _id: Id<"statuses">;
+  name: string;
+  description: string | null;
+  color: string;
+  category: TaskCategory;
+  position: string;
+  isDefault: boolean;
+  archived: boolean;
+  icon: StatusIcon;
+  /** A task uses the status: its category is locked and it can't be deleted. */
+  inUse: boolean;
+};
+
+/**
+ * The settings list: every status (archived included) in category order,
+ * then position, with whether a task uses it. Admin-only; task surfaces read
+ * statuses from `workspaceRefs.get`.
+ */
+export const listForSettings = query({
+  args: {},
+  handler: async (ctx): Promise<StatusSettingsRow[]> => {
+    const { orgId } = await requireAdmin(ctx);
+    const rows: StatusSettingsRow[] = [];
+    for (const category of TASK_CATEGORIES) {
+      const inCategory = await loadCategory(ctx, orgId, category);
+      const active = inCategory.filter((s) => !s.archivedAt);
+      for (const s of inCategory) {
+        const index = active.indexOf(s);
+        rows.push({
+          _id: s._id,
+          name: s.name,
+          description: s.description ?? null,
+          color: s.color,
+          category,
+          position: s.position ?? "",
+          isDefault: s.isDefault === true,
+          archived: s.archivedAt !== undefined,
+          icon: statusIconFor(category, index === -1 ? active.length - 1 : index, active.length),
+          inUse: await statusInUse(ctx, orgId, s._id),
+        });
+      }
+    }
+    return rows;
   },
 });
 
+// ─── Mutations ───────────────────────────────────────────────────────────────
+
 export const create = mutation({
   args: {
+    category: taskCategoryValidator,
     name: v.string(),
     color: statusColorValidator,
-    icon: v.optional(v.string()),
-    type: statusTypeValidator,
+    description: v.optional(v.string()),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<Id<"statuses">> => {
     const { orgId, userId } = await requireAdmin(ctx);
-
-    const trimmedName = args.name.trim();
-    if (!trimmedName) {
-      throw new ConvexError("Name is required");
-    }
-    validateStringLength(trimmedName, 200, "Status name");
-
-    // Get the highest sortOrder to append at the end
-    const existing = await ctx.db
-      .query("statuses")
-      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
-      .collect();
-    const maxSort = existing.reduce((max, s) => Math.max(max, s.sortOrder), -1);
-
+    const name = normalizeName(args.name);
+    assertUniqueName(await loadAll(ctx, orgId), name);
+    const inCategory = await loadCategory(ctx, orgId, args.category);
+    if (inCategory.length >= CATEGORY_CAP) throw new ConvexError(`At most ${CATEGORY_CAP} statuses per category`);
     const now = Date.now();
     return await ctx.db.insert("statuses", {
       orgId,
-      name: trimmedName,
+      name,
+      description: normalizeDescription(args.description),
       color: args.color,
-      icon: args.icon,
-      type: args.type,
-      category: categoryFromLegacyType(args.type),
-      isDefault: false,
-      sortOrder: maxSort + 1,
+      category: args.category,
+      position: positionAfterLast(inCategory),
+      // The first status of an empty category becomes its default.
+      isDefault: !inCategory.some((s) => !s.archivedAt && s.isDefault === true),
       createdAt: now,
       updatedAt: now,
       createdBy: userId,
@@ -69,228 +172,189 @@ export const create = mutation({
   },
 });
 
+/**
+ * Rename / recolor / describe, and — only while no task uses the status —
+ * change its category (it then lands at the end of the new category). A
+ * category's default and its last active status cannot leave it.
+ */
 export const update = mutation({
   args: {
     id: v.id("statuses"),
     name: v.optional(v.string()),
     color: v.optional(statusColorValidator),
-    icon: v.optional(v.string()),
-    type: v.optional(statusTypeValidator),
-    sortOrder: v.optional(v.number()),
+    description: v.optional(v.union(v.string(), v.null())),
+    category: v.optional(taskCategoryValidator),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<null> => {
     const { orgId } = await requireAdmin(ctx);
-
-    const status = await ctx.db.get(args.id);
-    if (!status || status.orgId !== orgId) {
-      throw new ConvexError("Status not found");
-    }
-
-    // Build typed patch
-    const patch: {
-      name?: string;
-      color?: string;
-      icon?: string;
-      type?: typeof args.type;
-      category?: TaskCategory;
-      sortOrder?: number;
-      updatedAt: number;
-    } = { updatedAt: Date.now() };
+    const status = await loadOwnStatus(ctx, orgId, args.id);
+    const patch: Partial<Doc<"statuses">> = {};
 
     if (args.name !== undefined) {
-      const trimmedName = args.name.trim();
-      if (!trimmedName) {
-        throw new ConvexError("Name is required");
+      const name = normalizeName(args.name);
+      if (name !== status.name) {
+        assertUniqueName(await loadAll(ctx, orgId), name, status._id);
+        patch.name = name;
       }
-      validateStringLength(trimmedName, 200, "Status name");
-      patch.name = trimmedName;
     }
-    if (args.color !== undefined) patch.color = args.color;
-    if (args.icon !== undefined) patch.icon = args.icon;
-    if (args.sortOrder !== undefined) patch.sortOrder = args.sortOrder;
-
-    // A legacy type change. The category (D3) is what business logic reads:
-    // it may only change while no task uses the status (§4.1); otherwise the
-    // tasks' legacy `statusType` cache follows the new type (write path, T2).
-    let syncTasks = false;
-    if (args.type !== undefined && args.type !== status.type) {
-      const currentCategory = categoryOfStatus(status);
-      const nextCategory = categoryFromLegacyType(args.type);
-      if (nextCategory !== currentCategory) {
-        const used = await ctx.db
-          .query("tasks")
-          .withIndex("by_orgId_statusId", (q) => q.eq("orgId", orgId).eq("statusId", args.id))
-          .first();
-        if (used) {
-          throw new ConvexError(
-            "This status is used by tasks, so its category can't change. Move its tasks to another status first.",
-          );
-        }
-        patch.category = nextCategory;
-      } else {
-        patch.category = currentCategory;
-        syncTasks = true;
+    if (args.color !== undefined && args.color !== status.color) patch.color = args.color;
+    if (args.description !== undefined) {
+      const description = normalizeDescription(args.description);
+      if (description !== status.description) patch.description = description;
+    }
+    if (args.category !== undefined && args.category !== categoryOfStatus(status)) {
+      if (await statusInUse(ctx, orgId, status._id)) {
+        throw new ConvexError(
+          "Tasks use this status, so its category can't change. Move those tasks to another status first.",
+        );
       }
-      patch.type = args.type;
+      if (status.isDefault) {
+        throw new ConvexError("Make another status the default for this category first");
+      }
+      const target = await loadCategory(ctx, orgId, args.category);
+      if (target.length >= CATEGORY_CAP) throw new ConvexError(`At most ${CATEGORY_CAP} statuses per category`);
+      patch.category = args.category;
+      patch.position = positionAfterLast(target);
+      if (!status.archivedAt && !target.some((s) => !s.archivedAt && s.isDefault === true)) patch.isDefault = true;
     }
 
-    await ctx.db.patch(args.id, patch);
-    if (syncTasks) await syncLegacyStatusType(ctx, (await ctx.db.get(args.id))!);
+    if (Object.keys(patch).length === 0) return null;
+    await ctx.db.patch(status._id, { ...patch, updatedAt: Date.now() });
+    return null;
   },
 });
 
+/** Moves a status inside its category: right after `afterId`, or first when null. */
+export const move = mutation({
+  args: { id: v.id("statuses"), afterId: v.union(v.id("statuses"), v.null()) },
+  handler: async (ctx, args): Promise<null> => {
+    const { orgId } = await requireAdmin(ctx);
+    const status = await loadOwnStatus(ctx, orgId, args.id);
+    const siblings = (await loadCategory(ctx, orgId, categoryOfStatus(status))).filter((s) => s._id !== status._id);
+    let before: string | null = null;
+    let after: string | null = siblings[0]?.position ?? null;
+    if (args.afterId !== null) {
+      const index = siblings.findIndex((s) => s._id === args.afterId);
+      if (index === -1) throw new ConvexError("Statuses can only be reordered inside their category");
+      before = siblings[index].position ?? null;
+      after = siblings[index + 1]?.position ?? null;
+    }
+    const position = generateKeyBetween(before, after);
+    await ctx.db.patch(status._id, { position, updatedAt: Date.now() });
+    return null;
+  },
+});
+
+/** Makes the status its category's default (new tasks in that category land here). */
+export const setDefault = mutation({
+  args: { id: v.id("statuses") },
+  handler: async (ctx, args): Promise<null> => {
+    const { orgId } = await requireAdmin(ctx);
+    const status = await loadOwnStatus(ctx, orgId, args.id);
+    if (status.archivedAt) throw new ConvexError("An archived status can't be the default");
+    const now = Date.now();
+    for (const s of await loadCategory(ctx, orgId, categoryOfStatus(status))) {
+      const isDefault = s._id === status._id;
+      if (s.isDefault !== isDefault) await ctx.db.patch(s._id, { isDefault, updatedAt: now });
+    }
+    return null;
+  },
+});
+
+/**
+ * Hides a status from pickers. Tasks keep it (it renders as archived) until
+ * moved; the category's default and its last active status stay.
+ */
 export const archive = mutation({
   args: { id: v.id("statuses") },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<null> => {
     const { orgId } = await requireAdmin(ctx);
-
-    const status = await ctx.db.get(args.id);
-    if (!status || status.orgId !== orgId) {
-      throw new ConvexError("Status not found");
-    }
-
-    await ctx.db.patch(args.id, {
-      archivedAt: Date.now(),
-      updatedAt: Date.now(),
-    });
+    const status = await loadOwnStatus(ctx, orgId, args.id);
+    if (status.archivedAt) return null;
+    if (status.isDefault) throw new ConvexError("Make another status the default for this category first");
+    const active = (await loadCategory(ctx, orgId, categoryOfStatus(status))).filter((s) => !s.archivedAt);
+    if (active.length <= 1) throw new ConvexError("Every category needs at least one active status");
+    await ctx.db.patch(status._id, { archivedAt: Date.now(), updatedAt: Date.now() });
+    return null;
   },
 });
 
 export const restore = mutation({
   args: { id: v.id("statuses") },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<null> => {
     const { orgId } = await requireAdmin(ctx);
-
-    const status = await ctx.db.get(args.id);
-    if (!status || status.orgId !== orgId) {
-      throw new ConvexError("Status not found");
-    }
-
-    await ctx.db.patch(args.id, {
-      archivedAt: undefined,
-      updatedAt: Date.now(),
-    });
+    const status = await loadOwnStatus(ctx, orgId, args.id);
+    if (!status.archivedAt) return null;
+    await ctx.db.patch(status._id, { archivedAt: undefined, updatedAt: Date.now() });
+    return null;
   },
 });
 
+/** Deletes a status no task uses (otherwise archive it). Same guards as archive. */
 export const remove = mutation({
   args: { id: v.id("statuses") },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<null> => {
     const { orgId } = await requireAdmin(ctx);
-
-    const status = await ctx.db.get(args.id);
-    if (!status || status.orgId !== orgId) {
-      throw new ConvexError("Status not found");
+    const status = await loadOwnStatus(ctx, orgId, args.id);
+    if (await statusInUse(ctx, orgId, status._id)) {
+      throw new ConvexError("Tasks use this status. Archive it instead, or move its tasks first.");
     }
-
-    // Check for task references before allowing hard delete (org-scoped)
-    const taskWithStatus = await ctx.db
-      .query("tasks")
-      .withIndex("by_orgId_statusId", (q) =>
-        q.eq("orgId", orgId).eq("statusId", args.id)
-      )
-      .first();
-    if (taskWithStatus) {
-      throw new ConvexError("Cannot delete a status that is assigned to tasks. Archive it instead.");
+    if (status.isDefault) throw new ConvexError("Make another status the default for this category first");
+    if (!status.archivedAt) {
+      const active = (await loadCategory(ctx, orgId, categoryOfStatus(status))).filter((s) => !s.archivedAt);
+      if (active.length <= 1) throw new ConvexError("Every category needs at least one active status");
     }
-
-    // Clear any orgSettings references to this status
-    const settings = await ctx.db
-      .query("orgSettings")
-      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
-      .unique();
-    if (settings) {
-      const settingsPatch: Record<string, unknown> = {};
-      if (settings.defaultStatusId === args.id) settingsPatch.defaultStatusId = undefined;
-      if (settings.completionDefaultAdminStatusId === args.id) settingsPatch.completionDefaultAdminStatusId = undefined;
-      if (settings.completionDefaultMemberStatusId === args.id) settingsPatch.completionDefaultMemberStatusId = undefined;
-      if (Object.keys(settingsPatch).length > 0) {
-        await ctx.db.patch(settings._id, { ...settingsPatch, updatedAt: Date.now() });
-      }
-    }
-
-    await ctx.db.delete(args.id);
+    await ctx.db.delete(status._id);
+    return null;
   },
 });
 
-export const setDefault = mutation({
-  args: { id: v.id("statuses") },
-  handler: async (ctx, args) => {
-    const { orgId } = await requireAdmin(ctx);
-
-    const status = await ctx.db.get(args.id);
-    if (!status || status.orgId !== orgId) {
-      throw new ConvexError("Status not found");
-    }
-    if (status.archivedAt) {
-      throw new ConvexError("Cannot set an archived status as default");
-    }
-
-    const settings = await ctx.db
-      .query("orgSettings")
-      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
-      .unique();
-    if (!settings) {
-      throw new ConvexError("Organization settings not found");
-    }
-
-    await ctx.db.patch(settings._id, {
-      defaultStatusId: args.id,
-      updatedAt: Date.now(),
-    });
-  },
-});
-
-export const reorder = mutation({
-  args: {
-    ids: v.array(v.id("statuses")),
-  },
-  handler: async (ctx, args) => {
-    const { orgId } = await requireAdmin(ctx);
-    const now = Date.now();
-
-    for (let i = 0; i < args.ids.length; i++) {
-      const status = await ctx.db.get(args.ids[i]);
-      if (!status || status.orgId !== orgId) {
-        throw new ConvexError("Status not found");
-      }
-      await ctx.db.patch(args.ids[i], { sortOrder: i, updatedAt: now });
-    }
-  },
-});
-
-// ─── Internal: seed default statuses for a new org ───────────────────────────
+// ─── New orgs ────────────────────────────────────────────────────────────────
 
 /**
- * Seeds the default set of statuses for a newly created organization.
- * Called internally during org setup — not exposed as a public mutation.
- * No-ops if statuses already exist for the org.
+ * Inserts an org's starting statuses (onboarding). `drafts` default to the
+ * §4.1 seed; every category must get at least one, and the first status of
+ * each category becomes its default. No-op when the org has statuses.
  */
-export const seed = internalMutation({
-  args: {
-    orgId: v.string(),
-    createdBy: v.id("users"),
+export async function seedOrgStatuses(
+  ctx: MutationCtx,
+  input: {
+    orgId: string;
+    createdBy: Id<"users">;
+    drafts?: ReadonlyArray<{ name: string; color: string; category: TaskCategory }>;
   },
-  handler: async (ctx, args) => {
-    const existing = await ctx.db
-      .query("statuses")
-      .withIndex("by_orgId", (q) => q.eq("orgId", args.orgId))
-      .first();
-    if (existing) return;
-
-    const now = Date.now();
-    for (const status of DEFAULT_STATUSES) {
-      await ctx.db.insert("statuses", {
-        orgId: args.orgId,
-        name: status.name,
-        color: status.color,
-        type: status.type,
-        category: categoryOfStatus(status),
-        sortOrder: status.sortOrder,
-        createdAt: now,
-        updatedAt: now,
-        createdBy: args.createdBy,
-      });
+): Promise<number> {
+  const existing = await ctx.db
+    .query("statuses")
+    .withIndex("by_orgId", (q) => q.eq("orgId", input.orgId))
+    .first();
+  if (existing) return 0;
+  const drafts = input.drafts ?? DEFAULT_STATUS_SEED;
+  for (const category of TASK_CATEGORIES) {
+    if (!drafts.some((d) => d.category === category)) {
+      throw new ConvexError(`Add at least one ${category} status`);
     }
-  },
-});
+  }
+  const names = new Set<string>();
+  const last = new Map<TaskCategory, string>();
+  const now = Date.now();
+  for (const draft of drafts) {
+    const name = normalizeName(draft.name);
+    if (names.has(name.toLowerCase())) throw new ConvexError(`A status named "${name}" already exists`);
+    names.add(name.toLowerCase());
+    const position = generateKeyBetween(last.get(draft.category) ?? null, null);
+    await ctx.db.insert("statuses", {
+      orgId: input.orgId,
+      name,
+      color: draft.color,
+      category: draft.category,
+      position,
+      isDefault: !last.has(draft.category),
+      createdAt: now,
+      updatedAt: now,
+      createdBy: input.createdBy,
+    });
+    last.set(draft.category, position);
+  }
+  return drafts.length;
+}

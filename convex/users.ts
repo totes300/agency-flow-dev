@@ -170,17 +170,6 @@ export const updateTaskDetailMode = mutation({
   },
 });
 
-export const updateMyTasksSettings = mutation({
-  args: { todayVisibleStatuses: v.optional(v.array(v.string())) },
-  handler: async (ctx, { todayVisibleStatuses }) => {
-    const user = await getCurrentUserOrThrow(ctx);
-    await ctx.db.patch(user._id, {
-      todayVisibleStatuses,
-      updatedAt: Date.now(),
-    });
-  },
-});
-
 export const deleteFromClerk = internalMutation({
   args: { clerkUserId: v.string() },
   async handler(ctx, { clerkUserId }) {

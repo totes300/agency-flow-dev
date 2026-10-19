@@ -12,7 +12,7 @@ import { useConvexAuth, useQuery } from "convex/react"
 import { useSearchParams, useRouter, usePathname } from "next/navigation"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
-import { buildDetailUrl, isTaskDetailOpen } from "@/lib/task-detail"
+import { buildDetailUrl } from "@/lib/task-detail"
 import { useIsAdmin } from "@/lib/hooks/use-is-admin"
 import { usePlannerQueryArgs } from "@/lib/hooks/use-planner-query-args"
 import { usePlannerMutations } from "@/lib/hooks/use-planner-mutations"
@@ -40,8 +40,9 @@ import {
 import { PlannerTaskCard } from "@/components/planner/planner-task-card"
 import { PlannerGridSkeleton } from "@/components/planner/planner-grid-skeleton"
 import { PlannerToolbar } from "@/components/planner/planner-toolbar"
-import { TaskDetailDrawer } from "@/components/tasks/task-detail-drawer"
-import { TaskReferenceDataProvider } from "@/components/tasks/task-reference-data"
+import { TaskDetailDrawer } from "@/components/task-detail/task-detail-drawer"
+import { usePlannerPanelTasks } from "@/lib/hooks/use-planner-panel-tasks"
+import { isClosedCategory } from "@/convex/tasks/model"
 
 export default function PlannerPage() {
   const { isAuthenticated } = useConvexAuth()
@@ -56,7 +57,6 @@ export default function PlannerPage() {
   const pathname = usePathname()
   const searchParamsRef = useRef(searchParams)
   searchParamsRef.current = searchParams
-  const detailOpen = isTaskDetailOpen(searchParams)
 
   // The Planner always opens tasks in the DRAWER on desktop, regardless of
   // the /tasks drawer/modal preference. The fullscreen modal covers the
@@ -110,32 +110,10 @@ export default function PlannerPage() {
 
   // Tasks panel data — loaded regardless of panel visibility because the
   // toolbar badge shows the unscheduled count even while the panel is closed.
-  const panelTasks = useQuery(
-    api.planner.taskPanel,
-    isAuthenticated ? {} : "skip",
-  )
+  const panelTasks = usePlannerPanelTasks(isAuthenticated, todayYMD)
   const unscheduledCount = useMemo(
     () => panelTasks?.filter(isUnscheduled).length,
     [panelTasks],
-  )
-
-  // Reference data for the drawer's inline cells — subscribed only while a
-  // task detail is open, so the board itself stays light.
-  const statuses = useQuery(
-    api.statuses.list,
-    isAuthenticated && detailOpen ? {} : "skip",
-  )
-  const categories = useQuery(
-    api.workCategories.list,
-    isAuthenticated && detailOpen ? {} : "skip",
-  )
-  const projects = useQuery(
-    api.projects.list,
-    isAuthenticated && detailOpen ? {} : "skip",
-  )
-  const referenceData = useMemo(
-    () => ({ statuses, categories, projects, orgMembers: members }),
-    [statuses, categories, projects, members],
   )
 
   // Drawer prev/next (J/K) walks tasks in board order: row order, then each
@@ -267,7 +245,6 @@ export default function PlannerPage() {
   // padding and fill the remaining viewport height; the grid scrolls
   // internally on both axes.
   return (
-    <TaskReferenceDataProvider value={referenceData}>
     <div className="-mx-4 -mb-6 -mt-6 flex min-h-0 min-w-0 flex-1 flex-col md:-mx-12">
       <PlannerToolbar
         rangeLabel={rangeLabel}
@@ -346,7 +323,7 @@ export default function PlannerPage() {
             title={engine.panelDrag.task.title}
             clientName={engine.panelDrag.task.clientName}
             categoryColor={engine.panelDrag.task.categoryColor}
-            isDone={engine.panelDrag.task.statusType === "done"}
+            isDone={isClosedCategory(engine.panelDrag.task.statusCategory)}
             floating
           />
         </div>
@@ -354,6 +331,5 @@ export default function PlannerPage() {
 
       <TaskDetailDrawer taskIds={orderedTaskIds} isAdmin={isAdmin} />
     </div>
-    </TaskReferenceDataProvider>
   )
 }

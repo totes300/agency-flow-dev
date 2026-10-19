@@ -12,6 +12,7 @@ import {
 } from "@/lib/planner"
 import type { PlannerSegmentBar, PlannerUserRow as PlannerUserRowData } from "@/convex/planner"
 import type { Id } from "@/convex/_generated/dataModel"
+import { isClosedCategory } from "@/convex/tasks/model"
 import {
   PlannerBar,
   PLANNER_BAR_HEIGHT_PX,
@@ -270,7 +271,7 @@ export function PlannerRow({
               durationDays={spanDays(b.seg)}
               visibleSpanDays={b.endIdx - b.startIdx + 1}
               labelMinSpan={labelMinSpan}
-              isDone={b.seg.statusType === "done"}
+              isDone={isClosedCategory(b.seg.statusCategory)}
               isSelected={isSelected}
               isSibling={
                 !isSelected &&
@@ -314,7 +315,7 @@ export function PlannerRow({
             durationDays={spanDays(preview)}
             visibleSpanDays={previewClamped.endIdx - previewClamped.startIdx + 1}
             labelMinSpan={labelMinSpan}
-            isDone={preview.seg.statusType === "done"}
+            isDone={isClosedCategory(preview.seg.statusCategory)}
             preview={preview.kind}
             copyGlyph={preview.copy}
             clippedStart={previewClamped.clippedStart}

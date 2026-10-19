@@ -15,16 +15,6 @@ export const LEGACY_ROUNDING_OPTIONS = [6] as const;
 
 export type RoundingMinutes = (typeof ROUNDING_OPTIONS)[number];
 
-export const STATUS_TYPES = [
-  "backlog",
-  "in_progress",
-  "review",
-  "blocked",
-  "done",
-] as const;
-
-export type StatusType = (typeof STATUS_TYPES)[number];
-
 export const DEFAULT_CURRENCY: Currency = "USD";
 export const DEFAULT_TIMEZONE = "America/New_York";
 export const DEFAULT_ROUNDING: RoundingMinutes = 1;
@@ -68,23 +58,3 @@ export const STATUS_COLOR_NAMES = [
 ] as const;
 
 export type StatusColorName = (typeof STATUS_COLOR_NAMES)[number];
-
-// ─── Default status seed data ──────────────────────────────────────────────────
-
-export const DEFAULT_STATUSES: Array<{
-  name: string;
-  type: StatusType;
-  color: StatusColorName;
-  sortOrder: number;
-}> = [
-  // No "Today" status — "today" is a derived per-user plan computed from
-  // planSegments (docs/today-planner-prd.md); "Next up" is the triage
-  // destination. Statuses describe workflow state only.
-  { name: "Inbox", type: "backlog", color: "gray", sortOrder: 0 },
-  { name: "Next up", type: "in_progress", color: "blue", sortOrder: 1 },
-  { name: "In progress", type: "in_progress", color: "amber", sortOrder: 2 },
-  { name: "Admin review", type: "review", color: "purple", sortOrder: 3 },
-  { name: "Client review", type: "review", color: "coral", sortOrder: 4 },
-  { name: "Stuck", type: "blocked", color: "red", sortOrder: 5 },
-  { name: "Done", type: "done", color: "green", sortOrder: 6 },
-];

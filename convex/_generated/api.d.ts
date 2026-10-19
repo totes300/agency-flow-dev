@@ -8,6 +8,8 @@
  * @module
  */
 
+import type * as __tests___helpers_orgSnapshot from "../__tests__/helpers/orgSnapshot.js";
+import type * as __tests___helpers_taskFixtures from "../__tests__/helpers/taskFixtures.js";
 import type * as activityLog from "../activityLog.js";
 import type * as agentArtifacts from "../agentArtifacts.js";
 import type * as agentAttachments from "../agentAttachments.js";
@@ -33,11 +35,13 @@ import type * as commentReactions from "../commentReactions.js";
 import type * as comments from "../comments.js";
 import type * as connectors from "../connectors.js";
 import type * as dailyNotes from "../dailyNotes.js";
+import type * as devCleanupTasks from "../devCleanupTasks.js";
 import type * as devSeedArloJune from "../devSeedArloJune.js";
 import type * as devSeedInbox from "../devSeedInbox.js";
 import type * as devSeedTasks from "../devSeedTasks.js";
 import type * as http from "../http.js";
 import type * as invoices from "../invoices.js";
+import type * as labels from "../labels.js";
 import type * as lib_agentReportCore from "../lib/agentReportCore.js";
 import type * as lib_agentToolRegistry from "../lib/agentToolRegistry.js";
 import type * as lib_auth from "../lib/auth.js";
@@ -68,9 +72,7 @@ import type * as lib_dateValidation from "../lib/dateValidation.js";
 import type * as lib_entryStatus from "../lib/entryStatus.js";
 import type * as lib_helpers from "../lib/helpers.js";
 import type * as lib_invoiceIdentifier from "../lib/invoiceIdentifier.js";
-import type * as lib_legacyMyDay from "../lib/legacyMyDay.js";
 import type * as lib_markPaid from "../lib/markPaid.js";
-import type * as lib_myTaskHelpers from "../lib/myTaskHelpers.js";
 import type * as lib_notificationEvents from "../lib/notificationEvents.js";
 import type * as lib_orgHelpers from "../lib/orgHelpers.js";
 import type * as lib_plannerMath from "../lib/plannerMath.js";
@@ -81,7 +83,6 @@ import type * as lib_rates from "../lib/rates.js";
 import type * as lib_reportPeriod from "../lib/reportPeriod.js";
 import type * as lib_rounding from "../lib/rounding.js";
 import type * as lib_secretCrypto from "../lib/secretCrypto.js";
-import type * as lib_taskActivityIndicators from "../lib/taskActivityIndicators.js";
 import type * as lib_task_helpers from "../lib/task_helpers.js";
 import type * as lib_timer from "../lib/timer.js";
 import type * as lib_timerEntry from "../lib/timerEntry.js";
@@ -92,7 +93,6 @@ import type * as lib_url from "../lib/url.js";
 import type * as lib_validators from "../lib/validators.js";
 import type * as lib_worksheetAi from "../lib/worksheetAi.js";
 import type * as linkPreviews from "../linkPreviews.js";
-import type * as migrations_retireTodayStatus from "../migrations/retireTodayStatus.js";
 import type * as notifications from "../notifications.js";
 import type * as orgMembers from "../orgMembers.js";
 import type * as orgSettings from "../orgSettings.js";
@@ -102,9 +102,9 @@ import type * as projectRateOverrides from "../projectRateOverrides.js";
 import type * as projects from "../projects.js";
 import type * as skills from "../skills.js";
 import type * as statuses from "../statuses.js";
-import type * as taskViewReceipts from "../taskViewReceipts.js";
 import type * as tasks from "../tasks.js";
 import type * as tasks_access from "../tasks/access.js";
+import type * as tasks_agent from "../tasks/agent.js";
 import type * as tasks_derived from "../tasks/derived.js";
 import type * as tasks_filters from "../tasks/filters.js";
 import type * as tasks_model from "../tasks/model.js";
@@ -133,6 +133,8 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  "__tests__/helpers/orgSnapshot": typeof __tests___helpers_orgSnapshot;
+  "__tests__/helpers/taskFixtures": typeof __tests___helpers_taskFixtures;
   activityLog: typeof activityLog;
   agentArtifacts: typeof agentArtifacts;
   agentAttachments: typeof agentAttachments;
@@ -158,11 +160,13 @@ declare const fullApi: ApiFromModules<{
   comments: typeof comments;
   connectors: typeof connectors;
   dailyNotes: typeof dailyNotes;
+  devCleanupTasks: typeof devCleanupTasks;
   devSeedArloJune: typeof devSeedArloJune;
   devSeedInbox: typeof devSeedInbox;
   devSeedTasks: typeof devSeedTasks;
   http: typeof http;
   invoices: typeof invoices;
+  labels: typeof labels;
   "lib/agentReportCore": typeof lib_agentReportCore;
   "lib/agentToolRegistry": typeof lib_agentToolRegistry;
   "lib/auth": typeof lib_auth;
@@ -193,9 +197,7 @@ declare const fullApi: ApiFromModules<{
   "lib/entryStatus": typeof lib_entryStatus;
   "lib/helpers": typeof lib_helpers;
   "lib/invoiceIdentifier": typeof lib_invoiceIdentifier;
-  "lib/legacyMyDay": typeof lib_legacyMyDay;
   "lib/markPaid": typeof lib_markPaid;
-  "lib/myTaskHelpers": typeof lib_myTaskHelpers;
   "lib/notificationEvents": typeof lib_notificationEvents;
   "lib/orgHelpers": typeof lib_orgHelpers;
   "lib/plannerMath": typeof lib_plannerMath;
@@ -206,7 +208,6 @@ declare const fullApi: ApiFromModules<{
   "lib/reportPeriod": typeof lib_reportPeriod;
   "lib/rounding": typeof lib_rounding;
   "lib/secretCrypto": typeof lib_secretCrypto;
-  "lib/taskActivityIndicators": typeof lib_taskActivityIndicators;
   "lib/task_helpers": typeof lib_task_helpers;
   "lib/timer": typeof lib_timer;
   "lib/timerEntry": typeof lib_timerEntry;
@@ -217,7 +218,6 @@ declare const fullApi: ApiFromModules<{
   "lib/validators": typeof lib_validators;
   "lib/worksheetAi": typeof lib_worksheetAi;
   linkPreviews: typeof linkPreviews;
-  "migrations/retireTodayStatus": typeof migrations_retireTodayStatus;
   notifications: typeof notifications;
   orgMembers: typeof orgMembers;
   orgSettings: typeof orgSettings;
@@ -227,9 +227,9 @@ declare const fullApi: ApiFromModules<{
   projects: typeof projects;
   skills: typeof skills;
   statuses: typeof statuses;
-  taskViewReceipts: typeof taskViewReceipts;
   tasks: typeof tasks;
   "tasks/access": typeof tasks_access;
+  "tasks/agent": typeof tasks_agent;
   "tasks/derived": typeof tasks_derived;
   "tasks/filters": typeof tasks_filters;
   "tasks/model": typeof tasks_model;

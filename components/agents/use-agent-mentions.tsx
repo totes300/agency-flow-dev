@@ -31,9 +31,19 @@ import {
  * The extension is built ONCE and reads its item list through a ref, so the
  * mention data resolving/updating never rebuilds the editor (which would drop
  * the user's in-progress message).
+ *
+ * Tasks are never shipped whole (docs/prd-tasks-refactor.md §7): an empty
+ * query suggests the caller's recent tasks from `agentMentions.list`; a typed
+ * query asks `agentMentions.searchTasks` (title search + exact identifier,
+ * access-filtered). The dropdown's items are derived at render from the
+ * latest data, so search results land while the picker stays open.
  */
 
-type MentionItem = MentionRef & { sublabel?: string }
+type MentionItem = MentionRef & {
+  sublabel?: string
+  /** Already matched server-side (task search): skip the local label filter. */
+  matched?: boolean
+}
 
 const TYPE_ICON: Record<MentionType, typeof UserIcon> = {
   task: CheckSquareIcon,
@@ -45,8 +55,11 @@ const TYPE_ICON: Record<MentionType, typeof UserIcon> = {
 /** Per-type cap so no single kind floods the dropdown; total scrolls. */
 const PER_TYPE_LIMIT = 5
 
+/** Typing pause before the task search query fires. */
+const TASK_SEARCH_DEBOUNCE_MS = 150
+
 interface MentionSuggestionState {
-  items: MentionItem[]
+  query: string
   command: (item: MentionItem) => void
   clientRect: (() => DOMRect | null) | null | undefined
 }
@@ -98,27 +111,51 @@ export function useAgentMentions() {
   const keyDownRef = useRef<((e: SuggestionKeyDownProps) => boolean) | null>(null)
   const isOpenRef = useRef(false)
 
+  // The typed query, debounced, drives the server-side task search.
+  const typed = state?.query.trim() ?? ""
+  const [search, setSearch] = useState("")
+  useEffect(() => {
+    const timer = setTimeout(() => setSearch(typed), TASK_SEARCH_DEBOUNCE_MS)
+    return () => clearTimeout(timer)
+  }, [typed])
+  const searched = useQuery(
+    api.agentMentions.searchTasks,
+    search ? { search } : "skip",
+  )
+
   // The full mention list, flattened + tagged by type. Kept in a ref so the
   // extension (created once) always reads the latest data without rebuilding.
+  // While a typed query's search is in flight, tasks fall back to filtering
+  // the recent list locally.
+  const searchedTasks = typed && search === typed ? searched?.tasks : undefined
   const allItems = useMemo<MentionItem[]>(() => {
     if (!data) return []
     const map = (
       type: MentionType,
       items: { id: string; label: string; sublabel?: string }[],
+      matched = false,
     ): MentionItem[] =>
       items.map((it) => ({
         type,
         id: it.id,
         label: sanitizeMentionLabel(it.label),
         sublabel: it.sublabel,
+        matched,
       }))
     return [
-      ...map("task", data.tasks),
+      ...(searchedTasks ? map("task", searchedTasks, true) : map("task", data.tasks)),
       ...map("project", data.projects),
       ...map("client", data.clients),
       ...map("user", data.users),
     ]
-  }, [data])
+  }, [data, searchedTasks])
+  // Stable identity per (data, query): the dropdown resets its selection
+  // whenever the items array changes.
+  const query = state?.query
+  const visibleItems = useMemo(
+    () => (query === undefined ? [] : filterItems(allItems, query)),
+    [allItems, query],
+  )
   const itemsRef = useRef(allItems)
   useEffect(() => {
     itemsRef.current = allItems
@@ -146,24 +183,24 @@ export function useAgentMentions() {
           items: ({ query }: { query: string }) => filterItems(itemsRef.current, query),
           render: () => ({
             onStart: (props: {
-              items: MentionItem[]
+              query: string
               command: (item: MentionItem) => void
               clientRect?: (() => DOMRect | null) | null
             }) => {
               isOpenRef.current = true
               setState({
-                items: props.items,
+                query: props.query,
                 command: props.command,
                 clientRect: props.clientRect ?? null,
               })
             },
             onUpdate: (props: {
-              items: MentionItem[]
+              query: string
               command: (item: MentionItem) => void
               clientRect?: (() => DOMRect | null) | null
             }) => {
               setState({
-                items: props.items,
+                query: props.query,
                 command: props.command,
                 clientRect: props.clientRect ?? null,
               })
@@ -185,7 +222,7 @@ export function useAgentMentions() {
     if (!state) return null
     return (
       <SuggestionDropdown
-        items={state.items}
+        items={visibleItems}
         onSelect={(item) => state.command(item)}
         clientRect={state.clientRect}
         onKeyDownRef={keyDownRef}
@@ -214,14 +251,20 @@ export function useAgentMentions() {
 
 /**
  * Filter the flattened list by query, keeping at most PER_TYPE_LIMIT of each
- * type so the dropdown always shows a cross-entity mix (not 20 tasks).
+ * type so the dropdown always shows a cross-entity mix (not 20 tasks). Server
+ * search hits pass as-is; local matching also checks the context line, so a
+ * task's identifier (`ARLO-21`) finds it.
  */
 function filterItems(items: MentionItem[], query: string): MentionItem[] {
-  const q = query.toLowerCase()
+  const q = query.trim().toLowerCase()
   const counts: Record<MentionType, number> = { task: 0, project: 0, client: 0, user: 0 }
   const out: MentionItem[] = []
   for (const item of items) {
-    if (q && !item.label.toLowerCase().includes(q)) continue
+    const hit =
+      item.matched ||
+      item.label.toLowerCase().includes(q) ||
+      (item.type === "task" && (item.sublabel?.toLowerCase().includes(q) ?? false))
+    if (q && !hit) continue
     if (counts[item.type] >= PER_TYPE_LIMIT) continue
     counts[item.type]++
     out.push(item)

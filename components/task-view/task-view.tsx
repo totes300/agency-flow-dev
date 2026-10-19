@@ -17,17 +17,22 @@ import { toastError } from "@/lib/toast-helpers"
 import { Button } from "@/components/ui/button"
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import { ConfirmDialog } from "@/components/confirm-dialog"
-import { TaskReferenceDataProvider, useTaskReferenceDataValue } from "@/components/tasks/task-reference-data"
 import { TaskDetailDrawer } from "@/components/task-detail/task-detail-drawer"
 import { useToggleTaskTimer } from "@/components/task-view/use-toggle-task-timer"
 import { TaskFormModal, type TaskFormDefaults } from "@/components/tasks/task-form-modal"
 import { Kbd } from "@/components/ui/kbd"
 import { ComposeIcon, PanelNavIcon, PlusNavIcon } from "@/components/icons/nav-icons"
 import { visibleColumnKeys, type CellContext } from "@/components/task-view/columns"
-import type { ColumnKey, OrderBy } from "@/components/task-view/column-rules"
+import {
+  PROJECT_CONTEXT_HIDDEN_COLUMNS,
+  PROJECT_CONTEXT_HIDDEN_GROUPS,
+  type ColumnKey,
+  type OrderBy,
+  type ViewContext,
+} from "@/components/task-view/column-rules"
 import { boardMoveFor, canDragOnBoard } from "@/components/task-view/board-model"
 import { DisplayMenu, boardGroupBy } from "@/components/task-view/display-menu"
-import { applyChips, applySearch } from "@/components/task-view/filter-model"
+import { applyChips, applySearch, type FilterField } from "@/components/task-view/filter-model"
 import { FilterButton, FilterChips, type FacetContext } from "@/components/task-view/filter-menu"
 import { SearchBox, type SearchBoxHandle } from "@/components/task-view/search-box"
 import { TaskBoard } from "@/components/task-view/task-board"
@@ -40,7 +45,11 @@ import { canReorderList, inlineAddPrefill, reorderNeighbours, scopeDefaultStatus
 import { SelectionBar } from "@/components/task-view/selection-bar"
 import { ShortcutsDialog } from "@/components/task-view/shortcuts-dialog"
 import { TaskTable } from "@/components/task-view/task-table"
-import { TASK_VIEW_PANEL_CLASS, TaskTableSkeleton } from "@/components/task-view/task-view-skeleton"
+import {
+  TASK_VIEW_EMBEDDED_PANEL_CLASS,
+  TASK_VIEW_PANEL_CLASS,
+  TaskTableSkeleton,
+} from "@/components/task-view/task-view-skeleton"
 import { useTaskActions } from "@/components/task-view/use-task-actions"
 import { useTaskKeyboard } from "@/components/task-view/use-task-keyboard"
 import { useTaskOpener } from "@/components/task-view/use-task-opener"
@@ -65,6 +74,9 @@ const CLOSED_ROW_MAX = 2000
 /** Columns a board card never shows: the ID (U3) and the long list-only cells. */
 const BOARD_HIDDEN_KEYS: ReadonlySet<ColumnKey> = new Set(["id", "created", "activity"])
 
+/** Filter fields a project's own tab hides (every row has that project and client). */
+const PROJECT_CONTEXT_HIDDEN_FIELDS: ReadonlySet<FilterField> = new Set(["project", "client"])
+
 /**
  * The task view container (docs/prd-tasks-refactor.md §6.2): surface preset +
  * view (URL ⇄ saved views, `use-view-state`) → `tasks.queries.listView` (the
@@ -80,9 +92,31 @@ const BOARD_HIDDEN_KEYS: ReadonlySet<ColumnKey> = new Set(["id", "created", "act
  * `listView` presets; Today is a plan (`tasks.today.listToday`) rendered by
  * `TodayList`. The sun (§5.6, D9) is on every list row, board card, the
  * selection bar and T.
+ *
+ * The project Tasks tab (`surface: "project"`, slice 7b) is the same
+ * container scoped to one project (`listView` reads
+ * `by_orgId_projectId_statusCategory`), embedded in the project page: no
+ * Client column, no project/client grouping or filters (U3), and new tasks
+ * land in the project.
  */
-export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks" | "myTasks"> }) {
+export function TaskView({
+  surface,
+  projectId,
+  fromLabel,
+  embedded = false,
+}: {
+  surface: TaskViewSurface
+  /** Required for `surface: "project"`. */
+  projectId?: Id<"projects">
+  /** Back-link label of the full task page opened from this view. */
+  fromLabel?: string
+  /** Inside another page (the project page) instead of filling the app panel. */
+  embedded?: boolean
+}) {
   const { isAuthenticated } = useConvexAuth()
+  const projectScoped = surface === "project"
+  const scopedProjectId = projectScoped ? projectId : undefined
+  const viewContext: ViewContext = useMemo(() => ({ projectScoped }), [projectScoped])
   const isAdmin = useIsAdmin() ?? false
   const searchParams = useSearchParams()
   const view = useViewState(surface)
@@ -101,10 +135,14 @@ export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks
   const closedLimit = closedLimits[viewKey] ?? CLOSED_ROW_DEFAULT
 
   const listArgs = useMemo(
-    () => ({ surface, ...view.listQuery, closedLimit, today }),
-    [surface, view.listQuery, closedLimit, today],
+    () => ({ surface, ...view.listQuery, projectId: scopedProjectId, closedLimit, today }),
+    [surface, view.listQuery, scopedProjectId, closedLimit, today],
   )
-  const liveResult = useQuery(api.tasks.queries.listView, isAuthenticated && view.ready && !isToday ? listArgs : "skip")
+  const canList = !projectScoped || scopedProjectId !== undefined
+  const liveResult = useQuery(
+    api.tasks.queries.listView,
+    isAuthenticated && view.ready && !isToday && canList ? listArgs : "skip",
+  )
   const result = useLastDefined(liveResult)
   const refs = useQuery(api.workspaceRefs.get, isAuthenticated ? {} : "skip")
   const { data: todayResult, error: todayError } = useOptionalQuery(
@@ -128,9 +166,7 @@ export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks
     [tabCounts],
   )
 
-  // The create modal still reads the legacy reference-data context (slice 7b).
   const currentUser = useQuery(api.users.current, isAuthenticated ? {} : "skip")
-  const referenceData = useTaskReferenceDataValue()
 
   // ─── Rows → search → chips → groups ─────────────────────────────────────────
   const index = useMemo(() => (refs ? indexRefs(refs) : null), [refs])
@@ -160,13 +196,13 @@ export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks
     // Status columns always show (inside the view's scope) so every status is a drop target.
     return groupRows(rows, { ...spec, groupBy: boardGroup, showEmptyGroups: spec.showEmptyGroups || boardGroup === "status" }, index)
   }, [board, boardGroup, index, rows, spec])
-  const columns = useMemo(() => visibleColumnKeys(spec), [spec])
+  const columns = useMemo(() => visibleColumnKeys(spec, viewContext), [spec, viewContext])
   const boardKeys = useMemo(
     () =>
-      visibleColumnKeys({ ...spec, groupBy: boardGroup }).filter(
+      visibleColumnKeys({ ...spec, groupBy: boardGroup }, viewContext).filter(
         (k) => !BOARD_HIDDEN_KEYS.has(k) && !(boardGroup === "status" && k === "statusIcon"),
       ),
-    [boardGroup, spec],
+    [boardGroup, spec, viewContext],
   )
   const grouped = board || spec.groupBy !== "none"
 
@@ -231,7 +267,7 @@ export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks
   const { open: openTask, peek: peekTask } = useTaskOpener({
     identifierOf,
     orderedIds,
-    fromLabel: surface === "myTasks" ? "My Tasks" : "Tasks",
+    fromLabel: fromLabel ?? (surface === "myTasks" ? "My Tasks" : "Tasks"),
     onOpened: setFocusState,
   })
 
@@ -304,7 +340,11 @@ export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks
   )
 
   const [createDefaults, setCreateDefaults] = useState<TaskFormDefaults | null>(null)
-  const openCreate = useCallback((defaults: TaskFormDefaults = {}) => setCreateDefaults({ ...defaults }), [setCreateDefaults])
+  // On a project's tab new tasks land in that project.
+  const openCreate = useCallback(
+    (defaults: TaskFormDefaults = {}) => setCreateDefaults({ projectId: scopedProjectId, ...defaults }),
+    [scopedProjectId, setCreateDefaults],
+  )
   const createInGroup = useCallback(
     (group: TaskGroup) => {
       const h = group.header
@@ -341,10 +381,10 @@ export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks
       const prefill = inlineAddPrefill(group, { defaultStatusId, isAdmin })
       if (!prefill) return undefined
       return (title: string) => {
-        createTask({ title, ...prefill }).catch((err) => toastError(err, "Failed to create task"))
+        createTask({ projectId: scopedProjectId, ...prefill, title }).catch((err) => toastError(err, "Failed to create task"))
       }
     },
-    [createTask, defaultStatusId, isAdmin],
+    [createTask, defaultStatusId, isAdmin, scopedProjectId],
   )
 
   const boardDraggable = canDragOnBoard(boardGroup, isAdmin)
@@ -385,8 +425,18 @@ export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks
   }
 
   const facetCtx: FacetContext | null = useMemo(
-    () => (index ? { rows: searched, chips: draft.chips, index, me, onChange: view.setChips } : null),
-    [draft.chips, index, me, searched, view.setChips],
+    () =>
+      index
+        ? {
+            rows: searched,
+            chips: draft.chips,
+            index,
+            me,
+            onChange: view.setChips,
+            hiddenFields: projectScoped ? PROJECT_CONTEXT_HIDDEN_FIELDS : undefined,
+          }
+        : null,
+    [draft.chips, index, me, projectScoped, searched, view.setChips],
   )
   const [filterOpen, setFilterOpen] = useState(false)
   const searchRef = useRef<SearchBoxHandle>(null)
@@ -427,8 +477,11 @@ export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks
   const narrowed = draft.chips.length > 0 || view.search !== ""
 
   return (
-    <TaskReferenceDataProvider value={referenceData}>
-      <div className={TASK_VIEW_PANEL_CLASS} data-full-bleed>
+    <>
+      <div
+        className={embedded ? TASK_VIEW_EMBEDDED_PANEL_CLASS : TASK_VIEW_PANEL_CLASS}
+        data-full-bleed={embedded ? undefined : true}
+      >
         <div className="flex h-12 shrink-0 items-center gap-2 px-3">
           <ViewTabs
             views={view.options}
@@ -481,6 +534,8 @@ export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks
             onSave={() => void viewActions.save()}
             onSaveAsNew={() => setViewDialog({ mode: "create", filterCount: draft.chips.length })}
             onSetDefault={() => void viewActions.setDefaultForEveryone()}
+            hiddenGroupBy={projectScoped ? PROJECT_CONTEXT_HIDDEN_GROUPS : undefined}
+            hiddenProperties={projectScoped ? PROJECT_CONTEXT_HIDDEN_COLUMNS : undefined}
           />
           {isMyTasks ? (
             <Button
@@ -568,7 +623,11 @@ export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks
               <Empty className="h-full">
                 <EmptyHeader>
                   <EmptyTitle>No tasks in this view</EmptyTitle>
-                  <EmptyDescription>Tasks you create or are assigned to show up here.</EmptyDescription>
+                  <EmptyDescription>
+                    {projectScoped
+                      ? "Tasks of this project you can see show up here."
+                      : "Tasks you create or are assigned to show up here."}
+                  </EmptyDescription>
                 </EmptyHeader>
                 <EmptyContent>
                   <Button variant="outline" size="sm" onClick={() => openCreate()}>
@@ -717,7 +776,7 @@ export function TaskView({ surface }: { surface: Extract<TaskViewSurface, "tasks
       ) : null}
 
       <TaskDetailDrawer taskIds={orderedIds} isAdmin={isAdmin} identifierOf={identifierOf} />
-    </TaskReferenceDataProvider>
+    </>
   )
 }
 

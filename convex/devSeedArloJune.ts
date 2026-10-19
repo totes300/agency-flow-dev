@@ -378,7 +378,7 @@ export const verify = internalMutation({
         title: t.title,
         orgId: t.orgId,
         projectId: t.projectId,
-        statusType: t.statusType,
+        statusCategory: t.statusCategory,
         statusId: t.statusId,
         archivedAt: t.archivedAt ?? null,
         parentTaskId: t.parentTaskId ?? null,

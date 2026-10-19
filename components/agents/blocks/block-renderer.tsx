@@ -7,6 +7,7 @@ import { ToolCallBlock } from "@/components/agents/blocks/tool-call-block"
 import { TableBlock } from "@/components/agents/blocks/table-block"
 import { ArtifactBlock } from "@/components/agents/blocks/artifact-block"
 import { ProposalBlock } from "@/components/agents/blocks/proposal-block"
+import { QuestionBlock } from "@/components/agents/blocks/question-block"
 
 /**
  * The block vocabulary's single dispatch point (PRD renderer contract):
@@ -15,8 +16,8 @@ import { ProposalBlock } from "@/components/agents/blocks/proposal-block"
  * directly in the thread timeline.
  *
  * `readOnly` (a non-owner admin viewing a thread in the audit view) makes the
- * only interactive block — proposals — inert; every other block is read-only
- * already.
+ * interactive blocks — proposals and questions — inert; every other block is
+ * read-only already.
  */
 export function BlockRenderer({
   block,
@@ -54,5 +55,7 @@ export function BlockRenderer({
       return (
         <ProposalBlock proposalIds={block.proposalIds} readOnly={readOnly} />
       )
+    case "question":
+      return <QuestionBlock questionId={block.questionId} readOnly={readOnly} />
   }
 }

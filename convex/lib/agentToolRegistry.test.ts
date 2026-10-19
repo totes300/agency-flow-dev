@@ -236,6 +236,8 @@ describe("background tool filtering (A1 actor layer)", () => {
     "proposeTaskUpdate",
     "proposeComment",
     "proposeSkill",
+    // A5 question block (T5)
+    "askUser",
   ];
 
   it("exactly the migrated tools are background-capable, all on the actor path", () => {

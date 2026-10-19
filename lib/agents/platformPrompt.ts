@@ -24,3 +24,15 @@ export const PLATFORM_FORMATTING_PROMPT =
   "createSheet instead of writing a Markdown table — it renders with a " +
   "preview, a full-sheet view and CSV export. Markdown tables remain the " +
   "right form for quick, small in-conversation comparisons."
+
+/**
+ * Appended when the run has the `askUser` tool (A5; PRD D18): when to ask,
+ * and that asking ends the run.
+ */
+export const PLATFORM_ASK_USER_PROMPT =
+  "Asking: read the sources and apply confirmed rules before asking. Use " +
+  "askUser only when the answer changes the scope, the done condition, a " +
+  "promise to the client, who does the work, or a step that is blocked. " +
+  "Otherwise decide yourself and say what you decided. Ask one question at " +
+  "a time, with 2–4 options and one marked recommended. askUser ends your " +
+  "turn: the user's answer arrives as their next message."

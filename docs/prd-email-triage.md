@@ -1451,7 +1451,7 @@ B1 phase prints. Started during milestone A (E4); blocks B1.
 | A2 | Threads + jobs | done | (this commit) | A2a visibility + anchor, one access policy, proposal revisions, run queue, stale-run cron; A2b job registry (llm_step + agent_run), system agents, designated agent actor (E2), Claude-only model allowlist, stages from tool events; both reviewed |
 | A3 | Read layer | done | (this commit) | getProjectRouting, getTaskComments, getTaskActivity, getTaskFiles, getTaskBundle on the actor path, reusing the UI access helpers; reseed for Copilot / Flow Assistant |
 | A4 | Proposal consolidation | done | (this commit) | createTask (subtasks, descriptionJson, source, grouping) / updateTask / postComment / proposeSkill; atomic approve via executeEffect with via-agent activity; createTask notify afterMs; I3 gate + final-state check; statuses.workflowRole + settings select + backfill; reviewed. Manual: statuses:backfillWorkflowRoles, reseed |
-| A5 | Question block | pending | | |
+| A5 | Question block | done | (this commit) | agentQuestions + askUser (ends the run via questionAsked), answer / later / reopen, exactly one next run (job continues as the answerer), settleQuestion only on typed turns, question-block.tsx with focused 1–4 keys; reviewed. Answer runs get only background tools until A7 |
 | A6 | Attachment contents | pending | | |
 | B1 | Gmail connect | pending | | waits on the Google OAuth client (E4) |
 | B2 | Email schema + pure model | pending | | |

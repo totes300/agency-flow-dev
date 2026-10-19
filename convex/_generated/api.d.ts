@@ -19,6 +19,8 @@ import type * as agentBackground from "../agentBackground.js";
 import type * as agentJobs from "../agentJobs.js";
 import type * as agentMentions from "../agentMentions.js";
 import type * as agentProposals from "../agentProposals.js";
+import type * as agentQuestions from "../agentQuestions.js";
+import type * as agentReads from "../agentReads.js";
 import type * as agentReports from "../agentReports.js";
 import type * as agentRunner from "../agentRunner.js";
 import type * as agentThreads from "../agentThreads.js";
@@ -149,6 +151,8 @@ declare const fullApi: ApiFromModules<{
   agentJobs: typeof agentJobs;
   agentMentions: typeof agentMentions;
   agentProposals: typeof agentProposals;
+  agentQuestions: typeof agentQuestions;
+  agentReads: typeof agentReads;
   agentReports: typeof agentReports;
   agentRunner: typeof agentRunner;
   agentThreads: typeof agentThreads;

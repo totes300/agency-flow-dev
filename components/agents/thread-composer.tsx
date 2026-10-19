@@ -1,6 +1,6 @@
 "use client"
 
-import { useRef, useState } from "react"
+import { useRef, useState, type RefObject } from "react"
 import { useAction, useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
@@ -23,16 +23,20 @@ export function ThreadComposer({
   agentName,
   isRunning,
   activeRun,
+  composerRef: externalRef,
 }: {
   threadId: string
   agentName: string
   isRunning: boolean
   activeRun: { _id: Id<"agentRuns">; cancelRequested: boolean } | null
+  /** The thread's composer handle, shared with blocks (question prefixes). */
+  composerRef?: RefObject<AgentComposerHandle | null>
 }) {
   // Covers the gap between the action call and the thread's reactive status
   // flip to "running".
   const [sending, setSending] = useState(false)
-  const composerRef = useRef<AgentComposerHandle>(null)
+  const ownRef = useRef<AgentComposerHandle>(null)
+  const composerRef = externalRef ?? ownRef
   const startRun = useAction(api.agentRunner.startRun)
   const stopRun = useMutation(api.agentRunner.stopRun)
 

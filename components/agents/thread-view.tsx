@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef } from "react"
+import { useEffect, useMemo, useRef } from "react"
 import { useQuery } from "convex/react"
 import { useUIMessages } from "@convex-dev/agent/react"
 import type { UIMessage } from "@convex-dev/agent/react"
@@ -8,6 +8,11 @@ import { EyeIcon } from "lucide-react"
 import { api } from "@/convex/_generated/api"
 import { Skeleton } from "@/components/ui/skeleton"
 import { ThreadComposer } from "@/components/agents/thread-composer"
+import type { AgentComposerHandle } from "@/components/agents/composer"
+import {
+  ComposerBridgeContext,
+  type ComposerBridge,
+} from "@/components/agents/composer-bridge"
 import { BlockRenderer } from "@/components/agents/blocks/block-renderer"
 import { ErrorBlock } from "@/components/agents/blocks/error-block"
 import { SystemBlock } from "@/components/agents/blocks/system-block"
@@ -27,6 +32,17 @@ export function ThreadView({ threadId }: { threadId: string }) {
     api.agentThreads.listMessages,
     { threadId },
     { initialNumItems: 50, stream: true },
+  )
+
+  // Blocks reach the composer through this bridge (a question option's
+  // composer prefix — A5); the handle itself stays owned by the composer.
+  const composerRef = useRef<AgentComposerHandle>(null)
+  const composerBridge = useMemo<ComposerBridge>(
+    () => ({
+      insertPrefix: (text) => composerRef.current?.insertPrefix(text),
+      focus: () => composerRef.current?.focus(),
+    }),
+    [],
   )
 
   // Pin the stream to the bottom while messages arrive/grow.
@@ -75,6 +91,9 @@ export function ThreadView({ threadId }: { threadId: string }) {
     // A background run waiting for the active one (I11) — its message is
     // posted when it starts, so only a quiet note shows meanwhile.
     if (run.queuedAt !== null) {
+      // The run a question answer started (A5) shows as its answer turn
+      // once it starts — no generic queued line meanwhile.
+      if (run.answersQuestion) continue
       timeline.push({
         key: `${run._id}-queued`,
         at: run.queuedAt,
@@ -102,7 +121,10 @@ export function ThreadView({ threadId }: { threadId: string }) {
     }
     // A tool the agent references no longer exists in the registry — dropped
     // before the model call, flagged here instead of failing the run (slice 09).
-    if (run.droppedTools.length > 0) {
+    // TODO(A7): answer runs (`questionId`) start on the background path, which
+    // drops the agent's non-actor-path tools; the notice is noise there until
+    // A7 moves every registry tool to the actor path.
+    if (run.droppedTools.length > 0 && !run.answersQuestion) {
       timeline.push({
         key: `${run._id}-dropped-tools`,
         at: run.startedAt,
@@ -160,14 +182,16 @@ export function ThreadView({ threadId }: { threadId: string }) {
         </span>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto flex max-w-2xl flex-col gap-4 px-4 py-6">
-          {timeline.map((entry) => (
-            <div key={entry.key} className="flex flex-col">
-              {entry.node}
-            </div>
-          ))}
-          <div ref={bottomRef} />
-        </div>
+        <ComposerBridgeContext.Provider value={readOnly ? null : composerBridge}>
+          <div className="mx-auto flex max-w-2xl flex-col gap-4 px-4 py-6">
+            {timeline.map((entry) => (
+              <div key={entry.key} className="flex flex-col">
+                {entry.node}
+              </div>
+            ))}
+            <div ref={bottomRef} />
+          </div>
+        </ComposerBridgeContext.Provider>
       </div>
       {readOnly ? (
         <div className="flex items-center justify-center gap-2 border-t px-4 py-3 text-xs text-muted-foreground">
@@ -180,6 +204,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
           agentName={thread.agentName}
           isRunning={thread.status === "running"}
           activeRun={thread.activeRun}
+          composerRef={composerRef}
         />
       )}
     </div>

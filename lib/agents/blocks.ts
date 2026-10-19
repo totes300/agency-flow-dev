@@ -9,6 +9,11 @@
 
 import { isAgentTableOutput, type AgentTable } from "./table";
 import { isProposalRefsOutput } from "./proposals";
+import {
+  ASK_USER_TOOL_NAME,
+  isQuestionRefOutput,
+  SETTLE_QUESTION_TOOL_NAME,
+} from "./questions";
 import { STOP_CONDITION_TOOL_NAME } from "./skills";
 
 /**
@@ -58,6 +63,15 @@ export type AgentBlock =
        * (approved/discarded/failed) update in place (slice 08).
        */
       proposalIds: string[];
+    }
+  | {
+      kind: "question";
+      /**
+       * The question `askUser` recorded (A5). The block renders from the
+       * LIVE question record (reactive query), never from this output, so
+       * answered / later / superseded always show their current state.
+       */
+      questionId: string;
     };
 
 /** Reference a tool output carries when it persisted a canvas artifact. */
@@ -166,6 +180,10 @@ export function classifyParts(parts: MessagePartLike[]): AgentBlock[] {
       // cards themselves are live records, referenced by id (slice 08).
       if (isProposalRefsOutput(block.output)) {
         blocks.push({ kind: "proposal", proposalIds: block.output.proposalIds });
+      }
+      // askUser's marker expands into the question block (A5).
+      if (isQuestionRefOutput(block.output)) {
+        blocks.push({ kind: "question", questionId: block.output.questionId });
       }
     }
   }
@@ -346,6 +364,20 @@ const TOOL_DISPLAY: Record<string, ToolDisplay> = {
       if (notFound(output)) return "not found";
       const n = arrayLength(output, "defaultAssignees");
       return n === null ? null : plural(n, "default assignee");
+    },
+  },
+  // The question block (A5): the ghost row above the block itself.
+  [ASK_USER_TOOL_NAME]: {
+    runningLabel: "Asking a question",
+    doneLabel: "Asked a question",
+    summarize: () => null,
+  },
+  [SETTLE_QUESTION_TOOL_NAME]: {
+    runningLabel: "Settling the open question",
+    doneLabel: "Settled the open question",
+    summarize: (output) => {
+      const status = field(output, "status");
+      return status === "answered" ? "answered" : status === "superseded" ? "replaced" : null;
     },
   },
   // The skill stop-condition tool (slice 04) — when it fires, a skill halted

@@ -77,6 +77,18 @@ import {
   PROPOSAL_TITLE_MAX,
 } from "../../lib/agents/proposals";
 import {
+  AGENT_QUESTION_MARKER,
+  ASK_USER_TOOL_NAME,
+  QUESTION_COMPOSER_PREFIX_MAX,
+  QUESTION_HEADER_MAX,
+  QUESTION_OPTION_DESCRIPTION_MAX,
+  QUESTION_OPTION_LABEL_MAX,
+  QUESTION_OPTIONS_MAX,
+  QUESTION_OPTIONS_MIN,
+  QUESTION_TEXT_MAX,
+  QUESTION_WHY_MAX,
+} from "../../lib/agents/questions";
+import {
   CONNECTOR_CATALOG,
   connectorGuidanceMessage,
 } from "../../lib/agents/connectors";
@@ -125,7 +137,7 @@ import type {
 } from "./agentReportCore";
 
 export type AgentToolScope = "member" | "admin";
-export type AgentToolKind = "read" | "artifact" | "propose" | "connector";
+export type AgentToolKind = "read" | "artifact" | "propose" | "connector" | "question";
 
 type AgentToolEntryBase = {
   name: string;
@@ -2069,9 +2081,104 @@ const collectOrgFinanceSnapshotTool = createTool({
   },
 });
 
+// ─── Question (T5, A5) ──────────────────────────────────────────────────────
+
+type AskUserResult = {
+  block: typeof AGENT_QUESTION_MARKER;
+  questionId: string;
+  note: string;
+};
+
+const ASK_NOTE =
+  "The question is shown to the user as a question block with its options. " +
+  "Your turn ends here; their answer arrives as their next message. Do not " +
+  "repeat the question or its options.";
+
+/**
+ * Ask the user one decision (PRD D16, D18). Writes an `agentQuestions` row
+ * as the run's actor (the asked user) and ENDS the run — the runner's stop
+ * condition fires on this tool's marker; the answer starts the next run.
+ */
+const askUserTool = (actor: AgentActor) => createTool({
+  description:
+    "Ask the user ONE decision you cannot make yourself, as a question block " +
+    "with 2–4 numbered options. Ask only when the answer changes the scope, " +
+    "the done condition, a promise to the client, who does the work, or a " +
+    "blocked step — otherwise decide and say what you decided. Calling this " +
+    "ENDS your turn; the answer arrives as the user's next message. Mark the " +
+    "option you would pick as recommended. A new question replaces one still open.",
+  inputSchema: z.object({
+    header: z.string().min(1).max(QUESTION_HEADER_MAX).describe('A short label, e.g. "Countdown"'),
+    question: z.string().min(1).max(QUESTION_TEXT_MAX),
+    why: z
+      .string()
+      .max(QUESTION_WHY_MAX)
+      .optional()
+      .describe('One short line on why you ask, e.g. "Réka wrote Friday, but no time"'),
+    options: z
+      .array(
+        z.object({
+          label: z.string().min(1).max(QUESTION_OPTION_LABEL_MAX),
+          description: z.string().max(QUESTION_OPTION_DESCRIPTION_MAX).optional(),
+          recommended: z.boolean().optional(),
+          effect: z
+            .enum(["email_client", "answer_here"])
+            .optional()
+            .describe("email_client: picking it leads to an email to the client; answer_here: settled here"),
+          composerPrefix: z
+            .string()
+            .max(QUESTION_COMPOSER_PREFIX_MAX)
+            .optional()
+            .describe('For "I\'ll give the exact value": text put into the composer for the user to finish, e.g. "Countdown ends: "'),
+        }),
+      )
+      .min(QUESTION_OPTIONS_MIN)
+      .max(QUESTION_OPTIONS_MAX),
+    multiSelect: z.boolean().optional().describe("Several options may be picked (default false)"),
+    allowOther: z.boolean().optional().describe("Offer a free-text answer (default true)"),
+    proposalId: z
+      .string()
+      .optional()
+      .describe("The proposal (plan) this question is about, if any"),
+    blocks: z
+      .object({
+        task: z.string().optional().describe("Identifier of the task this blocks"),
+        subtask: z.string().optional().describe("Identifier of the subtask this blocks"),
+        requestId: z.string().optional(),
+      })
+      .optional(),
+  }),
+  execute: async (ctx, input): Promise<AskUserResult> => {
+    if (!ctx.threadId) throw new Error("No thread for the question");
+    const { questionId } = await ctx.runMutation(internal.agentQuestions.ask, {
+      actor: actorRef(actor),
+      componentThreadId: ctx.threadId,
+      header: input.header,
+      question: input.question,
+      why: input.why,
+      options: input.options,
+      multiSelect: input.multiSelect ?? false,
+      allowOther: input.allowOther ?? true,
+      proposalId: input.proposalId,
+      blocks: input.blocks,
+    });
+    return { block: AGENT_QUESTION_MARKER, questionId, note: ASK_NOTE };
+  },
+});
+
 // ─── Registry ───────────────────────────────────────────────────────────────
 
 export const agentToolRegistry: Record<string, AgentToolEntry> = {
+  [ASK_USER_TOOL_NAME]: {
+    name: ASK_USER_TOOL_NAME,
+    humanDescription:
+      "Ask the user one decision as a question block with options — the " +
+      "run ends and continues when they answer.",
+    scope: "member",
+    kind: "question",
+    background: true,
+    makeTool: askUserTool,
+  },
   listClients: {
     name: "listClients",
     humanDescription: "Read the client directory (names, currencies).",

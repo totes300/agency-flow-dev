@@ -55,7 +55,14 @@ export type ComposerSubmission = {
 
 /** Imperative handle so parents can prefill (example chips) / restore drafts. */
 export type AgentComposerHandle = {
+  /** Replace the draft with `text` (example chips, restoring a failed send). */
   prefill: (text: string) => void
+  /**
+   * Insert `text` at the START of the draft, keeping what is already typed,
+   * and leave the caret right after it (a question option's composer
+   * prefix, A5).
+   */
+  insertPrefix: (text: string) => void
   focus: () => void
   clear: () => void
 }
@@ -261,6 +268,12 @@ export const AgentComposer = forwardRef<AgentComposerHandle, {
         ed.commands.setContent(text)
         setHasContent(text.trim().length > 0)
         ed.commands.focus("end")
+      },
+      insertPrefix: (text: string) => {
+        const ed = editorRef.current
+        if (!ed) return
+        // A JSON text node keeps the prefix verbatim (trailing space included).
+        ed.chain().focus("start").insertContent({ type: "text", text }).run()
       },
       focus: () => editorRef.current?.commands.focus("end"),
       clear: () => {

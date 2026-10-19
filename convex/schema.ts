@@ -970,6 +970,10 @@ export default defineSchema({
     error: v.optional(v.string()),
     // Actionable next step shown under the error block (e.g. settings hint).
     errorHint: v.optional(v.string()),
+    // The question this run continues from (A5, I7): set on the ONE run an
+    // answer starts (`agentQuestions.answer`), so the run gets the answered
+    // question as context.
+    questionId: v.optional(v.id("agentQuestions")),
   })
     .index("by_orgId", ["orgId"])
     .index("by_threadId", ["threadId"])
@@ -1068,6 +1072,77 @@ export default defineSchema({
   })
     .index("by_orgId", ["orgId"])
     .index("by_threadId_status", ["threadId", "status"]),
+
+  // The question block (A5; PRD D16, D18, §6.6, I7, I11). `askUser` writes a
+  // row and ENDS its run; the block renders from this record. An answer
+  // (one transaction: pending → answered + exactly one queued next run) or
+  // "Later" is stored here. One pending question per thread: a new ask
+  // supersedes the old one. Shapes + pure rules: lib/agents/questions.ts.
+  agentQuestions: defineTable({
+    orgId: v.string(),
+    agentThreadId: v.id("agentThreads"),
+    // The run that asked, when known — audit only.
+    runId: v.optional(v.id("agentRuns")),
+    // Who must answer: the asking run's actor. An org admin with write
+    // access to the thread may answer too.
+    askedUserId: v.id("users"),
+    header: v.string(),
+    question: v.string(),
+    // The one muted "why it asks" line.
+    why: v.optional(v.string()),
+    options: v.array(
+      v.object({
+        label: v.string(),
+        description: v.optional(v.string()),
+        recommended: v.optional(v.boolean()),
+        // What picking it leads to: drafts an email to the client, or is
+        // settled right here (the trailing icon).
+        effect: v.optional(
+          v.union(v.literal("email_client"), v.literal("answer_here")),
+        ),
+        // Picking it puts this into the thread composer instead of answering
+        // ("Countdown ends: ").
+        composerPrefix: v.optional(v.string()),
+      }),
+    ),
+    multiSelect: v.boolean(),
+    allowOther: v.boolean(),
+    // I11: the plan revision the question belongs to — stamped by code from
+    // the proposal at ask time; an answer after the revision moved is refused.
+    proposalId: v.optional(v.id("agentProposals")),
+    proposalRevision: v.optional(v.number()),
+    // What the open question blocks (stored only; enforcement comes later).
+    blocks: v.optional(
+      v.object({
+        taskId: v.optional(v.id("tasks")),
+        subtaskId: v.optional(v.id("tasks")),
+        requestId: v.optional(v.string()),
+      }),
+    ),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("answered"),
+      v.literal("later"),
+      v.literal("superseded"),
+    ),
+    // Picked option indexes and/or free text. A typed composer answer the
+    // agent settled (`settleQuestion`) has no indexes, only the note.
+    answer: v.optional(
+      v.object({
+        optionIndexes: v.array(v.number()),
+        other: v.optional(v.string()),
+      }),
+    ),
+    answeredBy: v.optional(v.id("users")),
+    answeredAt: v.optional(v.number()),
+    // "conversation" = settled by the agent from a typed message
+    // (`settleQuestion`; the note is the model's words, not the user's).
+    // Unset = answered in the block.
+    answeredIn: v.optional(v.literal("conversation")),
+    createdAt: v.number(),
+  })
+    .index("by_agentThreadId_status", ["agentThreadId", "status"])
+    .index("by_orgId_askedUserId_status", ["orgId", "askedUserId", "status"]),
 
   // Connector framework (PRD Module 4 · slice 10) — the extensible chassis for
   // external accounts. STRICTLY PER-USER in V1: a connector authenticates the

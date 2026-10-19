@@ -1,6 +1,12 @@
 import { v, ConvexError, type ObjectType } from "convex/values";
 import { z } from "zod";
-import { gateway, type LanguageModel, type Tool } from "ai";
+import {
+  gateway,
+  type LanguageModel,
+  type StopCondition,
+  type Tool,
+  type ToolSet,
+} from "ai";
 import {
   Agent,
   abortStream,
@@ -27,7 +33,7 @@ import {
   type AuthContext,
 } from "./lib/auth";
 import { loadTaskForReadOrNull } from "./tasks/access";
-import { requireThreadAccess, UNTITLED_THREAD } from "./agentThreads";
+import { requireThreadAccess, threadAccess, UNTITLED_THREAD } from "./agentThreads";
 import { getToolsForAgent } from "./lib/agentToolRegistry";
 import {
   getAgentRunJob,
@@ -43,7 +49,18 @@ import {
   STOP_CONDITION_TOOL_NAME,
   type ResolvableSkill,
 } from "../lib/agents/skills";
-import { PLATFORM_FORMATTING_PROMPT } from "../lib/agents/platformPrompt";
+import {
+  PLATFORM_ASK_USER_PROMPT,
+  PLATFORM_FORMATTING_PROMPT,
+} from "../lib/agents/platformPrompt";
+import {
+  ASK_USER_TOOL_NAME,
+  buildAnsweredQuestionContext,
+  buildPendingQuestionContext,
+  formatAnswerTurn,
+  isQuestionRefOutput,
+  SETTLE_QUESTION_TOOL_NAME,
+} from "../lib/agents/questions";
 import {
   resolveModel,
   WorksheetAiUnavailableError,
@@ -161,6 +178,11 @@ export type BeginRunResult = {
   maxSteps: number;
   /** The agent job this run executes, if any (`agentRuns.job`). */
   job: string | null;
+  /**
+   * A question still pending in the thread when the run began (A5, §6.6):
+   * the run gets it as context plus the per-run `settleQuestion` tool.
+   */
+  pendingQuestionId: Id<"agentQuestions"> | null;
 };
 
 /**
@@ -171,7 +193,7 @@ export type BeginRunResult = {
  * throw here leaving nothing written (the queued-run claim catches it and
  * settles the queued row instead).
  */
-async function checkRunStart(
+export async function checkRunStart(
   ctx: MutationCtx,
   auth: AuthContext,
   rawThreadId: string,
@@ -235,6 +257,8 @@ async function openRun(
     queuedRunId?: Id<"agentRuns">;
     /** An agent job run (A2b): job instructions, tools, steps, model. */
     job?: AgentRunJob;
+    /** The question an answer run continues from (A5, `agentRuns.questionId`). */
+    questionId?: Id<"agentQuestions">;
   } = {},
 ): Promise<BeginRunResult> {
   const { queuedRunId, job } = opts;
@@ -258,13 +282,17 @@ async function openRun(
   }
   const resolved = resolveSkills(skills, clientId);
   const skillPrompt = assembleSkillPrompt(resolved);
+  // A job run uses the JOB's tool list (background-capable by
+  // construction, validateAgentJob); a plain turn uses the agent's.
+  const toolNames = job ? job.tools : agent.tools;
   // Agent identity first (+ the job's instructions for a job run, A2b), then
-  // the platform's rendering-surface capabilities (markdown/tables), then
-  // per-run skill prompts.
+  // the platform's rendering-surface capabilities (markdown/tables) and —
+  // when the run can ask — the asking rules (D18), then per-run skill prompts.
   const baseInstructions = [
     agent.instructions,
     job?.instructions,
     PLATFORM_FORMATTING_PROMPT,
+    toolNames.includes(ASK_USER_TOOL_NAME) ? PLATFORM_ASK_USER_PROMPT : null,
     skillPrompt,
   ]
     .filter(Boolean)
@@ -283,9 +311,19 @@ async function openRun(
     mentions: resolvedMentions,
     attachments: args.attachments ?? [],
   });
-  const instructions = composerContext
-    ? `${baseInstructions}\n\n${composerContext}`
-    : baseInstructions;
+  // ─── Question context (A5, PRD §6.6) ─────────────────────────────────
+  // The run an answer started learns which question it continues from. A
+  // message TYPED in the composer (`via: "user"`, no job) while a question is
+  // pending gets that question (+ the settleQuestion tool, wired in
+  // executeRun) — never a background, job or answer run: only a human's own
+  // words may settle a question.
+  const questionContext = await loadQuestionContext(ctx, thread._id, {
+    answeredQuestionId: opts.questionId,
+    includePending: via === "user" && !job && !opts.questionId,
+  });
+  const instructions = [baseInstructions, composerContext, ...questionContext.lines]
+    .filter(Boolean)
+    .join("\n\n");
 
   // Save the user message FIRST, so its component _creationTime precedes the
   // run's startedAt — the "skill loaded" notes then sort AFTER the question
@@ -307,9 +345,6 @@ async function openRun(
     isAdmin: auth.isAdmin,
     via,
   };
-  // A job run uses the JOB's tool list (background-capable by
-  // construction, validateAgentJob); a plain turn uses the agent's.
-  const toolNames = job ? job.tools : agent.tools;
   const { dropped: droppedTools } = getToolsForAgent(toolNames, actor);
 
   const now = Date.now();
@@ -372,8 +407,41 @@ async function openRun(
     model: job?.model ?? agent.model ?? null,
     maxSteps: job?.maxSteps ?? MAX_STEPS,
     job: job?.name ?? null,
+    pendingQuestionId: questionContext.pendingQuestionId,
   };
   return result;
+}
+
+/**
+ * The question lines for a run's instructions (A5): the answered question
+ * an answer run continues from, and the thread's pending question (newest —
+ * there is at most one, `agentQuestions.ask` supersedes older ones).
+ */
+async function loadQuestionContext(
+  ctx: MutationCtx,
+  threadId: Id<"agentThreads">,
+  opts: { answeredQuestionId?: Id<"agentQuestions">; includePending: boolean },
+): Promise<{ lines: string[]; pendingQuestionId: Id<"agentQuestions"> | null }> {
+  const { answeredQuestionId } = opts;
+  const lines: string[] = [];
+  if (answeredQuestionId) {
+    const answered = await ctx.db.get(answeredQuestionId);
+    if (answered && answered.agentThreadId === threadId && answered.answer) {
+      lines.push(
+        buildAnsweredQuestionContext(answered, formatAnswerTurn(answered, answered.answer)),
+      );
+    }
+  }
+  if (!opts.includePending) return { lines, pendingQuestionId: null };
+  const pending = await ctx.db
+    .query("agentQuestions")
+    .withIndex("by_agentThreadId_status", (q) =>
+      q.eq("agentThreadId", threadId).eq("status", "pending"),
+    )
+    .order("desc")
+    .first();
+  if (pending) lines.push(buildPendingQuestionContext(pending._id, pending));
+  return { lines, pendingQuestionId: pending?._id ?? null };
 }
 
 /** Toasted by the composer when the caller's membership row isn't there yet. */
@@ -450,27 +518,13 @@ export const beginBackgroundRun = internalMutation({
 
     const ahead = await nextQueuedRun(ctx, thread._id);
     if (thread.status === "running" || ahead) {
-      const now = Date.now();
-      const runId = await ctx.db.insert("agentRuns", {
-        orgId: thread.orgId,
-        threadId: thread._id,
+      const runId = await enqueueBackgroundRun(ctx, {
+        thread,
         agentId: agent._id,
-        userId: auth.userId,
-        actorIsAdmin: auth.isAdmin,
-        via: "background",
-        ...(job ? { job: job.name } : {}),
-        status: "queued",
-        startedAt: now,
-        queuedAt: now,
-        queuedMessage: args.message,
+        auth,
+        message: args.message,
+        job: job?.name,
       });
-      // Idle thread with a backlog (the pump between a finish and its
-      // scheduled claim): make sure the queue moves.
-      if (thread.status !== "running") {
-        await ctx.scheduler.runAfter(0, internal.agentBackground.runNextQueued, {
-          threadId: thread._id,
-        });
-      }
       return { queued: true, runId };
     }
     const run = await openRun(
@@ -549,6 +603,130 @@ async function requireJobActor(
   }
 }
 
+/**
+ * Record a `queued` background run (A2a, I11) and make sure the queue moves:
+ * on an idle thread the pump is scheduled now; on a busy one the active
+ * run's settle pumps it. The claim (`beginNextQueuedRun`) re-checks the
+ * actor and posts `message` as the run's user turn. Shared by a background
+ * start on a busy thread and the ONE run a question answer starts (A5) —
+ * which always enqueues, so the answer and its run land in one transaction.
+ */
+export async function enqueueBackgroundRun(
+  ctx: MutationCtx,
+  args: {
+    thread: Doc<"agentThreads">;
+    agentId: Id<"agents">;
+    auth: Pick<AuthContext, "userId" | "isAdmin">;
+    message: string;
+    job?: string;
+    questionId?: Id<"agentQuestions">;
+  },
+): Promise<Id<"agentRuns">> {
+  const { thread } = args;
+  const now = Date.now();
+  const runId = await ctx.db.insert("agentRuns", {
+    orgId: thread.orgId,
+    threadId: thread._id,
+    agentId: args.agentId,
+    userId: args.auth.userId,
+    actorIsAdmin: args.auth.isAdmin,
+    via: "background",
+    ...(args.job ? { job: args.job } : {}),
+    ...(args.questionId ? { questionId: args.questionId } : {}),
+    status: "queued",
+    startedAt: now,
+    queuedAt: now,
+    queuedMessage: args.message,
+  });
+  // Idle thread (with or without a backlog): schedule the pump. A busy
+  // thread's settle (`settleRun`) pumps it instead.
+  if (thread.status !== "running") {
+    await ctx.scheduler.runAfter(0, internal.agentBackground.runNextQueued, {
+      threadId: thread._id,
+    });
+  }
+  return runId;
+}
+
+/**
+ * A5 job continuity — the ONE exception to the A2b designated-actor rule: the
+ * run a question answer starts (`agentRuns.questionId`) continues the asking
+ * run's job, acting as the human who ANSWERED. Allowed only for a current
+ * admin with write access to an `admins` job thread, or the owner of a
+ * `private` job thread. Every other job run keeps `requireJobActor`.
+ */
+function requireAnswerRunActor(
+  job: AgentRunJob,
+  thread: Doc<"agentThreads">,
+  auth: AuthContext,
+): void {
+  const visibility = thread.visibility ?? "private";
+  const allowed =
+    job.visibility === "admins"
+      ? visibility === "admins" && auth.isAdmin && threadAccess(thread, auth).canWrite
+      : visibility === "private" && thread.userId === auth.userId;
+  if (!allowed) {
+    throw new JobRunRejection(
+      job.visibility === "admins"
+        ? "Only an admin of this shared thread can continue this job"
+        : "Only the thread owner can continue this job",
+      "Ask an admin who can see this thread to answer.",
+    );
+  }
+}
+
+/**
+ * The job an answer run continues (A5): the asking run's job, checked for the
+ * answerer now (`requireAnswerRunActor`). Null when the question was asked
+ * outside a job run. Called by `agentQuestions.answer` so a refusal is
+ * immediate; the queued claim re-checks it.
+ */
+export async function resolveAnswerRunJob(
+  ctx: MutationCtx,
+  args: {
+    askingRunId: Id<"agentRuns"> | undefined;
+    thread: Doc<"agentThreads">;
+    agent: Doc<"agents">;
+    auth: AuthContext;
+  },
+): Promise<string | undefined> {
+  const asking = args.askingRunId ? await ctx.db.get(args.askingRunId) : null;
+  if (!asking?.job || asking.threadId !== args.thread._id) return undefined;
+  const job = requireJobForAgent(asking.job, args.agent);
+  requireAnswerRunActor(job, args.thread, args.auth);
+  return job.name;
+}
+
+/**
+ * A5: the run an answer started never started (its start re-check failed, or
+ * it was cancelled while queued) — the answer would otherwise be recorded with
+ * nothing happening. Put the question back to `pending` (answer cleared) when
+ * it is still `answered` and no other question is pending in the thread
+ * (one at a time). The run's error / cancelled line stays.
+ */
+export async function restoreQuestionOfLostRun(
+  ctx: MutationCtx,
+  run: Pick<Doc<"agentRuns">, "questionId">,
+): Promise<void> {
+  if (!run.questionId) return;
+  const question = await ctx.db.get(run.questionId);
+  if (!question || question.status !== "answered") return;
+  const otherPending = await ctx.db
+    .query("agentQuestions")
+    .withIndex("by_agentThreadId_status", (q) =>
+      q.eq("agentThreadId", question.agentThreadId).eq("status", "pending"),
+    )
+    .first();
+  if (otherPending) return;
+  await ctx.db.patch(question._id, {
+    status: "pending",
+    answer: undefined,
+    answeredBy: undefined,
+    answeredAt: undefined,
+    answeredIn: undefined,
+  });
+}
+
 /** The oldest queued run of a thread (FIFO by creation time), if any. */
 async function nextQueuedRun(
   ctx: MutationCtx,
@@ -593,7 +771,11 @@ export const beginNextQueuedRun = internalMutation({
         });
         ({ agent } = await checkRunStart(ctx, auth, thread._id));
         job = next.job ? requireJobForAgent(next.job, agent) : undefined;
-        if (job) await requireJobActor(ctx, job, thread, next.userId);
+        if (job) {
+          // A5: an answer run continues the job as the answerer.
+          if (next.questionId) requireAnswerRunActor(job, thread, auth);
+          else await requireJobActor(ctx, job, thread, next.userId);
+        }
       } catch (err) {
         // Nothing was written by the checks. Post the queued message so the
         // error block has its context, then settle the queued row.
@@ -619,6 +801,7 @@ export const beginNextQueuedRun = internalMutation({
             ? rejection.hint
             : "The run's acting user no longer has access to this thread or agent.",
         });
+        await restoreQuestionOfLostRun(ctx, next);
         continue;
       }
       return await openRun(
@@ -628,7 +811,7 @@ export const beginNextQueuedRun = internalMutation({
         thread,
         agent,
         { message: next.queuedMessage ?? "" },
-        { queuedRunId: next._id, job },
+        { queuedRunId: next._id, job, questionId: next.questionId },
       );
     }
   },
@@ -655,6 +838,7 @@ export const failQueuedHead = internalMutation({
       error: `Queued run not started: ${args.error}`.slice(0, 500),
       errorHint: "Something went wrong starting this run.",
     });
+    await restoreQuestionOfLostRun(ctx, head);
     return true;
   },
 });
@@ -789,6 +973,53 @@ function makeStopConditionTool(runId: Id<"agentRuns">): Tool {
         reason: input.reason,
       });
       return { halted: true };
+    },
+  });
+}
+
+/**
+ * Stop condition for `askUser` — this version's `hasToolCall`, narrowed to a
+ * SUCCESSFUL call: the last step returned the question marker. A rejected
+ * ask (bad input → tool error) lets the model correct and retry instead of
+ * ending the run with no question on screen.
+ */
+export const questionAsked: StopCondition<ToolSet> = ({ steps }) =>
+  steps
+    .at(-1)
+    ?.toolResults.some(
+      (r) => r.toolName === ASK_USER_TOOL_NAME && isQuestionRefOutput(r.output),
+    ) ?? false;
+
+/**
+ * The settle tool for a question pending in the run's thread (A5, PRD §6.6),
+ * built per run so it closes over the run id (the mutation checks the
+ * question belongs to the run's thread). Offered only while one is pending.
+ */
+function makeSettleQuestionTool(runId: Id<"agentRuns">): Tool {
+  return createTool({
+    description:
+      "Settle the pending question you asked earlier in this conversation. " +
+      'Use outcome "answered" when the user\'s typed message answers it (put ' +
+      'their answer in note), or "superseded" when their message replaces ' +
+      "the plan it was about. Do not call it when the message is a question " +
+      "to you or an unrelated instruction — the question then stays open.",
+    inputSchema: z.object({
+      questionId: z.string().describe("The pending question's id"),
+      outcome: z.enum(["answered", "superseded"]),
+      note: z
+        .string()
+        .max(500)
+        .optional()
+        .describe("For answered: the user's answer in a few words"),
+    }),
+    execute: async (toolCtx, input): Promise<{ settled: true; status: string }> => {
+      await toolCtx.runMutation(internal.agentQuestions.settle, {
+        runId,
+        questionId: input.questionId,
+        outcome: input.outcome,
+        note: input.note,
+      });
+      return { settled: true, status: input.outcome };
     },
   });
 }
@@ -1064,13 +1295,22 @@ export async function executeRun(
     if (run.hasStopConditions) {
       agentTools[STOP_CONDITION_TOOL_NAME] = makeStopConditionTool(run.runId);
     }
+    // A question pending in the thread (A5, §6.6): the model may settle it
+    // when the user's typed message answers or replaces it.
+    if (run.pendingQuestionId) {
+      agentTools[SETTLE_QUESTION_TOOL_NAME] = makeSettleQuestionTool(run.runId);
+    }
 
     const agent = new Agent(components.agent, {
       name: run.agent.name,
       languageModel,
       instructions: run.agent.instructions,
       tools: agentTools,
-      stopWhen: stepCountIs(run.maxSteps),
+      // `askUser` ENDS the run (A5, I7): the loop stops after the step in
+      // which a question was recorded — no further model call — and the run
+      // settles normally (succeeded), the thread goes idle. The answer
+      // starts the next run.
+      stopWhen: [stepCountIs(run.maxSteps), questionAsked],
       usageHandler: async (handlerCtx, { usage }) => {
         await handlerCtx.runMutation(internal.agentRunner.recordUsage, {
           runId: run.runId,
@@ -1239,6 +1479,8 @@ export const stopRun = mutation({
         status: "cancelled",
         finishedAt: Date.now(),
       });
+      // A cancelled answer run (A5): the question is open again.
+      await restoreQuestionOfLostRun(ctx, run);
       return null;
     }
     if (run.status !== "running" || run.cancelRequested) return null;

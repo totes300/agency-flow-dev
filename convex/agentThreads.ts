@@ -222,6 +222,8 @@ export const listRuns = query({
       status: r.status,
       // A queued background run (A2a) has no outcome yet — a quiet line.
       queuedAt: r.status === "queued" ? (r.queuedAt ?? r.startedAt) : null,
+      // Started by a question answer (A5) — the UI skips its queued line.
+      answersQuestion: r.questionId !== undefined,
       // Cancelled while still queued (stopRun) — it never ran; its message
       // was never posted.
       cancelledBeforeStart:

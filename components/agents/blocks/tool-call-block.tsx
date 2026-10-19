@@ -6,6 +6,7 @@ import {
   FolderIcon,
   ListPlusIcon,
   Loader2Icon,
+  MessageCircleQuestionMarkIcon,
   TableIcon,
   UsersIcon,
   WrenchIcon,
@@ -30,6 +31,9 @@ const TOOL_ICONS: Record<string, { Icon: LucideIcon; filled: boolean }> = {
   // Propose-kind tools (slice 08) — line icons; the cards carry the weight.
   proposeCreateTasks: { Icon: ListPlusIcon, filled: false },
   proposeArchiveTask: { Icon: ArchiveIcon, filled: false },
+  // The question block (A5) carries the weight; its ghost row stays quiet.
+  askUser: { Icon: MessageCircleQuestionMarkIcon, filled: false },
+  settleQuestion: { Icon: MessageCircleQuestionMarkIcon, filled: false },
 }
 
 /**

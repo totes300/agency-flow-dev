@@ -4,6 +4,9 @@ import {
   detectLanguage,
   effortEstimates,
   firstNameOf,
+  internalTeamNames,
+  memberFirstName,
+  memberNameForms,
   mentionsName,
   moneyAmounts,
   numberedLines,
@@ -60,6 +63,49 @@ describe("detectLanguage (D19)", () => {
     expect(firstNameOf("Kovács Réka", "hu")).toBe("Réka");
     expect(firstNameOf("Jane Smith", "en")).toBe("Jane");
     expect(firstNameOf(undefined, "hu")).toBeNull();
+  });
+});
+
+describe("team member names (structured Clerk parts)", () => {
+  const adam = { name: "Adam Toth", firstName: "Adam", lastName: "Toth" };
+  it("the sender's first name is the structured given name — never a Hungarian-order guess", () => {
+    expect(memberFirstName(adam)).toBe("Adam");
+    // Family-first display name, but Clerk says the given name is Réka.
+    expect(memberFirstName({ name: "Kovács Réka", firstName: "Réka", lastName: "Kovács" })).toBe("Réka");
+    // Older rows without parts: the display name's first token (Clerk builds it given-first).
+    expect(memberFirstName({ name: "Adam Toth" })).toBe("Adam");
+    expect(memberFirstName({ name: "Lili" })).toBe("Lili");
+    expect(memberFirstName(null)).toBeNull();
+  });
+
+  it("name forms: full, first, last — deduped, no stray tokens", () => {
+    expect(memberNameForms({ name: "Bence Kiss", firstName: "Bence", lastName: "Kiss" })).toEqual(["Bence Kiss", "Bence", "Kiss"]);
+    expect(memberNameForms({ name: "Lili" })).toEqual(["Lili"]);
+    expect(memberNameForms({ name: "Nagy Lili Anna", firstName: "Lili Anna", lastName: "Nagy" })).toEqual([
+      "Nagy Lili Anna",
+      "Lili Anna Nagy",
+      "Lili Anna",
+      "Nagy",
+    ]);
+  });
+
+  it("doNotMention: every member's forms, minus the sender's own and names the client's people share", () => {
+    const names = internalTeamNames({
+      members: [
+        { name: "Bence Kiss", firstName: "Bence", lastName: "Kiss" },
+        { name: "Réka Tóth", firstName: "Réka", lastName: "Tóth" },
+        { name: "Adam Nagy", firstName: "Adam", lastName: "Nagy" },
+        { name: "Bo" },
+      ],
+      sender: adam,
+      clientNames: ["Kovács Réka", "Kiss Anna"],
+    });
+    // "Réka" / "Kiss" — the client's people have them; "Adam" and "Tóth"
+    // (folded = "toth") are the sender's own forms; "Bo" is too short.
+    expect(names).toEqual(["Bence Kiss", "Bence", "Réka Tóth", "Adam Nagy", "Nagy"]);
+    // And the checks match them case-folded with a Hungarian suffix.
+    expect(mentionsName("Bencével egyeztetünk", "Bence")).toBe(true);
+    expect(mentionsName("ADAM NAGYNAK szólunk", "Adam Nagy")).toBe(true);
   });
 });
 

@@ -844,7 +844,7 @@ describe("the seed demo: Réka end to end, Péter's reply", () => {
   async function seedFixture(t: T) {
     return await t.run(async (ctx) => {
       const now = Date.now();
-      const admin = await ctx.db.insert("users", { name: "Tóth Ádám", email: "adam@agency.test", externalId: "clerk_seed_admin", createdAt: now, updatedAt: now });
+      const admin = await ctx.db.insert("users", { name: "Ádám Tóth", firstName: "Ádám", lastName: "Tóth", email: "adam@agency.test", externalId: "clerk_seed_admin", createdAt: now, updatedAt: now });
       const designer = await ctx.db.insert("users", { name: "Frances", email: "frances@agency.test", externalId: "clerk_seed_fr", createdAt: now, updatedAt: now });
       await ctx.db.insert("orgMembers", { orgId: ORG, clerkUserId: "clerk_seed_admin", userId: admin, role: "admin", joinedAt: now });
       await ctx.db.insert("orgMembers", { orgId: ORG, clerkUserId: "clerk_seed_fr", userId: designer, role: "member", joinedAt: now });
@@ -943,12 +943,14 @@ describe("the seed demo: Réka end to end, Péter's reply", () => {
       threadId,
       paginationOpts: { numItems: 100, cursor: null },
     });
-    const stamps = page.page.map((m) => ({ key: m.key, role: m.role, at: m._creationTime }));
-    const windows = runs.map((r) => ({ id: r._id, status: r.status, startedAt: r.startedAt, finishedAt: r.finishedAt, job: r.job, via: r.via, answersQuestion: r.answersQuestion, started: r.started }));
-    const hidden = backgroundJobPrompts(stamps, windows);
+    const stamps = page.page.map((m) => ({ id: m.id, role: m.role, at: m._creationTime }));
+    const windows = runs.map((r) => ({ id: r._id, status: r.status, startedAt: r.startedAt, finishedAt: r.finishedAt, job: r.job, via: r.via, answersQuestion: r.answersQuestion, started: r.started, promptMessageId: r.promptMessageId }));
+    const hidden = backgroundJobPrompts(windows);
     const userTurns = stamps.filter((m) => m.role === "user");
     expect(userTurns.length).toBeGreaterThanOrEqual(4);
-    expect(userTurns.filter((m) => !hidden.has(m.key))).toEqual([]);
+    // Every canned prompt is recorded on its fake run row — and hidden by id.
+    expect(userTurns.filter((m) => !hidden.has(m.id))).toEqual([]);
+    expect(runs.filter((r) => r.job).every((r) => r.promptMessageId !== null)).toBe(true);
     for (const m of stamps.filter((x) => x.role === "assistant")) {
       expect(runAt(windows, m.at)?.job).toBeTruthy();
     }
@@ -966,6 +968,21 @@ describe("the seed demo: Réka end to end, Péter's reply", () => {
     expect(reply.bodyText).toContain("Szia Péter!");
     expect(reply.bodyText).toContain("Az első verzió szerdáig elkészül.");
     expect(reply.answersRequestIds).toHaveLength(1);
+
+    // The draft's FACTS name people by their structured parts: the sender
+    // signs with the given name (not a Hungarian-order split of "Tóth Ádám"),
+    // and doNotMention lists the other members' real forms — no stray tokens.
+    expect(reply.bodyText.trim().endsWith("Ádám")).toBe(true);
+    const peterRuns = await t.withIdentity(SEED_ADMIN).query(api.agentThreads.listRuns, { threadId: peter.agentThreadId! });
+    const draftRun = peterRuns.find((r) => r.job === "draftReply")!;
+    const peterPage = await t.withIdentity(SEED_ADMIN).query(api.agentThreads.listMessages, {
+      threadId: peter.agentThreadId!,
+      paginationOpts: { numItems: 100, cursor: null },
+    });
+    const prompt = peterPage.page.find((m) => m.id === draftRun.promptMessageId)!;
+    const facts = JSON.parse(prompt.text.slice(prompt.text.indexOf("{")));
+    expect(facts.senderFirstName).toBe("Ádám");
+    expect(facts.doNotMention.teamMembers).toEqual(["Frances"]);
 
     await t.withIdentity(SEED_ADMIN).mutation(api.email.decisions.convertQuestionToTask, { itemId: peter._id });
     await settle(t);

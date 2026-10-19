@@ -134,6 +134,8 @@ export const upsertMembership = internalMutation({
       const userId = await ctx.db.insert("users", {
         externalId: args.clerkUserId,
         name,
+        firstName: args.userData.firstName || undefined,
+        lastName: args.userData.lastName || undefined,
         email: args.userData.identifier?.includes("@") ? args.userData.identifier : undefined,
         imageUrl: args.userData.imageUrl,
         createdAt: now,

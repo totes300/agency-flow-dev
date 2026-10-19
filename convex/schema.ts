@@ -57,7 +57,13 @@ import {
 export default defineSchema({
   // ─── Users (synced from Clerk) ─────────────────────────────────────────────
   users: defineTable({
+    // Display name — Clerk's "first last" (or the email when both are empty).
     name: v.string(),
+    // Clerk's structured name parts. Use these for a person's given / family
+    // name — never split `name` by a guessed order. Unset on rows synced
+    // before they were stored (callers fall back to `name`'s first token).
+    firstName: v.optional(v.string()),
+    lastName: v.optional(v.string()),
     email: v.optional(v.string()),
     imageUrl: v.optional(v.string()),
     externalId: v.string(),
@@ -1068,6 +1074,11 @@ export default defineSchema({
     // When a queued run was claimed and actually started (B8a). A queued row
     // without it never ran (cancelled while queued, or refused at claim).
     claimedAt: v.optional(v.number()),
+    // The agent-component message id of the prompt this run saved (its
+    // opening user message: a typed turn, a background job's machine input,
+    // an answer run's answer, a fake run's canned prompt). The thread view
+    // hides a background job's prompt by THIS id — never by timestamps.
+    promptMessageId: v.optional(v.string()),
     // Cooperative Stop: set by stopRun, checked by the loop between steps.
     cancelRequested: v.optional(v.boolean()),
     // Skills loaded into this run's system prompt (slice 04) — surfaced as

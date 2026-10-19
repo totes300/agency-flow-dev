@@ -248,6 +248,9 @@ export const listRuns = query({
       // Entry mode (A1): a background job's prompt is machine input — the
       // thread shows its run line instead of a user turn (B8a).
       via: r.via ?? "user",
+      // The exact message this run saved as its prompt — the thread view
+      // hides a background job's by this id (never by timestamps).
+      promptMessageId: r.promptMessageId ?? null,
     }));
   },
 });

@@ -11,7 +11,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { convexTest } from "convex-test";
-import { createThread, mockModel } from "@convex-dev/agent";
+import { createThread, mockModel, saveMessage } from "@convex-dev/agent";
 import { MockLanguageModelV3 } from "ai/test";
 import agentComponentTest from "@convex-dev/agent/test";
 import { z } from "zod";
@@ -32,6 +32,8 @@ import {
 } from "../lib/agentJobs";
 import { SYSTEM_AGENTS } from "../lib/systemAgents";
 import { NO_AGENT_ACTOR_MESSAGE } from "../agentJobs";
+import { saveFakeJobTurn } from "../email/fakeRun";
+import { backgroundJobPrompts } from "../../lib/agents/threadRuns";
 
 // resolveModel → the component's mock model, recording the model override it
 // was asked for. A set override is still parsed by the REAL resolver, so a bad
@@ -491,6 +493,75 @@ describe("startAgentJob", () => {
     expect(model.doStreamCalls).toHaveLength(1);
     expect((model.doStreamCalls[0].tools ?? []).map((tool) => tool.name)).toEqual(["listClients"]);
     expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain("JOB-INSTRUCTIONS-MARKER");
+  });
+
+  it("records the exact prompt id on a queued job claimed later and on a fake run — the thread hides exactly those", async () => {
+    vi.useFakeTimers();
+    const t = createT();
+    const u = await setup(t);
+    const prepared = await t.mutation(internal.agentJobs.prepareAgentJob, {
+      job: "test_triage", orgId: ORG, anchor: ANCHOR,
+    });
+    if (!prepared.ok) throw new Error("prepare failed");
+    // A person's typed turn opens an active run on the thread.
+    const active = await t.run(async (ctx) => {
+      const thread = (await ctx.db.get(prepared.threadId))!;
+      const { messageId } = await saveMessage(ctx, components.agent, {
+        threadId: thread.componentThreadId, userId: u.admin2, prompt: "Typed by a person",
+      });
+      const runId = await ctx.db.insert("agentRuns", {
+        orgId: ORG, threadId: thread._id, agentId: thread.agentId, userId: u.admin2,
+        via: "user", status: "running", startedAt: Date.now(), promptMessageId: messageId,
+      });
+      await ctx.db.patch(thread._id, { status: "running" });
+      return runId;
+    });
+    modelSlot.current = recordingModel({ content: [{ type: "text", text: "Queued answer." }] });
+    // Enqueued now (startedAt = enqueue time), claimed seconds later: its
+    // prompt is saved at claim, long after the row was written.
+    const res = await t.action(internal.agentJobs.startAgentJob, {
+      job: "test_triage", orgId: ORG, anchor: ANCHOR, input: "Queued triage MACHINE INPUT",
+    });
+    if (res.status !== "queued") throw new Error(`expected queued, got ${res.status}`);
+    expect((await t.run((ctx) => ctx.db.get(res.runId)))?.promptMessageId).toBeUndefined();
+    vi.advanceTimersByTime(5_000);
+    await t.mutation(internal.agentRunner.finishRun, { runId: active, status: "succeeded" });
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    // Then a fake (seed) job turn on the same thread.
+    await t.run(async (ctx) => {
+      const thread = (await ctx.db.get(prepared.threadId))!;
+      const user = (await ctx.db.get(u.admin))!;
+      await saveFakeJobTurn(ctx, {
+        thread,
+        auth: { userId: u.admin, orgId: ORG, orgRole: "admin", isAdmin: true, user },
+        job: "test_triage",
+        messages: [
+          { role: "user", content: "FAKE MACHINE INPUT" },
+          { role: "assistant", content: "Fake answer." },
+        ],
+      });
+    });
+
+    const threadId = prepared.threadId as string;
+    const runs = await t.withIdentity(IDENTITY.admin).query(api.agentThreads.listRuns, { threadId });
+    const page = await t.withIdentity(IDENTITY.admin).query(api.agentThreads.listMessages, {
+      threadId, paginationOpts: { numItems: 50, cursor: null },
+    });
+    const userIdByText = new Map(page.page.filter((m) => m.role === "user").map((m) => [m.text, m.id]));
+    const queued = runs.find((r) => r._id === res.runId)!;
+    expect(queued).toMatchObject({ status: "succeeded", started: true, promptMessageId: userIdByText.get("Queued triage MACHINE INPUT") });
+    expect(runs.find((r) => r._id === active)?.promptMessageId).toBe(userIdByText.get("Typed by a person"));
+    const fake = runs.find((r) => r._id !== active && r._id !== res.runId)!;
+    expect(fake.promptMessageId).toBe(userIdByText.get("FAKE MACHINE INPUT"));
+
+    const hidden = backgroundJobPrompts(runs.map((r) => ({
+      id: r._id, status: r.status, startedAt: r.startedAt, finishedAt: r.finishedAt, job: r.job,
+      via: r.via, answersQuestion: r.answersQuestion, started: r.started, promptMessageId: r.promptMessageId,
+    })));
+    expect([...hidden].sort()).toEqual(
+      [userIdByText.get("Queued triage MACHINE INPUT"), userIdByText.get("FAKE MACHINE INPUT")].sort(),
+    );
   });
 
   /** Prepare the job's thread, make it busy, and queue a job start on it. */

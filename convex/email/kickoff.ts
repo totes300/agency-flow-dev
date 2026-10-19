@@ -152,14 +152,82 @@ export type KickoffFacts = {
 };
 
 /**
- * The client's first name from a contact name. Hungarian names are
+ * The client's first name from a contact name (`clientContacts.name` /
+ * an email From name — free text, no structured parts). Hungarian names are
  * family-name first ("Kovács Réka" → "Réka"); English given-name first.
+ * NEVER for a team member: their structured Clerk parts are known
+ * (`memberFirstName`).
  */
 export function firstNameOf(name: string | null | undefined, language: ReplyLanguage): string | null {
   const parts = (name ?? "").trim().split(/\s+/).filter(Boolean);
   if (parts.length === 0) return null;
   if (parts.length === 1) return parts[0];
   return language === "hu" ? parts[parts.length - 1] : parts[0];
+}
+
+/** A team member's name as stored on `users` (Clerk display name + parts). */
+export type MemberName = { name: string; firstName?: string | null; lastName?: string | null };
+
+const nameTokens = (name: string) => name.trim().split(/\s+/).filter(Boolean);
+
+/**
+ * A team member's given name: Clerk's `firstName`, else the display name's
+ * first token — Clerk builds it given-name first ("Adam Toth" → "Adam"),
+ * whatever the team's language.
+ */
+export function memberFirstName(user: MemberName | null | undefined): string | null {
+  if (!user) return null;
+  return user.firstName?.trim() || nameTokens(user.name)[0] || null;
+}
+
+/**
+ * The forms a team member's name appears in: the full name, the given name
+ * and the family name (structured parts first; else the display name's
+ * first / last token). `mentionsName` folds case, accents and Hungarian
+ * suffixes when checking a draft, so these stay as written.
+ */
+export function memberNameForms(user: MemberName): string[] {
+  const tokens = nameTokens(user.name);
+  const first = memberFirstName(user);
+  const last = user.lastName?.trim() || (tokens.length > 1 ? tokens[tokens.length - 1] : null);
+  const full = user.name.trim();
+  const forms = [full, first && last ? `${first} ${last}` : null, first, last];
+  const seen = new Set<string>();
+  return forms.filter((f): f is string => {
+    if (!f) return false;
+    const key = foldText(f);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/**
+ * The team-member names a client email must not carry (`doNotMention`):
+ * every form of every member's name — except the sender's own forms (they
+ * sign the email) and single names the client's own people share. Names
+ * shorter than 3 letters are left out (`mentionsName` ignores them).
+ */
+export function internalTeamNames(args: {
+  members: readonly MemberName[];
+  sender: MemberName | null;
+  clientNames: readonly string[];
+}): string[] {
+  const fold = (t: string) => foldText(t).replace(/\s+/g, " ").trim();
+  const senderForms = new Set(args.sender ? memberNameForms(args.sender).map(fold) : []);
+  const clientTokens = new Set(args.clientNames.flatMap(nameTokens).map(fold));
+  const out = new Map<string, string>();
+  for (const member of args.members) {
+    const full = fold(member.name);
+    for (const form of memberNameForms(member)) {
+      const key = fold(form);
+      if (key.length < 3 || senderForms.has(key)) continue;
+      // A single name a client person also has ("Réka" on both sides) stays allowed.
+      if (key !== full && !key.includes(" ") && clientTokens.has(key)) continue;
+      if (!out.has(key)) out.set(key, form);
+    }
+  }
+  return [...out.values()];
 }
 
 // ─── Checks on a submitted draft ─────────────────────────────────────────────

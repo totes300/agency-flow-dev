@@ -27,7 +27,7 @@ import {
   type MessagePartLike,
 } from "@/lib/agents/blocks"
 import { JOB_STAGES, type StageRunStatus } from "@/lib/agents/jobStages"
-import { backgroundJobPrompts, runAt, type RunWindow } from "@/lib/agents/threadRuns"
+import { backgroundJobPrompts, runAnchor, runAt, type RunWindow } from "@/lib/agents/threadRuns"
 import { cleanErrorText } from "@/lib/agents/providerErrors"
 
 /**
@@ -144,13 +144,19 @@ export function ThreadView({
     via: r.via,
     answersQuestion: r.answersQuestion,
     started: r.started,
+    promptMessageId: r.promptMessageId,
   }))
   const stagedRun = (run: RunWindow | null) =>
     run && run.job && JOB_STAGES[run.job] ? run : null
-  const hiddenPrompts = backgroundJobPrompts(
-    messages.map((m) => ({ key: m.key, role: m.role, at: m._creationTime })),
-    windows,
+  // Hidden by the exact prompt id each run recorded — never by timestamps.
+  const hiddenPrompts = backgroundJobPrompts(windows)
+  // A run's lines sort at or after its prompt (stamped after startedAt on a
+  // real deployment), so a shown typed turn / answer stays above its run.
+  const userTimes = new Map(
+    messages.filter((m) => m.role === "user").map((m) => [m.id, m._creationTime]),
   )
+  const anchorOf = (run: { startedAt: number; promptMessageId: string | null }) =>
+    runAnchor(run, userTimes)
   const jobCalls = new Map<string, RunLineCall[]>()
 
   // One timeline: messages by creation time + settled-run outcomes by
@@ -160,7 +166,7 @@ export function ThreadView({
   const assistant: { key: string; at: number; blocks: AgentBlock[] }[] = []
   for (const message of messages) {
     if (message.role === "user") {
-      if (hiddenPrompts.has(message.key)) continue
+      if (hiddenPrompts.has(message.id)) continue
       timeline.push({
         key: message.key,
         at: message._creationTime,
@@ -207,7 +213,7 @@ export function ThreadView({
     if (staged && run.started) {
       timeline.push({
         key: `${run._id}-run-line`,
-        at: run.startedAt,
+        at: anchorOf(run),
         rank: 1,
         node: (
           <RunLineBlock
@@ -245,7 +251,7 @@ export function ThreadView({
     for (const skill of run.loadedSkills) {
       timeline.push({
         key: `${run._id}-skill-${skill.name}`,
-        at: run.startedAt,
+        at: anchorOf(run),
         rank: 1,
         node: (
           <SystemBlock>
@@ -262,7 +268,7 @@ export function ThreadView({
     if (run.droppedTools.length > 0) {
       timeline.push({
         key: `${run._id}-dropped-tools`,
-        at: run.startedAt,
+        at: anchorOf(run),
         rank: 1,
         node: (
           <SystemBlock>

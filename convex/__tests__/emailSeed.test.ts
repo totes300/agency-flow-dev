@@ -181,7 +181,12 @@ describe("devSeedEmail.seed", () => {
     expect(gabor.bodyText).not.toContain("iPhone");
 
     // Péter: a question on a thread linked to the Arlo task (history handled).
-    const peter = bySubject("Őszi kampány aloldal");
+    const peter = bySubject("landing oldal");
+    // A fixed, realistic subject — never the linked dev task's title ("Őszi kampány aloldal").
+    expect(peter.subject).toBe("Őszi kampány – landing oldal");
+    expect(messagesOf(peter._id).map((m) => m.subject)).toEqual([
+      "Őszi kampány – landing oldal", "Re: Őszi kampány – landing oldal", "Re: Őszi kampány – landing oldal",
+    ]);
     expect(peter.clientId).toBe(f.arlo);
     expect(messagesOf(peter._id).map((m) => [m.direction, m.stage])).toEqual([
       ["inbound", "handled"], ["outbound", "handled"], ["inbound", "received"],
@@ -349,10 +354,10 @@ describe("devSeedEmail.process (fake model)", () => {
     // Gábor: urgent request.
     expect(itemOf("rossz ár")).toEqual([expect.objectContaining({ kind: "request", status: "open", urgent: true })]);
     // Péter: a question on the linked task.
-    expect(itemOf("Őszi kampány aloldal")).toEqual([
+    expect(itemOf("landing oldal")).toEqual([
       expect.objectContaining({ kind: "question", status: "open", taskId: f.arloTask }),
     ]);
-    expect(rowsOf("Őszi kampány aloldal").map((r) => r.intent)).toEqual(["ask"]);
+    expect(rowsOf("landing oldal").map((r) => r.intent)).toEqual(["ask"]);
     // Judit: new sender.
     expect(itemOf("Bemutatkozás")).toEqual([expect.objectContaining({ kind: "new_sender", status: "open" })]);
     // Anna: no item, an Inbox no_action row for the admin.
@@ -433,7 +438,16 @@ describe("devSeedEmail.reset", () => {
 
     // A reset is repeatable, and the seed loads again afterwards.
     expect((await t.mutation(internal.devSeedEmail.reset, { orgId: ORG })).deleted.connectors).toBe(0);
+    // The latest open Arlo task is a dev scratch task ("hello"): the reseeded
+    // conversation still links to it, but keeps its own realistic subject.
+    await t.run((ctx) => ctx.db.patch(f.arloTask, { title: "hello" }));
     expect((await t.mutation(internal.devSeedEmail.seed, { orgId: ORG })).threadsCreated).toBe(5);
+    const reseeded = await t.run(async (ctx) => {
+      const peter = (await ctx.db.query("emailThreads").collect()).find((th) => th.gmailThreadId.endsWith("peter-question"))!;
+      const links = await ctx.db.query("emailThreadTasks").collect();
+      return { subject: peter.subject, linked: links.filter((l) => l.threadId === peter._id).map((l) => l.taskId) };
+    });
+    expect(reseeded).toEqual({ subject: "Őszi kampány – landing oldal", linked: [f.arloTask] });
   });
 });
 

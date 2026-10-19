@@ -128,8 +128,10 @@ type SeedThread = {
   key: string;
   client: SeedClientKey | null;
   contact: PersonKey | null;
-  subject: (task: Doc<"tasks"> | null) => string;
+  /** A fixed, realistic subject — never copied from dev data (a linked task's title). */
+  subject: string;
   messages: (subject: string) => SeedMessage[];
+  /** Link the conversation to the latest open Arlo task (its title stays its own). */
   linkTask?: boolean;
 };
 
@@ -231,7 +233,7 @@ const THREADS: readonly SeedThread[] = [
     key: "reka-black-friday",
     client: "pragmatico",
     contact: "reka",
-    subject: () => "Re: Black Friday kampány – anyagok",
+    subject: "Re: Black Friday kampány – anyagok",
     messages: (subject) => [
       {
         key: "reka-black-friday-1",
@@ -251,7 +253,7 @@ const THREADS: readonly SeedThread[] = [
     key: "gabor-price-bug",
     client: "pragmatico",
     contact: "gabor",
-    subject: () => "SÜRGŐS: rossz ár a webshopban",
+    subject: "SÜRGŐS: rossz ár a webshopban",
     messages: (subject) => [
       {
         key: "gabor-price-bug-1",
@@ -270,7 +272,7 @@ const THREADS: readonly SeedThread[] = [
     client: "arlo",
     contact: "peter",
     linkTask: true,
-    subject: (task) => (task ? `Re: ${task.title}` : "Re: Őszi kampány aloldal"),
+    subject: "Re: Őszi kampány – landing oldal",
     messages: (subject) => [
       {
         key: "peter-question-1",
@@ -308,7 +310,7 @@ const THREADS: readonly SeedThread[] = [
     key: "judit-new-sender",
     client: null,
     contact: null,
-    subject: () => "Bemutatkozás – webshop arculat és hírlevél",
+    subject: "Bemutatkozás – webshop arculat és hírlevél",
     messages: (subject) => [
       {
         key: "judit-new-sender-1",
@@ -326,7 +328,7 @@ const THREADS: readonly SeedThread[] = [
     key: "anna-thanks",
     client: "arlo",
     contact: "anna",
-    subject: () => "Re: Szeptemberi riport",
+    subject: "Re: Szeptemberi riport",
     messages: (subject) => [
       {
         key: "anna-thanks-1",
@@ -563,7 +565,7 @@ export const seed = internalMutation({
     for (const spec of THREADS) {
       const gmailThreadId = `${SEED_PREFIX}${spec.key}`;
       const task = spec.linkTask ? linkedTask : null;
-      const subject = spec.subject(task);
+      const subject = spec.subject;
       const messages = spec.messages(subject);
       const times = messages.map((m) => m.at(clock));
       const inbound = messages.map((m, i) => ({ m, at: times[i] })).filter(({ m }) => m.direction === "inbound");

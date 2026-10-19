@@ -25,12 +25,14 @@ import {
   checkReplyDraft,
   detectLanguage,
   firstNameOf,
+  internalTeamNames,
+  memberFirstName,
   returnWording,
   type KickoffFacts,
   type ReplyLanguage,
 } from "./kickoff";
 import { fakeKickoffBody, fakeReplyBody, type FakeQuestion } from "./fakeDrafts";
-import { conversationInbound, requestPlanning, teamLanguageOf } from "./prepare";
+import { conversationInbound, requestPlanning } from "./prepare";
 import { isUnresolved } from "./items";
 
 /**
@@ -166,26 +168,24 @@ export async function gatherReplyFacts(
     else if (task.dueDate) dues.push(task.dueDate);
   }
 
-  // Team member names the email must not carry (the sender and the client's people excepted).
-  const clientTokens = new Set(
-    [...thread.participants.map((p) => p.name ?? ""), ...inbound.map((m) => m.from.name ?? ""), contactName ?? ""]
-      .flatMap((n) => n.split(/\s+/))
-      .filter(Boolean),
-  );
+  // Team member names the email must not carry: full / first / last name of
+  // every member (structured Clerk parts), the sender's own forms and single
+  // names the client's people share excepted (internalTeamNames).
   const members = await ctx.db
     .query("orgMembers")
     .withIndex("by_orgId", (q) => q.eq("orgId", item.orgId))
     .take(200);
-  const names = new Set<string>();
+  const teamUsers: Doc<"users">[] = [];
   for (const m of members) {
     if (!m.userId || m.userId === senderId) continue;
     const user = await ctx.db.get(m.userId);
-    if (!user?.name || user.deletedAt) continue;
-    names.add(user.name.trim());
-    for (const token of user.name.trim().split(/\s+/)) {
-      if (token.length >= 3 && !clientTokens.has(token) && !(sender?.name ?? "").split(/\s+/).includes(token)) names.add(token);
-    }
+    if (user?.name && !user.deletedAt) teamUsers.push(user);
   }
+  const names = internalTeamNames({
+    members: teamUsers,
+    sender,
+    clientNames: [...thread.participants.map((p) => p.name ?? ""), ...inbound.map((m) => m.from.name ?? ""), contactName ?? ""],
+  });
 
   const linked = item.taskId ? await ctx.db.get(item.taskId) : null;
   const linkedStatus = linked ? await ctx.db.get(linked.statusId) : null;
@@ -230,7 +230,9 @@ export async function gatherReplyFacts(
     mode,
     language,
     contactFirstName: firstNameOf(contactName, language),
-    senderFirstName: firstNameOf(sender?.name, teamLanguageOf(settings).toLowerCase().startsWith("hu") ? "hu" : "en"),
+    // A team member's given name comes from their structured Clerk name —
+    // never a language-guessed split of the display name ("Adam Toth" → "Adam").
+    senderFirstName: memberFirstName(sender),
     kickoff,
     questions,
     required,
@@ -239,7 +241,7 @@ export async function gatherReplyFacts(
     draftTaskId,
     inboundTexts: inbound.map((m) => `${m.subject}\n${m.bodyText}`),
     internalIdentifiers,
-    internalNames: [...names],
+    internalNames: names,
     tz,
   };
 }
@@ -333,7 +335,8 @@ async function postCreatedEventLine(
     const names: string[] = [];
     for (const id of assignees) {
       const user = await ctx.db.get(id);
-      if (user && !user.deletedAt) names.push(user.name.split(/\s+/)[0]);
+      const first = user && !user.deletedAt ? memberFirstName(user) : null;
+      if (first) names.push(first);
     }
     await postEventLine(ctx, {
       componentThreadId: agentThread.componentThreadId,

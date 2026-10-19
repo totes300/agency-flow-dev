@@ -22,9 +22,9 @@ export type RunWindow = {
    * messages and must never capture another run's.
    */
   started: boolean;
+  /** The message this run saved as its prompt (`agentRuns.promptMessageId`). */
+  promptMessageId: string | null;
 };
-
-export type MessageStamp = { key: string; role: string; at: number };
 
 /** A run that actually ran (not a still-queued, cancelled-before-start or refused-at-claim row). */
 function ran(run: RunWindow): boolean {
@@ -47,38 +47,29 @@ export function runAt(runs: readonly RunWindow[], at: number): RunWindow | null 
 }
 
 /**
- * How far after `startedAt` a run's prompt may be stamped: a queued
- * background run saves its prompt in the same transaction that claims it.
+ * The prompt messages to hide: a BACKGROUND job run's machine prompt (the
+ * email the job reads, the facts it drafts from) — the thread shows the job's
+ * run line instead of a user turn for it. Keyed on the exact message id each
+ * run recorded when it saved its prompt (`agentRuns.promptMessageId`) — never
+ * on timestamps, which don't order reliably against `startedAt`. A person's
+ * own turns are never hidden: a typed message (`via: "user"`), an answer
+ * run's prompt (it IS the user's answer, A5).
  */
-export const PROMPT_SLACK_MS = 2_000;
+export function backgroundJobPrompts(runs: readonly RunWindow[]): Set<string> {
+  const hidden = new Set<string>();
+  for (const run of runs) {
+    if (!run.promptMessageId || !run.job || run.via !== "background" || run.answersQuestion) continue;
+    hidden.add(run.promptMessageId);
+  }
+  return hidden;
+}
 
 /**
- * The user messages that are a BACKGROUND job's machine prompt (the email
- * the job reads, the facts it drafts from) — the thread shows the job's run
- * line instead of a user turn for them. A person's own turns (an answer run's
- * answer, a typed message) are never hidden. Per job run: the latest user
- * message after the previous run started and at or before this run started;
- * failing that, the first one within PROMPT_SLACK_MS after its start (and
- * before the next run's).
+ * Where a run's own timeline lines (run line, "skill loaded" notes) sort: its
+ * start, or its prompt message when that was stamped later — so a shown
+ * prompt (a typed turn, an answer) always sits above the run it started.
  */
-export function backgroundJobPrompts(messages: readonly MessageStamp[], runs: readonly RunWindow[]): Set<string> {
-  const hidden = new Set<string>();
-  const started = runs.filter(ran).sort((a, b) => a.startedAt - b.startedAt);
-  const users = messages.filter((m) => m.role === "user");
-  started.forEach((run, i) => {
-    if (!run.job || run.via !== "background" || run.answersQuestion) return;
-    const after = i > 0 ? started[i - 1].startedAt : -Infinity;
-    const before = Math.min(run.startedAt + PROMPT_SLACK_MS, i + 1 < started.length ? started[i + 1].startedAt : Infinity);
-    let prompt: MessageStamp | null = null;
-    for (const m of users) {
-      if (m.at > after && m.at <= run.startedAt && (!prompt || m.at >= prompt.at)) prompt = m;
-    }
-    if (!prompt) {
-      for (const m of users) {
-        if (m.at > run.startedAt && m.at < before && (!prompt || m.at < prompt.at)) prompt = m;
-      }
-    }
-    if (prompt) hidden.add(prompt.key);
-  });
-  return hidden;
+export function runAnchor(run: Pick<RunWindow, "startedAt" | "promptMessageId">, promptTimes: ReadonlyMap<string, number>): number {
+  const promptAt = run.promptMessageId ? promptTimes.get(run.promptMessageId) : undefined;
+  return promptAt === undefined ? run.startedAt : Math.max(run.startedAt, promptAt);
 }

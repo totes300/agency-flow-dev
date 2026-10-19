@@ -333,9 +333,10 @@ async function openRun(
     .filter(Boolean)
     .join("\n\n");
 
-  // Save the user message FIRST, so its component _creationTime precedes the
-  // run's startedAt — the "skill loaded" notes then sort AFTER the question
-  // and before the answer in the thread timeline.
+  // Save the user message FIRST. Its id is recorded on the run row
+  // (`promptMessageId`); the thread view anchors the run's notes / run line
+  // at or after it (its _creationTime may land after `startedAt` on a real
+  // deployment), so they sort AFTER the question and before the answer.
   const { messageId } = await saveMessage(ctx, components.agent, {
     threadId: thread.componentThreadId,
     userId: auth.userId,
@@ -365,6 +366,11 @@ async function openRun(
     ...(job ? { job: job.name } : {}),
     status: "running" as const,
     startedAt: now,
+    // The exact prompt message (B8a fix): the thread view keys on it to
+    // hide a background job's machine input. Timestamps can't: on a real
+    // deployment the message's _creationTime lands AFTER this `startedAt`
+    // (the mutation's Date.now()), so a prompt never sits at or before it.
+    promptMessageId: messageId,
     ...(resolved.loaded.length > 0
       ? {
           loadedSkills: resolved.loaded.map((s) => ({
@@ -789,17 +795,19 @@ export const beginNextQueuedRun = internalMutation({
       } catch (err) {
         // Nothing was written by the checks. Post the queued message so the
         // error block has its context, then settle the queued row.
+        let promptMessageId: string | undefined;
         if (next.queuedMessage) {
-          await saveMessage(ctx, components.agent, {
+          ({ messageId: promptMessageId } = await saveMessage(ctx, components.agent, {
             threadId: thread.componentThreadId,
             userId: next.userId,
             prompt: next.queuedMessage,
-          });
+          }));
         }
         // Job checks carry their own error + hint (unknown job, actor
         // changed); everything else is an access re-check failure.
         const rejection = err instanceof JobRunRejection ? err : null;
         await ctx.db.patch(next._id, {
+          ...(promptMessageId ? { promptMessageId } : {}),
           status: "failed",
           finishedAt: Date.now(),
           queuedMessage: undefined,

@@ -60,6 +60,7 @@ const run = (over: Record<string, unknown>) => ({
   job: null,
   via: "user",
   started: true,
+  promptMessageId: null,
   ...over,
 })
 
@@ -72,9 +73,9 @@ afterEach(cleanup)
 
 describe("ThreadView — job runs (B8a)", () => {
   it("a background job run: the prompt is hidden, ONE run line, then only the deliverable", () => {
-    live.runs = [run({ _id: "job1", job: "prepareTask", via: "background" })]
+    live.runs = [run({ _id: "job1", job: "prepareTask", via: "background", promptMessageId: "msg1" })]
     live.messages = [
-      { key: "m1", role: "user", text: "INPUT: {email json}", _creationTime: T0 - 5, parts: [] },
+      { key: "m1", id: "msg1", role: "user", text: "INPUT: {email json}", _creationTime: T0 - 5, parts: [] },
       {
         key: "m2",
         role: "assistant",
@@ -100,9 +101,9 @@ describe("ThreadView — job runs (B8a)", () => {
   })
 
   it("a plain chat run keeps today's rendering: the user turn and inline tool rows", () => {
-    live.runs = [run({ _id: "chat1" })]
+    live.runs = [run({ _id: "chat1", promptMessageId: "msg1" })]
     live.messages = [
-      { key: "m1", role: "user", text: "Where is ARL-57?", _creationTime: T0 - 5, parts: [] },
+      { key: "m1", id: "msg1", role: "user", text: "Where is ARL-57?", _creationTime: T0 - 5, parts: [] },
       {
         key: "m2",
         role: "assistant",
@@ -152,5 +153,31 @@ describe("ThreadView — job runs (B8a)", () => {
     expect(screen.getByText("Read task digest for ARL-57")).toBeInTheDocument() // the ghost row, inline
     expect(screen.getByText("This task is no longer available.")).toBeInTheDocument() // the widget rendered
     expect(screen.queryByRole("list", { name: "Run steps" })).not.toBeInTheDocument() // no run line for the dead job
+  })
+  it("real ordering: prompts stamped AFTER their run starts — each job hides its own, the answer turn shows above its run", () => {
+    // A queued draftReply claimed after the plan: every prompt's
+    // _creationTime lands a few ms after its run's startedAt.
+    live.runs = [
+      run({ _id: "plan", job: "prepareTask", via: "background", startedAt: T0, finishedAt: T0 + 6_000, promptMessageId: "p-plan" }),
+      run({ _id: "draft", job: "draftReply", via: "background", startedAt: T0 + 7_000, finishedAt: T0 + 9_000, promptMessageId: "p-draft" }),
+      run({ _id: "answer", job: "prepareTask", via: "background", answersQuestion: true, startedAt: T0 + 10_000, finishedAt: T0 + 12_000, promptMessageId: "p-answer" }),
+    ]
+    live.messages = [
+      { key: "m1", id: "p-plan", role: "user", text: "PLAN INPUT", _creationTime: T0 + 3, parts: [] },
+      { key: "m2", id: "a-plan", role: "assistant", text: "", _creationTime: T0 + 100, parts: [{ type: "text", text: "One task for Lili.", state: "done" }] },
+      { key: "m3", id: "p-draft", role: "user", text: "Draft the kickoff reply (D21) FACTS", _creationTime: T0 + 7_004, parts: [] },
+      { key: "m4", id: "a-draft", role: "assistant", text: "", _creationTime: T0 + 7_100, parts: [{ type: "text", text: "Drafted.", state: "done" }] },
+      { key: "m5", id: "p-answer", role: "user", text: "Lili does it, by Friday", _creationTime: T0 + 10_004, parts: [] },
+      { key: "m6", id: "a-answer", role: "assistant", text: "", _creationTime: T0 + 10_100, parts: [{ type: "text", text: "Updated the plan.", state: "done" }] },
+    ]
+    const { container } = render(<ThreadView threadId="th1" />)
+    expect(screen.queryByText("PLAN INPUT")).not.toBeInTheDocument()
+    expect(screen.queryByText(/Draft the kickoff reply/)).not.toBeInTheDocument()
+    const answer = screen.getByText("Lili does it, by Friday")
+    // The answer turn sorts above the run it started (its run line).
+    const runLines = screen.getAllByRole("button", { name: /·/ })
+    const answerLine = runLines.at(-1)!
+    expect(answer.compareDocumentPosition(answerLine) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(container).toHaveTextContent("Updated the plan.")
   })
 })

@@ -49,6 +49,10 @@ export const syncUser = mutation({
     const now = Date.now();
     const name = identity.name ?? identity.email ?? "Anonymous";
     const email = identity.email ?? undefined;
+    // Structured name parts when the token carries them (Clerk's Convex
+    // template does); a token without them keeps what the webhook stored.
+    const firstName = identity.givenName || existing?.firstName || undefined;
+    const lastName = identity.familyName || existing?.lastName || undefined;
     // Skip Clerk/Gravatar default avatars — only store real uploaded photos
     const rawImageUrl = identity.pictureUrl ?? undefined;
     const imageUrl = rawImageUrl && !rawImageUrl.includes("gravatar.com/avatar") ? rawImageUrl : undefined;
@@ -58,10 +62,14 @@ export const syncUser = mutation({
       if (
         existing.name !== name ||
         existing.email !== email ||
-        existing.imageUrl !== imageUrl
+        existing.imageUrl !== imageUrl ||
+        existing.firstName !== firstName ||
+        existing.lastName !== lastName
       ) {
         await ctx.db.patch(existing._id, {
           name,
+          firstName,
+          lastName,
           email,
           imageUrl,
           updatedAt: now,
@@ -72,6 +80,8 @@ export const syncUser = mutation({
 
     return await ctx.db.insert("users", {
       name,
+      firstName,
+      lastName,
       email,
       imageUrl,
       externalId: identity.subject,
@@ -96,6 +106,8 @@ export const upsertFromClerk = internalMutation({
       primaryEmail ||
       "Anonymous";
     const email = primaryEmail ?? undefined;
+    const firstName = data.first_name || undefined;
+    const lastName = data.last_name || undefined;
     // Only store imageUrl if the user uploaded a real profile photo
     const imageUrl = data.has_image ? (data.image_url ?? undefined) : undefined;
 
@@ -107,10 +119,14 @@ export const upsertFromClerk = internalMutation({
       if (
         existing.name !== name ||
         existing.email !== email ||
-        existing.imageUrl !== imageUrl
+        existing.imageUrl !== imageUrl ||
+        existing.firstName !== firstName ||
+        existing.lastName !== lastName
       ) {
         await ctx.db.patch(existing._id, {
           name,
+          firstName,
+          lastName,
           email,
           imageUrl,
           updatedAt: now,
@@ -119,6 +135,8 @@ export const upsertFromClerk = internalMutation({
     } else {
       userId = await ctx.db.insert("users", {
         name,
+        firstName,
+        lastName,
         email,
         imageUrl,
         externalId: data.id,

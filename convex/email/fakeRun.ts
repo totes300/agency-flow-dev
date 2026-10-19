@@ -14,9 +14,10 @@ import type { AuthContext } from "../lib/auth";
  * the turn renders as the job's run line plus its deliverable.
  *
  * The row is written `succeeded` and its window is set to the saved
- * messages' creation times, so every message of the turn falls inside it
- * (the prompt at its start). It never looks like a live run to the code that
- * checks for one (re-plan in flight, the asking run).
+ * messages' creation times, so every message of the turn falls inside it.
+ * The canned prompt's message id is recorded as `promptMessageId` — the
+ * thread view hides exactly that message. It never looks like a live run to
+ * the code that checks for one (re-plan in flight, the asking run).
  */
 export async function saveFakeJobTurn(
   ctx: MutationCtx,
@@ -43,8 +44,10 @@ export async function saveFakeJobTurn(
     messages: args.messages,
   });
   const times = messages.map((m) => m._creationTime);
+  const prompt = messages.find((m) => m.message?.role === "user");
   await ctx.db.patch(runId, {
     startedAt: Math.min(now, ...times),
     finishedAt: Math.max(now, ...times),
+    ...(prompt ? { promptMessageId: prompt._id } : {}),
   });
 }

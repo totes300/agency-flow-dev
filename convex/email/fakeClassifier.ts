@@ -71,6 +71,24 @@ const CANNED: Readonly<Record<string, Omit<FakeModelOutputs, "screen"> & { scree
     },
     completeness: { missing: [] },
   },
+  // B6b: Réka's follow-up after Create (devSeedEmail:followUp) — a change on the created task.
+  "seed-reka-black-friday-2": {
+    classify: {
+      intents: ["add"],
+      requests: [
+        {
+          text: "És kérnénk egy story méretet is a Facebookra.",
+          constraints: [{ kind: "platform", value: "Facebookra" }],
+          intent: "add",
+          refersToRequestId: null,
+        },
+      ],
+      approveHasAction: NO_ACTION,
+      reasons: ["One more request on the Black Friday task: a story size for Facebook"],
+      urgent: false,
+    },
+    completeness: { missing: [] },
+  },
   "seed-gabor-price-bug-1": {
     classify: {
       intents: ["add"],

@@ -150,6 +150,9 @@ const ACTIVITY_VERBS: Record<string, string> = {
   task_archived: "archived the task",
   task_restored: "restored the task",
   email_sent: "sent an email",
+  task_created_from_email: "created the task from an email",
+  reopened_from_email: "reopened the task from an email",
+  subtasks_added_from_email: "added subtasks from an email",
 }
 
 function AssigneeStack({ assignees }: { assignees: MemberRef[] }) {

@@ -15,8 +15,10 @@
 
 import { z } from "zod";
 import type { AgentRunJob, LlmStepJob } from "../lib/agentJobs";
-import { EMAIL_ASSISTANT_TOOLS } from "../lib/systemAgents";
+import { DRAFT_REPLY_TOOLS, PREPARE_CHANGE_TOOLS, PREPARE_TASK_TOOLS } from "../lib/systemAgents";
 import {
+  DRAFT_REPLY_INSTRUCTIONS,
+  PREPARE_CHANGE_INSTRUCTIONS,
   PREPARE_TASK_INSTRUCTIONS,
   CHECK_COMPLETENESS_INSTRUCTIONS,
   CLASSIFY_INBOUND_INSTRUCTIONS,
@@ -137,10 +139,44 @@ export const prepareTaskJob: AgentRunJob = {
   systemAgentKey: "email_assistant",
   visibility: "admins",
   instructions: PREPARE_TASK_INSTRUCTIONS,
-  tools: EMAIL_ASSISTANT_TOOLS,
+  tools: PREPARE_TASK_TOOLS,
 };
+
+/**
+ * draftReply (PRD §6.1 kickoff, D21; Q7 reply — B6b): the kickoff reply
+ * after Create / Merge / Apply, or the reply to a question item, submitted
+ * with `submitDraft`. Same shared admin conversation (email/reply.ts).
+ */
+export const draftReplyJob: AgentRunJob = {
+  name: "draftReply",
+  tier: "agent_run",
+  systemAgentKey: "email_assistant",
+  visibility: "admins",
+  instructions: DRAFT_REPLY_INSTRUCTIONS,
+  tools: DRAFT_REPLY_TOOLS,
+};
+
+/**
+ * prepareChange (PRD D4, D29 — B6b): a client email on a linked task (or a
+ * Merge) becomes ONE `updateTask` proposal with an email source, through
+ * `proposeTaskUpdate` (email/changes.ts).
+ */
+export const prepareChangeJob: AgentRunJob = {
+  name: "prepareChange",
+  tier: "agent_run",
+  systemAgentKey: "email_assistant",
+  visibility: "admins",
+  instructions: PREPARE_CHANGE_INSTRUCTIONS,
+  tools: PREPARE_CHANGE_TOOLS,
+};
+
+export const PREPARE_TASK_JOB_NAME = prepareTaskJob.name;
+export const DRAFT_REPLY_JOB = draftReplyJob.name;
+export const PREPARE_CHANGE_JOB = prepareChangeJob.name;
 
 /** Registered in AGENT_JOBS (convex/lib/agentJobs.ts). */
 export const EMAIL_AGENT_JOBS = {
   prepareTask: prepareTaskJob,
+  draftReply: draftReplyJob,
+  prepareChange: prepareChangeJob,
 } as const;

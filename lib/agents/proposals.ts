@@ -109,9 +109,11 @@ export type UpdateTaskSubtasks = {
     title?: string;
     assigneeIds?: string[];
     dueDate?: string | null;
+    /** Email change (B6b): the ledger rows this amendment covers. */
+    requestIds?: string[];
   }>;
   /** Moves the sub-task to the org's canceled-category default status. */
-  cancel?: Array<{ subtaskId: string; subtaskTitle?: string; reason?: string }>;
+  cancel?: Array<{ subtaskId: string; subtaskTitle?: string; reason?: string; requestIds?: string[] }>;
   /** Moves the sub-task to the org's completed-category default status. */
   tick?: Array<{ subtaskId: string; subtaskTitle?: string }>;
 };
@@ -549,6 +551,8 @@ function validateUpdateTask(p: Record<string, unknown>): UpdateTaskPayload {
       if (r.assigneeIds !== undefined) item.assigneeIds = idList(r.assigneeIds, `${field}.assigneeIds`);
       const dueDate = nullableDate(r.dueDate, `${field}.dueDate`);
       if (dueDate !== undefined) item.dueDate = dueDate;
+      const requestIds = idList(r.requestIds, `${field}.requestIds`);
+      if (requestIds.length > 0) item.requestIds = requestIds;
       return item;
     });
     const refList = (value: unknown, field: string, withReason: boolean) =>
@@ -559,10 +563,12 @@ function validateUpdateTask(p: Record<string, unknown>): UpdateTaskPayload {
         const subtaskTitle = optionalString(r.subtaskTitle, `${f}.subtaskTitle`);
         const reason = withReason ? optionalString(r.reason, `${f}.reason`) : undefined;
         if (reason && reason.length > PROPOSAL_EVIDENCE_ITEM_MAX) fail(`${f}.reason is too long`);
+        const requestIds = withReason ? idList(r.requestIds, `${f}.requestIds`) : [];
         return {
           subtaskId,
           ...(subtaskTitle ? { subtaskTitle } : {}),
           ...(reason ? { reason } : {}),
+          ...(requestIds.length > 0 ? { requestIds } : {}),
         };
       });
     const cancel = refList(rawSubs.cancel, "subtasks.cancel", true);

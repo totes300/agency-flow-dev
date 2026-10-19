@@ -10,6 +10,10 @@ import {
   agentCheckResultValidator,
   agentCheckSubjectValidator,
   agentItemAttentionValidator,
+  agentItemChangePlanValidator,
+  agentItemCommitValidator,
+  agentItemKickoffOutcomeValidator,
+  agentItemMergeValidator,
   agentItemPlanIssueValidator,
   agentItemPlanRefusalValidator,
   agentItemPlanValidator,
@@ -1344,7 +1348,10 @@ export default defineSchema({
     // I1 idempotency key (connector + provider thread id).
     .index("by_orgId_connectorId_gmailThreadId", ["orgId", "connectorId", "gmailThreadId"])
     // D37 clocks: "client waiting 24 working hours".
-    .index("by_orgId_waitingOn_lastInboundAt", ["orgId", "waitingOn", "lastInboundAt"]),
+    .index("by_orgId_waitingOn_lastInboundAt", ["orgId", "waitingOn", "lastInboundAt"])
+    // B6b: Undo of a Create deletes the client / contact it made only when no thread points at them.
+    .index("by_orgId_clientId", ["orgId", "clientId"])
+    .index("by_orgId_contactId", ["orgId", "contactId"]),
 
   // A conversation ↔ its tasks (I2: split, merge). The primary thread of a
   // task is its `created` row. Replaces a tasks.emailThreadId cache (S6).
@@ -1399,6 +1406,23 @@ export default defineSchema({
     // B6a: a prepareTask start is scheduled and has not begun — a new message
     // joins it instead of scheduling another (trigger dedupe).
     planStartScheduledAt: v.optional(v.number()),
+    // B6b: what the owner committed (Create / Merge / Apply) — the item is
+    // "kickoff pending" while open with it (D21, D26); Undo reverts it (D30).
+    commit: v.optional(agentItemCommitValidator),
+    // B6b: the change proposal on the linked task (kind change, D4 / D29).
+    changePlan: v.optional(agentItemChangePlanValidator),
+    // B6b: Merge into an existing task (D29).
+    merge: v.optional(agentItemMergeValidator),
+    // B6b: how the kickoff step ended (sent / discarded / replied in Gmail).
+    kickoffOutcome: v.optional(agentItemKickoffOutcomeValidator),
+    // B6b: "Make it a task instead" — the next plan may not be a reply-only plan.
+    forbidReply: v.optional(v.boolean()),
+    // B6b: DEV — the item was planned with the canned seed outputs; its later
+    // jobs (kickoff, change) on a seed mailbox use them too.
+    devFakeModel: v.optional(v.boolean()),
+    // B6b: a follow-up step that could not be done automatically (e.g. a
+    // blocked subtask that could not be unblocked when its question was answered).
+    decisionNote: v.optional(v.object({ message: v.string(), at: v.number() })),
     decidedBy: v.optional(v.id("users")),
     decidedAt: v.optional(v.number()),
     createdAt: v.number(),
@@ -1574,6 +1598,9 @@ export default defineSchema({
     dismissedReason: v.optional(v.string()), // required when dismissed (I12)
     // B6a: the current plan's (provisional) disposition — see the validator.
     planned: v.optional(clientRequestPlannedValidator),
+    // B6b: an `ask` row Create left open for the kickoff reply to answer
+    // (marked `answered` when that reply is sent).
+    answerInKickoff: v.optional(v.boolean()),
     createdAt: v.number(),
     updatedAt: v.number(),
   })

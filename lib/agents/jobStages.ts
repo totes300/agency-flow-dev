@@ -32,8 +32,8 @@ export type JobStageState = "pending" | "working" | "done" | "stopped";
 export type JobStageView = { key: string; label: string; state: JobStageState };
 
 /**
- * The job → stages map. B6a: prepareTask; later draftReply, presendReview,
- * handoverQA.
+ * The job → stages map. B6a: prepareTask; B6b: draftReply, prepareChange;
+ * later presendReview, handoverQA.
  */
 export const JOB_STAGES: Readonly<Record<string, readonly JobStage[]>> = {
   // PRD §6.1 / §6.5 — the Triage run line.
@@ -54,6 +54,17 @@ export const JOB_STAGES: Readonly<Record<string, readonly JobStage[]>> = {
       ],
     },
     { key: "plan", label: "Prepare the plan", tools: ["submitTriagePlan", "askUser"] },
+  ],
+  // PRD §6.1 kickoff / Q7 reply (B6b).
+  draftReply: [
+    { key: "read", label: "Read the conversation", tools: ["getEmailThread", "getThreadRequests", "getReplyTaskBundle", "listTeamMembers"] },
+    { key: "draft", label: "Write the email", tools: ["submitDraft"] },
+  ],
+  // PRD D4 / D29 (B6b).
+  prepareChange: [
+    { key: "read", label: "Read the email", tools: ["getEmailThread", "getThreadRequests"] },
+    { key: "check", label: "Check the task", tools: ["getTaskBundle", "listTeamMembers"] },
+    { key: "plan", label: "Prepare the change", tools: ["proposeTaskUpdate", "askUser"] },
   ],
 };
 

@@ -15,6 +15,8 @@
  *   the approver is not an admin (incl. a member's draft) block  not_admin
  *   no recipient                                          block  no_recipient
  *   an attachment can't be read / is too large            block  attachments
+ *   a kickoff, with open rows newer than the commit       block  new_requests
+ *     the draft does not answer (B6b)
  *   a recipient not on the thread / replyCc (I2)          warn   new_recipient
  *   a pending question in the draft's conversation        warn   pending_question
  *   any pre-send review finding for this version          warn   presend:<key>
@@ -59,6 +61,12 @@ export type SendGateContext = {
   presendFindings: ReadonlyArray<{ key: string; text: string }>;
   /** Attachment problems found by the caller (missing file, total too large). */
   attachmentProblems: readonly string[];
+  /**
+   * B6b (M6): open rows that arrived AFTER the item's commit and this draft
+   * does not answer — new work the kickoff would silently skip. Blocks a
+   * kickoff (a change proposal comes first).
+   */
+  newRequestsSinceCommit?: ReadonlyArray<{ id: string; text: string }>;
 };
 
 /**
@@ -100,6 +108,11 @@ export function sendGate(draft: SendGateDraft, ctx: SendGateContext): SendGateRe
     const row = { key: "open_requests", text: `Not answered yet: "${first}"${more}` };
     if (OPEN_REQUESTS_BLOCK_KINDS.has(draft.kind)) blocks.push(row);
     else warnings.push(row);
+  }
+  const fresh = ctx.newRequestsSinceCommit ?? [];
+  if (draft.kind === "kickoff" && fresh.length > 0) {
+    const more = fresh.length > 1 ? ` (+${fresh.length - 1} more)` : "";
+    blocks.push({ key: "new_requests", text: `The client asked for more since Create: "${quote(fresh[0].text)}"${more} — handle it first.` });
   }
   if (!ctx.approver.isAdmin) {
     blocks.push({

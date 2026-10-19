@@ -24,6 +24,9 @@ export type ActivityEventType =
   | "comment_resolved"
   | "comment_reopened"
   | "email_sent"
+  | "task_created_from_email"
+  | "reopened_from_email"
+  | "subtasks_added_from_email"
 
 /**
  * Format an activity event into a human-readable description.
@@ -130,6 +133,20 @@ export function formatActivityText(
     case "email_sent": {
       const to = typeof metadata.to === "string" && metadata.to ? metadata.to : "the client"
       return { text: `${userName} sent an email to`, highlight: to }
+    }
+
+    case "task_created_from_email":
+      return { text: `${userName} created this task from a client email` }
+
+    case "reopened_from_email":
+      return {
+        text: `${userName} reopened the task from a client email`,
+        highlight: typeof metadata.to === "string" ? metadata.to : undefined,
+      }
+
+    case "subtasks_added_from_email": {
+      const count = typeof metadata.count === "number" ? metadata.count : 0
+      return { text: `${userName} added ${count} ${count === 1 ? "subtask" : "subtasks"} from a client email` }
     }
 
     default:

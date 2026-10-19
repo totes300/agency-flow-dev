@@ -134,6 +134,8 @@ export const proposalPayloadValidator = v.union(
               title: v.optional(v.string()),
               assigneeIds: v.optional(v.array(v.string())),
               dueDate: v.optional(v.union(v.string(), v.null())),
+              /** Email change (B6b): the ledger rows this amendment covers. */
+              requestIds: requestIdsValidator,
             }),
           ),
         ),
@@ -143,6 +145,8 @@ export const proposalPayloadValidator = v.union(
               subtaskId: v.string(),
               subtaskTitle: v.optional(v.string()),
               reason: v.optional(v.string()),
+              /** Email change (B6b): the ledger rows the cancellation answers. */
+              requestIds: requestIdsValidator,
             }),
           ),
         ),

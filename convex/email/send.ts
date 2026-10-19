@@ -13,7 +13,7 @@ import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
 import { loadAuthContextForActor, type AuthContext } from "../lib/auth";
 import { emailDraftFailureKindValidator } from "../lib/validators";
-import { closeItem, findLiveItem, openAttentions } from "../agentItems";
+import { closeEmailItem, findLiveItem, openAttentions } from "../agentItems";
 import { logActivity } from "../activityLog";
 import { loadTaskForWrite } from "../tasks/access";
 import { createTask, updateTask } from "../tasks/write";
@@ -116,6 +116,22 @@ export async function hasPendingChangeProposal(
   return false;
 }
 
+/** I9 (B6b): an undecided `updateTask` proposal FROM A CLIENT EMAIL on the task. */
+export async function hasPendingEmailChange(
+  ctx: QueryCtx | MutationCtx,
+  orgId: string,
+  taskId: Id<"tasks">,
+): Promise<boolean> {
+  for (const status of ["pending", "failed"] as const) {
+    const rows = await ctx.db
+      .query("agentProposals")
+      .withIndex("by_orgId_taskId_status", (q) => q.eq("orgId", orgId).eq("taskId", taskId).eq("status", status))
+      .take(20);
+    if (rows.some((r) => { const p = r.editedPayload ?? r.payload; return p.kind === "updateTask" && p.source?.kind === "email"; })) return true;
+  }
+  return false;
+}
+
 /** The draft's task, named for the I9 fix, when a change proposal blocks it. */
 async function pendingChangeOn(
   ctx: QueryCtx | MutationCtx,
@@ -144,10 +160,12 @@ export async function loadSendGateContext(
 
   const answered = new Set<string>(draft.answersRequestIds ?? []);
   const openRequests: Array<{ id: string; text: string }> = [];
+  const openCreatedAt = new Map<string, number>();
   const pushOpen = (rows: Doc<"clientRequests">[]) => {
     for (const r of rows) {
       if (r.disposition === "open" && !answered.has(r._id) && !openRequests.some((o) => o.id === r._id)) {
         openRequests.push({ id: r._id, text: r.text });
+        openCreatedAt.set(r._id, r.createdAt);
       }
     }
   };
@@ -208,7 +226,16 @@ export async function loadSendGateContext(
     }
   }
 
+  // M6: a kickoff may not skip work the client asked for after the commit.
+  let newRequestsSinceCommit: Array<{ id: string; text: string }> = [];
+  if (draft.kind === "kickoff" && thread && thread.orgId === orgId) {
+    const item = await findLiveItem(ctx, orgId, { type: "emailThread", id: thread._id });
+    const since = item?.commit?.at;
+    if (since !== undefined) newRequestsSinceCommit = openRequests.filter((r) => (openCreatedAt.get(r.id) ?? 0) > since);
+  }
+
   return {
+    newRequestsSinceCommit,
     expectedVersion: args.expectedVersion,
     approver: { isAdmin: args.approverIsAdmin },
     createdByMember,
@@ -997,7 +1024,25 @@ export const applySentEffect = internalMutation({
       case "item": {
         const item = await findLiveItem(ctx, orgId, { type: "emailThread", id: draft.threadId ?? sending._id });
         if (item && item.draftId === draft._id && openAttentions(item).length === 0) {
-          await closeItem(ctx, item, { outcome: "replied", userId: approverId });
+          // An email change still undecided on the committed tasks keeps the item open (I9 — the
+          // change's Apply / Not a change ends it); the kickoff step is done either way.
+          let changePending = false;
+          for (const taskId of item.commit?.taskIds ?? []) {
+            if (await hasPendingEmailChange(ctx, orgId, taskId)) changePending = true;
+          }
+          if (item.kind === "change" && item.changePlan && !item.commit?.proposalIds.includes(item.changePlan.proposalId)) {
+            changePending = true;
+          }
+          if (changePending) {
+            await ctx.db.patch(item._id, { kickoffOutcome: "sent", draftId: undefined, updatedAt: Date.now() });
+          } else {
+            // A kickoff ends a committed item with ITS outcome (D21, D26); a reply → replied.
+            await closeEmailItem(ctx, item, {
+              outcome: item.commit?.outcome ?? "replied",
+              userId: approverId,
+              ...(item.commit ? { kickoffOutcome: "sent" as const } : {}),
+            });
+          }
         }
         break;
       }

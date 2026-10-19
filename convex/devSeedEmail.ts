@@ -8,6 +8,11 @@ import { normalizeSubject, stripQuoted, type EmailAddress } from "./email/model"
 import { ORG_TIMEZONE_FALLBACK } from "./lib/timer";
 import { addCalendarDays, localDateOf, weekdayOf, zonedDateTimeToInstant } from "./lib/workingDays";
 import { isClosedCategory } from "./tasks/model";
+import { loadAuthContextForActor } from "./lib/auth";
+import { findLiveItem } from "./agentItems";
+import { proposalRevision } from "./agentProposals";
+import { createFromTriageCore } from "./email/create";
+import { applyChangeCore } from "./email/changes";
 
 /**
  * DEV-ONLY email-triage seed (docs/prd-email-triage.md §9 B2). Loads the
@@ -57,7 +62,15 @@ import { isClosedCategory } from "./tasks/model";
  *        Triage plans of email/fakePlans.ts — B6a)
  *        npx convex run devSeedEmail:process '{}'                   (the real model — needs the org's AI key)
  * Reset: npx convex run devSeedEmail:reset '{"orgId":"org_…"}'   (also the seed conversations'
- *        Triage threads, their proposals, questions, runs and job audit rows)
+ *        Triage threads, their proposals, questions, runs and job audit rows;
+ *        tasks a Create made stay — delete them in the app)
+ *
+ * B6b demo chain (no UI yet — B7/B8), all with the canned outputs:
+ *        npx convex run devSeedEmail:create '{}'          Create Réka's plan as the designated actor
+ *                                                         (the kickoff draft follows after the 10 s undo window)
+ *        npx convex run devSeedEmail:followUp '{"fakeModel":true}'  Réka: "és kérnénk egy story méretet is"
+ *                                                         → a change proposal on the created task
+ *        npx convex run devSeedEmail:applyChange '{}'     Apply it → the kickoff is drafted again
  *
  * Reads whole-org tables on purpose (bounded): a dummy-data dev tool.
  */
@@ -867,5 +880,138 @@ export const reset = internalMutation({
       deleted.connectors++;
     }
     return { orgId, deleted };
+  },
+});
+
+// ─── B6b demo actions ───────────────────────────────────────────────────────
+
+const REKA_THREAD = `${SEED_PREFIX}reka-black-friday`;
+
+const REKA_FOLLOW_UP = `Sziasztok!
+
+Köszi a gyors választ! És kérnénk egy story méretet is a Facebookra.
+
+Réka`;
+
+async function seedConversation(ctx: MutationCtx, orgId: string, gmailThreadId: string): Promise<Doc<"emailThreads">> {
+  for (const mailbox of await findSeedMailbox(ctx, orgId)) {
+    const thread = await ctx.db
+      .query("emailThreads")
+      .withIndex("by_orgId_connectorId_gmailThreadId", (q) =>
+        q.eq("orgId", orgId).eq("connectorId", mailbox._id).eq("gmailThreadId", gmailThreadId),
+      )
+      .unique();
+    if (thread) return thread;
+  }
+  throw new ConvexError(`No seed conversation ${gmailThreadId} — run devSeedEmail:seed first.`);
+}
+
+/** The designated agent actor — the demo decides as them (no signed-in user on the CLI). */
+async function demoActor(ctx: MutationCtx, orgId: string) {
+  const settings = await ctx.db
+    .query("orgSettings")
+    .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+    .first();
+  if (!settings?.agentActorUserId) throw new ConvexError("Set a designated agent actor first (agentJobs:setAgentActorUser).");
+  return await loadAuthContextForActor(ctx, { orgId, userId: settings.agentActorUserId });
+}
+
+/**
+ * DEV: Triage's Create on a seed conversation (default Réka's), as the
+ * designated actor — `createFromTriageCore`, the same gate and writes as the
+ * owner's button. The kickoff draft follows after the 10 s undo window.
+ *
+ *   npx convex run devSeedEmail:create '{}'
+ */
+export const create = internalMutation({
+  args: { orgId: v.optional(v.string()), thread: v.optional(v.string()) },
+  handler: async (ctx, args): Promise<{ undoUntil: number; taskIds: Id<"tasks">[] }> => {
+    const orgId = await resolveOrgId(ctx, args.orgId);
+    await requireEmailTriageEnabled(ctx, orgId);
+    const thread = await seedConversation(ctx, orgId, args.thread ? `${SEED_PREFIX}${args.thread}` : REKA_THREAD);
+    const item = await findLiveItem(ctx, orgId, { type: "emailThread", id: thread._id });
+    if (!item?.plan) throw new ConvexError("The conversation has no plan yet — run devSeedEmail:process first.");
+    const proposals: Array<{ proposalId: Id<"agentProposals">; revision: number }> = [];
+    for (const id of item.plan.proposalIds) {
+      const p = await ctx.db.get(id);
+      if (p && (p.status === "pending" || p.status === "failed")) proposals.push({ proposalId: p._id, revision: proposalRevision(p) });
+    }
+    return await createFromTriageCore(ctx, { auth: await demoActor(ctx, orgId), item, thread, proposals });
+  },
+});
+
+/**
+ * DEV: Réka writes again after Create — "és kérnénk egy story méretet is"
+ * (a new message on her conversation, stage `received`), then the inbound
+ * pipeline runs: classify (canned with fakeModel) → a change on the created
+ * task → prepareChange (canned) → the change proposal.
+ *
+ *   npx convex run devSeedEmail:followUp '{"fakeModel":true}'
+ */
+export const followUp = internalMutation({
+  args: { orgId: v.optional(v.string()), fakeModel: v.optional(v.boolean()) },
+  handler: async (ctx, args): Promise<{ messageId: Id<"emailMessages">; created: boolean }> => {
+    const orgId = await resolveOrgId(ctx, args.orgId);
+    await requireEmailTriageEnabled(ctx, orgId);
+    const thread = await seedConversation(ctx, orgId, REKA_THREAD);
+    const gmailMessageId = `${SEED_PREFIX}reka-black-friday-2`;
+    const existing = await ctx.db
+      .query("emailMessages")
+      .withIndex("by_orgId_connectorId_gmailMessageId", (q) =>
+        q.eq("orgId", orgId).eq("connectorId", thread.connectorId).eq("gmailMessageId", gmailMessageId),
+      )
+      .unique();
+    if (existing) return { messageId: existing._id, created: false };
+    const mailbox = (await ctx.db.get(thread.connectorId))!;
+    const owner = await ctx.db.get(mailbox.userId);
+    const us: EmailAddress = { name: owner?.name, email: (owner?.email ?? "office@agency.test").toLowerCase() };
+    const now = Date.now();
+    const subject = `Re: ${thread.subject}`;
+    const messageId = await ctx.db.insert("emailMessages", {
+      orgId,
+      threadId: thread._id,
+      connectorId: thread.connectorId,
+      gmailMessageId,
+      rfcMessageId: "<reka-black-friday-2@seed.agency-flow.invalid>",
+      direction: "inbound",
+      from: { name: PEOPLE.reka.name, email: PEOPLE.reka.email },
+      to: [us],
+      cc: [],
+      subject,
+      bodyText: stripQuoted(REKA_FOLLOW_UP, { subject }).text,
+      bodyHtml: toSimpleHtml(REKA_FOLLOW_UP),
+      attachments: [],
+      sentAt: now,
+      stage: "received",
+      createdAt: now,
+    });
+    await ctx.db.patch(thread._id, { lastMessageAt: now, lastInboundAt: now, waitingOn: "us", updatedAt: now });
+    await ctx.scheduler.runAfter(0, internal.email.pipeline.processInboundMessage, { messageId, fakeModel: args.fakeModel });
+    return { messageId, created: true };
+  },
+});
+
+/**
+ * DEV: Apply the change proposal of a seed conversation (default Réka's) as
+ * the designated actor — `applyChangeCore`; the kickoff is drafted again.
+ *
+ *   npx convex run devSeedEmail:applyChange '{}'
+ */
+export const applyChange = internalMutation({
+  args: { orgId: v.optional(v.string()), thread: v.optional(v.string()) },
+  handler: async (ctx, args): Promise<{ taskId: Id<"tasks"> }> => {
+    const orgId = await resolveOrgId(ctx, args.orgId);
+    await requireEmailTriageEnabled(ctx, orgId);
+    const thread = await seedConversation(ctx, orgId, args.thread ? `${SEED_PREFIX}${args.thread}` : REKA_THREAD);
+    const item = await findLiveItem(ctx, orgId, { type: "emailThread", id: thread._id });
+    const proposal = item?.changePlan ? await ctx.db.get(item.changePlan.proposalId) : null;
+    if (!item || !proposal) throw new ConvexError("The conversation has no change proposal — run devSeedEmail:followUp first.");
+    return await applyChangeCore(ctx, {
+      auth: await demoActor(ctx, orgId),
+      item,
+      thread,
+      proposalId: proposal._id,
+      revision: proposalRevision(proposal),
+    });
   },
 });

@@ -3,7 +3,7 @@ import { internalMutation, mutation, type MutationCtx, type QueryCtx } from "../
 import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
 import {
-  closeItem,
+  closeEmailItem,
   findFilteredItem,
   findLiveItem,
   joinItem,
@@ -29,7 +29,8 @@ import { requestPlanningSafely } from "./prepare";
  *   dispatchMessage   the `classified → handled` stage: facts → decision →
  *                     join the conversation's live item (I13) or open one, or
  *                     an Inbox `no_action` row; an item that needs a plan
- *                     starts prepareTask (B6a, email/prepare.requestPlanning)
+ *                     starts its job (prepareTask — B6a; prepareChange / the
+ *                     kickoff draftReply — B6b; email/prepare.requestPlanning)
  *   declineItem       D28 — the item closes as declined, its open ledger rows
  *                     become `dismissed` ("declined")
  *   purgeFiltered     the daily D24 retention cron (filtered items + their
@@ -211,7 +212,7 @@ export async function dispatchMessage(
   const closeAttentionOnly = async () => {
     if (!live || !attentionOnly) return;
     await joinItem(ctx, live, { messageId: message._id, quiet: true });
-    await closeItem(ctx, (await ctx.db.get(live._id))!, { outcome: "not_a_change" });
+    await closeEmailItem(ctx, (await ctx.db.get(live._id))!, { outcome: "not_a_change" });
     live = null;
   };
 
@@ -267,6 +268,25 @@ export async function dispatchMessage(
     if (decision.action === "item" && decision.status === "open") {
       if (attentionOnly || KIND_RANK[decision.kind] > KIND_RANK[live.kind]) patch.kind = decision.kind;
       if (decision.taskId && !live.taskId) patch.taskId = decision.taskId;
+      // B6b: after Create (kickoff pending) a reply asking for a change becomes
+      // a change on the created task — the same prepareChange → Apply flow (D4).
+      if (live.commit && decision.kind === "change" && decision.taskId) {
+        patch.kind = "change";
+        patch.taskId = decision.taskId;
+      }
+    }
+    // M6: after a commit, any message that added open ledger rows is a change on
+    // the committed task — whatever its classification (a "request" included) —
+    // never something the kickoff silently absorbs.
+    if (live.commit && live.kind !== "change" && patch.kind !== "change") {
+      const added = await ctx.db
+        .query("clientRequests")
+        .withIndex("by_orgId_threadId", (q) => q.eq("orgId", orgId).eq("threadId", thread._id))
+        .take(200);
+      if (added.some((r) => r.messageId === message._id && r.disposition === "open")) {
+        patch.kind = "change";
+        patch.taskId = (decision.action === "item" ? decision.taskId : undefined) ?? live.commit.taskIds[0];
+      }
     }
     await joinItem(ctx, live, {
       messageId: message._id,
@@ -344,6 +364,7 @@ export const declineItem = mutation({
       throw new ConvexError("This item is already closed");
     }
     if (openAttentions(item).length > 0) throw new ConvexError(OPEN_ATTENTION_MESSAGE);
+    if (item.commit) throw new ConvexError("This item was already created — send or discard the kickoff reply instead.");
     const threadId = ctx.db.normalizeId("emailThreads", item.anchor.id);
     const thread = threadId ? await ctx.db.get(threadId) : null;
     let dismissed: Id<"clientRequests">[] = [];
@@ -351,7 +372,8 @@ export const declineItem = mutation({
       dismissed = await dismissOpenRequestsOfThread(ctx, auth.orgId, thread._id, DECLINED_REASON);
       await ctx.db.patch(thread._id, { waitingOn: "none", updatedAt: Date.now() });
     }
-    await closeItem(ctx, item, { outcome: "declined", userId: auth.userId });
+    // The shared close: a change item's pending proposal goes with it (I9 never stranded).
+    await closeEmailItem(ctx, item, { outcome: "declined", userId: auth.userId });
     return { dismissed: dismissed.length };
   },
 });

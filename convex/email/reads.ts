@@ -134,6 +134,12 @@ export type AgentEmailThread = {
     replanNeeded: boolean;
     /** Effective payloads — the owner's edits included. */
     plan: { revision: number; gaps: string[]; tasks: AgentEmailPlanTask[] } | null;
+    /** B6b: what the owner committed (Create / Merge / Apply) — the kickoff reply is next. */
+    committed: { outcome: string; taskIds: string[] } | null;
+    /** B6b: the change proposal on the linked task (kind change). */
+    change: { proposalId: string; gaps: string[] } | null;
+    /** B6b: the item's email draft (kickoff / reply) — revise it with submitDraft. */
+    draftId: string | null;
   } | null;
 };
 
@@ -256,6 +262,11 @@ export async function getEmailThreadForAuth(
       emails: live.messageCount ?? (live.messageIds ?? []).length,
       replanNeeded: live.needsReplanSince !== undefined,
       plan,
+      committed: live.commit ? { outcome: live.commit.outcome, taskIds: live.commit.taskIds } : null,
+      change: live.changePlan
+        ? { proposalId: live.changePlan.proposalId, gaps: live.changePlan.gaps.map((g) => g.detail) }
+        : null,
+      draftId: live.draftId ?? null,
     };
   }
 

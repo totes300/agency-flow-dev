@@ -217,8 +217,10 @@ export function openSubtasksMessage(open: number): string {
  * subtaskCount`), never the status alone. The agent proposal path re-checks
  * its final state (`agentProposals.executeUpdateTask`).
  *
- * TODO(B6, I9): a pending change proposal on the task also blocks entering
- * the admin-review role (and its drafts from sending) — added with B6.
+ * I9 (B6b): a pending change proposal from a client email on the task also
+ * blocks entering the admin-review role — `pendingEmailChangeRefusal`, read
+ * by `updateTask` and `reviewGateRefusalFor` (its drafts are held by the B5
+ * send gate).
  *
  * TODO(C2): D8 "Hand over partially" names the open sub-tasks that move to a
  * follow-up — it gets its own write.ts entry point, never a public flag.
@@ -229,7 +231,31 @@ export function reviewGateRefusal(task: Doc<"tasks">, next: Doc<"statuses">): st
   return open > 0 ? openSubtasksMessage(open) : null;
 }
 
-/** `reviewGateRefusal` for a status id (bulk pre-checks). Unknown statuses pass — `updateTask` rejects them. */
+/** I9 refusal text (email-triage PRD §4.3). */
+export const PENDING_EMAIL_CHANGE_MESSAGE =
+  "A client's change request on this task is waiting in Triage — apply it or mark it not a change first.";
+
+/**
+ * I9 (email-triage PRD §4.3, D4): while a change proposal from a client
+ * email is undecided on the task (an `updateTask` with an email source,
+ * pending — or failed, which is retryable), the task cannot move into the
+ * `admin_review` role. Read through `agentProposals.by_orgId_taskId_status`.
+ */
+export async function pendingEmailChangeRefusal(ctx: MutationCtx, task: Doc<"tasks">): Promise<string | null> {
+  for (const status of ["pending", "failed"] as const) {
+    const rows = await ctx.db
+      .query("agentProposals")
+      .withIndex("by_orgId_taskId_status", (q) => q.eq("orgId", task.orgId).eq("taskId", task._id).eq("status", status))
+      .take(20);
+    for (const row of rows) {
+      const payload = row.editedPayload ?? row.payload;
+      if (payload.kind === "updateTask" && payload.source?.kind === "email") return PENDING_EMAIL_CHANGE_MESSAGE;
+    }
+  }
+  return null;
+}
+
+/** I3 + I9 for a status id (bulk pre-checks). Unknown statuses pass — `updateTask` rejects them. */
 export async function reviewGateRefusalFor(
   ctx: MutationCtx,
   task: Doc<"tasks">,
@@ -237,7 +263,10 @@ export async function reviewGateRefusalFor(
 ): Promise<string | null> {
   const status = await ctx.db.get(statusId);
   if (!status || status.orgId !== task.orgId) return null;
-  return reviewGateRefusal(task, status);
+  const refusal = reviewGateRefusal(task, status);
+  if (refusal) return refusal;
+  if (status.workflowRole !== "admin_review" || status._id === task.statusId) return null;
+  return await pendingEmailChangeRefusal(ctx, task);
 }
 
 async function loadProject(
@@ -616,6 +645,12 @@ export type CreateTaskInput = {
   projectId?: Id<"projects">;
   /** Creates a sub-task (T8): one level, the parent's project/client. */
   parentTaskId?: Id<"tasks">;
+  /**
+   * The client of a task WITHOUT a project (email-triage B6b: a Triage task
+   * for a client with no project yet). Ignored when there is a project (its
+   * client wins) or a parent (sub-tasks share the parent's client — T8).
+   */
+  clientId?: Id<"clients">;
   /** Omitted = not specified (sub-tasks inherit the parent's). */
   assigneeIds?: Id<"users">[];
   workCategoryId?: Id<"workCategories">;
@@ -679,6 +714,13 @@ export async function createTask(
     project = await loadProject(ctx, orgId, input.projectId);
   }
 
+  let clientId: Id<"clients"> | undefined = project?.clientId ?? parent?.clientId;
+  if (!project && !parent && input.clientId) {
+    const client = await ctx.db.get(input.clientId);
+    if (!client || client.orgId !== orgId || client.archivedAt) throw new ConvexError("Client not found");
+    clientId = client._id;
+  }
+
   const status = input.statusId
     ? await loadStatus(ctx, orgId, input.statusId)
     : await defaultStatusFor(ctx, orgId, input.defaultCategories ?? ["backlog"]);
@@ -712,7 +754,7 @@ export async function createTask(
     hasDescription: hasDescriptionContent(description),
     ...statusFields(status, undefined, now),
     projectId: project?._id,
-    clientId: project?.clientId,
+    clientId,
     assigneeIds,
     labelIds: labels.map((l) => l._id),
     workCategoryId,
@@ -898,6 +940,10 @@ export async function updateTask(
     const next = await loadStatus(ctx, orgId, patch.statusId);
     const refusal = reviewGateRefusal(task, next.status);
     if (refusal) throw new ConvexError(refusal);
+    if (next.status.workflowRole === "admin_review") {
+      const pendingChange = await pendingEmailChangeRefusal(ctx, task);
+      if (pendingChange) throw new ConvexError(pendingChange);
+    }
     const prevStatus = await ctx.db.get(task.statusId);
     const prevCategory = await currentCategory(ctx, task);
     changed.add("status");

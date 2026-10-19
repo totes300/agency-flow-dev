@@ -135,7 +135,7 @@ export const isUnresolvedRow = (row: Pick<PlanLedgerRow, "disposition">) =>
  * catch-all for a clarify without parameters). They must appear in the title
  * or the task description.
  */
-const DESCRIPTION_CONSTRAINT_KINDS: ReadonlySet<string> = new Set(["link", "clarification"]);
+export const DESCRIPTION_CONSTRAINT_KINDS: ReadonlySet<string> = new Set(["link", "clarification"]);
 
 /**
  * "Verbatim" with the whitespace normalised (NBSP, runs, line breaks) and

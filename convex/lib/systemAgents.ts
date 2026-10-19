@@ -22,11 +22,8 @@ export type SystemAgentDefinition = {
   runPermission: "admins" | "everyone";
 };
 
-/**
- * The Email assistant's tools — the `prepareTask` job's (convex/email/jobs.ts)
- * and the default set of a follow-up chat turn in a Triage conversation.
- */
-export const EMAIL_ASSISTANT_TOOLS = [
+/** The `prepareTask` job's tools (convex/email/jobs.ts — B6a). */
+export const PREPARE_TASK_TOOLS = [
   "getEmailThread",
   "getThreadRequests",
   "getAttachmentText",
@@ -41,6 +38,26 @@ export const EMAIL_ASSISTANT_TOOLS = [
   "askUser",
   "submitTriagePlan",
 ];
+
+/** The `draftReply` job's tools (B6b — kickoff / reply drafts). */
+export const DRAFT_REPLY_TOOLS = ["getEmailThread", "getThreadRequests", "getReplyTaskBundle", "listTeamMembers", "submitDraft"];
+
+/** The `prepareChange` job's tools (B6b — a change on a linked task). */
+export const PREPARE_CHANGE_TOOLS = [
+  "getEmailThread",
+  "getThreadRequests",
+  "getTaskBundle",
+  "listTeamMembers",
+  "askUser",
+  "proposeTaskUpdate",
+];
+
+/**
+ * The Email assistant's DEFAULT tools — a follow-up chat turn in a Triage
+ * conversation (the owner asks for a change to the plan, the change or the
+ * draft — D20): every job's tools.
+ */
+export const EMAIL_ASSISTANT_TOOLS = [...new Set([...PREPARE_TASK_TOOLS, ...DRAFT_REPLY_TOOLS, ...PREPARE_CHANGE_TOOLS])];
 
 export const SYSTEM_AGENTS = {
   // Neutral placeholder (A2b).

@@ -264,9 +264,12 @@ export async function recordPlannedDispositions(
     threadIds: readonly Id<"emailThreads">[];
     planRevision: number;
     dispositions: readonly PlannedDisposition[];
+    /** B6b: touch only these rows (a change owns only its own rows — never the kickoff's or the plan's). */
+    onlyRequestIds?: ReadonlySet<string>;
   },
 ): Promise<{ written: number }> {
-  const rows = (await Promise.all(args.threadIds.map((id) => threadRequests(ctx, args.orgId, id)))).flat();
+  const all = (await Promise.all(args.threadIds.map((id) => threadRequests(ctx, args.orgId, id)))).flat();
+  const rows = args.onlyRequestIds ? all.filter((r) => args.onlyRequestIds!.has(r._id)) : all;
   const byId = new Map(args.dispositions.map((d) => [d.requestId as string, d] as const));
   const now = Date.now();
   let written = 0;

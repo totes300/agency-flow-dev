@@ -468,6 +468,34 @@ export const activityLogValidator = v.union(
       to: v.optional(v.string()),
     }),
   ),
+  // Email triage B6b (§4.2): Triage's Create made this task from a client email.
+  activity(
+    "task_created_from_email",
+    v.object({
+      threadId: v.id("emailThreads"),
+      messageId: v.optional(v.id("emailMessages")),
+      subject: v.optional(v.string()),
+    }),
+  ),
+  // B6b (D4, D29): an applied change from a client email reopened the task.
+  activity(
+    "reopened_from_email",
+    v.object({
+      threadId: v.id("emailThreads"),
+      messageId: v.optional(v.id("emailMessages")),
+      from: v.string(),
+      to: v.string(),
+    }),
+  ),
+  // B6b (D4, D29): an applied change from a client email added subtasks.
+  activity(
+    "subtasks_added_from_email",
+    v.object({
+      threadId: v.id("emailThreads"),
+      messageId: v.optional(v.id("emailMessages")),
+      count: v.number(),
+    }),
+  ),
 );
 
 type ActivityLogRow = Infer<typeof activityLogValidator>;

@@ -26,7 +26,7 @@ import { AGENT_QUESTION_MARKER, ASK_USER_TOOL_NAME } from "../../lib/agents/ques
 import { requireEmailTriageEnabled, isEmailTriageEnabled } from "./gate";
 import { recordPlannedDispositions, threadRequests, type PlannedDisposition } from "./requests";
 import { TEAM_LANGUAGE_FALLBACK } from "./prompts";
-import { prepareTaskJob } from "./jobs";
+import { DRAFT_REPLY_JOB, PREPARE_CHANGE_JOB, prepareTaskJob } from "./jobs";
 import { cannedPlanFor } from "./fakePlans";
 import { conversationThreads } from "./drafts";
 import { isPublicMailDomain } from "./model";
@@ -86,6 +86,24 @@ export function teamLanguageOf(settings: Doc<"orgSettings"> | null): string {
 
 export type PlanningRequest = "scheduled" | "skipped" | "no_actor" | "already_queued";
 
+/** What started the request (`retry`: an admin's Retry or a new designated actor). */
+export type PlanningTrigger = "opened" | "joined" | "retry" | "kickoff" | "reply_plan" | "merge";
+
+/**
+ * The job an email item needs now (B6b routing; `override` forces one):
+ *   kind change (a linked task, or a Merge)       → prepareChange (D4, D29)
+ *   committed (Create / Apply done, kickoff due)  → draftReply kickoff (D21)
+ *   request / new_sender / question               → prepareTask (B6a)
+ *   anything else (approval, needs_look …)        → none
+ */
+export function jobForItem(item: Doc<"agentItems">, override?: string): string | null {
+  if (override) return override;
+  if (item.kind === "change") return PREPARE_CHANGE_JOB;
+  if (item.commit) return DRAFT_REPLY_JOB;
+  if (PLANNED_ITEM_KINDS.has(item.kind)) return PREPARE_TASK_JOB;
+  return null;
+}
+
 /** A scheduled start that never began (crashed action) stops deduping after this. */
 export const PLAN_START_STALE_MS = 15 * 60_000;
 
@@ -107,25 +125,36 @@ export const PLAN_START_STALE_MS = 15 * 60_000;
 export async function requestPlanning(
   ctx: MutationCtx,
   itemId: Id<"agentItems">,
-  opts: { trigger: "opened" | "joined" | "retry"; messageIds: readonly Id<"emailMessages">[]; fakeModel?: boolean },
+  opts: {
+    trigger: PlanningTrigger;
+    messageIds: readonly Id<"emailMessages">[];
+    fakeModel?: boolean;
+    /** B6b: force a job (draftReply for a reply plan or a Retry of a draft). */
+    job?: string;
+  },
 ): Promise<PlanningRequest> {
   const item = await ctx.db.get(itemId);
   if (!item || item.source !== "email" || item.anchor.type !== "emailThread") return "skipped";
   if (item.status !== "open" && item.status !== "snoozed") return "skipped";
-  if (!PLANNED_ITEM_KINDS.has(item.kind)) return "skipped";
+  const jobName = jobForItem(item, opts.job);
+  if (!jobName) return "skipped";
+  // M2: no draftReply before the undo window ends — the kickoff job at `undoUntil` drafts it then.
+  if (jobName === DRAFT_REPLY_JOB && item.commit?.undoUntil !== undefined && Date.now() < item.commit.undoUntil) {
+    return "skipped";
+  }
   // A join plans again only when it marked the item (a quiet thank-you does not).
   if (opts.trigger === "joined" && item.needsReplanSince === undefined) return "skipped";
   const threadId = ctx.db.normalizeId("emailThreads", item.anchor.id);
   const thread = threadId ? await ctx.db.get(threadId) : null;
   if (!thread || thread.orgId !== item.orgId) return "skipped";
 
-  const job = getAgentRunJob(PREPARE_TASK_JOB);
-  if (!job) throw new ConvexError("The prepareTask job is not registered");
+  const job = getAgentRunJob(jobName);
+  if (!job) throw new ConvexError(`The ${jobName} job is not registered`);
   const actor = await resolveJobActor(ctx, job, item.orgId, undefined);
   const now = Date.now();
   if (!actor.ok) {
     await ctx.db.patch(item._id, {
-      planIssue: { kind: "no_actor", message: actor.error, at: now },
+      planIssue: { kind: "no_actor", message: actor.error, job: jobName, at: now },
       planStartScheduledAt: undefined,
     });
     return "no_actor";
@@ -146,20 +175,34 @@ export async function requestPlanning(
     .query("agentRuns")
     .withIndex("by_threadId_status", (q) => q.eq("threadId", agentThreadId).eq("status", "queued"))
     .take(20);
-  if (queued.some((r) => r.job === PREPARE_TASK_JOB)) {
+  if (queued.some((r) => r.job === jobName)) {
     if (item.agentThreadId !== agentThreadId) await ctx.db.patch(item._id, { agentThreadId });
     return "already_queued";
   }
-  await ctx.db.patch(item._id, { agentThreadId, planIssue: undefined, planStartScheduledAt: now });
-
   const connector = await ctx.db.get(thread.connectorId);
-  if (opts.fakeModel === true && connector?.devSeed === true) {
+  // DEV: canned outputs only on a seed mailbox; the item remembers it for its later jobs.
+  const fake = (opts.fakeModel === true || item.devFakeModel === true) && connector?.devSeed === true;
+  await ctx.db.patch(item._id, {
+    agentThreadId,
+    planIssue: undefined,
+    planStartScheduledAt: now,
+    ...(fake ? { devFakeModel: true } : {}),
+  });
+
+  const messageIds = [...opts.messageIds];
+  if (jobName === PREPARE_CHANGE_JOB) {
+    await ctx.scheduler.runAfter(0, fake ? internal.email.changes.runFakeChange : internal.email.changes.startPrepareChange, {
+      itemId: item._id,
+      messageIds,
+    });
+  } else if (jobName === DRAFT_REPLY_JOB) {
+    await ctx.scheduler.runAfter(0, fake ? internal.email.reply.runFakeDraft : internal.email.reply.startDraftReply, {
+      itemId: item._id,
+    });
+  } else if (fake) {
     await ctx.scheduler.runAfter(0, internal.email.prepare.runFakePlan, { itemId: item._id });
   } else {
-    await ctx.scheduler.runAfter(0, internal.email.prepare.startPrepareTask, {
-      itemId: item._id,
-      messageIds: [...opts.messageIds],
-    });
+    await ctx.scheduler.runAfter(0, internal.email.prepare.startPrepareTask, { itemId: item._id, messageIds });
   }
   return "scheduled";
 }
@@ -214,8 +257,10 @@ export const retryPlanning = mutation({
       throw new ConvexError("Only an email item has a plan to prepare");
     }
     if (item.status !== "open" && item.status !== "snoozed") throw new ConvexError("This item is already closed");
-    if (!PLANNED_ITEM_KINDS.has(item.kind)) throw new ConvexError("This item has no plan to prepare");
-    return { result: await requestPlanning(ctx, item._id, { trigger: "retry", messageIds: [] }) };
+    // A failed draft (kickoff / reply) retries the draft; anything else the item's own job.
+    const job = item.planIssue?.job === DRAFT_REPLY_JOB ? DRAFT_REPLY_JOB : undefined;
+    if (!jobForItem(item, job)) throw new ConvexError("This item has no plan to prepare");
+    return { result: await requestPlanning(ctx, item._id, { trigger: "retry", messageIds: [], job }) };
   },
 });
 
@@ -262,7 +307,7 @@ export const onPrepareRunSettled = internalMutation({
     const thread = await ctx.db.get(run.threadId);
     if (!thread || thread.anchor?.type !== "emailThread") return null;
     const item = await findLiveItem(ctx, run.orgId, { type: "emailThread", id: thread.anchor.id });
-    if (!item) return null;
+    if (!item || item.commit || item.kind === "change") return null; // created / a change: not this job's
     if (item.plan && item.plan.submittedAt >= run.startedAt) return null;
     const asked = await ctx.db
       .query("agentQuestions")
@@ -310,6 +355,9 @@ async function buildPrepareInput(
       ? `- RE-PLAN: the item already has plan revision ${item.plan.revision}. Submit the whole updated plan; ` +
         "in each task's changedByNewEmail list only the fields the new email changes — the owner's edits stay."
       : "- There is no plan yet.",
+    ...(item.forbidReply
+      ? ["- The owner asked to make this a TASK: replyInsteadOfTask is not allowed — plan the work as a task."]
+      : []),
   ];
   return lines.join("\n");
 }
@@ -369,12 +417,17 @@ export const linkItemThread = internalMutation({
 });
 
 export const recordPlanIssue = internalMutation({
-  args: { itemId: v.id("agentItems"), message: v.string() },
+  args: { itemId: v.id("agentItems"), message: v.string(), job: v.optional(v.string()) },
   handler: async (ctx, args): Promise<null> => {
     const item = await ctx.db.get(args.itemId);
     if (!item) return null;
     await ctx.db.patch(item._id, {
-      planIssue: { kind: "start_failed", message: args.message.slice(0, 500), at: Date.now() },
+      planIssue: {
+        kind: "start_failed",
+        message: args.message.slice(0, 500),
+        ...(args.job ? { job: args.job } : {}),
+        at: Date.now(),
+      },
       planStartScheduledAt: undefined,
     });
     return null;
@@ -508,6 +561,15 @@ export async function submitTriagePlanCore(
   if (!emailThread || emailThread.orgId !== auth.orgId) throw new Error("The email conversation no longer exists.");
   const item = await findLiveItem(ctx, auth.orgId, { type: "emailThread", id: emailThread._id });
   if (!item) throw new Error("This conversation has no open Triage item — there is nothing to plan.");
+  if (item.commit) {
+    throw new Error("The owner already created this plan — nothing to re-plan. The kickoff reply comes next.");
+  }
+  if (item.kind === "change") {
+    throw new Error("This email is a change on a linked task — propose it with proposeTaskUpdate, not a new plan.");
+  }
+  if (item.forbidReply && args.input.replyInsteadOfTask?.reply === true) {
+    throw new Error("The owner asked to make this a task — replyInsteadOfTask is not allowed; plan the work as a task.");
+  }
   const now = args.nowMs ?? Date.now();
   const settings = await getOrgSettings(ctx, auth.orgId);
 
@@ -708,6 +770,8 @@ export async function submitTriagePlanCore(
     ...(clearReplan ? { needsReplanSince: undefined } : {}),
     updatedAt: now,
   });
+  // B6b (Q7): a reply plan gets its reply drafted (queued behind this run — I11).
+  if (reply) await requestPlanning(ctx, item._id, { trigger: "reply_plan", messageIds: [], job: DRAFT_REPLY_JOB });
 
   return {
     status: "stored",
@@ -723,8 +787,8 @@ export async function submitTriagePlanCore(
 }
 
 /** Inbound messages of the conversation (every copy thread), newest first, one per email (bounded). */
-async function conversationInbound(
-  ctx: MutationCtx,
+export async function conversationInbound(
+  ctx: QueryCtx | MutationCtx,
   orgId: string,
   threads: readonly Doc<"emailThreads">[],
 ): Promise<Doc<"emailMessages">[]> {

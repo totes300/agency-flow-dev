@@ -306,8 +306,110 @@ export const agentItemPlanIssueValidator = v.object({
   kind: v.optional(v.union(v.literal("no_actor"), v.literal("start_failed"), v.literal("run_incomplete"))),
   message: v.string(),
   gaps: v.optional(v.array(triagePlanGapValidator)),
+  // B6b: the job the issue is about (prepareTask when unset; prepareChange,
+  // draftReply) — Retry restarts that job.
+  job: v.optional(v.string()),
   at: v.number(),
 });
+
+/**
+ * A ledger row as it was before a Create / Apply converted it (B6b) — Undo
+ * puts it back exactly.
+ */
+export const agentItemConvertedRequestValidator = v.object({
+  requestId: v.id("clientRequests"),
+  disposition: v.union(
+    v.literal("open"),
+    v.literal("covered"),
+    v.literal("answered"),
+    v.literal("question_pending"),
+    v.literal("dismissed"),
+    v.literal("superseded"),
+  ),
+  taskId: v.optional(v.id("tasks")),
+  subtaskId: v.optional(v.id("tasks")),
+  dismissedReason: v.optional(v.string()),
+  answerInKickoff: v.optional(v.boolean()),
+  clientId: v.optional(v.id("clients")),
+});
+
+/**
+ * What the owner committed on an email item (B6b, D21, D26, D29, D30) — the
+ * item stays OPEN as "kickoff pending" until the kickoff reply is sent or
+ * discarded. `created` (Create, undoable until `undoUntil`), `merged`
+ * (Merge → an applied change) or `applied` (a change proposal applied).
+ * The rest is what Undo reverts: the tasks it made, the ledger rows it
+ * converted (their previous state), the thread ↔ task links, the client +
+ * contact it created, the questions it bound to subtasks and the threads it
+ * linked to the new client.
+ */
+export const agentItemCommitValidator = v.object({
+  outcome: v.union(v.literal("created"), v.literal("merged"), v.literal("applied")),
+  at: v.number(),
+  userId: v.id("users"),
+  taskIds: v.array(v.id("tasks")),
+  proposalIds: v.array(v.id("agentProposals")),
+  converted: v.array(agentItemConvertedRequestValidator),
+  threadTaskIds: v.array(v.id("emailThreadTasks")),
+  newClient: v.optional(
+    v.object({
+      clientId: v.id("clients"),
+      /** False when an existing client already had the domain (Create linked it, Undo keeps it). */
+      createdClient: v.boolean(),
+      /** The contact Create made (Undo deletes it when nothing else uses it). */
+      contactId: v.optional(v.id("clientContacts")),
+      /** Conversation threads Create linked to the client (Undo unlinks them). */
+      threadIds: v.array(v.id("emailThreads")),
+    }),
+  ),
+  /** The item's linked task before Create (a question item) — Undo restores it. */
+  previousTaskId: v.optional(v.id("tasks")),
+  /** The item's kind at the commit — Undo refuses once a new email changed it (L1). */
+  kind: v.optional(agentItemKindValidator),
+  /** Questions whose `blocks` Create bound to a created subtask. */
+  questionIds: v.optional(v.array(v.id("agentQuestions"))),
+  /** D30: Undo is offered until then (Create only). */
+  undoUntil: v.optional(v.number()),
+  /** The kickoff draft job scheduled for `undoUntil` (cancelled by Undo). */
+  kickoffFnId: v.optional(v.id("_scheduled_functions")),
+});
+
+/**
+ * The agent's change proposal on a linked task (B6b, D4, D29 — prepareChange
+ * / `proposeTaskUpdate` with an email source): the `updateTask` proposal,
+ * the rows it does NOT cover with a subtask (answered / dismissed /
+ * question_pending), and the gaps it was stored with.
+ */
+export const agentItemChangePlanValidator = v.object({
+  proposalId: v.id("agentProposals"),
+  revision: v.number(),
+  dispositions: v.array(
+    v.object({
+      requestId: v.id("clientRequests"),
+      disposition: v.union(v.literal("answered"), v.literal("dismissed"), v.literal("question_pending")),
+      reason: v.optional(v.string()),
+      question: v.optional(v.string()),
+    }),
+  ),
+  gaps: v.array(triagePlanGapValidator),
+  runId: v.optional(v.id("agentRuns")),
+  submittedAt: v.number(),
+});
+
+/** D29: the conversation was merged into an existing task (a `merged` link). */
+export const agentItemMergeValidator = v.object({
+  taskId: v.id("tasks"),
+  threadTaskId: v.id("emailThreadTasks"),
+  at: v.number(),
+  userId: v.id("users"),
+});
+
+/** D21 / D26: how the kickoff step ended (the item's outcome stays created / merged / applied). */
+export const agentItemKickoffOutcomeValidator = v.union(
+  v.literal("sent"),
+  v.literal("discarded"),
+  v.literal("replied_in_gmail"),
+);
 
 /** The gaps of the latest REFUSED submit (B6a) — kept for `run_incomplete`. */
 export const agentItemPlanRefusalValidator = v.object({

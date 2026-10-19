@@ -19,7 +19,7 @@ import { createTask } from "../tasks/write";
 import { NO_AGENT_ACTOR_MESSAGE } from "../agentJobs";
 import { RUN_INCOMPLETE_MESSAGE } from "../email/prepare";
 import { CREATE_FROM_TRIAGE_MESSAGE } from "../agentProposals";
-import { EMAIL_ASSISTANT_TOOLS } from "../lib/systemAgents";
+import { PREPARE_TASK_TOOLS } from "../lib/systemAgents";
 import { getToolsForAgent } from "../lib/agentToolRegistry";
 import { addCalendarDays, localDateOf } from "../lib/workingDays";
 import type { TriagePlanInput } from "../email/plan";
@@ -279,7 +279,7 @@ describe("prepareTask triggering", () => {
     const agent = (await t.run((ctx) => ctx.db.get(agentThread.agentId)))!;
     expect(agent).toMatchObject({ systemKey: "email_assistant", name: "Email assistant" });
     // The job's tools, the stage-able ones included; the input names the item and the new message.
-    expect((model.doStreamCalls[0].tools ?? []).map((tool) => tool.name).sort()).toEqual([...EMAIL_ASSISTANT_TOOLS].sort());
+    expect((model.doStreamCalls[0].tools ?? []).map((tool) => tool.name).sort()).toEqual([...PREPARE_TASK_TOOLS].sort());
     const prompt = JSON.stringify(model.doStreamCalls[0].prompt);
     expect(prompt).toContain(`Triage item ${item._id}`);
     expect(prompt).toContain(msg);

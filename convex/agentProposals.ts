@@ -129,9 +129,9 @@ export const executeEffect = internalMutation({
     const payload = validated.payload;
     switch (payload.kind) {
       case "createTask":
-        return await executeCreateTask(ctx, auth, payload, attribution);
+        return (await createTaskTreeFromPayload(ctx, auth, payload, attribution)).taskId;
       case "updateTask":
-        return await executeUpdateTask(ctx, auth, payload, attribution);
+        return (await updateTaskFromPayload(ctx, auth, payload, attribution)).taskId;
       case "postComment": {
         const access = await loadProposalTask(ctx, auth, payload.taskId);
         await createComment(ctx, access, { content: commentTextToTiptapDoc(payload.body) }, { attribution });
@@ -229,12 +229,34 @@ function toPriority(value: number | undefined): TaskPriority | undefined {
 
 // ─── createTask: the task + its sub-task tree ───────────────────────────────
 
-async function executeCreateTask(
+/** A sub-task created blocked: in the `blocked`-role status (when the org has one) with a note on top. */
+export type BlockedSubtask = { statusId?: Id<"statuses">; noteDoc: string };
+
+/** Options of the shared create path (email-triage B6b — Triage's Create). */
+export type CreateTreeOptions = {
+  /** D30: deliver assignment notifications after this delay (a removed task gets none). */
+  notifyAfterMs?: number;
+  /**
+   * Sub-tasks to create in a given status with a note at the top of their
+   * description, by index — a step blocked by a pending question (§6.6).
+   */
+  blockedSubtasks?: ReadonlyMap<number, BlockedSubtask>;
+  /** A task without a project: its client (write.ts ignores it when there is a project). */
+  clientId?: Id<"clients">;
+};
+
+/**
+ * The `createTask` effect — the task and its sub-task tree, as `auth`. The
+ * proposal engine's approve path (`executeEffect`) and Triage's Create
+ * (email/create.ts, one mutation) both run it; it returns the created ids.
+ */
+export async function createTaskTreeFromPayload(
   ctx: MutationCtx,
   auth: AuthContext,
   payload: CreateTaskPayload,
   attribution: ActivityAttribution,
-): Promise<string> {
+  opts: CreateTreeOptions = {},
+): Promise<{ taskId: Id<"tasks">; subtaskIds: Id<"tasks">[] }> {
   const projectId = payload.projectId ? await resolveProject(ctx, auth, payload.projectId) : undefined;
   const assigneeIds = payload.assigneeIds?.length ? await resolveUsers(ctx, payload.assigneeIds) : undefined;
   const workCategoryId = payload.workCategoryId
@@ -249,6 +271,7 @@ async function executeCreateTask(
   }
   const description =
     payload.descriptionJson ?? (payload.description ? plainTextToTiptapDoc(payload.description) : undefined);
+  const notify = opts.notifyAfterMs !== undefined ? { afterMs: opts.notifyAfterMs } : undefined;
 
   // The real write path, as the approving user: status defaults, sort keys,
   // identifiers, activity ("task_created" by the human, via agent),
@@ -261,6 +284,7 @@ async function executeCreateTask(
       description,
       statusId: status?._id,
       projectId,
+      ...(!projectId && opts.clientId ? { clientId: opts.clientId } : {}),
       assigneeIds,
       workCategoryId,
       dueDate: payload.dueDate,
@@ -268,10 +292,13 @@ async function executeCreateTask(
       labelIds,
     },
     // The project's default assignee only when no assignees were proposed (= tasks.create).
-    { defaultAssignee: assigneeIds === undefined, attribution },
+    { defaultAssignee: assigneeIds === undefined, attribution, ...(notify ? { notify } : {}) },
   );
-  for (const sub of subtasks) await addSubtask(ctx, auth, taskId, sub, attribution);
-  return taskId;
+  const subtaskIds: Id<"tasks">[] = [];
+  for (const [i, sub] of subtasks.entries()) {
+    subtaskIds.push(await addSubtask(ctx, auth, taskId, sub, attribution, { notify, blocked: opts.blockedSubtasks?.get(i) }));
+  }
+  return { taskId, subtaskIds };
 }
 
 /** Sub-tasks with no proposed assignee inherit the parent's (= tasks.createSubtask). */
@@ -281,13 +308,21 @@ async function addSubtask(
   parentTaskId: Id<"tasks">,
   sub: ProposedSubtask,
   attribution: ActivityAttribution,
+  opts: { notify?: { afterMs: number }; blocked?: BlockedSubtask } = {},
 ): Promise<Id<"tasks">> {
   const assigneeIds = sub.assigneeIds.length > 0 ? await resolveUsers(ctx, sub.assigneeIds) : undefined;
   return await createTask(
     ctx,
     auth,
-    { title: sub.title, parentTaskId, assigneeIds, dueDate: sub.dueDate },
-    { defaultAssignee: true, attribution },
+    {
+      title: sub.title,
+      parentTaskId,
+      assigneeIds,
+      dueDate: sub.dueDate,
+      ...(opts.blocked?.statusId ? { statusId: opts.blocked.statusId } : {}),
+      ...(opts.blocked ? { description: opts.blocked.noteDoc } : {}),
+    },
+    { defaultAssignee: true, attribution, ...(opts.notify ? { notify: opts.notify } : {}) },
   );
 }
 
@@ -295,12 +330,17 @@ async function addSubtask(
 
 const REVIEW_ROLES = new Set(["admin_review", "client_review"]);
 
-async function executeUpdateTask(
+/**
+ * The `updateTask` effect, as `auth` — the proposal engine's approve path and
+ * Triage's Apply (email/changes.ts) both run it. Returns the task and the
+ * sub-tasks `subtasks.add` created (in order) and whether a reopen applied.
+ */
+export async function updateTaskFromPayload(
   ctx: MutationCtx,
   auth: AuthContext,
   payload: UpdateTaskPayload,
   attribution: ActivityAttribution,
-): Promise<string> {
+): Promise<{ taskId: Id<"tasks">; addedSubtaskIds: Id<"tasks">[]; reopened: { from: string; to: string } | null }> {
   const { task } = await loadProposalTask(ctx, auth, payload.taskId);
   if (task.archivedAt) throw new ConvexError("The task is archived — restore it first.");
   const subs = payload.subtasks;
@@ -321,7 +361,8 @@ async function executeUpdateTask(
   const cancel = await Promise.all((subs?.cancel ?? []).map((c) => loadSub(c.subtaskId)));
   const tick = await Promise.all((subs?.tick ?? []).map((t) => loadSub(t.subtaskId)));
 
-  for (const sub of subs?.add ?? []) await addSubtask(ctx, auth, task._id, sub, attribution);
+  const addedSubtaskIds: Id<"tasks">[] = [];
+  for (const sub of subs?.add ?? []) addedSubtaskIds.push(await addSubtask(ctx, auth, task._id, sub, attribution));
   for (const { op, access } of amend) {
     await updateTaskWrite(
       ctx,
@@ -363,6 +404,7 @@ async function executeUpdateTask(
       changes.workCategoryId === null ? null : await resolveCategory(ctx, auth, changes.workCategoryId);
   }
   if (changes.descriptionJson !== undefined) patch.description = changes.descriptionJson;
+  let reopened: { from: string; to: string } | null = null;
   if (changes.statusId) {
     patch.statusId = (await resolveStatus(ctx, auth, changes.statusId))._id;
   } else if (payload.reopen) {
@@ -370,7 +412,11 @@ async function executeUpdateTask(
     const current = await ctx.db.get(fresh.task.statusId);
     const inReview = current?.workflowRole !== undefined && REVIEW_ROLES.has(current.workflowRole);
     const closed = fresh.task.statusCategory !== undefined && isClosedCategory(fresh.task.statusCategory);
-    if (inReview || closed) patch.statusId = (await resolveStatus(ctx, auth, payload.reopen.statusId))._id;
+    if (inReview || closed) {
+      const target = await resolveStatus(ctx, auth, payload.reopen.statusId);
+      patch.statusId = target._id;
+      if (target._id !== fresh.task.statusId) reopened = { from: current?.name ?? "None", to: target.name };
+    }
   }
   await updateTaskWrite(ctx, fresh, patch, { attribution });
 
@@ -383,7 +429,7 @@ async function executeUpdateTask(
   if (finalStatus?.workflowRole === "admin_review" && open > 0) {
     throw new ConvexError(openSubtasksMessage(open));
   }
-  return task._id;
+  return { taskId: task._id, addedSubtaskIds, reopened };
 }
 
 /** Settle a proposal row from an execute outcome; returns the outcome. */
@@ -434,9 +480,21 @@ async function settleProposal(
  */
 export const CREATE_FROM_TRIAGE_MESSAGE = "Create this from Triage";
 
-function isTriagePlanProposal(proposal: Doc<"agentProposals">): boolean {
+/**
+ * A change proposal from a client email (an `updateTask` with an email
+ * source — D4, D29) is applied only by Triage's Apply (B6b: it converts the
+ * ledger, logs the email activity, stales drafts and drafts the kickoff).
+ */
+export const APPLY_FROM_TRIAGE_MESSAGE = "Apply this from Triage";
+
+/** The Triage-only refusal for a proposal, or null when the generic paths may decide it. */
+export function triageOnlyRefusal(proposal: Doc<"agentProposals">): string | null {
   const payload = proposal.editedPayload ?? proposal.payload;
-  return payload.kind === "createTask" && payload.source?.kind === "email";
+  const source = "source" in payload ? payload.source : undefined;
+  if (source?.kind !== "email") return null;
+  if (payload.kind === "createTask") return CREATE_FROM_TRIAGE_MESSAGE;
+  if (payload.kind === "updateTask") return APPLY_FROM_TRIAGE_MESSAGE;
+  return null;
 }
 
 /** I11: rows written before revisions existed read as revision 1. */
@@ -784,7 +842,8 @@ export const approve = mutation({
     if (args.revision !== proposalRevision(proposal)) {
       throw new ConvexError(STALE_REVISION_MESSAGE);
     }
-    if (isTriagePlanProposal(proposal)) throw new ConvexError(CREATE_FROM_TRIAGE_MESSAGE);
+    const triageOnly = triageOnlyRefusal(proposal);
+    if (triageOnly) throw new ConvexError(triageOnly);
     const meta = PROPOSAL_KIND_META[proposal.payload.kind];
     if (meta.approveScope === "admin" && !auth.isAdmin) {
       throw new ConvexError(
@@ -949,9 +1008,11 @@ export const approveAll = mutation({
       ) {
         continue;
       }
-      // Never mass-committed: a Triage plan task is created from Triage (B6b).
-      if (isTriagePlanProposal(proposal)) {
-        outcomes.push({ proposalId: proposal._id, result: "failed", reason: CREATE_FROM_TRIAGE_MESSAGE });
+      // Never mass-committed: a Triage plan task is created, an email change
+      // applied, from Triage (B6b).
+      const triageOnly = triageOnlyRefusal(proposal);
+      if (triageOnly) {
+        outcomes.push({ proposalId: proposal._id, result: "failed", reason: triageOnly });
         continue;
       }
       const meta = PROPOSAL_KIND_META[proposal.payload.kind];

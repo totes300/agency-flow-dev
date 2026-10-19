@@ -22,6 +22,8 @@ import {
   resolveAnswerRunJob,
 } from "./agentRunner";
 import { resolveTaskRef } from "./tasks/agent";
+import { internal } from "./_generated/api";
+import { answerRunJobFor, noteAnswerFollowUpFailure } from "./email/create";
 import { loadTaskForReadOrNull } from "./tasks/access";
 import {
   formatAnswerTurn,
@@ -419,12 +421,18 @@ export const answer = mutation({
     const { agent } = await checkRunStart(ctx, runAuth, thread._id);
     // Asked inside a job run → the answer run continues THAT job, acting as
     // the answerer (the A5 exception to the designated-actor rule).
-    const job = await resolveAnswerRunJob(ctx, {
-      askingRunId: question.runId,
+    // Email triage B6b: after Create, a plan question's answer goes into the
+    // kickoff (draftReply) instead of re-planning a created plan.
+    const job = await answerRunJobFor(
+      ctx,
       thread,
-      agent,
-      auth: runAuth,
-    });
+      await resolveAnswerRunJob(ctx, {
+        askingRunId: question.runId,
+        thread,
+        agent,
+        auth: runAuth,
+      }),
+    );
 
     await ctx.db.patch(question._id, {
       status: "answered",
@@ -432,6 +440,16 @@ export const answer = mutation({
       answeredBy: runAuth.userId,
       answeredAt: Date.now(),
     });
+    // B6b: a subtask Create made blocked by this question is unblocked and its
+    // row covered (§6.6) — a nested step whose failure never fails the answer.
+    try {
+      await ctx.runMutation(internal.email.create.afterQuestionAnswered, {
+        questionId: question._id,
+        actor: { orgId: runAuth.orgId, userId: runAuth.userId },
+      });
+    } catch (err) {
+      await noteAnswerFollowUpFailure(ctx, question, err);
+    }
     const runId = await enqueueBackgroundRun(ctx, {
       thread,
       agentId: agent._id,

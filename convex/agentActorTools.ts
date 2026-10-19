@@ -4,7 +4,9 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { agentActorRefValidator, loadAuthContextForActor } from "./lib/auth";
 import { billingTypeValidator } from "./lib/validators";
 import { proposalPayloadValidator } from "./lib/proposalValidators";
-import { requireThreadAccess } from "./agentThreads";
+import { requireThreadAccess, threadAccess } from "./agentThreads";
+import { findLiveItem } from "./agentItems";
+import { resolveTaskRef } from "./tasks/agent";
 import { listClientsForAuth } from "./clients";
 import { listProjectsForAuth } from "./projects";
 import type { ResolvedProjectDetail, ResolvedProjectListItem } from "./lib/types";
@@ -73,6 +75,9 @@ import {
   type AgentThreadRequests,
 } from "./email/reads";
 import { submitTriagePlanArgs, submitTriagePlanCore, type SubmitPlanOutcome } from "./email/prepare";
+import { submitDraftArgs, submitDraftCore, type SubmitDraftOutcome } from "./email/reply";
+import { changeArgs, liveChangeItemFor, submitChangeCore, type ChangeToolInput } from "./email/changes";
+import type { PlanGap } from "./email/plan";
 import {
   getAttachmentTextForAuth,
   getEmailAttachmentTextForAuth,
@@ -209,6 +214,32 @@ export const getTaskBundle = internalQuery({
   },
 });
 
+/**
+ * B6b (gate review M4): the task digest for a `draftReply` run — only the
+ * item's committed tasks (`commit.taskIds`) and its linked task, or their
+ * subtasks. Anything else reads as not found.
+ */
+export const getReplyTaskBundle = internalQuery({
+  args: { actor: agentActorRefValidator, componentThreadId: v.string(), task: v.string() },
+  handler: async (ctx, { actor, componentThreadId, task }): Promise<AgentTaskBundle | null> => {
+    const auth = await loadAuthContextForActor(ctx, actor);
+    const thread = await ctx.db
+      .query("agentThreads")
+      .withIndex("by_componentThreadId", (q) => q.eq("componentThreadId", componentThreadId))
+      .unique();
+    if (!thread || thread.orgId !== auth.orgId || !threadAccess(thread, auth).canRead) return null;
+    if (thread.anchor?.type !== "emailThread") return null;
+    const item = await findLiveItem(ctx, auth.orgId, { type: "emailThread", id: thread.anchor.id });
+    if (!item) return null;
+    const allowed = new Set<string>([...(item.commit?.taskIds ?? []), ...(item.taskId ? [item.taskId] : [])]);
+    const taskId = await resolveTaskRef(ctx, auth.orgId, task);
+    const doc = taskId ? await ctx.db.get(taskId) : null;
+    if (!doc || doc.orgId !== auth.orgId) return null;
+    if (!allowed.has(doc._id) && !(doc.parentTaskId && allowed.has(doc.parentTaskId))) return null;
+    return await getTaskBundleForAuth(ctx, auth, { task });
+  },
+});
+
 // ─── A6 — attachment contents (T2) — core in agentReads.ts ───────────────────
 
 export const getAttachmentText = internalQuery({
@@ -276,6 +307,83 @@ export const submitTriagePlan = internalMutation({
     const found = await loadThreadByComponentId(ctx, args.componentThreadId);
     const { thread } = await requireThreadAccess(ctx, auth, found._id, "write");
     return await submitTriagePlanCore(ctx, { auth, thread, input: args.plan, acceptGaps: args.acceptGaps });
+  },
+});
+
+/** B6b: the kickoff / reply draft of a Triage conversation (`submitDraft` tool). */
+export const submitDraft = internalMutation({
+  args: { actor: agentActorRefValidator, componentThreadId: v.string(), ...submitDraftArgs },
+  handler: async (ctx, { actor, componentThreadId, ...input }): Promise<SubmitDraftOutcome> => {
+    const auth = await loadAuthContextForActor(ctx, actor);
+    const found = await loadThreadByComponentId(ctx, componentThreadId);
+    const { thread } = await requireThreadAccess(ctx, auth, found._id, "write");
+    return await submitDraftCore(ctx, { auth, thread, input });
+  },
+});
+
+export type ProposeTaskUpdateOutcome =
+  | { kind: "gaps"; gaps: PlanGap[] }
+  | { kind: "change"; proposalIds: string[]; gaps: PlanGap[]; reopen: boolean }
+  | { kind: "proposals"; proposalIds: string[] };
+
+/** The generic `updateTask` payload of a `proposeTaskUpdate` call (outside a Triage change). */
+function genericUpdatePayload(input: ChangeToolInput) {
+  const subtasks = {
+    ...(input.addSubtasks
+      ? {
+          add: input.addSubtasks.map((s) => ({
+            title: s.title,
+            assigneeIds: s.assigneeIds ?? [],
+            ...(s.dueDate ? { dueDate: s.dueDate } : {}),
+          })),
+        }
+      : {}),
+    ...(input.amendSubtasks
+      ? {
+          amend: input.amendSubtasks.map((a) => ({
+            subtaskId: a.subtaskId,
+            ...(a.title !== undefined ? { title: a.title } : {}),
+            ...(a.assigneeIds !== undefined ? { assigneeIds: a.assigneeIds } : {}),
+            ...(a.dueDate !== undefined ? { dueDate: a.dueDate } : {}),
+          })),
+        }
+      : {}),
+    ...(input.cancelSubtasks
+      ? { cancel: input.cancelSubtasks.map((c) => ({ subtaskId: c.subtaskId, ...(c.reason ? { reason: c.reason } : {}) })) }
+      : {}),
+    ...(input.tickSubtasks ? { tick: input.tickSubtasks } : {}),
+  };
+  return {
+    kind: "updateTask" as const,
+    taskId: input.task,
+    ...(input.changes ? { changes: input.changes } : {}),
+    ...(Object.keys(subtasks).length > 0 ? { subtasks } : {}),
+    ...(input.reopenStatusId ? { reopen: { statusId: input.reopenStatusId } } : {}),
+  };
+}
+
+/**
+ * `proposeTaskUpdate` (actor path). In a Triage conversation whose item is a
+ * change on a linked task (B6b, D4 / D29) it is the change write —
+ * `submitChangeCore` (email source, ledger coverage, code-set reopen, gaps
+ * retried once); anywhere else the generic proposal, as before.
+ */
+export const proposeTaskUpdate = internalMutation({
+  args: { actor: agentActorRefValidator, componentThreadId: v.string(), ...changeArgs },
+  handler: async (ctx, args): Promise<ProposeTaskUpdateOutcome> => {
+    const auth = await loadAuthContextForActor(ctx, args.actor);
+    const found = await loadThreadByComponentId(ctx, args.componentThreadId);
+    const { thread } = await requireThreadAccess(ctx, auth, found._id, "write");
+    if (await liveChangeItemFor(ctx, thread)) {
+      const outcome = await submitChangeCore(ctx, { auth, thread, input: args.input, acceptGaps: args.acceptGaps });
+      return outcome.status === "gaps"
+        ? { kind: "gaps", gaps: outcome.gaps }
+        : { kind: "change", proposalIds: [outcome.proposalId], gaps: outcome.gaps, reopen: outcome.reopen };
+    }
+    if ((args.input.dispositions ?? []).length > 0) {
+      throw new Error("dispositions apply only to a change from a client email in Triage — leave them out.");
+    }
+    return { kind: "proposals", proposalIds: await insertProposalsForThread(ctx, thread, [genericUpdatePayload(args.input)], auth) };
   },
 });
 

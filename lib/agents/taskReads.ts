@@ -283,6 +283,12 @@ export function describeActivity(event: ActivityEvent): ActivityLine {
       return plain(event.type, "Edited the description");
     case "email_sent":
       return plain(event.type, `Sent an email to ${event.metadata.to || "the client"}`);
+    case "task_created_from_email":
+      return plain(event.type, "Created the task from a client email");
+    case "reopened_from_email":
+      return { type: event.type, summary: `Reopened from a client email: ${event.metadata.from} → ${event.metadata.to}`, before: event.metadata.from, after: event.metadata.to };
+    case "subtasks_added_from_email":
+      return plain(event.type, `Added ${event.metadata.count} subtask${event.metadata.count === 1 ? "" : "s"} from a client email`);
     default: {
       const type = (event as { type: string }).type;
       return plain(type, type.replace(/_/g, " "));

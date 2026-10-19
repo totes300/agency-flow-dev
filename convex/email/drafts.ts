@@ -11,6 +11,8 @@ import {
   emailPromiseCandidateValidator,
 } from "../lib/validators";
 import { loadTaskForReadOrNull } from "../tasks/access";
+import { closeEmailItem, findLiveItem, openAttentions } from "../agentItems";
+import { RESET_SEND_FIELDS, cancelScheduled } from "./draftState";
 import { isEmailTriageEnabled, requireEmailTriageEnabled } from "./gate";
 import { normalizeSubject, parseAddress } from "./model";
 import { replySubject } from "./mime";
@@ -709,32 +711,7 @@ export type DraftPatch = {
 
 const sameJson = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
-/** Cancel a scheduled dispatch / retry; a finished or missing job is fine. */
-export async function cancelScheduled(ctx: MutationCtx, id: Id<"_scheduled_functions"> | undefined): Promise<void> {
-  if (!id) return;
-  try {
-    await ctx.scheduler.cancel(id);
-  } catch {
-    // Already ran / cancelled — the claim's identity check refuses it anyway.
-  }
-}
-
-/**
- * The fields that take a draft back to `draft` with no approval (D9): an
- * edit, Undo, a stale message, a refused dispatch. Cancels nothing itself.
- */
-export const RESET_SEND_FIELDS = {
-  status: "draft",
-  approval: undefined,
-  sendAt: undefined,
-  scheduledFnId: undefined,
-  messageIdHeader: undefined,
-  sendAttempts: undefined,
-  dispatchingAt: undefined,
-  unknownSince: undefined,
-  autoRetryAt: undefined,
-  failure: undefined,
-} as const;
+export { RESET_SEND_FIELDS, cancelScheduled, discardUnsentDraft } from "./draftState";
 
 /**
  * Apply an edit (a person's or the agent's own, D20). Any change bumps the
@@ -891,15 +868,32 @@ export const markDraftReviewed = mutation({
 export const discardDraft = mutation({
   args: { draftId: v.id("emailDrafts") },
   handler: async (ctx, args): Promise<null> => {
-    const { draft, ownsAsMember } = await loadDraftForCaller(ctx, args.draftId);
+    const { auth, draft, ownsAsMember } = await loadDraftForCaller(ctx, args.draftId);
     if (draft.status === "discarded") return null;
     const allowed = ownsAsMember ? draft.status === "draft" : EDITABLE.has(draft.status);
     if (!allowed) throw new ConvexError(`This draft is ${draft.status} and can't be discarded.`);
     await cancelScheduled(ctx, draft.scheduledFnId);
     await ctx.db.patch(draft._id, { ...RESET_SEND_FIELDS, status: "discarded", updatedAt: Date.now() });
+    await closeItemOnKickoffDiscard(ctx, draft, auth.userId);
     return null;
   },
 });
+
+/**
+ * D21 / D26 (B6b): discarding the kickoff of a "kickoff pending" item ends
+ * its last step — the item closes with its commit's outcome (created /
+ * merged / applied) and `kickoffOutcome: "discarded"`. Not while a newer
+ * change on the item is still undecided (its Apply drafts the kickoff again).
+ */
+async function closeItemOnKickoffDiscard(ctx: MutationCtx, draft: Doc<"emailDrafts">, userId: Id<"users">): Promise<void> {
+  if (!draft.threadId) return;
+  const item = await findLiveItem(ctx, draft.orgId, { type: "emailThread", id: draft.threadId });
+  if (!item || item.draftId !== draft._id || !item.commit || openAttentions(item).length > 0) return;
+  const changePending =
+    item.kind === "change" && (!item.changePlan || !item.commit.proposalIds.includes(item.changePlan.proposalId));
+  if (changePending) return;
+  await closeEmailItem(ctx, item, { outcome: item.commit.outcome, userId, kickoffOutcome: "discarded" });
+}
 
 export const restoreDraft = mutation({
   args: { draftId: v.id("emailDrafts") },
@@ -957,6 +951,36 @@ export async function markConversationDraftsStale(
       }
       marked.push(d._id);
     }
+  }
+  return marked;
+}
+
+/**
+ * Mark every open draft ON A TASK stale (B6b: an applied change from a client
+ * email — D9 "a change on the thread's tasks makes the version stale"). Same
+ * per-state rules as `markConversationDraftsStale`.
+ */
+export async function markTaskDraftsStale(
+  ctx: MutationCtx,
+  orgId: string,
+  taskId: Id<"tasks">,
+  reason: string,
+): Promise<Id<"emailDrafts">[]> {
+  const marked: Id<"emailDrafts">[] = [];
+  const now = Date.now();
+  const stale = { reason: reason.slice(0, 300), at: now };
+  const drafts = await ctx.db
+    .query("emailDrafts")
+    .withIndex("by_orgId_taskId", (q) => q.eq("orgId", orgId).eq("taskId", taskId))
+    .order("desc")
+    .take(DRAFTS_PER_THREAD_CAP);
+  for (const d of drafts) {
+    if (!STALE_STATES.has(d.status)) continue;
+    await cancelScheduled(ctx, d.scheduledFnId);
+    if (d.status === "queued") await ctx.db.patch(d._id, { ...RESET_SEND_FIELDS, stale, updatedAt: now });
+    else if (d.status === "failed") await ctx.db.patch(d._id, { stale, scheduledFnId: undefined, autoRetryAt: undefined, updatedAt: now });
+    else await ctx.db.patch(d._id, { stale, updatedAt: now });
+    marked.push(d._id);
   }
   return marked;
 }

@@ -970,9 +970,13 @@ describe("item actions (admin-only, org-checked)", () => {
     await expect(
       t.withIdentity(ADMIN).mutation(api.agentItems.markItemDone, { itemId: item._id, outcome: "declined" }),
     ).rejects.toThrow("Use Decline");
-    await t.withIdentity(ADMIN).mutation(api.agentItems.markItemDone, { itemId: item._id, outcome: "marked_done" });
+    // B6b gate review: an outcome must match the item ("marked_done" is Mark done's, for an approval).
+    await expect(
+      t.withIdentity(ADMIN).mutation(api.agentItems.markItemDone, { itemId: item._id, outcome: "marked_done" }),
+    ).rejects.toThrow("Use Triage actions");
+    await t.withIdentity(ADMIN).mutation(api.agentItems.markItemDone, { itemId: item._id, outcome: "not_a_change" });
     expect(await t.run((ctx) => ctx.db.get(item._id))).toMatchObject({
-      status: "done", outcome: "marked_done", decidedBy: f.admin,
+      status: "done", outcome: "not_a_change", decidedBy: f.admin,
     });
   });
 

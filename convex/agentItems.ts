@@ -8,6 +8,7 @@ import { getOrgSettings } from "./lib/orgHelpers";
 import { ORG_TIMEZONE_FALLBACK } from "./lib/timer";
 import { addCalendarDays, localDateOf, weekdayOf, zonedDateTimeToInstant } from "./lib/workingDays";
 import { requireEmailTriageEnabled } from "./email/gate";
+import { discardUnsentDraft } from "./email/draftState";
 
 /**
  * The platform attention queue — `agentItems` (docs/prd-email-triage.md
@@ -234,6 +235,37 @@ export const wakeSnoozedItem = internalMutation({
  * Mark an item done with its outcome (D26: it leaves the list; Done view).
  * Decline goes through `email/triage.declineItem` (it dismisses the ledger).
  */
+export const USE_TRIAGE_ACTIONS_MESSAGE = "Use Triage actions";
+
+/**
+ * Why the generic Done may not close this email item with `outcome`, or null
+ * (B6b gate review): a committed item (kickoff pending) or a change item is
+ * closed only by its Triage actions (Send / Discard the kickoff, Apply / Not a
+ * change); an outcome must match the item — created / merged / applied need a
+ * commit, marked_done moves the task (Mark done), kept is for an approval,
+ * replied needs the item's sent draft, replied_in_gmail is the sync's.
+ */
+export async function genericDoneRefusal(
+  ctx: MutationCtx,
+  item: Doc<"agentItems">,
+  outcome: Doc<"agentItems">["outcome"],
+): Promise<string | null> {
+  if (item.source !== "email") return null;
+  if (item.commit || item.kind === "change") return USE_TRIAGE_ACTIONS_MESSAGE;
+  switch (outcome) {
+    case "kept":
+      return item.kind === "approval" ? null : `${USE_TRIAGE_ACTIONS_MESSAGE} — "kept" is for a client approval`;
+    case "not_a_change":
+      return null;
+    case "replied": {
+      const draft = item.draftId ? await ctx.db.get(item.draftId) : null;
+      return draft?.status === "sent" ? null : `${USE_TRIAGE_ACTIONS_MESSAGE} — nothing was sent on this item`;
+    }
+    default:
+      return `${USE_TRIAGE_ACTIONS_MESSAGE} — "${outcome}" comes from its own action`;
+  }
+}
+
 export const markItemDone = mutation({
   args: { itemId: v.id("agentItems"), outcome: agentItemOutcomeValidator },
   handler: async (ctx, args): Promise<null> => {
@@ -241,10 +273,42 @@ export const markItemDone = mutation({
     if (args.outcome === "declined") throw new ConvexError("Use Decline to decline an item");
     if (item.status !== "open" && item.status !== "snoozed") throw new ConvexError("This item is already closed");
     if (openAttentions(item).length > 0) throw new ConvexError(OPEN_ATTENTION_MESSAGE);
-    await closeItem(ctx, item, { outcome: args.outcome, userId: auth.userId });
+    const refusal = await genericDoneRefusal(ctx, item, args.outcome);
+    if (refusal) throw new ConvexError(refusal);
+    if (item.source === "email") await closeEmailItem(ctx, item, { outcome: args.outcome, userId: auth.userId });
+    else await closeItem(ctx, item, { outcome: args.outcome, userId: auth.userId });
     return null;
   },
 });
+
+/**
+ * THE close of an email item (B6b gate review — every terminal path): its
+ * undecided change proposal is discarded (so I9 never stays on the task) and
+ * its unsent kickoff / reply draft is discarded (a sent one is left as it is),
+ * then the item closes with its outcome (and how the kickoff ended).
+ */
+export async function closeEmailItem(
+  ctx: MutationCtx,
+  item: Doc<"agentItems">,
+  args: {
+    outcome: Doc<"agentItems">["outcome"];
+    userId?: Id<"users">;
+    kickoffOutcome?: Doc<"agentItems">["kickoffOutcome"];
+  },
+): Promise<void> {
+  const now = Date.now();
+  const proposal = item.changePlan ? await ctx.db.get(item.changePlan.proposalId) : null;
+  if (proposal && proposal.orgId === item.orgId && (proposal.status === "pending" || proposal.status === "failed")) {
+    await ctx.db.patch(proposal._id, {
+      status: "discarded",
+      decidedAt: now,
+      ...(args.userId ? { decidedBy: args.userId } : { failureReason: "The Triage item closed" }),
+    });
+  }
+  await discardUnsentDraft(ctx, item.draftId);
+  await closeItem(ctx, item, { outcome: args.outcome, userId: args.userId });
+  if (args.kickoffOutcome) await ctx.db.patch(item._id, { kickoffOutcome: args.kickoffOutcome });
+}
 
 /** Close a live item (done + outcome + who decided; no one when the pipeline closes it). */
 export async function closeItem(

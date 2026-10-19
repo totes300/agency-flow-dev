@@ -174,6 +174,8 @@ export const setAgentActorUser = internalMutation({
  */
 const JOB_SETTLED_HOOKS: Record<string, typeof internal.email.prepare.onPrepareRunSettled> = {
   prepareTask: internal.email.prepare.onPrepareRunSettled,
+  prepareChange: internal.email.changes.onChangeRunSettled,
+  draftReply: internal.email.reply.onDraftRunSettled,
 };
 
 export const jobRunSettled = internalMutation({

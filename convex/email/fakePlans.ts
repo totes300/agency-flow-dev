@@ -3,6 +3,7 @@ import type { Doc, Id } from "../_generated/dataModel";
 import type { AuthContext } from "../lib/auth";
 import { threadRequests } from "./requests";
 import type { PlanDispositionInput, PlanSubtaskInput, PlanTaskInput, TriagePlanInput } from "./plan";
+import type { ChangeToolInput } from "./changes";
 
 /**
  * DEV-ONLY canned Triage plans for the seeded canvas conversations
@@ -25,6 +26,10 @@ import type { PlanDispositionInput, PlanSubtaskInput, PlanTaskInput, TriagePlanI
  *   Gábor → one urgent task (due today), the prices verbatim
  *   Péter → a reply instead of a task (his "mikorra lesz kész?")
  *   Judit → a new client (Zöldkert Kft.) + one task; her call request answered
+ *   B6b:
+ *   Péter, "Make it a task instead" → one task with the question as a subtask
+ *   a change on a linked task (Réka's follow-up "és kérnénk egy story méretet
+ *   is") → `cannedChangeFor`: one new subtask per new request
  */
 
 export type CannedQuestion = {
@@ -278,9 +283,37 @@ async function gaborPlan(c: Ctx, client: Id<"clients"> | undefined): Promise<Can
   };
 }
 
-function peterPlan(c: Ctx): CannedPlan | null {
+function peterPlan(c: Ctx, forbidReply: boolean): CannedPlan | null {
   const row = rowFor(c, "Mikorra lesz kész");
   if (!row) return null;
+  if (forbidReply) {
+    return {
+      input: {
+        grouping: "one",
+        suggestedGrouping: "one",
+        tasks: [
+          {
+            title: "Őszi kampány aloldal – átadási időpont a kampányindításhoz",
+            description: {
+              summary:
+                "Szabó Péter (Arlo) azt kérdezi, mikorra lesz kész az aloldal: a jövő heti kampányindításhoz kell tudniuk.",
+              doneWhen: ["Péter megkapta a pontos átadási időpontot"],
+            },
+            assigneeIds: [c.auth.userId],
+            subtasks: [
+              {
+                title: "Az aloldal átadási időpontjának egyeztetése a jövő heti kampányindításhoz",
+                assigneeIds: [c.auth.userId],
+                requestIds: [row._id],
+              },
+            ],
+          },
+        ],
+        dispositions: [{ requestId: row._id, disposition: "covered", task: 0, subtask: 0 }],
+      },
+      summary: "One task, as you asked — the reply comes after Create.",
+    };
+  }
   return {
     input: {
       grouping: "one",
@@ -357,10 +390,53 @@ export async function cannedPlanFor(
     case "seed-gabor-price-bug":
       return await gaborPlan(c, emailThread.clientId);
     case "seed-peter-question":
-      return peterPlan(c);
+      return peterPlan(c, args.item.forbidReply === true);
     case "seed-judit-new-sender":
       return await juditPlan(c);
     default:
       return null;
   }
+}
+
+// ─── B6b: the canned change on a linked task ─────────────────────────────────
+
+/**
+ * The canned `proposeTaskUpdate` of a change item on a SEED mailbox: one new
+ * subtask per new request (the client's words as the title — its
+ * constraints verbatim), assigned to whoever owns the closest subtask; asks
+ * become `answered`. Réka's follow-up gets the canvas title.
+ */
+export async function cannedChangeFor(
+  ctx: MutationCtx,
+  args: { auth: AuthContext; task: Doc<"tasks">; rows: readonly Doc<"clientRequests">[] },
+): Promise<{ input: ChangeToolInput; summary: string } | null> {
+  const { task } = args;
+  const subs = await ctx.db
+    .query("tasks")
+    .withIndex("by_orgId_parentTaskId", (q) => q.eq("orgId", task.orgId).eq("parentTaskId", task._id))
+    .take(100);
+  const storyOwner = subs.find((s) => /story/i.test(s.title))?.assigneeIds[0];
+  const owner = storyOwner ?? task.assigneeIds[0] ?? args.auth.userId;
+  const addSubtasks: NonNullable<ChangeToolInput["addSubtasks"]> = [];
+  const dispositions: NonNullable<ChangeToolInput["dispositions"]> = [];
+  for (const row of args.rows) {
+    if (row.disposition === "question_pending") {
+      // Still waiting on the owner's question (its subtask exists, blocked) — not new work.
+      dispositions.push({ requestId: row._id, disposition: "question_pending", question: row.planned?.question ?? "Waiting on the owner's answer" });
+      continue;
+    }
+    if (row.intent === "ask") {
+      dispositions.push({ requestId: row._id, disposition: "answered" });
+      continue;
+    }
+    const title = /story méretet/i.test(row.text)
+      ? "Story méret a Facebookra is, a Black Friday bannerek vizuáljával"
+      : row.text.replace(/\s+/g, " ").trim();
+    addSubtasks.push({ title, assigneeIds: [owner], requestIds: [row._id] });
+  }
+  if (addSubtasks.length === 0) return null;
+  return {
+    input: { task: task.identifier ?? task._id, addSubtasks, ...(dispositions.length > 0 ? { dispositions } : {}) },
+    summary: `${addSubtasks.length === 1 ? "One new subtask" : `${addSubtasks.length} new subtasks`} on ${task.identifier ?? task.title}.`,
+  };
 }

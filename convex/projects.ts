@@ -1,7 +1,12 @@
 import { v, ConvexError } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
-import { query, mutation } from "./_generated/server";
-import { getAuthContext, requireAdmin, validateStringLength } from "./lib/auth";
+import { query, mutation, type QueryCtx } from "./_generated/server";
+import {
+  getAuthContext,
+  requireAdmin,
+  validateStringLength,
+  type AuthContext,
+} from "./lib/auth";
 import { billingTypeValidator, retainerStatusValidator } from "./lib/validators";
 import { generateNextProjectCode, ensureUniqueProjectCode, normalizeProjectCode } from "./lib/helpers";
 import { rewriteProjectIdentifiers } from "./tasks/write";
@@ -38,6 +43,61 @@ const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 
 // ─── Queries ────────────────────────────────────────────────────────────────────
 
+/** Args of `projects.list` (shared with the agent actor path). */
+export type ListProjectsArgs = {
+  includeArchived?: boolean;
+  clientId?: Id<"clients">;
+  billingType?: Doc<"projects">["billingType"];
+};
+
+/**
+ * Shared core of `list` — also run by the agent actor path
+ * (`convex/agentActorTools.ts`) with a DB-derived AuthContext, so both entry
+ * points execute the same code and checks.
+ */
+export async function listProjectsForAuth(
+  ctx: QueryCtx,
+  auth: AuthContext,
+  args: ListProjectsArgs,
+): Promise<ResolvedProjectListItem[]> {
+  const { orgId } = auth;
+
+  const [allProjects, clients] = await Promise.all([
+    ctx.db.query("projects").withIndex("by_orgId", (q) => q.eq("orgId", orgId)).collect(),
+    ctx.db.query("clients").withIndex("by_orgId", (q) => q.eq("orgId", orgId)).collect(),
+  ]);
+  let projects = allProjects;
+
+  if (!args.includeArchived) {
+    projects = projects.filter((p) => !p.archivedAt);
+  }
+  if (args.clientId) {
+    projects = projects.filter((p) => p.clientId === args.clientId);
+  }
+  if (args.billingType) {
+    projects = projects.filter((p) => p.billingType === args.billingType);
+  }
+  const clientMap = new Map(clients.map((c) => [c._id.toString(), {
+    name: c.name,
+    prefix: c.prefix,
+    usePrefix: c.usePrefix,
+    currency: c.currency,
+  }]));
+
+  return projects.map((p) => {
+    const client = clientMap.get(p.clientId.toString());
+    return {
+      ...p,
+      clientName: client?.name ?? "Unknown",
+      clientPrefix: client?.prefix ?? "",
+      clientUsePrefix: client?.usePrefix,
+      // Resolved currency — single source of truth is client.currency.
+      // See D1 invariant in convex/schema.ts above `timeEntries`.
+      currency: client?.currency ?? "USD",
+    };
+  });
+}
+
 export const list = query({
   args: {
     includeArchived: v.optional(v.boolean()),
@@ -49,42 +109,7 @@ export const list = query({
   // resolve `currency` from the client will fail type-checking instead of
   // silently shipping `undefined` to 14+ downstream consumers.
   handler: async (ctx, args): Promise<ResolvedProjectListItem[]> => {
-    const { orgId } = await getAuthContext(ctx);
-
-    const [allProjects, clients] = await Promise.all([
-      ctx.db.query("projects").withIndex("by_orgId", (q) => q.eq("orgId", orgId)).collect(),
-      ctx.db.query("clients").withIndex("by_orgId", (q) => q.eq("orgId", orgId)).collect(),
-    ]);
-    let projects = allProjects;
-
-    if (!args.includeArchived) {
-      projects = projects.filter((p) => !p.archivedAt);
-    }
-    if (args.clientId) {
-      projects = projects.filter((p) => p.clientId === args.clientId);
-    }
-    if (args.billingType) {
-      projects = projects.filter((p) => p.billingType === args.billingType);
-    }
-    const clientMap = new Map(clients.map((c) => [c._id.toString(), {
-      name: c.name,
-      prefix: c.prefix,
-      usePrefix: c.usePrefix,
-      currency: c.currency,
-    }]));
-
-    return projects.map((p) => {
-      const client = clientMap.get(p.clientId.toString());
-      return {
-        ...p,
-        clientName: client?.name ?? "Unknown",
-        clientPrefix: client?.prefix ?? "",
-        clientUsePrefix: client?.usePrefix,
-        // Resolved currency — single source of truth is client.currency.
-        // See D1 invariant in convex/schema.ts above `timeEntries`.
-        currency: client?.currency ?? "USD",
-      };
-    });
+    return await listProjectsForAuth(ctx, await getAuthContext(ctx), args);
   },
 });
 

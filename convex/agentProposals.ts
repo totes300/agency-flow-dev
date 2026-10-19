@@ -1,4 +1,4 @@
-import { v, ConvexError } from "convex/values";
+import { v, ConvexError, type Infer } from "convex/values";
 import {
   internalMutation,
   mutation,
@@ -212,49 +212,70 @@ export const createFromTool = internalMutation({
     proposals: v.array(proposalPayloadValidator),
   },
   handler: async (ctx, args): Promise<string[]> => {
-    if (args.proposals.length === 0 || args.proposals.length > 25) {
-      throw new Error("Propose between 1 and 25 items per call.");
-    }
-    const thread = await ctx.db
-      .query("agentThreads")
-      .withIndex("by_componentThreadId", (q) =>
-        q.eq("componentThreadId", args.componentThreadId),
-      )
-      .unique();
-    if (!thread) throw new ConvexError("Thread not found for proposal");
-
-    const now = Date.now();
-    const ids: string[] = [];
-    for (const raw of args.proposals) {
-      const validated = validateProposalPayload(raw);
-      if (!validated.ok) {
-        throw new Error(`Invalid proposal: ${validated.reason}`);
-      }
-      let payload = validated.payload;
-      if (payload.kind === "archiveTask") {
-        const taskId = await resolveTaskRef(ctx, thread.orgId, payload.taskId);
-        const task = taskId ? await ctx.db.get(taskId) : null;
-        if (!task || task.orgId !== thread.orgId) {
-          throw new Error(
-            `No task found for ${payload.taskId}. Use the task's identifier ` +
-              "(e.g. ARLO-21) or an @-mentioned task.",
-          );
-        }
-        payload = { ...payload, taskId: task._id, taskTitle: task.title };
-      }
-      const id = await ctx.db.insert("agentProposals", {
-        orgId: thread.orgId,
-        threadId: thread._id,
-        userId: thread.userId,
-        payload,
-        status: "pending",
-        createdAt: now,
-      });
-      ids.push(id);
-    }
-    return ids;
+    const thread = await loadThreadByComponentId(ctx, args.componentThreadId);
+    return await insertProposalsForThread(ctx, thread, args.proposals);
   },
 });
+
+/** The app thread behind a component thread id (proposal tools' tool ctx). */
+export async function loadThreadByComponentId(
+  ctx: MutationCtx,
+  componentThreadId: string,
+): Promise<Doc<"agentThreads">> {
+  const thread = await ctx.db
+    .query("agentThreads")
+    .withIndex("by_componentThreadId", (q) =>
+      q.eq("componentThreadId", componentThreadId),
+    )
+    .unique();
+  if (!thread) throw new ConvexError("Thread not found for proposal");
+  return thread;
+}
+
+/**
+ * Shared core of proposal creation — `createFromTool` (ctx.auth-path tools)
+ * and the agent actor path (`agentActorTools.createProposals`) both insert
+ * through here, so validation and scoping never fork.
+ */
+export async function insertProposalsForThread(
+  ctx: MutationCtx,
+  thread: Doc<"agentThreads">,
+  proposals: Infer<typeof proposalPayloadValidator>[],
+): Promise<string[]> {
+  if (proposals.length === 0 || proposals.length > 25) {
+    throw new Error("Propose between 1 and 25 items per call.");
+  }
+  const now = Date.now();
+  const ids: string[] = [];
+  for (const raw of proposals) {
+    const validated = validateProposalPayload(raw);
+    if (!validated.ok) {
+      throw new Error(`Invalid proposal: ${validated.reason}`);
+    }
+    let payload = validated.payload;
+    if (payload.kind === "archiveTask") {
+      const taskId = await resolveTaskRef(ctx, thread.orgId, payload.taskId);
+      const task = taskId ? await ctx.db.get(taskId) : null;
+      if (!task || task.orgId !== thread.orgId) {
+        throw new Error(
+          `No task found for ${payload.taskId}. Use the task's identifier ` +
+            "(e.g. ARLO-21) or an @-mentioned task.",
+        );
+      }
+      payload = { ...payload, taskId: task._id, taskTitle: task.title };
+    }
+    const id = await ctx.db.insert("agentProposals", {
+      orgId: thread.orgId,
+      threadId: thread._id,
+      userId: thread.userId,
+      payload,
+      status: "pending",
+      createdAt: now,
+    });
+    ids.push(id);
+  }
+  return ids;
+}
 
 // ─── Read (cards) ───────────────────────────────────────────────────────────
 

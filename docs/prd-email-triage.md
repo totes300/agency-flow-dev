@@ -1447,7 +1447,7 @@ B1 phase prints. Started during milestone A (E4); blocks B1.
 
 | Phase | Name | Status | Commit | Notes |
 |---|---|---|---|---|
-| A1 | Actor + background runs | pending | | blocks every automatic run; independent code review |
+| A1 | Actor + background runs | done | (this commit) | actor on agentRuns, internal agentBackground.start, 8 tools on the actor path, single role source (orgMembers); reviewed |
 | A2 | Threads + jobs | pending | | independent code review |
 | A3 | Read layer | pending | | |
 | A4 | Proposal consolidation | pending | | |

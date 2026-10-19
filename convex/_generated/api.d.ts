@@ -11,9 +11,11 @@
 import type * as __tests___helpers_orgSnapshot from "../__tests__/helpers/orgSnapshot.js";
 import type * as __tests___helpers_taskFixtures from "../__tests__/helpers/taskFixtures.js";
 import type * as activityLog from "../activityLog.js";
+import type * as agentActorTools from "../agentActorTools.js";
 import type * as agentArtifacts from "../agentArtifacts.js";
 import type * as agentAttachments from "../agentAttachments.js";
 import type * as agentAudit from "../agentAudit.js";
+import type * as agentBackground from "../agentBackground.js";
 import type * as agentMentions from "../agentMentions.js";
 import type * as agentProposals from "../agentProposals.js";
 import type * as agentReports from "../agentReports.js";
@@ -135,9 +137,11 @@ declare const fullApi: ApiFromModules<{
   "__tests__/helpers/orgSnapshot": typeof __tests___helpers_orgSnapshot;
   "__tests__/helpers/taskFixtures": typeof __tests___helpers_taskFixtures;
   activityLog: typeof activityLog;
+  agentActorTools: typeof agentActorTools;
   agentArtifacts: typeof agentArtifacts;
   agentAttachments: typeof agentAttachments;
   agentAudit: typeof agentAudit;
+  agentBackground: typeof agentBackground;
   agentMentions: typeof agentMentions;
   agentProposals: typeof agentProposals;
   agentReports: typeof agentReports;

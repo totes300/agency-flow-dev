@@ -872,7 +872,14 @@ export default defineSchema({
     orgId: v.string(),
     threadId: v.id("agentThreads"),
     agentId: v.id("agents"),
+    // The acting user (actor). Interactive: the signed-in caller; background:
+    // the named member the run acts as (agentBackground.start, A1).
     userId: v.id("users"),
+    // Actor role when the run began (audit; tools re-derive it per call from
+    // orgMembers) and entry mode. Optional: rows before A1 have neither
+    // (they were all interactive).
+    actorIsAdmin: v.optional(v.boolean()),
+    via: v.optional(v.union(v.literal("user"), v.literal("background"))),
     status: v.union(
       v.literal("running"),
       v.literal("succeeded"),

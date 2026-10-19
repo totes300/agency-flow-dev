@@ -1,26 +1,37 @@
-import { query, mutation, internalMutation } from "./_generated/server";
+import { query, mutation, internalMutation, type QueryCtx } from "./_generated/server";
 import { v, ConvexError } from "convex/values";
-import { getAuthContext, requireAdmin } from "./lib/auth";
+import type { Doc } from "./_generated/dataModel";
+import { getAuthContext, requireAdmin, type AuthContext } from "./lib/auth";
 import { categoryColorValidator } from "./lib/validators";
 import { DEFAULT_CATEGORIES } from "./lib/constants";
+
+/**
+ * Shared core of `list` — also run by the agent actor path
+ * (`convex/agentActorTools.ts`) with a DB-derived AuthContext.
+ */
+export async function listWorkCategoriesForAuth(
+  ctx: QueryCtx,
+  auth: AuthContext,
+  args: { includeArchived?: boolean },
+): Promise<Doc<"workCategories">[]> {
+  const categories = await ctx.db
+    .query("workCategories")
+    .withIndex("by_orgId", (q) => q.eq("orgId", auth.orgId))
+    .collect();
+
+  const filtered = args.includeArchived
+    ? categories
+    : categories.filter((c) => !c.archivedAt);
+
+  return filtered.sort((a, b) => a.sortOrder - b.sortOrder);
+}
 
 export const list = query({
   args: {
     includeArchived: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
-    const { orgId } = await getAuthContext(ctx);
-
-    const categories = await ctx.db
-      .query("workCategories")
-      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
-      .collect();
-
-    const filtered = args.includeArchived
-      ? categories
-      : categories.filter((c) => !c.archivedAt);
-
-    return filtered.sort((a, b) => a.sortOrder - b.sortOrder);
+    return await listWorkCategoriesForAuth(ctx, await getAuthContext(ctx), args);
   },
 });
 

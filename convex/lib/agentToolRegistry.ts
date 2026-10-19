@@ -3,10 +3,18 @@
  * and the determinism boundary (PRD module 2).
  *
  * Every entry wraps an EXISTING Convex function via `ctx.runQuery` /
- * `ctx.runMutation`, so the wrapped function's own `getAuthContext` /
- * `requireAdmin` enforcement applies with the running user's identity
- * (D6 — permission intersection: the runner action is invoked by the
- * client, so `ctx.auth` inside tool execution IS the running user).
+ * `ctx.runMutation`, so the wrapped function's own enforcement applies as
+ * the run's acting user (D6 — permission intersection). Two paths:
+ *
+ *   - actor path (`makeTool`) — the tool is built per run with the run's
+ *     `AgentActor` in a closure and calls an INTERNAL actor variant
+ *     (`convex/agentActorTools.ts` & co.) that re-derives the AuthContext
+ *     from the DB on every call and runs the same core as the public query.
+ *     Works with or without `ctx.auth` → the only tools a background run
+ *     gets (`background: true`). Used in BOTH modes — one code path.
+ *   - legacy path (`tool`) — a static tool calling `api.*` and relying on
+ *     the interactive run action's inherited `ctx.auth`. Interactive only;
+ *     a background run drops it (recorded in the run's `droppedTools`).
  *
  * Kinds:
  *   - `read`     — returns data verbatim from a deterministic query.
@@ -31,6 +39,7 @@ import type { Tool } from "ai";
 import { createTool, type ToolCtx } from "@convex-dev/agent";
 import { api, internal } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
+import { actorRef, type AgentActor } from "./auth";
 import type { WorksheetAiInput } from "../worksheetsHelpers";
 import {
   AGENT_TABLE_MARKER,
@@ -99,18 +108,43 @@ import type {
 export type AgentToolScope = "member" | "admin";
 export type AgentToolKind = "read" | "artifact" | "propose" | "connector";
 
-export type AgentToolEntry = {
+type AgentToolEntryBase = {
   name: string;
   /** Shown in the admin builder's tool checklist (human, not model-facing). */
   humanDescription: string;
   scope: AgentToolScope;
   kind: AgentToolKind;
-  tool: Tool;
 };
+
+/**
+ * A registry entry. `background: true` is only expressible on an actor-path
+ * entry (`makeTool`) — a static `ctx.auth` tool can't be marked background,
+ * so a background run can never receive a tool that silently needs a
+ * signed-in user.
+ */
+export type AgentToolEntry = AgentToolEntryBase &
+  (
+    | {
+        /** Legacy: calls `api.*` with the interactive run's `ctx.auth`. */
+        tool: Tool;
+        background: false;
+      }
+    | {
+        /** Actor path: built per run with the acting user in a closure. */
+        makeTool: (actor: AgentActor) => Tool;
+        /** Offered to background runs (no `ctx.auth`). */
+        background: boolean;
+      }
+  );
+
+/** Materialize an entry's model tool for one run's actor. */
+export function buildEntryTool(entry: AgentToolEntry, actor: AgentActor): Tool {
+  return "makeTool" in entry ? entry.makeTool(actor) : entry.tool;
+}
 
 // ─── Read tools (tracer seed) ───────────────────────────────────────────────
 
-const listClientsTool = createTool({
+const listClientsTool = (actor: AgentActor) => createTool({
   description:
     "List the organization's clients from the app database. Returns each " +
     "client's id, name, currency and archived state. Use this whenever the " +
@@ -128,7 +162,8 @@ const listClientsTool = createTool({
   ): Promise<
     Array<{ id: string; name: string; currency: string; archived: boolean }>
   > => {
-    const clients = await ctx.runQuery(api.clients.list, {
+    const clients = await ctx.runQuery(internal.agentActorTools.listClients, {
+      actor: actorRef(actor),
       includeArchived: input.includeArchived ?? false,
     });
     return clients.map((c) => ({
@@ -140,7 +175,7 @@ const listClientsTool = createTool({
   },
 });
 
-const listProjectsTool = createTool({
+const listProjectsTool = (actor: AgentActor) => createTool({
   description:
     "List the organization's projects from the app database. Returns each " +
     "project's id, name, client name, billing type and archived state. Use " +
@@ -163,7 +198,8 @@ const listProjectsTool = createTool({
       archived: boolean;
     }>
   > => {
-    const projects = await ctx.runQuery(api.projects.list, {
+    const projects = await ctx.runQuery(internal.agentActorTools.listProjects, {
+      actor: actorRef(actor),
       includeArchived: input.includeArchived ?? false,
     });
     return projects.map((p) => ({
@@ -541,7 +577,7 @@ const PROPOSE_NOTE =
  * human edits/approves/discards the cards; only approval executes the real
  * `tasks.create` as the approving user (PRD Module 3, US 21).
  */
-const proposeCreateTasksTool = createTool({
+const proposeCreateTasksTool = (actor: AgentActor) => createTool({
   description:
     "Propose creating one or more tasks. Each proposal appears in the chat " +
     "as an editable card the user must approve — nothing is created until " +
@@ -582,8 +618,9 @@ const proposeCreateTasksTool = createTool({
   execute: async (ctx, input): Promise<ProposeResult> => {
     if (!ctx.threadId) throw new Error("No thread for proposals");
     const proposalIds: string[] = await ctx.runMutation(
-      internal.agentProposals.createFromTool,
+      internal.agentActorTools.createProposals,
       {
+        actor: actorRef(actor),
         componentThreadId: ctx.threadId,
         proposals: input.tasks.map((t) => ({ kind: "createTask" as const, ...t })),
       },
@@ -675,7 +712,7 @@ type EchoResult =
  * the connect-in-Settings guidance. Credentials are resolved server-side and
  * never surfaced — the tool returns only the masked token, never the secret.
  */
-const echoTool = createTool({
+const echoTool = (actor: AgentActor) => createTool({
   description:
     "Echo text back through the running user's Echo connector — a " +
     "development tool that verifies the connector framework end-to-end. It " +
@@ -691,14 +728,16 @@ const echoTool = createTool({
       .describe("The text to echo back through the connector"),
   }),
   execute: async (ctx, input): Promise<EchoResult> => {
-    const res = await ctx.runQuery(internal.connectors.resolveForRun, {
+    const res = await ctx.runQuery(internal.connectors.resolveForActor, {
+      actor: actorRef(actor),
       type: "echo",
     });
     if (!res.ok) {
       // A decrypt failure means the stored credential is unusable — persist
       // the flip so the Connectors surface shows `error`, not `connected`.
       if (res.reason === "error" && res.connectorId) {
-        await ctx.runMutation(internal.connectors.markStatus, {
+        await ctx.runMutation(internal.connectors.markStatusForActor, {
+          actor: actorRef(actor),
           connectorId: res.connectorId,
           status: "error",
         });
@@ -708,7 +747,8 @@ const echoTool = createTool({
         message: connectorGuidanceMessage(CONNECTOR_CATALOG.echo, res.reason),
       };
     }
-    await ctx.runMutation(internal.connectors.touchConnector, {
+    await ctx.runMutation(internal.connectors.touchConnectorForActor, {
+      actor: actorRef(actor),
       connectorId: res.connectorId,
     });
     return {
@@ -724,7 +764,7 @@ const echoTool = createTool({
 
 // ─── Read-tool expansion — directory & reference (Package A) ────────────────
 
-const listTeamMembersTool = createTool({
+const listTeamMembersTool = (actor: AgentActor) => createTool({
   description:
     "List the organization's team members from the app database. Returns " +
     "each member's id, name, email and role (admin | member). Use this to " +
@@ -736,7 +776,9 @@ const listTeamMembersTool = createTool({
   ): Promise<
     Array<{ id: string; name: string; email: string | null; role: string }>
   > => {
-    const members = await ctx.runQuery(api.orgMembers.listOrgMembers, {});
+    const members = await ctx.runQuery(internal.agentActorTools.listOrgMembers, {
+      actor: actorRef(actor),
+    });
     return members.map((m) => ({
       id: m._id,
       name: m.name,
@@ -746,7 +788,7 @@ const listTeamMembersTool = createTool({
   },
 });
 
-const listWorkCategoriesTool = createTool({
+const listWorkCategoriesTool = (actor: AgentActor) => createTool({
   description:
     "List the organization's work categories (e.g. Development, Design) " +
     "from the app database. Returns each category's id, name and archived " +
@@ -762,7 +804,8 @@ const listWorkCategoriesTool = createTool({
     ctx,
     input,
   ): Promise<Array<{ id: string; name: string; archived: boolean }>> => {
-    const categories = await ctx.runQuery(api.workCategories.list, {
+    const categories = await ctx.runQuery(internal.agentActorTools.listWorkCategories, {
+      actor: actorRef(actor),
       includeArchived: input.includeArchived ?? false,
     });
     return categories.map((c) => ({
@@ -773,7 +816,7 @@ const listWorkCategoriesTool = createTool({
   },
 });
 
-const listStatusesTool = createTool({
+const listStatusesTool = (actor: AgentActor) => createTool({
   description:
     "List the organization's task statuses from the app database, in " +
     "workflow order. Returns each status's id, name, category (backlog | " +
@@ -800,7 +843,9 @@ const listStatusesTool = createTool({
     }>
   > => {
     // The member-readable reference query every task surface renders from.
-    const refs = await ctx.runQuery(api.workspaceRefs.get, {});
+    const refs = await ctx.runQuery(internal.agentActorTools.getWorkspaceRefs, {
+      actor: actorRef(actor),
+    });
     return refs.statuses
       .filter((s) => input.includeArchived === true || !s.archived)
       .map((s) => ({
@@ -815,7 +860,7 @@ const listStatusesTool = createTool({
 
 // ─── Read-tool expansion — tasks & work status (Package B) ──────────────────
 
-const findTasksTool = createTool({
+const findTasksTool = (actor: AgentActor) => createTool({
   description:
     "Search the organization's tasks with flat filters — status category, " +
     "status id, client, project, assignee, work category, due-date range, " +
@@ -881,11 +926,14 @@ const findTasksTool = createTool({
   execute: async (ctx, input): Promise<AgentFindTasksResult> => {
     // Ids travel as plain strings; the query validates them against the
     // running user's org and throws a model-actionable error otherwise.
-    return await ctx.runQuery(api.tasks.agent.findTasks, input);
+    return await ctx.runQuery(internal.agentActorTools.findTasks, {
+      actor: actorRef(actor),
+      ...input,
+    });
   },
 });
 
-const getTaskDetailTool = createTool({
+const getTaskDetailTool = (actor: AgentActor) => createTool({
   description:
     "Read one task in full: identifier, title, plain-text description, " +
     "status and status category, priority, project, client, work category, " +
@@ -908,7 +956,8 @@ const getTaskDetailTool = createTool({
     | ({ found: true } & AgentTaskDetail)
     | { found: false; message: string }
   > => {
-    const detail = await ctx.runQuery(api.tasks.agent.getTaskDetail, {
+    const detail = await ctx.runQuery(internal.agentActorTools.getTaskDetail, {
+      actor: actorRef(actor),
       task: input.task,
     });
     if (!detail) {
@@ -1694,14 +1743,16 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
     humanDescription: "Read the client directory (names, currencies).",
     scope: "member",
     kind: "read",
-    tool: listClientsTool,
+    background: true,
+    makeTool: listClientsTool,
   },
   listProjects: {
     name: "listProjects",
     humanDescription: "Read the project list (names, clients, billing types).",
     scope: "member",
     kind: "read",
-    tool: listProjectsTool,
+    background: true,
+    makeTool: listProjectsTool,
   },
   createSheet: {
     name: "createSheet",
@@ -1710,6 +1761,7 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "export) from data assembled out of other tools' results.",
     scope: "member",
     kind: "artifact",
+    background: false,
     tool: createSheetTool,
   },
   proposeCreateTasks: {
@@ -1719,7 +1771,8 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "human approves each card.",
     scope: "member",
     kind: "propose",
-    tool: proposeCreateTasksTool,
+    background: true,
+    makeTool: proposeCreateTasksTool,
   },
   proposeArchiveTask: {
     name: "proposeArchiveTask",
@@ -1728,6 +1781,7 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "confirmation step on the card). Dev kind exercising the confirm flow.",
     scope: "admin",
     kind: "propose",
+    background: false,
     tool: proposeArchiveTaskTool,
   },
   collectTimesheetData: {
@@ -1738,6 +1792,7 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
     // not soften that — members don't even see it in their tool set.
     scope: "admin",
     kind: "read",
+    background: false,
     tool: collectTimesheetDataTool,
   },
   echo: {
@@ -1747,7 +1802,8 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "the connector framework; self-explains when the user hasn't connected).",
     scope: "member",
     kind: "connector",
-    tool: echoTool,
+    background: false,
+    makeTool: echoTool,
   },
   // ── Read-tool expansion — directory & reference (Package A) ──────────────
   listTeamMembers: {
@@ -1755,21 +1811,24 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
     humanDescription: "Read the team roster (names, emails, roles).",
     scope: "member",
     kind: "read",
-    tool: listTeamMembersTool,
+    background: true,
+    makeTool: listTeamMembersTool,
   },
   listWorkCategories: {
     name: "listWorkCategories",
     humanDescription: "Read the work-category list (names, archived state).",
     scope: "member",
     kind: "read",
-    tool: listWorkCategoriesTool,
+    background: true,
+    makeTool: listWorkCategoriesTool,
   },
   listStatuses: {
     name: "listStatuses",
     humanDescription: "Read the task status list (names, categories).",
     scope: "member",
     kind: "read",
-    tool: listStatusesTool,
+    background: true,
+    makeTool: listStatusesTool,
   },
   // ── Tasks & work status (Package B) ───────────────────────────────────────
   findTasks: {
@@ -1779,7 +1838,8 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "work category, due dates, text). Members see only their own tasks.",
     scope: "member",
     kind: "read",
-    tool: findTasksTool,
+    background: true,
+    makeTool: findTasksTool,
   },
   getTaskDetail: {
     name: "getTaskDetail",
@@ -1788,13 +1848,15 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "minutes, sub-tasks).",
     scope: "member",
     kind: "read",
-    tool: getTaskDetailTool,
+    background: true,
+    makeTool: getTaskDetailTool,
   },
   countTasksByStatus: {
     name: "countTasksByStatus",
     humanDescription: "Task counts per status category and status.",
     scope: "member",
     kind: "read",
+    background: false,
     tool: countTasksByStatusTool,
   },
   // ── Time & utilization (Package C) ────────────────────────────────────────
@@ -1805,6 +1867,7 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "Non-admin runs are always scoped to the running user.",
     scope: "member",
     kind: "read",
+    background: false,
     tool: collectMemberTimeTool,
   },
   collectTeamTime: {
@@ -1814,6 +1877,7 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "with per-project splits and team totals.",
     scope: "admin",
     kind: "read",
+    background: false,
     tool: collectTeamTimeTool,
   },
   getProjectTimeSummary: {
@@ -1823,6 +1887,7 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "billing buckets, labor cost). Mirrors the project overview page.",
     scope: "member",
     kind: "read",
+    background: false,
     tool: getProjectTimeSummaryTool,
   },
   getProjectMonthlyBreakdown: {
@@ -1831,6 +1896,7 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "One project's month-by-month time breakdown (optionally per category).",
     scope: "member",
     kind: "read",
+    background: false,
     tool: getProjectMonthlyBreakdownTool,
   },
   // ── Client reporting (Package D) ──────────────────────────────────────────
@@ -1841,6 +1907,7 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "(minutes, billable value, per-project split).",
     scope: "admin",
     kind: "read",
+    background: false,
     tool: collectClientMonthlyTotalsTool,
   },
   getRetainerStatement: {
@@ -1850,6 +1917,7 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "overage, categories, covering invoice).",
     scope: "admin",
     kind: "read",
+    background: false,
     tool: getRetainerStatementTool,
   },
   // ── Retainer health & month close (Package E) ─────────────────────────────
@@ -1860,6 +1928,7 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "(used vs included, status, overage due, invoice) in one call.",
     scope: "admin",
     kind: "read",
+    background: false,
     tool: collectRetainerHealthTool,
   },
   listReadyToInvoice: {
@@ -1869,6 +1938,7 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "to-generate / to-close / overdue counts).",
     scope: "admin",
     kind: "read",
+    background: false,
     tool: listReadyToInvoiceTool,
   },
   getRetainerCycleReport: {
@@ -1878,6 +1948,7 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "utilization, per-month rows). Mirrors the project retainer page.",
     scope: "member",
     kind: "read",
+    background: false,
     tool: getRetainerCycleReportTool,
   },
   // ── Invoices & AR (Package F) ─────────────────────────────────────────────
@@ -1888,6 +1959,7 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "ranges, text).",
     scope: "admin",
     kind: "read",
+    background: false,
     tool: findInvoicesTool,
   },
   getInvoiceMetrics: {
@@ -1897,6 +1969,7 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "month) with per-currency totals.",
     scope: "admin",
     kind: "read",
+    background: false,
     tool: getInvoiceMetricsTool,
   },
   getInvoiceDetail: {
@@ -1906,6 +1979,7 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "or id — the verification tool for reports.",
     scope: "admin",
     kind: "read",
+    background: false,
     tool: getInvoiceDetailTool,
   },
   // ── Profitability & org finance (Package G) ───────────────────────────────
@@ -1917,6 +1991,7 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "query strips money for members itself).",
     scope: "member",
     kind: "read",
+    background: false,
     tool: getProjectFinanceSummaryTool,
   },
   collectOrgFinanceSnapshot: {
@@ -1926,6 +2001,7 @@ export const agentToolRegistry: Record<string, AgentToolEntry> = {
       "value and invoice totals per currency, plus per-project rows.",
     scope: "admin",
     kind: "read",
+    background: false,
     tool: collectOrgFinanceSnapshotTool,
   },
 };
@@ -1958,16 +2034,19 @@ export function isKnownTool(name: string): boolean {
 
 /**
  * Resolve an agent's whitelisted tool names into an AI-SDK tool set for one
- * run. Pure: scope filtering + unknown-name dropping, no I/O.
+ * run's actor. Pure: filtering + closure construction, no I/O.
  *
- * - `admin`-scoped entries are omitted for non-admin runners (tool absent,
+ * - `admin`-scoped entries are omitted for non-admin actors (tool absent,
  *   not erroring — the model cannot attempt it).
  * - Names missing from the registry are collected in `dropped` so the
  *   runner can surface a system note instead of silently shrinking the set.
+ * - A background actor only receives `background: true` entries; the rest
+ *   are `dropped` too (same system note), since they need `ctx.auth`.
+ * - Actor-path entries are built with THIS actor in their closure.
  */
 export function getToolsForAgent(
   toolNames: string[],
-  isAdmin: boolean,
+  actor: AgentActor,
 ): { tools: Record<string, Tool>; dropped: string[] } {
   const tools: Record<string, Tool> = {};
   const dropped: string[] = [];
@@ -1977,8 +2056,12 @@ export function getToolsForAgent(
       dropped.push(name);
       continue;
     }
-    if (entry.scope === "admin" && !isAdmin) continue;
-    tools[name] = entry.tool;
+    if (entry.scope === "admin" && !actor.isAdmin) continue;
+    if (actor.via === "background" && !entry.background) {
+      dropped.push(name);
+      continue;
+    }
+    tools[name] = buildEntryTool(entry, actor);
   }
   return { tools, dropped };
 }

@@ -43,9 +43,15 @@ import {
   internalQuery,
   mutation,
   query,
+  type QueryCtx,
 } from "./_generated/server";
 import { internal } from "./_generated/api";
-import { getAuthContext, requireAdmin } from "./lib/auth";
+import {
+  agentActorRefValidator,
+  getAuthContext,
+  loadAuthContextForActor,
+  requireAdmin,
+} from "./lib/auth";
 import {
   buildKeyMask,
   decryptSecret,
@@ -322,7 +328,9 @@ export const loadDecryptedKey = internalQuery({
 });
 
 /**
- * Key loader for the Agents runner (`convex/agentRunner.ts`).
+ * Key loader for agent tools still on the `ctx.auth` path (today only the
+ * timesheet summarizer inside `collectTimesheetData`); the runner itself uses
+ * `loadDecryptedKeyForActor` below.
  *
  * Unlike `loadDecryptedKey` (admin-gated: the Integrations tab is an
  * admin surface), this variant requires only org membership: agents with
@@ -337,27 +345,46 @@ export const loadDecryptedKeyForRun = internalQuery({
   args: {},
   handler: async (ctx): Promise<string | null> => {
     const auth = await getAuthContext(ctx);
-    const settings = await ctx.db
-      .query("orgSettings")
-      .withIndex("by_orgId", (q) => q.eq("orgId", auth.orgId))
-      .unique();
-    if (!settings?.aiAnthropicKeyCiphertext) return null;
-    try {
-      return await decryptSecret(settings.aiAnthropicKeyCiphertext);
-    } catch (err) {
-      if (
-        err instanceof SecretDecryptionFailedError ||
-        err instanceof SecretCryptoUnavailableError
-      ) {
-        console.warn(
-          `[aiIntegration] Decryption failed for org ${auth.orgId}: ${err.message}`,
-        );
-        return null;
-      }
-      throw err;
-    }
+    return await loadOrgAiKey(ctx, auth.orgId);
   },
 });
+
+/**
+ * Actor-path key loader — what the agent runner uses in BOTH interactive and
+ * background runs (docs/prd-email-triage-implementation-plan.md §3 P1). The
+ * key is org-level; the actor's membership is re-checked from the DB on every
+ * call (`loadAuthContextForActor`), so a removed member's run cannot load it.
+ */
+export const loadDecryptedKeyForActor = internalQuery({
+  args: { actor: agentActorRefValidator },
+  handler: async (ctx, args): Promise<string | null> => {
+    const auth = await loadAuthContextForActor(ctx, args.actor);
+    return await loadOrgAiKey(ctx, auth.orgId);
+  },
+});
+
+/** Decrypt an org's stored Anthropic key; `null` when absent/undecryptable. */
+async function loadOrgAiKey(ctx: QueryCtx, orgId: string): Promise<string | null> {
+  const settings = await ctx.db
+    .query("orgSettings")
+    .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+    .unique();
+  if (!settings?.aiAnthropicKeyCiphertext) return null;
+  try {
+    return await decryptSecret(settings.aiAnthropicKeyCiphertext);
+  } catch (err) {
+    if (
+      err instanceof SecretDecryptionFailedError ||
+      err instanceof SecretCryptoUnavailableError
+    ) {
+      console.warn(
+        `[aiIntegration] Decryption failed for org ${orgId}: ${err.message}`,
+      );
+      return null;
+    }
+    throw err;
+  }
+}
 
 // ─── Anthropic ping ─────────────────────────────────────────────────────────
 

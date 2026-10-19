@@ -1,4 +1,4 @@
-import { ConvexError } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { internalQuery, QueryCtx, MutationCtx } from "../_generated/server";
 import { Doc, Id } from "../_generated/dataModel";
 
@@ -149,3 +149,73 @@ export const requireAdminForAction = internalQuery({
     };
   },
 });
+
+// ─── Agent actor (background-capable runs) ──────────────────────────────────
+
+/**
+ * Who an agent run acts as (docs/prd-email-triage-implementation-plan.md §3
+ * P1). `via: "user"` = an interactive run started by the signed-in user;
+ * `via: "background"` = a server-started run with no `ctx.auth`, acting as a
+ * named org member. `isAdmin` is the `orgMembers` role resolved when the run
+ * began (both modes — never the JWT role) and is used ONLY for tool-set
+ * filtering; every actor-path read/write re-derives the role from
+ * `orgMembers` via `loadAuthContextForActor`.
+ */
+export type AgentActor = {
+  orgId: string;
+  userId: Id<"users">;
+  isAdmin: boolean;
+  via: "user" | "background";
+};
+
+/**
+ * What actor-path internal functions receive: identity only. The role is
+ * deliberately NOT on the wire — it is re-read from the DB on every call, so a
+ * demotion or removal mid-run takes effect (fail closed).
+ */
+export const agentActorRefValidator = v.object({
+  orgId: v.string(),
+  userId: v.id("users"),
+});
+export type AgentActorRef = { orgId: string; userId: Id<"users"> };
+
+/** Strip an actor to the identity-only ref the internal functions accept. */
+export function actorRef(actor: AgentActorRef): AgentActorRef {
+  return { orgId: actor.orgId, userId: actor.userId };
+}
+
+/**
+ * Build an `AuthContext` (same shape as `getAuthContext`) from DB records for
+ * a run that has no `ctx.auth`. Membership + role come from `orgMembers`,
+ * which the Clerk webhook (`organizationMembership.*`, convex/http.ts) keeps
+ * in sync with the same `org:admin → admin` mapping the JWT path uses.
+ *
+ * Throws when the user is missing/deleted or is not a CURRENT member of the
+ * org. Server-side only: callers are internal functions whose actor came from
+ * a run row or an internal entry point — never from a client argument.
+ */
+export async function loadAuthContextForActor(
+  ctx: QueryCtx | MutationCtx,
+  actor: AgentActorRef,
+): Promise<AuthContext> {
+  const user = await ctx.db.get(actor.userId);
+  if (!user || user.deletedAt) {
+    throw new ConvexError("Acting user not found");
+  }
+  const membership = await ctx.db
+    .query("orgMembers")
+    .withIndex("by_orgId_clerkUserId", (q) =>
+      q.eq("orgId", actor.orgId).eq("clerkUserId", user.externalId),
+    )
+    .unique();
+  if (!membership || (membership.userId && membership.userId !== user._id)) {
+    throw new ConvexError("Acting user is not a member of this organization");
+  }
+  return {
+    userId: user._id,
+    orgId: actor.orgId,
+    orgRole: membership.role,
+    isAdmin: membership.role === "admin",
+    user,
+  };
+}

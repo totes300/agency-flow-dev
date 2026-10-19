@@ -1,48 +1,60 @@
-import { query, mutation, internalMutation } from "./_generated/server";
+import { query, mutation, internalMutation, type QueryCtx } from "./_generated/server";
 import { v, ConvexError } from "convex/values";
 import type { Id } from "./_generated/dataModel";
-import { getAuthContext } from "./lib/auth";
+import { getAuthContext, type AuthContext } from "./lib/auth";
 
 // ─── Public query ───────────────────────────────────────────────────────────
+
+export type OrgMemberListItem = {
+  _id: Id<"users">;
+  name: string;
+  email: string | undefined;
+  imageUrl: string | undefined;
+  role: "admin" | "member";
+  defaultWorkCategoryId: Id<"workCategories"> | undefined;
+};
 
 /** List all org members with their user profile data. Reactive subscription. */
 export const listOrgMembers = query({
   args: {},
-  handler: async (ctx) => {
-    const { orgId } = await getAuthContext(ctx);
-
-    const memberships = await ctx.db
-      .query("orgMembers")
-      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
-      .collect();
-
-    // Batch-resolve user profiles (only for resolved memberships)
-    const results = await Promise.all(
-      memberships.map(async (m) => {
-        if (!m.userId) return null;
-        const user = await ctx.db.get(m.userId);
-        if (!user || user.deletedAt) return null;
-        return {
-          _id: user._id,
-          name: user.name,
-          email: user.email,
-          imageUrl: user.imageUrl,
-          role: m.role,
-          defaultWorkCategoryId: m.defaultWorkCategoryId,
-        };
-      })
-    );
-
-    return results.filter(Boolean) as Array<{
-      _id: Id<"users">;
-      name: string;
-      email: string | undefined;
-      imageUrl: string | undefined;
-      role: "admin" | "member";
-      defaultWorkCategoryId: Id<"workCategories"> | undefined;
-    }>;
+  handler: async (ctx): Promise<OrgMemberListItem[]> => {
+    return await listOrgMembersForAuth(ctx, await getAuthContext(ctx));
   },
 });
+
+/**
+ * Shared core of `listOrgMembers` — also run by the agent actor path
+ * (`convex/agentActorTools.ts`) with a DB-derived AuthContext.
+ */
+export async function listOrgMembersForAuth(
+  ctx: QueryCtx,
+  auth: AuthContext,
+): Promise<OrgMemberListItem[]> {
+  const { orgId } = auth;
+  const memberships = await ctx.db
+    .query("orgMembers")
+    .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+    .collect();
+
+  // Batch-resolve user profiles (only for resolved memberships)
+  const results = await Promise.all(
+    memberships.map(async (m) => {
+      if (!m.userId) return null;
+      const user = await ctx.db.get(m.userId);
+      if (!user || user.deletedAt) return null;
+      return {
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        imageUrl: user.imageUrl,
+        role: m.role,
+        defaultWorkCategoryId: m.defaultWorkCategoryId,
+      };
+    })
+  );
+
+  return results.filter(Boolean) as OrgMemberListItem[];
+}
 
 /**
  * Set (or clear) a member's default billing category — the motor of the

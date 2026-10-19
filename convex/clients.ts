@@ -1,25 +1,42 @@
 import { v, ConvexError } from "convex/values";
-import { query, mutation } from "./_generated/server";
-import { getAuthContext, requireAdmin, validateStringLength } from "./lib/auth";
+import { query, mutation, type QueryCtx } from "./_generated/server";
+import type { Doc } from "./_generated/dataModel";
+import {
+  getAuthContext,
+  requireAdmin,
+  validateStringLength,
+  type AuthContext,
+} from "./lib/auth";
 import { generateClientPrefix, ensureUniquePrefix } from "./lib/helpers";
 import { currencyValidator } from "./lib/validators";
 
 // ─── Queries ────────────────────────────────────────────────────────────────────
+
+/**
+ * Shared core of `list` — also run by the agent actor path
+ * (`convex/agentActorTools.ts`) with a DB-derived AuthContext, so both entry
+ * points execute the same code and checks.
+ */
+export async function listClientsForAuth(
+  ctx: QueryCtx,
+  auth: AuthContext,
+  args: { includeArchived?: boolean },
+): Promise<Doc<"clients">[]> {
+  const clients = await ctx.db
+    .query("clients")
+    .withIndex("by_orgId", (q) => q.eq("orgId", auth.orgId))
+    .collect();
+
+  if (args.includeArchived) return clients;
+  return clients.filter((c) => !c.archivedAt);
+}
 
 export const list = query({
   args: {
     includeArchived: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
-    const { orgId } = await getAuthContext(ctx);
-
-    const clients = await ctx.db
-      .query("clients")
-      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
-      .collect();
-
-    if (args.includeArchived) return clients;
-    return clients.filter((c) => !c.archivedAt);
+    return await listClientsForAuth(ctx, await getAuthContext(ctx), args);
   },
 });
 

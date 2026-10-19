@@ -1,16 +1,32 @@
 import { describe, expect, it } from "vitest";
+import type { Id } from "../_generated/dataModel";
+import type { AgentActor } from "./auth";
 import {
   agentToolRegistry,
+  buildEntryTool,
   getToolCatalog,
   getToolsForAgent,
   isKnownTool,
 } from "./agentToolRegistry";
 
+/** Interactive actors for the pure filtering tests (no DB involved). */
+const actorFor = (
+  isAdmin: boolean,
+  via: AgentActor["via"] = "user",
+): AgentActor => ({
+  orgId: "org_test",
+  userId: "user_test" as Id<"users">,
+  isAdmin,
+  via,
+});
+const MEMBER = actorFor(false);
+const ADMIN = actorFor(true);
+
 describe("agentToolRegistry", () => {
   it("every entry's key matches its name and has a model tool", () => {
     for (const [key, entry] of Object.entries(agentToolRegistry)) {
       expect(entry.name).toBe(key);
-      expect(entry.tool).toBeDefined();
+      expect(buildEntryTool(entry, MEMBER)).toBeDefined();
       expect(entry.humanDescription.length).toBeGreaterThan(0);
     }
   });
@@ -86,8 +102,9 @@ describe("agentToolRegistry", () => {
 describe("task tools speak the new task layer (tasks refactor §7)", () => {
   type Parseable = { safeParse: (input: unknown) => { success: boolean } };
   const schemaOf = (name: string) =>
-    (agentToolRegistry[name].tool as unknown as { inputSchema: Parseable })
-      .inputSchema;
+    (buildEntryTool(agentToolRegistry[name], MEMBER) as unknown as {
+      inputSchema: Parseable;
+    }).inputSchema;
 
   it("findTasks filters by status category, not the legacy status type", () => {
     const schema = schemaOf("findTasks");
@@ -111,7 +128,7 @@ describe("getToolsForAgent", () => {
   it("resolves whitelisted names into a tool set", () => {
     const { tools, dropped } = getToolsForAgent(
       ["listClients", "listProjects"],
-      false,
+      MEMBER,
     );
     expect(Object.keys(tools).sort()).toEqual(["listClients", "listProjects"]);
     expect(dropped).toEqual([]);
@@ -120,7 +137,7 @@ describe("getToolsForAgent", () => {
   it("drops unknown names and reports them, never executes them", () => {
     const { tools, dropped } = getToolsForAgent(
       ["listClients", "closeAllPeriods", "sudo"],
-      true,
+      ADMIN,
     );
     expect(Object.keys(tools)).toEqual(["listClients"]);
     expect(dropped).toEqual(["closeAllPeriods", "sudo"]);
@@ -128,8 +145,8 @@ describe("getToolsForAgent", () => {
 
   it("omits admin-scoped tools for members (absent, not erroring)", () => {
     const names = Object.keys(agentToolRegistry);
-    const member = getToolsForAgent(names, false);
-    const admin = getToolsForAgent(names, true);
+    const member = getToolsForAgent(names, MEMBER);
+    const admin = getToolsForAgent(names, ADMIN);
     // Member set ⊆ admin set; both drop nothing (all names known —
     // scope omission and unknown-drop are distinct).
     expect(member.dropped).toEqual([]);
@@ -153,13 +170,13 @@ describe("getToolsForAgent", () => {
   it("keeps connector-kind tools in the set (resolution is at run time, not here)", () => {
     // A connector tool is present regardless of whether the user has a live
     // connection — it self-explains at execute time (slice 10 · US 40).
-    const { tools, dropped } = getToolsForAgent(["echo"], false);
+    const { tools, dropped } = getToolsForAgent(["echo"], MEMBER);
     expect(Object.keys(tools)).toEqual(["echo"]);
     expect(dropped).toEqual([]);
   });
 
   it("empty whitelist yields an empty tool set", () => {
-    const { tools, dropped } = getToolsForAgent([], true);
+    const { tools, dropped } = getToolsForAgent([], ADMIN);
     expect(Object.keys(tools)).toEqual([]);
     expect(dropped).toEqual([]);
   });
@@ -183,5 +200,56 @@ describe("getToolCatalog / isKnownTool", () => {
     expect(isKnownTool("listClients")).toBe(true);
     expect(isKnownTool("collectTimesheetData")).toBe(true);
     expect(isKnownTool("closeAllPeriods")).toBe(false);
+  });
+});
+
+describe("background tool filtering (A1 actor layer)", () => {
+  const BACKGROUND_TOOLS = [
+    "listClients",
+    "listProjects",
+    "listTeamMembers",
+    "listWorkCategories",
+    "listStatuses",
+    "findTasks",
+    "getTaskDetail",
+    "proposeCreateTasks",
+  ];
+
+  it("exactly the migrated tools are background-capable, all on the actor path", () => {
+    const background = Object.values(agentToolRegistry)
+      .filter((e) => e.background)
+      .map((e) => e.name)
+      .sort();
+    expect(background).toEqual([...BACKGROUND_TOOLS].sort());
+    for (const name of BACKGROUND_TOOLS) {
+      expect("makeTool" in agentToolRegistry[name], name).toBe(true);
+    }
+  });
+
+  it("a background run keeps only background tools; the rest are dropped (recorded)", () => {
+    const names = Object.keys(agentToolRegistry);
+    const { tools, dropped } = getToolsForAgent(names, actorFor(true, "background"));
+    expect(Object.keys(tools).sort()).toEqual([...BACKGROUND_TOOLS].sort());
+    // Every non-background entry is reported, so the thread shows the skip.
+    const expectedDropped = names.filter((n) => !agentToolRegistry[n].background);
+    expect(dropped.sort()).toEqual(expectedDropped.sort());
+  });
+
+  it("background drops unknown names too, and still omits admin-only tools for members", () => {
+    const { tools, dropped } = getToolsForAgent(
+      ["findTasks", "collectTeamTime", "sudo"],
+      actorFor(false, "background"),
+    );
+    expect(Object.keys(tools)).toEqual(["findTasks"]);
+    // collectTeamTime is admin-scoped: omitted for a member (not "dropped"),
+    // exactly like an interactive member run.
+    expect(dropped).toEqual(["sudo"]);
+  });
+
+  it("interactive runs keep every tool (migrated ones on the actor path)", () => {
+    const names = Object.keys(agentToolRegistry);
+    const { tools, dropped } = getToolsForAgent(names, ADMIN);
+    expect(Object.keys(tools).sort()).toEqual([...names].sort());
+    expect(dropped).toEqual([]);
   });
 });

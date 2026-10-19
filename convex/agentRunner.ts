@@ -1,4 +1,4 @@
-import { v, ConvexError } from "convex/values";
+import { v, ConvexError, type ObjectType } from "convex/values";
 import { z } from "zod";
 import { gateway, type LanguageModel, type Tool } from "ai";
 import {
@@ -19,7 +19,13 @@ import {
 } from "./_generated/server";
 import { components, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { getAuthContext, type AuthContext } from "./lib/auth";
+import {
+  actorRef,
+  getAuthContext,
+  loadAuthContextForActor,
+  type AgentActor,
+  type AuthContext,
+} from "./lib/auth";
 import { loadTaskForReadOrNull } from "./tasks/access";
 import { requireOwnedThread, UNTITLED_THREAD } from "./agentThreads";
 import { getToolsForAgent } from "./lib/agentToolRegistry";
@@ -78,11 +84,17 @@ const MENTION_TABLE: Record<MentionType, "tasks" | "projects" | "clients" | "use
  * Agent Runtime (PRD module 1) — everything between "user sends a message"
  * and "blocks appear".
  *
- * `startRun` is a PUBLIC ACTION invoked directly by the client (not via
- * the scheduler) so `ctx.auth` inside the whole run — including every
- * tool's `ctx.runQuery` — carries the running user's identity. That is
- * D6 (permission intersection) implemented structurally: wrapped domain
- * functions re-run their own `getAuthContext`/`requireAdmin` per call.
+ * `startRun` is the ONLY public entry point: a public action invoked by the
+ * client, whose actor is the signed-in caller. `agentBackground.start` is
+ * the internal (server-only) entry for runs without a signed-in user (A1);
+ * it acts as a named org member whose membership is re-checked from the DB.
+ * Both share `beginRunCore` + `executeRun`.
+ *
+ * D6 (permission intersection): the run carries an `AgentActor`. Actor-path
+ * tools receive it through a run-scoped closure and call internal variants
+ * that re-derive the AuthContext per call (`loadAuthContextForActor`);
+ * legacy tools (interactive runs only) still rely on the action's inherited
+ * `ctx.auth`, re-running their own `getAuthContext`/`requireAdmin` per call.
  *
  * Streaming: `saveStreamDeltas` persists prose deltas through the
  * component; the UI subscribes reactively via `agentThreads.listMessages`
@@ -108,157 +120,242 @@ function deriveTitle(message: string): string {
 
 // ─── Run lifecycle (internal mutations, auth re-checked inside) ─────────────
 
+/** Composer + message args shared by both run entry points. */
+const beginRunArgs = {
+  // Plain string — arrives from the URL via the composer; normalized here.
+  threadId: v.string(),
+  message: v.string(),
+  // Composer @-mentions (slice 07) — re-resolved + injected as authoritative
+  // context so the model uses exact ids, never client-typed names.
+  mentions: v.optional(v.array(mentionRefValidator)),
+  // Text already extracted from uploaded files by the action (storage blobs
+  // aren't readable inside a mutation).
+  attachments: v.optional(
+    v.array(v.object({ name: v.string(), text: v.string() })),
+  ),
+};
+
+/** What an opened run hands the runner loop (`executeRun`). */
+export type BeginRunResult = {
+  runId: Id<"agentRuns">;
+  promptMessageId: string;
+  componentThreadId: string;
+  /** Who the run acts as — tools get it via a run-scoped closure. */
+  actor: AgentActor;
+  agent: { name: string; instructions: string; tools: string[] };
+  hasStopConditions: boolean;
+};
+
 /**
- * Validate + open a run. Runs INSIDE the caller's auth context (internal
- * mutations invoked via ctx.runMutation inherit the action's identity),
- * and re-checks everything so the action layer can't be mis-trusted:
- * thread ownership, agent run permission, no concurrent run.
+ * Validate + open a run for an already-established AuthContext — the shared
+ * core of both entry points (interactive `beginRun`, background
+ * `beginBackgroundRun`). Re-checks everything so the action layer can't be
+ * mis-trusted: thread ownership, agent run permission, no concurrent run.
  *
  * Also SAVES the user message here (not in the action): the message lands
  * transactionally with the run row, appears in the thread immediately, and
  * survives a later failure (e.g. missing AI key) so the error block has
  * its question above it.
  */
+async function beginRunCore(
+  ctx: MutationCtx,
+  auth: AuthContext,
+  via: AgentActor["via"],
+  args: ObjectType<typeof beginRunArgs>,
+): Promise<BeginRunResult> {
+  const threadId = ctx.db.normalizeId("agentThreads", args.threadId);
+  if (!threadId) throw new ConvexError("Thread not found");
+  const thread = await requireOwnedThread(ctx, auth, threadId);
+  if (thread.status === "running") {
+    throw new ConvexError("A run is already in progress on this thread");
+  }
+  const agent = await ctx.db.get(thread.agentId);
+  if (!agent || agent.orgId !== auth.orgId) {
+    throw new ConvexError("Agent not found");
+  }
+  if (agent.archivedAt) {
+    throw new ConvexError("This agent has been archived");
+  }
+  if (agent.runPermission === "admins" && !auth.isAdmin) {
+    throw new ConvexError("You don't have permission to run this agent");
+  }
+
+  // ─── Skills (slice 04) ───────────────────────────────────────────────
+  // Resolve the agent's attached skills for THIS run: global skills always
+  // load; client-scoped skills load only when the opening message names
+  // their client. Ordering + prompt assembly are the pure lib/agents/skills.
+  const skills = await loadAgentSkills(ctx, auth.orgId, agent.skillIds ?? []);
+  let clientId: string | null = null;
+  if (skills.some((s) => s.scope === "client")) {
+    const clients = await ctx.db
+      .query("clients")
+      .withIndex("by_orgId", (q) => q.eq("orgId", auth.orgId))
+      .collect();
+    clientId = matchClientForRun(
+      args.message,
+      clients
+        .filter((c) => !c.archivedAt)
+        .map((c) => ({ _id: c._id, name: c.name, prefix: c.prefix })),
+    );
+  }
+  const resolved = resolveSkills(skills, clientId);
+  const skillPrompt = assembleSkillPrompt(resolved);
+  // Agent identity first, then the platform's rendering-surface
+  // capabilities (markdown/tables), then per-run skill prompts.
+  const baseInstructions = [
+    agent.instructions,
+    PLATFORM_FORMATTING_PROMPT,
+    skillPrompt,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+  // ─── Composer context (slice 07) ─────────────────────────────────────
+  // Re-resolve @-mentions to verified refs + fold in extracted file text,
+  // then append one authoritative block below the skills. Empty when the
+  // message carried neither, so a plain run's prompt is unchanged.
+  const resolvedMentions = await resolveMentions(
+    ctx,
+    auth,
+    args.mentions ?? [],
+  );
+  const composerContext = buildComposerContext({
+    mentions: resolvedMentions,
+    attachments: args.attachments ?? [],
+  });
+  const instructions = composerContext
+    ? `${baseInstructions}\n\n${composerContext}`
+    : baseInstructions;
+
+  // Save the user message FIRST, so its component _creationTime precedes the
+  // run's startedAt — the "skill loaded" notes then sort AFTER the question
+  // and before the answer in the thread timeline.
+  const { messageId } = await saveMessage(ctx, components.agent, {
+    threadId: thread.componentThreadId,
+    userId: auth.userId,
+    prompt: args.message,
+  });
+
+  // Flag tool names the registry no longer knows (renamed/removed in code),
+  // plus — for a background actor — tools not yet on the actor path: recorded
+  // on the run row so the thread surfaces a `system` block, and dropped again
+  // at model-call time (getToolsForAgent in the action is the single source
+  // of truth — never executed).
+  const actor: AgentActor = {
+    orgId: auth.orgId,
+    userId: auth.userId,
+    isAdmin: auth.isAdmin,
+    via,
+  };
+  const { dropped: droppedTools } = getToolsForAgent(agent.tools, actor);
+
+  const now = Date.now();
+  const runId = await ctx.db.insert("agentRuns", {
+    orgId: auth.orgId,
+    threadId: thread._id,
+    agentId: agent._id,
+    userId: auth.userId,
+    // The actor this run acts as (A1): role at begin + entry mode. Tools
+    // re-derive the role from orgMembers per call; this is the audit record.
+    actorIsAdmin: auth.isAdmin,
+    via,
+    status: "running",
+    startedAt: now,
+    ...(resolved.loaded.length > 0
+      ? {
+          loadedSkills: resolved.loaded.map((s) => ({
+            name: s.name,
+            isStopCondition: s.isStopCondition,
+          })),
+        }
+      : {}),
+    ...(droppedTools.length > 0 ? { droppedTools } : {}),
+  });
+  await ctx.db.patch(thread._id, {
+    status: "running",
+    lastActivityAt: now,
+    // First message auto-titles the thread (US: auto-generated titles).
+    ...(thread.title === UNTITLED_THREAD
+      ? { title: deriveTitle(args.message) }
+      : {}),
+  });
+
+  const result: BeginRunResult = {
+    runId,
+    promptMessageId: messageId,
+    componentThreadId: thread.componentThreadId,
+    actor,
+    agent: {
+      name: agent.name,
+      instructions,
+      tools: agent.tools,
+    },
+    // The runner adds the stop tool + honours halts only when a loaded skill
+    // declares a stop-condition.
+    hasStopConditions: resolved.stopConditions.length > 0,
+  };
+  return result;
+}
+
+/** Toasted by the composer when the caller's membership row isn't there yet. */
+export const MEMBERSHIP_NOT_SYNCED_MESSAGE =
+  "Your organization membership hasn't synced yet — try again in a moment.";
+
+/**
+ * Interactive entry: the actor is the signed-in caller. Identity + org come
+ * from the JWT (`getAuthContext`, inherited from the public `startRun`
+ * action); the core then requires the JWT org to be the thread's org.
+ *
+ * The ROLE comes from `orgMembers` (`loadAuthContextForActor`), exactly as in
+ * background runs — one role source per run, so the admin-scope tool filter,
+ * the `runPermission` check and every actor-path read always agree. Resolved
+ * BEFORE anything is recorded: a missing membership row (Clerk webhook lag,
+ * preview deployments) rejects here with a clear toast instead of failing
+ * mid-run with no user message / run row written.
+ */
 export const beginRun = internalMutation({
-  args: {
-    // Plain string — arrives from the URL via the composer; normalized here.
-    threadId: v.string(),
-    message: v.string(),
-    // Composer @-mentions (slice 07) — re-resolved + injected as authoritative
-    // context so the model uses exact ids, never client-typed names.
-    mentions: v.optional(v.array(mentionRefValidator)),
-    // Text already extracted from uploaded files by the action (storage blobs
-    // aren't readable inside a mutation).
-    attachments: v.optional(
-      v.array(v.object({ name: v.string(), text: v.string() })),
-    ),
+  args: beginRunArgs,
+  handler: async (ctx, args): Promise<BeginRunResult> => {
+    const jwtAuth = await getAuthContext(ctx);
+    let auth: AuthContext;
+    try {
+      auth = await loadAuthContextForActor(ctx, {
+        orgId: jwtAuth.orgId,
+        userId: jwtAuth.userId,
+      });
+    } catch {
+      throw new ConvexError(MEMBERSHIP_NOT_SYNCED_MESSAGE);
+    }
+    return await beginRunCore(ctx, auth, "user", args);
   },
-  handler: async (ctx, args) => {
-    const auth = await getAuthContext(ctx);
+});
+
+/**
+ * Background entry (A1): no `ctx.auth`. The thread's org is the run's org;
+ * the acting user's membership + role are re-derived from `orgMembers` NOW
+ * (`loadAuthContextForActor` throws for a non-member), and the core's
+ * `requireOwnedThread` requires them to own the thread (A2 widens this to
+ * shared `admins` threads). Internal only — reached solely through
+ * `internal.agentBackground.start`.
+ */
+export const beginBackgroundRun = internalMutation({
+  args: {
+    threadId: v.string(),
+    actingUserId: v.id("users"),
+    message: v.string(),
+  },
+  handler: async (ctx, args): Promise<BeginRunResult> => {
     const threadId = ctx.db.normalizeId("agentThreads", args.threadId);
-    if (!threadId) throw new ConvexError("Thread not found");
-    const thread = await requireOwnedThread(ctx, auth, threadId);
-    if (thread.status === "running") {
-      throw new ConvexError("A run is already in progress on this thread");
-    }
-    const agent = await ctx.db.get(thread.agentId);
-    if (!agent || agent.orgId !== auth.orgId) {
-      throw new ConvexError("Agent not found");
-    }
-    if (agent.archivedAt) {
-      throw new ConvexError("This agent has been archived");
-    }
-    if (agent.runPermission === "admins" && !auth.isAdmin) {
-      throw new ConvexError("You don't have permission to run this agent");
-    }
-
-    // ─── Skills (slice 04) ───────────────────────────────────────────────
-    // Resolve the agent's attached skills for THIS run: global skills always
-    // load; client-scoped skills load only when the opening message names
-    // their client. Ordering + prompt assembly are the pure lib/agents/skills.
-    const skills = await loadAgentSkills(ctx, auth.orgId, agent.skillIds ?? []);
-    let clientId: string | null = null;
-    if (skills.some((s) => s.scope === "client")) {
-      const clients = await ctx.db
-        .query("clients")
-        .withIndex("by_orgId", (q) => q.eq("orgId", auth.orgId))
-        .collect();
-      clientId = matchClientForRun(
-        args.message,
-        clients
-          .filter((c) => !c.archivedAt)
-          .map((c) => ({ _id: c._id, name: c.name, prefix: c.prefix })),
-      );
-    }
-    const resolved = resolveSkills(skills, clientId);
-    const skillPrompt = assembleSkillPrompt(resolved);
-    // Agent identity first, then the platform's rendering-surface
-    // capabilities (markdown/tables), then per-run skill prompts.
-    const baseInstructions = [
-      agent.instructions,
-      PLATFORM_FORMATTING_PROMPT,
-      skillPrompt,
-    ]
-      .filter(Boolean)
-      .join("\n\n");
-
-    // ─── Composer context (slice 07) ─────────────────────────────────────
-    // Re-resolve @-mentions to verified refs + fold in extracted file text,
-    // then append one authoritative block below the skills. Empty when the
-    // message carried neither, so a plain run's prompt is unchanged.
-    const resolvedMentions = await resolveMentions(
-      ctx,
-      auth,
-      args.mentions ?? [],
-    );
-    const composerContext = buildComposerContext({
-      mentions: resolvedMentions,
-      attachments: args.attachments ?? [],
+    const thread = threadId ? await ctx.db.get(threadId) : null;
+    if (!thread) throw new ConvexError("Thread not found");
+    const auth = await loadAuthContextForActor(ctx, {
+      orgId: thread.orgId,
+      userId: args.actingUserId,
     });
-    const instructions = composerContext
-      ? `${baseInstructions}\n\n${composerContext}`
-      : baseInstructions;
-
-    // Save the user message FIRST, so its component _creationTime precedes the
-    // run's startedAt — the "skill loaded" notes then sort AFTER the question
-    // and before the answer in the thread timeline.
-    const { messageId } = await saveMessage(ctx, components.agent, {
-      threadId: thread.componentThreadId,
-      userId: auth.userId,
-      prompt: args.message,
+    return await beginRunCore(ctx, auth, "background", {
+      threadId: args.threadId,
+      message: args.message,
     });
-
-    // Flag tool names the registry no longer knows (renamed/removed in code)
-    // for THIS runner: recorded on the run row so the thread surfaces a
-    // `system` block, and dropped again at model-call time (getToolsForAgent
-    // in the action is the single source of truth — never executed).
-    const { dropped: droppedTools } = getToolsForAgent(
-      agent.tools,
-      auth.isAdmin,
-    );
-
-    const now = Date.now();
-    const runId = await ctx.db.insert("agentRuns", {
-      orgId: auth.orgId,
-      threadId: thread._id,
-      agentId: agent._id,
-      userId: auth.userId,
-      status: "running",
-      startedAt: now,
-      ...(resolved.loaded.length > 0
-        ? {
-            loadedSkills: resolved.loaded.map((s) => ({
-              name: s.name,
-              isStopCondition: s.isStopCondition,
-            })),
-          }
-        : {}),
-      ...(droppedTools.length > 0 ? { droppedTools } : {}),
-    });
-    await ctx.db.patch(thread._id, {
-      status: "running",
-      lastActivityAt: now,
-      // First message auto-titles the thread (US: auto-generated titles).
-      ...(thread.title === UNTITLED_THREAD
-        ? { title: deriveTitle(args.message) }
-        : {}),
-    });
-
-    return {
-      runId,
-      promptMessageId: messageId,
-      componentThreadId: thread.componentThreadId,
-      userId: auth.userId,
-      isAdmin: auth.isAdmin,
-      agent: {
-        name: agent.name,
-        instructions,
-        tools: agent.tools,
-      },
-      // The runner adds the stop tool + honours halts only when a loaded skill
-      // declares a stop-condition.
-      hasStopConditions: resolved.stopConditions.length > 0,
-    };
   },
 });
 
@@ -516,136 +613,149 @@ export const startRun = action({
     // transaction. Validation failures throw BEFORE anything is recorded —
     // those still surface as a toast; anything after this settles as an
     // in-thread error block instead of a rejected promise.
-    const run = await ctx.runMutation(internal.agentRunner.beginRun, {
+    const run: BeginRunResult = await ctx.runMutation(internal.agentRunner.beginRun, {
       threadId: args.threadId,
       message,
       mentions: args.mentions,
       attachments: attachmentTexts,
     });
 
-    // Cooperative Stop (PRD error/stop model): stopRun sets a flag on the
-    // run row; we re-check it after every step and abort before the next
-    // model call. Mid-prose stops are covered separately — stopRun also
-    // aborts the component's delta stream, which the DeltaStreamer detects
-    // on its next write and aborts this same signal.
-    const cancel = new AbortController();
-    const checkControl = () =>
-      ctx.runQuery(internal.agentRunner.getRunControl, {
-        runId: run.runId,
-      });
+    return await executeRun(ctx, run);
+  },
+});
 
-    try {
-      // Phase 9 BYOK chain: per-org key → gateway env → direct env.
-      // Throws WorksheetAiUnavailableError when nothing is configured.
-      const orgKey = await ctx.runQuery(
-        internal.aiIntegration.loadDecryptedKeyForRun,
-        {},
+/**
+ * The run loop, shared by the interactive `startRun` and the background
+ * `agentBackground.start` (A1) — same model resolution, tool set, stop
+ * handling, settle/finish and audit rows. Nothing here reads `ctx.auth`:
+ * the BYOK key loads via the actor path, migrated tools carry the actor in
+ * their closure, and run bookkeeping goes through internal mutations keyed
+ * by run id. (Legacy `ctx.auth` tools only exist in interactive runs.)
+ */
+export async function executeRun(
+  ctx: ActionCtx,
+  run: BeginRunResult,
+): Promise<{ runId: Id<"agentRuns"> }> {
+  // Cooperative Stop (PRD error/stop model): stopRun sets a flag on the
+  // run row; we re-check it after every step and abort before the next
+  // model call. Mid-prose stops are covered separately — stopRun also
+  // aborts the component's delta stream, which the DeltaStreamer detects
+  // on its next write and aborts this same signal.
+  const cancel = new AbortController();
+  const checkControl = () =>
+    ctx.runQuery(internal.agentRunner.getRunControl, {
+      runId: run.runId,
+    });
+
+  try {
+    // Phase 9 BYOK chain: per-org key → gateway env → direct env.
+    // Throws WorksheetAiUnavailableError when nothing is configured.
+    // Actor path: membership re-checked from the DB, no ctx.auth needed.
+    const orgKey = await ctx.runQuery(
+      internal.aiIntegration.loadDecryptedKeyForActor,
+      { actor: actorRef(run.actor) },
+    );
+    // resolveModel returns a bare gateway slug on the gateway path;
+    // the component requires a LanguageModel instance, so wrap it.
+    const resolved = resolveModel(orgKey);
+    const languageModel: LanguageModel =
+      typeof resolved === "string" ? gateway(resolved) : resolved;
+
+    const { tools, dropped } = getToolsForAgent(run.agent.tools, run.actor);
+    if (dropped.length > 0) {
+      console.warn(
+        `[agentRunner] Tools unavailable for this ${run.actor.via} run: ${dropped.join(", ")}`,
       );
-      // resolveModel returns a bare gateway slug on the gateway path;
-      // the component requires a LanguageModel instance, so wrap it.
-      const resolved = resolveModel(orgKey);
-      const languageModel: LanguageModel =
-        typeof resolved === "string" ? gateway(resolved) : resolved;
+    }
 
-      const { tools, dropped } = getToolsForAgent(
-        run.agent.tools,
-        run.isAdmin,
-      );
-      if (dropped.length > 0) {
-        console.warn(
-          `[agentRunner] Agent references unknown tools: ${dropped.join(", ")}`,
-        );
-      }
+    // The stop tool exists only when a loaded skill declares a
+    // stop-condition — otherwise the model has no way (and no reason) to
+    // halt the run itself.
+    const agentTools: Record<string, Tool> = { ...tools };
+    if (run.hasStopConditions) {
+      agentTools[STOP_CONDITION_TOOL_NAME] = makeStopConditionTool(run.runId);
+    }
 
-      // The stop tool exists only when a loaded skill declares a
-      // stop-condition — otherwise the model has no way (and no reason) to
-      // halt the run itself.
-      const agentTools: Record<string, Tool> = { ...tools };
-      if (run.hasStopConditions) {
-        agentTools[STOP_CONDITION_TOOL_NAME] = makeStopConditionTool(run.runId);
-      }
-
-      const agent = new Agent(components.agent, {
-        name: run.agent.name,
-        languageModel,
-        instructions: run.agent.instructions,
-        tools: agentTools,
-        stopWhen: stepCountIs(MAX_STEPS),
-        usageHandler: async (handlerCtx, { usage }) => {
-          await handlerCtx.runMutation(internal.agentRunner.recordUsage, {
-            runId: run.runId,
-            inputTokens: usage.inputTokens ?? 0,
-            outputTokens: usage.outputTokens ?? 0,
-            totalTokens: usage.totalTokens ?? 0,
-          });
-        },
-      });
-
-      const result = await agent.streamText(
-        ctx,
-        { threadId: run.componentThreadId, userId: run.userId },
-        {
-          promptMessageId: run.promptMessageId,
-          abortSignal: cancel.signal,
-          // Runs AFTER the component saved the step's messages — partial
-          // output is already persisted when we pull the plug here.
-          onStepFinish: async () => {
-            if (cancel.signal.aborted) return;
-            const ctl = await checkControl();
-            if (ctl.cancelRequested || ctl.stoppedBySkill) cancel.abort();
-          },
-        },
-        { saveStreamDeltas: true },
-      );
-      // Drain the stream so the action stays alive until the response
-      // (including tool steps) fully lands in the component's storage.
-      await result.consumeStream();
-
-      // The mid-prose stop path aborts the streamer, not our signal — ask
-      // the DB, not the controller, how this run ended. A skill stop-condition
-      // outranks a user Stop when both somehow raced.
-      const ctl = await checkControl();
-      const status = ctl.stoppedBySkill
-        ? "stopped_by_skill"
-        : cancel.signal.aborted || ctl.cancelRequested
-          ? "cancelled"
-          : "succeeded";
-      await ctx.runMutation(internal.agentRunner.finishRun, {
-        runId: run.runId,
-        status,
-      });
-      return { runId: run.runId };
-    } catch (err) {
-      // An abort that escapes as an exception is a deliberate halt — a skill
-      // stop-condition or a user Stop, not a failure.
-      const ctl = await checkControl();
-      if (ctl.stoppedBySkill || ctl.cancelRequested) {
-        await ctx.runMutation(internal.agentRunner.finishRun, {
+    const agent = new Agent(components.agent, {
+      name: run.agent.name,
+      languageModel,
+      instructions: run.agent.instructions,
+      tools: agentTools,
+      stopWhen: stepCountIs(MAX_STEPS),
+      usageHandler: async (handlerCtx, { usage }) => {
+        await handlerCtx.runMutation(internal.agentRunner.recordUsage, {
           runId: run.runId,
-          status: ctl.stoppedBySkill ? "stopped_by_skill" : "cancelled",
+          inputTokens: usage.inputTokens ?? 0,
+          outputTokens: usage.outputTokens ?? 0,
+          totalTokens: usage.totalTokens ?? 0,
         });
-        return { runId: run.runId };
-      }
-      const aiUnavailable = err instanceof WorksheetAiUnavailableError;
-      const message = aiUnavailable
-        ? "No AI key is configured for this organization."
-        : err instanceof Error
-          ? err.message
-          : "Unknown error";
-      // Settle as an in-thread error block (agentThreads.listRuns) rather
-      // than a rejected promise — the thread stays continuable.
+      },
+    });
+
+    const result = await agent.streamText(
+      ctx,
+      { threadId: run.componentThreadId, userId: run.actor.userId },
+      {
+        promptMessageId: run.promptMessageId,
+        abortSignal: cancel.signal,
+        // Runs AFTER the component saved the step's messages — partial
+        // output is already persisted when we pull the plug here.
+        onStepFinish: async () => {
+          if (cancel.signal.aborted) return;
+          const ctl = await checkControl();
+          if (ctl.cancelRequested || ctl.stoppedBySkill) cancel.abort();
+        },
+      },
+      { saveStreamDeltas: true },
+    );
+    // Drain the stream so the action stays alive until the response
+    // (including tool steps) fully lands in the component's storage.
+    await result.consumeStream();
+
+    // The mid-prose stop path aborts the streamer, not our signal — ask
+    // the DB, not the controller, how this run ended. A skill stop-condition
+    // outranks a user Stop when both somehow raced.
+    const ctl = await checkControl();
+    const status = ctl.stoppedBySkill
+      ? "stopped_by_skill"
+      : cancel.signal.aborted || ctl.cancelRequested
+        ? "cancelled"
+        : "succeeded";
+    await ctx.runMutation(internal.agentRunner.finishRun, {
+      runId: run.runId,
+      status,
+    });
+    return { runId: run.runId };
+  } catch (err) {
+    // An abort that escapes as an exception is a deliberate halt — a skill
+    // stop-condition or a user Stop, not a failure.
+    const ctl = await checkControl();
+    if (ctl.stoppedBySkill || ctl.cancelRequested) {
       await ctx.runMutation(internal.agentRunner.finishRun, {
         runId: run.runId,
-        status: "failed",
-        error: message.slice(0, 500),
-        errorHint: aiUnavailable
-          ? "Add an Anthropic API key in Settings → Integrations, then try again."
-          : "You can send a follow-up message in this thread to retry.",
+        status: ctl.stoppedBySkill ? "stopped_by_skill" : "cancelled",
       });
       return { runId: run.runId };
     }
-  },
-});
+    const aiUnavailable = err instanceof WorksheetAiUnavailableError;
+    const message = aiUnavailable
+      ? "No AI key is configured for this organization."
+      : err instanceof Error
+        ? err.message
+        : "Unknown error";
+    // Settle as an in-thread error block (agentThreads.listRuns) rather
+    // than a rejected promise — the thread stays continuable.
+    await ctx.runMutation(internal.agentRunner.finishRun, {
+      runId: run.runId,
+      status: "failed",
+      error: message.slice(0, 500),
+      errorHint: aiUnavailable
+        ? "Add an Anthropic API key in Settings → Integrations, then try again."
+        : "You can send a follow-up message in this thread to retry.",
+    });
+    return { runId: run.runId };
+  }
+}
 
 /**
  * Read each uploaded file's text from storage and cap it (slice 07). Runs in

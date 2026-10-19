@@ -12,16 +12,17 @@
  *   - `disconnect`  — clear the credential + flip status to `revoked`.
  *
  * Internal (server-to-server, consumed by connector-backed tools during a
- * run — the run action carries the running user's identity, so these resolve
- * THAT user's connection and no one else's, US 38):
- *   - `resolveForRun`   — classify + decrypt the caller's connection for a type.
- *   - `touchConnector`  — bump `lastUsedAt` after a successful resolve.
- *   - `markStatus`      — persist a status flip (e.g. `error` when decryption
- *                         fails) so the surface and tool behavior agree.
+ * run — each takes the run's actor and re-derives membership from the DB, so
+ * these resolve THAT user's connection and no one else's, US 38, and work in
+ * background runs without `ctx.auth`):
+ *   - `resolveForActor`        — classify + decrypt the actor's connection.
+ *   - `touchConnectorForActor` — bump `lastUsedAt` after a successful resolve.
+ *   - `markStatusForActor`     — persist a status flip (e.g. `error` when
+ *                                decryption fails) so surface + tool agree.
  *
  * Security invariants (mirroring `convex/aiIntegration.ts`):
  *   1. Plaintext credentials never cross the client boundary — `list` returns
- *      only the mask; decryption happens server-side in `resolveForRun`, whose
+ *      only the mask; decryption happens server-side in `resolveForActor`, whose
  *      result flows to the run action's runtime, never to the browser or the
  *      model context.
  *   2. Credentials are AES-GCM-encrypted with the shared KEK
@@ -39,7 +40,12 @@ import {
   type QueryCtx,
 } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
-import { getAuthContext, type AuthContext } from "./lib/auth";
+import {
+  agentActorRefValidator,
+  getAuthContext,
+  loadAuthContextForActor,
+  type AuthContext,
+} from "./lib/auth";
 import {
   buildKeyMask,
   decryptSecret,
@@ -247,57 +253,71 @@ export type ResolveConnectionResult =
     };
 
 /**
- * Resolve the RUNNING user's connection for a type (`resolveConnection` in
- * the PRD's contract). No userId arg — the identity comes from the run
- * action's auth context (D6), which is exactly why user A's run can never
- * pick up user B's connection. Only `connected` is usable; a corrupt/undecryptable
- * credential resolves to `error` (the tool persists the flip via `markStatus`).
+ * Resolve the ACTING user's connection for a type (`resolveConnection` in
+ * the PRD's contract). Only `connected` is usable; a corrupt/undecryptable
+ * credential resolves to `error` (the tool persists the flip via
+ * `markStatusForActor`). The connection is looked up by the actor's own
+ * (orgId, userId) — user A's run can never pick up user B's connection.
  */
-export const resolveForRun = internalQuery({
-  args: { type: v.string() },
-  handler: async (ctx, args): Promise<ResolveConnectionResult> => {
-    const auth = await getAuthContext(ctx);
-    const row = await loadOwnConnection(ctx, auth, args.type);
+async function resolveConnectionForAuth(
+  ctx: QueryCtx,
+  auth: AuthContext,
+  type: string,
+): Promise<ResolveConnectionResult> {
+  const row = await loadOwnConnection(ctx, auth, type);
 
-    const decision = classifyConnection(row?.status ?? null);
-    if (!decision.ok) {
-      return { ok: false, reason: decision.reason, connectorId: row?._id ?? null };
-    }
-    // Status is `connected` — a row with ciphertext must exist. Defensive:
-    // a connected row lacking ciphertext is treated as an error, not a crash.
-    if (!row!.credentialsCiphertext) {
+  const decision = classifyConnection(row?.status ?? null);
+  if (!decision.ok) {
+    return { ok: false, reason: decision.reason, connectorId: row?._id ?? null };
+  }
+  // Status is `connected` — a row with ciphertext must exist. Defensive:
+  // a connected row lacking ciphertext is treated as an error, not a crash.
+  if (!row!.credentialsCiphertext) {
+    return { ok: false, reason: "error", connectorId: row!._id };
+  }
+  let credentials: Record<string, unknown>;
+  try {
+    const plaintext = await decryptSecret(row!.credentialsCiphertext);
+    const parsed: unknown = JSON.parse(plaintext);
+    credentials =
+      typeof parsed === "object" && parsed !== null
+        ? (parsed as Record<string, unknown>)
+        : {};
+  } catch (err) {
+    if (
+      err instanceof SecretDecryptionFailedError ||
+      err instanceof SecretCryptoUnavailableError ||
+      err instanceof SyntaxError
+    ) {
+      console.warn(
+        `[connectors] Credential decrypt failed for org ${auth.orgId} type ${type}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
       return { ok: false, reason: "error", connectorId: row!._id };
     }
-    let credentials: Record<string, unknown>;
-    try {
-      const plaintext = await decryptSecret(row!.credentialsCiphertext);
-      const parsed: unknown = JSON.parse(plaintext);
-      credentials =
-        typeof parsed === "object" && parsed !== null
-          ? (parsed as Record<string, unknown>)
-          : {};
-    } catch (err) {
-      if (
-        err instanceof SecretDecryptionFailedError ||
-        err instanceof SecretCryptoUnavailableError ||
-        err instanceof SyntaxError
-      ) {
-        console.warn(
-          `[connectors] Credential decrypt failed for org ${auth.orgId} type ${args.type}: ${
-            err instanceof Error ? err.message : String(err)
-          }`,
-        );
-        return { ok: false, reason: "error", connectorId: row!._id };
-      }
-      throw err;
-    }
-    return {
-      ok: true,
-      connectorId: row!._id,
-      credentials,
-      mask: row!.credentialMask ?? null,
-      scopes: row!.scopes,
-    };
+    throw err;
+  }
+  return {
+    ok: true,
+    connectorId: row!._id,
+    credentials,
+    mask: row!.credentialMask ?? null,
+    scopes: row!.scopes,
+  };
+}
+
+/**
+ * Actor-path resolver (agent runs, interactive AND background — docs/
+ * prd-email-triage-implementation-plan.md §3 P1). The actor comes from the
+ * run (never a client argument); membership is re-checked on every call via
+ * `loadAuthContextForActor`, so a member removed mid-run fails closed.
+ */
+export const resolveForActor = internalQuery({
+  args: { actor: agentActorRefValidator, type: v.string() },
+  handler: async (ctx, args): Promise<ResolveConnectionResult> => {
+    const auth = await loadAuthContextForActor(ctx, args.actor);
+    return await resolveConnectionForAuth(ctx, auth, args.type);
   },
 });
 
@@ -313,10 +333,10 @@ async function requireOwnConnectorRow(
 }
 
 /** Bump `lastUsedAt` after a successful resolve (best-effort; no-op if gone). */
-export const touchConnector = internalMutation({
-  args: { connectorId: v.id("connectors") },
+export const touchConnectorForActor = internalMutation({
+  args: { actor: agentActorRefValidator, connectorId: v.id("connectors") },
   handler: async (ctx, args) => {
-    const auth = await getAuthContext(ctx);
+    const auth = await loadAuthContextForActor(ctx, args.actor);
     const row = await requireOwnConnectorRow(ctx, auth, args.connectorId);
     if (!row) return null;
     await ctx.db.patch(row._id, { lastUsedAt: Date.now() });
@@ -330,13 +350,14 @@ export const touchConnector = internalMutation({
  * visible on the surface instead of silently retrying every run. Never
  * touches `connected` (that only happens through `connect`).
  */
-export const markStatus = internalMutation({
+export const markStatusForActor = internalMutation({
   args: {
+    actor: agentActorRefValidator,
     connectorId: v.id("connectors"),
     status: v.union(v.literal("expired"), v.literal("error"), v.literal("revoked")),
   },
   handler: async (ctx, args) => {
-    const auth = await getAuthContext(ctx);
+    const auth = await loadAuthContextForActor(ctx, args.actor);
     const row = await requireOwnConnectorRow(ctx, auth, args.connectorId);
     if (!row || row.status === args.status) return null;
     await ctx.db.patch(row._id, { status: args.status, updatedAt: Date.now() });

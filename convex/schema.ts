@@ -10,6 +10,10 @@ import {
   agentCheckResultValidator,
   agentCheckSubjectValidator,
   agentItemAttentionValidator,
+  agentItemPlanIssueValidator,
+  agentItemPlanRefusalValidator,
+  agentItemPlanValidator,
+  clientRequestPlannedValidator,
   agentItemKindValidator,
   agentItemOutcomeValidator,
   agentItemSourceValidator,
@@ -1385,6 +1389,16 @@ export default defineSchema({
     // Messages of this conversation that failed a stage 3 times (I5), one entry
     // per message → Retry. Done / Decline are refused while any is open.
     attentions: v.optional(v.array(agentItemAttentionValidator)),
+    // B6a: the agent's current plan (prepareTask / submitTriagePlan) — its
+    // createTask proposals, plan revision and the gaps it was stored with.
+    plan: v.optional(agentItemPlanValidator),
+    // B6a: why the item has no current plan (no actor, start failed, run incomplete).
+    planIssue: v.optional(agentItemPlanIssueValidator),
+    // B6a: the gaps of the latest refused submitTriagePlan (cleared when a plan is stored).
+    planRefusal: v.optional(agentItemPlanRefusalValidator),
+    // B6a: a prepareTask start is scheduled and has not begun — a new message
+    // joins it instead of scheduling another (trigger dedupe).
+    planStartScheduledAt: v.optional(v.number()),
     decidedBy: v.optional(v.id("users")),
     decidedAt: v.optional(v.number()),
     createdAt: v.number(),
@@ -1558,6 +1572,8 @@ export default defineSchema({
     subtaskId: v.optional(v.id("tasks")),
     supersededBy: v.optional(v.id("clientRequests")), // "use 15% instead of 20%"
     dismissedReason: v.optional(v.string()), // required when dismissed (I12)
+    // B6a: the current plan's (provisional) disposition — see the validator.
+    planned: v.optional(clientRequestPlannedValidator),
     createdAt: v.number(),
     updatedAt: v.number(),
   })

@@ -62,6 +62,8 @@ export const proposalPayloadValidator = v.union(
     /** TipTap JSON string; wins over `description` when both are set. */
     descriptionJson: v.optional(v.string()),
     projectId: v.optional(v.string()),
+    /** The client the work is for (display / routing; the task's client comes from its project). */
+    clientId: v.optional(v.string()),
     assigneeIds: v.optional(v.array(v.string())),
     workCategoryId: v.optional(v.string()),
     dueDate: v.optional(v.string()),
@@ -72,9 +74,29 @@ export const proposalPayloadValidator = v.union(
     subtasks: v.optional(v.array(proposedSubtaskValidator)),
     source: v.optional(proposalSourceValidator),
     fieldReasons: v.optional(proposalFieldReasonsValidator),
-    /** One split plan = N createTask proposals sharing `planId` ("Task i of count"). */
+    /**
+     * One split plan = N createTask proposals sharing `planId` ("Task i of
+     * count"). `mode` is how the plan is grouped, `suggested` what the agent
+     * suggests (D6: a split by discipline is only ever suggested).
+     */
     grouping: v.optional(
-      v.object({ planId: v.string(), index: v.number(), count: v.number() }),
+      v.object({
+        planId: v.string(),
+        index: v.number(),
+        count: v.number(),
+        mode: v.optional(v.union(v.literal("one"), v.literal("byDiscipline"), v.literal("custom"))),
+        suggested: v.optional(v.union(v.literal("one"), v.literal("byDiscipline"))),
+      }),
+    ),
+    /** Past tasks of the client the plan drew on ("like PRG-118"). */
+    similarTaskIds: v.optional(v.array(v.string())),
+    /** Unknown sender (new_sender item): Create also creates client + contact (B6b). */
+    newClient: v.optional(
+      v.object({
+        name: v.string(),
+        domain: v.string(),
+        contact: v.object({ name: v.string(), email: v.string() }),
+      }),
     ),
     /** @deprecated Pre-multi-assignee rows; folded into assigneeIds by
      * `validateProposalPayload` on every read/merge path. Kept so existing

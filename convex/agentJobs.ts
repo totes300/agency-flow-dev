@@ -1,7 +1,8 @@
-import { v, ConvexError } from "convex/values";
+import { v, ConvexError, type ObjectType } from "convex/values";
 import {
   internalAction,
   internalMutation,
+  type ActionCtx,
   type MutationCtx,
 } from "./_generated/server";
 import { internal } from "./_generated/api";
@@ -158,13 +159,36 @@ export const setAgentActorUser = internalMutation({
       agentActorUserId: args.userId ?? undefined,
       updatedAt: Date.now(),
     });
+    // Email items waiting for an actor plan now (B6a; the target checks the flag).
+    if (args.userId) {
+      await ctx.scheduler.runAfter(0, internal.email.prepare.replanAfterActorChange, { orgId: args.orgId });
+    }
+    return null;
+  },
+});
+
+/**
+ * Settle hooks of `agent_run` jobs (B6a): the runner schedules this when a
+ * run with `job` settles — finished, failed, cancelled, or a queued run that
+ * could not start. One switch, so the runner knows no job by name.
+ */
+const JOB_SETTLED_HOOKS: Record<string, typeof internal.email.prepare.onPrepareRunSettled> = {
+  prepareTask: internal.email.prepare.onPrepareRunSettled,
+};
+
+export const jobRunSettled = internalMutation({
+  args: { runId: v.id("agentRuns") },
+  handler: async (ctx, args): Promise<null> => {
+    const run = await ctx.db.get(args.runId);
+    const hook = run?.job ? JOB_SETTLED_HOOKS[run.job] : undefined;
+    if (hook) await ctx.runMutation(hook, { runId: args.runId });
     return null;
   },
 });
 
 // ─── agent_run start ─────────────────────────────────────────────────────────
 
-type PrepareResult =
+export type PrepareResult =
   | { ok: true; threadId: Id<"agentThreads">; actingUserId: Id<"users"> }
   | { ok: false; jobRunId: Id<"agentJobRuns">; error: string };
 
@@ -225,6 +249,15 @@ export type StartAgentJobResult =
   | { status: "started" | "queued"; runId: Id<"agentRuns">; threadId: Id<"agentThreads"> }
   | { status: "failed"; jobRunId: Id<"agentJobRuns">; error: string };
 
+const startAgentJobArgs = {
+  job: v.string(),
+  orgId: v.string(),
+  anchor: anchorValidator,
+  input: v.string(),
+  ownerUserId: v.optional(v.id("users")),
+  title: v.optional(v.string()),
+};
+
 /**
  * Start an `agent_run` job (A2b): ensure the org's system agent and the
  * anchored thread (one per anchor for an `admins` job, one per owner for a
@@ -236,43 +269,49 @@ export type StartAgentJobResult =
  * `private` jobs only.
  */
 export const startAgentJob = internalAction({
-  args: {
-    job: v.string(),
-    orgId: v.string(),
-    anchor: anchorValidator,
-    input: v.string(),
-    ownerUserId: v.optional(v.id("users")),
-    title: v.optional(v.string()),
-  },
-  handler: async (ctx, args): Promise<StartAgentJobResult> => {
-    const message = args.input.trim();
-    if (!message) throw new ConvexError("Job input is empty");
-    const prepared: PrepareResult = await ctx.runMutation(
-      internal.agentJobs.prepareAgentJob,
-      {
-        job: args.job,
-        orgId: args.orgId,
-        anchor: args.anchor,
-        ownerUserId: args.ownerUserId,
-        title: args.title,
-      },
-    );
-    if (!prepared.ok) {
-      return { status: "failed", jobRunId: prepared.jobRunId, error: prepared.error };
-    }
-    const begun: BackgroundBeginResult = await ctx.runMutation(
-      internal.agentRunner.beginBackgroundRun,
-      {
-        threadId: prepared.threadId,
-        actingUserId: prepared.actingUserId,
-        message,
-        job: args.job,
-      },
-    );
-    if (begun.queued) {
-      return { status: "queued", runId: begun.runId, threadId: prepared.threadId };
-    }
-    const { runId } = await executeRun(ctx, begun.run);
-    return { status: "started", runId, threadId: prepared.threadId };
-  },
+  args: startAgentJobArgs,
+  handler: async (ctx, args): Promise<StartAgentJobResult> => await startAgentJobCore(ctx, args),
 });
+
+/**
+ * The body of `startAgentJob`, callable from another internal action of the
+ * same runtime (the guidelines: share code, don't nest actions). `onThread`
+ * runs once the anchored thread exists and BEFORE the run executes — e.g. the
+ * email pipeline links its item to the thread (B6a).
+ */
+export async function startAgentJobCore(
+  ctx: ActionCtx,
+  args: ObjectType<typeof startAgentJobArgs>,
+  hooks: { onThread?: (threadId: Id<"agentThreads">) => Promise<void> } = {},
+): Promise<StartAgentJobResult> {
+  const message = args.input.trim();
+  if (!message) throw new ConvexError("Job input is empty");
+  const prepared: PrepareResult = await ctx.runMutation(
+    internal.agentJobs.prepareAgentJob,
+    {
+      job: args.job,
+      orgId: args.orgId,
+      anchor: args.anchor,
+      ownerUserId: args.ownerUserId,
+      title: args.title,
+    },
+  );
+  if (!prepared.ok) {
+    return { status: "failed", jobRunId: prepared.jobRunId, error: prepared.error };
+  }
+  await hooks.onThread?.(prepared.threadId);
+  const begun: BackgroundBeginResult = await ctx.runMutation(
+    internal.agentRunner.beginBackgroundRun,
+    {
+      threadId: prepared.threadId,
+      actingUserId: prepared.actingUserId,
+      message,
+      job: args.job,
+    },
+  );
+  if (begun.queued) {
+    return { status: "queued", runId: begun.runId, threadId: prepared.threadId };
+  }
+  const { runId } = await executeRun(ctx, begun.run);
+  return { status: "started", runId, threadId: prepared.threadId };
+}

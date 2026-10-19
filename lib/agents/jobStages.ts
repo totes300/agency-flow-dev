@@ -32,10 +32,30 @@ export type JobStageState = "pending" | "working" | "done" | "stopped";
 export type JobStageView = { key: string; label: string; state: JobStageState };
 
 /**
- * The job → stages map. Filled by the B-phase jobs (prepareTask, draftReply,
- * presendReview, handoverQA); empty until then.
+ * The job → stages map. B6a: prepareTask; later draftReply, presendReview,
+ * handoverQA.
  */
-export const JOB_STAGES: Readonly<Record<string, readonly JobStage[]>> = {};
+export const JOB_STAGES: Readonly<Record<string, readonly JobStage[]>> = {
+  // PRD §6.1 / §6.5 — the Triage run line.
+  prepareTask: [
+    { key: "read", label: "Read the email", tools: ["getEmailThread", "getAttachmentText", "getThreadRequests"] },
+    {
+      key: "check",
+      label: "Check related work",
+      tools: [
+        "findSimilarTasksForClient",
+        "getTaskBundle",
+        "getProjectRouting",
+        "listTeamMembers",
+        "listWorkCategories",
+        "listStatuses",
+        "listProjects",
+        "listClients",
+      ],
+    },
+    { key: "plan", label: "Prepare the plan", tools: ["submitTriagePlan", "askUser"] },
+  ],
+};
 
 /** Run outcome as the stage line needs it (mirrors `agentRuns.status`). */
 export type StageRunStatus =

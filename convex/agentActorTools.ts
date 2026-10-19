@@ -65,7 +65,17 @@ import {
   type TimesheetData,
 } from "./timesheets";
 import {
+  findSimilarTasksForClientForAuth,
+  getEmailThreadForAuth,
+  getThreadRequestsForAuth,
+  type AgentEmailThread,
+  type AgentSimilarTasks,
+  type AgentThreadRequests,
+} from "./email/reads";
+import { submitTriagePlanArgs, submitTriagePlanCore, type SubmitPlanOutcome } from "./email/prepare";
+import {
   getAttachmentTextForAuth,
+  getEmailAttachmentTextForAuth,
   getProjectRoutingForAuth,
   getTaskActivityForAuth,
   getTaskBundleForAuth,
@@ -210,6 +220,62 @@ export const getAttachmentText = internalQuery({
   },
   handler: async (ctx, { actor, ...args }): Promise<AgentAttachmentText | null> => {
     return await getAttachmentTextForAuth(ctx, await loadAuthContextForActor(ctx, actor), args);
+  },
+});
+
+// ─── B6a — email reads (T1, T15, T7) + the plan tool — cores in email/* ──────
+
+export const getEmailThread = internalQuery({
+  args: { actor: agentActorRefValidator, threadId: v.string() },
+  handler: async (ctx, { actor, ...args }): Promise<AgentEmailThread | null> => {
+    return await getEmailThreadForAuth(ctx, await loadAuthContextForActor(ctx, actor), args);
+  },
+});
+
+export const getThreadRequests = internalQuery({
+  args: { actor: agentActorRefValidator, threadId: v.optional(v.string()), agentThreadId: v.optional(v.string()) },
+  handler: async (ctx, { actor, ...args }): Promise<AgentThreadRequests | null> => {
+    return await getThreadRequestsForAuth(ctx, await loadAuthContextForActor(ctx, actor), args);
+  },
+});
+
+export const findSimilarTasksForClient = internalQuery({
+  args: {
+    actor: agentActorRefValidator,
+    clientId: v.string(),
+    query: v.string(),
+    workCategoryId: v.optional(v.string()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, { actor, ...args }): Promise<AgentSimilarTasks | null> => {
+    return await findSimilarTasksForClientForAuth(ctx, await loadAuthContextForActor(ctx, actor), args);
+  },
+});
+
+export const getEmailAttachmentText = internalQuery({
+  args: {
+    actor: agentActorRefValidator,
+    emailMessageId: v.string(),
+    index: v.number(),
+    offset: v.optional(v.number()),
+  },
+  handler: async (ctx, { actor, ...args }): Promise<AgentAttachmentText | null> => {
+    return await getEmailAttachmentTextForAuth(ctx, await loadAuthContextForActor(ctx, actor), args);
+  },
+});
+
+/**
+ * `submitTriagePlan` (B6a): the run's actor must have WRITE access to the
+ * thread (an admin in the shared Triage conversation); the core checks the
+ * plan, and stores it (or returns its gaps) — email/prepare.ts.
+ */
+export const submitTriagePlan = internalMutation({
+  args: { actor: agentActorRefValidator, componentThreadId: v.string(), ...submitTriagePlanArgs },
+  handler: async (ctx, args): Promise<SubmitPlanOutcome> => {
+    const auth = await loadAuthContextForActor(ctx, args.actor);
+    const found = await loadThreadByComponentId(ctx, args.componentThreadId);
+    const { thread } = await requireThreadAccess(ctx, auth, found._id, "write");
+    return await submitTriagePlanCore(ctx, { auth, thread, input: args.plan, acceptGaps: args.acceptGaps });
   },
 });
 

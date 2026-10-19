@@ -1459,7 +1459,7 @@ B1 phase prints. Started during milestone A (E4); blocks B1.
 | B3 | Sync + ingest + filter | pending | | |
 | B4 | Classify + ledger + dispatch | done | (this commit) | stage machine with retries, generations, watchdog + stuck sweep; rules-first acknowledge, llm_step classifyInbound / checkCompleteness / screenSender (claude-haiku-4.5); clientRequests ledger; §5.3 dispatch into agentItems (I13 join, quiet ack, attentions); email_event Inbox rows; filtered purge; seed runs the pipeline (fakeModel option); reviewed |
 | B5 | Send pipeline | done | (this commit) | drafts with versions + approval hash (content, sending address, connectedAt), sendGate (§6.7), 15 s undo, one-shot claim, Message-ID history so no re-approval double-sends, 5xx = unknown → confirm by Message-ID, isolated post-send effects, D35 mailbox rule + colleague note, extractPromises from sent body only, stale on inbound; security reviewed |
-| B6 | prepareTask + Triage backend | pending | | |
+| B6 | prepareTask + Triage backend | in progress | (this commit) | B6a done: email_assistant system agent, prepareTask job, getEmailThread / getThreadRequests / findSimilarTasksForClient, submitTriagePlan with code checks (I12 across mailbox copies, verbatim constraints, client scope, newClient constraints), code-side due dates, D25 merge by identity, planIssue + retryPlanning, fake seed plans; reviewed. B6b next: Create / Undo / Merge / change / approval / kickoff |
 | B7 | Drawer Draft mode | pending | | |
 | B8 | Conversation kit + Triage UI | pending | | |
 | C1 | Completion draft + pre-send review | pending | | |

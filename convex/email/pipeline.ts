@@ -156,7 +156,7 @@ export const runStage = internalMutation({
     await requireEmailTriageEnabled(ctx, message.orgId);
     if (args.stage === "received") await stepReceived(ctx, message, args);
     else if (args.stage === "extracted") await stepExtracted(ctx, message, args);
-    else await stepClassified(ctx, message);
+    else await stepClassified(ctx, message, args);
     return null;
   },
 });
@@ -428,8 +428,13 @@ async function stepExtracted(
   });
 }
 
-async function stepClassified(ctx: MutationCtx, message: Doc<"emailMessages">): Promise<void> {
-  await dispatchMessage(ctx, message);
+async function stepClassified(
+  ctx: MutationCtx,
+  message: Doc<"emailMessages">,
+  args: { fakeModel?: boolean },
+): Promise<void> {
+  // `fakeModel` reaches the planner too (B6a: canned plans for seed mailboxes).
+  await dispatchMessage(ctx, message, { fakeModel: args.fakeModel });
   await ctx.db.patch(message._id, { stage: "handled", stageError: undefined, stageAt: Date.now() });
 }
 

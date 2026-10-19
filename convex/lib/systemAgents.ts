@@ -12,6 +12,8 @@
  * in one of its threads. A job run uses the job's own tool list instead.
  */
 
+import { EMAIL_ASSISTANT_INSTRUCTIONS } from "../email/prompts";
+
 export type SystemAgentDefinition = {
   name: string;
   description: string;
@@ -20,9 +22,28 @@ export type SystemAgentDefinition = {
   runPermission: "admins" | "everyone";
 };
 
+/**
+ * The Email assistant's tools — the `prepareTask` job's (convex/email/jobs.ts)
+ * and the default set of a follow-up chat turn in a Triage conversation.
+ */
+export const EMAIL_ASSISTANT_TOOLS = [
+  "getEmailThread",
+  "getThreadRequests",
+  "getAttachmentText",
+  "getProjectRouting",
+  "findSimilarTasksForClient",
+  "getTaskBundle",
+  "listTeamMembers",
+  "listWorkCategories",
+  "listStatuses",
+  "listProjects",
+  "listClients",
+  "askUser",
+  "submitTriagePlan",
+];
+
 export const SYSTEM_AGENTS = {
-  // Neutral placeholder (A2b). B-phase email jobs add their own system agent
-  // ("Email assistant") with its own instructions.
+  // Neutral placeholder (A2b).
   assistant: {
     name: "Assistant",
     description: "Agency Flow's built-in assistant for background jobs.",
@@ -35,6 +56,15 @@ export const SYSTEM_AGENTS = {
       "was created or changed. Keep answers short and concrete.",
     tools: ["listClients", "listProjects", "listTeamMembers", "findTasks", "getTaskDetail"],
     runPermission: "everyone",
+  },
+  // The Email assistant (PRD §6, §6.8 — B6a): the agent of every email
+  // `agent_run` job, in the shared admin conversation of one email thread.
+  email_assistant: {
+    name: "Email assistant",
+    description: "Prepares Triage plans from client emails — an assistant and project manager, never a worker.",
+    instructions: EMAIL_ASSISTANT_INSTRUCTIONS,
+    tools: EMAIL_ASSISTANT_TOOLS,
+    runPermission: "admins",
   },
 } satisfies Record<string, SystemAgentDefinition>;
 

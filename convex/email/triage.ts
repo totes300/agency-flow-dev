@@ -19,6 +19,7 @@ import { DECLINED_REASON, dismissOpenRequestsOfThread } from "./requests";
 import { notifyAdminsOfEmailEvent } from "./inbox";
 import { markConversationDraftsStale, staleReasonForInbound } from "./drafts";
 import type { Intent } from "./jobs";
+import { requestPlanningSafely } from "./prepare";
 
 /**
  * Dispatch after classification (docs/prd-email-triage.md §5.3, D4, D24,
@@ -27,7 +28,8 @@ import type { Intent } from "./jobs";
  *   decideDispatch    the §5.3 table as a pure function (unit-tested row by row)
  *   dispatchMessage   the `classified → handled` stage: facts → decision →
  *                     join the conversation's live item (I13) or open one, or
- *                     an Inbox `no_action` row
+ *                     an Inbox `no_action` row; an item that needs a plan
+ *                     starts prepareTask (B6a, email/prepare.requestPlanning)
  *   declineItem       D28 — the item closes as declined, its open ledger rows
  *                     become `dismissed` ("declined")
  *   purgeFiltered     the daily D24 retention cron (filtered items + their
@@ -190,7 +192,11 @@ export type DispatchOutcome =
  * `messageIds`, notification dedupe), and runs once anyway: the stage moves
  * to `handled` in the same transaction.
  */
-export async function dispatchMessage(ctx: MutationCtx, message: Doc<"emailMessages">): Promise<DispatchOutcome> {
+export async function dispatchMessage(
+  ctx: MutationCtx,
+  message: Doc<"emailMessages">,
+  opts: { fakeModel?: boolean } = {},
+): Promise<DispatchOutcome> {
   const thread = await ctx.db.get(message.threadId);
   if (!thread || thread.orgId !== message.orgId) throw new ConvexError("Conversation not found");
   const classification = message.classification;
@@ -273,6 +279,8 @@ export async function dispatchMessage(ctx: MutationCtx, message: Doc<"emailMessa
       await staleOpenDrafts();
     }
     await informChange(live._id);
+    // B6a (D25): a join that marked the item for re-planning starts the planner.
+    await requestPlanningSafely(ctx, live._id, { trigger: "joined", messageIds: [message._id], fakeModel: opts.fakeModel });
     return { kind: "joined", itemId: live._id };
   }
 
@@ -313,6 +321,8 @@ export async function dispatchMessage(ctx: MutationCtx, message: Doc<"emailMessa
   await ctx.db.patch(thread._id, { waitingOn: "us", updatedAt: now });
   await staleOpenDrafts();
   await informChange(itemId);
+  // B6a (§6.1): a new request / new_sender / question item gets its plan prepared.
+  await requestPlanningSafely(ctx, itemId, { trigger: "opened", messageIds: [message._id], fakeModel: opts.fakeModel });
   return { kind: "opened", itemId };
 }
 

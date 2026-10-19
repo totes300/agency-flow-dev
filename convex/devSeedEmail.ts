@@ -1,6 +1,6 @@
 import { v, ConvexError } from "convex/values";
 import { internalMutation, type MutationCtx } from "./_generated/server";
-import { internal } from "./_generated/api";
+import { components, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { CONNECTOR_CATALOG } from "../lib/agents/connectors";
 import { requireEmailTriageEnabled, setEmailTriageFlag } from "./email/gate";
@@ -52,9 +52,12 @@ import { isClosedCategory } from "./tasks/model";
  * Run:   npx convex run devSeedEmail:seed '{}'                (single-org deployment)
  *        npx convex run devSeedEmail:seed '{"orgId":"org_…"}'
  *        npx convex run devSeedEmail:seed '{"orgId":"org_…","clientNames":{"arlo":"Arlow Kft."}}'
- * Then:  npx convex run devSeedEmail:process '{"fakeModel":true}'   (canned outputs, no AI credit)
+ * Then:  npx convex run devSeedEmail:process '{"fakeModel":true}'   (canned outputs, no AI credit;
+ *        with a designated agent actor set, dispatch also stores the canned
+ *        Triage plans of email/fakePlans.ts — B6a)
  *        npx convex run devSeedEmail:process '{}'                   (the real model — needs the org's AI key)
- * Reset: npx convex run devSeedEmail:reset '{"orgId":"org_…"}'
+ * Reset: npx convex run devSeedEmail:reset '{"orgId":"org_…"}'   (also the seed conversations'
+ *        Triage threads, their proposals, questions, runs and job audit rows)
  *
  * Reads whole-org tables on purpose (bounded): a dummy-data dev tool.
  */
@@ -729,6 +732,51 @@ export const process = internalMutation({
 
 // ─── reset ──────────────────────────────────────────────────────────────────
 
+/**
+ * The agent threads anchored on one seed conversation (its Triage
+ * conversation, B6a) with their proposals, questions and runs; the
+ * component's messages are deleted in the background
+ * (`threads.deleteAllForThreadIdAsync`). Org-scoped through the anchor index.
+ */
+async function deleteAnchoredAgentThreads(
+  ctx: MutationCtx,
+  orgId: string,
+  threadId: Id<"emailThreads">,
+  deleted: Record<string, number>,
+): Promise<void> {
+  const anchored = await ctx.db
+    .query("agentThreads")
+    .withIndex("by_orgId_anchorType_anchorId_agentId_visibility_userId", (q) =>
+      q.eq("orgId", orgId).eq("anchor.type", "emailThread").eq("anchor.id", threadId),
+    )
+    .take(READ_CAP);
+  for (const agentThread of anchored) {
+    const proposals = await ctx.db
+      .query("agentProposals")
+      .withIndex("by_threadId_status", (q) => q.eq("threadId", agentThread._id))
+      .take(READ_CAP);
+    const questions = await ctx.db
+      .query("agentQuestions")
+      .withIndex("by_agentThreadId_status", (q) => q.eq("agentThreadId", agentThread._id))
+      .take(READ_CAP);
+    const runs = await ctx.db
+      .query("agentRuns")
+      .withIndex("by_threadId", (q) => q.eq("threadId", agentThread._id))
+      .take(READ_CAP);
+    for (const row of proposals) await ctx.db.delete(row._id);
+    for (const row of questions) await ctx.db.delete(row._id);
+    for (const row of runs) await ctx.db.delete(row._id);
+    deleted.agentProposals += proposals.length;
+    deleted.agentQuestions += questions.length;
+    deleted.agentRuns += runs.length;
+    await ctx.runMutation(components.agent.threads.deleteAllForThreadIdAsync, {
+      threadId: agentThread.componentThreadId,
+    });
+    await ctx.db.delete(agentThread._id);
+    deleted.agentThreads++;
+  }
+}
+
 export type EmailSeedResetResult = { orgId: string; deleted: Record<string, number> };
 
 /** Remove the seed mailbox and every email row hanging off it — nothing else. */
@@ -746,7 +794,18 @@ export const reset = internalMutation({
       emailPromises: 0,
       emailDrafts: 0,
       notifications: 0,
+      // B6a: the seed conversations' Triage threads and what hangs off them.
+      agentThreads: 0,
+      agentProposals: 0,
+      agentQuestions: 0,
+      agentRuns: 0,
+      agentJobRuns: 0,
     };
+    // Job audit rows anchored on a seed conversation (classify, prepareTask …).
+    const jobRuns = await ctx.db
+      .query("agentJobRuns")
+      .withIndex("by_orgId_job", (q) => q.eq("orgId", orgId))
+      .take(READ_CAP * 4);
     // Email Inbox rows of the seed conversations (task-less, keyed by thread).
     const notifications = await ctx.db
       .query("notifications")
@@ -794,6 +853,12 @@ export const reset = internalMutation({
           if (row.threadId !== thread._id) continue;
           await ctx.db.delete(row._id);
           deleted.notifications++;
+        }
+        await deleteAnchoredAgentThreads(ctx, orgId, thread._id, deleted);
+        for (const row of jobRuns) {
+          if (row.anchor?.type !== "emailThread" || row.anchor.id !== thread._id) continue;
+          await ctx.db.delete(row._id);
+          deleted.agentJobRuns++;
         }
         await ctx.db.delete(thread._id);
         deleted.emailThreads++;

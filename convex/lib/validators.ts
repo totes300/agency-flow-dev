@@ -262,6 +262,144 @@ export const agentItemAttentionValidator = v.object({
   at: v.number(),
 });
 
+/**
+ * A plan check that failed and was NOT fixed by the model's one retry (B6a,
+ * PRD §6.1, I12): the plan is stored with it, and Triage shows it in amber
+ * ("Not covered: story size") instead of guessing.
+ */
+export const triagePlanGapValidator = v.object({
+  kind: v.union(v.literal("missing_disposition"), v.literal("constraint_not_in_title")),
+  requestId: v.id("clientRequests"),
+  detail: v.string(),
+});
+
+/**
+ * The agent's current plan for an email item (B6a, `submitTriagePlan`): its
+ * `createTask` proposals (one per task; a split shares `planId`), the plan
+ * revision (bumped on every submit — the owner's edits bump the proposals'
+ * own revisions), the gaps it was stored with, and the reply intent of a
+ * "reply instead of a task" plan (the draft itself comes in B6b).
+ */
+export const agentItemPlanValidator = v.object({
+  planId: v.string(),
+  proposalIds: v.array(v.id("agentProposals")),
+  revision: v.number(),
+  grouping: v.object({
+    mode: v.union(v.literal("one"), v.literal("byDiscipline")),
+    suggested: v.union(v.literal("one"), v.literal("byDiscipline")),
+  }),
+  gaps: v.array(triagePlanGapValidator),
+  reply: v.optional(v.object({ intent: v.string() })),
+  runId: v.optional(v.id("agentRuns")),
+  submittedAt: v.number(),
+});
+
+/**
+ * Why the item has no current plan (B6a): no designated agent actor
+ * (`no_actor` — re-triggered when one is set), the job could not start
+ * (`start_failed`), or a run settled without storing a plan
+ * (`run_incomplete`, with the gaps of its last refused submit). Unlike
+ * `attentions` it blocks nothing; cleared by the next plan or start, and
+ * `email/prepare.retryPlanning` retries it.
+ */
+export const agentItemPlanIssueValidator = v.object({
+  kind: v.optional(v.union(v.literal("no_actor"), v.literal("start_failed"), v.literal("run_incomplete"))),
+  message: v.string(),
+  gaps: v.optional(v.array(triagePlanGapValidator)),
+  at: v.number(),
+});
+
+/** The gaps of the latest REFUSED submit (B6a) — kept for `run_incomplete`. */
+export const agentItemPlanRefusalValidator = v.object({
+  gaps: v.array(triagePlanGapValidator),
+  at: v.number(),
+});
+
+/**
+ * The disposition the current PLAN gives a ledger row (B6a, D20 "prepare
+ * freely, commit once"). Provisional until Create (B6b turns `covered` into
+ * `subtaskId`) or Send (`answered`); only `question_pending` is also written
+ * to `disposition`. `taskIndex` / `subtaskIndex` point into the plan.
+ */
+export const clientRequestPlannedValidator = v.object({
+  disposition: v.union(
+    v.literal("covered"),
+    v.literal("answered"),
+    v.literal("question_pending"),
+    v.literal("dismissed"),
+  ),
+  proposalId: v.optional(v.id("agentProposals")),
+  taskIndex: v.optional(v.number()),
+  subtaskIndex: v.optional(v.number()),
+  question: v.optional(v.string()),
+  reason: v.optional(v.string()),
+  planRevision: v.number(),
+  at: v.number(),
+});
+
+/** `submitTriagePlan` input on the wire (mirrors the tool's zod schema; email/plan.ts types). */
+const planFieldReasonValidator = v.object({
+  field: v.string(),
+  reason: v.string(),
+  confidence: v.union(v.literal("sure"), v.literal("unsure")),
+});
+export const triagePlanInputValidator = v.object({
+  grouping: v.union(v.literal("one"), v.literal("byDiscipline")),
+  suggestedGrouping: v.union(v.literal("one"), v.literal("byDiscipline")),
+  tasks: v.array(
+    v.object({
+      proposalId: v.optional(v.string()),
+      title: v.string(),
+      description: v.object({
+        summary: v.string(),
+        doneWhen: v.array(v.string()),
+        notes: v.optional(v.array(v.string())),
+      }),
+      projectId: v.optional(v.string()),
+      clientId: v.optional(v.string()),
+      assigneeIds: v.optional(v.array(v.string())),
+      priority: v.optional(v.number()),
+      workCategoryId: v.optional(v.string()),
+      labelIds: v.optional(v.array(v.string())),
+      duePhrase: v.optional(v.string()),
+      subtasks: v.array(
+        v.object({
+          title: v.string(),
+          assigneeIds: v.array(v.string()),
+          requestIds: v.array(v.string()),
+          duePhrase: v.optional(v.string()),
+        }),
+      ),
+      fieldReasons: v.optional(v.array(planFieldReasonValidator)),
+      changedByNewEmail: v.optional(v.array(v.string())),
+    }),
+  ),
+  dispositions: v.array(
+    v.object({
+      requestId: v.string(),
+      disposition: v.union(
+        v.literal("covered"),
+        v.literal("answered"),
+        v.literal("question_pending"),
+        v.literal("dismissed"),
+      ),
+      task: v.optional(v.number()),
+      subtask: v.optional(v.number()),
+      question: v.optional(v.string()),
+      reason: v.optional(v.string()),
+    }),
+  ),
+  similarTaskIds: v.optional(v.array(v.string())),
+  newClient: v.optional(
+    v.object({
+      name: v.string(),
+      domain: v.string(),
+      contact: v.object({ name: v.string(), email: v.string() }),
+    }),
+  ),
+  replyInsteadOfTask: v.optional(v.object({ reply: v.boolean(), intent: v.string() })),
+});
+
 export const agentItemOutcomeValidator = v.union(
   v.literal("created"),
   v.literal("merged"),

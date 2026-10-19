@@ -26,6 +26,7 @@ import { createSkill } from "./skills";
 import { requireThreadAccess, threadAccess } from "./agentThreads";
 import {
   commentTextToTiptapDoc,
+  mergeAgentRevision,
   mergeEditedPayload,
   plainTextToTiptapDoc,
   PROPOSAL_KIND_META,
@@ -425,6 +426,19 @@ async function settleProposal(
   return outcome;
 }
 
+/**
+ * A Triage plan task (a `createTask` with an email source) is created only by
+ * Triage's Create (email-triage B6b: it also covers the ledger, links the
+ * thread, creates a new client, defers notifications) — never by the generic
+ * approve paths.
+ */
+export const CREATE_FROM_TRIAGE_MESSAGE = "Create this from Triage";
+
+function isTriagePlanProposal(proposal: Doc<"agentProposals">): boolean {
+  const payload = proposal.editedPayload ?? proposal.payload;
+  return payload.kind === "createTask" && payload.source?.kind === "email";
+}
+
 /** I11: rows written before revisions existed read as revision 1. */
 export function proposalRevision(proposal: Doc<"agentProposals">): number {
   return proposal.revision ?? 1;
@@ -602,20 +616,64 @@ export async function insertProposalsForThread(
 }
 
 /**
- * The agent revises its OWN plan (A2a; for A2b jobs and B6): replace the
- * agent's payload of a still-open proposal in the calling run's thread and
- * bump the revision, so any decision made on the old card is refused (I11).
- * Human edits made on the old draft are dropped — the card now shows the
- * agent's new plan, which the humans review again. The kind cannot change.
+ * The agent revises its OWN plan (A2a; A2b jobs; email-triage B6a): replace
+ * the agent's payload of a still-open proposal in the thread and bump the
+ * revision, so any decision made on the old card is refused (I11). The kind
+ * cannot change.
  *
- * TODO(B6): plan-revision merging is defined there — owner edits survive a
- * re-plan (PRD D25). Until then a re-plan replaces the effective payload.
+ * D25: the owner's edits SURVIVE a revision unless the agent marks the field
+ * as changed by the new content (`changedFields` — `submitTriagePlan`'s
+ * `changedByNewEmail`): `mergeAgentRevision` (lib/agents/proposals.ts)
+ * computes the new `editedPayload` from the agent's previous payload, the
+ * owner's edited one and the agent's new one. Throws model-actionable errors.
  */
+export async function reviseProposalCore(
+  ctx: MutationCtx,
+  thread: Doc<"agentThreads">,
+  proposal: Doc<"agentProposals">,
+  raw: Infer<typeof proposalPayloadValidator>,
+  changedFields: readonly string[] = [],
+): Promise<{ revision: number }> {
+  if (proposal.threadId !== thread._id) {
+    throw new Error(`No proposal ${proposal._id} in this conversation.`);
+  }
+  if (proposal.status !== "pending" && proposal.status !== "failed") {
+    throw new Error("That proposal has already been decided.");
+  }
+  const payload = await normalizeAgentPayload(ctx, thread, raw);
+  if (payload.kind !== proposal.payload.kind) {
+    throw new Error("A proposal's kind cannot change — propose a new one.");
+  }
+  const previous = validateProposalPayload(proposal.payload);
+  const edited = proposal.editedPayload ? validateProposalPayload(proposal.editedPayload) : null;
+  const merged = mergeAgentRevision({
+    previous: previous.ok ? previous.payload : payload,
+    edited: edited?.ok ? edited.payload : undefined,
+    next: payload,
+    changedFields,
+  });
+  // The merge of two valid payloads can still be structurally off (e.g. too
+  // many subtasks) — then the agent's revision wins, never a broken card.
+  const editedPayload = merged && validateProposalPayload(merged).ok ? merged : undefined;
+  const revision = proposalRevision(proposal) + 1;
+  await ctx.db.patch(proposal._id, {
+    payload,
+    taskId: changedTaskId(ctx, payload),
+    editedPayload,
+    revision,
+    status: "pending",
+    failureReason: undefined,
+  });
+  return { revision };
+}
+
 export const updateProposalPayload = internalMutation({
   args: {
     componentThreadId: v.string(),
     proposalId: v.string(),
     payload: proposalPayloadValidator,
+    // D25: fields whose owner edits the new content overrides.
+    changedFields: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args): Promise<{ revision: number }> => {
     const thread = await loadThreadByComponentId(ctx, args.componentThreadId);
@@ -624,23 +682,7 @@ export const updateProposalPayload = internalMutation({
     if (!proposal || proposal.threadId !== thread._id) {
       throw new Error(`No proposal ${args.proposalId} in this conversation.`);
     }
-    if (proposal.status !== "pending" && proposal.status !== "failed") {
-      throw new Error("That proposal has already been decided.");
-    }
-    const payload = await normalizeAgentPayload(ctx, thread, args.payload);
-    if (payload.kind !== proposal.payload.kind) {
-      throw new Error("A proposal's kind cannot change — propose a new one.");
-    }
-    const revision = proposalRevision(proposal) + 1;
-    await ctx.db.patch(proposal._id, {
-      payload,
-      taskId: changedTaskId(ctx, payload),
-      editedPayload: undefined,
-      revision,
-      status: "pending",
-      failureReason: undefined,
-    });
-    return { revision };
+    return await reviseProposalCore(ctx, thread, proposal, args.payload, args.changedFields ?? []);
   },
 });
 
@@ -742,6 +784,7 @@ export const approve = mutation({
     if (args.revision !== proposalRevision(proposal)) {
       throw new ConvexError(STALE_REVISION_MESSAGE);
     }
+    if (isTriagePlanProposal(proposal)) throw new ConvexError(CREATE_FROM_TRIAGE_MESSAGE);
     const meta = PROPOSAL_KIND_META[proposal.payload.kind];
     if (meta.approveScope === "admin" && !auth.isAdmin) {
       throw new ConvexError(
@@ -904,6 +947,11 @@ export const approveAll = mutation({
         proposal.status !== "pending" ||
         proposalRevision(proposal) !== proposalRevision(checked)
       ) {
+        continue;
+      }
+      // Never mass-committed: a Triage plan task is created from Triage (B6b).
+      if (isTriagePlanProposal(proposal)) {
+        outcomes.push({ proposalId: proposal._id, result: "failed", reason: CREATE_FROM_TRIAGE_MESSAGE });
         continue;
       }
       const meta = PROPOSAL_KIND_META[proposal.payload.kind];

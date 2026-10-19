@@ -232,6 +232,72 @@ export async function dismissOpenRequestsOfThread(
   return dismissed;
 }
 
+// ─── The plan's dispositions (B6a) ────────────────────────────────────────────
+
+export type PlannedDisposition = {
+  requestId: Id<"clientRequests">;
+  disposition: "covered" | "answered" | "question_pending" | "dismissed";
+  proposalId?: Id<"agentProposals">;
+  taskIndex?: number;
+  subtaskIndex?: number;
+  question?: string;
+  reason?: string;
+};
+
+/**
+ * Write a plan's dispositions onto the conversation's ledger (B6a, I12,
+ * D20 "prepare freely, commit once"). Every unresolved row (open /
+ * question_pending) gets the plan's `planned` disposition; only
+ * `question_pending` also becomes the row's `disposition` (a covered row goes
+ * back to `open` from an earlier question). `covered`, `answered` and
+ * `dismissed` stay PROVISIONAL: Create (B6b) turns `covered` into the
+ * subtask id, a sent reply marks `answered` (`markRequestsAnsweredBySend`),
+ * and nothing is dismissed for good before the owner commits. Unresolved rows
+ * the plan left out lose a stale `planned` (they show as gaps). Rows of
+ * another conversation or org, and resolved rows, are never touched.
+ */
+export async function recordPlannedDispositions(
+  ctx: MutationCtx,
+  args: {
+    orgId: string;
+    /** The conversation: the thread and its copies in other mailboxes (B5 `conversationThreads`). */
+    threadIds: readonly Id<"emailThreads">[];
+    planRevision: number;
+    dispositions: readonly PlannedDisposition[];
+  },
+): Promise<{ written: number }> {
+  const rows = (await Promise.all(args.threadIds.map((id) => threadRequests(ctx, args.orgId, id)))).flat();
+  const byId = new Map(args.dispositions.map((d) => [d.requestId as string, d] as const));
+  const now = Date.now();
+  let written = 0;
+  for (const row of rows) {
+    if (row.disposition !== "open" && row.disposition !== "question_pending") continue;
+    const d = byId.get(row._id);
+    if (!d) {
+      if (row.planned || row.disposition === "question_pending") {
+        await ctx.db.patch(row._id, { planned: undefined, disposition: "open", updatedAt: now });
+      }
+      continue;
+    }
+    await ctx.db.patch(row._id, {
+      disposition: d.disposition === "question_pending" ? "question_pending" : "open",
+      planned: {
+        disposition: d.disposition,
+        ...(d.proposalId ? { proposalId: d.proposalId } : {}),
+        ...(d.taskIndex !== undefined ? { taskIndex: d.taskIndex } : {}),
+        ...(d.subtaskIndex !== undefined ? { subtaskIndex: d.subtaskIndex } : {}),
+        ...(d.question?.trim() ? { question: d.question.trim().slice(0, 500) } : {}),
+        ...(d.reason?.trim() ? { reason: d.reason.trim().slice(0, 500) } : {}),
+        planRevision: args.planRevision,
+        at: now,
+      },
+      updatedAt: now,
+    });
+    written++;
+  }
+  return { written };
+}
+
 // ─── Dispositions for B6 (internal; not wired to UI yet) ──────────────────────
 
 /** Load rows by id for an org; throws on a missing or foreign row (no partial writes). */

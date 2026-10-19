@@ -812,6 +812,7 @@ export const beginNextQueuedRun = internalMutation({
             : "The run's acting user no longer has access to this thread or agent.",
         });
         await restoreQuestionOfLostRun(ctx, next);
+        await notifyJobRunSettled(ctx, next);
         continue;
       }
       return await openRun(
@@ -849,6 +850,7 @@ export const failQueuedHead = internalMutation({
       errorHint: "Something went wrong starting this run.",
     });
     await restoreQuestionOfLostRun(ctx, head);
+    await notifyJobRunSettled(ctx, head);
     return true;
   },
 });
@@ -1129,6 +1131,12 @@ async function settleRun(
       threadId: run.threadId,
     });
   }
+  await notifyJobRunSettled(ctx, run);
+}
+
+/** A job run settled (any status): its job's settle hook, outside this transaction (B6a). */
+async function notifyJobRunSettled(ctx: MutationCtx, run: Doc<"agentRuns">): Promise<void> {
+  if (run.job) await ctx.scheduler.runAfter(0, internal.agentJobs.jobRunSettled, { runId: run._id });
 }
 
 /**

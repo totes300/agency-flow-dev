@@ -54,6 +54,8 @@ export type CreateTaskPayload = {
   /** TipTap JSON string; wins over `description` when both are set. */
   descriptionJson?: string;
   projectId?: string;
+  /** The client the work is for (display / routing; the task's client comes from its project). */
+  clientId?: string;
   assigneeIds?: string[];
   workCategoryId?: string;
   dueDate?: string; // YYYY-MM-DD
@@ -64,7 +66,25 @@ export type CreateTaskPayload = {
   source?: ProposalSource;
   fieldReasons?: ProposalFieldReasons;
   /** One split plan = N createTask proposals sharing `planId`. */
-  grouping?: { planId: string; index: number; count: number };
+  grouping?: ProposalGrouping;
+  /** Past tasks of the client the plan drew on. */
+  similarTaskIds?: string[];
+  /** Unknown sender: Create also creates the client + contact (email-triage B6b). */
+  newClient?: ProposalNewClient;
+};
+
+export type ProposalGrouping = {
+  planId: string;
+  index: number;
+  count: number;
+  mode?: "one" | "byDiscipline" | "custom";
+  suggested?: "one" | "byDiscipline";
+};
+
+export type ProposalNewClient = {
+  name: string;
+  domain: string;
+  contact: { name: string; email: string };
 };
 
 export type UpdateTaskChanges = {
@@ -412,6 +432,7 @@ function validateCreateTask(p: Record<string, unknown>): CreateTaskPayload {
   const descriptionJson = optionalDocJson(p.descriptionJson, "descriptionJson");
   const dueDate = optionalDate(p.dueDate, "dueDate");
   const projectId = optionalString(p.projectId, "projectId");
+  const clientId = optionalString(p.clientId, "clientId");
   const workCategoryId = optionalString(p.workCategoryId, "workCategoryId");
   const statusId = optionalString(p.statusId, "statusId");
   const priority = optionalPriority(p.priority);
@@ -420,11 +441,12 @@ function validateCreateTask(p: Record<string, unknown>): CreateTaskPayload {
   const subtasks = normalizeSubtaskList(p.subtasks, "subtasks");
   const source = normalizeSource(p.source);
   const fieldReasons = normalizeFieldReasons(p.fieldReasons);
+  const similarTaskIds = idList(p.similarTaskIds, "similarTaskIds");
   let grouping: CreateTaskPayload["grouping"];
   const rawGrouping = asRecord(p.grouping, "grouping");
   if (rawGrouping) {
     const planId = optionalString(rawGrouping.planId, "grouping.planId");
-    const { index, count } = rawGrouping;
+    const { index, count, mode, suggested } = rawGrouping;
     if (
       !planId ||
       typeof index !== "number" ||
@@ -437,7 +459,32 @@ function validateCreateTask(p: Record<string, unknown>): CreateTaskPayload {
     ) {
       fail("grouping needs a planId and 1 ≤ index ≤ count");
     }
-    grouping = { planId, index, count };
+    if (mode !== undefined && mode !== "one" && mode !== "byDiscipline" && mode !== "custom") {
+      fail('grouping.mode must be "one", "byDiscipline" or "custom"');
+    }
+    if (suggested !== undefined && suggested !== "one" && suggested !== "byDiscipline") {
+      fail('grouping.suggested must be "one" or "byDiscipline"');
+    }
+    grouping = {
+      planId,
+      index,
+      count,
+      ...(mode !== undefined ? { mode } : {}),
+      ...(suggested !== undefined ? { suggested } : {}),
+    };
+  }
+  let newClient: ProposalNewClient | undefined;
+  const rawNewClient = asRecord(p.newClient, "newClient");
+  if (rawNewClient) {
+    const contact = asRecord(rawNewClient.contact, "newClient.contact") ?? fail("newClient needs a contact");
+    newClient = {
+      name: requiredString(rawNewClient.name, "newClient.name", "Client name", PROPOSAL_TITLE_MAX),
+      domain: requiredString(rawNewClient.domain, "newClient.domain", "Client domain", PROPOSAL_TITLE_MAX).toLowerCase(),
+      contact: {
+        name: requiredString(contact.name, "newClient.contact.name", "Contact name", PROPOSAL_TITLE_MAX),
+        email: requiredString(contact.email, "newClient.contact.email", "Contact email", PROPOSAL_TITLE_MAX).toLowerCase(),
+      },
+    };
   }
   return {
     kind: "createTask",
@@ -445,6 +492,7 @@ function validateCreateTask(p: Record<string, unknown>): CreateTaskPayload {
     ...(description ? { description } : {}),
     ...(descriptionJson ? { descriptionJson } : {}),
     ...(projectId ? { projectId } : {}),
+    ...(clientId ? { clientId } : {}),
     ...(assigneeIds.length > 0 ? { assigneeIds } : {}),
     ...(workCategoryId ? { workCategoryId } : {}),
     ...(dueDate ? { dueDate } : {}),
@@ -455,6 +503,8 @@ function validateCreateTask(p: Record<string, unknown>): CreateTaskPayload {
     ...(source ? { source } : {}),
     ...(fieldReasons ? { fieldReasons } : {}),
     ...(grouping ? { grouping } : {}),
+    ...(similarTaskIds.length > 0 ? { similarTaskIds } : {}),
+    ...(newClient ? { newClient } : {}),
   };
 }
 
@@ -675,6 +725,182 @@ export function mergeEditedPayload(
   }
   merged.kind = original.kind;
   return merged as ProposalPayload;
+}
+
+// ─── Agent revision merge (email-triage D25) ────────────────────────────────
+
+/**
+ * Top-level `createTask` fields an owner edit can hold on to across an agent
+ * revision. `description` stands for both description forms (plain and
+ * TipTap). `subtasks` merge per subtask (below).
+ */
+export const REVISION_MERGE_FIELDS = [
+  "title",
+  "description",
+  "projectId",
+  "assigneeIds",
+  "workCategoryId",
+  "dueDate",
+  "statusId",
+  "priority",
+  "labelIds",
+] as const;
+
+/** Key-order-independent JSON (edits rebuild objects; key order is not a change). */
+function stableJson(value: unknown): string {
+  const canonical = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map(canonical);
+    if (v && typeof v === "object") {
+      return Object.fromEntries(
+        Object.keys(v as Record<string, unknown>)
+          .filter((k) => (v as Record<string, unknown>)[k] !== undefined)
+          .sort()
+          .map((k) => [k, canonical((v as Record<string, unknown>)[k])]),
+      );
+    }
+    return v ?? null;
+  };
+  return JSON.stringify(canonical(value));
+}
+
+function fieldValue(payload: CreateTaskPayload, field: string): unknown {
+  if (field === "description") {
+    return { description: payload.description ?? null, descriptionJson: payload.descriptionJson ?? null };
+  }
+  return (payload as Record<string, unknown>)[field] ?? null;
+}
+
+function copyField(target: Record<string, unknown>, from: CreateTaskPayload, field: string): void {
+  const keys = field === "description" ? ["description", "descriptionJson"] : [field];
+  for (const key of keys) {
+    const value = (from as Record<string, unknown>)[key];
+    if (value === undefined) delete target[key];
+    else target[key] = value;
+  }
+}
+
+const normTitle = (title: string) => title.trim().toLowerCase();
+
+/**
+ * Pair each subtask of `from` with one of `to` (each used once): the one
+ * sharing the most covered requests, else — for a subtask covering none —
+ * the same title. A subtask that gains or loses a request (a question
+ * resolved, a new request added to it) is still the same subtask.
+ */
+function pairSubtasks(from: readonly ProposedSubtask[], to: readonly ProposedSubtask[]): Map<number, number> {
+  const pairs = new Map<number, number>();
+  const used = new Set<number>();
+  from.forEach((sub, i) => {
+    const ids = new Set(sub.requestIds ?? []);
+    let best = -1;
+    let bestScore = 0;
+    to.forEach((other, j) => {
+      if (used.has(j)) return;
+      const score = (other.requestIds ?? []).filter((id) => ids.has(id)).length;
+      if (score > bestScore) {
+        best = j;
+        bestScore = score;
+      }
+    });
+    if (best < 0) {
+      best = to.findIndex(
+        (other, j) =>
+          !used.has(j) &&
+          (other.requestIds ?? []).length === 0 &&
+          ids.size === 0 &&
+          normTitle(other.title) === normTitle(sub.title),
+      );
+    }
+    if (best >= 0) {
+      pairs.set(i, best);
+      used.add(best);
+    }
+  });
+  return pairs;
+}
+
+const SUBTASK_MERGE_FIELDS = ["title", "assigneeIds", "dueDate"] as const;
+
+/**
+ * D25 — the agent revises its plan after a new email (or an answer) while the
+ * owner may already have edited it. Returns the new `editedPayload` for the
+ * revised proposal: the owner's edits survive unless the agent marked the
+ * field as changed by the new content (`changedFields`); `undefined` when no
+ * owner edit survives (the agent's `next` is then the effective payload).
+ *
+ *   - top-level fields (REVISION_MERGE_FIELDS): an owner edit = the edited
+ *     value differs from the agent's PREVIOUS value; it is kept unless the
+ *     field is in `changedFields`;
+ *   - `subtasks` in `changedFields` → the agent's list wins whole; otherwise
+ *     subtasks are paired across versions by OVERLAPPING covered requests
+ *     (else by title): per field (title, assignees, due) the owner's edit of
+ *     a subtask survives, its covered requests are the union (a request the
+ *     new email adds lands on the owner's version too); a subtask the owner
+ *     deleted stays deleted, one the owner added stays, a new one from the
+ *     agent is added; `subtasks.<i>` (index in `next`) forces the agent's
+ *     version of that one subtask;
+ *   - source, grouping, reasons, similar tasks, new client: always the
+ *     agent's (they describe the plan, not the task).
+ *
+ * Only `createTask` merges; any other kind takes the agent's revision.
+ */
+export function mergeAgentRevision(args: {
+  previous: ProposalPayload;
+  edited: ProposalPayload | undefined;
+  next: ProposalPayload;
+  changedFields: readonly string[];
+}): ProposalPayload | undefined {
+  const { previous, edited, next } = args;
+  if (!edited || next.kind !== "createTask" || previous.kind !== "createTask" || edited.kind !== "createTask") {
+    return undefined;
+  }
+  const changed = new Set(args.changedFields);
+  const merged: Record<string, unknown> = { ...next };
+
+  for (const field of REVISION_MERGE_FIELDS) {
+    const ownerEdited = stableJson(fieldValue(edited, field)) !== stableJson(fieldValue(previous, field));
+    if (ownerEdited && !changed.has(field)) copyField(merged, edited, field);
+  }
+
+  const prevSubs = previous.subtasks ?? [];
+  const editedSubs = edited.subtasks ?? [];
+  const nextSubs = next.subtasks ?? [];
+  const subtasksEdited = stableJson(editedSubs) !== stableJson(prevSubs);
+  if (subtasksEdited && !changed.has("subtasks")) {
+    const nextToPrev = pairSubtasks(nextSubs, prevSubs);
+    const editedToPrev = pairSubtasks(editedSubs, prevSubs);
+    const prevToEdited = new Map([...editedToPrev].map(([e, p]) => [p, e] as const));
+    const out: ProposedSubtask[] = [];
+    nextSubs.forEach((sub, i) => {
+      const p = nextToPrev.get(i);
+      if (changed.has(`subtasks.${i}`) || p === undefined) {
+        out.push(sub); // forced, or new from the agent
+        return;
+      }
+      const e = prevToEdited.get(p);
+      if (e === undefined) return; // the owner deleted it — stays deleted
+      const prev = prevSubs[p];
+      const mine = editedSubs[e];
+      const result: ProposedSubtask = { ...sub };
+      for (const field of SUBTASK_MERGE_FIELDS) {
+        if (stableJson(mine[field]) !== stableJson(prev[field])) {
+          if (mine[field] === undefined) delete result[field];
+          else (result as Record<string, unknown>)[field] = mine[field];
+        }
+      }
+      const requestIds = [...new Set([...(sub.requestIds ?? []), ...(mine.requestIds ?? [])])];
+      if (requestIds.length > 0) result.requestIds = requestIds;
+      out.push(result);
+    });
+    editedSubs.forEach((sub, e) => {
+      if (!editedToPrev.has(e)) out.push(sub); // the owner's own
+    });
+    if (out.length > 0) merged.subtasks = out;
+    else delete merged.subtasks;
+  }
+
+  merged.kind = "createTask";
+  return stableJson(merged) === stableJson(next) ? undefined : (merged as ProposalPayload);
 }
 
 // ─── Tool-output marker (classifier contract) ───────────────────────────────

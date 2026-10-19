@@ -41,6 +41,7 @@ import {
   type ContentStatus,
 } from "../lib/attachments/contents";
 import { loadContent } from "./attachmentContents";
+import { isEmailTriageEnabled } from "./email/gate";
 
 /**
  * Backing reads of the A3 agent read tools (docs/prd-email-triage.md §6.4:
@@ -519,9 +520,9 @@ export type AgentAttachmentText = {
     name: string;
     mimeType: string;
     sizeBytes: number;
-    /** Identifier of the task the file is on. */
+    /** Identifier of the task the file is on (null for an email attachment). */
     task: string | null;
-    source: "task" | "comment";
+    source: "task" | "comment" | "email";
   };
   /** `not_processed`: the file was never queued for reading (pre-A6, not backfilled). */
   status: ContentStatus | "not_processed";
@@ -592,6 +593,40 @@ export async function getAttachmentTextForAuth(
     },
     status: content?.status ?? "not_processed",
     message: contentMessage(content),
+    content: page ? { untrustedFileContent: true, text: page.text } : null,
+    offset: page?.offset ?? 0,
+    nextOffset: page?.nextOffset ?? null,
+    totalChars: page?.totalChars ?? null,
+    truncated: content?.truncated ?? false,
+    pageCount: content?.pageCount ?? null,
+    width: content?.width ?? null,
+    height: content?.height ?? null,
+    error: content && content.status !== "done" ? (content.error ?? null) : null,
+  };
+}
+
+/**
+ * An email attachment's contents (B6a — the same T2 shape): admin only and
+ * behind the email flag (I6, I14), the message must be in the actor's org.
+ * `null` for anything else (member, foreign, missing, bad index) alike.
+ */
+export async function getEmailAttachmentTextForAuth(
+  ctx: QueryCtx,
+  auth: AuthContext,
+  args: { emailMessageId: string; index: number; offset?: number },
+): Promise<AgentAttachmentText | null> {
+  if (!auth.isAdmin || !(await isEmailTriageEnabled(ctx, auth.orgId))) return null;
+  const id = ctx.db.normalizeId("emailMessages", args.emailMessageId.trim());
+  const message = id ? await ctx.db.get(id) : null;
+  if (!message || message.orgId !== auth.orgId) return null;
+  const att = Number.isInteger(args.index) ? message.attachments[args.index] : undefined;
+  if (!att) return null;
+  const content = att.storageId ? await loadContent(ctx, auth.orgId, att.storageId) : null;
+  const page = content?.status === "done" && content.text ? pageText(content.text, args.offset, ATTACHMENT_TEXT_PAGE_MAX) : null;
+  return {
+    file: { id: `${message._id}#${args.index}`, name: att.name, mimeType: att.mime, sizeBytes: att.size, task: null, source: "email" },
+    status: content?.status ?? "not_processed",
+    message: att.storageId ? contentMessage(content) : "This attachment was not downloaded. Its contents are unknown — say so plainly; do not guess.",
     content: page ? { untrustedFileContent: true, text: page.text } : null,
     offset: page?.offset ?? 0,
     nextOffset: page?.nextOffset ?? null,

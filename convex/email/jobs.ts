@@ -14,8 +14,10 @@
  */
 
 import { z } from "zod";
-import type { LlmStepJob } from "../lib/agentJobs";
+import type { AgentRunJob, LlmStepJob } from "../lib/agentJobs";
+import { EMAIL_ASSISTANT_TOOLS } from "../lib/systemAgents";
 import {
+  PREPARE_TASK_INSTRUCTIONS,
   CHECK_COMPLETENESS_INSTRUCTIONS,
   CLASSIFY_INBOUND_INSTRUCTIONS,
   EXTRACT_PROMISES_INSTRUCTIONS,
@@ -119,4 +121,26 @@ export const EMAIL_LLM_JOBS = {
   checkCompleteness: checkCompletenessJob,
   screenSender: screenSenderJob,
   extractPromises: extractPromisesJob,
+} as const;
+
+// ─── agent_run jobs (B6a) ─────────────────────────────────────────────────────
+
+/**
+ * prepareTask (PRD §6.1): the Email assistant reads the conversation and
+ * submits the Triage plan (`submitTriagePlan`). Runs in the shared admin
+ * conversation of the email thread as the designated agent actor (E2);
+ * stages: lib/agents/jobStages.ts. Started by dispatch (email/prepare.ts).
+ */
+export const prepareTaskJob: AgentRunJob = {
+  name: "prepareTask",
+  tier: "agent_run",
+  systemAgentKey: "email_assistant",
+  visibility: "admins",
+  instructions: PREPARE_TASK_INSTRUCTIONS,
+  tools: EMAIL_ASSISTANT_TOOLS,
+};
+
+/** Registered in AGENT_JOBS (convex/lib/agentJobs.ts). */
+export const EMAIL_AGENT_JOBS = {
+  prepareTask: prepareTaskJob,
 } as const;

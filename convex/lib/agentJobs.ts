@@ -35,7 +35,7 @@ import { getSystemAgentDefinition } from "./systemAgents";
 import { resolveModel, WorksheetAiUnavailableError } from "./worksheetAi";
 import { parseModelSlug } from "../../lib/agents/modelSlug";
 import { JOB_STAGES, type JobStage } from "../../lib/agents/jobStages";
-import { EMAIL_LLM_JOBS } from "../email/jobs";
+import { EMAIL_AGENT_JOBS, EMAIL_LLM_JOBS } from "../email/jobs";
 
 export type AgentJobAnchor = { type: string; id: string };
 
@@ -122,13 +122,14 @@ export function validateAgentJob(
 }
 
 /**
- * The production registry. B4 adds the email `llm_step` jobs
- * (classifyInbound, checkCompleteness, screenSender — convex/email/jobs.ts);
- * the later B-phase jobs (extractPromises · prepareTask, draftReply,
- * presendReview, handoverQA) are added here too.
+ * The production registry. The email jobs live in convex/email/jobs.ts:
+ * `llm_step` classifyInbound, checkCompleteness, screenSender,
+ * extractPromises (B4/B5) and `agent_run` prepareTask (B6a); draftReply,
+ * presendReview and handoverQA are added there too.
  */
 export const AGENT_JOBS: Readonly<Record<string, AgentJob>> = {
   ...EMAIL_LLM_JOBS,
+  ...EMAIL_AGENT_JOBS,
 };
 for (const job of Object.values(AGENT_JOBS)) validateAgentJob(job);
 for (const name of Object.keys(JOB_STAGES)) {

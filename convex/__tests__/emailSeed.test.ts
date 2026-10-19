@@ -414,7 +414,7 @@ describe("devSeedEmail.reset", () => {
     const result = await t.mutation(internal.devSeedEmail.reset, { orgId: ORG });
     expect(result.deleted).toEqual({
       connectors: 1, emailThreads: 5, emailMessages: 8, emailThreadTasks: 1, agentItems: 0, clientRequests: 0, emailPromises: 0,
-      emailDrafts: 0, notifications: 0,
+      emailDrafts: 0, notifications: 0, agentThreads: 0, agentProposals: 0, agentQuestions: 0, agentRuns: 0, agentJobRuns: 0,
     });
     expect(await emailCounts(t)).toEqual({
       connectors: 1, emailThreads: 1, emailMessages: 0, emailThreadTasks: 0, agentItems: 1, clientRequests: 1, emailPromises: 0,

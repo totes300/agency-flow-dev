@@ -308,6 +308,7 @@ export const classifyMessage = internalAction({
             messageId: args.messageId,
             generation: args.generation,
             result: screenedOutClassification(senderScreen, source),
+            fakeModel: args.fakeModel,
           });
           return null;
         }
@@ -325,6 +326,8 @@ export const classifyMessage = internalAction({
         messageId: args.messageId,
         generation: args.generation,
         result,
+        // The next stages need it too: dispatch starts the (canned) plan (B6a).
+        fakeModel: args.fakeModel,
       });
     } catch (err) {
       await ctx.runMutation(internal.email.pipeline.recordStageFailure, {

@@ -399,7 +399,17 @@ describe("proposal revisions in a shared thread", () => {
     ).toEqual({ revision: 3 });
     const row = (await t.run((ctx) => ctx.db.get(proposalId)))!;
     expect(row).toMatchObject({ revision: 3, payload: { title: "Plan v2" } });
-    expect(row.editedPayload).toBeUndefined();
+    // D25 (B6a): the owner's title edit survives a revision that didn't change it …
+    expect(row.editedPayload).toMatchObject({ title: "Human edit" });
+    // … and gives way when the agent marks the title as changed by new content.
+    expect(
+      await t.mutation(internal.agentProposals.updateProposalPayload, {
+        componentThreadId, proposalId, payload: { kind: "createTask", title: "Plan v3" }, changedFields: ["title"],
+      }),
+    ).toEqual({ revision: 4 });
+    const row2 = (await t.run((ctx) => ctx.db.get(proposalId)))!;
+    expect(row2).toMatchObject({ revision: 4, payload: { title: "Plan v3" } });
+    expect(row2.editedPayload).toBeUndefined();
 
     await expect(
       t.withIdentity(IDENTITY.admin2).mutation(api.agentProposals.approve, { proposalId, revision: 2 }),

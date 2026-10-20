@@ -32,9 +32,11 @@ export const PRIMARY_LABELS: Record<TriagePrimary, string> = {
 type Detail = Pick<
   TriageItemDetail,
   "kind" | "status" | "state" | "plan" | "change" | "commit" | "draftId" | "planIssue" | "attentions"
->
+> & { mailboxIssue?: TriageItemDetail["mailboxIssue"] }
 
 export function primaryAction(d: Detail): TriagePrimary | null {
+  // B3: "Mailbox not syncing" has only Reconnect / Resync — no ⌘↵ decision.
+  if (d.mailboxIssue) return null
   if (d.status === "filtered") return "promote"
   if (d.status === "done") return null
   if (d.attentions.length > 0) return "retry"
@@ -50,12 +52,20 @@ export function primaryAction(d: Detail): TriagePrimary | null {
 }
 
 /** Whether the item can still be declined / merged / snoozed (open, not committed). */
-export function canTriage(d: Pick<TriageItemDetail, "status" | "commit" | "attentions">): boolean {
+export function canTriage(
+  d: Pick<TriageItemDetail, "status" | "commit" | "attentions"> & { mailboxIssue?: TriageItemDetail["mailboxIssue"] },
+): boolean {
+  // B3: a failing mailbox is not an email decision — no Decline / Merge / Snooze (it closes itself).
+  if (d.mailboxIssue) return false
   return (d.status === "open" || d.status === "snoozed") && !d.commit && d.attentions.length === 0
 }
 
 /** Merge needs a client and a fresh email item (not already about a task). */
-export function canMerge(d: Pick<TriageItemDetail, "status" | "commit" | "attentions" | "kind" | "clientId">): boolean {
+export function canMerge(
+  d: Pick<TriageItemDetail, "status" | "commit" | "attentions" | "kind" | "clientId"> & {
+    mailboxIssue?: TriageItemDetail["mailboxIssue"]
+  },
+): boolean {
   return canTriage(d) && d.kind !== "change" && d.kind !== "approval" && d.clientId !== null
 }
 

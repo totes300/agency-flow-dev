@@ -16,6 +16,16 @@ crons.interval(
   {},
 );
 
+// Email triage D36: poll every connected Gmail mailbox from its history
+// cursor (B3, email/sync.ts → email/syncNode.ts). One run per mailbox at a
+// time (lease); seed mailboxes never; flagged orgs only (I14).
+crons.interval(
+  "sync gmail mailboxes",
+  { minutes: 1 },
+  internal.email.sync.scheduleSyncs,
+  {},
+);
+
 // Email triage I5: an inbound message stuck in a work stage for 30 min (its
 // scheduled work was lost) is re-kicked. Flagged orgs only (I14).
 crons.interval(

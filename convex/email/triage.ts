@@ -225,7 +225,8 @@ export async function dispatchMessage(
 
   const linked = await resolveLinkedTask(ctx, thread, [thread.subject, message.subject]);
   const decision = decideDispatch({
-    knownSender: Boolean(thread.clientId) || linked !== null,
+    // B3 (M1): an unauthenticated sender is never "known", whatever the thread says.
+    knownSender: message.unverifiedSender !== true && (Boolean(thread.clientId) || linked !== null),
     mailboxOwnerIsAdmin: await isMailboxOwnerAdmin(ctx, thread),
     linked: linked ? { taskId: linked.task._id, workflowRole: linked.workflowRole } : null,
     intents: classification.intents,

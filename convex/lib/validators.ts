@@ -57,6 +57,15 @@ export const emailThreadTaskRoleValidator = v.union(
   v.literal("merged"),
 );
 
+/** Why a mailbox sync failed (B3, connectors.sync.error) — the fix shown keys off it (§7.6). */
+export const syncErrorKindValidator = v.union(
+  v.literal("disconnected"),
+  v.literal("permission"),
+  v.literal("quota"),
+  v.literal("transient"),
+  v.literal("unknown"),
+);
+
 export const emailDirectionValidator = v.union(
   v.literal("inbound"),
   v.literal("outbound"),

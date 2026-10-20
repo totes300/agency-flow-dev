@@ -1,6 +1,11 @@
 "use client"
 
+import { useState } from "react"
 import Link from "next/link"
+import { useMutation } from "convex/react"
+import { toast } from "sonner"
+import { api } from "@/convex/_generated/api"
+import { toastError } from "@/lib/toast-helpers"
 import { AlertCircleIcon } from "lucide-react"
 import type { TriageItemDetail } from "@/convex/email/triageView"
 import { OUTCOME_LABELS } from "@/lib/agents/triageState"
@@ -24,6 +29,7 @@ import type { TriageActions } from "@/components/triage/use-triage-actions"
  *   attention              Retry · Reconnect (when the mailbox is disconnected)
  *   plan issue             Retry, or "Set the agent actor in Settings"
  *   filtered               Move to Triage
+ *   mailbox not syncing    Reconnect · Resync last 7 days (no Done / Decline / Merge — it closes itself)
  *
  * The kickoff / reply email's Send lives in its email block (B8a).
  */
@@ -36,6 +42,8 @@ export function TriageDecision({ detail, actions }: { detail: TriageItemDetail; 
     const outcome = detail.outcome ? OUTCOME_LABELS[detail.outcome] : "Done"
     return <Line>{`${outcome} · this email is done`}</Line>
   }
+
+  if (detail.mailboxIssue) return <MailboxIssueDecision detail={detail} issue={detail.mailboxIssue} />
 
   if (detail.attentions.length > 0) {
     const reconnect = detail.mailbox && !detail.mailbox.connected
@@ -183,3 +191,40 @@ function Amber({ children }: { children: React.ReactNode }) {
     </span>
   )
 }
+
+/** B3: a mailbox that stopped syncing — Reconnect (its owner, on Connectors) or Resync (any admin). */
+function MailboxIssueDecision({
+  detail,
+  issue,
+}: {
+  detail: TriageItemDetail
+  issue: NonNullable<TriageItemDetail["mailboxIssue"]>
+}) {
+  const resync = useMutation(api.email.sync.resyncMailboxAsAdmin)
+  const [busy, setBusy] = useState(false)
+  async function handleResync() {
+    setBusy(true)
+    try {
+      await resync({ connectorId: issue.connectorId })
+      toast.success("Resyncing the last 7 days.")
+    } catch (err) {
+      toastError(err, "Couldn't start the resync")
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <Bar note={<Amber>{detail.decisionNote ?? `${issue.email ?? "This mailbox"} isn't syncing.`}</Amber>}>
+      <Button asChild variant="ghost" size="sm" className="text-muted-foreground">
+        <Link href="/agents?view=connectors">Reconnect</Link>
+      </Button>
+      {issue.connected && (
+        <Button variant="ghost" size="sm" onClick={() => void handleResync()} disabled={busy}>
+          {busy && <Spinner data-icon="inline-start" />}
+          Resync last 7 days
+        </Button>
+      )}
+    </Bar>
+  )
+}
+

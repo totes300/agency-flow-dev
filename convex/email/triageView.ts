@@ -16,6 +16,7 @@ import { currentAuth } from "./drafts";
 import { assertDecidable, loadEmailItemForAdmin, loadItemThread } from "./items";
 import { requestPlanning, requestPlanningSafely, type PlanningRequest } from "./prepare";
 import { retryStageCore } from "./pipeline";
+import { MAILBOX_ANCHOR_TYPE } from "./sync";
 
 /**
  * The Triage read model and its small actions (docs/prd-email-triage.md
@@ -124,7 +125,10 @@ async function stateOf(
     status: item.status,
     kind: item.kind,
     outcome: item.outcome ?? null,
-    attentionMessage: openAttentions(item)[0]?.message ?? null,
+    // B3: a failing mailbox's item says why (its sync error), like a failed stage.
+    attentionMessage:
+      openAttentions(item)[0]?.message ??
+      (item.anchor.type === MAILBOX_ANCHOR_TYPE ? (item.decisionNote?.message ?? "Mailbox not syncing") : null),
     planIssue: item.planIssue ? { kind: item.planIssue.kind, message: item.planIssue.message } : null,
     running: closed ? false : await runInFlight(ctx, item),
     pendingQuestion: closed ? false : await hasPendingQuestion(ctx, item),
@@ -138,6 +142,15 @@ async function stateOf(
 }
 
 // ─── Titles ──────────────────────────────────────────────────────────────────
+
+/** B3: "Mailbox not syncing · ‹address›" for a failing mailbox's item (no email thread); else null. */
+async function mailboxItemTitle(ctx: QueryCtx, item: Doc<"agentItems">): Promise<string | null> {
+  if (item.anchor.type !== MAILBOX_ANCHOR_TYPE) return null;
+  const id = ctx.db.normalizeId("connectors", item.anchor.id);
+  const connector = id ? await ctx.db.get(id) : null;
+  const address = connector && connector.orgId === item.orgId ? connector.credentialMask : null;
+  return address ? `Mailbox not syncing · ${address}` : "Mailbox not syncing";
+}
 
 type Sender = { name: string | null; email: string };
 
@@ -190,6 +203,8 @@ export type TriageRow = {
   at: number;
   messageCount: number;
   urgent: boolean;
+  /** B3 (M1): the latest email's sender wasn't authenticated by Gmail (a quiet amber note). */
+  unverifiedSender: boolean;
   snoozedUntil: number | null;
   state: TriageState;
 };
@@ -207,7 +222,7 @@ async function rowOf(ctx: QueryCtx, item: Doc<"agentItems">): Promise<TriageRow>
     status: item.status,
     title: rowTitle({
       kind: item.kind,
-      subject: thread?.subject ?? message?.subject ?? "",
+      subject: (await mailboxItemTitle(ctx, item)) ?? thread?.subject ?? message?.subject ?? "",
       planTitles: planTasks.map((p) => p.title),
       committed: Boolean(item.commit),
       task: task ? { identifier: task.identifier, title: task.title } : null,
@@ -218,6 +233,7 @@ async function rowOf(ctx: QueryCtx, item: Doc<"agentItems">): Promise<TriageRow>
     at: message?.sentAt ?? thread?.lastInboundAt ?? item.createdAt,
     messageCount: item.messageCount ?? (item.messageIds ?? []).length,
     urgent: item.urgent === true,
+    unverifiedSender: message?.unverifiedSender === true,
     snoozedUntil: item.snoozedUntil ?? null,
     state: await stateOf(ctx, item, planTasks),
   };
@@ -361,6 +377,11 @@ export type TriageItemDetail = {
   decisionNote: string | null;
   linkedTask: { _id: Id<"tasks">; identifier: string; title: string } | null;
   mailbox: { email: string | null; connected: boolean } | null;
+  /**
+   * B3: a "Mailbox not syncing" item (no email thread) — its only actions are
+   * Reconnect and Resync; it closes itself when sync recovers or on disconnect.
+   */
+  mailboxIssue: { connectorId: Id<"connectors">; email: string | null; connected: boolean } | null;
   emails: TriageEmail[];
 };
 
@@ -441,7 +462,7 @@ export const getItem = query({
       kickoffOutcome: item.kickoffOutcome ?? null,
       title: rowTitle({
         kind: item.kind,
-        subject: thread?.subject ?? lastInbound?.subject ?? "",
+        subject: (await mailboxItemTitle(ctx, item)) ?? thread?.subject ?? lastInbound?.subject ?? "",
         planTitles: planTasks.map((p) => p.title),
         committed: Boolean(item.commit),
         task: task ? { identifier: task.identifier, title: task.title } : null,
@@ -473,10 +494,19 @@ export const getItem = query({
       mailbox: connector && connector.orgId === item.orgId
         ? { email: connector.credentialMask ?? null, connected: connector.status === "connected" }
         : null,
+      mailboxIssue: await mailboxIssueOf(ctx, item),
       emails,
     };
   },
 });
+
+async function mailboxIssueOf(ctx: QueryCtx, item: Doc<"agentItems">): Promise<TriageItemDetail["mailboxIssue"]> {
+  if (item.anchor.type !== MAILBOX_ANCHOR_TYPE) return null;
+  const id = ctx.db.normalizeId("connectors", item.anchor.id);
+  const connector = id ? await ctx.db.get(id) : null;
+  if (!connector || connector.orgId !== item.orgId) return null;
+  return { connectorId: connector._id, email: connector.credentialMask ?? null, connected: connector.status === "connected" };
+}
 
 // ─── mergeCandidates ─────────────────────────────────────────────────────────
 

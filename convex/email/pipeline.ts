@@ -620,7 +620,9 @@ export const loadClassifyInput = internalQuery({
     if (!thread || thread.orgId !== message.orgId) return null;
     const connector = await ctx.db.get(thread.connectorId);
     const linked = await resolveLinkedTask(ctx, thread, [thread.subject, message.subject]);
-    const needsScreen = !thread.clientId && !linked && (await isMailboxOwnerAdmin(ctx, thread));
+    // B3 (M1): a sender Gmail did not authenticate is screened like an unknown one.
+    const needsScreen =
+      (message.unverifiedSender === true || (!thread.clientId && !linked)) && (await isMailboxOwnerAdmin(ctx, thread));
     const client = thread.clientId ? await ctx.db.get(thread.clientId) : null;
 
     let linkedTask: ClassifyInput["prompt"]["linkedTask"] = null;

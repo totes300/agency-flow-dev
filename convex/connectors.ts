@@ -65,6 +65,8 @@ import {
   type ConnectorStatus,
 } from "../lib/agents/connectors";
 import { isEmailTriageEnabled } from "./email/gate";
+import { syncErrorFix, type SyncErrorKind } from "./email/syncModel";
+import { closeMailboxAttention } from "./email/mailboxItem";
 
 const CONNECTOR_TOKEN_MIN_LEN = 8;
 const CONNECTOR_TOKEN_MAX_LEN = 4096;
@@ -116,7 +118,15 @@ export type ConnectorListItem = {
   lastUsedAt: number | null;
   scopes: string[];
   /** Polling sync state (Gmail) — null when the type doesn't sync or never did. */
-  sync: { lastSyncAt: number | null; error: { message: string; at: number } | null } | null;
+  sync: {
+    lastSyncAt: number | null;
+    /** B3: the last run's failure; `fix` is what to do about it (§7.6). */
+    error: { kind: SyncErrorKind | null; message: string; fix: string | null; at: number } | null;
+    /** B3: a `Resync last 7 days` is in progress. */
+    resyncing: boolean;
+    /** B3 (H1/H2): emails the sync could not read or store (passed; open them in Gmail). */
+    unprocessable: { count: number; lastAt: number } | null;
+  } | null;
   /** The email-triage dev seed mailbox occupies the slot (connect is refused). */
   isDemo: boolean;
 };
@@ -155,7 +165,24 @@ export const list = query({
         lastUsedAt: row?.lastUsedAt ?? null,
         scopes: row?.scopes ?? [...meta.defaultScopes],
         sync: row?.sync
-          ? { lastSyncAt: row.sync.lastSyncAt ?? null, error: row.sync.error ?? null }
+          ? {
+              lastSyncAt: row.sync.lastSyncAt ?? null,
+              error: row.sync.error
+                ? {
+                    kind: row.sync.error.kind ?? null,
+                    message: row.sync.error.message,
+                    fix: row.sync.error.kind ? syncErrorFix(row.sync.error.kind) : null,
+                    at: row.sync.error.at,
+                  }
+                : null,
+              resyncing: row.sync.resyncRequestedAt !== undefined,
+              unprocessable: row.sync.unprocessable?.length
+                ? {
+                    count: row.sync.unprocessable.length,
+                    lastAt: Math.max(...row.sync.unprocessable.map((u) => u.at)),
+                  }
+                : null,
+            }
           : null,
         isDemo: row?.devSeed === true,
       };
@@ -275,6 +302,8 @@ export const disconnect = mutation({
       credentialMask: undefined,
       updatedAt: Date.now(),
     });
+    // B3 (L4): a disconnected mailbox has no "Mailbox not syncing" item.
+    if (row.type === "gmail") await closeMailboxAttention(ctx, row);
     return null;
   },
 });

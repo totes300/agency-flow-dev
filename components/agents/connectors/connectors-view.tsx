@@ -7,13 +7,15 @@
  * redirect for Gmail) / disconnect / status. Not admin-gated: a connector
  * authenticates the running user's own account (US 37–39).
  *
- * Gmail (email triage B1, D17): listed only when the org has
+ * Gmail (email triage B1, D17; B3 sync): listed only when the org has
  * `emailTriageEnabled` (the server decides — `api.connectors.list`). Connect
  * calls the `oauth.startGmailConnect` action and navigates to Google; the
  * callback sends the user back here with `?gmail=pending&t=…` — this page,
  * signed in, finishes it through `oauth.finishGmailConnect` (only the user
  * who started the flow can) — or `?gmail=error&reason=…`. Either becomes a
- * toast and the params are removed from the URL first.
+ * toast and the params are removed from the URL first. A connected Gmail row
+ * shows its last sync, the sync error with its fix, and `Resync last 7 days`
+ * (`email/sync.resyncMyMailbox`, D34).
  *
  * Security posture (mirrors Settings → Integrations):
  *   - The token plaintext lives in memory only during the paste→save flow;
@@ -145,6 +147,8 @@ export function ConnectorsView() {
 function ConnectorCard({ connector }: { connector: ConnectorListItem }) {
   const disconnect = useMutation(api.connectors.disconnect)
   const startGmailConnect = useAction(api.oauth.startGmailConnect)
+  const resyncMyMailbox = useMutation(api.email.sync.resyncMyMailbox)
+  const [resyncing, setResyncing] = useState(false)
   const [connectOpen, setConnectOpen] = useState(false)
   const [disconnectOpen, setDisconnectOpen] = useState(false)
   const [redirecting, setRedirecting] = useState(false)
@@ -160,6 +164,22 @@ function ConnectorCard({ connector }: { connector: ConnectorListItem }) {
       setDisconnectOpen(false)
     } catch (err) {
       toastError(err, `Couldn't disconnect ${connector.displayName}`)
+    }
+  }
+
+  async function handleResync() {
+    setResyncing(true)
+    try {
+      const { alreadyRunning } = await resyncMyMailbox({})
+      toast.success(
+        alreadyRunning
+          ? "A resync is already running."
+          : "Resyncing the last 7 days — new client emails show up in Triage.",
+      )
+    } catch (err) {
+      toastError(err, "Couldn't start the resync")
+    } finally {
+      setResyncing(false)
     }
   }
 
@@ -227,6 +247,16 @@ function ConnectorCard({ connector }: { connector: ConnectorListItem }) {
               {isOAuth && connector.sync?.error && (
                 <p className="text-xs text-destructive">
                   Sync error: {connector.sync.error.message}
+                  {connector.sync.error.fix ? (
+                    <span className="text-muted-foreground"> {connector.sync.error.fix}</span>
+                  ) : null}
+                </p>
+              )}
+              {isOAuth && connector.sync?.unprocessable && (
+                <p className="text-xs text-muted-foreground">
+                  {connector.sync.unprocessable.count === 1
+                    ? "1 email couldn't be read and was skipped — open it in Gmail."
+                    : `${connector.sync.unprocessable.count} emails couldn't be read and were skipped — open them in Gmail.`}
                 </p>
               )}
               {isOAuth && needsReconnect && (
@@ -247,6 +277,19 @@ function ConnectorCard({ connector }: { connector: ConnectorListItem }) {
         <div className="flex shrink-0 items-center gap-2">
           {connector.isDemo ? null : isConnected ? (
             <>
+              {isOAuth && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void handleResync()}
+                  disabled={resyncing || connector.sync?.resyncing === true}
+                >
+                  {resyncing || connector.sync?.resyncing ? (
+                    <Loader2Icon className="size-3.5 animate-spin" aria-hidden />
+                  ) : null}
+                  Resync last 7 days
+                </Button>
+              )}
               {!isOAuth && (
                 <Button
                   variant="outline"
@@ -321,7 +364,10 @@ function ConnectorCard({ connector }: { connector: ConnectorListItem }) {
 }
 
 function syncLabel(sync: ConnectorListItem["sync"]): string {
-  if (!sync?.lastSyncAt) return "Not synced yet"
+  if (sync?.resyncing) return "resyncing the last 7 days…"
+  if (!sync?.lastSyncAt) return "not synced yet"
+  // An idle mailbox records its sync at most every 5 minutes (B3).
+  if (Date.now() - sync.lastSyncAt < 6 * 60_000) return "last sync · a few minutes ago"
   return `last sync ${formatRelativeTime(sync.lastSyncAt)}`
 }
 

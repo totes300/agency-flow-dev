@@ -1,6 +1,6 @@
 /**
  * A minimal Gmail REST client (docs/prd-email-triage.md B1; B5 adds send +
- * the Message-ID search; B3 adds history / messages). Plain `fetch` against
+ * the Message-ID search; B3 adds history, raw messages and the resync list). Plain `fetch` against
  * `https://gmail.googleapis.com/gmail/v1` — no SDK — so it runs in the default
  * Convex runtime (no "use node").
  *
@@ -49,9 +49,54 @@ export type GmailProfile = {
 /** A message Gmail accepted / found: its provider ids. */
 export type GmailMessageRef = { id: string; threadId: string };
 
-/** What the email jobs depend on. B3 extends it (history, messages). */
+/** A message a history record added (B3), with its labels at that point. */
+export type GmailAddedMessage = GmailMessageRef & { labelIds: string[] };
+
+/** One users.history record, reduced to the messages it added (B3, D36). */
+export type GmailHistoryRecord = { id: string; messagesAdded: GmailAddedMessage[] };
+
+/**
+ * users.history.list (B3). `expired: true` = Gmail answered 404: the
+ * `startHistoryId` is older than the mailbox keeps (≈ a week) — the caller
+ * runs the bounded resync.
+ */
+export type GmailHistoryPage =
+  | { expired: true }
+  | { expired: false; history: GmailHistoryRecord[]; nextPageToken: string | null; historyId: string };
+
+/** users.messages.get?format=raw (B3): the RFC 822 bytes as base64url. */
+export type GmailRawMessage = {
+  id: string;
+  threadId: string;
+  labelIds: string[];
+  /** Epoch ms Gmail received it (fallback for a missing / bad Date header). */
+  internalDate: number | null;
+  sizeEstimate: number | null;
+  raw: string;
+};
+
+/** What the email jobs depend on. */
 export interface GmailClient {
   getProfile(): Promise<GmailProfile>;
+  /**
+   * users.history.list since `startHistoryId` (B3, D36). Keep the same
+   * `startHistoryId` while following `pageToken`. A 404 is an expired
+   * cursor (`{ expired: true }`), not an error.
+   */
+  listHistory(args: {
+    startHistoryId: string;
+    historyTypes?: readonly "messageAdded"[];
+    labelId?: string;
+    pageToken?: string;
+    maxResults?: number;
+  }): Promise<GmailHistoryPage>;
+  /** users.messages.get?format=raw (B3); null when the message is gone (404). */
+  getMessage(id: string, format: "raw"): Promise<GmailRawMessage | null>;
+  /** users.messages.list with a search (B3 bounded resync: `newer_than:7d`). Newest first. */
+  listMessages(args: { q: string; pageToken?: string; maxResults?: number }): Promise<{
+    messages: GmailMessageRef[];
+    nextPageToken: string | null;
+  }>;
   /**
    * users.messages.send (B5). `raw` = the RFC 2822 message, base64url
    * (email/mime.ts `buildGmailRaw`); `threadId` keeps a reply in the
@@ -72,6 +117,8 @@ export interface GmailClient {
 export const GMAIL_SEND_TIMEOUT_MS = 60_000;
 /** Other calls (profile, search) time out sooner; that is a plain transient error. */
 export const GMAIL_REQUEST_TIMEOUT_MS = 30_000;
+/** A raw message download may carry 25 MB of attachments — give it longer. */
+export const GMAIL_RAW_TIMEOUT_MS = 90_000;
 
 const RATE_LIMIT_REASONS = new Set([
   "rateLimitExceeded",
@@ -117,6 +164,15 @@ export function classifyGmailHttpError(status: number, body: unknown): { kind: G
   return { kind: "unknown", reason };
 }
 
+/** Gmail ids arrive as strings (history ids sometimes as numbers). */
+function idString(value: unknown): string {
+  return typeof value === "string" ? value : typeof value === "number" ? String(value) : "";
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((x): x is string => typeof x === "string") : [];
+}
+
 /**
  * The real client. `accessToken` is a getter so a long-running job can hand
  * in `() => getGmailAccessToken(ctx, connectorId)` and get a refreshed token
@@ -148,6 +204,7 @@ export function createGmailClient(
         signal: controller.signal,
       });
     } catch {
+      clearTimeout(timer);
       // A send that may have reached Gmail is not "transient": it is unknown.
       throw new GmailApiError(
         opts.ambiguous ? "unknown" : "transient",
@@ -155,14 +212,23 @@ export function createGmailClient(
         null,
         `Gmail ${method} ${route} failed: network error or timeout`,
       );
-    } finally {
-      clearTimeout(timer);
     }
+    // The timeout stays armed until the BODY is read (a slow body is a timeout too).
     let parsed: unknown = null;
     try {
       parsed = await res.json();
     } catch {
       parsed = null;
+      if (controller.signal.aborted) {
+        throw new GmailApiError(
+          opts.ambiguous ? "unknown" : "transient",
+          0,
+          null,
+          `Gmail ${method} ${route} failed: timeout while reading the answer`,
+        );
+      }
+    } finally {
+      clearTimeout(timer);
     }
     if (!res.ok) {
       const { kind, reason } = classifyGmailHttpError(res.status, parsed);
@@ -188,6 +254,79 @@ export function createGmailClient(
         historyId: typeof raw?.historyId === "string" ? raw.historyId : String(raw?.historyId ?? ""),
         messagesTotal: typeof raw?.messagesTotal === "number" ? raw.messagesTotal : null,
         threadsTotal: typeof raw?.threadsTotal === "number" ? raw.threadsTotal : null,
+      };
+    },
+
+    async listHistory({ startHistoryId, historyTypes, labelId, pageToken, maxResults }) {
+      const params = new URLSearchParams({ startHistoryId });
+      for (const type of historyTypes ?? ["messageAdded"]) params.append("historyTypes", type);
+      if (labelId) params.set("labelId", labelId);
+      if (pageToken) params.set("pageToken", pageToken);
+      if (maxResults) params.set("maxResults", String(maxResults));
+      let res: Record<string, unknown> | null;
+      try {
+        res = await request<Record<string, unknown> | null>("GET", `/users/me/history?${params.toString()}`);
+      } catch (err) {
+        if (err instanceof GmailApiError && err.status === 404) return { expired: true };
+        throw err;
+      }
+      const records = Array.isArray(res?.history) ? (res.history as Record<string, unknown>[]) : [];
+      const history: GmailHistoryRecord[] = records.map((r) => ({
+        id: idString(r.id),
+        messagesAdded: (Array.isArray(r.messagesAdded) ? (r.messagesAdded as Record<string, unknown>[]) : [])
+          .map((a) => a.message as Record<string, unknown> | undefined)
+          .filter((m): m is Record<string, unknown> => !!m && typeof m.id === "string" && !!m.id)
+          .map((m) => ({
+            id: m.id as string,
+            threadId: typeof m.threadId === "string" ? m.threadId : "",
+            labelIds: stringArray(m.labelIds),
+          })),
+      }));
+      return {
+        expired: false,
+        history,
+        nextPageToken: typeof res?.nextPageToken === "string" && res.nextPageToken ? res.nextPageToken : null,
+        historyId: idString(res?.historyId),
+      };
+    },
+
+    async getMessage(id, format) {
+      let res: Record<string, unknown> | null;
+      try {
+        res = await request<Record<string, unknown> | null>(
+          "GET",
+          `/users/me/messages/${encodeURIComponent(id)}?format=${format}`,
+          undefined,
+          { timeoutMs: GMAIL_RAW_TIMEOUT_MS },
+        );
+      } catch (err) {
+        if (err instanceof GmailApiError && err.status === 404) return null;
+        throw err;
+      }
+      if (!res || typeof res.raw !== "string") {
+        throw new GmailApiError("unknown", 200, null, "Gmail returned a message without its raw content");
+      }
+      const internalDate = Number(res.internalDate);
+      const sizeEstimate = Number(res.sizeEstimate);
+      return {
+        id: typeof res.id === "string" ? res.id : id,
+        threadId: typeof res.threadId === "string" ? res.threadId : "",
+        labelIds: stringArray(res.labelIds),
+        internalDate: Number.isFinite(internalDate) && internalDate > 0 ? internalDate : null,
+        sizeEstimate: Number.isFinite(sizeEstimate) ? sizeEstimate : null,
+        raw: res.raw,
+      };
+    },
+
+    async listMessages({ q, pageToken, maxResults }) {
+      const params = new URLSearchParams({ q });
+      if (pageToken) params.set("pageToken", pageToken);
+      if (maxResults) params.set("maxResults", String(maxResults));
+      const res = await request<Record<string, unknown> | null>("GET", `/users/me/messages?${params.toString()}`);
+      const list = Array.isArray(res?.messages) ? (res.messages as Record<string, unknown>[]) : [];
+      return {
+        messages: list.map(readRef).filter((r): r is GmailMessageRef => r !== null),
+        nextPageToken: typeof res?.nextPageToken === "string" && res.nextPageToken ? res.nextPageToken : null,
       };
     },
 
@@ -230,4 +369,20 @@ export function createGmailClient(
       return null;
     },
   };
+}
+
+// ─── The B3 sync's transport (tests inject a fake) ──────────────────────────
+
+let syncTestTransport: GmailTransport | null = null;
+
+/** Route every Gmail call of the B3 sync (`email/syncNode.ts`) through `transport` — vitest only. */
+export function setSyncGmailTransportForTesting(transport: GmailTransport | null): void {
+  const isTest = typeof process !== "undefined" && Boolean(process.env.VITEST);
+  if (!isTest) throw new Error("setSyncGmailTransportForTesting is test-only");
+  syncTestTransport = transport;
+}
+
+/** The transport the sync uses: the real `fetch`, or the test's fake. */
+export function syncGmailTransport(): GmailTransport {
+  return syncTestTransport ?? ((url, init) => fetch(url, init));
 }

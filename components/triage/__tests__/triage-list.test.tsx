@@ -21,6 +21,7 @@ function row(over: Partial<Omit<TriageRow, "_id">> & { _id: string }): TriageRow
     at: NOW,
     messageCount: 1,
     urgent: false,
+    unverifiedSender: false,
     snoozedUntil: null,
     state: { label: "New", tone: "progress", live: false, fresh: true },
     ...over,

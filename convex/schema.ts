@@ -43,6 +43,7 @@ import {
   emailPromiseStatusValidator,
   emailThreadTaskRoleValidator,
   emailWaitingOnValidator,
+  syncErrorKindValidator,
 } from "./lib/validators";
 import {
   activityLogValidator,
@@ -1314,17 +1315,34 @@ export default defineSchema({
     scopes: v.array(v.string()),
     connectedAt: v.number(),
     lastUsedAt: v.optional(v.number()),
-    // Polling sync state (email triage S4, D34, D36) — any polling connector
-    // syncs the same way. Gmail: `cursor` = history id, set to "now" on first
-    // connect (no backfill). `error` shows on the connector row and as
-    // "Mailbox not syncing" in Triage. The B1 callback initialises it to
-    // `{ cursor: undefined }`. TODO(B3): written by email/gmail.ts.
+    // Polling sync state (email triage S4, D34, D36) — what the connector row
+    // shows; it changes only on a failure, a recovery, a resync request, or
+    // `lastSyncAt` at most every 5 minutes when idle (so `connectors.list` is
+    // not invalidated every minute). The cursor, the run lease and the resync
+    // progress live in `mailboxSyncStates` (B3). `cursor` here is legacy (the
+    // B1 callback still writes `{ cursor: undefined }` for a fresh start).
     sync: v.optional(
       v.object({
         cursor: v.optional(v.string()),
+        // B3: names the `mailboxSyncStates` row this sync state belongs to; a
+        // fresh start (B1 resets `sync`) drops the key, so the old cursor is not reused.
+        stateKey: v.optional(v.string()),
         lastSyncAt: v.optional(v.number()),
         lastFullSyncAt: v.optional(v.number()),
-        error: v.optional(v.object({ message: v.string(), at: v.number() })),
+        error: v.optional(
+          v.object({ kind: v.optional(syncErrorKindValidator), message: v.string(), at: v.number() }),
+        ),
+        // B3: the first failure of the current failing streak (cleared on success).
+        failingSince: v.optional(v.number()),
+        failures: v.optional(v.number()),
+        // B3: no automatic run before this (transient / quota backoff).
+        backoffUntil: v.optional(v.number()),
+        // B3: `Resync last 7 days` asked and not finished yet (the row's "resyncing…").
+        resyncRequestedAt: v.optional(v.number()),
+        // B3 (H1/H2): messages the sync could not read or store — passed, listed here.
+        unprocessable: v.optional(
+          v.array(v.object({ gmailMessageId: v.string(), reason: v.string(), at: v.number() })),
+        ),
       }),
     ),
     // A dev seed row (convex/devSeedEmail.ts) — never connected to the
@@ -1336,7 +1354,36 @@ export default defineSchema({
     .index("by_orgId_userId", ["orgId", "userId"])
     .index("by_orgId_userId_type", ["orgId", "userId", "type"])
     // One live mailbox per address per org (B1 L2) + the revoke guard.
-    .index("by_orgId_type_credentialMask", ["orgId", "type", "credentialMask"]),
+    .index("by_orgId_type_credentialMask", ["orgId", "type", "credentialMask"])
+    // B3 sync cron (D36): the connected mailboxes of a flagged org.
+    .index("by_orgId_type_status", ["orgId", "type", "status"]),
+
+  // B3: the high-churn half of a mailbox sync (D36) — the history cursor, the
+  // one-run-at-a-time lease, the bounded resync's progress and the per-message
+  // attempt markers (H1). One row per gmail connector; never read by a UI query.
+  mailboxSyncStates: defineTable({
+    orgId: v.string(),
+    connectorId: v.id("connectors"),
+    // Matches `connectors.sync.stateKey`; a mismatch means a fresh start.
+    stateKey: v.string(),
+    cursor: v.optional(v.string()),
+    leaseId: v.optional(v.string()),
+    leaseUntil: v.optional(v.number()),
+    resync: v.optional(
+      v.object({
+        reason: v.union(v.literal("manual"), v.literal("expired")),
+        requestedAt: v.number(),
+        // The history id captured before listing; the cursor once the resync ends.
+        newCursor: v.optional(v.string()),
+        // The page being read, and the ids of it already done (L3).
+        pageToken: v.optional(v.string()),
+        doneIds: v.optional(v.array(v.string())),
+      }),
+    ),
+    // H1: a download being parsed / stored; a crash leaves the marker, the 3rd skips it.
+    attempts: v.optional(v.array(v.object({ gmailMessageId: v.string(), count: v.number(), at: v.number() }))),
+    updatedAt: v.number(),
+  }).index("by_connectorId", ["connectorId"]),
 
 
   // ─── Email triage (docs/prd-email-triage.md §4.1) ──────────────────────────
@@ -1474,9 +1521,19 @@ export default defineSchema({
     cc: v.array(emailAddressValidator),
     subject: v.string(),
     bodyText: v.string(), // quoted history stripped (email/model.ts stripQuoted) — what the agent reads
-    bodyHtml: v.optional(v.string()), // full body for the Gmail-style view (sanitised on render)
+    // Full body for the Gmail-style view. UNTRUSTED client HTML (B3 stores it
+    // as received): never render it unsandboxed — sanitise, or show it in a
+    // sandboxed iframe with no script / same-origin.
+    bodyHtml: v.optional(v.string()),
     attachments: v.array(emailMessageAttachmentValidator),
     sentAt: v.number(),
+    // B3 (H2): To / Cc entries beyond the 100 kept.
+    toOverflow: v.optional(v.number()),
+    ccOverflow: v.optional(v.number()),
+    // B3 (M1): Gmail could not authenticate the sender (no DMARC pass, no
+    // aligned SPF / DKIM pass) while the From claims a client or a colleague —
+    // treated as an unknown sender. TODO(B8): a quiet amber "Unverified sender" on the Triage row.
+    unverifiedSender: v.optional(v.boolean()),
     classification: v.optional(emailClassificationValidator), // inbound only (§6.3)
     stage: emailMessageStageValidator, // I5
     stageError: v.optional(

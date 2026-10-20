@@ -166,6 +166,7 @@ export function TriageRow({
           <span className="min-w-0 truncate">{who || "Unknown sender"}</span>
           <span className="flex-1" />
           {row.urgent && <span className="shrink-0 text-destructive">Urgent</span>}
+          {row.unverifiedSender && <span className="shrink-0 text-amber-600 dark:text-amber-500">Unverified sender</span>}
           <span className="shrink-0 tabular-nums">{formatRowTime(row.at)}</span>
         </span>
         <span className={cn("w-full truncate text-[13px]", row.state.fresh ? "font-semibold" : "font-medium")}>{row.title}</span>

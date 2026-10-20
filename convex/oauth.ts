@@ -446,8 +446,8 @@ async function activateGmailConnection(
   grant: Doc<"oauthPendingGrants">,
 ): Promise<void> {
   const now = Date.now();
-  // TODO(B3): the first sync sets `sync.cursor` to the profile's current
-  // historyId ("start from now", D34) when it finds no cursor.
+  // The first sync (email/syncNode.ts) sets `sync.cursor` to the profile's
+  // current historyId ("start from now", D34) when it finds no cursor.
   if (existing) {
     const sameMailbox = existing.credentialMask === grant.emailAddress && existing.status !== "revoked";
     await ctx.db.patch(existing._id, {
@@ -457,7 +457,11 @@ async function activateGmailConnection(
       scopes: grant.scopes,
       connectedAt: now,
       lastUsedAt: undefined,
-      sync: sameMailbox && existing.sync ? { ...existing.sync, error: undefined } : { cursor: undefined },
+      // Same mailbox: keep the cursor (and a resync in progress); a fresh grant ends the failure streak.
+      sync:
+        sameMailbox && existing.sync
+          ? { ...existing.sync, error: undefined, failingSince: undefined, failures: undefined, backoffUntil: undefined }
+          : { cursor: undefined },
       updatedAt: now,
     });
     if (existing.credentialsCiphertext && existing.credentialMask !== grant.emailAddress) {

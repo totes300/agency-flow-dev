@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { ConvexError } from "convex/values";
 import { getFunctionName } from "convex/server";
 import { z } from "zod";
@@ -49,7 +49,7 @@ describe("MCP registry", () => {
       expect(Object.keys(tool.operations).length).toBeGreaterThan(0);
       for (const operation of Object.values(tool.operations)) {
         expect(getFunctionName(operation.query)).toMatch(/^mcp\//);
-        expect(typeof operation.run).toBe("function");
+        expect(typeof operation.render).toBe("function");
       }
       // The schema converts to JSON Schema for tools/list.
       const json = z.toJSONSchema(tool.inputSchema);
@@ -99,8 +99,18 @@ describe("fetch tool", () => {
 });
 
 describe("mcpErrorMessage", () => {
-  it("never leaks non-Convex errors", () => {
-    expect(mcpErrorMessage(new Error("db connection string ..."))).toBe("Internal error.");
+  it("passes Convex user errors through without logging", () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
     expect(mcpErrorMessage(new ConvexError("Visible"))).toBe("Visible");
+    expect(log).not.toHaveBeenCalled();
+    log.mockRestore();
+  });
+
+  it("logs other errors server-side and shows the model a generic message", () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const error = new Error("socket hang up");
+    expect(mcpErrorMessage(error)).toBe("Internal error.");
+    expect(log).toHaveBeenCalledWith("[mcp] tool error:", error);
+    log.mockRestore();
   });
 });

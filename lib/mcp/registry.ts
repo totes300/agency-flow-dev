@@ -26,10 +26,16 @@ export type McpToolContext = { runQuery: McpQueryRunner };
 
 export type McpToolResult = { text: string; isError: boolean };
 
-/** One Convex function a tool calls, paired with the renderer for its result. */
+/** An argument-less public query (the MCP functions derive everything from auth). */
+type ArglessQuery = FunctionReference<"query", "public", Record<string, never>>;
+
+/**
+ * One Convex function a tool calls, paired with the renderer for its result.
+ * Tools dispatch through `runOperation`, so this table is what actually runs.
+ */
 export type McpOperation = {
-  query: FunctionReference<"query">;
-  run: (ctx: McpToolContext) => Promise<string>;
+  query: ArglessQuery;
+  render: (data: unknown) => string;
 };
 
 export type McpTool = {
@@ -42,24 +48,29 @@ export type McpTool = {
   execute: (input: unknown, ctx: McpToolContext) => Promise<McpToolResult>;
 };
 
-/** An argument-less query paired with its renderer; keeps both typed. */
-function queryOperation<Query extends FunctionReference<"query", "public", Record<string, never>>>(
+/** Pairs a query with its renderer; the renderer is typed by the query's result. */
+function queryOperation<Query extends ArglessQuery>(
   query: Query,
   render: (data: FunctionReturnType<Query>) => string,
 ): McpOperation {
-  return {
-    query,
-    run: async (ctx) => render(await ctx.runQuery(query, {} as FunctionArgs<Query>)),
-  };
+  // Sound: `runOperation` only ever passes the result of `query` itself.
+  return { query, render: (data) => render(data as FunctionReturnType<Query>) };
+}
+
+/** Runs an operation's Convex query as the caller and renders the result. */
+export async function runOperation(operation: McpOperation, ctx: McpToolContext): Promise<string> {
+  return operation.render(await ctx.runQuery(operation.query, {}));
 }
 
 /**
  * Error text safe to show the model: Convex user errors (`ConvexError`, e.g.
- * "No organization selected …") pass through; anything else is generic so
- * internals never leak.
+ * "No organization selected …") pass through. Anything else is logged on the
+ * server and reported generically, so internals never reach the model. The
+ * error comes from Convex or a renderer and never carries the bearer token.
  */
 export function mcpErrorMessage(error: unknown): string {
   if (error instanceof ConvexError && typeof error.data === "string") return error.data;
+  console.error("[mcp] tool error:", error);
   return "Internal error.";
 }
 
@@ -102,7 +113,7 @@ const fetchTool: McpTool = {
         continue;
       }
       try {
-        sections.push(await specialRefOperations[parsed.ref.name].run(ctx));
+        sections.push(await runOperation(fetchTool.operations[parsed.ref.name], ctx));
       } catch (error) {
         failures += 1;
         sections.push(`Error fetching "${parsed.input}": ${mcpErrorMessage(error)}`);

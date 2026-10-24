@@ -9,9 +9,11 @@ import { addDaysToDateString } from "./todayPlan";
 import { createRefResolver, type RefResolver } from "./mcpRefs";
 import { commentPreview, isOverdue, orgClock, timeEntryRow, userNames, type OrgClock } from "./mcpRecords";
 import { listTaskCommentsForAuth } from "../comments";
+import { externalRefOwner, normalizeExternalRef } from "./mcpExternalRefs";
 import { filterReadableTasks } from "../tasks/access";
 import { findTaskDocsForAuth, toAgentTaskRows, type FindTasksInput } from "../tasks/lookup";
-import { isTaskCategory, type TaskCategory } from "../tasks/model";
+import { compareBySortKey, isClosedCategory, isTaskCategory, type TaskCategory } from "../tasks/model";
+import { loadAssignedTo, loadSubtasksOf, type Loaded } from "../tasks/read";
 import { visibleTimeEntries } from "../timeEntries";
 import { REF_CAP } from "../workspaceRefs";
 import { extractPlainText } from "../../lib/tiptap-utils";
@@ -29,7 +31,10 @@ import { SEARCH_LIMIT_MAX } from "../../lib/mcp/limits";
  * every db.get / query is one range):
  * - tasks: the shared task core (findTaskDocsForAuth) — a few ranges for
  *   admins; for members one range per assigned task (edge cap 2,000) plus
- *   their access checks — then up to ~6 per row on the page;
+ *   their access checks — then up to ~6 per row on the page. `external_ref`
+ *   is one range plus one task read; `next_assignee` reads the member's
+ *   assigned tasks (≤ 1,000) and the checklists of at most 100 parents
+ *   (≤ 201 sub-tasks each): ~1,200 ranges and ~21,000 documents at most;
  * - projects / clients: one range (≤ 2,001 docs) plus one per page row;
  *   members: one range plus one per org member;
  * - time entries: one range (≤ 2,001 docs) plus one per distinct project
@@ -159,6 +164,8 @@ function refTable<T>(rows: T[], noun: string): T[] {
 // ─── Tasks ───────────────────────────────────────────────────────────────────
 
 export type TaskSearchArgs = PageArgs & {
+  externalRef?: string;
+  nextAssignee?: string;
   query?: string;
   assignee?: string;
   mine?: boolean;
@@ -217,6 +224,40 @@ async function labelFilter(ctx: QueryCtx, orgId: string, label: string | undefin
   return named[0]._id;
 }
 
+/** Assigned tasks read for a `next_assignee` filter. */
+export const NEXT_STEP_EDGE_CAP = 1000;
+/** Parents whose checklists a `next_assignee` filter reads. */
+export const NEXT_STEP_PARENT_CAP = 100;
+
+/**
+ * Parents whose next step (D24: the first open, non-archived sub-task in
+ * sort order) is assigned to `userId`. Starts from the member's own
+ * assigned open sub-tasks, then reads each parent's checklist (bounded).
+ */
+async function nextStepParents(ctx: QueryCtx, orgId: string, userId: Id<"users">): Promise<Loaded> {
+  const assigned = await loadAssignedTo(ctx, orgId, userId, NEXT_STEP_EDGE_CAP);
+  const parentIds = [
+    ...new Set(
+      assigned.tasks
+        .filter((t) => t.parentTaskId !== undefined && !t.archivedAt && t.statusCategory && !isClosedCategory(t.statusCategory))
+        .map((t) => t.parentTaskId!),
+    ),
+  ];
+  let truncated = assigned.truncated || parentIds.length > NEXT_STEP_PARENT_CAP;
+  const parents: Doc<"tasks">[] = [];
+  for (const parentId of parentIds.slice(0, NEXT_STEP_PARENT_CAP)) {
+    const subs = await loadSubtasksOf(ctx, orgId, parentId);
+    truncated ||= subs.truncated;
+    const first = subs.tasks
+      .filter((t) => !t.archivedAt && t.statusCategory && !isClosedCategory(t.statusCategory))
+      .sort(compareBySortKey)[0];
+    if (!first || !first.assigneeIds.includes(userId)) continue;
+    const parent = await ctx.db.get(parentId);
+    if (parent && parent.orgId === orgId) parents.push(parent);
+  }
+  return { tasks: parents, truncated };
+}
+
 export async function searchTasks(ctx: QueryCtx, auth: AuthContext, args: TaskSearchArgs) {
   assertPage(args);
   assertRange(args.due, "due");
@@ -227,8 +268,25 @@ export async function searchTasks(ctx: QueryCtx, auth: AuthContext, args: TaskSe
   const assigneeId = await personFilter(resolver, auth, args);
   const client = await clientFilter(resolver, args.client);
   const project = await projectFilter(resolver, args.project);
-  const status = await statusFilter(ctx, auth.orgId, args.status);
+  // An external ref names one task whatever its status: "any" unless a status is given.
+  const status = await statusFilter(ctx, auth.orgId, args.status ?? (args.externalRef !== undefined ? "any" : undefined));
   const labelId = await labelFilter(ctx, auth.orgId, args.label);
+
+  // Candidate sets from the D21 / D24 lookups; access and the other filters still apply.
+  let candidates: Loaded | undefined;
+  if (args.externalRef !== undefined) {
+    const owner = await externalRefOwner(ctx, auth.orgId, normalizeExternalRef(args.externalRef));
+    const task = owner ? await ctx.db.get(owner) : null;
+    candidates = { tasks: task ? [task] : [], truncated: false };
+  }
+  if (args.nextAssignee !== undefined) {
+    const member = await resolver.require(args.nextAssignee, "member");
+    if (member.type !== "member") throw new Error(`Expected a member, resolved a ${member.type}`);
+    const parents = await nextStepParents(ctx, auth.orgId, member.user._id);
+    candidates = candidates
+      ? { tasks: candidates.tasks.filter((t) => parents.tasks.some((p) => p._id === t._id)), truncated: parents.truncated }
+      : parents;
+  }
 
   let dueBefore = args.due.to;
   if (args.overdue) {
@@ -252,6 +310,7 @@ export async function searchTasks(ctx: QueryCtx, auth: AuthContext, args: TaskSe
     dueBefore,
     search: args.query,
     where: filterUpdated ? (t) => updatedMatch(t.lastActivityAt ?? t.updatedAt, args, clock) : undefined,
+    candidates,
   });
 
   const shown = page(matched, args);

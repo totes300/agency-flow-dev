@@ -16,8 +16,8 @@ export type SearchCursor<Type extends string = string> = {
   offsets: Partial<Record<Type, number>>;
 };
 
-/** JSON with object keys sorted, so equal inputs serialize identically. */
-function stableJson(value: unknown): string {
+/** JSON with object keys sorted (undefined members dropped), so equal inputs serialize identically. */
+export function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
   if (value !== null && typeof value === "object") {
     const entries = Object.entries(value as Record<string, unknown>)
@@ -73,4 +73,37 @@ export function decodeCursor<Type extends string>(
   }
   if (Object.keys(offsets).length === 0) return null;
   return { fingerprint: f, offsets };
+}
+
+// ─── Changes feed cursor (fetch("changes"), docs/prd-mcp.md D22) ─────────────
+
+const CHANGES_CURSOR_VERSION = 1;
+
+/**
+ * A position in the org's activity stream: the last change consumed, as
+ * its `createdAt` and `_creationTime` (the `activityLog.by_org` index order).
+ * The next call returns changes strictly after it, so nothing comes twice.
+ */
+export type ChangesPosition = { createdAt: number; creationTime: number };
+
+export function encodeChangesCursor(position: ChangesPosition): string {
+  return toBase64Url(
+    JSON.stringify({ v: CHANGES_CURSOR_VERSION, k: "changes", t: position.createdAt, c: position.creationTime }),
+  );
+}
+
+/** The decoded position, or null when the cursor is malformed or of another kind. */
+export function decodeChangesCursor(raw: string): ChangesPosition | null {
+  let data: unknown;
+  try {
+    data = JSON.parse(fromBase64Url(raw.trim()));
+  } catch {
+    return null;
+  }
+  if (!data || typeof data !== "object") return null;
+  const { v, k, t, c } = data as { v?: unknown; k?: unknown; t?: unknown; c?: unknown };
+  if (v !== CHANGES_CURSOR_VERSION || k !== "changes") return null;
+  if (typeof t !== "number" || !Number.isFinite(t) || t < 0) return null;
+  if (typeof c !== "number" || !Number.isFinite(c) || c < 0) return null;
+  return { createdAt: t, creationTime: c };
 }

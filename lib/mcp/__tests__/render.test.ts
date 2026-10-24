@@ -143,6 +143,8 @@ const TASK: TaskRecord = {
   commentCount: 40,
   subtaskCount: 1,
   subtaskDoneCount: 0,
+  nextStep: { identifier: "ARLO-22", title: "Copy", assignees: [] },
+  externalRefs: { refs: ["gmail:18c2f0a1"], truncated: false },
   description: "## Brief\n\nRebuild the **hero**",
   subtasks: {
     rows: [{ identifier: "ARLO-22", title: "Copy", status: "Next up", statusCategory: "unstarted", assignees: [] }],
@@ -219,6 +221,8 @@ describe("renderTaskRecord", () => {
           "- Estimate: 1h 30m · Tracked: 2h",
           "- Billable: yes",
           "- Sub-tasks: 0/1 done",
+          "- Next step: ARLO-22 · Copy · unassigned",
+          "- External refs: gmail:18c2f0a1",
           "- Comments: 40",
           "- Created: 2026-10-24 14:00 · Last activity: 2026-10-24 14:00",
         ].join("\n"),

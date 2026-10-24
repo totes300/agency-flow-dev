@@ -12,7 +12,9 @@ import { getTaskDetailForAuth } from "../tasks/lookup";
 import { isClosedCategory } from "../tasks/model";
 import { visibleTimeEntries } from "../timeEntries";
 import type { Resolved } from "./mcpRefs";
-import { capText, descriptionToMarkdown, tiptapToMarkdown } from "../../lib/mcp/tiptap-markdown";
+import { listTaskExternalRefs } from "./mcpExternalRefs";
+import { capText, mentionedUserIds, tiptapToMarkdown } from "../../lib/mcp/tiptap-markdown";
+import { safeParseDoc } from "./notificationEvents";
 import type { FetchInclude } from "../../lib/mcp/limits";
 
 /**
@@ -29,8 +31,8 @@ import type { FetchInclude } from "../../lib/mcp/limits";
  * Read budget per record (Convex: 4,096 index ranges, 32,000 documents per
  * call; the route fetches one ref per call): a task with every include is
  * about 30 ranges plus one per distinct comment author / activity actor /
- * time-entry member, and at most ~3,000 documents (comments 501, activity
- * 501, time entries 2,001, files 51 + 51, sub-tasks 201).
+ * time-entry member, two per distinct mentioned user, and at most ~3,100 documents (comments 501, activity
+ * 501, time entries 2,001, files 51 + 51, sub-tasks 201, external refs 51).
  */
 
 /** Most recent comments / activity events / time entries returned per task. */
@@ -64,6 +66,41 @@ export function userNames(ctx: QueryCtx) {
   };
 }
 
+/**
+ * Rich text → markdown with mentions as `@email` (org members only, memoized
+ * per call), so a fetched body edited and saved back keeps its mentions.
+ * Two reads per distinct mentioned user.
+ */
+export function richTextMarkdown(ctx: QueryCtx, orgId: string) {
+  const emails = new Map<string, string | null>();
+  async function load(content: unknown) {
+    for (const id of mentionedUserIds(content)) {
+      if (emails.has(id)) continue;
+      const userId = ctx.db.normalizeId("users", id);
+      const user = userId ? await ctx.db.get(userId) : null;
+      const memberships = userId
+        ? await ctx.db.query("orgMembers").withIndex("by_userId", (q) => q.eq("userId", userId)).take(100)
+        : [];
+      const member = user && !user.deletedAt && memberships.some((m) => m.orgId === orgId);
+      emails.set(id, member ? (user.email ?? null) : null);
+    }
+  }
+  const mentionEmail = (id: string) => emails.get(id) ?? undefined;
+  return {
+    async content(content: unknown): Promise<string> {
+      await load(content);
+      return tiptapToMarkdown(content, { mentionEmail });
+    },
+    /** A stored description (Tiptap JSON string; legacy plain text passes through); null when empty. */
+    async description(description: string | undefined): Promise<string | null> {
+      if (!description) return null;
+      const doc = safeParseDoc(description);
+      const text = doc ? await this.content(doc) : description.trim();
+      return text === "" ? null : text;
+    },
+  };
+}
+
 /** A project's code and name when it belongs to the org. */
 export async function projectSummary(ctx: QueryCtx, orgId: string, projectId: Id<"projects"> | undefined) {
   const project = projectId ? await ctx.db.get(projectId) : null;
@@ -93,7 +130,10 @@ async function taskRecord(ctx: QueryCtx, auth: AuthContext, taskId: Id<"tasks">,
   if (!found) return null;
   const { detail, access } = found;
   const { task } = access;
-  const description = descriptionToMarkdown(task.description);
+  const markdown = richTextMarkdown(ctx, auth.orgId);
+  const description = await markdown.description(task.description);
+  // The checklist's next step (D24): the first open sub-task in sort order.
+  const next = detail.subtasks.find((s) => s.statusCategory !== null && !isClosedCategory(s.statusCategory));
 
   const record = {
     type: "task" as const,
@@ -121,6 +161,8 @@ async function taskRecord(ctx: QueryCtx, auth: AuthContext, taskId: Id<"tasks">,
     commentCount: task.commentCount ?? 0,
     subtaskCount: task.subtaskCount ?? 0,
     subtaskDoneCount: task.subtaskDoneCount ?? 0,
+    nextStep: next ? { identifier: next.identifier, title: next.title, assignees: next.assignees } : null,
+    externalRefs: await listTaskExternalRefs(ctx, auth.orgId, task._id),
     description,
     subtasks: include.has("subtasks")
       ? {
@@ -134,7 +176,7 @@ async function taskRecord(ctx: QueryCtx, auth: AuthContext, taskId: Id<"tasks">,
           truncated: detail.subtasksTruncated,
         }
       : null,
-    comments: include.has("comments") ? await taskComments(ctx, auth, taskId) : null,
+    comments: include.has("comments") ? await taskComments(ctx, auth, taskId, markdown) : null,
     activity: include.has("activity") ? await taskActivity(ctx, auth, taskId) : null,
     time: include.has("time") ? await taskTime(ctx, auth, taskId) : null,
     files: include.has("files") || include.has("attachment_text") ? await taskFiles(ctx, auth, taskId) : null,
@@ -145,20 +187,29 @@ async function taskRecord(ctx: QueryCtx, auth: AuthContext, taskId: Id<"tasks">,
   return record;
 }
 
-async function taskComments(ctx: QueryCtx, auth: AuthContext, taskId: Id<"tasks">) {
+async function taskComments(
+  ctx: QueryCtx,
+  auth: AuthContext,
+  taskId: Id<"tasks">,
+  markdown: ReturnType<typeof richTextMarkdown>,
+) {
   const result = await listTaskCommentsForAuth(ctx, auth, taskId);
   if (!result) return { rows: [], total: 0, truncated: false };
   const recent = result.comments.slice(-RECENT_ROWS);
-  return {
-    rows: recent.map((c) => ({
+  const rows = [];
+  for (const c of recent) {
+    rows.push({
       id: c._id,
       author: c.userName,
       createdAt: c.createdAt,
       edited: c.updatedAt > c.createdAt,
       replyTo: c.parentCommentId ? (c.parentUserName ?? null) : null,
       resolved: c.resolvedAt !== undefined,
-      text: tiptapToMarkdown(c.content),
-    })),
+      text: await markdown.content(c.content),
+    });
+  }
+  return {
+    rows,
     /** Comments read (at most the core's cap); `truncated` = more exist. */
     total: result.comments.length,
     truncated: result.truncated,
@@ -275,7 +326,7 @@ export async function buildRecord(
         edited: comment.updatedAt > comment.createdAt,
         resolved: comment.resolvedAt !== undefined,
         isReply: comment.parentCommentId !== undefined,
-        text: tiptapToMarkdown(comment.content),
+        text: await richTextMarkdown(ctx, orgId).content(comment.content),
       };
     }
 

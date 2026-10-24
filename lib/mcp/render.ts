@@ -28,6 +28,11 @@ export type MemberPage = FunctionReturnType<typeof api.mcp.search.members>;
 export type TimeEntryPage = FunctionReturnType<typeof api.mcp.search.timeEntries>;
 export type CommentPage = FunctionReturnType<typeof api.mcp.search.comments>;
 
+export type ChangesData = FunctionReturnType<typeof api.mcp.fetch.changes>;
+export type SaveTasksData = FunctionReturnType<typeof api.mcp.write.saveTasks>;
+export type SaveCommentsData = FunctionReturnType<typeof api.mcp.write.saveComments>;
+export type DeleteData = FunctionReturnType<typeof api.mcp.write.remove>;
+
 /** What renderers need besides the data: where the app lives and the org's clock. */
 export type RenderContext = {
   appOrigin: string;
@@ -434,6 +439,14 @@ function taskHeader(record: TaskRecord, ctx: RenderContext): string {
     `- Billable: ${record.billable ? "yes" : "no"}`,
     record.parent && `- Parent: ${record.parent.identifier ?? "?"} · ${oneLine(record.parent.title)}`,
     record.subtaskCount > 0 && `- Sub-tasks: ${record.subtaskDoneCount}/${record.subtaskCount} done`,
+    record.nextStep &&
+      `- Next step: ${fields(
+        record.nextStep.identifier,
+        oneLine(record.nextStep.title),
+        record.nextStep.assignees.length > 0 ? list(record.nextStep.assignees) : "unassigned",
+      )}`,
+    record.externalRefs.refs.length > 0 &&
+      `- External refs: ${record.externalRefs.refs.join(", ")}${record.externalRefs.truncated ? " (more exist)" : ""}`,
     record.commentCount > 0 && `- Comments: ${record.commentCount}`,
     record.archived && "- Archived: yes",
     `- Created: ${formatTimestamp(record.createdAt, ctx.timezone)} · Last activity: ${formatTimestamp(record.lastActivityAt, ctx.timezone)}`,
@@ -629,4 +642,115 @@ export function renderCommentSection(page: CommentPage, ctx: RenderContext): str
     page,
     page.rows.map((r) => renderCommentRow(r, { ...ctx, timezone: page.timezone })),
   );
+}
+
+// ─── Changes feed (fetch("changes"), D22, D29) ───────────────────────────────
+
+/** Checklist wording for sub-task events on the parent (D24). */
+const CHANGE_TEXT: Record<string, (m: Record<string, unknown>) => string> = {
+  subtask_created: (m) => `checklist + "${m.title}"`,
+  subtask_completed: (m) => `checklist "${m.title}" ✓`,
+  subtask_deleted: (m) => `checklist − "${m.title}"`,
+};
+
+function changeText(type: string, metadata: unknown): string {
+  const format = CHANGE_TEXT[type];
+  return oneLine(format ? format((metadata ?? {}) as Record<string, unknown>) : activityText(type, metadata));
+}
+
+/** Title for a change line: one line, at most CHANGE_TITLE_MAX characters. */
+function shortTitle(title: string): string {
+  const line = oneLine(title);
+  return line.length > CHANGE_TITLE_MAX ? `${line.slice(0, CHANGE_TITLE_MAX - 1).trimEnd()}…` : line;
+}
+
+const CHANGE_TITLE_MAX = 80;
+
+/**
+ * One line per change, oldest first: time · task · title · actor · what changed
+ * (· via client). Comment text (D29) follows as a user-content block. The
+ * cursor line says how to continue; it is always present.
+ */
+export function renderChanges(data: ChangesData, ctx: RenderContext): string {
+  const timezone = data.timezone;
+  const header =
+    data.changes.length === 0
+      ? "## Changes · none new"
+      : `## Changes · ${data.changes.length} (oldest first, times in ${timezone})`;
+  const lines = data.changes.map((c) => {
+    const head = `- ${fields(
+      formatTimestamp(c.at, timezone),
+      `[${c.task.identifier}](${taskLink(ctx.appOrigin, c.task.identifier)})`,
+      shortTitle(c.task.title),
+      oneLine(c.actor),
+      changeText(c.type, c.metadata),
+      c.comment ? `comment ${c.comment.id}` : null,
+      c.via ? `via ${oneLine(c.via)}` : null,
+    )}`;
+    if (!c.comment) return head;
+    if (c.comment.deleted) return `${head}\n(The comment has since been deleted.)`;
+    if (c.comment.text === null) return head;
+    const more = c.comment.truncated ? `\n(Shortened to 500 characters… fetch ${c.comment.id} for the full comment.)` : "";
+    return `${head}\n${userContent(c.comment.text || "(no text)")}${more}`;
+  });
+  const next = data.more
+    ? `More changes are waiting: call fetch with refs ["changes"] and changes.cursor "${data.cursor}" now.`
+    : `Up to date. Next time, call fetch with refs ["changes"] and changes.cursor "${data.cursor}" to get only what changed since.`;
+  return [header, ...lines, next].join("\n");
+}
+
+// ─── Write results (affected refs and links only, §6) ────────────────────────
+
+const REPLAYED =
+  "Replayed: this idempotencyKey was already used, so nothing was written again. The first call's result:";
+
+function writeHeader(title: string, replayed: boolean): string {
+  return replayed ? `## ${title}\n${REPLAYED}` : `## ${title}`;
+}
+
+/** Formatting a rewrite could not keep (markdown cannot carry it): said, never dropped silently. */
+function formattingNote(removed: readonly string[] | undefined): string | null {
+  return removed && removed.length > 0 ? `formatting removed: ${removed.join(", ")}` : null;
+}
+
+const SAVE_ACTION: Record<"created" | "updated" | "unchanged", string> = {
+  created: "created",
+  updated: "updated",
+  unchanged: "no change",
+};
+
+export function renderSaveTasks(data: SaveTasksData, ctx: RenderContext): string {
+  const lines = data.items.map(
+    (i) =>
+      `- ${fields(
+        `[${i.identifier}](${taskLink(ctx.appOrigin, i.identifier)})`,
+        oneLine(i.title),
+        SAVE_ACTION[i.action],
+        formattingNote(i.formattingRemoved),
+      )}`,
+  );
+  return [writeHeader(`Saved ${data.items.length} ${data.items.length === 1 ? "task" : "tasks"}`, data.replayed), ...lines].join("\n");
+}
+
+export function renderSaveComments(data: SaveCommentsData, ctx: RenderContext): string {
+  const lines = data.items.map(
+    (i) =>
+      `- ${fields(
+        `[comment ${i.commentId}](${taskLink(ctx.appOrigin, i.task, i.commentId)})`,
+        `on ${i.task}`,
+        SAVE_ACTION[i.action],
+        formattingNote(i.formattingRemoved),
+      )}`,
+  );
+  return [
+    writeHeader(`Saved ${data.items.length} ${data.items.length === 1 ? "comment" : "comments"}`, data.replayed),
+    ...lines,
+  ].join("\n");
+}
+
+export function renderDelete(data: DeleteData): string {
+  const lines = data.items.map(
+    (i) => `- ${fields(oneLine(i.label), i.action === "deleted" ? "deleted" : "already deleted with an earlier ref")}`,
+  );
+  return [writeHeader(`Deleted ${data.items.filter((i) => i.action === "deleted").length}`, data.replayed), ...lines].join("\n");
 }

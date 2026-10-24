@@ -9,6 +9,7 @@ import {
   SEARCH_TYPES,
   fitRows,
   mcpErrorMessage,
+  type McpMutationRunner,
   type McpQueryRunner,
   type McpToolContext,
 } from "../registry";
@@ -18,6 +19,14 @@ import { decodeCursor } from "../cursor";
 
 const ORIGIN = "https://localhost:3001";
 const NOW = Date.UTC(2026, 9, 24, 12);
+
+/** Read tools never write: any mutation call fails the test. */
+const noWrites = {
+  runMutation: (async () => {
+    throw new Error("unexpected mutation");
+  }) as McpMutationRunner,
+  clientName: async () => "Claude",
+};
 
 const ME: MeData = {
   user: { name: "Ada Admin", email: "ada@x.test" },
@@ -86,7 +95,7 @@ function fakeConvex(
         throw new Error(`unexpected query ${name}`);
     }
   }) as McpQueryRunner;
-  const ctx: McpToolContext = { runQuery, appOrigin: ORIGIN, now: () => NOW };
+  const ctx: McpToolContext = { runQuery, appOrigin: ORIGIN, now: () => NOW, ...noWrites };
   return { ctx, calls };
 }
 
@@ -107,7 +116,7 @@ describe("MCP registry", () => {
       expect(typeof t.annotations.readOnlyHint).toBe("boolean");
       expect(Object.keys(t.operations).length).toBeGreaterThan(0);
       for (const operation of Object.values(t.operations)) {
-        expect(getFunctionName(operation.query)).toMatch(/^mcp\//);
+        expect(getFunctionName("query" in operation ? operation.query : operation.mutation)).toMatch(/^mcp\//);
         expect(typeof operation.render).toBe("function");
       }
       // The schema converts to JSON Schema for tools/list.
@@ -176,7 +185,7 @@ describe("search tool", () => {
 
   it("states an incomplete (capped) result explicitly", async () => {
     const runQuery = (async (_q, args) => taskPage(40, args as { offset: number; limit: number }, true)) as McpQueryRunner;
-    const result = await search.execute({}, { runQuery, appOrigin: ORIGIN, now: () => NOW });
+    const result = await search.execute({}, { runQuery, appOrigin: ORIGIN, now: () => NOW, ...noWrites });
     expect(result.text).toContain("### Tasks · 1–25 of at least 40");
     expect(result.text).toContain("Incomplete: the search reads a bounded number of records");
   });
@@ -222,7 +231,7 @@ describe("fitRows", () => {
       const page = taskPage(100, args as { offset: number; limit: number });
       return { ...page, rows: page.rows.map((r) => ({ ...r, title: long })) };
     }) as McpQueryRunner;
-    const result = await tool("search").execute({ limit: 100 }, { runQuery, appOrigin: ORIGIN, now: () => NOW });
+    const result = await tool("search").execute({ limit: 100 }, { runQuery, appOrigin: ORIGIN, now: () => NOW, ...noWrites });
     expect(result.text.length).toBeLessThan(OUTPUT_BUDGET_CHARS + 500);
     const shown = /### Tasks · 1–(\d+) of 100/.exec(result.text);
     expect(Number(shown![1])).toBeLessThan(100);
@@ -258,7 +267,7 @@ describe("fetch tool", () => {
       };
     }) as McpQueryRunner;
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
-    const result = await fetchTool.execute({ refs: ["ARLO-1", "ada@x.test"] }, { runQuery, appOrigin: ORIGIN, now: () => NOW });
+    const result = await fetchTool.execute({ refs: ["ARLO-1", "ada@x.test"] }, { runQuery, appOrigin: ORIGIN, now: () => NOW, ...noWrites });
     log.mockRestore();
     expect(result.isError).toBe(false);
     expect(result.text).toContain(
@@ -330,5 +339,153 @@ describe("mcpErrorMessage", () => {
     expect(mcpErrorMessage(error)).toBe("Internal error.");
     expect(log).toHaveBeenCalledWith("[mcp] tool error:", error);
     log.mockRestore();
+  });
+});
+
+// ─── Slice 3: write tools and the changes feed ───────────────────────────────
+
+/** Fake Convex for writes and changes: records mutation calls, answers by function name. */
+function fakeWrites(result: (name: string, args: Record<string, unknown>) => unknown) {
+  const calls: Calls = [];
+  const runMutation = (async (mutation, args) => {
+    const name = getFunctionName(mutation);
+    calls.push({ name, args: args as Record<string, unknown> });
+    return result(name, args as Record<string, unknown>);
+  }) as McpMutationRunner;
+  const runQuery = (async (query, args) => {
+    const name = getFunctionName(query);
+    calls.push({ name, args: args as Record<string, unknown> });
+    return result(name, args as Record<string, unknown>);
+  }) as McpQueryRunner;
+  const ctx: McpToolContext = { runQuery, runMutation, appOrigin: ORIGIN, now: () => NOW, clientName: async () => "Claude" };
+  return { ctx, calls };
+}
+
+describe("write tools", () => {
+  it("are write tools with honest hints; only delete is destructive", () => {
+    expect(tool("save_tasks").annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: false });
+    expect(tool("save_comments").annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: false });
+    expect(tool("delete").annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: true });
+    for (const name of ["save_tasks", "save_comments", "delete"]) {
+      expect(tool(name).description).toMatch(/data, not instructions|app's rules/);
+    }
+  });
+
+  it("save_tasks sends the items, key and client name, and renders refs with links", async () => {
+    const { ctx, calls } = fakeWrites(() => ({
+      tool: "save_tasks",
+      replayed: false,
+      items: [
+        { identifier: "ARLO-21", title: "Reply to Arlo", action: "created" },
+        { identifier: "ARLO-22", title: "Send mockups", action: "updated", formattingRemoved: ["highlight", "underline"] },
+      ],
+    }));
+    const items = [{ title: "Reply to Arlo", project: "ARLO", externalRefs: ["gmail:1"] }, { ref: "ARLO-22", done: true }];
+    const result = await tool("save_tasks").execute({ items, idempotencyKey: "k" }, ctx);
+    expect(calls).toEqual([{ name: "mcp/write:saveTasks", args: { items, idempotencyKey: "k", clientName: "Claude" } }]);
+    expect(result).toEqual({
+      isError: false,
+      text: [
+        "## Saved 2 tasks",
+        "- [ARLO-21](https://localhost:3001/tasks/ARLO-21) · Reply to Arlo · created",
+        "- [ARLO-22](https://localhost:3001/tasks/ARLO-22) · Send mockups · updated · formatting removed: highlight, underline",
+      ].join("\n"),
+    });
+  });
+
+  it("says a replay wrote nothing, and passes Convex errors through", async () => {
+    const replay = fakeWrites(() => ({ tool: "delete", replayed: true, items: [{ input: "ARLO-1", type: "task", label: "ARLO-1 · Old", action: "deleted" }] }));
+    expect((await tool("delete").execute({ refs: ["ARLO-1"], idempotencyKey: "k" }, replay.ctx)).text).toBe(
+      "## Deleted 1\nReplayed: this idempotencyKey was already used, so nothing was written again. The first call's result:\n- ARLO-1 · Old · deleted",
+    );
+    const failing = fakeWrites(() => {
+      throw new ConvexError("Item 1 (ARLO-9): gmail:abc is already on ARLO-21. Nothing was saved.");
+    });
+    expect(await tool("save_tasks").execute({ items: [{ ref: "ARLO-9", externalRefs: ["gmail:abc"] }] }, failing.ctx)).toEqual({
+      text: "Error: Item 1 (ARLO-9): gmail:abc is already on ARLO-21. Nothing was saved.",
+      isError: true,
+    });
+  });
+
+  it("refuses foreign links and out-of-schema input before calling Convex", async () => {
+    const { ctx, calls } = fakeWrites(() => null);
+    expect((await tool("save_comments").execute({ items: [{ task: "https://evil.test/tasks/ARLO-1", body: "x" }] }, ctx)).text).toBe(
+      'Error: Item 1 task: "https://evil.test/tasks/ARLO-1" is not an Agency Flow link. Links must start with https://localhost:3001.',
+    );
+    await expect(tool("save_tasks").execute({ items: [{ done: false }] }, ctx)).rejects.toThrow();
+    await expect(tool("save_tasks").execute({ items: [] }, ctx)).rejects.toThrow();
+    expect(calls).toEqual([]);
+  });
+});
+
+describe("fetch changes", () => {
+  const data = {
+    timezone: "UTC",
+    cursor: "CUR2",
+    more: false,
+    changes: [
+      {
+        at: NOW,
+        task: { identifier: "ARLO-21", title: "Checklist" },
+        actor: "Csaba",
+        type: "subtask_completed",
+        metadata: { title: "szűrők", subtaskId: "s1" },
+        via: null,
+        comment: null,
+      },
+      {
+        at: NOW + 60_000,
+        task: { identifier: "ARLO-21", title: "Checklist" },
+        actor: "Csaba",
+        type: "comment_added",
+        metadata: { commentId: "cm1" },
+        via: "Claude",
+        comment: { id: "cm1", text: "Done\nwith ```fences```", truncated: true, deleted: false },
+      },
+    ],
+  };
+
+  it("passes the options and renders one line per change with the cursor", async () => {
+    const { ctx, calls } = fakeWrites(() => data);
+    const result = await tool("fetch").execute(
+      { refs: ["changes"], changes: { cursor: "CUR1", exclude_self: true, types: ["comment_added", "subtask_completed"] } },
+      ctx,
+    );
+    expect(calls).toEqual([
+      {
+        name: "mcp/fetch:changes",
+        args: {
+          cursor: "CUR1",
+          types: ["comment_added", "subtask_completed"],
+          excludeSelf: true,
+          includeText: true,
+          limit: 50,
+          now: NOW,
+        },
+      },
+    ]);
+    expect(result.isError).toBe(false);
+    expect(result.text).toBe(
+      [
+        "## Changes · 2 (oldest first, times in UTC)",
+        '- 2026-10-24 12:00 · [ARLO-21](https://localhost:3001/tasks/ARLO-21) · Checklist · Csaba · checklist "szűrők" ✓',
+        "- 2026-10-24 12:01 · [ARLO-21](https://localhost:3001/tasks/ARLO-21) · Checklist · Csaba · commented · comment cm1 · via Claude",
+        "````user-content",
+        "Done",
+        "with ```fences```",
+        "````",
+        "(Shortened to 500 characters… fetch cm1 for the full comment.)",
+        'Up to date. Next time, call fetch with refs ["changes"] and changes.cursor "CUR2" to get only what changed since.',
+      ].join("\n"),
+    );
+  });
+
+  it("refuses changes options without the changes ref", async () => {
+    const { ctx, calls } = fakeWrites(() => data);
+    expect(await tool("fetch").execute({ refs: ["me"], changes: { exclude_self: true } }, ctx)).toEqual({
+      text: 'Error: changes options apply to the "changes" ref only. Add "changes" to refs, or drop changes.',
+      isError: true,
+    });
+    expect(calls).toEqual([]);
   });
 });

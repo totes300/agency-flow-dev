@@ -171,6 +171,9 @@ export function ActivityBatch({
                     {rowHighlight ? (
                       <span className="font-medium text-foreground/80"> {rowHighlight}</span>
                     ) : null}
+                    {item.viaName ? (
+                      <span className="text-muted-foreground/60"> · via {item.viaName}</span>
+                    ) : null}
                   </span>
                   <Tooltip>
                     <TooltipTrigger asChild>

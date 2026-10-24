@@ -27,6 +27,8 @@ export const tasks = query({
   args: {
     offset: v.number(),
     limit: v.number(),
+    externalRef: v.optional(v.string()),
+    nextAssignee: v.optional(v.string()),
     assignee: v.optional(v.string()),
     mine: v.optional(v.boolean()),
     client: v.optional(v.string()),

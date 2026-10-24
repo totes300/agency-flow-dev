@@ -3,6 +3,7 @@ import { query } from "../_generated/server";
 import { getMcpAuthContext } from "../lib/mcpAuth";
 import { createRefResolver, type RefCandidate } from "../lib/mcpRefs";
 import { buildRecord, orgClock } from "../lib/mcpRecords";
+import { listChanges } from "../lib/mcpChanges";
 import { isValidClientPrefix } from "../lib/clientPrefix";
 import { FETCH_INCLUDES, MAX_REFS, type FetchInclude } from "../../lib/mcp/limits";
 import { getOrgSettings } from "../lib/orgHelpers";
@@ -130,5 +131,25 @@ export const records = query({
       );
     }
     return { timezone: clock.timezone, today: clock.today, results };
+  },
+});
+
+/**
+ * `fetch("changes")` (D22, D29): the org's changes after `cursor`, oldest
+ * first, one entry per activity row on a task the caller can read
+ * (convex/lib/mcpChanges.ts). `now` is the caller's clock.
+ */
+export const changes = query({
+  args: {
+    cursor: v.optional(v.string()),
+    types: v.optional(v.array(v.string())),
+    excludeSelf: v.boolean(),
+    includeText: v.boolean(),
+    limit: v.number(),
+    now: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const auth = await getMcpAuthContext(ctx);
+    return await listChanges(ctx, auth, args);
   },
 });

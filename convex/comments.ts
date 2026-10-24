@@ -1,10 +1,10 @@
 import { v, ConvexError } from "convex/values";
-import { query, mutation, type QueryCtx } from "./_generated/server";
-import { Id } from "./_generated/dataModel";
+import { query, mutation, type MutationCtx, type QueryCtx } from "./_generated/server";
+import { Doc, Id } from "./_generated/dataModel";
 import { getAuthContext, type AuthContext } from "./lib/auth";
 import { logActivity } from "./activityLog";
 import { onComment } from "./tasks/derived";
-import { loadTaskForReadOrNull, loadTaskForWrite } from "./tasks/access";
+import { loadTaskForReadOrNull, loadTaskForWrite, type TaskAccess } from "./tasks/access";
 import { createNotifications } from "./notifications";
 import {
   extractMentionIds,
@@ -83,6 +83,7 @@ export async function listTaskCommentsForAuth(
       resolvedAt: comment.resolvedAt,
       resolvedBy: comment.resolvedBy,
       resolvedByName,
+      viaName: comment.via?.clientName,
     };
   });
 
@@ -100,6 +101,174 @@ export const byTask = query({
   },
 });
 
+// ─── Write cores (shared by the mutations below and MCP save_comments) ──────
+
+/**
+ * Creates a comment on a task the caller may write (`access` from
+ * tasks/access.ts): reply validation and auto re-open, the activity row,
+ * counters and the notification fan-out (@mentions, reply-to-author, task
+ * participants). `access.auth.via` attributes an agent write (D15).
+ */
+export async function createCommentForAuth(
+  ctx: MutationCtx,
+  access: TaskAccess,
+  args: { content: unknown; parentCommentId?: Id<"comments"> },
+): Promise<Id<"comments">> {
+  const { task, auth } = access;
+  const { orgId, userId } = auth;
+  const taskId = task._id;
+
+  // Validate parent comment if replying
+  let parentAuthorId: Id<"users"> | undefined;
+  if (args.parentCommentId) {
+    const parent = await ctx.db.get(args.parentCommentId);
+    if (!parent || parent.taskId !== taskId) {
+      throw new ConvexError("Parent comment not found");
+    }
+    parentAuthorId = parent.userId;
+
+    // Auto re-open: find root comment and unresolve if resolved
+    let root = parent;
+    while (root.parentCommentId) {
+      const ancestor = await ctx.db.get(root.parentCommentId);
+      if (!ancestor) break;
+      root = ancestor;
+    }
+    if (root.resolvedAt) {
+      await ctx.db.patch(root._id, { resolvedAt: undefined, resolvedBy: undefined });
+    }
+  }
+
+  const content = validateTiptapContent(args.content);
+
+  const now = Date.now();
+  const commentId = await ctx.db.insert("comments", {
+    taskId,
+    orgId,
+    userId,
+    content,
+    parentCommentId: args.parentCommentId,
+    via: auth.via,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  await logActivity(ctx, {
+    taskId,
+    orgId,
+    userId,
+    via: auth.via,
+    type: "comment_added",
+    metadata: { commentId },
+    at: now,
+  });
+  await onComment(ctx, taskId, { kind: "created", at: now, actorId: userId });
+
+  // Notification fan-out: @mentions + reply-to-author + task participants
+  // (assignees ∪ prior commenters). Mention ids come from client-controlled
+  // Tiptap JSON — createNotifications validates each recipient.
+  const priorComments = await ctx.db
+    .query("comments")
+    .withIndex("by_task", (q) => q.eq("taskId", taskId))
+    .take(200);
+  const participantIds = [...new Set(priorComments.map((c) => c.userId))];
+
+  const recipients = computeCommentRecipients({
+    actorId: userId,
+    assigneeIds: task.assigneeIds,
+    mentionIds: extractMentionIds(content),
+    participantIds,
+    parentAuthorId,
+  });
+  if (recipients.length > 0) {
+    const preview = extractContentPreview(content, 140);
+    await createNotifications(ctx, {
+      orgId,
+      actorId: userId,
+      task,
+      events: recipients.map((r) => ({
+        recipientId: r.userId,
+        type: r.type,
+        commentId,
+        previewText: preview,
+      })),
+    });
+  }
+
+  return commentId;
+}
+
+/** The task access guard (tasks/access.ts): a comment on a task the caller cannot read is not found. */
+async function assertCommentTaskReadable(
+  ctx: MutationCtx,
+  auth: AuthContext,
+  comment: Doc<"comments">,
+): Promise<void> {
+  if (!(await loadTaskForReadOrNull(ctx, comment.taskId, auth))) {
+    throw new ConvexError("Comment not found");
+  }
+}
+
+/** Replaces the content of the caller's own comment. Returns whether the content differs. */
+export async function updateCommentForAuth(
+  ctx: MutationCtx,
+  auth: AuthContext,
+  commentId: Id<"comments">,
+  rawContent: unknown,
+): Promise<boolean> {
+  const comment = await ctx.db.get(commentId);
+  if (!comment || comment.orgId !== auth.orgId) throw new ConvexError("Comment not found");
+  if (comment.userId !== auth.userId) throw new ConvexError("You can only edit your own comments");
+  await assertCommentTaskReadable(ctx, auth, comment);
+
+  const content = validateTiptapContent(rawContent);
+  await ctx.db.patch(commentId, {
+    content,
+    updatedAt: Date.now(),
+  });
+  return JSON.stringify(content) !== JSON.stringify(comment.content);
+}
+
+/**
+ * Deletes a comment with its reactions and attachments (storage included).
+ * Admins can delete any comment, members only their own.
+ */
+export async function removeCommentForAuth(
+  ctx: MutationCtx,
+  auth: AuthContext,
+  commentId: Id<"comments">,
+): Promise<Doc<"comments">> {
+  const comment = await ctx.db.get(commentId);
+  if (!comment || comment.orgId !== auth.orgId) throw new ConvexError("Comment not found");
+  if (!auth.isAdmin && comment.userId !== auth.userId) {
+    throw new ConvexError("You can only delete your own comments");
+  }
+  await assertCommentTaskReadable(ctx, auth, comment);
+
+  // Cascade delete: reactions
+  const reactions = await ctx.db
+    .query("commentReactions")
+    .withIndex("by_comment", (q) => q.eq("commentId", commentId))
+    .collect();
+  for (const r of reactions) {
+    await ctx.db.delete(r._id);
+  }
+
+  // Cascade delete: attachments (+ storage cleanup)
+  const attachments = await ctx.db
+    .query("commentAttachments")
+    .withIndex("by_comment", (q) => q.eq("commentId", commentId))
+    .collect();
+  for (const att of attachments) {
+    await ctx.storage.delete(att.fileId);
+    await ctx.db.delete(att._id);
+  }
+
+  await ctx.db.delete(commentId);
+  await onComment(ctx, comment.taskId, { kind: "deleted" });
+  return comment;
+}
+
 // ─── Mutations ──────────────────────────────────────────────────────────────────
 
 /**
@@ -112,85 +281,11 @@ export const create = mutation({
     parentCommentId: v.optional(v.id("comments")),
   },
   handler: async (ctx, args) => {
-    const { task, auth } = await loadTaskForWrite(ctx, args.taskId);
-    const { orgId, userId } = auth;
-
-    // Validate parent comment if replying
-    let parentAuthorId: Id<"users"> | undefined;
-    if (args.parentCommentId) {
-      const parent = await ctx.db.get(args.parentCommentId);
-      if (!parent || parent.taskId !== args.taskId) {
-        throw new ConvexError("Parent comment not found");
-      }
-      parentAuthorId = parent.userId;
-
-      // Auto re-open: find root comment and unresolve if resolved
-      let root = parent;
-      while (root.parentCommentId) {
-        const ancestor = await ctx.db.get(root.parentCommentId);
-        if (!ancestor) break;
-        root = ancestor;
-      }
-      if (root.resolvedAt) {
-        await ctx.db.patch(root._id, { resolvedAt: undefined, resolvedBy: undefined });
-      }
-    }
-
-    validateTiptapContent(args.content);
-
-    const now = Date.now();
-    const commentId = await ctx.db.insert("comments", {
-      taskId: args.taskId,
-      orgId,
-      userId,
+    const access = await loadTaskForWrite(ctx, args.taskId);
+    return await createCommentForAuth(ctx, access, {
       content: args.content,
       parentCommentId: args.parentCommentId,
-      createdAt: now,
-      updatedAt: now,
     });
-
-    await logActivity(ctx, {
-      taskId: args.taskId,
-      orgId,
-      userId,
-      type: "comment_added",
-      metadata: { commentId },
-      at: now,
-    });
-    await onComment(ctx, args.taskId, { kind: "created", at: now, actorId: userId });
-
-    // Notification fan-out: @mentions + reply-to-author + task participants
-    // (assignees ∪ prior commenters). Mention ids come from client-controlled
-    // Tiptap JSON — createNotifications validates each recipient.
-    const priorComments = await ctx.db
-      .query("comments")
-      .withIndex("by_task", (q) => q.eq("taskId", args.taskId))
-      .take(200);
-    const participantIds = [...new Set(priorComments.map((c) => c.userId))];
-
-    const recipients = computeCommentRecipients({
-      actorId: userId,
-      assigneeIds: task.assigneeIds,
-      mentionIds: extractMentionIds(args.content),
-      participantIds,
-      parentAuthorId,
-    });
-    if (recipients.length > 0) {
-      const preview = extractContentPreview(args.content, 140);
-      await createNotifications(ctx, {
-        orgId,
-        actorId: userId,
-        task,
-        events: recipients.map((r) => ({
-          recipientId: r.userId,
-          type: r.type,
-          commentId,
-          previewText: preview,
-        })),
-      });
-    }
-
-    return commentId;
   },
 });
 
@@ -204,23 +299,7 @@ export const update = mutation({
   },
   handler: async (ctx, args) => {
     const auth = await getAuthContext(ctx);
-    const { orgId, userId } = auth;
-
-    const comment = await ctx.db.get(args.id);
-    if (!comment || comment.orgId !== orgId) throw new ConvexError("Comment not found");
-    if (comment.userId !== userId) throw new ConvexError("You can only edit your own comments");
-
-    // Task access guard (tasks/access.ts)
-    if (!(await loadTaskForReadOrNull(ctx, comment.taskId, auth))) {
-      throw new ConvexError("Comment not found");
-    }
-
-    validateTiptapContent(args.content);
-
-    await ctx.db.patch(args.id, {
-      content: args.content,
-      updatedAt: Date.now(),
-    });
+    await updateCommentForAuth(ctx, auth, args.id, args.content);
   },
 });
 
@@ -231,40 +310,7 @@ export const remove = mutation({
   args: { id: v.id("comments") },
   handler: async (ctx, args) => {
     const auth = await getAuthContext(ctx);
-    const { orgId, userId, isAdmin } = auth;
-
-    const comment = await ctx.db.get(args.id);
-    if (!comment || comment.orgId !== orgId) throw new ConvexError("Comment not found");
-    if (!isAdmin && comment.userId !== userId) {
-      throw new ConvexError("You can only delete your own comments");
-    }
-
-    // Task access guard (tasks/access.ts)
-    if (!(await loadTaskForReadOrNull(ctx, comment.taskId, auth))) {
-      throw new ConvexError("Comment not found");
-    }
-
-    // Cascade delete: reactions
-    const reactions = await ctx.db
-      .query("commentReactions")
-      .withIndex("by_comment", (q) => q.eq("commentId", args.id))
-      .collect();
-    for (const r of reactions) {
-      await ctx.db.delete(r._id);
-    }
-
-    // Cascade delete: attachments (+ storage cleanup)
-    const attachments = await ctx.db
-      .query("commentAttachments")
-      .withIndex("by_comment", (q) => q.eq("commentId", args.id))
-      .collect();
-    for (const att of attachments) {
-      await ctx.storage.delete(att.fileId);
-      await ctx.db.delete(att._id);
-    }
-
-    await ctx.db.delete(args.id);
-    await onComment(ctx, comment.taskId, { kind: "deleted" });
+    await removeCommentForAuth(ctx, auth, args.id);
   },
 });
 
@@ -520,14 +566,15 @@ export const latestPreview = query({
 import { validateTiptapContent as _validateTiptap } from "./lib/content_validation";
 
 /**
- * Validate Tiptap JSON and throw ConvexError on failure.
- * Must be called by EVERY mutation that writes to the `content` field.
+ * Validate Tiptap JSON and throw ConvexError on failure; returns it typed as
+ * the stored `content` shape. Must be called by EVERY write to `content`.
  */
-function validateTiptapContent(content: unknown): void {
+function validateTiptapContent(content: unknown): Doc<"comments">["content"] {
   const result = _validateTiptap(content);
   if (!result.valid) {
     throw new ConvexError(result.reason);
   }
+  return content as Doc<"comments">["content"];
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────────

@@ -2,12 +2,14 @@ import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import {
   activityLogValidator,
+  activityViaValidator,
   numberScopeValidator,
   taskCategoryValidator,
   taskPriorityValidator,
   taskViewSpecValidator,
   taskViewSurfaceValidator,
 } from "./tasks/model";
+import { mcpWriteResultValidator } from "./lib/mcpWriteResults";
 
 export default defineSchema({
   // ─── Users (synced from Clerk) ─────────────────────────────────────────────
@@ -204,6 +206,19 @@ export default defineSchema({
     taskId: v.id("tasks"),
   })
     .index("by_orgId_identifier", ["orgId", "identifier"])
+    .index("by_taskId", ["taskId"]),
+
+  // External source refs on tasks (docs/prd-mcp.md D21), e.g. `gmail:<thread>`.
+  // A ref belongs to at most one task per org (checked on every insert, never
+  // moved); a task carries many. Written by convex/lib/mcpExternalRefs.ts,
+  // removed with the task (tasks/write.ts deleteTaskRecord).
+  taskExternalRefs: defineTable({
+    orgId: v.string(),
+    ref: v.string(),
+    taskId: v.id("tasks"),
+    createdAt: v.number(),
+  })
+    .index("by_orgId_ref", ["orgId", "ref"])
     .index("by_taskId", ["taskId"]),
 
   // ─── Per-user task state (§4.3) — fan-out on write ─────────────────────────
@@ -661,6 +676,8 @@ export default defineSchema({
     parentCommentId: v.optional(v.id("comments")),
     resolvedAt: v.optional(v.number()),
     resolvedBy: v.optional(v.id("users")),
+    // Written through an external agent (MCP attribution, D15).
+    via: v.optional(activityViaValidator),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
@@ -787,4 +804,21 @@ export default defineSchema({
     // bound startDate below by today − SEGMENT_SCAN_WINDOW_DAYS as a scan
     // guard (see convex/lib/todayPlan.ts).
     .index("by_orgId_userId_startDate", ["orgId", "userId", "startDate"]),
+
+  // ─── MCP idempotency keys (docs/prd-mcp.md D23) ───────────────────────────
+  // One row per (org, user, key): the first result of a write tool call,
+  // checked and written in the same mutation as the write. Kept 24 h; the
+  // hourly cron in crons.ts deletes older rows (by_createdAt).
+  mcpIdempotency: defineTable({
+    orgId: v.string(),
+    userId: v.id("users"),
+    key: v.string(),
+    tool: v.string(),
+    // The request the key was first used for (tool + canonical arguments).
+    fingerprint: v.string(),
+    result: mcpWriteResultValidator,
+    createdAt: v.number(),
+  })
+    .index("by_orgId_userId_key", ["orgId", "userId", "key"])
+    .index("by_createdAt", ["createdAt"]),
 });

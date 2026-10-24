@@ -9,6 +9,7 @@ import {
   PRIORITY_LABELS,
   TASK_CATEGORIES,
   categoryOfStatus,
+  compareBySortKey,
   isClosedCategory,
   normalizeIdentifier,
   taskCategoryValidator,
@@ -150,14 +151,6 @@ function byRecentActivity(a: Doc<"tasks">, b: Doc<"tasks">): number {
   return (b.lastActivityAt ?? b.updatedAt) - (a.lastActivityAt ?? a.updatedAt);
 }
 
-/** Manual order (fractional keys compare bytewise), creation as the tiebreak. */
-function bySortKey(a: Doc<"tasks">, b: Doc<"tasks">): number {
-  const ak = a.sortKey ?? "";
-  const bk = b.sortKey ?? "";
-  if (ak !== bk) return ak < bk ? -1 : 1;
-  return a.createdAt - b.createdAt;
-}
-
 function mergeLoaded(...parts: Loaded[]): Loaded {
   return {
     tasks: parts.flatMap((p) => p.tasks),
@@ -195,6 +188,12 @@ export type FindTasksInput = {
   includeClosed?: boolean;
   /** An extra row predicate applied with the filters (e.g. MCP's updated range). */
   where?: (task: Doc<"tasks">) => boolean;
+  /**
+   * Preloaded candidate rows (e.g. MCP's external-ref and next-assignee
+   * lookups): used instead of the loaders; access and every filter still
+   * apply, `search` as a case-insensitive title match.
+   */
+  candidates?: Loaded;
 };
 
 export type FoundTaskDocs = {
@@ -258,7 +257,13 @@ export async function findTaskDocsForAuth(
   const search = args.search?.trim();
 
   let loaded: Loaded;
-  if (search) {
+  if (args.candidates) {
+    const needle = search?.toLowerCase();
+    loaded = {
+      tasks: needle ? args.candidates.tasks.filter((t) => t.title.toLowerCase().includes(needle)) : args.candidates.tasks,
+      truncated: args.candidates.truncated,
+    };
+  } else if (search) {
     const hits = await ctx.db
       .query("tasks")
       .withSearchIndex("search_title", (q) =>
@@ -307,7 +312,7 @@ export async function findTaskDocsForAuth(
       inDueRange(t.dueDate, args) &&
       (args.where === undefined || args.where(t)),
   );
-  if (!search) matched.sort(byRecentActivity);
+  if (!search || args.candidates) matched.sort(byRecentActivity);
   return { matched, loadTruncated: loaded.truncated };
 }
 
@@ -424,7 +429,7 @@ export async function getTaskDetailForAuth(
     ? { tasks: [], truncated: false }
     : await loadSubtasksOf(ctx, auth.orgId, task._id);
   const subtasks: AgentTaskDetail["subtasks"] = [];
-  for (const s of subs.tasks.filter((s) => !s.archivedAt).sort(bySortKey)) {
+  for (const s of subs.tasks.filter((s) => !s.archivedAt).sort(compareBySortKey)) {
     subtasks.push({
       id: s._id,
       identifier: s.identifier ?? null,

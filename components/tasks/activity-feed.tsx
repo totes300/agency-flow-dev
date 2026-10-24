@@ -533,8 +533,8 @@ function CommentsView({
 // ─── Feed builder ───────────────────────────────────────────────────────────────
 
 function buildFeed(
-  activities: { _id: string; type: string; userId: string; userName: string; metadata: unknown; createdAt: number }[] | undefined,
-  comments: { _id: string; userId: string; userName: string; userImageUrl?: string; content: unknown; parentCommentId?: Id<"comments">; parentUserName?: string; parentPreview?: string; resolvedAt?: number; resolvedBy?: Id<"users">; resolvedByName?: string; createdAt: number; updatedAt?: number }[] | undefined,
+  activities: { _id: string; type: string; userId: string; userName: string; viaName?: string; metadata: unknown; createdAt: number }[] | undefined,
+  comments: { _id: string; userId: string; userName: string; viaName?: string; userImageUrl?: string; content: unknown; parentCommentId?: Id<"comments">; parentUserName?: string; parentPreview?: string; resolvedAt?: number; resolvedBy?: Id<"users">; resolvedByName?: string; createdAt: number; updatedAt?: number }[] | undefined,
 ): FeedItem[] | null {
   if (!activities || !comments) return null
 
@@ -545,6 +545,7 @@ function buildFeed(
       type: a.type,
       userId: a.userId,
       userName: a.userName,
+      viaName: a.viaName,
       metadata: a.metadata as Record<string, unknown>,
       createdAt: a.createdAt,
     }))
@@ -553,6 +554,7 @@ function buildFeed(
     id: c._id,
     userId: c.userId,
     userName: c.userName,
+    viaName: c.viaName,
     userImageUrl: c.userImageUrl,
     content: c.content,
     parentCommentId: c.parentCommentId,

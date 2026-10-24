@@ -30,6 +30,7 @@ import { loadActiveTimers, type ActiveTimer } from "./lib/billing/timers";
 import type { MonthlyBalanceRow } from "./lib/billing/pricing";
 import type { CarriedReason } from "./lib/billing/scope";
 import type { EntryCloseSnapshot } from "./lib/types";
+import { buildProjectBillingPeriods, type ProjectBillingPeriods } from "./lib/billing/projectPeriods";
 
 // ─── Response types ──────────────────────────────────────────────────────────
 
@@ -344,6 +345,26 @@ export const getNavSignals = query({
       overdueCount,
       readyAmountByCurrency,
     };
+  },
+});
+
+// ─── Project periods ─────────────────────────────────────────────────────────
+
+/**
+ * The project page's billing read model (docs/prd-project-billing-redesign.md
+ * §6.1): every period with its server-derived state, action and undo, the
+ * tab counts and totals. Fixed fee carries `fixed`; non-billable has no periods.
+ */
+export const getProjectBillingPeriods = query({
+  args: { projectId: v.id("projects") },
+  handler: async (ctx, args): Promise<ProjectBillingPeriods | null> => {
+    const { orgId } = await requireAdmin(ctx);
+    const project = await ctx.db.get(args.projectId);
+    if (!project || project.orgId !== orgId) return null;
+    const client = await ctx.db.get(project.clientId);
+    if (!client || client.orgId !== orgId) return null;
+    const settings = await viewSettings(ctx, orgId);
+    return buildProjectBillingPeriods(ctx, orgId, project, client.currency, settings);
   },
 });
 

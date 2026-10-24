@@ -369,3 +369,26 @@ describe("§8.3 — one balance ladder on every surface", () => {
     });
   });
 });
+
+describe("getRetainerData access", () => {
+  it("refuses members: the payload carries the fee, overage rate and overage due", async () => {
+    setToday("2026-04-10");
+    const w = await world(retainer);
+    await w.t.run(async (ctx) => {
+      const now = Date.now();
+      const userId = await ctx.db.insert("users", { name: "Member", externalId: "user_member", createdAt: now, updatedAt: now });
+      await ctx.db.insert("orgMembers", { orgId: ORG_ID, clerkUserId: "user_member", userId, role: "member", joinedAt: now });
+    });
+    const member = w.t.withIdentity({
+      subject: "user_member",
+      tokenIdentifier: "test|user_member",
+      org_id: ORG_ID,
+      org_role: "org:member",
+    } as never);
+
+    await expect(member.query(api.projects.getRetainerData, { id: w.projectId })).rejects.toThrow(
+      "Admin access required",
+    );
+    expect(await as(w).query(api.projects.getRetainerData, { id: w.projectId })).not.toBeNull();
+  });
+});

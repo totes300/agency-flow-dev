@@ -506,7 +506,8 @@ export const getRetainerData = query({
     cycleOffset: v.optional(v.number()), // 0 = current, -1 = previous, etc.
   },
   handler: async (ctx, args) => {
-    const { orgId } = await getAuthContext(ctx);
+    // Admin-only: returns the retainer fee, overage rate and overage amounts.
+    const { orgId } = await requireAdmin(ctx);
 
     const [project, orgSettings] = await Promise.all([
       ctx.db.get(args.id),

@@ -49,6 +49,7 @@ import type * as lib_billing_reportMonths from "../lib/billing/reportMonths.js";
 import type * as lib_billing_scope from "../lib/billing/scope.js";
 import type * as lib_billing_timers from "../lib/billing/timers.js";
 import type * as lib_billing_usageBlock from "../lib/billing/usageBlock.js";
+import type * as lib_clientPrefix from "../lib/clientPrefix.js";
 import type * as lib_closeFlags from "../lib/closeFlags.js";
 import type * as lib_closeGroups from "../lib/closeGroups.js";
 import type * as lib_closeQueue from "../lib/closeQueue.js";
@@ -167,6 +168,7 @@ declare const fullApi: ApiFromModules<{
   "lib/billing/scope": typeof lib_billing_scope;
   "lib/billing/timers": typeof lib_billing_timers;
   "lib/billing/usageBlock": typeof lib_billing_usageBlock;
+  "lib/clientPrefix": typeof lib_clientPrefix;
   "lib/closeFlags": typeof lib_closeFlags;
   "lib/closeGroups": typeof lib_closeGroups;
   "lib/closeQueue": typeof lib_closeQueue;

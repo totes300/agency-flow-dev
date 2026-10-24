@@ -11,7 +11,6 @@ import type { Id } from "@/convex/_generated/dataModel"
 import {
   INVOICE_STATUS_COPY,
   invoiceDisplayStatus,
-  periodPrimaryAction,
   periodUndoActions,
   type InvoiceDisplayStatus,
   type PeriodState,
@@ -23,7 +22,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Separator } from "@/components/ui/separator"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import { InvoiceStateChip } from "@/components/billing/period-state-chip"
-import { PeriodActionButton, PeriodMenu, invoiceHref, usePeriodActions } from "@/components/billing/period-actions"
+import { PeriodMenu, invoiceHref, usePeriodActions } from "@/components/billing/period-actions"
 import { shortDate } from "@/components/projects/overview/period-card"
 import { shortPeriod } from "@/components/billing/needs-action-list"
 import { formatInvoiceNumber, formatMinor, pluralize } from "@/lib/format"
@@ -124,7 +123,6 @@ export function HubInvoiceTable({
           paidAt: inv.paidAt ?? null,
           totalMinor: inv.totalMinor,
         }
-        const action = state ? periodPrimaryAction(state, { isCommittable: false }) : null
         const undo = state ? periodUndoActions(state, { draftNumbered: inv.number != null }) : []
         const target = { row: null, invoice: view, projectId: inv.projectId }
         return (
@@ -169,11 +167,6 @@ export function HubInvoiceTable({
               <InvoiceStateChip status={status} />
             </span>
             <span className="flex items-center justify-end gap-1">
-              {action && action.kind === "mark_paid" ? (
-                <span className="hidden group-hover/row:inline-flex">
-                  <PeriodActionButton action={action} className="h-[26px] px-2.5 text-xs" onRun={() => actions.primary(target, action)} />
-                </span>
-              ) : null}
               {undo.length > 0 ? (
                 <PeriodMenu
                   projectId={inv.projectId}

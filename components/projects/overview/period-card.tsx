@@ -190,14 +190,14 @@ function cardCopy(
       return {
         label: ctx.tm ? "Billed" : "Overage billed",
         amount: money,
-        sub: `${number ?? "Invoice"}${inv?.paidAt ? ` · paid ${shortDate(new Date(inv.paidAt).toISOString().slice(0, 10))}` : ""}`,
+        sub: `${number ?? "Invoice"}${inv?.paidAt ? ` · paid ${dayOf(inv.paidAt)}` : ""}`,
       }
     case "closed":
       return {
         label: "Nothing to invoice",
         amount: zero,
         dim: true,
-        sub: `Closed ${row.closedAt ? shortDate(new Date(row.closedAt).toISOString().slice(0, 10)) : ""} · within budget`,
+        sub: `Closed ${row.closedAt ? dayOf(row.closedAt) : ""} · within budget`,
       }
   }
 }
@@ -340,6 +340,11 @@ function OpenLink({ href, label, download = false }: { href: string; label: stri
 export function shortDate(ymd: string): string {
   const [y, m, d] = ymd.split("-").map(Number)
   return new Date(y, m - 1, d).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+}
+
+/** "Oct 24" for an epoch timestamp, in the viewer's calendar. */
+function dayOf(ms: number): string {
+  return new Date(ms).toLocaleDateString("en-US", { month: "short", day: "numeric" })
 }
 
 function overdueDays(dueDate: string, todayStr: string): number {

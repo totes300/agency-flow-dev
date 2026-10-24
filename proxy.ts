@@ -6,6 +6,11 @@ const isPublicRoute = createRouteMatcher([
   "/",
   "/sign-in(.*)",
   "/sign-up(.*)",
+  // MCP (docs/prd-mcp.md §5.1): the route verifies its own OAuth bearer token
+  // and must answer 401 + WWW-Authenticate, not a sign-in redirect. The OAuth
+  // discovery documents are public.
+  "/mcp",
+  "/.well-known/(.*)",
 ]);
 
 const isAdminRoute = createRouteMatcher(adminRoutePatterns);

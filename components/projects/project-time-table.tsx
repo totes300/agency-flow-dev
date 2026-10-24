@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { useRef, useState } from "react"
-import { useMutation } from "convex/react"
+import { useMutation, useQuery } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import type { CarriedReason } from "@/convex/lib/billing/scope"
@@ -49,6 +49,7 @@ import { TimeEntryHoursCell } from "@/components/projects/time-entry-hours-cell"
 import { UserAvatar } from "@/components/user-avatar"
 import { BillingStatusBadge } from "@/components/billing-status-badge"
 import { ReopenPeriodDialog } from "@/components/projects/reopen-period-dialog"
+import { invoiceHref } from "@/components/billing/period-actions"
 import { formatLockedTooltip } from "@/lib/entry-tooltip"
 import {
   formatCurrency,
@@ -63,7 +64,7 @@ import {
   BanIcon,
   CornerUpRightIcon,
   DollarSignIcon,
-  DownloadIcon,
+  CalendarIcon,
   MoreHorizontalIcon,
   PanelRightOpenIcon,
   PencilIcon,
@@ -614,6 +615,12 @@ function RowActionsMenu({
   const [isDeleting, setIsDeleting] = useState(false)
   const [reopenDialogOpen, setReopenDialogOpen] = useState(false)
   const toggleInFlightRef = useRef(false)
+  const locked = status === "draft" || status === "closed"
+  const billing = useQuery(api.billingViews.getProjectBillingPeriods, isAdmin && locked ? { projectId } : "skip")
+  const lockedStart = row.closePeriodStart
+  const closedPeriod = lockedStart
+    ? billing?.periods.find((p) => p.start <= lockedStart && p.end >= lockedStart)
+    : undefined
 
   async function runToggle(target: boolean): Promise<boolean> {
     try {
@@ -675,14 +682,12 @@ function RowActionsMenu({
       hasInvoiceLink && row.invoicePrefix && row.invoiceNumber != null
         ? formatInvoiceNumber(row.invoicePrefix, row.invoiceNumber)
         : null
-    // A within-budget retainer close (no invoice) can be reopened; its
-    // period also names the report month for the View report link.
-    const reopenable =
-      status === "closed" &&
-      row.closeKind === "retainer" &&
-      row.invoiceId === undefined &&
-      row.closePeriodStart !== undefined
-    const reportPeriodToken = row.closePeriodStart?.slice(0, 7)
+    // The locked entry's period, from the project's billing read model:
+    // its undo decides Reopen (and why it may be disabled, §5.4), and its
+    // hours are what reopening unlocks (A12).
+    const period = closedPeriod
+    const reopen = period?.undo.find((u) => u.kind === "reopen_period")
+    const from = `/projects/${projectId}?tab=time`
 
     return (
       <>
@@ -703,43 +708,43 @@ function RowActionsMenu({
               <PanelRightOpenIcon aria-hidden className="size-3.5" />
               Open task
             </DropdownMenuItem>
-            {invoiceNumber && (
+            {invoiceNumber && row.invoiceId && (
               <DropdownMenuItem asChild>
-                <Link href={`/invoices/${invoiceNumber}`}>
+                <Link href={invoiceHref(row.invoiceId, from)}>
                   <ArrowUpRightIcon aria-hidden className="size-3.5" />
                   Open invoice {invoiceNumber}
                 </Link>
               </DropdownMenuItem>
             )}
-            {reopenable && reportPeriodToken && (
+            {row.closePeriodStart && (
               <DropdownMenuItem asChild>
-                <Link
-                  href={`/projects/${projectId}/reports/${reportPeriodToken}`}
-                  target="_blank"
-                  rel="noopener"
-                >
-                  <DownloadIcon aria-hidden className="size-3.5" />
-                  View report
+                <Link href={`/projects/${projectId}?period=${row.closePeriodStart.slice(0, 7)}`}>
+                  <CalendarIcon aria-hidden className="size-3.5" />
+                  View period
                 </Link>
               </DropdownMenuItem>
             )}
-            {reopenable && isAdmin && (
-              <DropdownMenuItem onSelect={() => setReopenDialogOpen(true)}>
+            {isAdmin && reopen ? (
+              <DropdownMenuItem
+                disabled={reopen.disabledReason !== undefined}
+                title={reopen.disabledReason}
+                onSelect={() => setReopenDialogOpen(true)}
+              >
                 <RotateCcwIcon aria-hidden className="size-3.5" />
-                Reopen period
+                {reopen.disabledReason ?? "Reopen period"}
               </DropdownMenuItem>
-            )}
+            ) : null}
           </DropdownMenuContent>
         </DropdownMenu>
 
-        {reopenable && row.closePeriodStart && (
+        {period && reopen && !reopen.disabledReason && (
           <ReopenPeriodDialog
             open={reopenDialogOpen}
             onOpenChange={setReopenDialogOpen}
             projectId={projectId}
-            periodStart={row.closePeriodStart}
-            periodLabel={formatPeriodMonth(row.closePeriodStart)}
-            workedMinutes={row.durationMinutes}
+            periodStart={period.start}
+            periodLabel={period.label}
+            workedMinutes={period.billableMinutes + period.nonBillableMinutes}
           />
         )}
       </>
@@ -872,16 +877,4 @@ function BillingStatusCell({
       </Tooltip>
     </TooltipProvider>
   )
-}
-
-/**
- * YYYY-MM-01 → "March 2026". Used by the reopen dialog on locked rows so
- * the consequence message names the period in human terms.
- */
-function formatPeriodMonth(periodStart: string): string {
-  const [y, m] = periodStart.split("-").map(Number)
-  return new Date(y, (m ?? 1) - 1, 1).toLocaleDateString("en-US", {
-    month: "long",
-    year: "numeric",
-  })
 }

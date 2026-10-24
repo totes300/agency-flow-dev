@@ -15,7 +15,7 @@ import { SettingsBudgetEstimates } from "@/components/projects/settings-budget-e
 import { SettingsRates } from "@/components/projects/settings-rates"
 import { SettingsRetainer } from "@/components/projects/settings-retainer"
 import { ProjectTeam } from "@/components/projects/project-team"
-import { ProjectInvoices } from "@/components/invoices/project-invoices"
+import { ProjectBillingTab } from "@/components/projects/billing/project-billing-tab"
 import { ProjectTime } from "@/components/projects/project-time"
 import { TaskDetailDrawer } from "@/components/task-detail/task-detail-drawer"
 import { TaskView } from "@/components/task-view/task-view"
@@ -28,7 +28,7 @@ import { useIsAdmin } from "@/lib/hooks/use-is-admin"
 import { useBreadcrumbTitle } from "@/lib/hooks/use-breadcrumb-title"
 import { cn } from "@/lib/utils"
 
-const TABS = ["overview", "tasks", "time", "invoices", "settings"] as const
+const TABS = ["overview", "tasks", "time", "billing", "settings"] as const
 type Tab = (typeof TABS)[number]
 
 /** Params the period header replaced (`?period=`, §7.1): redirected once, then dropped. */
@@ -51,7 +51,8 @@ export default function ProjectDetailPage() {
 
   // URL is the source of truth for the active tab — keeps back button, refresh,
   // and shareable links working (CLAUDE.md: filterable views persist to URL).
-  const tabParam = searchParams.get("tab")
+  // The Invoices tab became Billing (§7.4); old links land there.
+  const tabParam = searchParams.get("tab") === "invoices" ? "billing" : searchParams.get("tab")
   const tab: Tab = (TABS as readonly string[]).includes(tabParam ?? "") ? (tabParam as Tab) : "overview"
 
   const navigate = useCallback(
@@ -82,9 +83,9 @@ export default function ProjectDetailPage() {
     [navigate, searchParams],
   )
 
-  // If non-billable project navigated with ?tab=invoices or ?tab=time, fall back to overview
+  // A non-billable project has no Time or Billing tab: fall back to overview.
   const isBillable = project ? project.billingType !== "non_billable" : true
-  const effectiveTab: Tab = (tab === "invoices" || tab === "time") && !isBillable ? "overview" : tab
+  const effectiveTab: Tab = (tab === "billing" || tab === "time") && !isBillable ? "overview" : tab
 
   const firstMonthKey = project
     ? (project.startDate ?? new Date(project.createdAt).toISOString().slice(0, 10)).slice(0, 7)
@@ -143,7 +144,7 @@ export default function ProjectDetailPage() {
   if (project === undefined) return <ProjectDetailSkeleton />
   if (project === null) notFound()
 
-  const withSidePanel = effectiveTab === "overview"
+  const withSidePanel = effectiveTab === "overview" || effectiveTab === "billing"
 
   return (
     <div data-full-bleed className="flex min-w-0 flex-col border-t border-border/60">
@@ -162,7 +163,22 @@ export default function ProjectDetailPage() {
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="tasks">Tasks</TabsTrigger>
             {isBillable && <TabsTrigger value="time">Time</TabsTrigger>}
-            {isBillable && <TabsTrigger value="invoices">Invoices</TabsTrigger>}
+            {isBillable && (
+              <TabsTrigger value="billing">
+                Billing
+                {billing && billing.needsActionCount > 0 ? (
+                  <span
+                    className="ml-0.5 inline-grid h-4 min-w-4 place-items-center rounded-full bg-blue-500 px-1 text-[10.5px] font-semibold text-white tabular-nums"
+                    title={`${billing.needsActionCount} ${billing.needsActionCount === 1 ? "period needs" : "periods need"} action`}
+                  >
+                    {billing.needsActionCount}
+                  </span>
+                ) : null}
+                {billing && billing.pastDueCount > 0 ? (
+                  <span className="size-[7px] rounded-full bg-destructive" title="Past due invoice" />
+                ) : null}
+              </TabsTrigger>
+            )}
             <TabsTrigger value="settings">Settings</TabsTrigger>
           </TabsList>
           <span className="flex-1" />
@@ -236,15 +252,26 @@ export default function ProjectDetailPage() {
                   teamMembers: project.teamMembers,
                   startDate: project.startDate,
                 }}
-                onNavigateToInvoices={() => setTab("invoices")}
+                onNavigateToInvoices={() => setTab("billing")}
               />
             )}
           </TabsContent>
         )}
 
         {isBillable && (
-          <TabsContent value="invoices" className="m-0 min-w-0 p-4 md:p-6">
-            {effectiveTab === "invoices" && <ProjectInvoices projectId={projectId} project={project} />}
+          <TabsContent value="billing" className="m-0 min-w-0">
+            {effectiveTab === "billing" && (
+              <div className="flex min-h-0">
+                <div className="min-w-0 flex-1 px-4 pt-6 pb-16 md:px-6">
+                  <ProjectBillingTab projectId={projectId} model={billing} onSelectPeriod={selectPeriodKey} />
+                </div>
+                {sidePanelOpen ? (
+                  <aside className="flex w-[300px] shrink-0 flex-col gap-3 border-l border-border/60 bg-muted/40 px-3 py-4">
+                    <ProjectPropertiesCards project={project} model={billing ?? null} />
+                  </aside>
+                ) : null}
+              </div>
+            )}
           </TabsContent>
         )}
 

@@ -75,8 +75,8 @@ export function ReopenPeriodDialog({
         <AlertDialogHeader>
           <AlertDialogTitle>Reopen {periodLabel}?</AlertDialogTitle>
           <AlertDialogDescription>
-            The {hoursLabel} of closed hours in this month become editable
-            again. Download a fresh report if you change anything.
+            The {hoursLabel} logged in {periodLabel} become editable again.
+            Download a fresh report if you change anything.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

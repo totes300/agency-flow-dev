@@ -4,13 +4,12 @@ import { useState } from "react"
 import { AnimatePresence, motion } from "motion/react"
 import { useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
-import type { Id } from "@/convex/_generated/dataModel"
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import { toast } from "sonner"
 import { toastError } from "@/lib/toast-helpers"
 import { formatCurrency, formatMinutes } from "@/lib/format"
-import { BanIcon, DollarSignIcon, LoaderIcon, ReceiptIcon, XIcon } from "lucide-react"
+import { BanIcon, DollarSignIcon, LoaderIcon, XIcon } from "lucide-react"
 import type { TimeEntryRow } from "@/components/projects/project-time-table"
 
 /**
@@ -24,18 +23,10 @@ export function ProjectTimeSelectionToolbar({
   selectedEntries,
   currency,
   onDeselectAll,
-  onCreateInvoice,
 }: {
   selectedEntries: TimeEntryRow[]
   currency: string
   onDeselectAll: () => void
-  /**
-   * Routes the admin to the Billing → Close queue to review the period before
-   * invoicing (PRD slice 08 — no one-click draft from an arbitrary selection;
-   * scope rule I2 governs which entries bill). Receives the billable-open ids
-   * and how many selected rows were skipped, kept for the parent's discretion.
-   */
-  onCreateInvoice: (ids: Id<"timeEntries">[], skipped: number) => void
 }) {
   const updateEntry = useMutation(api.timeEntries.update)
   const [bulkInFlight, setBulkInFlight] = useState<"billable" | "non_billable" | null>(
@@ -84,18 +75,6 @@ export function ProjectTimeSelectionToolbar({
         `${succeeded} of ${results.length} entries updated`,
       )
     }
-  }
-
-  function handleCreate() {
-    if (count === 0) return
-    const billableOpen = selectedEntries
-      .filter((e) => e.isBillable && e.closeStatus === undefined)
-      .map((e) => e._id as Id<"timeEntries">)
-    if (billableOpen.length === 0) {
-      toast.error("Selection has no open billable entries.")
-      return
-    }
-    onCreateInvoice(billableOpen, count - billableOpen.length)
   }
 
   return (
@@ -163,11 +142,6 @@ export function ProjectTimeSelectionToolbar({
                 Mark Non-Billable
               </Button>
             )}
-
-            <Button size="sm" onClick={handleCreate} className="ml-1">
-              <ReceiptIcon data-icon="inline-start" className="size-3.5" />
-              Review to invoice
-            </Button>
           </div>
         </motion.div>
       )}

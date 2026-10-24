@@ -274,9 +274,10 @@ export function PeriodMenu({
   align = "end",
 }: {
   projectId: Id<"projects">
-  row: Pick<PeriodRow, "key" | "start" | "end" | "label" | "closeId">
+  /** The period; absent for an invoice without one (fixed fee): undo items only. */
+  row?: Pick<PeriodRow, "key" | "start" | "end" | "label" | "closeId">
   undoItems: UndoAction[]
-  onViewEntries: () => void
+  onViewEntries?: () => void
   onUndo: (item: UndoAction) => void
   triggerClassName?: string
   align?: "start" | "end"
@@ -288,7 +289,7 @@ export function PeriodMenu({
         <Button
           variant="ghost"
           size="icon-sm"
-          aria-label={`${row.label} actions`}
+          aria-label={row ? `${row.label} actions` : "Invoice actions"}
           className={triggerClassName}
           onClick={(e) => e.stopPropagation()}
         >
@@ -296,15 +297,19 @@ export function PeriodMenu({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align={align} className="min-w-48" onClick={(e) => e.stopPropagation()}>
-        <DropdownMenuItem onSelect={onViewEntries}>
-          <EyeIcon /> View entries
-        </DropdownMenuItem>
-        <WorksheetMenuItem
-          label="Download worksheet"
-          icon={<FileSpreadsheetIcon className="size-3.5" aria-hidden />}
-          run={() => exportWorksheet(row)}
-        />
-        {undoItems.length > 0 ? <DropdownMenuSeparator /> : null}
+        {row ? (
+          <>
+            <DropdownMenuItem onSelect={onViewEntries}>
+              <EyeIcon /> View entries
+            </DropdownMenuItem>
+            <WorksheetMenuItem
+              label="Download worksheet"
+              icon={<FileSpreadsheetIcon className="size-3.5" aria-hidden />}
+              run={() => exportWorksheet(row)}
+            />
+          </>
+        ) : null}
+        {row && undoItems.length > 0 ? <DropdownMenuSeparator /> : null}
         {undoItems.map((item) =>
           item.disabledReason ? (
             <Tooltip key={item.kind}>

@@ -91,7 +91,7 @@ billing, month close). Agents take over the input work.
 ## 4. Architecture
 
 ```
-Claude / Codex ──Streamable HTTP + Bearer (Clerk OAuth JWT)──▶ Next.js app/[transport]/route.ts
+Claude / Codex ──Streamable HTTP + Bearer (Clerk OAuth JWT)──▶ Next.js app/mcp/route.ts
                                                                 │  mcp-handler + withMcpAuth
                                                                 │  tool registry (lib/mcp/registry)
                                                                 │  markdown renderers (lib/mcp/render)
@@ -104,7 +104,8 @@ Claude / Codex ──Streamable HTTP + Bearer (Clerk OAuth JWT)──▶ Next.js
                                        existing *ForAuth cores + tasks/write.ts, billing, …
 ```
 
-- **Next.js route** (`app/[transport]/route.ts` plus the public `.well-known` routes).
+- **Next.js route** (`app/mcp/route.ts` plus the public `.well-known` routes). There is
+  deliberately no root `[transport]` catch-all, which would swallow unknown URLs.
   - It verifies the bearer token with Clerk, which is what `withMcpAuth` and
     `verifyClerkToken` do.
   - It maps tool calls to Convex functions and renders the results as markdown.
@@ -155,8 +156,13 @@ Claude / Codex ──Streamable HTTP + Bearer (Clerk OAuth JWT)──▶ Next.js
   - Refresh tokens do not expire, so unattended agents keep working as long as their
     client refreshes (D26).
 - **Discovery:**
-  - `/.well-known/oauth-protected-resource/mcp` is served by
-    `protectedResourceHandlerClerk`.
+  - `/.well-known/oauth-protected-resource/mcp` is built with
+    `generateClerkProtectedResourceMetadata`. Clerk's `protectedResourceHandlerClerk`
+    sets `resource` to the bare origin, which breaks the exact `/mcp` match. The
+    metadata advertises `scopes_supported: ["user:org:read", "offline_access"]`.
+  - Dev resource URL: `https://localhost:3001/mcp`. Clerk requires https, so the dev
+    server runs with `next dev --experimental-https -p 3001`. Both Next and Convex read
+    `MCP_RESOURCE_URL`.
   - `/.well-known/oauth-authorization-server` is optional.
   - Both are public. `resource` must exactly equal the URL users paste into Claude.
   - Unauthenticated requests get a **401** with `WWW-Authenticate: Bearer
@@ -164,8 +170,11 @@ Claude / Codex ──Streamable HTTP + Bearer (Clerk OAuth JWT)──▶ Next.js
 
 ### 5.2 `getMcpAuthContext(ctx)` — the only MCP entry point
 It returns the same `AuthContext` shape as `getAuthContext`:
-1. `ctx.auth.getUserIdentity()` must come from the **OAuth provider** (check issuer or
-   audience), not the session provider.
+1. `ctx.auth.getUserIdentity()` must come from the **OAuth provider**, not the session
+   provider. Both share the Clerk issuer, and Convex enforces each provider's audience
+   but does not expose which one matched. The discriminator is therefore the
+   `client_id` claim, which every OAuth access token carries (RFC 9068) and session
+   tokens never do (`oauthClientIdOf` / `getSessionIdentity` in `convex/lib/auth.ts`).
 2. `orgId` is the verified `org_id` claim. Missing → `"No organization selected — reconnect
    and pick an organization"`.
 3. User comes from `users.byExternalId(subject)`. The role comes **only from
@@ -259,7 +268,11 @@ input into a typed reference. Convex resolves and ownership-checks it (I3).
   short key exists.
 - **Detail** is a heading, a field list, the markdown body and the included sections,
   in that order.
-- **Every entity** carries its app deep link.
+- **Every entity** carries its app deep link. The exception is `fetch("workspace")`,
+  which is a key sheet with no links (owner, 2026-10-24).
+- **Reference data never comes back clipped.** If a workspace table exceeds its cap,
+  `fetch("workspace")` refuses with a model-actionable error, the same rule as reports
+  (owner, 2026-10-24).
 - **Paging:** the default limit is 25 and the maximum 100. The cursor is opaque. A
   result is never silently truncated: when more exist, the output says so and gives the
   cursor.
@@ -447,6 +460,10 @@ The tests for these modules move with them.
 - **S2:** Version compatibility of `@clerk/mcp-tools` 0.7.x with `mcp-handler`. Clerk's
   example pins `mcp-handler` 1.x / SDK v1, while `mcp-handler` 2.x needs the v2 SDK.
   Stay on the combination Clerk's example uses.
+  **Outcome (owner-accepted 2026-10-24):** `@clerk/mcp-tools` 0.6 + `mcp-handler` 1.1,
+  the example's packages. An npm `overrides` entry collapses the MCP SDK to a single
+  `@modelcontextprotocol/sdk` 1.32.2. The pinned 1.26.0 has a high-severity advisory,
+  and every SDK import `mcp-handler` uses was checked against 1.32.2.
 - **S3:** Can the OAuth access-token lifetime be shortened in Clerk (for example to
   1 h), and does Clerk rotate refresh tokens for public clients?
 - **S4:** Does the Clerk Backend API list and revoke a user's OAuth grants per client
@@ -489,7 +506,7 @@ For each slice:
    Deploy backend changes to shared dummy-data dev with `npx convex dev --once`.
    Local checks are the gate; do not wait for CI or previews. The known three
    timestamp-test failures and existing untouched lint errors are not slice work.
-5. After owner setup, connect Codex to `http://localhost:3001/mcp`, run the slice's
+5. After owner setup, connect Codex to `https://localhost:3001/mcp`, run the slice's
    tools/example prompts and verify observable effects in the app. Record actual
    outputs and clearly distinguish tested, failed and unverified behavior.
 6. Update this table with commits, independent review and deviations; append one
@@ -505,7 +522,7 @@ before changing the PRD. Code, documentation and commit messages stay in English
 
 | # | Slice | Status | Commits | Review | Notes / deviations |
 |---|---|---|---|---|---|
-| 1 | Auth tracer | Planning — owner configuration gate | — | Pending implementation | Start: `5dc9411`. Development discovery checked; CIMD/DCR not advertised. See plan below. |
+| 1 | Auth tracer | Built, reviewed, fixes verified. Owner connect and S1 end-to-end pending | `def14c9` `cffbbd3` `3033410` `b80637f` + fixes `543d1f8` `f6cc62b` `4ccb821` `28ff3f5` `4ecaeb7` | Two independent reviews (standards/security, spec): no blockers or majors. 9 minor fixes done and re-verified (tsc clean, 65 MCP + lookup tests green) | Clerk dev MCP resource `https://localhost:3001/mcp` registered with owner approval (CIMD + aud on). Deviations accepted: https URL, `app/mcp/route.ts`, `generateClerkProtectedResourceMetadata`, `client_id` discriminator, S2 SDK override, workspace refuses instead of clipping, no links in the workspace sheet. |
 | 2 | Search, fetch, references and renderers | Not started | — | — | Depends on slice 1 done |
 | 3 | Tasks, comments, delete, idempotency, attribution and changes | Not started | — | — | Depends on slice 2 done |
 | 4 | Time entries and timer | Not started | — | — | Depends on slice 3 done |
@@ -518,9 +535,9 @@ before changing the PRD. Code, documentation and commit messages stay in English
 
 - Update `package.json` / lockfile for Clerk >=7.2.3 and the official example's
   compatible MCP dependency combination; resolve S2 from package manifests.
-- Add `app/[transport]/route.ts`, public `.well-known` discovery routes and thin
+- Add `app/mcp/route.ts`, public `.well-known` discovery routes and thin
   `lib/mcp/registry.ts` / render adapters. Adjust `proxy.ts` so MCP uses OAuth and
-  discovery stays public. Keep the resource URL exactly `http://localhost:3001/mcp`.
+  discovery stays public. Keep the resource URL exactly `https://localhost:3001/mcp`.
 - Add `convex/lib/mcpAuth.ts`, `convex/mcp` fetch entry points and the second provider
   in `convex/auth.config.ts` after S1 establishes real token claims and validation.
   Roles come only from `orgMembers`. Extract and reuse the existing workspace core

@@ -22,6 +22,7 @@ import {
 import { SidebarCountBadge } from "@/components/sidebar-count-badge"
 import { formatDateToYMD } from "@/lib/format"
 import { useOptionalQuery } from "@/lib/hooks/use-optional-query"
+import { navBadge } from "@/convex/lib/billing/periodState"
 
 /**
  * My Tasks: the caller's open tasks planned for today (§5.4 — today's
@@ -37,45 +38,28 @@ function MyTasksBadge() {
 }
 
 /**
- * Sidebar signal block on the `Invoices` row — the shared red count badge,
- * with a hover tooltip that breaks the number down (ready to bill / to close /
- * overdue). The badge itself stays visually identical to every other sidebar
- * count; the tooltip carries the detail that used to need a separate icon.
- *
- * Render rules (PRD US 1–4):
- *   - `inboxCount === 0 && overdueCount === 0` → render nothing (clean state is
- *     silent — the absence is the signal).
- *   - otherwise → red count badge; number is the billing-inbox total, falling
- *     back to the overdue count when there's nothing new to bill.
- *   - Hover (mouse or focus) → tooltip with the count breakdown.
+ * Billing row badge (docs/prd-project-billing-redesign.md §5.5): the shared
+ * red count of periods that need action; when none do, the past-due invoice
+ * count. The tooltip always names both. Clean state renders nothing.
  *
  * `pointer-events-auto` re-enables hover (the base badge is pointer-events-none)
  * so the Tooltip trigger fires.
  */
-function InvoicesNavSignals() {
+function BillingNavSignals() {
   const { isAuthenticated } = useConvexAuth()
   const signals = useQuery(
     api.billingViews.getNavSignals,
     isAuthenticated ? {} : "skip",
   )
   if (!signals) return null
-  const { toGenerateCount, toCloseCount = 0, overdueCount } = signals
-  // Billing inbox total: invoices to generate + within-budget months to
-  // close & report. Both are month-end actions the admin must clear.
-  const inboxCount = toGenerateCount + toCloseCount
-  if (inboxCount === 0 && overdueCount === 0) return null
-
-  const tooltipParts: string[] = []
-  if (toGenerateCount > 0) tooltipParts.push(`${toGenerateCount} ready to bill`)
-  if (toCloseCount > 0) tooltipParts.push(`${toCloseCount} to close & report`)
-  if (overdueCount > 0) tooltipParts.push(`${overdueCount} overdue`)
-  const tooltip = tooltipParts.join(" · ")
+  const { count, tooltip } = navBadge(signals)
+  if (count === 0) return null
 
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <SidebarCountBadge
-          count={inboxCount > 0 ? inboxCount : overdueCount}
+          count={count}
           aria-label={tooltip}
           className="pointer-events-auto"
         />
@@ -117,7 +101,7 @@ export function NavMain({
                       <item.icon />
                       <span>{item.title}</span>
                       {item.url === "/my-tasks" && <MyTasksBadge />}
-                      {item.url === "/billing" && <InvoicesNavSignals />}
+                      {item.url === "/billing" && <BillingNavSignals />}
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>

@@ -255,7 +255,7 @@ export async function buildProjectBillingPeriods(
 
   if (project.billingType === "fixed") {
     const fixed = await fixedBilling(ctx, orgId, project, currency, invoiceDocs);
-    return { ...base, fixed, needsActionCount: fixed.draft ? 1 : 0 };
+    return { ...base, fixed, needsActionCount: live.filter((inv) => inv.status === "draft").length };
   }
   if (!isClosableProject(project)) return base;
 

@@ -27,6 +27,7 @@ import { useInvoicesQueryArgs } from "@/lib/hooks/use-invoices-query-args"
 import { useLastDefined } from "@/lib/hooks/use-last-defined"
 import { useUrlDebouncedParam } from "@/lib/hooks/use-url-debounced-param"
 import { ORG_TIMEZONE_FALLBACK } from "@/lib/hooks/use-org-timezone"
+import { fromMinor } from "@/convex/lib/billing/money"
 import {
   parseStatusTab,
   STATUS_TAB_TO_QUERY,
@@ -52,7 +53,7 @@ export default function BillingPage() {
 
   // Counts feed the shared tab strip in every branch.
   const liveNavSignals = useQuery(
-    api.billingViews.getNavSignals,
+    api.billingViews.getNeedsAction,
     isAuthenticated ? {} : "skip",
   )
   const liveMetrics = useQuery(
@@ -62,12 +63,11 @@ export default function BillingPage() {
   const navSignals = useLastDefined(liveNavSignals)
   const metrics = useLastDefined(liveMetrics)
 
-  const closeCount =
-    (navSignals?.toGenerateCount ?? 0) + (navSignals?.toCloseCount ?? 0)
+  const closeCount = navSignals?.needsActionCount ?? 0
   const draftCount = metrics?.draft.count ?? 0
   const outstandingCount =
     (metrics?.unpaid.count ?? 0) + (metrics?.pastDue.count ?? 0)
-  const hasOverdue = (navSignals?.overdueCount ?? 0) > 0
+  const hasOverdue = (navSignals?.pastDueCount ?? 0) > 0
 
   const header = <h1 className="text-xl font-semibold tracking-tight">Billing</h1>
 
@@ -75,9 +75,11 @@ export default function BillingPage() {
     <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6">
       {header}
       <BillingSummary
-        readyAmountByCurrency={navSignals?.readyAmountByCurrency ?? {}}
-        readyCount={navSignals?.toGenerateCount ?? 0}
-        closeCount={navSignals?.toCloseCount ?? 0}
+        readyAmountByCurrency={Object.fromEntries(
+          Object.entries(navSignals?.tiles.unbilled.minorByCurrency ?? {}).map(([cur, minor]) => [cur, fromMinor(minor, cur)]),
+        )}
+        readyCount={navSignals?.tiles.unbilled.readyCount ?? 0}
+        closeCount={navSignals?.tiles.monthsToClose.count ?? 0}
         outstandingByCurrency={metrics?.outstanding?.currencySums ?? {}}
         outstandingCount={outstandingCount}
         overdueCount={metrics?.pastDue.count ?? 0}

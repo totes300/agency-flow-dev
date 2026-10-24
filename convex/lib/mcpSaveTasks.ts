@@ -3,7 +3,7 @@ import type { MutationCtx } from "../_generated/server";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { McpAuthContext } from "./mcpAuth";
 import { createRefResolver, type RefResolver } from "./mcpRefs";
-import { markdownToRichText, runItem } from "./mcpWrites";
+import { markdownToRichText, richTextOptions, runItem } from "./mcpWrites";
 import type { SaveTasksResult } from "./mcpWriteResults";
 import {
   addExternalRefs,
@@ -14,15 +14,19 @@ import {
 import { loadTaskForReadOrNull, loadTaskForWrite } from "../tasks/access";
 import { PRIORITY, type TaskPriority } from "../tasks/model";
 import {
+  archiveTask,
   createTask,
   defaultStatusFor,
   placeSubtask,
+  restoreTask,
   updateTask,
   type CreateTaskInput,
   type TaskPatch,
 } from "../tasks/write";
 import { REF_CAP } from "../workspaceRefs";
 import type { PriorityName } from "../../lib/mcp/limits";
+import { unrepresentableFormatting } from "../../lib/mcp/tiptap-markdown";
+import { safeParseDoc as descriptionDoc } from "./notificationEvents";
 
 /**
  * MCP `save_tasks` (docs/prd-mcp.md §6, D21, D24, D27, D28): a batch of task
@@ -42,6 +46,12 @@ import type { PriorityName } from "../../lib/mcp/limits";
  * - `done: true` = the org's default completed status (D24); `after` /
  *   `before` order a sub-task among its siblings (fractional sort keys).
  * - `externalRefs` are add-only; a ref another task owns fails, naming it.
+ *   An external ref is also a task reference anywhere (`ref`, `parent`,
+ *   `after` / `before`): items run in order, so a later item can point at a
+ *   task an earlier item of the same call created. A ref that finds an
+ *   archived task is refused unless the item restores it.
+ * - `archived: true | false` archives / restores through the app's paths
+ *   (members may archive what they can open, as in the app).
  *
  * Read budget per item (Convex: 4,096 index ranges per call; at most
  * MCP_BATCH_MAX = 25 items): ref resolution ~5, reference names one read
@@ -70,6 +80,7 @@ export type SaveTaskItem = {
   estimateMinutes?: number | null;
   category?: string | null;
   externalRefs?: string[];
+  archived?: boolean;
 };
 
 const PRIORITY_BY_NAME: Record<PriorityName, TaskPriority> = {
@@ -184,12 +195,15 @@ async function resolveProperties(names: ReferenceNames, resolver: RefResolver, i
   };
 }
 
-/** The task an item without `ref` updates through its external refs, or null to create. */
+/**
+ * The task an item without `ref` updates through its external refs (with
+ * the ref that found it), or null to create.
+ */
 async function taskByExternalRefs(
   ctx: MutationCtx,
   auth: McpAuthContext,
   refs: readonly string[],
-): Promise<Id<"tasks"> | null> {
+): Promise<{ taskId: Id<"tasks">; ref: string } | null> {
   const owners = new Map<Id<"tasks">, string>();
   for (const ref of refs) {
     const owner = await externalRefOwner(ctx, auth.orgId, ref);
@@ -205,7 +219,7 @@ async function taskByExternalRefs(
   if (!(await loadTaskForReadOrNull(ctx, taskId, auth))) {
     throw new ConvexError(`${ref} is already on a task you cannot access.`);
   }
-  return taskId;
+  return { taskId, ref };
 }
 
 /** Applies `after` / `before` to a sub-task; returns whether its position changed. */
@@ -248,18 +262,37 @@ async function saveItem(
   }
   const externalRefs = normalizeExternalRefs(item.externalRefs ?? []);
 
-  const targetId =
-    item.ref !== undefined
-      ? (await requireTask(resolver, item.ref))._id
-      : await taskByExternalRefs(ctx, auth, externalRefs);
+  let targetId: Id<"tasks"> | null = null;
+  if (item.ref !== undefined) {
+    targetId = (await requireTask(resolver, item.ref))._id;
+  } else {
+    const found = await taskByExternalRefs(ctx, auth, externalRefs);
+    if (found) {
+      const task = (await ctx.db.get(found.taskId))!;
+      // Never update a card nobody sees without saying so.
+      if (task.archivedAt !== undefined && item.archived !== false) {
+        throw new ConvexError(
+          `${found.ref} is on archived ${task.identifier ?? task._id}; set archived: false on it to restore it.`,
+        );
+      }
+      targetId = found.taskId;
+    }
+  }
   const props = await resolveProperties(names, resolver, item);
 
   if (targetId !== null) {
-    const access = await loadTaskForWrite(ctx, targetId, auth);
-    const { task } = access;
-    if (item.parent !== undefined && (await requireTask(resolver, item.parent))._id !== task.parentTaskId) {
+    let access = await loadTaskForWrite(ctx, targetId, auth);
+    if (item.parent !== undefined && (await requireTask(resolver, item.parent))._id !== access.task.parentTaskId) {
       throw new ConvexError("A task's parent cannot change. Create a new sub-task under the other parent instead.");
     }
+    // Restore first, so the rest of the item applies to the live task (the app's restore path).
+    let restored = false;
+    if (item.archived === false && access.task.archivedAt !== undefined) {
+      await restoreTask(ctx, access);
+      access = await loadTaskForWrite(ctx, targetId, auth);
+      restored = true;
+    }
+    const { task } = access;
     let statusId = props.statusId;
     // done: true on a task that is already completed keeps its status.
     if (item.done && task.statusCategory !== "completed") {
@@ -278,17 +311,32 @@ async function saveItem(
       priority: props.priority,
       labelIds: props.labelIds,
     };
-    const { changed } = await updateTask(ctx, access, patch);
-    const updated = (await ctx.db.get(targetId))!;
+    const { changed, assigneesChanged } = await updateTask(ctx, access, patch);
+    const formattingRemoved = changed.includes("description")
+      ? unrepresentableFormatting(descriptionDoc(task.description), richTextOptions())
+      : [];
+    let updated = (await ctx.db.get(targetId))!;
     const added = await addExternalRefs(ctx, auth, updated, externalRefs, now);
     const moved = await position(ctx, auth, resolver, updated, item);
+    let archived = false;
+    if (item.archived === true && updated.archivedAt === undefined) {
+      // The app's archive path: sub-tasks cascade, running timers are saved.
+      await archiveTask(ctx, await loadTaskForWrite(ctx, targetId, auth));
+      updated = (await ctx.db.get(targetId))!;
+      archived = true;
+    }
+    const didChange = changed.length > 0 || assigneesChanged || added > 0 || moved || restored || archived;
     return {
       identifier: updated.identifier ?? updated._id,
       title: updated.title,
-      action: changed.length > 0 || added > 0 || moved ? "updated" : "unchanged",
+      action: didChange ? "updated" : "unchanged",
+      ...(formattingRemoved.length > 0 ? { formattingRemoved } : {}),
     };
   }
 
+  if (item.archived === true) {
+    throw new ConvexError("archived applies to existing tasks: create the task first, then archive it by ref.");
+  }
   if (item.title === undefined) {
     throw new ConvexError(
       "title is required to create a task. To update one, pass its ref (or an external ref it already has).",

@@ -206,15 +206,21 @@ describe("save_tasks: batches, idempotency, leads", () => {
     const f = await setup(t);
     const first = await saveTasks(t, "admin", [{ title: "Once" }], { idempotencyKey: "run-1" });
     const count = (await allTasks(t)).length;
-    const replay = await saveTasks(t, "admin", [{ title: "Different input" }], { idempotencyKey: "run-1" });
+    // The same request again (a retry; the display name may differ): the first result, no write.
+    const replay = await saveTasks(t, "admin", [{ title: "Once" }], { idempotencyKey: "run-1", clientName: "Other" });
     expect(replay).toEqual({ ...first, replayed: true });
+    expect(await allTasks(t)).toHaveLength(count);
+    // The same key for a different request is refused, never answered with the old result.
+    await expect(saveTasks(t, "admin", [{ title: "Different input" }], { idempotencyKey: "run-1" })).rejects.toThrow(
+      "This idempotencyKey was already used for a different request; use a new key for a new write.",
+    );
     expect(await allTasks(t)).toHaveLength(count);
     // Keys are per user: another user's identical key runs.
     const alices = await saveTasks(t, "alice", [{ title: "Alice's" }], { idempotencyKey: "run-1" });
     expect(alices.replayed).toBe(false);
     // Another tool with the same key is refused.
     await expect(saveComments(t, "admin", [{ task: f.id.A, body: "x" }], { idempotencyKey: "run-1" })).rejects.toThrow(
-      "already used for save_tasks",
+      "already used for a different request",
     );
     // Expired keys run again; the cleanup deletes them.
     await t.run(async (ctx) => {
@@ -222,8 +228,8 @@ describe("save_tasks: batches, idempotency, leads", () => {
         await ctx.db.patch(row._id, { createdAt: row.createdAt - IDEMPOTENCY_TTL_MS - 1 });
       }
     });
-    const again = await saveTasks(t, "admin", [{ title: "Twice" }], { idempotencyKey: "run-1" });
-    expect(again).toMatchObject({ replayed: false, items: [{ title: "Twice", action: "created" }] });
+    const again = await saveTasks(t, "admin", [{ title: "Once" }], { idempotencyKey: "run-1" });
+    expect(again).toMatchObject({ replayed: false, items: [{ title: "Once", action: "created" }] });
     await t.mutation(internal.mcpIdempotency.cleanupExpired, {});
     const keys = await t.run(async (ctx) => await ctx.db.query("mcpIdempotency").collect());
     expect(keys.map((k) => [k.key, k.tool])).toEqual([["run-1", "save_tasks"]]);
@@ -534,5 +540,154 @@ describe("fetch changes (D22, D29)", () => {
     await saveTasks(t, "other", [{ title: "Other org work" }]);
     const ours = await changes(t, "admin");
     expect(JSON.stringify(ours)).not.toContain("Other org work");
+  });
+});
+
+// ─── Review round 1: external refs as task refs, archive, fidelity ──────────
+
+describe("external refs are task refs everywhere (D-EXTREF)", () => {
+  it("a checklist built in one call through external refs, rerun-safe", async () => {
+    const t = createT();
+    await setup(t);
+    const items = [
+      { title: "Reply to Arlo", project: "ARLO", externalRefs: ["gmail:T"] },
+      { title: "Send mockups", parent: "gmail:T", externalRefs: ["gmail:T#1"] },
+      { title: "Book call", parent: "gmail:T", externalRefs: ["gmail:T#2"], before: "gmail:T#1" },
+    ];
+    const first = await saveTasks(t, "admin", items);
+    expect(first.items.map((i) => i.action)).toEqual(["created", "created", "created"]);
+    const rerun = await saveTasks(t, "admin", items);
+    expect(rerun.items.map((i) => i.action)).toEqual(["unchanged", "unchanged", "unchanged"]);
+    expect(rerun.items.map((i) => i.identifier)).toEqual(first.items.map((i) => i.identifier));
+    expect((await allTasks(t)).filter((task) => task.title === "Send mockups")).toHaveLength(1);
+
+    const [parent] = (await as(t, "admin").query(api.mcp.fetch.records, { refs: ["gmail:T"], include: ["subtasks"], now: Date.now() })).results;
+    if (!parent.ok || parent.record.type !== "task") throw new Error("expected a task");
+    expect(parent.record.subtasks!.rows.map((s) => s.title)).toEqual(["Book call", "Send mockups"]);
+
+    // Comment target and search task filter by external ref.
+    const comment = await saveComments(t, "admin", [{ task: "gmail:T#1", body: "Sent" }]);
+    expect(comment.items[0].task).toBe(first.items[1].identifier);
+    const found = await as(t, "admin").query(api.mcp.search.comments, {
+      offset: 0, limit: 25, task: "gmail:T#1", updated: {}, now: Date.now(),
+    });
+    expect(found.rows.map((r) => r.id)).toEqual([comment.items[0].commentId]);
+    // Delete by external ref; the ref is freed and unknown refs are not found.
+    await remove(t, "admin", ["gmail:T#2"]);
+    await expect(remove(t, "admin", ["gmail:T#2"])).rejects.toThrow("gmail:T#2 not found");
+  });
+
+  it("other orgs' and unreadable refs are not found; reserved sources are refused", async () => {
+    const t = createT();
+    await setup(t);
+    await saveTasks(t, "other", [{ title: "Theirs", externalRefs: ["gmail:theirs"] }]);
+    await expect(saveTasks(t, "admin", [{ ref: "gmail:theirs", title: "x" }])).rejects.toThrow("gmail:theirs not found");
+    await saveTasks(t, "admin", [{ title: "Admin's", assignees: [email("admin")], externalRefs: ["gmail:adm"] }]);
+    await expect(saveComments(t, "alice", [{ task: "gmail:adm", body: "x" }])).rejects.toThrow("gmail:adm not found");
+    await expect(saveTasks(t, "admin", [{ title: "x", externalRefs: ["client:KONV"] }])).rejects.toThrow("Invalid external ref");
+    await expect(saveTasks(t, "admin", [{ title: "x", externalRefs: ["project:ARLO"] }])).rejects.toThrow("Invalid external ref");
+  });
+
+  it("caps refs per task", async () => {
+    const t = createT();
+    await setup(t);
+    const key = (await saveTasks(t, "admin", [{ title: "Many" }])).items[0].identifier;
+    for (let batch = 0; batch < 5; batch++) {
+      const refs = Array.from({ length: 20 }, (_, i) => `slack:${batch}-${i}`);
+      await saveTasks(t, "admin", [{ ref: key, externalRefs: refs }]);
+    }
+    await expect(saveTasks(t, "admin", [{ ref: key, externalRefs: ["slack:one-more"] }])).rejects.toThrow("at most 100 external refs");
+  });
+});
+
+describe("archive and restore (D-ARCHIVE) and archived refs", () => {
+  it("archives and restores through the app's paths; members may archive what they can open", async () => {
+    const t = createT();
+    const f = await setup(t);
+    expect((await saveTasks(t, "alice", [{ ref: f.id.A, archived: true }])).items[0].action).toBe("updated");
+    expect((await taskBy(t, f.id.A)).archivedAt).toBeDefined();
+    expect((await saveTasks(t, "alice", [{ ref: f.id.A, archived: true }])).items[0].action).toBe("unchanged");
+    await expect(saveTasks(t, "bob", [{ ref: f.id.A, archived: false }])).rejects.toThrow("not found");
+    expect((await saveTasks(t, "alice", [{ ref: f.id.A, archived: false, title: "Back" }])).items[0].action).toBe("updated");
+    const task = await taskBy(t, f.id.A);
+    expect(task.archivedAt).toBeUndefined();
+    expect(task.title).toBe("Back");
+    await expect(saveTasks(t, "admin", [{ title: "New", archived: true }])).rejects.toThrow("archived applies to existing tasks");
+  });
+
+  it("an external ref that finds an archived card is refused unless the item restores it", async () => {
+    const t = createT();
+    await setup(t);
+    const key = (await saveTasks(t, "admin", [{ title: "Old thread", externalRefs: ["gmail:old"] }])).items[0].identifier;
+    await saveTasks(t, "admin", [{ ref: key, archived: true }]);
+    await expect(saveTasks(t, "admin", [{ title: "Old thread again", externalRefs: ["gmail:old"] }])).rejects.toThrow(
+      `gmail:old is on archived ${key}; set archived: false on it to restore it.`,
+    );
+    const restored = await saveTasks(t, "admin", [{ title: "Old thread again", externalRefs: ["gmail:old"], archived: false }]);
+    expect(restored.items[0]).toMatchObject({ identifier: key, action: "updated", title: "Old thread again" });
+  });
+});
+
+describe("review round 1 gaps", () => {
+  it("an assignee-only update reports updated", async () => {
+    const t = createT();
+    const f = await setup(t);
+    const result = await saveTasks(t, "admin", [{ ref: f.id.A, assignees: [email("alice"), email("bob")] }]);
+    expect(result.items[0].action).toBe("updated");
+    expect((await taskBy(t, f.id.A)).assigneeIds).toEqual([f.alice, f.bob]);
+  });
+
+  it("a member cannot create a sub-task under a parent they cannot read", async () => {
+    const t = createT();
+    const f = await setup(t);
+    await expect(saveTasks(t, "alice", [{ parent: f.id.U, title: "Sneaky" }])).rejects.toThrow(`${f.id.U} not found`);
+  });
+
+  it("mentions of non-members and other-org members are refused", async () => {
+    const t = createT();
+    const f = await setup(t);
+    await expect(saveComments(t, "admin", [{ task: f.id.A, body: `hi @${email("other")}` }])).rejects.toThrow(
+      `@${email("other")} is not a member of this workspace`,
+    );
+  });
+
+  it("a fetched description with a mention saves back with the mention intact", async () => {
+    const t = createT();
+    const f = await setup(t);
+    const key = (await saveTasks(t, "admin", [{ title: "Brief", description: `Ask @${email("alice")} about *this*` }])).items[0].identifier;
+    const [r] = (await as(t, "admin").query(api.mcp.fetch.records, { refs: [key], include: [], now: Date.now() })).results;
+    if (!r.ok || r.record.type !== "task") throw new Error("expected a task");
+    expect(r.record.description).toBe(`Ask @${email("alice")} about *this*`);
+    const before = (await taskBy(t, key)).description;
+    const saved = await saveTasks(t, "admin", [{ ref: key, description: r.record.description! }]);
+    expect(saved.items[0].action).toBe("unchanged");
+    expect((await taskBy(t, key)).description).toBe(before);
+    expect(JSON.parse(before!).content[0].content).toContainEqual({ type: "mention", attrs: { id: f.alice, label: "Alice" } });
+  });
+
+  it("a rewrite that drops editor-only formatting says so", async () => {
+    const t = createT();
+    const f = await setup(t);
+    await t.run(async (ctx) => {
+      const access = await loadTaskForWrite(ctx, f.A, f.adminAuth);
+      await updateTask(ctx, access, {
+        description: JSON.stringify({
+          type: "doc",
+          content: [{ type: "paragraph", content: [{ type: "text", text: "Key", marks: [{ type: "underline" }] }] }],
+        }),
+      });
+    });
+    const result = await saveTasks(t, "admin", [{ ref: f.id.A, description: "Key" }]);
+    expect(result.items[0]).toMatchObject({ action: "updated", formattingRemoved: ["underline"] });
+  });
+
+  it("delete errors name the ref's own position", async () => {
+    const t = createT();
+    const f = await setup(t);
+    const own = (await saveComments(t, "alice", [{ task: f.id.A, body: "mine" }])).items[0].commentId;
+    // The duplicate is skipped; the failing task is still "Item 3", its place in refs.
+    await expect(remove(t, "alice", [own, own, f.id.A])).rejects.toThrow(`Item 3 (${f.id.A}): Only admins can delete tasks.`);
+    // All-or-nothing: the comment is still there.
+    expect(await t.run(async (ctx) => await ctx.db.get(own))).not.toBeNull();
   });
 });

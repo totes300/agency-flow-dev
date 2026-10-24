@@ -377,7 +377,7 @@ describe("write tools", () => {
       replayed: false,
       items: [
         { identifier: "ARLO-21", title: "Reply to Arlo", action: "created" },
-        { identifier: "ARLO-22", title: "Send mockups", action: "unchanged" },
+        { identifier: "ARLO-22", title: "Send mockups", action: "updated", formattingRemoved: ["highlight", "underline"] },
       ],
     }));
     const items = [{ title: "Reply to Arlo", project: "ARLO", externalRefs: ["gmail:1"] }, { ref: "ARLO-22", done: true }];
@@ -388,7 +388,7 @@ describe("write tools", () => {
       text: [
         "## Saved 2 tasks",
         "- [ARLO-21](https://localhost:3001/tasks/ARLO-21) · Reply to Arlo · created",
-        "- [ARLO-22](https://localhost:3001/tasks/ARLO-22) · Send mockups · no change",
+        "- [ARLO-22](https://localhost:3001/tasks/ARLO-22) · Send mockups · updated · formatting removed: highlight, underline",
       ].join("\n"),
     });
   });
@@ -468,8 +468,8 @@ describe("fetch changes", () => {
     expect(result.text).toBe(
       [
         "## Changes · 2 (oldest first, times in UTC)",
-        '- 2026-10-24 12:00 · [ARLO-21](https://localhost:3001/tasks/ARLO-21) · Csaba · checklist "szűrők" ✓',
-        "- 2026-10-24 12:01 · [ARLO-21](https://localhost:3001/tasks/ARLO-21) · Csaba · commented · comment cm1 · via Claude",
+        '- 2026-10-24 12:00 · [ARLO-21](https://localhost:3001/tasks/ARLO-21) · Checklist · Csaba · checklist "szűrők" ✓',
+        "- 2026-10-24 12:01 · [ARLO-21](https://localhost:3001/tasks/ARLO-21) · Checklist · Csaba · commented · comment cm1 · via Claude",
         "````user-content",
         "Done",
         "with ```fences```",

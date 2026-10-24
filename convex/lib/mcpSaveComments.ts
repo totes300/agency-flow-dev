@@ -2,7 +2,8 @@ import { ConvexError } from "convex/values";
 import type { MutationCtx } from "../_generated/server";
 import type { McpAuthContext } from "./mcpAuth";
 import { createRefResolver, type RefResolver } from "./mcpRefs";
-import { markdownToRichText, runItem } from "./mcpWrites";
+import { markdownToRichText, richTextOptions, runItem } from "./mcpWrites";
+import { unrepresentableFormatting } from "../../lib/mcp/tiptap-markdown";
 import type { SaveCommentsResult } from "./mcpWriteResults";
 import { createCommentForAuth, updateCommentForAuth } from "../comments";
 import { loadTaskForWrite } from "../tasks/access";
@@ -50,10 +51,12 @@ async function saveItem(
     const resolved = await resolver.require(item.ref, "comment");
     if (resolved.type !== "comment") throw new Error(`Expected a comment, resolved a ${resolved.type}`);
     const changed = await updateCommentForAuth(ctx, auth, resolved.comment._id, await body(resolver, item.body));
+    const formattingRemoved = changed ? unrepresentableFormatting(resolved.comment.content, richTextOptions()) : [];
     return {
       commentId: resolved.comment._id,
       task: resolved.access.task.identifier ?? resolved.access.task._id,
       action: changed ? "updated" : "unchanged",
+      ...(formattingRemoved.length > 0 ? { formattingRemoved } : {}),
     };
   }
 

@@ -1,7 +1,7 @@
 import { v } from "convex/values";
 import { mutation } from "../_generated/server";
 import { getMcpAuthContext } from "../lib/mcpAuth";
-import { assertBatch, mcpActor, recordIdempotent, replayIdempotent } from "../lib/mcpWrites";
+import { assertBatch, mcpActor, recordIdempotent, replayIdempotent, requestFingerprint } from "../lib/mcpWrites";
 import { saveTasks as saveTaskItems } from "../lib/mcpSaveTasks";
 import { saveComments as saveCommentItems } from "../lib/mcpSaveComments";
 import { deleteRecords } from "../lib/mcpDelete";
@@ -13,7 +13,8 @@ import { deleteRecords } from "../lib/mcpDelete";
  * app's own write paths as the caller (D3, D16).
  *
  * - `idempotencyKey` (D23): checked and recorded in the same mutation; a
- *   replay returns the first result (`replayed: true`) and writes nothing.
+ *   replay of the same request returns the first result (`replayed: true`)
+ *   and writes nothing; the same key with different arguments is refused.
  * - `clientName`: the OAuth client's display name for "via <client>" (D15),
  *   resolved by the Next.js route. Display text only — sanitized and capped
  *   (lib/mcp/client-name.ts), never used for authorization; the client's
@@ -46,6 +47,7 @@ export const saveTasks = mutation({
         estimateMinutes: v.optional(v.union(v.number(), v.null())),
         category: v.optional(v.union(v.string(), v.null())),
         externalRefs: v.optional(v.array(v.string())),
+        archived: v.optional(v.boolean()),
       }),
     ),
     idempotencyKey: v.optional(v.string()),
@@ -54,11 +56,12 @@ export const saveTasks = mutation({
   handler: async (ctx, args) => {
     const auth = mcpActor(await getMcpAuthContext(ctx), args.clientName);
     const now = Date.now();
-    const replay = await replayIdempotent(ctx, auth, "save_tasks", args.idempotencyKey, now);
+    const fingerprint = requestFingerprint("save_tasks", { items: args.items });
+    const replay = await replayIdempotent(ctx, auth, "save_tasks", args.idempotencyKey, fingerprint, now);
     if (replay) return { ...replay, replayed: true };
     assertBatch(args.items.length, "item");
     const result = await saveTaskItems(ctx, auth, args.items, now);
-    await recordIdempotent(ctx, auth, "save_tasks", args.idempotencyKey, result, now);
+    await recordIdempotent(ctx, auth, "save_tasks", args.idempotencyKey, fingerprint, result, now);
     return { ...result, replayed: false };
   },
 });
@@ -79,11 +82,12 @@ export const saveComments = mutation({
   handler: async (ctx, args) => {
     const auth = mcpActor(await getMcpAuthContext(ctx), args.clientName);
     const now = Date.now();
-    const replay = await replayIdempotent(ctx, auth, "save_comments", args.idempotencyKey, now);
+    const fingerprint = requestFingerprint("save_comments", { items: args.items });
+    const replay = await replayIdempotent(ctx, auth, "save_comments", args.idempotencyKey, fingerprint, now);
     if (replay) return { ...replay, replayed: true };
     assertBatch(args.items.length, "item");
     const result = await saveCommentItems(ctx, auth, args.items);
-    await recordIdempotent(ctx, auth, "save_comments", args.idempotencyKey, result, now);
+    await recordIdempotent(ctx, auth, "save_comments", args.idempotencyKey, fingerprint, result, now);
     return { ...result, replayed: false };
   },
 });
@@ -98,11 +102,12 @@ export const remove = mutation({
   handler: async (ctx, args) => {
     const auth = mcpActor(await getMcpAuthContext(ctx), args.clientName);
     const now = Date.now();
-    const replay = await replayIdempotent(ctx, auth, "delete", args.idempotencyKey, now);
+    const fingerprint = requestFingerprint("delete", { refs: args.refs, deleteTimeEntries: args.deleteTimeEntries ?? false });
+    const replay = await replayIdempotent(ctx, auth, "delete", args.idempotencyKey, fingerprint, now);
     if (replay) return { ...replay, replayed: true };
     assertBatch(args.refs.length, "ref");
     const result = await deleteRecords(ctx, auth, args.refs, { deleteTimeEntries: args.deleteTimeEntries ?? false });
-    await recordIdempotent(ctx, auth, "delete", args.idempotencyKey, result, now);
+    await recordIdempotent(ctx, auth, "delete", args.idempotencyKey, fingerprint, result, now);
     return { ...result, replayed: false };
   },
 });

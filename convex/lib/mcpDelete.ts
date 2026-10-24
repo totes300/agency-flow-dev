@@ -36,9 +36,10 @@ const UNSUPPORTED: Partial<Record<RefType, string>> = {
   member: "members",
 };
 
+/** A resolved ref; `index` is its position in the call's refs (error messages name it). */
 type Target =
-  | { input: string; type: "task"; id: Id<"tasks">; label: string }
-  | { input: string; type: "comment"; id: Id<"comments">; label: string };
+  | { index: number; input: string; type: "task"; id: Id<"tasks">; label: string }
+  | { index: number; input: string; type: "comment"; id: Id<"comments">; label: string };
 
 export async function deleteRecords(
   ctx: MutationCtx,
@@ -57,10 +58,11 @@ export async function deleteRecords(
       switch (resolved.type) {
         case "task": {
           const { task } = resolved.access;
-          return { input, type: "task", id: task._id, label: `${task.identifier ?? task._id} · ${task.title}` };
+          return { index, input, type: "task", id: task._id, label: `${task.identifier ?? task._id} · ${task.title}` };
         }
         case "comment":
           return {
+            index,
             input,
             type: "comment",
             id: resolved.comment._id,
@@ -78,8 +80,8 @@ export async function deleteRecords(
   }
 
   const items: DeleteResult["items"] = [];
-  for (const [index, target] of targets.entries()) {
-    const action = await runItem(index, target.input, async () => {
+  for (const target of targets) {
+    const action = await runItem(target.index, target.input, async () => {
       if ((await ctx.db.get(target.id)) === null) return "already_deleted" as const;
       if (target.type === "task") {
         const access = await loadTaskForWrite(ctx, target.id, auth);

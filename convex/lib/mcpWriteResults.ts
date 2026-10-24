@@ -17,6 +17,8 @@ export const saveTasksResultValidator = v.object({
       identifier: v.string(),
       title: v.string(),
       action: v.union(v.literal("created"), v.literal("updated"), v.literal("unchanged")),
+      /** Editor formatting markdown cannot carry, dropped by a description rewrite. */
+      formattingRemoved: v.optional(v.array(v.string())),
     }),
   ),
 });
@@ -28,6 +30,8 @@ export const saveCommentsResultValidator = v.object({
       commentId: v.id("comments"),
       task: v.string(),
       action: v.union(v.literal("created"), v.literal("updated"), v.literal("unchanged")),
+      /** Editor formatting markdown cannot carry, dropped by an edit. */
+      formattingRemoved: v.optional(v.array(v.string())),
     }),
   ),
 });

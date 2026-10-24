@@ -658,8 +658,16 @@ function changeText(type: string, metadata: unknown): string {
   return oneLine(format ? format((metadata ?? {}) as Record<string, unknown>) : activityText(type, metadata));
 }
 
+/** Title for a change line: one line, at most CHANGE_TITLE_MAX characters. */
+function shortTitle(title: string): string {
+  const line = oneLine(title);
+  return line.length > CHANGE_TITLE_MAX ? `${line.slice(0, CHANGE_TITLE_MAX - 1).trimEnd()}…` : line;
+}
+
+const CHANGE_TITLE_MAX = 80;
+
 /**
- * One line per change, oldest first: time · task · actor · what changed
+ * One line per change, oldest first: time · task · title · actor · what changed
  * (· via client). Comment text (D29) follows as a user-content block. The
  * cursor line says how to continue; it is always present.
  */
@@ -673,6 +681,7 @@ export function renderChanges(data: ChangesData, ctx: RenderContext): string {
     const head = `- ${fields(
       formatTimestamp(c.at, timezone),
       `[${c.task.identifier}](${taskLink(ctx.appOrigin, c.task.identifier)})`,
+      shortTitle(c.task.title),
       oneLine(c.actor),
       changeText(c.type, c.metadata),
       c.comment ? `comment ${c.comment.id}` : null,
@@ -699,6 +708,11 @@ function writeHeader(title: string, replayed: boolean): string {
   return replayed ? `## ${title}\n${REPLAYED}` : `## ${title}`;
 }
 
+/** Formatting a rewrite could not keep (markdown cannot carry it): said, never dropped silently. */
+function formattingNote(removed: readonly string[] | undefined): string | null {
+  return removed && removed.length > 0 ? `formatting removed: ${removed.join(", ")}` : null;
+}
+
 const SAVE_ACTION: Record<"created" | "updated" | "unchanged", string> = {
   created: "created",
   updated: "updated",
@@ -707,7 +721,13 @@ const SAVE_ACTION: Record<"created" | "updated" | "unchanged", string> = {
 
 export function renderSaveTasks(data: SaveTasksData, ctx: RenderContext): string {
   const lines = data.items.map(
-    (i) => `- ${fields(`[${i.identifier}](${taskLink(ctx.appOrigin, i.identifier)})`, oneLine(i.title), SAVE_ACTION[i.action])}`,
+    (i) =>
+      `- ${fields(
+        `[${i.identifier}](${taskLink(ctx.appOrigin, i.identifier)})`,
+        oneLine(i.title),
+        SAVE_ACTION[i.action],
+        formattingNote(i.formattingRemoved),
+      )}`,
   );
   return [writeHeader(`Saved ${data.items.length} ${data.items.length === 1 ? "task" : "tasks"}`, data.replayed), ...lines].join("\n");
 }
@@ -715,7 +735,12 @@ export function renderSaveTasks(data: SaveTasksData, ctx: RenderContext): string
 export function renderSaveComments(data: SaveCommentsData, ctx: RenderContext): string {
   const lines = data.items.map(
     (i) =>
-      `- ${fields(`[comment ${i.commentId}](${taskLink(ctx.appOrigin, i.task, i.commentId)})`, `on ${i.task}`, SAVE_ACTION[i.action])}`,
+      `- ${fields(
+        `[comment ${i.commentId}](${taskLink(ctx.appOrigin, i.task, i.commentId)})`,
+        `on ${i.task}`,
+        SAVE_ACTION[i.action],
+        formattingNote(i.formattingRemoved),
+      )}`,
   );
   return [
     writeHeader(`Saved ${data.items.length} ${data.items.length === 1 ? "comment" : "comments"}`, data.replayed),

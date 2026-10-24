@@ -814,6 +814,8 @@ export default defineSchema({
     userId: v.id("users"),
     key: v.string(),
     tool: v.string(),
+    // The request the key was first used for (tool + canonical arguments).
+    fingerprint: v.string(),
     result: mcpWriteResultValidator,
     createdAt: v.number(),
   })

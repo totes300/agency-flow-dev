@@ -16,8 +16,8 @@ export type SearchCursor<Type extends string = string> = {
   offsets: Partial<Record<Type, number>>;
 };
 
-/** JSON with object keys sorted, so equal inputs serialize identically. */
-function stableJson(value: unknown): string {
+/** JSON with object keys sorted (undefined members dropped), so equal inputs serialize identically. */
+export function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
   if (value !== null && typeof value === "object") {
     const entries = Object.entries(value as Record<string, unknown>)

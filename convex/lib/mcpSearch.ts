@@ -3,17 +3,19 @@ import type { QueryCtx } from "../_generated/server";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { AuthContext } from "./auth";
 import { assertValidDateString } from "./dateValidation";
-import { effectiveClientPrefix } from "./helpers";
+import { referenceClientPrefix } from "./helpers";
 import { getDateInTimezone } from "./timer";
 import { addDaysToDateString } from "./todayPlan";
 import { createRefResolver, type RefResolver } from "./mcpRefs";
-import { commentText, isOverdue, orgClock, timeEntryRow, userNames, type OrgClock } from "./mcpRecords";
+import { commentPreview, isOverdue, orgClock, timeEntryRow, userNames, type OrgClock } from "./mcpRecords";
+import { listTaskCommentsForAuth } from "../comments";
 import { filterReadableTasks } from "../tasks/access";
 import { findTaskDocsForAuth, toAgentTaskRows, type FindTasksInput } from "../tasks/lookup";
 import { isTaskCategory, type TaskCategory } from "../tasks/model";
 import { visibleTimeEntries } from "../timeEntries";
 import { REF_CAP } from "../workspaceRefs";
 import { extractPlainText } from "../../lib/tiptap-utils";
+import { SEARCH_LIMIT_MAX } from "../../lib/mcp/limits";
 
 /**
  * MCP `search` per result type (docs/prd-mcp.md §6, §7), for an
@@ -22,15 +24,31 @@ import { extractPlainText } from "../../lib/tiptap-utils";
  * page (`offset` / `limit`) plus the full match count. A loader that hit its
  * cap sets `incomplete`: more matches may exist, and the renderer says so —
  * a clipped set is never presented as complete. No money in any row.
+ *
+ * Read budget (Convex: 4,096 index ranges and 32,000 documents per call;
+ * every db.get / query is one range):
+ * - tasks: the shared task core (findTaskDocsForAuth) — a few ranges for
+ *   admins; for members one range per assigned task (edge cap 2,000) plus
+ *   their access checks — then up to ~6 per row on the page;
+ * - projects / clients: one range (≤ 2,001 docs) plus one per page row;
+ *   members: one range plus one per org member;
+ * - time entries: one range (≤ 2,001 docs) plus one per distinct project
+ *   (client filter) and ~2 per page row;
+ * - comments: one activity range (≤ 501 rows), then per comment one get,
+ *   per distinct task one get and (members) up to two edge checks: at most
+ *   ~2,000 ranges; with a task filter, the task's comments in one range.
+ * Filters by member email add one range per org member (mcpRefs.ts).
  */
 
-export const SEARCH_LIMIT_MAX = 100;
 /** Deepest offset a cursor may page to (results come from capped loads anyway). */
 export const SEARCH_OFFSET_MAX = 10_000;
 /** Time entries read per search before filtering. */
 export const TIME_SEARCH_CAP = 2000;
-/** Activity rows scanned per comment search (comments are found via their `comment_added` row). */
-export const COMMENT_SCAN_CAP = 2000;
+/**
+ * Activity rows scanned per comment search (comments are found via their
+ * `comment_added` row); sized to the 4,096-range budget above.
+ */
+export const COMMENT_SCAN_CAP = 500;
 /** Preview length of a comment row. */
 export const COMMENT_PREVIEW_CHARS = 200;
 
@@ -104,19 +122,38 @@ async function personFilter(
   if (args.mine) return auth.userId;
   if (args.assignee === undefined) return undefined;
   const member = await resolver.require(args.assignee, "member");
-  return member.type === "member" ? member.user._id : undefined;
+  if (member.type !== "member") throw new Error(`Expected a member, resolved a ${member.type}`);
+  return member.user._id;
 }
 
 async function clientFilter(resolver: RefResolver, ref: string | undefined): Promise<Doc<"clients"> | undefined> {
   if (ref === undefined) return undefined;
   const resolved = await resolver.require(ref, "client");
-  return resolved.type === "client" ? resolved.client : undefined;
+  if (resolved.type !== "client") throw new Error(`Expected a client, resolved a ${resolved.type}`);
+  return resolved.client;
 }
 
 async function projectFilter(resolver: RefResolver, ref: string | undefined): Promise<Doc<"projects"> | undefined> {
   if (ref === undefined) return undefined;
   const resolved = await resolver.require(ref, "project");
-  return resolved.type === "project" ? resolved.project : undefined;
+  if (resolved.type !== "project") throw new Error(`Expected a project, resolved a ${resolved.type}`);
+  return resolved.project;
+}
+
+/** A task ref the caller can read (comment / time-entry search `task` filter). */
+async function taskFilter(resolver: RefResolver, ref: string | undefined): Promise<Doc<"tasks"> | undefined> {
+  if (ref === undefined) return undefined;
+  const resolved = await resolver.require(ref, "task");
+  if (resolved.type !== "task") throw new Error(`Expected a task, resolved a ${resolved.type}`);
+  return resolved.access.task;
+}
+
+/** A reference table read in full under `REF_CAP`; refuses rather than match against a clipped list. */
+function refTable<T>(rows: T[], noun: string): T[] {
+  if (rows.length > REF_CAP) {
+    throw new ConvexError(`This workspace has more than ${REF_CAP} ${noun}, so a ${noun.replace(/e?s$/, "")} filter cannot be matched by name.`);
+  }
+  return rows;
 }
 
 // ─── Tasks ───────────────────────────────────────────────────────────────────
@@ -145,10 +182,10 @@ async function statusFilter(
   const value = status?.trim();
   if (!value || value.toLowerCase() === "open") return { closedAllowed: false };
   if (value.toLowerCase() === "any") return { includeClosed: true, closedAllowed: true };
-  const statuses = await ctx.db
-    .query("statuses")
-    .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
-    .take(REF_CAP);
+  const statuses = refTable(
+    await ctx.db.query("statuses").withIndex("by_orgId", (q) => q.eq("orgId", orgId)).take(REF_CAP + 1),
+    "statuses",
+  );
   const named = statuses.filter((s) => s.name.toLowerCase() === value.toLowerCase());
   if (named.length === 1) {
     return { statusId: named[0]._id, closedAllowed: named[0].category === "completed" || named[0].category === "canceled" };
@@ -170,10 +207,10 @@ async function statusFilter(
 async function labelFilter(ctx: QueryCtx, orgId: string, label: string | undefined): Promise<Id<"labels"> | undefined> {
   const value = label?.trim();
   if (!value) return undefined;
-  const labels = await ctx.db
-    .query("labels")
-    .withIndex("by_orgId_position", (q) => q.eq("orgId", orgId))
-    .take(REF_CAP);
+  const labels = refTable(
+    await ctx.db.query("labels").withIndex("by_orgId_position", (q) => q.eq("orgId", orgId)).take(REF_CAP + 1),
+    "labels",
+  );
   const named = labels.filter((l) => l.name.toLowerCase() === value.toLowerCase());
   if (named.length === 0) throw new ConvexError(`No label "${value}". Labels are listed in fetch("workspace").`);
   if (named.length > 1) throw new ConvexError(`Label "${value}" is ambiguous: ${named.length} labels share that name.`);
@@ -219,31 +256,18 @@ export async function searchTasks(ctx: QueryCtx, auth: AuthContext, args: TaskSe
 
   const shown = page(matched, args);
   const base = await toAgentTaskRows(ctx, auth.orgId, shown);
-  const codes = new Map<Id<"projects">, string | null>();
-  const rows = [];
-  for (const [i, task] of shown.entries()) {
-    let code: string | null = null;
-    if (task.projectId) {
-      if (!codes.has(task.projectId)) {
-        const p = await ctx.db.get(task.projectId);
-        codes.set(task.projectId, p && p.orgId === auth.orgId ? p.code : null);
-      }
-      code = codes.get(task.projectId) ?? null;
-    }
-    const row = base[i];
-    rows.push({
-      identifier: task.identifier,
-      title: task.title,
-      status: row.status,
-      statusCategory: task.statusCategory,
-      priority: row.priority,
-      assignees: row.assignees,
-      dueDate: row.dueDate,
-      overdue: isOverdue(task, clock.today),
-      project: code,
-      parent: row.parent,
-    });
-  }
+  // The identifier's key already is the project code: no project column.
+  const rows = shown.map((task, i) => ({
+    identifier: task.identifier,
+    title: task.title,
+    status: base[i].status,
+    statusCategory: task.statusCategory,
+    priority: base[i].priority,
+    assignees: base[i].assignees,
+    dueDate: base[i].dueDate,
+    overdue: isOverdue(task, clock.today),
+    parent: base[i].parent,
+  }));
   const result: SearchPage<(typeof rows)[number]> & { today: string } = {
     rows,
     total: matched.length,
@@ -295,7 +319,7 @@ export async function searchProjects(
       id: p._id,
       code: p.code,
       name: p.name,
-      client: c ? { name: c.name, prefix: effectiveClientPrefix(c) } : null,
+      client: c ? { name: c.name, prefix: referenceClientPrefix(c) } : null,
       archived: p.archivedAt !== undefined,
     });
   }
@@ -315,12 +339,12 @@ export async function searchClients(ctx: QueryCtx, auth: AuthContext, args: Page
     await ctx.db.query("clients").withIndex("by_orgId", (q) => q.eq("orgId", auth.orgId)).take(REF_CAP + 1),
   );
   const matched = loaded.rows
-    .filter((c) => textMatch(args.query, c.name, effectiveClientPrefix(c)))
+    .filter((c) => textMatch(args.query, c.name, referenceClientPrefix(c)))
     .sort(activeFirst((c) => c.name));
   const rows = page(matched, args).map((c) => ({
     id: c._id,
     name: c.name,
-    prefix: effectiveClientPrefix(c),
+    prefix: referenceClientPrefix(c),
     archived: c.archivedAt !== undefined,
   }));
   const result: SearchPage<(typeof rows)[number]> = {
@@ -363,6 +387,7 @@ export type TimeSearchArgs = PageArgs & {
   query?: string;
   assignee?: string;
   mine?: boolean;
+  task?: string;
   client?: string;
   project?: string;
   tracked: DateRangeArgs;
@@ -374,7 +399,8 @@ export type TimeSearchArgs = PageArgs & {
 /**
  * Time entries the caller may see (admins: the org, members: their own, as
  * in the app), loaded through the most selective index: the person's
- * `by_userId_date` range, a project's entries, or the org's date range.
+ * `by_userId_date` range, the task's entries, the org's date range when
+ * dates are given, a project's entries, else the org's latest entries.
  */
 export async function searchTimeEntries(ctx: QueryCtx, auth: AuthContext, args: TimeSearchArgs) {
   assertPage(args);
@@ -383,19 +409,26 @@ export async function searchTimeEntries(ctx: QueryCtx, auth: AuthContext, args: 
   const clock = await orgClock(ctx, auth.orgId, args.now);
   const resolver = createRefResolver(ctx, auth);
   const person = await personFilter(resolver, auth, args);
+  const task = await taskFilter(resolver, args.task);
   const client = await clientFilter(resolver, args.client);
   const project = await projectFilter(resolver, args.project);
   const notes: string[] = [];
 
-  // Members see only their own entries (visibleTimeEntries): read their range.
-  const userId = auth.isAdmin ? person : auth.userId;
+  // Members see only their own entries (visibleTimeEntries).
   if (!auth.isAdmin && person !== undefined && person !== auth.userId) {
     notes.push("Members see only their own time entries, so entries logged by others are not shown.");
   }
-
+  const userId = auth.isAdmin ? person : auth.userId;
   const { from, to } = args.tracked;
+  const hasDates = from !== undefined || to !== undefined;
+
   let loaded: Doc<"timeEntries">[];
-  if (userId !== undefined) {
+  if (task !== undefined) {
+    loaded = await ctx.db
+      .query("timeEntries")
+      .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
+      .take(TIME_SEARCH_CAP + 1);
+  } else if (userId !== undefined) {
     loaded = await ctx.db
       .query("timeEntries")
       .withIndex("by_userId_date", (q) => {
@@ -407,7 +440,7 @@ export async function searchTimeEntries(ctx: QueryCtx, auth: AuthContext, args: 
       })
       .order("desc")
       .take(TIME_SEARCH_CAP + 1);
-  } else if (project !== undefined) {
+  } else if (project !== undefined && !hasDates) {
     loaded = await ctx.db
       .query("timeEntries")
       .withIndex("by_orgId_projectId_closeId", (q) => q.eq("orgId", auth.orgId).eq("projectId", project._id))
@@ -444,6 +477,7 @@ export async function searchTimeEntries(ctx: QueryCtx, auth: AuthContext, args: 
   const matched: Doc<"timeEntries">[] = [];
   for (const e of visible) {
     if (person !== undefined && e.userId !== person) continue;
+    if (task !== undefined && e.taskId !== task._id) continue;
     if (project !== undefined && e.projectId !== project._id) continue;
     if (!inRange(e.date, args.tracked)) continue;
     if (!updatedMatch(e.updatedAt, args, clock)) continue;
@@ -473,6 +507,7 @@ export type CommentSearchArgs = PageArgs & {
   query?: string;
   assignee?: string;
   mine?: boolean;
+  task?: string;
   client?: string;
   project?: string;
   updated: DateRangeArgs;
@@ -480,23 +515,36 @@ export type CommentSearchArgs = PageArgs & {
   now: number;
 };
 
-/**
- * Comments on tasks the caller can read, newest first. Comments have no org
- * index, so they are found through their `comment_added` activity rows
- * (`activityLog.by_org`, newest first, bounded by `COMMENT_SCAN_CAP`); the
- * "updated" filters narrow that scan by when the comment was written.
- */
-export async function searchComments(ctx: QueryCtx, auth: AuthContext, args: CommentSearchArgs) {
-  assertPage(args);
-  assertRange(args.updated, "updated");
-  const clock = await orgClock(ctx, auth.orgId, args.now);
-  const resolver = createRefResolver(ctx, auth);
-  const author = await personFilter(resolver, auth, args);
-  const client = await clientFilter(resolver, args.client);
-  const project = await projectFilter(resolver, args.project);
+type CommentCandidate = {
+  id: Id<"comments">;
+  task: Doc<"tasks">;
+  userId: Id<"users">;
+  createdAt: number;
+  content: unknown;
+};
 
+/** Comments of one readable task (its `by_task` range, capped by the comments core). */
+async function taskCommentCandidates(ctx: QueryCtx, auth: AuthContext, task: Doc<"tasks">) {
+  const result = await listTaskCommentsForAuth(ctx, auth, task._id);
+  const candidates: CommentCandidate[] = (result?.comments ?? []).map((c) => ({
+    id: c._id,
+    task,
+    userId: c.userId,
+    createdAt: c.createdAt,
+    content: c.content,
+  }));
+  return { candidates, incomplete: result?.truncated ?? false };
+}
+
+/**
+ * Comments on readable tasks found through their `comment_added` activity
+ * rows (`activityLog.by_org`, newest first, `COMMENT_SCAN_CAP` rows): comments
+ * have no org index. The "updated" filters narrow that scan by when the
+ * comment was written.
+ */
+async function orgCommentCandidates(ctx: QueryCtx, auth: AuthContext, args: CommentSearchArgs) {
   // Index range in epoch ms, widened by a day on each side for timezones;
-  // exact matching on the org-timezone date happens below.
+  // exact matching on the org-timezone date happens afterwards.
   let lower = args.updatedSince;
   if (args.updated.from !== undefined) {
     const fromMs = Date.parse(`${args.updated.from}T00:00:00Z`) - DAY_MS;
@@ -514,7 +562,6 @@ export async function searchComments(ctx: QueryCtx, auth: AuthContext, args: Com
     })
     .order("desc")
     .take(COMMENT_SCAN_CAP + 1);
-  const incomplete = events.length > COMMENT_SCAN_CAP;
 
   const comments: Doc<"comments">[] = [];
   const seen = new Set<Id<"comments">>();
@@ -537,26 +584,44 @@ export async function searchComments(ctx: QueryCtx, auth: AuthContext, args: Com
   const readable = new Map(
     (await filterReadableTasks(ctx, auth, [...tasks.values()])).map((t) => [t._id, t] as const),
   );
-
-  const matched = comments.filter((c) => {
+  const candidates: CommentCandidate[] = [];
+  for (const c of comments) {
     const task = readable.get(c.taskId);
-    if (!task) return false;
+    if (task) candidates.push({ id: c._id, task, userId: c.userId, createdAt: c.createdAt, content: c.content });
+  }
+  return { candidates, incomplete: events.length > COMMENT_SCAN_CAP };
+}
+
+/** Comments on tasks the caller can read, newest first. */
+export async function searchComments(ctx: QueryCtx, auth: AuthContext, args: CommentSearchArgs) {
+  assertPage(args);
+  assertRange(args.updated, "updated");
+  const clock = await orgClock(ctx, auth.orgId, args.now);
+  const resolver = createRefResolver(ctx, auth);
+  const author = await personFilter(resolver, auth, args);
+  const task = await taskFilter(resolver, args.task);
+  const client = await clientFilter(resolver, args.client);
+  const project = await projectFilter(resolver, args.project);
+
+  const { candidates, incomplete } = task
+    ? await taskCommentCandidates(ctx, auth, task)
+    : await orgCommentCandidates(ctx, auth, args);
+  const matched = candidates.filter((c) => {
     if (author !== undefined && c.userId !== author) return false;
-    if (project !== undefined && task.projectId !== project._id) return false;
-    if (client !== undefined && task.clientId !== client._id) return false;
+    if (project !== undefined && c.task.projectId !== project._id) return false;
+    if (client !== undefined && c.task.clientId !== client._id) return false;
     if (!updatedMatch(c.createdAt, args, clock)) return false;
     return textMatch(args.query, extractPlainText(c.content));
   });
-  matched.sort((a, b) => b.createdAt - a.createdAt || a._id.localeCompare(b._id));
+  matched.sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id));
 
   const nameOf = userNames(ctx);
   const rows = [];
   for (const c of page(matched, args)) {
-    const task = readable.get(c.taskId)!;
-    const text = commentText(c.content, COMMENT_PREVIEW_CHARS);
+    const text = commentPreview(c.content, COMMENT_PREVIEW_CHARS);
     rows.push({
-      id: c._id,
-      task: { identifier: task.identifier, title: task.title },
+      id: c.id,
+      task: { identifier: c.task.identifier, title: c.task.title },
       author: await nameOf(c.userId),
       createdAt: c.createdAt,
       text: text.text.replace(/\s+/g, " ").trim(),

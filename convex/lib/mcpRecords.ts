@@ -1,7 +1,7 @@
 import type { QueryCtx } from "../_generated/server";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { AuthContext } from "./auth";
-import { effectiveClientPrefix } from "./helpers";
+import { referenceClientPrefix } from "./helpers";
 import { getOrgSettings } from "./orgHelpers";
 import { getDateInTimezone, ORG_TIMEZONE_FALLBACK } from "./timer";
 import { listTaskCommentsForAuth } from "../comments";
@@ -13,6 +13,7 @@ import { isClosedCategory } from "../tasks/model";
 import { visibleTimeEntries } from "../timeEntries";
 import type { Resolved } from "./mcpRefs";
 import { capText, descriptionToMarkdown, tiptapToMarkdown } from "../../lib/mcp/tiptap-markdown";
+import type { FetchInclude } from "../../lib/mcp/limits";
 
 /**
  * Compact data for MCP `fetch` records (docs/prd-mcp.md §6, §7). Convex
@@ -21,24 +22,24 @@ import { capText, descriptionToMarkdown, tiptapToMarkdown } from "../../lib/mcp/
  * sees exactly what the app shows them. No money: rates, fees and amounts
  * are never part of a record.
  *
- * Every list is bounded; anything not shown is counted and flagged, so the
- * renderer can say so instead of presenting a clipped list as complete.
+ * Bodies (descriptions, comments) are never cut here: the route fits a
+ * result into its size budget by showing fewer list rows, and says so.
+ * Lists are bounded; anything not returned is counted and flagged.
+ *
+ * Read budget per record (Convex: 4,096 index ranges, 32,000 documents per
+ * call; the route fetches one ref per call): a task with every include is
+ * about 30 ranges plus one per distinct comment author / activity actor /
+ * time-entry member, and at most ~3,000 documents (comments 501, activity
+ * 501, time entries 2,001, files 51 + 51, sub-tasks 201).
  */
 
-export const FETCH_INCLUDES = ["subtasks", "comments", "activity", "time", "files", "attachment_text"] as const;
-export type FetchInclude = (typeof FETCH_INCLUDES)[number];
-
-/** Markdown body cap (characters) for a task description. */
-export const DESCRIPTION_MAX_CHARS = 6000;
-/** Text cap per comment. */
-export const COMMENT_MAX_CHARS = 1500;
-/** Most recent comments / activity events / time entries shown per task. */
+/** Most recent comments / activity events / time entries returned per task. */
 export const RECENT_ROWS = 30;
 /** Time entries read per task (the total covers all of them). */
 export const TASK_TIME_CAP = 2000;
 /** Files listed per task (task + comment attachments). */
 export const FILES_MAX = 50;
-/** Note cap per time entry. */
+/** Note cap per time entry row (marked with "…" when cut). */
 export const NOTE_MAX_CHARS = 300;
 /** Projects listed on a client record. */
 export const CLIENT_PROJECTS_MAX = 50;
@@ -73,12 +74,12 @@ export async function projectSummary(ctx: QueryCtx, orgId: string, projectId: Id
 export async function clientSummary(ctx: QueryCtx, orgId: string, clientId: Id<"clients"> | undefined) {
   const client = clientId ? await ctx.db.get(clientId) : null;
   return client && client.orgId === orgId
-    ? { id: client._id, name: client.name, prefix: effectiveClientPrefix(client) }
+    ? { id: client._id, name: client.name, prefix: referenceClientPrefix(client) }
     : null;
 }
 
-/** Comment content as capped markdown. */
-export function commentText(content: unknown, max = COMMENT_MAX_CHARS) {
+/** A comment preview (search rows): markdown capped at `max`, flagged when cut. */
+export function commentPreview(content: unknown, max: number) {
   return capText(tiptapToMarkdown(content), max);
 }
 
@@ -120,7 +121,7 @@ async function taskRecord(ctx: QueryCtx, auth: AuthContext, taskId: Id<"tasks">,
     commentCount: task.commentCount ?? 0,
     subtaskCount: task.subtaskCount ?? 0,
     subtaskDoneCount: task.subtaskDoneCount ?? 0,
-    description: description ? capText(description, DESCRIPTION_MAX_CHARS) : null,
+    description,
     subtasks: include.has("subtasks")
       ? {
           rows: detail.subtasks.map((s) => ({
@@ -149,19 +150,15 @@ async function taskComments(ctx: QueryCtx, auth: AuthContext, taskId: Id<"tasks"
   if (!result) return { rows: [], total: 0, truncated: false };
   const recent = result.comments.slice(-RECENT_ROWS);
   return {
-    rows: recent.map((c) => {
-      const text = commentText(c.content);
-      return {
-        id: c._id,
-        author: c.userName,
-        createdAt: c.createdAt,
-        edited: c.updatedAt > c.createdAt,
-        replyTo: c.parentCommentId ? (c.parentUserName ?? null) : null,
-        resolved: c.resolvedAt !== undefined,
-        text: text.text,
-        textTruncated: text.truncated,
-      };
-    }),
+    rows: recent.map((c) => ({
+      id: c._id,
+      author: c.userName,
+      createdAt: c.createdAt,
+      edited: c.updatedAt > c.createdAt,
+      replyTo: c.parentCommentId ? (c.parentUserName ?? null) : null,
+      resolved: c.resolvedAt !== undefined,
+      text: tiptapToMarkdown(c.content),
+    })),
     /** Comments read (at most the core's cap); `truncated` = more exist. */
     total: result.comments.length,
     truncated: result.truncated,
@@ -269,7 +266,6 @@ export async function buildRecord(
 
     case "comment": {
       const { comment, access } = resolved;
-      const text = commentText(comment.content);
       return {
         type: "comment" as const,
         id: comment._id,
@@ -279,8 +275,7 @@ export async function buildRecord(
         edited: comment.updatedAt > comment.createdAt,
         resolved: comment.resolvedAt !== undefined,
         isReply: comment.parentCommentId !== undefined,
-        text: text.text,
-        textTruncated: text.truncated,
+        text: tiptapToMarkdown(comment.content),
       };
     }
 
@@ -313,7 +308,7 @@ export async function buildRecord(
         type: "client" as const,
         id: client._id,
         name: client.name,
-        prefix: effectiveClientPrefix(client),
+        prefix: referenceClientPrefix(client),
         archived: client.archivedAt !== undefined,
         projects: inOrg.slice(0, CLIENT_PROJECTS_MAX).map((p) => ({
           id: p._id,

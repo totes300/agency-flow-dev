@@ -30,7 +30,7 @@ const handler = createAgencyFlowMcpHandler({
       if (name === "mcp/search:tasks") {
         const row = {
           identifier: "ARLO-21", title: "Fix hero", status: "In progress", statusCategory: "started",
-          priority: "High", assignees: ["Ada"], dueDate: "2026-10-20", overdue: true, project: "ARLO", parent: null,
+          priority: "High", assignees: ["Ada"], dueDate: "2026-10-20", overdue: true, parent: null,
         };
         return { rows: [row], total: 1, offset: 0, incomplete: false, notes: [], today: "2026-10-24" };
       }
@@ -150,7 +150,7 @@ describe("MCP protocol", () => {
           text: [
             "### Tasks · 1–1 of 1",
             "Today: 2026-10-24 (org timezone)",
-            "- [ARLO-21](https://localhost:3001/tasks/ARLO-21) · Fix hero · In progress · due 2026-10-20 (overdue) · Ada · High · ARLO",
+            "- [ARLO-21](https://localhost:3001/tasks/ARLO-21) · Fix hero · In progress · due 2026-10-20 (overdue) · Ada · High",
           ].join("\n"),
         },
       ],

@@ -45,7 +45,6 @@ function taskRow(n: number): TaskPage["rows"][number] {
     assignees: ["Alice"],
     dueDate: null,
     overdue: false,
-    project: "ARLO",
     parent: null,
   };
 }
@@ -61,7 +60,9 @@ function taskPage(total: number, args: { offset: number; limit: number }, incomp
 type Calls = Array<{ name: string; args: Record<string, unknown> }>;
 
 /** Fake Convex: answers by function name; records every call. */
-function fakeConvex(options: { error?: unknown; taskTotal?: number; records?: RecordsData } = {}) {
+function fakeConvex(
+  options: { error?: unknown; taskTotal?: number; records?: (ref: string) => RecordsData["results"][number] } = {},
+) {
   const calls: Calls = [];
   const runQuery = (async (query, args) => {
     const name = getFunctionName(query);
@@ -73,8 +74,10 @@ function fakeConvex(options: { error?: unknown; taskTotal?: number; records?: Re
         return ME;
       case "mcp/fetch:workspace":
         return WORKSPACE;
-      case "mcp/fetch:records":
-        return options.records;
+      case "mcp/fetch:records": {
+        const { refs } = args as { refs: string[] };
+        return { timezone: "UTC", today: "2026-10-24", results: refs.map((ref) => options.records!(ref)) };
+      }
       case "mcp/search:tasks":
         return taskPage(options.taskTotal ?? 3, a);
       case "mcp/search:members":
@@ -141,7 +144,7 @@ describe("search tool", () => {
       },
     ]);
     expect(result.text).toBe(
-      `### Tasks · 1–1 of 1\n- [ARLO-1](${ORIGIN}/tasks/ARLO-1) · Task 1 · Next up · Alice · ARLO`,
+      `### Tasks · 1–1 of 1\n- [ARLO-1](${ORIGIN}/tasks/ARLO-1) · Task 1 · Next up · Alice`,
     );
   });
 
@@ -230,19 +233,38 @@ describe("fitRows", () => {
 describe("fetch tool", () => {
   const fetchTool = tool("fetch");
 
-  it("renders special refs in order and resolves the rest in one records call", async () => {
-    const records: RecordsData = {
-      timezone: "UTC",
-      today: "2026-10-24",
-      results: [{ input: "ARLO-99", ok: false, message: "ARLO-99 not found. Use search to find tasks.", candidates: [] }],
-    };
-    const { ctx, calls } = fakeConvex({ records });
-    const result = await fetchTool.execute({ refs: ["me", "ARLO-99", "workspace"], include: ["comments"] }, ctx);
+  it("renders refs in input order, one records call per non-special ref", async () => {
+    const notFound = (ref: string) => ({ input: ref, ok: false as const, message: `${ref} not found. Use search to find tasks.`, candidates: [] });
+    const { ctx, calls } = fakeConvex({ records: notFound });
+    const result = await fetchTool.execute({ refs: ["me", "ARLO-99", "workspace", "ARLO-98"], include: ["comments"] }, ctx);
     expect(result.isError).toBe(false);
-    expect(result.text.indexOf("## Me")).toBeLessThan(result.text.indexOf("ARLO-99 not found"));
-    expect(result.text.indexOf("ARLO-99 not found")).toBeLessThan(result.text.indexOf("## Workspace"));
-    expect(calls.map((c) => c.name)).toEqual(["mcp/fetch:me", "mcp/fetch:workspace", "mcp/fetch:records"]);
-    expect(calls[2].args).toEqual({ refs: ["ARLO-99"], include: ["comments"], now: NOW });
+    const order = ["## Me", "ARLO-99 not found", "## Workspace", "ARLO-98 not found"].map((s) => result.text.indexOf(s));
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+    expect(calls.map((c) => c.name).sort()).toEqual(["mcp/fetch:me", "mcp/fetch:records", "mcp/fetch:records", "mcp/fetch:workspace"]);
+    expect(calls.filter((c) => c.name === "mcp/fetch:records").map((c) => c.args)).toEqual([
+      { refs: ["ARLO-99"], include: ["comments"], now: NOW },
+      { refs: ["ARLO-98"], include: ["comments"], now: NOW },
+    ]);
+  });
+
+  it("one failing ref never fails the others", async () => {
+    const runQuery = (async (_q, args) => {
+      const { refs } = args as { refs: string[] };
+      if (refs[0] === "ARLO-1") throw new Error("Too many reads in a single function execution (limit: 4096)");
+      return {
+        timezone: "UTC",
+        today: "2026-10-24",
+        results: [{ input: refs[0], ok: true, record: { type: "member", id: "u1", name: "Ada", email: "ada@x.test", role: "admin" } }],
+      };
+    }) as McpQueryRunner;
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = await fetchTool.execute({ refs: ["ARLO-1", "ada@x.test"] }, { runQuery, appOrigin: ORIGIN, now: () => NOW });
+    log.mockRestore();
+    expect(result.isError).toBe(false);
+    expect(result.text).toContain(
+      'Error fetching "ARLO-1": This request needed more data than one call may read. Narrow it (more filters, a date range, a task filter) or fetch fewer refs and includes.',
+    );
+    expect(result.text).toContain("## Member Ada");
   });
 
   it("reports unparseable refs inline without calling Convex for them", async () => {
@@ -266,23 +288,20 @@ describe("fetch tool", () => {
 
   it("defers whole refs past the size budget instead of cutting one", async () => {
     const big = "z".repeat(OUTPUT_BUDGET_CHARS - 100);
-    const records = {
-      timezone: "UTC",
-      today: "2026-10-24",
-      results: ["KONV", "ARLO"].map((key, i) => ({
+    const records = (key: string) =>
+      ({
         input: key,
         ok: true as const,
         record: {
           type: "client" as const,
-          id: `client_${i}`,
-          name: big,
+          id: `client_${key}`,
+          name: `${key} ${big}`,
           prefix: key,
           archived: false,
           projects: [],
           projectsTruncated: false,
         },
-      })),
-    } as unknown as RecordsData;
+      }) as unknown as RecordsData["results"][number];
     const result = await fetchTool.execute({ refs: ["KONV", "ARLO"] }, fakeConvex({ records }).ctx);
     expect(result.text).toContain("## Client KONV");
     expect(result.text).not.toContain("## Client ARLO");

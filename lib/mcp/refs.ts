@@ -13,13 +13,15 @@
  * - an app URL (a pasted link) — tasks, comments, projects, clients, members;
  * - a task identifier `KEY-N`, case-insensitive (old identifiers resolve
  *   through `taskIdentifierAliases` in Convex);
- * - a short key: a project code (`ARLO`) or a client prefix (`KONV`),
- *   case-insensitive; Convex decides which (both → ambiguous, candidates);
+ * - a bare short key: the project code (`ARLO`), case-insensitive — task
+ *   identifiers are built on it (owner, 2026-10-24);
+ * - a client prefix written `client:KONV`, case-insensitive;
  * - a member email;
  * - a Convex record ID.
  */
 
 import { normalizeIdentifier } from "../../convex/tasks/model";
+import { CLIENT_PREFIX_PATTERN } from "../../convex/lib/clientPrefix";
 
 export const SPECIAL_REFS = ["me", "workspace"] as const;
 export type SpecialRefName = (typeof SPECIAL_REFS)[number];
@@ -32,8 +34,10 @@ export type ParsedRef =
   | { kind: "special"; name: SpecialRefName }
   /** `ARLO-21`, normalized to uppercase. */
   | { kind: "task"; identifier: string }
-  /** A project code or client prefix, as typed (matched case-insensitively). */
+  /** A bare short key: a project code, as typed (matched case-insensitively). */
   | { kind: "key"; key: string }
+  /** `client:KONV`: a client prefix, as typed (matched case-insensitively). */
+  | { kind: "client_key"; key: string }
   /** A member email, lowercased. */
   | { kind: "email"; email: string }
   /** A record ID; `table` is known when it came from a link. */
@@ -43,15 +47,13 @@ export type RefParseResult =
   | { ok: true; input: string; ref: ParsedRef }
   | { ok: false; input: string; error: string };
 
-/** Maximum refs per `fetch` call (§6). */
-export const MAX_REFS = 25;
-
 /** The forms a reference may take, for model-facing errors and descriptions. */
 export const REF_FORMS =
-  'a task key (ARLO-21), project code (ARLO), client prefix (KONV), member email, record ID, an Agency Flow link, or "me" / "workspace"';
+  'a task key (ARLO-21), project code (ARLO), client prefix (client:KONV), member email, record ID, an Agency Flow link, or "me" / "workspace"';
 
-/** Short keys: project codes are 1–10 letters/digits; client prefixes are at most 10 characters. */
-const KEY_PATTERN = /^[A-Za-z0-9]{1,10}$/;
+/** Short keys: 1–10 letters or digits, the client prefix format (project codes are a subset). */
+const KEY_PATTERN = CLIENT_PREFIX_PATTERN;
+const CLIENT_QUALIFIER = /^client:(.*)$/i;
 /** Convex IDs are long alphanumeric strings; never confused with a short key. */
 const ID_PATTERN = /^[A-Za-z0-9]{20,64}$/;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -101,7 +103,13 @@ function parseUrl(input: string, appOrigin: string | undefined): ParsedRef | str
   const detail = params.get(DETAIL_PARAM)?.trim();
   if (detail) return taskRef(detail) ?? `Invalid task link "${input}".`;
 
-  const segments = url.pathname.split("/").filter(Boolean).map((s) => decodeURIComponent(s));
+  let segments: string[];
+  try {
+    segments = url.pathname.split("/").filter(Boolean).map((s) => decodeURIComponent(s));
+  } catch {
+    // A malformed escape (e.g. `%E0%A4%A`) must fail this ref, not the call.
+    return `Invalid link "${input}".`;
+  }
   const [section, id] = segments;
   switch (section) {
     case "tasks":
@@ -139,6 +147,17 @@ export function parseRef(raw: string, options: { appOrigin?: string } = {}): Ref
   if (/^https?:\/\//i.test(input)) {
     const parsed = parseUrl(input, options.appOrigin);
     return typeof parsed === "string" ? { ok: false, input, error: parsed } : { ok: true, input, ref: parsed };
+  }
+  const qualified = CLIENT_QUALIFIER.exec(input);
+  if (qualified) {
+    const key = qualified[1].trim();
+    return KEY_PATTERN.test(key)
+      ? { ok: true, input, ref: { kind: "client_key", key } }
+      : {
+          ok: false,
+          input,
+          error: `Invalid client reference "${input}". Client prefixes are 1–10 letters or digits (client:KONV); clients without one are referenced by ID or link.`,
+        };
   }
   if (EMAIL_PATTERN.test(input)) {
     return { ok: true, input, ref: { kind: "email", email: input.toLowerCase() } };

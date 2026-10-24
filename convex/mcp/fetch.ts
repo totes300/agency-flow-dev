@@ -2,7 +2,9 @@ import { ConvexError, v } from "convex/values";
 import { query } from "../_generated/server";
 import { getMcpAuthContext } from "../lib/mcpAuth";
 import { createRefResolver, type RefCandidate } from "../lib/mcpRefs";
-import { buildRecord, FETCH_INCLUDES, orgClock, type FetchInclude } from "../lib/mcpRecords";
+import { buildRecord, orgClock } from "../lib/mcpRecords";
+import { isValidClientPrefix } from "../lib/clientPrefix";
+import { FETCH_INCLUDES, MAX_REFS, type FetchInclude } from "../../lib/mcp/limits";
 import { getOrgSettings } from "../lib/orgHelpers";
 import { REF_CAP, getWorkspaceRefsForAuth, type WorkspaceRefTable } from "../workspaceRefs";
 
@@ -72,18 +74,17 @@ export const workspace = query({
         client: clientNames.get(p.clientId) ?? null,
         archived: p.archived,
       })),
+      // Only prefixes in the valid format are references (`client:KONV`);
+      // other clients are referenced by ID.
       clients: refs.clients.map((c) => ({
         id: c._id,
         name: c.name,
-        prefix: c.prefix,
+        prefix: c.prefix !== null && isValidClientPrefix(c.prefix) ? c.prefix : null,
         archived: c.archived,
       })),
     };
   },
 });
-
-/** Most refs one `records` call resolves (the tool's `refs[]` cap, docs/prd-mcp.md §6). */
-const MAX_RECORD_REFS = 25;
 
 /**
  * `fetch(refs[])` for records: tasks, comments, time entries, projects,
@@ -91,7 +92,9 @@ const MAX_RECORD_REFS = 25;
  * ref is resolved and access-checked in the caller's org (I3); a missing,
  * foreign or unreadable record is "not found", an ambiguous short key or
  * email returns its candidates. Results keep the input order, one per ref.
- * `now` is the caller's clock (queries never read it) for "overdue".
+ * `now` is the caller's clock (queries never read it) for "overdue". The
+ * route calls this once per ref, so one heavy task stays within Convex's
+ * per-call read limits on its own (budget: convex/lib/mcpRecords.ts).
  */
 export const records = query({
   args: {
@@ -101,8 +104,8 @@ export const records = query({
   },
   handler: async (ctx, args) => {
     const auth = await getMcpAuthContext(ctx);
-    if (args.refs.length > MAX_RECORD_REFS) {
-      throw new ConvexError(`Fetch at most ${MAX_RECORD_REFS} refs per call.`);
+    if (args.refs.length > MAX_REFS) {
+      throw new ConvexError(`Fetch at most ${MAX_REFS} refs per call.`);
     }
     const clock = await orgClock(ctx, auth.orgId, args.now);
     const include = new Set<FetchInclude>(args.include);

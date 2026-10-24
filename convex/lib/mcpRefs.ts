@@ -2,7 +2,7 @@ import { ConvexError } from "convex/values";
 import type { QueryCtx } from "../_generated/server";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { AuthContext } from "./auth";
-import { clientPrefixKey, effectiveClientPrefix } from "./helpers";
+import { clientPrefixKey, referenceClientPrefix } from "./helpers";
 import { loadTaskForReadOrNull, type TaskAccess } from "../tasks/access";
 import { resolveTaskRef } from "../tasks/lookup";
 import { visibleTimeEntries } from "../timeEntries";
@@ -17,13 +17,18 @@ import { parseRef, REF_TABLES, type RefTable } from "../../lib/mcp/refs";
  * - tasks: identifier (live or alias) or ID, readable per tasks/access.ts;
  * - comments: ID, on a task the caller can read;
  * - time entries: ID, visible per `visibleTimeEntries` (members: own only);
- * - projects / clients: ID, project code, client prefix (case-insensitive);
+ * - projects: ID or project code (a bare short key, case-insensitive);
+ * - clients: ID or `client:PREFIX` (case-insensitive; valid prefixes only);
  * - members: ID, email (case-insensitive), with a membership in the org.
  *
  * Missing, other-org and unreadable records are all "not found" — never
- * "forbidden" — so references cannot probe other tenants. A short key or
- * email that matches more than one record is ambiguous and returns the
- * candidates; the resolver never guesses.
+ * "forbidden" — so references cannot probe other tenants. A key or email
+ * that matches more than one record (duplicates that predate uniqueness)
+ * is ambiguous and returns the candidates; the resolver never guesses.
+ *
+ * Read budget (Convex: 4,096 index ranges per call): a task ref costs about
+ * 5 ranges; a client prefix one bounded range; an email one range plus one
+ * per org member (bounded by REF_CAP), read once per call.
  */
 
 export type RefType = "task" | "comment" | "time_entry" | "project" | "client" | "member";
@@ -66,14 +71,14 @@ const NOT_FOUND_HINT: Record<RefType, string> = {
   comment: "Use search to find comments.",
   time_entry: "Use search to find time entries.",
   project: 'Project codes are listed in fetch("workspace").',
-  client: 'Client prefixes are listed in fetch("workspace").',
+  client: 'Client prefixes (client:KEY) are listed in fetch("workspace").',
   member: 'Members are listed in fetch("workspace").',
 };
 
 /** A message naming every candidate by its unique ID, so the model can retry exactly. */
 export function ambiguousMessage(input: string, candidates: readonly RefCandidate[]): string {
   const list = candidates
-    .map((c) => `${TYPE_NOUN[c.type]} ${c.key ? `${c.key} · ` : ""}${c.name} (ref ${c.id})`)
+    .map((c) => `${TYPE_NOUN[c.type]} ${c.key ? `${c.type === "client" ? `client:${c.key}` : c.key} · ` : ""}${c.name} (ref ${c.id})`)
     .join("; ");
   return `"${input}" is ambiguous: it matches ${list}. Use one of these refs.`;
 }
@@ -225,39 +230,51 @@ export function createRefResolver(ctx: QueryCtx, auth: AuthContext) {
         return { ok: true, resolved: { type: "member", user: matches[0].user, role: matches[0].role } };
       }
 
-      case "key": {
-        if (!allows("project") && !allows("client")) return wrongType("a project code or client prefix");
-        const projects = allows("project")
-          ? await ctx.db
-              .query("projects")
-              .withIndex("by_orgId_code", (q) => q.eq("orgId", orgId).eq("code", ref.key.toUpperCase()))
-              .take(10)
-          : [];
-        const key = clientPrefixKey(ref.key);
-        const clients = allows("client")
-          ? (await orgClients()).filter((c) => {
-              const prefix = effectiveClientPrefix(c);
-              return prefix !== null && clientPrefixKey(prefix) === key;
-            })
-          : [];
-        if (projects.length + clients.length === 0) {
-          const hint = expected
-            ? NOT_FOUND_HINT[expected]
-            : 'Project codes and client prefixes are listed in fetch("workspace").';
-          return { ok: false, message: `${parsed.input} not found. ${hint}` };
+      case "key":
+      case "client_key": {
+        // A bare key is the project code (owner, 2026-10-24); clients are
+        // written `client:KONV`. A client filter accepts a bare prefix too,
+        // and a bare key that is no project code falls back to a client
+        // prefix in fetch, so an exact unique prefix still resolves.
+        const asClient = ref.kind === "client_key" || expected === "client";
+        if (asClient && !allows("client")) return wrongType("a client prefix");
+        if (!asClient && !allows("project")) return wrongType("a project code");
+        if (!asClient) {
+          const projects = await ctx.db
+            .query("projects")
+            .withIndex("by_orgId_code", (q) => q.eq("orgId", orgId).eq("code", ref.key.toUpperCase()))
+            .take(10);
+          if (projects.length === 1) return { ok: true, resolved: { type: "project", project: projects[0] } };
+          if (projects.length > 1) {
+            const candidates = projects.map((p) => ({ type: "project" as const, id: p._id, key: p.code, name: p.name }));
+            return { ok: false, message: ambiguousMessage(parsed.input, candidates), candidates };
+          }
+          if (expected === "project") return notFound("project");
         }
-        if (projects.length + clients.length > 1) {
-          const candidates: RefCandidate[] = [
-            ...projects.map((p) => ({ type: "project" as const, id: p._id, key: p.code, name: p.name })),
-            ...clients.map((c) => ({ type: "client" as const, id: c._id, key: effectiveClientPrefix(c), name: c.name })),
-          ];
+        const key = clientPrefixKey(ref.key);
+        const clients = (await orgClients()).filter((c) => {
+          const prefix = referenceClientPrefix(c);
+          return prefix !== null && clientPrefixKey(prefix) === key;
+        });
+        if (clients.length === 0) {
+          return {
+            ok: false,
+            message: `${parsed.input} not found. ${
+              asClient ? NOT_FOUND_HINT.client : 'Project codes and client prefixes (client:KEY) are listed in fetch("workspace").'
+            }`,
+          };
+        }
+        if (clients.length > 1) {
+          // Duplicates that predate prefix uniqueness: never guess.
+          const candidates = clients.map((c) => ({
+            type: "client" as const,
+            id: c._id,
+            key: referenceClientPrefix(c),
+            name: c.name,
+          }));
           return { ok: false, message: ambiguousMessage(parsed.input, candidates), candidates };
         }
-        return {
-          ok: true,
-          resolved:
-            projects.length === 1 ? { type: "project", project: projects[0] } : { type: "client", client: clients[0] },
-        };
+        return { ok: true, resolved: { type: "client", client: clients[0] } };
       }
 
       case "id": {

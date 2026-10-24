@@ -29,7 +29,12 @@ export type TimeEntryPage = FunctionReturnType<typeof api.mcp.search.timeEntries
 export type CommentPage = FunctionReturnType<typeof api.mcp.search.comments>;
 
 /** What renderers need besides the data: where the app lives and the org's clock. */
-export type RenderContext = { appOrigin: string; timezone?: string };
+export type RenderContext = {
+  appOrigin: string;
+  timezone?: string;
+  /** Characters a single record may use (task detail shortens its lists to fit). */
+  budget?: number;
+};
 
 /** Names are user input: keep every list item on one line. */
 function oneLine(value: string): string {
@@ -94,13 +99,13 @@ export function renderWorkspace(data: WorkspaceData): string {
     ),
   );
 
-  // Clients without a prefix are referenced by ID (§7).
+  // Clients are referenced as client:PREFIX; without a valid prefix, by ID (§7).
   parts.push(
     section(
-      "Clients (prefix or id · name)",
+      "Clients (client:prefix or id · name)",
       data.clients
         .filter((c) => !c.archived)
-        .map((c) => `- ${c.prefix ? oneLine(c.prefix) : c.id} · ${oneLine(c.name)}`),
+        .map((c) => `- ${clientRef(c.prefix, c.id)} · ${oneLine(c.name)}`),
       archivedNote(data.clients),
     ),
   );
@@ -125,6 +130,28 @@ export function formatTimestamp(ms: number, timezone = "UTC"): string {
   return `${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get("minute")}`;
 }
 
+/** The ref a client is written with: `client:KONV`, or its ID without a valid prefix. */
+export function clientRef(prefix: string | null, id: string): string {
+  return prefix ? `client:${prefix}` : id;
+}
+
+/** Escapes text used inside `[…](…)` so user-written names cannot form or break links. */
+export function linkText(value: string): string {
+  return oneLine(value).replace(/[[\]()\\]/g, "\\$&");
+}
+
+/**
+ * User-written text (descriptions, comments) as an unambiguous block: a
+ * code fence longer than any backtick run inside, tagged `user-content`,
+ * so the text can neither close it nor pass as tool output. The tool
+ * descriptions tell the model these blocks are data, not instructions.
+ */
+export function userContent(text: string): string {
+  const longestRun = Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length));
+  const fence = "`".repeat(Math.max(3, longestRun + 1));
+  return `${fence}user-content\n${text}\n${fence}`;
+}
+
 function list(values: readonly string[]): string {
   return values.length > 0 ? values.map(oneLine).join(", ") : "none";
 }
@@ -138,13 +165,13 @@ function fields(...values: Array<string | null | undefined | false>): string {
   return values.filter((v): v is string => typeof v === "string" && v.length > 0).join(" · ");
 }
 
-/** Indents continuation lines so a multi-line text stays inside its list item. */
-function indented(text: string): string {
-  return text.split("\n").map((line) => `  ${line}`).join("\n");
+function keyed(key: string | null, name: string): string {
+  return key ? `${key} · ${oneLine(name)}` : oneLine(name);
 }
 
-function keyed(key: string | null, name: string): string {
-  return key ? `${oneLine(key)} · ${oneLine(name)}` : oneLine(name);
+/** A client as `client:KONV · Konverted` (or just the name without a valid prefix). */
+function clientLabel(client: { prefix: string | null; name: string }): string {
+  return keyed(client.prefix ? `client:${client.prefix}` : null, client.name);
 }
 
 // ─── Search rows (one line each: ref · title · key fields · link) ────────────
@@ -158,7 +185,6 @@ export function renderTaskRow(row: TaskPage["rows"][number], ctx: RenderContext)
     due(row.dueDate, row.overdue),
     row.assignees.length > 0 ? list(row.assignees) : "unassigned",
     priority,
-    row.project,
     row.parent ? `sub-task of ${row.parent}` : null,
   )}`;
 }
@@ -167,15 +193,14 @@ export function renderProjectRow(row: ProjectPage["rows"][number], ctx: RenderCo
   return `- ${fields(
     `[${row.code}](${projectLink(ctx.appOrigin, row.id)})`,
     oneLine(row.name),
-    row.client ? `client ${keyed(row.client.prefix, row.client.name)}` : "no client",
+    row.client ? clientLabel(row.client) : "no client",
     row.archived && "archived",
   )}`;
 }
 
 export function renderClientRow(row: ClientPage["rows"][number], ctx: RenderContext): string {
-  // Clients without a prefix are referenced by ID (§7).
   return `- ${fields(
-    `[${row.prefix ? oneLine(row.prefix) : row.id}](${clientLink(ctx.appOrigin, row.id)})`,
+    `[${linkText(clientRef(row.prefix, row.id))}](${clientLink(ctx.appOrigin, row.id)})`,
     oneLine(row.name),
     row.archived && "archived",
   )}`;
@@ -183,7 +208,7 @@ export function renderClientRow(row: ClientPage["rows"][number], ctx: RenderCont
 
 export function renderMemberRow(row: MemberPage["rows"][number], ctx: RenderContext): string {
   return `- ${fields(
-    `[${row.email ?? row.id}](${memberLink(ctx.appOrigin, row.id)})`,
+    `[${linkText(row.email ?? row.id)}](${memberLink(ctx.appOrigin, row.id)})`,
     oneLine(row.name),
     row.role,
   )}`;
@@ -192,7 +217,9 @@ export function renderMemberRow(row: MemberPage["rows"][number], ctx: RenderCont
 type TimeRow = TimeEntryPage["rows"][number];
 
 function timeTask(row: TimeRow, ctx: RenderContext): string {
-  return row.task ? `[${row.task.identifier}](${taskLink(ctx.appOrigin, row.task.identifier)}) ${oneLine(row.task.title)}` : "task not available";
+  return row.task
+    ? `[${row.task.identifier}](${taskLink(ctx.appOrigin, row.task.identifier)}) ${oneLine(row.task.title)}`
+    : "task not available";
 }
 
 function timeNote(row: TimeRow): string | null {
@@ -260,23 +287,43 @@ function activityText(type: string, metadata: unknown): string {
   return format ? format(m) : type.replace(/_/g, " ");
 }
 
-/** "(latest 30 of 42)" when a section shows fewer rows than exist. */
-function shownOf(shown: number, total: number, truncated: boolean): string {
-  if (truncated) return ` (latest ${shown} of more than ${total})`;
-  return shown < total ? ` (latest ${shown} of ${total})` : ` (${total})`;
+/** How many rows of each list a task detail shows (the rest is named, never dropped silently). */
+type ShownCounts = { subtasks: number; comments: number; activity: number; time: number; files: number };
+
+/** A search call that lists the rest, as the model should write it. */
+function searchHint(type: "comment" | "time_entry", identifier: string): string {
+  return `search {"types": ["${type}"], "task": "${identifier}"}`;
 }
 
-function taskSections(record: TaskRecord, ctx: RenderContext): string[] {
+/**
+ * The header suffix and the "how to get the rest" line of a list: `shown`
+ * rows of `returned` (what Convex sent) of `total` (what exists; `more` =
+ * more than `total`).
+ */
+function listMeta(
+  shown: number,
+  returned: number,
+  total: number,
+  more: boolean,
+  rest: string,
+): { suffix: string; note: string | null } {
+  if (shown >= total && !more) return { suffix: ` (${total})`, note: null };
+  const of = more ? `more than ${total}` : `${total}`;
+  const shortened = shown < returned ? "Shortened to keep this result small. " : "";
+  return { suffix: ` (latest ${shown} of ${of})`, note: `${shortened}${rest}` };
+}
+
+function taskSections(record: TaskRecord, ctx: RenderContext, shown: ShownCounts, withDescription: boolean): string[] {
   const parts: string[] = [];
-  if (record.description) {
+  if (record.description !== null) {
     parts.push(
-      `### Description\n${record.description.text}${
-        record.description.truncated ? "\n\n(Description cut short here. Open the link for the full text.)" : ""
-      }`,
+      withDescription
+        ? `### Description\n${userContent(record.description)}`
+        : `### Description\nNot shown: the description is ${record.description.length} characters, more than fits in one result. Open the link to read it in the app.`,
     );
   }
   if (record.subtasks) {
-    const rows = record.subtasks.rows.map((s) =>
+    const rows = record.subtasks.rows.slice(0, shown.subtasks).map((s) =>
       `- ${fields(
         s.identifier ? `[${s.identifier}](${taskLink(ctx.appOrigin, s.identifier)})` : null,
         oneLine(s.title),
@@ -284,74 +331,100 @@ function taskSections(record: TaskRecord, ctx: RenderContext): string[] {
         s.assignees.length > 0 ? list(s.assignees) : "unassigned",
       )}`,
     );
-    const note = record.subtasks.truncated ? "\n(More sub-tasks exist than shown. Open the link for all.)" : "";
-    parts.push(`### Sub-tasks (${rows.length})\n${rows.length > 0 ? rows.join("\n") : "none"}${note}`);
+    const total = record.subtasks.rows.length;
+    const missing = shown.subtasks < total || record.subtasks.truncated;
+    const note = missing
+      ? `\n(${rows.length} of ${record.subtasks.truncated ? "more than " : ""}${total} shown. Open the link for every sub-task, or fetch them by key.)`
+      : "";
+    parts.push(`### Sub-tasks (${total}${record.subtasks.truncated ? "+" : ""})\n${rows.length > 0 ? rows.join("\n") : "none"}${note}`);
   }
   if (record.comments) {
     const { rows, total, truncated } = record.comments;
-    const lines = rows.map((c) => {
+    const visible = rows.slice(rows.length - Math.min(shown.comments, rows.length));
+    const meta = listMeta(visible.length, rows.length, total, truncated, `For all comments: ${searchHint("comment", record.identifier)}.`);
+    const blocks = visible.map((c) => {
       const head = fields(
+        `[${c.id}](${taskLink(ctx.appOrigin, record.identifier, c.id)})`,
         formatTimestamp(c.createdAt, ctx.timezone),
         oneLine(c.author),
         c.replyTo ? `reply to ${oneLine(c.replyTo)}` : null,
         c.resolved && "resolved",
         c.edited && "edited",
       );
-      const text = `${c.text}${c.textTruncated ? " … (cut short; open the link for the full comment)" : ""}`;
-      return `- ${head}\n${indented(text || "(no text)")}`;
+      return `- ${head}\n${userContent(c.text || "(no text)")}`;
     });
-    parts.push(`### Comments${shownOf(rows.length, total, truncated)}\n${lines.length > 0 ? lines.join("\n") : "none"}`);
+    parts.push(
+      [`### Comments${meta.suffix}`, meta.note, blocks.length > 0 ? blocks.join("\n") : "none"]
+        .filter((line): line is string => line !== null)
+        .join("\n"),
+    );
   }
   if (record.activity) {
     const { rows, total, truncated } = record.activity;
-    const lines = rows.map(
+    const visible = rows.slice(rows.length - Math.min(shown.activity, rows.length));
+    const meta = listMeta(visible.length, rows.length, total, truncated, "Open the link for the full activity.");
+    const lines = visible.map(
       (e) => `- ${formatTimestamp(e.createdAt, ctx.timezone)} · ${oneLine(e.userName)} ${activityText(e.type, e.metadata)}`,
     );
-    parts.push(`### Activity${shownOf(rows.length, total, truncated)}\n${lines.length > 0 ? lines.join("\n") : "none"}`);
+    parts.push(
+      [`### Activity${meta.suffix}`, meta.note, lines.length > 0 ? lines.join("\n") : "none"]
+        .filter((line): line is string => line !== null)
+        .join("\n"),
+    );
   }
   if (record.time) {
     const { rows, total, totalMinutes, ownOnly, truncated } = record.time;
-    const scope = ownOnly ? " (your entries only; members see their own time)" : "";
-    const sum = `${truncated ? "at least " : ""}${formatDuration(totalMinutes)} over ${total} ${total === 1 ? "entry" : "entries"}`;
-    const lines = rows.map((r) =>
+    const scope = ownOnly ? " · your entries only (members see their own time)" : "";
+    const sum = truncated
+      ? `Total of the ${total} entries read: ${formatDuration(totalMinutes)} (more exist)`
+      : `Total of all ${total} ${total === 1 ? "entry" : "entries"}: ${formatDuration(totalMinutes)}`;
+    const visible = rows.slice(0, shown.time);
+    const meta = listMeta(visible.length, rows.length, total, truncated, `For all entries: ${searchHint("time_entry", record.identifier)}.`);
+    const lines = visible.map((r) =>
       `- ${fields(r.id, r.date, formatDuration(r.minutes), oneLine(r.member), timeNote(r), r.billable ? "billable" : "non-billable")}`,
     );
-    const more = rows.length < total ? `\n(Latest ${rows.length} shown. Search time_entry for the rest.)` : "";
-    parts.push(`### Time${scope}\nTotal: ${sum}\n${lines.length > 0 ? lines.join("\n") : "none"}${more}`);
+    parts.push(
+      [`### Time${meta.suffix}${scope}`, sum, meta.note, lines.length > 0 ? lines.join("\n") : "none"]
+        .filter((line): line is string => line !== null)
+        .join("\n"),
+    );
   }
   if (record.files) {
-    const lines = record.files.rows.map((f) =>
+    const all = record.files.rows;
+    const visible = all.slice(0, shown.files);
+    const lines = visible.map((f) =>
       `- ${fields(
-        f.url ? `[${oneLine(f.name)}](${f.url})` : oneLine(f.name),
+        f.url ? `[${linkText(f.name)}](${f.url})` : oneLine(f.name),
         formatFileSize(f.size),
         f.mimeType,
         f.onComment && "on a comment",
       )}`,
     );
-    const note = record.files.truncated ? "\n(More files exist than shown. Open the link for all.)" : "";
-    parts.push(`### Files (${lines.length})\n${lines.length > 0 ? lines.join("\n") : "none"}${note}`);
+    const missing = visible.length < all.length || record.files.truncated;
+    const note = missing
+      ? `\n(${visible.length} of ${record.files.truncated ? "more than " : ""}${all.length} shown. Open the link for every file.)`
+      : "";
+    parts.push(`### Files (${all.length}${record.files.truncated ? "+" : ""})\n${lines.length > 0 ? lines.join("\n") : "none"}${note}`);
   }
   if (record.attachmentText) {
-    parts.push(
-      "### Attachment text\nNot available: Agency Flow does not extract text from attachments yet. Use the file links above.",
-    );
+    parts.push("### Attachment text\nText extraction from attachments is not available yet. Use the file links instead.");
   }
   return parts;
 }
 
-export function renderTaskRecord(record: TaskRecord, ctx: RenderContext): string {
+function taskHeader(record: TaskRecord, ctx: RenderContext): string {
   const priority = record.priority === PRIORITY_LABELS[PRIORITY.none] ? null : record.priority;
   const effort = fields(
     record.estimateMinutes !== null ? `Estimate: ${formatDuration(record.estimateMinutes)}` : null,
     `Tracked: ${formatDuration(record.trackedMinutes)}`,
   );
-  const lines = [
+  return [
     `## ${record.identifier} · ${oneLine(record.title)}`,
     `- Link: ${taskLink(ctx.appOrigin, record.identifier)}`,
     `- Status: ${record.status ? oneLine(record.status) : "unknown"} (${record.statusCategory})`,
     priority && `- Priority: ${priority}`,
     `- Project: ${record.project ? keyed(record.project.code, record.project.name) : "none"}`,
-    record.client && `- Client: ${keyed(record.client.prefix, record.client.name)}`,
+    record.client && `- Client: ${clientLabel(record.client)}`,
     `- Assignees: ${list(record.assignees)}`,
     record.labels.length > 0 && `- Labels: ${list(record.labels)}`,
     record.workCategory && `- Work category: ${oneLine(record.workCategory)}`,
@@ -364,8 +437,39 @@ export function renderTaskRecord(record: TaskRecord, ctx: RenderContext): string
     record.commentCount > 0 && `- Comments: ${record.commentCount}`,
     record.archived && "- Archived: yes",
     `- Created: ${formatTimestamp(record.createdAt, ctx.timezone)} · Last activity: ${formatTimestamp(record.lastActivityAt, ctx.timezone)}`,
-  ].filter((line): line is string => typeof line === "string");
-  return [lines.join("\n"), ...taskSections(record, ctx)].join("\n\n");
+  ]
+    .filter((line): line is string => typeof line === "string")
+    .join("\n");
+}
+
+/** Lists shortened first, least useful first; the description is never cut, only left out whole. */
+const SHORTEN_ORDER: ReadonlyArray<keyof ShownCounts> = ["activity", "files", "time", "comments", "subtasks"];
+
+/**
+ * A task in full: heading, fields, the description and the included
+ * sections. Over `ctx.budget`, lists are shortened (each says how many it
+ * shows and how to get the rest); a description that alone does not fit is
+ * left out with its size, never cut.
+ */
+export function renderTaskRecord(record: TaskRecord, ctx: RenderContext): string {
+  const budget = ctx.budget ?? Number.POSITIVE_INFINITY;
+  const shown: ShownCounts = {
+    subtasks: record.subtasks?.rows.length ?? 0,
+    comments: record.comments?.rows.length ?? 0,
+    activity: record.activity?.rows.length ?? 0,
+    time: record.time?.rows.length ?? 0,
+    files: record.files?.rows.length ?? 0,
+  };
+  const render = (withDescription: boolean) =>
+    [taskHeader(record, ctx), ...taskSections(record, ctx, shown, withDescription)].join("\n\n");
+  let text = render(true);
+  for (const list of SHORTEN_ORDER) {
+    while (text.length > budget && shown[list] > 0) {
+      shown[list] = Math.floor(shown[list] / 2);
+      text = render(true);
+    }
+  }
+  return text.length > budget ? render(false) : text;
 }
 
 export function renderRecord(record: FetchedRecord, ctx: RenderContext): string {
@@ -382,7 +486,7 @@ export function renderRecord(record: FetchedRecord, ctx: RenderContext): string 
         record.isReply ? "- Reply: yes" : null,
         record.resolved ? "- Resolved: yes" : null,
         "",
-        `${record.text || "(no text)"}${record.textTruncated ? "\n\n(Comment cut short here. Open the link for the full text.)" : ""}`,
+        userContent(record.text || "(no text)"),
       ]
         .filter((line): line is string => line !== null)
         .join("\n");
@@ -396,7 +500,7 @@ export function renderRecord(record: FetchedRecord, ctx: RenderContext): string 
         `- Task: ${record.task ? `${record.task.identifier} · ${oneLine(record.task.title)}` : "not available"}`,
         `- Project: ${record.project ? keyed(record.project.code, record.project.name) : "none"}`,
         `- Billable: ${record.billable ? "yes" : "no"}`,
-        record.note ? `- Note: ${record.note}${record.noteTruncated ? "…" : ""}` : null,
+        record.note ? `- Note: "${record.note}${record.noteTruncated ? "…" : ""}"` : null,
       ]
         .filter((line): line is string => line !== null)
         .join("\n");
@@ -405,7 +509,7 @@ export function renderRecord(record: FetchedRecord, ctx: RenderContext): string 
         `## Project ${record.code} · ${oneLine(record.name)}`,
         `- Link: ${projectLink(ctx.appOrigin, record.id)}`,
         `- Code: ${record.code} (task keys ${record.code}-N)`,
-        `- Client: ${record.client ? keyed(record.client.prefix, record.client.name) : "none"}`,
+        `- Client: ${record.client ? clientLabel(record.client) : "none"}`,
         `- Archived: ${record.archived ? "yes" : "no"}`,
       ].join("\n");
     case "client": {
@@ -415,9 +519,9 @@ export function renderRecord(record: FetchedRecord, ctx: RenderContext): string 
       const more = record.projectsTruncated ? "\n(More projects exist than shown. Search project with this client.)" : "";
       return [
         [
-          `## Client ${record.prefix ? `${oneLine(record.prefix)} · ` : ""}${oneLine(record.name)}`,
+          `## Client ${oneLine(record.name)}`,
           `- Link: ${clientLink(ctx.appOrigin, record.id)}`,
-          `- Prefix: ${record.prefix ? oneLine(record.prefix) : `none (reference by ID ${record.id})`}`,
+          `- Ref: ${clientRef(record.prefix, record.id)}`,
           `- Archived: ${record.archived ? "yes" : "no"}`,
         ].join("\n"),
         `### Projects (${projects.length})\n${projects.length > 0 ? projects.join("\n") : "none"}${more}`,
@@ -445,7 +549,8 @@ export function renderRefError(input: string, message: string, candidates: RefCa
           : c.type === "member"
             ? memberLink(ctx.appOrigin, c.id)
             : null;
-    return `- ${fields(c.type, c.key ? oneLine(c.key) : null, oneLine(c.name), `ref ${c.id}`, link)}`;
+    const key = c.key ? (c.type === "client" ? `client:${c.key}` : c.key) : null;
+    return `- ${fields(c.type, key, oneLine(c.name), `ref ${c.id}`, link)}`;
   });
   return [`Error fetching "${input}": ${message}`, ...lines].join("\n");
 }
@@ -457,9 +562,10 @@ type AnyPage = { rows: readonly unknown[]; total: number; offset: number; incomp
 /**
  * One result type's section: a header with the shown range and total, the
  * notes, then one row per line. `incomplete` (a capped load) is always
- * spelled out, so a clipped set never reads as complete.
+ * spelled out with the filters that type accepts, so a clipped set never
+ * reads as complete.
  */
-function searchSection(label: string, page: AnyPage, rows: string[], extra: string[] = []): string {
+function searchSection(label: string, narrowWith: string, page: AnyPage, rows: string[], extra: string[] = []): string {
   const shown = page.rows.length;
   const total = `${page.incomplete ? "at least " : ""}${page.total}`;
   const header =
@@ -471,7 +577,7 @@ function searchSection(label: string, page: AnyPage, rows: string[], extra: stri
   const notes = [...extra, ...page.notes];
   if (page.incomplete) {
     notes.push(
-      "Incomplete: the search reads a bounded number of records and more may match than are listed. Narrow it with filters (project, assignee, status, a date range) for a complete list.",
+      `Incomplete: the search reads a bounded number of records and more may match than are listed. Narrow it with ${narrowWith} for a complete list.`,
     );
   }
   return [header, ...notes, ...rows].join("\n");
@@ -479,29 +585,48 @@ function searchSection(label: string, page: AnyPage, rows: string[], extra: stri
 
 export function renderTaskSection(page: TaskPage, ctx: RenderContext): string {
   const today = page.rows.some((r) => r.dueDate) ? [`Today: ${page.today} (org timezone)`] : [];
-  return searchSection("Tasks", page, page.rows.map((r) => renderTaskRow(r, ctx)), today);
+  return searchSection(
+    "Tasks",
+    "project, assignee, status, label or a due date range",
+    page,
+    page.rows.map((r) => renderTaskRow(r, ctx)),
+    today,
+  );
 }
 
 export function renderProjectSection(page: ProjectPage, ctx: RenderContext): string {
-  return searchSection("Projects", page, page.rows.map((r) => renderProjectRow(r, ctx)));
+  return searchSection("Projects", "query or client", page, page.rows.map((r) => renderProjectRow(r, ctx)));
 }
 
 export function renderClientSection(page: ClientPage, ctx: RenderContext): string {
-  return searchSection("Clients", page, page.rows.map((r) => renderClientRow(r, ctx)));
+  return searchSection("Clients", "query", page, page.rows.map((r) => renderClientRow(r, ctx)));
 }
 
 export function renderMemberSection(page: MemberPage, ctx: RenderContext): string {
-  return searchSection("Members", page, page.rows.map((r) => renderMemberRow(r, ctx)));
+  return searchSection("Members", "query", page, page.rows.map((r) => renderMemberRow(r, ctx)));
 }
 
 export function renderTimeEntrySection(page: TimeEntryPage, ctx: RenderContext): string {
   const total =
-    page.total > 0
-      ? [`Total of all ${page.total} matching entries: ${page.incomplete ? "at least " : ""}${formatDuration(page.totalMinutes)}`]
-      : [];
-  return searchSection("Time entries", page, page.rows.map((r) => renderTimeEntryRow(r, ctx)), total);
+    page.total === 0
+      ? []
+      : page.incomplete
+        ? [`Total of the ${page.total} entries found: ${formatDuration(page.totalMinutes)} (more may exist)`]
+        : [`Total of all ${page.total} matching ${page.total === 1 ? "entry" : "entries"}: ${formatDuration(page.totalMinutes)}`];
+  return searchSection(
+    "Time entries",
+    "task, project, assignee or a tracked date range",
+    page,
+    page.rows.map((r) => renderTimeEntryRow(r, ctx)),
+    total,
+  );
 }
 
 export function renderCommentSection(page: CommentPage, ctx: RenderContext): string {
-  return searchSection("Comments", page, page.rows.map((r) => renderCommentRow(r, { ...ctx, timezone: page.timezone })));
+  return searchSection(
+    "Comments",
+    "task, project, assignee or an updated date range",
+    page,
+    page.rows.map((r) => renderCommentRow(r, { ...ctx, timezone: page.timezone })),
+  );
 }

@@ -29,11 +29,20 @@ describe("parseRef", () => {
     expect(parsed("K2-7")).toEqual({ kind: "task", identifier: "K2-7" });
   });
 
-  it("parses project codes and client prefixes as short keys, as typed", () => {
+  it("parses a bare short key as a project code, as typed", () => {
     expect(parsed("ARLO")).toEqual({ kind: "key", key: "ARLO" });
     expect(parsed("konv")).toEqual({ kind: "key", key: "konv" });
-    expect(parsed("ACME2")).toEqual({ kind: "key", key: "ACME2" });
     expect(parsed("3M")).toEqual({ kind: "key", key: "3M" });
+  });
+
+  it("parses client:KEY (qualifier case-insensitive) with the client prefix format", () => {
+    expect(parsed("client:KONV")).toEqual({ kind: "client_key", key: "KONV" });
+    expect(parsed("Client: acme2 ")).toEqual({ kind: "client_key", key: "acme2" });
+    expect(parsed("client:A&B")).toBe(
+      'Invalid client reference "client:A&B". Client prefixes are 1–10 letters or digits (client:KONV); clients without one are referenced by ID or link.',
+    );
+    expect(parsed("client:ABCDEFGHIJK")).toMatch(/^Invalid client reference/);
+    expect(parsed("client:")).toMatch(/^Invalid client reference/);
   });
 
   it("parses member emails, lowercased", () => {
@@ -70,12 +79,14 @@ describe("parseRef", () => {
     expect(parsed(`${ORIGIN}/invoices/${ID}`)).toMatch(/^Unsupported Agency Flow link/);
     expect(parsed(`${ORIGIN}/projects/not-an-id`)).toMatch(/^Unsupported Agency Flow link/);
     expect(parsed(`${ORIGIN}/tasks/nope!`)).toMatch(/^Invalid task link/);
+    // A malformed escape fails this ref only, never the call.
+    expect(parsed(`${ORIGIN}/tasks/%E0%A4%A`)).toBe(`Invalid link "${ORIGIN}/tasks/%E0%A4%A".`);
   });
 
   it("rejects empty and unrecognized refs with a model-actionable message", () => {
     expect(parseRef("   ")).toEqual({ ok: false, input: "", error: "Empty reference." });
     expect(parsed("Arlo website")).toBe(
-      'Unrecognized reference "Arlo website". Use a task key (ARLO-21), project code (ARLO), client prefix (KONV), member email, record ID, an Agency Flow link, or "me" / "workspace".',
+      'Unrecognized reference "Arlo website". Use a task key (ARLO-21), project code (ARLO), client prefix (client:KONV), member email, record ID, an Agency Flow link, or "me" / "workspace".',
     );
     expect(parsed("PRJ-042-x")).toMatch(/^Unrecognized reference/);
     expect(parsed("abcdefghijklmno")).toMatch(/^Unrecognized reference/); // 11–19 chars: neither key nor ID

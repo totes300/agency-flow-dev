@@ -6,9 +6,9 @@
 //        missing and unreadable records are all "not found"
 //   T1   a member never fetches or finds a task the app would not show
 //        them; time entries follow the app (members: own only)
-//   §7   aliases, case-insensitive keys, ambiguity → candidates (incl. a
-//        duplicate client prefix already in the data), paging totals and
-//        cap-hit `incomplete`
+//   §7   aliases, case-insensitive keys, a bare key = project code and
+//        `client:KEY` for clients, duplicates already in the data →
+//        candidates, paging totals and cap-hit `incomplete`
 
 import { describe, it, expect } from "vitest";
 import { convexTest } from "convex-test";
@@ -19,6 +19,7 @@ import type { AuthContext } from "../lib/auth";
 import { DEFAULT_STATUS_SEED } from "../tasks/model";
 import { addIdentifierAlias, createTask, type CreateTaskInput } from "../tasks/write";
 import { OPEN_ROW_CAP } from "../tasks/read";
+import { REF_CAP } from "../workspaceRefs";
 
 const modules = (
   import.meta as ImportMeta & {
@@ -226,7 +227,7 @@ describe("fetch records: task references (I3, T1)", () => {
       client: { name: "Arlow", prefix: "ARLO" },
       assignees: ["Carol"],
       labels: ["Launch"],
-      description: { text: "## Brief\n\nRebuild the **hero**", truncated: false },
+      description: "## Brief\n\nRebuild the **hero**",
       subtaskCount: 1,
       attachmentText: { available: false },
     });
@@ -272,23 +273,45 @@ describe("fetch records: other kinds (I3)", () => {
     expect(JSON.stringify(results[0])).not.toMatch(/5000|monthlyFee|billing/i);
   });
 
-  it("an ambiguous short key returns candidates, never a guess", async () => {
+  it("a bare key is the project code; clients are client:KEY; duplicates return candidates", async () => {
     const t = createT();
     const f = await setup(t);
-    const [arlo, dup] = (await records(t, "admin", ["arlo", "DUP"])).results;
-    expect(arlo.ok).toBe(false);
-    if (arlo.ok) return;
-    expect(arlo.candidates).toEqual([
-      { type: "project", id: f.arlo, key: "ARLO", name: "Arlow site" },
-      { type: "client", id: f.arloClient, key: "ARLO", name: "Arlow" },
-    ]);
-    expect(arlo.message).toBe(
-      `"arlo" is ambiguous: it matches project ARLO · Arlow site (ref ${f.arlo}); client ARLO · Arlow (ref ${f.arloClient}). Use one of these refs.`,
-    );
+    const [arlo, arloClient, bareDup, dup, konvBare] = (
+      await records(t, "admin", ["arlo", "client:arlo", "DUP", "Client:dup", "KONV"])
+    ).results;
+    // Project ARLO and client prefix ARLO: the bare key means the project.
+    expect(arlo).toMatchObject({ ok: true, record: { type: "project", id: f.arlo } });
+    expect(arloClient).toMatchObject({ ok: true, record: { type: "client", id: f.arloClient, prefix: "ARLO" } });
+    // No project KONV: the bare key falls back to the unique client prefix.
+    expect(konvBare).toMatchObject({ ok: true, record: { type: "client", id: f.konv } });
     // Duplicate prefixes already in the data (case-insensitive) → candidates, no crash.
-    expect(dup.ok).toBe(false);
-    if (dup.ok) return;
-    expect(dup.candidates.map((c) => c.id).sort()).toEqual([f.dupA, f.dupB].sort());
+    for (const r of [bareDup, dup]) {
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(r.candidates.map((c) => c.id).sort()).toEqual([f.dupA, f.dupB].sort());
+    }
+    if (!dup.ok) {
+      expect(dup.message).toMatch(/^"Client:dup" is ambiguous: it matches client client:(DUP|dup) · Dup [AB] \(ref /);
+    }
+  });
+
+  it("a client whose legacy prefix has another format is referenced by ID only", async () => {
+    const t = createT();
+    const f = await setup(t);
+    const legacy = await t.run(async (ctx) => {
+      const now = Date.now();
+      return await ctx.db.insert("clients", {
+        orgId: ORG, name: "Legacy & Co", currency: "EUR", prefix: "LEGACYCO99", createdAt: now, updatedAt: now, createdBy: f.admin,
+      });
+    });
+    await t.run(async (ctx) => ctx.db.patch(legacy, { prefix: "L&C" }));
+    const [byKey, byId] = (await records(t, "admin", ["client:LEGACYCO99", legacy])).results;
+    expect(byKey.ok).toBe(false);
+    expect(byId).toMatchObject({ ok: true, record: { type: "client", prefix: null } });
+    // The workspace sheet lists it by ID, not by its unusable prefix.
+    const workspace = await as(t, "admin").query(api.mcp.fetch.workspace, {});
+    expect(workspace.clients.find((c) => c.id === legacy)?.prefix).toBeNull();
+    expect(workspace.clients.find((c) => c.id === f.konv)?.prefix).toBe("KONV");
   });
 
   it("IDs and links of another org's records are not found", async () => {
@@ -335,7 +358,8 @@ describe("search tasks", () => {
     const result = await taskSearch(t, "alice", { mine: true, overdue: true });
     expect(result.today).toBe("2026-10-24");
     expect(result.rows.map((r) => r.identifier)).toEqual([f.id.A]);
-    expect(result.rows[0]).toMatchObject({ overdue: true, status: "In progress", project: "ARLO", assignees: ["Alice"] });
+    expect(result.rows[0]).toMatchObject({ overdue: true, status: "In progress", assignees: ["Alice"] });
+    expect(result.rows[0]).not.toHaveProperty("project");
     expect(result).toMatchObject({ total: 1, incomplete: false });
     // Admin's own overdue task is U; Alice's overdue A is not "mine" for the admin.
     expect((await taskSearch(t, "admin", { mine: true, overdue: true })).rows.map((r) => r.identifier)).toEqual([f.id.U]);
@@ -368,11 +392,26 @@ describe("search tasks", () => {
     expect(await ids({ label: "launch" })).toEqual([f.id.P]);
     expect(await ids({ client: "konv" })).toEqual([f.id.B, f.id.U].sort());
     expect(await ids({ due: { from: "2026-10-23", to: "2026-10-24" } })).toEqual([f.id.A, f.id.B].sort());
-    await expect(ids({ client: "ELSE" })).rejects.toThrow('ELSE not found. Client prefixes are listed in fetch("workspace").');
+    expect(await ids({ client: "client:KONV" })).toEqual([f.id.B, f.id.U].sort());
+    await expect(ids({ client: "ELSE" })).rejects.toThrow('ELSE not found. Client prefixes (client:KEY) are listed in fetch("workspace").');
+    await expect(ids({ project: "client:KONV" })).rejects.toThrow('"client:KONV" is a client prefix, not a project.');
     await expect(ids({ project: f.otherProject })).rejects.toThrow(/not found/);
     await expect(ids({ client: "ARLO-1" })).rejects.toThrow('"ARLO-1" is a task key, not a client.');
     await expect(ids({ status: "Nope" })).rejects.toThrow(/No status "Nope"/);
     await expect(ids({ assignee: "me", mine: true })).rejects.toThrow(/either mine or assignee/);
+  });
+
+  it("refuses to match a label against a clipped label list", async () => {
+    const t = createT();
+    await setup(t);
+    await t.run(async (ctx) => {
+      for (let i = 0; i < REF_CAP; i++) {
+        await ctx.db.insert("labels", { orgId: ORG, name: `L${i}`, color: "red", position: `b${i}` });
+      }
+    });
+    await expect(taskSearch(t, "admin", { label: "Launch" })).rejects.toThrow(
+      `This workspace has more than ${REF_CAP} labels, so a label filter cannot be matched by name.`,
+    );
   });
 
   it("pages with offset and reports the full total", async () => {
@@ -431,6 +470,38 @@ describe("search time entries, comments and reference data", () => {
     expect((await timeSearch(t, "admin", { client: "KONV" })).totalMinutes).toBe(15);
     expect((await timeSearch(t, "admin", { project: "ARLO", query: "hero" })).rows.map((r) => r.id)).toEqual([f.eAlice]);
     expect(JSON.stringify(admin)).not.toMatch(/Rate/);
+    // A date range with a project reads the org's date index and filters the project.
+    expect((await timeSearch(t, "admin", { project: "ARLO", tracked: { from: "2026-10-21" } })).rows.map((r) => r.id)).toEqual([f.eAdmin]);
+  });
+
+  it("time entries and comments filter by a task the caller can read", async () => {
+    const t = createT();
+    const f = await setup(t);
+    const admin = await timeSearch(t, "admin", { task: f.id.A });
+    expect(admin.rows.map((r) => r.id)).toEqual([f.eAdmin, f.eAlice]);
+    expect(admin.totalMinutes).toBe(120);
+    expect((await timeSearch(t, "alice", { task: f.id.A.toLowerCase() })).rows.map((r) => r.id)).toEqual([f.eAlice]);
+    await expect(timeSearch(t, "bob", { task: f.id.A })).rejects.toThrow(`${f.id.A} not found. Use search to find tasks.`);
+    expect((await commentSearch(t, "admin", { task: f.id.P })).rows.map((r) => r.id)).toEqual([f.cP]);
+    expect((await commentSearch(t, "carol", { task: f.id.P, query: "copy" })).rows.map((r) => r.id)).toEqual([f.cP]);
+    await expect(commentSearch(t, "alice", { task: f.id.U })).rejects.toThrow(/not found/);
+  });
+
+  it("the comment scan is bounded and says incomplete when it hits its cap", async () => {
+    const t = createT();
+    const f = await setup(t);
+    // 500 newer activity rows push every comment_added row past the scan cap.
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 500; i++) {
+        await ctx.db.insert("activityLog", {
+          taskId: f.A, orgId: ORG, userId: f.admin, type: "task_created", metadata: {}, createdAt: NOW + i,
+        });
+      }
+    });
+    const result = await commentSearch(t, "admin");
+    expect(result).toMatchObject({ rows: [], total: 0, incomplete: true });
+    // A task filter reads that task's comments directly.
+    expect((await commentSearch(t, "admin", { task: f.id.A })).rows.map((r) => r.id)).toEqual([f.cA]);
   });
 
   it("comments: only on readable tasks, filtered by author and text", async () => {

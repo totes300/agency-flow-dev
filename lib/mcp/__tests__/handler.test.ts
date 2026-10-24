@@ -6,6 +6,7 @@
 
 import { describe, it, expect } from "vitest";
 import { getFunctionName } from "convex/server";
+import { z } from "zod";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { createAgencyFlowMcpHandler } from "../handler";
 import { MCP_TOOLS, type McpQueryRunner } from "../registry";
@@ -72,15 +73,28 @@ describe("MCP route handler auth", () => {
 });
 
 describe("MCP protocol", () => {
-  it("lists exactly the registry tools with their annotations", async () => {
+  it("lists exactly the registry tools: name, title, description, annotations, input schema", async () => {
     const res = await handler(rpc({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }, GOOD_TOKEN));
     expect(res.status).toBe(200);
     const { result } = await rpcResult(res);
-    const tools = result!.tools as { name: string; annotations: unknown; inputSchema: { properties: object } }[];
-    expect(tools.map((t) => t.name)).toEqual(MCP_TOOLS.map((t) => t.name));
-    const fetchTool = tools.find((t) => t.name === "fetch")!;
-    expect(fetchTool.annotations).toMatchObject({ readOnlyHint: true });
-    expect(Object.keys(fetchTool.inputSchema.properties)).toEqual(["refs"]);
+    const listed = (result!.tools as Record<string, unknown>[]).map((t) => ({
+      name: t.name,
+      title: t.title,
+      description: t.description,
+      annotations: t.annotations,
+      inputSchema: t.inputSchema,
+    }));
+    // The SDK converts zod schemas to draft-7 JSON Schema in input mode.
+    const expected = MCP_TOOLS.map((tool) => ({
+      name: tool.name,
+      title: tool.title,
+      description: tool.description,
+      annotations: tool.annotations,
+      inputSchema: z.toJSONSchema(tool.inputSchema, { target: "draft-7", io: "input" }),
+    }));
+    expect(listed).toEqual(expected);
+    // Guard against both sides being trivially empty.
+    expect(Object.keys(expected.find((t) => t.name === "fetch")!.inputSchema.properties ?? {})).toEqual(["refs"]);
   });
 
   it("calls Convex with the caller's own bearer token and returns markdown", async () => {

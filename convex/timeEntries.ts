@@ -1,6 +1,7 @@
 import { v, ConvexError } from "convex/values";
 import { query, mutation } from "./_generated/server";
-import type { Doc, Id } from "./_generated/dataModel";
+import type { DataModel, Doc, Id } from "./_generated/dataModel";
+import type { GenericDatabaseReader } from "convex/server";
 import { getAuthContext, requireAdmin, type AuthContext } from "./lib/auth";
 import { roundMinutes } from "./lib/rounding";
 import { getDateInTimezone, ORG_TIMEZONE_FALLBACK } from "./lib/timer";
@@ -39,13 +40,17 @@ async function assertCategoryInOrg(
  * The unblock path depends on whether the close is still a draft.
  */
 async function closeLockMessage(
-  ctx: { db: { get: (id: Id<"billingCloses">) => Promise<Doc<"billingCloses"> | null> } },
+  ctx: { db: GenericDatabaseReader<DataModel> },
   closeId: Id<"billingCloses">,
   action: "edit" | "delete",
 ): Promise<string> {
   const close = await ctx.db.get(closeId);
   if (close?.status === "draft") {
-    return `Cannot ${action} a time entry that's on a draft invoice — delete the draft first`;
+    // A reverted draft keeps its number and can only be voided (N9).
+    const invoice = close.invoiceId ? await ctx.db.get(close.invoiceId) : null;
+    return invoice?.number != null
+      ? `Cannot ${action} a time entry that's on a draft invoice — void the invoice first`
+      : `Cannot ${action} a time entry that's on a draft invoice — delete the draft first`;
   }
   return close?.invoiceId
     ? `Cannot ${action} a time entry linked to an invoice — void the invoice first`

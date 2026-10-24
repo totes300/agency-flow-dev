@@ -145,6 +145,12 @@ export type CloseWorkspaceData = {
   entries: CloseWorkspaceRow[];
   /** Review flags from the pure `closeFlags` module (ordered blocking→warning→info). */
   flags: CloseFlag[];
+  /**
+   * The period as the project page sees it (docs/prd-project-billing-redesign.md
+   * §10): state chip, blocker, undo items, invoice and documents. Null for a
+   * period the project's rows do not list (an empty ended T&M month).
+   */
+  periodRow: PeriodRow | null;
 };
 
 /** One project's committable period in the Billing → Close tab. */
@@ -563,6 +569,8 @@ export const getCloseWorkspace = query({
     const flags = flagsFor(view, timersIn(timers, new Set(taskName.keys()), view.period));
 
     const rows = await workspaceRows(ctx, orgId, c, view, taskName);
+    const model = await buildProjectBillingPeriods(ctx, orgId, project, c.currency, settings);
+    const periodRow = model.periods.find((p) => p.start === view.period.start) ?? null;
     const closed = view.liveClose !== null;
     const draftInvoice =
       view.liveClose?.status === "draft" && view.liveClose.invoiceId
@@ -620,6 +628,7 @@ export const getCloseWorkspace = query({
       timezone: settings.timezone,
       entries: rows,
       flags,
+      periodRow,
     };
   },
 });

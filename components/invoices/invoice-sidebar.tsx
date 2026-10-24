@@ -7,7 +7,8 @@ import { toast } from "sonner"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import type { InvoiceView } from "@/convex/lib/billing/invoiceView"
-import { InvoiceStatusBadge } from "@/components/invoices/invoice-status-badge"
+import { InvoiceStateChip } from "@/components/billing/period-state-chip"
+import { invoiceDisplayStatus } from "@/convex/lib/billing/periodState"
 import { CompanyDetailsDialog } from "@/components/invoices/company-details-dialog"
 import { WorksheetDownloadButton } from "@/components/worksheet/worksheet-download-button"
 import { ConfirmDialog } from "@/components/confirm-dialog"
@@ -87,6 +88,7 @@ export function InvoiceSidebar({
     | "markInvoiced"
     | "revertToDraft"
     | "delete"
+    | "void"
   >(null)
   const [actionLoading, setActionLoading] = useState(false)
   const [companyDialogOpen, setCompanyDialogOpen] = useState(false)
@@ -108,7 +110,7 @@ export function InvoiceSidebar({
   }
 
   async function handleStatusChange(
-    newStatus: "draft" | "invoiced" | "paid",
+    newStatus: "draft" | "invoiced" | "paid" | "void",
     successMessage: string,
   ) {
     setActionLoading(true)
@@ -163,10 +165,12 @@ export function InvoiceSidebar({
           {formatCurrency(invoice.total, invoice.currency)}
         </p>
         <div className="mt-3">
-          <InvoiceStatusBadge
-            status={invoice.status}
-            dueDate={invoice.dueDate}
-            timezone={timezone}
+          <InvoiceStateChip
+            status={invoiceDisplayStatus(
+              invoice.status,
+              invoice.dueDate,
+              new Date().toLocaleDateString("en-CA", { timeZone: timezone }),
+            )}
           />
         </div>
       </div>
@@ -283,7 +287,7 @@ export function InvoiceSidebar({
               onClick={() => setConfirmAction("markInvoiced")}
               disabled={actionLoading}
             >
-              Mark as Invoiced
+              Mark as invoiced
             </Button>
           ))}
 
@@ -313,7 +317,7 @@ export function InvoiceSidebar({
               }}
               disabled={actionLoading}
             >
-              Mark as Paid
+              Mark as paid
             </Button>
             <Button
               variant="ghost"
@@ -321,7 +325,15 @@ export function InvoiceSidebar({
               onClick={() => setConfirmAction("revertToDraft")}
               disabled={actionLoading}
             >
-              Revert to Draft
+              Revert to draft
+            </Button>
+            <Button
+              variant="ghost"
+              className="text-destructive hover:text-destructive"
+              onClick={() => setConfirmAction("void")}
+              disabled={actionLoading}
+            >
+              Void invoice…
             </Button>
           </>
         )}
@@ -338,20 +350,20 @@ export function InvoiceSidebar({
             }}
             disabled={actionLoading}
           >
-            Mark as Unpaid
+            Mark as unpaid
           </Button>
         )}
 
-        {/* Drafts are unnumbered and unissued — deleting one never burns a
-            sequence number. Finalized invoices can only be voided. */}
+        {/* A never-numbered draft is deleted (no number burns); a reverted,
+            numbered draft can only be voided (N9, §5.4). */}
         {invoice.status === "draft" && (
           <Button
             variant="ghost"
             className="text-destructive hover:text-destructive"
-            onClick={() => setConfirmAction("delete")}
+            onClick={() => setConfirmAction(invoice.number == null ? "delete" : "void")}
             disabled={actionLoading}
           >
-            Delete Draft
+            {invoice.number == null ? "Delete draft" : "Void invoice…"}
           </Button>
         )}
       </div>
@@ -360,9 +372,9 @@ export function InvoiceSidebar({
       <ConfirmDialog
         open={confirmAction === "markInvoiced"}
         onOpenChange={(open) => { if (!open) setConfirmAction(null) }}
-        title="Mark as Invoiced"
-        description="This will lock the invoice for editing. You can revert to draft later if corrections are needed."
-        confirmLabel="Mark as Invoiced"
+        title="Mark as invoiced?"
+        description="This numbers and locks the invoice. You can revert to draft later if corrections are needed."
+        confirmLabel="Mark as invoiced"
         onConfirm={() => {
           void handleStatusChange("invoiced", "Invoice marked as invoiced")
         }}
@@ -372,11 +384,28 @@ export function InvoiceSidebar({
       <ConfirmDialog
         open={confirmAction === "revertToDraft"}
         onOpenChange={(open) => { if (!open) setConfirmAction(null) }}
-        title="Revert to Draft"
-        description="This will unlock the invoice for editing."
-        confirmLabel="Revert to Draft"
+        title="Revert to draft?"
+        description="The invoice keeps its number and becomes editable again."
+        confirmLabel="Revert to draft"
         onConfirm={() => {
           void handleStatusChange("draft", "Invoice reverted to draft")
+        }}
+      />
+
+      {/* Confirm: Void (B8 — void always confirms) */}
+      <ConfirmDialog
+        open={confirmAction === "void"}
+        onOpenChange={(open) => { if (!open) setConfirmAction(null) }}
+        title="Void this invoice?"
+        description={
+          invoice.closeId
+            ? "The invoice keeps its number and is marked void. The period reopens and its time can be billed again."
+            : "The invoice keeps its number and is marked void. Its amount can be invoiced again."
+        }
+        confirmLabel="Void invoice"
+        variant="destructive"
+        onConfirm={() => {
+          void handleStatusChange("void", "Invoice voided")
         }}
       />
 

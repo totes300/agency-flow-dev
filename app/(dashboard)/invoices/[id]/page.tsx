@@ -34,11 +34,10 @@ export default function InvoiceEditorPage() {
       : null
   useBreadcrumbTitle(breadcrumbTitle)
 
-  const fromType = searchParams.get("from")
-  const fromProjectId = searchParams.get("projectId")
-  const backHref = fromType === "project" && fromProjectId
-    ? `/projects/${fromProjectId}?tab=invoices`
-    : "/invoices"
+  // A9: Back returns where the invoice was opened from (project Billing tab,
+  // hub view + filters, the workspace) — a same-app path only.
+  const from = searchParams.get("from")
+  const backHref = from && from.startsWith("/") && !from.startsWith("//") ? from : "/billing?view=invoices"
 
   useEffect(() => {
     if (!printRequested || data === undefined || data === null) return

@@ -217,3 +217,30 @@ describe("A15 — one definition of billed", () => {
     expect(billed).toEqual({ minutes: 90, amount: 150, unbilledMinutes: 45 });
   });
 });
+
+describe("§10 — Close workspace and locked entries", () => {
+  it("the workspace carries the period row: state, blocker and undo", async () => {
+    setToday("2026-05-10");
+    const w = await newWorld();
+    const p = await addProject(w, retainer);
+    await addEntry(w, p, "2026-04-04", 700);
+    const april = await asAdmin(w).query(api.billingViews.getCloseWorkspace, { projectId: p.projectId, period: "2026-04" });
+    expect(april?.periodRow).toMatchObject({ state: "ready_to_invoice", blockedBy: { key: "2026-03", label: "March 2026" } });
+    await commit(w, p, "2026-03-01");
+    const march = await asAdmin(w).query(api.billingViews.getCloseWorkspace, { projectId: p.projectId, period: "2026-03" });
+    expect(march?.periodRow).toMatchObject({ state: "closed", undo: [{ kind: "reopen_period" }] });
+  });
+
+  it("an entry on a reverted (numbered) draft says void, not delete", async () => {
+    setToday("2026-04-10");
+    const w = await newWorld();
+    const p = await addProject(w, { billingType: "t_and_m", startDate: undefined });
+    const entry = await addEntry(w, p, "2026-03-03", 60, { rate: 100 });
+    const { invoiceId } = await commit(w, p, "2026-03-01");
+    const remove = () => asAdmin(w).mutation(api.timeEntries.remove, { id: entry });
+    await expect(remove()).rejects.toThrow("delete the draft first");
+    await setInvoiceStatus(w, invoiceId!, "invoiced");
+    await setInvoiceStatus(w, invoiceId!, "draft");
+    await expect(remove()).rejects.toThrow("void the invoice first");
+  });
+});

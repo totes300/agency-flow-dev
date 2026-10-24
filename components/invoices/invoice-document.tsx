@@ -162,10 +162,7 @@ export function InvoiceDocument({
           <LockIcon className="size-4 shrink-0" />
           <span>
             This invoice is locked.{" "}
-            <span className="text-amber-800/80 dark:text-amber-300/80">
-              Use <span className="font-medium">Revert to draft</span> in the
-              sidebar to make changes.
-            </span>
+            <span className="text-amber-800/80 dark:text-amber-300/80">{lockHint(invoice.status)}</span>
           </span>
         </div>
       )}
@@ -277,4 +274,22 @@ export function InvoiceDocument({
       />
     </div>
   )
+}
+
+/** A10 — what the lock banner suggests, per status: only the action that exists. */
+function lockHint(status: "draft" | "invoiced" | "paid" | "void"): React.ReactNode {
+  switch (status) {
+    case "invoiced":
+      return (
+        <>
+          Use <span className="font-medium">Revert to draft</span> in the sidebar to make changes.
+        </>
+      )
+    case "paid":
+      return "Paid invoices are final. Mark it as unpaid to change its status."
+    case "void":
+      return "Void invoices are kept for the record and cannot change."
+    default:
+      return null
+  }
 }

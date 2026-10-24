@@ -10,7 +10,8 @@ const isPublicRoute = createRouteMatcher([
   // and must answer 401 + WWW-Authenticate, not a sign-in redirect. The OAuth
   // discovery documents are public.
   "/mcp",
-  "/.well-known/(.*)",
+  "/.well-known/oauth-protected-resource/mcp",
+  "/.well-known/oauth-authorization-server",
 ]);
 
 const isAdminRoute = createRouteMatcher(adminRoutePatterns);

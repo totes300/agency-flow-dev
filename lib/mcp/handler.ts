@@ -2,6 +2,7 @@ import { createMcpHandler, withMcpAuth } from "mcp-handler";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { protectedResourceMetadataPath } from "./config";
+import { appOriginOf } from "./links";
 import { MCP_TOOLS, type McpQueryRunner } from "./registry";
 
 /**
@@ -24,6 +25,7 @@ export const MCP_SERVER_INFO = { name: "agency-flow", version: "0.1.0" };
 export function registerMcpTools(
   server: McpServer,
   queryRunnerFor: McpHandlerOptions["queryRunnerFor"],
+  appOrigin: string,
 ): void {
   for (const tool of MCP_TOOLS) {
     server.registerTool(
@@ -39,7 +41,11 @@ export function registerMcpTools(
         if (!token) {
           return { content: [{ type: "text", text: "Not authenticated." }], isError: true };
         }
-        const result = await tool.execute(input, { runQuery: queryRunnerFor(token) });
+        const result = await tool.execute(input, {
+          runQuery: queryRunnerFor(token),
+          appOrigin,
+          now: Date.now,
+        });
         return { content: [{ type: "text", text: result.text }], isError: result.isError };
       },
     );
@@ -49,7 +55,8 @@ export function registerMcpTools(
 export function createAgencyFlowMcpHandler(options: McpHandlerOptions): (req: Request) => Promise<Response> {
   const resource = new URL(options.resourceUrl);
   const handler = createMcpHandler(
-    (server) => registerMcpTools(server, options.queryRunnerFor),
+    // The app and /mcp share one origin: deep links use the resource URL's.
+    (server) => registerMcpTools(server, options.queryRunnerFor, appOriginOf(options.resourceUrl)),
     { serverInfo: MCP_SERVER_INFO },
     // Streamable HTTP answers exactly `/mcp` (app/mcp/route.ts, the resource
     // path); no SSE. No catch-all route, so other URLs stay untouched.

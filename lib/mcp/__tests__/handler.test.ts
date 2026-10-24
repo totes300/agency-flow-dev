@@ -26,7 +26,15 @@ const handler = createAgencyFlowMcpHandler({
   queryRunnerFor: (token) =>
     (async (query) => {
       seenTokens.push(token);
-      if (getFunctionName(query) !== "mcp/fetch:me") throw new Error("unexpected query");
+      const name = getFunctionName(query);
+      if (name === "mcp/search:tasks") {
+        const row = {
+          identifier: "ARLO-21", title: "Fix hero", status: "In progress", statusCategory: "started",
+          priority: "High", assignees: ["Ada"], dueDate: "2026-10-20", overdue: true, project: "ARLO", parent: null,
+        };
+        return { rows: [row], total: 1, offset: 0, incomplete: false, notes: [], today: "2026-10-24" };
+      }
+      if (name !== "mcp/fetch:me") throw new Error("unexpected query");
       return { user: { name: "Ada", email: "ada@x.test" }, org: { id: "org_1", name: null }, role: "admin" };
     }) as McpQueryRunner,
 });
@@ -94,7 +102,15 @@ describe("MCP protocol", () => {
     }));
     expect(listed).toEqual(expected);
     // Guard against both sides being trivially empty.
-    expect(Object.keys(expected.find((t) => t.name === "fetch")!.inputSchema.properties ?? {})).toEqual(["refs"]);
+    expect(listed.map((t) => t.name)).toEqual(["search", "fetch"]);
+    expect(Object.keys(expected.find((t) => t.name === "fetch")!.inputSchema.properties ?? {})).toEqual([
+      "refs",
+      "include",
+    ]);
+    expect(Object.keys(expected.find((t) => t.name === "search")!.inputSchema.properties ?? {})).toEqual(
+      expect.arrayContaining(["query", "types", "assignee", "mine", "status", "label", "client", "project", "cursor", "limit"]),
+    );
+    expect(listed.every((t) => (t.annotations as { readOnlyHint?: boolean }).readOnlyHint === true)).toBe(true);
   });
 
   it("calls Convex with the caller's own bearer token and returns markdown", async () => {
@@ -111,5 +127,33 @@ describe("MCP protocol", () => {
       content: [{ type: "text", text: "## Me\n- User: Ada <ada@x.test>\n- Org: org_1\n- Role: admin" }],
     });
     expect(seenTokens).toEqual([GOOD_TOKEN]);
+  });
+
+  it("runs search with deep links on the resource URL's origin", async () => {
+    const res = await handler(
+      rpc(
+        {
+          jsonrpc: "2.0",
+          id: 4,
+          method: "tools/call",
+          params: { name: "search", arguments: { mine: true, overdue: true } },
+        },
+        GOOD_TOKEN,
+      ),
+    );
+    const { result } = await rpcResult(res);
+    expect(result).toMatchObject({
+      isError: false,
+      content: [
+        {
+          type: "text",
+          text: [
+            "### Tasks · 1–1 of 1",
+            "Today: 2026-10-24 (org timezone)",
+            "- [ARLO-21](https://localhost:3001/tasks/ARLO-21) · Fix hero · In progress · due 2026-10-20 (overdue) · Ada · High · ARLO",
+          ].join("\n"),
+        },
+      ],
+    });
   });
 });

@@ -563,12 +563,13 @@ export async function searchComments(ctx: QueryCtx, auth: AuthContext, args: Com
       textTruncated: text.truncated,
     });
   }
-  const result: SearchPage<(typeof rows)[number]> = {
+  const result: SearchPage<(typeof rows)[number]> & { timezone: string } = {
     rows,
     total: matched.length,
     offset: args.offset,
     incomplete,
     notes: [],
+    timezone: clock.timezone,
   };
   return result;
 }

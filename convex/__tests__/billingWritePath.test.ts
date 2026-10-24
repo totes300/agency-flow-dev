@@ -521,11 +521,23 @@ describe("createFixedInvoice", () => {
     expect((await get(w, a))?.closeId).toBeUndefined();
   });
 
-  it("finalize re-checks the remainder against sibling drafts", async () => {
+  it("finalize re-checks the remainder against sibling drafts (legacy data)", async () => {
     setToday("2026-04-10");
     const w = await world({ billingType: "fixed", fixedPrice: 10000 });
     const one = await as(w).mutation(api.billingInvoices.createFixedInvoice, { projectId: w.projectId, amount: 7000 });
-    const two = await as(w).mutation(api.billingInvoices.createFixedInvoice, { projectId: w.projectId, amount: 7000 });
+    // A sibling draft from before the one-draft guard (A5): copy the first.
+    const two = await w.t.run(async (ctx) => {
+      const { _id, _creationTime, ...inv } = (await ctx.db.get(one.invoiceId))!;
+      const invoiceId = await ctx.db.insert("invoices", inv);
+      for (const li of await ctx.db.query("invoiceLineItems").withIndex("by_invoiceId", (q) => q.eq("invoiceId", _id)).collect()) {
+        const { _id: lineId, _creationTime: lineTime, ...line } = li;
+        void lineId;
+        void lineTime;
+        await ctx.db.insert("invoiceLineItems", { ...line, invoiceId });
+      }
+      void _creationTime;
+      return { invoiceId };
+    });
     await setStatus(w, one.invoiceId, "invoiced");
     await expect(setStatus(w, two.invoiceId, "invoiced")).rejects.toThrow(/exceeds the project's unbilled remainder/);
   });

@@ -10,7 +10,7 @@ import { getDateInTimezone, ORG_TIMEZONE_FALLBACK } from "./lib/timer";
 import { getOrgSettings, getProjectCurrency } from "./lib/orgHelpers";
 import { fixedBilledMinor } from "./lib/billing/invoiceLifecycle";
 import { fromMinor, toMinor } from "./lib/billing/money";
-import { loadCloseContext } from "./lib/billing/closeData";
+import { getLiveCloses, loadCloseContext } from "./lib/billing/closeData";
 import { getCyclePeriods } from "./lib/billing/periods";
 import { monthBalances, type MonthBalance } from "./lib/billing/periodView";
 import { loadReportMonths } from "./lib/billing/reportMonths";
@@ -426,6 +426,18 @@ export const updateRetainer = mutation({
     const project = await ctx.db.get(args.id);
     if (!project || project.orgId !== orgId) throw new ConvexError("Project not found");
     if (project.billingType !== "retainer") throw new ConvexError("Not a retainer project");
+
+    // A7 / P8: the cycle grid (start date, cycle length, rollover) is locked
+    // while any period is closed — moving it would re-cut periods that are
+    // already settled. Fee, included hours and overage rate stay editable:
+    // they apply to open periods only (closed ones are frozen, D11).
+    const gridChanged =
+      (args.startDate !== undefined && args.startDate !== project.startDate) ||
+      (args.cycleLength !== undefined && args.cycleLength !== (project.cycleLength ?? 1)) ||
+      (args.rolloverEnabled !== undefined && args.rolloverEnabled !== (project.rolloverEnabled ?? false));
+    if (gridChanged && (await getLiveCloses(ctx, orgId, project._id)).length > 0) {
+      throw new ConvexError("Reopen or void the closed periods before changing the billing cycle.");
+    }
 
     const updates: Record<string, unknown> = { updatedAt: Date.now() };
 

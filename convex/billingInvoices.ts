@@ -38,6 +38,21 @@ export const createFixedInvoice = mutation({
     const client = await ctx.db.get(project.clientId);
     if (!client || client.orgId !== orgId) throw new ConvexError("Client not found for project.");
 
+    // A5 / B9: one draft at a time — a second "Create invoice" would draft
+    // the same remainder again. The UI offers "Open draft" instead.
+    const draft = await ctx.db
+      .query("invoices")
+      .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
+      .filter((q) => q.and(q.eq(q.field("orgId"), orgId), q.eq(q.field("status"), "draft")))
+      .first();
+    if (draft) {
+      throw new ConvexError({
+        code: "DRAFT_EXISTS",
+        invoiceId: draft._id,
+        message: "This project already has a draft invoice. Open it instead.",
+      });
+    }
+
     const currency = client.currency;
     const remainingMinor =
       toMinor(project.fixedPrice ?? 0, currency) - (await fixedBilledMinor(ctx, orgId, project._id));

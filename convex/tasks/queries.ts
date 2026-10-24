@@ -24,6 +24,7 @@ import {
   loadSubtasksOf,
   loadView,
   loadViaParentSubtasks,
+  loadWorkedIn,
   matchesFilters,
   toDetailDTO,
   toRowDTO,
@@ -55,6 +56,11 @@ export const listView = query({
     projectId: v.optional(v.id("projects")),
     closedLimit: v.optional(v.number()),
     today: todayArg,
+    /**
+     * Project surface only: the tasks worked in `[from, to]` (YYYY-MM-DD)
+     * instead of the whole project (docs/prd-project-billing-redesign.md §6.3).
+     */
+    workedIn: v.optional(v.object({ from: v.string(), to: v.string() })),
   },
   handler: async (ctx, args) => {
     const auth = await getAuthContext(ctx);
@@ -73,15 +79,32 @@ export const listView = query({
       const project = await ctx.db.get(args.projectId);
       if (!project || project.orgId !== auth.orgId) throw new ConvexError("Project not found");
     }
+    if (args.workedIn && args.surface !== "project") {
+      throw new ConvexError("workedIn is only allowed on the project surface");
+    }
     const closedLimit = clampClosedLimit(args.closedLimit);
-    const loaded = await loadView(ctx, auth, {
-      filters: spec.filters,
-      // The Planner panel plans top-level tasks only.
-      showSubtasks: args.surface === "planner" ? false : spec.showSubtasks,
-      projectId: args.surface === "project" ? args.projectId : undefined,
-      closedLimit,
-    });
     const today = await todayFor(ctx, auth.orgId, args.today);
+    // The Planner panel plans top-level tasks only.
+    const showSubtasks = args.surface === "planner" ? false : spec.showSubtasks;
+    const loaded =
+      args.workedIn && args.projectId
+        ? {
+            ...(await loadWorkedIn(ctx, auth, {
+              projectId: args.projectId,
+              from: args.workedIn.from,
+              to: args.workedIn.to,
+              today,
+              filters: spec.filters,
+              showSubtasks,
+            })),
+            hasMoreClosed: false,
+          }
+        : await loadView(ctx, auth, {
+            filters: spec.filters,
+            showSubtasks,
+            projectId: args.surface === "project" ? args.projectId : undefined,
+            closedLimit,
+          });
     const perUser = await loadPerUser(
       ctx,
       auth.orgId,
@@ -102,6 +125,8 @@ export const listView = query({
       hasMoreClosed: loaded.hasMoreClosed,
       perUser,
       spec,
+      /** Minutes logged per task in `workedIn` (absent without it). */
+      workedMinutes: "workedMinutes" in loaded ? loaded.workedMinutes : undefined,
     };
   },
 });

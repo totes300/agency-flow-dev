@@ -1,7 +1,7 @@
 import { v, ConvexError } from "convex/values";
 import { query, mutation } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
-import { getAuthContext, type AuthContext } from "./lib/auth";
+import { getAuthContext, requireAdmin, type AuthContext } from "./lib/auth";
 import { roundMinutes } from "./lib/rounding";
 import { getDateInTimezone, ORG_TIMEZONE_FALLBACK } from "./lib/timer";
 import { getOrgSettings, getProjectCurrency, resolveRateSnapshot, resolveEntryCategory } from "./lib/orgHelpers";
@@ -861,12 +861,13 @@ export const listProjectEntries = query({
 
 /**
  * Aggregate overview metrics for a project — used by Fixed and T&M overviews
- * and the project header "Last activity" date.
+ * and the project header "Last activity" date. Admin-only: it carries amounts
+ * and cost (A13).
  */
 export const projectOverview = query({
   args: { projectId: v.id("projects") },
   handler: async (ctx, args) => {
-    const { orgId } = await getAuthContext(ctx);
+    const { orgId } = await requireAdmin(ctx);
 
     const project = await ctx.db.get(args.projectId);
     if (!project || project.orgId !== orgId) return null;
@@ -893,15 +894,14 @@ export const projectOverview = query({
     // FOUR buckets over billable entries, in lock-step with `entryStatus()`
     // so the data shape matches the row display (`billableOverviewBucket`):
     //   open      → no live close (needs billing or closure)
-    //   draft     → close with a draft invoice (revenue not yet realized)
-    //   invoiced  → final T&M close (billed hourly — revenue)
+    //   draft     → close with a draft invoice
+    //   invoiced  → final T&M close
     //   settled   → final retainer close (covered, no extra revenue)
     //
-    // The draft bucket is deliberate: a draft invoice has reserved hours
-    // but no finalized revenue. Lumping draft into invoiced would inflate
-    // T&M "billed" totals before the invoice is sent; lumping into open
-    // would falsely surface those hours in the Ready feed. Distinct bucket
-    // keeps reports honest and matches what the row badge already shows.
+    // Money totals use ONE definition of billed (A15, PRD §6.8): billed =
+    // covered by a live close, draft or final — `billedMinutes/Amount` below,
+    // the same rule as `computeTmSummary`. The draft bucket stays for the
+    // row badge only; no surface shows "Draft" as a money column.
     let openMinutes = 0;
     let openAmount = 0;
     // `openAmount` (the "ready to bill" number on the overview) groups like
@@ -1057,6 +1057,9 @@ export const projectOverview = query({
       // instead — that one is invoice-derived, not entry-derived.
       openMinutes,     // no live close
       openAmount,
+      // Billed = covered by a live close (draft or final T&M) — §6.8.
+      billedMinutes: draftMinutes + invoicedMinutes,
+      billedAmount: draftAmount + invoicedAmount,
       draftMinutes,    // close with a draft invoice
       draftAmount,
       invoicedMinutes, // final T&M close
@@ -1078,7 +1081,8 @@ export const projectOverview = query({
 export const projectMonthlyBreakdown = query({
   args: { projectId: v.id("projects") },
   handler: async (ctx, args) => {
-    const { orgId } = await getAuthContext(ctx);
+    // Admin-only: rows carry billable amounts and cost (A13).
+    const { orgId } = await requireAdmin(ctx);
 
     const project = await ctx.db.get(args.projectId);
     if (!project || project.orgId !== orgId) return [];

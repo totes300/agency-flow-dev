@@ -2,6 +2,7 @@ import { ConvexError } from "convex/values";
 import type { Auth, UserIdentity } from "convex/server";
 import { internalQuery, QueryCtx, MutationCtx } from "../_generated/server";
 import { Doc, Id } from "../_generated/dataModel";
+import type { ActivityVia } from "../tasks/model";
 
 export type AuthContext = {
   userId: Id<"users">;
@@ -9,6 +10,12 @@ export type AuthContext = {
   orgRole: "admin" | "member";
   isAdmin: boolean;
   user: Doc<"users">;
+  /**
+   * Set only for writes through an external agent (MCP, docs/prd-mcp.md
+   * D15): stamped on the activity rows and comments the write paths create.
+   * Attribution only — never consulted for authorization.
+   */
+  via?: ActivityVia;
 };
 
 /**

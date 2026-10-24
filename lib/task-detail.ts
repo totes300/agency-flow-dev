@@ -149,6 +149,8 @@ export type ActivityEvent = {
   type: string
   userId: string
   userName?: string
+  /** The external agent the user acted through (MCP "via <client>", D15). */
+  viaName?: string
   metadata: Record<string, unknown>
   createdAt: number
 }
@@ -158,6 +160,8 @@ export type CommentEvent = {
   kind: "comment"
   userId: string
   userName?: string
+  /** The external agent the user wrote through (MCP "via <client>", D15). */
+  viaName?: string
   userImageUrl?: string
   content: unknown // Tiptap JSON
   parentCommentId?: string

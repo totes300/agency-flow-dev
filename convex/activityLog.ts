@@ -3,7 +3,7 @@ import { query, MutationCtx, type QueryCtx } from "./_generated/server";
 import { getAuthContext, type AuthContext } from "./lib/auth";
 import { Id } from "./_generated/dataModel";
 import { loadTaskForReadOrNull } from "./tasks/access";
-import type { ActivityEvent } from "./tasks/model";
+import type { ActivityEvent, ActivityVia } from "./tasks/model";
 import { onActivity } from "./tasks/derived";
 
 // ─── Helper (called from other mutations) ───────────────────────────────────────
@@ -13,6 +13,8 @@ import { onActivity } from "./tasks/derived";
  * move the task's `lastActivity` forward + fan out the unseen-change flag
  * (§5.5, §4.3). Called from tasks/write.ts,
  * comments.ts and timeEntries.ts. `at` defaults to now (seeds pass history).
+ * `via` marks a write made through an external agent (callers pass the
+ * actor's `AuthContext.via`, docs/prd-mcp.md D15).
  */
 export async function logActivity(
   ctx: MutationCtx,
@@ -21,6 +23,7 @@ export async function logActivity(
     orgId: string;
     userId: Id<"users">;
     at?: number;
+    via?: ActivityVia;
   } & ActivityEvent,
 ) {
   const { at, ...event } = args;
@@ -71,6 +74,7 @@ export async function listTaskActivityForAuth(
       createdAt: event.createdAt,
       userId: event.userId,
       userName: userCache.get(event.userId) ?? "Unknown",
+      viaName: event.via?.clientName,
     })),
     truncated: rows.length > cap,
   };

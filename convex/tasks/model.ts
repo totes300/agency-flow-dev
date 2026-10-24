@@ -335,6 +335,20 @@ export function completedAtAfterTransition(input: {
   return now;
 }
 
+/**
+ * Manual order (fractional `sortKey`s compare bytewise), creation as the
+ * tiebreak: the list and sub-task checklist order.
+ */
+export function compareBySortKey(
+  a: { sortKey?: string; createdAt: number },
+  b: { sortKey?: string; createdAt: number },
+): number {
+  const ak = a.sortKey ?? "";
+  const bk = b.sortKey ?? "";
+  if (ak !== bk) return ak < bk ? -1 : 1;
+  return a.createdAt - b.createdAt;
+}
+
 /** True when the category change crosses the open/closed boundary in either direction. */
 export function changesOpenness(prev: TaskCategory, next: TaskCategory): boolean {
   return isClosedCategory(prev) !== isClosedCategory(next);
@@ -348,12 +362,28 @@ const fromToString = v.object({ from: v.string(), to: v.string() });
 const fromToDate = v.object({ from: nullableString, to: nullableString });
 const commentRef = v.object({ commentId: v.id("comments") });
 
+/**
+ * A write made through an external agent (docs/prd-mcp.md D15): the OAuth
+ * client that carried it, shown as a quiet "via <clientName>" next to the
+ * real user. `clientId` comes from the verified token (the changes feed's
+ * `exclude_self`); `clientName` is display text only, never used to decide
+ * anything.
+ */
+export const activityViaValidator = v.object({
+  kind: v.literal("mcp"),
+  clientId: v.string(),
+  clientName: v.string(),
+});
+
+export type ActivityVia = Infer<typeof activityViaValidator>;
+
 /** Fields every `activityLog` row carries next to its typed `type` + `metadata`. */
 const activityBase = {
   taskId: v.id("tasks"),
   orgId: v.string(),
   userId: v.id("users"),
   createdAt: v.number(),
+  via: v.optional(activityViaValidator),
 };
 
 function activity<T extends string, M extends GenericValidator>(type: T, metadata: M) {

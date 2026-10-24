@@ -34,6 +34,7 @@ import {
   DEFAULT_ORG_TASK_KEY,
   PRIORITY,
   categoryOfStatus,
+  compareBySortKey,
   completedAtAfterTransition,
   deriveIdentifierKey,
   formatIdentifier,
@@ -381,6 +382,7 @@ async function moveToProject(
         taskId: t._id,
         orgId: task.orgId,
         userId: auth.userId,
+        via: auth.via,
         type: "identifier_changed",
         metadata: { from: t.identifier ?? null, to: identifier, reason: "project_move" },
       });
@@ -698,6 +700,7 @@ export async function createTask(
     taskId,
     orgId,
     userId,
+    via: auth.via,
     type: "task_created",
     metadata: options.duplicatedFrom ? { duplicatedFrom: options.duplicatedFrom._id } : {},
     at: now,
@@ -707,6 +710,7 @@ export async function createTask(
       taskId: parent._id,
       orgId,
       userId,
+      via: auth.via,
       type: "subtask_created",
       metadata: { subtaskId: taskId, title },
       at: now,
@@ -960,7 +964,7 @@ export async function updateTask(
 
   // ── Activity ──
   const log = async (event: ActivityEvent, taskId: Id<"tasks"> = task._id) =>
-    await logActivity(ctx, { taskId, orgId, userId, ...event });
+    await logActivity(ctx, { taskId, orgId, userId, via: auth.via, ...event });
   for (const event of events) await log(event);
   if (labelChange) {
     for (const label of labelChange.added) {
@@ -1045,7 +1049,14 @@ export async function archiveTask(ctx: MutationCtx, access: TaskAccess): Promise
   if (task.archivedAt) return { saved: [], failed: [] };
   const now = Date.now();
   await ctx.db.patch(task._id, { archivedAt: now, updatedAt: now });
-  await logActivity(ctx, { taskId: task._id, orgId: task.orgId, userId: auth.userId, type: "task_archived", metadata: {} });
+  await logActivity(ctx, {
+    taskId: task._id,
+    orgId: task.orgId,
+    userId: auth.userId,
+    via: auth.via,
+    type: "task_archived",
+    metadata: {},
+  });
   const children = await childrenOf(ctx, task);
   for (const child of children) {
     if (child.archivedAt) continue;
@@ -1054,6 +1065,7 @@ export async function archiveTask(ctx: MutationCtx, access: TaskAccess): Promise
       taskId: child._id,
       orgId: task.orgId,
       userId: auth.userId,
+      via: auth.via,
       type: "task_archived",
       metadata: { viaParent: task._id },
     });
@@ -1076,7 +1088,14 @@ export async function restoreTask(ctx: MutationCtx, access: TaskAccess): Promise
   if (!task.archivedAt) throw new ConvexError("Task is not archived");
   const now = Date.now();
   await ctx.db.patch(task._id, { archivedAt: undefined, updatedAt: now });
-  await logActivity(ctx, { taskId: task._id, orgId: task.orgId, userId: auth.userId, type: "task_restored", metadata: {} });
+  await logActivity(ctx, {
+    taskId: task._id,
+    orgId: task.orgId,
+    userId: auth.userId,
+    via: auth.via,
+    type: "task_restored",
+    metadata: {},
+  });
   const children = await childrenOf(ctx, task);
   let restored = 0;
   for (const child of children) {
@@ -1086,6 +1105,7 @@ export async function restoreTask(ctx: MutationCtx, access: TaskAccess): Promise
       taskId: child._id,
       orgId: task.orgId,
       userId: auth.userId,
+      via: auth.via,
       type: "task_restored",
       metadata: { viaParent: task._id },
     });
@@ -1117,6 +1137,12 @@ export async function deleteTaskRecord(ctx: MutationCtx, task: Doc<"tasks">): Pr
     .withIndex("by_taskId_userId", (q) => q.eq("taskId", task._id))
     .collect();
   for (const state of userStates) await ctx.db.delete(state._id);
+  // External source refs (MCP, D21): a deleted task frees its refs.
+  const externalRefs = await ctx.db
+    .query("taskExternalRefs")
+    .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
+    .collect();
+  for (const ref of externalRefs) await ctx.db.delete(ref._id);
   await ctx.db.delete(task._id);
 }
 
@@ -1183,6 +1209,7 @@ export async function removeTask(
         taskId: parent._id,
         orgId: task.orgId,
         userId: auth.userId,
+        via: auth.via,
         type: "subtask_deleted",
         metadata: { title: task.title },
       });
@@ -1236,6 +1263,34 @@ export async function reorderSubtasks(
   for (const [i, sub] of subs.entries()) {
     await ctx.db.patch(sub._id, { sortKey: keys[i], updatedAt: now });
   }
+}
+
+/**
+ * Moves a sub-task right after or right before a sibling (the MCP
+ * checklist order, docs/prd-mcp.md D24) through `reorderSubtasks`, the
+ * drawer's drag & drop path. Archived siblings keep their keys. Returns
+ * whether the order changed.
+ */
+export async function placeSubtask(
+  ctx: MutationCtx,
+  parentAccess: TaskAccess,
+  subtaskId: Id<"tasks">,
+  anchor: { after: Id<"tasks"> } | { before: Id<"tasks"> },
+): Promise<boolean> {
+  const anchorId = "after" in anchor ? anchor.after : anchor.before;
+  if (anchorId === subtaskId) throw new ConvexError("A sub-task cannot be placed relative to itself");
+  const siblings = (await childrenOf(ctx, parentAccess.task)).filter((t) => !t.archivedAt).sort(compareBySortKey);
+  const current = siblings.map((t) => t._id);
+  if (!current.includes(subtaskId)) throw new ConvexError("Subtask does not belong to this parent");
+  if (!current.includes(anchorId)) {
+    throw new ConvexError("after / before must name another active sub-task of the same parent");
+  }
+  const next = current.filter((id) => id !== subtaskId);
+  const at = next.indexOf(anchorId) + ("after" in anchor ? 1 : 0);
+  next.splice(at, 0, subtaskId);
+  if (next.every((id, i) => id === current[i])) return false;
+  await reorderSubtasks(ctx, parentAccess, next);
+  return true;
 }
 
 // ─── Maintenance (seeds) ─────────────────────────────────────────────────────

@@ -457,6 +457,9 @@ The tests for these modules move with them.
   - whether a `typ: at+jwt` header is accepted.
 
   If not, use §5.4.
+  **Outcome (2026-10-24): passed.** Convex 1.34.1 accepts the Clerk OAuth JWT (`typ: at+jwt`)
+  through the `customJwt` provider and exposes `client_id` and `org_id` on the identity, so
+  §5.4 is not needed.
 - **S2:** Version compatibility of `@clerk/mcp-tools` 0.7.x with `mcp-handler`. Clerk's
   example pins `mcp-handler` 1.x / SDK v1, while `mcp-handler` 2.x needs the v2 SDK.
   Stay on the combination Clerk's example uses.
@@ -522,7 +525,7 @@ before changing the PRD. Code, documentation and commit messages stay in English
 
 | # | Slice | Status | Commits | Review | Notes / deviations |
 |---|---|---|---|---|---|
-| 1 | Auth tracer | Built, reviewed, fixes verified. Owner connect and S1 end-to-end pending | `def14c9` `cffbbd3` `3033410` `b80637f` + fixes `543d1f8` `f6cc62b` `4ccb821` `28ff3f5` `4ecaeb7` | Two independent reviews (standards/security, spec): no blockers or majors. 9 minor fixes done and re-verified (tsc clean, 65 MCP + lookup tests green) | Clerk dev MCP resource `https://localhost:3001/mcp` registered with owner approval (CIMD + aud on). Deviations accepted: https URL, `app/mcp/route.ts`, `generateClerkProtectedResourceMetadata`, `client_id` discriminator, S2 SDK override, workspace refuses instead of clipping, no links in the workspace sheet. |
+| 1 | Auth tracer | **Done** 2026-10-24. End to end: Claude Code connected via CIMD, owner consent with org pick, `fetch(me)` + `fetch(workspace)` returned correct org data (admin role from orgMembers). App UI verified on https with Clerk 7.9.20 | `def14c9` `cffbbd3` `3033410` `b80637f` + fixes `543d1f8` `f6cc62b` `4ccb821` `28ff3f5` `4ecaeb7` | Two independent reviews (standards/security, spec): no blockers or majors. 9 minor fixes done and re-verified (tsc clean, 65 MCP + lookup tests green) | Clerk dev MCP resource `https://localhost:3001/mcp` registered with owner approval (CIMD + aud on). Deviations accepted: https URL, `app/mcp/route.ts`, `generateClerkProtectedResourceMetadata`, `client_id` discriminator, S2 SDK override, workspace refuses instead of clipping, no links in the workspace sheet. |
 | 2 | Search, fetch, references and renderers | Not started | — | — | Depends on slice 1 done |
 | 3 | Tasks, comments, delete, idempotency, attribution and changes | Not started | — | — | Depends on slice 2 done |
 | 4 | Time entries and timer | Not started | — | — | Depends on slice 3 done |

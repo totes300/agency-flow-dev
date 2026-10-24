@@ -255,8 +255,11 @@ Rules for every tool:
 - An app URL, so a pasted link works.
 - A task identifier `KEY-N`. Old identifiers resolve through `taskIdentifierAliases`.
 - A project `code`.
-- A client `prefix` (`KONV`). Prefixes become unique per org when set; clients without
-  one are referenced by ID or URL.
+- A client `prefix`, written as `client:KONV`. Prefixes are unique per org
+  (case-insensitive), and only A–Z/0–9 up to 10 characters are accepted on save, in the
+  UI as well (owner, 2026-10-24). Clients without a valid prefix are referenced by ID or
+  URL. A bare short key means the **project** code, because task identifiers are built on
+  it (owner, 2026-10-24).
 - A member email.
 - The special refs `workspace`, `inbox`, `me` and `changes`.
 
@@ -333,8 +336,10 @@ Report rules:
 - **`attach_file(ref, { storageId } | { inlineText, filename })`** attaches to a task or
   comment through the existing attachment write path. `inlineText` is capped at
   200 KiB, matching Notion.
-- **Read:** `fetch(ref, include: ["files", "attachment_text"])` uses the existing
-  extraction (`attachmentContents`) for PDF, DOCX and text.
+- **Read:** `fetch(ref, include: ["files", "attachment_text"])`. The PDF/DOCX/text
+  extraction (`attachmentContents`) existed only on the closed email-triage branch
+  (c3972ab). It is ported in slice 7 (owner, 2026-10-24); until then the include says
+  extraction is not available.
 - There is no server-side URL download, so no SSRF surface.
 
 ## 11. App-side changes
@@ -445,8 +450,8 @@ The tests for these modules move with them.
 | 3 | `save_tasks` (external refs, checklist `done` / order, `next_assignee`), `save_comments`, `delete`, `idempotencyKey`, attribution `via`, `fetch("changes")` | Email → card with `gmail:<thread>`; a second run updates the same card; a retried call writes once; the activity row shows "via <client>"; the assignee gets the notification; the changes feed shows a teammate's tick and comment text and hides the bot's own writes; a lead card without a project is created |
 | 4 | `save_time_entries`, `timer` | Log and fix time; the timer shows in the app |
 | 5 | `report` (all kinds in §8, including `missing_time` and the extended `client_monthly`) | Numbers match the app screens exactly |
-| 6 | `billing_preview` / `billing_commit` (all actions) | Close a month and generate an invoice from Claude; a stale token is refused |
-| 7 | `save_clients`, `save_projects`, `save_plan`, `save_daily_notes`, `fetch("inbox")` + `mark_read`, files | Each has an example prompt that passes end to end |
+| 6 | `billing_preview` / `billing_commit` (all actions), plus the `invoice` search type | Close a month and generate an invoice from Claude; a stale token is refused |
+| 7 | `save_clients`, `save_projects`, `save_plan`, `save_daily_notes`, the `daily_note` search type, `fetch("inbox")` + `mark_read`, files including the ported attachment extraction | Each has an example prompt that passes end to end |
 | 8 | Settings → Connected apps, help page, final review | Revoke works; docs are done; the full checks pass |
 
 ## 15. Spikes and open facts (resolve in slice 1)
@@ -526,7 +531,7 @@ before changing the PRD. Code, documentation and commit messages stay in English
 | # | Slice | Status | Commits | Review | Notes / deviations |
 |---|---|---|---|---|---|
 | 1 | Auth tracer | **Done** 2026-10-24. End to end: Claude Code connected via CIMD, owner consent with org pick, `fetch(me)` + `fetch(workspace)` returned correct org data (admin role from orgMembers). App UI verified on https with Clerk 7.9.20 | `def14c9` `cffbbd3` `3033410` `b80637f` + fixes `543d1f8` `f6cc62b` `4ccb821` `28ff3f5` `4ecaeb7` | Two independent reviews (standards/security, spec): no blockers or majors. 9 minor fixes done and re-verified (tsc clean, 65 MCP + lookup tests green) | Clerk dev MCP resource `https://localhost:3001/mcp` registered with owner approval (CIMD + aud on). Deviations accepted: https URL, `app/mcp/route.ts`, `generateClerkProtectedResourceMetadata`, `client_id` discriminator, S2 SDK override, workspace refuses instead of clipping, no links in the workspace sheet. |
-| 2 | Search, fetch, references and renderers | Not started | — | — | Depends on slice 1 done |
+| 2 | Search, fetch, references and renderers | Built and reviewed; review fixes in progress | `fff5558` `435999c` `b9ad704` `ab8136e` `8dc3e57` `c8abc6c` | Two reviews: no tenancy/access blocker. One major (Convex 4,096 index-range limit in comment search and batched fetch) plus minors in round 1. Exit prompts verified end to end with the owner's token | Owner decisions: bare key = project, clients as `client:KEY`; prefix A–Z/0–9 ≤10; attachment extraction ported in slice 7. Search additions: `overdue`, `status` = open/any/category, `due_/tracked_/updated_from/to`, `types` default `["task"]`, a filter that doesn't apply is an error. `invoice`/`daily_note` types move to slices 6/7. Comment search relies on `comment_added` activity rows (seeded comments lack them) |
 | 3 | Tasks, comments, delete, idempotency, attribution and changes | Not started | — | — | Depends on slice 2 done |
 | 4 | Time entries and timer | Not started | — | — | Depends on slice 3 done |
 | 5 | Reports | Not started | — | — | Depends on slice 4 done |

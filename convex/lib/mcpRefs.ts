@@ -7,6 +7,7 @@ import { loadTaskForReadOrNull, type TaskAccess } from "../tasks/access";
 import { resolveTaskRef } from "../tasks/lookup";
 import { visibleTimeEntries } from "../timeEntries";
 import { REF_CAP } from "../workspaceRefs";
+import { externalRefOwner } from "./mcpExternalRefs";
 import { parseRef, REF_TABLES, type RefTable } from "../../lib/mcp/refs";
 
 /**
@@ -14,7 +15,9 @@ import { parseRef, REF_TABLES, type RefTable } from "../../lib/mcp/refs";
  * the app's own access rules (I3). The pure parser (lib/mcp/refs.ts)
  * classifies the string; this module finds the record and checks it:
  *
- * - tasks: identifier (live or alias) or ID, readable per tasks/access.ts;
+ * - tasks: identifier (live or alias), ID or an external source ref
+ *   (`gmail:<id>`, via taskExternalRefs in the org — D21), readable per
+ *   tasks/access.ts;
  * - comments: ID, on a task the caller can read;
  * - time entries: ID, visible per `visibleTimeEntries` (members: own only);
  * - projects: ID or project code (a bare short key, case-insensitive);
@@ -27,7 +30,7 @@ import { parseRef, REF_TABLES, type RefTable } from "../../lib/mcp/refs";
  * is ambiguous and returns the candidates; the resolver never guesses.
  *
  * Read budget (Convex: 4,096 index ranges per call): a task ref costs about
- * 5 ranges; a client prefix one bounded range; an email one range plus one
+ * 5 ranges (an external ref one more: its `by_orgId_ref` row); a client prefix one bounded range; an email one range plus one
  * per org member (bounded by REF_CAP), read once per call.
  */
 
@@ -213,6 +216,13 @@ export function createRefResolver(ctx: QueryCtx, auth: AuthContext) {
       case "task": {
         if (!allows("task")) return wrongType("a task key");
         const taskId = await resolveTaskRef(ctx, orgId, ref.identifier);
+        const access = taskId ? await readableTask(taskId) : null;
+        return access ? { ok: true, resolved: { type: "task", access } } : notFound("task");
+      }
+
+      case "external": {
+        if (!allows("task")) return wrongType("an external ref (a task's)");
+        const taskId = await externalRefOwner(ctx, orgId, ref.ref);
         const access = taskId ? await readableTask(taskId) : null;
         return access ? { ok: true, resolved: { type: "task", access } } : notFound("task");
       }

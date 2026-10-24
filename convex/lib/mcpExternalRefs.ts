@@ -3,6 +3,8 @@ import type { MutationCtx, QueryCtx } from "../_generated/server";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { AuthContext } from "./auth";
 import { loadTaskForReadOrNull } from "../tasks/access";
+import { EXTERNAL_REFS_PER_TASK_MAX } from "../tasks/model";
+import { normalizeExternalRef as parseExternalRef } from "../../lib/mcp/refs";
 
 /**
  * External source refs on tasks (docs/prd-mcp.md D21): `gmail:<threadId>`,
@@ -11,30 +13,20 @@ import { loadTaskForReadOrNull } from "../tasks/access";
  * that task; a ref is never moved. Refs are add-only through MCP and go away
  * with their task (tasks/write.ts `deleteTaskRecord`).
  *
- * Read budget: one `by_orgId_ref` range per ref looked up (plus one task
- * read for an owner's label); a task's refs are one `by_taskId` range.
+ * Read budget: one `by_orgId_ref` range plus one task read per ref looked
+ * up; adding refs reads the task's refs once (≤ 101 rows, the per-task cap).
  */
 
 /** Refs one `save_tasks` item may add. */
 export const EXTERNAL_REFS_PER_ITEM_MAX = 20;
 /** Refs listed on a fetched task. */
-export const TASK_EXTERNAL_REFS_SHOWN = 50;
+export const TASK_EXTERNAL_REFS_SHOWN = EXTERNAL_REFS_PER_TASK_MAX;
 
-/** `<source>:<id>`: a source of letters, digits, `-` / `_` (starting with a letter) and an ID without spaces. */
-const EXTERNAL_REF = /^([A-Za-z][A-Za-z0-9_-]{0,31}):(\S{1,256})$/;
-
-/**
- * The canonical form of an external ref (source lowercased, ID kept exactly:
- * source IDs are case-sensitive), or a model-actionable error.
- */
+/** The canonical form of an external ref, or a model-actionable error (lib/mcp/refs.ts). */
 export function normalizeExternalRef(raw: string): string {
-  const match = EXTERNAL_REF.exec(raw.trim());
-  if (!match) {
-    throw new ConvexError(
-      `Invalid external ref "${raw.slice(0, 80)}". Write <source>:<id>, e.g. gmail:18c2f0a1b2c3d4e5 (source: letters, digits, - or _; id: up to 256 characters, no spaces).`,
-    );
-  }
-  return `${match[1].toLowerCase()}:${match[2]}`;
+  const result = parseExternalRef(raw);
+  if (!result.ok) throw new ConvexError(result.error);
+  return result.ref;
 }
 
 /** Normalized, de-duplicated refs of one item. */
@@ -45,13 +37,19 @@ export function normalizeExternalRefs(raw: readonly string[]): string[] {
   return [...new Set(raw.map(normalizeExternalRef))];
 }
 
-/** The task that owns `ref` in the org, or null. */
-export async function externalRefOwner(ctx: QueryCtx, orgId: string, ref: string): Promise<Id<"tasks"> | null> {
-  const row = await ctx.db
+async function refRow(ctx: QueryCtx, orgId: string, ref: string) {
+  return await ctx.db
     .query("taskExternalRefs")
     .withIndex("by_orgId_ref", (q) => q.eq("orgId", orgId).eq("ref", ref))
     .first();
-  return row?.taskId ?? null;
+}
+
+/** The live task that owns `ref` in the org, or null (a row left by a deleted task owns nothing). */
+export async function externalRefOwner(ctx: QueryCtx, orgId: string, ref: string): Promise<Id<"tasks"> | null> {
+  const row = await refRow(ctx, orgId, ref);
+  if (!row) return null;
+  const task = await ctx.db.get(row.taskId);
+  return task && task.orgId === orgId ? task._id : null;
 }
 
 /**
@@ -77,13 +75,29 @@ export async function addExternalRefs(
   now: number,
 ): Promise<number> {
   let added = 0;
+  let count: number | null = null;
   for (const ref of refs) {
-    const owner = await externalRefOwner(ctx, auth.orgId, ref);
-    if (owner === task._id) continue;
-    if (owner !== null) {
-      throw new ConvexError(`${ref} is already on ${await ownerLabel(ctx, auth, owner)}`);
+    const row = await refRow(ctx, auth.orgId, ref);
+    if (row?.taskId === task._id) continue;
+    if (row) {
+      const owner = await ctx.db.get(row.taskId);
+      if (owner && owner.orgId === auth.orgId) {
+        throw new ConvexError(`${ref} is already on ${await ownerLabel(ctx, auth, owner._id)}`);
+      }
+      // Left behind by a deleted task: reclaim it.
+      await ctx.db.delete(row._id);
+    }
+    count ??= (
+      await ctx.db
+        .query("taskExternalRefs")
+        .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
+        .take(EXTERNAL_REFS_PER_TASK_MAX + 1)
+    ).length;
+    if (count >= EXTERNAL_REFS_PER_TASK_MAX) {
+      throw new ConvexError(`A task carries at most ${EXTERNAL_REFS_PER_TASK_MAX} external refs.`);
     }
     await ctx.db.insert("taskExternalRefs", { orgId: task.orgId, ref, taskId: task._id, createdAt: now });
+    count += 1;
     added += 1;
   }
   return added;

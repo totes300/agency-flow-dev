@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseRef, parseRefs, type ParsedRef } from "../refs";
+import { normalizeExternalRef, parseRef, parseRefs, type ParsedRef } from "../refs";
 
 const ORIGIN = "https://localhost:3001";
 const ID = "jd7f3k2m9x8q4w5e6r7t8y9u0i1o2p3a";
@@ -45,6 +45,22 @@ describe("parseRef", () => {
     expect(parsed("client:")).toMatch(/^Invalid client reference/);
   });
 
+  it("parses external source refs as task refs: source lowercased, id exact", () => {
+    expect(parsed("gmail:18C2f0a1")).toEqual({ kind: "external", ref: "gmail:18C2f0a1" });
+    expect(parsed(" Gmail:thread-1#2 ")).toEqual({ kind: "external", ref: "gmail:thread-1#2" });
+    expect(parsed("slack:1729.0042")).toEqual({ kind: "external", ref: "slack:1729.0042" });
+    expect(parsed("gmail: spaced")).toMatch(/^Invalid external ref "gmail: spaced"\. Write <source>:<id>.*see save_tasks externalRefs/);
+    expect(parsed("1bad:x")).toMatch(/^Invalid external ref/);
+  });
+
+  it("reserves client and project as qualifiers, never external-ref sources", () => {
+    expect(parsed("project:ARLO")).toEqual({ kind: "key", key: "ARLO" });
+    expect(parsed("project:A B")).toMatch(/^Invalid project reference/);
+    expect(normalizeExternalRef("client:KONV")).toMatchObject({ ok: false });
+    expect(normalizeExternalRef("Project:x")).toMatchObject({ ok: false });
+    expect(normalizeExternalRef("granola:N1")).toEqual({ ok: true, ref: "granola:N1" });
+  });
+
   it("parses member emails, lowercased", () => {
     expect(parsed("Ada@Konverted.io")).toEqual({ kind: "email", email: "ada@konverted.io" });
   });
@@ -86,7 +102,7 @@ describe("parseRef", () => {
   it("rejects empty and unrecognized refs with a model-actionable message", () => {
     expect(parseRef("   ")).toEqual({ ok: false, input: "", error: "Empty reference." });
     expect(parsed("Arlo website")).toBe(
-      'Unrecognized reference "Arlo website". Use a task key (ARLO-21), project code (ARLO), client prefix (client:KONV), member email, record ID, an Agency Flow link, or "me" / "workspace".',
+      'Unrecognized reference "Arlo website". Use a task key (ARLO-21) or a task\'s external ref (gmail:<threadId>), project code (ARLO), client prefix (client:KONV), member email, record ID, an Agency Flow link, or "me" / "workspace".',
     );
     expect(parsed("PRJ-042-x")).toMatch(/^Unrecognized reference/);
     expect(parsed("abcdefghijklmno")).toMatch(/^Unrecognized reference/); // 11–19 chars: neither key nor ID

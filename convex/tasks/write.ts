@@ -32,6 +32,7 @@ import {
 import { onSubtaskChange } from "./derived";
 import {
   DEFAULT_ORG_TASK_KEY,
+  EXTERNAL_REFS_PER_TASK_MAX,
   PRIORITY,
   categoryOfStatus,
   compareBySortKey,
@@ -801,7 +802,7 @@ export async function updateTask(
   access: TaskAccess,
   patch: TaskPatch,
   options: { now?: number } = {},
-): Promise<{ changed: TaskField[] }> {
+): Promise<{ changed: TaskField[]; assigneesChanged: boolean }> {
   const { task, auth } = access;
   const { orgId, userId } = auth;
   const now = options.now ?? Date.now();
@@ -952,7 +953,7 @@ export async function updateTask(
   }
 
   assertCanEditFields(access, [...changed]);
-  if (changed.size === 0 && nextAssignees === undefined) return { changed: [] };
+  if (changed.size === 0 && nextAssignees === undefined) return { changed: [], assigneesChanged: false };
 
   // ── Writes ──
   await ctx.db.patch(task._id, { ...set, updatedAt: now });
@@ -1031,7 +1032,7 @@ export async function updateTask(
     await createNotifications(ctx, { orgId, actorId: userId, task: updated, events: notifications });
   }
 
-  return { changed: [...changed] };
+  return { changed: [...changed], assigneesChanged: nextAssignees !== undefined };
 }
 
 // ─── Archive / restore (T8) ──────────────────────────────────────────────────
@@ -1137,11 +1138,13 @@ export async function deleteTaskRecord(ctx: MutationCtx, task: Doc<"tasks">): Pr
     .withIndex("by_taskId_userId", (q) => q.eq("taskId", task._id))
     .collect();
   for (const state of userStates) await ctx.db.delete(state._id);
-  // External source refs (MCP, D21): a deleted task frees its refs.
+  // External source refs (MCP, D21): a deleted task frees its refs. Capped
+  // per task on insert; the bounded read keeps a delete possible even past
+  // the cap (a leftover row points at no task and is reclaimed on reuse).
   const externalRefs = await ctx.db
     .query("taskExternalRefs")
     .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
-    .collect();
+    .take(EXTERNAL_REFS_PER_TASK_MAX * 10);
   for (const ref of externalRefs) await ctx.db.delete(ref._id);
   await ctx.db.delete(task._id);
 }

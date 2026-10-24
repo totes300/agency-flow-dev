@@ -15,7 +15,11 @@
  *   through `taskIdentifierAliases` in Convex);
  * - a bare short key: the project code (`ARLO`), case-insensitive — task
  *   identifiers are built on it (owner, 2026-10-24);
- * - a client prefix written `client:KONV`, case-insensitive;
+ * - a client prefix written `client:KONV`, case-insensitive (`project:ARLO`
+ *   qualifies a project code the same way);
+ * - an external source ref `<source>:<id>` (docs/prd-mcp.md D21), e.g.
+ *   `gmail:18c2f0a1b2c3d4e5`: the task that carries it. `client` and
+ *   `project` are qualifiers, never sources;
  * - a member email;
  * - a Convex record ID.
  */
@@ -40,6 +44,8 @@ export type ParsedRef =
   | { kind: "client_key"; key: string }
   /** A member email, lowercased. */
   | { kind: "email"; email: string }
+  /** An external source ref (D21), canonical: source lowercased, ID as typed. */
+  | { kind: "external"; ref: string }
   /** A record ID; `table` is known when it came from a link. */
   | { kind: "id"; id: string; table?: RefTable };
 
@@ -49,11 +55,33 @@ export type RefParseResult =
 
 /** The forms a reference may take, for model-facing errors and descriptions. */
 export const REF_FORMS =
-  'a task key (ARLO-21), project code (ARLO), client prefix (client:KONV), member email, record ID, an Agency Flow link, or "me" / "workspace"';
+  'a task key (ARLO-21) or a task\'s external ref (gmail:<threadId>), project code (ARLO), client prefix (client:KONV), member email, record ID, an Agency Flow link, or "me" / "workspace"';
+
+/** `<source>:<id>`: a source of letters, digits, `-` / `_` (starting with a letter) and an ID without spaces. */
+const EXTERNAL_REF = /^([A-Za-z][A-Za-z0-9_-]{0,31}):(\S{1,256})$/;
+/** Ref qualifiers, so never external-ref sources. */
+export const RESERVED_EXTERNAL_SOURCES = ["client", "project"] as const;
+
+export const EXTERNAL_REF_FORMAT =
+  "<source>:<id>, e.g. gmail:18c2f0a1b2c3d4e5 (source: letters, digits, - or _; id: up to 256 characters, no spaces; client and project are reserved)";
+
+/**
+ * The canonical form of an external source ref (D21): the source
+ * lowercased, the ID kept exactly (source IDs are case-sensitive).
+ */
+export function normalizeExternalRef(raw: string): { ok: true; ref: string } | { ok: false; error: string } {
+  const match = EXTERNAL_REF.exec(raw.trim());
+  const source = match?.[1].toLowerCase();
+  if (!match || !source || (RESERVED_EXTERNAL_SOURCES as readonly string[]).includes(source)) {
+    return { ok: false, error: `Invalid external ref "${raw.trim().slice(0, 80)}". Write ${EXTERNAL_REF_FORMAT}.` };
+  }
+  return { ok: true, ref: `${source}:${match[2]}` };
+}
 
 /** Short keys: 1–10 letters or digits, the client prefix format (project codes are a subset). */
 const KEY_PATTERN = CLIENT_PREFIX_PATTERN;
 const CLIENT_QUALIFIER = /^client:(.*)$/i;
+const PROJECT_QUALIFIER = /^project:(.*)$/i;
 /** Convex IDs are long alphanumeric strings; never confused with a short key. */
 const ID_PATTERN = /^[A-Za-z0-9]{20,64}$/;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -158,6 +186,20 @@ export function parseRef(raw: string, options: { appOrigin?: string } = {}): Ref
           input,
           error: `Invalid client reference "${input}". Client prefixes are 1–10 letters or digits (client:KONV); clients without one are referenced by ID or link.`,
         };
+  }
+  const project = PROJECT_QUALIFIER.exec(input);
+  if (project) {
+    const key = project[1].trim();
+    return KEY_PATTERN.test(key)
+      ? { ok: true, input, ref: { kind: "key", key } }
+      : { ok: false, input, error: `Invalid project reference "${input}". Project codes are 1–10 letters or digits (project:ARLO).` };
+  }
+  if (input.includes(":")) {
+    // Any other `x:y` is an external source ref (D21) — or a mistyped one.
+    const external = normalizeExternalRef(input);
+    return external.ok
+      ? { ok: true, input, ref: { kind: "external", ref: external.ref } }
+      : { ok: false, input, error: `${external.error} External refs name the task that carries them (see save_tasks externalRefs).` };
   }
   if (EMAIL_PATTERN.test(input)) {
     return { ok: true, input, ref: { kind: "email", email: input.toLowerCase() } };

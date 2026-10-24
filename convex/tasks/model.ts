@@ -335,6 +335,9 @@ export function completedAtAfterTransition(input: {
   return now;
 }
 
+/** External source refs one task may carry (MCP, docs/prd-mcp.md D21). */
+export const EXTERNAL_REFS_PER_TASK_MAX = 100;
+
 /**
  * Manual order (fractional `sortKey`s compare bytewise), creation as the
  * tiebreak: the list and sub-task checklist order.

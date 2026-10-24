@@ -1,4 +1,5 @@
 import { ConvexError } from "convex/values";
+import type { Auth, UserIdentity } from "convex/server";
 import { internalQuery, QueryCtx, MutationCtx } from "../_generated/server";
 import { Doc, Id } from "../_generated/dataModel";
 
@@ -24,6 +25,49 @@ export function validateStringLength(
   }
 }
 
+/**
+ * The OAuth client an identity was issued to, or null for an app session.
+ *
+ * Token-surface discriminator (docs/prd-mcp.md §5.2, I4): Clerk OAuth access
+ * tokens (RFC 9068, `typ: at+jwt`) always carry a `client_id` claim and are
+ * accepted by the `customJwt` provider in auth.config.ts (aud = MCP resource
+ * URL). The app's session tokens (Clerk "convex" JWT template, aud "convex")
+ * carry no `client_id`. Both share the Clerk issuer, so the issuer alone
+ * cannot tell them apart.
+ */
+export function oauthClientIdOf(identity: UserIdentity): string | null {
+  const clientId = identity.client_id;
+  return typeof clientId === "string" && clientId.length > 0 ? clientId : null;
+}
+
+/**
+ * The caller's identity when it is an app session token; null when there is
+ * none or when it is an OAuth access token (I4: OAuth tokens may only call
+ * `convex/mcp/*`). Fails closed: any `client_id` claim, even a malformed one,
+ * keeps the identity off the UI surface. Every UI-side identity read goes
+ * through here; `getMcpAuthContext` is the only other reader.
+ */
+export async function getSessionIdentity(ctx: { auth: Auth }): Promise<UserIdentity | null> {
+  const identity = await ctx.auth.getUserIdentity();
+  if (!identity || identity.client_id !== undefined) return null;
+  return identity;
+}
+
+/**
+ * The caller's membership row in `orgId`, keyed by Clerk user id. The role
+ * source for `getMcpAuthContext` (D12); session tokens carry their own role.
+ */
+export async function findOrgMembership(
+  ctx: QueryCtx | MutationCtx,
+  orgId: string,
+  clerkUserId: string,
+): Promise<Doc<"orgMembers"> | null> {
+  return await ctx.db
+    .query("orgMembers")
+    .withIndex("by_orgId_clerkUserId", (q) => q.eq("orgId", orgId).eq("clerkUserId", clerkUserId))
+    .unique();
+}
+
 /** Extract orgId and orgRole from a Clerk JWT identity. */
 function parseOrgFromIdentity(identity: Record<string, unknown>): {
   orgId: string | undefined;
@@ -41,11 +85,12 @@ function parseOrgFromIdentity(identity: Record<string, unknown>): {
  * Call at the start of every protected query/mutation.
  * Extracts userId, orgId, orgRole from the Clerk JWT + Convex users table.
  * Throws if not authenticated, no org selected, or user not synced.
+ * OAuth access tokens are refused (I4); MCP functions use getMcpAuthContext.
  */
 export async function getAuthContext(
   ctx: QueryCtx | MutationCtx
 ): Promise<AuthContext> {
-  const identity = await ctx.auth.getUserIdentity();
+  const identity = await getSessionIdentity(ctx);
   if (!identity) {
     throw new ConvexError("Not authenticated");
   }
@@ -78,11 +123,12 @@ export async function getAuthContext(
 /**
  * Like getAuthContext but returns null instead of throwing.
  * Use for queries that need graceful degradation (e.g. optional org context).
+ * OAuth access tokens get null (I4).
  */
 export async function getAuthContextOptional(
   ctx: QueryCtx | MutationCtx
 ): Promise<{ orgId: string; user: Doc<"users"> } | null> {
-  const identity = await ctx.auth.getUserIdentity();
+  const identity = await getSessionIdentity(ctx);
   if (!identity) return null;
 
   const { orgId } = parseOrgFromIdentity(identity as Record<string, unknown>);

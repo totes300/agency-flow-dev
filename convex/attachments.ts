@@ -1,6 +1,6 @@
 import { v, ConvexError } from "convex/values";
 import { query, mutation, action } from "./_generated/server";
-import { getAuthContext } from "./lib/auth";
+import { getAuthContext, getSessionIdentity } from "./lib/auth";
 import { loadTaskForReadOrNull, loadTaskForWrite } from "./tasks/access";
 import { isMimeTypeBlocked } from "./lib/content_validation";
 import { isSafeUrl } from "./lib/url";
@@ -68,7 +68,7 @@ const MAX_REUPLOAD_SIZE = 10 * 1024 * 1024; // 10MB
 export const reuploadFromUrl = action({
   args: { url: v.string() },
   handler: async (ctx, { url }) => {
-    const identity = await ctx.auth.getUserIdentity();
+    const identity = await getSessionIdentity(ctx);
     if (!identity) throw new ConvexError("Not authenticated");
 
     // SSRF protection: block private/internal network destinations

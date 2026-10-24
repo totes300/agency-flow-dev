@@ -202,7 +202,10 @@ const SEARCH_TYPE_PLURAL: Record<SearchType, string> = {
 /** Model-actionable problems with the input itself, before any Convex call. */
 export function searchInputProblem(input: SearchInput, types: readonly SearchType[], appOrigin: string): string | null {
   for (const [filter, value] of Object.entries(input) as Array<[keyof SearchInput, unknown]>) {
-    if (value === undefined || filter === "types" || filter === "cursor" || filter === "limit") continue;
+    // `false` flags (mine, overdue) narrow nothing, so they apply everywhere.
+    if (value === undefined || value === false || filter === "types" || filter === "cursor" || filter === "limit") {
+      continue;
+    }
     const unsupported = types.filter((t) => !SEARCH_FILTERS[t].includes(filter));
     if (unsupported.length > 0) {
       return `Filter "${filter}" does not apply to ${unsupported.join(", ")}. Search those types separately, or drop the filter.`;
@@ -210,7 +213,7 @@ export function searchInputProblem(input: SearchInput, types: readonly SearchTyp
   }
   for (const filter of ["assignee", "client", "project"] as const) {
     const value = input[filter];
-    if (value === undefined || (filter === "assignee" && value.trim() === "me")) continue;
+    if (value === undefined) continue;
     const parsed = parseRef(value, { appOrigin });
     if (!parsed.ok) return `${filter}: ${parsed.error}`;
   }

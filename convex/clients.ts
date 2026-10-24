@@ -1,7 +1,13 @@
 import { v, ConvexError } from "convex/values";
 import { query, mutation } from "./_generated/server";
 import { getAuthContext, requireAdmin, validateStringLength } from "./lib/auth";
-import { generateClientPrefix, ensureUniquePrefix } from "./lib/helpers";
+import {
+  assertClientPrefixAvailable,
+  clientPrefixKey,
+  effectiveClientPrefix,
+  ensureUniquePrefix,
+  generateClientPrefix,
+} from "./lib/helpers";
 import { currencyValidator } from "./lib/validators";
 
 // ─── Queries ────────────────────────────────────────────────────────────────────
@@ -144,9 +150,16 @@ export const create = mutation({
       currency = orgSettings?.defaultCurrency ?? "USD";
     }
 
-    // Client prefix: auto-generate or use provided, then dedup
-    const rawPrefix = args.prefix?.trim() || generateClientPrefix(name);
-    const prefix = await ensureUniquePrefix(ctx, orgId, rawPrefix);
+    // Client prefix: a typed prefix must be free (case-insensitive, never
+    // rewritten); a generated one is made free with a numeric suffix.
+    const typedPrefix = args.prefix?.trim();
+    let prefix: string;
+    if (typedPrefix) {
+      await assertClientPrefixAvailable(ctx, orgId, typedPrefix);
+      prefix = typedPrefix;
+    } else {
+      prefix = await ensureUniquePrefix(ctx, orgId, generateClientPrefix(name));
+    }
 
     const now = Date.now();
     return await ctx.db.insert("clients", {
@@ -216,9 +229,14 @@ export const update = mutation({
     if (args.prefix !== undefined) {
       const pfx = args.prefix.trim();
       if (pfx) {
-        updates.prefix = await ensureUniquePrefix(
-          ctx, orgId, pfx, args.id.toString(),
-        );
+        // The edit form re-sends the current prefix with every save: an
+        // unchanged prefix (case-insensitively) is not re-checked, so data
+        // that already holds a duplicate never blocks editing other fields.
+        const current = effectiveClientPrefix(client);
+        if (current === null || clientPrefixKey(current) !== clientPrefixKey(pfx)) {
+          await assertClientPrefixAvailable(ctx, orgId, pfx, args.id);
+        }
+        updates.prefix = pfx;
       }
     }
 

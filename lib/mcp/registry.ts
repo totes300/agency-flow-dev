@@ -107,9 +107,9 @@ const fetchTool: McpTool = {
     const sections: string[] = [];
     let failures = 0;
     for (const parsed of parseRefs(refs)) {
-      if (!parsed.ok) {
+      if (!parsed.ok || parsed.ref.kind !== "special") {
         failures += 1;
-        sections.push(`Error: ${parsed.error}`);
+        sections.push(`Error: ${parsed.ok ? `Unsupported reference "${parsed.input}".` : parsed.error}`);
         continue;
       }
       try {

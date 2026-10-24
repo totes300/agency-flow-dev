@@ -1,6 +1,7 @@
 # PRD: Agency Flow MCP — Drive the App From Claude and Codex
 
-> **Status:** Draft, decisions locked through grilling on 2026-10-24 · Owner: Adam
+> **Status:** Draft, decisions locked through grilling on 2026-10-24 · Owner: Adam ·
+> Revised the same day with feedback from the owner's working agent (Grok Bot), D21–D29.
 >
 > **Scope:** a remote MCP server that lets every Agency Flow user operate the app from an
 > external agent (Claude: claude.ai, Desktop, Claude Code; OpenAI Codex), modelled on
@@ -46,6 +47,12 @@ billing, month close). Agents take over the input work.
   and prompts are not needed for V1.
 - Read-only or other scope tiers. There is one scope (D11).
 - Changing the worksheet AI summaries or the BYOK AI key. Both stay as they are.
+- Outbound webhooks. V2: they will be a signal next to the changes feed (D22), not a
+  replacement for it.
+- API keys / personal access tokens. OAuth refresh tokens do not expire (§5.1), so
+  unattended agents keep working.
+- New task fields for agents (next step, client summary, draft flag). D24, D25 and D27
+  cover these needs with what already exists.
 
 ## 3. Locked decisions (owner, 2026-10-24)
 
@@ -58,19 +65,28 @@ billing, month close). Agents take over the input work.
 | D5 | **Billing writes use preview → commit.** `billing_preview` returns the exact effect plus a commit token. `billing_commit` runs only with that token, and only if nothing in the preview's inputs has changed since (§9). |
 | D6 | **Deletion:** the agent may delete whatever the user can delete in the app, through the same mutations. These tools carry `destructiveHint`. |
 | D7 | **Tool shape:** reads are generic and resource-oriented (`search`, `fetch`). Writes are batched commands per aggregate. Reports go through one `report(kind)` tool. All schemas and descriptions are generated from one registry (§6). |
-| D8 | **References follow the Notion pattern:** IDs or URLs, never fuzzy names. On top of that we accept our existing short keys: task `ARLO-21` (with aliases), project code `ARLO`, member email (§7). |
+| D8 | **References follow the Notion pattern:** IDs or URLs, never fuzzy names. On top of that we accept our existing short keys: task `ARLO-21` (with aliases), project code `ARLO`, client `prefix` (`KONV`), member email (§7). |
 | D9 | **Reference data** (statuses, categories, labels, members, project codes) comes from `fetch("workspace")`. The **inbox** comes from `fetch("inbox")`. Neither needs its own tool, and neither is put in tool descriptions. |
 | D10 | **Output:** compact markdown with short references and app deep links. Lists default to a limit of 25 with a cursor. An `include` parameter controls depth. Reports are markdown tables with an app link. |
 | D11 | **Auth:** Clerk is the OAuth authorization server. Org selection happens on the consent screen, so the token carries `org_id`. One connection is bound to one org. There is one scope. |
 | D12 | **Role** is always read from `orgMembers` on every call, never from the token. Clerk OAuth tokens carry no org role. |
 | D13 | **Hosting:** a Next.js route on Vercel using `mcp-handler` and `@clerk/mcp-tools`, which is Clerk's official path. The route only adapts the protocol. All logic lives in Convex. |
 | D14 | **Convex validates the OAuth JWT itself**, as a second auth provider. The fallback, if spike S1 fails, is §5.4. |
-| D15 | **Attribution:** activity rows written through MCP show the real user plus a quiet "via Claude" / "via Codex" marker. |
+| D15 | **Attribution:** activity rows written through MCP show the real user plus a quiet "via <OAuth client name>" marker, for example "via Claude", "via Codex" or "via Grok Bot". The row also stores the OAuth `clientId`, which the changes feed uses for `exclude_self` (D22). |
 | D16 | **Notifications:** MCP writes trigger exactly the notifications the same write triggers in the app. There is no MCP-specific branch. |
 | D17 | **Settings → Connected apps:** shows each client, when it connected and when it was last used, with a Revoke button. |
 | D18 | **File upload follows the Notion pattern on Convex storage:** a tool returns a Convex upload URL, the client POSTs the bytes, and a write tool attaches the resulting `storageId`. Small text content can also be passed inline. The server never downloads a URL. |
 | D19 | **Removal comes first, in its own PR (slice 0).** The in-app agent and email triage are deleted completely. PRs #14 and #15 (email-triage) are closed without merging. Worksheet AI and BYOK stay. |
 | D20 | **Delivery:** one feature branch, built in slices (§14), with one PR to `main` at the end. Slice 0 is the exception and goes in its own PR. |
+| D21 | **External source refs on tasks.** Examples: `gmail:<threadId>`, `granola:<noteId>`, `slack:<ts>`. A task can carry many. A ref belongs to at most one task in the org. A `save_tasks` item with no `ref` but a known `externalRefs` entry updates that task instead of creating a new one, so duplicates are impossible by construction. Adding a ref that another task already owns is an error that names the owner, for example `gmail:abc is already on ARLO-21`. It is never moved silently. `search` filters by `external_ref`. |
+| D22 | **Changes feed:** `fetch("changes", { cursor, types[], exclude_self })`, read from `activityLog` (`by_org` index). Each change is one line, for example `ARLO-21 · Csaba · checklist "szűrők" ✓`. The opaque cursor means nothing is processed twice. `exclude_self` drops rows written by the calling OAuth client. `search` also accepts `updated_since`. Webhooks are V2. |
+| D23 | **Idempotency:** every write tool accepts an optional `idempotencyKey`. A repeated call with the same key (same user and org, kept 24 h) returns the first result. The check runs in the same transaction as the write. |
+| D24 | **Checklist = sub-tasks.** `save_tasks` creates and ticks items in one call (`done: true` means the project's first completed status) and orders them with `after` / `before` refs (fractional `sortKey`). `fetch` lists them under the parent. The "next step" is the first open sub-task and its assignee. `search` filters on it with `next_assignee`. |
+| D25 | **Client summaries are written by the agent from raw material.** For each task, `report(kind="client_monthly")` returns the title, status, deep link, minutes, time-entry notes and the closing comment. The server makes no LLM call and stores no new field. A `missing_time` report kind lists Review/Done tasks that have no time entries. |
+| D26 | **Unattended access is OAuth only.** Clerk refresh tokens do not expire, so a client that refreshes keeps working without the user present. API keys were considered and rejected for V1. |
+| D27 | **No draft flag.** An agent that wants a card not yet visible to colleagues creates it unassigned in a Backlog status, so no notification fires until someone assigns it. D3 stands. |
+| D28 | **Tasks without a client (leads):** `project` is optional in `save_tasks`. The data model already allows it (`tasks.projectId` is optional): such a task gets the org-level identifier key, and its client is empty because the client always follows the project. Time entries require a project, so a lead that needs logged time goes under an ordinary "Leads" client with a non-billable "Leads" project. That is a data convention, not code. When the lead converts, moving the task to the real project keeps the old identifier as an alias. There is no automatic Inbox project. |
+| D29 | **Comment text in the changes feed:** `comment_added` rows in `fetch("changes")` include the comment's plain text, capped at 500 characters with "…" and the comment ref when longer. Follow-up checks can then read what colleagues wrote without fetching every card. Turn it off with `include_text: false`. |
 
 ## 4. Architecture
 
@@ -109,13 +125,16 @@ Claude / Codex ──Streamable HTTP + Bearer (Clerk OAuth JWT)──▶ Next.js
 - **The `*ForAuth` pattern already exists** and is the reuse layer, including:
   - `listClientsForAuth`, `listProjectsForAuth`, `listOrgMembersForAuth`;
   - `getWorkspaceRefsForAuth`;
-  - `findTasksForAuth` and `resolveTaskRef` (in `convex/tasks/agent.ts`);
-  - `timeByMemberForAuth` and the other `agentReports` cores, plus `agentReportCore`;
-  - the `agentReads` bundle and attachment readers;
+  - `findTasks`, `getTaskDetail`, `resolveTask` and `resolveTaskRef` (in
+    `convex/tasks/lookup.ts`);
+  - the report collectors in `convex/reports.ts` and the pure layer
+    `convex/lib/reportCore.ts`;
+  - `lib/reports/views.ts` (report flatteners) and `lib/task-lookup.ts`;
   - `getMonthlyReportForAuth`, `getCloseQueueForAuth`, `getInvoiceForAuth`;
   - `projectOverviewForAuth`.
 
-  Slice 0 must keep these and move or rename them out of `agent*` files (§12).
+  Slice 0 (PR #16, merged) already moved these out of the `agent*` files under the
+  names above.
 
 ## 5. Auth and tenancy
 
@@ -133,6 +152,8 @@ Claude / Codex ──Streamable HTTP + Bearer (Clerk OAuth JWT)──▶ Next.js
     allows, see S3).
   - `getMcpAuthContext` re-checks membership on every call, so removing a user from
     the org cuts access immediately.
+  - Refresh tokens do not expire, so unattended agents keep working as long as their
+    client refreshes (D26).
 - **Discovery:**
   - `/.well-known/oauth-protected-resource/mcp` is served by
     `protectedResourceHandlerClerk`.
@@ -188,9 +209,9 @@ needs fewer calls.
 
 | Tool | Annotations | Purpose |
 |---|---|---|
-| `search` | read-only | Text query plus structured filters: `types[]` (task, project, client, member, time_entry, invoice, daily_note, comment), assignee, status, label, client, project, date range (due / tracked / updated), `mine`, `cursor`, `limit`. Returns compact rows with references. |
-| `fetch` | read-only | `refs[]` (up to 25) → markdown detail. `include[]` controls depth (subtasks, comments, activity, time, files, attachment_text). Special refs: `workspace`, `inbox`, `me`. |
-| `save_tasks` | write | Batch. An item without `ref` creates a task, an item with `ref` patches it. Fields: title, description (markdown), project, parent, status, assignees, labels, priority, start/due date, estimate, category. Runs `tasks/write.ts`. |
+| `search` | read-only | Text query plus structured filters: `types[]` (task, project, client, member, time_entry, invoice, daily_note, comment), assignee, status, label, client, project, date range (due / tracked / updated), `updated_since`, `external_ref` (D21), `next_assignee` (D24), `mine`, `cursor`, `limit`. Returns compact rows with references. |
+| `fetch` | read-only | `refs[]` (up to 25) → markdown detail. `include[]` controls depth (subtasks, comments, activity, time, files, attachment_text). Special refs: `workspace`, `inbox`, `me`, and `changes` with `{ cursor, types[], exclude_self, include_text }` (D22, D29). |
+| `save_tasks` | write | Batch. An item without `ref` creates a task, unless one of its `externalRefs` already belongs to a task, in which case it updates that task (D21). An item with `ref` patches it. Fields: title, description (markdown), project (optional, D28), parent, status, `done`, `after` / `before` (order), assignees, labels, priority, start/due date, estimate, category, `externalRefs` (add-only). Runs `tasks/write.ts`. |
 | `save_comments` | write | Batch create, or edit your own comment. Mentions are written as `@email`. |
 | `save_time_entries` | write | Batch create/patch of time entries (task, date, minutes, note, category). |
 | `timer` | write | `start(task)`, `stop`, `status`. |
@@ -212,6 +233,11 @@ Rules for every tool:
   Use search to find tasks."` Ambiguity always returns candidates. The tool never guesses.
 - **Write tools return** the affected references and deep links, not full records. The
   agent can `fetch` if it needs more.
+- **Every write tool** accepts an optional `idempotencyKey` (D23). It is stored in an
+  `mcpIdempotency` table (orgId, userId, key, result, createdAt; 24 h TTL by cron) and
+  checked in the same mutation as the write.
+- **Keeping the source on the card:** attach the original email or note with
+  `attach_file(ref, { inlineText, filename: "source.md" })`. No special field is needed.
 
 ## 7. References and output format
 
@@ -220,11 +246,12 @@ Rules for every tool:
 - An app URL, so a pasted link works.
 - A task identifier `KEY-N`. Old identifiers resolve through `taskIdentifierAliases`.
 - A project `code`.
+- A client `prefix` (`KONV`). Prefixes become unique per org when set; clients without
+  one are referenced by ID or URL.
 - A member email.
-- The special refs `workspace`, `inbox` and `me`.
+- The special refs `workspace`, `inbox`, `me` and `changes`.
 
-Clients have no short key, so they are referenced by ID or URL (both appear in
-`fetch("workspace")`). One parser (`lib/mcp/refs.ts`, pure, unit-tested) turns any
+All keys appear in `fetch("workspace")`. One parser (`lib/mcp/refs.ts`, pure, unit-tested) turns any
 input into a typed reference. Convex resolves and ownership-checks it (I3).
 
 **Output:**
@@ -248,7 +275,8 @@ the same self-scope and money stripping as in the app.
 |---|---|
 | `timesheet` | `timesheets.collectTimesheetData` + `timesheetPivot` |
 | `time_by_member` | `timeByMemberForAuth` |
-| `client_monthly` | `clientMonthlySummaryForAuth` |
+| `client_monthly` | `clientMonthlySummaryForAuth`, extended per task with status, deep link, minutes, time-entry notes and the closing comment (D25) |
+| `missing_time` | new: Review/Done tasks in the period with no time entries (D25) |
 | `project_overview` | `projectOverviewForAuth` / `getProjectSummaryForAuth` |
 | `project_monthly` | `projectMonthlyBreakdownForAuth` |
 | `retainer_statement` | `getMonthlyReportForAuth` / `getRetainerDataForAuth` |
@@ -299,9 +327,14 @@ Report rules:
 ## 11. App-side changes
 
 - **Attribution (D15):** add an optional `via` field on `activityLog` (and on comments
-  where shown): `{ kind: "mcp", clientName }`. The UI renders a muted "via Claude" next
-  to the actor. `clientName` comes from the Clerk OAuth application name for
-  `client_id`.
+  where shown): `{ kind: "mcp", clientId, clientName }`. The UI renders a muted
+  "via <clientName>" next to the actor. `clientName` comes from the Clerk OAuth
+  application name for `client_id`.
+- **External refs (D21):** a new `taskExternalRefs` table (orgId, ref, taskId, createdAt)
+  with indexes `by_orgId_ref` (unique lookup) and `by_taskId`. `fetch` shows a task's
+  refs. The drawer may list them later; that is not V1.
+- **Client prefix uniqueness (§7):** saving a client with a prefix another client
+  already uses is refused, in the UI as well as through MCP.
 - **Connected apps (D17):** a Settings section listing the user's OAuth grants (Clerk
   Backend API): client, connected-at and last-used, with Revoke. Last-used is stamped
   by `getMcpAuthContext`, throttled to once per hour per client.
@@ -312,6 +345,9 @@ Report rules:
   three example prompts.
 
 ## 12. Slice 0 — removal PR (separate PR, lands first)
+
+> **Done:** PR #16, merged 2026-10-24. `main` never contained `convex/email`; that code
+> lived only on the closed email-triage branches. The list below is the original scope.
 
 **Keep, but move out of `agent*` names:**
 - the `*ForAuth` cores in `agentReads.ts`, `agentReports.ts` and
@@ -368,7 +404,15 @@ The tests for these modules move with them.
     refused; a removed member is refused;
   - I2/I3 cross-org references return not-found;
   - batch atomicity (I5);
-  - billing commit refused after a data change.
+  - billing commit refused after a data change;
+  - external refs: upsert hits the existing task; a ref owned by another task fails with
+    that task's identifier; refs from another org never match;
+  - an idempotency-key replay returns the first result and writes nothing;
+  - the changes feed: cursor resumes exactly, `exclude_self` drops the caller's rows,
+    comment rows carry capped text, and comments on tasks the caller cannot read never
+    appear;
+  - a task created without a project gets the org identifier key and no client;
+  - `next_assignee` follows sub-task order.
 - **Protocol:**
   - the MCP Inspector against a preview deployment;
   - a 401 + `WWW-Authenticate` check;
@@ -376,7 +420,7 @@ The tests for these modules move with them.
 - **End-to-end (manual, every slice):**
   - connect from Claude Desktop and from Codex CLI against dev;
   - run the slice's example prompts;
-  - verify the result in the app UI, including "via Claude" and notifications.
+  - verify the result in the app UI, including "via <client>" and notifications.
 
 ## 14. Slices (feature branch `mcp`, one PR at the end)
 
@@ -384,10 +428,10 @@ The tests for these modules move with them.
 |---|---|---|
 | 0 | Removal PR (§12) | Merged to `main` separately |
 | 1 | **Auth tracer:** Clerk upgrade (≥ 7.2.3), OAuth app setup, `.well-known` routes, route skeleton, `getMcpAuthContext`, second Convex provider (S1), `fetch("me")` and `fetch("workspace")` | Claude Desktop and Codex connect, pick an org and get the workspace |
-| 2 | `search` + `fetch` (tasks, projects, clients, members, comments, time) + reference parser + renderers | "What's overdue for me?" and "show ARLO-21 with comments" |
-| 3 | `save_tasks`, `save_comments`, `delete` + attribution `via` | Create, assign and comment from a pasted email; the activity row shows "via Claude"; the assignee gets the notification |
+| 2 | `search` + `fetch` (tasks, projects, clients, members, comments, time) + reference parser (client prefix included) + renderers | "What's overdue for me?" and "show ARLO-21 with comments" |
+| 3 | `save_tasks` (external refs, checklist `done` / order, `next_assignee`), `save_comments`, `delete`, `idempotencyKey`, attribution `via`, `fetch("changes")` | Email → card with `gmail:<thread>`; a second run updates the same card; a retried call writes once; the activity row shows "via <client>"; the assignee gets the notification; the changes feed shows a teammate's tick and comment text and hides the bot's own writes; a lead card without a project is created |
 | 4 | `save_time_entries`, `timer` | Log and fix time; the timer shows in the app |
-| 5 | `report` (all kinds in §8) | Numbers match the app screens exactly |
+| 5 | `report` (all kinds in §8, including `missing_time` and the extended `client_monthly`) | Numbers match the app screens exactly |
 | 6 | `billing_preview` / `billing_commit` (all actions) | Close a month and generate an invoice from Claude; a stale token is refused |
 | 7 | `save_clients`, `save_projects`, `save_plan`, `save_daily_notes`, `fetch("inbox")` + `mark_read`, files | Each has an example prompt that passes end to end |
 | 8 | Settings → Connected apps, help page, final review | Revoke works; docs are done; the full checks pass |

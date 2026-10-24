@@ -467,3 +467,90 @@ The tests for these modules move with them.
 - Notion MCP tools — developers.notion.com/docs/mcp-supported-tools; design notes —
   notion.com/blog/notions-hosted-mcp-server-an-inside-look (2025-07-15)
 - Convex HTTP actions — docs.convex.dev/functions/http-actions
+
+## 17. Execution and resume protocol
+
+Resume with: **Continue the MCP build per docs/prd-mcp.md §17.**
+
+This table is the single source of truth for execution progress. Slice 0 is done
+(PR #16). Work strictly in order, one slice at a time, on `mcp` in this checkout;
+no worktrees, extra branches, pushes or PRs before the final owner gate. Preserve
+all unrelated working-tree changes.
+
+For each slice:
+1. Re-read its §14 row, locked decisions and §13 tests; record a short file/reuse/test plan.
+2. Delegate implementation with a complete, self-contained brief when agents are
+   available. Enforce I1–I5; reuse existing domain cores. Read installed Next.js docs
+   before route work and version-matched Clerk/Convex sources before API work.
+3. Make small logical commits. Independently review the full diff from the slice's
+   starting commit for standards and exact spec coverage. Challenge findings, fix
+   confirmed issues and repeat review until clean.
+4. Run `npx tsc --noEmit`, touched tests and `npm run build` when routes change.
+   Deploy backend changes to shared dummy-data dev with `npx convex dev --once`.
+   Local checks are the gate; do not wait for CI or previews. The known three
+   timestamp-test failures and existing untouched lint errors are not slice work.
+5. After owner setup, connect Codex to `http://localhost:3001/mcp`, run the slice's
+   tools/example prompts and verify observable effects in the app. Record actual
+   outputs and clearly distinguish tested, failed and unverified behavior.
+6. Update this table with commits, independent review and deviations; append one
+   line to `project_mcp_direction.md` for each finished slice. Report 2–4 lines in
+   Hungarian and continue immediately to the next slice.
+
+Stop for owner approval before Clerk configuration changes (development only),
+one-time owner consent/client setup, spike results changing the plan, unsettled
+questions or contradictions with locked decisions, and the final push/PR after
+slice 8. Show the concrete change first; ask short numbered questions with 2–3
+options and the recommendation first. A MUST deviation requires owner approval
+before changing the PRD. Code, documentation and commit messages stay in English.
+
+| # | Slice | Status | Commits | Review | Notes / deviations |
+|---|---|---|---|---|---|
+| 1 | Auth tracer | Planning — owner configuration gate | — | Pending implementation | Start: `5dc9411`. Development discovery checked; CIMD/DCR not advertised. See plan below. |
+| 2 | Search, fetch, references and renderers | Not started | — | — | Depends on slice 1 done |
+| 3 | Tasks, comments, delete, idempotency, attribution and changes | Not started | — | — | Depends on slice 2 done |
+| 4 | Time entries and timer | Not started | — | — | Depends on slice 3 done |
+| 5 | Reports | Not started | — | — | Depends on slice 4 done |
+| 6 | Billing preview and commit | Not started | — | — | Depends on slice 5 done |
+| 7 | Clients, projects, planner, notes, inbox and files | Not started | — | — | Depends on slice 6 done |
+| 8 | Connected apps, help and final review | Not started | — | — | Final push/PR requires owner approval |
+
+### Slice 1 plan and preflight (2026-10-24)
+
+- Update `package.json` / lockfile for Clerk >=7.2.3 and the official example's
+  compatible MCP dependency combination; resolve S2 from package manifests.
+- Add `app/[transport]/route.ts`, public `.well-known` discovery routes and thin
+  `lib/mcp/registry.ts` / render adapters. Adjust `proxy.ts` so MCP uses OAuth and
+  discovery stays public. Keep the resource URL exactly `http://localhost:3001/mcp`.
+- Add `convex/lib/mcpAuth.ts`, `convex/mcp` fetch entry points and the second provider
+  in `convex/auth.config.ts` after S1 establishes real token claims and validation.
+  Roles come only from `orgMembers`. Extract and reuse the existing workspace core
+  in `convex/workspaceRefs.ts`; the named `getWorkspaceRefsForAuth` helper in §4 is
+  not currently present. Guard UI auth helpers and direct identity readers against
+  OAuth identities to enforce both directions of I4.
+- Test membership-derived admin/member roles, absent org/user/membership, token
+  surface separation, cross-org isolation, auth-first/no-identity-arguments
+  invariants, registry/render output, metadata and unauthenticated 401 challenge.
+  Run typecheck, touched tests and build; then dev deployment and real Codex/Claude
+  connection, `fetch(me)` and `fetch(workspace)` after owner consent.
+- Installed versions: Next.js 16.2.2, Clerk 7.0.7, Convex 1.34.1. The generated
+  Convex guidelines target ^1.44.0: mismatch flagged; verify APIs against installed
+  1.34.1 rather than assuming newer APIs or silently upgrading Convex.
+- Read-only development discovery returned HTTP 200: `user:org:read`, `org_id`
+  and RS256 advertised; CIMD and DCR are not advertised. No Clerk configuration
+  was changed. A real OAuth token is still required for S1; S1–S5 are not marked
+  passed. No implementation, typecheck, test run, build or end-to-end result yet.
+- Proposed owner-approved development settings: publish CIMD support, publish DCR
+  fallback, keep consent enabled with organization selection, use JWT access tokens,
+  and default/request `user:org:read` plus `offline_access` for D26 refresh access.
+  `offline_access` is a protocol scope, not another product permission tier.
+  Keep token lifetime unchanged pending S3 findings. Clerk's official OAuth and MCP
+  guides were checked; settings remain pending explicit owner approval.
+- Independent read-only plan review confirmed the auth boundary must also cover
+  `convex/users.ts` and `convex/attachments.ts`. Convex 1.34.1 supports `customJwt`,
+  but deployed acceptance of the real OAuth token remains unverified. S1 must prove
+  a token-surface discriminator; a shared issuer alone is insufficient.
+- Follow-up facts to resolve before affected implementation: membership removal is
+  webhook-synchronized (no freshness marker); workspace tables currently silently
+  cap at 2,000; query auth cannot write last-used timestamps. Do not claim immediate
+  upstream revocation, return clipped workspace output, or write from queries.
+  Resolve any resulting spec decision at the owner gate, without changing D1–D29.

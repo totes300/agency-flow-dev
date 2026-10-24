@@ -1,6 +1,8 @@
-import { ConvexError } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { query } from "../_generated/server";
 import { getMcpAuthContext } from "../lib/mcpAuth";
+import { createRefResolver, type RefCandidate } from "../lib/mcpRefs";
+import { buildRecord, FETCH_INCLUDES, orgClock, type FetchInclude } from "../lib/mcpRecords";
 import { getOrgSettings } from "../lib/orgHelpers";
 import { REF_CAP, getWorkspaceRefsForAuth, type WorkspaceRefTable } from "../workspaceRefs";
 
@@ -77,5 +79,53 @@ export const workspace = query({
         archived: c.archived,
       })),
     };
+  },
+});
+
+/** Most refs one `records` call resolves (the tool's `refs[]` cap, docs/prd-mcp.md §6). */
+const MAX_RECORD_REFS = 25;
+
+/**
+ * `fetch(refs[])` for records: tasks, comments, time entries, projects,
+ * clients and members, by any reference form (docs/prd-mcp.md §7). Every
+ * ref is resolved and access-checked in the caller's org (I3); a missing,
+ * foreign or unreadable record is "not found", an ambiguous short key or
+ * email returns its candidates. Results keep the input order, one per ref.
+ * `now` is the caller's clock (queries never read it) for "overdue".
+ */
+export const records = query({
+  args: {
+    refs: v.array(v.string()),
+    include: v.array(v.union(...FETCH_INCLUDES.map((i) => v.literal(i)))),
+    now: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const auth = await getMcpAuthContext(ctx);
+    if (args.refs.length > MAX_RECORD_REFS) {
+      throw new ConvexError(`Fetch at most ${MAX_RECORD_REFS} refs per call.`);
+    }
+    const clock = await orgClock(ctx, auth.orgId, args.now);
+    const include = new Set<FetchInclude>(args.include);
+    const resolver = createRefResolver(ctx, auth);
+    const results = [];
+    for (const input of args.refs) {
+      const resolution = await resolver.resolve(input);
+      if (!resolution.ok) {
+        results.push({
+          input,
+          ok: false as const,
+          message: resolution.message,
+          candidates: resolution.candidates ?? ([] as RefCandidate[]),
+        });
+        continue;
+      }
+      const record = await buildRecord(ctx, auth, resolution.resolved, include, clock);
+      results.push(
+        record
+          ? { input, ok: true as const, record }
+          : { input, ok: false as const, message: `${input} not found.`, candidates: [] as RefCandidate[] },
+      );
+    }
+    return { timezone: clock.timezone, today: clock.today, results };
   },
 });

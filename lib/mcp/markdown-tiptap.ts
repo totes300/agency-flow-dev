@@ -5,17 +5,32 @@
  * like text typed in the app. Pure and dependency-free: Convex imports it.
  *
  * Supported:
- * - blocks: paragraphs (a single line break is a hard break), `#` headings,
- *   `-` / `*` / `+` bullet lists, `1.` ordered lists (start kept), `- [ ]` /
- *   `- [x]` task lists (when every item is one), nested lists (indent by two
- *   or more spaces), ``` / ~~~ fenced code blocks with a language,
- *   `>` blockquotes, `---` rules;
+ * - blocks: paragraphs (a single line break is a hard break), `#` headings
+ *   (levels 1–3, as the editor; deeper ones become level 3), `-` / `*` /
+ *   `+` bullet lists, `1.` ordered lists (1–3 digit starts, so "2026." stays
+ *   text), `- [ ]` / `- [x]` task lists (when every item is one), nested
+ *   lists (indent by two or more spaces), ``` / ~~~ fenced code blocks with
+ *   a language, `>` blockquotes, `---` rules, GFM tables (first row =
+ *   header cells), and `![alt](src "title")` images alone on a line whose
+ *   src is on this workspace's storage (`options.imageSrcPrefixes`);
  * - inline: `**bold**` / `__bold__`, `*italic*` / `_italic_`, `~~strike~~`,
  *   `` `code` ``, `[text](https://…)` links (http, https and mailto only),
  *   `\` escapes, and `@email` mentions when the caller resolves the email
  *   (`options.mention`) — otherwise the text stays as written.
- * Anything else (tables, images, HTML) stays as plain text.
+ * Anything else (other images, HTML) stays as plain text. Container nesting
+ * deeper than `MARKDOWN_MAX_DEPTH` throws `MarkdownTooDeepError`. Parsing is
+ * linear in the input: failed delimiter searches are remembered.
  */
+
+/** Blockquote / list nesting accepted (the editor's own content limit is 24 levels). */
+export const MARKDOWN_MAX_DEPTH = 24;
+
+export class MarkdownTooDeepError extends Error {
+  constructor() {
+    super(`Markdown nests quotes or lists more than ${MARKDOWN_MAX_DEPTH} levels deep. Flatten it.`);
+    this.name = "MarkdownTooDeepError";
+  }
+}
 
 export type TiptapMark = { type: string; attrs?: Record<string, unknown> };
 
@@ -38,15 +53,20 @@ export type MarkdownToTiptapOptions = {
    * Called once per mention outside code, in document order.
    */
   mention?: (email: string) => MentionTarget | null;
+  /** Image srcs that become image nodes (this workspace's storage); others stay text. */
+  imageSrcPrefixes?: readonly string[];
 };
 
 const FENCE = /^ {0,3}(`{3,}|~{3,})\s*([\w+#.-]*)\s*$/;
 const HEADING = /^ {0,3}(#{1,6})\s+(.*)$/;
 const RULE = /^ {0,3}([-*_])(?:\s*\1){2,}\s*$/;
 const QUOTE = /^ {0,3}>\s?(.*)$/;
-const LIST_ITEM = /^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$/;
+const LIST_ITEM = /^(\s*)([-*+]|\d{1,3}[.)])\s+(.*)$/;
 const TASK_PREFIX = /^\[([ xX])\]\s+(.*)$/;
-const EMAIL_AT = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/;
+const EMAIL_AT = /^[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,24}/;
+const IMAGE_LINE = /^\s*!\[([^\]\n]{0,500})\]\((\S{1,2000}?)(?: "([^"\n]{0,500})")?\)\s*$/;
+const TABLE_DELIMITER = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/;
+const TABLE_ROW = /^\s*\|/;
 const SAFE_HREF = /^(https?:\/\/|mailto:)[^\s<>]+$/i;
 const ESCAPABLE = /[\\`*_{}[\]()#+\-.!~>|@]/;
 
@@ -82,8 +102,21 @@ function isWordChar(ch: string | undefined): boolean {
   return ch !== undefined && /[\p{L}\p{N}]/u.test(ch);
 }
 
-/** Index of a closing `delim` after `from` that ends a non-empty, non-space-padded span; -1 if none. */
-function findClosing(text: string, from: number, delim: string): number {
+/**
+ * Index of a closing `delim` after `from` that ends a non-empty,
+ * non-space-padded span; -1 if none. `failed` remembers, per delimiter, the
+ * earliest `from` that found nothing: every later search would fail too
+ * (its candidates are a subset), so it returns at once — linear overall.
+ */
+function findClosing(text: string, from: number, delim: string, failed: Map<string, number>): number {
+  const knownFail = failed.get(delim);
+  if (knownFail !== undefined && from >= knownFail) return -1;
+  const found = scanClosing(text, from, delim);
+  if (found === -1) failed.set(delim, Math.min(from, knownFail ?? from));
+  return found;
+}
+
+function scanClosing(text: string, from: number, delim: string): number {
   for (let k = text.indexOf(delim, from); k !== -1; k = text.indexOf(delim, k + 1)) {
     if (k === from) continue;
     if (/\s/.test(text[k - 1])) continue;
@@ -99,6 +132,7 @@ function findClosing(text: string, from: number, delim: string): number {
 }
 
 function parseInline(text: string, marks: TiptapMark[], options: MarkdownToTiptapOptions, out: TiptapNode[] = []): TiptapNode[] {
+  const failed = new Map<string, number>();
   let buffer = "";
   const flush = () => {
     pushText(out, buffer, marks);
@@ -124,7 +158,10 @@ function parseInline(text: string, marks: TiptapMark[], options: MarkdownToTipta
     }
     if (ch === "`") {
       const run = /^`+/.exec(rest)![0];
-      const close = text.indexOf(run, p + run.length);
+      const key = `code:${run.length}`;
+      const knownFail = failed.get(key);
+      const close = knownFail !== undefined && p >= knownFail ? -1 : text.indexOf(run, p + run.length);
+      if (close === -1) failed.set(key, Math.min(p, knownFail ?? p));
       if (close !== -1 && text[close + run.length] !== "`") {
         let code = text.slice(p + run.length, close);
         if (code.length > 1 && code.startsWith(" ") && code.endsWith(" ")) code = code.slice(1, -1);
@@ -140,7 +177,7 @@ function parseInline(text: string, marks: TiptapMark[], options: MarkdownToTipta
     }
     if (ch === "!" && text[p + 1] === "[") {
       // Images are not written through MCP: keep `![alt](src)` as text.
-      const image = /^!\[[^\]]*\]\([^)\s]*\)/.exec(rest);
+      const image = /^!\[[^\]\n]{0,500}\]\([^)\s]{0,2000}\)/.exec(rest);
       if (image) {
         buffer += image[0];
         p += image[0].length;
@@ -148,7 +185,7 @@ function parseInline(text: string, marks: TiptapMark[], options: MarkdownToTipta
       }
     }
     if (ch === "[") {
-      const link = /^\[([^\]\n]+)\]\(([^)\s]+)\)/.exec(rest);
+      const link = /^\[([^\]\n]{1,1000})\]\(([^)\s]{1,2000})\)/.exec(rest);
       if (link && SAFE_HREF.test(link[2])) {
         flush();
         parseInline(link[1], withMark({ type: "link", attrs: { href: link[2] } }), options, out);
@@ -158,7 +195,7 @@ function parseInline(text: string, marks: TiptapMark[], options: MarkdownToTipta
     }
     const double = rest.startsWith("**") ? "**" : rest.startsWith("__") ? "__" : rest.startsWith("~~") ? "~~" : null;
     if (double && !/\s/.test(text[p + 2] ?? " ") && !(double === "__" && isWordChar(text[p - 1]))) {
-      const close = findClosing(text, p + 2, double);
+      const close = findClosing(text, p + 2, double, failed);
       if (close !== -1) {
         flush();
         parseInline(text.slice(p + 2, close), withMark({ type: double === "~~" ? "strike" : "bold" }), options, out);
@@ -167,7 +204,7 @@ function parseInline(text: string, marks: TiptapMark[], options: MarkdownToTipta
       }
     }
     if ((ch === "*" || ch === "_") && !/\s/.test(text[p + 1] ?? " ") && !(ch === "_" && isWordChar(text[p - 1]))) {
-      const close = findClosing(text, p + 1, ch);
+      const close = findClosing(text, p + 1, ch, failed);
       if (close !== -1) {
         flush();
         parseInline(text.slice(p + 1, close), withMark({ type: "italic" }), options, out);
@@ -176,7 +213,7 @@ function parseInline(text: string, marks: TiptapMark[], options: MarkdownToTipta
       }
     }
     if (ch === "@" && options.mention && !isWordChar(text[p - 1]) && text[p - 1] !== "@") {
-      const email = EMAIL_AT.exec(text.slice(p + 1));
+      const email = EMAIL_AT.exec(text.slice(p + 1, p + 360));
       if (email) {
         const target = options.mention(email[0].toLowerCase());
         if (target) {
@@ -213,7 +250,7 @@ function itemContent(blocks: TiptapNode[]): TiptapNode[] {
 }
 
 /** Parses the list starting at `start`; returns the node and the next line index. */
-function parseList(lines: string[], start: number, options: MarkdownToTiptapOptions): [TiptapNode, number] {
+function parseList(lines: string[], start: number, options: MarkdownToTiptapOptions, depth: number): [TiptapNode, number] {
   const first = LIST_ITEM.exec(lines[start])!;
   const indent = first[1].length;
   const ordered = /^\d/.test(first[2]);
@@ -271,21 +308,57 @@ function parseList(lines: string[], start: number, options: MarkdownToTiptapOpti
           return {
             type: "taskItem",
             attrs: { checked: mark.toLowerCase() === "x" },
-            content: itemContent(parseBlocks([text, ...body.slice(1)], options)),
+            content: itemContent(parseBlocks([text, ...body.slice(1)], options, depth + 1)),
           };
         }),
       },
       i,
     ];
   }
-  const listItems = items.map((body) => ({ type: "listItem", content: itemContent(parseBlocks(body, options)) }));
+  const listItems = items.map((body) => ({ type: "listItem", content: itemContent(parseBlocks(body, options, depth + 1)) }));
   const node: TiptapNode = ordered
     ? { type: "orderedList", attrs: { start: Number.parseInt(first[2], 10) || 1 }, content: listItems }
     : { type: "bulletList", content: listItems };
   return [node, i];
 }
 
-function parseBlocks(lines: string[], options: MarkdownToTiptapOptions): TiptapNode[] {
+/** GFM table cells of one row: split on unescaped pipes, outer pipes dropped. */
+function tableCells(line: string): string[] {
+  const trimmed = line.trim().replace(/^\|/, "").replace(/(?<!\\)\|$/, "");
+  return trimmed.split(/(?<!\\)\|/).map((cell) => cell.trim());
+}
+
+function parseTable(lines: string[], start: number, options: MarkdownToTiptapOptions): [TiptapNode, number] {
+  const header = tableCells(lines[start]);
+  const rows: string[][] = [];
+  let i = start + 2;
+  while (i < lines.length && TABLE_ROW.test(lines[i])) {
+    rows.push(tableCells(lines[i]));
+    i += 1;
+  }
+  const width = Math.max(header.length, ...rows.map((r) => r.length));
+  const cell = (type: string, text: string | undefined): TiptapNode => ({
+    type,
+    content: [inlineBlock("paragraph", [text ?? ""], options)],
+  });
+  const row = (type: string, cells: string[]): TiptapNode => ({
+    type: "tableRow",
+    content: Array.from({ length: width }, (_, c) => cell(type, cells[c])),
+  });
+  return [{ type: "table", content: [row("tableHeader", header), ...rows.map((r) => row("tableCell", r))] }, i];
+}
+
+/** An image node for a line holding only an image on the workspace's storage; else null. */
+function imageBlock(line: string, options: MarkdownToTiptapOptions): TiptapNode | null {
+  const match = IMAGE_LINE.exec(line);
+  if (!match) return null;
+  const [, alt, src, title] = match;
+  if (!(options.imageSrcPrefixes ?? []).some((prefix) => src.startsWith(prefix))) return null;
+  return { type: "image", attrs: { src, alt: alt || null, title: title ?? (alt || null) } };
+}
+
+function parseBlocks(lines: string[], options: MarkdownToTiptapOptions, depth = 0): TiptapNode[] {
+  if (depth > MARKDOWN_MAX_DEPTH) throw new MarkdownTooDeepError();
   const out: TiptapNode[] = [];
   let i = 0;
   while (i < lines.length) {
@@ -319,7 +392,7 @@ function parseBlocks(lines: string[], options: MarkdownToTiptapOptions): TiptapN
     const heading = HEADING.exec(line);
     if (heading) {
       const text = heading[2].replace(/\s+#+\s*$/, "").replace(/^#+$/, "");
-      out.push(inlineBlock("heading", [text], options, { level: heading[1].length }));
+      out.push(inlineBlock("heading", [text], options, { level: Math.min(heading[1].length, 3) }));
       i += 1;
       continue;
     }
@@ -336,15 +409,29 @@ function parseBlocks(lines: string[], options: MarkdownToTiptapOptions): TiptapN
         quoted.push(QUOTE.exec(lines[i])![1]);
         i += 1;
       }
-      const content = parseBlocks(quoted, options);
+      const content = parseBlocks(quoted, options, depth + 1);
       out.push(content.length > 0 ? { type: "blockquote", content } : { type: "blockquote", content: [{ type: "paragraph" }] });
       continue;
     }
 
     if (LIST_ITEM.test(line)) {
-      const [list, next] = parseList(lines, i, options);
+      const [list, next] = parseList(lines, i, options, depth);
       out.push(list);
       i = next;
+      continue;
+    }
+
+    if (TABLE_ROW.test(line) && i + 1 < lines.length && TABLE_DELIMITER.test(lines[i + 1])) {
+      const [table, next] = parseTable(lines, i, options);
+      out.push(table);
+      i = next;
+      continue;
+    }
+
+    const imageNode = imageBlock(line, options);
+    if (imageNode) {
+      out.push(imageNode);
+      i += 1;
       continue;
     }
 

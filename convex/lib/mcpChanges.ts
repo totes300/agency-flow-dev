@@ -2,9 +2,9 @@ import { ConvexError } from "convex/values";
 import type { QueryCtx } from "../_generated/server";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { McpAuthContext } from "./mcpAuth";
-import { orgClock, userNames } from "./mcpRecords";
+import { orgClock, richTextMarkdown, userNames } from "./mcpRecords";
 import { loadTaskForReadOrNull } from "../tasks/access";
-import { capText, tiptapToMarkdown } from "../../lib/mcp/tiptap-markdown";
+import { capText } from "../../lib/mcp/tiptap-markdown";
 import { decodeChangesCursor, encodeChangesCursor, type ChangesPosition } from "../../lib/mcp/cursor";
 import { CHANGES_LIMIT_MAX, CHANGE_COMMENT_TEXT_MAX, CHANGE_TYPES, type ChangeType } from "../../lib/mcp/limits";
 
@@ -27,7 +27,8 @@ import { CHANGES_LIMIT_MAX, CHANGE_COMMENT_TEXT_MAX, CHANGE_TYPES, type ChangeTy
  * Read budget (Convex: 4,096 index ranges, 32,000 documents per call): two
  * activity ranges (≤ 301 rows), per distinct task one read plus (members)
  * up to two edge checks, one per distinct actor, one per returned comment
- * (≤ 100): at most ~1,600 ranges and ~1,500 documents.
+ * (≤ 100) and two per distinct user mentioned in them: at most ~2,000
+ * ranges and ~1,500 documents.
  */
 
 /** Activity rows examined per call; the cursor moves past filtered rows too. */
@@ -108,6 +109,7 @@ export async function listChanges(ctx: QueryCtx, auth: McpAuthContext, args: Cha
     return readable.get(taskId) ?? null;
   };
   const nameOf = userNames(ctx);
+  const markdown = richTextMarkdown(ctx, auth.orgId);
 
   const changes = [];
   let last: ChangesPosition | null = null;
@@ -135,7 +137,7 @@ export async function listChanges(ctx: QueryCtx, auth: McpAuthContext, args: Cha
       const id = row.metadata.commentId;
       const doc = args.includeText ? await ctx.db.get(id) : null;
       const live = doc !== null && doc.orgId === auth.orgId && doc.taskId === task._id;
-      const capped = live ? capText(tiptapToMarkdown(doc.content), CHANGE_COMMENT_TEXT_MAX) : null;
+      const capped = live ? capText(await markdown.content(doc.content), CHANGE_COMMENT_TEXT_MAX) : null;
       comment = {
         id,
         text: capped?.text ?? null,

@@ -65,3 +65,6 @@ export const IDEMPOTENCY_KEY_MAX_LENGTH = 200;
 /** Task priorities as written in `save_tasks` (convex/tasks/model.ts PRIORITY). */
 export const PRIORITY_NAMES = ["none", "urgent", "high", "medium", "low"] as const;
 export type PriorityName = (typeof PRIORITY_NAMES)[number];
+
+/** Markdown accepted per description or comment body (route schema and Convex). */
+export const MARKDOWN_MAX_LENGTH = 50_000;

@@ -88,6 +88,7 @@ function TermsCard({ project, model }: { project: PanelProject; model: ProjectBi
     return (
       <SideCard className="px-2 pt-2.5 pb-2">
         <h4 className="px-2 pb-1 text-xs font-medium text-muted-foreground">Rates</h4>
+        <KV label="Rate">{rateRangeLabel(terms.rateRangeMinor, currency) ?? "Not set"}</KV>
         <KV label="Rounding">{terms.roundingMinutes > 1 ? `${terms.roundingMinutes} min per line` : "None"}</KV>
       </SideCard>
     )
@@ -103,6 +104,14 @@ function TermsCard({ project, model }: { project: PanelProject; model: ProjectBi
     )
   }
   return null
+}
+
+/** "$95.00 / h" or "$80.00–$120.00 / h" (T&M category rates). */
+export function rateRangeLabel(range: { min: number; max: number } | null, currency: string): string | null {
+  if (!range) return null
+  return range.min === range.max
+    ? `${formatMinor(range.min, currency)} / h`
+    : `${formatMinor(range.min, currency)}–${formatMinor(range.max, currency)} / h`
 }
 
 function KV({ label, children }: { label: string; children: ReactNode }) {

@@ -124,6 +124,8 @@ export type ProjectBillingPeriods = {
     cycleLength: number;
     fixedPriceMinor: number | null;
     roundingMinutes: number;
+    /** T&M: lowest and highest effective category rate (project override ?? org default), minor/h. */
+    rateRangeMinor: { min: number; max: number } | null;
   };
   /** Newest first, from the first period to the current one. */
   periods: PeriodRow[];
@@ -242,6 +244,7 @@ export async function buildProjectBillingPeriods(
       cycleLength: project.cycleLength ?? 1,
       fixedPriceMinor: project.fixedPrice !== undefined ? toMinor(project.fixedPrice, currency) : null,
       roundingMinutes: settings.roundingMinutes,
+      rateRangeMinor: project.billingType === "t_and_m" ? await rateRange(ctx, orgId, project._id, currency) : null,
     },
     periods: [],
     currentKey: null,
@@ -419,6 +422,28 @@ function periodSpans(
     }
   }
   return [...byStart.values()].sort((a, b) => (a.start < b.start ? -1 : 1));
+}
+
+/** The project's T&M rate span over its categories' effective rates (override ?? org default). */
+async function rateRange(
+  ctx: Reader,
+  orgId: string,
+  projectId: Id<"projects">,
+  currency: string,
+): Promise<{ min: number; max: number } | null> {
+  const defaults = await ctx.db
+    .query("categoryRates")
+    .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+    .collect();
+  const overrides = await ctx.db
+    .query("projectRateOverrides")
+    .withIndex("by_projectId", (q) => q.eq("projectId", projectId))
+    .collect();
+  const rates = new Map<string, number>();
+  for (const r of defaults) if (r.currency === currency) rates.set(r.workCategoryId, r.defaultBillRate);
+  for (const o of overrides) if (o.orgId === orgId) rates.set(o.workCategoryId, o.billableRate);
+  const values = [...rates.values()].filter((r) => r > 0).map((r) => toMinor(r, currency));
+  return values.length > 0 ? { min: Math.min(...values), max: Math.max(...values) } : null;
 }
 
 async function fixedBilling(

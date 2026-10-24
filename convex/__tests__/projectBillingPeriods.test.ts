@@ -235,6 +235,27 @@ describe("T&M", () => {
   });
 });
 
+describe("T&M terms", () => {
+  it("rate range = the project's effective category rates (override ?? org default)", async () => {
+    setToday("2026-04-10");
+    const w = await billingWorld(modules);
+    const p = await addProject(w, { billingType: "t_and_m", startDate: undefined });
+    expect((await model(w, p))?.terms.rateRangeMinor).toBeNull();
+    await w.t.run(async (ctx) => {
+      const now = Date.now();
+      const cat = (name: string) =>
+        ctx.db.insert("workCategories", { orgId: "org_billing", name, color: "blue", sortOrder: 0, createdAt: now, updatedAt: now, createdBy: w.userId });
+      const design = await cat("Design");
+      const dev = await cat("Dev");
+      for (const [id, rate] of [[design, 80], [dev, 100]] as const) {
+        await ctx.db.insert("categoryRates", { orgId: "org_billing", workCategoryId: id, currency: "EUR", defaultBillRate: rate, createdAt: now, updatedAt: now });
+      }
+      await ctx.db.insert("projectRateOverrides", { orgId: "org_billing", projectId: p.projectId, workCategoryId: dev, billableRate: 120, createdAt: now, updatedAt: now });
+    });
+    expect((await model(w, p))?.terms.rateRangeMinor).toEqual({ min: 8000, max: 12000 });
+  });
+});
+
 describe("fixed fee and non-billable", () => {
   it("fixed: no periods; fixed billing with draft and remaining", async () => {
     setToday("2026-04-10");

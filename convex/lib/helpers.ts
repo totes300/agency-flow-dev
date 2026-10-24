@@ -1,6 +1,7 @@
 import { ConvexError } from "convex/values";
 import { MutationCtx, QueryCtx } from "../_generated/server";
 import type { Doc, Id } from "../_generated/dataModel";
+import { CLIENT_PREFIX_MAX_LENGTH, isValidClientPrefix } from "./clientPrefix";
 import {
   IDENTIFIER_KEY_MAX_LENGTH,
   isValidIdentifierKey,
@@ -106,6 +107,32 @@ export function effectiveClientPrefix(
   return client.prefix ?? client.invoicePrefix ?? null;
 }
 
+/**
+ * The prefix MCP shows and resolves (`client:KONV`): the effective prefix
+ * when it has the valid format, else null — a client with a legacy prefix
+ * outside A–Z/0–9 is referenced by ID or link only.
+ */
+export function referenceClientPrefix(
+  client: Pick<Doc<"clients">, "prefix" | "invoicePrefix">,
+): string | null {
+  const prefix = effectiveClientPrefix(client);
+  return prefix !== null && isValidClientPrefix(prefix) ? prefix : null;
+}
+
+/**
+ * Normalizes a prefix the user typed: trimmed, uppercased, and refused unless
+ * it is 1–10 letters (A–Z) or digits.
+ */
+export function normalizeClientPrefix(raw: string): string {
+  const prefix = raw.trim().toUpperCase();
+  if (!isValidClientPrefix(prefix)) {
+    throw new ConvexError(
+      `Client prefix "${raw.trim()}" is not valid: use 1–${CLIENT_PREFIX_MAX_LENGTH} letters (A–Z) or digits, e.g. KONV.`,
+    );
+  }
+  return prefix;
+}
+
 /** Prefixes compare case-insensitively: `KONV` and `konv` are the same reference. */
 export function clientPrefixKey(prefix: string): string {
   return prefix.trim().toLowerCase();
@@ -142,9 +169,8 @@ export async function ensureUniquePrefix(
   ctx: MutationCtx,
   orgId: string,
   prefix: string,
-  excludeClientId?: Id<"clients">,
 ): Promise<string> {
-  const used = await clientsByPrefixKey(ctx, orgId, excludeClientId);
+  const used = await clientsByPrefixKey(ctx, orgId);
   if (!used.has(clientPrefixKey(prefix))) return prefix;
 
   let counter = 2;

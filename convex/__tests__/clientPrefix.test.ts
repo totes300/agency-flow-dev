@@ -1,9 +1,11 @@
 // @vitest-environment edge-runtime
 //
 // Client prefixes are unique references per org (docs/prd-mcp.md §7, §11):
-// the UI save mutations refuse a typed prefix another client already uses,
+// the UI save mutations accept only A–Z/0–9 up to 10 characters (saved
+// uppercase) and refuse a typed prefix another client already uses,
 // case-insensitively; generated prefixes still dedupe with a suffix; data
-// that already holds a duplicate never blocks editing other fields.
+// that already holds a duplicate or a legacy format never blocks editing
+// other fields.
 
 import { describe, it, expect } from "vitest";
 import { convexTest } from "convex-test";
@@ -50,7 +52,7 @@ describe("client prefix uniqueness", () => {
     expect(await prefixOf(t, konv)).toBe("KONV");
 
     await expect(admin.mutation(api.clients.create, { name: "Konvoy", prefix: "konv" })).rejects.toThrow(
-      'Prefix "konv" is already used by client "Konverted". Choose a different prefix.',
+      'Prefix "KONV" is already used by client "Konverted". Choose a different prefix.',
     );
     await expect(admin.mutation(api.clients.create, { name: "Konvoy", prefix: " KONV " })).rejects.toThrow(
       /already used by client "Konverted"/,
@@ -74,14 +76,14 @@ describe("client prefix uniqueness", () => {
     const arlo = await admin.mutation(api.clients.create, { name: "Arlo", prefix: "ARLO" });
 
     await expect(admin.mutation(api.clients.update, { id: arlo, prefix: "Konv" })).rejects.toThrow(
-      'Prefix "Konv" is already used by client "Konverted". Choose a different prefix.',
+      'Prefix "KONV" is already used by client "Konverted". Choose a different prefix.',
     );
     expect(await prefixOf(t, arlo)).toBe("ARLO");
 
-    // The client's own prefix (any case) and a free one save fine.
+    // The client's own prefix (any case) is unchanged; a free one saves uppercase.
     await admin.mutation(api.clients.update, { id: arlo, prefix: "arlo" });
-    expect(await prefixOf(t, arlo)).toBe("arlo");
-    await admin.mutation(api.clients.update, { id: arlo, prefix: "ARL" });
+    expect(await prefixOf(t, arlo)).toBe("ARLO");
+    await admin.mutation(api.clients.update, { id: arlo, prefix: "arl" });
     expect(await prefixOf(t, arlo)).toBe("ARL");
   });
 
@@ -116,5 +118,28 @@ describe("client prefix uniqueness", () => {
     await expect(
       t.withIdentity(ADMIN).mutation(api.clients.create, { name: "Legend", prefix: "leg" }),
     ).rejects.toThrow(/already used by client "Legacy"/);
+  });
+
+  it("accepts only A–Z/0–9 up to 10 characters, saved uppercase", async () => {
+    const t = createT();
+    const { admin: adminId } = await setup(t);
+    const admin = t.withIdentity(ADMIN);
+    const invalid = (prefix: string) => `Client prefix "${prefix}" is not valid: use 1–10 letters (A–Z) or digits, e.g. KONV.`;
+    for (const prefix of ["A&B", "AB CD", "AB-1", "MÜLL", "ABCDEFGHIJK"]) {
+      await expect(admin.mutation(api.clients.create, { name: `Client ${prefix}`, prefix })).rejects.toThrow(invalid(prefix));
+    }
+    const ok = await admin.mutation(api.clients.create, { name: "Acme", prefix: "acme7" });
+    expect(await prefixOf(t, ok)).toBe("ACME7");
+    await expect(admin.mutation(api.clients.update, { id: ok, prefix: "a.b" })).rejects.toThrow(invalid("a.b"));
+
+    // A legacy prefix in another format stays editable while unchanged.
+    const legacy = await t.run(async (ctx) => {
+      const now = Date.now();
+      return await ctx.db.insert("clients", {
+        orgId: ORG, name: "Legacy Co", currency: "EUR", prefix: "L&C", createdAt: now, updatedAt: now, createdBy: adminId,
+      });
+    });
+    await admin.mutation(api.clients.update, { id: legacy, prefix: "L&C", notes: "edited" });
+    expect(await prefixOf(t, legacy)).toBe("L&C");
   });
 });

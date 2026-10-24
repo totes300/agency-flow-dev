@@ -7,6 +7,7 @@ import {
   effectiveClientPrefix,
   ensureUniquePrefix,
   generateClientPrefix,
+  normalizeClientPrefix,
 } from "./lib/helpers";
 import { currencyValidator } from "./lib/validators";
 
@@ -150,13 +151,14 @@ export const create = mutation({
       currency = orgSettings?.defaultCurrency ?? "USD";
     }
 
-    // Client prefix: a typed prefix must be free (case-insensitive, never
-    // rewritten); a generated one is made free with a numeric suffix.
+    // Client prefix: a typed prefix must be valid (A–Z/0–9, ≤ 10, saved
+    // uppercase) and free (case-insensitive, never rewritten); a generated
+    // one is made free with a numeric suffix.
     const typedPrefix = args.prefix?.trim();
     let prefix: string;
     if (typedPrefix) {
-      await assertClientPrefixAvailable(ctx, orgId, typedPrefix);
-      prefix = typedPrefix;
+      prefix = normalizeClientPrefix(typedPrefix);
+      await assertClientPrefixAvailable(ctx, orgId, prefix);
     } else {
       prefix = await ensureUniquePrefix(ctx, orgId, generateClientPrefix(name));
     }
@@ -230,13 +232,15 @@ export const update = mutation({
       const pfx = args.prefix.trim();
       if (pfx) {
         // The edit form re-sends the current prefix with every save: an
-        // unchanged prefix (case-insensitively) is not re-checked, so data
-        // that already holds a duplicate never blocks editing other fields.
+        // unchanged prefix (case-insensitively) is left as stored and not
+        // re-checked, so a legacy duplicate or a legacy format never blocks
+        // editing other fields.
         const current = effectiveClientPrefix(client);
         if (current === null || clientPrefixKey(current) !== clientPrefixKey(pfx)) {
-          await assertClientPrefixAvailable(ctx, orgId, pfx, args.id);
+          const prefix = normalizeClientPrefix(pfx);
+          await assertClientPrefixAvailable(ctx, orgId, prefix, args.id);
+          updates.prefix = prefix;
         }
-        updates.prefix = pfx;
       }
     }
 

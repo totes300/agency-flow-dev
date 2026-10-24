@@ -9,13 +9,14 @@ import { getFunctionName } from "convex/server";
 import { z } from "zod";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { createAgencyFlowMcpHandler } from "../handler";
-import { MCP_TOOLS, type McpQueryRunner } from "../registry";
+import { MCP_TOOLS, type McpMutationRunner, type McpQueryRunner } from "../registry";
 
 const RESOURCE_URL = "https://localhost:3001/mcp";
 const METADATA_URL = "https://localhost:3001/.well-known/oauth-protected-resource/mcp";
 const GOOD_TOKEN = "good-token";
 
 const seenTokens: string[] = [];
+const seenMutations: Array<{ name: string; args: Record<string, unknown> }> = [];
 
 const handler = createAgencyFlowMcpHandler({
   resourceUrl: RESOURCE_URL,
@@ -37,6 +38,17 @@ const handler = createAgencyFlowMcpHandler({
       if (name !== "mcp/fetch:me") throw new Error("unexpected query");
       return { user: { name: "Ada", email: "ada@x.test" }, org: { id: "org_1", name: null }, role: "admin" };
     }) as McpQueryRunner,
+  mutationRunnerFor: (token) =>
+    (async (mutation, args) => {
+      seenTokens.push(token);
+      seenMutations.push({ name: getFunctionName(mutation), args: args as Record<string, unknown> });
+      return {
+        tool: "save_comments",
+        replayed: false,
+        items: [{ commentId: "cm1", task: "ARLO-21", action: "created" }],
+      };
+    }) as McpMutationRunner,
+  clientNameFor: async (clientId) => (clientId === "client_test" ? "Test Client" : undefined),
 });
 
 function rpc(body: unknown, token?: string): Request {
@@ -102,15 +114,24 @@ describe("MCP protocol", () => {
     }));
     expect(listed).toEqual(expected);
     // Guard against both sides being trivially empty.
-    expect(listed.map((t) => t.name)).toEqual(["search", "fetch"]);
+    expect(listed.map((t) => t.name)).toEqual(["search", "fetch", "save_tasks", "save_comments", "delete"]);
     expect(Object.keys(expected.find((t) => t.name === "fetch")!.inputSchema.properties ?? {})).toEqual([
       "refs",
       "include",
+      "changes",
     ]);
+    for (const name of ["save_tasks", "save_comments", "delete"]) {
+      expect(Object.keys(expected.find((t) => t.name === name)!.inputSchema.properties ?? {})).toContain("idempotencyKey");
+    }
     expect(Object.keys(expected.find((t) => t.name === "search")!.inputSchema.properties ?? {})).toEqual(
       expect.arrayContaining(["query", "types", "assignee", "mine", "status", "label", "client", "project", "cursor", "limit"]),
     );
-    expect(listed.every((t) => (t.annotations as { readOnlyHint?: boolean }).readOnlyHint === true)).toBe(true);
+    const hints = Object.fromEntries(listed.map((t) => [t.name, t.annotations]));
+    expect(hints.search).toMatchObject({ readOnlyHint: true });
+    expect(hints.fetch).toMatchObject({ readOnlyHint: true });
+    expect(hints.save_tasks).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: false });
+    expect(hints.save_comments).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: false });
+    expect(hints.delete).toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: true });
   });
 
   it("calls Convex with the caller's own bearer token and returns markdown", async () => {
@@ -155,5 +176,40 @@ describe("MCP protocol", () => {
         },
       ],
     });
+  });
+});
+
+describe("MCP write tools", () => {
+  it("run Convex mutations with the caller's token and the client's display name", async () => {
+    seenTokens.length = 0;
+    seenMutations.length = 0;
+    const res = await handler(
+      rpc(
+        {
+          jsonrpc: "2.0",
+          id: 5,
+          method: "tools/call",
+          params: { name: "save_comments", arguments: { items: [{ task: "ARLO-21", body: "Done" }], idempotencyKey: "k1" } },
+        },
+        GOOD_TOKEN,
+      ),
+    );
+    const { result } = await rpcResult(res);
+    expect(result).toMatchObject({
+      isError: false,
+      content: [
+        {
+          type: "text",
+          text: "## Saved 1 comment\n- [comment cm1](https://localhost:3001/tasks/ARLO-21?comment=cm1) · on ARLO-21 · created",
+        },
+      ],
+    });
+    expect(seenTokens).toEqual([GOOD_TOKEN]);
+    expect(seenMutations).toEqual([
+      {
+        name: "mcp/write:saveComments",
+        args: { items: [{ task: "ARLO-21", body: "Done" }], idempotencyKey: "k1", clientName: "Test Client" },
+      },
+    ]);
   });
 });

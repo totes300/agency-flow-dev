@@ -12,6 +12,7 @@ import { getTaskDetailForAuth } from "../tasks/lookup";
 import { isClosedCategory } from "../tasks/model";
 import { visibleTimeEntries } from "../timeEntries";
 import type { Resolved } from "./mcpRefs";
+import { listTaskExternalRefs } from "./mcpExternalRefs";
 import { capText, descriptionToMarkdown, tiptapToMarkdown } from "../../lib/mcp/tiptap-markdown";
 import type { FetchInclude } from "../../lib/mcp/limits";
 
@@ -29,8 +30,8 @@ import type { FetchInclude } from "../../lib/mcp/limits";
  * Read budget per record (Convex: 4,096 index ranges, 32,000 documents per
  * call; the route fetches one ref per call): a task with every include is
  * about 30 ranges plus one per distinct comment author / activity actor /
- * time-entry member, and at most ~3,000 documents (comments 501, activity
- * 501, time entries 2,001, files 51 + 51, sub-tasks 201).
+ * time-entry member, and at most ~3,100 documents (comments 501, activity
+ * 501, time entries 2,001, files 51 + 51, sub-tasks 201, external refs 51).
  */
 
 /** Most recent comments / activity events / time entries returned per task. */
@@ -94,6 +95,8 @@ async function taskRecord(ctx: QueryCtx, auth: AuthContext, taskId: Id<"tasks">,
   const { detail, access } = found;
   const { task } = access;
   const description = descriptionToMarkdown(task.description);
+  // The checklist's next step (D24): the first open sub-task in sort order.
+  const next = detail.subtasks.find((s) => s.statusCategory !== null && !isClosedCategory(s.statusCategory));
 
   const record = {
     type: "task" as const,
@@ -121,6 +124,8 @@ async function taskRecord(ctx: QueryCtx, auth: AuthContext, taskId: Id<"tasks">,
     commentCount: task.commentCount ?? 0,
     subtaskCount: task.subtaskCount ?? 0,
     subtaskDoneCount: task.subtaskDoneCount ?? 0,
+    nextStep: next ? { identifier: next.identifier, title: next.title, assignees: next.assignees } : null,
+    externalRefs: await listTaskExternalRefs(ctx, auth.orgId, task._id),
     description,
     subtasks: include.has("subtasks")
       ? {

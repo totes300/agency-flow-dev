@@ -9,7 +9,7 @@
  * imports only.
  *
  * Accepted forms:
- * - special refs `me` and `workspace` (lowercase only);
+ * - special refs `me`, `workspace` and `changes` (lowercase only);
  * - an app URL (a pasted link) — tasks, comments, projects, clients, members;
  * - a task identifier `KEY-N`, case-insensitive (old identifiers resolve
  *   through `taskIdentifierAliases` in Convex);
@@ -23,7 +23,7 @@
 import { normalizeIdentifier } from "../../convex/tasks/model";
 import { CLIENT_PREFIX_PATTERN } from "../../convex/lib/clientPrefix";
 
-export const SPECIAL_REFS = ["me", "workspace"] as const;
+export const SPECIAL_REFS = ["me", "workspace", "changes"] as const;
 export type SpecialRefName = (typeof SPECIAL_REFS)[number];
 
 /** Tables an ID or link can point at in this slice. */

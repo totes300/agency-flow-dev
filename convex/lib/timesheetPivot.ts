@@ -10,7 +10,7 @@ import {
   type AgentTable,
   type AgentTableColumn,
   type AgentTableRowValues,
-} from "../../lib/agents/table";
+} from "../../lib/reports/table";
 
 /** Column bucket for tasks without a work category. Always sorts last. */
 export const UNCATEGORIZED_LABEL = "Uncategorized";
@@ -27,7 +27,7 @@ export type TimesheetPivotRow = {
   /**
    * AI prose (slice 05). Present only when the table is built with
    * `aiColumns` — the summarize step fills these; a sentinel string signals
-   * the flagged / unavailable states (see lib/agents/table). Never a number.
+   * the flagged / unavailable states (see lib/reports/table). Never a number.
    */
   requested?: string | null;
   delivered?: string | null;

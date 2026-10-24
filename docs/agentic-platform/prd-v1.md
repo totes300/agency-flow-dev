@@ -1,5 +1,7 @@
 # PRD: Agentic Platform (Agents Workspace)
 
+> **SUPERSEDED (2026-10-24):** the in-app agent platform was removed. Agents now drive Agency Flow from outside through the MCP server, see `docs/prd-mcp.md`. Kept for reference only.
+
 **Status:** Final — ready for slicing · **Owner:** Adam · **Supersedes:** `docs/agents-platform-v1-prd.md` (draft)
 **Scope:** Platform V1 (Wave 1) with the full multi-wave vision designed in
 **Interview date:** 2026-07-11

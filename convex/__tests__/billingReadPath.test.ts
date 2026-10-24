@@ -304,7 +304,7 @@ describe("§8.3 — one balance ladder on every surface", () => {
         includedMinutes: 1800,
       });
 
-      const health = await as(w).query(internal.agentReports.retainerHealthForMonth, { year: 2026, month });
+      const health = await as(w).query(internal.reports.retainerHealthForMonth, { year: 2026, month });
       const row = health.rows.find((r) => r.projectId === w.projectId);
       expect(row).toMatchObject({
         usedMinutes: used[i],
@@ -329,7 +329,7 @@ describe("§8.3 — one balance ladder on every surface", () => {
     const open = await expectAgreement(w);
     expect(open).toMatchObject({ overageMinutes: 340, overageDue: 510 });
     expect(open?.months.map((m) => m.balanceStatus)).toEqual(["deficit", "deficit", "due"]);
-    const june = await as(w).query(internal.agentReports.retainerHealthForMonth, { year: 2026, month: 6 });
+    const june = await as(w).query(internal.reports.retainerHealthForMonth, { year: 2026, month: 6 });
     expect(june.rows[0]).toMatchObject({ overageDue: true, overageMinutes: 340, overageAmount: 510 });
 
     const { invoiceId } = await commit(w, "2026-04-01");

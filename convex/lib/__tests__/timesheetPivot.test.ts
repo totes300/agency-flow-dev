@@ -6,7 +6,7 @@ import {
   UNCATEGORIZED_LABEL,
   type TimesheetPivotRow,
 } from "../timesheetPivot";
-import { isAgentTableOutput, AGENT_TABLE_MARKER } from "../../../lib/agents/table";
+import { isAgentTableOutput, AGENT_TABLE_MARKER } from "../../../lib/reports/table";
 
 function row(overrides: Partial<TimesheetPivotRow>): TimesheetPivotRow {
   return {

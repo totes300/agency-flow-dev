@@ -321,44 +321,6 @@ export const loadDecryptedKey = internalQuery({
   },
 });
 
-/**
- * Key loader for the Agents runner (`convex/agentRunner.ts`).
- *
- * Unlike `loadDecryptedKey` (admin-gated: the Integrations tab is an
- * admin surface), this variant requires only org membership: agents with
- * `runPermission: "everyone"` are runnable by members, and the org's AI
- * key is run infrastructure, not a per-user secret. The plaintext still
- * never crosses the client boundary — this is `internalQuery`, consumed
- * server-side by the runner action only. What a member can DO with the
- * model stays bounded by the tool registry's scope filtering plus each
- * wrapped function's own auth (D6).
- */
-export const loadDecryptedKeyForRun = internalQuery({
-  args: {},
-  handler: async (ctx): Promise<string | null> => {
-    const auth = await getAuthContext(ctx);
-    const settings = await ctx.db
-      .query("orgSettings")
-      .withIndex("by_orgId", (q) => q.eq("orgId", auth.orgId))
-      .unique();
-    if (!settings?.aiAnthropicKeyCiphertext) return null;
-    try {
-      return await decryptSecret(settings.aiAnthropicKeyCiphertext);
-    } catch (err) {
-      if (
-        err instanceof SecretDecryptionFailedError ||
-        err instanceof SecretCryptoUnavailableError
-      ) {
-        console.warn(
-          `[aiIntegration] Decryption failed for org ${auth.orgId}: ${err.message}`,
-        );
-        return null;
-      }
-      throw err;
-    }
-  },
-});
-
 // ─── Anthropic ping ─────────────────────────────────────────────────────────
 
 /**

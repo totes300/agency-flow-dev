@@ -2,10 +2,6 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
-/* Streamdown (agent chat markdown) ships its default classes in its dist —
-   Tailwind must scan it or unoverridden elements render unstyled. */
-@source "../node_modules/streamdown/dist/*.js";
-
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {

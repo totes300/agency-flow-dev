@@ -10,7 +10,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { convexTest } from "convex-test";
 import schema from "../schema";
-import { api } from "../_generated/api";
+import { api, internal } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
 import {
   addEntry,
@@ -304,7 +304,7 @@ describe("N11 — a period row agrees with every surface", () => {
     await addEntry(w, p, "2026-03-18", 255);
     await addEntry(w, p, "2026-03-20", 120, { billable: false });
 
-    const queue = (await asAdmin(w).query(api.billingViews.getCloseQueue, {})).months
+    const queue = (await asAdmin(w).query(internal.billingViews.getCloseQueue, {})).months
       .flatMap((m) => m.rows)
       .find((r) => r.projectId === p.projectId);
     const ws = await asAdmin(w).query(api.billingViews.getCloseWorkspace, { projectId: p.projectId, period: "2026-03" });

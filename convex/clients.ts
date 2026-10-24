@@ -317,7 +317,7 @@ export const remove = mutation({
 
     // Block hard-delete when any invoice exists on any of this client's
     // projects. Invoices are legal/financial records and must not be silently
-    // orphaned — `getInvoiceMetrics` would keep summing them.
+    // orphaned — the Billing hub keeps summing them.
     for (const project of projects) {
       const existingInvoice = await ctx.db
         .query("invoices")

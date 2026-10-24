@@ -10,7 +10,7 @@
  *  - Currency amounts are Σ (minutes/60 × rate-snapshot); rounded to two
  *    decimals only at the final aggregate for output cleanliness.
  *  - Money is ALWAYS partitioned per currency — never summed across
- *    currencies (same rule as `invoices.getInvoiceMetrics`).
+ *    currencies (same rule as the Billing hub tiles).
  *  - Retainer entries carry billableRate=0 by design; their billable
  *    VALUE is 0 here while their minutes still count. Retainer revenue is
  *    fee-based and shows up on the invoice side of the snapshot.

@@ -20,7 +20,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { convexTest } from "convex-test";
 import schema from "../schema";
-import { api } from "../_generated/api";
+import { api, internal } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
 import { scopeOf, type ScopeEntry, type ScopeProject } from "../lib/billing/scope";
 import { reconcileOrg } from "../lib/billing/reconcile";
@@ -204,7 +204,7 @@ async function seedEntry(
 // ─── Surface readers (exactly what the UI calls) ────────────────────────────
 
 async function queueRow(t: T, projectId: Id<"projects">, monthKey: string) {
-  const queue = await t.withIdentity(ADMIN).query(api.billingViews.getCloseQueue, {});
+  const queue = await t.withIdentity(ADMIN).query(internal.billingViews.getCloseQueue, {});
   return queue.months
     .flatMap((m) => m.rows)
     .find((r) => r.projectId === projectId && r.periodToken === monthKey);

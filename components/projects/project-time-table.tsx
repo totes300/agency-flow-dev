@@ -193,7 +193,7 @@ export function ProjectTimeTable<T extends ProjectTimeTableRow>({
   currency,
   // `timezone` is part of the shared prop bag for the table's callers
   // but Slice 4 dropped the only consumer (the InvoiceStatusBadge that
-  // computed Overdue against today). Kept on the props type so the
+  // computed past due against today). Kept on the props type so the
   // grouped + flat call sites can spread `sharedTableProps` without
   // having to fork.
   isAdmin,
@@ -674,7 +674,7 @@ function RowActionsMenu({
   // Three locked-row shapes:
   //   - Draft (close with a draft invoice)   → `Open invoice INV-…`
   //   - Closed with an invoice               → `Open invoice INV-…`
-  //   - Closed within budget (retainer)      → `View report` + admin Reopen
+  //   - Closed within budget (retainer)      → `View period` + admin Reopen
   if (status === "draft" || status === "closed") {
     const hasInvoiceLink =
       row.invoicePrefix && row.invoiceNumber != null && row.invoiceId

@@ -267,7 +267,7 @@ export function InvoiceSidebar({
         {invoice.status === "draft" &&
           (brandMissing ? (
             // Never a dead disabled button: the blocker's resolution IS the
-            // primary action. Saving flips this back to Mark as Invoiced
+            // primary action. Saving flips this back to Mark as invoiced
             // reactively (brandMissing comes from a live query).
             <>
               <Button onClick={() => setCompanyDialogOpen(true)}>
@@ -368,7 +368,7 @@ export function InvoiceSidebar({
         )}
       </div>
 
-      {/* Confirm: Mark as Invoiced */}
+      {/* Confirm: Mark as invoiced */}
       <ConfirmDialog
         open={confirmAction === "markInvoiced"}
         onOpenChange={(open) => { if (!open) setConfirmAction(null) }}
@@ -380,7 +380,7 @@ export function InvoiceSidebar({
         }}
       />
 
-      {/* Confirm: Revert to Draft */}
+      {/* Confirm: Revert to draft */}
       <ConfirmDialog
         open={confirmAction === "revertToDraft"}
         onOpenChange={(open) => { if (!open) setConfirmAction(null) }}

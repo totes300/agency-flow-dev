@@ -100,7 +100,7 @@ export const PERIOD_STATE_COPY: Record<PeriodState, { chip: string; tone: StateT
   closed: { chip: "Closed", tone: "green", meaning: "Closed within budget, nothing invoiced" },
 };
 
-/** Invoice-only statuses (Invoices views). "Overdue" is called Past due everywhere. */
+/** Invoice-only statuses (Invoices views). An invoiced invoice past its due date is "Past due" everywhere. */
 export type InvoiceDisplayStatus = "draft" | "invoiced" | "past_due" | "paid" | "void";
 
 export const INVOICE_STATUS_COPY: Record<InvoiceDisplayStatus, { chip: string; tone: StateTone }> = {

@@ -89,7 +89,7 @@ async function addEntry(w: World, date: string, minutes: number, over: { billabl
 
 const as = (w: World) => w.t.withIdentity(ADMIN);
 const queueRow = async (w: World) =>
-  (await as(w).query(api.billingViews.getCloseQueue, {})).months.flatMap((m) => m.rows).find((r) => r.projectId === w.projectId);
+  (await as(w).query(internal.billingViews.getCloseQueue, {})).months.flatMap((m) => m.rows).find((r) => r.projectId === w.projectId);
 const workspace = (w: World, period: string) =>
   as(w).query(api.billingViews.getCloseWorkspace, { projectId: w.projectId, period });
 const report = (w: World, year: number, month: number) =>

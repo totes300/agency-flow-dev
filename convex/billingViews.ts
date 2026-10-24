@@ -12,7 +12,7 @@
  */
 
 import { v } from "convex/values";
-import { query, type QueryCtx } from "./_generated/server";
+import { internalQuery, query, type QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireAdmin } from "./lib/auth";
 import { getOrgSettings } from "./lib/orgHelpers";
@@ -327,8 +327,12 @@ async function buildQueue(ctx: QueryCtx, orgId: string): Promise<CloseQueueData>
   return { months, actionableCount: rows.length };
 }
 
-/** Billing → Close: one row per project that has a period due. */
-export const getCloseQueue = query({
+/**
+ * One row per project's committable period — the pre-redesign queue. No UI
+ * reads it any more (the hub is `getNeedsAction`); it stays internal as the
+ * N11 consistency fixture of the billing suites.
+ */
+export const getCloseQueue = internalQuery({
   args: {},
   handler: async (ctx): Promise<CloseQueueData> => {
     const { orgId } = await requireAdmin(ctx);

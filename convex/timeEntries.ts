@@ -909,7 +909,7 @@ export const projectOverview = query({
     // row badge only; no surface shows "Draft" as a money column.
     let openMinutes = 0;
     let openAmount = 0;
-    // `openAmount` (the "ready to bill" number on the overview) groups like
+    // `openAmount` (the open, unbilled amount on the overview) groups like
     // a T&M close — by (category, task, rate), rounded up with the
     // workspace default.
     const defaultRounding = orgSettings?.roundingMinutes ?? 1;
@@ -1057,9 +1057,8 @@ export const projectOverview = query({
       // ─── Phase 8 — entry-derived billing buckets ────────────────────────
       // Time-based figures from the entry ledger (hours × billableRate
       // snapshot). Four buckets, lock-step with `entryStatus()`.
-      // For the Invoices tab "Total Invoiced" money figure (which includes
-      // manual/overage lines), use api.invoices.getProjectInvoiceMetrics
-      // instead — that one is invoice-derived, not entry-derived.
+      // Invoice money (with manual lines) comes from the invoices
+      // themselves — billingViews.getProjectBillingPeriods.
       openMinutes,     // no live close
       openAmount,
       // Billed = covered by a live close (draft or final T&M) — §6.8.

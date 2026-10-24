@@ -9,7 +9,7 @@ import { convexTest } from "convex-test";
 import schema from "../schema";
 import { api } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
-import { NO_ORG_SELECTED } from "../lib/mcpAuth";
+import { NO_ORG_SELECTED, USER_NOT_SYNCED } from "../lib/mcpAuth";
 import { REF_CAP } from "../workspaceRefs";
 
 const modules = (
@@ -138,7 +138,38 @@ describe("getMcpAuthContext via fetch(me)", () => {
     await setup(t);
     await expect(
       t.withIdentity(oauthIdentity("clerk_ghost", ORG_ID)).query(api.mcp.fetch.me, {}),
-    ).rejects.toThrow("User not found in database");
+    ).rejects.toThrow(USER_NOT_SYNCED);
+  });
+
+  it("refuses a deleted user", async () => {
+    const t = createT();
+    const { member } = await setup(t);
+    await t.run(async (ctx) => ctx.db.patch(member, { deletedAt: Date.now() }));
+    await expect(
+      t.withIdentity(oauthIdentity("clerk_member", ORG_ID)).query(api.mcp.fetch.me, {}),
+    ).rejects.toThrow(USER_NOT_SYNCED);
+  });
+
+  it("ignores role claims on the token: a member stays a member", async () => {
+    const t = createT();
+    await setup(t);
+    const hostile = { ...oauthIdentity("clerk_member", ORG_ID), org_role: "org:admin", orgRole: "org:admin" };
+    const me = await t.withIdentity(hostile).query(api.mcp.fetch.me, {});
+    expect(me.role).toBe("member");
+  });
+
+  it("accepts a membership not yet linked to its user (userId unset)", async () => {
+    const t = createT();
+    await setup(t);
+    await t.run(async (ctx) => {
+      const row = await ctx.db
+        .query("orgMembers")
+        .withIndex("by_orgId_clerkUserId", (q) => q.eq("orgId", ORG_ID).eq("clerkUserId", "clerk_member"))
+        .unique();
+      await ctx.db.patch(row!._id, { userId: undefined });
+    });
+    const me = await t.withIdentity(oauthIdentity("clerk_member", ORG_ID)).query(api.mcp.fetch.me, {});
+    expect(me).toMatchObject({ user: { name: "Mel Member" }, role: "member" });
   });
 
   it("refuses a user without membership", async () => {
@@ -236,11 +267,10 @@ describe("fetch(workspace)", () => {
     expect(ws.projects).toEqual([{ code: "PMINE", name: "Project Mine", client: "Client Mine", archived: false }]);
     expect(ws.clients.map((c) => c.prefix)).toEqual(["CMINE"]);
     expect(ws.members.map((m) => m.email).sort()).toEqual(["clerk_admin@x.test", "clerk_member@x.test"]);
-    expect(ws.truncated).toEqual([]);
     expect(JSON.stringify(ws)).not.toContain("Theirs");
   });
 
-  it("flags a table over the read cap instead of clipping silently", async () => {
+  it("refuses instead of returning a clipped list when a table is over the read cap", async () => {
     const t = createT();
     await setup(t);
     await t.run(async (ctx) => {
@@ -250,10 +280,13 @@ describe("fetch(workspace)", () => {
         });
       }
     });
-    const ws = await t
-      .withIdentity(oauthIdentity("clerk_admin", ORG_ID))
-      .query(api.mcp.fetch.workspace, {});
-    expect(ws.truncated).toEqual(["labels"]);
-    expect(ws.labels).toHaveLength(REF_CAP);
+    await expect(
+      t.withIdentity(oauthIdentity("clerk_admin", ORG_ID)).query(api.mcp.fetch.workspace, {}),
+    ).rejects.toThrow(`The workspace has more than ${REF_CAP} labels`);
+    // The UI query keeps its capped behaviour.
+    const refs = await t
+      .withIdentity(sessionIdentity("clerk_admin", ORG_ID, "org:admin"))
+      .query(api.workspaceRefs.get, {});
+    expect(refs.labels).toHaveLength(REF_CAP);
   });
 });

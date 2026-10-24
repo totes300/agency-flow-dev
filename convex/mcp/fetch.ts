@@ -1,7 +1,17 @@
+import { ConvexError } from "convex/values";
 import { query } from "../_generated/server";
 import { getMcpAuthContext } from "../lib/mcpAuth";
 import { getOrgSettings } from "../lib/orgHelpers";
-import { getWorkspaceRefsForAuth } from "../workspaceRefs";
+import { REF_CAP, getWorkspaceRefsForAuth, type WorkspaceRefTable } from "../workspaceRefs";
+
+const WORKSPACE_TABLE_LABELS: Record<WorkspaceRefTable, string> = {
+  statuses: "statuses",
+  labels: "labels",
+  projects: "projects",
+  clients: "clients",
+  orgMembers: "members",
+  workCategories: "work categories",
+};
 
 /**
  * MCP `fetch` special refs (docs/prd-mcp.md §6, D9). Each function calls
@@ -27,13 +37,21 @@ export const me = query({
  * `fetch("workspace")`: the reference data an agent needs to write valid
  * input — status, label and category names, members by email, project codes
  * and client prefixes. Display fields only, like the UI's workspace query.
- * `truncated` lists tables over the read cap; the renderer must say so.
+ * Never a partial result (owner decision D-B, like reports): a table over the
+ * read cap refuses the whole fetch instead of returning clipped rows.
  */
 export const workspace = query({
   args: {},
   handler: async (ctx) => {
     const auth = await getMcpAuthContext(ctx);
     const { refs, truncated } = await getWorkspaceRefsForAuth(ctx, auth);
+    if (truncated.length > 0) {
+      const tables = truncated.map((t) => WORKSPACE_TABLE_LABELS[t]).sort().join(", ");
+      throw new ConvexError(
+        `The workspace has more than ${REF_CAP} ${tables}, so fetch("workspace") cannot return a complete list. ` +
+          "Look up the specific records you need by reference instead.",
+      );
+    }
     const clientNames = new Map(refs.clients.map((c) => [c._id, c.name]));
     return {
       orgTaskKey: refs.orgTaskKey,
@@ -58,7 +76,6 @@ export const workspace = query({
         prefix: c.prefix,
         archived: c.archived,
       })),
-      truncated,
     };
   },
 });

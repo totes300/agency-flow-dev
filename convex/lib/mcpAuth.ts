@@ -11,6 +11,10 @@ export type McpAuthContext = AuthContext & { clientId: string };
 export const NO_ORG_SELECTED =
   "No organization selected — reconnect and pick an organization";
 
+/** The Clerk user has no synced `users` row yet (first browser sign-in creates it). */
+export const USER_NOT_SYNCED =
+  "Your Agency Flow account is not set up yet. Sign in to Agency Flow in the browser once, then retry.";
+
 /**
  * The only MCP entry point (docs/prd-mcp.md §5.2). Every `convex/mcp/*`
  * function calls it first (I1) and takes no org, user or role arguments (I2).
@@ -50,7 +54,7 @@ export async function getMcpAuthContext(
     .withIndex("byExternalId", (q) => q.eq("externalId", identity.subject))
     .unique();
   if (!user || user.deletedAt) {
-    throw new ConvexError("User not found in database");
+    throw new ConvexError(USER_NOT_SYNCED);
   }
 
   const membership = await findOrgMembership(ctx, orgId, identity.subject);

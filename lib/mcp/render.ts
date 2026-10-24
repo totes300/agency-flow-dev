@@ -1,25 +1,17 @@
 import type { FunctionReturnType } from "convex/server";
 import type { api } from "@/convex/_generated/api";
-import { CATEGORY_LABELS, TASK_CATEGORIES } from "@/convex/tasks/model";
+import { TASK_CATEGORIES } from "@/convex/tasks/model";
 
 /**
  * Compact markdown renderers for MCP tool results (docs/prd-mcp.md §7, D10).
  * Convex returns data; these turn it into token-efficient text. Archived
  * reference rows are counted, not listed: agents should only write active
- * values. Nothing is ever clipped silently.
+ * values. Names are user input and may contain commas, so every value gets
+ * its own line; fields within a line are separated by " · ".
  */
 
 export type MeData = FunctionReturnType<typeof api.mcp.fetch.me>;
 export type WorkspaceData = FunctionReturnType<typeof api.mcp.fetch.workspace>;
-
-const WORKSPACE_TABLE_LABELS: Record<WorkspaceData["truncated"][number], string> = {
-  statuses: "statuses",
-  labels: "labels",
-  projects: "projects",
-  clients: "clients",
-  orgMembers: "members",
-  workCategories: "work categories",
-};
 
 /** Names are user input: keep every list item on one line. */
 function oneLine(value: string): string {
@@ -47,30 +39,23 @@ export function renderMe(data: MeData): string {
 export function renderWorkspace(data: WorkspaceData): string {
   const parts: string[] = ["## Workspace"];
 
-  if (data.truncated.length > 0) {
-    const tables = data.truncated.map((t) => WORKSPACE_TABLE_LABELS[t]).join(", ");
-    parts.push(
-      `> Truncated: the ${tables} ${data.truncated.length > 1 ? "lists exceed" : "list exceeds"} the read limit; only the first rows are shown.`,
-    );
-  }
-
   if (data.orgTaskKey) {
     parts.push(`Task key for tasks without a project: ${data.orgTaskKey}`);
   }
 
+  // Category order (TASK_CATEGORIES), then the workspace's status order.
   const statusLines: string[] = [];
   for (const category of TASK_CATEGORIES) {
-    const names = data.statuses
-      .filter((s) => s.category === category && !s.archived)
-      .map((s) => (s.isDefault ? `${oneLine(s.name)} (default)` : oneLine(s.name)));
-    if (names.length > 0) statusLines.push(`- ${CATEGORY_LABELS[category]}: ${names.join(", ")}`);
+    for (const s of data.statuses) {
+      if (s.category !== category || s.archived) continue;
+      const marker = s.isDefault ? " · default" : "";
+      statusLines.push(`- ${oneLine(s.name)} · ${category}${marker}`);
+    }
   }
-  parts.push(section("Statuses", statusLines, archivedNote(data.statuses)));
+  parts.push(section("Statuses (name · category)", statusLines, archivedNote(data.statuses)));
 
-  const activeNames = (rows: readonly { name: string; archived: boolean }[]) => {
-    const names = rows.filter((r) => !r.archived).map((r) => oneLine(r.name));
-    return names.length > 0 ? [names.join(", ")] : [];
-  };
+  const activeNames = (rows: readonly { name: string; archived: boolean }[]) =>
+    rows.filter((r) => !r.archived).map((r) => `- ${oneLine(r.name)}`);
   parts.push(section("Labels", activeNames(data.labels), archivedNote(data.labels)));
   parts.push(section("Work categories", activeNames(data.workCategories), archivedNote(data.workCategories)));
 

@@ -20,7 +20,6 @@ const WORKSPACE: WorkspaceData = {
   members: [],
   projects: [],
   clients: [],
-  truncated: [],
 };
 
 /** Fake Convex: answers by function name, or throws `error` when given. */

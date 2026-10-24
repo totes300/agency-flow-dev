@@ -13,7 +13,7 @@ const WORKSPACE: WorkspaceData = {
   ],
   labels: [
     { name: "Bug", archived: false },
-    { name: "Feature\nrequest", archived: false },
+    { name: "Feature, request", archived: false },
   ],
   workCategories: [{ name: "Design", archived: false }],
   members: [
@@ -28,7 +28,6 @@ const WORKSPACE: WorkspaceData = {
     { id: "k1" as Id<"clients">, name: "Arlo", prefix: "ARL", archived: false },
     { id: "k2" as Id<"clients">, name: "No Prefix Ltd", prefix: null, archived: false },
   ],
-  truncated: [],
 };
 
 describe("renderMe", () => {
@@ -50,14 +49,14 @@ describe("renderMe", () => {
 });
 
 describe("renderWorkspace", () => {
-  it("renders the compact reference sheet", () => {
+  it("renders the compact reference sheet, one value per line", () => {
     expect(renderWorkspace(WORKSPACE)).toBe(
       [
         "## Workspace",
         "Task key for tasks without a project: KON",
-        "### Statuses (+1 archived)\n- Backlog: Backlog (default)\n- Unstarted: Todo (default)\n- Started: In progress\n- Completed: Done (default)",
-        "### Labels\nBug, Feature request",
-        "### Work categories\nDesign",
+        "### Statuses (name · category) (+1 archived)\n- Backlog · backlog · default\n- Todo · unstarted · default\n- In progress · started\n- Done · completed · default",
+        "### Labels\n- Bug\n- Feature, request",
+        "### Work categories\n- Design",
         "### Members (name · email · role)\n- Ada Admin · ada@x.test · admin\n- Mel Member · no email · member",
         "### Projects (code · name · client) (+1 archived)\n- ARLO · Arlo website · Arlo",
         "### Clients (prefix or id · name)\n- ARL · Arlo\n- k2 · No Prefix Ltd",
@@ -65,9 +64,12 @@ describe("renderWorkspace", () => {
     );
   });
 
-  it("says so when a list was truncated", () => {
-    const text = renderWorkspace({ ...WORKSPACE, truncated: ["projects", "orgMembers"] });
-    expect(text).toContain("> Truncated: the projects, members lists exceed the read limit");
+  it("keeps names with commas or newlines unambiguous", () => {
+    const text = renderWorkspace({
+      ...WORKSPACE,
+      labels: [{ name: "Bug, urgent\nnow", archived: false }, { name: "Later", archived: false }],
+    });
+    expect(text).toContain("### Labels\n- Bug, urgent now\n- Later");
   });
 
   it("marks empty sections", () => {

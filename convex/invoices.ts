@@ -172,11 +172,14 @@ export const listAllInvoices = query({
         // Tenancy guard: never surface a related doc that doesn't belong to this org.
         const safeProject = project && project.orgId === orgId ? project : null;
         const safeClient = client && client.orgId === orgId ? client : null;
+        // The period the invoice bills (its close); null for fixed-fee invoices.
+        const close = inv.closeId ? await ctx.db.get(inv.closeId) : null;
         return {
           ...toInvoiceView(inv),
           projectName: safeProject?.name ?? "Unknown",
           projectBillingType: safeProject?.billingType ?? "t_and_m",
           clientName: safeClient?.name ?? "Unknown",
+          period: close && close.orgId === orgId ? { start: close.periodStart, end: close.periodEnd } : null,
         };
       }),
     );

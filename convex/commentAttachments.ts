@@ -1,6 +1,7 @@
 import { v, ConvexError } from "convex/values";
-import { query, mutation } from "./_generated/server";
-import { getAuthContext } from "./lib/auth";
+import { query, mutation, type QueryCtx } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
+import { getAuthContext, type AuthContext } from "./lib/auth";
 import { loadTaskForReadOrNull } from "./tasks/access";
 import { isMimeTypeBlocked } from "./lib/content_validation";
 
@@ -11,19 +12,49 @@ const MAX_FILE_NAME_LENGTH = 255;
 // ─── Query ──────────────────────────────────────────────────────────────────────
 
 /**
+ * A task's comment attachments for an already-authorized caller, with file
+ * URLs. Null when the caller cannot read the task (tasks/access.ts, T1).
+ * Shared by `byTask` below and the MCP `fetch` tool. Without `cap` every row
+ * is read (the UI groups them per comment); with `cap`, `truncated` says
+ * whether more exist.
+ */
+export async function listCommentAttachmentsForAuth(
+  ctx: QueryCtx,
+  auth: AuthContext,
+  taskId: Id<"tasks">,
+  cap?: number,
+) {
+  if (!(await loadTaskForReadOrNull(ctx, taskId, auth))) return null;
+
+  const query = ctx.db.query("commentAttachments").withIndex("by_task", (q) => q.eq("taskId", taskId));
+  const rows = cap === undefined ? await query.collect() : await query.take(cap + 1);
+  const attachments = cap === undefined ? rows : rows.slice(0, cap);
+
+  // Fetch all storage URLs in parallel
+  const urls = await Promise.all(attachments.map((att) => ctx.storage.getUrl(att.fileId)));
+  return {
+    attachments: attachments.map((att, i) => ({
+      _id: att._id,
+      commentId: att.commentId,
+      fileName: att.fileName,
+      fileSize: att.fileSize,
+      mimeType: att.mimeType,
+      url: urls[i],
+    })),
+    truncated: cap !== undefined && rows.length > cap,
+  };
+}
+
+/**
  * Get all comment attachments for a task, grouped by commentId.
  * Returns a record keyed by commentId → array of attachments with URLs.
  */
 export const byTask = query({
   args: { taskId: v.id("tasks") },
   handler: async (ctx, { taskId }) => {
-    // Access via tasks/access.ts (T1, incl. sub-tasks of an assigned parent).
-    if (!(await loadTaskForReadOrNull(ctx, taskId))) return {};
-
-    const attachments = await ctx.db
-      .query("commentAttachments")
-      .withIndex("by_task", (q) => q.eq("taskId", taskId))
-      .collect();
+    const auth = await getAuthContext(ctx);
+    const result = await listCommentAttachmentsForAuth(ctx, auth, taskId);
+    if (!result) return {};
 
     const grouped: Record<
       string,
@@ -36,21 +67,9 @@ export const byTask = query({
       }>
     > = {};
 
-    // Fetch all storage URLs in parallel
-    const urls = await Promise.all(
-      attachments.map((att) => ctx.storage.getUrl(att.fileId))
-    );
-
-    for (let i = 0; i < attachments.length; i++) {
-      const att = attachments[i];
-      if (!grouped[att.commentId]) grouped[att.commentId] = [];
-      grouped[att.commentId].push({
-        _id: att._id,
-        fileName: att.fileName,
-        fileSize: att.fileSize,
-        mimeType: att.mimeType,
-        url: urls[i],
-      });
+    for (const { commentId, ...att } of result.attachments) {
+      if (!grouped[commentId]) grouped[commentId] = [];
+      grouped[commentId].push(att);
     }
 
     return grouped;

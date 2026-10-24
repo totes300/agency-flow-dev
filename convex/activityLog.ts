@@ -1,5 +1,6 @@
 import { v } from "convex/values";
-import { query, MutationCtx } from "./_generated/server";
+import { query, MutationCtx, type QueryCtx } from "./_generated/server";
+import { getAuthContext, type AuthContext } from "./lib/auth";
 import { Id } from "./_generated/dataModel";
 import { loadTaskForReadOrNull } from "./tasks/access";
 import type { ActivityEvent } from "./tasks/model";
@@ -30,6 +31,51 @@ export async function logActivity(
 
 // ─── Query ──────────────────────────────────────────────────────────────────────
 
+/** Activity events read per task. */
+export const TASK_ACTIVITY_CAP = 500;
+
+/**
+ * A task's activity for an already-authorized caller, oldest first, with
+ * user names joined; description edits are left out. Null when the caller
+ * cannot read the task (tasks/access.ts, T1). Shared by `byTask` below and
+ * the MCP `fetch` tool; `truncated` = more than `cap` events exist.
+ */
+export async function listTaskActivityForAuth(
+  ctx: QueryCtx,
+  auth: AuthContext,
+  taskId: Id<"tasks">,
+  cap: number = TASK_ACTIVITY_CAP,
+) {
+  if (!(await loadTaskForReadOrNull(ctx, taskId, auth))) return null;
+
+  const rows = await ctx.db
+    .query("activityLog")
+    .withIndex("by_task", (q) => q.eq("taskId", taskId))
+    .take(cap + 1);
+  const events = rows.slice(0, cap).filter((event) => event.type !== "description_changed");
+
+  // Join user names with dedup cache
+  const userCache = new Map<string, string>();
+  for (const event of events) {
+    if (!userCache.has(event.userId)) {
+      const user = await ctx.db.get(event.userId);
+      userCache.set(event.userId, user?.name ?? "Unknown");
+    }
+  }
+
+  return {
+    events: events.map((event) => ({
+      _id: event._id,
+      type: event.type,
+      metadata: event.metadata,
+      createdAt: event.createdAt,
+      userId: event.userId,
+      userName: userCache.get(event.userId) ?? "Unknown",
+    })),
+    truncated: rows.length > cap,
+  };
+}
+
 /**
  * Get activity log for a task, sorted chronologically.
  * Returns events with user name joined.
@@ -37,32 +83,8 @@ export async function logActivity(
 export const byTask = query({
   args: { taskId: v.id("tasks") },
   handler: async (ctx, { taskId }) => {
-    // Access via tasks/access.ts (T1, incl. sub-tasks of an assigned parent).
-    if (!(await loadTaskForReadOrNull(ctx, taskId))) return [];
-
-    const events = (await ctx.db
-      .query("activityLog")
-      .withIndex("by_task", (q) => q.eq("taskId", taskId))
-      .take(500))
-      .filter((event) => event.type !== "description_changed");
-
-    // Join user names with dedup cache
-    const userCache = new Map<string, string>();
-    for (const event of events) {
-      if (!userCache.has(event.userId)) {
-        const user = await ctx.db.get(event.userId);
-        userCache.set(event.userId, user?.name ?? "Unknown");
-      }
-    }
-
-    return events.map((event) => ({
-      _id: event._id,
-      type: event.type,
-      metadata: event.metadata,
-      createdAt: event.createdAt,
-      userId: event.userId,
-      userName: userCache.get(event.userId) ?? "Unknown",
-    }));
+    const auth = await getAuthContext(ctx);
+    return (await listTaskActivityForAuth(ctx, auth, taskId))?.events ?? [];
   },
 });
 

@@ -35,6 +35,7 @@ export type AgentTaskFilterInput = {
   projectId?: string;
   assigneeId?: string;
   workCategoryId?: string;
+  labelId?: string;
   /** Due on or after this date (YYYY-MM-DD), inclusive. */
   dueAfter?: string;
   /** Due on or before this date (YYYY-MM-DD), inclusive. */
@@ -72,7 +73,10 @@ export function agentTaskCategories(input: {
  * (`inDueRange`).
  */
 export function agentTaskViewFilters(
-  input: Pick<AgentTaskFilterInput, "statusId" | "clientId" | "projectId" | "assigneeId" | "workCategoryId">,
+  input: Pick<
+    AgentTaskFilterInput,
+    "statusId" | "clientId" | "projectId" | "assigneeId" | "workCategoryId" | "labelId"
+  >,
   categories: readonly TaskCategory[],
 ): ListFilter[] {
   const filters: ListFilter[] = [{ property: "statusCategory", operator: "is", values: [...categories] }];
@@ -84,6 +88,7 @@ export function agentTaskViewFilters(
   pin("project", input.projectId);
   pin("assignee", input.assigneeId);
   pin("workCategory", input.workCategoryId);
+  pin("label", input.labelId);
   return filters;
 }
 

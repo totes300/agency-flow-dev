@@ -1,7 +1,7 @@
 import { v, ConvexError } from "convex/values";
 import { query, mutation } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
-import { getAuthContext } from "./lib/auth";
+import { getAuthContext, type AuthContext } from "./lib/auth";
 import { roundMinutes } from "./lib/rounding";
 import { getDateInTimezone, ORG_TIMEZONE_FALLBACK } from "./lib/timer";
 import { getOrgSettings, getProjectCurrency, resolveRateSnapshot, resolveEntryCategory } from "./lib/orgHelpers";
@@ -54,6 +54,17 @@ async function closeLockMessage(
 
 // ─── Queries ────────────────────────────────────────────────────────────────────
 
+/**
+ * Time-entry visibility, shared by every entry list (UI and MCP): admins see
+ * every entry of the org, members only their own.
+ */
+export function visibleTimeEntries<E extends Pick<Doc<"timeEntries">, "userId">>(
+  auth: Pick<AuthContext, "userId" | "isAdmin">,
+  entries: readonly E[],
+): E[] {
+  return auth.isAdmin ? [...entries] : entries.filter((e) => e.userId === auth.userId);
+}
+
 export const listByTask = query({
   args: { taskId: v.id("tasks") },
   handler: async (ctx, args) => {
@@ -69,9 +80,7 @@ export const listByTask = query({
       .collect();
 
     // Member sees only own entries
-    const filtered = isAdmin
-      ? entries
-      : entries.filter((e) => e.userId === userId);
+    const filtered = visibleTimeEntries({ userId, isAdmin }, entries);
 
     // Enrich with user info
     const userIds = [...new Set(filtered.map((e) => e.userId.toString()))];
@@ -692,9 +701,7 @@ export const listProjectEntries = query({
     const rawEntries = await getProjectEntries(ctx, orgId, args.projectId);
 
     // Members see only their own entries (matches listByTask).
-    const visible = isAdmin
-      ? rawEntries
-      : rawEntries.filter((e) => e.userId === userId);
+    const visible = visibleTimeEntries({ userId, isAdmin }, rawEntries);
 
     // Denormalize: user, category, invoice (tenancy-guarded).
     const userIds = [...new Set(visible.map((e) => e.userId.toString()))];

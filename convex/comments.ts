@@ -1,7 +1,7 @@
 import { v, ConvexError } from "convex/values";
-import { query, mutation } from "./_generated/server";
+import { query, mutation, type QueryCtx } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
-import { getAuthContext } from "./lib/auth";
+import { getAuthContext, type AuthContext } from "./lib/auth";
 import { logActivity } from "./activityLog";
 import { onComment } from "./tasks/derived";
 import { loadTaskForReadOrNull, loadTaskForWrite } from "./tasks/access";
@@ -13,70 +13,90 @@ import {
 
 // ─── Query ──────────────────────────────────────────────────────────────────────
 
+/** Comments read per task. */
+export const TASK_COMMENT_CAP = 500;
+
+/**
+ * A task's comments for an already-authorized caller, oldest first, with
+ * author and reply context joined. Null when the caller cannot read the task
+ * (access via tasks/access.ts, T1, incl. sub-tasks of an assigned parent).
+ * Shared by `byTask` below and the MCP `fetch` tool; `truncated` = more than
+ * `cap` comments exist.
+ */
+export async function listTaskCommentsForAuth(
+  ctx: QueryCtx,
+  auth: AuthContext,
+  taskId: Id<"tasks">,
+  cap: number = TASK_COMMENT_CAP,
+) {
+  if (!(await loadTaskForReadOrNull(ctx, taskId, auth))) return null;
+
+  const rows = await ctx.db
+    .query("comments")
+    .withIndex("by_task", (q) => q.eq("taskId", taskId))
+    .take(cap + 1);
+  const comments = rows.slice(0, cap);
+
+  // Build user cache + comment-to-userName map for parentUserName lookup
+  const userCache = new Map<string, { name: string; imageUrl?: string }>();
+  for (const c of comments) {
+    if (!userCache.has(c.userId)) {
+      const user = await ctx.db.get(c.userId);
+      userCache.set(c.userId, { name: user?.name ?? "Unknown", imageUrl: user?.imageUrl });
+    }
+    // Pre-cache resolver users (may not be comment authors)
+    if (c.resolvedBy && !userCache.has(c.resolvedBy)) {
+      const resolver = await ctx.db.get(c.resolvedBy);
+      userCache.set(c.resolvedBy, { name: resolver?.name ?? "Former member" });
+    }
+  }
+
+  // Build maps for parent comment lookups
+  const commentUserMap = new Map<string, string>();
+  const commentPreviewMap = new Map<string, string>();
+  for (const c of comments) {
+    commentUserMap.set(c._id, userCache.get(c.userId)?.name ?? "Unknown");
+    commentPreviewMap.set(c._id, extractContentPreview(c.content));
+  }
+
+  const enriched = comments.map((comment) => {
+    const user = userCache.get(comment.userId) ?? { name: "Unknown" };
+    const resolvedByName = comment.resolvedBy
+      ? userCache.get(comment.resolvedBy)?.name ?? "Former member"
+      : undefined;
+
+    return {
+      _id: comment._id,
+      content: comment.content,
+      createdAt: comment.createdAt,
+      updatedAt: comment.updatedAt,
+      userId: comment.userId,
+      userName: user.name,
+      userImageUrl: user.imageUrl,
+      parentCommentId: comment.parentCommentId,
+      parentUserName: comment.parentCommentId
+        ? commentUserMap.get(comment.parentCommentId)
+        : undefined,
+      parentPreview: comment.parentCommentId
+        ? commentPreviewMap.get(comment.parentCommentId)
+        : undefined,
+      resolvedAt: comment.resolvedAt,
+      resolvedBy: comment.resolvedBy,
+      resolvedByName,
+    };
+  });
+
+  return { comments: enriched, truncated: rows.length > cap };
+}
+
 /**
  * Get comments for a task, sorted chronologically.
  */
 export const byTask = query({
   args: { taskId: v.id("tasks") },
   handler: async (ctx, { taskId }) => {
-    // Access via tasks/access.ts (T1, incl. sub-tasks of an assigned parent).
-    if (!(await loadTaskForReadOrNull(ctx, taskId))) return [];
-
-    const comments = await ctx.db
-      .query("comments")
-      .withIndex("by_task", (q) => q.eq("taskId", taskId))
-      .take(500);
-
-    // Build user cache + comment-to-userName map for parentUserName lookup
-    const userCache = new Map<string, { name: string; imageUrl?: string }>();
-    for (const c of comments) {
-      if (!userCache.has(c.userId)) {
-        const user = await ctx.db.get(c.userId);
-        userCache.set(c.userId, { name: user?.name ?? "Unknown", imageUrl: user?.imageUrl });
-      }
-      // Pre-cache resolver users (may not be comment authors)
-      if (c.resolvedBy && !userCache.has(c.resolvedBy)) {
-        const resolver = await ctx.db.get(c.resolvedBy);
-        userCache.set(c.resolvedBy, { name: resolver?.name ?? "Former member" });
-      }
-    }
-
-    // Build maps for parent comment lookups
-    const commentUserMap = new Map<string, string>();
-    const commentPreviewMap = new Map<string, string>();
-    for (const c of comments) {
-      commentUserMap.set(c._id, userCache.get(c.userId)?.name ?? "Unknown");
-      commentPreviewMap.set(c._id, extractContentPreview(c.content));
-    }
-
-    const enriched = comments.map((comment) => {
-      const user = userCache.get(comment.userId) ?? { name: "Unknown" };
-      const resolvedByName = comment.resolvedBy
-        ? userCache.get(comment.resolvedBy)?.name ?? "Former member"
-        : undefined;
-
-      return {
-        _id: comment._id,
-        content: comment.content,
-        createdAt: comment.createdAt,
-        updatedAt: comment.updatedAt,
-        userId: comment.userId,
-        userName: user.name,
-        userImageUrl: user.imageUrl,
-        parentCommentId: comment.parentCommentId,
-        parentUserName: comment.parentCommentId
-          ? commentUserMap.get(comment.parentCommentId)
-          : undefined,
-        parentPreview: comment.parentCommentId
-          ? commentPreviewMap.get(comment.parentCommentId)
-          : undefined,
-        resolvedAt: comment.resolvedAt,
-        resolvedBy: comment.resolvedBy,
-        resolvedByName,
-      };
-    });
-
-    return enriched;
+    const auth = await getAuthContext(ctx);
+    return (await listTaskCommentsForAuth(ctx, auth, taskId))?.comments ?? [];
   },
 });
 

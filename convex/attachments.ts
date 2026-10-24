@@ -1,50 +1,70 @@
 import { v, ConvexError } from "convex/values";
-import { query, mutation, action } from "./_generated/server";
-import { getAuthContext, getSessionIdentity } from "./lib/auth";
+import { query, mutation, action, type QueryCtx } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
+import { getAuthContext, getSessionIdentity, type AuthContext } from "./lib/auth";
 import { loadTaskForReadOrNull, loadTaskForWrite } from "./tasks/access";
 import { isMimeTypeBlocked } from "./lib/content_validation";
 import { isSafeUrl } from "./lib/url";
 
 // ─── Query ──────────────────────────────────────────────────────────────────────
 
+/** Attachments read per task. */
+export const TASK_ATTACHMENT_CAP = 100;
+
+/**
+ * A task's attachments for an already-authorized caller, oldest first, with
+ * uploader names and file URLs. Null when the caller cannot read the task
+ * (tasks/access.ts, T1). Shared by `byTask` below and the MCP `fetch` tool;
+ * `truncated` = more than `cap` attachments exist.
+ */
+export async function listTaskAttachmentsForAuth(
+  ctx: QueryCtx,
+  auth: AuthContext,
+  taskId: Id<"tasks">,
+  cap: number = TASK_ATTACHMENT_CAP,
+) {
+  if (!(await loadTaskForReadOrNull(ctx, taskId, auth))) return null;
+
+  const rows = await ctx.db
+    .query("attachments")
+    .withIndex("by_task", (q) => q.eq("taskId", taskId))
+    .take(cap + 1);
+  const attachments = rows.slice(0, cap);
+
+  // Build user cache to avoid N+1
+  const userCache = new Map<string, string>();
+  for (const att of attachments) {
+    if (!userCache.has(att.userId)) {
+      const user = await ctx.db.get(att.userId);
+      userCache.set(att.userId, user?.name ?? "Unknown");
+    }
+  }
+
+  // Generate URLs for all files in parallel
+  const enriched = await Promise.all(
+    attachments.map(async (att) => {
+      const url = await ctx.storage.getUrl(att.fileId);
+      return {
+        _id: att._id,
+        fileName: att.fileName,
+        fileSize: att.fileSize,
+        mimeType: att.mimeType,
+        url,
+        userId: att.userId,
+        createdAt: att.createdAt,
+        userName: userCache.get(att.userId) ?? "Unknown",
+      };
+    })
+  );
+
+  return { attachments: enriched, truncated: rows.length > cap };
+}
+
 export const byTask = query({
   args: { taskId: v.id("tasks") },
   handler: async (ctx, { taskId }) => {
-    // Access via tasks/access.ts (T1, incl. sub-tasks of an assigned parent).
-    if (!(await loadTaskForReadOrNull(ctx, taskId))) return [];
-
-    const attachments = await ctx.db
-      .query("attachments")
-      .withIndex("by_task", (q) => q.eq("taskId", taskId))
-      .take(100);
-
-    // Build user cache to avoid N+1
-    const userCache = new Map<string, string>();
-    for (const att of attachments) {
-      if (!userCache.has(att.userId)) {
-        const user = await ctx.db.get(att.userId);
-        userCache.set(att.userId, user?.name ?? "Unknown");
-      }
-    }
-
-    // Generate URLs for all files in parallel
-    const enriched = await Promise.all(
-      attachments.map(async (att) => {
-        const url = await ctx.storage.getUrl(att.fileId);
-        return {
-          _id: att._id,
-          fileName: att.fileName,
-          fileSize: att.fileSize,
-          mimeType: att.mimeType,
-          url,
-          userId: att.userId,
-          createdAt: att.createdAt,
-          userName: userCache.get(att.userId) ?? "Unknown",
-        };
-      })
-    );
-
-    return enriched;
+    const auth = await getAuthContext(ctx);
+    return (await listTaskAttachmentsForAuth(ctx, auth, taskId))?.attachments ?? [];
   },
 });
 

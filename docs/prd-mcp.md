@@ -539,6 +539,16 @@ before changing the PRD. Code, documentation and commit messages stay in English
 | 7 | Clients, projects, planner, notes, inbox and files | Not started | — | — | Depends on slice 6 done |
 | 8 | Connected apps, help and final review | Not started | — | — | Final push/PR requires owner approval |
 
+### Known limits (accepted, owner 2026-10-24)
+
+- A Convex read-limit error (4,096 index ranges per function) cannot be caught inside
+  the function, and production may redact its text. The model then sees "Internal
+  error.". The defence is sizing every path to stay under budget; a one-off stress test
+  on dev after slice 3 verifies the budgets.
+- The member path of task search costs about one read range per assigned task. This is
+  shared with the UI and only matters at around 2,000 tasks per member. Optimise it
+  together with the UI if that ever becomes real.
+
 ### Slice 1 plan and preflight (2026-10-24)
 
 - Update `package.json` / lockfile for Clerk >=7.2.3 and the official example's

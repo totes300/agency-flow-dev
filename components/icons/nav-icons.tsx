@@ -52,10 +52,6 @@ export const MyTasksNavIcon = createNavIcon("MyTasksNavIcon", <>
   <circle cx="8" cy="8" r="5.6" strokeDasharray="2.2 1.6" /><circle cx="8" cy="8" r="2" />
 </>)
 
-export const AgentNavIcon = createNavIcon("AgentNavIcon", <>
-  <path d="m3 2.75 10 5.25-10 5.25 1.75-5.25z" /><path d="M4.75 8H8" />
-</>)
-
 export const TasksNavIcon = createNavIcon("TasksNavIcon", <>
   <rect x="2.5" y="2.5" width="11" height="11" rx="3" /><path d="m5.6 8.1 1.7 1.7 3.2-3.6" />
 </>)

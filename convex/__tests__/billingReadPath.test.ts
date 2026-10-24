@@ -315,7 +315,7 @@ describe("§8.3 — one balance ladder on every surface", () => {
       expect(row?.cycle?.usedMinutes).toBe(stmt?.cycleToDate?.usedMinutes);
     }
 
-    const summary = await as(w).query(api.projects.getSummary, { projectId: w.projectId, cycleOffset: -1 });
+    const summary = await as(w).query(api.projects.getSummary, { projectId: w.projectId, period: "2026-04" });
     expect(summary?.billingType === "retainer" && summary.timeBreakdown.cycleBudgetMinutes).toBe(1800);
     expect(summary?.billingType === "retainer" && summary.overage).toMatchObject({
       overBudgetMinutes: 340,
@@ -363,7 +363,7 @@ describe("§8.3 — one balance ladder on every surface", () => {
       [0, 600],
     ]);
     expect(page).toMatchObject({ overageMinutes: 600, overageDue: 900 });
-    const summary = await as(w).query(api.projects.getSummary, { projectId: w.projectId, cycleOffset: -1 });
+    const summary = await as(w).query(api.projects.getSummary, { projectId: w.projectId, period: "2026-04" });
     expect(summary?.billingType === "retainer" && summary.overage).toMatchObject({
       overBudgetMinutes: 600,
       overageDueAmount: 900,

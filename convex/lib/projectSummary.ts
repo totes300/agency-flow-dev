@@ -151,7 +151,14 @@ export type RetainerSummary = {
   profitability?: Profitability;
 };
 
-export type ProjectSummary = TmSummary | FixedSummary | RetainerSummary;
+/** Non-billable: the period's time breakdown only (no money). */
+export type NonBillableSummary = {
+  billingType: "non_billable";
+  currency: string;
+  timeBreakdown: TimeBreakdownTm;
+};
+
+export type ProjectSummary = TmSummary | FixedSummary | RetainerSummary | NonBillableSummary;
 
 // ─── T&M ──────────────────────────────────────────────────────────────────────
 

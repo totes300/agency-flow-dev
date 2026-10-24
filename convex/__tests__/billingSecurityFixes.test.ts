@@ -204,9 +204,16 @@ describe("A15 — one definition of billed", () => {
     await commit(w, p, "2026-04-01"); // stays a draft
 
     const overview = await asAdmin(w).query(api.timeEntries.projectOverview, { projectId: p.projectId });
-    const summary = await asAdmin(w).query(api.projects.getSummary, { projectId: p.projectId, dateRange: { preset: "all" } });
     expect(overview).toMatchObject({ billedMinutes: 90, billedAmount: 150, openMinutes: 45 });
-    if (summary?.billingType !== "t_and_m") throw new Error("expected a T&M summary");
-    expect(summary.billingStatus).toMatchObject({ billedMinutes: 90, billedAmount: 150, unbilledMinutes: 45 });
+    // The finance card's per-period billed adds up to the same total (P9).
+    const billed = { minutes: 0, amount: 0, unbilledMinutes: 0 };
+    for (const period of ["2026-03", "2026-04", "2026-05"]) {
+      const summary = await asAdmin(w).query(api.projects.getSummary, { projectId: p.projectId, period });
+      if (summary?.billingType !== "t_and_m") throw new Error("expected a T&M summary");
+      billed.minutes += summary.billingStatus!.billedMinutes;
+      billed.amount += summary.billingStatus!.billedAmount;
+      billed.unbilledMinutes += summary.billingStatus!.unbilledMinutes;
+    }
+    expect(billed).toEqual({ minutes: 90, amount: 150, unbilledMinutes: 45 });
   });
 });

@@ -11,7 +11,15 @@ import { getOrgSettings, getProjectCurrency } from "./lib/orgHelpers";
 import { fixedBilledMinor } from "./lib/billing/invoiceLifecycle";
 import { fromMinor, toMinor } from "./lib/billing/money";
 import { getLiveCloses, loadCloseContext } from "./lib/billing/closeData";
-import { getCyclePeriods } from "./lib/billing/periods";
+import {
+  absMonthOf,
+  getCyclePeriods,
+  monthKeyFromAbs,
+  monthPeriodOf,
+  periodMonths,
+  periodOfDate,
+  type PeriodGridProject,
+} from "./lib/billing/periods";
 import { monthBalances, type MonthBalance } from "./lib/billing/periodView";
 import { loadReportMonths } from "./lib/billing/reportMonths";
 import { autoSaveTimersForTasks } from "./lib/timerEntry";
@@ -23,12 +31,10 @@ import {
   computeTmSummary,
   computeFixedSummary,
   computeRetainerSummary,
-  resolveDateRange,
   type EntryInput,
   type InvoiceInput,
   type LineItemInput,
   type DateRange,
-  type DateRangePreset,
   type RetainerCycleContext,
   type ProjectSummary,
 } from "./lib/projectSummary";
@@ -847,32 +853,26 @@ export const getRetainerData = query({
 //
 // See docs/project-summary-prd.md for the canonical formulas.
 
-const dateRangePresetValidator = v.union(
-  v.literal("this_month"),
-  v.literal("this_quarter"),
-  v.literal("this_year"),
-  v.literal("all"),
-  v.literal("custom"),
-);
-
+/**
+ * The project Overview's finance card for one period
+ * (docs/prd-project-billing-redesign.md §7.2): `period` = "YYYY-MM" of any
+ * month (absent = the current one). Retainer → the period containing it on
+ * the project's grid (a rollover cycle, else the month); T&M → that calendar
+ * month; fixed → project to date. Admin-only (§9): every column but the time
+ * breakdown is money.
+ */
 export const getSummary = query({
   args: {
     projectId: v.id("projects"),
-    dateRange: v.optional(
-      v.object({
-        preset: dateRangePresetValidator,
-        from: v.optional(v.string()),
-        to: v.optional(v.string()),
-      }),
-    ),
-    cycleOffset: v.optional(v.number()),
+    period: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<ProjectSummary | null> => {
-    const { orgId, isAdmin } = await getAuthContext(ctx);
+    const { orgId } = await requireAdmin(ctx);
+    const isAdmin = true;
 
     const project = await ctx.db.get(args.projectId);
     if (!project || project.orgId !== orgId) return null;
-    if (project.billingType === "non_billable") return null;
+    if (args.period !== undefined && !/^\d{4}-(0[1-9]|1[0-2])$/.test(args.period)) return null;
 
     const currency = await getProjectCurrency(ctx, project);
 
@@ -888,16 +888,27 @@ export const getSummary = query({
       date: e.date,
     }));
 
+    if (project.billingType === "non_billable") {
+      const orgSettings = await getOrgSettings(ctx, orgId);
+      const today = getDateInTimezone(Date.now(), orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK);
+      const month = monthPeriodOf(`${args.period ?? today.slice(0, 7)}-01`);
+      const inMonth = entries.filter((e) => e.date >= month.start && e.date <= month.end);
+      const billableMinutes = inMonth.reduce((sum, e) => sum + (e.isBillable ? e.durationMinutes : 0), 0);
+      const totalMinutes = inMonth.reduce((sum, e) => sum + e.durationMinutes, 0);
+      return {
+        billingType: "non_billable",
+        currency,
+        timeBreakdown: { totalMinutes, billableMinutes, nonBillableMinutes: totalMinutes - billableMinutes },
+      };
+    }
+
     if (project.billingType === "t_and_m") {
       const orgSettings = await getOrgSettings(ctx, orgId);
       const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
       const today = getDateInTimezone(Date.now(), timezone);
 
-      const preset: DateRangePreset = args.dateRange?.preset ?? "all";
-      const dateRange: DateRange = resolveDateRange(preset, today, {
-        from: args.dateRange?.from,
-        to: args.dateRange?.to,
-      });
+      const month = monthPeriodOf(`${args.period ?? today.slice(0, 7)}-01`);
+      const dateRange: DateRange = { preset: "custom", from: month.start, to: month.end };
 
       return computeTmSummary({
         entries,
@@ -974,13 +985,11 @@ export const getSummary = query({
     const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
     const todayStr = getDateInTimezone(Date.now(), timezone);
 
-    const cycleContext = resolveRetainerCycleContext({
-      startDate,
-      cycleLength,
-      offset: args.cycleOffset ?? 0,
+    const cycleContext = resolveRetainerPeriodContext({
+      project: { billingType: "retainer", startDate, rolloverEnabled, cycleLength },
+      monthKey: args.period ?? todayStr.slice(0, 7),
       todayStr,
     });
-    if (!cycleContext) return null;
 
     // Report months (billing refactor N8): an entry counts on the month its
     // close bills it — skipped and late work on the receiving month.
@@ -1055,17 +1064,13 @@ export const getSummary = query({
 });
 
 /**
- * Resolve retainer cycle boundaries for a given project + offset.
- *
- * Thin adapter over `getCyclePeriods` that preserves the
- * pre-existing return shape `{ start, end, length, number, offset, ...,
- * monthKeys }` consumed by `getSummary`. The boundary math itself lives in
- * `convex/lib/billing/periods.ts`.
+ * The retainer period containing `monthKey` on the project's grid — a
+ * rollover cycle, else the calendar month — in the shape `getSummary`
+ * reports. A month before the start clamps to the first period.
  */
-function resolveRetainerCycleContext(input: {
-  startDate: string;
-  cycleLength: number;
-  offset: number;
+function resolveRetainerPeriodContext(input: {
+  project: PeriodGridProject & { startDate: string };
+  monthKey: string;
   todayStr: string;
 }): {
   start: string;
@@ -1077,26 +1082,26 @@ function resolveRetainerCycleContext(input: {
   hasPreviousCycle: boolean;
   hasNextCycle: boolean;
   monthKeys: string[];
-} | null {
-  const cycle = getCyclePeriods({
-    startDate: input.startDate,
-    cycleLength: input.cycleLength,
-    todayStr: input.todayStr,
-    cycleOffset: input.offset,
-  });
-  if (!cycle) return null;
-  const monthKeys = cycle.periods.map((p) => p.periodStart.slice(0, 7));
-
+} {
+  const { project, todayStr } = input;
+  const first = periodOfDate(project, project.startDate);
+  const wanted = `${input.monthKey}-01`;
+  const period = wanted < first.start ? first : periodOfDate(project, wanted);
+  const current = periodOfDate(project, todayStr);
+  const length = periodMonths(project);
+  const index = Math.round((absMonthOf(period.start) - absMonthOf(first.start)) / length);
+  const currentIndex = Math.round((absMonthOf(current.start) - absMonthOf(first.start)) / length);
+  const startAbs = absMonthOf(period.start);
   return {
-    start: cycle.cycleStart,
-    end: cycle.cycleEnd,
-    length: input.cycleLength,
-    number: cycle.cycleIndex + 1,
-    offset: input.offset,
-    isCycleClosed: cycle.isCycleClosed,
-    hasPreviousCycle: cycle.cycleIndex > 0,
-    hasNextCycle: cycle.cycleIndex < cycle.currentCycleIndex,
-    monthKeys,
+    start: period.start,
+    end: period.end,
+    length,
+    number: index + 1,
+    offset: index - currentIndex,
+    isCycleClosed: period.end < todayStr,
+    hasPreviousCycle: index > 0,
+    hasNextCycle: index < currentIndex,
+    monthKeys: Array.from({ length }, (_, i) => monthKeyFromAbs(startAbs + i)),
   };
 }
 

@@ -12,7 +12,7 @@ import { useLastDefined } from "@/lib/hooks/use-last-defined"
 import { useOptionalQuery } from "@/lib/hooks/use-optional-query"
 import { useRowSelection } from "@/lib/hooks/use-row-selection"
 import { parseTaskRef } from "@/lib/task-detail"
-import { formatDateToYMD } from "@/lib/format"
+import { formatDateToYMD, formatMinutes } from "@/lib/format"
 import { toastError } from "@/lib/toast-helpers"
 import { Button } from "@/components/ui/button"
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
@@ -74,6 +74,26 @@ const CLOSED_ROW_MAX = 2000
 /** Columns a board card never shows: the ID (U3) and the long list-only cells. */
 const BOARD_HIDDEN_KEYS: ReadonlySet<ColumnKey> = new Set(["id", "created", "activity"])
 
+/** The project Overview's Work list (docs/prd-project-billing-redesign.md §7.2): every status, period columns. */
+const WORK_COLUMNS: TaskViewSpec["visibleProperties"] = ["priority", "id", "status", "title", "assignee", "time"]
+const WORK_IN_PERIOD_VIEW: ViewOption = {
+  key: "work",
+  name: "Work",
+  scope: "system",
+  canEdit: false,
+  spec: { ...SYSTEM_VIEWS.project.all.spec, visibleProperties: WORK_COLUMNS },
+}
+/** Fixed fee: no period, the project's active work. */
+const WORK_ACTIVE_VIEW: ViewOption = {
+  ...WORK_IN_PERIOD_VIEW,
+  spec: { ...SYSTEM_VIEWS.project.active.spec, visibleProperties: WORK_COLUMNS },
+}
+
+function groupTimeTotal(group: TaskGroup): string | undefined {
+  const minutes = group.rows.reduce((sum, r) => sum + r.task.trackedMinutes, 0)
+  return formatMinutes(minutes)
+}
+
 /** Filter fields a project's own tab hides (every row has that project and client). */
 const PROJECT_CONTEXT_HIDDEN_FIELDS: ReadonlySet<FilterField> = new Set(["project", "client"])
 
@@ -104,6 +124,9 @@ export function TaskView({
   projectId,
   fromLabel,
   embedded = false,
+  workedIn,
+  workTitle,
+  workEmpty,
 }: {
   surface: TaskViewSurface
   /** Required for `surface: "project"`. */
@@ -112,6 +135,17 @@ export function TaskView({
   fromLabel?: string
   /** Inside another page (the project page) instead of filling the app panel. */
   embedded?: boolean
+  /**
+   * The project Overview's Work list (docs/prd-project-billing-redesign.md
+   * §7.2): tasks worked in this range (`listView` workedIn), one fixed view,
+   * the Time column showing the minutes logged in the range. Without a range
+   * (fixed fee) the list is the project's active work.
+   */
+  workedIn?: { from: string; to: string } | null
+  /** The Work list's section title ("Work in October"); presence switches the toolbar to Filter + Display. */
+  workTitle?: string
+  /** The Work list's empty state. */
+  workEmpty?: React.ReactNode
 }) {
   const { isAuthenticated } = useConvexAuth()
   const projectScoped = surface === "project"
@@ -119,7 +153,8 @@ export function TaskView({
   const viewContext: ViewContext = useMemo(() => ({ projectScoped }), [projectScoped])
   const isAdmin = useIsAdmin() ?? false
   const searchParams = useSearchParams()
-  const view = useViewState(surface)
+  const workList = workTitle !== undefined
+  const view = useViewState(surface, workList ? (workedIn ? WORK_IN_PERIOD_VIEW : WORK_ACTIVE_VIEW) : undefined)
   const viewActions = useViewActions(view)
   const { spec, draft } = view
   const viewKey = view.view.key
@@ -135,8 +170,15 @@ export function TaskView({
   const closedLimit = closedLimits[viewKey] ?? CLOSED_ROW_DEFAULT
 
   const listArgs = useMemo(
-    () => ({ surface, ...view.listQuery, projectId: scopedProjectId, closedLimit, today }),
-    [surface, view.listQuery, scopedProjectId, closedLimit, today],
+    () => ({
+      surface,
+      ...view.listQuery,
+      projectId: scopedProjectId,
+      closedLimit,
+      today,
+      ...(workedIn ? { workedIn } : {}),
+    }),
+    [surface, view.listQuery, scopedProjectId, closedLimit, today, workedIn],
   )
   const canList = !projectScoped || scopedProjectId !== undefined
   const liveResult = useQuery(
@@ -179,10 +221,13 @@ export function TaskView({
     () => [...sections.carried.map((c) => c.row), ...sections.today, ...sections.done],
     [sections],
   )
-  const listRows = useMemo(
-    () => (result && index ? sortRows(buildRowModels(result.rows, result.perUser, index), spec.orderBy) : []),
-    [result, index, spec.orderBy],
-  )
+  const listRows = useMemo(() => {
+    if (!result || !index) return []
+    // The Work list's Time column is the time logged in the period.
+    const worked = result.workedMinutes
+    const rows = worked ? result.rows.map((r) => ({ ...r, trackedMinutes: worked[r._id] ?? 0 })) : result.rows
+    return sortRows(buildRowModels(rows, result.perUser, index), spec.orderBy)
+  }, [result, index, spec.orderBy])
   const allRows = isToday ? todayRows : listRows
   const searched = useMemo(() => applySearch(allRows, view.search), [allRows, view.search])
   const rows = useMemo(() => applyChips(searched, draft.chips, me), [searched, draft.chips, me])
@@ -479,9 +524,31 @@ export function TaskView({
   return (
     <>
       <div
-        className={embedded ? TASK_VIEW_EMBEDDED_PANEL_CLASS : TASK_VIEW_PANEL_CLASS}
-        data-full-bleed={embedded ? undefined : true}
+        className={workList ? "flex w-full flex-col" : embedded ? TASK_VIEW_EMBEDDED_PANEL_CLASS : TASK_VIEW_PANEL_CLASS}
+        data-full-bleed={embedded || workList ? undefined : true}
       >
+        {workList ? (
+          <div className="flex h-11 shrink-0 items-center gap-2 pr-1 pl-3">
+            <h3 className="text-sm font-semibold">{workTitle}</h3>
+            <span className="text-sm text-muted-foreground tabular-nums">{loaded ? rows.length : ""}</span>
+            <span className="flex-1" />
+            {facetCtx ? <FilterButton open={filterOpen} onOpenChange={setFilterOpen} ctx={facetCtx} /> : null}
+            <DisplayMenu
+              display={draft.display}
+              view={view.view}
+              modified={view.modified}
+              isAdmin={false}
+              savable={false}
+              onChange={view.updateDisplay}
+              onReset={view.reset}
+              onSave={() => {}}
+              onSaveAsNew={() => {}}
+              onSetDefault={() => {}}
+              hiddenGroupBy={PROJECT_CONTEXT_HIDDEN_GROUPS}
+              hiddenProperties={PROJECT_CONTEXT_HIDDEN_COLUMNS}
+            />
+          </div>
+        ) : (
         <div className="flex h-12 shrink-0 items-center gap-2 px-3">
           <ViewTabs
             views={view.options}
@@ -561,6 +628,7 @@ export function TaskView({
             <ComposeIcon />
           </Button>
         </div>
+        )}
         {facetCtx && !isToday ? <FilterChips ctx={facetCtx} /> : null}
 
         {!isToday && result?.truncated ? (
@@ -570,7 +638,7 @@ export function TaskView({
         ) : null}
 
         <div className="flex min-h-0 flex-1 border-t border-border/60">
-        <div className={board && !isToday ? "min-w-0 flex-1 overflow-auto" : "min-w-0 flex-1 overflow-auto pb-20"}>
+        <div className={workList ? "min-w-0 flex-1 overflow-x-auto" : board && !isToday ? "min-w-0 flex-1 overflow-auto" : "min-w-0 flex-1 overflow-auto pb-20"}>
           {!loaded ? (
             <TaskTableSkeleton />
           ) : isToday && todayError ? (
@@ -606,6 +674,8 @@ export function TaskView({
               onRemoveCarried={(id) => void todayActions.dropCarried(id)}
               onReorder={(ids) => void todayActions.reorder(ids)}
             />
+          ) : rows.length === 0 && !board && workList && !narrowed && workEmpty ? (
+            workEmpty
           ) : rows.length === 0 && !board ? (
             narrowed ? (
               <Empty className="h-full">
@@ -672,6 +742,7 @@ export function TaskView({
                 onOpen={openTask}
                 onReorder={reorderInGroup}
                 inlineAdd={inlineAdd}
+                groupTotal={workedIn ? groupTimeTotal : undefined}
               />
               {result?.hasMoreClosed && closedLimit < CLOSED_ROW_MAX ? (
                 <div className="flex justify-center py-4">

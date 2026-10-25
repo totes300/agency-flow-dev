@@ -89,6 +89,7 @@ import type * as lib_mcpWrites from "../lib/mcpWrites.js";
 import type * as lib_notificationEvents from "../lib/notificationEvents.js";
 import type * as lib_orgHelpers from "../lib/orgHelpers.js";
 import type * as lib_plannerMath from "../lib/plannerMath.js";
+import type * as lib_projectDelete from "../lib/projectDelete.js";
 import type * as lib_projectEntries from "../lib/projectEntries.js";
 import type * as lib_projectSummary from "../lib/projectSummary.js";
 import type * as lib_rates from "../lib/rates.js";
@@ -235,6 +236,7 @@ declare const fullApi: ApiFromModules<{
   "lib/notificationEvents": typeof lib_notificationEvents;
   "lib/orgHelpers": typeof lib_orgHelpers;
   "lib/plannerMath": typeof lib_plannerMath;
+  "lib/projectDelete": typeof lib_projectDelete;
   "lib/projectEntries": typeof lib_projectEntries;
   "lib/projectSummary": typeof lib_projectSummary;
   "lib/rates": typeof lib_rates;

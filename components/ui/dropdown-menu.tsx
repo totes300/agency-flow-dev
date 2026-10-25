@@ -46,7 +46,7 @@ function DropdownMenuContent({
         // 2026-05-25: dropped `w-(--radix-dropdown-menu-trigger-width)` from
         // the default. The trigger-width binding collapsed any menu whose
         // trigger was an icon button (28–32px) and forced long labels like
-        // "Download cycle worksheet" to wrap. Now the menu sizes to content
+        // long labels to wrap. Now the menu sizes to content
         // with a 176px floor, matching Stripe-style action menus. Callers
         // that intentionally want the trigger width (sidebar account/team
         // switchers, the color picker grid) keep that behavior because they

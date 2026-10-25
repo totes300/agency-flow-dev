@@ -178,7 +178,7 @@ export type CommittableResult = {
  * The project's committable period: the EARLIEST elapsed period without a
  * live close —
  *   - retainer: every period from the project start counts, empty ones too
- *     (a zero-usage "Close & report" keeps the oldest-first chain moving);
+ *     (a zero-usage "Close period" keeps the oldest-first chain moving);
  *   - T&M: only periods whose scope is non-empty.
  * Elapsed = `period.end < todayStr` (org timezone, resolved by the caller).
  */

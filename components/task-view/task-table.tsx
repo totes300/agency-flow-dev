@@ -61,6 +61,7 @@ export function TaskTable({
   onOpen,
   onReorder,
   inlineAdd,
+  groupTotal,
 }: {
   columns: readonly ColumnKey[]
   groups: readonly TaskGroup[]
@@ -85,6 +86,8 @@ export function TaskTable({
   onReorder: ((group: TaskGroup, from: number, to: number) => void) | null
   /** The inline add row's create handler for a group, if the group offers one. */
   inlineAdd: (group: TaskGroup) => ((title: string) => void) | undefined
+  /** A group's right-aligned total, when the surface shows one. */
+  groupTotal?: (group: TaskGroup) => string | undefined
 }) {
   const titleColumn = columns.indexOf("title") + 1
 
@@ -110,6 +113,7 @@ export function TaskTable({
                 collapsed={collapsed}
                 onToggle={() => onToggleGroup(group.key)}
                 onCreate={onCreateInGroup(group)}
+                total={groupTotal?.(group)}
               />
             ) : null}
             {collapsed ? null : (

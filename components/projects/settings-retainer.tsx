@@ -173,7 +173,7 @@ export function SettingsRetainer({
 
   return (
     <>
-      <Card>
+      <Card id="retainer-section">
         <CardHeader>
           <CardTitle>Retainer Configuration</CardTitle>
           <CardAction>

@@ -16,7 +16,7 @@ import { skipStampFor } from "./lib/billing/scope";
 /**
  * Settle the project's committable period. Over budget / T&M → a draft
  * invoice (returned so the UI can open it); within budget → a final close
- * and nothing else ("Close & report").
+ * and nothing else ("Close period").
  */
 export const commitClose = mutation({
   args: { projectId: v.id("projects"), periodStart: v.string() },

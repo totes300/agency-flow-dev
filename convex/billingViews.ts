@@ -12,7 +12,7 @@
  */
 
 import { v } from "convex/values";
-import { query, type QueryCtx } from "./_generated/server";
+import { internalQuery, query, type QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { assertAdmin, requireAdmin, type AuthContext } from "./lib/auth";
 import { getOrgSettings } from "./lib/orgHelpers";
@@ -30,6 +30,19 @@ import { loadActiveTimers, type ActiveTimer } from "./lib/billing/timers";
 import type { MonthlyBalanceRow } from "./lib/billing/pricing";
 import type { CarriedReason } from "./lib/billing/scope";
 import type { EntryCloseSnapshot } from "./lib/types";
+import {
+  buildProjectBillingPeriods,
+  type PeriodInvoice,
+  type PeriodRow,
+  type ProjectBillingPeriods,
+} from "./lib/billing/projectPeriods";
+import {
+  periodPrimaryAction,
+  periodUndoActions,
+  type PeriodState,
+  type PrimaryAction,
+  type UndoAction,
+} from "./lib/billing/periodState";
 
 // ─── Response types ──────────────────────────────────────────────────────────
 
@@ -132,6 +145,12 @@ export type CloseWorkspaceData = {
   entries: CloseWorkspaceRow[];
   /** Review flags from the pure `closeFlags` module (ordered blocking→warning→info). */
   flags: CloseFlag[];
+  /**
+   * The period as the project page sees it (docs/prd-project-billing-redesign.md
+   * §10): state chip, blocker, undo items, invoice and documents. Null for a
+   * period the project's rows do not list (an empty ended T&M month).
+   */
+  periodRow: PeriodRow | null;
 };
 
 /** One project's committable period in the Billing → Close tab. */
@@ -308,45 +327,235 @@ async function buildQueue(ctx: QueryCtx, orgId: string): Promise<CloseQueueData>
   return { months, actionableCount: rows.length };
 }
 
-/** Billing → Close: one row per project that has a period due. */
-export const getCloseQueue = query({
+/**
+ * One row per project's committable period — the pre-redesign queue. No UI
+ * reads it any more (the hub is `getNeedsAction`); it stays internal as the
+ * N11 consistency fixture of the billing suites, and its core
+ * (`getCloseQueueForAuth`) backs the MCP `close_queue` report.
+ */
+export const getCloseQueue = internalQuery({
   args: {},
   handler: async (ctx): Promise<CloseQueueData> => await getCloseQueueForAuth(ctx, await requireAdmin(ctx)),
 });
 
-/** `getCloseQueue` for an already-built auth context (UI and MCP `report`). Admin-only. */
+/**
+ * `getCloseQueue` for an already-built auth context (the internal fixture and
+ * the MCP `report` kind `close_queue`, docs/prd-mcp.md). Admin-only.
+ */
 export async function getCloseQueueForAuth(ctx: QueryCtx, auth: AuthContext): Promise<CloseQueueData> {
   assertAdmin(auth);
   return buildQueue(ctx, auth.orgId);
 }
 
-/** Sidebar badge: to-generate / to-close rows from the queue, plus overdue invoices. */
+// ─── Project periods ─────────────────────────────────────────────────────────
+
+/**
+ * The project page's billing read model (docs/prd-project-billing-redesign.md
+ * §6.1): every period with its server-derived state, action and undo, the
+ * tab counts and totals. Fixed fee carries `fixed`; non-billable has no periods.
+ */
+export const getProjectBillingPeriods = query({
+  args: { projectId: v.id("projects") },
+  handler: async (ctx, args): Promise<ProjectBillingPeriods | null> => {
+    const { orgId } = await requireAdmin(ctx);
+    const project = await ctx.db.get(args.projectId);
+    if (!project || project.orgId !== orgId) return null;
+    const client = await ctx.db.get(project.clientId);
+    if (!client || client.orgId !== orgId) return null;
+    const settings = await viewSettings(ctx, orgId);
+    return buildProjectBillingPeriods(ctx, orgId, project, client.currency, settings);
+  },
+});
+
+// ─── Needs action (hub + badge) ──────────────────────────────────────────────
+
+/** Hub groups in month-end order (§6.2). Past due is listed, never counted. */
+export const NEEDS_ACTION_GROUPS = ["needs_rate", "ready_to_invoice", "ready_to_close", "draft", "past_due"] as const;
+export type NeedsActionGroup = (typeof NEEDS_ACTION_GROUPS)[number];
+
+/** One Billing hub row: a needs-action period, or a fixed-fee invoice (draft / past due). */
+export type NeedsActionRow = {
+  key: string;
+  group: NeedsActionGroup;
+  projectId: Id<"projects">;
+  projectName: string;
+  clientId: Id<"clients">;
+  clientName: string;
+  billingType: Doc<"projects">["billingType"];
+  currency: string;
+  /** The period; null on a fixed-fee invoice row. */
+  period: PeriodRow | null;
+  invoice: PeriodInvoice | null;
+  /** The invoice total when there is an invoice, else the period's price. */
+  amountMinor: number;
+  action: PrimaryAction | null;
+  undo: UndoAction[];
+};
+
+type MoneyByCurrency = Record<string, number>;
+
+export type NeedsActionData = {
+  rows: NeedsActionRow[];
+  /** §5.5 — every needs-action period (blocked ones too) plus fixed drafts. */
+  needsActionCount: number;
+  pastDueCount: number;
+  /** "October 2026 · month-end in N days". */
+  today: string;
+  tiles: {
+    unbilled: { minorByCurrency: MoneyByCurrency; readyCount: number; draftCount: number };
+    outstanding: { minorByCurrency: MoneyByCurrency; pastDueCount: number; invoicedCount: number };
+    paidThisMonth: { minorByCurrency: MoneyByCurrency; count: number };
+    monthsToClose: { count: number; waitingCount: number };
+  };
+};
+
+const addMoney = (m: MoneyByCurrency, currency: string, minor: number) => {
+  m[currency] = (m[currency] ?? 0) + minor;
+};
+
+/**
+ * One pass over the org's non-archived billable projects, through the same
+ * builder as the project page — the hub list, its tiles and the sidebar badge
+ * all come from here (A6, A16).
+ */
+async function buildNeedsAction(ctx: QueryCtx, orgId: string): Promise<NeedsActionData> {
+  const settings = await viewSettings(ctx, orgId);
+  const thisMonth = settings.todayStr.slice(0, 7);
+  const projects = await ctx.db
+    .query("projects")
+    .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+    .collect();
+  const clients = new Map<Id<"clients">, Doc<"clients"> | null>();
+
+  const rows: NeedsActionRow[] = [];
+  let needsActionCount = 0;
+  let pastDueCount = 0;
+  const tiles: NeedsActionData["tiles"] = {
+    unbilled: { minorByCurrency: {}, readyCount: 0, draftCount: 0 },
+    outstanding: { minorByCurrency: {}, pastDueCount: 0, invoicedCount: 0 },
+    paidThisMonth: { minorByCurrency: {}, count: 0 },
+    monthsToClose: { count: 0, waitingCount: 0 },
+  };
+
+  for (const project of projects) {
+    if (project.archivedAt || project.billingType === "non_billable") continue;
+    if (!clients.has(project.clientId)) {
+      const c = await ctx.db.get(project.clientId);
+      clients.set(project.clientId, c && c.orgId === orgId ? c : null);
+    }
+    const client = clients.get(project.clientId);
+    if (!client) continue;
+    const model = await buildProjectBillingPeriods(ctx, orgId, project, client.currency, settings);
+    needsActionCount += model.needsActionCount;
+    pastDueCount += model.pastDueCount;
+    const base = {
+      projectId: project._id,
+      projectName: project.name,
+      clientId: client._id,
+      clientName: client.name,
+      billingType: project.billingType,
+      currency: model.currency,
+    };
+
+    for (const period of model.periods) {
+      const group = groupOf(period.state);
+      if (!group) continue;
+      rows.push({
+        ...base,
+        key: `${project._id}:${period.key}`,
+        group,
+        period,
+        invoice: period.invoice,
+        amountMinor: period.invoice?.totalMinor ?? period.amountMinor,
+        action: period.action,
+        undo: period.undo,
+      });
+      if (period.state === "ready_to_invoice") {
+        tiles.unbilled.readyCount += 1;
+        addMoney(tiles.unbilled.minorByCurrency, model.currency, period.amountMinor);
+      }
+      if (period.state === "ready_to_close") {
+        tiles.monthsToClose.count += 1;
+        if (period.blockedBy) tiles.monthsToClose.waitingCount += 1;
+      }
+    }
+
+    // Fixed fee has no periods: its drafts and past-due invoices are rows of their own.
+    if (project.billingType === "fixed") {
+      for (const inv of model.invoices) {
+        if (inv.status !== "draft" && inv.status !== "past_due") continue;
+        const state: PeriodState = inv.status;
+        rows.push({
+          ...base,
+          key: `${project._id}:${inv.id}`,
+          group: inv.status,
+          period: null,
+          invoice: inv,
+          amountMinor: inv.totalMinor,
+          action: periodPrimaryAction(state, { isCommittable: false }),
+          undo: periodUndoActions(state, { draftNumbered: inv.number !== null }),
+        });
+      }
+    }
+
+    for (const inv of model.invoices) {
+      if (inv.status === "draft") {
+        tiles.unbilled.draftCount += 1;
+        addMoney(tiles.unbilled.minorByCurrency, model.currency, inv.totalMinor);
+      } else if (inv.status === "invoiced" || inv.status === "past_due") {
+        if (inv.status === "past_due") tiles.outstanding.pastDueCount += 1;
+        else tiles.outstanding.invoicedCount += 1;
+        addMoney(tiles.outstanding.minorByCurrency, model.currency, inv.totalMinor);
+      } else if (
+        inv.status === "paid" &&
+        inv.paidAt !== null &&
+        getDateInTimezone(inv.paidAt, settings.timezone).slice(0, 7) === thisMonth
+      ) {
+        tiles.paidThisMonth.count += 1;
+        addMoney(tiles.paidThisMonth.minorByCurrency, model.currency, inv.totalMinor);
+      }
+    }
+  }
+
+  const order = (g: NeedsActionGroup) => NEEDS_ACTION_GROUPS.indexOf(g);
+  rows.sort(
+    (a, b) =>
+      order(a.group) - order(b.group) ||
+      (a.period?.start ?? a.invoice?.issueDate ?? "").localeCompare(b.period?.start ?? b.invoice?.issueDate ?? "") ||
+      a.projectName.localeCompare(b.projectName),
+  );
+  return { rows, needsActionCount, pastDueCount, today: settings.todayStr, tiles };
+}
+
+function groupOf(state: PeriodState): NeedsActionGroup | null {
+  switch (state) {
+    case "needs_rate":
+    case "ready_to_invoice":
+    case "ready_to_close":
+    case "draft":
+    case "past_due":
+      return state;
+    default:
+      return null;
+  }
+}
+
+/** Billing hub → Needs action: one row per period that needs action, plus the tiles. */
+export const getNeedsAction = query({
+  args: {},
+  handler: async (ctx): Promise<NeedsActionData> => {
+    const { orgId } = await requireAdmin(ctx);
+    return buildNeedsAction(ctx, orgId);
+  },
+});
+
+/** Sidebar badge (§5.5): needs-action periods and past-due invoices, one pass. */
 export const getNavSignals = query({
   args: {},
-  handler: async (ctx) => {
+  handler: async (ctx): Promise<{ needsActionCount: number; pastDueCount: number }> => {
     const { orgId } = await requireAdmin(ctx);
-    const { todayStr } = await viewSettings(ctx, orgId);
-    const invoiced = await ctx.db
-      .query("invoices")
-      .withIndex("by_orgId_status", (q) => q.eq("orgId", orgId).eq("status", "invoiced"))
-      .collect();
-    const overdueCount = invoiced.filter((inv) => inv.dueDate != null && inv.dueDate < todayStr).length;
-    const rows = (await buildQueue(ctx, orgId)).months.flatMap((m) => m.rows);
-    const toCloseCount = rows.filter((r) => r.isCloseRow).length;
-    // Money waiting to be invoiced, per currency (minor-unit sums, converted once).
-    const readyMinor: Record<string, number> = {};
-    for (const r of rows) {
-      if (!r.isCloseRow) readyMinor[r.currency] = (readyMinor[r.currency] ?? 0) + r.amountMinor;
-    }
-    const readyAmountByCurrency = Object.fromEntries(
-      Object.entries(readyMinor).map(([cur, minor]) => [cur, fromMinor(minor, cur)]),
-    );
-    return {
-      toGenerateCount: rows.length - toCloseCount,
-      toCloseCount,
-      overdueCount,
-      readyAmountByCurrency,
-    };
+    const { needsActionCount, pastDueCount } = await buildNeedsAction(ctx, orgId);
+    return { needsActionCount, pastDueCount };
   },
 });
 
@@ -371,6 +580,8 @@ export const getCloseWorkspace = query({
     const flags = flagsFor(view, timersIn(timers, new Set(taskName.keys()), view.period));
 
     const rows = await workspaceRows(ctx, orgId, c, view, taskName);
+    const model = await buildProjectBillingPeriods(ctx, orgId, project, c.currency, settings);
+    const periodRow = model.periods.find((p) => p.start === view.period.start) ?? null;
     const closed = view.liveClose !== null;
     const draftInvoice =
       view.liveClose?.status === "draft" && view.liveClose.invoiceId
@@ -428,6 +639,7 @@ export const getCloseWorkspace = query({
       timezone: settings.timezone,
       entries: rows,
       flags,
+      periodRow,
     };
   },
 });

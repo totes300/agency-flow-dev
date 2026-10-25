@@ -1,7 +1,8 @@
 import { v, ConvexError } from "convex/values";
 import { query, mutation, type MutationCtx, type QueryCtx } from "./_generated/server";
-import type { Doc, Id } from "./_generated/dataModel";
-import { getAuthContext, type AuthContext } from "./lib/auth";
+import type { DataModel, Doc, Id } from "./_generated/dataModel";
+import type { GenericDatabaseReader } from "convex/server";
+import { assertAdmin, getAuthContext, requireAdmin, type AuthContext } from "./lib/auth";
 import { roundMinutes } from "./lib/rounding";
 import { formatDurationHHMM, getDateInTimezone, ORG_TIMEZONE_FALLBACK } from "./lib/timer";
 import { getOrgSettings, getProjectCurrency, resolveRateSnapshot, resolveEntryCategory } from "./lib/orgHelpers";
@@ -33,13 +34,17 @@ async function assertCategoryInOrg(
  * The unblock path depends on whether the close is still a draft.
  */
 async function closeLockMessage(
-  ctx: { db: { get: (id: Id<"billingCloses">) => Promise<Doc<"billingCloses"> | null> } },
+  ctx: { db: GenericDatabaseReader<DataModel> },
   closeId: Id<"billingCloses">,
   action: "edit" | "delete",
 ): Promise<string> {
   const close = await ctx.db.get(closeId);
   if (close?.status === "draft") {
-    return `Cannot ${action} a time entry that's on a draft invoice — delete the draft first`;
+    // A reverted draft keeps its number and can only be voided (N9).
+    const invoice = close.invoiceId ? await ctx.db.get(close.invoiceId) : null;
+    return invoice?.number != null
+      ? `Cannot ${action} a time entry that's on a draft invoice — void the invoice first`
+      : `Cannot ${action} a time entry that's on a draft invoice — delete the draft first`;
   }
   return close?.invoiceId
     ? `Cannot ${action} a time entry linked to an invoice — void the invoice first`
@@ -924,19 +929,20 @@ export const listProjectEntries = query({
 
 /**
  * Aggregate overview metrics for a project — used by Fixed and T&M overviews
- * and the project header "Last activity" date.
+ * and the project header "Last activity" date. Admin-only: it carries amounts
+ * and cost (A13).
  */
 export const projectOverview = query({
   args: { projectId: v.id("projects") },
-  handler: async (ctx, args) => await projectOverviewForAuth(ctx, await getAuthContext(ctx), args),
+  handler: async (ctx, args) => await projectOverviewForAuth(ctx, await requireAdmin(ctx), args),
 });
 
 /**
  * `projectOverview` for an already-built auth context (UI and MCP `report`).
- * Org-scoped only, exactly like the query; MCP gates it to admins (the
- * project pages are admin routes).
+ * Admin-only, like the query (A13): it carries amounts and cost.
  */
 export async function projectOverviewForAuth(ctx: QueryCtx, auth: AuthContext, args: { projectId: Id<"projects"> }) {
+  assertAdmin(auth);
   const { orgId } = auth;
 
   const project = await ctx.db.get(args.projectId);
@@ -964,18 +970,17 @@ export async function projectOverviewForAuth(ctx: QueryCtx, auth: AuthContext, a
   // FOUR buckets over billable entries, in lock-step with `entryStatus()`
   // so the data shape matches the row display (`billableOverviewBucket`):
   //   open      → no live close (needs billing or closure)
-  //   draft     → close with a draft invoice (revenue not yet realized)
-  //   invoiced  → final T&M close (billed hourly — revenue)
+  //   draft     → close with a draft invoice
+  //   invoiced  → final T&M close
   //   settled   → final retainer close (covered, no extra revenue)
   //
-  // The draft bucket is deliberate: a draft invoice has reserved hours
-  // but no finalized revenue. Lumping draft into invoiced would inflate
-  // T&M "billed" totals before the invoice is sent; lumping into open
-  // would falsely surface those hours in the Ready feed. Distinct bucket
-  // keeps reports honest and matches what the row badge already shows.
+  // Money totals use ONE definition of billed (A15, PRD §6.8): billed =
+  // covered by a live close, draft or final — `billedMinutes/Amount` below,
+  // the same rule as `computeTmSummary`. The draft bucket stays for the
+  // row badge only; no surface shows "Draft" as a money column.
   let openMinutes = 0;
   let openAmount = 0;
-  // `openAmount` (the "ready to bill" number on the overview) groups like
+  // `openAmount` (the open, unbilled amount on the overview) groups like
   // a T&M close — by (category, task, rate), rounded up with the
   // workspace default.
   const defaultRounding = orgSettings?.roundingMinutes ?? 1;
@@ -1123,11 +1128,13 @@ export async function projectOverviewForAuth(ctx: QueryCtx, auth: AuthContext, a
     // ─── Phase 8 — entry-derived billing buckets ────────────────────────
     // Time-based figures from the entry ledger (hours × billableRate
     // snapshot). Four buckets, lock-step with `entryStatus()`.
-    // For the Invoices tab "Total Invoiced" money figure (which includes
-    // manual/overage lines), use api.invoices.getProjectInvoiceMetrics
-    // instead — that one is invoice-derived, not entry-derived.
+    // Invoice money (with manual lines) comes from the invoices
+    // themselves — billingViews.getProjectBillingPeriods.
     openMinutes,     // no live close
     openAmount,
+    // Billed = covered by a live close (draft or final T&M) — §6.8.
+    billedMinutes: draftMinutes + invoicedMinutes,
+    billedAmount: draftAmount + invoicedAmount,
     draftMinutes,    // close with a draft invoice
     draftAmount,
     invoicedMinutes, // final T&M close
@@ -1147,15 +1154,17 @@ export async function projectOverviewForAuth(ctx: QueryCtx, auth: AuthContext, a
  */
 export const projectMonthlyBreakdown = query({
   args: { projectId: v.id("projects") },
-  handler: async (ctx, args) => await projectMonthlyBreakdownForAuth(ctx, await getAuthContext(ctx), args),
+  // Admin-only: rows carry billable amounts and cost (A13).
+  handler: async (ctx, args) => await projectMonthlyBreakdownForAuth(ctx, await requireAdmin(ctx), args),
 });
 
-/** `projectMonthlyBreakdown` for an already-built auth context; same scoping note as `projectOverviewForAuth`. */
+/** `projectMonthlyBreakdown` for an already-built auth context; admin-only like `projectOverviewForAuth` (A13). */
 export async function projectMonthlyBreakdownForAuth(
   ctx: QueryCtx,
   auth: AuthContext,
   args: { projectId: Id<"projects"> },
 ) {
+  assertAdmin(auth);
   const { orgId } = auth;
 
   const project = await ctx.db.get(args.projectId);

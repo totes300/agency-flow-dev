@@ -48,11 +48,14 @@ export function GroupHeader({
   collapsed,
   onToggle,
   onCreate,
+  total,
 }: {
   group: TaskGroup
   collapsed: boolean
   onToggle: () => void
   onCreate?: () => void
+  /** Right-aligned group total (the project Work list's time in period). */
+  total?: string
 }) {
   return (
     <GroupHeaderRow
@@ -62,6 +65,7 @@ export function GroupHeader({
       collapsed={collapsed}
       onToggle={onToggle}
     >
+      {total ? <span className="font-mono text-xs font-normal text-muted-foreground tabular-nums">{total}</span> : null}
       {onCreate ? (
         <Button variant="ghost" size="icon-xs" aria-label={`New task in ${group.label}`} onClick={onCreate}>
           <PlusNavIcon />

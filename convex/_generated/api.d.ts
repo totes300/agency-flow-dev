@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as __tests___helpers_billingWorld from "../__tests__/helpers/billingWorld.js";
 import type * as __tests___helpers_orgSnapshot from "../__tests__/helpers/orgSnapshot.js";
 import type * as __tests___helpers_taskFixtures from "../__tests__/helpers/taskFixtures.js";
 import type * as activityLog from "../activityLog.js";
@@ -41,9 +42,11 @@ import type * as lib_billing_invoiceLifecycle from "../lib/billing/invoiceLifecy
 import type * as lib_billing_invoiceView from "../lib/billing/invoiceView.js";
 import type * as lib_billing_labels from "../lib/billing/labels.js";
 import type * as lib_billing_money from "../lib/billing/money.js";
+import type * as lib_billing_periodState from "../lib/billing/periodState.js";
 import type * as lib_billing_periodView from "../lib/billing/periodView.js";
 import type * as lib_billing_periods from "../lib/billing/periods.js";
 import type * as lib_billing_pricing from "../lib/billing/pricing.js";
+import type * as lib_billing_projectPeriods from "../lib/billing/projectPeriods.js";
 import type * as lib_billing_reconcile from "../lib/billing/reconcile.js";
 import type * as lib_billing_reportGroups from "../lib/billing/reportGroups.js";
 import type * as lib_billing_reportMonths from "../lib/billing/reportMonths.js";
@@ -142,6 +145,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  "__tests__/helpers/billingWorld": typeof __tests___helpers_billingWorld;
   "__tests__/helpers/orgSnapshot": typeof __tests___helpers_orgSnapshot;
   "__tests__/helpers/taskFixtures": typeof __tests___helpers_taskFixtures;
   activityLog: typeof activityLog;
@@ -175,9 +179,11 @@ declare const fullApi: ApiFromModules<{
   "lib/billing/invoiceView": typeof lib_billing_invoiceView;
   "lib/billing/labels": typeof lib_billing_labels;
   "lib/billing/money": typeof lib_billing_money;
+  "lib/billing/periodState": typeof lib_billing_periodState;
   "lib/billing/periodView": typeof lib_billing_periodView;
   "lib/billing/periods": typeof lib_billing_periods;
   "lib/billing/pricing": typeof lib_billing_pricing;
+  "lib/billing/projectPeriods": typeof lib_billing_projectPeriods;
   "lib/billing/reconcile": typeof lib_billing_reconcile;
   "lib/billing/reportGroups": typeof lib_billing_reportGroups;
   "lib/billing/reportMonths": typeof lib_billing_reportMonths;

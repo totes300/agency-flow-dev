@@ -1,3 +1,5 @@
+import { fromMinor } from "@/convex/lib/billing/money"
+
 /**
  * Round a number to 2 decimal places. Centralized so client and server
  * formatting use the same rounding rule on currency-shaped numbers.
@@ -49,6 +51,14 @@ export function formatCurrency(amount: number, currency: string): string {
  */
 export function formatCurrencyPrecise(amount: number, currency: string): string {
   return getCurrencyFormatter(currency, 2).format(amount)
+}
+
+/**
+ * Format integer minor units (server billing amounts, N6) with cents. The
+ * one client conversion: no other arithmetic on money happens in the UI.
+ */
+export function formatMinor(minor: number, currency: string): string {
+  return formatCurrencyPrecise(fromMinor(minor, currency), currency)
 }
 
 /**

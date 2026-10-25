@@ -89,7 +89,7 @@ async function addEntry(w: World, date: string, minutes: number, over: { billabl
 
 const as = (w: World) => w.t.withIdentity(ADMIN);
 const queueRow = async (w: World) =>
-  (await as(w).query(api.billingViews.getCloseQueue, {})).months.flatMap((m) => m.rows).find((r) => r.projectId === w.projectId);
+  (await as(w).query(internal.billingViews.getCloseQueue, {})).months.flatMap((m) => m.rows).find((r) => r.projectId === w.projectId);
 const workspace = (w: World, period: string) =>
   as(w).query(api.billingViews.getCloseWorkspace, { projectId: w.projectId, period });
 const report = (w: World, year: number, month: number) =>
@@ -220,7 +220,8 @@ describe("queue", () => {
     await addEntry(w, "2026-04-04", 100);
     expect(await queueRow(w)).toMatchObject({ periodToken: "2026-03", isCloseRow: true, pendingPeriods: 2 });
     const signals = await as(w).query(api.billingViews.getNavSignals, {});
-    expect(signals).toEqual({ toGenerateCount: 0, toCloseCount: 1, overdueCount: 0, readyAmountByCurrency: {} });
+    // §5.5: every waiting period counts, not one per project.
+    expect(signals).toEqual({ needsActionCount: 3, pastDueCount: 0 });
   });
 
   it("an open period behind an unclosed one is flagged, not committable", async () => {
@@ -314,7 +315,7 @@ describe("§8.3 — one balance ladder on every surface", () => {
       expect(row?.cycle?.usedMinutes).toBe(stmt?.cycleToDate?.usedMinutes);
     }
 
-    const summary = await as(w).query(api.projects.getSummary, { projectId: w.projectId, cycleOffset: -1 });
+    const summary = await as(w).query(api.projects.getSummary, { projectId: w.projectId, period: "2026-04" });
     expect(summary?.billingType === "retainer" && summary.timeBreakdown.cycleBudgetMinutes).toBe(1800);
     expect(summary?.billingType === "retainer" && summary.overage).toMatchObject({
       overBudgetMinutes: 340,
@@ -362,7 +363,7 @@ describe("§8.3 — one balance ladder on every surface", () => {
       [0, 600],
     ]);
     expect(page).toMatchObject({ overageMinutes: 600, overageDue: 900 });
-    const summary = await as(w).query(api.projects.getSummary, { projectId: w.projectId, cycleOffset: -1 });
+    const summary = await as(w).query(api.projects.getSummary, { projectId: w.projectId, period: "2026-04" });
     expect(summary?.billingType === "retainer" && summary.overage).toMatchObject({
       overBudgetMinutes: 600,
       overageDueAmount: 900,

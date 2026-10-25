@@ -49,7 +49,8 @@ const tool = (name: string) => MCP_TOOLS.find((t) => t.name === name)!;
 
 const UPLOAD = {
   tool: "create_upload" as const,
-  uploadUrl: "https://x.convex.cloud/api/storage/upload?token=abc",
+  uploadId: "u_abc",
+  uploadUrl: "https://x.convex.site/mcp-upload?u=u_abc",
   fileName: "brief.pdf",
   contentType: "application/pdf",
   sizeBytes: 48213,
@@ -85,13 +86,16 @@ describe("create_upload", () => {
       [
         "## Upload ready",
         "- File: brief.pdf · application/pdf · 47.1 KB (48213 bytes)",
-        "- Upload URL (one file, valid until 2026-10-25 13:00 UTC): https://x.convex.cloud/api/storage/upload?token=abc",
+        "- uploadId: u_abc",
+        "- The upload URL works once, until 2026-10-25 13:00 UTC, for exactly these bytes and this Content-Type.",
         "",
-        "Next: POST the file's raw bytes to the upload URL with the header Content-Type: application/pdf, for example from a shell:",
-        'curl -sS -X POST -H "Content-Type: application/pdf" --data-binary @<path-to-file> "https://x.convex.cloud/api/storage/upload?token=abc"',
-        'The response is {"storageId": "…"}. Then call attach_file with the task (or your comment) ref and that storageId, within 24 hours.',
+        "Next: POST the file's raw bytes, for example from a shell:",
+        'curl -sS -X POST -H "Content-Type: application/pdf" --data-binary @<path-to-file> "https://x.convex.site/mcp-upload?u=u_abc"',
+        'It answers {"uploaded": true}. Then call attach_file with the task (or your own comment) ref and "uploadId": "u_abc", within 24 hours.',
       ].join("\n"),
     );
+    // The URL is printed once.
+    expect(result.text.split(UPLOAD.uploadUrl)).toHaveLength(2);
   });
 
   it("checks the size against the app's 10 MB limit before calling Convex", () => {
@@ -103,12 +107,12 @@ describe("create_upload", () => {
 });
 
 describe("attach_file", () => {
-  it("a storageId runs the mcp/files:attach mutation; inline text the mcp/files:attachText action", async () => {
+  it("an uploadId runs the mcp/files:attach mutation; inline text the mcp/files:attachText action", async () => {
     const { ctx, calls } = fake(() => ATTACHED);
-    const byId = await tool("attach_file").execute({ ref: "ARLO-21", storageId: "kg2abc" }, ctx);
+    const byId = await tool("attach_file").execute({ ref: "ARLO-21", uploadId: "u_abc" }, ctx);
     const inline = await tool("attach_file").execute({ ref: "gmail:t1", inlineText: "Hi", filename: "source.md", idempotencyKey: "k" }, ctx);
     expect(calls).toEqual([
-      { kind: "mutation", name: "mcp/files:attach", args: { ref: "ARLO-21", storageId: "kg2abc", idempotencyKey: undefined } },
+      { kind: "mutation", name: "mcp/files:attach", args: { ref: "ARLO-21", uploadId: "u_abc", idempotencyKey: undefined } },
       { kind: "action", name: "mcp/files:attachText", args: { ref: "gmail:t1", inlineText: "Hi", filename: "source.md", idempotencyKey: "k" } },
     ]);
     expect(byId).toEqual({ text: renderAttachFile(ATTACHED, CTX), isError: false });
@@ -119,13 +123,13 @@ describe("attach_file", () => {
     const { ctx, calls } = fake(() => ATTACHED);
     const run = (input: Record<string, unknown>) => tool("attach_file").execute(input, ctx);
     expect(await run({ ref: "ARLO-21" })).toEqual({
-      text: "Error: pass either storageId (after create_upload) or inlineText with filename, not both.",
+      text: "Error: pass either uploadId (from create_upload) or inlineText with filename, not both.",
       isError: true,
     });
-    expect((await run({ ref: "ARLO-21", storageId: "s", inlineText: "t", filename: "a.md" })).isError).toBe(true);
+    expect((await run({ ref: "ARLO-21", uploadId: "s", inlineText: "t", filename: "a.md" })).isError).toBe(true);
     expect(await run({ ref: "ARLO-21", inlineText: "t" })).toEqual({ text: 'Error: inlineText needs a filename, e.g. "source.md".', isError: true });
-    expect((await run({ ref: "ARLO-21", storageId: "s", filename: "a.md" })).text).toMatch(/filename goes with inlineText/);
-    expect((await run({ ref: "https://elsewhere.example/tasks/ARLO-21", storageId: "s" })).isError).toBe(true);
+    expect((await run({ ref: "ARLO-21", uploadId: "s", filename: "a.md" })).text).toMatch(/filename goes with inlineText/);
+    expect((await run({ ref: "https://elsewhere.example/tasks/ARLO-21", uploadId: "s" })).isError).toBe(true);
     expect(tool("attach_file").inputSchema.safeParse({ ref: "ARLO-21", inlineText: "x".repeat(200 * 1024 + 1), filename: "a" }).success).toBe(false);
     expect(calls).toEqual([]);
   });

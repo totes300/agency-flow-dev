@@ -1342,11 +1342,12 @@ export function renderCreateUpload(data: CreateUploadData): string {
   return [
     writeHeader("Upload ready", data.replayed),
     `- File: ${fields(oneLine(data.fileName), data.contentType, `${formatFileSize(data.sizeBytes)} (${data.sizeBytes} bytes)`)}`,
-    `- Upload URL (one file, valid until ${formatTimestamp(data.expiresAt, "UTC")} UTC): ${data.uploadUrl}`,
+    `- uploadId: ${data.uploadId}`,
+    `- The upload URL works once, until ${formatTimestamp(data.expiresAt, "UTC")} UTC, for exactly these bytes and this Content-Type.`,
     "",
-    `Next: POST the file's raw bytes to the upload URL with the header Content-Type: ${data.contentType}, for example from a shell:`,
+    "Next: POST the file's raw bytes, for example from a shell:",
     `curl -sS -X POST -H "Content-Type: ${data.contentType}" --data-binary @<path-to-file> "${data.uploadUrl}"`,
-    'The response is {"storageId": "…"}. Then call attach_file with the task (or your comment) ref and that storageId, within 24 hours.',
+    `It answers {"uploaded": true}. Then call attach_file with the task (or your own comment) ref and "uploadId": "${data.uploadId}", within 24 hours.`,
   ].join("\n");
 }
 

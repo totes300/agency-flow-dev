@@ -80,6 +80,8 @@ export const INLINE_TEXT_MAX_BYTES = 200 * 1024;
 export const UPLOAD_URL_TTL_MS = 60 * 60 * 1000;
 /** An upload must be attached within 24 hours of its create_upload. */
 export const UPLOAD_ATTACH_WINDOW_MS = 24 * 60 * 60 * 1000;
+/** Upload rows are kept 25 hours (past the attach window), then cleaned up with any unattached blob. */
+export const UPLOAD_ROW_TTL_MS = 25 * 60 * 60 * 1000;
 
 /** Markdown accepted per description or comment body (route schema and Convex). */
 export const MARKDOWN_MAX_LENGTH = 50_000;

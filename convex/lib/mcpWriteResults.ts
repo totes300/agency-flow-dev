@@ -195,10 +195,11 @@ export const markReadResultValidator = v.object({
 
 /**
  * A started upload (docs/prd-mcp.md §10): POST the bytes to `uploadUrl`
- * before `expiresAt`, then attach_file the returned storageId.
+ * before `expiresAt`, then attach_file with `uploadId`.
  */
 export const createUploadResultValidator = v.object({
   tool: v.literal("create_upload"),
+  uploadId: v.string(),
   uploadUrl: v.string(),
   fileName: v.string(),
   contentType: v.string(),

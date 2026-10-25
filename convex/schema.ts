@@ -866,26 +866,28 @@ export default defineSchema({
     .index("by_orgId_userId_key", ["orgId", "userId", "key"])
     .index("by_createdAt", ["createdAt"]),
 
-  // ─── MCP uploads (docs/prd-mcp.md D18, §10) ─────────────────────────────────
+  // ─── MCP file uploads (docs/prd-mcp.md D18, §10) ────────────────────────────
   // One row per `create_upload`: the file the caller announced (name, type,
-  // size) before POSTing its bytes to the Convex upload URL. `attach_file`
-  // accepts a storageId only when it matches an upload of the same user in
-  // the same org (size, type, uploaded after the announcement and within the
-  // URL's lifetime) and marks it used (`storageId`), so a storageId from
-  // anywhere else — another org's file included — can never be attached
-  // (I3). Kept 24 h (cleanup cron).
-  mcpUploads: defineTable({
+  // size) under an unguessable `uploadId`. The upload endpoint
+  // (convex/mcpFileUploads.ts, POST /mcp-upload?u=<uploadId>) stores exactly
+  // those bytes once, within the hour, and writes `storageId`; `attach_file`
+  // takes the uploadId and attaches that blob once (`attachedAt`). The client
+  // never handles a storageId, so no other storage object can be attached
+  // (I3). Rows are kept 25 h; the cleanup cron also deletes the blob of an
+  // upload that was stored but never attached.
+  mcpFileUploads: defineTable({
+    uploadId: v.string(),
     orgId: v.string(),
     userId: v.id("users"),
     fileName: v.string(),
     contentType: v.string(),
     sizeBytes: v.number(),
     createdAt: v.number(),
-    // Set when attached: the upload is used once.
     storageId: v.optional(v.id("_storage")),
+    storedAt: v.optional(v.number()),
+    attachedAt: v.optional(v.number()),
   })
-    .index("by_orgId_userId_createdAt", ["orgId", "userId", "createdAt"])
-    .index("by_storageId", ["storageId"])
+    .index("by_uploadId", ["uploadId"])
     .index("by_createdAt", ["createdAt"]),
 
   // ─── MCP billing previews (docs/prd-mcp.md D5, §9) ────────────────────────

@@ -17,15 +17,20 @@ import { parseRef } from "../../lib/mcp/refs";
  * MCP files (docs/prd-mcp.md D18, §10), on Convex storage like the app:
  *
  * - `create_upload` checks the file against the app's limits (10 MB, the
- *   blocked types), records the announcement (`mcpUploads`) and returns a
- *   Convex upload URL; the client POSTs the bytes and gets a `storageId`.
- * - `attach_file` attaches a storageId — only one this user announced with
- *   create_upload in this org (same size and type, uploaded within the URL's
- *   hour, used once), so no other storage object can be attached (I3) — or
- *   inline text (≤ 200 KiB, stored by the `mcp/files:attachText` action as a
- *   text file). Both go through the app's attachment write paths
+ *   blocked types) and records the announcement (`mcpFileUploads`) under an
+ *   unguessable `uploadId`. It returns the URL of the upload endpoint
+ *   (convex/mcpFileUploads.ts, `POST /mcp-upload?u=<uploadId>`), which
+ *   stores exactly the announced bytes — the announced type, never more
+ *   than the announced size — once, within the hour, and writes the
+ *   storageId onto the row. The client never sees a storageId.
+ * - `attach_file` takes the `uploadId` (this user's, in this org, stored,
+ *   not yet attached, within 24 h) and attaches exactly that row's blob,
+ *   once — so no other storage object can ever be attached (I3) — or inline
+ *   text (≤ 200 KiB, stored by the `mcp/files:attachText` action as a text
+ *   file). Both go through the app's attachment write paths
  *   (attachments.ts / commentAttachments.ts `save*ForAuth`): the same
- *   limits, rows and text extraction as an upload in the app.
+ *   limits, rows, one-attachment-per-blob rule and text extraction as an
+ *   upload in the app.
  * - Who may attach: a task — whoever may write it (admins; members on tasks
  *   assigned to them or their parent), as the app; a comment — only its
  *   author, as the app (D-COMMENTATTACH).
@@ -35,7 +40,7 @@ import { parseRef } from "../../lib/mcp/refs";
  */
 
 const NO_UPLOAD =
-  "This storageId does not match a file you announced with create_upload in the last 24 hours. Call create_upload, POST the bytes to its uploadUrl (within the hour), then attach the storageId it returns.";
+  "Unknown uploadId. Use the uploadId create_upload returned (in this connection's workspace, within 24 hours); call create_upload again if it expired.";
 
 /** A file name the app can show: trimmed, 1–255 characters, no control characters. */
 export function checkFileName(raw: string): string {
@@ -47,13 +52,26 @@ export function checkFileName(raw: string): string {
 }
 
 /** `type/subtype` without parameters, lowercased. */
-function baseMimeType(raw: string): string {
+export function baseMimeType(raw: string): string {
   return raw.split(";")[0].trim().toLowerCase();
 }
 
 const MIME_TYPE = /^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}\/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$/;
 
-/** `create_upload`: checks the announced file, records it and returns the upload URL. */
+/** An unguessable upload id: 24 random bytes, base64url (Web Crypto, seeded per call by Convex). */
+function newUploadId(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(24));
+  return btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/** The upload endpoint's URL for one announced file (convex/http.ts). */
+function uploadUrlFor(uploadId: string): string {
+  const site = process.env.CONVEX_SITE_URL;
+  if (!site) throw new Error("CONVEX_SITE_URL is not set");
+  return `${site}/mcp-upload?u=${encodeURIComponent(uploadId)}`;
+}
+
+/** `create_upload`: checks the announced file, records it and returns its upload URL. */
 export async function createUpload(
   ctx: MutationCtx,
   auth: McpAuthContext,
@@ -73,8 +91,9 @@ export async function createUpload(
   }
   if (input.sizeBytes > MAX_FILE_SIZE) throw new ConvexError("File exceeds 10MB limit (as in the app).");
 
-  const uploadUrl = await ctx.storage.generateUploadUrl();
-  await ctx.db.insert("mcpUploads", {
+  const uploadId = newUploadId();
+  await ctx.db.insert("mcpFileUploads", {
+    uploadId,
     orgId: auth.orgId,
     userId: auth.userId,
     fileName,
@@ -84,7 +103,8 @@ export async function createUpload(
   });
   return {
     tool: "create_upload",
-    uploadUrl,
+    uploadId,
+    uploadUrl: uploadUrlFor(uploadId),
     fileName,
     contentType,
     sizeBytes: input.sizeBytes,
@@ -93,54 +113,30 @@ export async function createUpload(
 }
 
 /**
- * The announced upload a storageId belongs to, marked used. Only this user's
- * uploads in this org qualify: the blob must have the announced size (and
- * type, when the POST sent one) and have been uploaded after the
- * announcement, within the URL's hour. Anything else — another org's blob,
- * an app upload, a reused storageId — is refused without saying why it
- * does not match (nothing leaks about other records).
+ * The stored file of an upload, marked attached. Only this user's upload in
+ * this org, within 24 h of create_upload, stored by the upload endpoint and
+ * not yet attached; anything else is "unknown uploadId" (nothing leaks
+ * about other records).
  */
-async function claimUpload(ctx: MutationCtx, auth: McpAuthContext, raw: string, now: number): Promise<AttachmentFileInput> {
-  const storageId = ctx.db.system.normalizeId("_storage", raw.trim());
-  const meta = storageId ? await ctx.db.system.get("_storage", storageId) : null;
-  if (!storageId || !meta) throw new ConvexError(NO_UPLOAD);
-  const used = await ctx.db
-    .query("mcpUploads")
-    .withIndex("by_storageId", (q) => q.eq("storageId", storageId))
-    .first();
-  if (used) {
+async function claimUpload(ctx: MutationCtx, auth: McpAuthContext, uploadId: string, now: number): Promise<AttachmentFileInput> {
+  const upload = await ctx.db
+    .query("mcpFileUploads")
+    .withIndex("by_uploadId", (q) => q.eq("uploadId", uploadId.trim()))
+    .unique();
+  if (!upload || upload.orgId !== auth.orgId || upload.userId !== auth.userId || upload.createdAt <= now - UPLOAD_ATTACH_WINDOW_MS) {
+    throw new ConvexError(NO_UPLOAD);
+  }
+  if (upload.attachedAt !== undefined) {
+    throw new ConvexError("This upload is already attached; each upload attaches once. Call create_upload again to attach another copy.");
+  }
+  const meta = upload.storageId ? await ctx.db.system.get("_storage", upload.storageId) : null;
+  if (!upload.storageId || !meta) {
     throw new ConvexError(
-      used.orgId === auth.orgId && used.userId === auth.userId
-        ? "This upload is already attached; each upload attaches once. Call create_upload again to attach another copy."
-        : NO_UPLOAD,
+      "The file has not been uploaded yet: POST its bytes to the uploadUrl create_upload returned (within the hour), then call attach_file again.",
     );
   }
-  const announced = await ctx.db
-    .query("mcpUploads")
-    .withIndex("by_orgId_userId_createdAt", (q) =>
-      q.eq("orgId", auth.orgId).eq("userId", auth.userId).gte("createdAt", now - UPLOAD_ATTACH_WINDOW_MS),
-    )
-    .order("desc")
-    .take(100);
-  const inWindow = announced.filter(
-    (u) => u.storageId === undefined && meta._creationTime >= u.createdAt && meta._creationTime <= u.createdAt + UPLOAD_URL_TTL_MS,
-  );
-  const upload = inWindow.find((u) => u.sizeBytes === meta.size);
-  if (!upload) {
-    const sizes = [...new Set(inWindow.map((u) => u.sizeBytes))];
-    throw new ConvexError(
-      sizes.length > 0
-        ? `The uploaded file is ${meta.size} bytes, but create_upload announced ${sizes.join(" or ")}. Announce the exact size and upload again.`
-        : NO_UPLOAD,
-    );
-  }
-  if (meta.contentType !== undefined && baseMimeType(meta.contentType) !== upload.contentType) {
-    throw new ConvexError(
-      `The file was uploaded as ${baseMimeType(meta.contentType) || "an unknown type"}, but create_upload announced ${upload.contentType}. Upload again with the header Content-Type: ${upload.contentType}.`,
-    );
-  }
-  await ctx.db.patch(upload._id, { storageId });
-  return { fileId: storageId, fileName: upload.fileName, fileSize: meta.size, mimeType: upload.contentType };
+  await ctx.db.patch(upload._id, { attachedAt: now });
+  return { fileId: upload.storageId, fileName: upload.fileName, fileSize: meta.size, mimeType: upload.contentType };
 }
 
 /** Inline text as a file: what the action stores and the attach path saves. */
@@ -170,8 +166,8 @@ export function prepareInlineText(text: string, rawFileName: string): InlineText
 }
 
 export type AttachSource =
-  /** A storageId the client uploaded after create_upload (checked against mcpUploads). */
-  | { kind: "upload"; storageId: string }
+  /** An upload from create_upload, stored by the upload endpoint (mcpFileUploads). */
+  | { kind: "upload"; uploadId: string }
   /** Inline text the `attachText` action stored itself (trusted: internal callers only). */
   | { kind: "inline"; storageId: Id<"_storage">; fileName: string; mimeType: string };
 
@@ -196,7 +192,7 @@ export async function attachFile(
   const target = await resolver.require(ref, isComment ? "comment" : "task");
 
   async function file(): Promise<AttachmentFileInput> {
-    if (source.kind === "upload") return await claimUpload(ctx, auth, source.storageId, now);
+    if (source.kind === "upload") return await claimUpload(ctx, auth, source.uploadId, now);
     const meta = await ctx.db.system.get("_storage", source.storageId);
     if (!meta) throw new Error("Inline text blob is missing");
     return { fileId: source.storageId, fileName: source.fileName, fileSize: meta.size, mimeType: source.mimeType };

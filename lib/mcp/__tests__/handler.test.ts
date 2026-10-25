@@ -187,7 +187,7 @@ describe("MCP protocol", () => {
       "filename", "contentType", "sizeBytes", "idempotencyKey",
     ]);
     expect(Object.keys(expected.find((t) => t.name === "attach_file")!.inputSchema.properties ?? {})).toEqual([
-      "ref", "storageId", "inlineText", "filename", "idempotencyKey",
+      "ref", "uploadId", "inlineText", "filename", "idempotencyKey",
     ]);
     expect(Object.keys(expected.find((t) => t.name === "billing_preview")!.inputSchema.properties ?? {})).toEqual([
       "action", "project", "period", "invoice", "amount",

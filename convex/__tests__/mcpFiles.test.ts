@@ -32,6 +32,7 @@ const modules = (
 ).glob("../**/*.ts");
 
 const ORG = "org_mcp7b_files";
+const SITE = "https://test-deployment.convex.site";
 const OTHER = "org_mcp7b_files_other";
 
 const createT = () => convexTest(schema, modules);
@@ -40,9 +41,11 @@ const createT = () => convexTest(schema, modules);
 // running in the background (its outcomes are driven by `completeWith`).
 beforeEach(() => {
   vi.useFakeTimers();
+  vi.stubEnv("CONVEX_SITE_URL", SITE);
 });
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllEnvs();
 });
 type T = ReturnType<typeof createT>;
 
@@ -140,20 +143,32 @@ async function setup(t: T) {
 
 const createUpload = (t: T, caller: Caller, args: { filename: string; contentType: string; sizeBytes: number; idempotencyKey?: string }) =>
   as(t, caller).mutation(api.mcp.files.createUpload, args);
-const attach = (t: T, caller: Caller, ref: string, storageId: string, idempotencyKey?: string) =>
-  as(t, caller).mutation(api.mcp.files.attach, { ref, storageId, idempotencyKey });
+const attach = (t: T, caller: Caller, ref: string, uploadId: string, idempotencyKey?: string) =>
+  as(t, caller).mutation(api.mcp.files.attach, { ref, uploadId, idempotencyKey });
 const attachText = (t: T, caller: Caller, ref: string, inlineText: string, filename = "source.md", idempotencyKey?: string) =>
   as(t, caller).action(api.mcp.files.attachText, { ref, inlineText, filename, idempotencyKey });
 
-/** The client's POST to the upload URL: a stored blob. */
-const upload = (t: T, body: string | Uint8Array) =>
+/** A blob stored directly (as the app's own upload URL would): for the app's save paths. */
+const storeBlob = (t: T, body: string | Uint8Array) =>
   t.run(async (ctx) => await ctx.storage.store(new Blob([body as BlobPart])));
 
-/** create_upload + the POST, as a client does it. */
-async function announceAndUpload(t: T, caller: Caller, body: string, filename = "brief.pdf", contentType = "application/pdf") {
-  await createUpload(t, caller, { filename, contentType, sizeBytes: new TextEncoder().encode(body).length });
-  return await upload(t, body);
+/** The client's POST to the upload URL create_upload returned. */
+async function post(t: T, uploadUrl: string, body: BodyInit, contentType: string) {
+  const url = new URL(uploadUrl);
+  expect(url.origin).toBe(SITE);
+  const res = await t.fetch(`${url.pathname}${url.search}`, { method: "POST", headers: { "Content-Type": contentType }, body });
+  return { status: res.status, body: (await res.json()) as Record<string, unknown> };
 }
+
+/** create_upload + the POST, as a client does it; returns the uploadId. */
+async function announceAndUpload(t: T, caller: Caller, body: string, filename = "brief.pdf", contentType = "application/pdf") {
+  const started = await createUpload(t, caller, { filename, contentType, sizeBytes: new TextEncoder().encode(body).length });
+  expect((await post(t, started.uploadUrl, body, contentType)).status).toBe(200);
+  return started.uploadId;
+}
+
+const uploadRow = (t: T, uploadId: string) =>
+  t.run(async (ctx) => await ctx.db.query("mcpFileUploads").withIndex("by_uploadId", (q) => q.eq("uploadId", uploadId)).unique());
 
 const taskFiles = (t: T, taskId: Id<"tasks">) =>
   t.run(async (ctx) => await ctx.db.query("attachments").withIndex("by_task", (q) => q.eq("taskId", taskId)).collect());
@@ -186,16 +201,19 @@ async function completeWith(
 }
 
 describe("create_upload", () => {
-  it("returns a Convex upload URL and records the announcement", async () => {
+  it("returns a single-use upload URL on the deployment's site and records the announcement", async () => {
     const t = createT();
     await setup(t);
     const result = await createUpload(t, "alice", { filename: " brief.pdf ", contentType: "Application/PDF", sizeBytes: 48213 });
     expect(result).toMatchObject({ tool: "create_upload", fileName: "brief.pdf", contentType: "application/pdf", sizeBytes: 48213, replayed: false });
-    expect(result.uploadUrl).toMatch(/^https:\/\//);
-    expect(result.expiresAt - Date.now()).toBeGreaterThan(59 * 60_000);
-    const rows = await t.run(async (ctx) => await ctx.db.query("mcpUploads").collect());
-    expect(rows).toEqual([expect.objectContaining({ orgId: ORG, fileName: "brief.pdf", contentType: "application/pdf", sizeBytes: 48213 })]);
-    expect(rows[0].storageId).toBeUndefined();
+    expect(result.uploadId).toMatch(/^[A-Za-z0-9_-]{32}$/);
+    expect(result.uploadUrl).toBe(`${SITE}/mcp-upload?u=${result.uploadId}`);
+    expect(result.expiresAt - Date.now()).toBe(60 * 60_000);
+    const row = await uploadRow(t, result.uploadId);
+    expect(row).toMatchObject({ orgId: ORG, fileName: "brief.pdf", contentType: "application/pdf", sizeBytes: 48213 });
+    expect(row!.storageId).toBeUndefined();
+    const second = await createUpload(t, "alice", { filename: "brief.pdf", contentType: "application/pdf", sizeBytes: 48213 });
+    expect(second.uploadId).not.toBe(result.uploadId);
   });
 
   it("refuses what the app refuses: blocked types, empty and over-10 MB files, bad names and types", async () => {
@@ -209,27 +227,95 @@ describe("create_upload", () => {
     await expect(refuse({ filename: "x".repeat(256), contentType: "application/pdf", sizeBytes: 10 })).rejects.toThrow(/longer than 255/);
     await expect(refuse({ filename: "a\u0000b", contentType: "application/pdf", sizeBytes: 10 })).rejects.toThrow(/control characters/);
     await expect(refuse({ filename: "x.pdf", contentType: "pdf", sizeBytes: 10 })).rejects.toThrow(/MIME type/);
-    expect(await t.run(async (ctx) => await ctx.db.query("mcpUploads").collect())).toEqual([]);
+    expect(await t.run(async (ctx) => await ctx.db.query("mcpFileUploads").collect())).toEqual([]);
   });
 
-  it("an idempotency replay returns the same URL and records nothing new", async () => {
+  it("an idempotency replay returns the same upload and records nothing new", async () => {
     const t = createT();
     await setup(t);
     const args = { filename: "a.pdf", contentType: "application/pdf", sizeBytes: 5, idempotencyKey: "k1" };
     const first = await createUpload(t, "admin", args);
     const again = await createUpload(t, "admin", args);
     expect(again).toEqual({ ...first, replayed: true });
-    expect(await t.run(async (ctx) => (await ctx.db.query("mcpUploads").collect()).length)).toBe(1);
+    expect(await t.run(async (ctx) => (await ctx.db.query("mcpFileUploads").collect()).length)).toBe(1);
     await expect(createUpload(t, "admin", { ...args, sizeBytes: 6 })).rejects.toThrow(/different request/);
+  });
+
+  it("a session (app) token is refused by every mcp/files function", async () => {
+    const t = createT();
+    const f = await setup(t);
+    const app = inApp(t, "admin", "org:admin");
+    await expect(app.mutation(api.mcp.files.createUpload, { filename: "a.pdf", contentType: "application/pdf", sizeBytes: 5 })).rejects.toThrow(
+      /MCP functions require an OAuth access token/,
+    );
+    await expect(app.mutation(api.mcp.files.attach, { ref: f.id.A, uploadId: "x" })).rejects.toThrow(/OAuth access token/);
+    const before = await blobCount(t);
+    await expect(app.action(api.mcp.files.attachText, { ref: f.id.A, inlineText: "x", filename: "a.txt" })).rejects.toThrow(/OAuth access token/);
+    expect(await blobCount(t)).toBe(before);
   });
 });
 
-describe("attach_file with a storageId", () => {
-  it("attaches to a task through the app's save path: the same row, extraction queued", async () => {
+describe("the upload endpoint (POST /mcp-upload)", () => {
+  it("stores exactly the announced bytes once and answers without the storageId", async () => {
+    const t = createT();
+    await setup(t);
+    const started = await createUpload(t, "admin", { filename: "notes.txt", contentType: "text/plain", sizeBytes: 11 });
+    const res = await post(t, started.uploadUrl, "hello world", "text/plain; charset=utf-8");
+    expect(res).toEqual({ status: 200, body: { uploaded: true, sizeBytes: 11, next: "Call attach_file with this upload's uploadId." } });
+    const row = await uploadRow(t, started.uploadId);
+    expect(row!.storageId).toBeDefined();
+    expect(JSON.stringify(res.body)).not.toContain(row!.storageId!);
+    expect(await t.run(async (ctx) => await (await ctx.storage.get(row!.storageId!))!.text())).toBe("hello world");
+    // Single use.
+    expect(await post(t, started.uploadUrl, "hello world", "text/plain")).toMatchObject({ status: 409 });
+  });
+
+  it("refuses another type, a larger or smaller body, an unknown and an expired URL; nothing is stored", async () => {
+    const t = createT();
+    await setup(t);
+    const started = await createUpload(t, "admin", { filename: "a.pdf", contentType: "application/pdf", sizeBytes: 8 });
+    const before = await blobCount(t);
+    expect(await post(t, started.uploadUrl, "%PDF-1.4", "text/html")).toEqual({
+      status: 415, body: { error: "Send the header Content-Type: application/pdf (the type given to create_upload)." },
+    });
+    expect(await post(t, started.uploadUrl, "%PDF-1.4 and much more", "application/pdf")).toMatchObject({ status: 413 });
+    expect(await post(t, started.uploadUrl, "%PDF", "application/pdf")).toMatchObject({
+      status: 400, body: { error: "The body must be exactly 8 bytes (the size given to create_upload)." },
+    });
+    expect(await post(t, `${SITE}/mcp-upload?u=nope`, "%PDF-1.4", "application/pdf")).toMatchObject({ status: 404 });
+    expect(await post(t, `${SITE}/mcp-upload`, "%PDF-1.4", "application/pdf")).toMatchObject({ status: 404 });
+    vi.advanceTimersByTime(60 * 60_000 + 1);
+    expect(await post(t, started.uploadUrl, "%PDF-1.4", "application/pdf")).toMatchObject({ status: 410 });
+    expect(await blobCount(t)).toBe(before);
+    expect((await uploadRow(t, started.uploadId))!.storageId).toBeUndefined();
+  });
+
+  it("the cleanup deletes the blob of an upload stored but never attached, keeps attached files", async () => {
     const t = createT();
     const f = await setup(t);
-    const storageId = await announceAndUpload(t, "alice", "%PDF-1.4 brief");
-    const result = await attach(t, "alice", f.id.A, storageId);
+    const kept = await announceAndUpload(t, "admin", "attached");
+    await attach(t, "admin", f.id.A, kept);
+    const abandoned = await announceAndUpload(t, "admin", "abandoned");
+    const abandonedBlob = (await uploadRow(t, abandoned))!.storageId!;
+    const blobs = await blobCount(t);
+    vi.advanceTimersByTime(24 * 60 * 60_000);
+    await t.mutation(internal.mcpFileUploads.cleanupExpired, {});
+    expect(await blobCount(t)).toBe(blobs); // within 25 h: nothing yet
+    vi.advanceTimersByTime(60 * 60_000 + 1);
+    await t.mutation(internal.mcpFileUploads.cleanupExpired, {});
+    expect(await t.run(async (ctx) => await ctx.db.query("mcpFileUploads").collect())).toEqual([]);
+    expect(await t.run(async (ctx) => await ctx.db.system.get("_storage", abandonedBlob))).toBeNull();
+    expect(await blobCount(t)).toBe(blobs - 1);
+    expect(await taskFiles(t, f.A)).toHaveLength(1);
+  });
+});
+
+describe("attach_file with an uploadId", () => {
+  it("attaches the uploaded file to a task through the app's save path: the same row, extraction queued", async () => {
+    const t = createT();
+    const f = await setup(t);
+    const uploadId = await announceAndUpload(t, "alice", "%PDF-1.4 brief");
+    const result = await attach(t, "alice", f.id.A, uploadId);
     expect(result).toMatchObject({
       tool: "attach_file",
       target: { type: "task", task: f.id.A, title: "Alice task" },
@@ -237,8 +323,10 @@ describe("attach_file with a storageId", () => {
       textStatus: "pending",
       replayed: false,
     });
+    const row = await uploadRow(t, uploadId);
+    expect(row!.attachedAt).toBeDefined();
     // The same document the app's attachments.save writes.
-    const appBlob = await upload(t, "%PDF-1.4 brief");
+    const appBlob = await storeBlob(t, "%PDF-1.4 brief");
     await inApp(t, "alice", "org:member").mutation(api.attachments.save, {
       taskId: f.A, fileId: appBlob, fileName: "brief.pdf", fileSize: 14, mimeType: "application/pdf",
     });
@@ -246,54 +334,55 @@ describe("attach_file with a storageId", () => {
     const strip = (r: typeof mcp) => ({ ...r, _id: null, _creationTime: null, createdAt: null, fileId: null });
     expect(strip(mcp)).toEqual(strip(app));
     expect(mcp._id).toBe(result.attachmentId);
-    // Both queued extraction (one content row each).
-    expect((await contentRows(t)).map((r) => [r.storageId, r.status])).toEqual([[storageId, "pending"], [appBlob, "pending"]]);
-    const upload1 = await t.run(async (ctx) => await ctx.db.query("mcpUploads").first());
-    expect(upload1!.storageId).toBe(storageId);
+    expect(mcp.fileId).toBe(row!.storageId);
+    expect((await contentRows(t)).map((r) => [r.storageId, r.status])).toEqual([[row!.storageId, "pending"], [appBlob, "pending"]]);
   });
 
-  it("refuses a storageId nobody announced, another user's or org's upload, a size mismatch and a second attach", async () => {
+  it("refuses an unknown, foreign, not-yet-uploaded, expired or already attached upload — and raw storage ids", async () => {
     const t = createT();
     const f = await setup(t);
-    // Uploaded without create_upload (e.g. an app upload): not attachable.
-    const stray = await upload(t, "stray");
-    await expect(attach(t, "admin", f.id.A, stray)).rejects.toThrow(/does not match a file you announced/);
-    await expect(attach(t, "admin", f.id.A, "not-an-id")).rejects.toThrow(/does not match a file you announced/);
+    await expect(attach(t, "admin", f.id.A, "nope")).rejects.toThrow(/Unknown uploadId/);
+    // A storage id is never an upload reference.
+    const blob = await storeBlob(t, "stray");
+    await expect(attach(t, "admin", f.id.A, blob)).rejects.toThrow(/Unknown uploadId/);
 
-    const aliceBlob = await announceAndUpload(t, "alice", "alice's file");
+    const alices = await announceAndUpload(t, "alice", "alice's file");
     // Another member of the org, and an admin of another org: same answer, nothing leaks.
-    await expect(attach(t, "bob", f.id.B, aliceBlob)).rejects.toThrow(/does not match a file you announced/);
-    await expect(attach(t, "other", f.X, aliceBlob)).rejects.toThrow(/does not match a file you announced/);
+    await expect(attach(t, "bob", f.id.B, alices)).rejects.toThrow(/Unknown uploadId/);
+    await expect(attach(t, "other", f.X, alices)).rejects.toThrow(/Unknown uploadId/);
 
-    await createUpload(t, "admin", { filename: "a.pdf", contentType: "application/pdf", sizeBytes: 100 });
-    const wrongSize = await upload(t, "only 12 b");
-    await expect(attach(t, "admin", f.id.A, wrongSize)).rejects.toThrow(/9 bytes, but create_upload announced 100/);
+    const pending = await createUpload(t, "admin", { filename: "a.pdf", contentType: "application/pdf", sizeBytes: 100 });
+    await expect(attach(t, "admin", f.id.A, pending.uploadId)).rejects.toThrow(/has not been uploaded yet/);
 
-    await attach(t, "alice", f.id.A, aliceBlob);
-    await expect(attach(t, "alice", f.id.A, aliceBlob)).rejects.toThrow(/already attached/);
+    await attach(t, "alice", f.id.A, alices);
+    await expect(attach(t, "alice", f.id.A, alices)).rejects.toThrow(/already attached/);
     expect(await taskFiles(t, f.A)).toHaveLength(1);
+
+    const late = await announceAndUpload(t, "admin", "late file");
+    vi.advanceTimersByTime(24 * 60 * 60_000 + 1);
+    await expect(attach(t, "admin", f.id.A, late)).rejects.toThrow(/Unknown uploadId/);
   });
 
   it("a failed attach keeps the upload for a retry (one transaction)", async () => {
     const t = createT();
     const f = await setup(t);
-    const blob = await announceAndUpload(t, "bob", "bob file");
+    const uploadId = await announceAndUpload(t, "bob", "bob file");
     // Bob cannot write Alice's task: not found, and the upload stays unused.
-    await expect(attach(t, "bob", f.id.A, blob)).rejects.toThrow(`${f.id.A} not found`);
-    expect((await t.run(async (ctx) => await ctx.db.query("mcpUploads").first()))!.storageId).toBeUndefined();
-    await attach(t, "bob", f.id.B, blob);
+    await expect(attach(t, "bob", f.id.A, uploadId)).rejects.toThrow(`${f.id.A} not found`);
+    expect((await uploadRow(t, uploadId))!.attachedAt).toBeUndefined();
+    await attach(t, "bob", f.id.B, uploadId);
     expect(await taskFiles(t, f.B)).toHaveLength(1);
   });
 
   it("idempotency: a replay returns the first result and writes nothing; another request with the key is refused", async () => {
     const t = createT();
     const f = await setup(t);
-    const blob = await announceAndUpload(t, "admin", "file");
-    const first = await attach(t, "admin", f.id.A, blob, "key-attach");
-    const again = await attach(t, "admin", f.id.A, blob, "key-attach");
+    const uploadId = await announceAndUpload(t, "admin", "file");
+    const first = await attach(t, "admin", f.id.A, uploadId, "key-attach");
+    const again = await attach(t, "admin", f.id.A, uploadId, "key-attach");
     expect(again).toEqual({ ...first, replayed: true });
     expect(await taskFiles(t, f.A)).toHaveLength(1);
-    await expect(attach(t, "admin", f.id.B, blob, "key-attach")).rejects.toThrow(/different request/);
+    await expect(attach(t, "admin", f.id.B, uploadId, "key-attach")).rejects.toThrow(/different request/);
   });
 
   it("the app's per-task limit applies", async () => {
@@ -305,8 +394,8 @@ describe("attach_file with a storageId", () => {
         await ctx.db.insert("attachments", { taskId: f.A, orgId: ORG, userId: f.admin, fileId, fileName: `${i}.txt`, fileSize: 1, mimeType: "text/plain", createdAt: 1 });
       }
     });
-    const blob = await announceAndUpload(t, "admin", "one more");
-    await expect(attach(t, "admin", f.id.A, blob)).rejects.toThrow(/Maximum 20 files per task/);
+    const uploadId = await announceAndUpload(t, "admin", "one more");
+    await expect(attach(t, "admin", f.id.A, uploadId)).rejects.toThrow(/Maximum 20 files per task/);
   });
 });
 
@@ -347,7 +436,7 @@ describe("attach_file: who may attach where", () => {
 
     // The app's save path applies the same rule with the same message.
     const appSave = async (caller: Caller, role: "org:admin" | "org:member") => {
-      const fileId = await upload(t, "app file");
+      const fileId = await storeBlob(t, "app file");
       return await inApp(t, caller, role).mutation(api.commentAttachments.save, {
         commentId: f.aliceComment, fileId, fileName: "app.txt", fileSize: 8, mimeType: "text/plain",
       });
@@ -414,7 +503,7 @@ describe("fetch include files / attachment_text", () => {
     const t = createT();
     const f = await setup(t);
     const saveFile = async (name: string, mimeType: string, body = "x") => {
-      const fileId = await upload(t, body);
+      const fileId = await storeBlob(t, body);
       await inApp(t, "admin", "org:admin").mutation(api.attachments.save, { taskId: f.A, fileId, fileName: name, fileSize: 1, mimeType });
       return fileId;
     };

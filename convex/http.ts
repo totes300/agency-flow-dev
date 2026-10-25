@@ -4,6 +4,7 @@ import { internal } from "./_generated/api";
 import type { WebhookEvent } from "@clerk/backend";
 import { Webhook } from "svix";
 import type { Id } from "./_generated/dataModel";
+import { upload as mcpUpload } from "./mcpFileUploads";
 
 const http = httpRouter();
 
@@ -32,6 +33,16 @@ http.route({
       },
     });
   }),
+});
+
+// ─── MCP file uploads (docs/prd-mcp.md D18, §10) ─────────────────────────────
+// The upload URL create_upload returns: stores exactly the announced bytes,
+// once, within the hour. The single-use uploadId in the URL is the
+// capability (convex/mcpFileUploads.ts).
+http.route({
+  path: "/mcp-upload",
+  method: "POST",
+  handler: mcpUpload,
 });
 
 http.route({

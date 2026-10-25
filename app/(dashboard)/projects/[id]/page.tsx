@@ -26,7 +26,6 @@ import { ProjectPropertiesCards } from "@/components/projects/overview/project-s
 import { selectPeriod } from "@/lib/billing/period-selection"
 import { useIsAdmin } from "@/lib/hooks/use-is-admin"
 import { useBreadcrumbTitle } from "@/lib/hooks/use-breadcrumb-title"
-import { cn } from "@/lib/utils"
 
 const TABS = ["overview", "tasks", "time", "billing", "settings"] as const
 type Tab = (typeof TABS)[number]
@@ -279,7 +278,7 @@ export default function ProjectDetailPage() {
           </TabsContent>
         )}
 
-        <TabsContent value="settings" className={cn("m-0 min-w-0 p-4 md:p-6")}>
+        <TabsContent value="settings" className="m-0 min-w-0 p-4 md:p-6">
           {effectiveTab === "settings" && (
             <div className="flex flex-col gap-6">
               <SettingsGeneral projectId={projectId} project={project} />

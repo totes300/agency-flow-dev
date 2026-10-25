@@ -123,7 +123,7 @@ export function ProjectDetailHeader({
             <span className="text-xs text-muted-foreground">
               Last logged: {lastLoggedDate ? formatShortDate(lastLoggedDate) : "—"}
             </span>
-            <Button variant="outline" size="sm" className="rounded-full" onClick={() => onTabChange("settings")}>
+            <Button variant="ghost" size="sm" onClick={() => onTabChange("settings")}>
               Edit
             </Button>
             <DropdownMenu>

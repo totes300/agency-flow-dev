@@ -4,9 +4,12 @@ How to take the Agency Flow MCP server (`docs/prd-mcp.md`) to production. It
 adds to `docs/runbooks/deployment.md`; follow that runbook's preflight and
 deployment sequence as well.
 
-**Nothing here has been done in production yet.** Every Clerk production change
-below is an owner-approved step (`docs/prd-mcp.md` §17): show the exact change,
-get a yes, then apply it.
+> **Rule: every production command — Convex (`--prod`, `npx convex deploy`), Vercel
+> (env vars, deploys, rollbacks) and Clerk (production instance settings) — runs
+> only after the owner's explicit yes** (`docs/prd-mcp.md` §17). Show the exact
+> command or change first.
+
+Nothing here has been done in production yet.
 
 ## What the MCP server consists of
 
@@ -36,6 +39,8 @@ get a yes, then apply it.
 | `CLERK_JWT_ISSUER_DOMAIN` | Convex production | Already required by the app. The MCP provider derives its issuer and JWKS (`<issuer>/.well-known/jwks.json`) from it, so it must be the production Clerk issuer (`https://clerk.<domain>`). |
 | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY` | Vercel | Already required. The secret key also resolves OAuth client names for "via <client>" and Connected apps. |
 | `CONVEX_SITE_URL` | Convex (built in) | Set by Convex itself; `create_upload` builds the upload URL from it. Nothing to configure. |
+| `MCP_RESOURCE_URL` | Convex **default environment variables for Preview** (Convex dashboard → project settings) | Vercel Preview builds create Convex preview deployments, and `convex/auth.config.ts` throws there too without it. Any https URL works (e.g. the production MCP URL); MCP itself is not offered on previews, because Clerk issues tokens only for the registered resource. |
+| `MCP_DISABLED` | Convex production, normally unset | The global stop: `"true"` refuses every MCP call (see Rollback). |
 
 Check before deploying (names only; never print values into logs or tickets):
 
@@ -56,7 +61,7 @@ target state:
 | JWT access tokens (`oauth_jwt_access_tokens`) | on | on (already on) |
 | `aud` claim from the RFC 8707 resource (`aud_claim_enabled`) | on | **turn on** |
 | Advertise CIMD (`client_id_metadata_documents_advertised`) | on | **turn on** |
-| Dynamic client registration | off | off unless a client needs it (PRD §5.1 calls DCR a fallback; Claude and Codex both use CIMD) |
+| Dynamic client registration | off | off unless a client needs it — **the owner confirms at the production step** (PRD §5.1 calls DCR a fallback; CIMD covers Claude and Codex) |
 | Consent screen with organization picker | on | on (the user picks the org there; `user:org:read`) |
 
 Steps, each after the owner's yes:
@@ -73,11 +78,16 @@ Steps, each after the owner's yes:
 
 ## 3. Deploy order
 
-1. Set `MCP_RESOURCE_URL` on Convex production (section 1).
-2. Deploy Convex (`npx convex deploy`). It adds the tables `taskExternalRefs`,
+The Vercel build deploys Convex itself (`vercel.json`: `npx convex deploy --cmd
+'next build'`), so merging to `main` deploys both. Hence:
+
+1. **Before the merge**, set `MCP_RESOURCE_URL` on Convex production and in the
+   Convex default environment variables for Preview (section 1). Otherwise the
+   Convex deploy inside the Vercel build fails at `convex/auth.config.ts`.
+2. Merge; the Vercel production build deploys Convex. It adds the tables `taskExternalRefs`,
    `mcpIdempotency`, `mcpFileUploads`, `mcpBillingPreviews`, `attachmentContents`
    and `mcpConnections` (Connected apps stamps and revokes), and the cron jobs below.
-3. Set `MCP_RESOURCE_URL` on Vercel Production and deploy the Next.js app.
+3. Set `MCP_RESOURCE_URL` on Vercel Production (before or with the deploy).
 4. Apply the Clerk production steps (section 2).
 5. Run the attachment extraction backfill (section 5).
 6. Verify (section 6).
@@ -139,7 +149,13 @@ and shown honestly by `fetch`.
    client appears with its connected and last-used times (last used moves at
    most once an hour). Revoke it: the client's next MCP call is refused with
    "Access for this app was revoked…". Allow it again: the next call works.
-7. Check the Convex and Vercel logs for `[mcp]` errors.
+7. Upload: `create_upload` for a small text file, `curl -X POST --data-binary @file
+   -H 'Content-Type: text/plain' '<upload URL>'` (the URL is on `<CONVEX_SITE_URL>/mcp-upload?u=…`),
+   then `attach_file` with the uploadId; `fetch` the task with
+   `include: ["attachment_text"]` shows the text. Delete the file afterwards.
+8. Member vs admin: as a member, `report` `time_by_member` returns only their own
+   time and an admin-only kind (e.g. `close_queue`) is refused; as an admin both work.
+9. Check the Convex and Vercel logs for `[mcp]` errors.
 
 ## Connected apps and revocation (owner decisions D-PAGE, D-REVOKE, 2026-10-25)
 
@@ -157,16 +173,27 @@ and shown honestly by `fetch`.
   the user disconnects it there (Claude: Settings → Connectors; Codex:
   `codex mcp logout agency-flow`); the page says so.
 - "Allow again" clears `revokedAt`; the client's existing tokens work again.
-- Removing a member from the organization still cuts MCP access on the next call,
-  because Convex re-checks membership every time.
+- Removing a member from the organization cuts MCP access on the next call,
+  because Convex re-checks `orgMembers` every time. That table is kept in sync by
+  the Clerk webhook (`/clerk-users-webhook` on the Convex site), so the production
+  Clerk webhook must deliver `organizationMembership.created/updated/deleted`
+  events; check its delivery log after the release.
 
 ## Rollback
 
-- The MCP route, tables and crons are additive; the app does not depend on them.
-  To switch MCP off quickly, unregister the resource in Clerk (no new tokens) or
-  remove `MCP_RESOURCE_URL` from Vercel (the route fails closed). Issued access
-  tokens stop working when Convex no longer accepts them, at the latest when they
-  expire (1 day).
+- **Global stop (preferred):** `npx convex env set --prod MCP_DISABLED true` (owner's
+  yes). `getMcpAuthContext` then refuses every MCP call at once, including tokens
+  already issued; the app is unaffected. `npx convex env remove --prod MCP_DISABLED`
+  turns MCP back on. No deploy is needed.
+- **Vercel Instant Rollback does not roll back Convex.** It only switches the
+  Next.js deployment; Convex keeps the newer functions and schema.
+- **Convex is forward-only once MCP writes exist.** MCP writes add optional `via`
+  fields on `comments` and `billingEvents` rows (and rows in the new tables). Deploying
+  an older Convex version whose schema lacks them fails schema validation. To roll
+  Convex back, first strip those fields (a one-off internal mutation) or keep the
+  schema fields and roll back only the functions.
+- Unregistering the resource in Clerk stops new tokens; it does not stop issued ones
+  (use `MCP_DISABLED`).
 - Do not remove `MCP_RESOURCE_URL` from Convex while `convex/auth.config.ts`
   requires it: the next Convex deploy would fail.
 

@@ -6,7 +6,8 @@ import { assertValidDateString } from "./dateValidation";
 import { getOrgSettings, getProjectCurrency } from "./orgHelpers";
 import { ORG_TIMEZONE_FALLBACK, getDateInTimezone } from "./timer";
 import { referenceClientPrefix } from "./helpers";
-import { isValidMonthKey } from "./reportCore";
+import { addDaysToDateString } from "./todayPlan";
+import { REPORT_RANGE_DAYS_MAX, isValidMonthKey, lastDayOfMonth } from "./reportCore";
 import { buildTimesheetTable, formatTimesheetPeriodLabel } from "./timesheetPivot";
 import { createRefResolver, type RefResolver } from "./mcpRefs";
 import { projectSummary, richTextMarkdown, userNames } from "./mcpRecords";
@@ -22,9 +23,12 @@ import { projectMonthlyBreakdownForAuth, projectOverviewForAuth } from "../timeE
 import { getMonthlyReportForAuth } from "../billingReports";
 import { getCloseQueueForAuth } from "../billingViews";
 import { getInvoiceMetricsForAuth } from "../invoices";
+import { isClosedCategory } from "../tasks/model";
 import { loadAssignedTo } from "../tasks/read";
+import { REF_CAP } from "../workspaceRefs";
 import { capText } from "../../lib/mcp/tiptap-markdown";
-import { REPORT_RANGE_DAYS_MAX, type ReportKind } from "../../lib/mcp/limits";
+import { type ReportKind } from "../../lib/mcp/limits";
+import { tzWallToEpoch } from "../../lib/workday";
 import {
   flattenInvoiceMetrics,
   flattenMonthlyBreakdown,
@@ -37,7 +41,8 @@ import {
  * Each kind resolves its references in the caller's org (I3), applies the
  * app's role rules and runs the SAME core the app's screen or internal query
  * runs (`*ForAuth`), then returns compact rows; the route renders the table
- * (D1: every number is computed here, by code, never by the model).
+ * (D1: every number, subtotal and count is computed here, by code, never by
+ * the model).
  *
  * Role rules, exactly as the app:
  * - members: `time_by_member` (their own time only, like Workday) and
@@ -47,47 +52,51 @@ import {
  * Money is never summed across currencies: every amount carries its currency
  * and every total is per currency (the cores already partition).
  *
- * Read budget (Convex: 4,096 index ranges and 32,000 documents per call):
- * the cores read what the app reads for the same screen. MCP adds at most
- * one range per output row (task keys, project codes, emails) plus:
- * - timesheet: one per task (cap TIMESHEET_TASK_CAP), entries ≤ 20,000;
- * - client_monthly: two per task (task, latest comment) plus mention lookups,
- *   tasks ≤ CLIENT_TASK_CAP;
- * - missing_time: one range for completed tasks (≤ MISSING_DONE_CAP), one per
- *   review status (≤ MISSING_REVIEW_CAP tasks in all), or one person's
- *   assigned tasks (≤ MISSING_ASSIGNED_CAP, one range each), then per
- *   candidate one time-entry probe and, for review tasks, one activity probe.
- * A scan over its cap throws a "narrow the period / filter" error; nothing is
- * ever returned clipped.
+ * Read budget (Convex: 4,096 index ranges and 32,000 documents per call).
+ * The cores read what the app reads for the same screen, and that is NOT
+ * bounded by this layer: timesheet, client_monthly and the project kinds read
+ * every entry of each project involved, all time (`getProjectEntries`, like
+ * the project page and the worksheet export), so a project past Convex's
+ * per-call limits fails here as it does in the app. On top of the cores:
+ * - timesheet: in-range entries ≤ MAX_REPORT_ENTRIES and tasks ≤
+ *   TIMESHEET_TASK_CAP (refused before any per-task read); one read per
+ *   task inside the collector and one per distinct project for codes;
+ * - client_monthly: tasks ≤ CLIENT_TASK_CAP; per task the task, its parent
+ *   (sub-tasks) and one comment range of ≤ CLOSING_COMMENT_SCAN documents,
+ *   plus two reads per distinct mentioned user;
+ * - time_by_member: up to 5 members read their own entries (`by_userId_date`),
+ *   more scan the org's range; both ≤ MAX_REPORT_ENTRIES;
+ * - missing_time: see `missingTimeReport` for its worst case.
+ * A scan over its cap throws a model-actionable error; nothing is ever
+ * returned clipped.
  */
 
 export const TIMESHEET_TASK_CAP = 1000;
-export const CLIENT_TASK_CAP = 600;
-export const MISSING_DONE_CAP = 1000;
-export const MISSING_REVIEW_CAP = 500;
+/** Tasks per client_monthly report: the task table at ~150 characters a row stays well inside one result. */
+export const CLIENT_TASK_CAP = 300;
+/** Characters of a task's closing comment in client_monthly (as the changes feed, D29). */
+export const CLOSING_COMMENT_MAX = 500;
+/** Newest comments read per task when looking for its closing comment. */
+export const CLOSING_COMMENT_SCAN = 20;
+/** missing_time: tasks closed in the period's window (one range). */
+export const MISSING_CLOSED_CAP = 400;
+/** missing_time: tasks currently in the requested non-closed statuses, in all. */
+export const MISSING_OPEN_CAP = 100;
+/** missing_time fallback: one person's assignment edges. */
 export const MISSING_ASSIGNED_CAP = 1000;
-/** Characters of a task's latest comment in client_monthly (longer ends with "…"). */
-export const CLOSING_COMMENT_MAX = 2000;
-
-const KIND_LABEL: Record<ReportKind, string> = {
-  timesheet: "timesheet",
-  time_by_member: "time_by_member",
-  client_monthly: "client_monthly",
-  missing_time: "missing_time",
-  project_overview: "project_overview",
-  project_monthly: "project_monthly",
-  retainer_statement: "retainer_statement",
-  retainer_health: "retainer_health",
-  close_queue: "close_queue",
-  invoice_metrics: "invoice_metrics",
-  org_finance: "org_finance",
-};
+/** missing_time: sub-tasks checked per parent for logged time. */
+export const MISSING_SUBTASK_SCAN = 20;
+/** missing_time: activity rows read (newest first, then older) to date a status change. */
+export const STATUS_SCAN_FIRST = 20;
+export const STATUS_SCAN_MORE = 80;
+/** Statuses and work categories read per org; more refuses instead of dropping some. */
+export const ORG_LIST_CAP = 500;
 
 /** Members get exactly the app's surfaces: admin screens refuse with what they can run instead. */
 function requireAdminReport(auth: AuthContext, kind: ReportKind): void {
   if (auth.isAdmin) return;
   throw new ConvexError(
-    `The ${KIND_LABEL[kind]} report is admin-only, as in the app. Members can run time_by_member (your own time) and missing_time (your tasks).`,
+    `The ${kind} report is admin-only, as in the app. Members can run time_by_member (your own time) and missing_time (your tasks).`,
   );
 }
 
@@ -134,7 +143,7 @@ function projectInfo(project: Doc<"projects">) {
   return { id: project._id, code: project.code, name: project.name, billingType: project.billingType };
 }
 
-/** Task keys and titles, memoized; foreign or missing tasks read as null. */
+/** Tasks by id, memoized; foreign or missing tasks read as null. */
 function taskLookup(ctx: QueryCtx, orgId: string) {
   const cache = new Map<string, Doc<"tasks"> | null>();
   return async (taskId: string): Promise<Doc<"tasks"> | null> => {
@@ -161,13 +170,26 @@ function projectCodes(ctx: QueryCtx, orgId: string) {
   };
 }
 
-/** The org's statuses by id (one range; the workspace cap is far above any real status list). */
+/** The org's statuses by id (one range); more than ORG_LIST_CAP refuses rather than dropping some. */
 async function statusMap(ctx: QueryCtx, orgId: string): Promise<Map<Id<"statuses">, Doc<"statuses">>> {
   const rows = await ctx.db
     .query("statuses")
     .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
-    .take(500);
+    .take(ORG_LIST_CAP + 1);
+  if (rows.length > ORG_LIST_CAP) {
+    throw new ConvexError(`This workspace has more than ${ORG_LIST_CAP} statuses, more than a report reads in one call.`);
+  }
   return new Map(rows.map((s) => [s._id, s]));
+}
+
+/** First instant after `date` (YYYY-MM-DD) in `timezone`, epoch ms. */
+function endOfDayMs(date: string, timezone: string): number {
+  const [y, m, d] = addDaysToDateString(date, 1).split("-").map(Number);
+  return tzWallToEpoch(y, m, d, 0, 0, 0, timezone);
+}
+
+async function orgTimezone(ctx: QueryCtx, orgId: string): Promise<string> {
+  return (await getOrgSettings(ctx, orgId))?.timezone ?? ORG_TIMEZONE_FALLBACK;
 }
 
 // ─── timesheet ───────────────────────────────────────────────────────────────
@@ -175,7 +197,8 @@ async function statusMap(ctx: QueryCtx, orgId: string): Promise<Map<Id<"statuses
 /**
  * Per-task time of a client (optionally one of its projects) in a date
  * range: the worksheet collector the app's exports run, per project, plus the
- * timesheet pivot's category totals. Admin-only (worksheets are).
+ * timesheet pivot's category totals and per-project subtotals. Admin-only
+ * (worksheets are).
  */
 export async function timesheetReport(
   ctx: QueryCtx,
@@ -216,9 +239,6 @@ export async function timesheetReport(
     .filter((c) => c.key.startsWith("cat:"))
     .map((c) => ({ name: c.label, minutes: Number(pivot.totals?.[c.key] ?? 0) }));
 
-  const task = taskLookup(ctx, auth.orgId);
-  const codes = projectCodes(ctx, auth.orgId);
-  const rows = [];
   // The pivot's row order: project, first worked, title.
   const sorted = [...data.rows].sort((a, b) =>
     a.projectName !== b.projectName
@@ -227,11 +247,15 @@ export async function timesheetReport(
         ? (a.firstWorked < b.firstWorked ? -1 : 1)
         : a.title.localeCompare(b.title),
   );
+  const codes = projectCodes(ctx, auth.orgId);
+  const rows = [];
+  const projects = new Map<string, { code: string; name: string; minutes: number; billableMinutes: number; nonBillableMinutes: number; entryCount: number }>();
   for (const r of sorted) {
+    const code = (await codes(r.projectId)) ?? r.projectName;
     rows.push({
-      identifier: (await task(r.taskId))?.identifier ?? null,
+      identifier: r.identifier,
       title: r.title,
-      project: (await codes(r.projectId)) ?? r.projectName,
+      project: code,
       category: r.categoryName,
       firstWorked: r.firstWorked,
       lastWorked: r.lastWorked,
@@ -240,6 +264,12 @@ export async function timesheetReport(
       nonBillableMinutes: r.nonBillableMinutes,
       entryCount: r.entryCount,
     });
+    const subtotal = projects.get(r.projectId) ?? { code, name: r.projectName, minutes: 0, billableMinutes: 0, nonBillableMinutes: 0, entryCount: 0 };
+    subtotal.minutes += r.totalMinutes;
+    subtotal.billableMinutes += r.billableMinutes;
+    subtotal.nonBillableMinutes += r.nonBillableMinutes;
+    subtotal.entryCount += r.entryCount;
+    projects.set(r.projectId, subtotal);
   }
   return {
     client: clientInfo(client),
@@ -248,6 +278,8 @@ export async function timesheetReport(
     to: args.to,
     periodLabel: formatTimesheetPeriodLabel({ startDate: args.from, endDate: args.to }),
     rows,
+    /** Per-project subtotals in row order (D1: the table's subtotal rows). */
+    projects: [...projects.values()],
     categories,
     totals: {
       minutes: Number(pivot.totals?.total ?? 0),
@@ -263,7 +295,8 @@ export async function timesheetReport(
 /**
  * Time per member and project in a date range (`timeByMemberForAuth`). Admins
  * get the whole team, or one member; members get exactly their own time, as
- * on Workday. Minutes only: no rates or amounts for anyone.
+ * on Workday. Minutes only: no rates or amounts for anyone. Project rows
+ * carry their code (and, for admins, their id for the link).
  */
 export async function timeByMemberReport(
   ctx: QueryCtx,
@@ -285,10 +318,24 @@ export async function timeByMemberReport(
     userIds: auth.isAdmin && member ? [member._id] : undefined,
     allMembers: auth.isAdmin && !member,
   });
+  const codes = projectCodes(ctx, auth.orgId);
   const members = [];
   for (const m of data.members) {
     const id = ctx.db.normalizeId("users", m.userId);
     const user = id ? await ctx.db.get(id) : null;
+    const projects = [];
+    for (const p of m.byProject) {
+      projects.push({
+        // Project pages are admin routes: members get the code, not the link.
+        id: auth.isAdmin ? p.projectId : null,
+        code: await codes(p.projectId),
+        name: p.projectName,
+        client: p.clientName,
+        minutes: p.minutes,
+        billableMinutes: p.billableMinutes,
+        nonBillableMinutes: p.minutes - p.billableMinutes,
+      });
+    }
     members.push({
       name: m.userName,
       email: user?.email ?? null,
@@ -296,12 +343,7 @@ export async function timeByMemberReport(
       billableMinutes: m.billableMinutes,
       nonBillableMinutes: m.nonBillableMinutes,
       entryCount: m.entryCount,
-      projects: m.byProject.map((p) => ({
-        name: p.projectName,
-        client: p.clientName,
-        minutes: p.minutes,
-        billableMinutes: p.billableMinutes,
-      })),
+      projects,
     });
   }
   return { from: args.from, to: args.to, scope, members, totals: data.totals };
@@ -310,34 +352,43 @@ export async function timeByMemberReport(
 // ─── client_monthly ──────────────────────────────────────────────────────────
 
 /**
- * A client's months (`clientMonthlySummaryForAuth`) plus, per task worked in
- * the range, the raw material for a client summary (D25): key, title,
- * status, minutes, its time-entry notes and its closing comment (the latest
- * comment on the task). The server never summarizes. Admin-only.
+ * A client's months (`clientMonthlySummaryForAuth`, optionally one of its
+ * projects) with per-project subtotals, plus, per task worked in the range,
+ * the raw material for a client summary (D25): key (and its parent's for a
+ * sub-task), title, status, completion date, minutes, its time-entry notes
+ * (non-billable ones marked) and its closing comment — the newest comment
+ * written by a person (not through MCP) up to the end of the period, capped
+ * at CLOSING_COMMENT_MAX. The server never summarizes. Admin-only.
  */
 export async function clientMonthlyReport(
   ctx: QueryCtx,
   auth: AuthContext,
-  args: { client: string; fromMonth: string; toMonth: string },
+  args: { client: string; fromMonth: string; toMonth: string; project?: string },
 ) {
   requireAdminReport(auth, "client_monthly");
   assertMonth(args.fromMonth, "from_month");
   assertMonth(args.toMonth, "to_month");
   const resolver = createRefResolver(ctx, auth);
   const client = await resolveClient(resolver, args.client);
+  const project = args.project !== undefined ? await resolveProject(resolver, args.project) : null;
+  if (project && project.clientId !== client._id) {
+    throw new ConvexError(`${project.code} is not a project of ${args.client}. Drop project, or use one of the client's project codes.`);
+  }
   const data = await clientMonthlySummaryForAuth(
     ctx,
     auth,
     { clientId: client._id, fromMonth: args.fromMonth, toMonth: args.toMonth },
-    { tasks: true },
+    { tasks: true, projectId: project?._id },
   );
   const rollups = data.tasks ?? [];
   if (rollups.length > CLIENT_TASK_CAP) {
     throw new ConvexError(
-      `${rollups.length} tasks were worked for this client in the range, more than one report lists (${CLIENT_TASK_CAP}). Ask for fewer months (e.g. one month).`,
+      `${rollups.length} tasks were worked in the range, more than one report lists (${CLIENT_TASK_CAP}). Run it per project (project) or for fewer months.`,
     );
   }
 
+  const timezone = await orgTimezone(ctx, auth.orgId);
+  const periodEnd = endOfDayMs(lastDayOfMonth(data.toMonth), timezone);
   const task = taskLookup(ctx, auth.orgId);
   const codes = projectCodes(ctx, auth.orgId);
   const statuses = await statusMap(ctx, auth.orgId);
@@ -346,22 +397,27 @@ export async function clientMonthlyReport(
   const tasks = [];
   for (const r of rollups) {
     const doc = await task(r.taskId);
-    const latest = doc
+    const parent = doc?.parentTaskId ? await task(doc.parentTaskId) : null;
+    const recent = doc
       ? await ctx.db
           .query("comments")
-          .withIndex("by_task", (q) => q.eq("taskId", doc._id))
+          .withIndex("by_task", (q) => q.eq("taskId", doc._id).lt("createdAt", periodEnd))
           .order("desc")
-          .first()
-      : null;
-    const comment = latest && latest.orgId === auth.orgId
-      ? capText(await markdown.content(latest.content), CLOSING_COMMENT_MAX)
-      : null;
+          .take(CLOSING_COMMENT_SCAN)
+      : [];
+    const closing = recent.find((c) => c.orgId === auth.orgId && c.via === undefined) ?? null;
+    const comment = closing ? capText(await markdown.content(closing.content), CLOSING_COMMENT_MAX) : null;
     const status = doc ? statuses.get(doc.statusId) : undefined;
     tasks.push({
       identifier: doc?.identifier ?? null,
+      parent: parent?.identifier ?? null,
       title: doc?.title ?? "Deleted task",
       status: status?.name ?? null,
       statusCategory: doc?.statusCategory ?? null,
+      completedOn:
+        doc?.statusCategory === "completed" && doc.completedAt !== undefined
+          ? getDateInTimezone(doc.completedAt, timezone)
+          : null,
       archived: doc?.archivedAt !== undefined,
       project: (await codes(r.projectId)) ?? r.projectName,
       minutes: r.minutes,
@@ -370,25 +426,32 @@ export async function clientMonthlyReport(
       entryCount: r.entryCount,
       notes: r.notes,
       closingComment:
-        latest && comment
-          ? { author: await name(latest.userId), createdAt: latest.createdAt, text: comment.text, truncated: comment.truncated }
+        closing && comment
+          ? { author: await name(closing.userId), createdAt: closing.createdAt, text: comment.text, truncated: comment.truncated }
           : null,
     });
   }
-  const timezone = (await getOrgSettings(ctx, auth.orgId))?.timezone ?? ORG_TIMEZONE_FALLBACK;
-  return {
-    client: clientInfo(client),
-    fromMonth: data.fromMonth,
-    toMonth: data.toMonth,
-    timezone,
-    months: data.months.map((m) => ({
+  const months = [];
+  for (const m of data.months) {
+    const byProject = [];
+    for (const p of m.byProject) byProject.push({ code: await codes(p.projectId), name: p.projectName, minutes: p.minutes });
+    months.push({
       month: m.month,
       minutes: m.minutes,
       billableMinutes: m.billableMinutes,
       nonBillableMinutes: m.nonBillableMinutes,
       billableAmount: m.billableAmount,
       entryCount: m.entryCount,
-    })),
+      byProject,
+    });
+  }
+  return {
+    client: clientInfo(client),
+    project: project ? projectInfo(project) : null,
+    fromMonth: data.fromMonth,
+    toMonth: data.toMonth,
+    timezone,
+    months,
     totals: data.totals,
     tasks,
   };
@@ -396,34 +459,120 @@ export async function clientMonthlyReport(
 
 // ─── missing_time ────────────────────────────────────────────────────────────
 
-/** "Review" as the app models it: a started status whose name says review (Admin review, Client review). */
-export function isReviewStatus(status: Pick<Doc<"statuses">, "category" | "name">): boolean {
-  return status.category === "started" && /review/i.test(status.name);
-}
-
-const DAY_MS = 86_400_000;
+type MissingTimeStatus = { id: Id<"statuses">; name: string; category: Doc<"statuses">["category"] };
 
 /**
- * Review/Done tasks in the period with no time entries (D25):
- * - Done: a completed-category status, completed (`completedAt`) in the
- *   period, in the org's timezone;
- * - Review: currently in a review status (`isReviewStatus`) that it entered
- *   in the period — its latest status change, or its creation when it never
- *   changed status.
- * Only top-level project tasks count: sub-tasks are checklist items and a
- * task without a project cannot carry time (D28). Archived tasks are left
- * out, like the app's lists. "No time" means no entry by anyone (the app
- * shows members a task's total tracked time too). Members see the tasks
- * assigned to them; admins every task, or one member's with member.
+ * The statuses a missing_time report covers: the names given (matched to the
+ * org's statuses, case-insensitively; an unknown name is an error listing the
+ * valid ones), or by default every completed-category status (owner decision
+ * D-MISSING, 2026-10-25). Names are never guessed.
+ */
+function resolveStatuses(all: ReadonlyMap<Id<"statuses">, Doc<"statuses">>, names: readonly string[] | undefined): MissingTimeStatus[] {
+  const statuses = [...all.values()];
+  const picked =
+    names === undefined
+      ? statuses.filter((s) => s.category === "completed")
+      : names.flatMap((raw) => {
+          const key = raw.trim().toLowerCase();
+          const match = statuses.filter((s) => s.name.trim().toLowerCase() === key);
+          if (match.length === 0) {
+            const valid = statuses.filter((s) => s.archivedAt === undefined).map((s) => s.name);
+            throw new ConvexError(`Unknown status "${raw}". Statuses: ${valid.join(", ")} (fetch("workspace") lists them).`);
+          }
+          return match;
+        });
+  const unique = new Map(picked.map((s) => [s._id, { id: s._id, name: s.name, category: s.category }]));
+  return [...unique.values()];
+}
+
+/**
+ * When the task entered its current status, from its activity: the newest
+ * status change, read newest-first in two bounded pages (STATUS_SCAN_FIRST,
+ * then STATUS_SCAN_MORE older rows). No status change in a task's whole
+ * history means it was created in that status. null = the change lies
+ * beyond both pages (unknown; the task is reported as unchecked).
+ */
+async function enteredStatusAt(ctx: QueryCtx, task: Doc<"tasks">): Promise<number | null> {
+  const recent = await ctx.db
+    .query("activityLog")
+    .withIndex("by_task", (q) => q.eq("taskId", task._id))
+    .order("desc")
+    .take(STATUS_SCAN_FIRST);
+  const first = recent.find((row) => row.type === "status_changed");
+  if (first) return first.createdAt;
+  if (recent.length < STATUS_SCAN_FIRST) return task.createdAt;
+  const oldest = recent[recent.length - 1].createdAt;
+  const older = await ctx.db
+    .query("activityLog")
+    .withIndex("by_task", (q) => q.eq("taskId", task._id).lt("createdAt", oldest))
+    .order("desc")
+    .take(STATUS_SCAN_MORE);
+  const change = older.find((row) => row.type === "status_changed");
+  if (change) return change.createdAt;
+  return older.length < STATUS_SCAN_MORE ? task.createdAt : null;
+}
+
+/**
+ * Whether time was logged on the task or any of its sub-tasks (owner rule:
+ * only real gaps — a parent whose time sits on its checklist is not one).
+ * The task's own entries by index; sub-tasks by their tracked-minutes
+ * counter (kept with every entry write, tasks/derived.ts), read only when
+ * the task has sub-tasks. null = more than MISSING_SUBTASK_SCAN sub-tasks and
+ * none of the first ones has time (unknown; reported as unchecked).
+ */
+async function hasLoggedTime(ctx: QueryCtx, task: Doc<"tasks">): Promise<boolean | null> {
+  const own = await ctx.db
+    .query("timeEntries")
+    .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
+    .first();
+  if (own) return true;
+  if ((task.subtaskCount ?? 0) === 0) return false;
+  const subtasks = await ctx.db
+    .query("tasks")
+    .withIndex("by_orgId_parentTaskId", (q) => q.eq("orgId", task.orgId).eq("parentTaskId", task._id))
+    .take(MISSING_SUBTASK_SCAN + 1);
+  if (subtasks.slice(0, MISSING_SUBTASK_SCAN).some((s) => (s.trackedMinutes ?? 0) > 0)) return true;
+  return subtasks.length > MISSING_SUBTASK_SCAN ? null : false;
+}
+
+/**
+ * Tasks that reached the given statuses in the period with no time logged
+ * (D25, D-MISSING). `statuses` defaults to the completed-category ones.
+ * - A closed status (completed or canceled category) counts when the task
+ *   was closed (`completedAt`) in the period, in the org's timezone.
+ * - Any other status counts when the task is in it now and entered it in the
+ *   period (`enteredStatusAt`).
+ * Only top-level project tasks: a sub-task is a checklist item, and a task
+ * without a project cannot carry time (D28). Archived tasks are left out,
+ * like the app's lists. "Time logged" = an entry by anyone on the task or a
+ * sub-task (the app shows members a task's total tracked time too). Members
+ * get the tasks assigned to them; admins every task, or one member's.
+ *
+ * Loading is period- and status-bounded, then filtered by assignee in
+ * memory: closed statuses by the `completedAt` window (≤ MISSING_CLOSED_CAP),
+ * others by status (≤ MISSING_OPEN_CAP in all). Only when one of those is
+ * over its cap AND an assignee is known (a member, or member) does it fall
+ * back to that person's assignment edges (≤ MISSING_ASSIGNED_CAP); otherwise
+ * it refuses, saying which narrowing works.
+ *
+ * Worst case, per call: ranges ≈ 10 fixed + 1 window + 1 per open status +
+ * 1,001 (edge fallback) + per candidate 2 (time probe, sub-tasks) for 400
+ * closed and 4 (+ two activity pages) for 100 open = 1,200, + one read per
+ * distinct assignee / project / client shown (≤ 3 × 500) ≈ 3,700 < 4,096.
+ * Documents ≈ 400 + 100 + 1,000 + 500 × (1 + 21) + 100 × 100 + 1,500 + 500
+ * (statuses) ≈ 24,500 < 32,000.
  */
 export async function missingTimeReport(
   ctx: QueryCtx,
   auth: AuthContext,
-  args: { from: string; to: string; client?: string; project?: string; member?: string },
+  args: { from: string; to: string; statuses?: string[]; client?: string; project?: string; member?: string },
 ) {
   assertReportRange(args.from, args.to);
   if (args.client !== undefined && args.project !== undefined) {
     throw new ConvexError("Use either client or project, not both.");
+  }
+  if (args.statuses !== undefined && args.statuses.length === 0) {
+    throw new ConvexError('statuses must name at least one status, or be left out for the completed ones (e.g. "Done").');
   }
   const resolver = createRefResolver(ctx, auth);
   const client = args.client !== undefined ? await resolveClient(resolver, args.client) : null;
@@ -432,60 +581,81 @@ export async function missingTimeReport(
   if (!auth.isAdmin && member && member._id !== auth.userId) {
     throw new ConvexError('Members see only their own tasks, as in the app. Use member "me" or leave member out.');
   }
-  const timezone = (await getOrgSettings(ctx, auth.orgId))?.timezone ?? ORG_TIMEZONE_FALLBACK;
-  const statuses = await statusMap(ctx, auth.orgId);
-  const reviewStatuses = [...statuses.values()].filter(isReviewStatus);
-  const reviewIds = new Set(reviewStatuses.map((s) => s._id));
+  const timezone = await orgTimezone(ctx, auth.orgId);
+  const allStatuses = await statusMap(ctx, auth.orgId);
+  const statuses = resolveStatuses(allStatuses, args.statuses);
+  const selected = new Map(statuses.map((s) => [s.id, s]));
+  const closed = statuses.filter((s) => isClosedCategory(s.category));
+  const open = statuses.filter((s) => !isClosedCategory(s.category));
+  const assignee = !auth.isAdmin ? auth.userId : member?._id;
   const inPeriod = (at: number) => {
     const date = getDateInTimezone(at, timezone);
     return date >= args.from && date <= args.to;
   };
 
-  // Candidates: one person's assignment edges (a member's visibility, or an
-  // admin's member filter), else the org's completed-in-window and in-review
-  // tasks.
-  const assignee = !auth.isAdmin ? auth.userId : member?._id;
-  let candidates: Doc<"tasks">[];
-  if (assignee) {
+  // Period- and status-bounded loads.
+  let candidates: Doc<"tasks">[] = [];
+  let closedOver = false;
+  const openOver: string[] = [];
+  if (closed.length > 0) {
+    // A margin around the org-timezone dates; the exact day filter follows.
+    const lo = Date.parse(`${args.from}T00:00:00Z`) - 86_400_000;
+    const hi = Date.parse(`${args.to}T00:00:00Z`) + 2 * 86_400_000;
+    const window = await ctx.db
+      .query("tasks")
+      .withIndex("by_orgId_completedAt", (q) => q.eq("orgId", auth.orgId).gte("completedAt", lo).lt("completedAt", hi))
+      .take(MISSING_CLOSED_CAP + 1);
+    if (window.length > MISSING_CLOSED_CAP) closedOver = true;
+    else candidates.push(...window.filter((t) => selected.has(t.statusId)));
+  }
+  let openLoaded = 0;
+  for (const status of open) {
+    const rows = await ctx.db
+      .query("tasks")
+      .withIndex("by_orgId_statusId", (q) => q.eq("orgId", auth.orgId).eq("statusId", status.id))
+      .take(MISSING_OPEN_CAP + 1 - openLoaded);
+    openLoaded += rows.length;
+    if (openLoaded > MISSING_OPEN_CAP) {
+      openOver.push(status.name);
+      break;
+    }
+    candidates.push(...rows);
+  }
+
+  const who = !auth.isAdmin ? "You are" : "This member is";
+  const overReasons = () =>
+    [
+      closedOver ? `more than ${MISSING_CLOSED_CAP} tasks were closed in the period` : null,
+      openOver.length > 0 ? `more than ${MISSING_OPEN_CAP} tasks are in ${open.map((s) => s.name).join(", ")}` : null,
+    ].filter((r): r is string => r !== null);
+  const narrowing = () =>
+    [closedOver ? "a shorter period" : null, openOver.length > 0 ? `without ${open.map((s) => s.name).join(", ")}` : null]
+      .filter((r): r is string => r !== null)
+      .join(" and ");
+  if (closedOver || openOver.length > 0) {
+    if (!assignee) {
+      const reasons = overReasons().join(", and ");
+      throw new ConvexError(
+        `${reasons.charAt(0).toUpperCase()}${reasons.slice(1)}, more than this report reads in one call. Run it per member (member), or ${narrowing()}.`,
+      );
+    }
+    // Fallback: one person's edges, filtered to the statuses in memory.
     const loaded = await loadAssignedTo(ctx, auth.orgId, assignee, MISSING_ASSIGNED_CAP);
     if (loaded.truncated) {
       throw new ConvexError(
-        !auth.isAdmin
-          ? `You are assigned more than ${MISSING_ASSIGNED_CAP} tasks, more than this report reads in one call. Ask an admin to run it for you.`
-          : `This member is assigned more than ${MISSING_ASSIGNED_CAP} tasks, more than this report reads in one call. Run it without member for a shorter period.`,
+        `${who} assigned more than ${MISSING_ASSIGNED_CAP} tasks and ${overReasons().join(", and ")}. Run it ${narrowing()}.`,
       );
     }
-    candidates = loaded.tasks;
-  } else {
-    // A margin around the org-timezone dates; the exact day filter follows.
-    const lo = Date.parse(`${args.from}T00:00:00Z`) - DAY_MS;
-    const hi = Date.parse(`${args.to}T00:00:00Z`) + 2 * DAY_MS;
-    const done = await ctx.db
-      .query("tasks")
-      .withIndex("by_orgId_completedAt", (q) => q.eq("orgId", auth.orgId).gte("completedAt", lo).lt("completedAt", hi))
-      .take(MISSING_DONE_CAP + 1);
-    if (done.length > MISSING_DONE_CAP) {
-      throw new ConvexError(
-        `More than ${MISSING_DONE_CAP} tasks were closed in the period. Narrow the period (e.g. one month).`,
-      );
+    candidates = loaded.tasks.filter((t) => selected.has(t.statusId));
+    const inWindow = candidates.filter((t) => isClosedCategory(t.statusCategory) && t.completedAt !== undefined && inPeriod(t.completedAt));
+    const openCandidates = candidates.filter((t) => !isClosedCategory(t.statusCategory));
+    if (inWindow.length > MISSING_CLOSED_CAP || openCandidates.length > MISSING_OPEN_CAP) {
+      throw new ConvexError(`Even for one person, too many tasks match. Run it ${narrowing() || "for a shorter period"}.`);
     }
-    const review: Doc<"tasks">[] = [];
-    for (const status of reviewStatuses) {
-      const rows = await ctx.db
-        .query("tasks")
-        .withIndex("by_orgId_statusId", (q) => q.eq("orgId", auth.orgId).eq("statusId", status._id))
-        .take(MISSING_REVIEW_CAP + 1 - review.length);
-      review.push(...rows);
-      if (review.length > MISSING_REVIEW_CAP) {
-        throw new ConvexError(
-          `More than ${MISSING_REVIEW_CAP} tasks are in a review status, more than this report reads in one call. Run it per member (member).`,
-        );
-      }
-    }
-    candidates = [...done, ...review];
   }
 
   const rows = [];
+  const unchecked: Array<{ identifier: string; reason: "status_history" | "subtasks" }> = [];
   const names = userNames(ctx);
   const projects = new Map<Id<"projects">, Awaited<ReturnType<typeof projectSummary>>>();
   const clientNames = new Map<Id<"clients">, string | null>();
@@ -495,32 +665,29 @@ export async function missingTimeReport(
     if (project && task.projectId !== project._id) continue;
     if (client && task.clientId !== client._id) continue;
     if (assignee && !task.assigneeIds.includes(assignee)) continue;
+    const status = selected.get(task.statusId);
+    if (!status) continue;
 
-    let kind: "done" | "review";
     let at: number;
-    if (task.statusCategory === "completed" && task.completedAt !== undefined) {
-      if (!inPeriod(task.completedAt)) continue;
-      kind = "done";
+    if (isClosedCategory(status.category)) {
+      if (task.completedAt === undefined || !inPeriod(task.completedAt)) continue;
       at = task.completedAt;
-    } else if (reviewIds.has(task.statusId)) {
-      const change = await ctx.db
-        .query("activityLog")
-        .withIndex("by_task", (q) => q.eq("taskId", task._id))
-        .order("desc")
-        .filter((q) => q.eq(q.field("type"), "status_changed"))
-        .first();
-      at = change ? change.createdAt : task.createdAt;
-      if (!inPeriod(at)) continue;
-      kind = "review";
     } else {
-      continue;
+      const entered = await enteredStatusAt(ctx, task);
+      if (entered === null) {
+        unchecked.push({ identifier: task.identifier, reason: "status_history" });
+        continue;
+      }
+      if (!inPeriod(entered)) continue;
+      at = entered;
     }
 
-    const anyEntry = await ctx.db
-      .query("timeEntries")
-      .withIndex("by_taskId", (q) => q.eq("taskId", task._id))
-      .first();
-    if (anyEntry) continue;
+    const logged = await hasLoggedTime(ctx, task);
+    if (logged === true) continue;
+    if (logged === null) {
+      unchecked.push({ identifier: task.identifier, reason: "subtasks" });
+      continue;
+    }
 
     if (!projects.has(task.projectId)) projects.set(task.projectId, await projectSummary(ctx, auth.orgId, task.projectId));
     let clientName: string | null = null;
@@ -536,8 +703,7 @@ export async function missingTimeReport(
     rows.push({
       identifier: task.identifier,
       title: task.title,
-      status: statuses.get(task.statusId)?.name ?? null,
-      kind,
+      status: status.name,
       date: getDateInTimezone(at, timezone),
       project: projects.get(task.projectId)?.code ?? null,
       client: clientName,
@@ -545,13 +711,23 @@ export async function missingTimeReport(
     });
   }
   rows.sort((a, b) => (a.date !== b.date ? (a.date < b.date ? -1 : 1) : a.identifier.localeCompare(b.identifier)));
+  // D1: the per-assignee counts are computed here; a task with two assignees counts for both.
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    for (const person of row.assignees.length > 0 ? row.assignees : ["Unassigned"]) counts.set(person, (counts.get(person) ?? 0) + 1);
+  }
   return {
     from: args.from,
     to: args.to,
     timezone,
     scope: !auth.isAdmin ? ("self" as const) : member ? ("member" as const) : ("team" as const),
-    reviewStatuses: reviewStatuses.filter((s) => s.archivedAt === undefined).map((s) => s.name),
+    statuses: statuses.map((s) => ({ name: s.name, category: s.category })),
+    statusesDefaulted: args.statuses === undefined,
     rows,
+    byAssignee: [...counts.entries()]
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name)),
+    unchecked,
   };
 }
 
@@ -568,19 +744,24 @@ async function adminProject(ctx: QueryCtx, auth: AuthContext, kind: ReportKind, 
   };
 }
 
-/** Category names by id for the flatteners (one range; "No category" otherwise). */
+/** Category names by id for the flatteners (one range); more than the workspace cap refuses. */
 async function categoryNameMap(ctx: QueryCtx, orgId: string): Promise<Map<string, string>> {
   const rows = await ctx.db
     .query("workCategories")
     .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
-    .take(2000);
+    .take(REF_CAP + 1);
+  if (rows.length > REF_CAP) {
+    throw new ConvexError(`This workspace has more than ${REF_CAP} work categories, more than a report reads in one call.`);
+  }
   return new Map(rows.map((c) => [c._id as string, c.name]));
 }
 
 /**
  * The project page's overview numbers (`projectOverviewForAuth`): time
- * totals, categories and the entry-ledger billing buckets. Admin-only: the
- * project pages are admin routes and the buckets carry money.
+ * totals, categories and the entry-ledger billing state — Unbilled, Billed
+ * (covered by a live T&M close, draft or final: the app's one definition,
+ * billing PRD §6.8) and Settled (retainer). Admin-only: the project pages are
+ * admin routes and the amounts are money.
  */
 export async function projectOverviewReport(ctx: QueryCtx, auth: AuthContext, args: { project: string }) {
   const { project, client, currency } = await adminProject(ctx, auth, "project_overview", args.project);
@@ -591,6 +772,7 @@ export async function projectOverviewReport(ctx: QueryCtx, auth: AuthContext, ar
     client,
     currency,
     summary: flattenProjectOverview(overview, await categoryNameMap(ctx, auth.orgId)),
+    billed: { minutes: overview.billedMinutes, amount: overview.billedAmount },
   };
 }
 
@@ -738,5 +920,9 @@ export async function invoiceMetricsReport(ctx: QueryCtx, auth: AuthContext) {
 export async function orgFinanceReport(ctx: QueryCtx, auth: AuthContext, args: { from: string; to: string }) {
   requireAdminReport(auth, "org_finance");
   assertReportRange(args.from, args.to);
-  return await orgFinanceSnapshotForAuth(ctx, auth, { fromDate: args.from, toDate: args.to });
+  const data = await orgFinanceSnapshotForAuth(ctx, auth, { fromDate: args.from, toDate: args.to });
+  const codes = projectCodes(ctx, auth.orgId);
+  const projects = [];
+  for (const p of data.projects) projects.push({ ...p, code: await codes(p.projectId) });
+  return { ...data, projects };
 }

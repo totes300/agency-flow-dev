@@ -23,8 +23,9 @@ import {
  * Next.js route renders the markdown table and the app link.
  *
  * References are strings in any MCP form: client (`client:KONV`, ID, link),
- * project (code, ID, link), member (email, `me`, ID, link). Dates are
- * YYYY-MM-DD in the org's calendar, months YYYY-MM.
+ * project (code, ID, link), member (email, `me`, ID, link); statuses by name
+ * as fetch("workspace") lists them. Dates are YYYY-MM-DD in the org's
+ * calendar, months YYYY-MM.
  */
 
 export const timesheet = query({
@@ -44,7 +45,7 @@ export const timeByMember = query({
 });
 
 export const clientMonthly = query({
-  args: { client: v.string(), fromMonth: v.string(), toMonth: v.string() },
+  args: { client: v.string(), fromMonth: v.string(), toMonth: v.string(), project: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const auth = await getMcpAuthContext(ctx);
     return await clientMonthlyReport(ctx, auth, args);
@@ -55,6 +56,7 @@ export const missingTime = query({
   args: {
     from: v.string(),
     to: v.string(),
+    statuses: v.optional(v.array(v.string())),
     client: v.optional(v.string()),
     project: v.optional(v.string()),
     member: v.optional(v.string()),

@@ -156,7 +156,14 @@ async function setup(t: T) {
       boltDone: await task("BOLT-10", "Bolt done", "Done", [bob], { projectId: boltProject, clientId: bolt, completedAt: june("05") }),
       reviewCreatedJune: await task("ARLO-18", "Review created in June", "Admin review", [alice], { projectId: arlo, clientId: arlow, createdAt: june("03") }),
       inProgress: await task("ARLO-19", "Still in progress", "In progress", [alice], { projectId: arlo, clientId: arlow }),
+      // Done in June, its time logged on a checklist item in May: not a gap.
+      parentTimedOnSubtask: await task("ARLO-20", "Parent, time on checklist", "Done", [bob], {
+        projectId: arlo, clientId: arlow, completedAt: june("18"), subtaskCount: 1,
+      }),
     };
+    const timedSubtask = await task("ARLO-21", "Checklist with time", "Done", [bob], {
+      projectId: arlo, clientId: arlow, completedAt: at("2026-05-21T10:00:00Z"), parentTaskId: m.parentTimedOnSubtask, trackedMinutes: 30,
+    });
     const statusChange = (taskId: Id<"tasks">, to: string, createdAt: number) =>
       ctx.db.insert("activityLog", {
         orgId: ORG, taskId, userId: admin, type: "status_changed", createdAt,
@@ -192,14 +199,24 @@ async function setup(t: T) {
     await entry(boltProject, b1, bob, "2026-06-03", 60, { rate: 80, currency: "USD", category: dev });
     await entry(boltProject, b1, bob, "2026-06-20", 30, { rate: 80, currency: "USD", billable: false, category: dev });
     await entry(fixd, f1, admin, "2026-06-07", 60, { currency: "USD", category: design });
+    await entry(arlo, timedSubtask, bob, "2026-05-20", 30, { rate: 100, note: "Checklist work", category: dev });
     const foreignTask = await ctx.db.insert("tasks", taskRow({
       orgId: OTHER, title: "Foreign task", identifier: "FORN-1", statusId: (await ctx.db.query("statuses").withIndex("by_orgId", (q) => q.eq("orgId", OTHER)).first())!._id,
       createdBy: other, projectId: foreignProject,
     }));
     await entry(foreignProject, foreignTask, other, "2026-06-04", 999, { rate: 100, orgId: OTHER });
+    // Alice's user id on an entry of another org: never hers in this one.
+    await entry(foreignProject, foreignTask, alice, "2026-06-09", 77, { rate: 100, orgId: OTHER });
 
     await ctx.db.insert("comments", { taskId: a1, orgId: ORG, userId: alice, content: doc("First look"), createdAt: june("02"), updatedAt: june("02") });
     await ctx.db.insert("comments", { taskId: a1, orgId: ORG, userId: admin, content: doc("Shipped to client, waiting for feedback"), createdAt: june("28"), updatedAt: june("28") });
+    // Not closing comments for June: one written through MCP, one after the period.
+    await ctx.db.insert("comments", {
+      taskId: a1, orgId: ORG, userId: admin, content: doc("Agent note"), createdAt: june("29"), updatedAt: june("29"),
+      via: { kind: "mcp", clientId: "client_claude", clientName: "Claude" },
+    });
+    await ctx.db.insert("comments", { taskId: a1, orgId: ORG, userId: alice, content: doc("July follow-up"), createdAt: at("2026-07-02T10:00:00Z"), updatedAt: at("2026-07-02T10:00:00Z") });
+    await ctx.db.insert("comments", { taskId: a2, orgId: ORG, userId: bob, content: doc(`Delivered. ${"long ".repeat(150)}`), createdAt: june("21"), updatedAt: june("21") });
 
     const invoice = (projectId: Id<"projects">, clientId: Id<"clients">, status: "draft" | "invoiced" | "paid" | "void", currency: string, totalMinor: number, extra: Record<string, unknown>) =>
       ctx.db.insert("invoices", {
@@ -225,8 +242,9 @@ async function setup(t: T) {
 const report = {
   timesheet: (t: T, c: Caller, a: { client: string; from: string; to: string; project?: string }) => as(t, c).query(api.mcp.report.timesheet, a),
   timeByMember: (t: T, c: Caller, a: { from: string; to: string; member?: string }) => as(t, c).query(api.mcp.report.timeByMember, a),
-  clientMonthly: (t: T, c: Caller, a: { client: string; fromMonth: string; toMonth: string }) => as(t, c).query(api.mcp.report.clientMonthly, a),
-  missingTime: (t: T, c: Caller, a: { from: string; to: string; client?: string; project?: string; member?: string }) =>
+  clientMonthly: (t: T, c: Caller, a: { client: string; fromMonth: string; toMonth: string; project?: string }) =>
+    as(t, c).query(api.mcp.report.clientMonthly, a),
+  missingTime: (t: T, c: Caller, a: { from: string; to: string; statuses?: string[]; client?: string; project?: string; member?: string }) =>
     as(t, c).query(api.mcp.report.missingTime, a),
 };
 
@@ -266,11 +284,16 @@ describe("numbers match the app (§14 row 5 exit)", () => {
       { name: "Design, Development", minutes: 195 },
     ]);
     expect(mcp.rows.find((r) => r.title === "Hero design")).toMatchObject({ identifier: "ARLO-1", project: "ARLO", category: "Design, Development" });
+    // D1: per-project subtotals, in row order, computed by code.
+    expect(mcp.projects).toEqual([
+      { code: "RETA", name: "Arlow care", minutes: 200, billableMinutes: 200, nonBillableMinutes: 0, entryCount: 1 },
+      { code: "ARLO", name: "Arlow site", minutes: 330, billableMinutes: 270, nonBillableMinutes: 60, entryCount: 5 },
+    ]);
   });
 
   it("time_by_member = the internal query and the Workday grid", async () => {
     const t = createT();
-    await setup(t);
+    const s = await setup(t);
     const mcp = await report.timeByMember(t, "admin", JUNE);
     const app = await inApp(t, "admin").query(internal.reports.timeByMember, { fromDate: JUNE.from, toDate: JUNE.to, allMembers: true });
     expect(mcp.scope).toBe("team");
@@ -285,6 +308,11 @@ describe("numbers match the app (§14 row 5 exit)", () => {
       expect(weekly.members.find((m) => m.name === row.user.name)?.minutes).toBe(row.totalMinutes);
     }
     expect(weekly.members.find((m) => m.name === "Alice")?.email).toBe("clerk_alice@x.test");
+    // Admins get the project id for the link; team of 3 reads per user, the same numbers as the org scan.
+    expect(mcp.members.find((m) => m.name === "Alice")?.projects.map((p) => [p.code, p.id])).toEqual([
+      ["RETA", s.reta],
+      ["ARLO", s.arlo],
+    ]);
   });
 
   it("client_monthly = the internal query; per-task minutes add up to it", async () => {
@@ -293,7 +321,10 @@ describe("numbers match the app (§14 row 5 exit)", () => {
     const mcp = await report.clientMonthly(t, "admin", { client: "client:ARL", fromMonth: "2026-03", toMonth: "2026-06" });
     const app = await inApp(t, "admin").query(internal.reports.clientMonthlySummary, { clientId: s.arlow, fromMonth: "2026-03", toMonth: "2026-06" });
     expect(mcp.totals).toEqual(app.totals);
-    expect(mcp.months).toEqual(app.months.map((m) => without(m, "byProject")));
+    expect(mcp.months.map((m) => without(m, "byProject"))).toEqual(app.months.map((m) => without(m, "byProject")));
+    expect(mcp.months.map((m) => m.byProject.map((p) => [p.name, p.minutes]))).toEqual(
+      app.months.map((m) => m.byProject.map((p) => [p.projectName, p.minutes])),
+    );
     expect(mcp.tasks.reduce((n, task) => n + task.minutes, 0)).toBe(app.totals.minutes);
   });
 
@@ -311,7 +342,9 @@ describe("numbers match the app (§14 row 5 exit)", () => {
     }
     const arlo = await as(t, "admin").query(api.mcp.report.projectOverview, { project: "ARLO" });
     expect(arlo).toMatchObject({ currency: "EUR", project: { code: "ARLO", billingType: "t_and_m" } });
-    expect(arlo.summary.totalMinutes).toBe(90 + 60 + 45 + 120 + 30 + 15);
+    expect(arlo.summary.totalMinutes).toBe(90 + 60 + 45 + 120 + 30 + 15 + 30);
+    const app = await inApp(t, "admin").query(api.timeEntries.projectOverview, { projectId: s.arlo });
+    expect(arlo.billed).toEqual({ minutes: app!.billedMinutes, amount: app!.billedAmount });
   });
 
   it("retainer_statement = the statement page; retainer_health = the internal sweep", async () => {
@@ -371,7 +404,8 @@ describe("numbers match the app (§14 row 5 exit)", () => {
     await setup(t);
     const mcp = await as(t, "admin").query(api.mcp.report.orgFinance, JUNE);
     const app = await inApp(t, "admin").query(internal.reports.orgFinanceSnapshot, { fromDate: JUNE.from, toDate: JUNE.to });
-    expect(mcp).toEqual(app);
+    expect({ ...mcp, projects: mcp.projects.map((p) => without(p, "code")) }).toEqual(app);
+    expect(mcp.projects.map((p) => p.code)).toEqual(["ARLO", "RETA", "BOLT", "FIXD"]);
   });
 });
 
@@ -404,7 +438,12 @@ describe("member scope and money stripping (as in the app)", () => {
     const own = await report.timeByMember(t, "alice", JUNE);
     const app = await inApp(t, "alice").query(internal.reports.timeByMember, { fromDate: JUNE.from, toDate: JUNE.to, allMembers: true });
     expect(own.scope).toBe("self");
+    // Read from her own entries (by_userId_date): her id on another org's entry never counts.
     expect(own.members.map((m) => [m.name, m.minutes])).toEqual([["Alice", 90 + 60 + 15 + 200]]);
+    expect(own.members[0].projects).toEqual([
+      { id: null, code: "RETA", name: "Arlow care", client: "Arlow", minutes: 200, billableMinutes: 200, nonBillableMinutes: 0 },
+      { id: null, code: "ARLO", name: "Arlow site", client: "Arlow", minutes: 165, billableMinutes: 105, nonBillableMinutes: 60 },
+    ]);
     expect(own.totals).toEqual(app.totals);
     expect(await report.timeByMember(t, "alice", { ...JUNE, member: "me" })).toEqual(own);
     await expect(report.timeByMember(t, "alice", { ...JUNE, member: "clerk_bob@x.test" })).rejects.toThrow(/only report their own time/);
@@ -435,52 +474,104 @@ describe("member scope and money stripping (as in the app)", () => {
     await setup(t);
     const own = await report.missingTime(t, "alice", JUNE);
     expect(own.scope).toBe("self");
-    expect(own.rows.map((r) => r.identifier)).toEqual(["ARLO-18", "ARLO-10"]);
+    expect(own.rows.map((r) => r.identifier)).toEqual(["ARLO-10"]);
+    const withReview = await report.missingTime(t, "alice", { ...JUNE, statuses: ["Done", "Admin review", "Client review"] });
+    expect(withReview.rows.map((r) => r.identifier)).toEqual(["ARLO-18", "ARLO-10"]);
     await expect(report.missingTime(t, "alice", { ...JUNE, member: "clerk_bob@x.test" })).rejects.toThrow(/only their own tasks/);
     expect(JSON.stringify(own)).not.toMatch(/amount|rate|cost/i);
   });
 });
 
-describe("missing_time (D25)", () => {
-  it("lists Done and entered-Review tasks of the period without time, nothing else", async () => {
+describe("missing_time (D25, D-MISSING)", () => {
+  it("defaults to the completed statuses and says so", async () => {
     const t = createT();
     await setup(t);
-    const all = await report.missingTime(t, "admin", JUNE);
-    expect(all.reviewStatuses).toEqual(["Admin review", "Client review"]);
-    expect(all.rows.map((r) => [r.identifier, r.kind, r.date, r.status, r.project])).toEqual([
-      ["ARLO-18", "review", "2026-06-03", "Admin review", "ARLO"],
-      ["BOLT-10", "done", "2026-06-05", "Done", "BOLT"],
-      ["ARLO-10", "done", "2026-06-15", "Done", "ARLO"],
-      ["ARLO-13", "review", "2026-06-25", "Client review", "ARLO"],
+    const done = await report.missingTime(t, "admin", JUNE);
+    expect(done.statuses).toEqual([{ name: "Done", category: "completed" }]);
+    expect(done.statusesDefaulted).toBe(true);
+    // ARLO-11 has time, ARLO-20's time is on its sub-task, ARLO-15 is canceled (not a default status).
+    expect(done.rows.map((r) => [r.identifier, r.date, r.status, r.project, r.client])).toEqual([
+      ["BOLT-10", "2026-06-05", "Done", "BOLT", "Bolt"],
+      ["ARLO-10", "2026-06-15", "Done", "ARLO", "Arlow"],
     ]);
-    expect(all.rows.find((r) => r.identifier === "ARLO-13")).toMatchObject({ client: "Arlow", assignees: ["Bob"] });
+    expect(done.byAssignee).toEqual([{ name: "Alice", count: 1 }, { name: "Bob", count: 1 }]);
+    expect(done.unchecked).toEqual([]);
+  });
+
+  it("takes statuses by name: closed ones by completion date, others by when they were entered", async () => {
+    const t = createT();
+    await setup(t);
+    const statuses = ["Done", "admin review", "Client review"];
+    const all = await report.missingTime(t, "admin", { ...JUNE, statuses });
+    expect(all.statusesDefaulted).toBe(false);
+    expect(all.statuses.map((s) => s.name)).toEqual(["Done", "Admin review", "Client review"]);
+    expect(all.rows.map((r) => [r.identifier, r.date, r.status])).toEqual([
+      ["ARLO-18", "2026-06-03", "Admin review"],
+      ["BOLT-10", "2026-06-05", "Done"],
+      ["ARLO-10", "2026-06-15", "Done"],
+      ["ARLO-13", "2026-06-25", "Client review"],
+    ]);
+    expect(all.byAssignee).toEqual([{ name: "Alice", count: 2 }, { name: "Bob", count: 2 }]);
+    expect((await report.missingTime(t, "admin", { ...JUNE, statuses: ["Canceled"] })).rows.map((r) => r.identifier)).toEqual(["ARLO-15"]);
     // Filters narrow the same set.
-    expect((await report.missingTime(t, "admin", { ...JUNE, client: "client:BLT" })).rows.map((r) => r.identifier)).toEqual(["BOLT-10"]);
-    expect((await report.missingTime(t, "admin", { ...JUNE, project: "ARLO", member: "clerk_bob@x.test" })).rows.map((r) => r.identifier)).toEqual(["ARLO-13"]);
+    expect((await report.missingTime(t, "admin", { ...JUNE, statuses, client: "client:BLT" })).rows.map((r) => r.identifier)).toEqual(["BOLT-10"]);
+    expect(
+      (await report.missingTime(t, "admin", { ...JUNE, statuses, project: "ARLO", member: "clerk_bob@x.test" })).rows.map((r) => r.identifier),
+    ).toEqual(["ARLO-13"]);
     // May: the task completed then, and the review entered then.
-    expect((await report.missingTime(t, "admin", { from: "2026-05-01", to: "2026-05-31" })).rows.map((r) => r.identifier)).toEqual([
+    expect((await report.missingTime(t, "admin", { from: "2026-05-01", to: "2026-05-31", statuses })).rows.map((r) => r.identifier)).toEqual([
       "ARLO-14",
       "ARLO-12",
     ]);
+    await expect(report.missingTime(t, "admin", { ...JUNE, statuses: ["Reviewing"] })).rejects.toThrow(/Unknown status "Reviewing"\. Statuses: Inbox, /);
+    await expect(report.missingTime(t, "admin", { ...JUNE, statuses: [] })).rejects.toThrow(/at least one status/);
     await expect(report.missingTime(t, "admin", { ...JUNE, client: "client:ARL", project: "ARLO" })).rejects.toThrow(/either client or project/);
   });
 
-  it("refuses rather than clips past its review-task cap", async () => {
+  it("a long-tenured member's lifetime assignments are never the primary read", async () => {
     const t = createT();
     const s = await setup(t);
     await t.run(async (ctx) => {
-      const review = (await ctx.db.query("statuses").withIndex("by_orgId", (q) => q.eq("orgId", ORG)).collect()).find((x) => x.name === "Admin review")!;
-      for (let i = 0; i < 500; i += 1) {
-        await ctx.db.insert("tasks", taskRow({ orgId: ORG, title: `Bulk ${i}`, statusId: review._id, statusCategory: "started", createdBy: s.admin, projectId: s.arlo }));
+      const inProgress = (await ctx.db.query("statuses").withIndex("by_orgId", (q) => q.eq("orgId", ORG)).collect()).find((x) => x.name === "In progress")!;
+      for (let i = 0; i < 1001; i += 1) {
+        const id = await ctx.db.insert("tasks", taskRow({
+          orgId: ORG, title: `Old ${i}`, statusId: inProgress._id, statusCategory: "started", createdBy: s.admin, projectId: s.arlo, assigneeIds: [s.alice],
+        }));
+        await ctx.db.insert("taskAssignees", { orgId: ORG, taskId: id, userId: s.alice, assignedAt: 0, assignedBy: s.admin });
       }
     });
-    await expect(report.missingTime(t, "admin", JUNE)).rejects.toThrow(/More than 500 tasks are in a review status.*per member/);
-    // One person's edges are read instead, so it still works per member.
-    expect((await report.missingTime(t, "alice", JUNE)).rows).toHaveLength(2);
-    expect((await report.missingTime(t, "admin", { ...JUNE, member: "clerk_alice@x.test" })).rows.map((r) => r.identifier)).toEqual([
+    expect((await report.missingTime(t, "alice", JUNE)).rows.map((r) => r.identifier)).toEqual(["ARLO-10"]);
+    expect((await report.missingTime(t, "admin", { ...JUNE, member: "clerk_alice@x.test" })).rows.map((r) => r.identifier)).toEqual(["ARLO-10"]);
+  });
+
+  it("over a load cap: falls back to one person's edges, else refuses with advice that works", async () => {
+    const t = createT();
+    const s = await setup(t);
+    await t.run(async (ctx) => {
+      const byName = new Map((await ctx.db.query("statuses").withIndex("by_orgId", (q) => q.eq("orgId", ORG)).collect()).map((x) => [x.name, x._id]));
+      for (let i = 0; i < 101; i += 1) {
+        await ctx.db.insert("tasks", taskRow({ orgId: ORG, title: `Review ${i}`, statusId: byName.get("Admin review")!, statusCategory: "started", createdBy: s.admin, projectId: s.arlo }));
+      }
+      for (let i = 0; i < 401; i += 1) {
+        await ctx.db.insert("tasks", taskRow({
+          orgId: ORG, title: `Closed ${i}`, statusId: byName.get("Done")!, statusCategory: "completed", createdBy: s.admin, projectId: s.arlo,
+          completedAt: at("2026-06-07T10:00:00Z"),
+        }));
+      }
+    });
+    await expect(report.missingTime(t, "admin", JUNE)).rejects.toThrow(
+      /^.*More than 400 tasks were closed in the period, more than this report reads in one call\. Run it per member \(member\), or a shorter period\./,
+    );
+    await expect(report.missingTime(t, "admin", { ...JUNE, statuses: ["Admin review"] })).rejects.toThrow(
+      /More than 100 tasks are in Admin review.*Run it per member \(member\), or without Admin review\./,
+    );
+    // The narrowing it names works: one member's edges, or a shorter period.
+    expect((await report.missingTime(t, "alice", { ...JUNE, statuses: ["Done", "Admin review"] })).rows.map((r) => r.identifier)).toEqual([
       "ARLO-18",
       "ARLO-10",
     ]);
+    expect((await report.missingTime(t, "admin", { ...JUNE, member: "clerk_bob@x.test" })).rows.map((r) => r.identifier)).toEqual(["BOLT-10"]);
+    expect((await report.missingTime(t, "admin", { from: "2026-06-10", to: "2026-06-30" })).rows.map((r) => r.identifier)).toEqual(["ARLO-10"]);
   });
 });
 
@@ -500,15 +591,41 @@ describe("client_monthly raw material (D25)", () => {
       billableMinutes: 135,
       nonBillableMinutes: 60,
       entryCount: 3,
+      parent: null,
+      completedOn: null,
       notes: [
-        { date: "2026-06-02", minutes: 90, note: "Hero sketches" },
-        { date: "2026-06-10", minutes: 60, note: "Internal sync" },
-        { date: "2026-06-11", minutes: 45, note: "Review pass" },
+        { date: "2026-06-02", minutes: 90, billable: true, note: "Hero sketches" },
+        { date: "2026-06-10", minutes: 60, billable: false, note: "Internal sync" },
+        { date: "2026-06-11", minutes: 45, billable: true, note: "Review pass" },
       ],
+      // The newest comment by a person up to the period's end: not the MCP one (Jun 29), not July's.
       closingComment: { author: "Admin", text: "Shipped to client, waiting for feedback", truncated: false },
     });
-    expect(data.tasks.find((task) => task.identifier === "ARLO-2")).toMatchObject({ status: "Done", minutes: 120, closingComment: null });
+    const landing = data.tasks.find((task) => task.identifier === "ARLO-2")!;
+    expect(landing).toMatchObject({ status: "Done", completedOn: "2026-06-20", minutes: 120, closingComment: { author: "Bob", truncated: true } });
+    expect(landing.closingComment!.text.length).toBeLessThanOrEqual(500);
     expect(data.tasks.map((task) => task.identifier)).toEqual(["RETA-1", "ARLO-1", "ARLO-2", "ARLO-11"]);
+    expect(data.months[0].byProject).toEqual([
+      { code: "ARLO", name: "Arlow site", minutes: 330 },
+      { code: "RETA", name: "Arlow care", minutes: 200 },
+    ]);
+  });
+
+  it("narrows to one project and keys sub-tasks to their parent", async () => {
+    const t = createT();
+    await setup(t);
+    const data = await report.clientMonthly(t, "admin", { client: "client:ARL", fromMonth: "2026-05", toMonth: "2026-06", project: "ARLO" });
+    expect(data.project).toMatchObject({ code: "ARLO" });
+    expect(data.tasks.map((task) => task.identifier)).toEqual(["ARLO-1", "ARLO-2", "ARLO-21", "ARLO-11"]);
+    expect(data.tasks.find((task) => task.identifier === "ARLO-21")).toMatchObject({ parent: "ARLO-20", minutes: 30 });
+    expect(data.totals.minutes).toBe(330 + 30);
+    expect(data.months.map((m) => m.byProject)).toEqual([
+      [{ code: "ARLO", name: "Arlow site", minutes: 30 }],
+      [{ code: "ARLO", name: "Arlow site", minutes: 330 }],
+    ]);
+    await expect(report.clientMonthly(t, "admin", { client: "client:ARL", fromMonth: "2026-06", toMonth: "2026-06", project: "BOLT" })).rejects.toThrow(
+      /BOLT is not a project of client:ARL/,
+    );
   });
 });
 

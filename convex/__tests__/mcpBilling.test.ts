@@ -29,6 +29,7 @@ import {
 } from "../lib/mcpBilling";
 import { INVOICES_ADMIN_ONLY } from "../lib/mcpRefs";
 import { statusRow, taskRow } from "./helpers/taskFixtures";
+import { connectMembers } from "./helpers/mcpConnections";
 
 const modules = (
   import.meta as ImportMeta & {
@@ -95,6 +96,7 @@ async function world(opts: { nextInvoiceNumber?: number } = {}): Promise<World> 
     ] as const) {
       await ctx.db.insert("orgMembers", { orgId, clerkUserId, userId, role, joinedAt: now });
     }
+    await connectMembers(ctx, ["client_claude", "client_codex"]);
     for (const [orgId, createdBy] of [[ORG, admin], [OTHER, other]] as const) {
       await ctx.db.insert("orgSettings", {
         orgId,

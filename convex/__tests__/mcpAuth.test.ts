@@ -11,6 +11,7 @@ import { api } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
 import { NO_ORG_SELECTED, USER_NOT_SYNCED } from "../lib/mcpAuth";
 import { REF_CAP } from "../workspaceRefs";
+import { connectMembers } from "./helpers/mcpConnections";
 
 const modules = (
   import.meta as ImportMeta & {
@@ -42,7 +43,14 @@ function sessionIdentity(subject: string, orgId: string, orgRole: string) {
 
 type Fixture = { admin: Id<"users">; member: Id<"users"> };
 
-async function setup(t: T): Promise<Fixture> {
+/** The fixture, with every member connected through the OAuth clients this file uses. */
+async function setup(t: T): Promise<Fixture>  {
+  const fixture = await setupData(t);
+  await t.run((ctx) => connectMembers(ctx, ["client_claude"]));
+  return fixture;
+}
+
+async function setupData(t: T): Promise<Fixture> {
   return await t.run(async (ctx) => {
     const now = Date.now();
     const mkUser = async (name: string, externalId: string) =>

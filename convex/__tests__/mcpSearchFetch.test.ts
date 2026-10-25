@@ -20,6 +20,7 @@ import { DEFAULT_STATUS_SEED } from "../tasks/model";
 import { addIdentifierAlias, createTask, type CreateTaskInput } from "../tasks/write";
 import { OPEN_ROW_CAP } from "../tasks/read";
 import { REF_CAP } from "../workspaceRefs";
+import { connectMembers } from "./helpers/mcpConnections";
 
 const modules = (
   import.meta as ImportMeta & {
@@ -49,7 +50,14 @@ const SUBJECT: Record<Caller, [string, string]> = {
 const as = (t: T, caller: Caller) =>
   t.withIdentity({ subject: SUBJECT[caller][0], issuer: "https://clerk.test", client_id: "client_claude", org_id: SUBJECT[caller][1] });
 
+/** The fixture, with every member connected through the OAuth clients this file uses. */
 async function setup(t: T) {
+  const fixture = await setupData(t);
+  await t.run((ctx) => connectMembers(ctx, ["client_claude"]));
+  return fixture;
+}
+
+async function setupData(t: T) {
   return await t.run(async (ctx) => {
     const now = NOW - 3600_000;
     const mkUser = async (name: string, externalId: string) =>

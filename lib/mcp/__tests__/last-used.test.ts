@@ -4,7 +4,7 @@
 // for "last used" stamps — at most once an hour per org + user + client.
 
 import { describe, it, expect } from "vitest";
-import { connectionKey, createLastUsedThrottle, STAMP_RETRY_AFTER_FAILURE_MS, unverifiedOrgIdOf } from "../last-used";
+import { connectionKey, createLastUsedThrottle, unverifiedOrgIdOf } from "../last-used";
 
 const HOUR = 60 * 60 * 1000;
 
@@ -25,12 +25,12 @@ describe("createLastUsedThrottle", () => {
     expect(throttle.due("a", HOUR + 5)).toBe(false);
   });
 
-  it("retries a failed stamp after a short wait, not a full interval", () => {
+  it("a forgotten (failed) stamp is due again on the next request", () => {
     const throttle = createLastUsedThrottle({ intervalMs: HOUR, maxEntries: 10 });
     expect(throttle.due("a", 0)).toBe(true);
-    throttle.failed("a", 10);
-    expect(throttle.due("a", 10 + STAMP_RETRY_AFTER_FAILURE_MS - 1)).toBe(false);
-    expect(throttle.due("a", 10 + STAMP_RETRY_AFTER_FAILURE_MS)).toBe(true);
+    throttle.forget("a");
+    expect(throttle.due("a", 1)).toBe(true);
+    expect(throttle.due("a", 2)).toBe(false);
   });
 
   it("forgets the oldest keys beyond maxEntries", () => {

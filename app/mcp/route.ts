@@ -1,4 +1,3 @@
-import { after } from "next/server";
 import { clerkClient } from "@clerk/nextjs/server";
 import { verifyClerkToken } from "@clerk/mcp-tools/server";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
@@ -19,33 +18,36 @@ import { CONNECTION_LAST_USED_INTERVAL_MS } from "@/lib/mcp/limits";
  * Write tools also pass the OAuth client's display name (attribution only).
  * proxy.ts keeps /mcp out of `auth.protect()` so failures are a 401.
  *
- * After a verified request the route stamps the connection's "last used"
- * for Settings → Connected apps (D17): a mutation as the user, at most
- * hourly per org + user + client in this instance, run after the response.
+ * Connected apps (D17): getMcpAuthContext refuses a token whose connection
+ * (org + user + client) has no `mcpConnections` row, so before handling a
+ * verified request the route registers / stamps it with
+ * `mcp/connections:touch` (a mutation as the user) — awaited, at most once an
+ * hour per org + user + client in this instance; the mutation itself writes
+ * at most hourly. A failed touch never fails the request: the tool call then
+ * gets Convex's own answer.
  */
 
 const lastUsed = createLastUsedThrottle({ intervalMs: CONNECTION_LAST_USED_INTERVAL_MS, maxEntries: 5_000 });
 
-/** Stamps Connected apps "last used" after the response; never fails the request. */
-function stampLastUsed(info: AuthInfo): void {
+/** Registers / stamps the connection before the request is handled; never throws. */
+async function registerConnection(info: AuthInfo): Promise<void> {
   const userId = info.extra?.userId;
   if (typeof userId !== "string" || !info.clientId) return;
   const key = connectionKey(info.token, userId, info.clientId);
   if (!lastUsed.due(key, Date.now())) return;
-  after(async () => {
-    try {
-      const clientName = await resolveClientName(info.clientId);
-      await fetchMutation(api.mcp.connections.touch, { clientName }, { token: info.token });
-    } catch (error) {
-      // A ConvexError is Convex refusing on purpose (revoked connection, no
-      // organization, user not synced, not a member): the tool calls are
-      // refused the same way, so wait the full interval and log nothing.
-      // Anything else (network, deployment) is retried after a short wait.
-      if (error instanceof ConvexError) return;
-      lastUsed.failed(key, Date.now());
-      console.error("[mcp] last-used stamp failed:", error instanceof Error ? error.message : "unknown error");
-    }
-  });
+  try {
+    const clientName = await resolveClientName(info.clientId);
+    await fetchMutation(api.mcp.connections.touch, { clientName }, { token: info.token });
+  } catch (error) {
+    // A ConvexError is Convex refusing on purpose (revoked connection, no
+    // organization, user not synced, not a member, MCP switched off): the
+    // tool call is refused the same way, so wait the full interval quietly.
+    if (error instanceof ConvexError) return;
+    // Anything else (network, deployment): try again on the next request,
+    // so a new connection is not left unregistered.
+    lastUsed.forget(key);
+    console.error("[mcp] connection stamp failed:", error instanceof Error ? error.message : "unknown error");
+  }
 }
 
 let handler: ((req: Request) => Promise<Response>) | null = null;
@@ -63,7 +65,7 @@ function getHandler(): (req: Request) => Promise<Response> {
         audience: resourceUrl,
       });
       const info = verifyClerkToken(state.toAuth(), bearerToken);
-      if (info) stampLastUsed(info);
+      if (info) await registerConnection(info);
       return info;
     },
     queryRunnerFor: (token) => (query, args) => fetchQuery(query, args, { token }),

@@ -16,7 +16,7 @@ import { api } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
 import { LAST_USED_INTERVAL_MS } from "../lib/mcpConnections";
-import { CONNECTION_REVOKED, MCP_SWITCHED_OFF, getMcpAuthContext } from "../lib/mcpAuth";
+import { CONNECTION_REVOKED, CONNECTION_UNKNOWN, MCP_SWITCHED_OFF, getMcpAuthContext } from "../lib/mcpAuth";
 
 const modules = (
   import.meta as ImportMeta & {
@@ -187,11 +187,28 @@ describe("revoke / allow again (D-REVOKE)", () => {
     expect((await inApp(t, "clerk_ada", ORG, "org:admin").query(api.connectedApps.listMine, {}))[0].revokedAt).toBeNull();
   });
 
+  it("fails closed without a connection row: a direct caller is refused until touch (the /mcp route) creates it", async () => {
+    const t = createT();
+    await setup(t);
+    await expect(me(t, "clerk_ada", ORG, CLAUDE)).rejects.toThrow(CONNECTION_UNKNOWN);
+    await expect(
+      viaMcp(t, "clerk_ada", ORG, CLAUDE).action(api.mcp.files.createUpload, { filename: "a.txt", contentType: "text/plain", sizeBytes: 3 }),
+    ).rejects.toThrow(CONNECTION_UNKNOWN);
+    expect(await rows(t)).toEqual([]);
+    // The route's first touch registers the connection; the call then succeeds.
+    await viaMcp(t, "clerk_ada", ORG, CLAUDE).mutation(api.mcp.connections.touch, { clientName: "claude.ai" });
+    expect((await me(t, "clerk_ada", ORG, CLAUDE)).role).toBe("admin");
+    // Another client of the same user is still unknown.
+    await expect(me(t, "clerk_ada", ORG, CODEX)).rejects.toThrow(CONNECTION_UNKNOWN);
+  });
+
   it("only that org + user + client is blocked", async () => {
     const t = createT();
     await setup(t);
     const id = await connectionOf(t, "clerk_ada", ORG, CLAUDE);
     await connectionOf(t, "clerk_mel", ORG, CLAUDE);
+    await connectionOf(t, "clerk_ada", ORG, CODEX);
+    await connectionOf(t, "clerk_ada", OTHER, CLAUDE);
     await inApp(t, "clerk_ada", ORG, "org:admin").mutation(api.connectedApps.revoke, { id });
     await expect(me(t, "clerk_ada", ORG, CLAUDE)).rejects.toThrow(CONNECTION_REVOKED);
     // Another client of the same user, the same client in another org, another user of the same client.

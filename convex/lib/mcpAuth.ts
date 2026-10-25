@@ -2,7 +2,7 @@ import { ConvexError } from "convex/values";
 import type { ActionCtx, MutationCtx, QueryCtx } from "../_generated/server";
 import { internal } from "../_generated/api";
 import { findOrgMembership, oauthClientIdOf, type AuthContext } from "./auth";
-import { isConnectionRevoked } from "./mcpConnections";
+import { connectionStatus } from "./mcpConnections";
 
 /**
  * Auth context for `convex/mcp/*`: the same shape as `getAuthContext` plus the
@@ -29,6 +29,13 @@ export function isMcpDisabled(): boolean {
   return process.env.MCP_DISABLED === "true";
 }
 
+/**
+ * No connection row for this org + user + client: the call did not come
+ * through the /mcp route, which registers a connection before its first call.
+ */
+export const CONNECTION_UNKNOWN =
+  "This app is not connected to Agency Flow yet. Connect through the Agency Flow MCP URL (…/mcp) first, then retry.";
+
 /** The user revoked this client in Connected apps (owner decision D-REVOKE). */
 export const CONNECTION_REVOKED =
   "Access for this app was revoked in Agency Flow (Connected apps). To use it again, choose Allow again there.";
@@ -46,10 +53,13 @@ export const CONNECTION_REVOKED =
  *    `orgMembers` (D12): OAuth tokens carry no org role, so the session-token
  *    parsing in `getAuthContext` must not be reused here. No membership, or
  *    one linked to another user, fails closed.
- * 4. The connection (org + user + client) must not be revoked in Connected
- *    apps (D-REVOKE): one indexed read. Clerk cannot revoke a grant without
- *    the client's token, so this is what stops a revoked client — its
- *    still-valid access token and every refreshed one — on the next call.
+ * 4. The connection (org + user + client) must exist and not be revoked in
+ *    Connected apps (D-REVOKE): one indexed read, failing closed. Clerk
+ *    cannot revoke a grant without the client's token, so this is what stops
+ *    a revoked client — its still-valid access token and every refreshed one
+ *    — on the next call. The /mcp route creates the row before a client's
+ *    first call (`mcp/connections:touch`, the only caller passing
+ *    `registering`), so a token used anywhere else is refused.
  *
  * Queries cannot write, so Connected apps "last used" is not stamped here:
  * the /mcp route calls `mcp/connections:touch` (convex/lib/mcpConnections.ts).
@@ -60,6 +70,7 @@ export const CONNECTION_REVOKED =
  */
 export async function getMcpAuthContext(
   ctx: QueryCtx | MutationCtx | ActionCtx,
+  options: { registering?: boolean } = {},
 ): Promise<McpAuthContext> {
   if (!("db" in ctx)) {
     return await ctx.runQuery(internal.mcp.auth.context, {});
@@ -95,8 +106,12 @@ export async function getMcpAuthContext(
     throw new ConvexError("You are not a member of this organization");
   }
 
-  if (await isConnectionRevoked(ctx, orgId, user._id, clientId)) {
+  const connection = await connectionStatus(ctx, orgId, user._id, clientId);
+  if (connection === "revoked") {
     throw new ConvexError(CONNECTION_REVOKED);
+  }
+  if (connection === "missing" && !options.registering) {
+    throw new ConvexError(CONNECTION_UNKNOWN);
   }
 
   return {

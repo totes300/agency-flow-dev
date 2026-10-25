@@ -14,7 +14,8 @@ export const touch = mutation({
   args: { clientName: v.optional(v.string()) },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const auth = await getMcpAuthContext(ctx);
+    // The one caller allowed without a connection row: it creates the row.
+    const auth = await getMcpAuthContext(ctx, { registering: true });
     await stampConnection(ctx, auth, args.clientName, Date.now());
     return null;
   },

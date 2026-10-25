@@ -26,6 +26,7 @@ import { loadTaskForWrite } from "../tasks/access";
 import { createCommentForAuth } from "../comments";
 import { IDEMPOTENCY_TTL_MS } from "../lib/mcpWrites";
 import { CHANGE_TYPES } from "../../lib/mcp/limits";
+import { connectMembers } from "./helpers/mcpConnections";
 
 const modules = (
   import.meta as ImportMeta & {
@@ -55,7 +56,14 @@ const as = (t: T, caller: Caller, clientId = "client_claude") =>
 
 const email = (caller: Caller) => `${SUBJECT[caller][0]}@x.test`;
 
+/** The fixture, with every member connected through the OAuth clients this file uses. */
 async function setup(t: T) {
+  const fixture = await setupData(t);
+  await t.run((ctx) => connectMembers(ctx, ["client_claude", "client_codex", "https://claude.ai/oauth/claude-code-client-metadata"]));
+  return fixture;
+}
+
+async function setupData(t: T) {
   return await t.run(async (ctx) => {
     const now = Date.now() - 3600_000;
     const mkUser = async (name: string, externalId: string) =>

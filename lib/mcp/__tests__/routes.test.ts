@@ -12,15 +12,8 @@ const authenticateRequest = vi.fn();
 const clerkClient = vi.fn(async () => ({ authenticateRequest }));
 vi.mock("@clerk/nextjs/server", () => ({ clerkClient }));
 
-// Connected apps stamping (D17): `after` callbacks are collected and run by
-// the test; Convex calls are recorded.
-const afterCallbacks: Array<() => Promise<void>> = [];
-vi.mock("next/server", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("next/server")>()),
-  after: (callback: () => Promise<void>) => {
-    afterCallbacks.push(callback);
-  },
-}));
+// Connected apps (D17): the route registers / stamps the connection through
+// Convex before handling a verified request; Convex calls are recorded.
 const fetchMutation = vi.fn();
 vi.mock("convex/nextjs", () => ({ fetchMutation, fetchQuery: vi.fn(), fetchAction: vi.fn() }));
 
@@ -125,7 +118,7 @@ describe("/mcp", () => {
   });
 });
 
-describe("/mcp: Connected apps last-used stamp", () => {
+describe("/mcp: Connected apps registration", () => {
   const CLIENT_ID = "https://claude.ai/oauth/claude-code-client-metadata";
   /** A JWT-shaped bearer token carrying `org_id` (Clerk verified it in production). */
   const bearer = (org: string) =>
@@ -139,84 +132,70 @@ describe("/mcp: Connected apps last-used stamp", () => {
   });
 
   beforeEach(() => {
-    afterCallbacks.length = 0;
     fetchMutation.mockReset();
   });
 
-  it("stamps after a verified request, as the user, at most once an hour per org + user + client", async () => {
+  it("registers the connection BEFORE handling the request, as the user, at most once an hour per org + user + client", async () => {
     const { POST } = await import("@/app/mcp/route");
     authenticateRequest.mockResolvedValue({ toAuth: () => signedIn("user_stamp") });
     const token = bearer("org_a");
 
     const res = await POST(mcpPost(token));
     expect(res.status).toBe(200);
-    expect(afterCallbacks).toHaveLength(1);
-    expect(fetchMutation).not.toHaveBeenCalled(); // runs after the response
-    await afterCallbacks[0]();
     expect(fetchMutation).toHaveBeenCalledTimes(1);
     const [, args, options] = fetchMutation.mock.calls[0];
     expect(args).toEqual({ clientName: "claude.ai" });
     expect(options).toEqual({ token });
 
-    // The same connection again: no second stamp from this instance.
+    // The same connection again: no second call from this instance.
     await POST(mcpPost(token));
-    expect(afterCallbacks).toHaveLength(1);
+    expect(fetchMutation).toHaveBeenCalledTimes(1);
     // Another org or user is another connection.
     await POST(mcpPost(bearer("org_b")));
     authenticateRequest.mockResolvedValue({ toAuth: () => signedIn("user_other") });
     await POST(mcpPost(token));
-    expect(afterCallbacks).toHaveLength(3);
+    expect(fetchMutation).toHaveBeenCalledTimes(3);
   });
 
-  it("a failed stamp never fails the request and is logged without the token", async () => {
+  it("the request waits for the registration (a new client's first call never races it)", async () => {
     const { POST } = await import("@/app/mcp/route");
-    authenticateRequest.mockResolvedValue({ toAuth: () => signedIn("user_fail") });
-    fetchMutation.mockRejectedValue(new Error("You are not a member of this organization"));
-    const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    const token = bearer("org_fail");
-    const res = await POST(mcpPost(token));
+    authenticateRequest.mockResolvedValue({ toAuth: () => signedIn("user_order") });
+    const order: string[] = [];
+    fetchMutation.mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      order.push("touch");
+    });
+    const res = await POST(mcpPost(bearer("org_order")));
+    order.push("response");
     expect(res.status).toBe(200);
-    await afterCallbacks[0]();
-    expect(error).toHaveBeenCalledTimes(1);
-    expect(JSON.stringify(error.mock.calls)).not.toContain(token);
-    error.mockRestore();
+    expect(order).toEqual(["touch", "response"]);
   });
 
-  it("a deliberate Convex refusal (e.g. revoked) waits the full hour, silently; a transport error retries after 5 minutes", async () => {
+  it("a deliberate Convex refusal (e.g. revoked) is quiet and waits the hour; a transport error is logged and retried next request", async () => {
     const { POST } = await import("@/app/mcp/route");
     const { ConvexError } = await import("convex/values");
     const { CONNECTION_REVOKED } = await import("@/convex/lib/mcpAuth");
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    const now = vi.spyOn(Date, "now");
-    const T = 1_800_000_000_000;
 
-    // Revoked: no log, and no second stamp within the hour.
     authenticateRequest.mockResolvedValue({ toAuth: () => signedIn("user_revoked") });
     fetchMutation.mockRejectedValue(new ConvexError(CONNECTION_REVOKED));
-    now.mockReturnValue(T);
+    expect((await POST(mcpPost(bearer("org_r")))).status).toBe(200);
     await POST(mcpPost(bearer("org_r")));
-    await afterCallbacks[0]();
+    expect(fetchMutation).toHaveBeenCalledTimes(1);
     expect(error).not.toHaveBeenCalled();
-    now.mockReturnValue(T + 10 * 60 * 1000);
-    await POST(mcpPost(bearer("org_r")));
-    expect(afterCallbacks).toHaveLength(1);
 
-    // Transport error: logged, retried after 5 minutes.
     authenticateRequest.mockResolvedValue({ toAuth: () => signedIn("user_network") });
     fetchMutation.mockRejectedValue(new Error("fetch failed"));
-    now.mockReturnValue(T);
-    await POST(mcpPost(bearer("org_n")));
-    await afterCallbacks[1]();
+    const token = bearer("org_n");
+    expect((await POST(mcpPost(token))).status).toBe(200);
     expect(error).toHaveBeenCalledTimes(1);
-    now.mockReturnValue(T + 5 * 60 * 1000);
-    await POST(mcpPost(bearer("org_n")));
-    expect(afterCallbacks).toHaveLength(3);
-
-    now.mockRestore();
+    expect(JSON.stringify(error.mock.calls)).not.toContain(token);
+    await POST(mcpPost(token));
+    expect(fetchMutation).toHaveBeenCalledTimes(3);
     error.mockRestore();
   });
 
-  it("an unauthenticated or invalid request stamps nothing", async () => {
+  it("an unauthenticated or invalid request registers nothing", async () => {
     const { POST } = await import("@/app/mcp/route");
     authenticateRequest.mockResolvedValue({
       toAuth: () => ({ tokenType: "oauth_token", isAuthenticated: false, userId: null, clientId: null, scopes: null }),
@@ -224,7 +203,7 @@ describe("/mcp: Connected apps last-used stamp", () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     await POST(mcpPost());
     await POST(mcpPost("forged"));
-    expect(afterCallbacks).toEqual([]);
+    expect(fetchMutation).not.toHaveBeenCalled();
     error.mockRestore();
   });
 });

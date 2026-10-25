@@ -19,21 +19,24 @@ import { CONNECTION_LAST_USED_INTERVAL_MS } from "../../lib/mcp/limits";
  */
 
 /**
- * Whether the caller revoked this org + user + client in Connected apps
- * (D-REVOKE). Exactly one indexed read; `getMcpAuthContext` runs it on every
- * MCP call.
+ * The state of this org + user + client's connection: "missing" (no row yet:
+ * the /mcp route creates it before a client's first call), "revoked" in
+ * Connected apps (D-REVOKE), or "allowed". Exactly one indexed read;
+ * `getMcpAuthContext` runs it on every MCP call and fails closed unless
+ * "allowed".
  */
-export async function isConnectionRevoked(
+export async function connectionStatus(
   ctx: QueryCtx,
   orgId: string,
   userId: Id<"users">,
   clientId: string,
-): Promise<boolean> {
+): Promise<"allowed" | "revoked" | "missing"> {
   const row = await ctx.db
     .query("mcpConnections")
     .withIndex("by_orgId_userId_clientId", (q) => q.eq("orgId", orgId).eq("userId", userId).eq("clientId", clientId))
     .unique();
-  return row?.revokedAt !== undefined;
+  if (!row) return "missing";
+  return row.revokedAt !== undefined ? "revoked" : "allowed";
 }
 
 /** "Last used" is stamped at most this often per connection. */

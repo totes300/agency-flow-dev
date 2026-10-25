@@ -19,6 +19,7 @@ import type { Doc, Id } from "../_generated/dataModel";
 import type { AuthContext } from "../lib/auth";
 import { DEFAULT_STATUS_SEED } from "../tasks/model";
 import { createTask } from "../tasks/write";
+import { connectMembers } from "./helpers/mcpConnections";
 
 const modules = (
   import.meta as ImportMeta & {
@@ -55,7 +56,14 @@ const inApp = (t: T, caller: Caller) =>
 
 const email = (caller: Caller) => `${SUBJECT[caller][0]}@x.test`;
 
+/** The fixture, with every member connected through the OAuth clients this file uses. */
 async function setup(t: T) {
+  const fixture = await setupData(t);
+  await t.run((ctx) => connectMembers(ctx, ["client_claude"]));
+  return fixture;
+}
+
+async function setupData(t: T) {
   return await t.run(async (ctx) => {
     const now = Date.now() - 3600_000;
     const mkUser = async (name: string, externalId: string) =>

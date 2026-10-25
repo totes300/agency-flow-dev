@@ -1,16 +1,13 @@
 /**
- * Route-side throttle for Connected apps "last used" stamps (docs/prd-mcp.md
- * D17, §11). Convex queries cannot write, so the /mcp route stamps the
- * connection with a mutation (`mcp/connections:touch`) after a request it
- * verified. This keeps that call to at most once per `intervalMs` per
- * org + user + client in each server instance; the mutation throttles again
- * across instances (convex/lib/mcpConnections.ts).
+ * Route-side throttle for Connected apps stamps (docs/prd-mcp.md D17, §11).
+ * Convex queries cannot write, so the /mcp route registers / stamps the
+ * connection with a mutation (`mcp/connections:touch`) before handling a
+ * request it verified. This keeps that call to at most once per `intervalMs`
+ * per org + user + client in each server instance; the mutation throttles
+ * again across instances (convex/lib/mcpConnections.ts).
  *
  * Pure (no I/O; the caller passes the clock), so tests drive it directly.
  */
-
-/** How long a failed stamp waits before it is tried again. */
-export const STAMP_RETRY_AFTER_FAILURE_MS = 5 * 60 * 1000;
 
 export type LastUsedThrottleOptions = {
   intervalMs: number;
@@ -20,8 +17,8 @@ export type LastUsedThrottleOptions = {
 
 /**
  * Returns `due(key, now)`: true when `key` has not been stamped within the
- * interval (and records the attempt), else false. `failed(key, now)` lets a
- * failed stamp be retried after a short wait instead of a full interval.
+ * interval (and records the attempt), else false. `forget(key)` lets a
+ * failed stamp be tried again on the next request.
  */
 export function createLastUsedThrottle({ intervalMs, maxEntries }: LastUsedThrottleOptions) {
   const stampedAt = new Map<string, number>();
@@ -43,8 +40,8 @@ export function createLastUsedThrottle({ intervalMs, maxEntries }: LastUsedThrot
       remember(key, now);
       return true;
     },
-    failed(key: string, now: number): void {
-      remember(key, now - intervalMs + STAMP_RETRY_AFTER_FAILURE_MS);
+    forget(key: string): void {
+      stampedAt.delete(key);
     },
     size(): number {
       return stampedAt.size;

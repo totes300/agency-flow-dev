@@ -22,6 +22,7 @@ import { DEFAULT_STATUS_SEED } from "../tasks/model";
 import { collectTimesheetDataForAuth } from "../timesheets";
 import { flattenMonthlyBreakdown, flattenProjectOverview } from "../../lib/reports/views";
 import { taskRow } from "./helpers/taskFixtures";
+import { connectMembers } from "./helpers/mcpConnections";
 
 const modules = (
   import.meta as ImportMeta & {
@@ -71,7 +72,14 @@ const doc = (text: string) => ({ type: "doc", content: [{ type: "paragraph", con
  * time in March–July, invoices in two currencies, and tasks covering every
  * missing_time case. Another org holds a foreign client, project and task.
  */
+/** The fixture, with every member connected through the OAuth clients this file uses. */
 async function setup(t: T) {
+  const fixture = await setupData(t);
+  await t.run((ctx) => connectMembers(ctx, ["client_claude"]));
+  return fixture;
+}
+
+async function setupData(t: T) {
   const ids = await t.run(async (ctx) => {
     const now = at("2026-03-01T08:00:00Z");
     const mkUser = async (name: string, externalId: string) =>

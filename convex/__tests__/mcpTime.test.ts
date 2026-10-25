@@ -23,6 +23,7 @@ import type { AuthContext } from "../lib/auth";
 import { DEFAULT_STATUS_SEED } from "../tasks/model";
 import { createTask } from "../tasks/write";
 import { tzWallToEpoch } from "../../lib/workday";
+import { connectMembers } from "./helpers/mcpConnections";
 
 const modules = (
   import.meta as ImportMeta & {
@@ -65,7 +66,14 @@ const email = (caller: Caller) => `${SUBJECT[caller][0]}@x.test`;
  * rate: Design (120, the task's) and Development (100, Alice's default).
  * Bob has no default (falls back to the task's category).
  */
+/** The fixture, with every member connected through the OAuth clients this file uses. */
 async function setup(t: T) {
+  const fixture = await setupData(t);
+  await t.run((ctx) => connectMembers(ctx, ["client_claude", "client_codex"]));
+  return fixture;
+}
+
+async function setupData(t: T) {
   return await t.run(async (ctx) => {
     const now = Date.now() - 3600_000;
     const mkUser = async (name: string, externalId: string) =>
@@ -496,6 +504,7 @@ describe("timer across workspaces (timer state is per user)", () => {
     await t.run(async (ctx) => {
       await ctx.db.insert("orgMembers", { orgId: OTHER, clerkUserId: "clerk_alice", userId: f.alice, role: "member", joinedAt: Date.now() });
       await ctx.db.patch(f.alice, { timerTaskId: f.foreignTask, timerStartedAt: startedAt, timerAccumulatedMs: 0, timerStatus: "running" });
+      await connectMembers(ctx, ["client_claude"]);
     });
     const elsewhere = "Your timer is running in another workspace; stop it there.";
     const status = await as(t, "alice").query(api.mcp.timer.status, { now: Date.now() });

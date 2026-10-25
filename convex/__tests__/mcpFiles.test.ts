@@ -24,6 +24,7 @@ import { requestExtraction } from "../attachmentContents";
 import { COMMENT_ATTACH_AUTHOR_ONLY } from "../commentAttachments";
 import { ATTACHMENT_TEXT_FETCH_MAX } from "../../lib/attachments/contents";
 import { INLINE_TEXT_MAX_BYTES } from "../../lib/mcp/limits";
+import { connectMembers } from "./helpers/mcpConnections";
 
 const modules = (
   import.meta as ImportMeta & {
@@ -66,7 +67,14 @@ const inApp = (t: T, caller: Caller, role: "org:admin" | "org:member") =>
 
 const doc = (text: string) => ({ type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text }] }] });
 
+/** The fixture, with every member connected through the OAuth clients this file uses. */
 async function setup(t: T) {
+  const fixture = await setupData(t);
+  await t.run((ctx) => connectMembers(ctx, ["client_claude"]));
+  return fixture;
+}
+
+async function setupData(t: T) {
   return await t.run(async (ctx) => {
     const now = Date.now() - 3600_000;
     const mkUser = async (name: string, externalId: string) =>

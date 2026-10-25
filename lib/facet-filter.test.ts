@@ -7,6 +7,7 @@ import {
   hasActiveFacets,
   toggleFacetValue,
   type FacetField,
+  type FacetSelection,
 } from "./facet-filter"
 
 type Item = { id: string; client: string; type: "fixed" | "retainer" | "t_and_m" }
@@ -73,13 +74,13 @@ describe("deriveFacetOptions", () => {
 
 describe("selection helpers", () => {
   it("toggles, clears and reports active properties", () => {
-    let selection = toggleFacetValue({}, "client" as Key, "Arlow")
+    let selection: FacetSelection<Key> = toggleFacetValue<Key>({}, "client", "Arlow")
     selection = toggleFacetValue(selection, "client", "Birch")
     expect(selection.client).toEqual(["Arlow", "Birch"])
     selection = toggleFacetValue(selection, "client", "Arlow")
     expect(selection.client).toEqual(["Birch"])
     expect(activeFacetFields(fields, selection).map((f) => f.key)).toEqual(["client"])
     expect(hasActiveFacets(fields, selection)).toBe(true)
-    expect(hasActiveFacets(fields, clearFacet(selection, "client"))).toBe(false)
+    expect(hasActiveFacets(fields, clearFacet<Key>(selection, "client"))).toBe(false)
   })
 })

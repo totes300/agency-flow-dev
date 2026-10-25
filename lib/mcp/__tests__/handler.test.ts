@@ -221,7 +221,7 @@ describe("MCP protocol", () => {
     const { result } = await rpcResult(res);
     expect(result).toMatchObject({
       isError: false,
-      content: [{ type: "text", text: "## Me\n- User: Ada <ada@x.test>\n- Org: org_1\n- Role: admin\n- Today: 2026-10-24 (UTC)\n- Timer: not running" }],
+      content: [{ type: "text", text: "## Me\n- User: Ada <ada@x.test>\n- Org: org_1\n- Role: admin\n- Today: Saturday 2026-10-24 (UTC)\n- Timer: not running" }],
     });
     expect(seenTokens).toEqual([GOOD_TOKEN]);
   });
@@ -246,7 +246,7 @@ describe("MCP protocol", () => {
           type: "text",
           text: [
             "### Tasks · 1–1 of 1",
-            "Today: 2026-10-24 (org timezone)",
+            "Today: Saturday 2026-10-24 (org timezone)",
             "- [ARLO-21](https://localhost:3001/tasks/ARLO-21) · Fix hero · In progress · due 2026-10-20 (overdue) · Ada · High",
           ].join("\n"),
         },

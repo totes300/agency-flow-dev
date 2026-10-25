@@ -460,9 +460,21 @@ export async function timeEntryRow(
   };
 }
 
+/** A project's team (`teamMembers`, validated org members, so the list is small): names and emails, deleted users skipped. */
+async function projectTeam(ctx: QueryCtx, ids: readonly Id<"users">[] | undefined) {
+  const team = [];
+  for (const id of ids ?? []) {
+    const user = await ctx.db.get(id);
+    if (user && !user.deletedAt) team.push({ name: user.name, email: user.email ?? null });
+  }
+  return team;
+}
+
 /**
  * The record for a resolved reference. Null only for a task that became
- * unreadable between resolution and load (treated as not found).
+ * unreadable between resolution and load (treated as not found). `include`
+ * names task sections; another record says when it was passed
+ * (`includeIgnored`) instead of dropping it silently.
  */
 export async function buildRecord(
   ctx: QueryCtx,
@@ -471,6 +483,19 @@ export async function buildRecord(
   include: ReadonlySet<FetchInclude>,
   clock: OrgClock,
   file?: FileSelection,
+) {
+  const record = await recordFor(ctx, auth, resolved, include, clock, file);
+  if (!record || record.type === "task") return record;
+  return { ...record, includeIgnored: include.size > 0 };
+}
+
+async function recordFor(
+  ctx: QueryCtx,
+  auth: AuthContext,
+  resolved: Resolved,
+  include: ReadonlySet<FetchInclude>,
+  clock: OrgClock,
+  file: FileSelection | undefined,
 ) {
   const { orgId } = auth;
   if (file !== undefined && resolved.type !== "task") {
@@ -509,6 +534,7 @@ export async function buildRecord(
         code: project.code,
         name: project.name,
         client: await clientSummary(ctx, orgId, project.clientId),
+        team: await projectTeam(ctx, project.teamMembers),
         archived: project.archivedAt !== undefined,
         /** Billing type and terms: admins only (the Settings tab); null for members — no billing data. */
         terms: await projectTermsForAuth(ctx, auth, project._id),

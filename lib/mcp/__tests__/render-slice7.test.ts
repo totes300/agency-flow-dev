@@ -202,7 +202,7 @@ describe("slice 7a reads", () => {
     );
     expect(
       renderRecord(
-        { type: "daily_note", id: id("n1"), date: "2026-10-24", member: { id: id("u1"), name: "Alice" }, own: true, updatedAt: Date.UTC(2026, 9, 24, 18), text: "- Done" },
+        { type: "daily_note", id: id("n1"), date: "2026-10-24", member: { id: id("u1"), name: "Alice" }, own: true, updatedAt: Date.UTC(2026, 9, 24, 18), text: "- Done", includeIgnored: false },
         { ...ctx, timezone: "UTC" },
       ),
     ).toBe(

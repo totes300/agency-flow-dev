@@ -147,8 +147,15 @@ describe("save_tasks: external refs (D21)", () => {
     const key = first.items[0].identifier;
     expect(key).toMatch(/^ARLO-\d+$/);
 
+    // Matched through a ref (no `ref`): the result names the ref that chose the task and what changed.
     const second = await saveTasks(t, "admin", [{ title: "Reply to Arlo (follow-up)", externalRefs: ["gmail:thread-1", "granola:n1"] }]);
-    expect(second.items).toEqual([{ identifier: key, title: "Reply to Arlo (follow-up)", action: "updated" }]);
+    expect(second.items).toEqual([
+      { identifier: key, title: "Reply to Arlo (follow-up)", action: "updated", matchedRef: "gmail:thread-1", changed: ["title", "externalRefs"] },
+    ]);
+    const third = await saveTasks(t, "admin", [{ externalRefs: ["granola:n1"] }]);
+    expect(third.items).toEqual([{ identifier: key, title: "Reply to Arlo (follow-up)", action: "unchanged", matchedRef: "granola:n1", changed: [] }]);
+    // Updated by `ref`: no matchedRef.
+    expect((await saveTasks(t, "admin", [{ ref: key, title: "Reply to Arlo" }])).items[0]).toEqual({ identifier: key, title: "Reply to Arlo", action: "updated" });
     expect((await allTasks(t)).filter((task) => task.title.startsWith("Reply to Arlo"))).toHaveLength(1);
 
     // fetch shows the refs; search finds the card by ref (any status).
@@ -356,6 +363,15 @@ describe("save_tasks: checklist (D24)", () => {
     // Ticking again changes nothing.
     expect((await saveTasks(t, "admin", [{ ref: subs[2], done: true }])).items[0].action).toBe("unchanged");
     await expect(saveTasks(t, "admin", [{ ref: parent, after: subs[0] }])).rejects.toThrow("order sub-tasks only");
+  });
+
+  it("done on a canceled sub-task keeps it canceled and reports unchanged (closed = completed or canceled)", async () => {
+    const t = createT();
+    const { subs } = await checklist(t);
+    await saveTasks(t, "admin", [{ ref: subs[0], status: "Canceled" }]);
+    expect((await taskBy(t, subs[0])).statusCategory).toBe("canceled");
+    expect((await saveTasks(t, "admin", [{ ref: subs[0], done: true }])).items[0].action).toBe("unchanged");
+    expect((await taskBy(t, subs[0])).statusCategory).toBe("canceled");
   });
 });
 

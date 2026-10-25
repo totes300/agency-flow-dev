@@ -504,7 +504,7 @@ describe("fetch changes", () => {
       [
         "## Changes · 2 (oldest first, times in UTC)",
         '- 2026-10-24 12:00 · [ARLO-21](https://localhost:3001/tasks/ARLO-21) · Checklist · Csaba · checklist "szűrők" ✓',
-        "- 2026-10-24 12:01 · [ARLO-21](https://localhost:3001/tasks/ARLO-21) · Checklist · Csaba · commented · comment cm1 · via Claude",
+        "- 2026-10-24 12:01 · ARLO-21 · Csaba · commented · comment cm1 · via Claude",
         "````user-content",
         "Done",
         "with ```fences```",

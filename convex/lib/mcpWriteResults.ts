@@ -33,6 +33,10 @@ export const saveTasksResultValidator = v.object({
       action: v.union(v.literal("created"), v.literal("updated"), v.literal("unchanged")),
       /** Editor formatting markdown cannot carry, dropped by a description rewrite. */
       formattingRemoved: v.optional(v.array(v.string())),
+      /** The item had no `ref`: the external ref that chose this existing task (D21). */
+      matchedRef: v.optional(v.string()),
+      /** With `matchedRef`: the fields the item changed (`title`, `description`, `assignees`, `externalRefs`, …). */
+      changed: v.optional(v.array(v.string())),
     }),
   ),
 });

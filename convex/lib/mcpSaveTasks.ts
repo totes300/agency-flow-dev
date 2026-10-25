@@ -12,7 +12,7 @@ import {
   ownerLabel,
 } from "./mcpExternalRefs";
 import { loadTaskForReadOrNull, loadTaskForWrite } from "../tasks/access";
-import { PRIORITY, type TaskPriority } from "../tasks/model";
+import { isClosedCategory, PRIORITY, type TaskPriority } from "../tasks/model";
 import {
   archiveTask,
   createTask,
@@ -266,6 +266,8 @@ async function saveItem(
   const externalRefs = normalizeExternalRefs(item.externalRefs ?? []);
 
   let targetId: Id<"tasks"> | null = null;
+  /** The external ref that chose the task when the item had no `ref` (reported, D21). */
+  let matchedRef: string | undefined;
   if (item.ref !== undefined) {
     targetId = (await requireTask(resolver, item.ref))._id;
   } else {
@@ -279,6 +281,7 @@ async function saveItem(
         );
       }
       targetId = found.taskId;
+      matchedRef = found.ref;
     }
   }
   const props = await resolveProperties(names, resolver, item);
@@ -297,8 +300,8 @@ async function saveItem(
     }
     const { task } = access;
     let statusId = props.statusId;
-    // done: true on a task that is already completed keeps its status.
-    if (item.done && task.statusCategory !== "completed") {
+    // done: true on a task that is already closed (completed or canceled) keeps its status.
+    if (item.done && !isClosedCategory(task.statusCategory)) {
       statusId = (await defaultStatusFor(ctx, auth.orgId, ["completed"])).status._id;
     }
     const patch: TaskPatch = {
@@ -328,12 +331,22 @@ async function saveItem(
       updated = (await ctx.db.get(targetId))!;
       archived = true;
     }
-    const didChange = changed.length > 0 || assigneesChanged || added > 0 || moved || restored || archived;
+    // What this item changed, already known from the write path (no extra reads).
+    const changedFields = [
+      ...changed,
+      assigneesChanged && "assignees",
+      added > 0 && "externalRefs",
+      moved && "position",
+      restored && "restored",
+      archived && "archived",
+    ].filter((f): f is string => typeof f === "string");
     return {
       identifier: updated.identifier ?? updated._id,
       title: updated.title,
-      action: didChange ? "updated" : "unchanged",
+      action: changedFields.length > 0 ? "updated" : "unchanged",
       ...(formattingRemoved.length > 0 ? { formattingRemoved } : {}),
+      // Matched through an external ref (no `ref`): say which, and what changed.
+      ...(matchedRef !== undefined ? { matchedRef, changed: changedFields } : {}),
     };
   }
 

@@ -343,7 +343,9 @@ describe("project billing terms", () => {
     code: "ARLO",
     name: "Arlow site",
     client: { id: "c1" as Id<"clients">, name: "Arlow", prefix: "ARL" },
+    team: [],
     archived: false,
+    includeIgnored: false,
   };
   const head = "## Project ARLO · Arlow site\n- Link: https://localhost:3001/projects/p1\n- Code: ARLO (task keys ARLO-N)\n- Client: client:ARL · Arlow\n- Archived: no";
 

@@ -100,7 +100,7 @@ export function renderMe(data: MeData, ctx: RenderContext): string {
     `- User: ${user}`,
     `- Org: ${org}`,
     `- Role: ${data.role}`,
-    `- Today: ${data.today} (${data.timezone})`,
+    `- Today: ${withWeekday(data.today)} (${data.timezone})`,
     ...timerLines(data.timer, data.timezone, ctx),
   ].join("\n");
 }
@@ -174,6 +174,17 @@ export function formatTimestamp(ms: number, timezone = "UTC"): string {
   }).formatToParts(new Date(ms));
   const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
   return `${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get("minute")}`;
+}
+
+/**
+ * `Sunday 2026-10-25` for a YYYY-MM-DD date already in the org timezone
+ * (Convex computes it): the weekday is read at noon UTC of that date, so it
+ * never depends on the server's clock or zone. A malformed date stays bare.
+ */
+export function withWeekday(date: string): string {
+  const noon = new Date(`${date}T12:00:00Z`);
+  if (Number.isNaN(noon.getTime())) return date;
+  return `${new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone: "UTC" }).format(noon)} ${date}`;
 }
 
 /** The ref a client is written with: `client:KONV`, or its ID without a valid prefix. */
@@ -318,17 +329,22 @@ export function renderCommentRow(row: CommentPage["rows"][number], ctx: RenderCo
 
 // ─── Fetch records ───────────────────────────────────────────────────────────
 
+/** A title stored in activity metadata, shortened like a change line's title. */
+function metaTitle(value: unknown): string {
+  return shortTitle(typeof value === "string" ? value : String(value));
+}
+
 const ACTIVITY_TEXT: Record<string, (m: Record<string, unknown>) => string> = {
   task_created: () => "created the task",
-  subtask_created: (m) => `added sub-task "${m.title}"`,
-  subtask_completed: (m) => `completed sub-task "${m.title}"`,
-  subtask_deleted: (m) => `deleted sub-task "${m.title}"`,
+  subtask_created: (m) => `added sub-task "${metaTitle(m.title)}"`,
+  subtask_completed: (m) => `completed sub-task "${metaTitle(m.title)}"`,
+  subtask_deleted: (m) => `deleted sub-task "${metaTitle(m.title)}"`,
   status_changed: (m) => `changed status ${m.from} → ${m.to}`,
   assignee_added: (m) => `assigned ${m.userName}`,
   assignee_removed: (m) => `unassigned ${m.userName}`,
   label_added: (m) => `added label ${m.labelName}`,
   label_removed: (m) => `removed label ${m.labelName}`,
-  title_changed: (m) => `renamed "${m.from}" → "${m.to}"`,
+  title_changed: (m) => `renamed "${metaTitle(m.from)}" → "${metaTitle(m.to)}"`,
   category_changed: (m) => `changed work category ${m.from} → ${m.to}`,
   priority_changed: (m) =>
     `changed priority ${PRIORITY_LABELS[m.from as keyof typeof PRIORITY_LABELS] ?? m.from} → ${PRIORITY_LABELS[m.to as keyof typeof PRIORITY_LABELS] ?? m.to}`,
@@ -600,12 +616,15 @@ function taskHeader(record: TaskRecord, ctx: RenderContext): string {
     `- Billable: ${record.billable ? "yes" : "no"}`,
     record.parent && `- Parent: ${record.parent.identifier ?? "?"} · ${oneLine(record.parent.title)}`,
     record.subtaskCount > 0 && `- Sub-tasks: ${record.subtaskDoneCount}/${record.subtaskCount} done`,
+    // With the sub-task list included, the next step is already a row there: point at it.
     record.nextStep &&
-      `- Next step: ${fields(
-        record.nextStep.identifier,
-        oneLine(record.nextStep.title),
-        record.nextStep.assignees.length > 0 ? list(record.nextStep.assignees) : "unassigned",
-      )}`,
+      (record.subtasks
+        ? `- Next step: ${record.nextStep.identifier ?? oneLine(record.nextStep.title)} (first open sub-task, see Sub-tasks)`
+        : `- Next step: ${fields(
+            record.nextStep.identifier,
+            oneLine(record.nextStep.title),
+            record.nextStep.assignees.length > 0 ? list(record.nextStep.assignees) : "unassigned",
+          )}`),
     record.externalRefs.refs.length > 0 &&
       `- External refs: ${record.externalRefs.refs.join(", ")}${record.externalRefs.truncated ? " (more exist)" : ""}`,
     record.commentCount > 0 && `- Comments: ${record.commentCount}`,
@@ -665,6 +684,12 @@ export function renderTaskRecord(record: TaskRecord, ctx: RenderContext): string
 }
 
 export function renderRecord(record: FetchedRecord, ctx: RenderContext): string {
+  const text = recordText(record, ctx);
+  // `include` names task sections: said when it was passed for another record, never ignored silently.
+  return record.type !== "task" && record.includeIgnored ? `${text}\n(include applies to tasks; none for this record)` : text;
+}
+
+function recordText(record: FetchedRecord, ctx: RenderContext): string {
   switch (record.type) {
     case "task":
       return renderTaskRecord(record, ctx);
@@ -703,12 +728,14 @@ export function renderRecord(record: FetchedRecord, ctx: RenderContext): string 
         `- Link: ${projectLink(ctx.appOrigin, record.id)}`,
         `- Code: ${record.code} (task keys ${record.code}-N)`,
         `- Client: ${record.client ? clientLabel(record.client) : "none"}`,
+        record.team.length > 0 &&
+          `- Team: ${record.team.map((m) => (m.email ? `${oneLine(m.name)} <${m.email}>` : oneLine(m.name))).join(", ")}`,
         `- Archived: ${record.archived ? "yes" : "no"}`,
         record.terms
           ? `- Billing type: ${record.terms.billingType}${BILLING_TYPE_HINT[record.terms.billingType]}`
           : "- Billing: admin-only, as in the app.",
       ]
-        .filter((line): line is string => line !== null)
+        .filter((line): line is string => typeof line === "string")
         .join("\n");
       return record.terms && record.terms.billingType !== "non_billable" ? `${head}\n\n${renderProjectTerms(record.terms)}` : head;
     }
@@ -928,7 +955,7 @@ function searchSection(label: string, narrowWith: string, page: AnyPage, rows: s
 }
 
 export function renderTaskSection(page: TaskPage, ctx: RenderContext): string {
-  const today = page.rows.some((r) => r.dueDate) ? [`Today: ${page.today} (org timezone)`] : [];
+  const today = page.rows.some((r) => r.dueDate) ? [`Today: ${withWeekday(page.today)} (org timezone)`] : [];
   return searchSection(
     "Tasks",
     "project, assignee, status, label or a due date range",
@@ -991,7 +1018,7 @@ export function renderInvoiceSection(page: InvoicePage, ctx: RenderContext): str
             ? `Totals of the ${page.total} invoices found, by status and currency, void excluded (more may exist):`
             : `Totals of all ${page.total} matching ${page.total === 1 ? "invoice" : "invoices"}, by status and currency, void excluded:`,
           ...(totals.length > 0 ? totals : ["- none"]),
-          `Today: ${page.today} (org timezone; Past due = Invoiced and due before today)`,
+          `Today: ${withWeekday(page.today)} (org timezone; Past due = Invoiced and due before today)`,
         ];
   return searchSection(
     "Invoices",
@@ -1076,9 +1103,9 @@ export function renderInbox(data: InboxData, ctx: RenderContext): string {
 
 /** Checklist wording for sub-task events on the parent (D24). */
 const CHANGE_TEXT: Record<string, (m: Record<string, unknown>) => string> = {
-  subtask_created: (m) => `checklist + "${m.title}"`,
-  subtask_completed: (m) => `checklist "${m.title}" ✓`,
-  subtask_deleted: (m) => `checklist − "${m.title}"`,
+  subtask_created: (m) => `checklist + "${metaTitle(m.title)}"`,
+  subtask_completed: (m) => `checklist "${metaTitle(m.title)}" ✓`,
+  subtask_deleted: (m) => `checklist − "${metaTitle(m.title)}"`,
 };
 
 function changeText(type: string, metadata: unknown): string {
@@ -1096,8 +1123,10 @@ const CHANGE_TITLE_MAX = 80;
 
 /**
  * One line per change, oldest first: time · task · title · actor · what changed
- * (· via client). Comment text (D29) follows as a user-content block. The
- * cursor line says how to continue; it is always present.
+ * (· via client). A task's link and title appear on its first line of the
+ * page only; later lines carry the bare key (D22's `ARLO-21 · Csaba · …`).
+ * Comment text (D29) follows as a user-content block. The cursor line says
+ * how to continue; it is always present.
  */
 export function renderChanges(data: ChangesData, ctx: RenderContext): string {
   const timezone = data.timezone;
@@ -1105,11 +1134,14 @@ export function renderChanges(data: ChangesData, ctx: RenderContext): string {
     data.changes.length === 0
       ? "## Changes · none new"
       : `## Changes · ${data.changes.length} (oldest first, times in ${timezone})`;
+  const introduced = new Set<string>();
   const lines = data.changes.map((c) => {
+    const first = !introduced.has(c.task.identifier);
+    introduced.add(c.task.identifier);
     const head = `- ${fields(
       formatTimestamp(c.at, timezone),
-      `[${c.task.identifier}](${taskLink(ctx.appOrigin, c.task.identifier)})`,
-      shortTitle(c.task.title),
+      first ? `[${c.task.identifier}](${taskLink(ctx.appOrigin, c.task.identifier)})` : c.task.identifier,
+      first ? shortTitle(c.task.title) : null,
       oneLine(c.actor),
       changeText(c.type, c.metadata),
       c.comment ? `comment ${c.comment.id}` : null,
@@ -1147,13 +1179,21 @@ const SAVE_ACTION: Record<"created" | "updated" | "unchanged", string> = {
   unchanged: "no change",
 };
 
+/** `updated (matched gmail:18f2; changed title, description)` for an item found through its external refs (D21). */
+function saveTaskAction(item: SaveTasksData["items"][number]): string {
+  const action = SAVE_ACTION[item.action];
+  if (!item.matchedRef) return action;
+  const changed = item.changed && item.changed.length > 0 ? `; changed ${item.changed.join(", ")}` : "";
+  return `${action} (matched ${item.matchedRef}${changed})`;
+}
+
 export function renderSaveTasks(data: SaveTasksData, ctx: RenderContext): string {
   const lines = data.items.map(
     (i) =>
       `- ${fields(
         `[${i.identifier}](${taskLink(ctx.appOrigin, i.identifier)})`,
         oneLine(i.title),
-        SAVE_ACTION[i.action],
+        saveTaskAction(i),
         formattingNote(i.formattingRemoved),
       )}`,
   );

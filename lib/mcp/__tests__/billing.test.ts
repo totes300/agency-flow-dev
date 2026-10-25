@@ -309,7 +309,7 @@ describe("invoice search", () => {
         "Totals of all 2 matching invoices, by status and currency, void excluded:",
         "- Draft: $100.00 (1)",
         "- Past due: €166.67 (1)",
-        "Today: 2026-10-15 (org timezone; Past due = Invoiced and due before today)",
+        "Today: Thursday 2026-10-15 (org timezone; Past due = Invoiced and due before today)",
         '- [Draft (never numbered, ref inv2)](https://localhost:3001/invoices/inv2) · Draft · $100.00 · client:YNK · Yankee · TM · Hourly · September 2026 · issued 2026-10-15 · "September 2026"',
         '- [INV-001](https://localhost:3001/invoices/INV-001) · Past due (14 days overdue) · €166.67 · client:ARL · Arlow · RET · Retainer · August 2026 · issued 2026-09-02 · due 2026-10-01 · "August 2026 overage"',
       ].join("\n"),

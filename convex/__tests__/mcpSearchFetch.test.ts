@@ -104,6 +104,8 @@ async function setupData(t: T) {
     const dupB = await mkClient(ORG, "Dup B", "dup", admin);
     const arlo = await mkProject(ORG, "Arlow site", "ARLO", arloClient, admin);
     const site = await mkProject(ORG, "Konverted site", "KSITE", konv, admin);
+    // KSITE has a team (the project's Team setting); ARLO none.
+    await ctx.db.patch(site, { teamMembers: [alice, bob] });
     const otherClient = await mkClient(OTHER, "Elsewhere", "ELSE", other);
     const otherProject = await mkProject(OTHER, "Elsewhere", "ELSE", otherClient, other);
     const launch = await ctx.db.insert("labels", { orgId: ORG, name: "Launch", color: "red", position: "a0" });
@@ -272,7 +274,20 @@ describe("fetch records: other kinds (I3)", () => {
     const t = createT();
     const f = await setup(t);
     const { results } = await records(t, "alice", ["ksite", "Konv", "CAROL_unused@x.test", "clerk_bob@X.TEST", f.carol]);
-    expect(results[0]).toMatchObject({ ok: true, record: { type: "project", code: "KSITE", client: { name: "Konverted", prefix: "KONV" } } });
+    expect(results[0]).toMatchObject({
+      ok: true,
+      record: {
+        type: "project",
+        code: "KSITE",
+        client: { name: "Konverted", prefix: "KONV" },
+        team: [{ name: "Alice", email: "clerk_alice@x.test" }, { name: "Bob", email: "clerk_bob@x.test" }],
+        includeIgnored: false,
+      },
+    });
+    // No team → []; include passed for a non-task record is flagged (the route says so), tasks never carry the flag.
+    const flagged = await records(t, "admin", ["ARLO", f.id.A], ["comments"]);
+    expect(flagged.results[0]).toMatchObject({ ok: true, record: { type: "project", code: "ARLO", team: [], includeIgnored: true } });
+    expect(flagged.results[1].ok && flagged.results[1].record.type === "task" && "includeIgnored" in flagged.results[1].record).toBe(false);
     expect(results[1]).toMatchObject({ ok: true, record: { type: "client", name: "Konverted", prefix: "KONV", projects: [{ code: "KSITE" }] } });
     expect(results[2]).toMatchObject({ ok: false, message: 'CAROL_unused@x.test is not a member of this workspace. Members are listed in fetch("workspace").' });
     expect(results[3]).toMatchObject({ ok: true, record: { type: "member", name: "Bob", role: "member" } });

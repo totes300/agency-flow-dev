@@ -15,7 +15,7 @@ import {
   tasksLink,
   workdayLink,
 } from "./links";
-import { clientRef, formatTimestamp, linkText, userContent, type RenderContext } from "./render";
+import { clientRef, formatTimestamp, userContent, withWeekday, type RenderContext } from "./render";
 import type { ReportKind } from "./limits";
 import { oneLine, tableCell } from "./markdown-text";
 
@@ -80,6 +80,25 @@ function taskCell(identifier: string | null, ctx: RenderContext): string {
 
 function clientLabel(client: { name: string; prefix: string | null; id: string }): string {
   return `${oneLine(client.name)} (${clientRef(client.prefix, client.id)})`;
+}
+
+type LegendProject = { code: string | null; name: string; client: string | null; link: string | null };
+
+/**
+ * A projects legend for a report whose rows repeat the same project: one
+ * line per project, in first-appearance order — `- ARLO · Arlow site ·
+ * Arlow (client) · <link>` — so the rows carry the bare code and every
+ * project is still linked once (§7).
+ */
+function projectLegend(projects: ReadonlyArray<LegendProject>): string {
+  return projects
+    .map(
+      (p) =>
+        `- ${[p.code ?? oneLine(p.name), p.code ? oneLine(p.name) : null, p.client ? `${oneLine(p.client)} (client)` : null, p.link]
+          .filter((v): v is string => v !== null)
+          .join(" · ")}`,
+    )
+    .join("\n");
 }
 
 function lines(...values: Array<string | null | undefined | false>): string {
@@ -246,21 +265,22 @@ export function renderTimeByMember(data: TimeByMemberReport, ctx: RenderContext)
     ]),
     [2, 3, 4, 5],
   );
+  // The same project recurs under several members: named once in a legend, rows carry its code.
+  const legend = new Map<string, LegendProject>();
   const projectRows = data.members.flatMap((m) =>
-    m.projects.map((p) => [
-      tableCell(m.name),
-      p.code ? (p.id ? `[${p.code}](${projectLink(ctx.appOrigin, p.id)})` : p.code) : "",
-      tableCell(p.name),
-      tableCell(p.client ?? ""),
-      minutes(p.minutes),
-      minutes(p.billableMinutes),
-      minutes(p.nonBillableMinutes),
-    ]),
+    m.projects.map((p) => {
+      const key = p.code ?? p.name;
+      if (!legend.has(key)) {
+        // Project pages are admin routes: a member's rows carry no link (Convex sends id: null).
+        legend.set(key, { code: p.code, name: p.name, client: p.client, link: p.id ? projectLink(ctx.appOrigin, p.id) : null });
+      }
+      return [tableCell(m.name), tableCell(key), minutes(p.minutes), minutes(p.billableMinutes), minutes(p.nonBillableMinutes)];
+    }),
   );
   const parts: ReportPart[] = [{ text: `${head}\n\n${table}` }];
   if (projectRows.length > 0) {
     parts.push({
-      text: `### By project\n${markdownTable(["Member", "Code", "Project", "Client", "Total", "Billable", "Non-billable"], projectRows, [4, 5, 6])}`,
+      text: `### By project\n${projectLegend([...legend.values()])}\n\n${markdownTable(["Member", "Project", "Total", "Billable", "Non-billable"], projectRows, [2, 3, 4])}`,
       optional: "the per-project breakdown",
     });
   }
@@ -331,10 +351,12 @@ export function renderClientMonthly(data: ClientMonthlyReport, ctx: RenderContex
       ]),
       [6, 7, 8],
     )}`,
-    optional: "the task table",
+    // Required (D25): the table is where each task's status, minutes and deep
+    // link live, and the raw material below refers to it by bare key.
   });
+  // Each task is linked in the table above: the material's headers carry the bare key.
   parts.push({
-    text: "### Raw material per task\nWrite the client summary from these notes and comments; the minutes above are final.",
+    text: "### Raw material per task\nWrite the client summary from these notes and comments; the minutes above are final. Task links: the Tasks worked table.",
   });
   for (const t of data.tasks) {
     const notes =
@@ -346,8 +368,7 @@ export function renderClientMonthly(data: ClientMonthlyReport, ctx: RenderContex
     const comment = t.closingComment
       ? `Closing comment (the latest by a person, up to the period's end) · ${oneLine(t.closingComment.author)} · ${formatTimestamp(t.closingComment.createdAt, data.timezone)}:\n${userContent(t.closingComment.text || "(no text)")}${t.closingComment.truncated ? "\n(Shortened to 500 characters; fetch the task with comments for the full text.)" : ""}`
       : "Closing comment: none";
-    const key = t.identifier ? `[${t.identifier}](${taskLink(ctx.appOrigin, t.identifier)})` : linkText(t.title);
-    parts.push({ text: `#### ${key}\n${notes}\n${comment}`, optional: t.identifier ?? t.title });
+    parts.push({ text: `#### ${t.identifier ?? oneLine(t.title)}\n${notes}\n${comment}`, optional: t.identifier ?? t.title });
   }
   return parts;
 }
@@ -595,7 +616,7 @@ export function renderCloseQueue(data: CloseQueueReport, ctx: RenderContext): Re
   const head = lines(
     `## Billing hub · Needs action · ${data.needsActionCount} ${data.needsActionCount === 1 ? "period needs" : "periods need"} action · ${data.pastDueCount} past due`,
     `- Link: ${billingLink(ctx.appOrigin)}`,
-    `- Today: ${data.today} (org timezone). Only the oldest ended open period of a project can be closed; later ones wait ("Close … first").`,
+    `- Today: ${withWeekday(data.today)} (org timezone). Only the oldest ended open period of a project can be closed; later ones wait ("Close … first").`,
     `- Unbilled: ${minorList(t.unbilled.byCurrency)} (${t.unbilled.readyCount} ready · ${t.unbilled.draftCount} draft)`,
     `- Outstanding: ${minorList(t.outstanding.byCurrency)} (${t.outstanding.pastDueCount} past due · ${t.outstanding.invoicedCount} invoiced)`,
     `- Paid this month: ${minorList(t.paidThisMonth.byCurrency)} (${t.paidThisMonth.count} ${t.paidThisMonth.count === 1 ? "invoice" : "invoices"})`,
@@ -605,6 +626,15 @@ export function renderCloseQueue(data: CloseQueueReport, ctx: RenderContext): Re
   const groups = Object.keys(NEEDS_ACTION_GROUP)
     .map((group) => ({ group, rows: data.rows.filter((r) => r.group === group) }))
     .filter((g) => g.rows.length > 0);
+  // A project recurs across periods and groups: named and linked once, rows carry its code.
+  const legend = new Map<string, LegendProject>();
+  for (const { rows } of groups) {
+    for (const r of rows) {
+      if (!legend.has(r.projectId)) {
+        legend.set(r.projectId, { code: r.projectCode, name: r.projectName, client: r.clientName, link: projectLink(ctx.appOrigin, r.projectId) });
+      }
+    }
+  }
   const sections = groups.map(({ group, rows }) => {
     const copy = NEEDS_ACTION_GROUP[group];
     const table = markdownTable(
@@ -633,7 +663,7 @@ export function renderCloseQueue(data: CloseQueueReport, ctx: RenderContext): Re
             : "";
         return [
           p ? tableCell(p.label) : "Fixed fee",
-          r.projectCode ? `[${r.projectCode}](${projectLink(ctx.appOrigin, r.projectId)}) · ${tableCell(r.projectName)}` : tableCell(r.projectName),
+          tableCell(r.projectCode ?? r.projectName),
           tableCell(r.clientName),
           BILLING_TYPE[r.billingType] ?? r.billingType,
           hours,
@@ -647,7 +677,7 @@ export function renderCloseQueue(data: CloseQueueReport, ctx: RenderContext): Re
     );
     return `### ${copy.name} · ${rows.length}\n${copy.hint}\n\n${table}`;
   });
-  return [{ text: [head, ...sections].join("\n\n") }];
+  return [{ text: [head, `### Projects\n${projectLegend([...legend.values()])}`, ...sections].join("\n\n") }];
 }
 
 const BUCKET_LABEL: Record<string, string> = {

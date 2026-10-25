@@ -188,7 +188,8 @@ and shown honestly by `fetch`.
 - **Vercel Instant Rollback does not roll back Convex.** It only switches the
   Next.js deployment; Convex keeps the newer functions and schema.
 - **Convex is forward-only once MCP writes exist.** MCP writes add optional `via`
-  fields on `comments` and `billingEvents` rows (and rows in the new tables). Deploying
+  fields on `activityLog`, `comments` and `billingEvents` rows (and rows in the new
+  tables, e.g. `mcpFileUploads.clientId`). Deploying
   an older Convex version whose schema lacks them fails schema validation. To roll
   Convex back, first strip those fields (a one-off internal mutation) or keep the
   schema fields and roll back only the functions.

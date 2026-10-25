@@ -27,7 +27,9 @@ const PROTECTED_RESOURCE_WELL_KNOWN = "/.well-known/oauth-protected-resource";
 export function getMcpResourceUrl(): string {
   const value = process.env.MCP_RESOURCE_URL;
   if (!value) {
-    throw new Error("Missing MCP_RESOURCE_URL environment variable");
+    throw new Error(
+      'Missing MCP_RESOURCE_URL environment variable: set it to the exact MCP URL (e.g. https://localhost:3001/mcp) in .env.local and on the Convex deployment — see docs/development.md, "MCP server (local)".',
+    );
   }
   return value;
 }

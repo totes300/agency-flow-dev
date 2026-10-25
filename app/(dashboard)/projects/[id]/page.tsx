@@ -148,14 +148,13 @@ export default function ProjectDetailPage() {
 
   return (
     <div data-full-bleed className="flex min-w-0 flex-col border-t border-border/60">
-      <div className="px-4 py-4 md:px-6">
-        <ProjectDetailHeader
-          projectId={projectId}
-          project={project}
-          lastLoggedDate={overview?.lastLoggedDate ?? undefined}
-          onTabChange={setTab}
-        />
-      </div>
+      {/* The header carries its own px-4 py-4 md:px-6 padding (Linear restyle). */}
+      <ProjectDetailHeader
+        projectId={projectId}
+        project={project}
+        lastLoggedDate={overview?.lastLoggedDate ?? undefined}
+        onTabChange={setTab}
+      />
 
       <Tabs value={effectiveTab} onValueChange={setTab} className="gap-0">
         <div className="flex items-center gap-2 overflow-x-auto border-y border-border/60 px-4 py-2 md:px-6">
@@ -235,7 +234,12 @@ export default function ProjectDetailPage() {
         <TabsContent value="tasks" className="m-0 min-w-0 p-4 md:p-6">
           {effectiveTab === "tasks" && (
             <Suspense fallback={<TaskTableSkeleton />}>
-              <TaskView surface="project" projectId={projectId} fromLabel={project.name} embedded />
+              <TaskView
+                surface="project"
+                projectId={projectId}
+                fromLabel={project.name}
+                embedded
+              />
             </Suspense>
           )}
         </TabsContent>

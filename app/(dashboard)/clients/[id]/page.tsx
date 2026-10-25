@@ -1,5 +1,8 @@
 "use client"
 
+import Link from "next/link"
+import { cn } from "@/lib/utils"
+import { BillingTypeBadge } from "@/components/billing-type-badge"
 import { useState } from "react"
 import { useParams, useRouter } from "next/navigation"
 import { useQuery, useMutation } from "convex/react"
@@ -28,8 +31,6 @@ import {
   ArchiveRestoreIcon,
   Trash2Icon,
   FolderIcon,
-  FileTextIcon,
-  UploadIcon,
 } from "lucide-react"
 import { toast } from "sonner"
 import type { Id } from "@/convex/_generated/dataModel"
@@ -38,66 +39,45 @@ import type { Id } from "@/convex/_generated/dataModel"
 
 function ClientDetailSkeleton() {
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3.5">
-          <Skeleton className="size-11 rounded-[10px]" />
-          <div className="space-y-1.5">
-            <Skeleton className="h-5 w-56" />
-            <Skeleton className="h-3.5 w-28" />
-          </div>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <Skeleton className="h-8 w-16 rounded-md" />
-          <Skeleton className="size-8 rounded-md" />
-        </div>
+    <div
+      data-full-bleed
+      aria-busy="true"
+      aria-label="Loading client"
+      className="border-t border-border/60"
+    >
+      <div className="flex items-center gap-3 border-b border-border/60 px-6 py-4">
+        <Skeleton className="size-10 rounded-lg" />
+        <Skeleton className="h-5 w-48" />
       </div>
-
-      {/* Stats */}
-      <div className="flex items-center border-y py-4">
-        {Array.from({ length: 4 }).map((_, i) => (
-          <div key={i} className="flex flex-col gap-1 px-7 first:pl-0">
-            <Skeleton className="h-3 w-20" />
-            <Skeleton className="h-6 w-12" />
-          </div>
-        ))}
+      <div className="grid gap-8 p-6 lg:grid-cols-[minmax(0,1fr)_320px]">
+        <Skeleton className="h-48 w-full" />
+        <Skeleton className="h-64 w-full" />
       </div>
-
-      {/* Content */}
-      <div className="flex gap-8">
-        <div className="flex-1 space-y-6">
-          <Skeleton className="h-48 rounded-lg" />
-          <Skeleton className="h-24 rounded-lg" />
-        </div>
-        <div className="w-[340px] shrink-0 space-y-5">
-          <Skeleton className="h-52 rounded-lg" />
-          <Skeleton className="h-40 rounded-lg" />
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// ─── Stat block ───────────────────────────────────────────────────────────────
-
-function StatBlock({ label, value }: { label: string; value: string | number }) {
-  return (
-    <div className="flex flex-col gap-0.5">
-      <span className="text-xs font-medium text-muted-foreground">{label}</span>
-      <span className="text-xl font-semibold tracking-tight">{value}</span>
     </div>
   )
 }
 
 // ─── Billing row ──────────────────────────────────────────────────────────────
 
-function BillingRow({ label, value, multiline }: { label: string; value?: string; multiline?: boolean }) {
+function BillingRow({
+  label,
+  value,
+  multiline,
+}: {
+  label: string
+  value?: string
+  multiline?: boolean
+}) {
   if (!value) return null
   return (
     <div className="flex justify-between gap-4">
       <span className="shrink-0 text-xs text-muted-foreground">{label}</span>
-      <span className={`text-right text-[13px] font-medium ${multiline ? "whitespace-pre-line" : ""}`}>
+      <span
+        className={cn(
+          "min-w-0 break-words text-right text-[13px]",
+          multiline && "whitespace-pre-line",
+        )}
+      >
         {value}
       </span>
     </div>
@@ -116,7 +96,9 @@ function formatAddress(client: {
   const lines: string[] = []
   if (client.billingStreet) lines.push(client.billingStreet)
   if (client.billingStreet2) lines.push(client.billingStreet2)
-  const cityLine = [client.billingZip, client.billingCity].filter(Boolean).join(" ")
+  const cityLine = [client.billingZip, client.billingCity]
+    .filter(Boolean)
+    .join(" ")
   if (cityLine) lines.push(cityLine)
   if (client.billingCountry) lines.push(client.billingCountry)
   return lines.length > 0 ? lines.join("\n") : undefined
@@ -130,6 +112,7 @@ export default function ClientDetailPage() {
   const clientId = params.id as Id<"clients">
 
   const client = useQuery(api.clients.get, { id: clientId })
+  const projects = useQuery(api.projects.list, { includeArchived: false })
   const contacts = useQuery(api.clientContacts.list, { clientId })
   const archiveClient = useMutation(api.clients.archive)
   const restoreClient = useMutation(api.clients.restore)
@@ -142,30 +125,34 @@ export default function ClientDetailPage() {
 
   useBreadcrumbTitle(client?.name ?? null)
 
-  if (client === undefined || contacts === undefined) return <ClientDetailSkeleton />
+  if (client === undefined || contacts === undefined)
+    return <ClientDetailSkeleton />
   if (client === null) {
     router.replace("/clients")
     return null
   }
 
-  const hasBilling = client.billingName || client.taxId || client.billingEmail ||
-    client.billingStreet || client.billingCity || client.billingCountry
+  const hasBilling =
+    client.billingName ||
+    client.taxId ||
+    client.billingEmail ||
+    client.billingStreet ||
+    client.billingCity ||
+    client.billingCountry
   const address = formatAddress(client)
 
-  // Placeholder stats — will be wired to real data in later phases
-  const stats = {
-    activeProjects: 0,
-    unbilledHours: 0,
-    openTasks: 0,
-    revenueThisYear: "€0",
-  }
+  const clientProjects = projects?.filter(
+    (project) => project.clientId === clientId,
+  )
 
   function handleArchive() {
     if (!client) return
     triggerUndo({
       key: clientId,
       message: `"${client.name}" archived`,
-      action: async () => { await archiveClient({ id: clientId }) },
+      action: async () => {
+        await archiveClient({ id: clientId })
+      },
       onUndo: async () => {
         try {
           await restoreClient({ id: clientId })
@@ -179,7 +166,9 @@ export default function ClientDetailPage() {
   async function handleRestore() {
     try {
       await restoreClient({ id: clientId })
-      toast.info("Client restored. Projects and tasks are still archived — restore them individually.")
+      toast.info(
+        "Client restored. Projects and tasks are still archived — restore them individually.",
+      )
     } catch {
       toast.error("Failed to restore client")
     }
@@ -191,14 +180,19 @@ export default function ClientDetailPage() {
       toast.success(`"${client!.name}" deleted`)
       router.push("/clients")
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to delete client")
+      toast.error(
+        err instanceof Error ? err.message : "Failed to delete client",
+      )
     }
   }
 
   return (
-    <div className="space-y-5">
+    <div
+      data-full-bleed
+      className="flex min-w-0 flex-col border-t border-border/60"
+    >
       {/* ── Header ──────────────────────────────────── */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/60 px-4 py-4 md:px-6">
         <div className="flex items-center gap-3.5">
           <ClientAvatar
             clientId={clientId}
@@ -209,23 +203,36 @@ export default function ClientDetailPage() {
           />
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <h1 className="truncate text-xl font-semibold tracking-tight">{client.name}</h1>
-              {client.archivedAt && <Badge variant="secondary" className="shrink-0 text-xs">Archived</Badge>}
+              <h1 className="truncate text-base font-medium tracking-tight">
+                {client.name}
+              </h1>
+              {client.archivedAt && (
+                <Badge variant="secondary" className="shrink-0 text-xs">
+                  Archived
+                </Badge>
+              )}
             </div>
             <p className="text-xs text-muted-foreground">
-              {[client.currency, client.prefix ?? client.invoicePrefix].filter(Boolean).join(" · ")}
+              {[client.currency, client.prefix ?? client.invoicePrefix]
+                .filter(Boolean)
+                .join(" · ")}
             </p>
           </div>
         </div>
 
         <div className="flex shrink-0 items-center gap-1.5">
-          <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>
+          <Button
+            variant="outline"
+            size="sm"
+            className="rounded-full"
+            onClick={() => setEditOpen(true)}
+          >
             <PencilIcon className="size-3.5" />
             Edit
           </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="icon-sm">
+              <Button variant="outline" size="icon-sm" className="rounded-full">
                 <MoreHorizontalIcon className="size-4" />
                 <span className="sr-only">More actions</span>
               </Button>
@@ -255,79 +262,63 @@ export default function ClientDetailPage() {
         </div>
       </div>
 
-      {/* ── Stats bar ───────────────────────────────── */}
-      <div className="flex items-stretch border-y">
-        <div className="py-4 pr-7">
-          <StatBlock label="Active projects" value={stats.activeProjects} />
-        </div>
-        <Separator orientation="vertical" />
-        <div className="px-7 py-4">
-          <StatBlock label="Unbilled hours" value={stats.unbilledHours} />
-        </div>
-        <Separator orientation="vertical" />
-        <div className="px-7 py-4">
-          <StatBlock label="Open tasks" value={stats.openTasks} />
-        </div>
-        <Separator orientation="vertical" />
-        <div className="px-7 py-4">
-          <StatBlock label="Revenue this year" value={stats.revenueThisYear} />
-        </div>
-      </div>
-
       {/* ── Two-column content ──────────────────────── */}
-      <div className="flex gap-8">
+      <div className="grid min-w-0 lg:grid-cols-[minmax(0,1fr)_340px]">
         {/* Left column — Projects, Notes, Documents */}
-        <div className="flex min-w-0 flex-1 flex-col gap-7">
-          {/* Projects */}
-          <section className="space-y-3">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-semibold">Projects</h2>
-              <Button variant="secondary" size="sm" disabled>
-                <FolderIcon className="size-3.5" />
-                Add
-              </Button>
+        <div className="flex min-w-0 flex-col gap-8 p-4 md:p-6">
+          <section className="flex flex-col gap-3">
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-medium">Projects</h2>
+              {clientProjects && (
+                <span className="text-xs tabular-nums text-muted-foreground">
+                  {clientProjects.length}
+                </span>
+              )}
             </div>
-            <div className="flex items-center gap-3 rounded-lg bg-muted/50 px-3 py-4 text-sm text-muted-foreground">
-              <FolderIcon className="size-4 shrink-0 text-muted-foreground/40" />
-              Projects will appear here once created.
-            </div>
+            {clientProjects === undefined ? (
+              <Skeleton className="h-24 w-full" />
+            ) : clientProjects.length === 0 ? (
+              <p className="py-6 text-sm text-muted-foreground">
+                No active projects for this client.
+              </p>
+            ) : (
+              <ul className="divide-y divide-border/60 border-y border-border/60">
+                {clientProjects.map((project) => (
+                  <li key={project._id}>
+                    <Link
+                      href={`/projects/${project._id}`}
+                      className="flex min-h-11 items-center gap-3 px-2 py-2 text-[13px] transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      <FolderIcon className="size-4 shrink-0 text-muted-foreground" />
+                      <span className="min-w-0 flex-1 truncate font-medium">
+                        {project.name}
+                      </span>
+                      <BillingTypeBadge type={project.billingType} />
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
           </section>
 
           {/* Notes */}
           {client.notes ? (
-            <section className="space-y-2.5">
+            <section className="flex flex-col gap-2.5">
               <h2 className="text-sm font-semibold">Notes</h2>
               <p className="whitespace-pre-line text-sm leading-relaxed text-muted-foreground">
                 {client.notes}
               </p>
             </section>
           ) : null}
-
-          {/* Documents */}
-          <section className="space-y-3">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-semibold">Documents</h2>
-              <Button variant="secondary" size="sm" disabled>
-                <UploadIcon className="size-3.5" />
-                Upload
-              </Button>
-            </div>
-            <div className="flex items-center gap-3 rounded-lg bg-muted/50 px-3 py-4 text-sm text-muted-foreground">
-              <FileTextIcon className="size-4 shrink-0 text-muted-foreground/40" />
-              Upload proposals, agreements, or other files.
-            </div>
-          </section>
         </div>
 
         {/* Right column — Billing, Contacts */}
-        <div className="flex w-[340px] shrink-0 flex-col gap-5">
+        <div className="flex min-w-0 flex-col gap-6 border-t border-border/60 p-4 md:p-6 lg:border-t-0 lg:border-l">
           {/* Billing */}
-          <div className="space-y-3 rounded-lg bg-muted/50 p-4">
-            <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Billing
-            </h2>
+          <div className="flex flex-col gap-4">
+            <h2 className="text-sm font-medium">Billing</h2>
             {hasBilling ? (
-              <div className="space-y-2.5">
+              <div className="flex flex-col gap-2.5">
                 <BillingRow label="Company" value={client.billingName} />
                 {client.billingName && <Separator />}
                 <BillingRow label="Tax ID" value={client.taxId} />
@@ -344,14 +335,18 @@ export default function ClientDetailPage() {
           </div>
 
           {/* Contacts */}
-          <div className="rounded-lg bg-muted/50 p-4">
+          <div className="border-t border-border/60 pt-5">
             <ContactList clientId={clientId} contacts={contacts} />
           </div>
         </div>
       </div>
 
       {/* ── Modals ──────────────────────────────────── */}
-      <ClientFormModal open={editOpen} onOpenChange={setEditOpen} client={client} />
+      <ClientFormModal
+        open={editOpen}
+        onOpenChange={setEditOpen}
+        client={client}
+      />
 
       <ConfirmDialog
         open={deleteOpen}

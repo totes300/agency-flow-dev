@@ -15,8 +15,8 @@ const DEBOUNCE_MS = 150
  * Collapsed to a round icon button until used; filters the loaded rows by
  * title or identifier. Esc clears and closes it.
  */
-export const SearchBox = forwardRef<SearchBoxHandle, { value: string; onChange: (value: string) => void }>(
-  function SearchBox({ value, onChange }, ref) {
+export const SearchBox = forwardRef<SearchBoxHandle, { value: string; onChange: (value: string) => void; label?: string }>(
+  function SearchBox({ value, onChange, label = "Search tasks" }, ref) {
     const [draft, setDraft] = useState(value)
     const [open, setOpen] = useState(value !== "")
     const inputRef = useRef<HTMLInputElement>(null)
@@ -48,8 +48,8 @@ export const SearchBox = forwardRef<SearchBoxHandle, { value: string; onChange: 
           variant="outline"
           size="icon-sm"
           className="rounded-full"
-          aria-label="Search tasks"
-          title="Search (/)"
+          aria-label={label}
+          title={label}
           onClick={() => {
             setOpen(true)
             requestAnimationFrame(() => inputRef.current?.focus())
@@ -67,8 +67,8 @@ export const SearchBox = forwardRef<SearchBoxHandle, { value: string; onChange: 
           ref={inputRef}
           autoFocus
           value={draft}
-          placeholder="Search tasks"
-          aria-label="Search tasks"
+          placeholder={label}
+          aria-label={label}
           className="h-7 pr-7 pl-8 text-[13px]"
           onChange={(e) => setDraft(e.target.value)}
           onBlur={() => { if (draft === "") setOpen(false) }}

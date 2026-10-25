@@ -16,6 +16,7 @@ import {
   generateClientPrefix,
   normalizeClientPrefix,
 } from "./lib/helpers";
+import { deleteProjectRows, projectDeleteBlocker } from "./lib/projectDelete";
 import { currencyValidator } from "./lib/validators";
 
 // ─── Queries ────────────────────────────────────────────────────────────────────
@@ -369,9 +370,10 @@ const removeClientArgs = { id: v.id("clients") };
 export type RemoveClientInput = ObjectType<typeof removeClientArgs>;
 
 /**
- * Deletes a client and its contacts, projects and estimates (admins only),
- * refused while invoices, logged time or running timers exist on its
- * projects — the app's Delete and MCP `delete`.
+ * Deletes a client and its contacts, projects, estimates and rate overrides
+ * (admins only), refused while any of its projects has time entries, a
+ * running timer, tasks, invoices or billing closes ("archive it instead",
+ * D-DELETEGUARD) — the app's Delete and MCP `delete`.
  */
 export async function removeClientForAuth(
   ctx: MutationCtx,
@@ -393,58 +395,20 @@ export async function removeClientForAuth(
     .filter((q) => q.eq(q.field("orgId"), orgId))
     .collect();
 
-  // Block hard-delete when any invoice exists on any of this client's
-  // projects. Invoices are legal/financial records and must not be silently
-  // orphaned — the Billing hub keeps summing them.
+  // D-DELETEGUARD: the client goes only when every one of its projects
+  // could be deleted on its own (no time entries, running timers, tasks,
+  // invoices or billing closes — the guard `projects.remove` uses). Anything
+  // else is archived instead.
   for (const project of projects) {
-    const existingInvoice = await ctx.db
-      .query("invoices")
-      .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
-      .filter((q) => q.eq(q.field("orgId"), orgId))
-      .first();
-    if (existingInvoice) {
+    const blocker = await projectDeleteBlocker(ctx, orgId, project);
+    if (blocker?.kind === "timer") {
       throw new ConvexError(
-        "Cannot delete this client — invoices exist on one or more of its projects. Delete those invoices first.",
+        `${blocker.userName} has a running timer on one of this client's projects — it must be stopped or discarded first.`,
       );
     }
-  }
-
-  // Block on logged time and running timers across ALL of this client's
-  // projects (same two guards as `projects.remove`). Deleting the client
-  // cascades away its projects; without these guards the tasks/entries under
-  // them would be orphaned from every project-scoped billing surface, and a
-  // running timer would dangle — its stop silently discards the measured
-  // hours. Delete is destructive, so we block rather than auto-save (entry
-  // creation is exactly what the entries guard forbids); archive the client
-  // to rescue timers instead.
-  const clientTaskIds = new Set<string>();
-  for (const project of projects) {
-    const projectTasks = await ctx.db
-      .query("tasks")
-      .withIndex("by_orgId_projectId", (q) => q.eq("orgId", orgId).eq("projectId", project._id))
-      .collect();
-    for (const task of projectTasks) clientTaskIds.add(task._id.toString());
-    const hasEntries = await ctx.db
-      .query("timeEntries")
-      .withIndex("by_orgId_projectId_closeId", (q) => q.eq("orgId", orgId).eq("projectId", project._id))
-      .first();
-    if (hasEntries) {
+    if (blocker) {
       throw new ConvexError(
-        "Cannot delete a client with time entries on its projects — archive it instead",
-      );
-    }
-  }
-
-  const clientMembers = await ctx.db
-    .query("orgMembers")
-    .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
-    .collect();
-  for (const member of clientMembers) {
-    if (!member.userId) continue;
-    const memberUser = await ctx.db.get(member.userId);
-    if (memberUser?.timerTaskId && clientTaskIds.has(memberUser.timerTaskId.toString())) {
-      throw new ConvexError(
-        `${memberUser.name} has a running timer on one of this client's projects — it must be stopped or discarded first.`,
+        `Cannot delete a client whose project ${project.code} has ${blocker.kind} — archive it instead`,
       );
     }
   }
@@ -458,18 +422,10 @@ export async function removeClientForAuth(
     await ctx.db.delete(contact._id);
   }
 
-  // Cascade delete projects and their estimates
+  // Cascade delete the (empty) projects with their estimates and rate
+  // overrides. No task cascade is needed: a project with tasks blocks above.
   for (const project of projects) {
-    // Delete estimates for this project
-    const estimates = await ctx.db
-      .query("projectCategoryEstimates")
-      .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
-      .collect();
-    for (const est of estimates) {
-      await ctx.db.delete(est._id);
-    }
-    // TODO Phase 5: cascade delete tasks
-    await ctx.db.delete(project._id);
+    await deleteProjectRows(ctx, project._id);
   }
 
   // Clean up uploaded logo file

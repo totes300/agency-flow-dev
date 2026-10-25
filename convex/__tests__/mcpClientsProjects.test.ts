@@ -329,7 +329,7 @@ describe("save_projects", () => {
   });
 });
 
-describe("delete projects and clients (D6)", () => {
+describe("delete projects and clients (D6, D-DELETEGUARD)", () => {
   async function entry(t: T, f: Awaited<ReturnType<typeof setup>>, projectId: Id<"projects">, taskId: Id<"tasks">) {
     await t.run(async (ctx) => {
       await ctx.db.insert("timeEntries", {
@@ -339,6 +339,24 @@ describe("delete projects and clients (D6)", () => {
       });
     });
   }
+  const invoiceOn = (t: T, f: Awaited<ReturnType<typeof setup>>, projectId: Id<"projects">, clientId: Id<"clients">) =>
+    t.run(async (ctx) =>
+      await ctx.db.insert("invoices", {
+        orgId: ORG, projectId, clientId, prefix: "INV", status: "draft", currency: "EUR",
+        subtotalMinor: 0, totalMinor: 0, issueDate: "2026-10-01", createdAt: Date.now(), updatedAt: Date.now(), createdBy: f.admin,
+      } as never),
+    );
+  const closeOn = (t: T, f: Awaited<ReturnType<typeof setup>>, projectId: Id<"projects">) =>
+    t.run(async (ctx) =>
+      await ctx.db.insert("billingCloses", {
+        orgId: ORG, projectId, kind: "t_and_m", status: "final", periodStart: "2026-09-01", periodEnd: "2026-09-30",
+        currency: "EUR", roundingMinutes: 1, includedMinutes: 0, overageRateMinor: 0, usageMinutes: 0, overageMinutes: 0,
+        amountMinor: 0, committedAt: Date.now(), committedBy: f.admin,
+      } as never),
+    );
+  /** An empty T&M project under `client`, created through MCP. */
+  const emptyProject = async (t: T, client: string, name: string) =>
+    (await saveProjects(t, "admin", [{ name, client, billingType: "t_and_m" }])).items[0];
 
   it("is admin-only and never reaches another org", async () => {
     const t = createT();
@@ -350,21 +368,43 @@ describe("delete projects and clients (D6)", () => {
     expect(await get(t, f.arlo)).not.toBeNull();
   });
 
-  it("projects: refused with logged time or a running timer, else deleted with estimates and overrides", async () => {
+  it("projects: refused with time entries, a running timer, tasks, invoices or closes — in the app too", async () => {
     const t = createT();
     const f = await setup(t);
     await entry(t, f, f.arlo, f.task);
     await expect(remove(t, "admin", ["ARLO"])).rejects.toThrow("Cannot delete a project with time entries — archive it instead");
 
+    const timed = await emptyProject(t, "client:ARL", "Timed");
+    const task = await t.run(async (ctx) => await createTask(ctx, f.adminAuth, { title: "Timed", projectId: timed.projectId }, { notify: false }));
+    await t.run(async (ctx) => ctx.db.patch(f.alice, { timerTaskId: task, timerStatus: "running", timerStartedAt: Date.now() }));
+    await expect(remove(t, "admin", [timed.projectId])).rejects.toThrow("Alice has a running timer on this project");
+    await t.run(async (ctx) => ctx.db.patch(f.alice, { timerTaskId: undefined, timerStatus: undefined, timerStartedAt: undefined }));
+    // Any task blocks it, archived ones included; the app's own mutation says the same.
+    await t.run(async (ctx) => ctx.db.patch(task, { archivedAt: Date.now() }));
+    await expect(remove(t, "admin", [timed.projectId])).rejects.toThrow("Cannot delete a project with tasks — archive it instead");
+    await expect(inApp(t, "admin").mutation(api.projects.remove, { id: timed.projectId })).rejects.toThrow(
+      "Cannot delete a project with tasks — archive it instead",
+    );
+
+    const invoiced = await emptyProject(t, "client:ARL", "Invoiced");
+    await invoiceOn(t, f, invoiced.projectId, f.arlow);
+    await expect(remove(t, "admin", [invoiced.projectId])).rejects.toThrow("Cannot delete a project with invoices — archive it instead");
+
+    const closed = await emptyProject(t, "client:ARL", "Closed");
+    await closeOn(t, f, closed.projectId);
+    await expect(remove(t, "admin", [closed.projectId])).rejects.toThrow(
+      "Cannot delete a project with closed billing periods — archive it instead",
+    );
+    expect(await get(t, timed.projectId)).not.toBeNull();
+  });
+
+  it("projects: an empty one is deleted with its estimates and rate overrides", async () => {
+    const t = createT();
+    await setup(t);
     const fixed = await saveProjects(t, "admin", [
       { name: "F", client: "client:ARL", billingType: "fixed", fixedFee: 100, estimates: [{ category: "Design", minutes: 60 }], rates: [{ category: "Design", rate: 1 }] },
     ]);
     const projectId = fixed.items[0].projectId;
-    const task = await t.run(async (ctx) => await createTask(ctx, f.adminAuth, { title: "Timed", projectId }, { notify: false }));
-    await t.run(async (ctx) => ctx.db.patch(f.alice, { timerTaskId: task, timerStatus: "running", timerStartedAt: Date.now() }));
-    await expect(remove(t, "admin", [projectId])).rejects.toThrow("Alice has a running timer on this project");
-    await t.run(async (ctx) => ctx.db.patch(f.alice, { timerTaskId: undefined, timerStatus: undefined, timerStartedAt: undefined }));
-
     const deleted = await remove(t, "admin", [projectId]);
     expect(deleted.items[0]).toMatchObject({ type: "project", label: `project ${fixed.items[0].code} · F`, action: "deleted" });
     expect(await get(t, projectId)).toBeNull();
@@ -375,35 +415,50 @@ describe("delete projects and clients (D6)", () => {
     expect(left).toEqual({ estimates: [], overrides: [] });
   });
 
-  it("clients: refused with an invoice or logged time, else deleted with contacts and projects", async () => {
+  it("clients: refused when any project has tasks, time, invoices or closes, naming the project", async () => {
     const t = createT();
     const f = await setup(t);
-    const invoice = await t.run(async (ctx) =>
-      await ctx.db.insert("invoices", {
-        orgId: ORG, projectId: f.arlo, clientId: f.arlow, prefix: "INV", status: "draft", currency: "EUR",
-        subtotalMinor: 0, totalMinor: 0, issueDate: "2026-10-01", createdAt: Date.now(), updatedAt: Date.now(), createdBy: f.admin,
-      } as never),
+    await expect(remove(t, "admin", ["client:ARL"])).rejects.toThrow(
+      "Cannot delete a client whose project ARLO has tasks — archive it instead",
     );
-    await expect(remove(t, "admin", ["client:ARL"])).rejects.toThrow("invoices exist on one or more of its projects");
-    await t.run(async (ctx) => ctx.db.delete(invoice));
-    await entry(t, f, f.arlo, f.task);
-    await expect(remove(t, "admin", ["client:ARL"])).rejects.toThrow("Cannot delete a client with time entries on its projects");
+    await expect(inApp(t, "admin").mutation(api.clients.remove, { id: f.arlow })).rejects.toThrow("whose project ARLO has tasks");
 
-    const fresh = await saveClients(t, "admin", [{ name: "Gone", prefix: "GONE" }]);
-    const clientId = fresh.items[0].clientId;
-    const project = await saveProjects(t, "admin", [{ name: "Gone site", client: "client:GONE", billingType: "non_billable" }]);
+    const fresh = (await saveClients(t, "admin", [{ name: "Blocked", prefix: "BLK" }])).items[0].clientId;
+    const project = await emptyProject(t, "client:BLK", "Blocked site");
+    const invoice = await invoiceOn(t, f, project.projectId, fresh);
+    await expect(remove(t, "admin", ["client:BLK"])).rejects.toThrow(`whose project ${project.code} has invoices`);
+    await t.run(async (ctx) => ctx.db.delete(invoice));
+    const close = await closeOn(t, f, project.projectId);
+    await expect(remove(t, "admin", ["client:BLK"])).rejects.toThrow(`whose project ${project.code} has closed billing periods`);
+    await t.run(async (ctx) => ctx.db.delete(close));
+    const task = await t.run(async (ctx) => await createTask(ctx, f.adminAuth, { title: "x", projectId: project.projectId }, { notify: false }));
+    await entry(t, f, project.projectId, task);
+    await expect(remove(t, "admin", ["client:BLK"])).rejects.toThrow(`whose project ${project.code} has time entries`);
+    expect(await get(t, fresh)).not.toBeNull();
+  });
+
+  it("clients: deleted with contacts, projects, estimates and rate overrides", async () => {
+    const t = createT();
+    const f = await setup(t);
+    const clientId = (await saveClients(t, "admin", [{ name: "Gone", prefix: "GONE" }])).items[0].clientId;
+    const project = await saveProjects(t, "admin", [
+      { name: "Gone site", client: "client:GONE", billingType: "fixed", fixedFee: 10, estimates: [{ category: "Design", minutes: 30 }], rates: [{ category: "Design", rate: 5 }] },
+    ]);
+    const projectId = project.items[0].projectId;
     await t.run(async (ctx) =>
       ctx.db.insert("clientContacts", { orgId: ORG, clientId, name: "C", email: "c@x.test", isPrimary: true, createdAt: 1, updatedAt: 1, createdBy: f.admin }),
     );
     // The project listed after its client: already deleted with it.
-    const deleted = await remove(t, "admin", ["client:GONE", project.items[0].projectId]);
+    const deleted = await remove(t, "admin", ["client:GONE", projectId]);
     expect(deleted.items.map((i) => [i.type, i.action])).toEqual([["client", "deleted"], ["project", "already_deleted"]]);
     expect(deleted.items[0].label).toBe("client client:GONE · Gone");
     const left = await t.run(async (ctx) => ({
       client: await ctx.db.get(clientId),
-      project: await ctx.db.get(project.items[0].projectId),
+      project: await ctx.db.get(projectId),
       contacts: await ctx.db.query("clientContacts").withIndex("by_clientId", (q) => q.eq("clientId", clientId)).collect(),
+      estimates: await ctx.db.query("projectCategoryEstimates").withIndex("by_projectId", (q) => q.eq("projectId", projectId)).collect(),
+      overrides: await ctx.db.query("projectRateOverrides").withIndex("by_projectId", (q) => q.eq("projectId", projectId)).collect(),
     }));
-    expect(left).toEqual({ client: null, project: null, contacts: [] });
+    expect(left).toEqual({ client: null, project: null, contacts: [], estimates: [], overrides: [] });
   });
 });

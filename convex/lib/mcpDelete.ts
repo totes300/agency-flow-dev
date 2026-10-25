@@ -28,12 +28,12 @@ import { referenceClientPrefix } from "./helpers";
  *   close (closed period, draft or final invoice) is refused with the
  *   app's unblock message.
  * - Project → `removeProjectForAuth`, the project page's "Delete": admins
- *   only; refused while the project has time entries ("archive it
- *   instead") or a running timer; its estimates and rate overrides go with
- *   it. As in the app, its tasks and invoices are not checked or removed.
+ *   only; refused while the project has time entries, a running timer,
+ *   tasks, invoices or billing closes ("archive it instead",
+ *   D-DELETEGUARD); its estimates and rate overrides go with it.
  * - Client → `removeClientForAuth`, the client page's "Delete": admins only;
- *   refused while any of its projects has an invoice, time entries or a
- *   running timer; its contacts, projects and their estimates go with it.
+ *   refused while any of its projects would be (the same guard, naming the
+ *   project); its contacts, projects, estimates and overrides go with it.
  * - Members and daily notes have no delete in the app; invoices are deleted
  *   through billing_preview / billing_commit.
  *

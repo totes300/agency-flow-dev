@@ -45,6 +45,7 @@ import {
   type ProjectSummary,
 } from "./lib/projectSummary";
 import { getProjectEntries } from "./lib/projectEntries";
+import { deleteProjectRows, projectDeleteBlocker } from "./lib/projectDelete";
 
 const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -1200,7 +1201,8 @@ export type RemoveProjectInput = ObjectType<typeof removeProjectArgs>;
 
 /**
  * Deletes a project with its estimates and rate overrides (admins only),
- * refused while it has time entries or a running timer — the app's Delete
+ * refused while it has time entries, a running timer, tasks, invoices or
+ * billing closes ("archive it instead", D-DELETEGUARD) — the app's Delete
  * and MCP `delete`.
  */
 export async function removeProjectForAuth(
@@ -1213,51 +1215,17 @@ export async function removeProjectForAuth(
   const project = await ctx.db.get(args.id);
   if (!project || project.orgId !== orgId) throw new ConvexError("Project not found");
 
-  // Block if the project has any time entries
-  const hasEntries = await ctx.db
-    .query("timeEntries")
-    .withIndex("by_orgId_projectId_closeId", (q) => q.eq("orgId", orgId).eq("projectId", args.id))
-    .first();
-  if (hasEntries) {
-    throw new ConvexError("Cannot delete a project with time entries — archive it instead");
+  // D-DELETEGUARD: only a project with nothing attached is deleted; the
+  // rest is archived (shared with clients.remove).
+  const blocker = await projectDeleteBlocker(ctx, orgId, project);
+  if (blocker?.kind === "timer") {
+    throw new ConvexError(
+      `${blocker.userName} has a running timer on this project — it must be stopped or discarded first.`,
+    );
   }
+  if (blocker) throw new ConvexError(`Cannot delete a project with ${blocker.kind} — archive it instead`);
 
-  // Block on running timers too. Deleting the project would leave the
-  // timer dangling — its stop would silently discard the measured hours
-  // (and an auto-save is impossible: entry creation is exactly what the
-  // entries-guard above forbids on delete).
-  const projectTasks = await ctx.db
-    .query("tasks")
-    .withIndex("by_orgId_projectId", (q) => q.eq("orgId", orgId).eq("projectId", args.id))
-    .collect();
-  const projectTaskIds = new Set(projectTasks.map((t) => t._id.toString()));
-  const projectMembers = await ctx.db
-    .query("orgMembers")
-    .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
-    .collect();
-  for (const member of projectMembers) {
-    if (!member.userId) continue;
-    const memberUser = await ctx.db.get(member.userId);
-    if (memberUser?.timerTaskId && projectTaskIds.has(memberUser.timerTaskId.toString())) {
-      throw new ConvexError(
-        `${memberUser.name} has a running timer on this project — it must be stopped or discarded first.`,
-      );
-    }
-  }
-
-  // Cascade delete: fetch estimates and rate overrides in parallel
-  const [estimates, rateOverrides] = await Promise.all([
-    ctx.db.query("projectCategoryEstimates").withIndex("by_projectId", (q) => q.eq("projectId", args.id)).collect(),
-    ctx.db.query("projectRateOverrides").withIndex("by_projectId", (q) => q.eq("projectId", args.id)).collect(),
-  ]);
-  for (const est of estimates) {
-    await ctx.db.delete(est._id);
-  }
-  for (const override of rateOverrides) {
-    await ctx.db.delete(override._id);
-  }
-
-  await ctx.db.delete(args.id);
+  await deleteProjectRows(ctx, args.id);
 }
 
 export const remove = mutation({

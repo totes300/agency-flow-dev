@@ -341,11 +341,11 @@ describe("numbers match the app (§14 row 5 exit)", () => {
     }
   });
 
-  it("close_queue = Billing → Close; invoice_metrics = the Billing hub metrics", async () => {
+  it("close_queue = the internal close queue; invoice_metrics = the internal invoice metrics", async () => {
     const t = createT();
     await setup(t);
     const mcp = await as(t, "admin").query(api.mcp.report.closeQueue, {});
-    const app = await inApp(t, "admin").query(api.billingViews.getCloseQueue, {});
+    const app = await inApp(t, "admin").query(internal.billingViews.getCloseQueue, {});
     expect(mcp.actionableCount).toBe(app.actionableCount);
     expect(mcp.months.map((m) => [m.monthKey, m.openCount, m.closedCount, m.totalCount])).toEqual(
       app.months.map((m) => [m.monthKey, m.openCount, m.closedCount, m.totalCount]),
@@ -358,7 +358,7 @@ describe("numbers match the app (§14 row 5 exit)", () => {
     );
 
     const metrics = await as(t, "admin").query(api.mcp.report.invoiceMetrics, {});
-    const appMetrics = await inApp(t, "admin").query(api.invoices.getInvoiceMetrics, {});
+    const appMetrics = await inApp(t, "admin").query(internal.invoices.getInvoiceMetrics, {});
     for (const bucket of ["draft", "unpaid", "pastDue", "paidThisMonth", "outstanding"] as const) {
       const row = metrics.buckets.find((b) => b.bucket === bucket)!;
       expect(row.count).toBe(appMetrics[bucket].count);

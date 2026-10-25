@@ -503,7 +503,7 @@ export function renderCloseQueue(data: CloseQueueReport, ctx: RenderContext): Re
         cell(r.projectCode ?? r.projectName),
         cell(r.clientName),
         cell(r.periodLabel),
-        r.isCloseRow ? "close & report" : `${BILLING_TYPE[r.billingType] ?? r.billingType}${r.configIssue ? " (set an overage rate first)" : ""}`,
+        r.isCloseRow ? "Ready to close" : `${BILLING_TYPE[r.billingType] ?? r.billingType}${r.configIssue ? " (set an overage rate first)" : ""}`,
         money(r.amount, r.currency),
         minutes(r.loggedMinutes),
         String(r.entryCount),

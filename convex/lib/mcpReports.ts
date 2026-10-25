@@ -672,7 +672,11 @@ export async function retainerHealthReport(ctx: QueryCtx, auth: AuthContext, arg
 
 // ─── close_queue / invoice_metrics / org_finance ────────────────────────────
 
-/** Billing → Close: one row per project period due (`getCloseQueueForAuth`). Admin-only. */
+/**
+ * One row per project period due to invoice or close (`getCloseQueueForAuth`,
+ * the close queue the billing suites keep as their N11 fixture; the app's hub
+ * view of the same work is `billingViews.getNeedsAction`). Admin-only.
+ */
 export async function closeQueueReport(ctx: QueryCtx, auth: AuthContext) {
   requireAdminReport(auth, "close_queue");
   const data = await getCloseQueueForAuth(ctx, auth);
@@ -716,7 +720,7 @@ export async function closeQueueReport(ctx: QueryCtx, auth: AuthContext) {
   return { months, actionableCount: data.actionableCount };
 }
 
-/** The Billing hub's invoice buckets (`getInvoiceMetricsForAuth`), per currency, plus outstanding (unpaid + past due). Admin-only. */
+/** Org-wide invoice buckets (`getInvoiceMetricsForAuth`), per currency, plus outstanding (unpaid + past due). Admin-only. */
 export async function invoiceMetricsReport(ctx: QueryCtx, auth: AuthContext) {
   requireAdminReport(auth, "invoice_metrics");
   const metrics = await getInvoiceMetricsForAuth(ctx, auth);

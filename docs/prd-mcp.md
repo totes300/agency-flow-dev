@@ -352,8 +352,10 @@ Report rules:
      token is not signed:** `billing_preview` stores an `mcpBillingPreviews` row and the
      token is that row's id. The row is bound to `orgId`, `userId` and the OAuth
      `clientId`, so a token previewed in Claude cannot be committed from Codex. At most
-     50 open (unexpired, uncommitted) previews per user and client; past that a preview
-     is refused rather than an older token invalidated behind the user's back.
+     50 open (unexpired, uncommitted) previews per user, across their clients. A
+     re-preview of the same action and params from the same connection supersedes the
+     earlier preview (its token expires at once); only distinct open targets count, and
+     past the cap a preview is refused.
 3. The row holds the action, the params, `expiresAt` and an **input fingerprint**
    (SHA-256) of what the preview read: the entries, rates, period state and invoice
    state, per action. The `close_period` fingerprint also includes the checklist

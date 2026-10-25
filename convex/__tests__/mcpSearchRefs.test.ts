@@ -116,6 +116,24 @@ describe("comment search scans comment_added rows only (CVX-1)", () => {
     expect(result.rows).toHaveLength(20);
     expect(result.rows.map((r) => r.text)).toContain("Comment 0");
   });
+
+  it("says incomplete when more than COMMENT_SCAN_CAP comment_added rows exist", async () => {
+    const t = createT();
+    const f = await setup(t);
+    await t.run(async (ctx) => {
+      const id = await ctx.db.insert("comments", {
+        taskId: f.A, orgId: ORG, userId: f.admin,
+        content: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "Repeated" }] }] },
+        createdAt: NOW - 100_000, updatedAt: NOW - 100_000,
+      });
+      // One comment, CAP + 1 comment_added rows: the scan window is full before it ends.
+      for (let i = 0; i < COMMENT_SCAN_CAP + 1; i++) {
+        await ctx.db.insert("activityLog", { taskId: f.A, orgId: ORG, userId: f.admin, type: "comment_added", metadata: { commentId: id }, createdAt: NOW - 90_000 + i });
+      }
+    });
+    const result = await commentSearch(t);
+    expect(result.incomplete).toBe(true);
+  });
 });
 
 describe("task search external_ref as a list (DOG-2)", () => {

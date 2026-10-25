@@ -95,7 +95,8 @@ The Vercel build deploys Convex itself (`vercel.json`: `npx convex deploy --cmd
    and the discovery routes answer 500 until the next deploy.
 2. Merge; the Vercel production build deploys Convex. It adds the tables `taskExternalRefs`,
    `mcpIdempotency`, `mcpFileUploads`, `mcpBillingPreviews`, `attachmentContents`
-   and `mcpConnections` (Connected apps stamps and revokes), and the cron jobs below.
+   `mcpConnections` (Connected apps stamps and revokes) and `fileUploads` (the app
+   UI's own upload announcements, `4dd2b0b`), and the cron jobs below.
    If the Vercel build fails **after** `npx convex deploy` ran, Convex is already on
    the new version. That is safe: the change is additive (new tables, optional
    fields, crons) and the old Next.js deployment keeps working against it. Fix
@@ -113,6 +114,7 @@ Defined in `convex/crons.ts`; they deploy with the functions. Each runs hourly:
 | `mcp idempotency cleanup` | Idempotency keys older than 24 h (D23). |
 | `mcp billing preview cleanup` | Billing previews older than 24 h (tokens commit within 10 minutes, §9). |
 | `mcp upload cleanup` | Upload announcements after 25 h, and the blobs of uploads that were never attached (§10). |
+| `app upload cleanup` | The same for the app UI's `fileUploads` rows (`convex/fileUploads.ts`). |
 
 After the deploy, confirm all three are listed in the Convex dashboard (Schedules →
 Cron jobs) and that their first runs succeed.
@@ -172,7 +174,8 @@ and shown honestly by `fetch`.
    ok|error` (no arguments, no user content), and on an internal error a short
    `ref <8 hex>` next to the tool name; the user sees the same ref in the error
    text. Refused calls (a `ConvexError`, e.g. "not found", admin-only, revoked) are
-   tool results, not errors, and are not logged as errors.
+   tool results: they show as `error` in the per-call line (the result was an error
+   for the agent) but produce no `[mcp] tool error` line and no ref.
    - Vercel → the project's Runtime logs, filter `[mcp]`: per-tool errors, latency,
      and the error ref a user reports.
    - Convex → Logs, filter the function path `mcp/`: the Convex side of the same
@@ -255,7 +258,8 @@ and shown honestly by `fetch`.
 
 - **Rate limiting.** The app has none for MCP. Before public exposure, add Vercel
   Firewall rate rules for `/mcp` and `/.well-known/*`, and limit the Convex upload
-  endpoint (`POST /mcp-upload` on the Convex site URL) the same way. Convex's own
+  endpoints (`POST /mcp-upload` and the app UI's `POST /upload`, both on the Convex
+  site URL) the same way. Convex's own
   budgets bound each call's reads, not the number of calls.
 - **Clerk `createRouteMatcher` deprecation** (`@clerk/nextjs` 7.9). Clerk recommends
   replacing middleware path matching with auth checks in each page, route handler

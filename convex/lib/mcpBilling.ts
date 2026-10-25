@@ -886,7 +886,10 @@ export async function previewBilling(ctx: MutationCtx, auth: McpAuthContext, inp
     .withIndex("by_orgId_userId_createdAt", (q) =>
       q.eq("orgId", auth.orgId).eq("userId", auth.userId).gt("createdAt", now - PREVIEW_TTL_MS),
     )
-    .collect();
+    // Newest first, bounded: at most 50 rows are live (the cap), so the newest
+    // 200 hold every live one; superseded rows beyond that are left to expire.
+    .order("desc")
+    .take(PREVIEW_OPEN_MAX * 4);
   const open = recent.filter((r) => r.committedAt === undefined && r.expiresAt > now);
   const target = stableJson({ action: input.action, params });
   let live = 0;

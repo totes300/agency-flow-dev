@@ -243,15 +243,16 @@ function hasErrorHint(error: unknown): boolean {
 }
 
 /**
- * Runs a read once more after a non-ConvexError (a transient transport or
- * server failure) before the error is rendered. Reads only: a mutation is
- * never retried.
+ * Runs a read once more after a failure that is neither a refusal nor a
+ * known deterministic error (so: a transient transport or server failure)
+ * before the error is rendered. Reads only: a mutation is never retried.
  */
 async function retryRead<T>(run: () => Promise<T>): Promise<T> {
   try {
     return await run();
   } catch (error) {
-    if (error instanceof ConvexError) throw error;
+    // A refusal or a read-limit / redacted server error is deterministic: no second read.
+    if (hasErrorHint(error)) throw error;
     return await run();
   }
 }

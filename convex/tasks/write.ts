@@ -30,6 +30,7 @@ import {
   type TaskField,
 } from "./access";
 import { onSubtaskChange } from "./derived";
+import { taskSearchText } from "../lib/searchText";
 import {
   DEFAULT_ORG_TASK_KEY,
   EXTERNAL_REFS_PER_TASK_MAX,
@@ -668,6 +669,7 @@ export async function createTask(
     title,
     description,
     hasDescription: hasDescriptionContent(description),
+    searchText: taskSearchText(title, description),
     ...statusFields(status, undefined, now),
     projectId: project?._id,
     clientId: project?.clientId,
@@ -830,6 +832,9 @@ export async function updateTask(
       set.description = description;
       set.hasDescription = hasDescriptionContent(description);
     }
+  }
+  if (set.title !== undefined || set.description !== undefined) {
+    set.searchText = taskSearchText(set.title ?? task.title, "description" in set ? set.description : task.description);
   }
 
   let statusChange: { from: TaskCategory | undefined; to: TaskCategory } | undefined;
@@ -1307,7 +1312,17 @@ export async function placeSubtask(
  * writes the model fields (identifier, counters) and the edges.
  */
 export async function insertTaskForSeed(ctx: MutationCtx, doc: TaskDocFields): Promise<Id<"tasks">> {
-  return await ctx.db.insert("tasks", doc);
+  return await ctx.db.insert("tasks", { ...doc, searchText: taskSearchText(doc.title, doc.description) });
+}
+
+/**
+ * Backfill only (convex/search.ts, S5): writes `searchText` on a task that
+ * has none. False when it already had one.
+ */
+export async function backfillTaskSearchText(ctx: MutationCtx, task: Doc<"tasks">): Promise<boolean> {
+  if (task.searchText !== undefined) return false;
+  await ctx.db.patch(task._id, { searchText: taskSearchText(task.title, task.description) });
+  return true;
 }
 
 /**

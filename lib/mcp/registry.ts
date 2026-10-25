@@ -336,7 +336,7 @@ const searchInput = z.object({
     .min(1)
     .max(200)
     .optional()
-    .describe('Text: titles, names, codes, emails, notes, comment text, invoice numbers ("draft" = unnumbered drafts).'),
+    .describe('Full text over titles, descriptions, comments and attachment text (PDF, Word, text); results by relevance. Also names, codes, emails, notes, invoice numbers ("draft" = unnumbered drafts).'),
   types: z
     .array(
       z.enum(SEARCH_TYPES, {

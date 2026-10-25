@@ -10,6 +10,8 @@
 //          `by_timerTaskId` index: O(affected tasks), not O(org members)
 //   CVX-4  a member's task search trusts the rows its own edge index proved
 //          readable instead of re-checking every edge
+//   S1     a full-text task search reads one search range for tasks, one
+//          for attachment text and ~3 per attachment hit (≤ 100)
 //   W2     a 25-item `save_tasks` with a webhook endpoint adds one
 //          `webhookEndpoints` range per activity row, nothing more
 //          (docs/prd-agent-first-backlog.md §5.4)
@@ -26,6 +28,7 @@ import type { McpAuthContext } from "../lib/mcpAuth";
 import { deleteRecords } from "../lib/mcpDelete";
 import { findTaskDocsForAuth } from "../tasks/lookup";
 import { saveTasks } from "../lib/mcpSaveTasks";
+import { ATTACHMENT_HIT_CAP, searchTasks } from "../lib/mcpSearch";
 import { statusRow, taskRow } from "./helpers/taskFixtures";
 
 const modules = (
@@ -94,6 +97,7 @@ const MEMBERS = 50;
 const DELETED_TASKS = 25;
 const PARENTS = 600;
 const SAVED_TASKS = 25;
+const BUDGET_FULL_TEXT = 270;
 const SUBTASKS_PER_PARENT = 2;
 
 type Fixture = {
@@ -242,5 +246,33 @@ describe("MCP read budgets", () => {
     // Measured 2026-10-25: 300 ranges for 25 tasks (25 activity rows), of
     // which 25 are the webhook endpoint reads.
     expect(result.ranges).toBeLessThan(390);
+  });
+  it(`a full-text task search with ${ATTACHMENT_HIT_CAP} matching files stays bounded`, async () => {
+    const t = createT();
+    const f = await t.run(setupOrg);
+    await t.run(async (ctx) => {
+      const now = Date.now();
+      for (let i = 0; i < ATTACHMENT_HIT_CAP + 10; i += 1) {
+        const taskId = await ctx.db.insert(
+          "tasks",
+          { ...taskRow({ orgId: ORG, title: `Brief ${i}`, statusId: f.statusId, createdBy: f.admin, statusCategory: "started", createdAt: now }), searchText: `Brief ${i}` },
+        );
+        const fileId = await ctx.storage.store(new Blob(["x"]));
+        await ctx.db.insert("attachments", { taskId, orgId: ORG, userId: f.admin, fileId, fileName: `${i}.pdf`, fileSize: 1, mimeType: "application/pdf", createdAt: now });
+        await ctx.db.insert("attachmentContents", { orgId: ORG, storageId: fileId, mimeType: "application/pdf", status: "done", text: "pangolin terms", attempts: 1, createdAt: now });
+      }
+    });
+    const { ranges, result } = await t.run(async (raw) => {
+      const auth = await adminAuth(raw, f);
+      const { ctx, ranges } = countingCtx(raw);
+      const result = await searchTasks(ctx, auth, { offset: 0, limit: 25, query: "pangolin", status: "any", due: {}, updated: {}, now: Date.now() });
+      return { ranges: ranges(), result };
+    });
+    // Worst case: every hit comes through a file, so each also runs the filter pass.
+    expect(result.total).toBe(ATTACHMENT_HIT_CAP);
+    expect(result.incomplete).toBe(true);
+    // Measured 2026-10-25: 204 ranges — two search ranges, ~2 per attachment
+    // hit (its attachment row, its task) and the page's rows. ~30 % headroom.
+    expect(ranges).toBeLessThan(BUDGET_FULL_TEXT);
   });
 });

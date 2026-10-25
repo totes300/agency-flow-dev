@@ -51,7 +51,9 @@ must be callable by clients.
   checks; a member's access comes from `taskAssignees` edges (own or the
   parent's), never from the `assigneeIds` cache.
 - Task rows and edges are written only by `convex/tasks/write.ts`.
-- Task search (`search_title`) always filters on `orgId` and the hits are
+- Full-text search (`tasks.search_text`, `comments.search_text`,
+  `attachmentContents.search_text`) always filters on `orgId`; an attachment hit
+  reaches its task through the attachment row, re-checked for the org. Task search always filters on `orgId` and the hits are
   access-filtered before anything is returned (pickers, agent mentions, agent
   tools).
 - Agent tools call the task queries with the running user's identity; an

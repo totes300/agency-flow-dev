@@ -144,6 +144,23 @@ files that already have a row are skipped, so a second run is harmless. Watch th
 logs for `attachmentContents` errors; a failed file is recorded with a fixed reason
 and shown honestly by `fetch`.
 
+## 5b. Search text backfill (full-text search, 2026-10-25)
+
+Full-text search (`docs/prd-agent-first-backlog.md` §6) reads `tasks.searchText`
+and `comments.searchText`, written with every new task and comment. Records written
+before this release have none, so search does not find them — the app's task
+pickers included — until this runs once, right after the Convex deploy (production
+only with the owner's yes):
+
+```bash
+npx convex run --prod search:backfillSearchText '{}'
+```
+
+It pages through tasks, then comments (200 per run, scheduler continuation) and is
+idempotent: a record that already has `searchText` is skipped. It logs
+`[search] backfillSearchText done: <n> documents filled`; a second run logs 0.
+Attachment text needs no backfill: it is indexed as extracted (§5).
+
 ## 6. Verification
 
 1. Discovery document:

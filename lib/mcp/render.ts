@@ -246,6 +246,7 @@ export function renderTaskRow(row: TaskPage["rows"][number], ctx: RenderContext)
     row.assignees.length > 0 ? list(row.assignees) : "unassigned",
     priority,
     row.parent ? `sub-task of ${row.parent}` : null,
+    "matchedIn" in row && row.matchedIn ? `matched in file "${oneLine(row.matchedIn)}"` : null,
   )}`;
 }
 

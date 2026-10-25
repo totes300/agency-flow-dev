@@ -7,7 +7,7 @@
       "type": "object",
       "properties": {
         "query": {
-          "description": "Text: titles, names, codes, emails, notes, comment text, invoice numbers (\"draft\" = unnumbered drafts).",
+          "description": "Full text over titles, descriptions, comments and attachment text (PDF, Word, text); results by relevance. Also names, codes, emails, notes, invoice numbers (\"draft\" = unnumbered drafts).",
           "type": "string"
         },
         "types": {

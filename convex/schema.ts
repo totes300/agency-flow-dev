@@ -156,6 +156,8 @@ export default defineSchema({
     ),
     completedAt: v.optional(v.number()),      // set iff statusCategory is closed (T4)
     archivedAt: v.optional(v.number()),
+    // Title + description plain text for `search_text` (lib/searchText.ts, S5).
+    searchText: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
     createdBy: v.id("users"),
@@ -170,9 +172,10 @@ export default defineSchema({
     .index("by_orgId_identifier", ["orgId", "identifier"])
     .index("by_orgId_completedAt", ["orgId", "completedAt"])
     .index("by_orgId_createdBy", ["orgId", "createdBy"])
-    .searchIndex("search_title", {
-      searchField: "title",
-      filterFields: ["orgId", "statusCategory"],
+    // Full text over title + description (docs/prd-agent-first-backlog.md S1).
+    .searchIndex("search_text", {
+      searchField: "searchText",
+      filterFields: ["orgId", "projectId", "statusCategory"],
     }),
 
   // ─── Task edges (§4.2) — written only by tasks/write.ts (T2) ─────────────
@@ -708,10 +711,13 @@ export default defineSchema({
     resolvedBy: v.optional(v.id("users")),
     // Written through an external agent (MCP attribution, D15).
     via: v.optional(activityViaValidator),
+    // Plain text for `search_text` (lib/searchText.ts, S5).
+    searchText: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
-    .index("by_task", ["taskId", "createdAt"]),
+    .index("by_task", ["taskId", "createdAt"])
+    .searchIndex("search_text", { searchField: "searchText", filterFields: ["orgId", "taskId"] }),
 
   // ─── Comment reactions ────────────────────────────────────────────────────
   commentReactions: defineTable({
@@ -778,7 +784,9 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_orgId_storageId", ["orgId", "storageId"]) // unique: one row per file per org
-    .index("by_storageId", ["storageId"]), // one attachment per blob (assertBlobUnattached)
+    .index("by_storageId", ["storageId"]) // one attachment per blob (assertBlobUnattached)
+    // Full text over extracted file text (S1); hits reach their task through the attachment rows.
+    .searchIndex("search_text", { searchField: "text", filterFields: ["orgId"] }),
 
   // ─── Notifications (inbox — mentions, assignments, comments) ─────────────
   notifications: defineTable({

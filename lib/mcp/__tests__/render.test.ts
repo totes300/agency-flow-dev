@@ -436,6 +436,17 @@ describe("renderRecord (other kinds) and ref errors", () => {
 describe("search sections", () => {
   const page = { total: 1, offset: 0, incomplete: false, notes: [] as string[] };
 
+  it("marks a task found through an attached file (full-text search, S2)", () => {
+    const row = {
+      identifier: "ARLO-21", title: "Fix hero", status: "In progress", statusCategory: "started" as const,
+      priority: "No priority", assignees: ["Ada"], dueDate: null, overdue: false, parent: null,
+    };
+    expect(renderTaskSection({ ...page, today: "2026-10-25", rows: [{ ...row, matchedIn: "brief\nv2.pdf" }] }, CTX)).toContain(
+      '- [ARLO-21](https://localhost:3001/tasks/ARLO-21) · Fix hero · In progress · Ada · matched in file "brief v2.pdf"',
+    );
+    expect(renderTaskSection({ ...page, today: "2026-10-25", rows: [row] }, CTX)).not.toContain("matched in file");
+  });
+
   it("one line per row with ref, title, key fields and link", () => {
     expect(
       renderProjectSection(

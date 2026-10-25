@@ -148,7 +148,7 @@ describe("MCP protocol", () => {
     expect(hints.delete).toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: true });
     expect(hints.report).toMatchObject({ readOnlyHint: true });
     expect(Object.keys(expected.find((t) => t.name === "report")!.inputSchema.properties ?? {})).toEqual([
-      "kind", "month", "from", "to", "from_month", "to_month", "client", "project", "member",
+      "kind", "month", "from", "to", "from_month", "to_month", "statuses", "client", "project", "member",
     ]);
   });
 

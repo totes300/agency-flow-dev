@@ -95,6 +95,3 @@ export const REPORT_KINDS = [
   "org_finance",
 ] as const;
 export type ReportKind = (typeof REPORT_KINDS)[number];
-
-/** Days per report date range: the ceiling of the report cores (convex/reports.ts). */
-export const REPORT_RANGE_DAYS_MAX = 366;

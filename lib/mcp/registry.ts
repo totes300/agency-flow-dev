@@ -15,7 +15,6 @@ import {
   MCP_BATCH_MAX,
   PRIORITY_NAMES,
   REPORT_KINDS,
-  REPORT_RANGE_DAYS_MAX,
   SEARCH_LIMIT_DEFAULT,
   SEARCH_LIMIT_MAX,
   TIME_ENTRY_MINUTES_MAX,
@@ -44,6 +43,7 @@ import {
   type RenderContext,
 } from "./render";
 import {
+  REPORT_OVERFLOW_HINT,
   fitReport,
   renderClientMonthly,
   renderCloseQueue,
@@ -58,7 +58,7 @@ import {
   renderTimesheet,
   type ReportPart,
 } from "./report-render";
-import { lastDayOfMonth } from "@/convex/lib/reportCore";
+import { REPORT_RANGE_DAYS_MAX, lastDayOfMonth } from "@/convex/lib/reportCore";
 
 /**
  * The single source of truth for the MCP tool catalog (docs/prd-mcp.md §4,
@@ -1031,7 +1031,7 @@ const deleteTool: McpTool = {
 
 const month = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, "Use a month in YYYY-MM format.");
 
-export const REPORT_PARAMS = ["month", "from", "to", "from_month", "to_month", "client", "project", "member"] as const;
+export const REPORT_PARAMS = ["month", "from", "to", "from_month", "to_month", "statuses", "client", "project", "member"] as const;
 export type ReportParam = (typeof REPORT_PARAMS)[number];
 
 /**
@@ -1045,8 +1045,8 @@ export const REPORT_SPECS: Record<
 > = {
   timesheet: { period: "range", required: ["client"], optional: ["project"] },
   time_by_member: { period: "range", required: [], optional: ["member"] },
-  client_monthly: { period: "months", required: ["client"], optional: [] },
-  missing_time: { period: "range", required: [], optional: ["client", "project", "member"] },
+  client_monthly: { period: "months", required: ["client"], optional: ["project"] },
+  missing_time: { period: "range", required: [], optional: ["statuses", "client", "project", "member"] },
   project_overview: { period: "none", required: ["project"], optional: [] },
   project_monthly: { period: "none", required: ["project"], optional: [] },
   retainer_statement: { period: "month", required: ["project"], optional: [] },
@@ -1070,6 +1070,12 @@ const reportInput = z.object({
   to: date.optional().describe("Range end, YYYY-MM-DD, inclusive (with from)."),
   from_month: month.optional().describe("client_monthly: first month, YYYY-MM (with to_month)."),
   to_month: month.optional().describe("client_monthly: last month, YYYY-MM (with from_month)."),
+  statuses: z
+    .array(z.string().min(1).max(100))
+    .min(1)
+    .max(20)
+    .optional()
+    .describe('missing_time: status names from fetch("workspace"), e.g. ["Done", "Client review"]. Default: the completed statuses.'),
   client: ref.optional().describe("A client: client:KONV (its prefix), ID or link."),
   project: ref.optional().describe("A project: code (ARLO), ID or link."),
   member: ref.optional().describe('A member: email, ID, link or "me".'),
@@ -1130,46 +1136,58 @@ function reportRange(input: ReportInput): { from: string; to: string } {
     : { from: input.from!, to: input.to! };
 }
 
+/** A report fitted into the result budget: its text, or the refusal when even the required tables do not fit. */
+function fittedReport(kind: ReportKind, parts: readonly ReportPart[]): McpToolResult {
+  const fitted = fitReport(parts, OUTPUT_BUDGET_CHARS, REPORT_OVERFLOW_HINT[kind]);
+  if (fitted.tooLarge) {
+    return {
+      text: `Error: This ${kind} report is too large for one result. Narrow it: a shorter period, or a client, project or member filter where the kind takes one.`,
+      isError: true,
+    };
+  }
+  return { text: fitted.text, isError: false };
+}
+
 /**
  * A report kind: its query, the args it takes from the input, and its
- * renderer. `operation` is the registry view (query + a fitted string
- * renderer); the tool runs `run` and fits the parts itself so it can refuse
- * an oversized report.
+ * renderer. `operation` is the registry view (query + the fitted text, the
+ * refusal included); the tool runs `run` and fits the parts the same way.
  */
 function reportOperation<Query extends FunctionReference<"query">>(
+  kind: ReportKind,
   query: Query,
   render: (data: FunctionReturnType<Query>, ctx: RenderContext) => ReportPart[],
   args: (input: ReportInput) => FunctionArgs<Query>,
 ) {
   return {
-    operation: queryOperation(query, (data, ctx) => fitReport(render(data, ctx), OUTPUT_BUDGET_CHARS).text),
+    operation: queryOperation(query, (data, ctx) => fittedReport(kind, render(data, ctx)).text),
     run: async (input: ReportInput, ctx: McpToolContext): Promise<ReportPart[]> =>
       render(await ctx.runQuery(query, args(input)), { appOrigin: ctx.appOrigin }),
   };
 }
 
 const reportKinds = {
-  timesheet: reportOperation(api.mcp.report.timesheet, renderTimesheet, (i) => ({
+  timesheet: reportOperation("timesheet", api.mcp.report.timesheet, renderTimesheet, (i) => ({
     client: i.client!, ...reportRange(i), project: i.project,
   })),
-  time_by_member: reportOperation(api.mcp.report.timeByMember, renderTimeByMember, (i) => ({
+  time_by_member: reportOperation("time_by_member", api.mcp.report.timeByMember, renderTimeByMember, (i) => ({
     ...reportRange(i), member: i.member,
   })),
-  client_monthly: reportOperation(api.mcp.report.clientMonthly, renderClientMonthly, (i) => ({
-    client: i.client!, fromMonth: i.month ?? i.from_month!, toMonth: i.month ?? i.to_month!,
+  client_monthly: reportOperation("client_monthly", api.mcp.report.clientMonthly, renderClientMonthly, (i) => ({
+    client: i.client!, fromMonth: i.month ?? i.from_month!, toMonth: i.month ?? i.to_month!, project: i.project,
   })),
-  missing_time: reportOperation(api.mcp.report.missingTime, renderMissingTime, (i) => ({
-    ...reportRange(i), client: i.client, project: i.project, member: i.member,
+  missing_time: reportOperation("missing_time", api.mcp.report.missingTime, renderMissingTime, (i) => ({
+    ...reportRange(i), statuses: i.statuses, client: i.client, project: i.project, member: i.member,
   })),
-  project_overview: reportOperation(api.mcp.report.projectOverview, renderProjectOverview, (i) => ({ project: i.project! })),
-  project_monthly: reportOperation(api.mcp.report.projectMonthly, renderProjectMonthly, (i) => ({ project: i.project! })),
-  retainer_statement: reportOperation(api.mcp.report.retainerStatement, renderRetainerStatement, (i) => ({
+  project_overview: reportOperation("project_overview", api.mcp.report.projectOverview, renderProjectOverview, (i) => ({ project: i.project! })),
+  project_monthly: reportOperation("project_monthly", api.mcp.report.projectMonthly, renderProjectMonthly, (i) => ({ project: i.project! })),
+  retainer_statement: reportOperation("retainer_statement", api.mcp.report.retainerStatement, renderRetainerStatement, (i) => ({
     project: i.project!, month: i.month!,
   })),
-  retainer_health: reportOperation(api.mcp.report.retainerHealth, renderRetainerHealth, (i) => ({ month: i.month! })),
-  close_queue: reportOperation(api.mcp.report.closeQueue, renderCloseQueue, () => ({})),
-  invoice_metrics: reportOperation(api.mcp.report.invoiceMetrics, renderInvoiceMetrics, () => ({})),
-  org_finance: reportOperation(api.mcp.report.orgFinance, renderOrgFinance, (i) => reportRange(i)),
+  retainer_health: reportOperation("retainer_health", api.mcp.report.retainerHealth, renderRetainerHealth, (i) => ({ month: i.month! })),
+  close_queue: reportOperation("close_queue", api.mcp.report.closeQueue, renderCloseQueue, () => ({})),
+  invoice_metrics: reportOperation("invoice_metrics", api.mcp.report.invoiceMetrics, renderInvoiceMetrics, () => ({})),
+  org_finance: reportOperation("org_finance", api.mcp.report.orgFinance, renderOrgFinance, (i) => reportRange(i)),
 } satisfies Record<ReportKind, unknown>;
 
 const reportTool: McpTool = {
@@ -1181,9 +1199,10 @@ const reportTool: McpTool = {
     `(period = month YYYY-MM, or from + to YYYY-MM-DD, at most ${REPORT_RANGE_DAYS_MAX} days):`,
     "timesheet: client, period, [project] — per-task time of a client;",
     "time_by_member: period, [member] — time per member and project (members: their own time);",
-    "client_monthly: client, month or from_month + to_month — months, then per task the status, minutes, time-entry",
-    "notes and closing comment: the raw material for a client summary you write;",
-    "missing_time: period, [client or project], [member] — Done/Review tasks of the period with no time logged;",
+    "client_monthly: client, month or from_month + to_month, [project] — months, then per task the status, minutes,",
+    "time-entry notes and closing comment: the raw material for a client summary you write;",
+    "missing_time: period, [statuses], [client or project], [member] — tasks that reached the statuses (default: the",
+    "completed ones, e.g. Done) in the period with no time logged on them or their sub-tasks;",
     "project_overview: project — totals and billing state; project_monthly: project — per month;",
     "retainer_statement: project, month; retainer_health: month — every retainer;",
     "close_queue, invoice_metrics: no params — the Billing hub; org_finance: period — time, cost, value, invoicing.",
@@ -1205,14 +1224,7 @@ const reportTool: McpTool = {
     } catch (error) {
       return { text: `Error: ${mcpErrorMessage(error)}`, isError: true };
     }
-    const fitted = fitReport(parts, OUTPUT_BUDGET_CHARS);
-    if (fitted.tooLarge) {
-      return {
-        text: `Error: This ${input.kind} report is too large for one result. Narrow it: a shorter period, or a client, project or member filter where the kind takes one.`,
-        isError: true,
-      };
-    }
-    return { text: fitted.text, isError: false };
+    return fittedReport(input.kind, parts);
   },
 };
 

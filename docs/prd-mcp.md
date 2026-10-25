@@ -534,10 +534,22 @@ before changing the PRD. Code, documentation and commit messages stay in English
 | 2 | Search, fetch, references and renderers | **Done** 2026-10-24 | `fff5558` `435999c` `b9ad704` `ab8136e` `8dc3e57` `c8abc6c` + fixes `524a17e` `326202f` `3f9a6ba` | Two reviews: no tenancy/access blocker. Round 1 fixed: read budgets (one Convex call per ref, comment scan 500), user content fenced as data, task filter for comments/time, no body caps (budgeted lists). Re-verified: tsc clean, 147 tests green, exit prompts + `ARLO` / `client:ARLO` + task-filtered comment search end to end | Owner decisions: bare key = project, clients as `client:KEY`; prefix A–Z/0–9 ≤10; attachment extraction ported in slice 7. Search additions: `overdue`, `status` = open/any/category, `due_/tracked_/updated_from/to`, `types` default `["task"]`, a filter that doesn't apply is an error. `invoice`/`daily_note` types move to slices 6/7. Comment search relies on `comment_added` activity rows (seeded comments lack them) |
 | 3 | Tasks, comments, delete, idempotency, attribution and changes | **Done** 2026-10-25 | `8ba87d5` `06b044d` `b76c9ce` + fixes `2944597` `ec939e8` `aaaa8e3` | Two reviews: no blockers. Round 1 fixed (idempotency bound to request, markdown fidelity, archived-ref refusal, client-name lookup, ref cap). End to end via MCP: one-call card + checklist with `gmail:` refs, idempotent replay, rerun = no change, comment with @mention, changes feed with `via claude.ai` and exclude_self, delete frees the ref; the assignee got 3 assignment + 1 mention notifications; "via claude.ai" shows in the app activity | Owner decisions 2026-10-25: external ref = task reference everywhere + ordered batch; `archived` in save_tasks; via = host for CIMD clients; exclude_self = same user AND same client. `deleteTimeEntries` flag for app parity. Sub-tasks inherit the parent's assignees when omitted (app rule) |
 | 4 | Time entries and timer | **Done** 2026-10-25 | `d05bcae` `2cf164e` `2069c32` + fixes `8bf591e` `ce7a12b` | Two reviews: the app time/timer refactor was verified behaviour-preserving. Round 1 fixed: a timer running in another org is refused untouched (app too) and reports `elsewhere`; timer times in the org timezone; `fetch("me")` shows Today and the timer; category on time rows; billable; timer-stop activity rows. End to end via MCP: Today, log 1h30 "yesterday" in Design, fix to 2h, timer start shown in the app sidebar + floating timer, stop saves an entry, changes feed `via claude.ai`, delete | Owner decisions 2026-10-25: timer stops write `time_entry_logged` in the app too; `billable` like the app's form. Members log only on tasks they can read. Caps: 1,440 min per entry, 2,000-char notes. Carried to slice 8: Clerk 7.9 deprecates `createRouteMatcher` (proxy.ts) |
-| 5 | Reports | Not started | — | — | Depends on slice 4 done |
+| 5 | Reports | **Done** 2026-10-25 | `12ecdf8` `b8b00f3` `8f5cfc4` `9db9a1a` `0bbfcb2` + fixes `73d1793` `f9a5bc3` `e152d42` | Two reviews: no blockers; billing-file refactors verified wrapper-only. Round 1 fixed: missing_time period-bounded loads + `statuses` param, client_monthly project param/subtotals/parent keys/billable-marked notes/human closing comment, D1 subtotals, project codes+links | Owner decision: missing_time `statuses` param, default = completed statuses (no name guessing). Members may run only time_by_member (own) and missing_time (own). Billing vocabulary follows docs/prd-project-billing-redesign.md |
 | 6 | Billing preview and commit | Not started | — | — | Depends on slice 5 done |
 | 7 | Clients, projects, planner, notes, inbox and files | Not started | — | — | Depends on slice 6 done |
 | 8 | Connected apps, help and final review | Not started | — | — | Final push/PR requires owner approval |
+
+### Integration (2026-10-25)
+
+`mcp` now also contains the billing hub + project page redesign (branch
+`claude/sweet-germain-e3c03d`, billing slices 0–8) and the Linear-style projects/clients
+restyle (`wip/linear-directory-views`). They were merged in a separate worktree
+(merges `1eeb66a`, `9dd7e04`) and fast-forwarded with owner approval. Cause of the
+earlier 3001/3002 drift: two branches pushed to the one shared dev Convex deployment.
+Rule from now on: every session works from `mcp` (or merges the latest `mcp` first)
+before any `npx convex dev`. Verified after the switch: a 27-step MCP regression with
+a real token (every tool, all 11 report kinds) was all OK; the billing hub, project page
+and Linear lists render in the browser.
 
 ### Known limits (accepted, owner 2026-10-24)
 

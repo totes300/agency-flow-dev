@@ -388,7 +388,10 @@ Report rules:
   `convex/mcpFileUploads.ts`, `convex/lib/mcpFiles.ts`). The client POSTs the bytes to
   it; the endpoint stores them once and answers `{ uploaded: true }`. The client never
   receives a `storageId`. Claude Code and Codex can do this from a shell. On claude.ai,
-  upload works only for inline text (S5).
+  upload works only for inline text (S5). The tool description states the limits
+  (agent-first backlog A, 2026-10-25): up to 10 MB; PDF, images (PNG, JPEG, WebP, GIF),
+  Word .docx, text, .md, .csv; HTML, scripts and executables are refused
+  (`BLOCKED_MIME_TYPES` in `convex/lib/content_validation.ts`).
 - **`attach_file(ref, { uploadId } | { inlineText, filename })`** attaches to a task or
   your own comment through the existing attachment write path, within 24 h of
   `create_upload`; the `uploadId` must be the caller's own, in this org. `inlineText` is

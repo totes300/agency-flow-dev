@@ -1424,7 +1424,8 @@ const createUploadTool: McpTool = {
   description: [
     "Upload a file from disk (text in hand: attach_file inlineText). Returns an uploadId and a one-time URL (1 h):",
     "POST the exact bytes with the same Content-Type (e.g. curl from a shell), then attach_file with the uploadId",
-    "within 24 h. claude.ai on the web cannot POST: use inlineText. No HTML, scripts or executables.",
+    "within 24 h. claude.ai on the web cannot POST: use inlineText. Up to 10 MB; PDF, images (PNG, JPEG, WebP,",
+    "GIF), Word .docx, text, .md, .csv; HTML, scripts and executables are refused.",
     'Example: {"filename": "brief.pdf", "contentType": "application/pdf", "sizeBytes": 48213}',
   ].join(" "),
   inputSchema: createUploadInput,

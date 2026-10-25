@@ -175,7 +175,10 @@ and shown honestly by `fetch`.
 7. Upload: `create_upload` for a small text file, `curl -X POST --data-binary @file
    -H 'Content-Type: text/plain' '<upload URL>'` (the URL is on `<CONVEX_SITE_URL>/mcp-upload?u=…`),
    then `attach_file` with the uploadId; `fetch` the task with
-   `include: ["attachment_text"]` shows the text. Delete the file afterwards.
+   `include: ["attachment_text"]` shows the text. Repeat with a PNG and a PDF (the
+   `create_upload` description lists the accepted types and the 10 MB cap); a second
+   `attach_file` with the same `idempotencyKey` answers "Replayed" and the task still
+   has the same number of files. Delete the files afterwards.
 8. Member vs admin: as a member, `report` `time_by_member` returns only their own
    time and an admin-only kind (e.g. `close_queue`) is refused; as an admin both work.
 9. Observability. The route logs one line per tool call, `[mcp] tool <name> <ms>ms

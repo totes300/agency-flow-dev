@@ -16,6 +16,7 @@ import {
   type Actor,
 } from "./billing/closeLifecycle";
 import {
+  NEVER_NUMBERED_VOID,
   applyDeleteDraft,
   applyFixedInvoice,
   applyTransition,
@@ -102,7 +103,7 @@ export const BILLING_ADMIN_ONLY = "Billing is admin-only, as in the app.";
 export const DATA_CHANGED = "Data changed since preview — run billing_preview again.";
 export const UNKNOWN_TOKEN =
   "Unknown commit token. Run billing_preview first and pass the commitToken it returns (tokens work only for the user and connection that previewed).";
-export const TOO_MANY_PREVIEWS = `You have ${PREVIEW_OPEN_MAX} billing previews from the last 10 minutes that were never committed. Commit the one the user approved, or wait for older previews to expire (10 minutes), then preview again.`;
+export const TOO_MANY_PREVIEWS = `You have ${PREVIEW_OPEN_MAX} uncommitted billing previews from the last 10 minutes: commit one of the open previews or wait 10 minutes.`;
 export const EXPIRED_TOKEN =
   "This commit token expired (tokens last 10 minutes). Run billing_preview again and show the user the new preview.";
 
@@ -189,6 +190,12 @@ type Planned = {
   datelessFingerprint: string;
   /** The issue date the commit would write, when it creates an invoice. */
   issueDate: string | null;
+  /**
+   * The fingerprint with the number a finalize would claim left out (tells
+   * "another invoice took the next number" apart); null for actions that
+   * never claim one.
+   */
+  numberlessFingerprint: string | null;
   apply: (ctx: MutationCtx, actor: Actor) => Promise<BillingCommitResult>;
 };
 
@@ -470,6 +477,7 @@ async function planClosePeriod(ctx: QueryCtx, auth: McpAuthContext, params: Bill
       invoice: plan.invoice ? { ...plan.invoice, issueDate: null, dueDate: null } : null,
     }),
     issueDate: plan.invoice?.issueDate ?? null,
+    numberlessFingerprint: null,
     apply: async (mctx, actor) => {
       const result = await applyClosePlan(mctx, actor, plan);
       return {
@@ -537,6 +545,7 @@ async function planReopenPeriod(ctx: QueryCtx, auth: McpAuthContext, params: Bil
     fingerprint,
     datelessFingerprint: fingerprint,
     issueDate: null,
+    numberlessFingerprint: null,
     apply: async (mctx, actor) => {
       const { reopenedCount } = await applyReopen(mctx, actor, plan);
       return {
@@ -629,6 +638,7 @@ async function planCreateFixedInvoice(ctx: QueryCtx, auth: McpAuthContext, param
     fingerprint: fingerprintOf("create_fixed_invoice", inputs),
     datelessFingerprint: fingerprintOf("create_fixed_invoice", { ...inputs, issueDate: null, dueDate: null }),
     issueDate: plan.issueDate,
+    numberlessFingerprint: null,
     apply: async (mctx, actor) => {
       const { invoiceId } = await applyFixedInvoice(mctx, actor, plan);
       return {
@@ -709,11 +719,6 @@ async function planInvoiceAction(
       `${name} is ${INVOICE_STATUS_COPY[before].chip}. ${outcome} applies to ${statusChips(INVOICE_FROM[action])} invoices.`,
     );
   }
-  // The app voids only numbered drafts; a never-numbered one is deleted (N9, §5.4).
-  if (action === "void_invoice" && invoice.status === "draft" && invoice.number == null) {
-    throw new ConvexError("This draft was never numbered, so the app deletes it instead of voiding it: use delete_draft.");
-  }
-
   const lines = (
     await ctx.db
       .query("invoiceLineItems")
@@ -740,7 +745,12 @@ async function planInvoiceAction(
   } else {
     const target = INVOICE_TARGET[action];
     const planned = await planTransition(ctx, orgId, invoice, target);
-    if (!planned.ok) throw new ConvexError(planned.reason);
+    if (!planned.ok) {
+      // The core's N9 refusal says "delete it"; name the MCP action that does.
+      throw new ConvexError(
+        planned.reason === NEVER_NUMBERED_VOID ? planned.reason.replace(/\.$/, " (use delete_draft).") : planned.reason,
+      );
+    }
     const plan = planned.plan;
     allocate = plan.allocate ? { number: plan.allocate.number, prefix: plan.allocate.prefix } : null;
     apply = (mctx, actor) => applyTransition(mctx, actor, plan);
@@ -793,7 +803,7 @@ async function planInvoiceAction(
     warnings: [],
   };
 
-  const fingerprint = fingerprintOf(action, {
+  const inputs = {
     invoice: [
       invoice._id,
       invoice.status,
@@ -813,14 +823,15 @@ async function planInvoiceAction(
     ],
     lines: lines.map((l) => [l._id, l.lineType, l.description, l.quantity, l.unitPriceMinor, l.amountMinor]),
     close: close ? [close._id, close.status, snapshot.map((r) => r.entryId)] : null,
-    allocate,
-  });
+  };
+  const fingerprint = fingerprintOf(action, { ...inputs, allocate });
 
   return {
     effect,
     fingerprint,
     datelessFingerprint: fingerprint,
     issueDate: null,
+    numberlessFingerprint: allocate ? fingerprintOf(action, inputs) : null,
     apply: async (mctx, actor) => {
       await apply(mctx, actor);
       return {
@@ -865,16 +876,28 @@ async function planBilling(
 export async function previewBilling(ctx: MutationCtx, auth: McpAuthContext, input: BillingInput) {
   assertAdmin(auth, BILLING_ADMIN_ONLY);
   const now = Date.now();
+  const params = await resolveBillingParams(ctx, auth, input);
+  // Open previews: uncommitted and unexpired. Re-previewing the same action
+  // on the same target from the same connection supersedes the earlier
+  // preview (its token expires now), so only distinct targets count toward
+  // the cap.
   const recent = await ctx.db
     .query("mcpBillingPreviews")
     .withIndex("by_orgId_userId_createdAt", (q) =>
       q.eq("orgId", auth.orgId).eq("userId", auth.userId).gt("createdAt", now - PREVIEW_TTL_MS),
     )
-    .take(PREVIEW_OPEN_MAX * 4);
-  if (recent.filter((r) => r.committedAt === undefined).length >= PREVIEW_OPEN_MAX) {
-    throw new ConvexError(TOO_MANY_PREVIEWS);
+    .collect();
+  const open = recent.filter((r) => r.committedAt === undefined && r.expiresAt > now);
+  const target = stableJson({ action: input.action, params });
+  let live = 0;
+  for (const row of open) {
+    if (row.clientId === auth.clientId && stableJson({ action: row.action, params: row.params }) === target) {
+      await ctx.db.patch(row._id, { expiresAt: now });
+    } else {
+      live += 1;
+    }
   }
-  const params = await resolveBillingParams(ctx, auth, input);
+  if (live >= PREVIEW_OPEN_MAX) throw new ConvexError(TOO_MANY_PREVIEWS);
   const planned = await planBilling(ctx, auth, input.action, params);
   const expiresAt = now + PREVIEW_TTL_MS;
   const token = await ctx.db.insert("mcpBillingPreviews", {
@@ -886,6 +909,7 @@ export async function previewBilling(ctx: MutationCtx, auth: McpAuthContext, inp
     fingerprint: planned.fingerprint,
     datelessFingerprint: planned.datelessFingerprint,
     ...(planned.issueDate ? { issueDate: planned.issueDate } : {}),
+    ...(planned.numberlessFingerprint ? { numberlessFingerprint: planned.numberlessFingerprint } : {}),
     createdAt: now,
     expiresAt,
   });
@@ -912,7 +936,8 @@ export async function commitBilling(
   }
   if (row.result) return { ...row.result, replayed: true };
   const now = Date.now();
-  if (now > row.expiresAt) throw new ConvexError(EXPIRED_TOKEN);
+  // A superseded preview expires at the moment of its re-preview, so "at" counts as expired.
+  if (now >= row.expiresAt) throw new ConvexError(EXPIRED_TOKEN);
 
   let planned: Planned;
   try {
@@ -934,6 +959,16 @@ export async function commitBilling(
     ) {
       throw new ConvexError(
         `${DATA_CHANGED} The issue date changed to ${planned.issueDate}: a new day began in the organization's timezone since the preview (${row.issueDate}).`,
+      );
+    }
+    // Only the series moved: another invoice was finalized, so this one would take a different number.
+    if (
+      row.numberlessFingerprint !== undefined &&
+      row.numberlessFingerprint === planned.numberlessFingerprint &&
+      planned.effect.invoice?.numberAfter
+    ) {
+      throw new ConvexError(
+        `${DATA_CHANGED} The next invoice number moved to ${planned.effect.invoice.numberAfter} (another invoice was finalized since the preview).`,
       );
     }
     throw new ConvexError(DATA_CHANGED);

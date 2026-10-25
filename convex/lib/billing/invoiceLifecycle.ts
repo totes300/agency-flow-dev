@@ -32,6 +32,13 @@ export const VALID_TRANSITIONS: Record<InvoiceStatus, InvoiceStatus[]> = {
 };
 
 /**
+ * N9 / §5.4: voiding keeps a numbered record; a draft that never took a
+ * number has none to keep, so it is deleted instead. Every status writer
+ * (app mutations, MCP) refuses with this reason.
+ */
+export const NEVER_NUMBERED_VOID = "This draft was never numbered; delete it instead of voiding it.";
+
+/**
  * The number finalizing `invoice` claims from the org's gapless series, or
  * null when it already has one (reverted, then re-finalized: it keeps it).
  * Reads only; `applyTransition` claims it.
@@ -127,6 +134,9 @@ export async function planTransition(
 ): Promise<{ ok: true; plan: TransitionPlan } | { ok: false; reason: string }> {
   if (!VALID_TRANSITIONS[invoice.status].includes(newStatus)) {
     return { ok: false, reason: `Cannot transition from "${invoice.status}" to "${newStatus}".` };
+  }
+  if (newStatus === "void" && invoice.status === "draft" && invoice.number == null) {
+    return { ok: false, reason: NEVER_NUMBERED_VOID };
   }
   const close = await getClose(ctx, orgId, invoice);
   let allocate: TransitionPlan["allocate"] = null;

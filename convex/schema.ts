@@ -931,7 +931,12 @@ export default defineSchema({
     // showed: a refusal caused only by midnight says so.
     datelessFingerprint: v.optional(v.string()),
     issueDate: v.optional(v.string()),
+    // The fingerprint without the number a finalize would claim: a refusal
+    // caused only by another invoice taking the next number says so.
+    numberlessFingerprint: v.optional(v.string()),
     createdAt: v.number(),
+    // A re-preview of the same action + params from the same connection
+    // supersedes the earlier row by moving this to the re-preview's time.
     expiresAt: v.number(),
     committedAt: v.optional(v.number()),
     result: v.optional(billingCommitResultValidator),

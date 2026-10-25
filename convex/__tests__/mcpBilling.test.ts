@@ -460,6 +460,28 @@ describe("commit token", () => {
     await expect(commit(w, q.token)).rejects.toThrow(DATA_CHANGED);
   });
 
+  it("a refusal caused only by another invoice taking the next number says so", async () => {
+    setToday("2026-10-15");
+    const w = await world();
+    await seedRetainerAugust(w);
+    const { invoiceId } = await closeAugust(w);
+    const p = await preview(w, { action: "mark_invoiced", invoice: invoiceId });
+    expect(p.effect.invoice!.numberAfter).toBe("INV-001");
+    // Another draft is finalized in the app meanwhile: the series moved, nothing else did.
+    const fixed = await commit(w, (await preview(w, { action: "create_fixed_invoice", project: "FIX" })).token);
+    await session(w.t).mutation(api.invoices.changeInvoiceStatus, { id: fixed.invoice!.id, newStatus: "invoiced" });
+    const before = await billingState(w);
+    await expect(commit(w, p.token)).rejects.toThrow(
+      `${DATA_CHANGED} The next invoice number moved to INV-002 (another invoice was finalized since the preview).`,
+    );
+    expect(await billingState(w)).toEqual(before);
+    // A new preview shows the number it takes now, and commits.
+    const again = await preview(w, { action: "mark_invoiced", invoice: invoiceId });
+    expect(again.effect.invoice!.numberAfter).toBe("INV-002");
+    expect((await commit(w, again.token)).invoice).toMatchObject({ number: "INV-002", status: "invoiced" });
+    expect(await invoiceOf(w, invoiceId)).toMatchObject({ status: "invoiced", number: 2 });
+  });
+
   it("expires after 10 minutes", async () => {
     setToday("2026-10-15");
     const w = await world();
@@ -806,21 +828,31 @@ describe("review round 1", () => {
     );
   });
 
-  it(`refuses more than ${PREVIEW_OPEN_MAX} open previews per user; committed and expired ones do not count`, async () => {
+  it(`caps open previews per user at ${PREVIEW_OPEN_MAX} distinct targets; re-previewing a target supersedes its earlier preview`, async () => {
     setToday("2026-10-15");
     const w = await world();
     await seedRetainerAugust(w);
     const { invoiceId } = await closeAugust(w);
-    const tokens = [];
-    for (let i = 0; i < PREVIEW_OPEN_MAX; i += 1) tokens.push((await preview(w, { action: "mark_invoiced", invoice: invoiceId })).token);
-    await expect(preview(w, { action: "mark_invoiced", invoice: invoiceId })).rejects.toThrow(TOO_MANY_PREVIEWS);
+    // The same target over and over never locks the user out: one open preview.
+    let latest = "";
+    for (let i = 0; i < 60; i += 1) latest = (await preview(w, { action: "mark_invoiced", invoice: invoiceId })).token;
+    // Distinct targets fill the budget (a different amount is a different target).
+    for (let amount = 1; amount < PREVIEW_OPEN_MAX; amount += 1) {
+      await preview(w, { action: "create_fixed_invoice", project: "FIX", amount });
+    }
+    await expect(preview(w, { action: "create_fixed_invoice", project: "FIX", amount: 999 })).rejects.toThrow(TOO_MANY_PREVIEWS);
+    await expect(preview(w, { action: "delete_draft", invoice: invoiceId })).rejects.toThrow(TOO_MANY_PREVIEWS);
+    // A target already open may still be re-previewed; the earlier token is superseded.
+    const superseding = await preview(w, { action: "mark_invoiced", invoice: invoiceId });
+    await expect(commit(w, latest)).rejects.toThrow(EXPIRED_TOKEN);
     // Another admin has their own budget.
     await expect(preview(w, { action: "mark_invoiced", invoice: invoiceId }, "admin2")).resolves.toBeDefined();
-    await commit(w, tokens[0]);
+    // Committing one frees a slot; expiry frees the rest.
+    await commit(w, superseding.token);
     await expect(preview(w, { action: "mark_paid", invoice: invoiceId })).resolves.toBeDefined();
-    await expect(preview(w, { action: "mark_paid", invoice: invoiceId })).rejects.toThrow(TOO_MANY_PREVIEWS);
+    await expect(preview(w, { action: "create_fixed_invoice", project: "FIX", amount: 999 })).rejects.toThrow(TOO_MANY_PREVIEWS);
     vi.setSystemTime(Date.now() + PREVIEW_TTL_MS + 1);
-    await expect(preview(w, { action: "mark_paid", invoice: invoiceId })).resolves.toBeDefined();
+    await expect(preview(w, { action: "create_fixed_invoice", project: "FIX", amount: 999 })).resolves.toBeDefined();
   });
 
   it("status-only previews show the total and line count; commit results carry the amount and currency", async () => {

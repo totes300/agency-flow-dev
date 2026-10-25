@@ -7,6 +7,7 @@ import { isMimeTypeBlocked } from "./lib/content_validation";
 import { deleteContentForStorage, requestExtraction } from "./attachmentContents";
 import { ATTACHMENT_DELETE_OWN_ONLY, assertBlobUnattached, type AttachmentFileInput } from "./attachments";
 import { MAX_FILE_SIZE } from "../lib/attachment";
+import { claimUploadedFile } from "./fileUploads";
 
 export const MAX_FILES_PER_COMMENT = 5;
 export const MAX_FILE_NAME_LENGTH = 255;
@@ -97,14 +98,6 @@ export const byTask = query({
 
 // ─── Mutations ──────────────────────────────────────────────────────────────────
 
-export const generateUploadUrl = mutation({
-  args: {},
-  handler: async (ctx) => {
-    await getAuthContext(ctx);
-    return await ctx.storage.generateUploadUrl();
-  },
-});
-
 /**
  * The comment attachment write path for an authorized caller: name length,
  * blocked types, the comment in the caller's org on a task they can read and
@@ -185,6 +178,8 @@ export const save = mutation({
   },
   handler: async (ctx, args) => {
     const auth = await getAuthContext(ctx);
+    // Only the caller's own upload (fileUploads.ts), never a storage id learned elsewhere.
+    await claimUploadedFile(ctx, auth, args.fileId);
     const { id } = await saveCommentAttachmentForAuth(ctx, auth, args.commentId, {
       fileId: args.fileId,
       fileName: args.fileName,

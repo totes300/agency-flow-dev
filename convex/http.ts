@@ -5,6 +5,7 @@ import type { WebhookEvent } from "@clerk/backend";
 import { Webhook } from "svix";
 import type { Id } from "./_generated/dataModel";
 import { upload as mcpUpload } from "./mcpFileUploads";
+import { upload as appUpload, uploadPreflight as appUploadPreflight } from "./fileUploads";
 
 const http = httpRouter();
 
@@ -43,6 +44,22 @@ http.route({
   path: "/mcp-upload",
   method: "POST",
   handler: mcpUpload,
+});
+
+// ─── App file uploads (task + comment attachments) ───────────────────────────
+// The upload URL fileUploads:generateUploadUrl returns: stores the bytes once,
+// within the hour, bound to the uploader (convex/fileUploads.ts). The browser
+// posts cross-origin, hence the preflight route.
+http.route({
+  path: "/upload",
+  method: "POST",
+  handler: appUpload,
+});
+
+http.route({
+  path: "/upload",
+  method: "OPTIONS",
+  handler: appUploadPreflight,
 });
 
 http.route({

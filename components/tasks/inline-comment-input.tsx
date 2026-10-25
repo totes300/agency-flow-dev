@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useCallback, useRef, useEffect } from "react"
-import { useMutation, useQuery } from "convex/react"
+import { useAction, useMutation, useQuery } from "convex/react"
 import { useConvexAuth } from "convex/react"
 import { Tiptap, useEditor } from "@tiptap/react"
 import { BubbleMenu } from "@tiptap/react/menus"
@@ -66,7 +66,7 @@ export function InlineCommentInput({
     useMentionSuggestion({ taskAssigneeIds })
 
   const createComment = useMutation(api.comments.create)
-  const generateUploadUrl = useMutation(api.commentAttachments.generateUploadUrl)
+  const generateUploadUrl = useAction(api.fileUploads.generateUploadUrl)
   const saveAttachment = useMutation(api.commentAttachments.save)
   const setTypingMutation = useMutation(api.typingIndicators.setTyping)
   const clearTypingMutation = useMutation(api.typingIndicators.clearTyping)
@@ -195,6 +195,9 @@ export function InlineCommentInput({
             headers: { "Content-Type": file.type || "application/octet-stream" },
             body: file,
           })
+          if (!result.ok) {
+            throw new Error(`Upload failed: ${result.status} ${result.statusText}`)
+          }
           const { storageId } = (await result.json()) as { storageId: string }
           setPendingFiles((prev) =>
             prev.map((f) => (f.fileId === tempId ? { ...f, uploading: false, storageId } : f)),

@@ -657,6 +657,26 @@ export default defineSchema({
     .index("by_task", ["taskId", "createdAt"])
     .index("by_fileId", ["fileId"]), // one attachment per blob (assertBlobUnattached)
 
+  // ─── App file uploads (task + comment attachments) ─────────────────────────
+  // One row per `fileUploads:generateUploadUrl` call: an unguessable
+  // `uploadId` bound to the caller's org and user. The upload endpoint
+  // (convex/fileUploads.ts, POST /upload?u=<uploadId>) stores the bytes once,
+  // within the hour, and writes `storageId`; `attachments.save` and
+  // `commentAttachments.save` only link a storageId found here for the same
+  // org + user, once (`attachedAt`). Rows are kept 25 h; the cleanup cron also
+  // deletes the blob of an upload that was stored but never attached.
+  fileUploads: defineTable({
+    uploadId: v.string(),
+    orgId: v.string(),
+    userId: v.id("users"),
+    createdAt: v.number(),
+    storageId: v.optional(v.id("_storage")),
+    attachedAt: v.optional(v.number()),
+  })
+    .index("by_uploadId", ["uploadId"])
+    .index("by_storageId", ["storageId"])
+    .index("by_createdAt", ["createdAt"]),
+
   // ─── Comment read receipts (per user per task) ─────────────────────────────
   commentReadReceipts: defineTable({
     taskId: v.id("tasks"),

@@ -34,6 +34,7 @@ import type * as dailyNotes from "../dailyNotes.js";
 import type * as devSeedArloJune from "../devSeedArloJune.js";
 import type * as devSeedInbox from "../devSeedInbox.js";
 import type * as devSeedTasks from "../devSeedTasks.js";
+import type * as fileUploads from "../fileUploads.js";
 import type * as http from "../http.js";
 import type * as invoices from "../invoices.js";
 import type * as labels from "../labels.js";
@@ -192,6 +193,7 @@ declare const fullApi: ApiFromModules<{
   devSeedArloJune: typeof devSeedArloJune;
   devSeedInbox: typeof devSeedInbox;
   devSeedTasks: typeof devSeedTasks;
+  fileUploads: typeof fileUploads;
   http: typeof http;
   invoices: typeof invoices;
   labels: typeof labels;

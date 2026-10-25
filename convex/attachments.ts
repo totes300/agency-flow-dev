@@ -7,6 +7,7 @@ import { isMimeTypeBlocked } from "./lib/content_validation";
 import { isSafeUrl } from "./lib/url";
 import { deleteContentForStorage, requestExtraction } from "./attachmentContents";
 import { MAX_FILE_SIZE, MAX_FILES_PER_TASK } from "../lib/attachment";
+import { claimUploadedFile } from "./fileUploads";
 
 // ─── Query ──────────────────────────────────────────────────────────────────────
 
@@ -85,6 +86,11 @@ export const byTask = query({
 
 // ─── Mutations ──────────────────────────────────────────────────────────────────
 
+/**
+ * A plain Convex upload URL for editor images (embedded by URL, never
+ * attached). Attachment uploads use `fileUploads:generateUploadUrl`, which
+ * binds the upload to the caller: `save` refuses a storageId from here.
+ */
 export const generateUploadUrl = mutation({
   args: {},
   handler: async (ctx) => {
@@ -222,6 +228,8 @@ export const save = mutation({
   },
   handler: async (ctx, args) => {
     const access = await loadTaskForWrite(ctx, args.taskId);
+    // Only the caller's own upload (fileUploads.ts), never a storage id learned elsewhere.
+    await claimUploadedFile(ctx, access.auth, args.fileId);
     return await saveTaskAttachmentForAuth(ctx, access, {
       fileId: args.fileId,
       fileName: args.fileName,

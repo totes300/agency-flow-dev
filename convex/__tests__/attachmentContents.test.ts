@@ -27,6 +27,7 @@ import { createTask } from "../tasks/write";
 import { loadContent, requestExtraction } from "../attachmentContents";
 import { cascadeDeleteTaskData } from "../lib/task_helpers";
 import { BLOB_ALREADY_ATTACHED } from "../attachments";
+import { storeAppUpload } from "./helpers/appUploads";
 import {
   BACKFILL_STAGGER_MS,
   EXTRACT_ATTEMPT_TIMEOUT_MS,
@@ -109,7 +110,9 @@ async function setup(t: T): Promise<Fixture> {
   });
 }
 
-const store = (t: T, body: BlobPart) => t.run(async (ctx) => await ctx.storage.store(new Blob([body])));
+/** A blob stored as the owner's own app upload (only the uploader can attach it). */
+const store = (t: T, body: BlobPart, owner: "clerk_admin" | "clerk_carol" = "clerk_admin") =>
+  t.run(async (ctx) => await storeAppUpload(ctx, { orgId: ORG, externalId: owner }, body));
 
 const contentRows = (t: T) => t.run(async (ctx) => await ctx.db.query("attachmentContents").collect());
 
@@ -166,7 +169,7 @@ describe("requestExtraction", () => {
     const f = await setup(t);
     const pdf = await store(t, "%PDF-1.4");
     await saveTaskFile(t, f, pdf, "brief.pdf", "application/pdf");
-    const png = await store(t, "png");
+    const png = await store(t, "png", "clerk_carol");
     await t.withIdentity(IDENTITY_CAROL).mutation(api.commentAttachments.save, {
       commentId: f.comment, fileId: png, fileName: "banner.png", fileSize: 3, mimeType: "image/png",
     });
@@ -383,7 +386,7 @@ describe("extracted content is deleted with its file", () => {
     const taskBlob = await store(t, "a");
     const taskFile = await saveTaskFile(t, f, taskBlob, "a.txt", "text/plain");
     await completeWith(t, taskBlob, "a.txt", { kind: "done", text: "task file text", truncated: false });
-    const commentBlob = await store(t, "b");
+    const commentBlob = await store(t, "b", "clerk_carol");
     const commentFile = await t.withIdentity(IDENTITY_CAROL).mutation(api.commentAttachments.save, {
       commentId: f.comment, fileId: commentBlob, fileName: "b.txt", fileSize: 1, mimeType: "text/plain",
     });
@@ -443,19 +446,24 @@ describe("one attachment per stored file", () => {
   it("a blob already attached (task or comment) or already read for any org is refused by both save paths", async () => {
     const t = createT();
     const f = await setup(t);
-    const onTask = await store(t, "a");
-    await saveTaskFile(t, f, onTask, "a.txt", "text/plain");
-    await expect(saveTaskFile(t, f, onTask, "again.txt", "text/plain")).rejects.toThrow(BLOB_ALREADY_ATTACHED);
+    // Carol (assigned to P) uploads both files: only the uploader may attach a file.
+    const carolTaskFile = (fileId: Id<"_storage">, fileName: string) =>
+      t.withIdentity(IDENTITY_CAROL).mutation(api.attachments.save, {
+        taskId: f.P, fileId, fileName, fileSize: 1, mimeType: "text/plain",
+      });
+    const onTask = await store(t, "a", "clerk_carol");
+    await carolTaskFile(onTask, "a.txt");
+    await expect(carolTaskFile(onTask, "again.txt")).rejects.toThrow(BLOB_ALREADY_ATTACHED);
     await expect(
       t.withIdentity(IDENTITY_CAROL).mutation(api.commentAttachments.save, {
         commentId: f.comment, fileId: onTask, fileName: "a.txt", fileSize: 1, mimeType: "text/plain",
       }),
     ).rejects.toThrow(BLOB_ALREADY_ATTACHED);
-    const onComment = await store(t, "b");
+    const onComment = await store(t, "b", "clerk_carol");
     await t.withIdentity(IDENTITY_CAROL).mutation(api.commentAttachments.save, {
       commentId: f.comment, fileId: onComment, fileName: "b.txt", fileSize: 1, mimeType: "text/plain",
     });
-    await expect(saveTaskFile(t, f, onComment, "b.txt", "text/plain")).rejects.toThrow(BLOB_ALREADY_ATTACHED);
+    await expect(carolTaskFile(onComment, "b.txt")).rejects.toThrow(BLOB_ALREADY_ATTACHED);
     // Read for another org (its attachment row gone or never written here): still refused.
     const foreign = await store(t, "c");
     await t.run(async (ctx) => {

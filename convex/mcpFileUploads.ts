@@ -81,8 +81,8 @@ function reply(status: number, body: Record<string, unknown>): Response {
   });
 }
 
-/** Reads at most `max` bytes of the body; null when it is longer. */
-async function readCapped(request: Request, max: number): Promise<Uint8Array[] | null> {
+/** Reads at most `max` bytes of the body; null when it is longer. Shared with the app upload endpoint (fileUploads.ts). */
+export async function readCapped(request: Request, max: number): Promise<Uint8Array[] | null> {
   const chunks: Uint8Array[] = [];
   if (!request.body) return chunks;
   const reader = request.body.getReader();

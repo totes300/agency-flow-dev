@@ -25,6 +25,7 @@ import { COMMENT_ATTACH_AUTHOR_ONLY } from "../commentAttachments";
 import { ATTACHMENT_TEXT_FETCH_MAX } from "../../lib/attachments/contents";
 import { INLINE_TEXT_MAX_BYTES } from "../../lib/mcp/limits";
 import { connectMembers } from "./helpers/mcpConnections";
+import { storeAppUpload } from "./helpers/appUploads";
 
 const modules = (
   import.meta as ImportMeta & {
@@ -156,9 +157,13 @@ const attach = (t: T, caller: Caller, ref: string, uploadId: string, idempotency
 const attachText = (t: T, caller: Caller, ref: string, inlineText: string, filename = "source.md", idempotencyKey?: string) =>
   as(t, caller).action(api.mcp.files.attachText, { ref, inlineText, filename, idempotencyKey });
 
-/** A blob stored directly (as the app's own upload URL would): for the app's save paths. */
+/** A blob stored directly, with no upload row: never attachable. */
 const storeBlob = (t: T, body: string | Uint8Array) =>
   t.run(async (ctx) => await ctx.storage.store(new Blob([body as BlobPart])));
+
+/** A blob stored as the caller's own app upload (fileUploads.ts): for the app's save paths. */
+const storeAppBlob = (t: T, caller: Caller, body: string) =>
+  t.run(async (ctx) => await storeAppUpload(ctx, { orgId: SUBJECT[caller][1], externalId: SUBJECT[caller][0] }, body));
 
 /** The client's POST to the upload URL create_upload returned. */
 async function post(t: T, uploadUrl: string, body: BodyInit, contentType: string) {
@@ -400,7 +405,7 @@ describe("attach_file with an uploadId", () => {
     const row = await uploadRow(t, uploadId);
     expect(row!.attachedAt).toBeDefined();
     // The same document the app's attachments.save writes.
-    const appBlob = await storeBlob(t, "%PDF-1.4 brief");
+    const appBlob = await storeAppBlob(t, "alice", "%PDF-1.4 brief");
     await inApp(t, "alice", "org:member").mutation(api.attachments.save, {
       taskId: f.A, fileId: appBlob, fileName: "brief.pdf", fileSize: 14, mimeType: "application/pdf",
     });
@@ -510,7 +515,7 @@ describe("attach_file: who may attach where", () => {
 
     // The app's save path applies the same rule with the same message.
     const appSave = async (caller: Caller, role: "org:admin" | "org:member") => {
-      const fileId = await storeBlob(t, "app file");
+      const fileId = await storeAppBlob(t, caller, "app file");
       return await inApp(t, caller, role).mutation(api.commentAttachments.save, {
         commentId: f.aliceComment, fileId, fileName: "app.txt", fileSize: 8, mimeType: "text/plain",
       });
@@ -577,7 +582,7 @@ describe("fetch include files / attachment_text", () => {
     const t = createT();
     const f = await setup(t);
     const saveFile = async (name: string, mimeType: string, body = "x") => {
-      const fileId = await storeBlob(t, body);
+      const fileId = await storeAppBlob(t, "admin", body);
       await inApp(t, "admin", "org:admin").mutation(api.attachments.save, { taskId: f.A, fileId, fileName: name, fileSize: 1, mimeType });
       return fileId;
     };

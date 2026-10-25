@@ -568,10 +568,12 @@ and Linear lists render in the browser.
   (one task with 400). Global comment search (reports incomplete correctly), task-filtered comment
   search (401 exact), a 400-comment task fetch with every include, a 25-ref fetch and a 100-row
   changes page all succeeded with no read-limit error. The seed data was removed afterwards.
-- Pre-existing app gap (follow-up, not MCP): the app's `attachments.save` / `commentAttachments.save`
-  accept any `_storage` id without proving the caller uploaded it (the app's generateUploadUrl flow
-  records no owner). MCP uploads are bound server-side (slice 7b). Closing the app path needs the
-  same upload-binding for the UI.
+- ~~Pre-existing app gap: the app's `attachments.save` / `commentAttachments.save` accepted any
+  `_storage` id without proving the caller uploaded it.~~ **Closed 2026-10-25:** UI attachment
+  uploads go through `fileUploads:generateUploadUrl` (an action-made uploadId bound to org + user,
+  `POST /upload?u=`), and both save paths refuse a storage id that is not the caller's own upload
+  (convex/fileUploads.ts, convex/__tests__/fileUploads.test.ts). Editor images still use a plain
+  Convex upload URL (embedded by URL, never attached).
 - Revoke is enforced only in Agency Flow; the Clerk grant and refresh token stay alive.
   An app appears in Connected apps only after its first request, and last-used moves at
   most hourly.

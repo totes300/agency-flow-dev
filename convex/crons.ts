@@ -12,4 +12,7 @@ crons.interval("mcp billing preview cleanup", { hours: 1 }, internal.mcpBillingP
 // MCP uploads (create_upload) attach within 24 h; rows and unattached blobs go after 25 h (docs/prd-mcp.md §10).
 crons.interval("mcp upload cleanup", { hours: 1 }, internal.mcpFileUploads.cleanupExpired, {});
 
+// App uploads (fileUploads.ts) attach within 24 h; rows and unattached blobs go after 25 h.
+crons.interval("app upload cleanup", { hours: 1 }, internal.fileUploads.cleanupExpired, {});
+
 export default crons;

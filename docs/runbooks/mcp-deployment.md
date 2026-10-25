@@ -232,6 +232,12 @@ supplies the app origin for task links and for the "not the app itself" URL chec
   line, `[webhook] delivery <id> attempt <n> ok|failed`, never the URL, secret or
   response. The row's `error` is short (`HTTP 503`, `Network error`, `Timed out after
   10 s`, `Endpoint removed or disabled`); the endpoint shows the last outcome.
+- **Authorization key (optional):** receivers that require a bearer key (e.g. Cursor
+  automation webhooks answer 401 without one) get it from the endpoint's
+  "Authorization key" field as `Authorization: Bearer <key>` on every POST, next to the
+  signature. The key is stored on the endpoint, never returned (the UI shows the last 4
+  characters) and never logged. A delivery log full of `401` usually means it is
+  missing or wrong.
 - **Receivers must verify the signature:** recompute HMAC-SHA256 with the secret over
   `"<t>.<raw body>"` from `X-AgencyFlow-Signature: t=<unix seconds>,v1=<hex>`, compare
   in constant time, reject when `|now − t| > 300 s`, and dedupe on the payload `id`

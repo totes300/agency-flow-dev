@@ -45,6 +45,7 @@ const RECENT_DELIVERIES = 20;
 const CLEANUP_BATCH = 500;
 const URL_MAX_LENGTH = 2048;
 const EXCLUDE_CLIENTS_MAX = 20;
+const AUTH_KEY_MAX = 2000;
 const CONNECTIONS_READ_MAX = 500;
 /** Longest string kept in a payload's `change`. */
 const CHANGE_STRING_MAX = 200;
@@ -126,6 +127,18 @@ function checkClientIds(clientIds: readonly string[]): void {
   }
 }
 
+/**
+ * The receiver's bearer key as stored: trimmed, without a pasted "Bearer "
+ * prefix; one token of printable characters, no spaces.
+ */
+export function normalizeAuthKey(raw: string): string {
+  const key = raw.replace(/^\s*bearer(\s+|$)/i, "").trim();
+  if (key.length === 0) throw new ConvexError("The authorization key is empty.");
+  if (key.length > AUTH_KEY_MAX) throw new ConvexError(`The authorization key is longer than ${AUTH_KEY_MAX} characters.`);
+  if (!/^[\x21-\x7e]+$/.test(key)) throw new ConvexError("The authorization key must be one word of printable characters, without spaces.");
+  return key;
+}
+
 function checkUrl(url: string): void {
   const problem = validateWebhookUrl(url, appOrigin());
   if (problem) throw new ConvexError(problem);
@@ -190,7 +203,7 @@ type WebhookPayload = {
   change?: Record<string, ChangeValue>;
 };
 
-type DeliveryJob = { url: string; secret: string; attempt: number; payload: WebhookPayload };
+type DeliveryJob = { url: string; secret: string; authKey: string | null; attempt: number; payload: WebhookPayload };
 
 async function taskPart(ctx: QueryCtx, row: Doc<"activityLog">): Promise<NonNullable<WebhookPayload["task"]>> {
   const task = await ctx.db.get(row.taskId);
@@ -258,7 +271,7 @@ export const startAttempt = internalMutation({
     } else {
       payload = { id: deliveryId, event: "test", at: new Date(delivery.createdAt).toISOString(), org: delivery.orgId };
     }
-    return { url: endpoint.url, secret: endpoint.secret, attempt: delivery.attempt, payload };
+    return { url: endpoint.url, secret: endpoint.secret, authKey: endpoint.authKey ?? null, attempt: delivery.attempt, payload };
   },
 });
 
@@ -321,6 +334,7 @@ async function attemptDelivery(ctx: ActionCtx, deliveryId: Id<"webhookDeliveries
         "X-AgencyFlow-Event": job.payload.event,
         "X-AgencyFlow-Delivery": deliveryId,
         "X-AgencyFlow-Signature": `t=${timestamp},v1=${signature}`,
+        ...(job.authKey ? { Authorization: `Bearer ${job.authKey}` } : {}),
       },
       body,
       signal: controller.signal,
@@ -386,6 +400,7 @@ function publicEndpoint(endpoint: Doc<"webhookEndpoints">, createdByName: string
     _id: endpoint._id,
     url: endpoint.url,
     secretHint: endpoint.secretHint,
+    authKeyHint: endpoint.authKey ? endpoint.authKey.slice(-4) : null,
     eventTypes: endpoint.eventTypes ?? null,
     excludeClientIds: endpoint.excludeClientIds,
     enabled: endpoint.enabled,
@@ -419,6 +434,7 @@ export const create = action({
     url: v.string(),
     eventTypes: v.optional(v.array(v.string())),
     excludeClientIds: v.optional(v.array(v.string())),
+    authKey: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<{ endpointId: Id<"webhookEndpoints">; secret: string }> => {
     const secret = newSecret();
@@ -433,6 +449,7 @@ export const insertEndpoint = internalMutation({
     url: v.string(),
     eventTypes: v.optional(v.array(v.string())),
     excludeClientIds: v.optional(v.array(v.string())),
+    authKey: v.optional(v.string()),
     secret: v.string(),
   },
   handler: async (ctx, args) => {
@@ -447,6 +464,7 @@ export const insertEndpoint = internalMutation({
     checkEventTypes(args.eventTypes);
     const excludeClientIds = args.excludeClientIds ?? [];
     checkClientIds(excludeClientIds);
+    const authKey = args.authKey?.trim() ? normalizeAuthKey(args.authKey) : undefined;
     const now = Date.now();
     return await ctx.db.insert("webhookEndpoints", {
       orgId: auth.orgId,
@@ -455,6 +473,7 @@ export const insertEndpoint = internalMutation({
       secretHint: args.secret.slice(-4),
       eventTypes: args.eventTypes,
       excludeClientIds,
+      authKey,
       enabled: true,
       createdBy: auth.userId,
       createdAt: now,
@@ -463,13 +482,17 @@ export const insertEndpoint = internalMutation({
   },
 });
 
-/** Edits the endpoint; `eventTypes: null` = every event type. A new URL is re-validated (W7). */
+/**
+ * Edits the endpoint; `eventTypes: null` = every event type, `authKey: null`
+ * removes the key (omitted = unchanged). A new URL is re-validated (W7).
+ */
 export const update = mutation({
   args: {
     endpointId: v.id("webhookEndpoints"),
     url: v.optional(v.string()),
     eventTypes: v.optional(v.union(v.null(), v.array(v.string()))),
     excludeClientIds: v.optional(v.array(v.string())),
+    authKey: v.optional(v.union(v.null(), v.string())),
     enabled: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
@@ -489,6 +512,7 @@ export const update = mutation({
       checkClientIds(args.excludeClientIds);
       patch.excludeClientIds = args.excludeClientIds;
     }
+    if (args.authKey !== undefined) patch.authKey = args.authKey === null ? undefined : normalizeAuthKey(args.authKey);
     if (args.enabled !== undefined) patch.enabled = args.enabled;
     await ctx.db.patch(endpoint._id, patch);
     return null;

@@ -995,6 +995,9 @@ export default defineSchema({
     secretHint: v.string(),                      // last 4 chars, for the UI
     eventTypes: v.optional(v.array(v.string())), // undefined = every activity type
     excludeClientIds: v.array(v.string()),       // W5: OAuth clients whose writes are not delivered
+    // Optional key sent as `Authorization: Bearer <key>`, for receivers that
+    // require one (e.g. agent automation webhooks). Never returned; a hint only.
+    authKey: v.optional(v.string()),
     enabled: v.boolean(),
     createdBy: v.id("users"),
     createdAt: v.number(),

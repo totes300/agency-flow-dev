@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as __tests___helpers_appUploads from "../__tests__/helpers/appUploads.js";
 import type * as __tests___helpers_billingWorld from "../__tests__/helpers/billingWorld.js";
 import type * as __tests___helpers_mcpConnections from "../__tests__/helpers/mcpConnections.js";
 import type * as __tests___helpers_orgSnapshot from "../__tests__/helpers/orgSnapshot.js";
@@ -167,6 +168,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  "__tests__/helpers/appUploads": typeof __tests___helpers_appUploads;
   "__tests__/helpers/billingWorld": typeof __tests___helpers_billingWorld;
   "__tests__/helpers/mcpConnections": typeof __tests___helpers_mcpConnections;
   "__tests__/helpers/orgSnapshot": typeof __tests___helpers_orgSnapshot;

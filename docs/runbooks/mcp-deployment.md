@@ -123,7 +123,7 @@ Defined in `convex/crons.ts`; they deploy with the functions. Each runs hourly:
 | `mcp billing preview cleanup` | Billing previews older than 24 h (tokens commit within 10 minutes, §9). |
 | `mcp upload cleanup` | Upload announcements after 25 h, and the blobs of uploads that were never attached (§10). |
 | `app upload cleanup` | The same for the app UI's `fileUploads` rows (`convex/fileUploads.ts`). |
-| `webhook delivery cleanup` | Webhook delivery attempts older than 7 days (W6, section "Webhooks"). |
+| `webhook delivery cleanup` | Webhook delivery attempts older than 7 days (W6, section "Webhooks"); first it closes attempts interrupted mid-delivery. |
 
 After the deploy, confirm all of them are listed in the Convex dashboard (Schedules →
 Cron jobs) and that their first runs succeed.
@@ -227,11 +227,23 @@ supplies the app origin for task links and for the "not the app itself" URL chec
 - **Flow:** `logActivity` queues every activity row for the org's enabled endpoint
   (type filter, excluded OAuth clients); `webhooks:deliver` POSTs it signed, with a
   10 s timeout, and retries after 30 s, 5 min and 30 min before leaving it failed.
-  A failing endpoint never blocks or fails the write.
+  A failing endpoint never blocks or fails the write. Outcomes are written only to
+  `webhookDeliveries`; the endpoint row is never stamped (every activity write reads
+  it, so stamping it per attempt made concurrent writes retry). Its "last delivery"
+  is the newest finished attempt, by when it ran (`startedAt`). The
+  `lastDelivery*` fields on `webhookEndpoints` are legacy and no longer written.
+- **Interrupted attempts:** an attempt whose action died after it started (action
+  timeout, a deploy) stays `pending` with a `startedAt`. The hourly `webhook delivery
+  cleanup` closes such rows older than 5 minutes as failed, `Attempt interrupted`,
+  and queues the next attempt when retries remain (event deliveries only; a test
+  event is not retried). So a row can sit `pending` for up to about an hour before
+  it is closed; a late outcome from the dead attempt is ignored.
 - **Reading failures:** filter the Convex logs on `[webhook]`; each attempt logs one
   line, `[webhook] delivery <id> attempt <n> ok|failed`, never the URL, secret or
   response. The row's `error` is short (`HTTP 503`, `Network error`, `Timed out after
-  10 s`, `Endpoint removed or disabled`); the endpoint shows the last outcome.
+  10 s`, `Endpoint removed or disabled`, `Event not found` when the task and its
+  activity were deleted before delivery, `Attempt interrupted`); the endpoint shows
+  the last outcome.
 - **Authorization key (optional):** receivers that require a bearer key (e.g. Cursor
   automation webhooks answer 401 without one) get it from the endpoint's
   "Authorization key" field as `Authorization: Bearer <key>` on every POST, next to the

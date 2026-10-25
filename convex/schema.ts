@@ -1002,6 +1002,9 @@ export default defineSchema({
     createdBy: v.id("users"),
     createdAt: v.number(),
     updatedAt: v.number(),
+    // Legacy, no longer written: the last delivery is read from
+    // `webhookDeliveries` (every activity write reads this row, so stamping it
+    // per attempt made concurrent writes retry, W8). Kept so existing rows validate.
     lastDeliveryAt: v.optional(v.number()),
     lastDeliveryStatus: v.optional(v.union(v.literal("ok"), v.literal("failed"))),
     lastDeliveryHttpStatus: v.optional(v.number()),
@@ -1017,9 +1020,12 @@ export default defineSchema({
     status: v.union(v.literal("pending"), v.literal("ok"), v.literal("failed")),
     httpStatus: v.optional(v.number()),
     error: v.optional(v.string()),               // short, no response bodies
-    createdAt: v.number(),
+    createdAt: v.number(),                       // queued; a retry runs nextAttemptAt of the row before
+    startedAt: v.optional(v.number()),           // `deliver` began this attempt
     nextAttemptAt: v.optional(v.number()),       // set on a failed attempt that is retried
   })
     .index("by_endpointId_createdAt", ["endpointId", "createdAt"])
-    .index("by_createdAt", ["createdAt"]),
+    .index("by_createdAt", ["createdAt"])
+    // Started attempts still pending: the hourly cleanup closes stale ones.
+    .index("by_status_startedAt", ["status", "startedAt"]),
 });

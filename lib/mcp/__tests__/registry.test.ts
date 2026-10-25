@@ -522,7 +522,7 @@ describe("time tools", () => {
       });
       expect(tool(name).description).toMatch(/Example: \{/);
     }
-    const timeItem = z.toJSONSchema(tool("save_time_entries").inputSchema) as {
+    const timeItem = z.toJSONSchema(tool("save_time_entries").inputSchema) as unknown as {
       properties: { items: { items: { properties: { minutes: { description: string } } } } };
     };
     expect(timeItem.properties.items.items.properties.minutes.description).toMatch(/Whole minutes: 90 = 1h 30m/);

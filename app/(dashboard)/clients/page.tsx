@@ -6,14 +6,14 @@ import { api } from "@/convex/_generated/api"
 import {
   DirectoryView,
   DirectoryEmpty,
+  DirectorySkeleton,
 } from "@/components/directory/directory-view"
 import {
-  DirectoryMenu,
+  DirectoryDisplayMenu,
   DirectoryMenuOptions,
 } from "@/components/directory/directory-menu"
 import { DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
 import { ConfirmDialog } from "@/components/confirm-dialog"
-import { ClientsListSkeleton } from "@/components/clients/clients-list-skeleton"
 import { ClientsTable } from "@/components/clients/clients-table"
 import dynamic from "next/dynamic"
 const ClientFormModal = dynamic(() =>
@@ -31,7 +31,11 @@ type SortBy = "name" | "projects"
 
 export default function ClientsPage() {
   const [includeArchived, setIncludeArchived] = useState(false)
-  const clients = useQuery(api.clients.listWithContacts, { includeArchived })
+  // One subscription for both tabs: Active/All re-filters loaded rows, so a
+  // switch never drops back to the skeleton (or loses keyboard focus).
+  const clients = useQuery(api.clients.listWithContacts, {
+    includeArchived: true,
+  })
   const archiveClient = useMutation(api.clients.archive)
   const restoreClient = useMutation(api.clients.restore)
   const removeClient = useMutation(api.clients.remove)
@@ -55,6 +59,7 @@ export default function ClientsPage() {
     const q = deferredSearch.toLowerCase()
     for (const c of clients) {
       if (hiddenIds.has(c._id)) continue
+      if (!includeArchived && c.archivedAt) continue
       if (q && !c.name.toLowerCase().includes(q)) continue
       result.push(c)
     }
@@ -66,7 +71,7 @@ export default function ClientsPage() {
       return a.name.localeCompare(b.name)
     })
     return result
-  }, [clients, hiddenIds, deferredSearch, sortBy])
+  }, [clients, hiddenIds, includeArchived, deferredSearch, sortBy])
 
   const groupedClients = useMemo(() => {
     if (groupBy === "none") return null
@@ -79,7 +84,7 @@ export default function ClientsPage() {
     return groups
   }, [groupBy, processedClients])
 
-  if (!clients) return <ClientsListSkeleton />
+  if (!clients) return <DirectorySkeleton />
 
   function handleArchive(
     client: Doc<"clients"> & { activeProjectCount: number },
@@ -140,9 +145,9 @@ export default function ClientsPage() {
       onSearchChange={setSearch}
       onCreate={() => setCreateOpen(true)}
       controls={
-        <DirectoryMenu
+        <DirectoryDisplayMenu
           label="Client display options"
-          active={sortBy !== "name" || groupBy !== "none"}
+          modified={sortBy !== "name" || groupBy !== "none"}
         >
           <DirectoryMenuOptions<GroupBy>
             label="Group by"
@@ -163,7 +168,7 @@ export default function ClientsPage() {
               { value: "projects", label: "Active projects" },
             ]}
           />
-        </DirectoryMenu>
+        </DirectoryDisplayMenu>
       }
     >
       {/* Table */}
@@ -171,9 +176,11 @@ export default function ClientsPage() {
         <DirectoryEmpty
           name="clients"
           filtered={!!search}
+          hasArchived={!includeArchived && clients.some((c) => c.archivedAt)}
           onReset={() => {
             setSearch("")
           }}
+          onShowAll={() => setIncludeArchived(true)}
           onCreate={() => setCreateOpen(true)}
         />
       ) : (

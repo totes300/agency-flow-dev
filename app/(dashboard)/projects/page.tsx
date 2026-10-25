@@ -6,15 +6,23 @@ import { api } from "@/convex/_generated/api"
 import {
   DirectoryView,
   DirectoryEmpty,
+  DirectorySkeleton,
 } from "@/components/directory/directory-view"
 import {
-  DirectoryMenu,
+  DirectoryDisplayMenu,
   DirectoryMenuOptions,
 } from "@/components/directory/directory-menu"
-import { DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
+import {
+  FacetFilterButton,
+  FacetFilterChips,
+  type FacetFilterContext,
+} from "@/components/filters/facet-filter"
 import { ConfirmDialog } from "@/components/confirm-dialog"
-import { ProjectsListSkeleton } from "@/components/projects/projects-list-skeleton"
 import { ProjectsTable } from "@/components/projects/projects-table"
+import {
+  PROJECT_FILTER_FIELDS,
+  type ProjectFilterKey,
+} from "@/components/projects/project-filter-fields"
 import dynamic from "next/dynamic"
 const ProjectFormModal = dynamic(() =>
   import("@/components/projects/project-form-modal").then((m) => ({
@@ -22,19 +30,23 @@ const ProjectFormModal = dynamic(() =>
   })),
 )
 import { useUndoAction } from "@/lib/hooks/use-undo-action"
-import { ListFilterIcon } from "lucide-react"
+import {
+  applyFacetFilters,
+  hasActiveFacets,
+  type FacetSelection,
+} from "@/lib/facet-filter"
 import { toast } from "sonner"
 import { toastArchiveSuccess } from "@/lib/toast-helpers"
 import type { Doc } from "@/convex/_generated/dataModel"
 
 type SortBy = "name" | "client"
-type FilterClient = "all" | string
-type FilterType = "all" | "fixed" | "t_and_m" | "retainer" | "non_billable"
+type ProjectRow = Doc<"projects"> & { clientName: string; currency: string }
 
 export default function ProjectsPage() {
   const [includeArchived, setIncludeArchived] = useState(false)
-  const projects = useQuery(api.projects.list, { includeArchived })
-  const clientsList = useQuery(api.clients.list, { includeArchived: false })
+  // One subscription for both tabs: Active/All re-filters loaded rows, so a
+  // switch never drops back to the skeleton (or loses keyboard focus).
+  const projects = useQuery(api.projects.list, { includeArchived: true })
   const archiveProject = useMutation(api.projects.archive)
   const restoreProject = useMutation(api.projects.restore)
   const removeProject = useMutation(api.projects.remove)
@@ -42,32 +54,31 @@ export default function ProjectsPage() {
   const [search, setSearch] = useState("")
   const deferredSearch = useDeferredValue(search)
   const [sortBy, setSortBy] = useState<SortBy>("name")
-  const [filterClient, setFilterClient] = useState<FilterClient>("all")
-  const [filterType, setFilterType] = useState<FilterType>("all")
+  const [filters, setFilters] = useState<FacetSelection<ProjectFilterKey>>({})
   const [createOpen, setCreateOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<Doc<"projects"> | null>(null)
 
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set())
   const { trigger: triggerUndo } = useUndoAction()
 
-  const processedProjects = useMemo(() => {
+  // The tab's rows (minus optimistically archived ones), narrowed by search;
+  // the filter facets count over these.
+  const tabProjects = useMemo(() => {
     if (!projects) return []
-    const result = []
-    for (const p of projects) {
-      if (hiddenIds.has(p._id)) continue
-      if (filterClient !== "all" && p.clientId !== filterClient) continue
-      if (filterType !== "all" && p.billingType !== filterType) continue
-      if (deferredSearch) {
-        const q = deferredSearch.toLowerCase()
-        if (
-          !p.name.toLowerCase().includes(q) &&
-          !p.code.toLowerCase().includes(q) &&
-          !p.clientName.toLowerCase().includes(q)
-        )
-          continue
-      }
-      result.push(p)
-    }
+    const q = deferredSearch.toLowerCase()
+    return projects.filter(
+      (p) =>
+        !hiddenIds.has(p._id) &&
+        (includeArchived || !p.archivedAt) &&
+        (!q ||
+          p.name.toLowerCase().includes(q) ||
+          p.code.toLowerCase().includes(q) ||
+          p.clientName.toLowerCase().includes(q)),
+    )
+  }, [projects, hiddenIds, includeArchived, deferredSearch])
+
+  const processedProjects = useMemo(() => {
+    const result = applyFacetFilters(tabProjects, PROJECT_FILTER_FIELDS, filters)
     result.sort((a, b) => {
       if (sortBy === "client") {
         const diff = a.clientName.localeCompare(b.clientName)
@@ -76,11 +87,18 @@ export default function ProjectsPage() {
       return a.name.localeCompare(b.name)
     })
     return result
-  }, [projects, hiddenIds, deferredSearch, sortBy, filterClient, filterType])
+  }, [tabProjects, filters, sortBy])
 
-  if (!projects) return <ProjectsListSkeleton />
+  const filterCtx: FacetFilterContext<ProjectRow, ProjectFilterKey> = {
+    items: tabProjects,
+    fields: PROJECT_FILTER_FIELDS,
+    selection: filters,
+    onChange: setFilters,
+  }
 
-  function handleArchive(project: Doc<"projects"> & { clientName: string }) {
+  if (!projects) return <DirectorySkeleton />
+
+  function handleArchive(project: ProjectRow) {
     const projectId = project._id
     setHiddenIds((prev) => new Set(prev).add(projectId))
 
@@ -146,40 +164,10 @@ export default function ProjectsPage() {
       onCreate={() => setCreateOpen(true)}
       controls={
         <>
-          <DirectoryMenu
-            label="Filter projects"
-            active={filterClient !== "all" || filterType !== "all"}
-            icon={<ListFilterIcon />}
-          >
-            <DirectoryMenuOptions
-              label="Client"
-              value={filterClient}
-              onChange={setFilterClient}
-              options={[
-                { value: "all", label: "All clients" },
-                ...(clientsList ?? []).map((client) => ({
-                  value: client._id,
-                  label: client.name,
-                })),
-              ]}
-            />
-            <DropdownMenuSeparator />
-            <DirectoryMenuOptions<FilterType>
-              label="Billing type"
-              value={filterType}
-              onChange={setFilterType}
-              options={[
-                { value: "all", label: "All types" },
-                { value: "fixed", label: "Fixed" },
-                { value: "t_and_m", label: "Time & materials" },
-                { value: "retainer", label: "Retainer" },
-                { value: "non_billable", label: "Non-billable" },
-              ]}
-            />
-          </DirectoryMenu>
-          <DirectoryMenu
+          <FacetFilterButton ctx={filterCtx} label="Filter projects" />
+          <DirectoryDisplayMenu
             label="Project display options"
-            active={sortBy !== "name"}
+            modified={sortBy !== "name"}
           >
             <DirectoryMenuOptions<SortBy>
               label="Sort by"
@@ -190,20 +178,26 @@ export default function ProjectsPage() {
                 { value: "client", label: "Client" },
               ]}
             />
-          </DirectoryMenu>
+          </DirectoryDisplayMenu>
         </>
       }
+      filters={<FacetFilterChips ctx={filterCtx} />}
     >
       {/* Table */}
       {processedProjects.length === 0 ? (
         <DirectoryEmpty
           name="projects"
-          filtered={!!search || filterClient !== "all" || filterType !== "all"}
+          filtered={
+            !!search || hasActiveFacets(PROJECT_FILTER_FIELDS, filters)
+          }
+          hasArchived={
+            !includeArchived && projects.some((p) => p.archivedAt)
+          }
           onReset={() => {
             setSearch("")
-            setFilterClient("all")
-            setFilterType("all")
+            setFilters({})
           }}
+          onShowAll={() => setIncludeArchived(true)}
           onCreate={() => setCreateOpen(true)}
         />
       ) : (

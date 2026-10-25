@@ -1,7 +1,6 @@
 "use client"
 
 import type { ReactNode } from "react"
-import { SlidersHorizontalIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -11,29 +10,35 @@ import {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
 } from "@/components/ui/dropdown-menu"
+import { DisplayNavIcon } from "@/components/icons/nav-icons"
 
-export function DirectoryMenu({
+/**
+ * The directory's display options (sort / group). Same round trigger as the
+ * task view's DisplayMenu: the small primary dot marks a non-default display.
+ */
+export function DirectoryDisplayMenu({
   label,
-  active = false,
-  icon,
+  modified = false,
   children,
 }: {
   label: string
-  active?: boolean
-  icon?: ReactNode
+  modified?: boolean
   children: ReactNode
 }) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button
-          variant={active ? "secondary" : "outline"}
+          variant="outline"
           size="icon-sm"
-          className="rounded-full"
-          aria-label={label}
+          className="relative rounded-full"
+          aria-label={modified ? `${label} (modified)` : label}
           title={label}
         >
-          {icon ?? <SlidersHorizontalIcon />}
+          <DisplayNavIcon />
+          {modified ? (
+            <span className="absolute top-1 right-1 size-1.5 rounded-full bg-primary ring-2 ring-background" />
+          ) : null}
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent

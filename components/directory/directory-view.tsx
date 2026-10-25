@@ -2,11 +2,12 @@
 
 import { cn } from "@/lib/utils"
 import type { ReactNode } from "react"
-import { SquarePenIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { ComposeIcon } from "@/components/icons/nav-icons"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { SearchBox } from "@/components/task-view/search-box"
 import { Skeleton } from "@/components/ui/skeleton"
+import { TASK_VIEW_PANEL_CLASS } from "@/components/task-view/task-view-skeleton"
 import {
   Empty,
   EmptyHeader,
@@ -14,10 +15,12 @@ import {
   EmptyDescription,
 } from "@/components/ui/empty"
 
-/** Matches the task surface: one compact toolbar and an independently scrolling list. */
-export const DIRECTORY_PANEL_CLASS =
-  "flex h-[calc(100svh-3rem)] min-h-[28rem] w-full flex-col overflow-hidden border-t border-border/60 bg-background md:h-[calc(100svh-4rem)]"
-
+/**
+ * A directory list (projects, clients) on the task surface's panel: one
+ * compact toolbar, the active filter chips under it, and an independently
+ * scrolling list. Pages feed both tabs from one loaded list, so switching
+ * Active/All never unmounts the toolbar.
+ */
 export function DirectoryView({
   name,
   includeArchived,
@@ -26,6 +29,7 @@ export function DirectoryView({
   onSearchChange,
   onCreate,
   controls,
+  filters,
   children,
 }: {
   name: "projects" | "clients"
@@ -35,6 +39,8 @@ export function DirectoryView({
   onSearchChange: (value: string) => void
   onCreate: () => void
   controls: ReactNode
+  /** The active filter chip row, rendered under the toolbar. */
+  filters?: ReactNode
   children: ReactNode
 }) {
   const view = includeArchived ? "all" : "active"
@@ -42,13 +48,13 @@ export function DirectoryView({
     <Tabs
       value={view}
       onValueChange={(value) => onIncludeArchivedChange(value === "all")}
-      className={cn(DIRECTORY_PANEL_CLASS, "gap-0")}
+      className={cn(TASK_VIEW_PANEL_CLASS, "gap-0")}
       data-full-bleed
     >
       <h1 className="sr-only">
         {name === "projects" ? "Projects" : "Clients"}
       </h1>
-      <div className="flex min-h-12 shrink-0 flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2">
+      <div className="flex min-h-12 shrink-0 flex-wrap items-center gap-2 px-3 py-2">
         <TabsList variant="pill" aria-label={`${name} views`}>
           <TabsTrigger value="active">Active</TabsTrigger>
           <TabsTrigger value="all">All {name}</TabsTrigger>
@@ -68,48 +74,72 @@ export function DirectoryView({
             aria-label={`Create ${name === "projects" ? "project" : "client"}`}
             title={`Create ${name === "projects" ? "project" : "client"}`}
           >
-            <SquarePenIcon />
+            <ComposeIcon />
           </Button>
         </div>
       </div>
-      <TabsContent key={view} value={view} className="min-h-0 overflow-auto">
+      {filters}
+      <TabsContent
+        key={view}
+        value={view}
+        className="min-h-0 overflow-auto border-t border-border/60"
+      >
         {children}
       </TabsContent>
     </Tabs>
   )
 }
 
+/**
+ * Empty list. Three cases: the search/filters hide everything; the Active tab
+ * is empty while archived records exist (point to the All tab); or there is
+ * nothing at all yet.
+ */
 export function DirectoryEmpty({
   name,
   filtered,
+  hasArchived,
   onReset,
+  onShowAll,
   onCreate,
 }: {
   name: "projects" | "clients"
   filtered: boolean
+  /** Active tab only: archived records exist, so the list is not truly empty. */
+  hasArchived: boolean
   onReset: () => void
+  onShowAll: () => void
   onCreate: () => void
 }) {
+  const singular = name === "projects" ? "project" : "client"
+  const content = filtered
+    ? {
+        title: `No matching ${name}`,
+        description: "Try a different search or clear your filters.",
+        action: "Clear filters",
+        onClick: onReset,
+      }
+    : hasArchived
+      ? {
+          title: `No active ${name}`,
+          description: `Archived ${name} are listed under All ${name}.`,
+          action: `Show all ${name}`,
+          onClick: onShowAll,
+        }
+      : {
+          title: `No ${name} yet`,
+          description: `Create your first ${name === "projects" ? "project to organize work and track budgets" : "client to organize contacts and projects"}.`,
+          action: `Create ${singular}`,
+          onClick: onCreate,
+        }
   return (
     <Empty className="min-h-64">
       <EmptyHeader>
-        <EmptyTitle>
-          {filtered ? `No matching ${name}` : `No ${name} yet`}
-        </EmptyTitle>
-        <EmptyDescription>
-          {filtered
-            ? "Try a different search or clear your filters."
-            : `Create your first ${name === "projects" ? "project to organize work and track budgets" : "client to organize contacts and projects"}.`}
-        </EmptyDescription>
+        <EmptyTitle>{content.title}</EmptyTitle>
+        <EmptyDescription>{content.description}</EmptyDescription>
       </EmptyHeader>
-      <Button
-        variant="outline"
-        size="sm"
-        onClick={filtered ? onReset : onCreate}
-      >
-        {filtered
-          ? "Clear filters"
-          : `Create ${name === "projects" ? "project" : "client"}`}
+      <Button variant="outline" size="sm" onClick={content.onClick}>
+        {content.action}
       </Button>
     </Empty>
   )
@@ -121,7 +151,7 @@ export function DirectorySkeleton() {
       data-full-bleed
       aria-busy="true"
       aria-label="Loading directory"
-      className={DIRECTORY_PANEL_CLASS}
+      className={TASK_VIEW_PANEL_CLASS}
     >
       <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border/60 px-3">
         <Skeleton className="h-7 w-16 rounded-full" />

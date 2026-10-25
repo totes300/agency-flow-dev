@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   aggregateClientMonths,
+  aggregateClientTasks,
   aggregateOrgFinance,
   aggregateTimeByMember,
   classifyRetainerMonth,
@@ -192,6 +193,30 @@ describe("aggregateClientMonths", () => {
 });
 
 // ─── classifyRetainerMonth ───────────────────────────────────────────────────
+
+describe("aggregateClientTasks", () => {
+  it("rolls minutes up per task and keeps the notes oldest first, raw", () => {
+    const projectByTaskId = new Map([["t1", projectRef()], ["t2", projectRef({ projectId: "p2", projectName: "Ads" })]]);
+    const rows = aggregateClientTasks({
+      projectByTaskId,
+      entries: [
+        { ...entry({ taskId: "t1", date: "2026-06-12", durationMinutes: 47 }), note: "  Second pass  ", startedAt: 2 },
+        { ...entry({ taskId: "t1", date: "2026-06-10", durationMinutes: 13, isBillable: false }), note: "First", startedAt: 1 },
+        { ...entry({ taskId: "t1", date: "2026-06-12", durationMinutes: 5 }), note: "", startedAt: 1 },
+        { ...entry({ taskId: "t2", date: "2026-06-11", durationMinutes: 90 }) },
+      ],
+    });
+    expect(rows.map((r) => [r.taskId, r.minutes, r.billableMinutes, r.nonBillableMinutes, r.entryCount])).toEqual([
+      ["t2", 90, 90, 0, 1],
+      ["t1", 65, 52, 13, 3],
+    ]);
+    expect(rows[1].notes).toEqual([
+      { date: "2026-06-10", minutes: 13, note: "First" },
+      { date: "2026-06-12", minutes: 47, note: "Second pass" },
+    ]);
+    expect(rows[0]).toMatchObject({ projectId: "p2", projectName: "Ads", notes: [] });
+  });
+});
 
 describe("classifyRetainerMonth", () => {
   it("classifies each balance state", () => {

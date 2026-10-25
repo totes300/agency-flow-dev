@@ -1,6 +1,6 @@
-import { query, mutation } from "./_generated/server";
+import { query, mutation, type QueryCtx } from "./_generated/server";
 import { v, ConvexError } from "convex/values";
-import { requireAdmin, validateStringLength } from "./lib/auth";
+import { assertAdmin, requireAdmin, validateStringLength, type AuthContext } from "./lib/auth";
 import { getOrgSettings, getProjectCurrency } from "./lib/orgHelpers";
 import { getDateInTimezone, ORG_TIMEZONE_FALLBACK } from "./lib/timer";
 import {
@@ -216,82 +216,86 @@ export const hasAnyInvoice = query({
  */
 export const getInvoiceMetrics = query({
   args: {},
-  handler: async (ctx) => {
-    const { orgId } = await requireAdmin(ctx);
-
-    const invoices = await ctx.db
-      .query("invoices")
-      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
-      .collect();
-
-    const orgSettings = await getOrgSettings(ctx, orgId);
-    const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
-    const todayStr = getDateInTimezone(Date.now(), timezone);
-    // Current month in org timezone, e.g. "2026-04"
-    const currentYearMonth = todayStr.slice(0, 7);
-
-    // Sums run in minor units per currency, converted once for display.
-    type Bucket = { count: number; currencySums: Record<string, number> };
-    const empty = (): Bucket => ({ count: 0, currencySums: {} });
-    const draft = empty();
-    const unpaid = empty();
-    const pastDue = empty();
-    const paidThisMonth = empty();
-
-    function accumulate(bucket: Bucket, inv: Doc<"invoices">) {
-      bucket.count += 1;
-      bucket.currencySums[inv.currency] =
-        (bucket.currencySums[inv.currency] ?? 0) + inv.totalMinor;
-    }
-    const toDisplay = (bucket: Bucket): Bucket => ({
-      count: bucket.count,
-      currencySums: Object.fromEntries(
-        Object.entries(bucket.currencySums).map(([cur, minor]) => [cur, fromMinor(minor, cur)]),
-      ),
-    });
-
-    for (const inv of invoices) {
-      if (inv.status === "void") continue;
-
-      if (inv.status === "draft") {
-        accumulate(draft, inv);
-      } else if (inv.status === "invoiced") {
-        // Undefined dueDate has no overdue clock — stays in Unpaid.
-        if (inv.dueDate == null || inv.dueDate >= todayStr) {
-          accumulate(unpaid, inv);
-        } else {
-          accumulate(pastDue, inv);
-        }
-      } else if (inv.status === "paid") {
-        if (inv.paidAt != null) {
-          // Compare paid date in the org's timezone, not UTC, so early-morning
-          // payments on the 1st of the month aren't dropped for +UTC orgs.
-          const paidYearMonth = getDateInTimezone(inv.paidAt, timezone).slice(0, 7);
-          if (paidYearMonth === currentYearMonth) {
-            accumulate(paidThisMonth, inv);
-          }
-        }
-      }
-    }
-
-    // Everything issued and unpaid (unpaid + past due), for the hub summary.
-    const outstanding = empty();
-    for (const b of [unpaid, pastDue]) {
-      outstanding.count += b.count;
-      for (const [cur, minor] of Object.entries(b.currencySums)) {
-        outstanding.currencySums[cur] = (outstanding.currencySums[cur] ?? 0) + minor;
-      }
-    }
-
-    return {
-      draft: toDisplay(draft),
-      unpaid: toDisplay(unpaid),
-      pastDue: toDisplay(pastDue),
-      outstanding: toDisplay(outstanding),
-      paidThisMonth: toDisplay(paidThisMonth),
-    };
-  },
+  handler: async (ctx) => await getInvoiceMetricsForAuth(ctx, await requireAdmin(ctx)),
 });
+
+/** `getInvoiceMetrics` for an already-built auth context (UI and MCP `report`). Admin-only. */
+export async function getInvoiceMetricsForAuth(ctx: QueryCtx, auth: AuthContext) {
+  assertAdmin(auth);
+  const { orgId } = auth;
+
+  const invoices = await ctx.db
+    .query("invoices")
+    .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+    .collect();
+
+  const orgSettings = await getOrgSettings(ctx, orgId);
+  const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
+  const todayStr = getDateInTimezone(Date.now(), timezone);
+  // Current month in org timezone, e.g. "2026-04"
+  const currentYearMonth = todayStr.slice(0, 7);
+
+  // Sums run in minor units per currency, converted once for display.
+  type Bucket = { count: number; currencySums: Record<string, number> };
+  const empty = (): Bucket => ({ count: 0, currencySums: {} });
+  const draft = empty();
+  const unpaid = empty();
+  const pastDue = empty();
+  const paidThisMonth = empty();
+
+  function accumulate(bucket: Bucket, inv: Doc<"invoices">) {
+    bucket.count += 1;
+    bucket.currencySums[inv.currency] =
+      (bucket.currencySums[inv.currency] ?? 0) + inv.totalMinor;
+  }
+  const toDisplay = (bucket: Bucket): Bucket => ({
+    count: bucket.count,
+    currencySums: Object.fromEntries(
+      Object.entries(bucket.currencySums).map(([cur, minor]) => [cur, fromMinor(minor, cur)]),
+    ),
+  });
+
+  for (const inv of invoices) {
+    if (inv.status === "void") continue;
+
+    if (inv.status === "draft") {
+      accumulate(draft, inv);
+    } else if (inv.status === "invoiced") {
+      // Undefined dueDate has no overdue clock — stays in Unpaid.
+      if (inv.dueDate == null || inv.dueDate >= todayStr) {
+        accumulate(unpaid, inv);
+      } else {
+        accumulate(pastDue, inv);
+      }
+    } else if (inv.status === "paid") {
+      if (inv.paidAt != null) {
+        // Compare paid date in the org's timezone, not UTC, so early-morning
+        // payments on the 1st of the month aren't dropped for +UTC orgs.
+        const paidYearMonth = getDateInTimezone(inv.paidAt, timezone).slice(0, 7);
+        if (paidYearMonth === currentYearMonth) {
+          accumulate(paidThisMonth, inv);
+        }
+      }
+    }
+  }
+
+  // Everything issued and unpaid (unpaid + past due), for the hub summary.
+  const outstanding = empty();
+  for (const b of [unpaid, pastDue]) {
+    outstanding.count += b.count;
+    for (const [cur, minor] of Object.entries(b.currencySums)) {
+      outstanding.currencySums[cur] = (outstanding.currencySums[cur] ?? 0) + minor;
+    }
+  }
+
+  return {
+    draft: toDisplay(draft),
+    unpaid: toDisplay(unpaid),
+    pastDue: toDisplay(pastDue),
+    outstanding: toDisplay(outstanding),
+    paidThisMonth: toDisplay(paidThisMonth),
+  };
+}
 
 /**
  * Inbox empty-state context — feeds the "All caught up" reward state.

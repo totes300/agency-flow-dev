@@ -1,5 +1,5 @@
 import { v, ConvexError } from "convex/values";
-import { query, mutation, type MutationCtx } from "./_generated/server";
+import { query, mutation, type MutationCtx, type QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { getAuthContext, type AuthContext } from "./lib/auth";
 import { roundMinutes } from "./lib/rounding";
@@ -928,211 +928,218 @@ export const listProjectEntries = query({
  */
 export const projectOverview = query({
   args: { projectId: v.id("projects") },
-  handler: async (ctx, args) => {
-    const { orgId } = await getAuthContext(ctx);
-
-    const project = await ctx.db.get(args.projectId);
-    if (!project || project.orgId !== orgId) return null;
-
-    // Every entry of the project, archived tasks included (historical reporting).
-    const allEntries = (await getProjectEntries(ctx, orgId, args.projectId)).map((e) => ({
-      ...e,
-      workCategoryId: e.snapshotCategoryId,
-    }));
-    const closeInfo = await loadEntryCloseInfo(ctx, orgId, allEntries);
-
-    // Get org timezone for "this month" computation
-    const orgSettings = await getOrgSettings(ctx, orgId);
-    const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
-    const nowDate = getDateInTimezone(Date.now(), timezone);
-    const currentMonth = nowDate.slice(0, 7); // "YYYY-MM"
-
-    // Compute aggregates
-    let totalMinutes = 0;
-    let totalBillableMinutes = 0;
-    let totalNonBillableMinutes = 0;
-    let thisMonthBillableMinutes = 0;
-    let totalActualCost = 0;
-    // FOUR buckets over billable entries, in lock-step with `entryStatus()`
-    // so the data shape matches the row display (`billableOverviewBucket`):
-    //   open      → no live close (needs billing or closure)
-    //   draft     → close with a draft invoice (revenue not yet realized)
-    //   invoiced  → final T&M close (billed hourly — revenue)
-    //   settled   → final retainer close (covered, no extra revenue)
-    //
-    // The draft bucket is deliberate: a draft invoice has reserved hours
-    // but no finalized revenue. Lumping draft into invoiced would inflate
-    // T&M "billed" totals before the invoice is sent; lumping into open
-    // would falsely surface those hours in the Ready feed. Distinct bucket
-    // keeps reports honest and matches what the row badge already shows.
-    let openMinutes = 0;
-    let openAmount = 0;
-    // `openAmount` (the "ready to bill" number on the overview) groups like
-    // a T&M close — by (category, task, rate), rounded up with the
-    // workspace default.
-    const defaultRounding = orgSettings?.roundingMinutes ?? 1;
-    const openGroups = new Map<string, { minutes: number; rate: number }>();
-    let draftMinutes = 0;
-    let draftAmount = 0;
-    let invoicedMinutes = 0;
-    let invoicedAmount = 0;
-    let settledMinutes = 0;
-    let settledAmount = 0;
-    let lastLoggedDate: string | null = null;
-    const minutesByCategory: Record<string, number> = {};
-    const billableMinutesByCategory: Record<string, number> = {};
-    const billableByMonth: Record<string, number> = {};
-
-    for (const e of allEntries) {
-      totalMinutes += e.durationMinutes;
-
-      if (e.isBillable) {
-        totalBillableMinutes += e.durationMinutes;
-      } else {
-        totalNonBillableMinutes += e.durationMinutes;
-      }
-
-      // This month — billable only (displayed under T&M "Billable Time" card)
-      if (e.isBillable && e.date.startsWith(currentMonth)) {
-        thisMonthBillableMinutes += e.durationMinutes;
-      }
-
-      // Category breakdowns
-      const catKey = e.workCategoryId?.toString() ?? "uncategorized";
-      minutesByCategory[catKey] = (minutesByCategory[catKey] ?? 0) + e.durationMinutes;
-      if (e.isBillable) {
-        billableMinutesByCategory[catKey] =
-          (billableMinutesByCategory[catKey] ?? 0) + e.durationMinutes;
-      }
-
-      // Labor cost from costRate (all project types)
-      totalActualCost += (e.durationMinutes / 60) * (e.costRate ?? 0);
-
-      // Phase 8 — four-way split over billable entries via the shared
-      // `billableOverviewBucket` classifier. Pure helper so the rule is
-      // testable without convex-test and stays in lock-step with the row
-      // badge (`entryStatus()`).
-      //
-      // Retainer entries within budget have billableRate=0 today — they
-      // contribute to the bucket's minutes but $0 to its amount, which is
-      // correct (retainer revenue lives in `getRetainerData`'s cycle math).
-      if (e.isBillable) {
-        const amount = (e.durationMinutes / 60) * (e.billableRate ?? 0);
-        const close = e.closeId ? closeInfo.get(e.closeId) : undefined;
-        switch (billableOverviewBucket(close ?? {})) {
-          case "invoiced":
-            invoicedMinutes += e.durationMinutes;
-            invoicedAmount += amount;
-            break;
-          case "settled":
-            settledMinutes += e.durationMinutes;
-            settledAmount += amount;
-            break;
-          case "draft":
-            draftMinutes += e.durationMinutes;
-            draftAmount += amount;
-            break;
-          case "open": {
-            openMinutes += e.durationMinutes;
-            const rate = e.billableRate ?? 0;
-            const gKey = `${e.snapshotCategoryId ?? "none"}::${e.taskId}::${rate}`;
-            const g = openGroups.get(gKey) ?? { minutes: 0, rate };
-            g.minutes += e.durationMinutes;
-            openGroups.set(gKey, g);
-            break;
-          }
-        }
-      }
-
-      // Last logged date
-      if (!lastLoggedDate || e.date > lastLoggedDate) {
-        lastLoggedDate = e.date;
-      }
-
-      // Billable by month (for 3-month trend)
-      if (e.isBillable) {
-        const monthKey = e.date.slice(0, 7);
-        billableByMonth[monthKey] = (billableByMonth[monthKey] ?? 0) + e.durationMinutes;
-      }
-    }
-
-    // Materialize the open promise exactly as a T&M close prices it.
-    const currency = await getProjectCurrency(ctx, project);
-    let openAmountMinor = 0;
-    for (const g of openGroups.values()) {
-      openAmountMinor += priceMinutesMinor(
-        ceilToIncrement(g.minutes, defaultRounding),
-        toMinor(g.rate, currency),
-      );
-    }
-    openAmount = fromMinor(openAmountMinor, currency);
-
-    // Last 3 billable months: compute the 3 calendar months ending with current month
-    const last3BillableMonths = computeLast3Months(currentMonth).map((month) => ({
-      month,
-      minutes: billableByMonth[month] ?? 0,
-    }));
-
-    // Invoice count (for all billing types) + Fixed-specific revenue from
-    // `fixed`-type line items. Renamed `invoicedAmount` → `fixedLineItemsAmount`
-    // in Phase 8 to dodge the collision with the new entry-derived
-    // `invoicedAmount` bucket above (T&M / retainer overage time billed
-    // hourly via a finalized invoice).
-    let fixedLineItemsAmount = 0;
-    let invoiceCount = 0;
-    if (project.billingType === "fixed" || project.billingType === "t_and_m") {
-      const projectInvoices = await ctx.db
-        .query("invoices")
-        .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
-        .filter((q) => q.eq(q.field("orgId"), orgId))
-        .collect();
-      invoiceCount = projectInvoices.length;
-
-      if (project.billingType === "fixed") {
-        for (const inv of projectInvoices) {
-          const lineItems = await ctx.db
-            .query("invoiceLineItems")
-            .withIndex("by_invoiceId", (q) => q.eq("invoiceId", inv._id))
-            .filter((q) => q.eq(q.field("orgId"), orgId))
-            .collect();
-          for (const li of lineItems) {
-            if (li.lineType === "fixed") fixedLineItemsAmount += fromMinor(li.amountMinor, inv.currency);
-          }
-        }
-      }
-    }
-
-    return {
-      totalMinutes,
-      totalBillableMinutes,
-      totalNonBillableMinutes,
-      lastLoggedDate,
-      thisMonthBillableMinutes,
-      last3BillableMonths,
-      minutesByCategory,
-      billableMinutesByCategory,
-      totalActualCost,
-      // ─── Phase 8 — entry-derived billing buckets ────────────────────────
-      // Time-based figures from the entry ledger (hours × billableRate
-      // snapshot). Four buckets, lock-step with `entryStatus()`.
-      // For the Invoices tab "Total Invoiced" money figure (which includes
-      // manual/overage lines), use api.invoices.getProjectInvoiceMetrics
-      // instead — that one is invoice-derived, not entry-derived.
-      openMinutes,     // no live close
-      openAmount,
-      draftMinutes,    // close with a draft invoice
-      draftAmount,
-      invoicedMinutes, // final T&M close
-      invoicedAmount,
-      settledMinutes,  // final retainer close
-      settledAmount,
-      invoiceCount,
-      // Fixed-specific — sum of `fixed`-type line items across invoices.
-      // Distinct from `invoicedAmount` above (entry-derived).
-      fixedLineItemsAmount,
-    };
-  },
+  handler: async (ctx, args) => await projectOverviewForAuth(ctx, await getAuthContext(ctx), args),
 });
+
+/**
+ * `projectOverview` for an already-built auth context (UI and MCP `report`).
+ * Org-scoped only, exactly like the query; MCP gates it to admins (the
+ * project pages are admin routes).
+ */
+export async function projectOverviewForAuth(ctx: QueryCtx, auth: AuthContext, args: { projectId: Id<"projects"> }) {
+  const { orgId } = auth;
+
+  const project = await ctx.db.get(args.projectId);
+  if (!project || project.orgId !== orgId) return null;
+
+  // Every entry of the project, archived tasks included (historical reporting).
+  const allEntries = (await getProjectEntries(ctx, orgId, args.projectId)).map((e) => ({
+    ...e,
+    workCategoryId: e.snapshotCategoryId,
+  }));
+  const closeInfo = await loadEntryCloseInfo(ctx, orgId, allEntries);
+
+  // Get org timezone for "this month" computation
+  const orgSettings = await getOrgSettings(ctx, orgId);
+  const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
+  const nowDate = getDateInTimezone(Date.now(), timezone);
+  const currentMonth = nowDate.slice(0, 7); // "YYYY-MM"
+
+  // Compute aggregates
+  let totalMinutes = 0;
+  let totalBillableMinutes = 0;
+  let totalNonBillableMinutes = 0;
+  let thisMonthBillableMinutes = 0;
+  let totalActualCost = 0;
+  // FOUR buckets over billable entries, in lock-step with `entryStatus()`
+  // so the data shape matches the row display (`billableOverviewBucket`):
+  //   open      → no live close (needs billing or closure)
+  //   draft     → close with a draft invoice (revenue not yet realized)
+  //   invoiced  → final T&M close (billed hourly — revenue)
+  //   settled   → final retainer close (covered, no extra revenue)
+  //
+  // The draft bucket is deliberate: a draft invoice has reserved hours
+  // but no finalized revenue. Lumping draft into invoiced would inflate
+  // T&M "billed" totals before the invoice is sent; lumping into open
+  // would falsely surface those hours in the Ready feed. Distinct bucket
+  // keeps reports honest and matches what the row badge already shows.
+  let openMinutes = 0;
+  let openAmount = 0;
+  // `openAmount` (the "ready to bill" number on the overview) groups like
+  // a T&M close — by (category, task, rate), rounded up with the
+  // workspace default.
+  const defaultRounding = orgSettings?.roundingMinutes ?? 1;
+  const openGroups = new Map<string, { minutes: number; rate: number }>();
+  let draftMinutes = 0;
+  let draftAmount = 0;
+  let invoicedMinutes = 0;
+  let invoicedAmount = 0;
+  let settledMinutes = 0;
+  let settledAmount = 0;
+  let lastLoggedDate: string | null = null;
+  const minutesByCategory: Record<string, number> = {};
+  const billableMinutesByCategory: Record<string, number> = {};
+  const billableByMonth: Record<string, number> = {};
+
+  for (const e of allEntries) {
+    totalMinutes += e.durationMinutes;
+
+    if (e.isBillable) {
+      totalBillableMinutes += e.durationMinutes;
+    } else {
+      totalNonBillableMinutes += e.durationMinutes;
+    }
+
+    // This month — billable only (displayed under T&M "Billable Time" card)
+    if (e.isBillable && e.date.startsWith(currentMonth)) {
+      thisMonthBillableMinutes += e.durationMinutes;
+    }
+
+    // Category breakdowns
+    const catKey = e.workCategoryId?.toString() ?? "uncategorized";
+    minutesByCategory[catKey] = (minutesByCategory[catKey] ?? 0) + e.durationMinutes;
+    if (e.isBillable) {
+      billableMinutesByCategory[catKey] =
+        (billableMinutesByCategory[catKey] ?? 0) + e.durationMinutes;
+    }
+
+    // Labor cost from costRate (all project types)
+    totalActualCost += (e.durationMinutes / 60) * (e.costRate ?? 0);
+
+    // Phase 8 — four-way split over billable entries via the shared
+    // `billableOverviewBucket` classifier. Pure helper so the rule is
+    // testable without convex-test and stays in lock-step with the row
+    // badge (`entryStatus()`).
+    //
+    // Retainer entries within budget have billableRate=0 today — they
+    // contribute to the bucket's minutes but $0 to its amount, which is
+    // correct (retainer revenue lives in `getRetainerData`'s cycle math).
+    if (e.isBillable) {
+      const amount = (e.durationMinutes / 60) * (e.billableRate ?? 0);
+      const close = e.closeId ? closeInfo.get(e.closeId) : undefined;
+      switch (billableOverviewBucket(close ?? {})) {
+        case "invoiced":
+          invoicedMinutes += e.durationMinutes;
+          invoicedAmount += amount;
+          break;
+        case "settled":
+          settledMinutes += e.durationMinutes;
+          settledAmount += amount;
+          break;
+        case "draft":
+          draftMinutes += e.durationMinutes;
+          draftAmount += amount;
+          break;
+        case "open": {
+          openMinutes += e.durationMinutes;
+          const rate = e.billableRate ?? 0;
+          const gKey = `${e.snapshotCategoryId ?? "none"}::${e.taskId}::${rate}`;
+          const g = openGroups.get(gKey) ?? { minutes: 0, rate };
+          g.minutes += e.durationMinutes;
+          openGroups.set(gKey, g);
+          break;
+        }
+      }
+    }
+
+    // Last logged date
+    if (!lastLoggedDate || e.date > lastLoggedDate) {
+      lastLoggedDate = e.date;
+    }
+
+    // Billable by month (for 3-month trend)
+    if (e.isBillable) {
+      const monthKey = e.date.slice(0, 7);
+      billableByMonth[monthKey] = (billableByMonth[monthKey] ?? 0) + e.durationMinutes;
+    }
+  }
+
+  // Materialize the open promise exactly as a T&M close prices it.
+  const currency = await getProjectCurrency(ctx, project);
+  let openAmountMinor = 0;
+  for (const g of openGroups.values()) {
+    openAmountMinor += priceMinutesMinor(
+      ceilToIncrement(g.minutes, defaultRounding),
+      toMinor(g.rate, currency),
+    );
+  }
+  openAmount = fromMinor(openAmountMinor, currency);
+
+  // Last 3 billable months: compute the 3 calendar months ending with current month
+  const last3BillableMonths = computeLast3Months(currentMonth).map((month) => ({
+    month,
+    minutes: billableByMonth[month] ?? 0,
+  }));
+
+  // Invoice count (for all billing types) + Fixed-specific revenue from
+  // `fixed`-type line items. Renamed `invoicedAmount` → `fixedLineItemsAmount`
+  // in Phase 8 to dodge the collision with the new entry-derived
+  // `invoicedAmount` bucket above (T&M / retainer overage time billed
+  // hourly via a finalized invoice).
+  let fixedLineItemsAmount = 0;
+  let invoiceCount = 0;
+  if (project.billingType === "fixed" || project.billingType === "t_and_m") {
+    const projectInvoices = await ctx.db
+      .query("invoices")
+      .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
+      .filter((q) => q.eq(q.field("orgId"), orgId))
+      .collect();
+    invoiceCount = projectInvoices.length;
+
+    if (project.billingType === "fixed") {
+      for (const inv of projectInvoices) {
+        const lineItems = await ctx.db
+          .query("invoiceLineItems")
+          .withIndex("by_invoiceId", (q) => q.eq("invoiceId", inv._id))
+          .filter((q) => q.eq(q.field("orgId"), orgId))
+          .collect();
+        for (const li of lineItems) {
+          if (li.lineType === "fixed") fixedLineItemsAmount += fromMinor(li.amountMinor, inv.currency);
+        }
+      }
+    }
+  }
+
+  return {
+    totalMinutes,
+    totalBillableMinutes,
+    totalNonBillableMinutes,
+    lastLoggedDate,
+    thisMonthBillableMinutes,
+    last3BillableMonths,
+    minutesByCategory,
+    billableMinutesByCategory,
+    totalActualCost,
+    // ─── Phase 8 — entry-derived billing buckets ────────────────────────
+    // Time-based figures from the entry ledger (hours × billableRate
+    // snapshot). Four buckets, lock-step with `entryStatus()`.
+    // For the Invoices tab "Total Invoiced" money figure (which includes
+    // manual/overage lines), use api.invoices.getProjectInvoiceMetrics
+    // instead — that one is invoice-derived, not entry-derived.
+    openMinutes,     // no live close
+    openAmount,
+    draftMinutes,    // close with a draft invoice
+    draftAmount,
+    invoicedMinutes, // final T&M close
+    invoicedAmount,
+    settledMinutes,  // final retainer close
+    settledAmount,
+    invoiceCount,
+    // Fixed-specific — sum of `fixed`-type line items across invoices.
+    // Distinct from `invoicedAmount` above (entry-derived).
+    fixedLineItemsAmount,
+  };
+}
 
 /**
  * Monthly breakdown of time entries for a project — grouped by month, then
@@ -1140,102 +1147,109 @@ export const projectOverview = query({
  */
 export const projectMonthlyBreakdown = query({
   args: { projectId: v.id("projects") },
-  handler: async (ctx, args) => {
-    const { orgId } = await getAuthContext(ctx);
+  handler: async (ctx, args) => await projectMonthlyBreakdownForAuth(ctx, await getAuthContext(ctx), args),
+});
 
-    const project = await ctx.db.get(args.projectId);
-    if (!project || project.orgId !== orgId) return [];
+/** `projectMonthlyBreakdown` for an already-built auth context; same scoping note as `projectOverviewForAuth`. */
+export async function projectMonthlyBreakdownForAuth(
+  ctx: QueryCtx,
+  auth: AuthContext,
+  args: { projectId: Id<"projects"> },
+) {
+  const { orgId } = auth;
 
-    // Fetch all tasks (including archived)
-    const tasks = await ctx.db
-      .query("tasks")
-      .withIndex("by_orgId_projectId", (q) =>
-        q.eq("orgId", orgId).eq("projectId", args.projectId),
-      )
-      .collect();
+  const project = await ctx.db.get(args.projectId);
+  if (!project || project.orgId !== orgId) return [];
 
-    // Fetch work categories for enrichment
-    const categories = await ctx.db
-      .query("workCategories")
-      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
-      .collect();
-    const catMap = new Map(categories.map((c) => [c._id.toString(), c]));
+  // Fetch all tasks (including archived)
+  const tasks = await ctx.db
+    .query("tasks")
+    .withIndex("by_orgId_projectId", (q) =>
+      q.eq("orgId", orgId).eq("projectId", args.projectId),
+    )
+    .collect();
 
-    const taskById = new Map(tasks.map((t) => [t._id.toString(), t]));
-    const allEntries = (await getProjectEntries(ctx, orgId, args.projectId)).flatMap((e) => {
-      const task = taskById.get(e.taskId.toString());
-      if (!task) return [];
-      return [
-        {
-          ...e,
-          taskId: task._id.toString(),
-          taskTitle: task.title,
-          workCategoryId: e.snapshotCategoryId?.toString() ?? null,
-        },
-      ];
-    });
+  // Fetch work categories for enrichment
+  const categories = await ctx.db
+    .query("workCategories")
+    .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+    .collect();
+  const catMap = new Map(categories.map((c) => [c._id.toString(), c]));
 
-    // Group entries by month
-    const entriesByMonth: Record<string, typeof allEntries> = {};
-    for (const e of allEntries) {
-      const monthKey = e.date.slice(0, 7);
-      (entriesByMonth[monthKey] ??= []).push(e);
-    }
+  const taskById = new Map(tasks.map((t) => [t._id.toString(), t]));
+  const allEntries = (await getProjectEntries(ctx, orgId, args.projectId)).flatMap((e) => {
+    const task = taskById.get(e.taskId.toString());
+    if (!task) return [];
+    return [
+      {
+        ...e,
+        taskId: task._id.toString(),
+        taskTitle: task.title,
+        workCategoryId: e.snapshotCategoryId?.toString() ?? null,
+      },
+    ];
+  });
 
-    // Build month data
-    const months = Object.keys(entriesByMonth)
-      .sort((a, b) => b.localeCompare(a)) // descending
-      .map((monthKey) => {
-        const monthEntries = entriesByMonth[monthKey];
-        const billableEntries = monthEntries.filter((e) => e.isBillable);
-        const nonBillableEntries = monthEntries.filter((e) => !e.isBillable);
+  // Group entries by month
+  const entriesByMonth: Record<string, typeof allEntries> = {};
+  for (const e of allEntries) {
+    const monthKey = e.date.slice(0, 7);
+    (entriesByMonth[monthKey] ??= []).push(e);
+  }
 
-        const totalMinutes = monthEntries.reduce((s, e) => s + e.durationMinutes, 0);
-        // totalAmount: billable revenue from billableRate (T&M / Fixed only).
-        // Retainer entries have billableRate=0; retainer revenue is cycle-level.
-        const totalAmount = billableEntries.reduce(
-          (s, e) => s + (e.durationMinutes / 60) * (e.billableRate ?? 0),
-          0,
-        );
+  // Build month data
+  const months = Object.keys(entriesByMonth)
+    .sort((a, b) => b.localeCompare(a)) // descending
+    .map((monthKey) => {
+      const monthEntries = entriesByMonth[monthKey];
+      const billableEntries = monthEntries.filter((e) => e.isBillable);
+      const nonBillableEntries = monthEntries.filter((e) => !e.isBillable);
 
-        const billableCategoryGroups = buildCategoryGroups(
-          billableEntries,
-          catMap,
-          true, // billable entries always show amounts
-        );
-        const nonBillableCategoryGroups = buildCategoryGroups(
-          nonBillableEntries,
-          catMap,
-          false, // non-billable never shows amounts
-        );
+      const totalMinutes = monthEntries.reduce((s, e) => s + e.durationMinutes, 0);
+      // totalAmount: billable revenue from billableRate (T&M / Fixed only).
+      // Retainer entries have billableRate=0; retainer revenue is cycle-level.
+      const totalAmount = billableEntries.reduce(
+        (s, e) => s + (e.durationMinutes / 60) * (e.billableRate ?? 0),
+        0,
+      );
 
-        // Unique tasks and categories
-        const uniqueTaskIds = new Set(monthEntries.map((e) => e.taskId));
-        const uniqueCatIds = new Set(monthEntries.map((e) => e.workCategoryId ?? "uncategorized"));
+      const billableCategoryGroups = buildCategoryGroups(
+        billableEntries,
+        catMap,
+        true, // billable entries always show amounts
+      );
+      const nonBillableCategoryGroups = buildCategoryGroups(
+        nonBillableEntries,
+        catMap,
+        false, // non-billable never shows amounts
+      );
 
-        // Month label: "March 2026"
-        const [y, m] = monthKey.split("-").map(Number);
-        const monthLabel = new Date(y, m - 1, 1).toLocaleDateString("en-US", {
-          month: "long",
-          year: "numeric",
-        });
+      // Unique tasks and categories
+      const uniqueTaskIds = new Set(monthEntries.map((e) => e.taskId));
+      const uniqueCatIds = new Set(monthEntries.map((e) => e.workCategoryId ?? "uncategorized"));
 
-        return {
-          month: monthKey,
-          monthLabel,
-          totalMinutes,
-          totalAmount,
-          entryCount: monthEntries.length,
-          billableCategoryGroups,
-          nonBillableCategoryGroups,
-          taskCount: uniqueTaskIds.size,
-          categoryCount: uniqueCatIds.size,
-        };
+      // Month label: "March 2026"
+      const [y, m] = monthKey.split("-").map(Number);
+      const monthLabel = new Date(y, m - 1, 1).toLocaleDateString("en-US", {
+        month: "long",
+        year: "numeric",
       });
 
-    return months;
-  },
-});
+      return {
+        month: monthKey,
+        monthLabel,
+        totalMinutes,
+        totalAmount,
+        entryCount: monthEntries.length,
+        billableCategoryGroups,
+        nonBillableCategoryGroups,
+        taskCount: uniqueTaskIds.size,
+        categoryCount: uniqueCatIds.size,
+      };
+    });
+
+  return months;
+}
 
 // ─── Helpers ────────────────────────────────────────────────────────────────────
 

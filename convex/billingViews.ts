@@ -14,7 +14,7 @@
 import { v } from "convex/values";
 import { query, type QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
-import { requireAdmin } from "./lib/auth";
+import { assertAdmin, requireAdmin, type AuthContext } from "./lib/auth";
 import { getOrgSettings } from "./lib/orgHelpers";
 import { ORG_TIMEZONE_FALLBACK, getDateInTimezone } from "./lib/timer";
 import { computeCloseFlags, type CloseFlag, type RunningTimerInfo } from "./lib/closeFlags";
@@ -311,11 +311,14 @@ async function buildQueue(ctx: QueryCtx, orgId: string): Promise<CloseQueueData>
 /** Billing → Close: one row per project that has a period due. */
 export const getCloseQueue = query({
   args: {},
-  handler: async (ctx): Promise<CloseQueueData> => {
-    const { orgId } = await requireAdmin(ctx);
-    return buildQueue(ctx, orgId);
-  },
+  handler: async (ctx): Promise<CloseQueueData> => await getCloseQueueForAuth(ctx, await requireAdmin(ctx)),
 });
+
+/** `getCloseQueue` for an already-built auth context (UI and MCP `report`). Admin-only. */
+export async function getCloseQueueForAuth(ctx: QueryCtx, auth: AuthContext): Promise<CloseQueueData> {
+  assertAdmin(auth);
+  return buildQueue(ctx, auth.orgId);
+}
 
 /** Sidebar badge: to-generate / to-close rows from the queue, plus overdue invoices. */
 export const getNavSignals = query({

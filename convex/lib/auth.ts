@@ -152,6 +152,17 @@ export async function getAuthContextOptional(
 }
 
 /**
+ * Throws unless an already-built auth context is an admin's — the gate for
+ * `*ForAuth` cores, which take a context from either builder
+ * (`getAuthContext` or `getMcpAuthContext`). Same message as `requireAdmin`.
+ */
+export function assertAdmin(auth: Pick<AuthContext, "isAdmin">): void {
+  if (!auth.isAdmin) {
+    throw new ConvexError("Admin access required");
+  }
+}
+
+/**
  * Same as getAuthContext but throws if the user is not an admin.
  */
 export async function requireAdmin(

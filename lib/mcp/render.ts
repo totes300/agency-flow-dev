@@ -361,6 +361,13 @@ const ACTIVITY_TEXT: Record<string, (m: Record<string, unknown>) => string> = {
   identifier_changed: (m) => `changed the task key ${m.from ?? "none"} → ${m.to}`,
   task_archived: () => "archived the task",
   task_restored: () => "restored the task",
+  task_deleted: (m) => {
+    const parts = [
+      m.subtaskCount ? `${m.subtaskCount} ${m.subtaskCount === 1 ? "sub-task" : "sub-tasks"}` : null,
+      m.deletedTimeEntries ? `${m.deletedTimeEntries} ${m.deletedTimeEntries === 1 ? "time entry" : "time entries"}` : null,
+    ].filter(Boolean);
+    return `deleted task "${metaTitle(m.title)}"${parts.length > 0 ? ` (${parts.join(", ")})` : ""}`;
+  },
   comment_added: () => "commented",
   comment_resolved: () => "resolved a comment",
   comment_reopened: () => "re-opened a comment",
@@ -1140,10 +1147,12 @@ export function renderChanges(data: ChangesData, ctx: RenderContext): string {
       : `## Changes · ${data.changes.length} (oldest first, times in ${timezone})`;
   const introduced = new Set<string>();
   const lines = data.changes.map((c) => {
-    const first = !introduced.has(c.task.identifier);
+    const deleted = "deleted" in c.task && c.task.deleted === true;
+    const first = !introduced.has(c.task.identifier) && !deleted;
     introduced.add(c.task.identifier);
     const head = `- ${fields(
       formatTimestamp(c.at, timezone),
+      // A deleted task has no page: bare key, its title is in the change text.
       first ? `[${c.task.identifier}](${taskLink(ctx.appOrigin, c.task.identifier)})` : c.task.identifier,
       first ? shortTitle(c.task.title) : null,
       oneLine(c.actor),

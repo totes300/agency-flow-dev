@@ -443,6 +443,19 @@ export const activityLogValidator = v.union(
       reason: v.union(v.literal("project_move"), v.literal("code_rename")),
     }),
   ),
+  // Deletion audit (docs/prd-agent-first-backlog.md §7): written after the
+  // task and its other activity rows are deleted, so its taskId dangles; the
+  // metadata is the record.
+  activity(
+    "task_deleted",
+    v.object({
+      identifier: v.string(),
+      title: v.string(), // capped at TASK_DELETED_TITLE_MAX (tasks/write.ts)
+      projectCode: v.optional(v.string()),
+      subtaskCount: v.number(),
+      deletedTimeEntries: v.number(),
+    }),
+  ),
   activity("task_archived", v.object({ viaParent: v.optional(v.id("tasks")) })),
   activity("task_restored", v.object({ viaParent: v.optional(v.id("tasks")) })),
   activity("comment_added", commentRef),

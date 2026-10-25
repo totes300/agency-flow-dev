@@ -121,11 +121,18 @@ export async function listChanges(ctx: QueryCtx, auth: McpAuthContext, args: Cha
       break;
     }
     const position = { createdAt: row.createdAt, creationTime: row._creationTime };
-    const task =
+    const skipped =
       row.type === "description_changed" ||
       (types && !types.has(row.type)) ||
-      (args.excludeSelf && row.via?.clientId === auth.clientId && row.userId === auth.userId)
-        ? null
+      (args.excludeSelf && row.via?.clientId === auth.clientId && row.userId === auth.userId);
+    // A deleted task (§7) is told from its row: its access edges went with it,
+    // so admins see every deletion and members their own.
+    const task = skipped
+      ? null
+      : row.type === "task_deleted"
+        ? auth.isAdmin || row.userId === auth.userId
+          ? { _id: row.taskId, identifier: row.metadata.identifier, title: row.metadata.title, deleted: true }
+          : null
         : await readableTask(row.taskId);
     if (!task) {
       last = position;
@@ -147,7 +154,7 @@ export async function listChanges(ctx: QueryCtx, auth: McpAuthContext, args: Cha
     }
     const change = {
       at: row.createdAt,
-      task: { identifier: task.identifier ?? task._id, title: task.title },
+      task: { identifier: task.identifier ?? task._id, title: task.title, ...("deleted" in task ? { deleted: true } : {}) },
       actor: await nameOf(row.userId),
       type: row.type,
       metadata: row.metadata,

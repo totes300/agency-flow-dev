@@ -574,6 +574,21 @@ describe("renderChanges (DESIGN-1)", () => {
     );
   });
 
+  it("tells a deleted task from its row: bare key, what went, via (§7)", () => {
+    const deleted = {
+      at: AT,
+      task: { identifier: "ARLO-21", title: "Logo v2", deleted: true },
+      actor: "Adam",
+      type: "task_deleted",
+      metadata: { identifier: "ARLO-21", title: "Logo v2", projectCode: "ARLO", subtaskCount: 3, deletedTimeEntries: 2 },
+      via: "claude.ai",
+      comment: null,
+    } as ChangesData["changes"][number];
+    expect(renderChanges({ ...data, changes: [deleted] }, CTX)).toContain(
+      '- 2026-10-24 12:00 · ARLO-21 · Adam · deleted task "Logo v2" (3 sub-tasks, 2 time entries) · via claude.ai',
+    );
+  });
+
   it("shortens checklist titles like task titles", () => {
     const long = "x".repeat(100);
     const text = renderChanges({ ...data, changes: [change(AT, "ARLO-21", "Checklist", "subtask_created", { title: long })] }, CTX);

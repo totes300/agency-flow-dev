@@ -1164,6 +1164,9 @@ export async function deleteTaskRecord(ctx: MutationCtx, task: Doc<"tasks">): Pr
  * always block; unlocked entries need explicit consent. Timers on the tree
  * are cleared (an entry cannot outlive its task).
  */
+/** Longest task title kept in a `task_deleted` row (§7). */
+export const TASK_DELETED_TITLE_MAX = 200;
+
 export async function removeTask(
   ctx: MutationCtx,
   access: TaskAccess,
@@ -1173,7 +1176,7 @@ export async function removeTask(
   const { task, auth } = access;
   const children = await childrenOf(ctx, task);
 
-  let hasEntries = false;
+  let entryCount = 0;
   for (const t of [task, ...children]) {
     const entries = await ctx.db
       .query("timeEntries")
@@ -1185,10 +1188,10 @@ export async function removeTask(
           "This task has invoiced or settled time entries. Archive it instead to keep billing records intact.",
         );
       }
-      hasEntries = true;
+      entryCount += 1;
     }
   }
-  if (hasEntries && !options.deleteEntries) {
+  if (entryCount > 0 && !options.deleteEntries) {
     throw new ConvexError(
       "This task has logged time. Archive it instead, or confirm deleting the time entries with it.",
     );
@@ -1211,8 +1214,26 @@ export async function removeTask(
     }
   }
 
+  const project = task.projectId ? await ctx.db.get(task.projectId) : null;
   for (const child of children) await deleteTaskRecord(ctx, child);
   await deleteTaskRecord(ctx, task);
+
+  // The audit row (§7): who deleted what. Written after the cascade, which
+  // deletes the task's own activity rows, so it is the one row that stays.
+  await logActivity(ctx, {
+    taskId: task._id,
+    orgId: task.orgId,
+    userId: auth.userId,
+    via: auth.via,
+    type: "task_deleted",
+    metadata: {
+      identifier: task.identifier,
+      title: task.title.slice(0, TASK_DELETED_TITLE_MAX),
+      projectCode: project && project.orgId === task.orgId ? project.code : undefined,
+      subtaskCount: children.length,
+      deletedTimeEntries: entryCount,
+    },
+  });
 
   if (task.parentTaskId) {
     const parent = await ctx.db.get(task.parentTaskId);

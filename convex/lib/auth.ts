@@ -156,9 +156,9 @@ export async function getAuthContextOptional(
  * `*ForAuth` cores, which take a context from either builder
  * (`getAuthContext` or `getMcpAuthContext`). Same message as `requireAdmin`.
  */
-export function assertAdmin(auth: Pick<AuthContext, "isAdmin">): void {
+export function assertAdmin(auth: Pick<AuthContext, "isAdmin">, message = "Admin access required"): void {
   if (!auth.isAdmin) {
-    throw new ConvexError("Admin access required");
+    throw new ConvexError(message);
   }
 }
 

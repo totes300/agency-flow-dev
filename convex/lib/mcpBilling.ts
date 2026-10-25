@@ -2,6 +2,7 @@ import { ConvexError } from "convex/values";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { McpAuthContext } from "./mcpAuth";
+import { assertAdmin } from "./auth";
 import { createRefResolver, invoiceKey } from "./mcpRefs";
 import { referenceClientPrefix } from "./helpers";
 import { getOrgSettings } from "./orgHelpers";
@@ -242,10 +243,6 @@ async function stateAfterRelease(ctx: QueryCtx, orgId: string, close: Doc<"billi
       todayOrgTz: todayStr,
     }),
   );
-}
-
-function assertAdmin(auth: McpAuthContext): void {
-  if (!auth.isAdmin) throw new ConvexError(BILLING_ADMIN_ONLY);
 }
 
 async function orgToday(ctx: QueryCtx, orgId: string): Promise<string> {
@@ -866,7 +863,7 @@ async function planBilling(
  * commit token, and returns the effect.
  */
 export async function previewBilling(ctx: MutationCtx, auth: McpAuthContext, input: BillingInput) {
-  assertAdmin(auth);
+  assertAdmin(auth, BILLING_ADMIN_ONLY);
   const now = Date.now();
   const recent = await ctx.db
     .query("mcpBillingPreviews")
@@ -907,7 +904,7 @@ export async function commitBilling(
   auth: McpAuthContext,
   token: string,
 ): Promise<BillingCommitResult & { replayed: boolean }> {
-  assertAdmin(auth);
+  assertAdmin(auth, BILLING_ADMIN_ONLY);
   const id = ctx.db.normalizeId("mcpBillingPreviews", token.trim());
   const row = id ? await ctx.db.get(id) : null;
   if (!row || row.orgId !== auth.orgId || row.userId !== auth.userId || row.clientId !== auth.clientId) {

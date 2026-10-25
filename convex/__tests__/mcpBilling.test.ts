@@ -22,7 +22,9 @@ import {
   DATA_CHANGED,
   EXPIRED_TOKEN,
   PREVIEW_KEEP_MS,
+  PREVIEW_OPEN_MAX,
   PREVIEW_TTL_MS,
+  TOO_MANY_PREVIEWS,
   UNKNOWN_TOKEN,
 } from "../lib/mcpBilling";
 import { INVOICES_ADMIN_ONLY } from "../lib/mcpRefs";
@@ -186,7 +188,7 @@ async function seedRetainerAugust(w: World) {
   ];
 }
 
-type PreviewInput = { action: Doc<"mcpBillingPreviews">["action"]; project?: string; period?: string; invoice?: string };
+type PreviewInput = { action: Doc<"mcpBillingPreviews">["action"]; project?: string; period?: string; invoice?: string; amount?: number };
 const preview = (w: World, input: PreviewInput, caller: Caller = "admin", clientId?: string) =>
   oauth(w.t, caller, clientId).mutation(api.mcp.billing.preview, input);
 const commit = (w: World, commitToken: string, caller: Caller = "admin", clientId?: string) =>
@@ -584,7 +586,8 @@ describe("invoice actions: each preview is what its commit does", () => {
     const voided = await run("void_invoice");
     expect(voided.e.invoice!.statusAfter).toBe("void");
     expect(voided.e.reopened).toEqual({ entryCount: 3, minutes: 760 });
-    expect(voided.e.periodState).toEqual({ before: "Invoiced", after: null });
+    // The after-state is derived like any open period's (§5.1): over budget, priced → Ready to invoice.
+    expect(voided.e.periodState).toEqual({ before: "Invoiced", after: "Ready to invoice" });
     expect(voided.invoice!.status).toBe("void");
     expect(voided.done.entryCount).toBe(3);
     expect((await closesOf(w, w.ret))[0]).toMatchObject({ status: "released", releasedReason: "invoice_voided" });
@@ -628,7 +631,7 @@ describe("invoice actions: each preview is what its commit does", () => {
     expect(p.effect).toMatchObject({
       outcome: "Reopen period",
       period: { label: "September 2026" },
-      periodState: { before: "Closed", after: null },
+      periodState: { before: "Closed", after: "Ready to close" },
       reopened: { entryCount: 1, minutes: 120 },
     });
     const done = await commit(w, p.token);
@@ -638,9 +641,9 @@ describe("invoice actions: each preview is what its commit does", () => {
 
     await seedRetainerAugust(w);
     const { invoiceId } = await closeAugust(w);
-    // A drafted period is not closed yet; a finalized one is billed on its invoice.
+    // A drafted period is undone through its invoice; a finalized one is billed on its invoice.
     await expect(preview(w, { action: "reopen_period", project: "RET", period: "2026-08" })).rejects.toThrow(
-      "This period is not closed.",
+      `August 2026 is a Draft: it waits on a never-numbered draft invoice (/invoices/${invoiceId}). Undo it with delete_draft on that invoice; that reopens the period.`,
     );
     await commit(w, (await preview(w, { action: "mark_invoiced", invoice: invoiceId })).token);
     await expect(preview(w, { action: "reopen_period", project: "RET", period: "2026-08" })).rejects.toThrow(
@@ -663,7 +666,7 @@ describe("invoice actions: each preview is what its commit does", () => {
     expect(invoice).toMatchObject({ status: "draft", totalMinor: 1200000, issueDate: p.effect.invoice!.issueDate, dueDate: p.effect.invoice!.dueDate });
     expect((await linesOf(w, invoice._id)).map((l) => [l.lineType, l.description, l.amountMinor])).toEqual([["fixed", "Website", 1200000]]);
     await expect(preview(w, { action: "create_fixed_invoice", project: "FIX" })).rejects.toThrow(
-      `This project already has a draft invoice (ref ${invoice._id}). Open it in the app, or finalize it with mark_invoiced.`,
+      `This project already has a draft invoice (ref ${invoice._id}, /invoices/${invoice._id}). Open it in the app, or finalize it with mark_invoiced.`,
     );
   });
 });
@@ -692,8 +695,8 @@ describe("invoice search and fetch", () => {
       [eur, "draft", 16667, "EUR"],
     ]);
     expect(page.totals).toEqual([
-      { currency: "EUR", totalMinor: 16667, count: 1 },
-      { currency: "USD", totalMinor: 10000, count: 1 },
+      { status: "draft", currency: "EUR", totalMinor: 16667, count: 1 },
+      { status: "draft", currency: "USD", totalMinor: 10000, count: 1 },
     ]);
     expect(page.rows[1]).toMatchObject({ number: null, client: { name: "Arlow", prefix: "ARL" }, project: { code: "RET" }, period: { label: "August 2026" } });
     expect((await search(w, { client: "client:YNK" })).rows.map((r) => r.id)).toEqual([usd]);
@@ -711,7 +714,18 @@ describe("invoice search and fetch", () => {
     const pastDue = await search(w, { status: "past_due" });
     expect(pastDue.rows.map((r) => [r.number, r.status])).toEqual([["INV-001", "past_due"]]);
     expect((await search(w, { query: "INV-001" })).rows.map((r) => r.id)).toEqual([eur]);
-    await expect(search(w, { status: "overdue" })).rejects.toThrow("Invoice status must be one of: draft, invoiced, past_due, paid, void.");
+    await expect(search(w, { status: "overdue" })).rejects.toThrow(
+      "Invoice status must be one of: draft, invoiced, past_due, outstanding, paid, void (invoiced excludes past_due; outstanding = invoiced + past_due).",
+    );
+    // outstanding = invoiced + past due; days overdue come from Convex (org timezone).
+    expect((await search(w, { status: "outstanding" })).rows.map((r) => [r.id, r.status, r.daysOverdue])).toEqual([[eur, "past_due", 14]]);
+    const all = await search(w);
+    expect(all.totals).toEqual([
+      { status: "draft", currency: "USD", totalMinor: 10000, count: 1 },
+      { status: "past_due", currency: "EUR", totalMinor: 16667, count: 1 },
+    ]);
+    const [fetched] = (await oauth(w.t, "admin").query(api.mcp.fetch.records, { refs: [eur], include: [], now: Date.now() })).results;
+    expect(fetched.ok && fetched.record.type === "invoice" && fetched.record.daysOverdue).toBe(14);
   });
 
   it("fetches an invoice by number, link or ID with the invoice page's lines and totals", async () => {
@@ -760,5 +774,153 @@ describe("invoice search and fetch", () => {
     // The billing tool expects an invoice, so the same number resolves there.
     const p = await preview(w, { action: "mark_paid", invoice: "INV-120" });
     expect(p.effect.invoice!.id).toBe(eur);
+  });
+});
+
+// ─── Review round 1 ──────────────────────────────────────────────────────────
+
+describe("review round 1", () => {
+  it("the approved checklist is part of the fingerprint: a warning that changed refuses the commit", async () => {
+    setToday("2026-10-15");
+    const w = await world();
+    const [, second] = await seedRetainerAugust(w);
+    const p = await preview(w, { action: "close_period", project: "RET", period: "2026-08" });
+    expect(p.effect.warnings).toEqual(["2 entries have no note"]);
+    // Adding a note changes nothing the close writes, only what the user was shown.
+    await w.t.run(async (ctx) => ctx.db.patch(second, { note: "Design" }));
+    await expect(commit(w, p.token)).rejects.toThrow(DATA_CHANGED);
+    expect(await closesOf(w, w.ret)).toEqual([]);
+  });
+
+  it("a refusal caused only by midnight says the issue date changed", async () => {
+    vi.setSystemTime(new Date("2026-10-15T23:55:00Z"));
+    const w = await world();
+    await seedRetainerAugust(w);
+    const p = await preview(w, { action: "close_period", project: "RET", period: "2026-08" });
+    expect(p.effect.invoice!.issueDate).toBe("2026-10-15");
+    vi.setSystemTime(new Date("2026-10-16T00:01:00Z"));
+    await expect(commit(w, p.token)).rejects.toThrow(
+      `${DATA_CHANGED} The issue date changed to 2026-10-16: a new day began in the organization's timezone since the preview (2026-10-15).`,
+    );
+  });
+
+  it(`refuses more than ${PREVIEW_OPEN_MAX} open previews per user; committed and expired ones do not count`, async () => {
+    setToday("2026-10-15");
+    const w = await world();
+    await seedRetainerAugust(w);
+    const { invoiceId } = await closeAugust(w);
+    const tokens = [];
+    for (let i = 0; i < PREVIEW_OPEN_MAX; i += 1) tokens.push((await preview(w, { action: "mark_invoiced", invoice: invoiceId })).token);
+    await expect(preview(w, { action: "mark_invoiced", invoice: invoiceId })).rejects.toThrow(TOO_MANY_PREVIEWS);
+    // Another admin has their own budget.
+    await expect(preview(w, { action: "mark_invoiced", invoice: invoiceId }, "admin2")).resolves.toBeDefined();
+    await commit(w, tokens[0]);
+    await expect(preview(w, { action: "mark_paid", invoice: invoiceId })).resolves.toBeDefined();
+    await expect(preview(w, { action: "mark_paid", invoice: invoiceId })).rejects.toThrow(TOO_MANY_PREVIEWS);
+    vi.setSystemTime(Date.now() + PREVIEW_TTL_MS + 1);
+    await expect(preview(w, { action: "mark_paid", invoice: invoiceId })).resolves.toBeDefined();
+  });
+
+  it("status-only previews show the total and line count; commit results carry the amount and currency", async () => {
+    setToday("2026-10-15");
+    const w = await world();
+    await seedRetainerAugust(w);
+    const { invoiceId, done } = await closeAugust(w);
+    expect(done).toMatchObject({ amountMinor: 16667, currency: "EUR" });
+    const finalized = await preview(w, { action: "mark_invoiced", invoice: invoiceId });
+    expect(finalized.effect.invoice!.lines.length).toBe(3);
+    await commit(w, finalized.token);
+    const paid = await preview(w, { action: "mark_paid", invoice: invoiceId });
+    expect(paid.effect.invoice).toMatchObject({ lines: [], lineCount: 3, totalMinor: 16667 });
+    expect(await commit(w, paid.token)).toMatchObject({ amountMinor: 16667, currency: "EUR", invoice: { status: "paid" } });
+  });
+
+  it("an empty T&M month names the next period to close", async () => {
+    setToday("2026-11-15");
+    const w = await world();
+    await expect(preview(w, { action: "close_period", project: "TM", period: "2026-09" })).rejects.toThrow(
+      "September 2026 has no open billable time; nothing is waiting to be closed on this project.",
+    );
+    await addEntry(w, w.tm, w.tmTask, "2026-10-05", 60, { rate: 100, currency: "USD", note: "x" });
+    await expect(preview(w, { action: "close_period", project: "TM", period: "2026-09" })).rejects.toThrow(
+      "September 2026 has no open billable time; the next period to close is October 2026.",
+    );
+  });
+
+  it("create_fixed_invoice takes an amount with the app's checks", async () => {
+    setToday("2026-10-15");
+    const w = await world();
+    const p = await preview(w, { action: "create_fixed_invoice", project: "FIX", amount: 1500 });
+    expect(p.effect.fixed).toEqual({ feeMinor: 1200000, billedMinor: 0, amountMinor: 150000, remainingAfterMinor: 1050000 });
+    const done = await commit(w, p.token);
+    expect(done).toMatchObject({ amountMinor: 150000, currency: "EUR" });
+    expect((await linesOf(w, done.invoice!.id)).map((l) => [l.lineType, l.amountMinor])).toEqual([["fixed", 150000]]);
+    await commit(w, (await preview(w, { action: "mark_invoiced", invoice: done.invoice!.id })).token);
+    await expect(preview(w, { action: "create_fixed_invoice", project: "FIX", amount: 20000 })).rejects.toThrow(
+      "Only 10500 EUR of the fixed fee is left to bill.",
+    );
+    await expect(preview(w, { action: "create_fixed_invoice", project: "FIX", amount: 0 })).rejects.toThrow(
+      "Enter an amount greater than zero.",
+    );
+    await expect(preview(w, { action: "mark_paid", invoice: done.invoice!.id, amount: 5 })).rejects.toThrow(
+      '"amount" applies to create_fixed_invoice only.',
+    );
+    // Default: the whole remainder.
+    const rest = await preview(w, { action: "create_fixed_invoice", project: "FIX" });
+    expect(rest.effect.fixed).toMatchObject({ billedMinor: 150000, amountMinor: 1050000, remainingAfterMinor: 0 });
+  });
+
+  it("another org's invoice is not found by ID, number or link — in preview, search and fetch", async () => {
+    setToday("2026-10-15");
+    const w = await world();
+    const foreign = await w.t.run(async (ctx) => {
+      const now = Date.now();
+      const other = (await ctx.db.query("users").withIndex("byExternalId", (q) => q.eq("externalId", "clerk_other")).unique())!;
+      const clientId = await ctx.db.insert("clients", { orgId: OTHER, name: "Else", currency: "EUR", createdAt: now, updatedAt: now, createdBy: other._id });
+      const projectId = await ctx.db.insert("projects", {
+        orgId: OTHER, clientId, name: "Else", code: "ELSE", billingType: "fixed", fixedPrice: 100, createdAt: now, updatedAt: now, createdBy: other._id,
+      });
+      return ctx.db.insert("invoices", {
+        orgId: OTHER, projectId, clientId, prefix: "INV-", number: 1, status: "invoiced", currency: "EUR",
+        subtotalMinor: 100, totalMinor: 100, issueDate: "2026-10-01", subject: "Foreign", createdAt: now, updatedAt: now, createdBy: other._id,
+      });
+    });
+    const refs = [foreign, "INV-001", `${ORIGIN}/invoices/INV-001`, `${ORIGIN}/invoices/${foreign}`];
+    const fetched = await oauth(w.t, "admin").query(api.mcp.fetch.records, { refs, include: [], now: Date.now() });
+    expect(fetched.results.map((r) => (r.ok ? "found" : r.message))).toEqual(refs.map(() => expect.stringMatching(/not found/)));
+    for (const ref of refs) {
+      await expect(preview(w, { action: "mark_paid", invoice: ref })).rejects.toThrow(/not found/);
+    }
+    const page = await oauth(w.t, "admin").query(api.mcp.search.invoices, { offset: 0, limit: 25, due: {}, now: Date.now() });
+    expect(page.rows).toEqual([]);
+    const byNumber = await oauth(w.t, "admin").query(api.mcp.search.invoices, { offset: 0, limit: 25, due: {}, now: Date.now(), query: "INV-001" });
+    expect(byNumber.total).toBe(0);
+  });
+
+  it("finds invoice numbers with any prefix, a short-key-shaped one included", async () => {
+    setToday("2026-10-15");
+    const w = await world();
+    const ids = await w.t.run(async (ctx) => {
+      const now = Date.now();
+      const project = (await ctx.db.get(w.fix))!;
+      const mk = (prefix: string, number: number) =>
+        ctx.db.insert("invoices", {
+          orgId: ORG, projectId: w.fix, clientId: project.clientId, prefix, number, status: "invoiced", currency: "EUR",
+          subtotalMinor: 100, totalMinor: 100, issueDate: "2026-10-01", createdAt: now, updatedAt: now, createdBy: w.admin,
+        });
+      return { slash: await mk("INV/2026/", 7), short: await mk("INV", 42) };
+    });
+    const results = (await oauth(w.t, "admin").query(api.mcp.fetch.records, { refs: ["INV/2026/007", "INV042"], include: [], now: Date.now() })).results;
+    expect(results.map((r) => (r.ok && r.record.type === "invoice" ? r.record.id : r))).toEqual([ids.slash, ids.short]);
+    // The billing tool takes the same numbers.
+    expect((await preview(w, { action: "mark_paid", invoice: "INV042" })).effect.invoice!.id).toBe(ids.short);
+    // A project with that code makes the short key ambiguous: candidates, never a guess.
+    await w.t.run(async (ctx) => {
+      const now = Date.now();
+      const project = (await ctx.db.get(w.fix))!;
+      await ctx.db.insert("projects", { orgId: ORG, clientId: project.clientId, name: "Clash", code: "INV042", billingType: "t_and_m", createdAt: now, updatedAt: now, createdBy: w.admin });
+    });
+    const [clash] = (await oauth(w.t, "admin").query(api.mcp.fetch.records, { refs: ["INV042"], include: [], now: Date.now() })).results;
+    expect(clash.ok ? [] : clash.candidates.map((c) => c.type).sort()).toEqual(["invoice", "project"]);
   });
 });

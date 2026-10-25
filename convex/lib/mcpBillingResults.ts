@@ -32,6 +32,8 @@ export const billingParamsValidator = v.object({
   /** YYYY-MM-DD: a period action's period start (close) or a day inside it (reopen). */
   periodStart: v.optional(v.string()),
   invoiceId: v.optional(v.id("invoices")),
+  /** create_fixed_invoice: the decimal amount as given (major units, the client's currency). */
+  amount: v.optional(v.number()),
 });
 export type BillingParams = Infer<typeof billingParamsValidator>;
 
@@ -61,5 +63,8 @@ export const billingCommitResultValidator = v.object({
   ),
   /** Entries settled (close) or made editable again (reopen, void, delete draft); null when none move. */
   entryCount: v.union(v.number(), v.null()),
+  /** The money involved, minor units in `currency`: the close's amount, the invoice's total. */
+  amountMinor: v.union(v.number(), v.null()),
+  currency: v.string(),
 });
 export type BillingCommitResult = Infer<typeof billingCommitResultValidator>;

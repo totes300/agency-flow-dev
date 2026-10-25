@@ -128,5 +128,11 @@ export const INVOICE_ACTIONS = [
   "delete_draft",
 ] as const satisfies readonly BillingAction[];
 
-/** Invoice statuses as the Invoices views show them (docs/prd-project-billing-redesign.md §5.2). */
-export const INVOICE_SEARCH_STATUSES = ["draft", "invoiced", "past_due", "paid", "void"] as const;
+/**
+ * Invoice search `status` values: the Invoices views' statuses
+ * (docs/prd-project-billing-redesign.md §5.2) — `invoiced` is issued and not
+ * yet past due, so it excludes `past_due` — plus `outstanding` = invoiced +
+ * past due (the redesign's "Outstanding").
+ */
+export const INVOICE_SEARCH_STATUSES = ["draft", "invoiced", "past_due", "outstanding", "paid", "void"] as const;
+export type InvoiceSearchStatus = (typeof INVOICE_SEARCH_STATUSES)[number];

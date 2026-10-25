@@ -18,7 +18,7 @@ import { safeParseDoc } from "./notificationEvents";
 import { getInvoiceForAuth } from "../invoices";
 import { invoiceDisplayStatus } from "./billing/periodState";
 import { periodRangeLabel } from "./billing/projectPeriods";
-import { invoiceKey } from "./mcpRefs";
+import { daysPastDue, invoiceKey } from "./mcpRefs";
 import type { FetchInclude } from "../../lib/mcp/limits";
 
 /**
@@ -408,12 +408,14 @@ export async function buildRecord(
       const data = await getInvoiceForAuth(ctx, auth, resolved.invoice._id);
       if (!data) return null;
       const inv = data.invoice;
+      const status = invoiceDisplayStatus(inv.status, inv.dueDate, clock.today);
       const categoryNames = new Map(data.categoryGroups.map((g) => [g.categoryId, g.categoryName]));
       return {
         type: "invoice" as const,
         id: inv._id,
         number: invoiceKey(inv),
-        status: invoiceDisplayStatus(inv.status, inv.dueDate, clock.today),
+        status,
+        daysOverdue: status === "past_due" && inv.dueDate ? daysPastDue(inv.dueDate, clock.today) : null,
         subject: inv.subject ?? null,
         currency: inv.currency,
         subtotalMinor: inv.subtotalMinor,

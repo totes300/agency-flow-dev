@@ -108,6 +108,13 @@ describe("parseRef", () => {
     expect(parsed(`${ORIGIN}/invoices/INV-120`)).toEqual({ kind: "invoice", number: "INV-120" });
     expect(parsed(`${ORIGIN}/invoices/${ID}?from=%2Fbilling`)).toEqual({ kind: "id", id: ID, table: "invoices" });
     expect(parsed(`${ORIGIN}/invoices/not a number`)).toMatch(/^Unsupported Agency Flow link/);
+    // Any prefix the org set in Settings, followed by digits.
+    expect(parsed("INV/2026/007")).toEqual({ kind: "invoice", number: "INV/2026/007" });
+    expect(parsed("#12")).toEqual({ kind: "invoice", number: "#12" });
+    expect(parsed("2026-001")).toEqual({ kind: "invoice", number: "2026-001" });
+    expect(parsed(`${ORIGIN}/invoices/INV%2F2026%2F007`)).toEqual({ kind: "invoice", number: "INV/2026/007" });
+    // A short key stays a project code; Convex also tries it as an invoice number for admins.
+    expect(parsed("INV042")).toEqual({ kind: "key", key: "INV042" });
   });
 
   it("rejects empty and unrecognized refs with a model-actionable message", () => {

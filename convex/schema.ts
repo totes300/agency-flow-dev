@@ -839,9 +839,16 @@ export default defineSchema({
     action: billingActionValidator,
     params: billingParamsValidator,
     fingerprint: v.string(),
+    // The fingerprint without the invoice dates, and the issue date the preview
+    // showed: a refusal caused only by midnight says so.
+    datelessFingerprint: v.optional(v.string()),
+    issueDate: v.optional(v.string()),
     createdAt: v.number(),
     expiresAt: v.number(),
     committedAt: v.optional(v.number()),
     result: v.optional(billingCommitResultValidator),
-  }).index("by_createdAt", ["createdAt"]),
+  })
+    .index("by_createdAt", ["createdAt"])
+    // Open previews per user (PREVIEW_OPEN_MAX).
+    .index("by_orgId_userId_createdAt", ["orgId", "userId", "createdAt"]),
 });

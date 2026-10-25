@@ -21,10 +21,10 @@
  *   `gmail:18c2f0a1b2c3d4e5`: the task that carries it. `client` and
  *   `project` are qualifiers, never sources;
  * - a member email;
- * - an invoice number as the app writes it (`INV-007`; admins only, checked
- *   in Convex). A number shaped like a task key (`INV-120`) parses as a task
- *   key; Convex then also tries it as an invoice number and returns both as
- *   candidates when both exist;
+ * - an invoice number as the app writes it (`INV-007`, `INV/2026/007`,
+ *   `#12`; admins only, checked in Convex). A number shaped like a task key
+ *   (`INV-120`) or a short key (`C7`) parses as that kind; Convex also tries
+ *   it as an invoice number and returns every match as a candidate;
  * - a Convex record ID.
  */
 
@@ -92,11 +92,15 @@ const PROJECT_QUALIFIER = /^project:(.*)$/i;
 const ID_PATTERN = /^[A-Za-z0-9]{20,64}$/;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 /**
- * An invoice number: a prefix starting with a letter, ending in digits
- * (`INV-007`, `ACME-2026-12`). Only reached when the input is no task key,
- * short key or record ID (lib/billing/labels.ts formatInvoiceNumber).
+ * An invoice number as the app formats it: any prefix (letters, digits,
+ * `-`, `/`, `#`, `.`, `_` — whatever the org set in Settings) followed by
+ * digits, e.g. `INV-007`, `ACME-2026-12`, `INV/2026/007`, `#12`, `2026-001`
+ * (lib/billing/labels.ts formatInvoiceNumber; convex/lib/invoiceIdentifier.ts
+ * splits it the same way). Only reached when the input is no task key, short
+ * key or record ID; a short key (`C7`) is also tried as an invoice number in
+ * Convex when an invoice may be meant.
  */
-const INVOICE_NUMBER_PATTERN = /^[A-Za-z][A-Za-z0-9-]{0,30}[0-9]$/;
+const INVOICE_NUMBER_PATTERN = /^(?=.{2,40}$)[A-Za-z0-9#/._-]*[A-Za-z#/._-][0-9]+$/;
 
 // Search params of task links (lib/task-detail.ts: TASK_PARAM, LEGACY_DETAIL_PARAM,
 // COMMENT_PARAM) and the admin's member view (`/my-tasks?user=`).

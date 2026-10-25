@@ -105,6 +105,26 @@ export function daysPastDue(dueDate: string, todayOrgTz: string): number {
   return Math.max(1, Math.round((Date.parse(`${todayOrgTz}T00:00:00Z`) - Date.parse(`${dueDate}T00:00:00Z`)) / 86_400_000));
 }
 
+/** A resolved record as a candidate of an ambiguous reference. */
+function candidateOf(resolved: Resolved): RefCandidate {
+  switch (resolved.type) {
+    case "task":
+      return { type: "task", id: resolved.access.task._id, key: resolved.access.task.identifier ?? null, name: resolved.access.task.title };
+    case "comment":
+      return { type: "comment", id: resolved.comment._id, key: null, name: `comment on ${resolved.access.task.identifier ?? resolved.access.task._id}` };
+    case "time_entry":
+      return { type: "time_entry", id: resolved.entry._id, key: null, name: resolved.entry.date };
+    case "project":
+      return { type: "project", id: resolved.project._id, key: resolved.project.code, name: resolved.project.name };
+    case "client":
+      return { type: "client", id: resolved.client._id, key: referenceClientPrefix(resolved.client), name: resolved.client.name };
+    case "member":
+      return { type: "member", id: resolved.user._id, key: null, name: resolved.user.name };
+    case "invoice":
+      return { type: "invoice", id: resolved.invoice._id, key: invoiceKey(resolved.invoice), name: resolved.invoice.subject ?? "Invoice" };
+  }
+}
+
 /** A message naming every candidate by its unique ID, so the model can retry exactly. */
 export function ambiguousMessage(input: string, candidates: readonly RefCandidate[]): string {
   const list = candidates
@@ -229,6 +249,46 @@ export function createRefResolver(ctx: QueryCtx, auth: AuthContext) {
     return ctx.db.normalizeId(table, raw) !== null;
   }
 
+  /** A project by code or (fallback / `client:`) a client by prefix — never guessing between duplicates. */
+  async function projectOrClient(rawKey: string, asClient: boolean, input: string, clientFallback: boolean): Promise<Resolution> {
+    if (!asClient) {
+      const projects = await ctx.db
+        .query("projects")
+        .withIndex("by_orgId_code", (q) => q.eq("orgId", orgId).eq("code", rawKey.toUpperCase()))
+        .take(10);
+      if (projects.length === 1) return { ok: true, resolved: { type: "project", project: projects[0] } };
+      if (projects.length > 1) {
+        const candidates = projects.map((p) => ({ type: "project" as const, id: p._id, key: p.code, name: p.name }));
+        return { ok: false, message: ambiguousMessage(input, candidates), candidates };
+      }
+      if (!clientFallback) return { ok: false, message: `${input} not found. ${NOT_FOUND_HINT.project}` };
+    }
+    const key = clientPrefixKey(rawKey);
+    const clients = (await orgClients()).filter((c) => {
+      const prefix = referenceClientPrefix(c);
+      return prefix !== null && clientPrefixKey(prefix) === key;
+    });
+    if (clients.length === 0) {
+      return {
+        ok: false,
+        message: `${input} not found. ${
+          asClient ? NOT_FOUND_HINT.client : 'Project codes and client prefixes (client:KEY) are listed in fetch("workspace").'
+        }`,
+      };
+    }
+    if (clients.length > 1) {
+      // Duplicates that predate prefix uniqueness: never guess.
+      const candidates = clients.map((c) => ({
+        type: "client" as const,
+        id: c._id,
+        key: referenceClientPrefix(c),
+        name: c.name,
+      }));
+      return { ok: false, message: ambiguousMessage(input, candidates), candidates };
+    }
+    return { ok: true, resolved: { type: "client", client: clients[0] } };
+  }
+
   /**
    * Resolves one reference. `expected` narrows the record type (search
    * filters); a reference of another type is refused by name. `me`
@@ -307,46 +367,25 @@ export function createRefResolver(ctx: QueryCtx, auth: AuthContext) {
         // A bare key is the project code (owner, 2026-10-24); clients are
         // written `client:KONV`. A client filter accepts a bare prefix too,
         // and a bare key that is no project code falls back to a client
-        // prefix in fetch, so an exact unique prefix still resolves.
+        // prefix in fetch, so an exact unique prefix still resolves. Where an
+        // invoice may be meant (admins), a short key is also tried as an
+        // invoice number (`INV042`, `C7`); more than one match → candidates.
         const asClient = ref.kind === "client_key" || expected === "client";
+        const asInvoice = ref.kind === "key" && allows("invoice");
         if (asClient && !allows("client")) return wrongType("a client prefix");
-        if (!asClient && !allows("project")) return wrongType("a project code");
-        if (!asClient) {
-          const projects = await ctx.db
-            .query("projects")
-            .withIndex("by_orgId_code", (q) => q.eq("orgId", orgId).eq("code", ref.key.toUpperCase()))
-            .take(10);
-          if (projects.length === 1) return { ok: true, resolved: { type: "project", project: projects[0] } };
-          if (projects.length > 1) {
-            const candidates = projects.map((p) => ({ type: "project" as const, id: p._id, key: p.code, name: p.name }));
-            return { ok: false, message: ambiguousMessage(parsed.input, candidates), candidates };
-          }
-          if (expected === "project") return notFound("project");
+        if (!asClient && !allows("project") && !asInvoice) return wrongType("a project code");
+        if (asInvoice && !allows("project") && !auth.isAdmin) return { ok: false, message: INVOICES_ADMIN_ONLY };
+        const invoice = asInvoice && auth.isAdmin ? await invoiceByNumber(parsed.input) : null;
+        const found = asClient || allows("project") ? await projectOrClient(ref.key, asClient, parsed.input, expected !== "project") : null;
+        if (!invoice) return found ?? notFound("invoice");
+        if (found === null || (!found.ok && !found.candidates?.length)) {
+          return { ok: true, resolved: { type: "invoice", invoice } };
         }
-        const key = clientPrefixKey(ref.key);
-        const clients = (await orgClients()).filter((c) => {
-          const prefix = referenceClientPrefix(c);
-          return prefix !== null && clientPrefixKey(prefix) === key;
-        });
-        if (clients.length === 0) {
-          return {
-            ok: false,
-            message: `${parsed.input} not found. ${
-              asClient ? NOT_FOUND_HINT.client : 'Project codes and client prefixes (client:KEY) are listed in fetch("workspace").'
-            }`,
-          };
-        }
-        if (clients.length > 1) {
-          // Duplicates that predate prefix uniqueness: never guess.
-          const candidates = clients.map((c) => ({
-            type: "client" as const,
-            id: c._id,
-            key: referenceClientPrefix(c),
-            name: c.name,
-          }));
-          return { ok: false, message: ambiguousMessage(parsed.input, candidates), candidates };
-        }
-        return { ok: true, resolved: { type: "client", client: clients[0] } };
+        const candidates: RefCandidate[] = [
+          ...(found.ok ? [candidateOf(found.resolved)] : found.candidates!),
+          { type: "invoice", id: invoice._id, key: invoiceKey(invoice), name: invoice.subject ?? "Invoice" },
+        ];
+        return { ok: false, message: ambiguousMessage(parsed.input, candidates), candidates };
       }
 
       case "id": {

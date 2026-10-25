@@ -6,7 +6,7 @@ import { assertValidDateString } from "./dateValidation";
 import { referenceClientPrefix } from "./helpers";
 import { getDateInTimezone } from "./timer";
 import { addDaysToDateString } from "./todayPlan";
-import { createRefResolver, INVOICES_ADMIN_ONLY, invoiceKey, type RefResolver } from "./mcpRefs";
+import { createRefResolver, daysPastDue, INVOICES_ADMIN_ONLY, invoiceKey, type RefResolver } from "./mcpRefs";
 import { categoryNames, commentPreview, isOverdue, orgClock, timeEntryRow, userNames, type OrgClock } from "./mcpRecords";
 import { TASK_COMMENT_CAP } from "../comments";
 import { externalRefOwner, normalizeExternalRef } from "./mcpExternalRefs";
@@ -17,7 +17,7 @@ import { loadAssignedTo, loadSubtasksOf, type Loaded } from "../tasks/read";
 import { visibleTimeEntries } from "../timeEntries";
 import { REF_CAP } from "../workspaceRefs";
 import { extractPlainText } from "../../lib/tiptap-utils";
-import { INVOICE_SEARCH_STATUSES, SEARCH_LIMIT_MAX } from "../../lib/mcp/limits";
+import { INVOICE_SEARCH_STATUSES, SEARCH_LIMIT_MAX, type InvoiceSearchStatus } from "../../lib/mcp/limits";
 import { invoiceMatchesSearch } from "../invoices";
 import { invoiceDisplayStatus, type InvoiceDisplayStatus } from "./billing/periodState";
 import { periodRangeLabel } from "./billing/projectPeriods";
@@ -723,10 +723,11 @@ export async function searchComments(ctx: QueryCtx, auth: AuthContext, args: Com
  * Invoices, as the Billing hub's Invoices view lists them (`listAllInvoices`):
  * newest first, the same text search (number or subject; "draft" for
  * never-numbered drafts) and display statuses (Draft · Invoiced · Past due ·
- * Paid · Void; past due = invoiced past its due date, org timezone). Admins
- * only, as the app's /billing and /invoices routes. Each row carries its
- * total in its own currency; `totals` sums the matches per currency, void
- * excluded, never across currencies.
+ * Paid · Void; past due = invoiced past its due date, org timezone;
+ * `invoiced` excludes past due, `outstanding` = both). Admins only, as the
+ * app's /billing and /invoices routes. Each row carries its total in its own
+ * currency; `totals` sums the matches per display status and currency (void
+ * excluded) — drafts never mixed with issued money, currencies never added.
  */
 export async function searchInvoices(
   ctx: QueryCtx,
@@ -743,16 +744,22 @@ export async function searchInvoices(
   if (!auth.isAdmin) throw new ConvexError(INVOICES_ADMIN_ONLY);
   assertPage(args);
   assertRange(args.due, "due");
-  const status = args.status as InvoiceDisplayStatus | undefined;
+  const status = args.status as InvoiceSearchStatus | undefined;
   if (status !== undefined && !(INVOICE_SEARCH_STATUSES as readonly string[]).includes(status)) {
-    throw new ConvexError(`Invoice status must be one of: ${INVOICE_SEARCH_STATUSES.join(", ")}.`);
+    throw new ConvexError(
+      `Invoice status must be one of: ${INVOICE_SEARCH_STATUSES.join(", ")} (invoiced excludes past_due; outstanding = invoiced + past_due).`,
+    );
   }
+  const statusMatch = (display: InvoiceDisplayStatus) =>
+    status === undefined ||
+    display === status ||
+    (status === "outstanding" && (display === "invoiced" || display === "past_due"));
   const { orgId } = auth;
   const resolver = createRefResolver(ctx, auth);
   const client = await clientFilter(resolver, args.client);
   const project = await projectFilter(resolver, args.project);
   const clock = await orgClock(ctx, orgId, args.now);
-  const stored = status === "past_due" ? "invoiced" : status;
+  const stored = status === "past_due" || status === "outstanding" ? "invoiced" : status;
 
   const rows = project
     ? await ctx.db.query("invoices").withIndex("by_projectId", (q) => q.eq("projectId", project._id)).order("desc").take(INVOICE_SEARCH_CAP + 1)
@@ -770,21 +777,24 @@ export async function searchInvoices(
         inv.orgId === orgId &&
         (client === undefined || inv.clientId === client._id) &&
         (project === undefined || inv.projectId === project._id) &&
-        (status === undefined || invoiceDisplayStatus(inv.status, inv.dueDate, clock.today) === status) &&
+        statusMatch(invoiceDisplayStatus(inv.status, inv.dueDate, clock.today)) &&
         (!term || invoiceMatchesSearch(inv, term)) &&
         (args.due.from === undefined || (inv.dueDate != null && inv.dueDate >= args.due.from)) &&
         (args.due.to === undefined || (inv.dueDate != null && inv.dueDate <= args.due.to)),
     )
     .sort((a, b) => b.createdAt - a.createdAt);
 
-  const totals = new Map<string, { totalMinor: number; count: number }>();
+  const totals = new Map<string, { status: InvoiceDisplayStatus; currency: string; totalMinor: number; count: number }>();
   for (const inv of matched) {
-    if (inv.status === "void") continue;
-    const t = totals.get(inv.currency) ?? { totalMinor: 0, count: 0 };
+    const display = invoiceDisplayStatus(inv.status, inv.dueDate, clock.today);
+    if (display === "void") continue;
+    const key = `${display}:${inv.currency}`;
+    const t = totals.get(key) ?? { status: display, currency: inv.currency, totalMinor: 0, count: 0 };
     t.totalMinor += inv.totalMinor;
     t.count += 1;
-    totals.set(inv.currency, t);
+    totals.set(key, t);
   }
+  const STATUS_ORDER: InvoiceDisplayStatus[] = ["draft", "invoiced", "past_due", "paid"];
 
   const projects = new Map<Id<"projects">, Doc<"projects"> | null>();
   const clients = new Map<Id<"clients">, Doc<"clients"> | null>();
@@ -801,10 +811,12 @@ export async function searchInvoices(
     const p = projects.get(inv.projectId) ?? null;
     const c = clients.get(inv.clientId) ?? null;
     const close = inv.closeId ? await ctx.db.get(inv.closeId) : null;
+    const display = invoiceDisplayStatus(inv.status, inv.dueDate, clock.today);
     out.push({
       id: inv._id,
       number: invoiceKey(inv),
-      status: invoiceDisplayStatus(inv.status, inv.dueDate, clock.today),
+      status: display,
+      daysOverdue: display === "past_due" && inv.dueDate ? daysPastDue(inv.dueDate, clock.today) : null,
       subject: inv.subject ?? null,
       client: c ? { name: c.name, prefix: referenceClientPrefix(c) } : null,
       project: p ? { id: p._id, code: p.code, name: p.name } : null,
@@ -819,7 +831,7 @@ export async function searchInvoices(
     });
   }
   const result: SearchPage<(typeof out)[number]> & {
-    totals: Array<{ currency: string; totalMinor: number; count: number }>;
+    totals: Array<{ status: InvoiceDisplayStatus; currency: string; totalMinor: number; count: number }>;
     today: string;
   } = {
     rows: out,
@@ -827,9 +839,9 @@ export async function searchInvoices(
     offset: args.offset,
     incomplete,
     notes: [],
-    totals: [...totals.entries()]
-      .map(([currency, t]) => ({ currency, ...t }))
-      .sort((a, b) => a.currency.localeCompare(b.currency)),
+    totals: [...totals.values()].sort(
+      (a, b) => STATUS_ORDER.indexOf(a.status) - STATUS_ORDER.indexOf(b.status) || a.currency.localeCompare(b.currency),
+    ),
     today: clock.today,
   };
   return result;

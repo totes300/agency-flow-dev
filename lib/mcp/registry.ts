@@ -242,7 +242,7 @@ const searchInput = z.object({
     .max(100)
     .optional()
     .describe(
-      `Tasks: a status name from fetch("workspace"), a category (backlog, unstarted, started, completed, canceled), "open" (default) or "any". Invoices: ${INVOICE_SEARCH_STATUSES.join(", ")} (default: all).`,
+      `Tasks: a status name from fetch("workspace"), a category (backlog, unstarted, started, completed, canceled), "open" (default) or "any". Invoices: ${INVOICE_SEARCH_STATUSES.join(", ")} (default: all; invoiced = issued and not yet due, so it excludes past_due; outstanding = invoiced + past_due).`,
     ),
   label: z.string().min(1).max(100).optional().describe('Tasks: a label name from fetch("workspace").'),
   client: ref.optional().describe("A client: client:KONV (its prefix), ID or link."),
@@ -418,7 +418,8 @@ const searchTool: McpTool = {
   title: "Search Agency Flow",
   description: [
     "Find Agency Flow records and get one compact markdown row each, with its ref and app link.",
-    "types: task (default), project, client, member, time_entry, comment, invoice (admins: number, status, total in its currency, due date). Filters combine with AND;",
+    "types: task (default), project, client, member, time_entry, comment, invoice (admins: number, status, total in its currency, due date, days overdue;",
+    "status invoiced excludes past_due, outstanding = both; totals per status and currency). Filters combine with AND;",
     "a filter that does not apply to a requested type is an error. Open tasks only unless status says otherwise.",
     `References in filters: ${REF_FORMS}. A bare key (ARLO) is a project code; clients are client:KONV.`,
     "Members see what the app shows them (their tasks; their own time entries; no invoices).",
@@ -1258,6 +1259,11 @@ const billingPreviewInput = z.object({
   invoice: ref
     .optional()
     .describe("Invoice actions: the invoice — number (INV-007), ID or link (search types [\"invoice\"] finds it)."),
+  amount: z
+    .number()
+    .positive()
+    .optional()
+    .describe("create_fixed_invoice only: the amount in the project's currency, e.g. 1500 (a deposit or installment). Default: everything left of the fee."),
 });
 
 /** The params each action takes (also checked in Convex). */
@@ -1282,8 +1288,9 @@ const billingPreviewTool: McpTool = {
     "and get an explicit yes before committing; quote its numbers as given. Actions (the app's own buttons):",
     "close_period(project, period) — the Close workspace commit: \"Create draft invoice\" when the period bills money,",
     "\"Close period\" when it ended within budget; only the oldest ended open period can be closed;",
-    "reopen_period(project, period) — undo a within-budget close; create_fixed_invoice(project) — fixed fee \"Create",
-    "invoice\" for what is left of the fee; mark_invoiced(invoice) — finalize a draft (numbers it);",
+    "reopen_period(project, period) — undo a within-budget close; create_fixed_invoice(project, [amount]) — fixed fee",
+    "\"Create invoice\" for what is left of the fee, or for amount (a deposit or installment, in the project's currency);",
+    "mark_invoiced(invoice) — finalize a draft (numbers it);",
     "mark_paid(invoice); mark_unpaid(invoice); revert_to_draft(invoice) — an invoiced one back to draft, keeping its",
     "number; void_invoice(invoice) — an invoiced or numbered draft invoice, reopening its period;",
     "delete_draft(invoice) — a never-numbered draft, reopening its period. period is YYYY-MM.",
@@ -1296,6 +1303,9 @@ const billingPreviewTool: McpTool = {
   execute: async (raw, ctx) => {
     const input = billingPreviewInput.parse(raw);
     const takes = BILLING_ACTION_PARAMS[input.action];
+    if (input.amount !== undefined && input.action !== "create_fixed_invoice") {
+      return { text: `Error: "amount" applies to create_fixed_invoice only.`, isError: true };
+    }
     for (const param of ["project", "period", "invoice"] as const) {
       const given = input[param] !== undefined;
       if (given && !takes.includes(param)) {
@@ -1313,6 +1323,7 @@ const billingPreviewTool: McpTool = {
         project: input.project,
         period: input.period,
         invoice: input.invoice,
+        amount: input.amount,
       });
       return { text: billingOperations.preview.render(data, { appOrigin: ctx.appOrigin }), isError: false };
     } catch (error) {

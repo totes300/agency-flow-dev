@@ -22,13 +22,23 @@ import {
   planFixedInvoice,
   planTransition,
 } from "./billing/invoiceLifecycle";
-import { getLiveCloses, isClosableProject, toScopeProject } from "./billing/closeData";
+import {
+  getLiveCloses,
+  isClosableProject,
+  loadCloseContext,
+  toPricingProject,
+  toScopeProject,
+  type CloseContext,
+} from "./billing/closeData";
+import { priceScope } from "./billing/pricing";
+import { committablePeriod, scopeOf } from "./billing/scope";
 import { formatInvoiceNumber } from "./billing/labels";
 import { periodOfDate, type Period } from "./billing/periods";
 import { periodRangeLabel } from "./billing/projectPeriods";
 import {
   INVOICE_STATUS_COPY,
   PERIOD_STATE_COPY,
+  derivePeriodState,
   invoiceDisplayStatus,
   type InvoiceDisplayStatus,
   type PeriodState,
@@ -69,20 +79,29 @@ import { sha256Hex } from "../../lib/mcp/sha256";
  *
  * Read budget: a close plans like the Close workspace — the project's entries
  * (one range), its live closes, org settings, one read per invoiced task for
- * line titles, and (preview only) the org's running timers and the project's
- * tasks for the review warnings. Invoice actions read the invoice, its lines,
- * its close and the close's snapshot rows (one range each).
+ * line titles, and the org's running timers and the project's tasks for the
+ * review warnings (part of the fingerprint, so read at commit too). Invoice
+ * actions read the invoice, its lines, its close and the close's snapshot
+ * rows (one range each); void / delete draft / reopen also re-price the
+ * period once (its entries, one range) to name the state it returns to.
  */
 
 /** How long a preview's token commits (docs/prd-mcp.md §9). */
 export const PREVIEW_TTL_MS = 10 * 60 * 1000;
 /** How long a committed token replays its result before the cron deletes it. */
 export const PREVIEW_KEEP_MS = 24 * 60 * 60 * 1000;
+/**
+ * Open (unexpired, uncommitted) previews per user. Past it a preview is
+ * refused rather than the oldest deleted: every outstanding token may be the
+ * one a user is about to approve, so none is invalidated behind their back.
+ */
+export const PREVIEW_OPEN_MAX = 50;
 
 export const BILLING_ADMIN_ONLY = "Billing is admin-only, as in the app.";
 export const DATA_CHANGED = "Data changed since preview — run billing_preview again.";
 export const UNKNOWN_TOKEN =
   "Unknown commit token. Run billing_preview first and pass the commitToken it returns (tokens work only for the user and connection that previewed).";
+export const TOO_MANY_PREVIEWS = `You have ${PREVIEW_OPEN_MAX} billing previews from the last 10 minutes that were never committed. Commit the one the user approved, or wait for older previews to expire (10 minutes), then preview again.`;
 export const EXPIRED_TOKEN =
   "This commit token expired (tokens last 10 minutes). Run billing_preview again and show the user the new preview.";
 
@@ -94,6 +113,8 @@ export type BillingInput = {
   project?: string;
   period?: string;
   invoice?: string;
+  /** create_fixed_invoice: decimal amount in the project's currency (default: everything left). */
+  amount?: number;
 };
 
 /** One invoice line as the preview shows it. */
@@ -149,7 +170,9 @@ export type BillingEffect = {
     issueDate: string;
     dueDate: string | null;
     totalMinor: number;
+    /** Every line, or none for status-only actions (mark_paid, mark_unpaid, revert_to_draft): see lineCount. */
     lines: EffectLine[];
+    lineCount: number;
   } | null;
   fixed: { feeMinor: number; billedMinor: number; amountMinor: number; remainingAfterMinor: number } | null;
   /** Entries that become editable again (reopen, void, delete draft). */
@@ -161,13 +184,64 @@ export type BillingEffect = {
 type Planned = {
   effect: BillingEffect;
   fingerprint: string;
-  /** Preview only: extra reads for the review warnings. */
-  warnings?: () => Promise<string[]>;
+  /** The fingerprint with the invoice's issue and due dates left out (tells a midnight rollover apart). */
+  datelessFingerprint: string;
+  /** The issue date the commit would write, when it creates an invoice. */
+  issueDate: string | null;
   apply: (ctx: MutationCtx, actor: Actor) => Promise<BillingCommitResult>;
 };
 
 function fingerprintOf(action: BillingAction, inputs: unknown): string {
   return sha256Hex(stableJson({ v: 1, action, inputs }));
+}
+
+/** An app page URL for messages built in Convex (origin of MCP_RESOURCE_URL; the path alone without it). */
+function appLink(path: string): string {
+  const resource = process.env.MCP_RESOURCE_URL;
+  if (!resource) return path;
+  try {
+    return new URL(path, new URL(resource).origin).toString();
+  } catch {
+    return path;
+  }
+}
+
+function invoicePath(invoice: Doc<"invoices">): string {
+  return `/invoices/${encodeURIComponent(invoiceKey(invoice) ?? invoice._id)}`;
+}
+
+/**
+ * The state chip a period shows once its close is released (void, delete
+ * draft, reopen): its entries open again and the period is priced like any
+ * open one (redesign §5.1 rows 7–9, `derivePeriodState`).
+ */
+async function stateAfterRelease(ctx: QueryCtx, orgId: string, close: Doc<"billingCloses">): Promise<string | null> {
+  const c = await loadCloseContext(ctx, orgId, close.projectId);
+  const settings = await getOrgSettings(ctx, orgId);
+  const todayStr = getDateInTimezone(Date.now(), settings?.timezone ?? ORG_TIMEZONE_FALLBACK);
+  const period = { start: close.periodStart, end: close.periodEnd };
+  const liveCloses = c.liveCloses.filter((cl) => cl._id !== close._id).map((cl) => ({ start: cl.periodStart, end: cl.periodEnd }));
+  const entries = c.entries.map((e) => (e.doc.closeId === close._id ? { ...e, locked: false } : e));
+  const members = scopeOf({ project: toScopeProject(c.project), entries, liveCloses, period });
+  // An ended T&M month with nothing billable is not a period (§5.1).
+  if (c.project.billingType === "t_and_m" && members.length === 0) return null;
+  const price = priceScope({
+    project: toPricingProject(c.project, c.currency),
+    period,
+    members,
+    roundingMinutes: c.project.billingType === "retainer" ? 1 : settings?.roundingMinutes ?? 1,
+    todayStr,
+  });
+  return chip(
+    derivePeriodState({
+      periodEnded: period.end < todayStr,
+      liveClose: null,
+      invoice: null,
+      amountMinor: price.amountMinor,
+      missingRate: price.issues.includes("missing-overage-rate"),
+      todayOrgTz: todayStr,
+    }),
+  );
 }
 
 function assertAdmin(auth: McpAuthContext): void {
@@ -210,6 +284,12 @@ export async function resolveBillingParams(
   input: BillingInput,
 ): Promise<BillingParams> {
   const { action } = input;
+  if (input.amount !== undefined) {
+    if (action !== "create_fixed_invoice") {
+      throw new ConvexError(`"amount" applies to create_fixed_invoice only.`);
+    }
+    if (!Number.isFinite(input.amount)) throw new ConvexError("amount must be a number in the project's currency, e.g. 1500.");
+  }
   const takes = (PERIOD_ACTIONS as readonly string[]).includes(action)
     ? ["project", "period"]
     : (PROJECT_ACTIONS as readonly string[]).includes(action)
@@ -231,7 +311,9 @@ export async function resolveBillingParams(
   const resolved = await resolver.require(input.project!, "project");
   if (resolved.type !== "project") throw new ConvexError(`${input.project} is not a project.`);
   const project = resolved.project;
-  if (input.period === undefined) return { projectId: project._id };
+  if (input.period === undefined) {
+    return { projectId: project._id, ...(input.amount !== undefined ? { amount: input.amount } : {}) };
+  }
   if (!MONTH.test(input.period)) throw new ConvexError("period must be a month in YYYY-MM format, e.g. 2026-09.");
   assertPeriodProject(project);
   // A cycle period is named by any of its months; close snaps to its start.
@@ -253,24 +335,34 @@ async function planClosePeriod(ctx: QueryCtx, auth: McpAuthContext, params: Bill
   const { orgId } = auth;
   const project = await loadProject(ctx, orgId, params.projectId);
   assertPeriodProject(project);
-  if (!isClosableProject(project) || params.periodStart === undefined) throw new ConvexError("Project not found.");
+  if (params.periodStart === undefined) throw new ConvexError("close_period needs period (YYYY-MM).");
 
-  // What the app shows instead of a commit button: a closed or running period.
-  const requested = periodOfDate(toScopeProject(project), params.periodStart);
+  // What the app shows instead of a commit button: a closed, running or
+  // empty period. The close context is loaded once and reused by the plan.
+  const c: CloseContext = await loadCloseContext(ctx, orgId, project._id);
+  const grid = toScopeProject(c.project);
+  const requested = periodOfDate(grid, params.periodStart);
   const label = periodRangeLabel(requested.start, requested.end);
-  const live = (await getLiveCloses(ctx, orgId, project._id)).find(
-    (c) => c.periodStart <= requested.end && c.periodEnd >= requested.start,
-  );
+  const today = await orgToday(ctx, orgId);
+  const live = c.liveCloses.find((cl) => cl.periodStart <= requested.end && cl.periodEnd >= requested.start);
   if (live) {
     throw new ConvexError(
       `${label} is already closed. Undo it first: reopen_period (a within-budget close) or the invoice's own actions (void_invoice, delete_draft).`,
     );
   }
-  if (requested.end >= (await orgToday(ctx, orgId))) {
+  if (requested.end >= today) {
     throw new ConvexError(`${label} is still in progress (it ends ${requested.end}). Only ended periods can be closed.`);
   }
+  if (c.project.billingType === "t_and_m" && scopeOf({ project: grid, entries: c.entries, liveCloses: c.livePeriods, period: requested }).length === 0) {
+    const { period: next } = committablePeriod({ project: grid, entries: c.entries, liveCloses: c.livePeriods, todayStr: today });
+    throw new ConvexError(
+      `${label} has no open billable time; ${
+        next ? `the next period to close is ${periodRangeLabel(next.start, next.end)}.` : "nothing is waiting to be closed on this project."
+      }`,
+    );
+  }
 
-  const plan = await planClose(ctx, orgId, { projectId: project._id, periodStart: requested.start });
+  const plan = await planClose(ctx, orgId, { projectId: project._id, periodStart: requested.start }, c);
   const { price, members } = plan;
   const header = await projectHeader(ctx, orgId, project);
   const isRetainer = project.billingType === "retainer";
@@ -311,6 +403,7 @@ async function planClosePeriod(ctx: QueryCtx, auth: McpAuthContext, params: Bill
           issueDate: plan.invoice.issueDate,
           dueDate: plan.invoice.dueDate,
           totalMinor: price.amountMinor,
+          lineCount: plan.invoice.lines.length,
           lines: plan.invoice.lines.map((l) => ({
             lineType: l.lineType,
             description: l.description,
@@ -326,7 +419,23 @@ async function planClosePeriod(ctx: QueryCtx, auth: McpAuthContext, params: Bill
     warnings: [],
   };
 
-  const fingerprint = fingerprintOf("close_period", {
+  // The Close workspace's review checklist: the same flags, the same lines.
+  const settings = await getOrgSettings(ctx, orgId);
+  const timers = await loadActiveTimers(ctx, orgId, settings?.timezone ?? ORG_TIMEZONE_FALLBACK);
+  const taskIds = new Set((await projectTaskIds(ctx, orgId, project._id)).keys());
+  const view = {
+    period: plan.period,
+    liveClose: null,
+    members: members.map(({ entry, carried }) => ({ entry, ...(carried ? { carried } : {}), doc: entry.doc })),
+    price,
+    committable: plan.period,
+    pendingAfter: 0,
+  };
+  effect.warnings = summarizeCloseFlags(flagsFor(view, timersIn(timers, taskIds, plan.period)))
+    .filter((f) => f.kind !== "carried-in")
+    .map(closeFlagLabel);
+
+  const inputs = {
     projectId: project._id,
     period: plan.period,
     currency: plan.currency,
@@ -352,28 +461,18 @@ async function planClosePeriod(ctx: QueryCtx, auth: McpAuthContext, params: Bill
       m.carried ?? null,
     ]),
     invoice: plan.invoice,
-  });
+    // What the user approved includes the checklist they saw (D5).
+    warnings: effect.warnings,
+  };
 
   return {
     effect,
-    fingerprint,
-    // The workspace's review checklist: the same flags, the same lines.
-    warnings: async () => {
-      const settings = await getOrgSettings(ctx, orgId);
-      const timers = await loadActiveTimers(ctx, orgId, settings?.timezone ?? ORG_TIMEZONE_FALLBACK);
-      const taskIds = new Set((await projectTaskIds(ctx, orgId, project._id)).keys());
-      const view = {
-        period: plan.period,
-        liveClose: null,
-        members: members.map(({ entry, carried }) => ({ entry, ...(carried ? { carried } : {}), doc: entry.doc })),
-        price,
-        committable: plan.period,
-        pendingAfter: 0,
-      };
-      return summarizeCloseFlags(flagsFor(view, timersIn(timers, taskIds, plan.period)))
-        .filter((s) => s.kind !== "carried-in")
-        .map(closeFlagLabel);
-    },
+    fingerprint: fingerprintOf("close_period", inputs),
+    datelessFingerprint: fingerprintOf("close_period", {
+      ...inputs,
+      invoice: plan.invoice ? { ...plan.invoice, issueDate: null, dueDate: null } : null,
+    }),
+    issueDate: plan.invoice?.issueDate ?? null,
     apply: async (mctx, actor) => {
       const result = await applyClosePlan(mctx, actor, plan);
       return {
@@ -383,6 +482,8 @@ async function planClosePeriod(ctx: QueryCtx, auth: McpAuthContext, params: Bill
         period,
         invoice: result.invoiceId ? { id: result.invoiceId, number: null, status: "draft" } : null,
         entryCount: result.entryCount,
+        amountMinor: price.amountMinor,
+        currency: plan.currency,
       };
     },
   };
@@ -392,8 +493,25 @@ async function planReopenPeriod(ctx: QueryCtx, auth: McpAuthContext, params: Bil
   const { orgId } = auth;
   const project = await loadProject(ctx, orgId, params.projectId);
   assertPeriodProject(project);
-  if (params.periodStart === undefined) throw new ConvexError("Project not found.");
-  const plan = await planReopen(ctx, orgId, { projectId: project._id, periodStart: params.periodStart });
+  const periodStart = params.periodStart;
+  if (periodStart === undefined) throw new ConvexError("reopen_period needs period (YYYY-MM).");
+  // A drafted period is undone through its invoice, as the app's ⋯ menu does (§5.4).
+  const live = (await getLiveCloses(ctx, orgId, project._id)).find(
+    (cl) => cl.periodStart <= periodStart && cl.periodEnd >= periodStart,
+  );
+  if (live && live.status === "draft") {
+    const draftRaw = live.invoiceId ? await ctx.db.get(live.invoiceId) : null;
+    const draft = draftRaw && draftRaw.orgId === orgId ? draftRaw : null;
+    const number = draft ? invoiceKey(draft) : null;
+    throw new ConvexError(
+      `${periodRangeLabel(live.periodStart, live.periodEnd)} is a Draft: it waits on ${
+        number ? `draft invoice ${number}` : "a never-numbered draft invoice"
+      }${draft ? ` (${appLink(invoicePath(draft))})` : ""}. Undo it with ${
+        number ? "void_invoice" : "delete_draft"
+      } on that invoice; that reopens the period.`,
+    );
+  }
+  const plan = await planReopen(ctx, orgId, { projectId: project._id, periodStart });
   const { close } = plan;
   const period = periodOf({ start: close.periodStart, end: close.periodEnd });
   const effect: BillingEffect = {
@@ -402,7 +520,7 @@ async function planReopenPeriod(ctx: QueryCtx, auth: McpAuthContext, params: Bil
     ...(await projectHeader(ctx, orgId, project)),
     currency: close.currency,
     period,
-    periodState: { before: chip("closed"), after: null },
+    periodState: { before: chip("closed"), after: await stateAfterRelease(ctx, orgId, close) },
     close: null,
     invoice: null,
     fixed: null,
@@ -420,6 +538,8 @@ async function planReopenPeriod(ctx: QueryCtx, auth: McpAuthContext, params: Bil
   return {
     effect,
     fingerprint,
+    datelessFingerprint: fingerprint,
+    issueDate: null,
     apply: async (mctx, actor) => {
       const { reopenedCount } = await applyReopen(mctx, actor, plan);
       return {
@@ -429,6 +549,8 @@ async function planReopenPeriod(ctx: QueryCtx, auth: McpAuthContext, params: Bil
         period,
         invoice: null,
         entryCount: reopenedCount,
+        amountMinor: close.amountMinor,
+        currency: close.currency,
       };
     },
   };
@@ -439,14 +561,17 @@ async function planCreateFixedInvoice(ctx: QueryCtx, auth: McpAuthContext, param
   const project = await loadProject(ctx, orgId, params.projectId);
   let plan;
   try {
-    plan = await planFixedInvoice(ctx, orgId, { projectId: project._id });
+    // The same checks as the app's draft sidebar (`setFixedAmount`): > 0 and ≤ what is left, in the client's currency.
+    plan = await planFixedInvoice(ctx, orgId, { projectId: project._id, amount: params.amount });
   } catch (error) {
-    // The app's structured DRAFT_EXISTS error carries the draft; say it in words.
+    // The app's structured DRAFT_EXISTS error carries the draft; say it in words, with its link.
     const data = error instanceof ConvexError ? (error.data as unknown) : null;
     if (data && typeof data === "object" && (data as { code?: unknown }).code === "DRAFT_EXISTS") {
-      const draftId = String((data as { invoiceId?: unknown }).invoiceId);
+      const draftId = ctx.db.normalizeId("invoices", String((data as { invoiceId?: unknown }).invoiceId));
+      const draft = draftId ? await ctx.db.get(draftId) : null;
+      const ref = draft ? (invoiceKey(draft) ?? draft._id) : String((data as { invoiceId?: unknown }).invoiceId);
       throw new ConvexError(
-        `This project already has a draft invoice (ref ${draftId}). Open it in the app, or finalize it with mark_invoiced.`,
+        `This project already has a draft invoice (ref ${ref}${draft ? `, ${appLink(invoicePath(draft))}` : ""}). Open it in the app, or finalize it with mark_invoiced.`,
       );
     }
     throw error;
@@ -469,6 +594,7 @@ async function planCreateFixedInvoice(ctx: QueryCtx, auth: McpAuthContext, param
       issueDate: plan.issueDate,
       dueDate: plan.dueDate,
       totalMinor: plan.amountMinor,
+      lineCount: 1,
       lines: [
         {
           lineType: "fixed",
@@ -489,7 +615,7 @@ async function planCreateFixedInvoice(ctx: QueryCtx, auth: McpAuthContext, param
     reopened: null,
     warnings: [],
   };
-  const fingerprint = fingerprintOf("create_fixed_invoice", {
+  const inputs = {
     projectId: project._id,
     currency: plan.currency,
     feeMinor: plan.feeMinor,
@@ -500,10 +626,12 @@ async function planCreateFixedInvoice(ctx: QueryCtx, auth: McpAuthContext, param
     issueDate: plan.issueDate,
     dueDate: plan.dueDate,
     messageToClient: plan.messageToClient ?? null,
-  });
+  };
   return {
     effect,
-    fingerprint,
+    fingerprint: fingerprintOf("create_fixed_invoice", inputs),
+    datelessFingerprint: fingerprintOf("create_fixed_invoice", { ...inputs, issueDate: null, dueDate: null }),
+    issueDate: plan.issueDate,
     apply: async (mctx, actor) => {
       const { invoiceId } = await applyFixedInvoice(mctx, actor, plan);
       return {
@@ -513,6 +641,8 @@ async function planCreateFixedInvoice(ctx: QueryCtx, auth: McpAuthContext, param
         period: null,
         invoice: { id: invoiceId, number: null, status: "draft" },
         entryCount: null,
+        amountMinor: plan.amountMinor,
+        currency: plan.currency,
       };
     },
   };
@@ -621,6 +751,9 @@ async function planInvoiceAction(
   }
   const numberAfter = allocate ? formatInvoiceNumber(allocate.prefix, allocate.number) : number;
   const period = close ? periodOf({ start: close.periodStart, end: close.periodEnd }) : null;
+  // Status-only actions change no line: the preview shows the total and the count.
+  const statusOnly = action === "mark_paid" || action === "mark_unpaid" || action === "revert_to_draft";
+  const releasedState = releasesClose && close ? await stateAfterRelease(ctx, orgId, close) : null;
 
   const effect: BillingEffect = {
     action,
@@ -632,7 +765,7 @@ async function planInvoiceAction(
       close && before !== "void"
         ? {
             before: chip(STATE_OF_INVOICE[before]),
-            after: after === "deleted" || after === "void" ? null : chip(STATE_OF_INVOICE[after]),
+            after: after === "deleted" || after === "void" ? releasedState : chip(STATE_OF_INVOICE[after]),
           }
         : null,
     close: null,
@@ -646,7 +779,8 @@ async function planInvoiceAction(
       issueDate: invoice.issueDate,
       dueDate: invoice.dueDate ?? null,
       totalMinor: invoice.totalMinor,
-      lines: lines.map((l) => ({
+      lineCount: lines.length,
+      lines: (statusOnly ? [] : lines).map((l) => ({
         lineType: l.lineType,
         description: l.description,
         quantity: l.quantity,
@@ -688,6 +822,8 @@ async function planInvoiceAction(
   return {
     effect,
     fingerprint,
+    datelessFingerprint: fingerprint,
+    issueDate: null,
     apply: async (mctx, actor) => {
       await apply(mctx, actor);
       return {
@@ -697,6 +833,8 @@ async function planInvoiceAction(
         period,
         invoice: { id: invoice._id, number: numberAfter, status: after },
         entryCount: effect.reopened?.entryCount ?? null,
+        amountMinor: invoice.totalMinor,
+        currency: invoice.currency,
       };
     },
   };
@@ -729,10 +867,18 @@ async function planBilling(
  */
 export async function previewBilling(ctx: MutationCtx, auth: McpAuthContext, input: BillingInput) {
   assertAdmin(auth);
+  const now = Date.now();
+  const recent = await ctx.db
+    .query("mcpBillingPreviews")
+    .withIndex("by_orgId_userId_createdAt", (q) =>
+      q.eq("orgId", auth.orgId).eq("userId", auth.userId).gt("createdAt", now - PREVIEW_TTL_MS),
+    )
+    .take(PREVIEW_OPEN_MAX * 4);
+  if (recent.filter((r) => r.committedAt === undefined).length >= PREVIEW_OPEN_MAX) {
+    throw new ConvexError(TOO_MANY_PREVIEWS);
+  }
   const params = await resolveBillingParams(ctx, auth, input);
   const planned = await planBilling(ctx, auth, input.action, params);
-  const warnings = planned.warnings ? await planned.warnings() : [];
-  const now = Date.now();
   const expiresAt = now + PREVIEW_TTL_MS;
   const token = await ctx.db.insert("mcpBillingPreviews", {
     orgId: auth.orgId,
@@ -741,10 +887,12 @@ export async function previewBilling(ctx: MutationCtx, auth: McpAuthContext, inp
     action: input.action,
     params,
     fingerprint: planned.fingerprint,
+    datelessFingerprint: planned.datelessFingerprint,
+    ...(planned.issueDate ? { issueDate: planned.issueDate } : {}),
     createdAt: now,
     expiresAt,
   });
-  return { token, expiresAt, effect: { ...planned.effect, warnings } };
+  return { token, expiresAt, effect: planned.effect };
 }
 
 /**
@@ -779,7 +927,20 @@ export async function commitBilling(
     }
     throw error;
   }
-  if (planned.fingerprint !== row.fingerprint) throw new ConvexError(DATA_CHANGED);
+  if (planned.fingerprint !== row.fingerprint) {
+    // Only the calendar moved: the invoice would be dated another day than the user saw.
+    if (
+      row.datelessFingerprint === planned.datelessFingerprint &&
+      row.issueDate !== undefined &&
+      planned.issueDate !== null &&
+      row.issueDate !== planned.issueDate
+    ) {
+      throw new ConvexError(
+        `${DATA_CHANGED} The issue date changed to ${planned.issueDate}: a new day began in the organization's timezone since the preview (${row.issueDate}).`,
+      );
+    }
+    throw new ConvexError(DATA_CHANGED);
+  }
 
   const result = await planned.apply(ctx, { orgId: auth.orgId, userId: auth.userId, via: auth.via });
   await ctx.db.patch(row._id, { committedAt: now, result });

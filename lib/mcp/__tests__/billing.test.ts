@@ -66,6 +66,7 @@ const CLOSE_PREVIEW: BillingPreviewData = {
       issueDate: "2026-10-15",
       dueDate: "2026-11-14",
       totalMinor: 16667,
+      lineCount: 2,
       lines: [
         { lineType: "time", description: "Support | fixes", quantity: 6.67, quantityMinutes: 400, unitPriceMinor: 0, amountMinor: 0 },
         { lineType: "overage", description: "Overage (1.67h × 100/h)", quantity: 1.67, quantityMinutes: 100, unitPriceMinor: 10000, amountMinor: 16667 },
@@ -93,6 +94,10 @@ describe("billing_preview tool", () => {
       text: "Error: close_period needs period. It takes: project, period.",
       isError: true,
     });
+    expect(await run({ action: "mark_paid", invoice: "INV-001", amount: 10 })).toEqual({
+      text: 'Error: "amount" applies to create_fixed_invoice only.',
+      isError: true,
+    });
     expect(await run({ action: "mark_paid", invoice: "INV-001", project: "RET" })).toEqual({
       text: 'Error: "project" does not apply to mark_paid. mark_paid takes: invoice.',
       isError: true,
@@ -108,7 +113,7 @@ describe("billing_preview tool", () => {
     const { ctx, calls } = fake(() => CLOSE_PREVIEW);
     const result = await tool("billing_preview").execute({ action: "close_period", project: "RET", period: "2026-08" }, ctx);
     expect(calls).toEqual([
-      { name: "mcp/billing:preview", args: { action: "close_period", project: "RET", period: "2026-08", invoice: undefined } },
+      { name: "mcp/billing:preview", args: { action: "close_period", project: "RET", period: "2026-08", invoice: undefined, amount: undefined } },
     ]);
     expect(result.isError).toBe(false);
     expect(result.text).toBe(renderBillingPreview(CLOSE_PREVIEW, { appOrigin: ORIGIN }));
@@ -133,6 +138,8 @@ describe("billing_commit tool", () => {
     period: { start: "2026-08-01", end: "2026-08-31", label: "August 2026" },
     invoice: { id: "inv1" as never, number: null, status: "draft" },
     entryCount: 3,
+    amountMinor: 16667,
+    currency: "EUR",
     replayed: false,
   };
 
@@ -152,6 +159,8 @@ describe("billing_commit tool", () => {
         "## Done · Create draft invoice · RET · August 2026",
         "- Project: [RET](https://localhost:3001/projects/p1) · Retainer",
         "- Period: August 2026 (2026-08-01 – 2026-08-31)",
+        "- Close workspace: https://localhost:3001/billing/close/p1/2026-08",
+        "- Invoice total: €166.67 (EUR)",
         "- Invoice: [draft invoice](https://localhost:3001/invoices/inv1) · Draft · ref inv1",
         "- Next: review the draft in the app, then mark it as invoiced (billing_preview action mark_invoiced).",
         "- Settled and locked 3 entries.",
@@ -197,7 +206,7 @@ describe("billing renderers", () => {
         ...CLOSE_PREVIEW.effect,
         action: "void_invoice",
         outcome: "Void invoice",
-        periodState: { before: "Invoiced", after: null },
+        periodState: { before: "Invoiced", after: "Ready to invoice" },
         close: null,
         invoice: { ...CLOSE_PREVIEW.effect.invoice!, id: "inv1" as never, number: "INV-001", numberAfter: "INV-001", statusBefore: "invoiced", statusAfter: "void" },
         reopened: { entryCount: 3, minutes: 760 },
@@ -206,12 +215,31 @@ describe("billing renderers", () => {
     };
     const text = renderBillingPreview(voidPreview, { appOrigin: ORIGIN });
     expect(text).toContain("## Billing preview · Void invoice · RET · INV-001");
-    expect(text).toContain("· Invoiced → open again (re-derived from current data)");
+    expect(text).toContain("· Invoiced → Ready to invoice");
     expect(text).toContain("### Invoice [INV-001](https://localhost:3001/invoices/INV-001)");
     expect(text).toContain("- Status: Invoiced → Void");
     expect(text).toContain("The invoice keeps its number and is marked void. The period reopens and its time can be billed again.");
     expect(text).toContain("3 entries (12h 40m) become editable again.");
     expect(text).not.toContain("Before you close");
+  });
+
+  it("shows a status-only action's total and line count, not its lines", () => {
+    const paid: BillingPreviewData = {
+      ...CLOSE_PREVIEW,
+      effect: {
+        ...CLOSE_PREVIEW.effect,
+        action: "mark_paid",
+        outcome: "Mark as paid",
+        periodState: { before: "Invoiced", after: "Paid" },
+        close: null,
+        invoice: { ...CLOSE_PREVIEW.effect.invoice!, id: "inv1" as never, number: "INV-001", numberAfter: "INV-001", statusBefore: "invoiced", statusAfter: "paid", lines: [] },
+        warnings: [],
+      },
+    };
+    const text = renderBillingPreview(paid, { appOrigin: ORIGIN });
+    expect(text).toContain("- Total: €166.67");
+    expect(text).toContain("- Lines: 2 (unchanged by this action)");
+    expect(text).not.toContain("| # |");
   });
 });
 
@@ -227,6 +255,7 @@ describe("invoice search", () => {
           id: "inv2" as never,
           number: null,
           status: "draft",
+          daysOverdue: null,
           subject: "September 2026",
           client: { name: "Yankee", prefix: "YNK" },
           project: { id: "p2" as never, code: "TM", name: "Hourly" },
@@ -240,6 +269,7 @@ describe("invoice search", () => {
           id: "inv1" as never,
           number: "INV-001",
           status: "past_due",
+          daysOverdue: 14,
           subject: "August 2026 overage",
           client: { name: "Arlow", prefix: "ARL" },
           project: { id: "p1" as never, code: "RET", name: "Retainer" },
@@ -255,8 +285,8 @@ describe("invoice search", () => {
       incomplete: false,
       notes: [],
       totals: [
-        { currency: "EUR", totalMinor: 16667, count: 1 },
-        { currency: "USD", totalMinor: 10000, count: 1 },
+        { status: "draft", currency: "USD", totalMinor: 10000, count: 1 },
+        { status: "past_due", currency: "EUR", totalMinor: 16667, count: 1 },
       ],
       today: "2026-10-15",
     };
@@ -275,10 +305,12 @@ describe("invoice search", () => {
     expect(result.text).toBe(
       [
         "### Invoices · 1–2 of 2",
-        "Total of all 2 matching invoices, per currency, void excluded: €166.67 (1) · $100.00 (1)",
+        "Totals of all 2 matching invoices, by status and currency, void excluded:",
+        "- Draft: $100.00 (1)",
+        "- Past due: €166.67 (1)",
         "Today: 2026-10-15 (org timezone; Past due = Invoiced and due before today)",
-        '- [Draft (never numbered, ref inv2)](https://localhost:3001/invoices/inv2) · Draft · $100.00 · client:YNK · Yankee · TM · Hourly · September 2026 · "September 2026"',
-        '- [INV-001](https://localhost:3001/invoices/INV-001) · Past due · €166.67 · client:ARL · Arlow · RET · Retainer · August 2026 · issued 2026-09-02 · due 2026-10-01 · "August 2026 overage"',
+        '- [Draft (never numbered, ref inv2)](https://localhost:3001/invoices/inv2) · Draft · $100.00 · client:YNK · Yankee · TM · Hourly · September 2026 · issued 2026-10-15 · "September 2026"',
+        '- [INV-001](https://localhost:3001/invoices/INV-001) · Past due (14 days overdue) · €166.67 · client:ARL · Arlow · RET · Retainer · August 2026 · issued 2026-09-02 · due 2026-10-01 · "August 2026 overage"',
       ].join("\n"),
     );
   });

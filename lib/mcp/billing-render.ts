@@ -109,10 +109,10 @@ function headerLines(e: Effect, ctx: RenderContext): string[] {
   ];
   if (e.period) {
     const state = e.periodState
-      ? ` · ${e.periodState.before} → ${e.periodState.after ?? "open again (re-derived from current data)"}`
+      ? ` · ${e.periodState.before} → ${e.periodState.after ?? "no open period (nothing billable left in it)"}`
       : "";
     lines.push(`- Period: ${e.period.label} (${e.period.start} – ${e.period.end})${state}`);
-    if (e.action === "close_period") {
+    if (e.action === "close_period" || e.action === "reopen_period") {
       lines.push(`- Close workspace: ${closeWorkspaceLink(ctx.appOrigin, e.project.id, e.period.start.slice(0, 7))}`);
     }
   }
@@ -153,6 +153,10 @@ function invoiceSection(e: Effect, ctx: RenderContext): string | null {
     `- Issue date: ${inv.issueDate} · due date: ${inv.dueDate ?? "none"}`,
     `- Total: ${money(inv.totalMinor)}`,
   ].filter((l): l is string => l !== null);
+  // Status-only actions (paid / unpaid / revert) change no line: total and count only.
+  if (inv.lines.length === 0 && inv.lineCount > 0) {
+    return [title, ...facts, `- Lines: ${inv.lineCount} (unchanged by this action)`].join("\n");
+  }
   const shown = inv.lines.slice(0, PREVIEW_LINES_MAX);
   const table =
     shown.length > 0
@@ -209,7 +213,15 @@ export function renderBillingCommit(data: BillingCommitData, ctx: RenderContext)
     lines.push("Replayed: this token was already committed, so nothing was written again. The first commit's result:");
   }
   lines.push(`- Project: [${data.project.code}](${projectLink(ctx.appOrigin, data.project.id)}) · ${oneLine(data.project.name)}`);
-  if (data.period) lines.push(`- Period: ${data.period.label} (${data.period.start} – ${data.period.end})`);
+  if (data.period) {
+    lines.push(`- Period: ${data.period.label} (${data.period.start} – ${data.period.end})`);
+    if (data.action === "close_period" || data.action === "reopen_period") {
+      lines.push(`- Close workspace: ${closeWorkspaceLink(ctx.appOrigin, data.project.id, data.period.start.slice(0, 7))}`);
+    }
+  }
+  if (data.amountMinor !== null) {
+    lines.push(`- ${data.invoice ? "Invoice total" : "Amount"}: ${moneyMinor(data.amountMinor, data.currency)} (${data.currency})`);
+  }
   if (data.invoice) {
     const inv = data.invoice;
     lines.push(

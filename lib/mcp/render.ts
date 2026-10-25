@@ -74,6 +74,11 @@ export function moneyMinor(minor: number, currency: string): string {
   return /^[A-Z]{3}$/.test(currency) ? formatCurrencyPrecise(amount, currency) : `${amount.toFixed(2)} ${currency}`;
 }
 
+/** "12 days overdue" (computed in Convex, org timezone). */
+function overdue(days: number): string {
+  return `${days} ${days === 1 ? "day" : "days"} overdue`;
+}
+
 /** An invoice's app link and display ref: its number, or its ID while never numbered. */
 export function invoiceRef(invoice: { id: string; number: string | null }): string {
   return invoice.number ?? invoice.id;
@@ -276,20 +281,20 @@ export function renderTimeEntryRow(row: TimeRow, ctx: RenderContext): string {
 
 /**
  * One invoice row, as the Billing hub's Invoices list shows it: number (or
- * "Draft"), status, total, client, project, period (or Fixed fee), issued
- * (numbered only) and due (not on drafts).
+ * "Draft"), status (with days overdue), total, client, project, period (or
+ * Fixed fee), the stored issue date and the due date (not on drafts).
  */
 export function renderInvoiceRow(row: InvoicePage["rows"][number], ctx: RenderContext): string {
   const ref = invoiceRef(row);
   const name = row.number ?? `Draft (never numbered, ref ${row.id})`;
   return `- ${fields(
     `[${name}](${invoiceLink(ctx.appOrigin, ref)})`,
-    INVOICE_STATUS_COPY[row.status].chip,
+    row.daysOverdue !== null ? `${INVOICE_STATUS_COPY[row.status].chip} (${overdue(row.daysOverdue)})` : INVOICE_STATUS_COPY[row.status].chip,
     moneyMinor(row.totalMinor, row.currency),
     row.client ? clientLabel(row.client) : null,
     row.project ? keyed(row.project.code, row.project.name) : null,
     row.period ? row.period.label : "Fixed fee",
-    row.number ? `issued ${row.issueDate}` : null,
+    `issued ${row.issueDate}`,
     row.dueDate && row.status !== "draft" ? `due ${row.dueDate}` : null,
     row.subject ? `"${oneLine(row.subject)}"` : null,
   )}`;
@@ -634,12 +639,12 @@ function renderInvoiceRecord(record: Extract<FetchedRecord, { type: "invoice" }>
       `## Invoice ${record.number ?? "draft (never numbered)"}`,
       `- Link: ${invoiceLink(ctx.appOrigin, ref)}`,
       `- Ref: ${ref}`,
-      `- Status: ${INVOICE_STATUS_COPY[record.status].chip}`,
+      `- Status: ${INVOICE_STATUS_COPY[record.status].chip}${record.daysOverdue !== null ? ` (${overdue(record.daysOverdue)})` : ""}`,
       record.subject ? `- Subject: "${oneLine(record.subject)}"` : null,
       `- Client: ${record.client ? clientLabel(record.client) : "not available"}`,
       `- Project: ${record.project ? `[${record.project.code}](${projectLink(ctx.appOrigin, record.project.id)}) · ${oneLine(record.project.name)}` : "not available"}`,
       `- Period: ${record.period ? `${record.period.label} (${record.period.start} – ${record.period.end})` : "none (fixed fee)"}`,
-      `- Issue date: ${record.issueDate}${record.number ? "" : " (set when it is marked as invoiced)"}`,
+      `- Issue date: ${record.issueDate}`,
       `- Due date: ${record.dueDate ?? "none"}`,
       record.paidAt !== null ? `- Paid: ${formatTimestamp(record.paidAt, ctx.timezone)}` : null,
       `- Total: ${moneyMinor(record.totalMinor, record.currency)} (${record.currency})`,
@@ -759,14 +764,21 @@ export function renderCommentSection(page: CommentPage, ctx: RenderContext): str
 }
 
 export function renderInvoiceSection(page: InvoicePage, ctx: RenderContext): string {
-  const totals = page.totals.map((t) => `${moneyMinor(t.totalMinor, t.currency)} (${t.count})`).join(" · ");
+  // One line per display status: drafts are never added to issued money, currencies never to each other.
+  const byStatus = new Map<string, string[]>();
+  for (const t of page.totals) {
+    const label = INVOICE_STATUS_COPY[t.status].chip;
+    byStatus.set(label, [...(byStatus.get(label) ?? []), `${moneyMinor(t.totalMinor, t.currency)} (${t.count})`]);
+  }
+  const totals = [...byStatus].map(([label, amounts]) => `- ${label}: ${amounts.join(" · ")}`);
   const extra =
     page.total === 0
       ? []
       : [
           page.incomplete
-            ? `Totals of the ${page.total} invoices found, per currency, void excluded (more may exist): ${totals || "none"}`
-            : `Total of all ${page.total} matching ${page.total === 1 ? "invoice" : "invoices"}, per currency, void excluded: ${totals || "none"}`,
+            ? `Totals of the ${page.total} invoices found, by status and currency, void excluded (more may exist):`
+            : `Totals of all ${page.total} matching ${page.total === 1 ? "invoice" : "invoices"}, by status and currency, void excluded:`,
+          ...(totals.length > 0 ? totals : ["- none"]),
           `Today: ${page.today} (org timezone; Past due = Invoiced and due before today)`,
         ];
   return searchSection(

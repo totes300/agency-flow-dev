@@ -25,6 +25,7 @@ export const preview = mutation({
     project: v.optional(v.string()),
     period: v.optional(v.string()),
     invoice: v.optional(v.string()),
+    amount: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const auth = await getMcpAuthContext(ctx);

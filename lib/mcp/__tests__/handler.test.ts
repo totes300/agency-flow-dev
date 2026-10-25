@@ -152,7 +152,7 @@ describe("MCP protocol", () => {
     expect(hints.billing_preview).toMatchObject({ readOnlyHint: true });
     expect(hints.billing_commit).toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: true });
     expect(Object.keys(expected.find((t) => t.name === "billing_preview")!.inputSchema.properties ?? {})).toEqual([
-      "action", "project", "period", "invoice",
+      "action", "project", "period", "invoice", "amount",
     ]);
     expect(Object.keys(expected.find((t) => t.name === "billing_commit")!.inputSchema.properties ?? {})).toEqual(["commitToken"]);
     expect(Object.keys(expected.find((t) => t.name === "report")!.inputSchema.properties ?? {})).toEqual([

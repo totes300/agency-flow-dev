@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { ConvexError } from "convex/values";
 import { getFunctionName } from "convex/server";
-import { MCP_TOOLS, SEARCH_FILTERS, type McpMutationRunner, type McpQueryRunner, type McpToolContext } from "../registry";
+import { MCP_TOOLS, SEARCH_FILTERS, type McpActionRunner, type McpMutationRunner, type McpQueryRunner, type McpToolContext } from "../registry";
 import { renderBillingCommit, renderBillingPreview, type BillingCommitData, type BillingPreviewData } from "../billing-render";
 import { renderInvoiceSection, type InvoicePage } from "../render";
 import { sha256Hex } from "../sha256";
@@ -26,6 +26,7 @@ function fake(answer: (name: string, args: Record<string, unknown>) => unknown) 
   const ctx: McpToolContext = {
     runQuery: run as McpQueryRunner,
     runMutation: run as McpMutationRunner,
+    runAction: run as McpActionRunner,
     appOrigin: ORIGIN,
     now: () => NOW,
     clientName: async () => "Claude",

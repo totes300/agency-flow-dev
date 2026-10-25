@@ -15,6 +15,8 @@ import { visibleTimeEntries } from "../timeEntries";
 import type { Resolved } from "./mcpRefs";
 import { listTaskExternalRefs } from "./mcpExternalRefs";
 import { capText, mentionedUserIds, tiptapToMarkdown } from "../../lib/mcp/tiptap-markdown";
+import { loadContent } from "../attachmentContents";
+import { ATTACHMENT_TEXT_FETCH_MAX, capText as capStoredText, contentMessage } from "../../lib/attachments/contents";
 import { safeParseDoc } from "./notificationEvents";
 import { getInvoiceForAuth } from "../invoices";
 import { invoiceDisplayStatus } from "./billing/periodState";
@@ -39,7 +41,8 @@ import type { FetchInclude } from "../../lib/mcp/limits";
  * call; the route fetches one ref per call): a task with every include is
  * about 30 ranges plus one per distinct comment author / activity actor /
  * time-entry member / planner-bar member or category, two per distinct mentioned user, and at most ~3,200 documents
- * (comments 501, activity 501, time entries 2,001, plan 101, files 51 + 51, sub-tasks 201, external refs 51).
+ * (comments 501, activity 501, time entries 2,001, plan 101, files 51 + 51, sub-tasks 201, external refs 51);
+ * attachment_text adds one range per listed file (≤ 50) and up to 50 × 50,000 characters of stored text.
  * A daily note is one read plus its author and mentioned users.
  */
 
@@ -203,10 +206,12 @@ async function taskRecord(ctx: QueryCtx, auth: AuthContext, taskId: Id<"tasks">,
     activity: include.has("activity") ? await taskActivity(ctx, auth, taskId) : null,
     time: include.has("time") ? await taskTime(ctx, auth, taskId) : null,
     plan: include.has("plan") ? await taskPlan(ctx, auth, taskId) : null,
-    files: include.has("files") || include.has("attachment_text") ? await taskFiles(ctx, auth, taskId) : null,
-    // The attachment text extraction (attachmentContents) does not exist yet:
-    // say so explicitly rather than pretend a file has no text.
-    attachmentText: include.has("attachment_text") ? { available: false as const } : null,
+    // attachment_text implies the file list: each file then carries its
+    // extracted text (or why there is none).
+    files:
+      include.has("files") || include.has("attachment_text")
+        ? await taskFiles(ctx, auth, taskId, include.has("attachment_text"))
+        : null,
   };
   return record;
 }
@@ -306,28 +311,61 @@ async function taskPlan(ctx: QueryCtx, auth: AuthContext, taskId: Id<"tasks">) {
   return { rows, truncated: segments.length > PLAN_ROWS_MAX };
 }
 
-async function taskFiles(ctx: QueryCtx, auth: AuthContext, taskId: Id<"tasks">) {
+/**
+ * What an agent may read of a file (attachmentContents, ported extraction):
+ * the status with an honest sentence, the text (capped per file, marked as
+ * cut) for PDF / DOCX / text files, the size for images. `status:
+ * "not_processed"` = no row (attached before extraction existed).
+ */
+async function fileText(ctx: QueryCtx, orgId: string, fileId: Id<"_storage">) {
+  const row = await loadContent(ctx, orgId, fileId);
+  const shown = row?.status === "done" && row.text ? capStoredText(row.text, ATTACHMENT_TEXT_FETCH_MAX) : null;
+  return {
+    status: row?.status ?? ("not_processed" as const),
+    message: contentMessage(row),
+    text: shown?.text ?? null,
+    /** Characters stored for this file (the extraction keeps at most 50,000). */
+    totalChars: row?.text?.length ?? 0,
+    /** Only the first ATTACHMENT_TEXT_FETCH_MAX characters are returned. */
+    cut: shown?.truncated ?? false,
+    /** The extraction itself stopped at its 50,000-character cap. */
+    extractionTruncated: row?.truncated ?? false,
+    pageCount: row?.pageCount ?? null,
+    width: row?.width ?? null,
+    height: row?.height ?? null,
+  };
+}
+
+async function taskFiles(ctx: QueryCtx, auth: AuthContext, taskId: Id<"tasks">, withText: boolean) {
   const own = await listTaskAttachmentsForAuth(ctx, auth, taskId, FILES_MAX);
   const onComments = await listCommentAttachmentsForAuth(ctx, auth, taskId, FILES_MAX);
-  const rows = [
+  const all = [
     ...(own?.attachments ?? []).map((a) => ({
+      fileId: a.fileId,
       name: a.fileName,
       size: a.fileSize,
       mimeType: a.mimeType,
       url: a.url,
-      onComment: false,
+      commentId: null,
     })),
     ...(onComments?.attachments ?? []).map((a) => ({
+      fileId: a.fileId,
       name: a.fileName,
       size: a.fileSize,
       mimeType: a.mimeType,
       url: a.url,
-      onComment: true,
+      commentId: a.commentId,
     })),
   ];
+  const rows = [];
+  for (const { fileId, ...file } of all.slice(0, FILES_MAX)) {
+    rows.push({ ...file, onComment: file.commentId !== null, text: withText ? await fileText(ctx, auth.orgId, fileId) : null });
+  }
   return {
-    rows: rows.slice(0, FILES_MAX),
-    truncated: rows.length > FILES_MAX || (own?.truncated ?? false) || (onComments?.truncated ?? false),
+    rows,
+    truncated: all.length > FILES_MAX || (own?.truncated ?? false) || (onComments?.truncated ?? false),
+    /** include attachment_text: every row carries `text`. */
+    withText,
   };
 }
 

@@ -19,6 +19,8 @@ export const MCP_WRITE_TOOLS = [
   "save_plan",
   "save_daily_notes",
   "mark_read",
+  "create_upload",
+  "attach_file",
 ] as const;
 export type McpWriteTool = (typeof MCP_WRITE_TOOLS)[number];
 
@@ -191,6 +193,36 @@ export const markReadResultValidator = v.object({
   ),
 });
 
+/**
+ * A started upload (docs/prd-mcp.md §10): POST the bytes to `uploadUrl`
+ * before `expiresAt`, then attach_file the returned storageId.
+ */
+export const createUploadResultValidator = v.object({
+  tool: v.literal("create_upload"),
+  uploadUrl: v.string(),
+  fileName: v.string(),
+  contentType: v.string(),
+  sizeBytes: v.number(),
+  expiresAt: v.number(),
+});
+
+/** An attached file and where its text extraction stands (attachmentContents). */
+export const attachFileResultValidator = v.object({
+  tool: v.literal("attach_file"),
+  target: v.object({
+    type: v.union(v.literal("task"), v.literal("comment")),
+    /** The task's key (the comment's task for a comment). */
+    task: v.string(),
+    title: v.string(),
+    commentId: v.optional(v.id("comments")),
+  }),
+  file: v.object({ name: v.string(), sizeBytes: v.number(), mimeType: v.string() }),
+  /** The attachments / commentAttachments row. */
+  attachmentId: v.string(),
+  /** Text extraction: pending (being read), done, unsupported or failed. */
+  textStatus: v.union(v.literal("pending"), v.literal("done"), v.literal("unsupported"), v.literal("failed")),
+});
+
 export const mcpWriteResultValidator = v.union(
   saveTasksResultValidator,
   saveCommentsResultValidator,
@@ -202,6 +234,8 @@ export const mcpWriteResultValidator = v.union(
   savePlanResultValidator,
   saveDailyNotesResultValidator,
   markReadResultValidator,
+  createUploadResultValidator,
+  attachFileResultValidator,
 );
 
 export type SaveTasksResult = Infer<typeof saveTasksResultValidator>;
@@ -214,4 +248,6 @@ export type SaveProjectsResult = Infer<typeof saveProjectsResultValidator>;
 export type SavePlanResult = Infer<typeof savePlanResultValidator>;
 export type SaveDailyNotesResult = Infer<typeof saveDailyNotesResultValidator>;
 export type MarkReadResult = Infer<typeof markReadResultValidator>;
+export type CreateUploadResult = Infer<typeof createUploadResultValidator>;
+export type AttachFileResult = Infer<typeof attachFileResultValidator>;
 export type McpWriteResult = Infer<typeof mcpWriteResultValidator>;

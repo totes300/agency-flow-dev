@@ -1,5 +1,6 @@
 import { ConvexError } from "convex/values";
-import type { MutationCtx, QueryCtx } from "../_generated/server";
+import type { ActionCtx, MutationCtx, QueryCtx } from "../_generated/server";
+import { internal } from "../_generated/api";
 import { findOrgMembership, oauthClientIdOf, type AuthContext } from "./auth";
 
 /**
@@ -30,10 +31,17 @@ export const USER_NOT_SYNCED =
  *
  * Queries cannot write, so last-used stamping for Connected apps happens
  * elsewhere (slice 8).
+ *
+ * Actions have no `ctx.db`: they run the same checks through the internal
+ * query `mcp/auth:context`, which receives the action's identity (Convex
+ * passes it on to functions an action calls).
  */
 export async function getMcpAuthContext(
-  ctx: QueryCtx | MutationCtx,
+  ctx: QueryCtx | MutationCtx | ActionCtx,
 ): Promise<McpAuthContext> {
+  if (!("db" in ctx)) {
+    return await ctx.runQuery(internal.mcp.auth.context, {});
+  }
   const identity = await ctx.auth.getUserIdentity();
   if (!identity) {
     throw new ConvexError("Not authenticated");

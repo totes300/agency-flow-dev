@@ -9,7 +9,7 @@ import { getFunctionName } from "convex/server";
 import { z } from "zod";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { createAgencyFlowMcpHandler } from "../handler";
-import { MCP_TOOLS, type McpMutationRunner, type McpQueryRunner } from "../registry";
+import { MCP_TOOLS, type McpActionRunner, type McpMutationRunner, type McpQueryRunner } from "../registry";
 
 const RESOURCE_URL = "https://localhost:3001/mcp";
 const METADATA_URL = "https://localhost:3001/.well-known/oauth-protected-resource/mcp";
@@ -51,6 +51,10 @@ const handler = createAgencyFlowMcpHandler({
         items: [{ commentId: "cm1", task: "ARLO-21", action: "created" }],
       };
     }) as McpMutationRunner,
+  actionRunnerFor: () =>
+    (async () => {
+      throw new Error("unexpected action");
+    }) as McpActionRunner,
   clientNameFor: async (clientId) => (clientId === "client_test" ? "Test Client" : undefined),
 });
 
@@ -130,6 +134,8 @@ describe("MCP protocol", () => {
       "save_daily_notes",
       "mark_read",
       "delete",
+      "create_upload",
+      "attach_file",
       "report",
       "billing_preview",
       "billing_commit",
@@ -151,6 +157,8 @@ describe("MCP protocol", () => {
       "save_daily_notes",
       "mark_read",
       "delete",
+      "create_upload",
+      "attach_file",
     ]) {
       expect(Object.keys(expected.find((t) => t.name === name)!.inputSchema.properties ?? {})).toContain("idempotencyKey");
     }
@@ -172,6 +180,15 @@ describe("MCP protocol", () => {
     expect(hints.report).toMatchObject({ readOnlyHint: true });
     expect(hints.billing_preview).toMatchObject({ readOnlyHint: true });
     expect(hints.billing_commit).toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: true });
+    for (const name of ["create_upload", "attach_file"]) {
+      expect(hints[name]).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: false });
+    }
+    expect(Object.keys(expected.find((t) => t.name === "create_upload")!.inputSchema.properties ?? {})).toEqual([
+      "filename", "contentType", "sizeBytes", "idempotencyKey",
+    ]);
+    expect(Object.keys(expected.find((t) => t.name === "attach_file")!.inputSchema.properties ?? {})).toEqual([
+      "ref", "storageId", "inlineText", "filename", "idempotencyKey",
+    ]);
     expect(Object.keys(expected.find((t) => t.name === "billing_preview")!.inputSchema.properties ?? {})).toEqual([
       "action", "project", "period", "invoice", "amount",
     ]);

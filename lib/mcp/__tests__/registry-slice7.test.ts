@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { getFunctionName } from "convex/server";
-import { MCP_TOOLS, type McpMutationRunner, type McpQueryRunner, type McpToolContext } from "../registry";
+import { MCP_TOOLS, type McpActionRunner, type McpMutationRunner, type McpQueryRunner, type McpToolContext } from "../registry";
 
 const ORIGIN = "https://localhost:3001";
 const NOW = Date.UTC(2026, 9, 24, 12);
@@ -18,6 +18,7 @@ function fake(reply: (name: string, args: Record<string, unknown>) => unknown) {
   const ctx: McpToolContext = {
     runQuery: run as McpQueryRunner,
     runMutation: run as McpMutationRunner,
+    runAction: run as McpActionRunner,
     appOrigin: ORIGIN,
     now: () => NOW,
     clientName: async () => "Claude",

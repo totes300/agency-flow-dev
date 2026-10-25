@@ -3,7 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { protectedResourceMetadataPath } from "./config";
 import { appOriginOf } from "./links";
-import { MCP_TOOLS, type McpMutationRunner, type McpQueryRunner } from "./registry";
+import { MCP_TOOLS, type McpActionRunner, type McpMutationRunner, type McpQueryRunner } from "./registry";
 
 /**
  * Builds the Streamable HTTP MCP handler (no SSE) behind bearer auth. Kept
@@ -19,12 +19,17 @@ export type McpHandlerOptions = {
   queryRunnerFor: (token: string) => McpQueryRunner;
   /** Runs Convex mutations as the user who owns `token`. */
   mutationRunnerFor: (token: string) => McpMutationRunner;
+  /** Runs Convex actions as the user who owns `token` (attach_file inline text). */
+  actionRunnerFor: (token: string) => McpActionRunner;
   /** The display name of an OAuth client (attribution only, D15); never throws. */
   clientNameFor: (clientId: string) => Promise<string | undefined>;
 };
 
 /** What the tools need from the route besides the request. */
-export type McpConvexAccess = Pick<McpHandlerOptions, "queryRunnerFor" | "mutationRunnerFor" | "clientNameFor">;
+export type McpConvexAccess = Pick<
+  McpHandlerOptions,
+  "queryRunnerFor" | "mutationRunnerFor" | "actionRunnerFor" | "clientNameFor"
+>;
 
 export const MCP_SERVER_INFO = { name: "agency-flow", version: "0.1.0" };
 
@@ -48,6 +53,7 @@ export function registerMcpTools(server: McpServer, access: McpConvexAccess, app
         const result = await tool.execute(input, {
           runQuery: access.queryRunnerFor(token),
           runMutation: access.mutationRunnerFor(token),
+          runAction: access.actionRunnerFor(token),
           appOrigin,
           now: Date.now,
           clientName: async () => (clientId ? await access.clientNameFor(clientId) : undefined),

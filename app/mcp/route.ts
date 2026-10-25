@@ -1,6 +1,6 @@
 import { clerkClient } from "@clerk/nextjs/server";
 import { verifyClerkToken } from "@clerk/mcp-tools/server";
-import { fetchMutation, fetchQuery } from "convex/nextjs";
+import { fetchAction, fetchMutation, fetchQuery } from "convex/nextjs";
 import { resolveClientName } from "@/lib/mcp/clerk-client-name";
 import { getMcpResourceUrl } from "@/lib/mcp/config";
 import { createAgencyFlowMcpHandler } from "@/lib/mcp/handler";
@@ -32,6 +32,7 @@ function getHandler(): (req: Request) => Promise<Response> {
     },
     queryRunnerFor: (token) => (query, args) => fetchQuery(query, args, { token }),
     mutationRunnerFor: (token) => (mutation, args) => fetchMutation(mutation, args, { token }),
+    actionRunnerFor: (token) => (action, args) => fetchAction(action, args, { token }),
     // Display name for "via <client>" only; Convex takes the client ID from the token.
     clientNameFor: resolveClientName,
   });

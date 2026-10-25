@@ -229,13 +229,13 @@ describe("fetch records: task references (I3, T1)", () => {
       labels: ["Launch"],
       description: "## Brief\n\nRebuild the **hero**",
       subtaskCount: 1,
-      attachmentText: { available: false },
     });
     expect(r.record.subtasks?.rows.map((s) => s.identifier)).toEqual([f.id.S]);
     expect(r.record.comments?.rows).toEqual([
       expect.objectContaining({ id: f.cP, author: "Carol", text: "Hero copy is ready", resolved: false }),
     ]);
-    expect(r.record.files).toEqual({ rows: [], truncated: false });
+    // attachment_text implies the file list (with text per file; none here).
+    expect(r.record.files).toEqual({ rows: [], truncated: false, withText: true });
     // Not requested → not loaded.
     expect(r.record.activity).toBeNull();
     expect(r.record.time).toBeNull();

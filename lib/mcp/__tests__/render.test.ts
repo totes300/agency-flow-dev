@@ -212,10 +212,20 @@ const TASK: TaskRecord = {
   },
   plan: null,
   files: {
-    rows: [{ name: "brief [v2].pdf", size: 2048, mimeType: "application/pdf", url: "https://files.test/brief", onComment: true }],
+    rows: [
+      {
+        name: "brief [v2].pdf",
+        size: 2048,
+        mimeType: "application/pdf",
+        url: "https://files.test/brief",
+        commentId: "cm1" as Id<"comments">,
+        onComment: true,
+        text: null,
+      },
+    ],
     truncated: false,
+    withText: false,
   },
-  attachmentText: { available: false },
 };
 
 describe("deep links", () => {
@@ -277,15 +287,14 @@ describe("renderTaskRecord", () => {
           "Total of all 1 entry: 1h 30m",
           '- e1 · 2026-10-20 · 1h 30m · Alice · "Hero layout" · Design · billable',
         ].join("\n"),
-        "### Files (1)\n- [brief \\[v2\\].pdf](https://files.test/brief) · 2.0 KB · application/pdf · on a comment",
-        "### Attachment text\nText extraction from attachments is not available yet. Use the file links instead.",
+        "### Files (1)\n- [brief \\[v2\\].pdf](https://files.test/brief) · 2.0 KB · application/pdf · on comment [cm1](https://localhost:3001/tasks/ARLO-21?comment=cm1)",
       ].join("\n\n"),
     );
   });
 
   it("leaves out sections that were not included", () => {
     const text = renderTaskRecord(
-      { ...TASK, subtasks: null, comments: null, activity: null, time: null, plan: null, files: null, attachmentText: null, description: null },
+      { ...TASK, subtasks: null, comments: null, activity: null, time: null, plan: null, files: null, description: null },
       CTX,
     );
     expect(text).not.toContain("###");

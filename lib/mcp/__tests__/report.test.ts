@@ -8,6 +8,7 @@ import {
   REPORT_PARAMS,
   REPORT_SPECS,
   reportInputProblem,
+  type McpActionRunner,
   type McpMutationRunner,
   type McpQueryRunner,
   type McpToolContext,
@@ -99,6 +100,9 @@ function fakeConvex(answer: (name: string, args: Record<string, unknown>) => unk
     runMutation: (async () => {
       throw new Error("report never writes");
     }) as McpMutationRunner,
+    runAction: (async () => {
+      throw new Error("report never runs actions");
+    }) as McpActionRunner,
     appOrigin: ORIGIN,
     now: () => Date.UTC(2026, 6, 10),
     clientName: async () => "Claude",
@@ -113,7 +117,7 @@ describe("report tool (registry)", () => {
     expect(Object.keys(REPORT_SPECS).sort()).toEqual([...REPORT_KINDS].sort());
     for (const kind of REPORT_KINDS) expect(report.description).toContain(`${kind}:`);
     for (const operation of Object.values(report.operations)) {
-      expect(getFunctionName("query" in operation ? operation.query : operation.mutation)).toMatch(/^mcp\/report:/);
+      expect("query" in operation && getFunctionName(operation.query)).toMatch(/^mcp\/report:/);
     }
   });
 

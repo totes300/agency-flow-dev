@@ -70,6 +70,17 @@ export const IDEMPOTENCY_KEY_MAX_LENGTH = 200;
 export const PRIORITY_NAMES = ["none", "urgent", "high", "medium", "low"] as const;
 export type PriorityName = (typeof PRIORITY_NAMES)[number];
 
+/**
+ * Files (docs/prd-mcp.md §10, D18). Size and count limits are the app's own
+ * (lib/attachment.ts, convex/attachments.ts, convex/commentAttachments.ts).
+ * `attach_file` inline text is capped at 200 KiB of UTF-8, matching Notion.
+ */
+export const INLINE_TEXT_MAX_BYTES = 200 * 1024;
+/** A Convex upload URL works for 1 hour after create_upload. */
+export const UPLOAD_URL_TTL_MS = 60 * 60 * 1000;
+/** An upload must be attached within 24 hours of its create_upload. */
+export const UPLOAD_ATTACH_WINDOW_MS = 24 * 60 * 60 * 1000;
+
 /** Markdown accepted per description or comment body (route schema and Convex). */
 export const MARKDOWN_MAX_LENGTH = 50_000;
 

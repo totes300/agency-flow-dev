@@ -863,6 +863,28 @@ export default defineSchema({
     .index("by_orgId_userId_key", ["orgId", "userId", "key"])
     .index("by_createdAt", ["createdAt"]),
 
+  // ─── MCP uploads (docs/prd-mcp.md D18, §10) ─────────────────────────────────
+  // One row per `create_upload`: the file the caller announced (name, type,
+  // size) before POSTing its bytes to the Convex upload URL. `attach_file`
+  // accepts a storageId only when it matches an upload of the same user in
+  // the same org (size, type, uploaded after the announcement and within the
+  // URL's lifetime) and marks it used (`storageId`), so a storageId from
+  // anywhere else — another org's file included — can never be attached
+  // (I3). Kept 24 h (cleanup cron).
+  mcpUploads: defineTable({
+    orgId: v.string(),
+    userId: v.id("users"),
+    fileName: v.string(),
+    contentType: v.string(),
+    sizeBytes: v.number(),
+    createdAt: v.number(),
+    // Set when attached: the upload is used once.
+    storageId: v.optional(v.id("_storage")),
+  })
+    .index("by_orgId_userId_createdAt", ["orgId", "userId", "createdAt"])
+    .index("by_storageId", ["storageId"])
+    .index("by_createdAt", ["createdAt"]),
+
   // ─── MCP billing previews (docs/prd-mcp.md D5, §9) ────────────────────────
   // One row per billing_preview: its _id is the commit token. Bound to the
   // org, user and OAuth client that previewed, the action and its resolved

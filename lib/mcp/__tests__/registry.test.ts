@@ -9,6 +9,7 @@ import {
   SEARCH_TYPES,
   fitRows,
   mcpErrorMessage,
+  type McpActionRunner,
   type McpMutationRunner,
   type McpQueryRunner,
   type McpToolContext,
@@ -25,6 +26,9 @@ const noWrites = {
   runMutation: (async () => {
     throw new Error("unexpected mutation");
   }) as McpMutationRunner,
+  runAction: (async () => {
+    throw new Error("unexpected action");
+  }) as McpActionRunner,
   clientName: async () => "Claude",
 };
 
@@ -119,7 +123,8 @@ describe("MCP registry", () => {
       expect(typeof t.annotations.readOnlyHint).toBe("boolean");
       expect(Object.keys(t.operations).length).toBeGreaterThan(0);
       for (const operation of Object.values(t.operations)) {
-        expect(getFunctionName("query" in operation ? operation.query : operation.mutation)).toMatch(/^mcp\//);
+        const fn = "query" in operation ? operation.query : "mutation" in operation ? operation.mutation : operation.action;
+        expect(getFunctionName(fn)).toMatch(/^mcp\//);
         expect(typeof operation.render).toBe("function");
       }
       // The schema converts to JSON Schema for tools/list.
@@ -368,7 +373,10 @@ function fakeWrites(result: (name: string, args: Record<string, unknown>) => unk
     calls.push({ name, args: args as Record<string, unknown> });
     return result(name, args as Record<string, unknown>);
   }) as McpQueryRunner;
-  const ctx: McpToolContext = { runQuery, runMutation, appOrigin: ORIGIN, now: () => NOW, clientName: async () => "Claude" };
+  const runAction = (async () => {
+    throw new Error("unexpected action");
+  }) as McpActionRunner;
+  const ctx: McpToolContext = { runQuery, runMutation, runAction, appOrigin: ORIGIN, now: () => NOW, clientName: async () => "Claude" };
   return { ctx, calls };
 }
 

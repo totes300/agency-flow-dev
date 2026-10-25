@@ -39,6 +39,8 @@ export const ATTACHMENT_TEXT_FETCH_MAX = 12_000;
 export const TEXT_BYTES_MAX = 4 * EXTRACT_TEXT_MAX;
 /** A DOCX whose archive unpacks to more than this is not handed to mammoth. */
 export const DOCX_MAX_UNCOMPRESSED_BYTES = 100 * 1024 * 1024;
+/** …nor one whose word/document.xml (the text mammoth parses) unpacks to more than this. */
+export const DOCX_DOCUMENT_XML_MAX_BYTES = 20 * 1024 * 1024;
 /** Backfill: extractions scheduled this far apart. */
 export const BACKFILL_STAGGER_MS = 2_000;
 /** Slack on top of the watchdog window before a pending row counts as stuck. */
@@ -249,11 +251,14 @@ export function decideStatus(outcome: ExtractionOutcome, attempts: number): Stat
   };
 }
 
-const ERROR_REASON_MAX = 200;
+/** The fixed reason for any other library failure (the raw message is never stored or shown). */
+export const READ_FAILED = "Could not read the file";
 
 /**
- * A short, readable reason for a library error, and whether retrying can
- * help. pdf.js signals encrypted and damaged files by exception name.
+ * A short, fixed reason for a library error, and whether retrying can help.
+ * pdf.js signals encrypted and damaged files by exception name; every other
+ * failure reads "Could not read the file" — library messages are never
+ * passed on (they could carry file content outside the data fence).
  */
 export function describeExtractionError(err: unknown): { reason: string; permanent: boolean } {
   const name = err instanceof Error ? err.name : typeof err === "object" && err ? String((err as { name?: unknown }).name ?? "") : "";
@@ -269,11 +274,8 @@ export function describeExtractionError(err: unknown): { reason: string; permane
   if (name === "InvalidPDFException" || /invalid pdf/i.test(message)) {
     return { reason: "PDF is damaged or not a valid PDF", permanent: true };
   }
-  const short = message.replace(/\s+/g, " ").trim() || "Unknown error";
-  return {
-    reason: `Could not read the file: ${short.length > ERROR_REASON_MAX ? `${short.slice(0, ERROR_REASON_MAX)}…` : short}`,
-    permanent: false,
-  };
+  // Never the library's own message: it is not ours to show and may echo file content.
+  return { reason: READ_FAILED, permanent: false };
 }
 
 // ─── Reading (MCP fetch) ───────────────────────────────────────────────────

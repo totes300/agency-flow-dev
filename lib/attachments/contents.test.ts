@@ -8,6 +8,7 @@ import {
   EXTRACT_RETRY_BASE_MS,
   EXTRACT_TEXT_MAX,
   FILE_MISSING,
+  READ_FAILED,
   TOO_LARGE,
   UNSUPPORTED_TYPE,
   capText,
@@ -128,12 +129,10 @@ describe("describeExtractionError", () => {
     expect(describeExtractionError({ name: "PasswordException", message: "x" }).permanent).toBe(true);
   });
 
-  it("anything else is transient, short and single-line", () => {
-    const out = describeExtractionError(new Error(`zip\n  broken ${"y".repeat(500)}`));
-    expect(out.permanent).toBe(false);
-    expect(out.reason.startsWith("Could not read the file: zip broken")).toBe(true);
-    expect(out.reason.length).toBeLessThan(260);
-    expect(describeExtractionError("weird").reason).toBe("Could not read the file: weird");
+  it("anything else is transient with one fixed reason — never the library's message", () => {
+    const out = describeExtractionError(new Error(`zip\n  broken: secret file text ${"y".repeat(500)}`));
+    expect(out).toEqual({ reason: READ_FAILED, permanent: false });
+    expect(describeExtractionError("weird")).toEqual({ reason: "Could not read the file", permanent: false });
   });
 });
 

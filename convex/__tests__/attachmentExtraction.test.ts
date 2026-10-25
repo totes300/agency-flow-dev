@@ -131,7 +131,7 @@ describe("extraction action (end to end)", () => {
     failures.current = Infinity;
     const id = await request(t, "hello", "text/plain", "flaky.txt");
     await drain(t);
-    expect(await rowOf(t, id)).toMatchObject({ status: "failed", attempts: 3, error: "Could not read the file: socket hang up" });
+    expect(await rowOf(t, id)).toMatchObject({ status: "failed", attempts: 3, error: "Could not read the file" });
   });
 
   it("a transient error that clears on retry ends done", async () => {

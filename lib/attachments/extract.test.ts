@@ -1,6 +1,6 @@
 // @vitest-environment node
 //
-// A6 extractors against tiny real fixtures (convex/__tests__/fixtures/):
+// Attachment extractors against tiny real fixtures (convex/__tests__/fixtures/):
 // a 2-page PDF (unpdf), a DOCX (mammoth), a 1200×628 PNG (image-size) and a
 // CRLF text file. Runs in the node environment — the same runtime as the
 // "use node" action that calls these.
@@ -8,8 +8,10 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { extractFileContent } from "./extract";
+import { zipSync } from "fflate";
+import { checkZipUnpackedSize, extractFileContent, readPdf } from "./extract";
 import {
+  DOCX_DOCUMENT_XML_MAX_BYTES,
   DOCX_MAX_UNCOMPRESSED_BYTES,
   TEXT_BYTES_MAX,
   describeExtractionError,
@@ -94,6 +96,31 @@ describe("extractFileContent", () => {
   it("a DOCX that unpacks to an absurd size is not handed to mammoth", async () => {
     const bomb = withClaimedUncompressedSize(fixture("brief.docx"), DOCX_MAX_UNCOMPRESSED_BYTES);
     expect(await extractFileContent(bomb, "docx")).toEqual({ kind: "unsupported", reason: DOCX_TOO_LARGE });
+  });
+
+  it("a DOCX whose headers understate its size is caught by actually unpacking it (capped)", async () => {
+    // word/document.xml really unpacks past the cap, but every header claims 1 byte.
+    const zip = zipSync({ "word/document.xml": new Uint8Array(DOCX_DOCUMENT_XML_MAX_BYTES + 1) }, { level: 9 });
+    const view = new DataView(zip.buffer, zip.byteOffset, zip.byteLength);
+    for (let i = 0; i + 4 <= zip.length; i++) {
+      const sig = view.getUint32(i, true);
+      if (sig === 0x02014b50) view.setUint32(i + 24, 1, true);
+      if (sig === 0x04034b50) view.setUint32(i + 22, 1, true);
+    }
+    expect(zip.length).toBeLessThan(100_000);
+    expect(zipUncompressedSize(zip)).toBe(1);
+    expect(checkZipUnpackedSize(zip)).toBe("too_large");
+    expect(await extractFileContent(zip, "docx")).toEqual({ kind: "unsupported", reason: DOCX_TOO_LARGE });
+    expect(checkZipUnpackedSize(fixture("brief.docx"))).toBe("ok");
+    expect(checkZipUnpackedSize(new TextEncoder().encode("not a zip"))).toBe("damaged");
+  });
+
+  it("PDF reading stops at the text cap instead of reading every page", async () => {
+    const out = await readPdf(fixture("brief.pdf"), 10);
+    expect(out).toMatchObject({ kind: "done", pageCount: 2, truncated: true });
+    if (out.kind !== "done") throw new Error("unreachable");
+    expect(out.text).toBe("Hello brie");
+    expect(out.text).not.toContain("Second page");
   });
 
   it("unrecognized or misnamed image bytes are a permanent failure", async () => {

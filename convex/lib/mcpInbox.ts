@@ -16,7 +16,7 @@ import {
 } from "../notifications";
 import type { TaskAccess } from "../tasks/access";
 import { capText } from "../../lib/mcp/tiptap-markdown";
-import { decodeInboxCursor, encodeInboxCursor, type InboxPosition } from "../../lib/mcp/cursor";
+import { decodeInboxCursor, encodeInboxCursor, type InboxCursor, type InboxPosition } from "../../lib/mcp/cursor";
 import { CHANGE_COMMENT_TEXT_MAX, INBOX_LIMIT_MAX } from "../../lib/mcp/limits";
 import { parseRef } from "../../lib/mcp/refs";
 
@@ -27,8 +27,11 @@ import { parseRef } from "../../lib/mcp/refs";
  * `fetch("inbox")` lists what the app's Inbox view lists — the caller's
  * own unread and read notifications in this org (archived and snoozed ones
  * stay out, as in the app; rows whose task was deleted are dropped, as
- * `notifications.listInbox` does) — unread first, newest first in each,
- * one page at a time with an opaque cursor. Comment notifications carry the
+ * `notifications.listInbox` does), newest first, one page at a time with an
+ * opaque cursor. By default only unread items are listed — that is what an
+ * agent acts on, and read items would only cost tokens; `includeRead` lists
+ * the read ones after every unread item (the app's full Inbox view). The
+ * result says whether read items exist. Comment notifications carry the
  * comment's text capped at 500 characters like the changes feed (D29) when
  * the caller can still open the task; otherwise, and for description
  * mentions, the snapshot the app stored at notification time.
@@ -57,7 +60,7 @@ export const INBOX_TEXT_BUDGET = 40_000;
 
 const COMMENT_TYPES: ReadonlySet<NotificationType> = new Set<NotificationType>(["mention_comment", "comment", "comment_reply"]);
 
-export type InboxArgs = { cursor?: string; limit: number; now: number };
+export type InboxArgs = { cursor?: string; includeRead: boolean; limit: number; now: number };
 
 /** One section's rows strictly after `from` (newest first), at most `cap`. */
 async function sectionRows(
@@ -104,10 +107,13 @@ export async function listInbox(ctx: QueryCtx, auth: McpAuthContext, args: Inbox
   if (!Number.isInteger(args.limit) || args.limit < 1 || args.limit > INBOX_LIMIT_MAX) {
     throw new ConvexError(`limit must be between 1 and ${INBOX_LIMIT_MAX}.`);
   }
-  let from: InboxPosition | null = null;
+  let from: InboxCursor | null = null;
   if (args.cursor !== undefined) {
     from = decodeInboxCursor(args.cursor);
     if (!from) throw new ConvexError('Invalid inbox cursor. Call fetch("inbox") without a cursor to start from the top.');
+    if (from.includeRead !== args.includeRead) {
+      throw new ConvexError("This inbox cursor belongs to a call with a different include_read; repeat that call's options with the cursor.");
+    }
   }
   const clock = await orgClock(ctx, auth.orgId, args.now);
   const unreadSlice = await ctx.db
@@ -115,11 +121,19 @@ export async function listInbox(ctx: QueryCtx, auth: McpAuthContext, args: Inbox
     .withIndex("by_recipient_org_state", (q) => q.eq("recipientId", auth.userId).eq("orgId", auth.orgId).eq("inboxState", "unread"))
     .take(INBOX_UNREAD_COUNT_CAP + 1);
 
-  // Unread first, then read; a cursor in the read section skips the unread one.
+  const anyRead =
+    (await ctx.db
+      .query("notifications")
+      .withIndex("by_recipient_org_state", (q) => q.eq("recipientId", auth.userId).eq("orgId", auth.orgId).eq("inboxState", "read"))
+      .first()) !== null;
+
+  // Unread, then (includeRead) read; a cursor in the read section skips the unread one.
   const cap = args.limit + 1;
   const candidates: Doc<"notifications">[] =
     from?.state === "read" ? [] : await sectionRows(ctx, auth, "unread", from, cap);
-  if (candidates.length < cap) candidates.push(...(await sectionRows(ctx, auth, "read", from, cap - candidates.length)));
+  if (args.includeRead && candidates.length < cap) {
+    candidates.push(...(await sectionRows(ctx, auth, "read", from, cap - candidates.length)));
+  }
 
   const tasks = new Map<Id<"tasks">, { task: Doc<"tasks"> | null; readable: boolean }>();
   const taskOf = async (taskId: Id<"tasks">) => {
@@ -186,7 +200,9 @@ export async function listInbox(ctx: QueryCtx, auth: McpAuthContext, args: Inbox
     items,
     unreadCount: Math.min(unreadSlice.length, INBOX_UNREAD_COUNT_CAP),
     unreadCapped: unreadSlice.length > INBOX_UNREAD_COUNT_CAP,
-    cursor: more && last ? encodeInboxCursor(last) : null,
+    cursor: more && last ? encodeInboxCursor({ ...last, includeRead: args.includeRead }) : null,
+    includeRead: args.includeRead,
+    readHidden: !args.includeRead && anyRead,
     timezone: clock.timezone,
   };
 }

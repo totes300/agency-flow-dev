@@ -120,14 +120,24 @@ const INBOX_CURSOR_VERSION = 1;
  */
 export type InboxPosition = { state: "unread" | "read"; createdAt: number; creationTime: number };
 
-export function encodeInboxCursor(position: InboxPosition): string {
+/** An inbox page cursor: the position plus whether the listing includes read items. */
+export type InboxCursor = InboxPosition & { includeRead: boolean };
+
+export function encodeInboxCursor(cursor: InboxCursor): string {
   return toBase64Url(
-    JSON.stringify({ v: INBOX_CURSOR_VERSION, k: "inbox", s: position.state, t: position.createdAt, c: position.creationTime }),
+    JSON.stringify({
+      v: INBOX_CURSOR_VERSION,
+      k: "inbox",
+      s: cursor.state,
+      t: cursor.createdAt,
+      c: cursor.creationTime,
+      r: cursor.includeRead ? 1 : 0,
+    }),
   );
 }
 
-/** The decoded position, or null when the cursor is malformed or of another kind. */
-export function decodeInboxCursor(raw: string): InboxPosition | null {
+/** The decoded cursor, or null when it is malformed or of another kind. */
+export function decodeInboxCursor(raw: string): InboxCursor | null {
   let data: unknown;
   try {
     data = JSON.parse(fromBase64Url(raw.trim()));
@@ -135,9 +145,10 @@ export function decodeInboxCursor(raw: string): InboxPosition | null {
     return null;
   }
   if (!data || typeof data !== "object") return null;
-  const { v, k, s, t, c } = data as { v?: unknown; k?: unknown; s?: unknown; t?: unknown; c?: unknown };
+  const { v, k, s, t, c, r } = data as { v?: unknown; k?: unknown; s?: unknown; t?: unknown; c?: unknown; r?: unknown };
   if (v !== INBOX_CURSOR_VERSION || k !== "inbox" || (s !== "unread" && s !== "read")) return null;
   if (typeof t !== "number" || !Number.isFinite(t) || t < 0) return null;
   if (typeof c !== "number" || !Number.isFinite(c) || c < 0) return null;
-  return { state: s, createdAt: t, creationTime: c };
+  if (r !== 0 && r !== 1) return null;
+  return { state: s, createdAt: t, creationTime: c, includeRead: r === 1 };
 }

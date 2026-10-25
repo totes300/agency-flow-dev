@@ -167,13 +167,15 @@ export const changes = query({
 });
 
 /**
- * `fetch("inbox")` (D9): the caller's own inbox — unread first, then read,
- * newest first — one page after `cursor` (convex/lib/mcpInbox.ts). `now` is
+ * `fetch("inbox")` (D9): the caller's own inbox — unread items, newest
+ * first (read ones too with `includeRead`, after every unread item) — one
+ * page after `cursor` (convex/lib/mcpInbox.ts). `now` is
  * the caller's clock.
  */
 export const inbox = query({
   args: {
     cursor: v.optional(v.string()),
+    includeRead: v.boolean(),
     limit: v.number(),
     now: v.number(),
   },

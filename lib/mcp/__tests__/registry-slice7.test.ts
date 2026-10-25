@@ -29,11 +29,13 @@ const tool = (name: string) => MCP_TOOLS.find((t) => t.name === name)!;
 
 describe("slice 7a tools in the registry", () => {
   it("fetch inbox runs mcp/fetch:inbox with its options; inbox options need the inbox ref", async () => {
-    const { ctx, calls } = fake(() => ({ items: [], unreadCount: 0, unreadCapped: false, cursor: null, timezone: "UTC" }));
-    const result = await tool("fetch").execute({ refs: ["inbox"], inbox: { cursor: "C", limit: 10 } }, ctx);
+    const { ctx, calls } = fake(() => ({
+      items: [], unreadCount: 0, unreadCapped: false, cursor: null, timezone: "UTC", includeRead: true, readHidden: false,
+    }));
+    const result = await tool("fetch").execute({ refs: ["inbox"], inbox: { cursor: "C", limit: 10, include_read: true } }, ctx);
     expect(result.isError).toBe(false);
     expect(result.text).toContain("## Inbox · 0 unread");
-    expect(calls).toEqual([{ name: "mcp/fetch:inbox", args: { cursor: "C", limit: 10, now: NOW } }]);
+    expect(calls).toEqual([{ name: "mcp/fetch:inbox", args: { cursor: "C", includeRead: true, limit: 10, now: NOW } }]);
     expect(await tool("fetch").execute({ refs: ["me"], inbox: {} }, ctx)).toEqual({
       text: 'Error: inbox options apply to the "inbox" ref only. Add "inbox" to refs, or drop inbox.',
       isError: true,

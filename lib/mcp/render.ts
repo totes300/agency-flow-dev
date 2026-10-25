@@ -873,10 +873,11 @@ const INBOX_TEXT: Record<InboxData["items"][number]["type"], string> = {
  */
 export function renderInbox(data: InboxData, ctx: RenderContext): string {
   const unread = `${data.unreadCount}${data.unreadCapped ? "+" : ""} unread`;
+  const order = data.includeRead ? "unread first, then read; newest first" : "newest first";
   const header =
     data.items.length === 0
       ? `## Inbox · ${unread} · nothing ${data.unreadCount > 0 ? "more " : ""}to show`
-      : `## Inbox · ${unread} (unread first, newest first, times in ${data.timezone})`;
+      : `## Inbox · ${unread} (${order}, times in ${data.timezone})`;
   const lines = data.items.map((i) => {
     const head = `- ${fields(
       formatTimestamp(i.at, data.timezone),
@@ -890,13 +891,15 @@ export function renderInbox(data: InboxData, ctx: RenderContext): string {
     const note = i.text.deleted
       ? "\n(The comment has since been deleted; this is the preview from when you were notified.)"
       : i.text.truncated && i.commentId
-        ? `\n(Shortened to 500 characters… fetch ${i.commentId} for the full comment.)`
+        ? "\n(Shortened to 500 characters: fetch the item's link for the full comment.)"
         : "";
     return `${head}\n${userContent(i.text.text || "(no text)")}${note}`;
   });
   const next = data.cursor
-    ? `More items: call fetch with refs ["inbox"] and inbox.cursor "${data.cursor}".`
-    : "End of the inbox (archived and snoozed items are not listed, as in the app).";
+    ? `More items: call fetch with refs ["inbox"] and inbox.cursor "${data.cursor}"${data.includeRead ? " (with include_read: true)" : ""}.`
+    : data.readHidden
+      ? "End of the unread items. Read items are not listed: pass inbox.include_read: true to see them."
+      : "End of the inbox (archived and snoozed items are not listed, as in the app).";
   const hint =
     data.items.some((i) => i.unread)
       ? 'Mark items read with mark_read (item refs, a task ref for all of its comments, or "inbox" for everything).'

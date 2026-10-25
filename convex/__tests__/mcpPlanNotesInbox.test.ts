@@ -105,8 +105,8 @@ const saveNote = (t: T, caller: Caller, args: { content: string; date?: string; 
   as(t, caller).mutation(api.mcp.write.saveDailyNotes, { ...args, clientName: "Claude" });
 const markRead = (t: T, caller: Caller, refs: string[], extra: Record<string, unknown> = {}) =>
   as(t, caller).mutation(api.mcp.write.markRead, { refs, clientName: "Claude", ...extra });
-const inbox = (t: T, caller: Caller, args: { cursor?: string; limit?: number } = {}) =>
-  as(t, caller).query(api.mcp.fetch.inbox, { cursor: args.cursor, limit: args.limit ?? 25, now: NOW });
+const inbox = (t: T, caller: Caller, args: { cursor?: string; limit?: number; includeRead?: boolean } = {}) =>
+  as(t, caller).query(api.mcp.fetch.inbox, { cursor: args.cursor, includeRead: args.includeRead ?? false, limit: args.limit ?? 25, now: NOW });
 const noteSearch = (t: T, caller: Caller, args: Record<string, unknown> = {}) =>
   as(t, caller).query(api.mcp.search.dailyNotes, { offset: 0, limit: 25, date: {}, updated: {}, now: NOW, ...args });
 
@@ -286,7 +286,7 @@ describe("fetch(inbox) and mark_read", () => {
     const t = createT();
     const f = await setup(t);
     await notify(t, f, 4);
-    const all = await inbox(t, "alice", { limit: 100 });
+    const all = await inbox(t, "alice", { limit: 100, includeRead: true });
     expect(all.items).toHaveLength(5);
     expect(all.unreadCount).toBe(5);
     expect(all.cursor).toBeNull();
@@ -295,13 +295,17 @@ describe("fetch(inbox) and mark_read", () => {
     expect(first.text).toMatchObject({ truncated: true, snapshot: false });
     expect(first.text!.text.length).toBeLessThanOrEqual(501);
 
-    // Read one, then page by 2: unread first, no item twice, none missing.
+    // Read one: by default only the 4 unread are listed, and the result says read items exist.
     await markRead(t, "alice", [all.items[0].id]);
+    const unreadOnly = await inbox(t, "alice", { limit: 100 });
+    expect(unreadOnly.items.map((i) => i.unread)).toEqual([true, true, true, true]);
+    expect(unreadOnly).toMatchObject({ readHidden: true, includeRead: false, cursor: null });
+    // include_read, paged by 2: unread first, no item twice, none missing.
     const seen: string[] = [];
     const states: boolean[] = [];
     let cursor: string | undefined;
     for (let page = 0; page < 5; page += 1) {
-      const res = await inbox(t, "alice", { limit: 2, cursor });
+      const res = await inbox(t, "alice", { limit: 2, cursor, includeRead: true });
       seen.push(...res.items.map((i) => i.id));
       states.push(...res.items.map((i) => i.unread));
       if (!res.cursor) break;
@@ -310,6 +314,8 @@ describe("fetch(inbox) and mark_read", () => {
     expect([...seen].sort()).toEqual(all.items.map((i) => i.id).sort());
     expect(states).toEqual([true, true, true, true, false]);
     await expect(inbox(t, "alice", { cursor: "nope" })).rejects.toThrow("Invalid inbox cursor");
+    const page = await inbox(t, "alice", { limit: 1, includeRead: true });
+    await expect(inbox(t, "alice", { cursor: page.cursor! })).rejects.toThrow("different include_read");
     expect((await inbox(t, "other")).items).toEqual([]);
   });
 
@@ -388,5 +394,31 @@ describe("fetch(inbox) and mark_read", () => {
     const second = await markRead(t, "alice", ["inbox"]);
     expect(second.items[0]).toMatchObject({ count: 5 });
     expect(second.items[0].more).toBeUndefined();
+  });
+
+  it("a deleted comment or an unreadable task falls back to the stored preview", async () => {
+    const t = createT();
+    const f = await setup(t);
+    const [kept, gone] = await t.run(async (ctx) => {
+      const access = await loadTaskForWrite(ctx, f.A, f.adminAuth);
+      const a = await createCommentForAuth(ctx, access, { content: doc("Still here") });
+      const b = await createCommentForAuth(ctx, access, { content: doc("Soon gone") });
+      return [a, b];
+    });
+    await t.run(async (ctx) => ctx.db.delete(gone));
+    let items = (await inbox(t, "alice")).items;
+    expect(items.find((i) => i.commentId === gone)!.text).toEqual({ text: "Soon gone", truncated: false, snapshot: true, deleted: true });
+    expect(items.find((i) => i.commentId === kept)!.text).toMatchObject({ text: "Still here", snapshot: false });
+
+    // Alice loses access to the task: no live text, only the snapshot the app stored.
+    await t.run(async (ctx) => {
+      await ctx.db.patch(kept, { content: doc("Edited after the notification") });
+      for (const edge of await ctx.db.query("taskAssignees").withIndex("by_taskId_userId", (q) => q.eq("taskId", f.A).eq("userId", f.alice)).collect()) {
+        await ctx.db.delete(edge._id);
+      }
+    });
+    items = (await inbox(t, "alice")).items;
+    expect(items.find((i) => i.commentId === kept)!.text).toEqual({ text: "Still here", truncated: false, snapshot: true, deleted: false });
+    expect(items.find((i) => i.commentId === gone)!.text).toMatchObject({ snapshot: true, deleted: false });
   });
 });

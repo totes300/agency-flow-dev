@@ -21,6 +21,10 @@
  *   `gmail:18c2f0a1b2c3d4e5`: the task that carries it. `client` and
  *   `project` are qualifiers, never sources;
  * - a member email;
+ * - an invoice number as the app writes it (`INV-007`; admins only, checked
+ *   in Convex). A number shaped like a task key (`INV-120`) parses as a task
+ *   key; Convex then also tries it as an invoice number and returns both as
+ *   candidates when both exist;
  * - a Convex record ID.
  */
 
@@ -31,7 +35,7 @@ export const SPECIAL_REFS = ["me", "workspace", "changes"] as const;
 export type SpecialRefName = (typeof SPECIAL_REFS)[number];
 
 /** Tables an ID or link can point at in this slice. */
-export const REF_TABLES = ["tasks", "comments", "projects", "clients", "users", "timeEntries"] as const;
+export const REF_TABLES = ["tasks", "comments", "projects", "clients", "users", "timeEntries", "invoices"] as const;
 export type RefTable = (typeof REF_TABLES)[number];
 
 export type ParsedRef =
@@ -46,6 +50,8 @@ export type ParsedRef =
   | { kind: "email"; email: string }
   /** An external source ref (D21), canonical: source lowercased, ID as typed. */
   | { kind: "external"; ref: string }
+  /** An invoice number (`INV-007`), as typed; Convex matches it like the invoice page URL. */
+  | { kind: "invoice"; number: string }
   /** A record ID; `table` is known when it came from a link. */
   | { kind: "id"; id: string; table?: RefTable };
 
@@ -55,7 +61,7 @@ export type RefParseResult =
 
 /** The forms a reference may take, for model-facing errors and descriptions. */
 export const REF_FORMS =
-  'a task key (ARLO-21) or a task\'s external ref (gmail:<threadId>), project code (ARLO), client prefix (client:KONV), member email, record ID, an Agency Flow link, or "me" / "workspace"';
+  'a task key (ARLO-21) or a task\'s external ref (gmail:<threadId>), project code (ARLO), client prefix (client:KONV), member email, invoice number (INV-007, admins), record ID, an Agency Flow link, or "me" / "workspace"';
 
 /** `<source>:<id>`: a source of letters, digits, `-` / `_` (starting with a letter) and an ID without spaces. */
 const EXTERNAL_REF = /^([A-Za-z][A-Za-z0-9_-]{0,31}):(\S{1,256})$/;
@@ -85,6 +91,12 @@ const PROJECT_QUALIFIER = /^project:(.*)$/i;
 /** Convex IDs are long alphanumeric strings; never confused with a short key. */
 const ID_PATTERN = /^[A-Za-z0-9]{20,64}$/;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+/**
+ * An invoice number: a prefix starting with a letter, ending in digits
+ * (`INV-007`, `ACME-2026-12`). Only reached when the input is no task key,
+ * short key or record ID (lib/billing/labels.ts formatInvoiceNumber).
+ */
+const INVOICE_NUMBER_PATTERN = /^[A-Za-z][A-Za-z0-9-]{0,30}[0-9]$/;
 
 // Search params of task links (lib/task-detail.ts: TASK_PARAM, LEGACY_DETAIL_PARAM,
 // COMMENT_PARAM) and the admin's member view (`/my-tasks?user=`).
@@ -149,13 +161,18 @@ function parseUrl(input: string, appOrigin: string | undefined): ParsedRef | str
     case "clients":
       if (id && isRecordId(id)) return { kind: "id", id, table: "clients" };
       break;
+    case "invoices":
+      // The invoice page: /invoices/INV-007 (or a pre-2026-05 /invoices/<id>).
+      if (id && isRecordId(id)) return { kind: "id", id, table: "invoices" };
+      if (id && INVOICE_NUMBER_PATTERN.test(id)) return { kind: "invoice", number: id };
+      break;
     case "my-tasks": {
       const user = params.get(USER_PARAM)?.trim();
       if (user && isRecordId(user)) return { kind: "id", id: user, table: "users" };
       break;
     }
   }
-  return `Unsupported Agency Flow link "${input}". Links to tasks, comments, projects, clients and members (/my-tasks?user=…) are supported.`;
+  return `Unsupported Agency Flow link "${input}". Links to tasks, comments, projects, clients, invoices and members (/my-tasks?user=…) are supported.`;
 }
 
 /**
@@ -213,6 +230,9 @@ export function parseRef(raw: string, options: { appOrigin?: string } = {}): Ref
   }
   if (isRecordId(input)) {
     return { ok: true, input, ref: { kind: "id", id: input } };
+  }
+  if (INVOICE_NUMBER_PATTERN.test(input)) {
+    return { ok: true, input, ref: { kind: "invoice", number: input } };
   }
   return { ok: false, input, error: `Unrecognized reference "${input}". Use ${REF_FORMS}.` };
 }

@@ -15,6 +15,10 @@ import type { Resolved } from "./mcpRefs";
 import { listTaskExternalRefs } from "./mcpExternalRefs";
 import { capText, mentionedUserIds, tiptapToMarkdown } from "../../lib/mcp/tiptap-markdown";
 import { safeParseDoc } from "./notificationEvents";
+import { getInvoiceForAuth } from "../invoices";
+import { invoiceDisplayStatus } from "./billing/periodState";
+import { periodRangeLabel } from "./billing/projectPeriods";
+import { invoiceKey } from "./mcpRefs";
 import type { FetchInclude } from "../../lib/mcp/limits";
 
 /**
@@ -22,7 +26,9 @@ import type { FetchInclude } from "../../lib/mcp/limits";
  * returns data, the Next.js route renders markdown. Everything is read
  * through the app's cores with the caller's auth (`*ForAuth`), so a member
  * sees exactly what the app shows them. No money: rates, fees and amounts
- * are never part of a record.
+ * are never part of a record — except invoices, which only admins can
+ * resolve (as the app's /invoices route) and which come from the invoice
+ * page's own core (`getInvoiceForAuth`), amounts in minor units.
  *
  * Bodies (descriptions, comments) are never cut here: the route fits a
  * result into its size budget by showing fewer list rows, and says so.
@@ -396,5 +402,43 @@ export async function buildRecord(
         email: resolved.user.email ?? null,
         role: resolved.role,
       };
+
+    case "invoice": {
+      // The invoice page's core (admin-only); the resolver already refused members.
+      const data = await getInvoiceForAuth(ctx, auth, resolved.invoice._id);
+      if (!data) return null;
+      const inv = data.invoice;
+      const categoryNames = new Map(data.categoryGroups.map((g) => [g.categoryId, g.categoryName]));
+      return {
+        type: "invoice" as const,
+        id: inv._id,
+        number: invoiceKey(inv),
+        status: invoiceDisplayStatus(inv.status, inv.dueDate, clock.today),
+        subject: inv.subject ?? null,
+        currency: inv.currency,
+        subtotalMinor: inv.subtotalMinor,
+        totalMinor: inv.totalMinor,
+        issueDate: inv.issueDate,
+        dueDate: inv.dueDate ?? null,
+        paidAt: inv.paidAt ?? null,
+        project: await projectSummary(ctx, orgId, inv.projectId),
+        billingType: data.project?.billingType ?? null,
+        client: await clientSummary(ctx, orgId, inv.clientId),
+        period: data.period
+          ? { start: data.period.start, end: data.period.end, label: periodRangeLabel(data.period.start, data.period.end) }
+          : null,
+        lines: data.lineItems.map((li) => ({
+          lineType: li.lineType,
+          description: li.description,
+          quantity: li.quantity,
+          quantityMinutes: li.quantityMinutes ?? null,
+          unitPriceMinor: li.unitPriceMinor,
+          amountMinor: li.amountMinor,
+          category: li.workCategoryId ? (categoryNames.get(li.workCategoryId) ?? null) : null,
+        })),
+        note: inv.note ?? null,
+        messageToClient: inv.messageToClient ?? null,
+      };
+    }
   }
 }

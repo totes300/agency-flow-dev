@@ -15,8 +15,9 @@ import { taskPagePath } from "@/lib/task-detail";
  *   Billing hub (/billing), a retainer statement
  *   (/projects/<id>/reports/YYYY-MM) and a Close workspace
  *   (/billing/close/<projectId>/YYYY-MM)
+ * - invoice: /invoices/INV-007 (a never-numbered draft: /invoices/<id>)
  * Time entries have no page of their own; they link to their task.
- * Projects, clients, billing and other members' My Tasks are admin pages in the app.
+ * Projects, clients, billing, invoices and other members' My Tasks are admin pages in the app.
  */
 
 /** The app origin, e.g. `https://localhost:3001`, from the MCP resource URL. */
@@ -60,4 +61,9 @@ export function statementLink(origin: string, projectId: string, month: string):
 /** The Close workspace of a project period; `period` is the period's first month, YYYY-MM. */
 export function closeWorkspaceLink(origin: string, projectId: string, period: string): string {
   return `${origin}/billing/close/${encodeURIComponent(projectId)}/${encodeURIComponent(period)}`;
+}
+
+/** An invoice page; `ref` is its number (INV-007) or, for a never-numbered draft, its ID. */
+export function invoiceLink(origin: string, ref: string): string {
+  return `${origin}/invoices/${encodeURIComponent(ref)}`;
 }

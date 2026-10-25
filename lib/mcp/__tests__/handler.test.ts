@@ -126,6 +126,8 @@ describe("MCP protocol", () => {
       "timer",
       "delete",
       "report",
+      "billing_preview",
+      "billing_commit",
     ]);
     expect(Object.keys(expected.find((t) => t.name === "fetch")!.inputSchema.properties ?? {})).toEqual([
       "refs",
@@ -147,6 +149,12 @@ describe("MCP protocol", () => {
     expect(hints.timer).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: false });
     expect(hints.delete).toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: true });
     expect(hints.report).toMatchObject({ readOnlyHint: true });
+    expect(hints.billing_preview).toMatchObject({ readOnlyHint: true });
+    expect(hints.billing_commit).toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: true });
+    expect(Object.keys(expected.find((t) => t.name === "billing_preview")!.inputSchema.properties ?? {})).toEqual([
+      "action", "project", "period", "invoice",
+    ]);
+    expect(Object.keys(expected.find((t) => t.name === "billing_commit")!.inputSchema.properties ?? {})).toEqual(["commitToken"]);
     expect(Object.keys(expected.find((t) => t.name === "report")!.inputSchema.properties ?? {})).toEqual([
       "kind", "month", "from", "to", "from_month", "to_month", "statuses", "client", "project", "member",
     ]);

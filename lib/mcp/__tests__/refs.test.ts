@@ -92,17 +92,28 @@ describe("parseRef", () => {
     );
     // Without an origin (Convex re-parses after the route checked it) the host is not checked.
     expect(parsed("https://evil.test/tasks/ARLO-21", {})).toEqual({ kind: "task", identifier: "ARLO-21" });
-    expect(parsed(`${ORIGIN}/invoices/${ID}`)).toMatch(/^Unsupported Agency Flow link/);
+    expect(parsed(`${ORIGIN}/billing`)).toMatch(/^Unsupported Agency Flow link/);
     expect(parsed(`${ORIGIN}/projects/not-an-id`)).toMatch(/^Unsupported Agency Flow link/);
     expect(parsed(`${ORIGIN}/tasks/nope!`)).toMatch(/^Invalid task link/);
     // A malformed escape fails this ref only, never the call.
     expect(parsed(`${ORIGIN}/tasks/%E0%A4%A`)).toBe(`Invalid link "${ORIGIN}/tasks/%E0%A4%A".`);
   });
 
+  it("parses invoice numbers and invoice links (docs/prd-mcp.md slice 6)", () => {
+    // The app's padded numbers are no task keys (no leading zeros): an invoice number.
+    expect(parsed("INV-007")).toEqual({ kind: "invoice", number: "INV-007" });
+    expect(parsed("ACME-2026-12")).toEqual({ kind: "invoice", number: "ACME-2026-12" });
+    // Task-key shaped numbers stay task keys; Convex also tries them as invoice numbers.
+    expect(parsed("INV-120")).toEqual({ kind: "task", identifier: "INV-120" });
+    expect(parsed(`${ORIGIN}/invoices/INV-120`)).toEqual({ kind: "invoice", number: "INV-120" });
+    expect(parsed(`${ORIGIN}/invoices/${ID}?from=%2Fbilling`)).toEqual({ kind: "id", id: ID, table: "invoices" });
+    expect(parsed(`${ORIGIN}/invoices/not a number`)).toMatch(/^Unsupported Agency Flow link/);
+  });
+
   it("rejects empty and unrecognized refs with a model-actionable message", () => {
     expect(parseRef("   ")).toEqual({ ok: false, input: "", error: "Empty reference." });
     expect(parsed("Arlo website")).toBe(
-      'Unrecognized reference "Arlo website". Use a task key (ARLO-21) or a task\'s external ref (gmail:<threadId>), project code (ARLO), client prefix (client:KONV), member email, record ID, an Agency Flow link, or "me" / "workspace".',
+      'Unrecognized reference "Arlo website". Use a task key (ARLO-21) or a task\'s external ref (gmail:<threadId>), project code (ARLO), client prefix (client:KONV), member email, invoice number (INV-007, admins), record ID, an Agency Flow link, or "me" / "workspace".',
     );
     expect(parsed("PRJ-042-x")).toMatch(/^Unrecognized reference/);
     expect(parsed("abcdefghijklmno")).toMatch(/^Unrecognized reference/); // 11–19 chars: neither key nor ID

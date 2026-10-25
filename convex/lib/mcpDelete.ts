@@ -87,6 +87,10 @@ export async function deleteRecords(
             label: `time entry ${entry.date} · ${formatDuration(entry.durationMinutes)} · ${member?.name ?? "Former member"} on ${task?.identifier ?? entry.taskId}`,
           };
         }
+        case "invoice":
+          throw new ConvexError(
+            `delete removes tasks, comments and time entries. "${input}" is an invoice: a never-numbered draft is deleted with billing_preview (action delete_draft) and billing_commit.`,
+          );
         default:
           throw new ConvexError(
             `delete removes tasks, comments and time entries. "${input}" is one of the ${UNSUPPORTED[resolved.type]}, which cannot be deleted through MCP yet.`,

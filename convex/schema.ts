@@ -10,6 +10,7 @@ import {
   taskViewSurfaceValidator,
 } from "./tasks/model";
 import { mcpWriteResultValidator } from "./lib/mcpWriteResults";
+import { billingActionValidator, billingCommitResultValidator, billingParamsValidator } from "./lib/mcpBillingResults";
 
 export default defineSchema({
   // ─── Users (synced from Clerk) ─────────────────────────────────────────────
@@ -823,4 +824,24 @@ export default defineSchema({
   })
     .index("by_orgId_userId_key", ["orgId", "userId", "key"])
     .index("by_createdAt", ["createdAt"]),
+
+  // ─── MCP billing previews (docs/prd-mcp.md D5, §9) ────────────────────────
+  // One row per billing_preview: its _id is the commit token. Bound to the
+  // org, user and OAuth client that previewed, the action and its resolved
+  // params, and the fingerprint of every value the commit would write. A
+  // commit within 10 minutes (`expiresAt`) recomputes the fingerprint and
+  // refuses on any change; the first result is kept so a repeated commit
+  // returns it. The hourly cron deletes rows older than 24 h (by_createdAt).
+  mcpBillingPreviews: defineTable({
+    orgId: v.string(),
+    userId: v.id("users"),
+    clientId: v.string(),
+    action: billingActionValidator,
+    params: billingParamsValidator,
+    fingerprint: v.string(),
+    createdAt: v.number(),
+    expiresAt: v.number(),
+    committedAt: v.optional(v.number()),
+    result: v.optional(billingCommitResultValidator),
+  }).index("by_createdAt", ["createdAt"]),
 });

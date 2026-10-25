@@ -1,9 +1,12 @@
 import type { FunctionReturnType } from "convex/server";
 import type { api } from "@/convex/_generated/api";
 import { PRIORITY_LABELS, PRIORITY, TASK_CATEGORIES } from "@/convex/tasks/model";
+import { fromMinor } from "@/convex/lib/billing/money";
+import { INVOICE_STATUS_COPY } from "@/convex/lib/billing/periodState";
 import { formatFileSize } from "@/lib/attachment";
 import { formatDuration } from "@/lib/duration";
-import { clientLink, memberLink, projectLink, taskLink } from "./links";
+import { formatCurrencyPrecise } from "@/lib/format";
+import { clientLink, invoiceLink, memberLink, projectLink, taskLink } from "./links";
 
 /**
  * Compact markdown renderers for MCP tool results (docs/prd-mcp.md §7, D10).
@@ -27,6 +30,7 @@ export type ClientPage = FunctionReturnType<typeof api.mcp.search.clients>;
 export type MemberPage = FunctionReturnType<typeof api.mcp.search.members>;
 export type TimeEntryPage = FunctionReturnType<typeof api.mcp.search.timeEntries>;
 export type CommentPage = FunctionReturnType<typeof api.mcp.search.comments>;
+export type InvoicePage = FunctionReturnType<typeof api.mcp.search.invoices>;
 
 export type ChangesData = FunctionReturnType<typeof api.mcp.fetch.changes>;
 export type SaveTasksData = FunctionReturnType<typeof api.mcp.write.saveTasks>;
@@ -57,6 +61,22 @@ function archivedNote(rows: readonly { archived: boolean }[]): string {
 function section(title: string, lines: string[], note = ""): string {
   const body = lines.length > 0 ? lines.join("\n") : "none";
   return `### ${title}${note}\n${body}`;
+}
+
+/**
+ * Integer minor units with their currency, formatted like the app's
+ * `formatMinor` (two decimals); an unknown code is written after the number.
+ * The one conversion here: amounts come from Convex, never summed across
+ * currencies.
+ */
+export function moneyMinor(minor: number, currency: string): string {
+  const amount = fromMinor(minor, currency);
+  return /^[A-Z]{3}$/.test(currency) ? formatCurrencyPrecise(amount, currency) : `${amount.toFixed(2)} ${currency}`;
+}
+
+/** An invoice's app link and display ref: its number, or its ID while never numbered. */
+export function invoiceRef(invoice: { id: string; number: string | null }): string {
+  return invoice.number ?? invoice.id;
 }
 
 export function renderMe(data: MeData, ctx: RenderContext): string {
@@ -251,6 +271,27 @@ export function renderTimeEntryRow(row: TimeRow, ctx: RenderContext): string {
     timeNote(row),
     row.category ? oneLine(row.category) : null,
     row.billable ? "billable" : "non-billable",
+  )}`;
+}
+
+/**
+ * One invoice row, as the Billing hub's Invoices list shows it: number (or
+ * "Draft"), status, total, client, project, period (or Fixed fee), issued
+ * (numbered only) and due (not on drafts).
+ */
+export function renderInvoiceRow(row: InvoicePage["rows"][number], ctx: RenderContext): string {
+  const ref = invoiceRef(row);
+  const name = row.number ?? `Draft (never numbered, ref ${row.id})`;
+  return `- ${fields(
+    `[${name}](${invoiceLink(ctx.appOrigin, ref)})`,
+    INVOICE_STATUS_COPY[row.status].chip,
+    moneyMinor(row.totalMinor, row.currency),
+    row.client ? clientLabel(row.client) : null,
+    row.project ? keyed(row.project.code, row.project.name) : null,
+    row.period ? row.period.label : "Fixed fee",
+    row.number ? `issued ${row.issueDate}` : null,
+    row.dueDate && row.status !== "draft" ? `due ${row.dueDate}` : null,
+    row.subject ? `"${oneLine(row.subject)}"` : null,
   )}`;
 }
 
@@ -568,7 +609,58 @@ export function renderRecord(record: FetchedRecord, ctx: RenderContext): string 
         `- Role: ${record.role}`,
         `- Ref: ${record.email ?? record.id}`,
       ].join("\n");
+    case "invoice":
+      return renderInvoiceRecord(record, ctx);
   }
+}
+
+/** Lines listed per invoice record; the totals always cover every line. */
+export const INVOICE_LINES_MAX = 200;
+
+const LINE_TYPE_LABEL: Record<string, string> = { time: "Time", overage: "Overage", fixed: "Fixed fee", manual: "Manual" };
+
+function renderInvoiceRecord(record: Extract<FetchedRecord, { type: "invoice" }>, ctx: RenderContext): string {
+  const ref = invoiceRef(record);
+  const shown = record.lines.slice(0, INVOICE_LINES_MAX);
+  const lines = shown.map(
+    (l, i) =>
+      `| ${i + 1} | ${tableCell(l.description)} | ${LINE_TYPE_LABEL[l.lineType] ?? l.lineType}${l.category ? ` · ${tableCell(l.category)}` : ""} | ${
+        l.quantityMinutes !== null ? formatDuration(l.quantityMinutes) : String(l.quantity)
+      } | ${moneyMinor(l.unitPriceMinor, record.currency)} | ${moneyMinor(l.amountMinor, record.currency)} |`,
+  );
+  const more = record.lines.length > shown.length ? `\n(${record.lines.length - shown.length} more lines are not listed; the totals include them. Open the invoice for all.)` : "";
+  return [
+    [
+      `## Invoice ${record.number ?? "draft (never numbered)"}`,
+      `- Link: ${invoiceLink(ctx.appOrigin, ref)}`,
+      `- Ref: ${ref}`,
+      `- Status: ${INVOICE_STATUS_COPY[record.status].chip}`,
+      record.subject ? `- Subject: "${oneLine(record.subject)}"` : null,
+      `- Client: ${record.client ? clientLabel(record.client) : "not available"}`,
+      `- Project: ${record.project ? `[${record.project.code}](${projectLink(ctx.appOrigin, record.project.id)}) · ${oneLine(record.project.name)}` : "not available"}`,
+      `- Period: ${record.period ? `${record.period.label} (${record.period.start} – ${record.period.end})` : "none (fixed fee)"}`,
+      `- Issue date: ${record.issueDate}${record.number ? "" : " (set when it is marked as invoiced)"}`,
+      `- Due date: ${record.dueDate ?? "none"}`,
+      record.paidAt !== null ? `- Paid: ${formatTimestamp(record.paidAt, ctx.timezone)}` : null,
+      `- Total: ${moneyMinor(record.totalMinor, record.currency)} (${record.currency})`,
+      record.note ? `- Internal note: "${oneLine(record.note)}"` : null,
+    ]
+      .filter((line): line is string => line !== null)
+      .join("\n"),
+    `### Lines (${record.lines.length})\n${
+      record.lines.length > 0
+        ? ["| # | Description | Type | Quantity | Unit price | Amount |", "| ---: | --- | --- | ---: | ---: | ---: |", ...lines].join("\n")
+        : "none"
+    }${more}`,
+    record.messageToClient ? `### Message to client\n${userContent(record.messageToClient)}` : null,
+  ]
+    .filter((part): part is string => part !== null)
+    .join("\n\n");
+}
+
+/** A markdown table cell: one line, pipes escaped. */
+function tableCell(value: string): string {
+  return oneLine(value).replace(/\\/g, "\\\\").replace(/\|/g, "\\|");
 }
 
 /** A failed ref: the model-actionable message, plus each candidate with its link. */
@@ -581,7 +673,9 @@ export function renderRefError(input: string, message: string, candidates: RefCa
           ? clientLink(ctx.appOrigin, c.id)
           : c.type === "member"
             ? memberLink(ctx.appOrigin, c.id)
-            : null;
+            : c.type === "invoice"
+              ? invoiceLink(ctx.appOrigin, c.key ?? c.id)
+              : null;
     const key = c.key ? (c.type === "client" ? `client:${c.key}` : c.key) : null;
     return `- ${fields(c.type, key, oneLine(c.name), `ref ${c.id}`, link)}`;
   });
@@ -661,6 +755,26 @@ export function renderCommentSection(page: CommentPage, ctx: RenderContext): str
     "task, project, assignee or an updated date range",
     page,
     page.rows.map((r) => renderCommentRow(r, { ...ctx, timezone: page.timezone })),
+  );
+}
+
+export function renderInvoiceSection(page: InvoicePage, ctx: RenderContext): string {
+  const totals = page.totals.map((t) => `${moneyMinor(t.totalMinor, t.currency)} (${t.count})`).join(" · ");
+  const extra =
+    page.total === 0
+      ? []
+      : [
+          page.incomplete
+            ? `Totals of the ${page.total} invoices found, per currency, void excluded (more may exist): ${totals || "none"}`
+            : `Total of all ${page.total} matching ${page.total === 1 ? "invoice" : "invoices"}, per currency, void excluded: ${totals || "none"}`,
+          `Today: ${page.today} (org timezone; Past due = Invoiced and due before today)`,
+        ];
+  return searchSection(
+    "Invoices",
+    "status, client, project or a due date range",
+    page,
+    page.rows.map((r) => renderInvoiceRow(r, ctx)),
+    extra,
   );
 }
 

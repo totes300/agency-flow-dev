@@ -8,6 +8,8 @@ import { resolveTaskRef } from "../tasks/lookup";
 import { visibleTimeEntries } from "../timeEntries";
 import { REF_CAP } from "../workspaceRefs";
 import { externalRefOwner } from "./mcpExternalRefs";
+import { resolveInvoiceByIdentifier } from "./invoiceIdentifier";
+import { formatInvoiceNumber } from "./billing/labels";
 import { parseRef, REF_TABLES, type RefTable } from "../../lib/mcp/refs";
 
 /**
@@ -22,7 +24,12 @@ import { parseRef, REF_TABLES, type RefTable } from "../../lib/mcp/refs";
  * - time entries: ID, visible per `visibleTimeEntries` (members: own only);
  * - projects: ID or project code (a bare short key, case-insensitive);
  * - clients: ID or `client:PREFIX` (case-insensitive; valid prefixes only);
- * - members: ID, email (case-insensitive), with a membership in the org.
+ * - members: ID, email (case-insensitive), with a membership in the org;
+ * - invoices (admins only, as in the app): ID, invoice page link or invoice
+ *   number (`INV-007`, matched like the page URL). A number shaped like a
+ *   task key is tried as both; when both exist the candidates come back.
+ *   Members get "admin-only" for any invoice-shaped reference, never a
+ *   lookup.
  *
  * Missing, other-org and unreadable records are all "not found" — never
  * "forbidden" — so references cannot probe other tenants. A key or email
@@ -34,7 +41,7 @@ import { parseRef, REF_TABLES, type RefTable } from "../../lib/mcp/refs";
  * per org member (bounded by REF_CAP), read once per call.
  */
 
-export type RefType = "task" | "comment" | "time_entry" | "project" | "client" | "member";
+export type RefType = "task" | "comment" | "time_entry" | "project" | "client" | "member" | "invoice";
 
 export type Resolved =
   | { type: "task"; access: TaskAccess }
@@ -42,7 +49,8 @@ export type Resolved =
   | { type: "time_entry"; entry: Doc<"timeEntries"> }
   | { type: "project"; project: Doc<"projects"> }
   | { type: "client"; client: Doc<"clients"> }
-  | { type: "member"; user: Doc<"users">; role: "admin" | "member" };
+  | { type: "member"; user: Doc<"users">; role: "admin" | "member" }
+  | { type: "invoice"; invoice: Doc<"invoices"> };
 
 /** One record an ambiguous reference could mean; `id` references it uniquely. */
 export type RefCandidate = { type: RefType; id: string; key: string | null; name: string };
@@ -58,6 +66,7 @@ const TABLE_TYPE: Record<RefTable, RefType> = {
   projects: "project",
   clients: "client",
   users: "member",
+  invoices: "invoice",
 };
 
 const TYPE_NOUN: Record<RefType, string> = {
@@ -67,6 +76,7 @@ const TYPE_NOUN: Record<RefType, string> = {
   project: "project",
   client: "client",
   member: "member",
+  invoice: "invoice",
 };
 
 const NOT_FOUND_HINT: Record<RefType, string> = {
@@ -76,7 +86,16 @@ const NOT_FOUND_HINT: Record<RefType, string> = {
   project: 'Project codes are listed in fetch("workspace").',
   client: 'Client prefixes (client:KEY) are listed in fetch("workspace").',
   member: 'Members are listed in fetch("workspace").',
+  invoice: 'Use search with types ["invoice"] to find invoices.',
 };
+
+/** Members never see invoices (the app's /invoices and /billing are admin routes). */
+export const INVOICES_ADMIN_ONLY = "Invoices are admin-only, as in the app.";
+
+/** An invoice's display key: its number once finalized, null for a never-numbered draft. */
+export function invoiceKey(invoice: Doc<"invoices">): string | null {
+  return invoice.number != null ? formatInvoiceNumber(invoice.prefix, invoice.number) : null;
+}
 
 /** A message naming every candidate by its unique ID, so the model can retry exactly. */
 export function ambiguousMessage(input: string, candidates: readonly RefCandidate[]): string {
@@ -179,7 +198,22 @@ export function createRefResolver(ctx: QueryCtx, auth: AuthContext) {
         const id = ctx.db.normalizeId("users", raw);
         return id ? await memberById(id) : null;
       }
+      case "invoices": {
+        const id = ctx.db.normalizeId("invoices", raw);
+        const invoice = id && auth.isAdmin ? await ctx.db.get(id) : null;
+        return invoice && invoice.orgId === orgId ? { type: "invoice", invoice } : null;
+      }
     }
+  }
+
+  /**
+   * An invoice by number, as the invoice page resolves its URL segment. The
+   * number is tried as typed, then uppercased (prefixes are stored as set).
+   */
+  async function invoiceByNumber(number: string): Promise<Doc<"invoices"> | null> {
+    const exact = await resolveInvoiceByIdentifier(ctx, orgId, number);
+    if (exact || number === number.toUpperCase()) return exact;
+    return await resolveInvoiceByIdentifier(ctx, orgId, number.toUpperCase());
   }
 
   /** Whether `raw` is an ID of `table` at all (regardless of org or access). */
@@ -214,10 +248,30 @@ export function createRefResolver(ctx: QueryCtx, auth: AuthContext) {
         return { ok: false, message: `"${parsed.input}" cannot be used here.` };
 
       case "task": {
-        if (!allows("task")) return wrongType("a task key");
-        const taskId = await resolveTaskRef(ctx, orgId, ref.identifier);
+        // A task key, unless it is an invoice number of the same shape
+        // (`INV-120`): admins get both lookups, and both matches as candidates.
+        if (!allows("task") && !allows("invoice")) return wrongType("a task key");
+        if (!allows("task") && !auth.isAdmin) return { ok: false, message: INVOICES_ADMIN_ONLY };
+        const taskId = allows("task") ? await resolveTaskRef(ctx, orgId, ref.identifier) : null;
         const access = taskId ? await readableTask(taskId) : null;
-        return access ? { ok: true, resolved: { type: "task", access } } : notFound("task");
+        const invoice = allows("invoice") && auth.isAdmin ? await invoiceByNumber(parsed.input) : null;
+        if (access && invoice) {
+          const candidates: RefCandidate[] = [
+            { type: "task", id: access.task._id, key: access.task.identifier ?? null, name: access.task.title },
+            { type: "invoice", id: invoice._id, key: invoiceKey(invoice), name: invoice.subject ?? "Invoice" },
+          ];
+          return { ok: false, message: ambiguousMessage(parsed.input, candidates), candidates };
+        }
+        if (access) return { ok: true, resolved: { type: "task", access } };
+        if (invoice) return { ok: true, resolved: { type: "invoice", invoice } };
+        return notFound(allows("task") ? "task" : "invoice");
+      }
+
+      case "invoice": {
+        if (!allows("invoice")) return wrongType("an invoice number");
+        if (!auth.isAdmin) return { ok: false, message: INVOICES_ADMIN_ONLY };
+        const invoice = await invoiceByNumber(ref.number);
+        return invoice ? { ok: true, resolved: { type: "invoice", invoice } } : notFound("invoice");
       }
 
       case "external": {
@@ -293,6 +347,7 @@ export function createRefResolver(ctx: QueryCtx, auth: AuthContext) {
         // A real Convex ID names exactly one table; the first that accepts it decides.
         const table = tables.find((t) => isIdOf(t, ref.id));
         if (!table) return notFound(expected);
+        if (table === "invoices" && !auth.isAdmin) return { ok: false, message: INVOICES_ADMIN_ONLY };
         const resolved = await byId(table, ref.id);
         return resolved ? { ok: true, resolved } : notFound(TABLE_TYPE[table]);
       }

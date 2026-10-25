@@ -6,7 +6,7 @@ import { assertValidDateString } from "./dateValidation";
 import { referenceClientPrefix } from "./helpers";
 import { getDateInTimezone } from "./timer";
 import { addDaysToDateString } from "./todayPlan";
-import { createRefResolver, type RefResolver } from "./mcpRefs";
+import { createRefResolver, INVOICES_ADMIN_ONLY, invoiceKey, type RefResolver } from "./mcpRefs";
 import { categoryNames, commentPreview, isOverdue, orgClock, timeEntryRow, userNames, type OrgClock } from "./mcpRecords";
 import { TASK_COMMENT_CAP } from "../comments";
 import { externalRefOwner, normalizeExternalRef } from "./mcpExternalRefs";
@@ -17,7 +17,10 @@ import { loadAssignedTo, loadSubtasksOf, type Loaded } from "../tasks/read";
 import { visibleTimeEntries } from "../timeEntries";
 import { REF_CAP } from "../workspaceRefs";
 import { extractPlainText } from "../../lib/tiptap-utils";
-import { SEARCH_LIMIT_MAX } from "../../lib/mcp/limits";
+import { INVOICE_SEARCH_STATUSES, SEARCH_LIMIT_MAX } from "../../lib/mcp/limits";
+import { invoiceMatchesSearch } from "../invoices";
+import { invoiceDisplayStatus, type InvoiceDisplayStatus } from "./billing/periodState";
+import { periodRangeLabel } from "./billing/projectPeriods";
 
 /**
  * MCP `search` per result type (docs/prd-mcp.md §6, §7), for an
@@ -42,6 +45,8 @@ import { SEARCH_LIMIT_MAX } from "../../lib/mcp/limits";
  * - comments: one activity range (≤ 501 rows), then per comment one get,
  *   per distinct task one get and (members) up to two edge checks: at most
  *   ~2,000 ranges; with a task filter, the task's comments in one range.
+ * - invoices (admins only): one range (≤ 2,001 docs, newest first) plus up
+ *   to three per page row (project, client, close).
  * Filters by member email add one range per org member (mcpRefs.ts).
  */
 
@@ -54,6 +59,8 @@ export const TIME_SEARCH_CAP = 2000;
  * `comment_added` row); sized to the 4,096-range budget above.
  */
 export const COMMENT_SCAN_CAP = 500;
+/** Invoices read per search before filtering (newest first). */
+export const INVOICE_SEARCH_CAP = 2000;
 /** Preview length of a comment row. */
 export const COMMENT_PREVIEW_CHARS = 200;
 
@@ -708,6 +715,122 @@ export async function searchComments(ctx: QueryCtx, auth: AuthContext, args: Com
     incomplete,
     notes: [],
     timezone: clock.timezone,
+  };
+  return result;
+}
+
+/**
+ * Invoices, as the Billing hub's Invoices view lists them (`listAllInvoices`):
+ * newest first, the same text search (number or subject; "draft" for
+ * never-numbered drafts) and display statuses (Draft · Invoiced · Past due ·
+ * Paid · Void; past due = invoiced past its due date, org timezone). Admins
+ * only, as the app's /billing and /invoices routes. Each row carries its
+ * total in its own currency; `totals` sums the matches per currency, void
+ * excluded, never across currencies.
+ */
+export async function searchInvoices(
+  ctx: QueryCtx,
+  auth: AuthContext,
+  args: PageArgs & {
+    query?: string;
+    status?: string;
+    client?: string;
+    project?: string;
+    due: DateRangeArgs;
+    now: number;
+  },
+) {
+  if (!auth.isAdmin) throw new ConvexError(INVOICES_ADMIN_ONLY);
+  assertPage(args);
+  assertRange(args.due, "due");
+  const status = args.status as InvoiceDisplayStatus | undefined;
+  if (status !== undefined && !(INVOICE_SEARCH_STATUSES as readonly string[]).includes(status)) {
+    throw new ConvexError(`Invoice status must be one of: ${INVOICE_SEARCH_STATUSES.join(", ")}.`);
+  }
+  const { orgId } = auth;
+  const resolver = createRefResolver(ctx, auth);
+  const client = await clientFilter(resolver, args.client);
+  const project = await projectFilter(resolver, args.project);
+  const clock = await orgClock(ctx, orgId, args.now);
+  const stored = status === "past_due" ? "invoiced" : status;
+
+  const rows = project
+    ? await ctx.db.query("invoices").withIndex("by_projectId", (q) => q.eq("projectId", project._id)).order("desc").take(INVOICE_SEARCH_CAP + 1)
+    : client
+      ? await ctx.db.query("invoices").withIndex("by_clientId", (q) => q.eq("clientId", client._id)).order("desc").take(INVOICE_SEARCH_CAP + 1)
+      : stored
+        ? await ctx.db.query("invoices").withIndex("by_orgId_status", (q) => q.eq("orgId", orgId).eq("status", stored)).order("desc").take(INVOICE_SEARCH_CAP + 1)
+        : await ctx.db.query("invoices").withIndex("by_orgId", (q) => q.eq("orgId", orgId)).order("desc").take(INVOICE_SEARCH_CAP + 1);
+  const incomplete = rows.length > INVOICE_SEARCH_CAP;
+  const term = args.query?.trim().toLowerCase();
+  const matched = rows
+    .slice(0, INVOICE_SEARCH_CAP)
+    .filter(
+      (inv) =>
+        inv.orgId === orgId &&
+        (client === undefined || inv.clientId === client._id) &&
+        (project === undefined || inv.projectId === project._id) &&
+        (status === undefined || invoiceDisplayStatus(inv.status, inv.dueDate, clock.today) === status) &&
+        (!term || invoiceMatchesSearch(inv, term)) &&
+        (args.due.from === undefined || (inv.dueDate != null && inv.dueDate >= args.due.from)) &&
+        (args.due.to === undefined || (inv.dueDate != null && inv.dueDate <= args.due.to)),
+    )
+    .sort((a, b) => b.createdAt - a.createdAt);
+
+  const totals = new Map<string, { totalMinor: number; count: number }>();
+  for (const inv of matched) {
+    if (inv.status === "void") continue;
+    const t = totals.get(inv.currency) ?? { totalMinor: 0, count: 0 };
+    t.totalMinor += inv.totalMinor;
+    t.count += 1;
+    totals.set(inv.currency, t);
+  }
+
+  const projects = new Map<Id<"projects">, Doc<"projects"> | null>();
+  const clients = new Map<Id<"clients">, Doc<"clients"> | null>();
+  const out = [];
+  for (const inv of page(matched, args)) {
+    if (!projects.has(inv.projectId)) {
+      const p = await ctx.db.get(inv.projectId);
+      projects.set(inv.projectId, p && p.orgId === orgId ? p : null);
+    }
+    if (!clients.has(inv.clientId)) {
+      const c = await ctx.db.get(inv.clientId);
+      clients.set(inv.clientId, c && c.orgId === orgId ? c : null);
+    }
+    const p = projects.get(inv.projectId) ?? null;
+    const c = clients.get(inv.clientId) ?? null;
+    const close = inv.closeId ? await ctx.db.get(inv.closeId) : null;
+    out.push({
+      id: inv._id,
+      number: invoiceKey(inv),
+      status: invoiceDisplayStatus(inv.status, inv.dueDate, clock.today),
+      subject: inv.subject ?? null,
+      client: c ? { name: c.name, prefix: referenceClientPrefix(c) } : null,
+      project: p ? { id: p._id, code: p.code, name: p.name } : null,
+      period:
+        close && close.orgId === orgId
+          ? { start: close.periodStart, end: close.periodEnd, label: periodRangeLabel(close.periodStart, close.periodEnd) }
+          : null,
+      issueDate: inv.issueDate,
+      dueDate: inv.dueDate ?? null,
+      totalMinor: inv.totalMinor,
+      currency: inv.currency,
+    });
+  }
+  const result: SearchPage<(typeof out)[number]> & {
+    totals: Array<{ currency: string; totalMinor: number; count: number }>;
+    today: string;
+  } = {
+    rows: out,
+    total: matched.length,
+    offset: args.offset,
+    incomplete,
+    notes: [],
+    totals: [...totals.entries()]
+      .map(([currency, t]) => ({ currency, ...t }))
+      .sort((a, b) => a.currency.localeCompare(b.currency)),
+    today: clock.today,
   };
   return result;
 }

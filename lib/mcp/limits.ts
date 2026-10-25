@@ -95,3 +95,38 @@ export const REPORT_KINDS = [
   "org_finance",
 ] as const;
 export type ReportKind = (typeof REPORT_KINDS)[number];
+
+/**
+ * `billing_preview` actions (docs/prd-mcp.md D5, §9): the app's own period
+ * and invoice actions, one each (docs/prd-project-billing-redesign.md
+ * §5.2–§5.4). convex/lib/mcpBillingResults.ts maps each to its write path.
+ */
+export const BILLING_ACTIONS = [
+  "close_period",
+  "reopen_period",
+  "create_fixed_invoice",
+  "mark_invoiced",
+  "mark_paid",
+  "mark_unpaid",
+  "revert_to_draft",
+  "void_invoice",
+  "delete_draft",
+] as const;
+export type BillingAction = (typeof BILLING_ACTIONS)[number];
+
+/** Actions on a project period (`project` + `period`). */
+export const PERIOD_ACTIONS = ["close_period", "reopen_period"] as const satisfies readonly BillingAction[];
+/** Actions on a project (`project`). */
+export const PROJECT_ACTIONS = ["create_fixed_invoice"] as const satisfies readonly BillingAction[];
+/** Actions on an invoice (`invoice`). */
+export const INVOICE_ACTIONS = [
+  "mark_invoiced",
+  "mark_paid",
+  "mark_unpaid",
+  "revert_to_draft",
+  "void_invoice",
+  "delete_draft",
+] as const satisfies readonly BillingAction[];
+
+/** Invoice statuses as the Invoices views show them (docs/prd-project-billing-redesign.md §5.2). */
+export const INVOICE_SEARCH_STATUSES = ["draft", "invoiced", "past_due", "paid", "void"] as const;

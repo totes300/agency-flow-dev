@@ -4,6 +4,7 @@ import { getMcpAuthContext } from "../lib/mcpAuth";
 import {
   searchClients,
   searchComments,
+  searchInvoices,
   searchMembers,
   searchProjects,
   searchTasks,
@@ -123,5 +124,23 @@ export const comments = query({
   handler: async (ctx, args) => {
     const auth = await getMcpAuthContext(ctx);
     return await searchComments(ctx, auth, args);
+  },
+});
+
+/** Invoices (admins only, as the app's Billing hub → Invoices). */
+export const invoices = query({
+  args: {
+    offset: v.number(),
+    limit: v.number(),
+    query: v.optional(v.string()),
+    status: v.optional(v.string()),
+    client: v.optional(v.string()),
+    project: v.optional(v.string()),
+    due: range,
+    now: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const auth = await getMcpAuthContext(ctx);
+    return await searchInvoices(ctx, auth, args);
   },
 });

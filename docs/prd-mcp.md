@@ -634,6 +634,11 @@ all fixed or deferred with a reason. Fixes landed on `mcp` in `3b06b16`, `f33d4e
 (`4dd2b0b`) was merged with owner approval. Report, numbers, verdict ("ready after the
 runbook's production setup") and the follow-up list: `docs/reviews/mcp-review-2026-10-25.md`.
 
+**Next backlog (owner-approved 2026-10-25):** `docs/prd-agent-first-backlog.md` — outbound
+webhooks V1 (pulled forward from V2), full-text search across tasks, comments and
+attachment text, a `task_deleted` audit event, upload documentation, and the agent
+recipes that replace in-app email ingestion and reminder rules.
+
 ### Known limits (accepted, owner 2026-10-24)
 
 - A Convex read-limit error (4,096 index ranges per function) cannot be caught inside

@@ -125,6 +125,7 @@ describe("MCP protocol", () => {
       "save_time_entries",
       "timer",
       "delete",
+      "report",
     ]);
     expect(Object.keys(expected.find((t) => t.name === "fetch")!.inputSchema.properties ?? {})).toEqual([
       "refs",
@@ -145,6 +146,10 @@ describe("MCP protocol", () => {
     expect(hints.save_time_entries).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: false });
     expect(hints.timer).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: false });
     expect(hints.delete).toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: true });
+    expect(hints.report).toMatchObject({ readOnlyHint: true });
+    expect(Object.keys(expected.find((t) => t.name === "report")!.inputSchema.properties ?? {})).toEqual([
+      "kind", "month", "from", "to", "from_month", "to_month", "client", "project", "member",
+    ]);
   });
 
   it("calls Convex with the caller's own bearer token and returns markdown", async () => {

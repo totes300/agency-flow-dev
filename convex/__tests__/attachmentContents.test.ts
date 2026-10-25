@@ -43,6 +43,8 @@ const modules = (
 const ORG = "org_files";
 const OTHER = "org_files_other";
 const IDENTITY_ADMIN = { subject: "clerk_admin", orgId: ORG, orgRole: "org:admin" };
+/** Carol wrote the test comment: only a comment's author attaches to it (D-COMMENTATTACH). */
+const IDENTITY_CAROL = { subject: "clerk_carol", orgId: ORG, orgRole: "org:member" };
 const DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
 const createT = () => convexTest(schema, modules);
@@ -164,7 +166,7 @@ describe("requestExtraction", () => {
     const pdf = await store(t, "%PDF-1.4");
     await saveTaskFile(t, f, pdf, "brief.pdf", "application/pdf");
     const png = await store(t, "png");
-    await t.withIdentity(IDENTITY_ADMIN).mutation(api.commentAttachments.save, {
+    await t.withIdentity(IDENTITY_CAROL).mutation(api.commentAttachments.save, {
       commentId: f.comment, fileId: png, fileName: "banner.png", fileSize: 3, mimeType: "image/png",
     });
     const rows = await contentRows(t);
@@ -375,7 +377,7 @@ describe("extracted content is deleted with its file", () => {
     const taskFile = await saveTaskFile(t, f, taskBlob, "a.txt", "text/plain");
     await completeWith(t, taskBlob, "a.txt", { kind: "done", text: "task file text", truncated: false });
     const commentBlob = await store(t, "b");
-    const commentFile = await t.withIdentity(IDENTITY_ADMIN).mutation(api.commentAttachments.save, {
+    const commentFile = await t.withIdentity(IDENTITY_CAROL).mutation(api.commentAttachments.save, {
       commentId: f.comment, fileId: commentBlob, fileName: "b.txt", fileSize: 1, mimeType: "text/plain",
     });
     await completeWith(t, commentBlob, "b.txt", { kind: "done", text: "comment file text", truncated: false });

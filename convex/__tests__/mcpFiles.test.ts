@@ -21,6 +21,7 @@ import type { AuthContext } from "../lib/auth";
 import { DEFAULT_STATUS_SEED } from "../tasks/model";
 import { createTask } from "../tasks/write";
 import { requestExtraction } from "../attachmentContents";
+import { COMMENT_ATTACH_AUTHOR_ONLY } from "../commentAttachments";
 import { ATTACHMENT_TEXT_FETCH_MAX } from "../../lib/attachments/contents";
 import { INLINE_TEXT_MAX_BYTES } from "../../lib/mcp/limits";
 
@@ -343,6 +344,17 @@ describe("attach_file: who may attach where", () => {
     // Unreadable task / other org: not found.
     await expect(attachText(t, "bob", f.aliceComment, "x", "x.txt")).rejects.toThrow(/not found/);
     await expect(attachText(t, "admin", f.otherComment, "x", "x.txt")).rejects.toThrow(/not found/);
+
+    // The app's save path applies the same rule with the same message.
+    const appSave = async (caller: Caller, role: "org:admin" | "org:member") => {
+      const fileId = await upload(t, "app file");
+      return await inApp(t, caller, role).mutation(api.commentAttachments.save, {
+        commentId: f.aliceComment, fileId, fileName: "app.txt", fileSize: 8, mimeType: "text/plain",
+      });
+    };
+    await expect(appSave("admin", "org:admin")).rejects.toThrow(COMMENT_ATTACH_AUTHOR_ONLY);
+    await appSave("alice", "org:member");
+    expect(await commentFiles(t, f.aliceComment)).toHaveLength(2);
   });
 });
 

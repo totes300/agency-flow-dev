@@ -6,10 +6,18 @@ import { loadTaskForReadOrNull } from "./tasks/access";
 import { isMimeTypeBlocked } from "./lib/content_validation";
 import { deleteContentForStorage, requestExtraction } from "./attachmentContents";
 import type { AttachmentFileInput } from "./attachments";
+import { MAX_FILE_SIZE } from "../lib/attachment";
 
 export const MAX_FILES_PER_COMMENT = 5;
-const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 export const MAX_FILE_NAME_LENGTH = 255;
+
+/**
+ * Files are added to a comment while writing it, so only its author may
+ * attach to it (owner decision D-COMMENTATTACH, 2026-10-25) — in the app and
+ * through MCP.
+ */
+export const COMMENT_ATTACH_AUTHOR_ONLY =
+  "You can attach files only to your own comments (files are added while writing a comment). Attach it to the task instead, or post a new comment and attach to that.";
 
 // ─── Query ──────────────────────────────────────────────────────────────────────
 
@@ -99,8 +107,8 @@ export const generateUploadUrl = mutation({
 
 /**
  * The comment attachment write path for an authorized caller: name length,
- * blocked types, the comment in the caller's org on a task they can read,
- * the per-comment count and the size limit, then the row, then text
+ * blocked types, the comment in the caller's org on a task they can read and
+ * written by the caller (D-COMMENTATTACH), the per-comment count and the size limit, then the row, then text
  * extraction (attachmentContents.ts). Shared by `save` below and MCP
  * `attach_file` (which resolves the comment first).
  */
@@ -130,6 +138,10 @@ export async function saveCommentAttachmentForAuth(
   // Task access guard (tasks/access.ts)
   if (!(await loadTaskForReadOrNull(ctx, comment.taskId, auth))) {
     throw new ConvexError("Comment not found");
+  }
+
+  if (comment.userId !== userId) {
+    throw new ConvexError(COMMENT_ATTACH_AUTHOR_ONLY);
   }
 
   // Check file count limit per comment

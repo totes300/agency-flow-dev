@@ -6,7 +6,7 @@ import { createRefResolver } from "./mcpRefs";
 import { isMimeTypeBlocked } from "./content_validation";
 import { loadTaskForWrite } from "../tasks/access";
 import { saveTaskAttachmentForAuth, type AttachmentFileInput } from "../attachments";
-import { MAX_FILE_NAME_LENGTH, saveCommentAttachmentForAuth } from "../commentAttachments";
+import { COMMENT_ATTACH_AUTHOR_ONLY, MAX_FILE_NAME_LENGTH, saveCommentAttachmentForAuth } from "../commentAttachments";
 import { loadContent } from "../attachmentContents";
 import type { AttachFileResult, CreateUploadResult } from "./mcpWriteResults";
 import { MAX_FILE_SIZE } from "../../lib/attachment";
@@ -28,7 +28,7 @@ import { parseRef } from "../../lib/mcp/refs";
  *   limits, rows and text extraction as an upload in the app.
  * - Who may attach: a task — whoever may write it (admins; members on tasks
  *   assigned to them or their parent), as the app; a comment — only its
- *   author: in the app files are added to a comment while writing it.
+ *   author, as the app (D-COMMENTATTACH).
  *
  * The server never downloads a URL (§10). The app writes no activity row for
  * attachments, so nothing here carries `via` (D15).
@@ -213,11 +213,9 @@ export async function attachFile(
       file: input,
     };
   } else if (target.type === "comment") {
-    if (target.comment.userId !== auth.userId) {
-      throw new ConvexError(
-        "You can attach files only to your own comments (in the app, files are added while writing a comment). Attach it to the task instead, or post a new comment and attach to that.",
-      );
-    }
+    // The core refuses someone else's comment (D-COMMENTATTACH); checked
+    // first here so a refused attach never touches the upload.
+    if (target.comment.userId !== auth.userId) throw new ConvexError(COMMENT_ATTACH_AUTHOR_ONLY);
     const input = await file();
     const { id } = await saveCommentAttachmentForAuth(ctx, auth, target.comment._id, input);
     saved = {

@@ -54,7 +54,7 @@ import {
  * - client_monthly: two per task (task, latest comment) plus mention lookups,
  *   tasks ≤ CLIENT_TASK_CAP;
  * - missing_time: one range for completed tasks (≤ MISSING_DONE_CAP), one per
- *   review status (≤ MISSING_REVIEW_CAP tasks in all) or the member's
+ *   review status (≤ MISSING_REVIEW_CAP tasks in all), or one person's
  *   assigned tasks (≤ MISSING_ASSIGNED_CAP, one range each), then per
  *   candidate one time-entry probe and, for review tasks, one activity probe.
  * A scan over its cap throws a "narrow the period / filter" error; nothing is
@@ -441,15 +441,18 @@ export async function missingTimeReport(
     return date >= args.from && date <= args.to;
   };
 
-  // Candidates: a member's own edges (their visibility), else the org's
-  // completed-in-window and in-review tasks.
+  // Candidates: one person's assignment edges (a member's visibility, or an
+  // admin's member filter), else the org's completed-in-window and in-review
+  // tasks.
   const assignee = !auth.isAdmin ? auth.userId : member?._id;
   let candidates: Doc<"tasks">[];
-  if (!auth.isAdmin) {
-    const loaded = await loadAssignedTo(ctx, auth.orgId, auth.userId, MISSING_ASSIGNED_CAP);
+  if (assignee) {
+    const loaded = await loadAssignedTo(ctx, auth.orgId, assignee, MISSING_ASSIGNED_CAP);
     if (loaded.truncated) {
       throw new ConvexError(
-        `You are assigned more than ${MISSING_ASSIGNED_CAP} tasks, more than this report reads in one call. Ask an admin to run it for you.`,
+        !auth.isAdmin
+          ? `You are assigned more than ${MISSING_ASSIGNED_CAP} tasks, more than this report reads in one call. Ask an admin to run it for you.`
+          : `This member is assigned more than ${MISSING_ASSIGNED_CAP} tasks, more than this report reads in one call. Run it without member for a shorter period.`,
       );
     }
     candidates = loaded.tasks;
@@ -475,7 +478,7 @@ export async function missingTimeReport(
       review.push(...rows);
       if (review.length > MISSING_REVIEW_CAP) {
         throw new ConvexError(
-          `More than ${MISSING_REVIEW_CAP} tasks are in a review status, more than this report reads in one call. Add project or member.`,
+          `More than ${MISSING_REVIEW_CAP} tasks are in a review status, more than this report reads in one call. Run it per member (member).`,
         );
       }
     }

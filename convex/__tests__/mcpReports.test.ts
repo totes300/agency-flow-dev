@@ -474,9 +474,13 @@ describe("missing_time (D25)", () => {
         await ctx.db.insert("tasks", taskRow({ orgId: ORG, title: `Bulk ${i}`, statusId: review._id, statusCategory: "started", createdBy: s.admin, projectId: s.arlo }));
       }
     });
-    await expect(report.missingTime(t, "admin", JUNE)).rejects.toThrow(/More than 500 tasks are in a review status/);
-    // A member reads their own edges instead, so it still works for them.
+    await expect(report.missingTime(t, "admin", JUNE)).rejects.toThrow(/More than 500 tasks are in a review status.*per member/);
+    // One person's edges are read instead, so it still works per member.
     expect((await report.missingTime(t, "alice", JUNE)).rows).toHaveLength(2);
+    expect((await report.missingTime(t, "admin", { ...JUNE, member: "clerk_alice@x.test" })).rows.map((r) => r.identifier)).toEqual([
+      "ARLO-18",
+      "ARLO-10",
+    ]);
   });
 });
 

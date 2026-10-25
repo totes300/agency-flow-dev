@@ -205,9 +205,9 @@ export type CloseQueueData = {
 
 // ─── Shared ──────────────────────────────────────────────────────────────────
 
-export type ViewSettings = { timezone: string; todayStr: string; roundingMinutes: number };
+type ViewSettings = { timezone: string; todayStr: string; roundingMinutes: number };
 
-export async function viewSettings(ctx: QueryCtx, orgId: string): Promise<ViewSettings> {
+async function viewSettings(ctx: QueryCtx, orgId: string): Promise<ViewSettings> {
   const s = await getOrgSettings(ctx, orgId);
   const timezone = s?.timezone ?? ORG_TIMEZONE_FALLBACK;
   return {

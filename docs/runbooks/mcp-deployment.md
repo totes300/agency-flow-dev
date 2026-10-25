@@ -76,7 +76,7 @@ Steps, each after the owner's yes:
 1. Set `MCP_RESOURCE_URL` on Convex production (section 1).
 2. Deploy Convex (`npx convex deploy`). It adds the tables `taskExternalRefs`,
    `mcpIdempotency`, `mcpFileUploads`, `mcpBillingPreviews`, `attachmentContents`
-   and `mcpConnections`, and the cron jobs below.
+   and `mcpConnections` (Connected apps stamps and revokes), and the cron jobs below.
 3. Set `MCP_RESOURCE_URL` on Vercel Production and deploy the Next.js app.
 4. Apply the Clerk production steps (section 2).
 5. Run the attachment extraction backfill (section 5).
@@ -135,9 +135,30 @@ and shown honestly by `fetch`.
    from Agency Flow, not from the token.
 5. Create a throwaway task through MCP, check "via <client>" in its activity in the
    app, then delete it through MCP.
-6. Open Connected apps in the app: the client appears with its connected and
-   last-used times (last used moves at most once an hour).
+6. Open Connected apps (user menu → Connected apps, `/connected-apps`): the
+   client appears with its connected and last-used times (last used moves at
+   most once an hour). Revoke it: the client's next MCP call is refused with
+   "Access for this app was revoked…". Allow it again: the next call works.
 7. Check the Convex and Vercel logs for `[mcp]` errors.
+
+## Connected apps and revocation (owner decisions D-PAGE, D-REVOKE, 2026-10-25)
+
+- `/connected-apps` is open to every member (not an admin route) and lists only
+  the signed-in user's own connections in the active workspace, from the
+  `mcpConnections` rows the `/mcp` route stamps (first use = "Connected", last
+  use at most hourly). Clerk has no API that lists a user's OAuth grants.
+- **Revoke is enforced in Agency Flow, not in Clerk.** Clerk can revoke a grant
+  only with the refresh token or an opaque access token in hand
+  (`POST /oauth_applications/{id}/revoke_token`), and JWT access tokens cannot be
+  revoked at all. Revoke therefore sets `mcpConnections.revokedAt`, and
+  `getMcpAuthContext` refuses every token of that org + user + client from the next
+  call, including an access token issued before the revoke and every refreshed one
+  (one indexed read per MCP call). The client keeps its stored connection until
+  the user disconnects it there (Claude: Settings → Connectors; Codex:
+  `codex mcp logout agency-flow`); the page says so.
+- "Allow again" clears `revokedAt`; the client's existing tokens work again.
+- Removing a member from the organization still cuts MCP access on the next call,
+  because Convex re-checks membership every time.
 
 ## Rollback
 
@@ -159,7 +180,6 @@ and shown honestly by `fetch`.
   the matcher; `lib/__tests__/proxy.test.ts` locks its behaviour (public routes,
   `auth.protect()`, admin redirect) for the migration. Convex enforces
   authorization regardless.
-- **Revocation limits.** Clerk can revoke a grant only with the refresh token or an
-  opaque access token in hand (`POST /oauth_applications/{id}/revoke_token`), and
-  JWT access tokens cannot be revoked at all. Removing a member from the org cuts
-  MCP access on the next call, because Convex re-checks membership every time.
+- **Clerk-side revocation.** If Clerk adds an API that lists or revokes a user's
+  grants per client, Revoke could also delete the grant there; until then it is
+  enforced in Agency Flow only (section above).

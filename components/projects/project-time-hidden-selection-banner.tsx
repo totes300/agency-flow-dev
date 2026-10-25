@@ -9,7 +9,7 @@ import { pluralize } from "@/lib/format"
  *
  * The Time tab preserves selection across filter changes (Linear/Notion
  * pattern) so a user who selects 20 rows, narrows the date range, then
- * clicks "Create Invoice" doesn't get a surprising "3 entries invoiced"
+ * clicks a bulk action doesn't get a surprising "3 entries invoiced"
  * result when they thought they'd picked 20. This banner makes the otherwise
  * invisible state visible.
  */

@@ -15,9 +15,9 @@
  */
 
 import { v, ConvexError } from "convex/values";
-import { internalQuery } from "./_generated/server";
-import type { Id } from "./_generated/dataModel";
-import { requireAdmin } from "./lib/auth";
+import { internalQuery, type QueryCtx } from "./_generated/server";
+import type { Doc, Id } from "./_generated/dataModel";
+import { assertAdmin, requireAdmin, type AuthContext } from "./lib/auth";
 import {
   resolveScopeEntries,
   buildTaskRows,
@@ -30,6 +30,7 @@ import {
 
 /** Full row: pivot fields + the Phase 9 AI input (slice 05 summarizes it). */
 export type TimesheetRow = TimesheetPivotRow & {
+  identifier: string;
   projectId: Id<"projects">;
   billableMinutes: number;
   nonBillableMinutes: number;
@@ -68,115 +69,151 @@ export const collectTimesheetData = internalQuery({
       ),
     ),
   },
-  handler: async (ctx, args): Promise<TimesheetData> => {
-    const authCtx = await requireAdmin(ctx);
-
-    const clientId = ctx.db.normalizeId("clients", args.clientId);
-    const client = clientId ? await ctx.db.get(clientId) : null;
-    if (!client || client.orgId !== authCtx.orgId) {
-      throw new ConvexError(
-        "Client not found. Use the listClients tool to get valid client ids.",
-      );
-    }
-
-    // Resolve category-name filters against the org's categories. Unknown
-    // names error with the valid list so the agent can self-correct
-    // instead of silently returning an empty (wrong) timesheet.
-    const categories = await ctx.db
-      .query("workCategories")
-      .withIndex("by_orgId", (q) => q.eq("orgId", authCtx.orgId))
-      .collect();
-    const categoryOrder = [...categories]
-      .sort((a, b) => a.sortOrder - b.sortOrder)
-      .map((c) => c.name);
-    let categoryIds: Id<"workCategories">[] | undefined;
-    if (args.categoryNames && args.categoryNames.length > 0) {
-      categoryIds = [];
-      for (const name of args.categoryNames) {
-        const match = categories.find(
-          (c) => c.name.toLowerCase() === name.toLowerCase(),
-        );
-        if (!match) {
-          throw new ConvexError(
-            `Unknown work category "${name}". Valid categories: ${categories
-              .map((c) => c.name)
-              .join(", ")}.`,
-          );
-        }
-        categoryIds.push(match._id);
-      }
-    }
-
-    // The client's projects (org-checked), optionally narrowed by id.
-    let projects = (
-      await ctx.db
-        .query("projects")
-        .withIndex("by_clientId", (q) => q.eq("clientId", client._id))
-        .collect()
-    ).filter((p) => p.orgId === authCtx.orgId);
-    if (args.projectIds && args.projectIds.length > 0) {
-      const wanted = new Set(args.projectIds);
-      projects = projects.filter((p) => wanted.has(p._id as string));
-      if (projects.length === 0) {
-        throw new ConvexError(
-          "None of the given project ids belong to this client. Use the listProjects tool to get valid project ids.",
-        );
-      }
-    }
-
-    // Loop the per-project collector — identical logic to every
-    // worksheet export, one transaction for the whole client.
-    const rows: TimesheetRow[] = [];
-    for (const project of projects) {
-      const { entries } = await resolveScopeEntries(
-        ctx,
-        {
-          kind: "period",
-          projectId: project._id,
-          periodStart: args.periodStart,
-          periodEnd: args.periodEnd,
-          filters: { categoryIds, billable: args.billable ?? "all" },
-        },
-        authCtx.orgId,
-      );
-      const projectRows = await buildTaskRows(
-        ctx,
-        project,
-        entries,
-        authCtx.orgId,
-      );
-      for (const r of projectRows) {
-        rows.push({
-          taskId: r.taskId as string,
-          title: r.title,
-          projectId: project._id,
-          projectName: project.name,
-          categoryName: r.categoryName,
-          firstWorked: r.firstWorked,
-          lastWorked: r.lastWorked,
-          totalMinutes: r.totalMinutes,
-          billableMinutes: r.billableMinutes,
-          nonBillableMinutes: r.nonBillableMinutes,
-          entryCount: r.entryCount,
-          aiInput: r.aiInput,
-        });
-      }
-    }
-
-    const periodLabel =
-      args.periodLabel ??
-      formatTimesheetPeriodLabel({
-        startDate: args.periodStart,
-        endDate: args.periodEnd,
-      });
-
-    return {
-      client: { name: client.name, currency: client.currency },
-      periodLabel,
-      periodStart: args.periodStart,
-      periodEnd: args.periodEnd,
-      rows,
-      categoryOrder,
-    };
-  },
+  handler: async (ctx, args): Promise<TimesheetData> =>
+    await collectTimesheetDataForAuth(ctx, await requireAdmin(ctx), args),
 });
+
+/**
+ * `collectTimesheetData` for an already-built auth context (MCP `report`
+ * timesheet). Admin-only. `options.aiInput: false` skips the summary evidence
+ * reads; `options.caps` refuses (never clips) a scope over its entry or task
+ * cap before any per-task read.
+ */
+export async function collectTimesheetDataForAuth(
+  ctx: QueryCtx,
+  authCtx: AuthContext,
+  args: {
+    clientId: string;
+    periodStart: string;
+    periodEnd: string;
+    periodLabel?: string;
+    projectIds?: string[];
+    categoryNames?: string[];
+    billable?: "all" | "billable" | "nonBillable";
+  },
+  options: { aiInput?: boolean; caps?: { entries: number; tasks: number; message: string } } = {},
+): Promise<TimesheetData> {
+  assertAdmin(authCtx);
+
+  const clientId = ctx.db.normalizeId("clients", args.clientId);
+  const client = clientId ? await ctx.db.get(clientId) : null;
+  if (!client || client.orgId !== authCtx.orgId) {
+    throw new ConvexError(
+      "Client not found. Clients (client:PREFIX) are listed in fetch(\"workspace\").",
+    );
+  }
+
+  // Resolve category-name filters against the org's categories. Unknown
+  // names error with the valid list so the agent can self-correct
+  // instead of silently returning an empty (wrong) timesheet.
+  const categories = await ctx.db
+    .query("workCategories")
+    .withIndex("by_orgId", (q) => q.eq("orgId", authCtx.orgId))
+    .collect();
+  const categoryOrder = [...categories]
+    .sort((a, b) => a.sortOrder - b.sortOrder)
+    .map((c) => c.name);
+  let categoryIds: Id<"workCategories">[] | undefined;
+  if (args.categoryNames && args.categoryNames.length > 0) {
+    categoryIds = [];
+    for (const name of args.categoryNames) {
+      const match = categories.find(
+        (c) => c.name.toLowerCase() === name.toLowerCase(),
+      );
+      if (!match) {
+        throw new ConvexError(
+          `Unknown work category "${name}". Valid categories: ${categories
+            .map((c) => c.name)
+            .join(", ")}.`,
+        );
+      }
+      categoryIds.push(match._id);
+    }
+  }
+
+  // The client's projects (org-checked), optionally narrowed by id.
+  let projects = (
+    await ctx.db
+      .query("projects")
+      .withIndex("by_clientId", (q) => q.eq("clientId", client._id))
+      .collect()
+  ).filter((p) => p.orgId === authCtx.orgId);
+  if (args.projectIds && args.projectIds.length > 0) {
+    const wanted = new Set(args.projectIds);
+    projects = projects.filter((p) => wanted.has(p._id as string));
+    if (projects.length === 0) {
+      throw new ConvexError(
+        "None of the given projects belong to this client. Project codes and their clients are listed in fetch(\"workspace\").",
+      );
+    }
+  }
+
+  // Loop the per-project collector — identical logic to every
+  // worksheet export, one transaction for the whole client. Scope entries
+  // come first so the caps refuse before any per-task read.
+  const scoped: Array<{ project: Doc<"projects">; entries: Doc<"timeEntries">[] }> = [];
+  for (const project of projects) {
+    const { entries } = await resolveScopeEntries(
+      ctx,
+      {
+        kind: "period",
+        projectId: project._id,
+        periodStart: args.periodStart,
+        periodEnd: args.periodEnd,
+        filters: { categoryIds, billable: args.billable ?? "all" },
+      },
+      authCtx.orgId,
+    );
+    scoped.push({ project, entries });
+  }
+  if (options.caps) {
+    const entryCount = scoped.reduce((n, s) => n + s.entries.length, 0);
+    const taskCount = new Set(scoped.flatMap((s) => s.entries.map((e) => e.taskId))).size;
+    if (entryCount > options.caps.entries || taskCount > options.caps.tasks) {
+      throw new ConvexError(options.caps.message);
+    }
+  }
+  const rows: TimesheetRow[] = [];
+  for (const { project, entries } of scoped) {
+    const projectRows = await buildTaskRows(
+      ctx,
+      project,
+      entries,
+      authCtx.orgId,
+      { aiInput: options.aiInput ?? true },
+    );
+    for (const r of projectRows) {
+      rows.push({
+        taskId: r.taskId as string,
+        identifier: r.identifier,
+        title: r.title,
+        projectId: project._id,
+        projectName: project.name,
+        categoryName: r.categoryName,
+        firstWorked: r.firstWorked,
+        lastWorked: r.lastWorked,
+        totalMinutes: r.totalMinutes,
+        billableMinutes: r.billableMinutes,
+        nonBillableMinutes: r.nonBillableMinutes,
+        entryCount: r.entryCount,
+        aiInput: r.aiInput,
+      });
+    }
+  }
+
+  const periodLabel =
+    args.periodLabel ??
+    formatTimesheetPeriodLabel({
+      startDate: args.periodStart,
+      endDate: args.periodEnd,
+    });
+
+  return {
+    client: { name: client.name, currency: client.currency },
+    periodLabel,
+    periodStart: args.periodStart,
+    periodEnd: args.periodEnd,
+    rows,
+    categoryOrder,
+  };
+}

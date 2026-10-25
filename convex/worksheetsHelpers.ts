@@ -80,6 +80,8 @@ export type WorksheetScope =
 /** Row shape passed from `collectWorksheetData` to the CSV builders. */
 export type WorksheetTaskRow = {
   taskId: Id<"tasks">;
+  /** The task key (ARLO-21), read with the task — for consumers that link it. */
+  identifier: string;
   title: string;
   categoryName: string | null;
   firstWorked: string; // YYYY-MM-DD
@@ -349,12 +351,17 @@ export async function resolveScopeEntries(
 // ─── Task-row aggregation ───────────────────────────────────────────────────
 
 // Exported for convex/timesheets.ts — see resolveScopeEntries note above.
+// `options.aiInput: false` (the MCP timesheet report) skips the summary
+// evidence reads — sub-tasks, comments, description, lifecycle notes — and
+// leaves `aiInput` empty; every hour, date and count is computed the same.
 export async function buildTaskRows(
   ctx: QueryCtx,
   project: Doc<"projects">,
   entries: Doc<"timeEntries">[],
   orgId: string,
+  options: { aiInput?: boolean } = {},
 ): Promise<WorksheetTaskRow[]> {
+  const withAiInput = options.aiInput ?? true;
   // Group entries by taskId. Each task gets one row whose hours sum the
   // entries IN scope (PRD §Row granularity).
   const byTaskId = new Map<string, Doc<"timeEntries">[]>();
@@ -396,6 +403,40 @@ export async function buildTaskRows(
       .filter((e) => !e.isBillable)
       .reduce((sum, e) => sum + e.durationMinutes, 0);
     const totalMinutes = billableMinutes + nonBillableMinutes;
+
+    // Category label from the in-scope entries' snapshot categories (deduped,
+    // date order) — the report/invoice attribution rule. A task whose
+    // category changed mid-history lists every snapshot name it carries, so
+    // worksheet and Monthly Report subtotals bucket the same hours the same
+    // way instead of relabeling old hours under the task's current category.
+    const snapshotCategoryNames: string[] = [];
+    for (const e of taskEntries) {
+      const name = await categoryName(e.snapshotCategoryId);
+      if (name && !snapshotCategoryNames.includes(name)) {
+        snapshotCategoryNames.push(name);
+      }
+    }
+
+    const row = {
+      taskId: task._id,
+      identifier: task.identifier,
+      title: task.title,
+      categoryName:
+        snapshotCategoryNames.length > 0 ? snapshotCategoryNames.join(", ") : null,
+      firstWorked: taskEntries[0].date,
+      lastWorked: taskEntries[taskEntries.length - 1].date,
+      entryCount: taskEntries.length,
+      billableMinutes,
+      nonBillableMinutes,
+      totalMinutes,
+    };
+    if (!withAiInput) {
+      rows.push({
+        ...row,
+        aiInput: { title: task.title, descriptionText: "", subtasks: [], commentTexts: [], entryNotes: [] },
+      });
+      continue;
+    }
 
     // Subtasks for this task (regardless of whether they had entries in
     // scope) — AI summary uses them as context.
@@ -449,30 +490,8 @@ export async function buildTaskRows(
       a.date < b.date ? -1 : a.date > b.date ? 1 : a.startedAt - b.startedAt,
     );
 
-    // Category label from the in-scope entries' snapshot categories (deduped,
-    // date order) — the report/invoice attribution rule. A task whose
-    // category changed mid-history lists every snapshot name it carries, so
-    // worksheet and Monthly Report subtotals bucket the same hours the same
-    // way instead of relabeling old hours under the task's current category.
-    const snapshotCategoryNames: string[] = [];
-    for (const e of taskEntries) {
-      const name = await categoryName(e.snapshotCategoryId);
-      if (name && !snapshotCategoryNames.includes(name)) {
-        snapshotCategoryNames.push(name);
-      }
-    }
-
     rows.push({
-      taskId: task._id,
-      title: task.title,
-      categoryName:
-        snapshotCategoryNames.length > 0 ? snapshotCategoryNames.join(", ") : null,
-      firstWorked: taskEntries[0].date,
-      lastWorked: taskEntries[taskEntries.length - 1].date,
-      entryCount: taskEntries.length,
-      billableMinutes,
-      nonBillableMinutes,
-      totalMinutes,
+      ...row,
       aiInput: {
         title: task.title,
         descriptionText,

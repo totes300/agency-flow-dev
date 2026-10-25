@@ -27,6 +27,7 @@ import {
 } from "./model";
 import { loadUserStates } from "./userState";
 import { matchesFilters, resolveFilterValue, type ListFilter } from "./filters";
+import { getProjectEntries } from "../lib/projectEntries";
 
 /**
  * The task read layer (docs/prd-tasks-refactor.md §5.4, invariant T7).
@@ -569,6 +570,9 @@ export async function loadView(
   const readable = await filterReadableTasks(ctx, auth, candidates);
   const visible = readable.filter(
     (t) =>
+      // A14: a project list is that project's tasks for every role — the
+      // member plan reads assignee edges, which span every project.
+      (input.projectId === undefined || t.projectId === input.projectId) &&
       !t.archivedAt &&
       (input.showSubtasks || !t.parentTaskId) &&
       (t.statusCategory === undefined || categories.includes(t.statusCategory)) &&
@@ -593,6 +597,61 @@ export async function loadView(
     hasMoreClosed: closed.length > input.closedLimit,
     plan,
   };
+}
+
+/**
+ * A project's work in a date range (docs/prd-project-billing-redesign.md
+ * §6.3): every task with time logged in `[from, to]` — archived and closed
+ * ones too, never capped by `closedLimit`, because a period's work must be
+ * complete — plus, when the range reaches today, the project's open tasks
+ * without time. Access (T1), the sub-task rule and the spec's filters apply
+ * as on any list. `workedMinutes` = minutes logged per task in the range.
+ */
+export async function loadWorkedIn(
+  ctx: ReadCtx,
+  auth: AuthContext,
+  input: {
+    projectId: Id<"projects">;
+    from: string;
+    to: string;
+    today: string;
+    filters: readonly ListFilter[];
+    showSubtasks: boolean;
+  },
+): Promise<{ tasks: Doc<"tasks">[]; truncated: boolean; workedMinutes: Record<Id<"tasks">, number> }> {
+  const { orgId } = auth;
+  const workedMinutes: Record<Id<"tasks">, number> = {};
+  for (const e of await getProjectEntries(ctx, orgId, input.projectId)) {
+    if (e.date < input.from || e.date > input.to) continue;
+    workedMinutes[e.taskId] = (workedMinutes[e.taskId] ?? 0) + e.durationMinutes;
+  }
+  const candidates: Doc<"tasks">[] = [];
+  for (const id of Object.keys(workedMinutes) as Id<"tasks">[]) {
+    const task = await ctx.db.get(id);
+    if (task && task.orgId === orgId && task.projectId === input.projectId) candidates.push(task);
+  }
+  let truncated = false;
+  if (input.to >= input.today) {
+    const open = await loadProjectTasks(ctx, orgId, input.projectId, [...OPEN_CATEGORIES], OPEN_ROW_CAP);
+    truncated = open.truncated;
+    for (const t of open.tasks) {
+      if (!t.archivedAt && workedMinutes[t._id] === undefined) candidates.push(t);
+    }
+  }
+
+  const categories = categoriesOf(input.filters);
+  const readable = await filterReadableTasks(ctx, auth, candidates);
+  const tasks = readable.filter(
+    (t) =>
+      (input.showSubtasks || !t.parentTaskId) &&
+      (t.statusCategory === undefined || categories.includes(t.statusCategory)) &&
+      matchesFilters(
+        t,
+        input.filters.filter((f) => f.property !== "newComments"),
+        auth.userId,
+      ),
+  );
+  return { tasks, truncated, workedMinutes };
 }
 
 export function clampClosedLimit(limit: number | undefined): number {

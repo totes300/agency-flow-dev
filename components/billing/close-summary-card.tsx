@@ -1,11 +1,27 @@
 "use client"
 
 import Link from "next/link"
+import { useAction } from "convex/react"
 import {
   CheckIcon,
   CircleAlertIcon,
+  FileTextIcon,
+  ReceiptIcon,
   TriangleAlertIcon,
 } from "lucide-react"
+import { api } from "@/convex/_generated/api"
+import { PERIOD_STATE_COPY } from "@/convex/lib/billing/periodState"
+import type { PeriodRow } from "@/convex/lib/billing/projectPeriods"
+import {
+  PeriodActionButton,
+  closeWorkspaceHref,
+  invoiceHref,
+  monthlyReportHref,
+  setRateHref,
+  usePeriodActions,
+} from "@/components/billing/period-actions"
+import type { Id } from "@/convex/_generated/dataModel"
+import { WorksheetDownloadButton } from "@/components/worksheet/worksheet-download-button"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -18,6 +34,7 @@ import {
 import { Separator } from "@/components/ui/separator"
 import { CloseCommitButton } from "@/components/billing/close-commit-button"
 import {
+  closeFlagLabel,
   summarizeCloseFlags,
   type CloseFlagKind,
   type CloseFlagSummary,
@@ -44,7 +61,7 @@ export function CloseSummaryCard({
   const isRetainer = data.billingType === "retainer"
   const noCharge = isRetainer && data.withinBudget
   const title = data.isClosed
-    ? "Closed"
+    ? (data.periodRow ? PERIOD_STATE_COPY[data.periodRow.state].chip : "Closed")
     : noCharge
       ? "Nothing to invoice"
       : "Invoice preview"
@@ -98,14 +115,71 @@ export function CloseSummaryCard({
           <Checks data={data} activeIssue={activeIssue} onToggleIssue={onToggleIssue} />
         </CardFooter>
       )}
-      {data.isClosed && data.coveringDraft && (
-        <CardFooter className="border-t pt-4">
-          <Button variant="outline" className="w-full" asChild>
-            <Link href={`/invoices/${data.coveringDraft.id}`}>Open draft invoice</Link>
-          </Button>
-        </CardFooter>
-      )}
+      {data.isClosed && data.periodRow ? <ClosedFooter data={data} row={data.periodRow} /> : null}
     </Card>
+  )
+}
+
+/**
+ * A closed period (§10): its one action, its documents and the state's undo
+ * — instead of a bare "Closed" card. The same handlers as the project page.
+ */
+function ClosedFooter({ data, row }: { data: CloseWorkspaceData; row: PeriodRow }) {
+  const projectId = data.project.id
+  const from = closeWorkspaceHref(projectId, row.key)
+  const actions = usePeriodActions(from)
+  const exportClose = useAction(api.worksheets.exportClose)
+  const closeId = row.closeId
+  const target = { row, invoice: row.invoice, projectId }
+  return (
+    <CardFooter className="flex flex-col items-stretch gap-3 border-t pt-4">
+      {row.action ? (
+        <PeriodActionButton action={row.action} size="default" className="w-full" onRun={() => actions.primary(target, row.action!)} />
+      ) : null}
+      <div className="flex flex-col gap-1">
+        {row.invoice ? (
+          <Button variant="ghost" size="sm" className="justify-start" asChild>
+            <Link href={invoiceHref(row.invoice.id, from)}>
+              <ReceiptIcon data-icon="inline-start" />
+              Invoice {row.invoice.number ?? "(draft)"}
+            </Link>
+          </Button>
+        ) : null}
+        {row.documents.monthlyReport ? (
+          <Button variant="ghost" size="sm" className="justify-start" asChild>
+            <Link href={monthlyReportHref(projectId, row, row.end)}>
+              <FileTextIcon data-icon="inline-start" />
+              Monthly report
+            </Link>
+          </Button>
+        ) : null}
+        {closeId ? (
+          <WorksheetDownloadButton
+            variant="ghost"
+            className="justify-start"
+            label="Worksheet"
+            run={() => exportClose({ closeId })}
+          />
+        ) : null}
+      </div>
+      {row.undo.length > 0 ? (
+        <div className="flex flex-wrap gap-1.5 border-t pt-3">
+          {row.undo.map((item) => (
+            <Button
+              key={item.kind}
+              variant="outline"
+              size="sm"
+              disabled={item.disabledReason !== undefined}
+              title={item.disabledReason}
+              onClick={() => actions.undo(target, item)}
+            >
+              {item.disabledReason ?? item.label}
+            </Button>
+          ))}
+        </div>
+      ) : null}
+      {actions.dialogs}
+    </CardFooter>
   )
 }
 
@@ -175,11 +249,11 @@ function CheckRow({
             blocking ? "text-destructive" : "text-amber-600 dark:text-amber-500",
           )}
         />
-        {checkLabel(summary)}
+        {closeFlagLabel(summary)}
       </span>
       {summary.kind === "missing-overage-rate" ? (
         <Button variant="link" size="sm" className="h-auto shrink-0 p-0" asChild>
-          <Link href={`/projects/${projectId}?tab=settings`}>Set rate</Link>
+          <Link href={setRateHref(projectId as Id<"projects">)}>Set rate</Link>
         </Button>
       ) : summary.entryIds.length > 0 ? (
         <Button
@@ -194,20 +268,4 @@ function CheckRow({
       ) : null}
     </div>
   )
-}
-
-function checkLabel(summary: CloseFlagSummary): string {
-  const n = summary.count
-  switch (summary.kind) {
-    case "missing-overage-rate":
-      return "Over budget, but the project has no overage rate"
-    case "running-timer":
-      return n === 1 ? "A timer is still running" : `${n} timers are still running`
-    case "long-entry":
-      return n === 1 ? "1 entry is over 8h" : `${n} entries are over 8h`
-    case "missing-note":
-      return n === 1 ? "1 entry has no note" : `${n} entries have no note`
-    case "carried-in":
-      return n === 1 ? "1 entry carried in" : `${n} entries carried in`
-  }
 }

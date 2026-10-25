@@ -1,5 +1,6 @@
 "use client"
 
+import Link from "next/link"
 import { useUser, useClerk } from "@clerk/nextjs"
 import {
   Avatar,
@@ -21,7 +22,7 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar"
-import { ChevronsUpDownIcon, SparklesIcon, BadgeCheckIcon, CreditCardIcon, BellIcon, LogOutIcon } from "lucide-react"
+import { ChevronsUpDownIcon, SparklesIcon, BadgeCheckIcon, CreditCardIcon, BellIcon, LogOutIcon, PlugIcon } from "lucide-react"
 
 export function NavUser() {
   const { isMobile } = useSidebar()
@@ -88,6 +89,13 @@ export function NavUser() {
               <DropdownMenuItem onClick={() => openUserProfile()}>
                 <BadgeCheckIcon />
                 Account
+              </DropdownMenuItem>
+              {/* Every member's own MCP connections (docs/prd-mcp.md D17, D-PAGE). */}
+              <DropdownMenuItem asChild>
+                <Link href="/connected-apps">
+                  <PlugIcon />
+                  Connected apps
+                </Link>
               </DropdownMenuItem>
               <DropdownMenuItem>
                 <CreditCardIcon />

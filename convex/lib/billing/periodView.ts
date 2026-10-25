@@ -22,9 +22,9 @@ import {
   type BillingEntry,
   type CloseContext,
 } from "./closeData";
-import { nextPeriod, periodOfDate, type Period } from "./periods";
+import { periodOfDate, type Period } from "./periods";
 import { priceScope, type MonthlyBalanceRow, type PriceResult, type PricedEntry } from "./pricing";
-import { committablePeriod, isPeriodClosed, scopeOf, type CarriedReason } from "./scope";
+import { committablePeriod, scopeOf, type CarriedReason } from "./scope";
 
 type Reader = { db: GenericDatabaseReader<DataModel> };
 
@@ -169,29 +169,4 @@ function sortMembers(members: PeriodMember[]): PeriodMember[] {
       ? a.entry.date < b.entry.date ? -1 : 1
       : a.entry._id < b.entry._id ? -1 : a.entry._id > b.entry._id ? 1 : 0,
   );
-}
-
-/**
- * Every elapsed period of a retainer without a live close, oldest first —
- * what is still waiting to be closed (the queue shows the first one; project
- * pages summarize all of them). Empty for T&M and for a retainer without a
- * start date.
- */
-export async function openElapsedRetainerPeriods(
-  ctx: Reader,
-  c: CloseContext,
-  opts: { todayStr: string; roundingMinutes: number },
-): Promise<PeriodView[]> {
-  const project = toScopeProject(c.project);
-  if (project.billingType !== "retainer" || !project.startDate) return [];
-  const views: PeriodView[] = [];
-  for (
-    let p = periodOfDate(project, project.startDate);
-    p.end < opts.todayStr;
-    p = nextPeriod(project, p)
-  ) {
-    if (isPeriodClosed(p, c.livePeriods)) continue;
-    views.push(await buildPeriodView(ctx, c, p, opts));
-  }
-  return views;
 }

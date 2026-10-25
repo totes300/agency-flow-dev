@@ -1,0 +1,192 @@
+import { ConvexError, v } from "convex/values";
+import { query } from "../_generated/server";
+import { getMcpAuthContext } from "../lib/mcpAuth";
+import { createRefResolver, type RefCandidate } from "../lib/mcpRefs";
+import { buildRecord, orgClock } from "../lib/mcpRecords";
+import { listChanges } from "../lib/mcpChanges";
+import { listInbox } from "../lib/mcpInbox";
+import { timerState } from "../lib/mcpTimer";
+import { isValidClientPrefix } from "../lib/clientPrefix";
+import { FETCH_INCLUDES, MAX_REFS, type FetchInclude } from "../../lib/mcp/limits";
+import { getOrgSettings } from "../lib/orgHelpers";
+import { REF_CAP, getWorkspaceRefsForAuth, type WorkspaceRefTable } from "../workspaceRefs";
+
+const WORKSPACE_TABLE_LABELS: Record<WorkspaceRefTable, string> = {
+  statuses: "statuses",
+  labels: "labels",
+  projects: "projects",
+  clients: "clients",
+  orgMembers: "members",
+  workCategories: "work categories",
+};
+
+/**
+ * MCP `fetch` special refs (docs/prd-mcp.md §6, D9). Each function calls
+ * `getMcpAuthContext` first (I1) and takes no org, user or role argument (I2).
+ * They return compact data; the Next.js route renders the markdown.
+ */
+
+/**
+ * `fetch("me")`: who the connection acts as, in which org, with which role;
+ * today's date in the org timezone (so "yesterday" never depends on the
+ * agent's clock) and the caller's timer (read-only, mcpTimer.ts). `now`
+ * comes from the route: queries take the clock as an argument.
+ */
+export const me = query({
+  args: { now: v.number() },
+  handler: async (ctx, args) => {
+    const auth = await getMcpAuthContext(ctx);
+    const settings = await getOrgSettings(ctx, auth.orgId);
+    const clock = await orgClock(ctx, auth.orgId, args.now);
+    return {
+      user: { name: auth.user.name, email: auth.user.email ?? null },
+      org: { id: auth.orgId, name: settings?.brandName ?? null },
+      role: auth.orgRole,
+      today: clock.today,
+      timezone: clock.timezone,
+      timer: await timerState(ctx, auth, args.now),
+    };
+  },
+});
+
+/**
+ * `fetch("workspace")`: the reference data an agent needs to write valid
+ * input — status, label and category names, members by email, project codes
+ * and client prefixes. Display fields only, like the UI's workspace query.
+ * Never a partial result (owner decision D-B, like reports): a table over the
+ * read cap refuses the whole fetch instead of returning clipped rows.
+ */
+export const workspace = query({
+  args: {},
+  handler: async (ctx) => {
+    const auth = await getMcpAuthContext(ctx);
+    const { refs, truncated } = await getWorkspaceRefsForAuth(ctx, auth);
+    if (truncated.length > 0) {
+      const tables = truncated.map((t) => WORKSPACE_TABLE_LABELS[t]).sort().join(", ");
+      throw new ConvexError(
+        `The workspace has more than ${REF_CAP} ${tables}, so fetch("workspace") cannot return a complete list. ` +
+          "Look up the specific records you need by reference instead.",
+      );
+    }
+    const clientNames = new Map(refs.clients.map((c) => [c._id, c.name]));
+    return {
+      orgTaskKey: refs.orgTaskKey,
+      statuses: refs.statuses.map((s) => ({
+        name: s.name,
+        category: s.category,
+        isDefault: s.isDefault,
+        archived: s.archived,
+      })),
+      labels: refs.labels.map((l) => ({ name: l.name, archived: l.archived })),
+      workCategories: refs.workCategories.map((c) => ({ name: c.name, archived: c.archived })),
+      members: refs.members.map((m) => ({ name: m.name, email: m.email, role: m.role })),
+      projects: refs.projects.map((p) => ({
+        code: p.code,
+        name: p.name,
+        client: clientNames.get(p.clientId) ?? null,
+        archived: p.archived,
+      })),
+      // Only prefixes in the valid format are references (`client:KONV`);
+      // other clients are referenced by ID.
+      clients: refs.clients.map((c) => ({
+        id: c._id,
+        name: c.name,
+        prefix: c.prefix !== null && isValidClientPrefix(c.prefix) ? c.prefix : null,
+        archived: c.archived,
+      })),
+    };
+  },
+});
+
+/**
+ * `fetch(refs[])` for records: tasks, comments, time entries, projects,
+ * clients, members, invoices and daily notes, by any reference form
+ * (docs/prd-mcp.md §7). Every
+ * ref is resolved and access-checked in the caller's org (I3); a missing,
+ * foreign or unreadable record is "not found", an ambiguous short key or
+ * email returns its candidates. Results keep the input order, one per ref.
+ * `now` is the caller's clock (queries never read it) for "overdue".
+ * `file` (one task ref only) reads a single attachment's text from an
+ * offset — the page-through for long files. The
+ * route calls this once per ref, so one heavy task stays within Convex's
+ * per-call read limits on its own (budget: convex/lib/mcpRecords.ts).
+ */
+export const records = query({
+  args: {
+    refs: v.array(v.string()),
+    include: v.array(v.union(...FETCH_INCLUDES.map((i) => v.literal(i)))),
+    file: v.optional(v.object({ id: v.optional(v.string()), name: v.optional(v.string()), offset: v.optional(v.number()) })),
+    now: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const auth = await getMcpAuthContext(ctx);
+    if (args.refs.length > MAX_REFS) {
+      throw new ConvexError(`Fetch at most ${MAX_REFS} refs per call.`);
+    }
+    if (args.file !== undefined && args.refs.length !== 1) {
+      throw new ConvexError("file reads one attachment of one task: pass exactly one task ref.");
+    }
+    const clock = await orgClock(ctx, auth.orgId, args.now);
+    const include = new Set<FetchInclude>(args.include);
+    const resolver = createRefResolver(ctx, auth);
+    const results = [];
+    for (const input of args.refs) {
+      const resolution = await resolver.resolve(input);
+      if (!resolution.ok) {
+        results.push({
+          input,
+          ok: false as const,
+          message: resolution.message,
+          candidates: resolution.candidates ?? ([] as RefCandidate[]),
+        });
+        continue;
+      }
+      const record = await buildRecord(ctx, auth, resolution.resolved, include, clock, args.file);
+      results.push(
+        record
+          ? { input, ok: true as const, record }
+          : { input, ok: false as const, message: `${input} not found.`, candidates: [] as RefCandidate[] },
+      );
+    }
+    return { timezone: clock.timezone, today: clock.today, results };
+  },
+});
+
+/**
+ * `fetch("changes")` (D22, D29): the org's changes after `cursor`, oldest
+ * first, one entry per activity row on a task the caller can read
+ * (convex/lib/mcpChanges.ts). `now` is the caller's clock.
+ */
+export const changes = query({
+  args: {
+    cursor: v.optional(v.string()),
+    types: v.optional(v.array(v.string())),
+    excludeSelf: v.boolean(),
+    includeText: v.boolean(),
+    limit: v.number(),
+    now: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const auth = await getMcpAuthContext(ctx);
+    return await listChanges(ctx, auth, args);
+  },
+});
+
+/**
+ * `fetch("inbox")` (D9): the caller's own inbox — unread items, newest
+ * first (read ones too with `includeRead`, after every unread item) — one
+ * page after `cursor` (convex/lib/mcpInbox.ts). `now` is
+ * the caller's clock.
+ */
+export const inbox = query({
+  args: {
+    cursor: v.optional(v.string()),
+    includeRead: v.boolean(),
+    limit: v.number(),
+    now: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const auth = await getMcpAuthContext(ctx);
+    return await listInbox(ctx, auth, args);
+  },
+});

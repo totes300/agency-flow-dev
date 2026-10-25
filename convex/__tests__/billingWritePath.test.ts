@@ -13,6 +13,7 @@ import { convexTest } from "convex-test";
 import schema from "../schema";
 import { api } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
+import { NEVER_NUMBERED_VOID } from "../lib/billing/invoiceLifecycle";
 import { reconcileOrg } from "../lib/billing/reconcile";
 import { statusRow, taskRow } from "./helpers/taskFixtures";
 
@@ -305,6 +306,14 @@ describe("invoice lifecycle", () => {
     expect((await get(w, closeId))?.status).toBe("final");
   });
 
+  it("a never-numbered draft cannot be voided: it is deleted instead (N9)", async () => {
+    const { w, closeId, invoiceId } = await drafted();
+    await expect(setStatus(w, invoiceId, "void")).rejects.toThrow(NEVER_NUMBERED_VOID);
+    expect(await get(w, invoiceId)).toMatchObject({ status: "draft" });
+    expect((await get(w, closeId))?.status).toBe("draft");
+    expect(await events(w)).toEqual(["close_committed"]);
+  });
+
   it("revert keeps the number; void releases the close and reopens entries", async () => {
     const { w, a, closeId, invoiceId } = await drafted();
     await setStatus(w, invoiceId, "invoiced");
@@ -521,11 +530,23 @@ describe("createFixedInvoice", () => {
     expect((await get(w, a))?.closeId).toBeUndefined();
   });
 
-  it("finalize re-checks the remainder against sibling drafts", async () => {
+  it("finalize re-checks the remainder against sibling drafts (legacy data)", async () => {
     setToday("2026-04-10");
     const w = await world({ billingType: "fixed", fixedPrice: 10000 });
     const one = await as(w).mutation(api.billingInvoices.createFixedInvoice, { projectId: w.projectId, amount: 7000 });
-    const two = await as(w).mutation(api.billingInvoices.createFixedInvoice, { projectId: w.projectId, amount: 7000 });
+    // A sibling draft from before the one-draft guard (A5): copy the first.
+    const two = await w.t.run(async (ctx) => {
+      const { _id, _creationTime, ...inv } = (await ctx.db.get(one.invoiceId))!;
+      const invoiceId = await ctx.db.insert("invoices", inv);
+      for (const li of await ctx.db.query("invoiceLineItems").withIndex("by_invoiceId", (q) => q.eq("invoiceId", _id)).collect()) {
+        const { _id: lineId, _creationTime: lineTime, ...line } = li;
+        void lineId;
+        void lineTime;
+        await ctx.db.insert("invoiceLineItems", { ...line, invoiceId });
+      }
+      void _creationTime;
+      return { invoiceId };
+    });
     await setStatus(w, one.invoiceId, "invoiced");
     await expect(setStatus(w, two.invoiceId, "invoiced")).rejects.toThrow(/exceeds the project's unbilled remainder/);
   });
@@ -587,6 +608,7 @@ describe("reconciliation", () => {
 
   it("flags a released close that still locks entries", async () => {
     const { w, b, closeId, invoiceId } = await committed();
+    await setStatus(w, invoiceId, "invoiced");
     await setStatus(w, invoiceId, "void");
     await w.t.run(async (ctx) => ctx.db.patch(b, { closeId }));
     expect(await codes(w)).toEqual(["released-still-locked"]);

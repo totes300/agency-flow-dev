@@ -12,6 +12,35 @@ npm run dev
 
 Use separate terminal sessions for the two long-running processes.
 
+## MCP server (local)
+
+- `npm run dev` serves https on port 3001 (`next dev --experimental-https`): Clerk
+  requires an https MCP resource URL. The MCP endpoint is
+  `https://localhost:3001/mcp`.
+- Set `MCP_RESOURCE_URL=https://localhost:3001/mcp` in `.env.local` **and** on the
+  Convex dev deployment (`npx convex env set MCP_RESOURCE_URL …`);
+  `convex/auth.config.ts` refuses to deploy without it.
+- Next.js creates a local certificate authority with mkcert for that https server.
+  Clients on the same computer must trust it. Node-based clients such as Claude
+  Code need `NODE_EXTRA_CA_CERTS` pointing at mkcert's root CA; on macOS:
+  `NODE_EXTRA_CA_CERTS="$HOME/Library/Application Support/mkcert/rootCA.pem"`.
+  Claude's web and desktop connectors are reached from Anthropic's servers and
+  cannot connect to localhost.
+- Connect: `claude mcp add --transport http agency-flow https://localhost:3001/mcp`
+  (then `/mcp` to sign in) or `codex mcp add agency-flow --url …` and
+  `codex mcp login agency-flow`. `/connected-apps` in the app shows the same steps.
+- Headless evaluation runs (does the agent solve a task with the MCP tools alone?):
+
+  ```bash
+  NODE_EXTRA_CA_CERTS="$HOME/Library/Application Support/mkcert/rootCA.pem" \
+    claude -p "<task>" --strict-mcp-config \
+    --allowedTools "mcp__agency-flow__*" \
+    --disallowedTools Bash,Read,Grep,Glob,Edit,Write
+  ```
+
+  Run it from a directory **outside** the repository; inside it the agent answers
+  from the codebase instead of calling the tools.
+
 ## Common checks
 
 ```bash

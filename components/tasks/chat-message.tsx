@@ -468,6 +468,9 @@ export const ChatMessage = memo(function ChatMessage({
             <span className="text-[13.5px] font-semibold text-foreground">
               {item.userName}
             </span>
+            {item.viaName ? (
+              <span className="text-xs text-muted-foreground/60">via {item.viaName}</span>
+            ) : null}
             <Tooltip>
               <TooltipTrigger asChild>
                 <span className="text-xs text-muted-foreground/50">

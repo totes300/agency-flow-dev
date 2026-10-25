@@ -15,7 +15,7 @@ import { StatusChip } from "@/components/ui/status-chip"
  * `closed` row (retainer-included / invoiced overage / fixed-included)
  * lives in the period drill-down (Slice 4) and reports, never on the row.
  *
- * Built on `StatusChip` so these read as siblings of `Invoiced / Overdue /
+ * Built on `StatusChip` so these read as siblings of `Invoiced / Past due /
  * Paid / Draft` on invoice-side surfaces — outlined chips, same anatomy.
  */
 export type BillingState = "open" | "draft" | "closed" | "non_billable"

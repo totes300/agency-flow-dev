@@ -46,7 +46,14 @@ describe("agentTaskViewFilters", () => {
   it("maps each flat id onto one `is` filter", () => {
     expect(
       agentTaskViewFilters(
-        { statusId: "st1", clientId: "c1", projectId: "p1", assigneeId: "u1", workCategoryId: "wc1" },
+        {
+          statusId: "st1",
+          clientId: "c1",
+          projectId: "p1",
+          assigneeId: "u1",
+          workCategoryId: "wc1",
+          labelId: "l1",
+        },
         ["backlog", "started"],
       ),
     ).toEqual([
@@ -56,6 +63,7 @@ describe("agentTaskViewFilters", () => {
       { property: "project", operator: "is", values: ["p1"] },
       { property: "assignee", operator: "is", values: ["u1"] },
       { property: "workCategory", operator: "is", values: ["wc1"] },
+      { property: "label", operator: "is", values: ["l1"] },
     ]);
   });
 

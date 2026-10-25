@@ -280,10 +280,11 @@ function TotalsRow({
       </div>
       <div className="flex flex-col gap-1 text-right">
         <span className="text-xs uppercase tracking-wide text-muted-foreground">
-          Billed here
+          Billed
         </span>
         <span className="text-base font-semibold tabular-nums">
-          {formatCurrency(grouped.invoiced.amount, currency)}
+          {/* §6.8: billed = covered by a live close, draft or final. */}
+          {formatCurrency(grouped.invoiced.amount + grouped.draft.amount, currency)}
         </span>
       </div>
     </div>

@@ -635,6 +635,34 @@ describe("T8: archive/restore cascade and delete", () => {
     expect(left.aliases).toHaveLength(0);
   });
 
+  it("remove clears every timer running on the deleted tree, sub-tasks included", async () => {
+    const t = createT();
+    const f = await setup(t);
+    const admin = as(t, "admin");
+    const parent = await admin.mutation(api.tasks.create, { title: "Parent", assigneeIds: [f.alice] });
+    const sub = await admin.mutation(api.tasks.createSubtask, { parentTaskId: parent, title: "Child" });
+    const elsewhere = await admin.mutation(api.tasks.create, { title: "Elsewhere" });
+    await t.run(async (ctx) => {
+      const now = Date.now();
+      await ctx.db.patch(f.alice, { timerTaskId: sub, timerStartedAt: now, timerAccumulatedMs: 0, timerStatus: "running" });
+      await ctx.db.patch(f.bob, { timerTaskId: parent, timerStartedAt: now, timerAccumulatedMs: 60_000, timerStatus: "paused" });
+      await ctx.db.patch(f.admin, { timerTaskId: elsewhere, timerStartedAt: now, timerAccumulatedMs: 0, timerStatus: "running" });
+    });
+    await admin.mutation(api.tasks.remove, { id: parent });
+
+    const users = await t.run(async (ctx) => ({
+      alice: (await ctx.db.get(f.alice))!, bob: (await ctx.db.get(f.bob))!, admin: (await ctx.db.get(f.admin))!,
+    }));
+    for (const user of [users.alice, users.bob]) {
+      expect(user.timerTaskId).toBeUndefined();
+      expect(user.timerStartedAt).toBeUndefined();
+      expect(user.timerAccumulatedMs).toBeUndefined();
+      expect(user.timerStatus).toBeUndefined();
+    }
+    // A timer on another task is untouched.
+    expect(users.admin).toMatchObject({ timerTaskId: elsewhere, timerStatus: "running" });
+  });
+
   it("deleting a sub-task updates the parent's counters", async () => {
     const t = createT();
     await setup(t);

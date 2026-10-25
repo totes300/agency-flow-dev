@@ -2,6 +2,7 @@ import { query, mutation, internalMutation, QueryCtx } from "./_generated/server
 import { v, ConvexError, type Validator } from "convex/values";
 import { internal } from "./_generated/api";
 import type { UserJSON } from "@clerk/backend";
+import { getSessionIdentity } from "./lib/auth";
 
 async function userByExternalId(ctx: QueryCtx, externalId: string) {
   return await ctx.db
@@ -11,7 +12,8 @@ async function userByExternalId(ctx: QueryCtx, externalId: string) {
 }
 
 export async function getCurrentUser(ctx: QueryCtx) {
-  const identity = await ctx.auth.getUserIdentity();
+  // Session tokens only: an OAuth (MCP) token never acts through UI functions (I4).
+  const identity = await getSessionIdentity(ctx);
   if (!identity) return null;
   const user = await userByExternalId(ctx, identity.subject);
   if (user?.deletedAt) return null;
@@ -42,7 +44,7 @@ export const viewer = query({
 export const syncUser = mutation({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity();
+    const identity = await getSessionIdentity(ctx);
     if (!identity) throw new ConvexError("Not authenticated");
 
     const existing = await userByExternalId(ctx, identity.subject);

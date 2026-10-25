@@ -21,7 +21,6 @@ import { ProjectTimeSelectionToolbar } from "@/components/projects/project-time-
 import { ProjectTimeStats } from "@/components/projects/project-time-stats"
 import { ProjectTimeHiddenSelectionBanner } from "@/components/projects/project-time-hidden-selection-banner"
 import { TimeEntryModal } from "@/components/projects/time-entry-modal"
-import { WorksheetExportButton } from "@/components/worksheet/worksheet-export-button"
 import { EmptyStateBanner } from "@/components/projects/empty-state-banner"
 import { useProjectTimeFilters } from "@/lib/hooks/use-project-time-filters"
 import { applyTimeEntryFilters } from "@/lib/time-entry-filters"
@@ -29,12 +28,6 @@ import { parseDateRangePreset } from "@/lib/date-buckets"
 import { useTaskDetailNav } from "@/lib/hooks/use-task-detail-nav"
 import { useOpenTaskId } from "@/components/task-detail/open-task-store"
 import { Button } from "@/components/ui/button"
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip"
 import type { Grouping } from "@/lib/date-buckets"
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -60,25 +53,6 @@ type ProjectEntriesData = NonNullable<
   FunctionReturnType<typeof api.timeEntries.listProjectEntries>
 >
 type AvailableMember = ProjectEntriesData["availableMembers"][number]
-
-/**
- * Disabled-state + tooltip for the "Invoice unbilled hours" header button.
- * The button renders ONLY on T&M projects — on retainer/fixed it could
- * never become enabled, and a permanently-dead control is toolbar noise
- * (invoicing lives on the Invoices tab there). Within T&M, transient
- * states (non-admin, nothing to bill) keep the disabled+tooltip treatment.
- *
- * Lives here (not in the orchestrator) because `unbilledCount` is content-
- * phase-only and the button itself is a header action of the content view.
- */
-function getInvoiceButtonState(
-  isAdmin: boolean,
-  unbilledCount: number,
-): { disabled: boolean; tooltip: string | null } {
-  if (!isAdmin) return { disabled: true, tooltip: "Only admins can create invoices" }
-  if (unbilledCount === 0) return { disabled: true, tooltip: "No unbilled hours" }
-  return { disabled: false, tooltip: null }
-}
 
 // ─── Component ──────────────────────────────────────────────────────────────
 
@@ -154,19 +128,6 @@ export function ProjectTimeContent({
     [entries, filters],
   )
 
-  // T&M invoicing now flows through the Close workspace (PRD slice 08) — never
-  // a one-click draft. Both the "Invoice unbilled hours" button and the
-  // bulk-selection path route to the Billing → Close queue, where the admin
-  // reviews the period before generating, so scope rule I2 has no bypass.
-  function handleReviewToInvoice() {
-    router.push("/billing")
-  }
-
-  function handleGenerateSelection() {
-    router.push("/billing")
-    setSelection(new Map())
-  }
-
   // ─── Effects ──────────────────────────────────────────────────────────────
 
   // Esc clears selection (matches tasks bulk-toolbar). Skip while a Radix
@@ -190,11 +151,6 @@ export function ProjectTimeContent({
     if (billable.length === 0) return false
     return billable.every((e) => e.invoiceId != null)
   }, [isTmProject, entries])
-
-  const unbilledCount = useMemo(
-    () => entries.filter((e) => e.isBillable && !e.invoiceId).length,
-    [entries],
-  )
 
   // Visible vs. hidden selection. Convex returns a fresh `entries` ref on
   // every backend tick — without this useMemo, every websocket update
@@ -266,50 +222,22 @@ export function ProjectTimeContent({
     const params = new URLSearchParams(searchParams.toString())
     params.delete("filters")
     params.delete("search")
-    params.set("tab", "invoices")
+    params.set("tab", "billing")
     router.push(`${pathname}?${params.toString()}`)
     onNavigateToInvoices?.()
   }
 
   // ─── Render ───────────────────────────────────────────────────────────────
 
-  const invoiceBtn = getInvoiceButtonState(isAdmin, unbilledCount)
   const editEntryRow = editEntryId ? entries.find((e) => e._id === editEntryId) : undefined
 
+  // Billing actions live on the period card and the Billing tab; the custom
+  // worksheet export is the project ⋯ menu's "Export worksheet…" (B7).
   const headerActions = (
-    <>
-      <WorksheetExportButton
-        projectId={projectId}
-        projectStartDate={project.startDate}
-        timezone={timezone}
-      />
-      {isTmProject && (
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              {/* span needed so the tooltip tracks hover even when the button is disabled */}
-              <span>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-9"
-                  disabled={invoiceBtn.disabled}
-                  onClick={handleReviewToInvoice}
-                >
-                  <ReceiptIcon data-icon="inline-start" className="size-4" />
-                  Invoice unbilled hours
-                </Button>
-              </span>
-            </TooltipTrigger>
-            {invoiceBtn.tooltip && <TooltipContent>{invoiceBtn.tooltip}</TooltipContent>}
-          </Tooltip>
-        </TooltipProvider>
-      )}
-      <Button size="sm" className="h-9" onClick={onOpenAdd}>
-        <PlusIcon data-icon="inline-start" className="size-4" />
-        Add time
-      </Button>
-    </>
+    <Button size="sm" className="h-9" onClick={onOpenAdd}>
+      <PlusIcon data-icon="inline-start" className="size-4" />
+      Add time
+    </Button>
   )
 
   const sharedTableProps = {
@@ -357,7 +285,7 @@ export function ProjectTimeContent({
           description="New billable entries will appear here automatically."
           action={
             <Button variant="link" size="sm" onClick={switchToInvoicesTab}>
-              View invoices
+              View billing
             </Button>
           }
         />
@@ -393,7 +321,6 @@ export function ProjectTimeContent({
           selectedEntries={selectedEntries}
           currency={project.currency}
           onDeselectAll={clearSelection}
-          onCreateInvoice={() => handleGenerateSelection()}
         />
       )}
 

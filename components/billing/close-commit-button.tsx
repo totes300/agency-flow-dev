@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
 import { toastError } from "@/lib/toast-helpers"
 import type { CloseWorkspaceData } from "@/convex/billingViews"
+import { invoiceHref } from "@/components/billing/period-actions"
 
 /**
  * The workspace's single primary action, full width in the summary card:
@@ -35,7 +36,7 @@ export function CloseCommitButton({ data }: { data: CloseWorkspaceData }) {
     ? "Set the project's overage rate first."
     : !data.committable
       ? notEarliest
-        ? "Close the earlier open period first."
+        ? `Close ${data.periodRow?.blockedBy?.label ?? "the earlier open period"} first.`
         : "This period hasn't ended yet."
       : null
 
@@ -50,7 +51,7 @@ export function CloseCommitButton({ data }: { data: CloseWorkspaceData }) {
         periodStart: data.period.start,
       })
       if (invoiceId) {
-        router.push(`/invoices/${invoiceId}`)
+        router.push(invoiceHref(invoiceId, `/projects/${data.project.id}?tab=billing`))
       } else {
         router.push(`/projects/${data.project.id}/reports/${data.period.end.slice(0, 7)}`)
         toast.success("Period closed")

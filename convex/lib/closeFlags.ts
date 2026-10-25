@@ -157,6 +157,26 @@ export function summarizeCloseFlags(flags: CloseFlag[]): CloseFlagSummary[] {
   });
 }
 
+/**
+ * The checklist line of a flag summary, as the Close workspace's "Before you
+ * close" list shows it (and the MCP close preview repeats it).
+ */
+export function closeFlagLabel(summary: Pick<CloseFlagSummary, "kind" | "count">): string {
+  const n = summary.count;
+  switch (summary.kind) {
+    case "missing-overage-rate":
+      return "Over budget, but the project has no overage rate";
+    case "running-timer":
+      return n === 1 ? "A timer is still running" : `${n} timers are still running`;
+    case "long-entry":
+      return n === 1 ? "1 entry is over 8h" : `${n} entries are over 8h`;
+    case "missing-note":
+      return n === 1 ? "1 entry has no note" : `${n} entries have no note`;
+    case "carried-in":
+      return n === 1 ? "1 entry carried in" : `${n} entries carried in`;
+  }
+}
+
 /** Count of review items surfaced on a queue row ("N to review") — excludes info. */
 export function reviewFlagCount(flags: CloseFlag[]): number {
   return flags.filter((f) => f.severity !== "info").length;

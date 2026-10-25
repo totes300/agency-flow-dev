@@ -1,16 +1,20 @@
-import { query, mutation } from "./_generated/server";
+import { query, mutation, type QueryCtx } from "./_generated/server";
 import { v, ConvexError } from "convex/values";
-import { getAuthContext, requireAdmin } from "./lib/auth";
+import { getAuthContext, requireAdmin, type AuthContext } from "./lib/auth";
 import { currencyValidator } from "./lib/validators";
+
+/** The org's default billable rates per work category and currency (the Rates settings and MCP `fetch`). */
+export async function listCategoryRatesForAuth(ctx: QueryCtx, auth: Pick<AuthContext, "orgId">) {
+  return await ctx.db
+    .query("categoryRates")
+    .withIndex("by_orgId", (q) => q.eq("orgId", auth.orgId))
+    .collect();
+}
 
 export const list = query({
   args: {},
   handler: async (ctx) => {
-    const { orgId } = await getAuthContext(ctx);
-    return await ctx.db
-      .query("categoryRates")
-      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
-      .collect();
+    return await listCategoryRatesForAuth(ctx, await getAuthContext(ctx));
   },
 });
 

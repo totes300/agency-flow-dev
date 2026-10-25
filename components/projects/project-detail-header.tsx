@@ -89,11 +89,11 @@ export function ProjectDetailHeader({
 
   return (
     <>
-      <div>
-        <div className="flex items-start justify-between">
+      <div className="px-4 py-4 md:px-6">
+        <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <div className="flex items-center gap-3">
-              <h1 className="text-xl font-semibold tracking-tight">{project.name}</h1>
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="text-base font-medium tracking-tight">{project.name}</h1>
               <BillingTypeBadge type={project.billingType} />
               {project.billingType === "retainer" && project.retainerStatus ? (
                 <RetainerStatusBadge status={project.retainerStatus} />
@@ -123,12 +123,12 @@ export function ProjectDetailHeader({
             <span className="text-xs text-muted-foreground">
               Last logged: {lastLoggedDate ? formatShortDate(lastLoggedDate) : "—"}
             </span>
-            <Button variant="outline" size="sm" onClick={() => onTabChange("settings")}>
+            <Button variant="ghost" size="sm" onClick={() => onTabChange("settings")}>
               Edit
             </Button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon-sm">
+                <Button variant="outline" size="icon-sm" className="rounded-full" aria-label="Project actions">
                   <MoreHorizontalIcon />
                 </Button>
               </DropdownMenuTrigger>

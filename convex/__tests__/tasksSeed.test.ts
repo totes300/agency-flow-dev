@@ -169,7 +169,7 @@ describe("devSeedTasks: repairs", () => {
     await t.mutation(internal.devSeedTasks.seed, { orgId: ORG_ID });
     const [a, , pragTask] = await addProjectTasks(t, org);
     await t.run(async (ctx) => {
-      // projects.remove keeps the project's tasks; a raw delete leaves edges behind.
+      // A legacy dangling project (projects.remove now refuses a project with tasks); a raw delete leaves edges behind.
       await ctx.db.delete(org.prag);
       await ctx.db.delete(a);
     });

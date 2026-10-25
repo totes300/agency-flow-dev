@@ -76,7 +76,7 @@ export function ProjectTimeFilters({
 }: {
   availableMembers: Member[]
   categories: Doc<"workCategories">[] | undefined
-  /** Right-aligned action buttons (Worksheet, Invoice Unbilled Hours, Add Time). */
+  /** Right-aligned action buttons (Add time). */
   actions?: React.ReactNode
   /** The Close workspace hides the date range — its period IS the scope. */
   showDateRange?: boolean

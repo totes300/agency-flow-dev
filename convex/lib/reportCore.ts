@@ -10,7 +10,7 @@
  *  - Currency amounts are Σ (minutes/60 × rate-snapshot); rounded to two
  *    decimals only at the final aggregate for output cleanliness.
  *  - Money is ALWAYS partitioned per currency — never summed across
- *    currencies (same rule as `invoices.getInvoiceMetrics`).
+ *    currencies (same rule as the Billing hub tiles).
  *  - Retainer entries carry billableRate=0 by design; their billable
  *    VALUE is 0 here while their minutes still count. Retainer revenue is
  *    fee-based and shows up on the invoice side of the snapshot.
@@ -42,6 +42,9 @@ export type TaskProjectRef = {
 };
 
 // ─── Month helpers ───────────────────────────────────────────────────────────
+
+/** Days per report date range: one ceiling for every report core and the MCP `report` tool. */
+export const REPORT_RANGE_DAYS_MAX = 366;
 
 const MONTH_REGEX = /^\d{4}-\d{2}$/;
 
@@ -280,6 +283,71 @@ export function aggregateClientMonths(input: {
     months: monthKeys.map((key) => byMonth.get(key)!),
     totals: { ...totals, billableAmount: round2(totals.billableAmount) },
   };
+}
+
+// ─── Client tasks (client_monthly raw material, docs/prd-mcp.md D25) ──────
+
+/** An entry plus what a per-task summary needs: its note and start time (ordering). */
+export type ReportNotedEntryInput = ReportEntryInput & { note?: string; startedAt?: number };
+
+export type ClientTaskRollup = {
+  taskId: string;
+  projectId: string | null;
+  projectName: string | null;
+  minutes: number;
+  billableMinutes: number;
+  nonBillableMinutes: number;
+  entryCount: number;
+  /** Non-empty notes of the task's entries in the range, oldest first (raw text, trimmed). */
+  notes: Array<{ date: string; minutes: number; billable: boolean; note: string }>;
+};
+
+/**
+ * One rollup per task worked in the range: raw minutes and the entry notes
+ * an agent writes a client summary from (the server never summarizes).
+ * Sorted by minutes desc, then task id, so two runs diff cleanly.
+ */
+export function aggregateClientTasks(input: {
+  entries: ReportNotedEntryInput[];
+  projectByTaskId: ReadonlyMap<string, TaskProjectRef | null>;
+}): ClientTaskRollup[] {
+  const byTask = new Map<string, { rollup: ClientTaskRollup; entries: ReportNotedEntryInput[] }>();
+  for (const e of input.entries) {
+    let acc = byTask.get(e.taskId);
+    if (!acc) {
+      const ref = input.projectByTaskId.get(e.taskId) ?? null;
+      acc = {
+        rollup: {
+          taskId: e.taskId,
+          projectId: ref?.projectId ?? null,
+          projectName: ref?.projectName ?? null,
+          minutes: 0,
+          billableMinutes: 0,
+          nonBillableMinutes: 0,
+          entryCount: 0,
+          notes: [],
+        },
+        entries: [],
+      };
+      byTask.set(e.taskId, acc);
+    }
+    acc.rollup.minutes += e.durationMinutes;
+    acc.rollup.entryCount += 1;
+    if (e.isBillable) acc.rollup.billableMinutes += e.durationMinutes;
+    else acc.rollup.nonBillableMinutes += e.durationMinutes;
+    acc.entries.push(e);
+  }
+  for (const { rollup, entries } of byTask.values()) {
+    rollup.notes = [...entries]
+      .sort((a, b) => (a.date !== b.date ? (a.date < b.date ? -1 : 1) : (a.startedAt ?? 0) - (b.startedAt ?? 0)))
+      .flatMap((e) => {
+        const note = e.note?.trim() ?? "";
+        return note ? [{ date: e.date, minutes: e.durationMinutes, billable: e.isBillable, note }] : [];
+      });
+  }
+  return [...byTask.values()]
+    .map((acc) => acc.rollup)
+    .sort((a, b) => b.minutes - a.minutes || (a.taskId < b.taskId ? -1 : a.taskId > b.taskId ? 1 : 0));
 }
 
 // ─── Retainer month classification ──────────────────────────────────────────

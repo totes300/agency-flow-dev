@@ -10,12 +10,12 @@ import { ConvexError, v } from "convex/values";
 import { mutation, type MutationCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireAdmin } from "./lib/auth";
-import { getOrgSettings } from "./lib/orgHelpers";
-import { ORG_TIMEZONE_FALLBACK, getDateInTimezone } from "./lib/timer";
 import { fromMinor, toMinor } from "./lib/billing/money";
 import {
+  applyFixedInvoice,
   fixedBilledMinor,
   manualLineAmountMinor,
+  planFixedInvoice,
   recomputeInvoiceTotals,
 } from "./lib/billing/invoiceLifecycle";
 
@@ -32,64 +32,7 @@ export const createFixedInvoice = mutation({
   },
   handler: async (ctx, args) => {
     const { orgId, userId } = await requireAdmin(ctx);
-    const project = await ctx.db.get(args.projectId);
-    if (!project || project.orgId !== orgId) throw new ConvexError("Project not found.");
-    if (project.billingType !== "fixed") throw new ConvexError("Not a fixed-fee project.");
-    const client = await ctx.db.get(project.clientId);
-    if (!client || client.orgId !== orgId) throw new ConvexError("Client not found for project.");
-
-    const currency = client.currency;
-    const remainingMinor =
-      toMinor(project.fixedPrice ?? 0, currency) - (await fixedBilledMinor(ctx, orgId, project._id));
-    const amountMinor = args.amount !== undefined ? toMinor(args.amount, currency) : remainingMinor;
-    if (amountMinor <= 0) {
-      throw new ConvexError(
-        args.amount !== undefined
-          ? "Enter an amount greater than zero."
-          : "This project's fixed fee is fully invoiced — there is nothing left to bill.",
-      );
-    }
-    if (amountMinor > remainingMinor) {
-      throw new ConvexError(
-        `Only ${fromMinor(Math.max(0, remainingMinor), currency)} ${currency} of the fixed fee is left to bill.`,
-      );
-    }
-
-    const orgSettings = await getOrgSettings(ctx, orgId);
-    const issueDate = getDateInTimezone(Date.now(), orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK);
-    const due = new Date(`${issueDate}T00:00:00Z`);
-    due.setUTCDate(due.getUTCDate() + (orgSettings?.defaultPaymentTermsDays ?? 30));
-    const now = Date.now();
-    const invoiceId = await ctx.db.insert("invoices", {
-      orgId,
-      projectId: project._id,
-      clientId: project.clientId,
-      prefix: orgSettings?.invoicePrefix ?? "INV-",
-      subject: "Fixed fee",
-      status: "draft",
-      currency,
-      subtotalMinor: amountMinor,
-      totalMinor: amountMinor,
-      issueDate,
-      dueDate: due.toISOString().slice(0, 10),
-      ...(orgSettings?.invoiceMessageTemplate ? { messageToClient: orgSettings.invoiceMessageTemplate } : {}),
-      createdAt: now,
-      updatedAt: now,
-      createdBy: userId,
-    });
-    await ctx.db.insert("invoiceLineItems", {
-      orgId,
-      invoiceId,
-      sortOrder: 0,
-      lineType: "fixed",
-      description: args.description?.trim() || project.name,
-      quantity: 1,
-      unitPriceMinor: amountMinor,
-      amountMinor,
-      createdAt: now,
-      updatedAt: now,
-    });
-    return { invoiceId };
+    return applyFixedInvoice(ctx, { orgId, userId }, await planFixedInvoice(ctx, orgId, args));
   },
 });
 

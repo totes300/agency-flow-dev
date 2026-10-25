@@ -1,9 +1,10 @@
 import { v, ConvexError } from "convex/values";
-import { query, mutation } from "./_generated/server";
-import type { Doc, Id } from "./_generated/dataModel";
-import { getAuthContext } from "./lib/auth";
+import { query, mutation, type MutationCtx, type QueryCtx } from "./_generated/server";
+import type { DataModel, Doc, Id } from "./_generated/dataModel";
+import type { GenericDatabaseReader } from "convex/server";
+import { assertAdmin, getAuthContext, requireAdmin, type AuthContext } from "./lib/auth";
 import { roundMinutes } from "./lib/rounding";
-import { getDateInTimezone, ORG_TIMEZONE_FALLBACK } from "./lib/timer";
+import { formatDurationHHMM, getDateInTimezone, ORG_TIMEZONE_FALLBACK } from "./lib/timer";
 import { getOrgSettings, getProjectCurrency, resolveRateSnapshot, resolveEntryCategory } from "./lib/orgHelpers";
 import { validateAssignees } from "./lib/task_helpers";
 import { assertValidDateString } from "./lib/dateValidation";
@@ -14,12 +15,6 @@ import { ceilToIncrement, fromMinor, priceMinutesMinor, toMinor } from "./lib/bi
 import { logActivity } from "./activityLog";
 import { onTimeEntryChange } from "./tasks/derived";
 import { getProjectEntries } from "./lib/projectEntries";
-
-function formatDurationHHMM(minutes: number): string {
-  const h = Math.floor(minutes / 60);
-  const m = minutes % 60;
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
-}
 
 /**
  * Validate that an explicit work category belongs to the caller's org before
@@ -39,13 +34,17 @@ async function assertCategoryInOrg(
  * The unblock path depends on whether the close is still a draft.
  */
 async function closeLockMessage(
-  ctx: { db: { get: (id: Id<"billingCloses">) => Promise<Doc<"billingCloses"> | null> } },
+  ctx: { db: GenericDatabaseReader<DataModel> },
   closeId: Id<"billingCloses">,
   action: "edit" | "delete",
 ): Promise<string> {
   const close = await ctx.db.get(closeId);
   if (close?.status === "draft") {
-    return `Cannot ${action} a time entry that's on a draft invoice — delete the draft first`;
+    // A reverted draft keeps its number and can only be voided (N9).
+    const invoice = close.invoiceId ? await ctx.db.get(close.invoiceId) : null;
+    return invoice?.number != null
+      ? `Cannot ${action} a time entry that's on a draft invoice — void the invoice first`
+      : `Cannot ${action} a time entry that's on a draft invoice — delete the draft first`;
   }
   return close?.invoiceId
     ? `Cannot ${action} a time entry linked to an invoice — void the invoice first`
@@ -53,6 +52,17 @@ async function closeLockMessage(
 }
 
 // ─── Queries ────────────────────────────────────────────────────────────────────
+
+/**
+ * Time-entry visibility, shared by every entry list (UI and MCP): admins see
+ * every entry of the org, members only their own.
+ */
+export function visibleTimeEntries<E extends Pick<Doc<"timeEntries">, "userId">>(
+  auth: Pick<AuthContext, "userId" | "isAdmin">,
+  entries: readonly E[],
+): E[] {
+  return auth.isAdmin ? [...entries] : entries.filter((e) => e.userId === auth.userId);
+}
 
 export const listByTask = query({
   args: { taskId: v.id("tasks") },
@@ -69,9 +79,7 @@ export const listByTask = query({
       .collect();
 
     // Member sees only own entries
-    const filtered = isAdmin
-      ? entries
-      : entries.filter((e) => e.userId === userId);
+    const filtered = visibleTimeEntries({ userId, isAdmin }, entries);
 
     // Enrich with user info
     const userIds = [...new Set(filtered.map((e) => e.userId.toString()))];
@@ -235,6 +243,350 @@ export const sumByProject = query({
   },
 });
 
+// ─── Write cores (shared by the mutations below and MCP save_time_entries) ───
+
+export type CreateTimeEntryInput = {
+  taskId: Id<"tasks">;
+  durationMinutes: number;
+  /** Wall-clock start, epoch ms. */
+  startedAt: number;
+  note?: string;
+  isBillable?: boolean;
+  date?: string;
+  /** Admin logging on behalf of another member. */
+  userId?: Id<"users">;
+  /** Explicit category override. */
+  workCategoryId?: Id<"workCategories">;
+};
+
+/**
+ * Logs a manual time entry as `auth`: members for themselves, admins for any
+ * member; the category via the member-default chain and the rate snapshot for
+ * the entry's owner; the `time_entry_logged` activity row (with `auth.via`
+ * for an agent write, docs/prd-mcp.md D15).
+ */
+export async function createTimeEntryForAuth(
+  ctx: MutationCtx,
+  auth: AuthContext,
+  args: CreateTimeEntryInput,
+): Promise<Id<"timeEntries">> {
+  // Determine the user this entry belongs to
+  let entryUserId = auth.userId;
+  if (args.userId && args.userId !== auth.userId) {
+    if (!auth.isAdmin) {
+      throw new ConvexError("Only admins can log time for other users");
+    }
+    await validateAssignees(ctx, auth.orgId, [args.userId]);
+    entryUserId = args.userId;
+  }
+
+  if (args.date) assertValidDateString(args.date);
+
+  const task = await ctx.db.get(args.taskId);
+  if (!task || task.orgId !== auth.orgId) throw new ConvexError("Task not found");
+  if (task.archivedAt) throw new ConvexError("Cannot log time on an archived task");
+  if (!task.projectId) throw new ConvexError("Assign a project first");
+
+  const project = await ctx.db.get(task.projectId);
+  if (!project) throw new ConvexError("Project not found");
+
+  // Get org settings
+  const orgSettings = await getOrgSettings(ctx, auth.orgId);
+  const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
+
+  // RAW LEDGER (2026-07-05 rounding-policy decision): store the duration
+  // as entered, whole-minute ceil only. The workspace rounding setting is
+  // an invoice-time rule and never mutates the ledger.
+  const rounded = roundMinutes(args.durationMinutes, 1);
+  if (rounded <= 0) throw new ConvexError("Duration must be greater than 0");
+
+  // Invariant: date === getDateInTimezone(startedAt, orgTz). startedAt wins.
+  const date = getDateInTimezone(args.startedAt, timezone);
+  if (args.date !== undefined && args.date !== date) {
+    throw new ConvexError(
+      `date (${args.date}) does not match startedAt's day (${date}).`,
+    );
+  }
+
+  // No closed-period date guard (billing refactor, story 28): time logged
+  // into an already-closed period is open and carries into the next close.
+
+  // Determine billable before rate resolution — non-billable entries skip rate enforcement
+  const isBillable = args.isBillable ?? task.billable;
+
+  // Billing category (member-default chain). Owner is the entry's user, never
+  // the acting admin. An explicit selection must be org-validated before use.
+  if (args.workCategoryId) {
+    await assertCategoryInOrg(ctx, auth.orgId, args.workCategoryId);
+  }
+  const snapshotCategoryId = await resolveEntryCategory(ctx, {
+    ownerUserId: entryUserId,
+    orgId: auth.orgId,
+    task,
+    explicit: args.workCategoryId,
+  });
+
+  // Rate snapshot (new model) — same category used for the row snapshot below.
+  const rateSnapshot = await resolveRateSnapshot(ctx, {
+    userId: entryUserId,
+    orgId: auth.orgId,
+    workCategoryId: snapshotCategoryId,
+    project,
+    isBillable,
+  });
+
+  const now = Date.now();
+  const entryId = await ctx.db.insert("timeEntries", {
+    orgId: auth.orgId,
+    projectId: project._id,
+    taskId: args.taskId,
+    userId: entryUserId,
+    date,
+    startedAt: args.startedAt,
+    durationMinutes: rounded,
+    note: args.note?.trim() || undefined,
+    isBillable,
+    method: "manual",
+    costRate: rateSnapshot.costRate,
+    billableRate: rateSnapshot.billableRate,
+    rateCurrency: rateSnapshot.rateCurrency,
+    snapshotCategoryId,
+    createdAt: now,
+    updatedAt: now,
+    createdBy: auth.userId,
+  });
+
+  await onTimeEntryChange(ctx, args.taskId, rounded);
+
+  await logActivity(ctx, {
+    taskId: args.taskId,
+    orgId: auth.orgId,
+    userId: auth.userId,
+    via: auth.via,
+    type: "time_entry_logged",
+    metadata: {
+      entryId,
+      duration: formatDurationHHMM(rounded),
+      note: args.note?.trim() || null,
+    },
+  });
+
+  return entryId;
+}
+
+export type UpdateTimeEntryInput = {
+  id: Id<"timeEntries">;
+  durationMinutes?: number;
+  note?: string | null;
+  date?: string;
+  startedAt?: number;
+  isBillable?: boolean;
+  taskId?: Id<"tasks">;
+  /** Explicit category change. */
+  workCategoryId?: Id<"workCategories">;
+};
+
+/**
+ * Edits a time entry as `auth`: members their own, admins any in the org.
+ * An entry settled by a live close (`closeId`: closed period, draft or final
+ * invoice) is refused with the unblock path. A duration change logs
+ * `time_entry_edited` (with `auth.via`, D15).
+ */
+export async function updateTimeEntryForAuth(
+  ctx: MutationCtx,
+  auth: AuthContext,
+  args: UpdateTimeEntryInput,
+): Promise<void> {
+  const { userId, orgId, isAdmin } = auth;
+
+  const entry = await ctx.db.get(args.id);
+  if (!entry || entry.orgId !== orgId) throw new ConvexError("Time entry not found");
+
+  // Permission check
+  if (!isAdmin && entry.userId !== userId) {
+    throw new ConvexError("You can only edit your own time entries");
+  }
+
+  // Close lock (N1): an entry settled by a live close is read-only.
+  if (entry.closeId !== undefined) {
+    throw new ConvexError(await closeLockMessage(ctx, entry.closeId, "edit"));
+  }
+
+  if (args.date !== undefined) assertValidDateString(args.date);
+
+  // Explicit category change must be org-validated before it touches the row.
+  if (args.workCategoryId !== undefined) {
+    await assertCategoryInOrg(ctx, orgId, args.workCategoryId);
+  }
+
+  const updates: Record<string, unknown> = { updatedAt: Date.now() };
+
+  if (args.durationMinutes !== undefined) {
+    // Raw ledger: whole-minute ceil only (see create above).
+    const rounded = roundMinutes(args.durationMinutes, 1);
+    if (rounded <= 0) throw new ConvexError("Duration must be greater than 0");
+    updates.durationMinutes = rounded;
+  }
+
+  if (args.note !== undefined) {
+    updates.note = args.note === null ? undefined : args.note.trim() || undefined;
+  }
+
+  // Invariant (see create): date === getDateInTimezone(startedAt, orgTz).
+  // Server doesn't re-anchor; clients call reanchorStartedAt and send both.
+  let nextDate = entry.date;
+  if (args.date !== undefined || args.startedAt !== undefined) {
+    const orgSettings = await getOrgSettings(ctx, orgId);
+    const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
+    const nextStartedAt = args.startedAt ?? entry.startedAt;
+    nextDate = args.date ?? entry.date;
+    const derivedDate = getDateInTimezone(nextStartedAt, timezone);
+    if (nextDate !== derivedDate) {
+      throw new ConvexError(
+        `date (${nextDate}) does not match startedAt's day (${derivedDate}). When changing date, also send a re-anchored startedAt.`,
+      );
+    }
+    if (args.startedAt !== undefined) updates.startedAt = nextStartedAt;
+    if (args.date !== undefined) updates.date = nextDate;
+  }
+
+  // Resolve target task if a change was requested. All downstream rate
+  // re-resolution (billable toggle OR task swap) must point at the SAME
+  // task doc, so fetch once.
+  const targetTaskId = args.taskId ?? entry.taskId;
+  const taskChanged = args.taskId !== undefined && args.taskId !== entry.taskId;
+
+  let targetTask: Doc<"tasks"> | null = null;
+  async function loadTargetTask(): Promise<Doc<"tasks">> {
+    if (targetTask) return targetTask;
+    const fetched = await ctx.db.get(targetTaskId);
+    if (!fetched || fetched.orgId !== orgId) {
+      throw new ConvexError("Task not found");
+    }
+    targetTask = fetched;
+    return fetched;
+  }
+
+  if (taskChanged) {
+    const task = await loadTargetTask();
+    if (task.archivedAt) {
+      throw new ConvexError("Cannot move time to an archived task");
+    }
+    if (!task.projectId) {
+      throw new ConvexError("Target task must belong to a project");
+    }
+    // Preserve the "same project" invariant: moving a time entry across
+    // projects would break project-level reporting and rate cascades.
+    const oldTask = await ctx.db.get(entry.taskId);
+    if (!oldTask || oldTask.projectId !== task.projectId) {
+      throw new ConvexError("Target task must belong to the same project");
+    }
+    updates.taskId = task._id;
+    // Sticky category (locked decision): a task move never re-derives
+    // snapshotCategoryId. The entry keeps the discipline it was logged under.
+  }
+
+  if (args.isBillable !== undefined) {
+    updates.isBillable = args.isBillable;
+  }
+
+  // Re-resolve the rate snapshot only when the entry's OWN category changes
+  // (explicit edit) or billability toggles. A task move does NOT re-resolve:
+  // the category is sticky and the same-project invariant keeps the rate
+  // cascade identical. The category feeding both the rate lookup and the
+  // stored snapshot is the explicit selection, else the entry's current
+  // (sticky) category — never the task's.
+  const categoryChanged =
+    args.workCategoryId !== undefined && args.workCategoryId !== entry.snapshotCategoryId;
+  const billableChanged =
+    args.isBillable !== undefined && args.isBillable !== entry.isBillable;
+  const effectiveIsBillable = args.isBillable ?? entry.isBillable;
+
+  if (categoryChanged || billableChanged) {
+    const nextCategoryId = args.workCategoryId ?? entry.snapshotCategoryId;
+    const task = await loadTargetTask();
+    if (!task.projectId) throw new ConvexError("Task has no project");
+    const project = await ctx.db.get(task.projectId);
+    if (!project) throw new ConvexError("Project not found");
+
+    const snapshot = await resolveRateSnapshot(ctx, {
+      userId: entry.userId,
+      orgId,
+      workCategoryId: nextCategoryId,
+      project,
+      isBillable: effectiveIsBillable,
+    });
+    updates.costRate = snapshot.costRate;
+    updates.billableRate = snapshot.billableRate;
+    updates.rateCurrency = snapshot.rateCurrency;
+    updates.snapshotCategoryId = nextCategoryId;
+  }
+
+  await ctx.db.patch(args.id, updates);
+
+  // trackedMinutes (§5.5): a move takes the old minutes off the source
+  // task and puts the new ones on the target.
+  const nextMinutes = (updates.durationMinutes as number | undefined) ?? entry.durationMinutes;
+  const nextTaskId = (updates.taskId as Id<"tasks"> | undefined) ?? entry.taskId;
+  if (nextTaskId !== entry.taskId) {
+    await onTimeEntryChange(ctx, entry.taskId, -entry.durationMinutes);
+    await onTimeEntryChange(ctx, nextTaskId, nextMinutes);
+  } else {
+    await onTimeEntryChange(ctx, entry.taskId, nextMinutes - entry.durationMinutes);
+  }
+
+  if (args.durationMinutes !== undefined && updates.durationMinutes !== entry.durationMinutes) {
+    await logActivity(ctx, {
+      taskId: entry.taskId,
+      orgId,
+      userId,
+      via: auth.via,
+      type: "time_entry_edited",
+      metadata: {
+        entryId: args.id,
+        oldDuration: formatDurationHHMM(entry.durationMinutes),
+        newDuration: formatDurationHHMM(updates.durationMinutes as number),
+      },
+    });
+  }
+}
+
+/**
+ * Deletes a time entry as `auth`: members their own, admins any in the org;
+ * close-locked entries are refused (same rule as `updateTimeEntryForAuth`).
+ * Logs `time_entry_deleted` (with `auth.via`, D15).
+ */
+export async function removeTimeEntryForAuth(
+  ctx: MutationCtx,
+  auth: AuthContext,
+  id: Id<"timeEntries">,
+): Promise<void> {
+  const { userId, orgId, isAdmin } = auth;
+  const entry = await ctx.db.get(id);
+  if (!entry || entry.orgId !== orgId) throw new ConvexError("Time entry not found");
+
+  if (!isAdmin && entry.userId !== userId) {
+    throw new ConvexError("You can only delete your own time entries");
+  }
+
+  // Close lock (N1), same rule as `update`.
+  if (entry.closeId !== undefined) {
+    throw new ConvexError(await closeLockMessage(ctx, entry.closeId, "delete"));
+  }
+
+  await logActivity(ctx, {
+    taskId: entry.taskId,
+    orgId,
+    userId,
+    via: auth.via,
+    type: "time_entry_deleted",
+    metadata: { entryId: id, duration: formatDurationHHMM(entry.durationMinutes) },
+  });
+
+  await ctx.db.delete(id);
+  await onTimeEntryChange(ctx, entry.taskId, -entry.durationMinutes);
+}
+
 // ─── Mutations ──────────────────────────────────────────────────────────────────
 
 export const create = mutation({
@@ -249,109 +601,7 @@ export const create = mutation({
     workCategoryId: v.optional(v.id("workCategories")), // explicit category override
   },
   handler: async (ctx, args) => {
-    const auth = await getAuthContext(ctx);
-
-    // Determine the user this entry belongs to
-    let entryUserId = auth.userId;
-    if (args.userId && args.userId !== auth.userId) {
-      if (!auth.isAdmin) {
-        throw new ConvexError("Only admins can log time for other users");
-      }
-      await validateAssignees(ctx, auth.orgId, [args.userId]);
-      entryUserId = args.userId;
-    }
-
-    if (args.date) assertValidDateString(args.date);
-
-    const task = await ctx.db.get(args.taskId);
-    if (!task || task.orgId !== auth.orgId) throw new ConvexError("Task not found");
-    if (task.archivedAt) throw new ConvexError("Cannot log time on an archived task");
-    if (!task.projectId) throw new ConvexError("Assign a project first");
-
-    const project = await ctx.db.get(task.projectId);
-    if (!project) throw new ConvexError("Project not found");
-
-    // Get org settings
-    const orgSettings = await getOrgSettings(ctx, auth.orgId);
-    const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
-
-    // RAW LEDGER (2026-07-05 rounding-policy decision): store the duration
-    // as entered, whole-minute ceil only. The workspace rounding setting is
-    // an invoice-time rule and never mutates the ledger.
-    const rounded = roundMinutes(args.durationMinutes, 1);
-    if (rounded <= 0) throw new ConvexError("Duration must be greater than 0");
-
-    // Invariant: date === getDateInTimezone(startedAt, orgTz). startedAt wins.
-    const date = getDateInTimezone(args.startedAt, timezone);
-    if (args.date !== undefined && args.date !== date) {
-      throw new ConvexError(
-        `date (${args.date}) does not match startedAt's day (${date}).`,
-      );
-    }
-
-    // No closed-period date guard (billing refactor, story 28): time logged
-    // into an already-closed period is open and carries into the next close.
-
-    // Determine billable before rate resolution — non-billable entries skip rate enforcement
-    const isBillable = args.isBillable ?? task.billable;
-
-    // Billing category (member-default chain). Owner is the entry's user, never
-    // the acting admin. An explicit selection must be org-validated before use.
-    if (args.workCategoryId) {
-      await assertCategoryInOrg(ctx, auth.orgId, args.workCategoryId);
-    }
-    const snapshotCategoryId = await resolveEntryCategory(ctx, {
-      ownerUserId: entryUserId,
-      orgId: auth.orgId,
-      task,
-      explicit: args.workCategoryId,
-    });
-
-    // Rate snapshot (new model) — same category used for the row snapshot below.
-    const rateSnapshot = await resolveRateSnapshot(ctx, {
-      userId: entryUserId,
-      orgId: auth.orgId,
-      workCategoryId: snapshotCategoryId,
-      project,
-      isBillable,
-    });
-
-    const now = Date.now();
-    const entryId = await ctx.db.insert("timeEntries", {
-      orgId: auth.orgId,
-      projectId: project._id,
-      taskId: args.taskId,
-      userId: entryUserId,
-      date,
-      startedAt: args.startedAt,
-      durationMinutes: rounded,
-      note: args.note?.trim() || undefined,
-      isBillable,
-      method: "manual",
-      costRate: rateSnapshot.costRate,
-      billableRate: rateSnapshot.billableRate,
-      rateCurrency: rateSnapshot.rateCurrency,
-      snapshotCategoryId,
-      createdAt: now,
-      updatedAt: now,
-      createdBy: auth.userId,
-    });
-
-    await onTimeEntryChange(ctx, args.taskId, rounded);
-
-    await logActivity(ctx, {
-      taskId: args.taskId,
-      orgId: auth.orgId,
-      userId: auth.userId,
-      type: "time_entry_logged",
-      metadata: {
-        entryId,
-        duration: formatDurationHHMM(rounded),
-        note: args.note?.trim() || null,
-      },
-    });
-
-    return entryId;
+    return await createTimeEntryForAuth(ctx, await getAuthContext(ctx), args);
   },
 });
 
@@ -367,187 +617,14 @@ export const update = mutation({
     workCategoryId: v.optional(v.id("workCategories")), // explicit category change
   },
   handler: async (ctx, args) => {
-    const { userId, orgId, isAdmin } = await getAuthContext(ctx);
-
-    const entry = await ctx.db.get(args.id);
-    if (!entry || entry.orgId !== orgId) throw new ConvexError("Time entry not found");
-
-    // Permission check
-    if (!isAdmin && entry.userId !== userId) {
-      throw new ConvexError("You can only edit your own time entries");
-    }
-
-    // Close lock (N1): an entry settled by a live close is read-only.
-    if (entry.closeId !== undefined) {
-      throw new ConvexError(await closeLockMessage(ctx, entry.closeId, "edit"));
-    }
-
-    if (args.date !== undefined) assertValidDateString(args.date);
-
-    // Explicit category change must be org-validated before it touches the row.
-    if (args.workCategoryId !== undefined) {
-      await assertCategoryInOrg(ctx, orgId, args.workCategoryId);
-    }
-
-    const updates: Record<string, unknown> = { updatedAt: Date.now() };
-
-    if (args.durationMinutes !== undefined) {
-      // Raw ledger: whole-minute ceil only (see create above).
-      const rounded = roundMinutes(args.durationMinutes, 1);
-      if (rounded <= 0) throw new ConvexError("Duration must be greater than 0");
-      updates.durationMinutes = rounded;
-    }
-
-    if (args.note !== undefined) {
-      updates.note = args.note === null ? undefined : args.note.trim() || undefined;
-    }
-
-    // Invariant (see create): date === getDateInTimezone(startedAt, orgTz).
-    // Server doesn't re-anchor; clients call reanchorStartedAt and send both.
-    let nextDate = entry.date;
-    if (args.date !== undefined || args.startedAt !== undefined) {
-      const orgSettings = await getOrgSettings(ctx, orgId);
-      const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
-      const nextStartedAt = args.startedAt ?? entry.startedAt;
-      nextDate = args.date ?? entry.date;
-      const derivedDate = getDateInTimezone(nextStartedAt, timezone);
-      if (nextDate !== derivedDate) {
-        throw new ConvexError(
-          `date (${nextDate}) does not match startedAt's day (${derivedDate}). When changing date, also send a re-anchored startedAt.`,
-        );
-      }
-      if (args.startedAt !== undefined) updates.startedAt = nextStartedAt;
-      if (args.date !== undefined) updates.date = nextDate;
-    }
-
-    // Resolve target task if a change was requested. All downstream rate
-    // re-resolution (billable toggle OR task swap) must point at the SAME
-    // task doc, so fetch once.
-    const targetTaskId = args.taskId ?? entry.taskId;
-    const taskChanged = args.taskId !== undefined && args.taskId !== entry.taskId;
-
-    let targetTask: Doc<"tasks"> | null = null;
-    async function loadTargetTask(): Promise<Doc<"tasks">> {
-      if (targetTask) return targetTask;
-      const fetched = await ctx.db.get(targetTaskId);
-      if (!fetched || fetched.orgId !== orgId) {
-        throw new ConvexError("Task not found");
-      }
-      targetTask = fetched;
-      return fetched;
-    }
-
-    if (taskChanged) {
-      const task = await loadTargetTask();
-      if (task.archivedAt) {
-        throw new ConvexError("Cannot move time to an archived task");
-      }
-      if (!task.projectId) {
-        throw new ConvexError("Target task must belong to a project");
-      }
-      // Preserve the "same project" invariant: moving a time entry across
-      // projects would break project-level reporting and rate cascades.
-      const oldTask = await ctx.db.get(entry.taskId);
-      if (!oldTask || oldTask.projectId !== task.projectId) {
-        throw new ConvexError("Target task must belong to the same project");
-      }
-      updates.taskId = task._id;
-      // Sticky category (locked decision): a task move never re-derives
-      // snapshotCategoryId. The entry keeps the discipline it was logged under.
-    }
-
-    if (args.isBillable !== undefined) {
-      updates.isBillable = args.isBillable;
-    }
-
-    // Re-resolve the rate snapshot only when the entry's OWN category changes
-    // (explicit edit) or billability toggles. A task move does NOT re-resolve:
-    // the category is sticky and the same-project invariant keeps the rate
-    // cascade identical. The category feeding both the rate lookup and the
-    // stored snapshot is the explicit selection, else the entry's current
-    // (sticky) category — never the task's.
-    const categoryChanged =
-      args.workCategoryId !== undefined && args.workCategoryId !== entry.snapshotCategoryId;
-    const billableChanged =
-      args.isBillable !== undefined && args.isBillable !== entry.isBillable;
-    const effectiveIsBillable = args.isBillable ?? entry.isBillable;
-
-    if (categoryChanged || billableChanged) {
-      const nextCategoryId = args.workCategoryId ?? entry.snapshotCategoryId;
-      const task = await loadTargetTask();
-      if (!task.projectId) throw new ConvexError("Task has no project");
-      const project = await ctx.db.get(task.projectId);
-      if (!project) throw new ConvexError("Project not found");
-
-      const snapshot = await resolveRateSnapshot(ctx, {
-        userId: entry.userId,
-        orgId,
-        workCategoryId: nextCategoryId,
-        project,
-        isBillable: effectiveIsBillable,
-      });
-      updates.costRate = snapshot.costRate;
-      updates.billableRate = snapshot.billableRate;
-      updates.rateCurrency = snapshot.rateCurrency;
-      updates.snapshotCategoryId = nextCategoryId;
-    }
-
-    await ctx.db.patch(args.id, updates);
-
-    // trackedMinutes (§5.5): a move takes the old minutes off the source
-    // task and puts the new ones on the target.
-    const nextMinutes = (updates.durationMinutes as number | undefined) ?? entry.durationMinutes;
-    const nextTaskId = (updates.taskId as Id<"tasks"> | undefined) ?? entry.taskId;
-    if (nextTaskId !== entry.taskId) {
-      await onTimeEntryChange(ctx, entry.taskId, -entry.durationMinutes);
-      await onTimeEntryChange(ctx, nextTaskId, nextMinutes);
-    } else {
-      await onTimeEntryChange(ctx, entry.taskId, nextMinutes - entry.durationMinutes);
-    }
-
-    if (args.durationMinutes !== undefined && updates.durationMinutes !== entry.durationMinutes) {
-      await logActivity(ctx, {
-        taskId: entry.taskId,
-        orgId,
-        userId,
-        type: "time_entry_edited",
-        metadata: {
-          entryId: args.id,
-          oldDuration: formatDurationHHMM(entry.durationMinutes),
-          newDuration: formatDurationHHMM(updates.durationMinutes as number),
-        },
-      });
-    }
+    await updateTimeEntryForAuth(ctx, await getAuthContext(ctx), args);
   },
 });
 
 export const remove = mutation({
   args: { id: v.id("timeEntries") },
   handler: async (ctx, args) => {
-    const { userId, orgId, isAdmin } = await getAuthContext(ctx);
-
-    const entry = await ctx.db.get(args.id);
-    if (!entry || entry.orgId !== orgId) throw new ConvexError("Time entry not found");
-
-    if (!isAdmin && entry.userId !== userId) {
-      throw new ConvexError("You can only delete your own time entries");
-    }
-
-    // Close lock (N1), same rule as `update`.
-    if (entry.closeId !== undefined) {
-      throw new ConvexError(await closeLockMessage(ctx, entry.closeId, "delete"));
-    }
-
-    await logActivity(ctx, {
-      taskId: entry.taskId,
-      orgId,
-      userId,
-      type: "time_entry_deleted",
-      metadata: { entryId: args.id, duration: formatDurationHHMM(entry.durationMinutes) },
-    });
-
-    await ctx.db.delete(args.id);
-    await onTimeEntryChange(ctx, entry.taskId, -entry.durationMinutes);
+    await removeTimeEntryForAuth(ctx, await getAuthContext(ctx), args.id);
   },
 });
 
@@ -692,9 +769,7 @@ export const listProjectEntries = query({
     const rawEntries = await getProjectEntries(ctx, orgId, args.projectId);
 
     // Members see only their own entries (matches listByTask).
-    const visible = isAdmin
-      ? rawEntries
-      : rawEntries.filter((e) => e.userId === userId);
+    const visible = visibleTimeEntries({ userId, isAdmin }, rawEntries);
 
     // Denormalize: user, category, invoice (tenancy-guarded).
     const userIds = [...new Set(visible.map((e) => e.userId.toString()))];
@@ -854,215 +929,224 @@ export const listProjectEntries = query({
 
 /**
  * Aggregate overview metrics for a project — used by Fixed and T&M overviews
- * and the project header "Last activity" date.
+ * and the project header "Last activity" date. Admin-only: it carries amounts
+ * and cost (A13).
  */
 export const projectOverview = query({
   args: { projectId: v.id("projects") },
-  handler: async (ctx, args) => {
-    const { orgId } = await getAuthContext(ctx);
-
-    const project = await ctx.db.get(args.projectId);
-    if (!project || project.orgId !== orgId) return null;
-
-    // Every entry of the project, archived tasks included (historical reporting).
-    const allEntries = (await getProjectEntries(ctx, orgId, args.projectId)).map((e) => ({
-      ...e,
-      workCategoryId: e.snapshotCategoryId,
-    }));
-    const closeInfo = await loadEntryCloseInfo(ctx, orgId, allEntries);
-
-    // Get org timezone for "this month" computation
-    const orgSettings = await getOrgSettings(ctx, orgId);
-    const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
-    const nowDate = getDateInTimezone(Date.now(), timezone);
-    const currentMonth = nowDate.slice(0, 7); // "YYYY-MM"
-
-    // Compute aggregates
-    let totalMinutes = 0;
-    let totalBillableMinutes = 0;
-    let totalNonBillableMinutes = 0;
-    let thisMonthBillableMinutes = 0;
-    let totalActualCost = 0;
-    // FOUR buckets over billable entries, in lock-step with `entryStatus()`
-    // so the data shape matches the row display (`billableOverviewBucket`):
-    //   open      → no live close (needs billing or closure)
-    //   draft     → close with a draft invoice (revenue not yet realized)
-    //   invoiced  → final T&M close (billed hourly — revenue)
-    //   settled   → final retainer close (covered, no extra revenue)
-    //
-    // The draft bucket is deliberate: a draft invoice has reserved hours
-    // but no finalized revenue. Lumping draft into invoiced would inflate
-    // T&M "billed" totals before the invoice is sent; lumping into open
-    // would falsely surface those hours in the Ready feed. Distinct bucket
-    // keeps reports honest and matches what the row badge already shows.
-    let openMinutes = 0;
-    let openAmount = 0;
-    // `openAmount` (the "ready to bill" number on the overview) groups like
-    // a T&M close — by (category, task, rate), rounded up with the
-    // workspace default.
-    const defaultRounding = orgSettings?.roundingMinutes ?? 1;
-    const openGroups = new Map<string, { minutes: number; rate: number }>();
-    let draftMinutes = 0;
-    let draftAmount = 0;
-    let invoicedMinutes = 0;
-    let invoicedAmount = 0;
-    let settledMinutes = 0;
-    let settledAmount = 0;
-    let lastLoggedDate: string | null = null;
-    const minutesByCategory: Record<string, number> = {};
-    const billableMinutesByCategory: Record<string, number> = {};
-    const billableByMonth: Record<string, number> = {};
-
-    for (const e of allEntries) {
-      totalMinutes += e.durationMinutes;
-
-      if (e.isBillable) {
-        totalBillableMinutes += e.durationMinutes;
-      } else {
-        totalNonBillableMinutes += e.durationMinutes;
-      }
-
-      // This month — billable only (displayed under T&M "Billable Time" card)
-      if (e.isBillable && e.date.startsWith(currentMonth)) {
-        thisMonthBillableMinutes += e.durationMinutes;
-      }
-
-      // Category breakdowns
-      const catKey = e.workCategoryId?.toString() ?? "uncategorized";
-      minutesByCategory[catKey] = (minutesByCategory[catKey] ?? 0) + e.durationMinutes;
-      if (e.isBillable) {
-        billableMinutesByCategory[catKey] =
-          (billableMinutesByCategory[catKey] ?? 0) + e.durationMinutes;
-      }
-
-      // Labor cost from costRate (all project types)
-      totalActualCost += (e.durationMinutes / 60) * (e.costRate ?? 0);
-
-      // Phase 8 — four-way split over billable entries via the shared
-      // `billableOverviewBucket` classifier. Pure helper so the rule is
-      // testable without convex-test and stays in lock-step with the row
-      // badge (`entryStatus()`).
-      //
-      // Retainer entries within budget have billableRate=0 today — they
-      // contribute to the bucket's minutes but $0 to its amount, which is
-      // correct (retainer revenue lives in `getRetainerData`'s cycle math).
-      if (e.isBillable) {
-        const amount = (e.durationMinutes / 60) * (e.billableRate ?? 0);
-        const close = e.closeId ? closeInfo.get(e.closeId) : undefined;
-        switch (billableOverviewBucket(close ?? {})) {
-          case "invoiced":
-            invoicedMinutes += e.durationMinutes;
-            invoicedAmount += amount;
-            break;
-          case "settled":
-            settledMinutes += e.durationMinutes;
-            settledAmount += amount;
-            break;
-          case "draft":
-            draftMinutes += e.durationMinutes;
-            draftAmount += amount;
-            break;
-          case "open": {
-            openMinutes += e.durationMinutes;
-            const rate = e.billableRate ?? 0;
-            const gKey = `${e.snapshotCategoryId ?? "none"}::${e.taskId}::${rate}`;
-            const g = openGroups.get(gKey) ?? { minutes: 0, rate };
-            g.minutes += e.durationMinutes;
-            openGroups.set(gKey, g);
-            break;
-          }
-        }
-      }
-
-      // Last logged date
-      if (!lastLoggedDate || e.date > lastLoggedDate) {
-        lastLoggedDate = e.date;
-      }
-
-      // Billable by month (for 3-month trend)
-      if (e.isBillable) {
-        const monthKey = e.date.slice(0, 7);
-        billableByMonth[monthKey] = (billableByMonth[monthKey] ?? 0) + e.durationMinutes;
-      }
-    }
-
-    // Materialize the open promise exactly as a T&M close prices it.
-    const currency = await getProjectCurrency(ctx, project);
-    let openAmountMinor = 0;
-    for (const g of openGroups.values()) {
-      openAmountMinor += priceMinutesMinor(
-        ceilToIncrement(g.minutes, defaultRounding),
-        toMinor(g.rate, currency),
-      );
-    }
-    openAmount = fromMinor(openAmountMinor, currency);
-
-    // Last 3 billable months: compute the 3 calendar months ending with current month
-    const last3BillableMonths = computeLast3Months(currentMonth).map((month) => ({
-      month,
-      minutes: billableByMonth[month] ?? 0,
-    }));
-
-    // Invoice count (for all billing types) + Fixed-specific revenue from
-    // `fixed`-type line items. Renamed `invoicedAmount` → `fixedLineItemsAmount`
-    // in Phase 8 to dodge the collision with the new entry-derived
-    // `invoicedAmount` bucket above (T&M / retainer overage time billed
-    // hourly via a finalized invoice).
-    let fixedLineItemsAmount = 0;
-    let invoiceCount = 0;
-    if (project.billingType === "fixed" || project.billingType === "t_and_m") {
-      const projectInvoices = await ctx.db
-        .query("invoices")
-        .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
-        .filter((q) => q.eq(q.field("orgId"), orgId))
-        .collect();
-      invoiceCount = projectInvoices.length;
-
-      if (project.billingType === "fixed") {
-        for (const inv of projectInvoices) {
-          const lineItems = await ctx.db
-            .query("invoiceLineItems")
-            .withIndex("by_invoiceId", (q) => q.eq("invoiceId", inv._id))
-            .filter((q) => q.eq(q.field("orgId"), orgId))
-            .collect();
-          for (const li of lineItems) {
-            if (li.lineType === "fixed") fixedLineItemsAmount += fromMinor(li.amountMinor, inv.currency);
-          }
-        }
-      }
-    }
-
-    return {
-      totalMinutes,
-      totalBillableMinutes,
-      totalNonBillableMinutes,
-      lastLoggedDate,
-      thisMonthBillableMinutes,
-      last3BillableMonths,
-      minutesByCategory,
-      billableMinutesByCategory,
-      totalActualCost,
-      // ─── Phase 8 — entry-derived billing buckets ────────────────────────
-      // Time-based figures from the entry ledger (hours × billableRate
-      // snapshot). Four buckets, lock-step with `entryStatus()`.
-      // For the Invoices tab "Total Invoiced" money figure (which includes
-      // manual/overage lines), use api.invoices.getProjectInvoiceMetrics
-      // instead — that one is invoice-derived, not entry-derived.
-      openMinutes,     // no live close
-      openAmount,
-      draftMinutes,    // close with a draft invoice
-      draftAmount,
-      invoicedMinutes, // final T&M close
-      invoicedAmount,
-      settledMinutes,  // final retainer close
-      settledAmount,
-      invoiceCount,
-      // Fixed-specific — sum of `fixed`-type line items across invoices.
-      // Distinct from `invoicedAmount` above (entry-derived).
-      fixedLineItemsAmount,
-    };
-  },
+  handler: async (ctx, args) => await projectOverviewForAuth(ctx, await requireAdmin(ctx), args),
 });
+
+/**
+ * `projectOverview` for an already-built auth context (UI and MCP `report`).
+ * Admin-only, like the query (A13): it carries amounts and cost.
+ */
+export async function projectOverviewForAuth(ctx: QueryCtx, auth: AuthContext, args: { projectId: Id<"projects"> }) {
+  assertAdmin(auth);
+  const { orgId } = auth;
+
+  const project = await ctx.db.get(args.projectId);
+  if (!project || project.orgId !== orgId) return null;
+
+  // Every entry of the project, archived tasks included (historical reporting).
+  const allEntries = (await getProjectEntries(ctx, orgId, args.projectId)).map((e) => ({
+    ...e,
+    workCategoryId: e.snapshotCategoryId,
+  }));
+  const closeInfo = await loadEntryCloseInfo(ctx, orgId, allEntries);
+
+  // Get org timezone for "this month" computation
+  const orgSettings = await getOrgSettings(ctx, orgId);
+  const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
+  const nowDate = getDateInTimezone(Date.now(), timezone);
+  const currentMonth = nowDate.slice(0, 7); // "YYYY-MM"
+
+  // Compute aggregates
+  let totalMinutes = 0;
+  let totalBillableMinutes = 0;
+  let totalNonBillableMinutes = 0;
+  let thisMonthBillableMinutes = 0;
+  let totalActualCost = 0;
+  // FOUR buckets over billable entries, in lock-step with `entryStatus()`
+  // so the data shape matches the row display (`billableOverviewBucket`):
+  //   open      → no live close (needs billing or closure)
+  //   draft     → close with a draft invoice
+  //   invoiced  → final T&M close
+  //   settled   → final retainer close (covered, no extra revenue)
+  //
+  // Money totals use ONE definition of billed (A15, PRD §6.8): billed =
+  // covered by a live close, draft or final — `billedMinutes/Amount` below,
+  // the same rule as `computeTmSummary`. The draft bucket stays for the
+  // row badge only; no surface shows "Draft" as a money column.
+  let openMinutes = 0;
+  let openAmount = 0;
+  // `openAmount` (the open, unbilled amount on the overview) groups like
+  // a T&M close — by (category, task, rate), rounded up with the
+  // workspace default.
+  const defaultRounding = orgSettings?.roundingMinutes ?? 1;
+  const openGroups = new Map<string, { minutes: number; rate: number }>();
+  let draftMinutes = 0;
+  let draftAmount = 0;
+  let invoicedMinutes = 0;
+  let invoicedAmount = 0;
+  let settledMinutes = 0;
+  let settledAmount = 0;
+  let lastLoggedDate: string | null = null;
+  const minutesByCategory: Record<string, number> = {};
+  const billableMinutesByCategory: Record<string, number> = {};
+  const billableByMonth: Record<string, number> = {};
+
+  for (const e of allEntries) {
+    totalMinutes += e.durationMinutes;
+
+    if (e.isBillable) {
+      totalBillableMinutes += e.durationMinutes;
+    } else {
+      totalNonBillableMinutes += e.durationMinutes;
+    }
+
+    // This month — billable only (displayed under T&M "Billable Time" card)
+    if (e.isBillable && e.date.startsWith(currentMonth)) {
+      thisMonthBillableMinutes += e.durationMinutes;
+    }
+
+    // Category breakdowns
+    const catKey = e.workCategoryId?.toString() ?? "uncategorized";
+    minutesByCategory[catKey] = (minutesByCategory[catKey] ?? 0) + e.durationMinutes;
+    if (e.isBillable) {
+      billableMinutesByCategory[catKey] =
+        (billableMinutesByCategory[catKey] ?? 0) + e.durationMinutes;
+    }
+
+    // Labor cost from costRate (all project types)
+    totalActualCost += (e.durationMinutes / 60) * (e.costRate ?? 0);
+
+    // Phase 8 — four-way split over billable entries via the shared
+    // `billableOverviewBucket` classifier. Pure helper so the rule is
+    // testable without convex-test and stays in lock-step with the row
+    // badge (`entryStatus()`).
+    //
+    // Retainer entries within budget have billableRate=0 today — they
+    // contribute to the bucket's minutes but $0 to its amount, which is
+    // correct (retainer revenue lives in `getRetainerData`'s cycle math).
+    if (e.isBillable) {
+      const amount = (e.durationMinutes / 60) * (e.billableRate ?? 0);
+      const close = e.closeId ? closeInfo.get(e.closeId) : undefined;
+      switch (billableOverviewBucket(close ?? {})) {
+        case "invoiced":
+          invoicedMinutes += e.durationMinutes;
+          invoicedAmount += amount;
+          break;
+        case "settled":
+          settledMinutes += e.durationMinutes;
+          settledAmount += amount;
+          break;
+        case "draft":
+          draftMinutes += e.durationMinutes;
+          draftAmount += amount;
+          break;
+        case "open": {
+          openMinutes += e.durationMinutes;
+          const rate = e.billableRate ?? 0;
+          const gKey = `${e.snapshotCategoryId ?? "none"}::${e.taskId}::${rate}`;
+          const g = openGroups.get(gKey) ?? { minutes: 0, rate };
+          g.minutes += e.durationMinutes;
+          openGroups.set(gKey, g);
+          break;
+        }
+      }
+    }
+
+    // Last logged date
+    if (!lastLoggedDate || e.date > lastLoggedDate) {
+      lastLoggedDate = e.date;
+    }
+
+    // Billable by month (for 3-month trend)
+    if (e.isBillable) {
+      const monthKey = e.date.slice(0, 7);
+      billableByMonth[monthKey] = (billableByMonth[monthKey] ?? 0) + e.durationMinutes;
+    }
+  }
+
+  // Materialize the open promise exactly as a T&M close prices it.
+  const currency = await getProjectCurrency(ctx, project);
+  let openAmountMinor = 0;
+  for (const g of openGroups.values()) {
+    openAmountMinor += priceMinutesMinor(
+      ceilToIncrement(g.minutes, defaultRounding),
+      toMinor(g.rate, currency),
+    );
+  }
+  openAmount = fromMinor(openAmountMinor, currency);
+
+  // Last 3 billable months: compute the 3 calendar months ending with current month
+  const last3BillableMonths = computeLast3Months(currentMonth).map((month) => ({
+    month,
+    minutes: billableByMonth[month] ?? 0,
+  }));
+
+  // Invoice count (for all billing types) + Fixed-specific revenue from
+  // `fixed`-type line items. Renamed `invoicedAmount` → `fixedLineItemsAmount`
+  // in Phase 8 to dodge the collision with the new entry-derived
+  // `invoicedAmount` bucket above (T&M / retainer overage time billed
+  // hourly via a finalized invoice).
+  let fixedLineItemsAmount = 0;
+  let invoiceCount = 0;
+  if (project.billingType === "fixed" || project.billingType === "t_and_m") {
+    const projectInvoices = await ctx.db
+      .query("invoices")
+      .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
+      .filter((q) => q.eq(q.field("orgId"), orgId))
+      .collect();
+    invoiceCount = projectInvoices.length;
+
+    if (project.billingType === "fixed") {
+      for (const inv of projectInvoices) {
+        const lineItems = await ctx.db
+          .query("invoiceLineItems")
+          .withIndex("by_invoiceId", (q) => q.eq("invoiceId", inv._id))
+          .filter((q) => q.eq(q.field("orgId"), orgId))
+          .collect();
+        for (const li of lineItems) {
+          if (li.lineType === "fixed") fixedLineItemsAmount += fromMinor(li.amountMinor, inv.currency);
+        }
+      }
+    }
+  }
+
+  return {
+    totalMinutes,
+    totalBillableMinutes,
+    totalNonBillableMinutes,
+    lastLoggedDate,
+    thisMonthBillableMinutes,
+    last3BillableMonths,
+    minutesByCategory,
+    billableMinutesByCategory,
+    totalActualCost,
+    // ─── Phase 8 — entry-derived billing buckets ────────────────────────
+    // Time-based figures from the entry ledger (hours × billableRate
+    // snapshot). Four buckets, lock-step with `entryStatus()`.
+    // Invoice money (with manual lines) comes from the invoices
+    // themselves — billingViews.getProjectBillingPeriods.
+    openMinutes,     // no live close
+    openAmount,
+    // Billed = covered by a live close (draft or final T&M) — §6.8.
+    billedMinutes: draftMinutes + invoicedMinutes,
+    billedAmount: draftAmount + invoicedAmount,
+    draftMinutes,    // close with a draft invoice
+    draftAmount,
+    invoicedMinutes, // final T&M close
+    invoicedAmount,
+    settledMinutes,  // final retainer close
+    settledAmount,
+    invoiceCount,
+    // Fixed-specific — sum of `fixed`-type line items across invoices.
+    // Distinct from `invoicedAmount` above (entry-derived).
+    fixedLineItemsAmount,
+  };
+}
 
 /**
  * Monthly breakdown of time entries for a project — grouped by month, then
@@ -1070,102 +1154,111 @@ export const projectOverview = query({
  */
 export const projectMonthlyBreakdown = query({
   args: { projectId: v.id("projects") },
-  handler: async (ctx, args) => {
-    const { orgId } = await getAuthContext(ctx);
+  // Admin-only: rows carry billable amounts and cost (A13).
+  handler: async (ctx, args) => await projectMonthlyBreakdownForAuth(ctx, await requireAdmin(ctx), args),
+});
 
-    const project = await ctx.db.get(args.projectId);
-    if (!project || project.orgId !== orgId) return [];
+/** `projectMonthlyBreakdown` for an already-built auth context; admin-only like `projectOverviewForAuth` (A13). */
+export async function projectMonthlyBreakdownForAuth(
+  ctx: QueryCtx,
+  auth: AuthContext,
+  args: { projectId: Id<"projects"> },
+) {
+  assertAdmin(auth);
+  const { orgId } = auth;
 
-    // Fetch all tasks (including archived)
-    const tasks = await ctx.db
-      .query("tasks")
-      .withIndex("by_orgId_projectId", (q) =>
-        q.eq("orgId", orgId).eq("projectId", args.projectId),
-      )
-      .collect();
+  const project = await ctx.db.get(args.projectId);
+  if (!project || project.orgId !== orgId) return [];
 
-    // Fetch work categories for enrichment
-    const categories = await ctx.db
-      .query("workCategories")
-      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
-      .collect();
-    const catMap = new Map(categories.map((c) => [c._id.toString(), c]));
+  // Fetch all tasks (including archived)
+  const tasks = await ctx.db
+    .query("tasks")
+    .withIndex("by_orgId_projectId", (q) =>
+      q.eq("orgId", orgId).eq("projectId", args.projectId),
+    )
+    .collect();
 
-    const taskById = new Map(tasks.map((t) => [t._id.toString(), t]));
-    const allEntries = (await getProjectEntries(ctx, orgId, args.projectId)).flatMap((e) => {
-      const task = taskById.get(e.taskId.toString());
-      if (!task) return [];
-      return [
-        {
-          ...e,
-          taskId: task._id.toString(),
-          taskTitle: task.title,
-          workCategoryId: e.snapshotCategoryId?.toString() ?? null,
-        },
-      ];
-    });
+  // Fetch work categories for enrichment
+  const categories = await ctx.db
+    .query("workCategories")
+    .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+    .collect();
+  const catMap = new Map(categories.map((c) => [c._id.toString(), c]));
 
-    // Group entries by month
-    const entriesByMonth: Record<string, typeof allEntries> = {};
-    for (const e of allEntries) {
-      const monthKey = e.date.slice(0, 7);
-      (entriesByMonth[monthKey] ??= []).push(e);
-    }
+  const taskById = new Map(tasks.map((t) => [t._id.toString(), t]));
+  const allEntries = (await getProjectEntries(ctx, orgId, args.projectId)).flatMap((e) => {
+    const task = taskById.get(e.taskId.toString());
+    if (!task) return [];
+    return [
+      {
+        ...e,
+        taskId: task._id.toString(),
+        taskTitle: task.title,
+        workCategoryId: e.snapshotCategoryId?.toString() ?? null,
+      },
+    ];
+  });
 
-    // Build month data
-    const months = Object.keys(entriesByMonth)
-      .sort((a, b) => b.localeCompare(a)) // descending
-      .map((monthKey) => {
-        const monthEntries = entriesByMonth[monthKey];
-        const billableEntries = monthEntries.filter((e) => e.isBillable);
-        const nonBillableEntries = monthEntries.filter((e) => !e.isBillable);
+  // Group entries by month
+  const entriesByMonth: Record<string, typeof allEntries> = {};
+  for (const e of allEntries) {
+    const monthKey = e.date.slice(0, 7);
+    (entriesByMonth[monthKey] ??= []).push(e);
+  }
 
-        const totalMinutes = monthEntries.reduce((s, e) => s + e.durationMinutes, 0);
-        // totalAmount: billable revenue from billableRate (T&M / Fixed only).
-        // Retainer entries have billableRate=0; retainer revenue is cycle-level.
-        const totalAmount = billableEntries.reduce(
-          (s, e) => s + (e.durationMinutes / 60) * (e.billableRate ?? 0),
-          0,
-        );
+  // Build month data
+  const months = Object.keys(entriesByMonth)
+    .sort((a, b) => b.localeCompare(a)) // descending
+    .map((monthKey) => {
+      const monthEntries = entriesByMonth[monthKey];
+      const billableEntries = monthEntries.filter((e) => e.isBillable);
+      const nonBillableEntries = monthEntries.filter((e) => !e.isBillable);
 
-        const billableCategoryGroups = buildCategoryGroups(
-          billableEntries,
-          catMap,
-          true, // billable entries always show amounts
-        );
-        const nonBillableCategoryGroups = buildCategoryGroups(
-          nonBillableEntries,
-          catMap,
-          false, // non-billable never shows amounts
-        );
+      const totalMinutes = monthEntries.reduce((s, e) => s + e.durationMinutes, 0);
+      // totalAmount: billable revenue from billableRate (T&M / Fixed only).
+      // Retainer entries have billableRate=0; retainer revenue is cycle-level.
+      const totalAmount = billableEntries.reduce(
+        (s, e) => s + (e.durationMinutes / 60) * (e.billableRate ?? 0),
+        0,
+      );
 
-        // Unique tasks and categories
-        const uniqueTaskIds = new Set(monthEntries.map((e) => e.taskId));
-        const uniqueCatIds = new Set(monthEntries.map((e) => e.workCategoryId ?? "uncategorized"));
+      const billableCategoryGroups = buildCategoryGroups(
+        billableEntries,
+        catMap,
+        true, // billable entries always show amounts
+      );
+      const nonBillableCategoryGroups = buildCategoryGroups(
+        nonBillableEntries,
+        catMap,
+        false, // non-billable never shows amounts
+      );
 
-        // Month label: "March 2026"
-        const [y, m] = monthKey.split("-").map(Number);
-        const monthLabel = new Date(y, m - 1, 1).toLocaleDateString("en-US", {
-          month: "long",
-          year: "numeric",
-        });
+      // Unique tasks and categories
+      const uniqueTaskIds = new Set(monthEntries.map((e) => e.taskId));
+      const uniqueCatIds = new Set(monthEntries.map((e) => e.workCategoryId ?? "uncategorized"));
 
-        return {
-          month: monthKey,
-          monthLabel,
-          totalMinutes,
-          totalAmount,
-          entryCount: monthEntries.length,
-          billableCategoryGroups,
-          nonBillableCategoryGroups,
-          taskCount: uniqueTaskIds.size,
-          categoryCount: uniqueCatIds.size,
-        };
+      // Month label: "March 2026"
+      const [y, m] = monthKey.split("-").map(Number);
+      const monthLabel = new Date(y, m - 1, 1).toLocaleDateString("en-US", {
+        month: "long",
+        year: "numeric",
       });
 
-    return months;
-  },
-});
+      return {
+        month: monthKey,
+        monthLabel,
+        totalMinutes,
+        totalAmount,
+        entryCount: monthEntries.length,
+        billableCategoryGroups,
+        nonBillableCategoryGroups,
+        taskCount: uniqueTaskIds.size,
+        categoryCount: uniqueCatIds.size,
+      };
+    });
+
+  return months;
+}
 
 // ─── Helpers ────────────────────────────────────────────────────────────────────
 

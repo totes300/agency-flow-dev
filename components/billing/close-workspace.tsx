@@ -8,6 +8,7 @@ import { toast } from "sonner"
 import {
   ArrowLeftIcon,
   ClipboardListIcon,
+  InfoIcon,
   MonitorIcon,
   PlusIcon,
 } from "lucide-react"
@@ -18,7 +19,9 @@ import { Button } from "@/components/ui/button"
 import { useTaskDetailNav } from "@/lib/hooks/use-task-detail-nav"
 import { TaskDetailDrawer } from "@/components/task-detail/task-detail-drawer"
 import { TimeEntryModal } from "@/components/projects/time-entry-modal"
-import { Badge } from "@/components/ui/badge"
+import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { PeriodStateChip } from "@/components/billing/period-state-chip"
+import { closeWorkspaceHref } from "@/components/billing/period-actions"
 import { CloseEntryGroups } from "@/components/billing/close-entry-groups"
 import { ClosePeriodMonths } from "@/components/billing/close-period-months"
 import { CloseSummaryCard } from "@/components/billing/close-summary-card"
@@ -67,15 +70,6 @@ function billingModeLabel(data: CloseWorkspaceData): string {
     label += ` · month ${Math.max(1, started)} of ${months}`
   }
   return label
-}
-
-/** The period's state in one word, for the header badge. */
-function periodStatus(data: CloseWorkspaceData): string {
-  if (data.coveringDraft) return "Draft invoice"
-  if (data.isClosed) return "Closed"
-  if (!data.periodElapsed) return "In progress"
-  if (data.billingType === "retainer") return data.withinBudget ? "Within budget" : "Over budget"
-  return "Ready to invoice"
 }
 
 /** The close offers member + category facets — never status (every in-scope
@@ -307,7 +301,7 @@ export function CloseWorkspace({
             <div className="flex flex-col gap-1">
               <div className="flex items-center gap-2">
                 <h1 className="text-xl font-semibold tracking-tight">{data.period.label}</h1>
-                <Badge variant="secondary">{periodStatus(data)}</Badge>
+                {data.periodRow ? <PeriodStateChip state={data.periodRow.state} /> : null}
               </div>
               <p className="text-sm text-muted-foreground">
                 <span className="text-foreground">{data.project.name}</span>
@@ -325,6 +319,23 @@ export function CloseWorkspace({
             </Button>
           )}
         </div>
+
+        {data.periodRow?.blockedBy && !data.isClosed ? (
+          <Alert>
+            <InfoIcon />
+            <AlertTitle>Close {data.periodRow.blockedBy.label} first</AlertTitle>
+            <AlertDescription>
+              Periods close oldest first. This one can be committed once {data.periodRow.blockedBy.label} is closed.
+            </AlertDescription>
+            <AlertAction>
+              <Button variant="outline" size="sm" asChild>
+                <Link href={closeWorkspaceHref(data.project.id, data.periodRow.blockedBy.key)}>
+                  Go to {data.periodRow.blockedBy.label}
+                </Link>
+              </Button>
+            </AlertAction>
+          </Alert>
+        ) : null}
 
         <div className="grid grid-cols-1 items-start gap-8 lg:grid-cols-[minmax(0,1fr)_20rem]">
           {/* Decision panel — first on narrow screens, sticky on the right on wide ones. */}

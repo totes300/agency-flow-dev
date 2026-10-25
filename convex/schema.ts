@@ -2,12 +2,15 @@ import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import {
   activityLogValidator,
+  activityViaValidator,
   numberScopeValidator,
   taskCategoryValidator,
   taskPriorityValidator,
   taskViewSpecValidator,
   taskViewSurfaceValidator,
 } from "./tasks/model";
+import { mcpWriteResultValidator } from "./lib/mcpWriteResults";
+import { billingActionValidator, billingCommitResultValidator, billingParamsValidator } from "./lib/mcpBillingResults";
 
 export default defineSchema({
   // ─── Users (synced from Clerk) ─────────────────────────────────────────────
@@ -26,7 +29,11 @@ export default defineSchema({
     taskDetailMode: v.optional(v.union(v.literal("drawer"), v.literal("page"))),
     createdAt: v.number(),
     updatedAt: v.number(),
-  }).index("byExternalId", ["externalId"]),
+  })
+    .index("byExternalId", ["externalId"])
+    // Who runs a timer on a task: a task delete clears them in one range per
+    // task (tasks/write.ts removeTask) instead of reading every org member.
+    .index("by_timerTaskId", ["timerTaskId"]),
 
   // ─── Org Members (synced from Clerk org memberships) ──────────────────────
   orgMembers: defineTable({
@@ -204,6 +211,19 @@ export default defineSchema({
     taskId: v.id("tasks"),
   })
     .index("by_orgId_identifier", ["orgId", "identifier"])
+    .index("by_taskId", ["taskId"]),
+
+  // External source refs on tasks (docs/prd-mcp.md D21), e.g. `gmail:<thread>`.
+  // A ref belongs to at most one task per org (checked on every insert, never
+  // moved); a task carries many. Written by convex/lib/mcpExternalRefs.ts,
+  // removed with the task (tasks/write.ts deleteTaskRecord).
+  taskExternalRefs: defineTable({
+    orgId: v.string(),
+    ref: v.string(),
+    taskId: v.id("tasks"),
+    createdAt: v.number(),
+  })
+    .index("by_orgId_ref", ["orgId", "ref"])
     .index("by_taskId", ["taskId"]),
 
   // ─── Per-user task state (§4.3) — fan-out on write ─────────────────────────
@@ -565,6 +585,8 @@ export default defineSchema({
     actorId: v.id("users"),
     at: v.number(),
     data: v.optional(v.record(v.string(), v.union(v.string(), v.number(), v.boolean()))),
+    // Written through an external agent (MCP attribution, docs/prd-mcp.md D15).
+    via: v.optional(activityViaValidator),
   })
     .index("by_orgId_projectId_at", ["orgId", "projectId", "at"])
     .index("by_invoiceId", ["invoiceId"]),
@@ -623,7 +645,9 @@ export default defineSchema({
   // by it — tasks/model.ts activityLogValidator.
   activityLog: defineTable(activityLogValidator)
     .index("by_task", ["taskId", "createdAt"])
-    .index("by_org", ["orgId", "createdAt"]),
+    .index("by_org", ["orgId", "createdAt"])
+    // One event type across the org, newest first (MCP comment search).
+    .index("by_org_type", ["orgId", "type", "createdAt"]),
 
   // ─── Attachments (per task, Convex file storage) ────────────────────────────
   attachments: defineTable({
@@ -636,7 +660,28 @@ export default defineSchema({
     mimeType: v.string(),
     createdAt: v.number(),
   })
-    .index("by_task", ["taskId", "createdAt"]),
+    .index("by_task", ["taskId", "createdAt"])
+    .index("by_fileId", ["fileId"]), // one attachment per blob (assertBlobUnattached)
+
+  // ─── App file uploads (task + comment attachments) ─────────────────────────
+  // One row per `fileUploads:generateUploadUrl` call: an unguessable
+  // `uploadId` bound to the caller's org and user. The upload endpoint
+  // (convex/fileUploads.ts, POST /upload?u=<uploadId>) stores the bytes once,
+  // within the hour, and writes `storageId`; `attachments.save` and
+  // `commentAttachments.save` only link a storageId found here for the same
+  // org + user, once (`attachedAt`). Rows are kept 25 h; the cleanup cron also
+  // deletes the blob of an upload that was stored but never attached.
+  fileUploads: defineTable({
+    uploadId: v.string(),
+    orgId: v.string(),
+    userId: v.id("users"),
+    createdAt: v.number(),
+    storageId: v.optional(v.id("_storage")),
+    attachedAt: v.optional(v.number()),
+  })
+    .index("by_uploadId", ["uploadId"])
+    .index("by_storageId", ["storageId"])
+    .index("by_createdAt", ["createdAt"]),
 
   // ─── Comment read receipts (per user per task) ─────────────────────────────
   commentReadReceipts: defineTable({
@@ -661,6 +706,8 @@ export default defineSchema({
     parentCommentId: v.optional(v.id("comments")),
     resolvedAt: v.optional(v.number()),
     resolvedBy: v.optional(v.id("users")),
+    // Written through an external agent (MCP attribution, D15).
+    via: v.optional(activityViaValidator),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
@@ -694,7 +741,44 @@ export default defineSchema({
   })
     .index("by_task", ["taskId"])
     .index("by_comment", ["commentId"])
-    .index("by_orgId", ["orgId"]),
+    .index("by_orgId", ["orgId"])
+    .index("by_fileId", ["fileId"]), // one attachment per blob (assertBlobUnattached)
+
+  // ─── Attachment contents (docs/prd-mcp.md §10, ported from c3972ab) ─────────
+  // What an agent can read inside a stored file (MCP fetch include
+  // `attachment_text`): text of PDF / DOCX / TXT / MD / CSV, image width ×
+  // height. ONE row per stored file per org, keyed by (orgId, storageId) —
+  // no FK to the referencing row: read access comes from the task or comment
+  // attachment that references this storageId, re-checked at read time.
+  // Written only by `requestExtraction` (convex/attachmentContents.ts) and
+  // the extraction action (convex/attachmentExtraction.ts); deleted with the
+  // blob (`deleteContentForStorage`, scoped to the referencing org). Rules:
+  // lib/attachments/contents.ts.
+  attachmentContents: defineTable({
+    orgId: v.string(),
+    storageId: v.id("_storage"),
+    mimeType: v.string(),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("done"),
+      v.literal("unsupported"),
+      v.literal("failed"),
+    ),
+    text: v.optional(v.string()), // capped at EXTRACT_TEXT_MAX (50 000 chars)
+    truncated: v.optional(v.boolean()), // the cap was hit
+    pageCount: v.optional(v.number()), // PDF
+    width: v.optional(v.number()), // images
+    height: v.optional(v.number()),
+    // Readable reason for unsupported / failed (and the last transient error
+    // while a retry is pending).
+    error: v.optional(v.string()),
+    attempts: v.number(), // current attempt number, 0 = never attempted (max EXTRACT_MAX_ATTEMPTS)
+    queuedAt: v.optional(v.number()), // when the current attempt is due (stuck-row re-queue)
+    extractedAt: v.optional(v.number()), // set on a final status
+    createdAt: v.number(),
+  })
+    .index("by_orgId_storageId", ["orgId", "storageId"]) // unique: one row per file per org
+    .index("by_storageId", ["storageId"]), // one attachment per blob (assertBlobUnattached)
 
   // ─── Notifications (inbox — mentions, assignments, comments) ─────────────
   notifications: defineTable({
@@ -747,7 +831,10 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_userId_date", ["userId", "date"])
-    .index("by_orgId_userId", ["orgId", "userId"]),
+    .index("by_orgId_userId", ["orgId", "userId"])
+    // Org-scoped date ranges (MCP daily_note search): another org's notes of
+    // the same user never take part of a bounded read.
+    .index("by_orgId_userId_date", ["orgId", "userId", "date"]),
 
   // ─── Typing indicators (ephemeral presence) ──────────────────────────────
   typingIndicators: defineTable({
@@ -787,4 +874,105 @@ export default defineSchema({
     // bound startDate below by today − SEGMENT_SCAN_WINDOW_DAYS as a scan
     // guard (see convex/lib/todayPlan.ts).
     .index("by_orgId_userId_startDate", ["orgId", "userId", "startDate"]),
+
+  // ─── MCP idempotency keys (docs/prd-mcp.md D23) ───────────────────────────
+  // One row per (org, user, key): the first result of a write tool call,
+  // checked and written in the same mutation as the write. Kept 24 h; the
+  // hourly cron in crons.ts deletes older rows (by_createdAt).
+  mcpIdempotency: defineTable({
+    orgId: v.string(),
+    userId: v.id("users"),
+    key: v.string(),
+    tool: v.string(),
+    // The request the key was first used for (tool + canonical arguments).
+    fingerprint: v.string(),
+    result: mcpWriteResultValidator,
+    createdAt: v.number(),
+  })
+    .index("by_orgId_userId_key", ["orgId", "userId", "key"])
+    .index("by_createdAt", ["createdAt"]),
+
+  // ─── MCP file uploads (docs/prd-mcp.md D18, §10) ────────────────────────────
+  // One row per `create_upload`: the file the caller announced (name, type,
+  // size) under an unguessable `uploadId`. The upload endpoint
+  // (convex/mcpFileUploads.ts, POST /mcp-upload?u=<uploadId>) stores exactly
+  // those bytes once, within the hour, and writes `storageId`; `attach_file`
+  // takes the uploadId and attaches that blob once (`attachedAt`). The client
+  // never handles a storageId, so no other storage object can be attached
+  // (I3). Rows are kept 25 h; the cleanup cron also deletes the blob of an
+  // upload that was stored but never attached.
+  mcpFileUploads: defineTable({
+    uploadId: v.string(),
+    orgId: v.string(),
+    userId: v.id("users"),
+    // The OAuth client that announced it: the endpoint refuses once that
+    // connection is revoked. Optional only for rows written before the
+    // client was recorded (slice 7b); such a row is refused, never allowed.
+    clientId: v.optional(v.string()),
+    fileName: v.string(),
+    contentType: v.string(),
+    sizeBytes: v.number(),
+    createdAt: v.number(),
+    storageId: v.optional(v.id("_storage")),
+    storedAt: v.optional(v.number()),
+    attachedAt: v.optional(v.number()),
+  })
+    .index("by_uploadId", ["uploadId"])
+    .index("by_createdAt", ["createdAt"]),
+
+  // ─── MCP billing previews (docs/prd-mcp.md D5, §9) ────────────────────────
+  // One row per billing_preview: its _id is the commit token. Bound to the
+  // org, user and OAuth client that previewed, the action and its resolved
+  // params, and the fingerprint of every value the commit would write. A
+  // commit within 10 minutes (`expiresAt`) recomputes the fingerprint and
+  // refuses on any change; the first result is kept so a repeated commit
+  // returns it. The hourly cron deletes rows older than 24 h (by_createdAt).
+  mcpBillingPreviews: defineTable({
+    orgId: v.string(),
+    userId: v.id("users"),
+    clientId: v.string(),
+    action: billingActionValidator,
+    params: billingParamsValidator,
+    fingerprint: v.string(),
+    // The fingerprint without the invoice dates, and the issue date the preview
+    // showed: a refusal caused only by midnight says so.
+    datelessFingerprint: v.optional(v.string()),
+    issueDate: v.optional(v.string()),
+    // The fingerprint without the number a finalize would claim: a refusal
+    // caused only by another invoice taking the next number says so.
+    numberlessFingerprint: v.optional(v.string()),
+    createdAt: v.number(),
+    // A re-preview of the same action + params from the same connection
+    // supersedes the earlier row by moving this to the re-preview's time.
+    expiresAt: v.number(),
+    committedAt: v.optional(v.number()),
+    result: v.optional(billingCommitResultValidator),
+  })
+    .index("by_createdAt", ["createdAt"])
+    // Open previews per user (PREVIEW_OPEN_MAX).
+    .index("by_orgId_userId_createdAt", ["orgId", "userId", "createdAt"]),
+
+  // ─── MCP connections (docs/prd-mcp.md D17, §11 Connected apps) ──────────────
+  // One row per org + user + OAuth client that has called /mcp. Clerk's
+  // Backend API cannot list a user's OAuth grants (S4), so Settings →
+  // Connected apps lists these rows. The /mcp route stamps them through
+  // `mcp/connections:touch` (convex/lib/mcpConnections.ts), which writes at
+  // most once per hour per client: `firstUsedAt` is shown as "Connected",
+  // `lastUsedAt` as "Last used". `clientName` is display text only (D15).
+  // `revokedAt` (owner decision D-REVOKE, 2026-10-25): Clerk cannot revoke a
+  // grant without the client's token, so Revoke is enforced here —
+  // getMcpAuthContext refuses this org + user + client while it is set;
+  // "Allow again" clears it.
+  mcpConnections: defineTable({
+    orgId: v.string(),
+    userId: v.id("users"),
+    clientId: v.string(),
+    clientName: v.string(),
+    firstUsedAt: v.number(),
+    lastUsedAt: v.number(),
+    revokedAt: v.optional(v.number()),
+  })
+    .index("by_orgId_userId_clientId", ["orgId", "userId", "clientId"])
+    // Connected apps lists the most recently used first (CONNECTIONS_LIST_MAX).
+    .index("by_orgId_userId_lastUsedAt", ["orgId", "userId", "lastUsedAt"]),
 });

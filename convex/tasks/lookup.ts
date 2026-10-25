@@ -2,13 +2,14 @@ import { v, ConvexError } from "convex/values";
 import { query, type MutationCtx, type QueryCtx } from "../_generated/server";
 import type { Doc, Id, TableNames } from "../_generated/dataModel";
 import { getAuthContext, type AuthContext } from "../lib/auth";
-import { filterReadableTasks, loadTaskForReadOrNull } from "./access";
+import { filterReadableTasks, loadTaskForReadOrNull, type TaskAccess } from "./access";
 import {
   CATEGORY_LABELS,
   PRIORITY,
   PRIORITY_LABELS,
   TASK_CATEGORIES,
   categoryOfStatus,
+  compareBySortKey,
   isClosedCategory,
   normalizeIdentifier,
   taskCategoryValidator,
@@ -82,13 +83,14 @@ export async function resolveTaskRef(
   return ctx.db.normalizeId("tasks", trimmed);
 }
 
-type OrgTable = "statuses" | "clients" | "projects" | "workCategories";
+type OrgTable = "statuses" | "clients" | "projects" | "workCategories" | "labels";
 
 const REF_HINT: Record<OrgTable, { noun: string; source: string }> = {
   statuses: { noun: "status", source: "listStatuses" },
   clients: { noun: "client", source: "listClients" },
   projects: { noun: "project", source: "listProjects" },
   workCategories: { noun: "work category", source: "listWorkCategories" },
+  labels: { noun: "label", source: "listLabels" },
 };
 
 /** A model-supplied id of an org-owned table, validated against the caller's org. */
@@ -149,14 +151,6 @@ function byRecentActivity(a: Doc<"tasks">, b: Doc<"tasks">): number {
   return (b.lastActivityAt ?? b.updatedAt) - (a.lastActivityAt ?? a.updatedAt);
 }
 
-/** Manual order (fractional keys compare bytewise), creation as the tiebreak. */
-function bySortKey(a: Doc<"tasks">, b: Doc<"tasks">): number {
-  const ak = a.sortKey ?? "";
-  const bk = b.sortKey ?? "";
-  if (ak !== bk) return ak < bk ? -1 : 1;
-  return a.createdAt - b.createdAt;
-}
-
 function mergeLoaded(...parts: Loaded[]): Loaded {
   return {
     tasks: parts.flatMap((p) => p.tasks),
@@ -164,7 +158,13 @@ function mergeLoaded(...parts: Loaded[]): Loaded {
   };
 }
 
-/** The caller's own edges plus the sub-tasks of their assigned parents (§11.5). */
+/**
+ * The caller's own edges plus the sub-tasks of their assigned parents (§11.5).
+ * Every row is readable by construction (T1, access.ts): `own` rows come off
+ * the caller's own `taskAssignees` range in this org, `via` rows are the
+ * org-indexed sub-tasks of those parents — exactly the two edges
+ * `filterReadableTasks` would read again. Callers use the rows as they are.
+ */
 async function loadMemberVisible(ctx: QueryCtx, auth: AuthContext): Promise<Loaded> {
   const own = await loadAssignedTo(ctx, auth.orgId, auth.userId);
   const via = await loadViaParentSubtasks(ctx, auth.orgId, own.tasks);
@@ -179,14 +179,185 @@ export type AgentFindTasksResult = {
   truncated: boolean;
 };
 
+/** The flat `findTasks` filters; ids travel as plain strings (validated here). */
+export type FindTasksInput = {
+  category?: TaskCategory;
+  statusId?: string;
+  clientId?: string;
+  projectId?: string;
+  assigneeId?: string;
+  workCategoryId?: string;
+  labelId?: string;
+  dueAfter?: string;
+  dueBefore?: string;
+  search?: string;
+  includeClosed?: boolean;
+  /** An extra row predicate applied with the filters (e.g. MCP's updated range). */
+  where?: (task: Doc<"tasks">) => boolean;
+  /**
+   * Preloaded candidate rows (e.g. MCP's external-ref and next-assignee
+   * lookups): used instead of the loaders; access and every filter still
+   * apply, `search` as a case-insensitive title match.
+   */
+  candidates?: Loaded;
+};
+
+export type FoundTaskDocs = {
+  /** Every readable match of the loaded rows, in result order. */
+  matched: Doc<"tasks">[];
+  /** A bounded loader hit its cap: more matches may exist beyond `matched`. */
+  loadTruncated: boolean;
+};
+
 /**
- * Flat-filtered task search for the `findTasks` tool. Open tasks only unless
- * `includeClosed` (or a closed `category` / closed `statusId`); archived tasks
- * never. Sub-tasks are included (`parent` carries the parent's identifier).
- * Members see what they can read: their own edges and the sub-tasks of their
- * assigned parents. Sorted by most recent activity; search hits keep
- * relevance order.
+ * The `findTasks` core for an already-authorized caller, shared by the UI
+ * query below and the MCP `search` tool. Open tasks only unless
+ * `includeClosed` (or a closed `category` / closed `statusId`); archived
+ * tasks never. Sub-tasks are included. Members see what they can read:
+ * their own edges and the sub-tasks of their assigned parents. Sorted by
+ * most recent activity; search hits keep relevance order.
  */
+export async function findTaskDocsForAuth(
+  ctx: QueryCtx,
+  auth: AuthContext,
+  args: FindTasksInput,
+): Promise<FoundTaskDocs> {
+  const { orgId } = auth;
+
+  // Validate every model-supplied id up front (actionable errors).
+  const status = args.statusId ? await requireOrgRef(ctx, orgId, "statuses", args.statusId) : null;
+  const client = args.clientId ? await requireOrgRef(ctx, orgId, "clients", args.clientId) : null;
+  const project = args.projectId ? await requireOrgRef(ctx, orgId, "projects", args.projectId) : null;
+  const workCategory = args.workCategoryId
+    ? await requireOrgRef(ctx, orgId, "workCategories", args.workCategoryId)
+    : null;
+  const label = args.labelId ? await requireOrgRef(ctx, orgId, "labels", args.labelId) : null;
+  let assigneeId: Id<"users"> | null = null;
+  if (args.assigneeId) {
+    assigneeId = ctx.db.normalizeId("users", args.assigneeId.trim());
+    if (!assigneeId) {
+      throw new ConvexError(
+        `No team member with id "${args.assigneeId}". Use an exact id from listTeamMembers.`,
+      );
+    }
+  }
+
+  const categories = agentTaskCategories({
+    category: args.category,
+    statusCategory: status ? categoryOfStatus(status) : undefined,
+    includeClosed: args.includeClosed,
+  });
+  const filters = agentTaskViewFilters(
+    {
+      statusId: status?._id,
+      clientId: client?._id,
+      projectId: project?._id,
+      assigneeId: assigneeId ?? undefined,
+      workCategoryId: workCategory?._id,
+      labelId: label?._id,
+    },
+    categories,
+  );
+  const open = categories.filter((c) => !isClosedCategory(c));
+  const closed = categories.filter(isClosedCategory);
+  const search = args.search?.trim();
+
+  let loaded: Loaded;
+  // True when the load itself proved every row readable (loadMemberVisible).
+  let readableByLoad = false;
+  if (args.candidates) {
+    const needle = search?.toLowerCase();
+    loaded = {
+      tasks: needle ? args.candidates.tasks.filter((t) => t.title.toLowerCase().includes(needle)) : args.candidates.tasks,
+      truncated: args.candidates.truncated,
+    };
+  } else if (search) {
+    const hits = await ctx.db
+      .query("tasks")
+      .withSearchIndex("search_title", (q) =>
+        categories.length === 1
+          ? q.search("title", search).eq("orgId", orgId).eq("statusCategory", categories[0])
+          : q.search("title", search).eq("orgId", orgId),
+      )
+      .take(SEARCH_CAP + 1);
+    loaded = { tasks: hits.slice(0, SEARCH_CAP), truncated: hits.length > SEARCH_CAP };
+  } else {
+    // §5.4 index selection: members read their own edges; admins narrow by
+    // a pinned project or assignee, else by category.
+    const plan = planListLoad({ auth, filters });
+    switch (plan.kind) {
+      case "assignee":
+        if (plan.userId === auth.userId && !auth.isAdmin) {
+          loaded = await loadMemberVisible(ctx, auth);
+          readableByLoad = true;
+        } else {
+          loaded = await loadAssignedTo(ctx, orgId, plan.userId);
+        }
+        break;
+      case "project":
+        loaded = mergeLoaded(
+          await loadProjectTasks(ctx, orgId, plan.projectId, open, OPEN_ROW_CAP),
+          await loadProjectTasks(ctx, orgId, plan.projectId, closed, CLOSED_ROW_DEFAULT),
+        );
+        break;
+      case "createdBy":
+      case "category":
+        loaded = mergeLoaded(
+          await loadByCategories(ctx, orgId, open, OPEN_ROW_CAP),
+          closed.length > 0
+            ? await loadRecentlyClosed(ctx, orgId, CLOSED_ROW_DEFAULT)
+            : { tasks: [], truncated: false },
+        );
+        break;
+    }
+  }
+
+  const readable = readableByLoad
+    ? loaded.tasks.filter((t) => t.orgId === orgId)
+    : await filterReadableTasks(ctx, auth, loaded.tasks);
+  const matched = readable.filter(
+    (t) =>
+      !t.archivedAt &&
+      t.statusCategory !== undefined &&
+      categories.includes(t.statusCategory) &&
+      matchesFilters(t, filters, auth.userId) &&
+      inDueRange(t.dueDate, args) &&
+      (args.where === undefined || args.where(t)),
+  );
+  if (!search || args.candidates) matched.sort(byRecentActivity);
+  return { matched, loadTruncated: loaded.truncated };
+}
+
+/** `findTasks` rows for `tasks` (names resolved, memoized per call). */
+export async function toAgentTaskRows(
+  ctx: QueryCtx,
+  orgId: string,
+  tasks: readonly Doc<"tasks">[],
+): Promise<AgentTaskRow[]> {
+  const nameOf = nameResolver(ctx, orgId);
+  const identifierOf = identifierResolver(ctx, orgId);
+  const rows: AgentTaskRow[] = [];
+  for (const t of tasks) {
+    rows.push({
+      id: t._id,
+      identifier: t.identifier ?? null,
+      title: t.title,
+      status: await nameOf(t.statusId),
+      statusCategory: t.statusCategory ?? null,
+      priority: priorityLabel(t),
+      project: await nameOf(t.projectId),
+      client: await nameOf(t.clientId),
+      workCategory: await nameOf(t.workCategoryId),
+      assignees: (await Promise.all(t.assigneeIds.map(nameOf))).filter((n): n is string => n !== null),
+      dueDate: t.dueDate ?? null,
+      billable: t.billable,
+      parent: await identifierOf(t.parentTaskId),
+    });
+  }
+  return rows;
+}
+
+/** Flat-filtered task search for the `findTasks` tool (see `findTaskDocsForAuth`). */
 export const findTasks = query({
   args: {
     category: v.optional(taskCategoryValidator),
@@ -203,118 +374,11 @@ export const findTasks = query({
   },
   handler: async (ctx, args): Promise<AgentFindTasksResult> => {
     const auth = await getAuthContext(ctx);
-    const { orgId } = auth;
-
-    // Validate every model-supplied id up front (actionable errors).
-    const status = args.statusId ? await requireOrgRef(ctx, orgId, "statuses", args.statusId) : null;
-    const client = args.clientId ? await requireOrgRef(ctx, orgId, "clients", args.clientId) : null;
-    const project = args.projectId ? await requireOrgRef(ctx, orgId, "projects", args.projectId) : null;
-    const workCategory = args.workCategoryId
-      ? await requireOrgRef(ctx, orgId, "workCategories", args.workCategoryId)
-      : null;
-    let assigneeId: Id<"users"> | null = null;
-    if (args.assigneeId) {
-      assigneeId = ctx.db.normalizeId("users", args.assigneeId.trim());
-      if (!assigneeId) {
-        throw new ConvexError(
-          `No team member with id "${args.assigneeId}". Use an exact id from listTeamMembers.`,
-        );
-      }
-    }
-
-    const categories = agentTaskCategories({
-      category: args.category,
-      statusCategory: status ? categoryOfStatus(status) : undefined,
-      includeClosed: args.includeClosed,
-    });
-    const filters = agentTaskViewFilters(
-      {
-        statusId: status?._id,
-        clientId: client?._id,
-        projectId: project?._id,
-        assigneeId: assigneeId ?? undefined,
-        workCategoryId: workCategory?._id,
-      },
-      categories,
-    );
-    const open = categories.filter((c) => !isClosedCategory(c));
-    const closed = categories.filter(isClosedCategory);
-    const limit = clampAgentTaskLimit(args.limit);
-    const search = args.search?.trim();
-
-    let loaded: Loaded;
-    if (search) {
-      const hits = await ctx.db
-        .query("tasks")
-        .withSearchIndex("search_title", (q) =>
-          categories.length === 1
-            ? q.search("title", search).eq("orgId", orgId).eq("statusCategory", categories[0])
-            : q.search("title", search).eq("orgId", orgId),
-        )
-        .take(SEARCH_CAP + 1);
-      loaded = { tasks: hits.slice(0, SEARCH_CAP), truncated: hits.length > SEARCH_CAP };
-    } else {
-      // §5.4 index selection: members read their own edges; admins narrow by
-      // a pinned project or assignee, else by category.
-      const plan = planListLoad({ auth, filters });
-      switch (plan.kind) {
-        case "assignee":
-          loaded =
-            plan.userId === auth.userId && !auth.isAdmin
-              ? await loadMemberVisible(ctx, auth)
-              : await loadAssignedTo(ctx, orgId, plan.userId);
-          break;
-        case "project":
-          loaded = mergeLoaded(
-            await loadProjectTasks(ctx, orgId, plan.projectId, open, OPEN_ROW_CAP),
-            await loadProjectTasks(ctx, orgId, plan.projectId, closed, CLOSED_ROW_DEFAULT),
-          );
-          break;
-        case "createdBy":
-        case "category":
-          loaded = mergeLoaded(
-            await loadByCategories(ctx, orgId, open, OPEN_ROW_CAP),
-            closed.length > 0
-              ? await loadRecentlyClosed(ctx, orgId, CLOSED_ROW_DEFAULT)
-              : { tasks: [], truncated: false },
-          );
-          break;
-      }
-    }
-
-    const readable = await filterReadableTasks(ctx, auth, loaded.tasks);
-    const matched = readable.filter(
-      (t) =>
-        !t.archivedAt &&
-        t.statusCategory !== undefined &&
-        categories.includes(t.statusCategory) &&
-        matchesFilters(t, filters, auth.userId) &&
-        inDueRange(t.dueDate, args),
-    );
-    if (!search) matched.sort(byRecentActivity);
-
-    const page = matched.slice(0, limit);
-    const nameOf = nameResolver(ctx, orgId);
-    const identifierOf = identifierResolver(ctx, orgId);
-    const tasks: AgentTaskRow[] = [];
-    for (const t of page) {
-      tasks.push({
-        id: t._id,
-        identifier: t.identifier ?? null,
-        title: t.title,
-        status: await nameOf(t.statusId),
-        statusCategory: t.statusCategory ?? null,
-        priority: priorityLabel(t),
-        project: await nameOf(t.projectId),
-        client: await nameOf(t.clientId),
-        workCategory: await nameOf(t.workCategoryId),
-        assignees: (await Promise.all(t.assigneeIds.map(nameOf))).filter((n): n is string => n !== null),
-        dueDate: t.dueDate ?? null,
-        billable: t.billable,
-        parent: await identifierOf(t.parentTaskId),
-      });
-    }
-    return { tasks, truncated: loaded.truncated || matched.length > limit };
+    const { limit: rawLimit, ...input } = args;
+    const { matched, loadTruncated } = await findTaskDocsForAuth(ctx, auth, input);
+    const limit = clampAgentTaskLimit(rawLimit);
+    const tasks = await toAgentTaskRows(ctx, auth.orgId, matched.slice(0, limit));
+    return { tasks, truncated: loadTruncated || matched.length > limit };
   },
 });
 
@@ -353,65 +417,77 @@ export type AgentTaskDetail = {
 };
 
 /**
- * One task in full for the `getTaskDetail` tool. `task` is an identifier
- * (`ARLO-21`, case-insensitive, old identifiers resolve) or a task id.
- * Unknown, other-org and unreadable tasks all return null.
+ * One task in full for an already-authorized caller, shared by the
+ * `getTaskDetail` query below and the MCP `fetch` tool. `ref` is an
+ * identifier (`ARLO-21`, case-insensitive, old identifiers resolve) or a
+ * task id. Unknown, other-org and unreadable tasks all return null. `access`
+ * carries the task document for callers that need more than the detail.
  */
+export async function getTaskDetailForAuth(
+  ctx: QueryCtx,
+  auth: AuthContext,
+  ref: string,
+): Promise<{ detail: AgentTaskDetail; access: TaskAccess } | null> {
+  const taskId = await resolveTaskRef(ctx, auth.orgId, ref);
+  if (!taskId) return null;
+  const access = await loadTaskForReadOrNull(ctx, taskId, auth);
+  if (!access) return null;
+  const { task } = access;
+  const nameOf = nameResolver(ctx, auth.orgId);
+
+  const parentDoc = task.parentTaskId ? await ctx.db.get(task.parentTaskId) : null;
+  // Whoever reads a parent reads all of its sub-tasks (§11.5); one level deep (T8).
+  const subs = task.parentTaskId
+    ? { tasks: [], truncated: false }
+    : await loadSubtasksOf(ctx, auth.orgId, task._id);
+  const subtasks: AgentTaskDetail["subtasks"] = [];
+  for (const s of subs.tasks.filter((s) => !s.archivedAt).sort(compareBySortKey)) {
+    subtasks.push({
+      id: s._id,
+      identifier: s.identifier ?? null,
+      title: s.title,
+      status: await nameOf(s.statusId),
+      statusCategory: s.statusCategory ?? null,
+      trackedMinutes: s.trackedMinutes ?? 0,
+      assignees: (await Promise.all(s.assigneeIds.map(nameOf))).filter((n): n is string => n !== null),
+    });
+  }
+
+  const detail: AgentTaskDetail = {
+    id: task._id,
+    identifier: task.identifier ?? null,
+    title: task.title,
+    description: taskDescriptionToPlainText(task.description),
+    status: await nameOf(task.statusId),
+    statusCategory: task.statusCategory ?? null,
+    priority: priorityLabel(task),
+    project: await nameOf(task.projectId),
+    client: await nameOf(task.clientId),
+    workCategory: await nameOf(task.workCategoryId),
+    assignees: (await Promise.all(task.assigneeIds.map(nameOf))).filter((n): n is string => n !== null),
+    labels: (await Promise.all((task.labelIds ?? []).map(nameOf))).filter((n): n is string => n !== null),
+    startDate: task.startDate ?? null,
+    dueDate: task.dueDate ?? null,
+    billable: task.billable,
+    estimateMinutes: task.estimateMinutes ?? null,
+    trackedMinutes: task.trackedMinutes ?? 0,
+    archived: task.archivedAt !== undefined,
+    parent:
+      parentDoc && parentDoc.orgId === auth.orgId
+        ? { identifier: parentDoc.identifier ?? null, title: parentDoc.title }
+        : null,
+    subtasks,
+    subtasksTruncated: subs.truncated,
+  };
+  return { detail, access };
+}
+
+/** One task in full for the `getTaskDetail` tool (see `getTaskDetailForAuth`). */
 export const getTaskDetail = query({
   args: { task: v.string() },
   handler: async (ctx, args): Promise<AgentTaskDetail | null> => {
     const auth = await getAuthContext(ctx);
-    const taskId = await resolveTaskRef(ctx, auth.orgId, args.task);
-    if (!taskId) return null;
-    const access = await loadTaskForReadOrNull(ctx, taskId, auth);
-    if (!access) return null;
-    const { task } = access;
-    const nameOf = nameResolver(ctx, auth.orgId);
-
-    const parentDoc = task.parentTaskId ? await ctx.db.get(task.parentTaskId) : null;
-    // Whoever reads a parent reads all of its sub-tasks (§11.5); one level deep (T8).
-    const subs = task.parentTaskId
-      ? { tasks: [], truncated: false }
-      : await loadSubtasksOf(ctx, auth.orgId, task._id);
-    const subtasks: AgentTaskDetail["subtasks"] = [];
-    for (const s of subs.tasks.filter((s) => !s.archivedAt).sort(bySortKey)) {
-      subtasks.push({
-        id: s._id,
-        identifier: s.identifier ?? null,
-        title: s.title,
-        status: await nameOf(s.statusId),
-        statusCategory: s.statusCategory ?? null,
-        trackedMinutes: s.trackedMinutes ?? 0,
-        assignees: (await Promise.all(s.assigneeIds.map(nameOf))).filter((n): n is string => n !== null),
-      });
-    }
-
-    return {
-      id: task._id,
-      identifier: task.identifier ?? null,
-      title: task.title,
-      description: taskDescriptionToPlainText(task.description),
-      status: await nameOf(task.statusId),
-      statusCategory: task.statusCategory ?? null,
-      priority: priorityLabel(task),
-      project: await nameOf(task.projectId),
-      client: await nameOf(task.clientId),
-      workCategory: await nameOf(task.workCategoryId),
-      assignees: (await Promise.all(task.assigneeIds.map(nameOf))).filter((n): n is string => n !== null),
-      labels: (await Promise.all((task.labelIds ?? []).map(nameOf))).filter((n): n is string => n !== null),
-      startDate: task.startDate ?? null,
-      dueDate: task.dueDate ?? null,
-      billable: task.billable,
-      estimateMinutes: task.estimateMinutes ?? null,
-      trackedMinutes: task.trackedMinutes ?? 0,
-      archived: task.archivedAt !== undefined,
-      parent:
-        parentDoc && parentDoc.orgId === auth.orgId
-          ? { identifier: parentDoc.identifier ?? null, title: parentDoc.title }
-          : null,
-      subtasks,
-      subtasksTruncated: subs.truncated,
-    };
+    return (await getTaskDetailForAuth(ctx, auth, args.task))?.detail ?? null;
   },
 });
 
@@ -478,7 +554,8 @@ export const countTasksByStatus = query({
       const loaded = await loadMemberVisible(ctx, auth);
       // A capped edge set leaves every category incomplete.
       for (const category of TASK_CATEGORIES) categoryTruncated.set(category, loaded.truncated);
-      tasks = await filterReadableTasks(ctx, auth, loaded.tasks);
+      // Readable by construction (loadMemberVisible): no edge re-check.
+      tasks = loaded.tasks.filter((t) => t.orgId === orgId);
     }
     const live = tasks.filter((t) => !t.archivedAt && t.statusCategory !== undefined);
 

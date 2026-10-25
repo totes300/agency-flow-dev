@@ -27,6 +27,30 @@ current routes, modules, and dependency versions.
   lookup.
 - See `docs/security/tenancy.md` for implementation and review requirements.
 
+## MCP server
+
+External agents (Claude, Codex) operate the app through a remote MCP server
+(`docs/prd-mcp.md` is the source of truth; production steps in
+`docs/runbooks/mcp-deployment.md`).
+
+- `app/mcp/route.ts` (Streamable HTTP, `mcp-handler`) only adapts the protocol: it
+  verifies the Clerk OAuth access token (audience = `MCP_RESOURCE_URL`) and calls
+  Convex as the user with the same token. Tool names, schemas, descriptions and
+  renderers come from one registry, `lib/mcp/registry.ts`; the server
+  `instructions` hold the conventions every tool shares.
+- Convex accepts that token through a second provider in `convex/auth.config.ts`.
+  The two token surfaces are told apart by the OAuth `client_id` claim:
+  `convex/mcp/*` call `getMcpAuthContext` (`convex/lib/mcpAuth.ts`), UI functions
+  call `getAuthContext`, and each refuses the other's token (I4).
+- `getMcpAuthContext` takes the org from the token's `org_id` (picked on Clerk's
+  consent screen), the role only from `orgMembers`, and fails closed on the
+  connection (`mcpConnections`, org + user + client): no row (the route registers
+  one before a client's first call) or a row the user revoked in Connected apps is
+  refused, as is every call while `MCP_DISABLED` is set. MCP functions then reuse the app's `*ForAuth` cores and
+  write paths, so rules and notifications are the app's.
+- `/connected-apps` lists the user's connections (stamped by the route at most
+  hourly) with Revoke / Allow again.
+
 ## Convex backend
 
 - `convex/schema.ts` is the data-model source of truth.

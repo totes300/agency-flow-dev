@@ -58,6 +58,35 @@ must be callable by clients.
   @-mentioned task is re-resolved through `access.ts` before its title reaches
   the model.
 
+## MCP (OAuth) token surface
+
+The MCP server (`docs/prd-mcp.md` §5) is a second way in, with its own rules:
+
+- Every `convex/mcp/*` function calls `getMcpAuthContext` first (I1) and takes no
+  `orgId`, user or role argument (I2); `convex/__tests__/mcpInvariants.test.ts`
+  enforces both on the source.
+- The org comes from the verified token's `org_id`; the role comes **only** from
+  `orgMembers`, never from the token (OAuth tokens carry no org role). Do not reuse
+  the session-token parsing of `getAuthContext` for OAuth identities.
+- Every reference resolved from tool input (ID, link, key, email, external ref) is
+  ownership-checked in the caller's org; a foreign or unreadable record is "not
+  found", never "forbidden" (I3).
+- A session JWT cannot call `convex/mcp/*` and an OAuth JWT cannot call UI
+  functions: the `client_id` claim decides the surface (I4).
+- A batch write is one mutation: all items succeed or none (I5).
+- Revocation is enforced here, not in Clerk, and fails closed: a token whose org +
+  user + client has a revoked `mcpConnections` row is refused on the next call, the
+  upload endpoint refuses the same way, and `MCP_DISABLED="true"` refuses all MCP
+  calls. Removing a member cuts access on the next call because membership is
+  re-read every time.
+- A call without a connection row is also refused, and the /mcp route creates the
+  row (`mcp/connections:touch`) before it handles a client's first request. Treat
+  that as a precondition the route satisfies, not as a boundary against the token
+  holder: `convex/mcp/*` are public functions, so anyone holding a valid OAuth
+  token can call them, `touch` included, with the access the token's user has in
+  that org. The security controls are the token, the per-call checks above (org,
+  membership, role, revoke) and Revoke.
+
 ## Review checklist
 
 - Can the caller choose the organization used for authorization?

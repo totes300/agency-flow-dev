@@ -83,6 +83,7 @@ export function DisplayMenu({
   onSetDefault,
   hiddenGroupBy,
   hiddenProperties,
+  savable = true,
 }: {
   display: DisplaySpec
   view: ViewOption
@@ -96,14 +97,16 @@ export function DisplayMenu({
   /** Groupings and properties the surface's context makes redundant (a project's own tab). */
   hiddenGroupBy?: ReadonlySet<GroupBy>
   hiddenProperties?: ReadonlySet<ViewProperty>
+  /** False on a fixed list (the project Work list): display changes stay in the URL, never saved. */
+  savable?: boolean
 }) {
   const board = display.layout === "board"
   const groupBy = board ? boardGroupBy(display.groupBy) : display.groupBy
   const subId = useId()
   const emptyId = useId()
   const locked = view.plan === true
-  const canSave = view.scope !== "system" && view.canEdit
-  const canSetDefault = isAdmin && view.scope !== "personal" && !locked
+  const canSave = savable && view.scope !== "system" && view.canEdit
+  const canSetDefault = savable && isAdmin && view.scope !== "personal" && !locked
 
   const toggleProperty = (key: ViewProperty) =>
     onChange({
@@ -207,7 +210,7 @@ export function DisplayMenu({
           <Button variant="ghost" size="sm" disabled={!modified} onClick={onReset}>
             Reset
           </Button>
-          {locked ? null : (
+          {locked || !savable ? null : (
             <Button variant="ghost" size="sm" onClick={onSaveAsNew}>
               Save as new view
             </Button>

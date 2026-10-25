@@ -19,6 +19,7 @@ import {
   listViewQueryFor,
   paramsForView,
   resolveView,
+  scopeFiltersOf,
   toSearchString,
   writeViewParams,
   viewParamFor,
@@ -41,7 +42,7 @@ type SavedViews = (typeof api.tasks.views.list)["_returnType"]
  * deployment without the views module) degrades to the system views instead
  * of breaking the list.
  */
-export function useViewState(surface: TaskViewSurface) {
+export function useViewState(surface: TaskViewSurface, fixedView?: ViewOption) {
   const searchParams = useSearchParams()
   const router = useRouter()
   const pathname = usePathname()
@@ -61,12 +62,17 @@ export function useViewState(surface: TaskViewSurface) {
     [saved, surface],
   )
   const paramsKey = searchParams.toString()
-  const view = resolveView(options, surface, searchParams.get(viewParamFor(surface)))
+  // A fixed view (the project Overview's Work list) ignores `?view=` and saved views.
+  const view = fixedView ?? resolveView(options, surface, searchParams.get(viewParamFor(surface)))
   const draft = useMemo(() => draftFromSearchParams(new URLSearchParams(paramsKey), view), [paramsKey, view])
   const spec = useMemo(() => draftSpec(view, draft), [view, draft])
   const modified = isDraftModified(draft, view)
   const search = searchParams.get(SEARCH_PARAM) ?? ""
-  const listQuery = useMemo(() => listViewQueryFor(view, draft), [view, draft])
+  const listQuery = useMemo(
+    // Chips filter client-side (facet counts need the unfiltered rows).
+    () => (fixedView ? { spec: { ...draftSpec(view, draft), filters: scopeFiltersOf(view) } } : listViewQueryFor(view, draft)),
+    [fixedView, view, draft],
+  )
 
   const navigate = useCallback(
     (next: URLSearchParams, mode: "push" | "replace") => {

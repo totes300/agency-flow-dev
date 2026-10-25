@@ -334,6 +334,18 @@ export async function recomputeUserStates(
 // ─── Public mutation ─────────────────────────────────────────────────────────
 
 /**
+ * Opening a task, for an already-loaded readable task: resets the caller's
+ * unread comments and unseen changes and clears its inbox notifications.
+ * Shared with MCP `mark_read` on a task or comment ref.
+ */
+export async function markViewedForAuth(ctx: MutationCtx, access: TaskAccess, now: number): Promise<void> {
+  await markTaskViewed(ctx, access, now);
+  // Honest badge: opening a task clears the viewer's unread inbox
+  // notifications for it.
+  await markTaskNotificationsRead(ctx, { userId: access.auth.userId, orgId: access.auth.orgId, taskId: access.task._id });
+}
+
+/**
  * Called when the caller opens a task (drawer, full page). Resets the
  * caller's unread comments and unseen-change dot.
  */
@@ -341,9 +353,6 @@ export const markViewed = mutation({
   args: { taskId: v.id("tasks") },
   handler: async (ctx, { taskId }) => {
     const access = await loadTaskForRead(ctx, taskId);
-    await markTaskViewed(ctx, access, Date.now());
-    // Honest badge: opening a task clears the viewer's unread inbox
-    // notifications for it.
-    await markTaskNotificationsRead(ctx, { userId: access.auth.userId, orgId: access.auth.orgId, taskId });
+    await markViewedForAuth(ctx, access, Date.now());
   },
 });

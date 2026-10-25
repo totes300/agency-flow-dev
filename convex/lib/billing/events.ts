@@ -6,6 +6,7 @@
 
 import type { Doc, Id } from "../../_generated/dataModel";
 import type { MutationCtx } from "../../_generated/server";
+import type { ActivityVia } from "../../tasks/model";
 
 export type BillingEventType = Doc<"billingEvents">["type"];
 
@@ -19,7 +20,10 @@ export async function appendBillingEvent(
     closeId?: Id<"billingCloses">;
     invoiceId?: Id<"invoices">;
     data?: Record<string, string | number | boolean>;
+    /** Written through an external agent (MCP attribution, docs/prd-mcp.md D15). */
+    via?: ActivityVia;
   },
 ): Promise<void> {
-  await ctx.db.insert("billingEvents", { ...event, at: Date.now() });
+  const { via, ...rest } = event;
+  await ctx.db.insert("billingEvents", { ...rest, ...(via ? { via } : {}), at: Date.now() });
 }

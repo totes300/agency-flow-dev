@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useRef, useCallback } from "react"
-import { useQuery, useMutation } from "convex/react"
+import { useAction, useQuery, useMutation } from "convex/react"
 import { useConvexAuth } from "convex/react"
 import { useOrganization } from "@clerk/nextjs"
 import { api } from "@/convex/_generated/api"
@@ -30,7 +30,7 @@ export function TaskDetailAttachments({
     isAuthenticated ? { taskId } : "skip",
   )
 
-  const generateUploadUrl = useMutation(api.attachments.generateUploadUrl)
+  const generateUploadUrl = useAction(api.fileUploads.generateUploadUrl)
   const saveAttachment = useMutation(api.attachments.save)
   const removeAttachment = useMutation(api.attachments.remove)
 

@@ -33,6 +33,7 @@ const tabsListVariants = cva(
         default:
           "rounded-lg p-[3px] bg-muted group-data-horizontal/tabs:h-8",
         line: "h-auto gap-0 rounded-none border-b bg-transparent p-0",
+        pill: "h-7 gap-1.5 rounded-none bg-transparent p-0",
         plain: "h-auto gap-4 rounded-none border-0 bg-transparent p-0",
       },
     },
@@ -78,6 +79,8 @@ function TabsTrigger({
         "group-data-[variant=line]/tabs-list:-mb-px group-data-[variant=line]/tabs-list:rounded-none group-data-[variant=line]/tabs-list:border-b-2 group-data-[variant=line]/tabs-list:border-transparent group-data-[variant=line]/tabs-list:px-4 group-data-[variant=line]/tabs-list:py-2 group-data-[variant=line]/tabs-list:text-muted-foreground group-data-[variant=line]/tabs-list:hover:text-foreground group-data-[variant=line]/tabs-list:data-active:border-foreground group-data-[variant=line]/tabs-list:data-active:text-foreground",
         // Plain variant — text only, no chrome
         "group-data-[variant=plain]/tabs-list:m-0 group-data-[variant=plain]/tabs-list:rounded-none group-data-[variant=plain]/tabs-list:border-0 group-data-[variant=plain]/tabs-list:bg-transparent group-data-[variant=plain]/tabs-list:p-0 group-data-[variant=plain]/tabs-list:shadow-none group-data-[variant=plain]/tabs-list:ring-0 group-data-[variant=plain]/tabs-list:text-muted-foreground/50 group-data-[variant=plain]/tabs-list:hover:text-muted-foreground group-data-[variant=plain]/tabs-list:data-active:text-foreground",
+        // Compact view pills, shared with directory surfaces.
+        "group-data-[variant=pill]/tabs-list:h-7 group-data-[variant=pill]/tabs-list:rounded-full group-data-[variant=pill]/tabs-list:px-3 group-data-[variant=pill]/tabs-list:text-[13px] group-data-[variant=pill]/tabs-list:font-normal group-data-[variant=pill]/tabs-list:ring-1 group-data-[variant=pill]/tabs-list:ring-inset group-data-[variant=pill]/tabs-list:ring-border group-data-[variant=pill]/tabs-list:hover:bg-muted/60 group-data-[variant=pill]/tabs-list:data-active:bg-foreground/[0.07] group-data-[variant=pill]/tabs-list:data-active:font-medium group-data-[variant=pill]/tabs-list:data-active:text-foreground group-data-[variant=pill]/tabs-list:data-active:ring-transparent",
         // Vertical
         "group-data-vertical/tabs:w-full group-data-vertical/tabs:justify-start",
         className

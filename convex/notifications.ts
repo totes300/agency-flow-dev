@@ -2,7 +2,7 @@ import { v, ConvexError } from "convex/values";
 import { query, mutation, internalMutation, MutationCtx, QueryCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
-import { getAuthContext } from "./lib/auth";
+import { getAuthContext, type AuthContext } from "./lib/auth";
 import { loadTaskForRead, userCanReadTask } from "./tasks/access";
 import { getUserState, setTaskMuted } from "./tasks/userState";
 
@@ -242,17 +242,29 @@ function assertIdsCap(ids: unknown[]): void {
   }
 }
 
+/**
+ * Marks the caller's own notifications read (any state → read, as the
+ * Inbox's open / "Mark as read"). Shared with MCP `mark_read`.
+ */
+export async function markNotificationsReadForAuth(
+  ctx: MutationCtx,
+  auth: Pick<AuthContext, "orgId" | "userId">,
+  ids: Id<"notifications">[],
+): Promise<void> {
+  const { orgId, userId } = auth;
+  assertIdsCap(ids);
+
+  const now = Date.now();
+  for (const id of ids) {
+    await getOwnNotification(ctx, id, userId, orgId);
+    await ctx.db.patch(id, { inboxState: "read", readAt: now, updatedAt: now });
+  }
+}
+
 export const markRead = mutation({
   args: { ids: v.array(v.id("notifications")) },
   handler: async (ctx, args) => {
-    const { orgId, userId } = await getAuthContext(ctx);
-    assertIdsCap(args.ids);
-
-    const now = Date.now();
-    for (const id of args.ids) {
-      await getOwnNotification(ctx, id, userId, orgId);
-      await ctx.db.patch(id, { inboxState: "read", readAt: now, updatedAt: now });
-    }
+    await markNotificationsReadForAuth(ctx, await getAuthContext(ctx), args.ids);
   },
 });
 
@@ -293,22 +305,38 @@ export const archive = mutation({
   },
 });
 
+/** Unread notifications one "Mark all as read" clears. */
+export const MARK_ALL_READ_CAP = 200;
+
+/**
+ * The Inbox's "Mark all as read": up to `MARK_ALL_READ_CAP` of the caller's
+ * unread notifications. Shared with MCP `mark_read("inbox")`; returns how
+ * many were marked.
+ */
+export async function markAllNotificationsReadForAuth(
+  ctx: MutationCtx,
+  auth: Pick<AuthContext, "orgId" | "userId">,
+): Promise<number> {
+  const { orgId, userId } = auth;
+
+  const unread = await ctx.db
+    .query("notifications")
+    .withIndex("by_recipient_org_state", (q) =>
+      q.eq("recipientId", userId).eq("orgId", orgId).eq("inboxState", "unread")
+    )
+    .take(MARK_ALL_READ_CAP);
+
+  const now = Date.now();
+  for (const row of unread) {
+    await ctx.db.patch(row._id, { inboxState: "read", readAt: now, updatedAt: now });
+  }
+  return unread.length;
+}
+
 export const markAllRead = mutation({
   args: {},
   handler: async (ctx) => {
-    const { orgId, userId } = await getAuthContext(ctx);
-
-    const unread = await ctx.db
-      .query("notifications")
-      .withIndex("by_recipient_org_state", (q) =>
-        q.eq("recipientId", userId).eq("orgId", orgId).eq("inboxState", "unread")
-      )
-      .take(200);
-
-    const now = Date.now();
-    for (const row of unread) {
-      await ctx.db.patch(row._id, { inboxState: "read", readAt: now, updatedAt: now });
-    }
+    await markAllNotificationsReadForAuth(ctx, await getAuthContext(ctx));
   },
 });
 

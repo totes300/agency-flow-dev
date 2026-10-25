@@ -84,7 +84,7 @@ describe("billing_preview tool", () => {
     const t = tool("billing_preview");
     expect(t.annotations).toEqual({ readOnlyHint: true, openWorldHint: false });
     for (const action of BILLING_ACTIONS) expect(t.description).toContain(action);
-    expect(t.description).toMatch(/show the preview to the user/i);
+    expect(t.description).toMatch(/show the user the preview and get an explicit yes/i);
     expect(t.description).toContain("Example:");
   });
 

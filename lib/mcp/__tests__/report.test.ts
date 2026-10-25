@@ -115,7 +115,7 @@ describe("report tool (registry)", () => {
     expect(report.annotations).toMatchObject({ readOnlyHint: true, openWorldHint: false });
     expect(Object.keys(report.operations).sort()).toEqual([...REPORT_KINDS].sort());
     expect(Object.keys(REPORT_SPECS).sort()).toEqual([...REPORT_KINDS].sort());
-    for (const kind of REPORT_KINDS) expect(report.description).toContain(`${kind}:`);
+    for (const kind of REPORT_KINDS) expect(report.description).toContain(`${kind}(`);
     for (const operation of Object.values(report.operations)) {
       expect("query" in operation && getFunctionName(operation.query)).toMatch(/^mcp\/report:/);
     }

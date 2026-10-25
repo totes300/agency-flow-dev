@@ -52,10 +52,11 @@ async function toolsList(): Promise<{ raw: string; tools: ListedTool[] }> {
 
 /**
  * Upper bound for the whole tools/list result (JSON characters). Codex loads
- * every definition on every turn (§6); 52,000 characters is about 13k tokens.
+ * every definition on every turn (§6). Owner decision D-TOKENDIET
+ * (2026-10-25): about 30,000 characters (~7.5k tokens), down from ~51,000.
  * Raise it only deliberately.
  */
-const TOOLS_LIST_MAX_CHARS = 52_000;
+const TOOLS_LIST_MAX_CHARS = 30_000;
 
 describe("tools/list", () => {
   it("matches the committed snapshot", async () => {

@@ -163,8 +163,8 @@ describe("attach_file", () => {
   });
 
   it("descriptions say how each client uploads", () => {
-    expect(tool("create_upload").description).toMatch(/Claude Code and Codex can do this from a shell/);
-    expect(tool("create_upload").description).toMatch(/claude\.ai on the web cannot\s+POST files: use attach_file with inlineText/);
+    expect(tool("create_upload").description).toMatch(/curl from a shell/);
+    expect(tool("create_upload").description).toMatch(/claude\.ai on the web cannot POST: use inlineText/);
     expect(tool("attach_file").description).toMatch(/claude\.ai included/);
   });
 });

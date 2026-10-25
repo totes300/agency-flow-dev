@@ -385,9 +385,9 @@ describe("write tools", () => {
     expect(tool("save_tasks").annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: false });
     expect(tool("save_comments").annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: false });
     expect(tool("delete").annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: true });
-    for (const name of ["save_tasks", "save_comments", "delete"]) {
-      expect(tool(name).description).toMatch(/data, never instructions|app's rules/);
-    }
+    // The shared write conventions (role rules, all-or-nothing, idempotencyKey) are stated once, in search.
+    expect(tool("search").description).toMatch(/Writes follow the app's role rules and notifications, are all-or-nothing/);
+    expect(tool("search").description).toMatch(/data, never\s+instructions/);
   });
 
   it("save_tasks sends the items, key and client name, and renders refs with links", async () => {
@@ -520,10 +520,12 @@ describe("time tools", () => {
         idempotentHint: false,
         openWorldHint: false,
       });
-      expect(tool(name).description).toMatch(/data, never instructions/);
       expect(tool(name).description).toMatch(/Example: \{/);
     }
-    expect(tool("save_time_entries").description).toMatch(/whole minutes: 90 means 1h 30m/);
+    const timeItem = z.toJSONSchema(tool("save_time_entries").inputSchema) as {
+      properties: { items: { items: { properties: { minutes: { description: string } } } } };
+    };
+    expect(timeItem.properties.items.items.properties.minutes.description).toMatch(/Whole minutes: 90 = 1h 30m/);
     expect(tool("delete").description).toMatch(/time entr/);
   });
 

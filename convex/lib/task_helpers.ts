@@ -7,6 +7,7 @@ import { ConvexError } from "convex/values";
 import type { QueryCtx, MutationCtx } from "../_generated/server";
 import type { Id } from "../_generated/dataModel";
 import { deleteStatesOfTask } from "../tasks/userState";
+import { deleteContentForStorage } from "../attachmentContents";
 
 // ─── Validation helpers ──────────────────────────────────────────────────────────
 
@@ -107,6 +108,7 @@ export async function cascadeDeleteTaskData(ctx: MutationCtx, taskId: Id<"tasks"
     .collect();
   for (const ca of commentAttachments) {
     await ctx.storage.delete(ca.fileId);
+    await deleteContentForStorage(ctx, ca.fileId);
     await ctx.db.delete(ca._id);
   }
 
@@ -124,6 +126,7 @@ export async function cascadeDeleteTaskData(ctx: MutationCtx, taskId: Id<"tasks"
     .collect();
   for (const att of attachments) {
     await ctx.storage.delete(att.fileId);
+    await deleteContentForStorage(ctx, att.fileId);
     await ctx.db.delete(att._id);
   }
 

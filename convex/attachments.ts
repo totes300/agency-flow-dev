@@ -1,10 +1,12 @@
 import { v, ConvexError } from "convex/values";
-import { query, mutation, action, type QueryCtx } from "./_generated/server";
+import { query, mutation, action, type MutationCtx, type QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { getAuthContext, getSessionIdentity, type AuthContext } from "./lib/auth";
-import { loadTaskForReadOrNull, loadTaskForWrite } from "./tasks/access";
+import { loadTaskForReadOrNull, loadTaskForWrite, type TaskAccess } from "./tasks/access";
 import { isMimeTypeBlocked } from "./lib/content_validation";
 import { isSafeUrl } from "./lib/url";
+import { deleteContentForStorage, requestExtraction } from "./attachmentContents";
+import { MAX_FILE_SIZE, MAX_FILES_PER_TASK } from "../lib/attachment";
 
 // ─── Query ──────────────────────────────────────────────────────────────────────
 
@@ -14,7 +16,8 @@ export const TASK_ATTACHMENT_CAP = 100;
 /**
  * A task's attachments for an already-authorized caller, oldest first, with
  * uploader names and file URLs. Null when the caller cannot read the task
- * (tasks/access.ts, T1). Shared by `byTask` below and the MCP `fetch` tool;
+ * (tasks/access.ts, T1). Shared by `byTask` below and the MCP `fetch` tool
+ * (which also uses `fileId` to look up the extracted text);
  * `truncated` = more than `cap` attachments exist.
  */
 export async function listTaskAttachmentsForAuth(
@@ -46,6 +49,7 @@ export async function listTaskAttachmentsForAuth(
       const url = await ctx.storage.getUrl(att.fileId);
       return {
         _id: att._id,
+        fileId: att.fileId,
         fileName: att.fileName,
         fileSize: att.fileSize,
         mimeType: att.mimeType,
@@ -64,7 +68,18 @@ export const byTask = query({
   args: { taskId: v.id("tasks") },
   handler: async (ctx, { taskId }) => {
     const auth = await getAuthContext(ctx);
-    return (await listTaskAttachmentsForAuth(ctx, auth, taskId))?.attachments ?? [];
+    const result = await listTaskAttachmentsForAuth(ctx, auth, taskId);
+    // The UI's shape: no storage id (the URL is what the client needs).
+    return (result?.attachments ?? []).map((att) => ({
+      _id: att._id,
+      fileName: att.fileName,
+      fileSize: att.fileSize,
+      mimeType: att.mimeType,
+      url: att.url,
+      userId: att.userId,
+      createdAt: att.createdAt,
+      userName: att.userName,
+    }));
   },
 });
 
@@ -123,6 +138,61 @@ export const reuploadFromUrl = action({
   },
 });
 
+export type AttachmentFileInput = {
+  fileId: Id<"_storage">;
+  fileName: string;
+  fileSize: number;
+  mimeType: string;
+};
+
+/**
+ * The task attachment write path for a caller who may write the task
+ * (`loadTaskForWrite`): blocked types, the per-task count and the size
+ * limit, then the row, then text extraction (attachmentContents.ts). Shared
+ * by `save` below and MCP `attach_file`.
+ */
+export async function saveTaskAttachmentForAuth(
+  ctx: MutationCtx,
+  access: TaskAccess,
+  file: AttachmentFileInput,
+): Promise<Id<"attachments">> {
+  const { orgId, userId } = access.auth;
+  const taskId = access.task._id;
+
+  // Block dangerous MIME types (XSS prevention)
+  if (isMimeTypeBlocked(file.mimeType)) {
+    throw new ConvexError("This file type is not allowed");
+  }
+
+  // Check file count limit
+  const existing = await ctx.db
+    .query("attachments")
+    .withIndex("by_task", (q) => q.eq("taskId", taskId))
+    .take(MAX_FILES_PER_TASK + 1); // one more than the limit, to check if over
+  if (existing.length >= MAX_FILES_PER_TASK) {
+    throw new ConvexError(`Maximum ${MAX_FILES_PER_TASK} files per task`);
+  }
+
+  // Validate file size (10MB)
+  if (file.fileSize > MAX_FILE_SIZE) {
+    throw new ConvexError("File exceeds 10MB limit");
+  }
+
+  const id = await ctx.db.insert("attachments", {
+    taskId,
+    orgId,
+    userId,
+    fileId: file.fileId,
+    fileName: file.fileName,
+    fileSize: file.fileSize,
+    mimeType: file.mimeType,
+    createdAt: Date.now(),
+  });
+  // What an agent can read inside the file (MCP fetch attachment_text).
+  await requestExtraction(ctx, { orgId, storageId: file.fileId, mimeType: file.mimeType, name: file.fileName });
+  return id;
+}
+
 export const save = mutation({
   args: {
     taskId: v.id("tasks"),
@@ -132,36 +202,12 @@ export const save = mutation({
     mimeType: v.string(),
   },
   handler: async (ctx, args) => {
-    const { orgId, userId } = (await loadTaskForWrite(ctx, args.taskId)).auth;
-
-    // Block dangerous MIME types (XSS prevention)
-    if (isMimeTypeBlocked(args.mimeType)) {
-      throw new ConvexError("This file type is not allowed");
-    }
-
-    // Check file count limit
-    const existing = await ctx.db
-      .query("attachments")
-      .withIndex("by_task", (q) => q.eq("taskId", args.taskId))
-      .take(21); // take 21 to check if over 20
-    if (existing.length >= 20) {
-      throw new ConvexError("Maximum 20 files per task");
-    }
-
-    // Validate file size (10MB)
-    if (args.fileSize > 10 * 1024 * 1024) {
-      throw new ConvexError("File exceeds 10MB limit");
-    }
-
-    return await ctx.db.insert("attachments", {
-      taskId: args.taskId,
-      orgId,
-      userId,
+    const access = await loadTaskForWrite(ctx, args.taskId);
+    return await saveTaskAttachmentForAuth(ctx, access, {
       fileId: args.fileId,
       fileName: args.fileName,
       fileSize: args.fileSize,
       mimeType: args.mimeType,
-      createdAt: Date.now(),
     });
   },
 });
@@ -179,6 +225,7 @@ export const remove = mutation({
     }
 
     await ctx.storage.delete(att.fileId);
+    await deleteContentForStorage(ctx, att.fileId);
     await ctx.db.delete(args.id);
   },
 });

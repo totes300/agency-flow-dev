@@ -6,6 +6,7 @@ import { logActivity } from "./activityLog";
 import { onComment } from "./tasks/derived";
 import { loadTaskForReadOrNull, loadTaskForWrite, type TaskAccess } from "./tasks/access";
 import { createNotifications } from "./notifications";
+import { deleteContentForStorage } from "./attachmentContents";
 import {
   extractMentionIds,
   computeCommentRecipients,
@@ -261,6 +262,7 @@ export async function removeCommentForAuth(
     .collect();
   for (const att of attachments) {
     await ctx.storage.delete(att.fileId);
+    await deleteContentForStorage(ctx, att.fileId);
     await ctx.db.delete(att._id);
   }
 

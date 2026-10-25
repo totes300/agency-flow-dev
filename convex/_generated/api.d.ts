@@ -13,6 +13,8 @@ import type * as __tests___helpers_orgSnapshot from "../__tests__/helpers/orgSna
 import type * as __tests___helpers_taskFixtures from "../__tests__/helpers/taskFixtures.js";
 import type * as activityLog from "../activityLog.js";
 import type * as aiIntegration from "../aiIntegration.js";
+import type * as attachmentContents from "../attachmentContents.js";
+import type * as attachmentExtraction from "../attachmentExtraction.js";
 import type * as attachments from "../attachments.js";
 import type * as billingCloses from "../billingCloses.js";
 import type * as billingInvoices from "../billingInvoices.js";
@@ -160,6 +162,8 @@ declare const fullApi: ApiFromModules<{
   "__tests__/helpers/taskFixtures": typeof __tests___helpers_taskFixtures;
   activityLog: typeof activityLog;
   aiIntegration: typeof aiIntegration;
+  attachmentContents: typeof attachmentContents;
+  attachmentExtraction: typeof attachmentExtraction;
   attachments: typeof attachments;
   billingCloses: typeof billingCloses;
   billingInvoices: typeof billingInvoices;

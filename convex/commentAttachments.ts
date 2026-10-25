@@ -1,20 +1,23 @@
 import { v, ConvexError } from "convex/values";
-import { query, mutation, type QueryCtx } from "./_generated/server";
-import type { Id } from "./_generated/dataModel";
+import { query, mutation, type MutationCtx, type QueryCtx } from "./_generated/server";
+import type { Doc, Id } from "./_generated/dataModel";
 import { getAuthContext, type AuthContext } from "./lib/auth";
 import { loadTaskForReadOrNull } from "./tasks/access";
 import { isMimeTypeBlocked } from "./lib/content_validation";
+import { deleteContentForStorage, requestExtraction } from "./attachmentContents";
+import type { AttachmentFileInput } from "./attachments";
 
-const MAX_FILES_PER_COMMENT = 5;
+export const MAX_FILES_PER_COMMENT = 5;
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
-const MAX_FILE_NAME_LENGTH = 255;
+export const MAX_FILE_NAME_LENGTH = 255;
 
 // ─── Query ──────────────────────────────────────────────────────────────────────
 
 /**
  * A task's comment attachments for an already-authorized caller, with file
  * URLs. Null when the caller cannot read the task (tasks/access.ts, T1).
- * Shared by `byTask` below and the MCP `fetch` tool. Without `cap` every row
+ * Shared by `byTask` below and the MCP `fetch` tool (which also uses
+ * `fileId` to look up the extracted text). Without `cap` every row
  * is read (the UI groups them per comment); with `cap`, `truncated` says
  * whether more exist.
  */
@@ -36,6 +39,7 @@ export async function listCommentAttachmentsForAuth(
     attachments: attachments.map((att, i) => ({
       _id: att._id,
       commentId: att.commentId,
+      fileId: att.fileId,
       fileName: att.fileName,
       fileSize: att.fileSize,
       mimeType: att.mimeType,
@@ -67,9 +71,16 @@ export const byTask = query({
       }>
     > = {};
 
-    for (const { commentId, ...att } of result.attachments) {
-      if (!grouped[commentId]) grouped[commentId] = [];
-      grouped[commentId].push(att);
+    // The UI's shape: no storage id (the URL is what the client needs).
+    for (const att of result.attachments) {
+      if (!grouped[att.commentId]) grouped[att.commentId] = [];
+      grouped[att.commentId].push({
+        _id: att._id,
+        fileName: att.fileName,
+        fileSize: att.fileSize,
+        mimeType: att.mimeType,
+        url: att.url,
+      });
     }
 
     return grouped;
@@ -86,6 +97,70 @@ export const generateUploadUrl = mutation({
   },
 });
 
+/**
+ * The comment attachment write path for an authorized caller: name length,
+ * blocked types, the comment in the caller's org on a task they can read,
+ * the per-comment count and the size limit, then the row, then text
+ * extraction (attachmentContents.ts). Shared by `save` below and MCP
+ * `attach_file` (which resolves the comment first).
+ */
+export async function saveCommentAttachmentForAuth(
+  ctx: MutationCtx,
+  auth: AuthContext,
+  commentId: Id<"comments">,
+  file: AttachmentFileInput,
+): Promise<{ id: Id<"commentAttachments">; comment: Doc<"comments"> }> {
+  const { orgId, userId } = auth;
+
+  // Validate file name length
+  if (file.fileName.length > MAX_FILE_NAME_LENGTH) {
+    throw new ConvexError("File name too long");
+  }
+
+  // Block dangerous MIME types (XSS prevention)
+  if (isMimeTypeBlocked(file.mimeType)) {
+    throw new ConvexError("This file type is not allowed");
+  }
+
+  const comment = await ctx.db.get(commentId);
+  if (!comment || comment.orgId !== orgId) {
+    throw new ConvexError("Comment not found");
+  }
+
+  // Task access guard (tasks/access.ts)
+  if (!(await loadTaskForReadOrNull(ctx, comment.taskId, auth))) {
+    throw new ConvexError("Comment not found");
+  }
+
+  // Check file count limit per comment
+  const existing = await ctx.db
+    .query("commentAttachments")
+    .withIndex("by_comment", (q) => q.eq("commentId", commentId))
+    .take(MAX_FILES_PER_COMMENT + 1);
+  if (existing.length >= MAX_FILES_PER_COMMENT) {
+    throw new ConvexError(`Maximum ${MAX_FILES_PER_COMMENT} files per comment`);
+  }
+
+  if (file.fileSize > MAX_FILE_SIZE) {
+    throw new ConvexError("File exceeds 10MB limit");
+  }
+
+  const id = await ctx.db.insert("commentAttachments", {
+    commentId,
+    taskId: comment.taskId,
+    orgId,
+    userId,
+    fileId: file.fileId,
+    fileName: file.fileName,
+    fileSize: file.fileSize,
+    mimeType: file.mimeType,
+    createdAt: Date.now(),
+  });
+  // What an agent can read inside the file (MCP fetch attachment_text).
+  await requestExtraction(ctx, { orgId, storageId: file.fileId, mimeType: file.mimeType, name: file.fileName });
+  return { id, comment };
+}
+
 export const save = mutation({
   args: {
     commentId: v.id("comments"),
@@ -96,52 +171,13 @@ export const save = mutation({
   },
   handler: async (ctx, args) => {
     const auth = await getAuthContext(ctx);
-    const { orgId, userId } = auth;
-
-    // Validate file name length
-    if (args.fileName.length > MAX_FILE_NAME_LENGTH) {
-      throw new ConvexError("File name too long");
-    }
-
-    // Block dangerous MIME types (XSS prevention)
-    if (isMimeTypeBlocked(args.mimeType)) {
-      throw new ConvexError("This file type is not allowed");
-    }
-
-    const comment = await ctx.db.get(args.commentId);
-    if (!comment || comment.orgId !== orgId) {
-      throw new ConvexError("Comment not found");
-    }
-
-    // Task access guard (tasks/access.ts)
-    if (!(await loadTaskForReadOrNull(ctx, comment.taskId, auth))) {
-      throw new ConvexError("Comment not found");
-    }
-
-    // Check file count limit per comment
-    const existing = await ctx.db
-      .query("commentAttachments")
-      .withIndex("by_comment", (q) => q.eq("commentId", args.commentId))
-      .take(MAX_FILES_PER_COMMENT + 1);
-    if (existing.length >= MAX_FILES_PER_COMMENT) {
-      throw new ConvexError(`Maximum ${MAX_FILES_PER_COMMENT} files per comment`);
-    }
-
-    if (args.fileSize > MAX_FILE_SIZE) {
-      throw new ConvexError("File exceeds 10MB limit");
-    }
-
-    return await ctx.db.insert("commentAttachments", {
-      commentId: args.commentId,
-      taskId: comment.taskId,
-      orgId,
-      userId,
+    const { id } = await saveCommentAttachmentForAuth(ctx, auth, args.commentId, {
       fileId: args.fileId,
       fileName: args.fileName,
       fileSize: args.fileSize,
       mimeType: args.mimeType,
-      createdAt: Date.now(),
     });
+    return id;
   },
 });
 
@@ -160,6 +196,7 @@ export const remove = mutation({
     }
 
     await ctx.storage.delete(att.fileId);
+    await deleteContentForStorage(ctx, att.fileId);
     await ctx.db.delete(args.id);
   },
 });

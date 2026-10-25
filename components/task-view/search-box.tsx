@@ -10,13 +10,21 @@ export type SearchBoxHandle = { focus: () => void }
 /** URL writes are debounced so typing does not replace history per keystroke. */
 const DEBOUNCE_MS = 150
 
+type SearchBoxProps = {
+  value: string
+  onChange: (value: string) => void
+  label?: string
+  /** Key that focuses the box, shown in the button's tooltip; pass it only where the shortcut is wired. */
+  shortcut?: string
+}
+
 /**
- * Title search for the task view (the old /tasks search box, `/` focuses it).
- * Collapsed to a round icon button until used; filters the loaded rows by
- * title or identifier. Esc clears and closes it.
+ * Title search for the task view (the old /tasks search box, `/` focuses it)
+ * and the directory lists. Collapsed to a round icon button until used;
+ * filters the loaded rows. Esc clears and closes it.
  */
-export const SearchBox = forwardRef<SearchBoxHandle, { value: string; onChange: (value: string) => void; label?: string }>(
-  function SearchBox({ value, onChange, label = "Search tasks" }, ref) {
+export const SearchBox = forwardRef<SearchBoxHandle, SearchBoxProps>(
+  function SearchBox({ value, onChange, label = "Search tasks", shortcut }, ref) {
     const [draft, setDraft] = useState(value)
     const [open, setOpen] = useState(value !== "")
     const inputRef = useRef<HTMLInputElement>(null)
@@ -49,7 +57,7 @@ export const SearchBox = forwardRef<SearchBoxHandle, { value: string; onChange: 
           size="icon-sm"
           className="rounded-full"
           aria-label={label}
-          title={label}
+          title={shortcut ? `${label} (${shortcut})` : label}
           onClick={() => {
             setOpen(true)
             requestAnimationFrame(() => inputRef.current?.focus())

@@ -587,7 +587,7 @@ export function TaskView({
             </Button>
           ) : (
             <>
-              <SearchBox ref={searchRef} value={view.search} onChange={view.setSearch} />
+              <SearchBox ref={searchRef} value={view.search} onChange={view.setSearch} shortcut="/" />
               {facetCtx ? <FilterButton open={filterOpen} onOpenChange={setFilterOpen} ctx={facetCtx} /> : null}
             </>
           )}

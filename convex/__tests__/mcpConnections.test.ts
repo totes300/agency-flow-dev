@@ -125,9 +125,9 @@ describe("connectedApps:listMine", () => {
     await viaMcp(t, "clerk_mel", ORG, CLAUDE).mutation(api.mcp.connections.touch, {});
 
     const ada = await inApp(t, "clerk_ada", ORG, "org:admin").query(api.connectedApps.listMine, {});
-    expect(ada.map((c) => [c.clientName, c.connectedAt, c.lastUsedAt, c.revokedAt])).toEqual([
-      ["claude.ai", T0 + 1000, T0 + 1000, null],
-      ["Codex", T0, T0, null],
+    expect(ada.map((c) => [c.clientId, c.clientName, c.connectedAt, c.lastUsedAt, c.revokedAt])).toEqual([
+      [CLAUDE, "claude.ai", T0 + 1000, T0 + 1000, null],
+      [CODEX, "Codex", T0, T0, null],
     ]);
     const adaElsewhere = await inApp(t, "clerk_ada", OTHER, "org:member").query(api.connectedApps.listMine, {});
     expect(adaElsewhere.map((c) => c.clientName)).toEqual(["claude.ai"]);

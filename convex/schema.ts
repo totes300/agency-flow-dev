@@ -936,5 +936,8 @@ export default defineSchema({
     firstUsedAt: v.number(),
     lastUsedAt: v.number(),
     revokedAt: v.optional(v.number()),
-  }).index("by_orgId_userId_clientId", ["orgId", "userId", "clientId"]),
+  })
+    .index("by_orgId_userId_clientId", ["orgId", "userId", "clientId"])
+    // Connected apps lists the most recently used first (CONNECTIONS_LIST_MAX).
+    .index("by_orgId_userId_lastUsedAt", ["orgId", "userId", "lastUsedAt"]),
 });

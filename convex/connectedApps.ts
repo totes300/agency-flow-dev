@@ -15,6 +15,7 @@ export const listMine = query({
   returns: v.array(
     v.object({
       id: v.id("mcpConnections"),
+      clientId: v.string(),
       clientName: v.string(),
       connectedAt: v.number(),
       lastUsedAt: v.number(),

@@ -4,6 +4,7 @@ import type { Doc, Id } from "../_generated/dataModel";
 import type { AuthContext } from "./auth";
 import type { McpAuthContext } from "./mcpAuth";
 import { sanitizeClientName } from "../../lib/mcp/client-name";
+import { CONNECTION_LAST_USED_INTERVAL_MS } from "../../lib/mcp/limits";
 
 /**
  * Connected apps (docs/prd-mcp.md D17, §11): one `mcpConnections` row per
@@ -36,9 +37,12 @@ export async function isConnectionRevoked(
 }
 
 /** "Last used" is stamped at most this often per connection. */
-export const LAST_USED_INTERVAL_MS = 60 * 60 * 1000;
+export const LAST_USED_INTERVAL_MS = CONNECTION_LAST_USED_INTERVAL_MS;
 
-/** Connections listed per user and org (a user has a handful). */
+/**
+ * Connections listed per user and org: the most recently used ones (a user
+ * has a handful; older rows beyond the cap are left out, never mixed in).
+ */
 export const CONNECTIONS_LIST_MAX = 50;
 
 export type StampOutcome = "created" | "stamped" | "skipped";
@@ -84,6 +88,8 @@ export async function stampConnection(
 /** One row of Connected apps. */
 export type ConnectionRow = {
   id: Doc<"mcpConnections">["_id"];
+  /** The OAuth client ID: tells apart two connections with the same name. */
+  clientId: string;
   clientName: string;
   connectedAt: number;
   lastUsedAt: number;
@@ -95,17 +101,17 @@ export type ConnectionRow = {
 export async function listConnectionsForAuth(ctx: QueryCtx, auth: AuthContext): Promise<ConnectionRow[]> {
   const rows = await ctx.db
     .query("mcpConnections")
-    .withIndex("by_orgId_userId_clientId", (q) => q.eq("orgId", auth.orgId).eq("userId", auth.userId))
+    .withIndex("by_orgId_userId_lastUsedAt", (q) => q.eq("orgId", auth.orgId).eq("userId", auth.userId))
+    .order("desc")
     .take(CONNECTIONS_LIST_MAX);
-  return rows
-    .map((row) => ({
-      id: row._id,
-      clientName: row.clientName,
-      connectedAt: row.firstUsedAt,
-      lastUsedAt: row.lastUsedAt,
-      revokedAt: row.revokedAt ?? null,
-    }))
-    .sort((a, b) => b.lastUsedAt - a.lastUsedAt);
+  return rows.map((row) => ({
+    id: row._id,
+    clientId: row.clientId,
+    clientName: row.clientName,
+    connectedAt: row.firstUsedAt,
+    lastUsedAt: row.lastUsedAt,
+    revokedAt: row.revokedAt ?? null,
+  }));
 }
 
 /**

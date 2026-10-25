@@ -1,4 +1,5 @@
 import { format, formatDistanceStrict } from "date-fns"
+import { CONNECTION_LAST_USED_INTERVAL_MS } from "@/lib/mcp/limits"
 
 /**
  * Pure helpers for the Connected apps page (/connected-apps, docs/prd-mcp.md
@@ -8,10 +9,8 @@ import { format, formatDistanceStrict } from "date-fns"
 /** The server name the setup commands use (`codex mcp add agency-flow …`). */
 export const MCP_SERVER_NAME = "agency-flow"
 
-/** "Last used" is stamped at most hourly (convex/lib/mcpConnections.ts). */
-const LAST_USED_GRANULARITY_MS = 60 * 60 * 1000
-
 export type ConnectionView = {
+  clientId: string
   clientName: string
   connectedAt: number
   lastUsedAt: number
@@ -22,10 +21,50 @@ export type ConnectionView = {
 export function connectionMeta(row: ConnectionView, now: number): string {
   const since = row.revokedAt !== null ? `Revoked ${format(row.revokedAt, "MMM d, yyyy")}` : `Connected ${format(row.connectedAt, "MMM d, yyyy")}`
   const lastUsed =
-    now - row.lastUsedAt < LAST_USED_GRANULARITY_MS
+    now - row.lastUsedAt < CONNECTION_LAST_USED_INTERVAL_MS
       ? "used within the last hour"
       : `last used ${formatDistanceStrict(row.lastUsedAt, now, { addSuffix: true })}`
   return `${since} · ${lastUsed}`
+}
+
+/**
+ * What tells a connection apart from another with the same display name:
+ * for a client metadata document URL (CIMD, e.g.
+ * `https://claude.ai/oauth/claude-code-client-metadata`) the last path
+ * segment in words ("claude code"); for a registered client, the end of its
+ * client ID. Derived only — no table of known clients.
+ */
+export function clientDetail(clientId: string): string {
+  try {
+    const url = new URL(clientId)
+    if (url.protocol === "https:") {
+      // The last path segment that still says something once the generic
+      // "client-metadata(.json)" suffix is removed.
+      const words = url.pathname
+        .split("/")
+        .filter(Boolean)
+        .map((segment) =>
+          segment
+            .replace(/\.json$/i, "")
+            .replace(/[-_]?(oauth[-_])?client[-_]?metadata$/i, "")
+            .replace(/[-_]+/g, " ")
+            .trim(),
+        )
+        .filter(Boolean)
+        .pop()
+      return words || url.pathname || url.hostname
+    }
+  } catch {
+    // Not a URL: a registered client ID.
+  }
+  return `client …${clientId.slice(-6)}`
+}
+
+/** The secondary label per row: only rows whose display name another row shares get one. */
+export function connectionDetails(rows: readonly ConnectionView[]): Array<string | null> {
+  const counts = new Map<string, number>()
+  for (const row of rows) counts.set(row.clientName, (counts.get(row.clientName) ?? 0) + 1)
+  return rows.map((row) => ((counts.get(row.clientName) ?? 0) > 1 ? clientDetail(row.clientId) : null))
 }
 
 /** Whether the MCP URL points at this computer (the local dev server). */

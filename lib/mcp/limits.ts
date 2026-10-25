@@ -153,3 +153,10 @@ export const INVOICE_ACTIONS = [
  */
 export const INVOICE_SEARCH_STATUSES = ["draft", "invoiced", "past_due", "outstanding", "paid", "void"] as const;
 export type InvoiceSearchStatus = (typeof INVOICE_SEARCH_STATUSES)[number];
+
+/**
+ * Connected apps (docs/prd-mcp.md D17): a connection's "last used" is stamped
+ * at most this often — by the /mcp route per server instance and again by
+ * convex/lib/mcpConnections.ts across instances; the page rounds to it.
+ */
+export const CONNECTION_LAST_USED_INTERVAL_MS = 60 * 60 * 1000;

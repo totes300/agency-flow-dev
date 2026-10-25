@@ -3,7 +3,6 @@
 import { useState } from "react"
 import { useConvexAuth, useMutation, useQuery } from "convex/react"
 import { api } from "@/convex/_generated/api"
-import type { Id } from "@/convex/_generated/dataModel"
 import { Skeleton } from "@/components/ui/skeleton"
 import { toastError } from "@/lib/toast-helpers"
 import { ConnectedAppsList } from "./connected-apps-list"
@@ -53,14 +52,14 @@ export function ConnectedAppsPage({ mcpUrl }: { mcpUrl: string | null }) {
             now={now}
             onRevoke={async (id) => {
               try {
-                await revoke({ id: id as Id<"mcpConnections"> })
+                await revoke({ id })
               } catch (error) {
                 toastError(error, "Couldn't revoke the app")
               }
             }}
             onAllowAgain={async (id) => {
               try {
-                await allowAgain({ id: id as Id<"mcpConnections"> })
+                await allowAgain({ id })
               } catch (error) {
                 toastError(error, "Couldn't allow the app again")
               }

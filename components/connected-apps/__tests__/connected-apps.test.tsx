@@ -6,21 +6,25 @@ import { describe, it, expect, vi, afterEach } from "vitest"
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { ConnectedAppsList, type ConnectionRowData } from "../connected-apps-list"
 import { ConnectHelp } from "../connect-help"
-import { connectionMeta, isLocalMcpUrl } from "@/lib/connected-apps"
+import { clientDetail, connectionDetails, connectionMeta, isLocalMcpUrl } from "@/lib/connected-apps"
+import type { Id } from "@/convex/_generated/dataModel"
 
 afterEach(cleanup)
 
 const HOUR = 60 * 60 * 1000
 const NOW = new Date(2026, 9, 25, 15, 0).getTime()
+const CLAUDE_CODE = "https://claude.ai/oauth/claude-code-client-metadata"
 const claude: ConnectionRowData = {
-  id: "c1",
+  id: "c1" as Id<"mcpConnections">,
+  clientId: CLAUDE_CODE,
   clientName: "claude.ai",
   connectedAt: new Date(2026, 9, 24, 9, 0).getTime(),
   lastUsedAt: NOW - 3 * HOUR,
   revokedAt: null,
 }
 const codex: ConnectionRowData = {
-  id: "c2",
+  id: "c2" as Id<"mcpConnections">,
+  clientId: "client_codex_dcr_123456",
   clientName: "Codex",
   connectedAt: new Date(2026, 9, 20, 9, 0).getTime(),
   lastUsedAt: NOW - 30 * 60 * 1000,
@@ -38,6 +42,20 @@ describe("connectionMeta", () => {
     expect(isLocalMcpUrl("https://127.0.0.1:3001/mcp")).toBe(true)
     expect(isLocalMcpUrl("https://app.example.com/mcp")).toBe(false)
     expect(isLocalMcpUrl("not a url")).toBe(false)
+  })
+})
+
+describe("clientDetail / connectionDetails", () => {
+  it("derives a label from the metadata URL path, or the end of a registered client ID", () => {
+    expect(clientDetail(CLAUDE_CODE)).toBe("claude code")
+    expect(clientDetail("https://chatgpt.com/oauth/codex_cli/client-metadata.json")).toBe("codex cli")
+    expect(clientDetail("https://example.com/")).toBe("/")
+    expect(clientDetail("client_codex_dcr_123456")).toBe("client …123456")
+  })
+
+  it("labels only rows whose display name another row shares", () => {
+    const web = { ...claude, id: "c3" as Id<"mcpConnections">, clientId: "https://claude.ai/oauth/mcp-oauth-client-metadata" }
+    expect(connectionDetails([claude, web, codex])).toEqual(["claude code", "mcp", null])
   })
 })
 
@@ -73,6 +91,13 @@ describe("ConnectedAppsList", () => {
     expect(dialog).toHaveTextContent("Allow Codex again?")
     fireEvent.click(screen.getAllByRole("button", { name: "Allow again" }).at(-1)!)
     await waitFor(() => expect(onAllowAgain).toHaveBeenCalledWith("c2"))
+  })
+
+  it("shows the secondary label next to two apps with the same name", () => {
+    const web = { ...claude, id: "c3" as Id<"mcpConnections">, clientId: "https://claude.ai/oauth/mcp-oauth-client-metadata" }
+    render(<ConnectedAppsList connections={[claude, web]} now={NOW} onRevoke={vi.fn()} onAllowAgain={vi.fn()} />)
+    expect(screen.getByText("· claude code")).toBeInTheDocument()
+    expect(screen.getByText("· mcp")).toBeInTheDocument()
   })
 
   it("says plainly when nothing is connected", () => {

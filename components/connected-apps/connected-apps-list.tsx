@@ -3,10 +3,11 @@
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { ConfirmDialog } from "@/components/confirm-dialog"
-import { connectionMeta, type ConnectionView } from "@/lib/connected-apps"
+import type { Id } from "@/convex/_generated/dataModel"
+import { connectionDetails, connectionMeta, type ConnectionView } from "@/lib/connected-apps"
 import { cn } from "@/lib/utils"
 
-export type ConnectionRowData = ConnectionView & { id: string }
+export type ConnectionRowData = ConnectionView & { id: Id<"mcpConnections"> }
 
 type Pending = { kind: "revoke" | "allow"; row: ConnectionRowData } | null
 
@@ -24,10 +25,11 @@ export function ConnectedAppsList({
 }: {
   connections: ConnectionRowData[]
   now: number
-  onRevoke: (id: string) => Promise<void>
-  onAllowAgain: (id: string) => Promise<void>
+  onRevoke: (id: Id<"mcpConnections">) => Promise<void>
+  onAllowAgain: (id: Id<"mcpConnections">) => Promise<void>
 }) {
   const [pending, setPending] = useState<Pending>(null)
+  const details = connectionDetails(connections)
 
   if (connections.length === 0) {
     return (
@@ -48,12 +50,16 @@ export function ConnectedAppsList({
   return (
     <>
       <ul className="border-t border-border/60">
-        {connections.map((row) => {
+        {connections.map((row, index) => {
           const revoked = row.revokedAt !== null
+          const detail = details[index]
           return (
             <li key={row.id} className="flex items-center gap-4 border-b border-border/60 py-3">
               <div className="min-w-0 flex-1">
-                <p className={cn("truncate text-sm font-medium", revoked && "text-muted-foreground")}>{row.clientName}</p>
+                <p className={cn("truncate text-sm font-medium", revoked && "text-muted-foreground")}>
+                  {row.clientName}
+                  {detail ? <span className="font-normal text-muted-foreground"> · {detail}</span> : null}
+                </p>
                 <p className="truncate text-xs text-muted-foreground">{connectionMeta(row, now)}</p>
               </div>
               <Button

@@ -73,14 +73,10 @@ export function ConnectHelp({ mcpUrl }: { mcpUrl: string | null }) {
         <div className="flex flex-col gap-2">
           <h3 className="font-medium">Local development</h3>
           <p className="text-muted-foreground">
-            This server runs on your computer with a local certificate authority (mkcert, created by{" "}
-            <code className={CODE_CLASS}>next dev --experimental-https</code>). Clients on this computer must trust it;
-            Node-based clients such as Claude Code need:
-          </p>
-          <Command>{'NODE_EXTRA_CA_CERTS="$HOME/Library/Application Support/mkcert/rootCA.pem"'}</Command>
-          <p className="text-muted-foreground">
-            (the macOS location). Claude&apos;s web and desktop connectors are reached from Anthropic&apos;s servers, so they
-            cannot connect to localhost; use Claude Code or Codex here.
+            This server runs on your computer with a local (mkcert) certificate. Clients must trust its root
+            certificate; Node-based clients such as Claude Code need <code className={CODE_CLASS}>NODE_EXTRA_CA_CERTS</code>{" "}
+            (see docs/development.md). Claude&apos;s web and desktop connectors cannot reach localhost; use Claude Code or
+            Codex here.
           </p>
         </div>
       ) : null}

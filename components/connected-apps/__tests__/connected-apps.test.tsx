@@ -123,7 +123,7 @@ describe("ConnectHelp", () => {
   it("adds the certificate note on localhost", () => {
     render(<ConnectHelp mcpUrl="https://localhost:3001/mcp" />)
     expect(screen.getByText("Local development")).toBeInTheDocument()
-    expect(screen.getByText(/NODE_EXTRA_CA_CERTS=/)).toBeInTheDocument()
+    expect(screen.getByText("NODE_EXTRA_CA_CERTS")).toBeInTheDocument()
   })
 
   it("says so when the environment has no MCP URL", () => {

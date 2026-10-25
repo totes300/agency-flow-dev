@@ -63,7 +63,7 @@ describe("slice 7a tools in the registry", () => {
     expect(projects.safeParse({ items: [{ name: "X", billingType: "hourly" }] }).success).toBe(false);
     expect(projects.safeParse({ items: [{ ref: "ARLO", includedMinutes: 90.5 }] }).success).toBe(false);
     expect(tool("save_clients").inputSchema.safeParse({ items: [{ name: "X", currency: "XYZ" }] }).success).toBe(false);
-    expect(tool("save_plan").inputSchema.safeParse({ items: [{ ref: "s1", remove: false }] }).success).toBe(false);
+    expect(tool("save_plan").inputSchema.safeParse({ items: [{ ref: "s1", remove: true }] }).success).toBe(false);
     expect(tool("save_daily_notes").inputSchema.safeParse({ content: "hi", date: "24/10/2026" }).success).toBe(false);
   });
 });

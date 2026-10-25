@@ -141,9 +141,9 @@ describe("save_plan", () => {
     expect(after.laneOrder).toBe(mcp.laneOrder);
     expect((await savePlan(t, "alice", [{ ref: mcp._id, endDate: "2026-10-30" }])).items[0].action).toBe("unchanged");
 
-    // Remove unschedules the bar; the task stays.
-    const removed = await savePlan(t, "alice", [{ ref: mcp._id, remove: true }]);
-    expect(removed.items[0].action).toBe("removed");
+    // delete unschedules the bar (the destructive tool); the task stays.
+    const removed = await as(t, "alice").mutation(api.mcp.write.remove, { refs: [mcp._id], clientName: "Claude" });
+    expect(removed.items[0]).toMatchObject({ type: "plan_segment", action: "deleted", label: `planner bar 2026-10-27 – 2026-10-30 · Alice on ${f.id.A}` });
     expect((await segments(t)).some((s) => s._id === mcp._id)).toBe(false);
     expect(await t.run(async (ctx) => await ctx.db.get(f.A))).not.toBeNull();
   });
@@ -158,7 +158,11 @@ describe("save_plan", () => {
     const bobs = await savePlan(t, "admin", [{ task: f.id.B, member: email("bob"), startDate: "2026-10-26", endDate: "2026-10-27" }]);
     const bar = bobs.items[0].segmentId;
     await expect(savePlan(t, "alice", [{ ref: bar, startDate: "2026-10-29" }])).rejects.toThrow("You can only manage your own plan");
-    await expect(savePlan(t, "alice", [{ ref: bar, remove: true }])).rejects.toThrow("You can only manage your own plan");
+    await expect(as(t, "alice").mutation(api.mcp.write.remove, { refs: [bar] })).rejects.toThrow("You can only manage your own plan");
+    await expect(as(t, "other").mutation(api.mcp.write.remove, { refs: [bar] })).rejects.toThrow("not found");
+    // Every member reads the shared board: the bar can be fetched.
+    const fetched = (await as(t, "alice").query(api.mcp.fetch.records, { refs: [bar], include: [], now: NOW })).results[0];
+    expect(fetched.ok && fetched.record).toMatchObject({ type: "plan_segment", member: { name: "Bob" }, mine: false });
     await expect(savePlan(t, "bob", [{ ref: bar, member: email("alice") }])).rejects.toThrow("You can only manage your own plan");
     expect((await savePlan(t, "bob", [{ ref: bar, startDate: "2026-10-27" }])).items[0].action).toBe("updated");
     // Other org: the task and the bar are not found.

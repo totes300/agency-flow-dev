@@ -239,7 +239,6 @@ export const savePlan = mutation({
         member: v.optional(v.string()),
         startDate: v.optional(v.string()),
         endDate: v.optional(v.string()),
-        remove: v.optional(v.boolean()),
       }),
     ),
     idempotencyKey: v.optional(v.string()),

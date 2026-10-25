@@ -25,6 +25,7 @@ import { parseRef, REF_TABLES, type RefTable } from "../../lib/mcp/refs";
  * - projects: ID or project code (a bare short key, case-insensitive);
  * - clients: ID or `client:PREFIX` (case-insensitive; valid prefixes only);
  * - members: ID, email (case-insensitive), with a membership in the org;
+ * - planner bars: ID (the Planner is a shared board: every member reads every bar);
  * - daily notes: ID, the caller's own — admins any member's (as the app's
  *   Daily Notes panel and `/my-tasks?user=`);
  * - invoices (admins only, as in the app): ID, invoice page link or invoice
@@ -43,7 +44,7 @@ import { parseRef, REF_TABLES, type RefTable } from "../../lib/mcp/refs";
  * per org member (bounded by REF_CAP), read once per call.
  */
 
-export type RefType = "task" | "comment" | "time_entry" | "project" | "client" | "member" | "invoice" | "daily_note";
+export type RefType = "task" | "comment" | "time_entry" | "project" | "client" | "member" | "invoice" | "daily_note" | "plan_segment";
 
 export type Resolved =
   | { type: "task"; access: TaskAccess }
@@ -53,7 +54,8 @@ export type Resolved =
   | { type: "client"; client: Doc<"clients"> }
   | { type: "member"; user: Doc<"users">; role: "admin" | "member" }
   | { type: "invoice"; invoice: Doc<"invoices"> }
-  | { type: "daily_note"; note: Doc<"dailyNotes"> };
+  | { type: "daily_note"; note: Doc<"dailyNotes"> }
+  | { type: "plan_segment"; segment: Doc<"planSegments"> };
 
 /** One record an ambiguous reference could mean; `id` references it uniquely. */
 export type RefCandidate = { type: RefType; id: string; key: string | null; name: string };
@@ -71,6 +73,7 @@ const TABLE_TYPE: Record<RefTable, RefType> = {
   users: "member",
   invoices: "invoice",
   dailyNotes: "daily_note",
+  planSegments: "plan_segment",
 };
 
 const TYPE_NOUN: Record<RefType, string> = {
@@ -82,6 +85,7 @@ const TYPE_NOUN: Record<RefType, string> = {
   member: "member",
   invoice: "invoice",
   daily_note: "daily note",
+  plan_segment: "planner bar",
 };
 
 const NOT_FOUND_HINT: Record<RefType, string> = {
@@ -93,6 +97,7 @@ const NOT_FOUND_HINT: Record<RefType, string> = {
   member: 'Members are listed in fetch("workspace").',
   invoice: 'Use search with types ["invoice"] to find invoices.',
   daily_note: 'Use search with types ["daily_note"] to find daily notes.',
+  plan_segment: 'Bar refs are listed by fetch on the task with include ["plan"].',
 };
 
 /** Members never see invoices (the app's /invoices and /billing are admin routes). */
@@ -130,6 +135,8 @@ function candidateOf(resolved: Resolved): RefCandidate {
       return { type: "invoice", id: resolved.invoice._id, key: invoiceKey(resolved.invoice), name: resolved.invoice.subject ?? "Invoice" };
     case "daily_note":
       return { type: "daily_note", id: resolved.note._id, key: null, name: resolved.note.date };
+    case "plan_segment":
+      return { type: "plan_segment", id: resolved.segment._id, key: null, name: `${resolved.segment.startDate} – ${resolved.segment.endDate}` };
   }
 }
 
@@ -246,6 +253,12 @@ export function createRefResolver(ctx: QueryCtx, auth: AuthContext) {
         return note && note.orgId === orgId && (auth.isAdmin || note.userId === auth.userId)
           ? { type: "daily_note", note }
           : null;
+      }
+      case "planSegments": {
+        // As planner.taskSegments / weekGrid: every member of the org reads every bar.
+        const id = ctx.db.normalizeId("planSegments", raw);
+        const segment = id ? await ctx.db.get(id) : null;
+        return segment && segment.orgId === orgId ? { type: "plan_segment", segment } : null;
       }
     }
   }

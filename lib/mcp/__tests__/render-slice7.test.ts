@@ -85,7 +85,7 @@ describe("slice 7a write results", () => {
             },
             {
               segmentId: id("s2"), task: { identifier: "ARLO-22", title: "Copy" }, member: { id: id("u1"), name: "Alice" },
-              startDate: "2026-11-02", endDate: "2026-11-02", action: "removed",
+              startDate: "2026-11-02", endDate: "2026-11-02", action: "updated",
             },
           ],
         },
@@ -95,7 +95,7 @@ describe("slice 7a write results", () => {
       [
         "## Saved 2 plan bars",
         "- bar s1 · [ARLO-21](https://app.test/tasks/ARLO-21) · Hero · Alice · 2026-10-26 – 2026-10-28 · created · [planner](https://app.test/planner?week=2026-W44&users=u1)",
-        "- bar s2 · [ARLO-22](https://app.test/tasks/ARLO-22) · Copy · Alice · 2026-11-02 · removed from the plan · [planner](https://app.test/planner?week=2026-W45&users=u1)",
+        "- bar s2 · [ARLO-22](https://app.test/tasks/ARLO-22) · Copy · Alice · 2026-11-02 · updated · [planner](https://app.test/planner?week=2026-W45&users=u1)",
       ].join("\n"),
     );
     expect(

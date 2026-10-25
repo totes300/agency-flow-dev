@@ -6,12 +6,7 @@ import { createRefResolver, type RefResolver } from "./mcpRefs";
 import { runItem } from "./mcpWrites";
 import { requireMember, requireTask } from "./mcpSaveTasks";
 import type { SavePlanResult } from "./mcpWriteResults";
-import {
-  createSegmentForAuth,
-  removeSegmentForAuth,
-  updateSegmentForAuth,
-  type UpdateSegmentInput,
-} from "../planner";
+import { createSegmentForAuth, updateSegmentForAuth, type UpdateSegmentInput } from "../planner";
 
 /**
  * MCP `save_plan` (docs/prd-mcp.md §6): Planner bars (plan segments: one
@@ -22,8 +17,9 @@ import {
  *   `startDate`, optional `endDate` (default: the start, one day) and
  *   `member` (default: you). A task may have many bars (split sittings).
  * - Edit (`ref` = a bar's ID, from fetch include ["plan"] or an earlier
- *   save_plan) = move / resize / move to another member's row; `remove`
- *   unschedules it (the task is untouched). A bar's task never changes.
+ *   save_plan) = move / resize / move to another member's row. A bar's task
+ *   never changes. Unscheduling is `delete` with the bar's ref (destructive,
+ *   so it lives on the destructive tool).
  * - Who: admins plan every row; members only their own row (create on it,
  *   touch their own bars, never move a bar to someone else), exactly
  *   `assertCanManagePlanFor`. Members schedule tasks they can open.
@@ -46,13 +42,9 @@ export type SavePlanItem = {
   member?: string;
   startDate?: string;
   endDate?: string;
-  /** true: unschedule the bar (`ref` required). */
-  remove?: boolean;
 };
 
 type Row = SavePlanResult["items"][number];
-
-const SEGMENT_HINT = 'Bar refs are listed by fetch on the task with include ["plan"].';
 
 async function row(ctx: MutationCtx, segment: Doc<"planSegments">, action: Row["action"]): Promise<Row> {
   const task = await ctx.db.get(segment.taskId);
@@ -67,31 +59,17 @@ async function row(ctx: MutationCtx, segment: Doc<"planSegments">, action: Row["
   };
 }
 
-/** The bar behind `ref` in the caller's org, else a not-found error. */
-async function requireSegment(ctx: MutationCtx, auth: McpAuthContext, ref: string): Promise<Doc<"planSegments">> {
-  const id = ctx.db.normalizeId("planSegments", ref.trim());
-  const segment = id ? await ctx.db.get(id) : null;
-  if (!segment || segment.orgId !== auth.orgId) throw new ConvexError(`Plan bar ${ref.trim()} not found. ${SEGMENT_HINT}`);
-  return segment;
-}
-
 async function editItem(
   ctx: MutationCtx,
   auth: McpAuthContext,
   resolver: RefResolver,
   item: SavePlanItem & { ref: string },
 ): Promise<Row> {
-  const segment = await requireSegment(ctx, auth, item.ref);
+  const resolved = await resolver.require(item.ref, "plan_segment");
+  if (resolved.type !== "plan_segment") throw new Error(`Expected a planner bar, resolved a ${resolved.type}`);
+  const segment = resolved.segment;
   if (item.task !== undefined) {
-    throw new ConvexError("A bar's task cannot change: remove the bar and schedule the other task.");
-  }
-  if (item.remove === true) {
-    if (item.member !== undefined || item.startDate !== undefined || item.endDate !== undefined) {
-      throw new ConvexError("remove takes only ref: drop member, startDate and endDate.");
-    }
-    const removed = await row(ctx, segment, "removed");
-    await removeSegmentForAuth(ctx, auth, { id: segment._id });
-    return removed;
+    throw new ConvexError("A bar's task cannot change: delete the bar and schedule the other task.");
   }
   // Partial merge onto the stored bar, like the Planner's drag / resize.
   const update: UpdateSegmentInput = { id: segment._id };
@@ -107,7 +85,6 @@ async function editItem(
 }
 
 async function createItem(ctx: MutationCtx, auth: McpAuthContext, resolver: RefResolver, item: SavePlanItem): Promise<Row> {
-  if (item.remove === true) throw new ConvexError("remove needs ref: the bar to unschedule.");
   if (item.task === undefined || item.startDate === undefined) {
     throw new ConvexError("task and startDate are required to schedule a bar (or pass ref to change one).");
   }

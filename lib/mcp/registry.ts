@@ -596,7 +596,8 @@ const fetchTool: McpTool = {
   description: [
     "Fetch Agency Flow records by reference and get compact markdown: a heading, fields, the body and",
     "the sections you include, with the app link. Records: tasks, comments, time entries, projects, clients, members,",
-    "daily notes (by ref from search), invoices (admins: lines and totals, by number INV-007, ID or link).",
+    "daily notes (by ref from search), planner bars (by ref from include plan), invoices (admins: lines and totals, by",
+    "number INV-007, ID or link).",
     `References: ${REF_FORMS}. A bare key (ARLO) is a project code; clients are client:KONV.`,
     'Special refs: "me" (your user, organization, role, today\'s date in the workspace timezone and your running',
     'timer), "workspace" (statuses, labels, work',
@@ -1212,13 +1213,14 @@ const saveProjectsTool: McpTool = {
 const planItem = z.object({
   ref: ref
     .optional()
-    .describe('A bar\'s ref (from fetch on its task with include ["plan"], or an earlier save_plan): move, resize or remove it. Omit to schedule a new bar.'),
+    .describe('A bar\'s ref (from fetch on its task with include ["plan"], or an earlier save_plan): move or resize it. Omit to schedule a new bar.'),
   task: ref.optional().describe("New bars: the task — key (ARLO-21), external ref (gmail:<threadId>), ID or link."),
   member: ref.optional().describe('Whose row: a member email or "me" (default for new bars: you).'),
   startDate: date.optional().describe("First day, YYYY-MM-DD (required for new bars)."),
   endDate: date.optional().describe("Last day, inclusive (new bars default to startDate: one day)."),
-  remove: z.literal(true).optional().describe("Unschedule the bar given by ref (the task itself is untouched)."),
-});
+})
+  // Unknown keys (e.g. a "remove" flag) are an error, never an edit that silently changes nothing.
+  .strict();
 
 const savePlanInput = z.object({
   items: z.array(planItem).min(1).max(MCP_BATCH_MAX).describe(`1–${MCP_BATCH_MAX} bars, saved together or not at all.`),
@@ -1231,10 +1233,10 @@ const savePlanTool: McpTool = {
   name: "save_plan",
   title: "Plan work on the Agency Flow Planner",
   description: [
-    "Schedule tasks on the Planner (a bar = one member × one task × a date range), or move, resize or remove bars;",
+    "Schedule tasks on the Planner (a bar = one member × one task × a date range), or move and resize bars;",
     "all items are saved or none. A task can have several bars (split sittings). Without ref an item schedules task",
     "on member's row (default you) from startDate to endDate; with ref (a bar's ref from fetch include [\"plan\"]) it",
-    "changes the dates or the row, or remove: true unschedules it. The app's rules apply: admins plan everyone's row,",
+    "changes the dates or the row. To unschedule a bar, delete its ref. The app's rules apply: admins plan everyone's row,",
     "members only their own (and tasks they can open); no capacity limits; bars keep their stacking order.",
     "Returns the bars with links to the Planner week.",
     'Example: {"items": [{"task": "ARLO-21", "member": "me", "startDate": "2026-10-27", "endDate": "2026-10-29"},',
@@ -1344,7 +1346,7 @@ const deleteInput = z.object({
     .array(ref)
     .min(1)
     .max(MCP_BATCH_MAX)
-    .describe(`1–${MCP_BATCH_MAX} task, comment, time entry, project or client refs, deleted together or not at all.`),
+    .describe(`1–${MCP_BATCH_MAX} task, comment, time entry, project, client or planner bar refs, deleted together or not at all.`),
   deleteTimeEntries: z
     .boolean()
     .optional()
@@ -1358,14 +1360,14 @@ const deleteTool: McpTool = {
   name: "delete",
   title: "Delete Agency Flow records",
   description: [
-    "Permanently delete tasks (with their sub-tasks, comments and files), comments, time entries, projects or",
-    "clients, with the app's rules: deleting tasks, projects and clients is admin-only; anyone may delete their own",
-    "comments and time entries, admins any. A task with logged time is refused unless deleteTimeEntries is true;",
+    "Permanently delete tasks (with their sub-tasks, comments and files), comments, time entries, projects, clients or",
+    "planner bars (unscheduling; the task stays), with the app's rules: deleting tasks, projects and clients is admin-only;",
+    "anyone may delete their own comments, time entries and planner bars, admins any. A task with logged time is refused unless deleteTimeEntries is true;",
     "invoiced or settled time always refuses (archive the task in the app instead), and a time entry in a closed",
     "period or on an invoice cannot be deleted (the error says how to unblock). Only an empty project can be deleted:",
     "tasks, time entries, a running timer, invoices or billing closes refuse it (archive it with save_projects instead);",
     "a client only when all its projects could be, and deleting it deletes those projects too. The type comes from",
-    "each ref (time entries by ID; a bare key is a project code, clients are client:KONV). All refs succeed or none.",
+    "each ref (time entries and bars by ID; a bare key is a project code, clients are client:KONV). All refs succeed or none.",
     'Example: {"refs": ["ARLO-21", "https://app.example/tasks/ARLO-9?comment=k57abc…", "<time entry id>"]}',
   ].join(" "),
   inputSchema: deleteInput,

@@ -58,10 +58,12 @@ export const deleteResultValidator = v.object({
         v.literal("time_entry"),
         v.literal("project"),
         v.literal("client"),
+        v.literal("plan_segment"),
       ),
       /**
        * `ARLO-21 · Title`, `comment on ARLO-21`, `time entry 2026-10-20 · 1h 30m · Alice
-       * on ARLO-21`, `project ARLO · Arlow site` or `client client:ARL · Arlow`
+       * on ARLO-21`, `project ARLO · Arlow site`, `client client:ARL · Arlow` or
+       * `planner bar 2026-10-26 – 2026-10-28 · Alice on ARLO-21`
        * (snapshot: the record is gone).
        */
       label: v.string(),
@@ -155,7 +157,7 @@ export const savePlanResultValidator = v.object({
       member: v.object({ id: v.id("users"), name: v.string() }),
       startDate: v.string(),
       endDate: v.string(),
-      action: v.union(v.literal("created"), v.literal("updated"), v.literal("unchanged"), v.literal("removed")),
+      action: savedAction,
     }),
   ),
 });

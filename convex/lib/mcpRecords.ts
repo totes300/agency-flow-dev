@@ -476,6 +476,28 @@ export async function buildRecord(
       };
     }
 
+    case "plan_segment": {
+      const { segment } = resolved;
+      const task = await ctx.db.get(segment.taskId);
+      const rank = rankTaskSegments(
+        await ctx.db
+          .query("planSegments")
+          .withIndex("by_orgId_taskId", (q) => q.eq("orgId", orgId).eq("taskId", segment.taskId))
+          .take(PLAN_ROWS_MAX),
+      ).get(segment._id);
+      return {
+        type: "plan_segment" as const,
+        id: segment._id,
+        task: task && task.orgId === orgId ? { identifier: task.identifier ?? task._id, title: task.title } : null,
+        member: { id: segment.userId, name: await userNames(ctx)(segment.userId) },
+        mine: segment.userId === auth.userId,
+        startDate: segment.startDate,
+        endDate: segment.endDate,
+        partIndex: rank?.partIndex ?? 1,
+        partCount: rank?.partCount ?? 1,
+      };
+    }
+
     case "daily_note": {
       // The resolver already applied the app's rule (own notes; admins any member's).
       const { note } = resolved;

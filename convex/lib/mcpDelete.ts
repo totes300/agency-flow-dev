@@ -12,6 +12,7 @@ import { loadTaskForWrite } from "../tasks/access";
 import { removeTask } from "../tasks/write";
 import { removeProjectForAuth } from "../projects";
 import { removeClientForAuth } from "../clients";
+import { removeSegmentForAuth } from "../planner";
 import { referenceClientPrefix } from "./helpers";
 
 /**
@@ -34,6 +35,8 @@ import { referenceClientPrefix } from "./helpers";
  * - Client → `removeClientForAuth`, the client page's "Delete": admins only;
  *   refused while any of its projects would be (the same guard, naming the
  *   project); its contacts, projects, estimates and overrides go with it.
+ * - Planner bar → `removeSegmentForAuth`, the Planner's unschedule: admins
+ *   any bar, members only their own (the task is untouched).
  * - Members and daily notes have no delete in the app; invoices are deleted
  *   through billing_preview / billing_commit.
  *
@@ -60,7 +63,8 @@ type Target =
   | { index: number; input: string; type: "comment"; id: Id<"comments">; label: string }
   | { index: number; input: string; type: "time_entry"; id: Id<"timeEntries">; label: string }
   | { index: number; input: string; type: "project"; id: Id<"projects">; label: string }
-  | { index: number; input: string; type: "client"; id: Id<"clients">; label: string };
+  | { index: number; input: string; type: "client"; id: Id<"clients">; label: string }
+  | { index: number; input: string; type: "plan_segment"; id: Id<"planSegments">; label: string };
 
 export async function deleteRecords(
   ctx: MutationCtx,
@@ -110,13 +114,26 @@ export async function deleteRecords(
           const prefix = referenceClientPrefix(client);
           return { index, input, type: "client", id: client._id, label: `client ${prefix ? `client:${prefix} · ` : ""}${client.name}` };
         }
+        case "plan_segment": {
+          const { segment } = resolved;
+          const task = await ctx.db.get(segment.taskId);
+          const member = await ctx.db.get(segment.userId);
+          const dates = segment.startDate === segment.endDate ? segment.startDate : `${segment.startDate} – ${segment.endDate}`;
+          return {
+            index,
+            input,
+            type: "plan_segment",
+            id: segment._id,
+            label: `planner bar ${dates} · ${member?.name ?? "Former member"} on ${task?.identifier ?? segment.taskId}`,
+          };
+        }
         case "invoice":
           throw new ConvexError(
-            `delete removes tasks, comments, time entries, projects and clients. "${input}" is an invoice: a never-numbered draft is deleted with billing_preview (action delete_draft) and billing_commit.`,
+            `delete removes tasks, comments, time entries, projects, clients and planner bars. "${input}" is an invoice: a never-numbered draft is deleted with billing_preview (action delete_draft) and billing_commit.`,
           );
         default:
           throw new ConvexError(
-            `delete removes tasks, comments, time entries, projects and clients. "${input}" is ${UNSUPPORTED[resolved.type]}.`,
+            `delete removes tasks, comments, time entries, projects, clients and planner bars. "${input}" is ${UNSUPPORTED[resolved.type]}.`,
           );
       }
     });
@@ -138,8 +155,10 @@ export async function deleteRecords(
         await removeTimeEntryForAuth(ctx, auth, target.id);
       } else if (target.type === "project") {
         await removeProjectForAuth(ctx, auth, { id: target.id });
-      } else {
+      } else if (target.type === "client") {
         await removeClientForAuth(ctx, auth, { id: target.id });
+      } else {
+        await removeSegmentForAuth(ctx, auth, { id: target.id });
       }
       return "deleted" as const;
     });

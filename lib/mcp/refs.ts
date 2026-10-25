@@ -35,7 +35,7 @@ export const SPECIAL_REFS = ["me", "workspace", "changes", "inbox"] as const;
 export type SpecialRefName = (typeof SPECIAL_REFS)[number];
 
 /** Tables an ID or link can point at in this slice. */
-export const REF_TABLES = ["tasks", "comments", "projects", "clients", "users", "timeEntries", "invoices", "dailyNotes"] as const;
+export const REF_TABLES = ["tasks", "comments", "projects", "clients", "users", "timeEntries", "invoices", "dailyNotes", "planSegments"] as const;
 export type RefTable = (typeof REF_TABLES)[number];
 
 export type ParsedRef =

@@ -643,6 +643,17 @@ export function renderRecord(record: FetchedRecord, ctx: RenderContext): string 
       ].join("\n");
     case "invoice":
       return renderInvoiceRecord(record, ctx);
+    case "plan_segment":
+      return [
+        `## Planner bar ${record.startDate === record.endDate ? record.startDate : `${record.startDate} – ${record.endDate}`}`,
+        `- Link: ${plannerLink(ctx.appOrigin, record.startDate, record.member.id)}`,
+        `- Ref: ${record.id}`,
+        `- Task: ${record.task ? `[${record.task.identifier}](${taskLink(ctx.appOrigin, record.task.identifier)}) · ${oneLine(record.task.title)}` : "not available"}`,
+        `- Member: ${oneLine(record.member.name)}${record.mine ? " (you)" : ""}`,
+        record.partCount > 1 ? `- Part: ${record.partIndex}/${record.partCount}` : null,
+      ]
+        .filter((line): line is string => line !== null)
+        .join("\n");
     case "daily_note":
       return [
         `## Daily note ${record.date} · ${oneLine(record.member.name)}`,
@@ -1147,8 +1158,6 @@ export function renderSaveProjects(data: SaveProjectsData, ctx: RenderContext): 
   return [writeHeader(`Saved ${data.items.length} ${data.items.length === 1 ? "project" : "projects"}`, data.replayed), ...lines].join("\n");
 }
 
-const PLAN_ACTION: Record<SavePlanData["items"][number]["action"], string> = { ...SAVE_ACTION, removed: "removed from the plan" };
-
 export function renderSavePlan(data: SavePlanData, ctx: RenderContext): string {
   const lines = data.items.map(
     (i) =>
@@ -1158,7 +1167,7 @@ export function renderSavePlan(data: SavePlanData, ctx: RenderContext): string {
         oneLine(i.task.title),
         oneLine(i.member.name),
         i.startDate === i.endDate ? i.startDate : `${i.startDate} – ${i.endDate}`,
-        PLAN_ACTION[i.action],
+        SAVE_ACTION[i.action],
         `[planner](${plannerLink(ctx.appOrigin, i.startDate, i.member.id)})`,
       )}`,
   );

@@ -26,6 +26,7 @@ import { DEFAULT_STATUS_SEED } from "../tasks/model";
 import { createTask } from "../tasks/write";
 import { loadContent, requestExtraction } from "../attachmentContents";
 import { cascadeDeleteTaskData } from "../lib/task_helpers";
+import { BLOB_ALREADY_ATTACHED } from "../attachments";
 import {
   BACKFILL_STAGGER_MS,
   EXTRACT_ATTEMPT_TIMEOUT_MS,
@@ -186,7 +187,9 @@ describe("requestExtraction", () => {
     const f = await setup(t);
     const fileId = await store(t, "hello");
     await saveTaskFile(t, f, fileId, "notes.txt", "text/plain");
-    await saveTaskFile(t, f, fileId, "notes-copy.txt", "text/plain");
+    await t.run(async (ctx) => {
+      await requestExtraction(ctx, { orgId: ORG, storageId: fileId, mimeType: "text/plain", name: "notes-copy.txt" });
+    });
     expect(await contentRows(t)).toHaveLength(1);
     const jobs = (await scheduled(t)).filter((j) => j.name.includes("attachmentExtraction"));
     expect(jobs).toHaveLength(1);
@@ -332,13 +335,17 @@ describe("extraction lifecycle", () => {
     const f = await setup(t);
     const fileId = await store(t, "hello");
     await saveTaskFile(t, f, fileId, "notes.txt", "text/plain");
+    const again = () =>
+      t.run(async (ctx) => {
+        await requestExtraction(ctx, { orgId: ORG, storageId: fileId, mimeType: "text/plain", name: "notes.txt" });
+      });
     // Within the window: a repeat request changes nothing.
-    await saveTaskFile(t, f, fileId, "notes.txt", "text/plain");
+    await again();
     expect(await contentOf(t, fileId)).toMatchObject({ status: "pending", attempts: 1 });
     expect(await jobsNamed(t, "attachmentExtraction")).toHaveLength(1);
     // The scheduled work was lost; well past the window, a request re-queues it.
     vi.setSystemTime(Date.now() + EXTRACT_ATTEMPT_TIMEOUT_MS + 5 * 60_000);
-    await saveTaskFile(t, f, fileId, "notes.txt", "text/plain");
+    await again();
     const row = await contentOf(t, fileId);
     expect(row).toMatchObject({ status: "pending", attempts: 2 });
     expect(row!.queuedAt).toBe(Date.now());
@@ -404,7 +411,7 @@ describe("extracted content is deleted with its file", () => {
     expect(await contentOf(t, s.taskBlob)).not.toBeNull();
   });
 
-  it("the task delete cascade drops task and comment attachment content (every org's row)", async () => {
+  it("the task delete cascade drops its task and comment attachment content — only for its own org", async () => {
     const t = createT();
     const f = await setup(t);
     const s = await seedDone(t, f);
@@ -413,6 +420,48 @@ describe("extracted content is deleted with its file", () => {
     });
     expect(await contentRows(t)).toHaveLength(3);
     await t.run(async (ctx) => await cascadeDeleteTaskData(ctx, f.P));
-    expect(await contentRows(t)).toEqual([]);
+    // A write in one org never deletes another org's row.
+    expect((await contentRows(t)).map((r) => r.orgId)).toEqual([OTHER]);
+  });
+
+  it("attachments.remove deletes only its own org's row", async () => {
+    const t = createT();
+    const f = await setup(t);
+    const s = await seedDone(t, f);
+    await t.run(async (ctx) => {
+      await requestExtraction(ctx, { orgId: OTHER, storageId: s.taskBlob, mimeType: "text/plain", name: "a.txt" });
+    });
+    await t.withIdentity(IDENTITY_ADMIN).mutation(api.attachments.remove, { id: s.taskFile });
+    expect(await contentOf(t, s.taskBlob)).toBeNull();
+    expect(await contentOf(t, s.taskBlob, OTHER)).not.toBeNull();
+  });
+});
+
+// ─── One attachment per blob ─────────────────────────────────────────────────
+
+describe("one attachment per stored file", () => {
+  it("a blob already attached (task or comment) or already read for any org is refused by both save paths", async () => {
+    const t = createT();
+    const f = await setup(t);
+    const onTask = await store(t, "a");
+    await saveTaskFile(t, f, onTask, "a.txt", "text/plain");
+    await expect(saveTaskFile(t, f, onTask, "again.txt", "text/plain")).rejects.toThrow(BLOB_ALREADY_ATTACHED);
+    await expect(
+      t.withIdentity(IDENTITY_CAROL).mutation(api.commentAttachments.save, {
+        commentId: f.comment, fileId: onTask, fileName: "a.txt", fileSize: 1, mimeType: "text/plain",
+      }),
+    ).rejects.toThrow(BLOB_ALREADY_ATTACHED);
+    const onComment = await store(t, "b");
+    await t.withIdentity(IDENTITY_CAROL).mutation(api.commentAttachments.save, {
+      commentId: f.comment, fileId: onComment, fileName: "b.txt", fileSize: 1, mimeType: "text/plain",
+    });
+    await expect(saveTaskFile(t, f, onComment, "b.txt", "text/plain")).rejects.toThrow(BLOB_ALREADY_ATTACHED);
+    // Read for another org (its attachment row gone or never written here): still refused.
+    const foreign = await store(t, "c");
+    await t.run(async (ctx) => {
+      await requestExtraction(ctx, { orgId: OTHER, storageId: foreign, mimeType: "text/plain", name: "c.txt" });
+    });
+    await expect(saveTaskFile(t, f, foreign, "c.txt", "text/plain")).rejects.toThrow(BLOB_ALREADY_ATTACHED);
+    expect((await contentRows(t)).filter((r) => r.orgId === ORG)).toHaveLength(2);
   });
 });

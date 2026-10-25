@@ -138,6 +138,24 @@ export const reuploadFromUrl = action({
   },
 });
 
+export const BLOB_ALREADY_ATTACHED = "This file is already attached. Upload it again to attach another copy.";
+
+/**
+ * One blob, one attachment: a stored file already referenced by a task or
+ * comment attachment (in any org), or already read for any org, is refused,
+ * so deleting one attachment can never break or expose another record.
+ */
+export async function assertBlobUnattached(ctx: MutationCtx, fileId: Id<"_storage">): Promise<void> {
+  const onTask = await ctx.db.query("attachments").withIndex("by_fileId", (q) => q.eq("fileId", fileId)).first();
+  const onComment = onTask
+    ? null
+    : await ctx.db.query("commentAttachments").withIndex("by_fileId", (q) => q.eq("fileId", fileId)).first();
+  const read = onTask || onComment
+    ? null
+    : await ctx.db.query("attachmentContents").withIndex("by_storageId", (q) => q.eq("storageId", fileId)).first();
+  if (onTask || onComment || read) throw new ConvexError(BLOB_ALREADY_ATTACHED);
+}
+
 export type AttachmentFileInput = {
   fileId: Id<"_storage">;
   fileName: string;
@@ -147,8 +165,8 @@ export type AttachmentFileInput = {
 
 /**
  * The task attachment write path for a caller who may write the task
- * (`loadTaskForWrite`): blocked types, the per-task count and the size
- * limit, then the row, then text extraction (attachmentContents.ts). Shared
+ * (`loadTaskForWrite`): blocked types, the per-task count, the size limit
+ * and one attachment per blob, then the row, then text extraction (attachmentContents.ts). Shared
  * by `save` below and MCP `attach_file`.
  */
 export async function saveTaskAttachmentForAuth(
@@ -178,6 +196,7 @@ export async function saveTaskAttachmentForAuth(
     throw new ConvexError("File exceeds 10MB limit");
   }
 
+  await assertBlobUnattached(ctx, file.fileId);
   const id = await ctx.db.insert("attachments", {
     taskId,
     orgId,
@@ -225,7 +244,7 @@ export const remove = mutation({
     }
 
     await ctx.storage.delete(att.fileId);
-    await deleteContentForStorage(ctx, att.fileId);
+    await deleteContentForStorage(ctx, att.orgId, att.fileId);
     await ctx.db.delete(args.id);
   },
 });

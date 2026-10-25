@@ -654,7 +654,8 @@ export default defineSchema({
     mimeType: v.string(),
     createdAt: v.number(),
   })
-    .index("by_task", ["taskId", "createdAt"]),
+    .index("by_task", ["taskId", "createdAt"])
+    .index("by_fileId", ["fileId"]), // one attachment per blob (assertBlobUnattached)
 
   // ─── Comment read receipts (per user per task) ─────────────────────────────
   commentReadReceipts: defineTable({
@@ -714,7 +715,8 @@ export default defineSchema({
   })
     .index("by_task", ["taskId"])
     .index("by_comment", ["commentId"])
-    .index("by_orgId", ["orgId"]),
+    .index("by_orgId", ["orgId"])
+    .index("by_fileId", ["fileId"]), // one attachment per blob (assertBlobUnattached)
 
   // ─── Attachment contents (docs/prd-mcp.md §10, ported from c3972ab) ─────────
   // What an agent can read inside a stored file (MCP fetch include
@@ -724,7 +726,8 @@ export default defineSchema({
   // attachment that references this storageId, re-checked at read time.
   // Written only by `requestExtraction` (convex/attachmentContents.ts) and
   // the extraction action (convex/attachmentExtraction.ts); deleted with the
-  // blob (`deleteContentForStorage`). Rules: lib/attachments/contents.ts.
+  // blob (`deleteContentForStorage`, scoped to the referencing org). Rules:
+  // lib/attachments/contents.ts.
   attachmentContents: defineTable({
     orgId: v.string(),
     storageId: v.id("_storage"),
@@ -749,7 +752,7 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_orgId_storageId", ["orgId", "storageId"]) // unique: one row per file per org
-    .index("by_storageId", ["storageId"]), // blob deletion cleanup only
+    .index("by_storageId", ["storageId"]), // one attachment per blob (assertBlobUnattached)
 
   // ─── Notifications (inbox — mentions, assignments, comments) ─────────────
   notifications: defineTable({

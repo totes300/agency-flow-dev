@@ -29,7 +29,8 @@ import {
  * second org referencing the same blob never reads the first org's row.
  *
  * Whoever deletes a referenced blob (`ctx.storage.delete`) also calls
- * `deleteContentForStorage`, so extracted text never outlives its file.
+ * `deleteContentForStorage` for the referencing record's org, so extracted
+ * text never outlives its file.
  */
 
 type ExtractionRequest = {
@@ -114,16 +115,16 @@ export async function requestExtraction(
 }
 
 /**
- * Drop the extracted content of a blob being deleted — call it next to every
- * `ctx.storage.delete` of a referenced file. Removes the row of every org
- * that referenced this blob: the blob is gone for all of them.
+ * Drop the extracted content of a file being deleted — call it next to every
+ * `ctx.storage.delete` of a referenced file, with the org of the record that
+ * referenced it. Only that org's row is removed: a write in one org never
+ * touches another org's data. (Attaching refuses a blob that is already
+ * referenced anywhere — `assertBlobUnattached` in attachments.ts — so no
+ * other org can hold a row for it.)
  */
-export async function deleteContentForStorage(ctx: MutationCtx, storageId: Id<"_storage">): Promise<void> {
-  const rows = await ctx.db
-    .query("attachmentContents")
-    .withIndex("by_storageId", (q) => q.eq("storageId", storageId))
-    .take(100);
-  for (const row of rows) await ctx.db.delete(row._id);
+export async function deleteContentForStorage(ctx: MutationCtx, orgId: string, storageId: Id<"_storage">): Promise<void> {
+  const row = await loadContent(ctx, orgId, storageId);
+  if (row) await ctx.db.delete(row._id);
 }
 
 // ─── Extraction lifecycle (called by the node action) ────────────────────────

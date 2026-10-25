@@ -5,7 +5,7 @@ import { getAuthContext, type AuthContext } from "./lib/auth";
 import { loadTaskForReadOrNull } from "./tasks/access";
 import { isMimeTypeBlocked } from "./lib/content_validation";
 import { deleteContentForStorage, requestExtraction } from "./attachmentContents";
-import type { AttachmentFileInput } from "./attachments";
+import { assertBlobUnattached, type AttachmentFileInput } from "./attachments";
 import { MAX_FILE_SIZE } from "../lib/attachment";
 
 export const MAX_FILES_PER_COMMENT = 5;
@@ -108,7 +108,8 @@ export const generateUploadUrl = mutation({
 /**
  * The comment attachment write path for an authorized caller: name length,
  * blocked types, the comment in the caller's org on a task they can read and
- * written by the caller (D-COMMENTATTACH), the per-comment count and the size limit, then the row, then text
+ * written by the caller (D-COMMENTATTACH), the per-comment count, the size
+ * limit and one attachment per blob, then the row, then text
  * extraction (attachmentContents.ts). Shared by `save` below and MCP
  * `attach_file` (which resolves the comment first).
  */
@@ -157,6 +158,7 @@ export async function saveCommentAttachmentForAuth(
     throw new ConvexError("File exceeds 10MB limit");
   }
 
+  await assertBlobUnattached(ctx, file.fileId);
   const id = await ctx.db.insert("commentAttachments", {
     commentId,
     taskId: comment.taskId,
@@ -208,7 +210,7 @@ export const remove = mutation({
     }
 
     await ctx.storage.delete(att.fileId);
-    await deleteContentForStorage(ctx, att.fileId);
+    await deleteContentForStorage(ctx, att.orgId, att.fileId);
     await ctx.db.delete(args.id);
   },
 });

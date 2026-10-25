@@ -108,7 +108,7 @@ export async function cascadeDeleteTaskData(ctx: MutationCtx, taskId: Id<"tasks"
     .collect();
   for (const ca of commentAttachments) {
     await ctx.storage.delete(ca.fileId);
-    await deleteContentForStorage(ctx, ca.fileId);
+    await deleteContentForStorage(ctx, ca.orgId, ca.fileId);
     await ctx.db.delete(ca._id);
   }
 
@@ -126,7 +126,7 @@ export async function cascadeDeleteTaskData(ctx: MutationCtx, taskId: Id<"tasks"
     .collect();
   for (const att of attachments) {
     await ctx.storage.delete(att.fileId);
-    await deleteContentForStorage(ctx, att.fileId);
+    await deleteContentForStorage(ctx, att.orgId, att.fileId);
     await ctx.db.delete(att._id);
   }
 

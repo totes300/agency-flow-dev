@@ -262,7 +262,7 @@ export async function removeCommentForAuth(
     .collect();
   for (const att of attachments) {
     await ctx.storage.delete(att.fileId);
-    await deleteContentForStorage(ctx, att.fileId);
+    await deleteContentForStorage(ctx, att.orgId, att.fileId);
     await ctx.db.delete(att._id);
   }
 

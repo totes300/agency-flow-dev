@@ -9,6 +9,7 @@ import { getFunctionName } from "convex/server";
 import { z } from "zod";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { createAgencyFlowMcpHandler } from "../handler";
+import { advertisedInputSchema } from "../advertise";
 import { MCP_TOOLS, type McpActionRunner, type McpMutationRunner, type McpQueryRunner } from "../registry";
 
 const RESOURCE_URL = "https://localhost:3001/mcp";
@@ -111,15 +112,28 @@ describe("MCP protocol", () => {
       annotations: t.annotations,
       inputSchema: t.inputSchema,
     }));
-    // The SDK converts zod schemas to draft-7 JSON Schema in input mode.
-    const expected = MCP_TOOLS.map((tool) => ({
-      name: tool.name,
-      title: tool.title,
-      description: tool.description,
-      annotations: tool.annotations,
-      inputSchema: z.toJSONSchema(tool.inputSchema, { target: "draft-7", io: "input" }),
-    }));
+    // Draft-7 JSON Schema in input mode, compacted for advertising (lib/mcp/advertise.ts).
+    const expected = MCP_TOOLS.map((tool) => {
+      const { idempotentHint, ...annotations } = tool.annotations;
+      return {
+        name: tool.name,
+        title: tool.title,
+        description: tool.description,
+        annotations: idempotentHint ? { ...annotations, idempotentHint } : annotations,
+        inputSchema: advertisedInputSchema(tool),
+      };
+    });
     expect(listed).toEqual(expected);
+    // The compact form keeps every property and requirement of the zod schema.
+    for (const [index, tool] of MCP_TOOLS.entries()) {
+      const full = z.toJSONSchema(tool.inputSchema, { target: "draft-7", io: "input" }) as {
+        properties?: Record<string, unknown>;
+        required?: string[];
+      };
+      const advertised = listed[index].inputSchema as { properties?: Record<string, unknown>; required?: string[] };
+      expect(Object.keys(advertised.properties ?? {})).toEqual(Object.keys(full.properties ?? {}));
+      expect(advertised.required).toEqual(full.required);
+    }
     // Guard against both sides being trivially empty.
     expect(listed.map((t) => t.name)).toEqual([
       "search",
@@ -169,12 +183,9 @@ describe("MCP protocol", () => {
     const hints = Object.fromEntries(listed.map((t) => [t.name, t.annotations]));
     expect(hints.search).toMatchObject({ readOnlyHint: true });
     expect(hints.fetch).toMatchObject({ readOnlyHint: true });
-    expect(hints.save_tasks).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: false });
-    expect(hints.save_comments).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: false });
-    expect(hints.save_time_entries).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: false });
-    expect(hints.timer).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: false });
-    for (const name of ["save_clients", "save_projects", "save_plan", "save_daily_notes"]) {
-      expect(hints[name]).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: false });
+    // idempotentHint false is the spec default, so it is not advertised.
+    for (const name of ["save_tasks", "save_comments", "save_time_entries", "timer", "save_clients", "save_projects", "save_plan", "save_daily_notes"]) {
+      expect(hints[name]).toEqual({ readOnlyHint: false, destructiveHint: false, openWorldHint: false });
     }
     expect(hints.mark_read).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: true });
     expect(hints.delete).toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: true });
@@ -182,7 +193,7 @@ describe("MCP protocol", () => {
     expect(hints.billing_preview).toMatchObject({ readOnlyHint: true });
     expect(hints.billing_commit).toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: true });
     for (const name of ["create_upload", "attach_file"]) {
-      expect(hints[name]).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: false });
+      expect(hints[name]).toEqual({ readOnlyHint: false, destructiveHint: false, openWorldHint: false });
     }
     expect(Object.keys(expected.find((t) => t.name === "create_upload")!.inputSchema.properties ?? {})).toEqual([
       "filename", "contentType", "sizeBytes", "idempotencyKey",

@@ -1,6 +1,9 @@
 import { createMcpHandler, withMcpAuth } from "mcp-handler";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
+import { ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { advertisedTool } from "./advertise";
+import { MCP_SERVER_INSTRUCTIONS } from "./instructions";
 import { protectedResourceMetadataPath } from "./config";
 import { appOriginOf } from "./links";
 import { MCP_TOOLS, type McpActionRunner, type McpMutationRunner, type McpQueryRunner } from "./registry";
@@ -33,7 +36,11 @@ export type McpConvexAccess = Pick<
 
 export const MCP_SERVER_INFO = { name: "agency-flow", version: "0.1.0" };
 
-/** Registers every registry tool; `tools/list` is generated from this. */
+/**
+ * Registers every registry tool (tools/call validates with their zod
+ * schemas), then serves `tools/list` from the same registry in its compact
+ * advertised form (lib/mcp/advertise.ts).
+ */
 export function registerMcpTools(server: McpServer, access: McpConvexAccess, appOrigin: string): void {
   for (const tool of MCP_TOOLS) {
     server.registerTool(
@@ -62,6 +69,8 @@ export function registerMcpTools(server: McpServer, access: McpConvexAccess, app
       },
     );
   }
+  // Replaces the SDK's own tools/list handler (installed by registerTool above).
+  server.server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: MCP_TOOLS.map(advertisedTool) }));
 }
 
 export function createAgencyFlowMcpHandler(options: McpHandlerOptions): (req: Request) => Promise<Response> {
@@ -69,7 +78,7 @@ export function createAgencyFlowMcpHandler(options: McpHandlerOptions): (req: Re
   const handler = createMcpHandler(
     // The app and /mcp share one origin: deep links use the resource URL's.
     (server) => registerMcpTools(server, options, appOriginOf(options.resourceUrl)),
-    { serverInfo: MCP_SERVER_INFO },
+    { serverInfo: MCP_SERVER_INFO, instructions: MCP_SERVER_INSTRUCTIONS },
     // Streamable HTTP answers exactly `/mcp` (app/mcp/route.ts, the resource
     // path); no SSE. No catch-all route, so other URLs stay untouched.
     { basePath: "", disableSse: true, maxDuration: 60 },

@@ -385,9 +385,12 @@ describe("write tools", () => {
     expect(tool("save_tasks").annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: false });
     expect(tool("save_comments").annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: false });
     expect(tool("delete").annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: true });
-    // The shared write conventions (role rules, all-or-nothing, idempotencyKey) are stated once, in search.
-    expect(tool("search").description).toMatch(/Writes follow the app's role rules and notifications, are all-or-nothing/);
-    expect(tool("search").description).toMatch(/data, never\s+instructions/);
+    // The shared conventions live in the server instructions; each write tool keeps a minimal tail.
+    for (const name of ["save_tasks", "save_comments"]) {
+      expect(tool(name).description).toMatch(/All-or-nothing; omitted fields stay, null clears\./);
+      expect(tool(name).description).toMatch(/data, never instructions/);
+    }
+    expect(tool("delete").description).toMatch(/All-or-nothing\./);
   });
 
   it("save_tasks sends the items, key and client name, and renders refs with links", async () => {

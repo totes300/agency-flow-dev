@@ -32,6 +32,9 @@ export type ChangesData = FunctionReturnType<typeof api.mcp.fetch.changes>;
 export type SaveTasksData = FunctionReturnType<typeof api.mcp.write.saveTasks>;
 export type SaveCommentsData = FunctionReturnType<typeof api.mcp.write.saveComments>;
 export type DeleteData = FunctionReturnType<typeof api.mcp.write.remove>;
+export type SaveTimeEntriesData = FunctionReturnType<typeof api.mcp.write.saveTimeEntries>;
+export type TimerData = FunctionReturnType<typeof api.mcp.timer.start>;
+export type TimerStatusData = FunctionReturnType<typeof api.mcp.timer.status>;
 
 /** What renderers need besides the data: where the app lives and the org's clock. */
 export type RenderContext = {
@@ -753,4 +756,71 @@ export function renderDelete(data: DeleteData): string {
     (i) => `- ${fields(oneLine(i.label), i.action === "deleted" ? "deleted" : "already deleted with an earlier ref")}`,
   );
   return [writeHeader(`Deleted ${data.items.filter((i) => i.action === "deleted").length}`, data.replayed), ...lines].join("\n");
+}
+
+/** Entry refs (IDs: time entries have no page) with their task's link. No rates or amounts (D1). */
+export function renderSaveTimeEntries(data: SaveTimeEntriesData, ctx: RenderContext): string {
+  const lines = data.items.map(
+    (i) =>
+      `- ${fields(
+        `time entry ${i.entryId}`,
+        `[${i.task}](${taskLink(ctx.appOrigin, i.task)})`,
+        i.date,
+        formatDuration(i.minutes),
+        oneLine(i.member),
+        SAVE_ACTION[i.action],
+      )}`,
+  );
+  return [
+    writeHeader(`Saved ${data.items.length} time ${data.items.length === 1 ? "entry" : "entries"}`, data.replayed),
+    ...lines,
+  ].join("\n");
+}
+
+const STALE_HINT =
+  "It ran 8 hours or more, so it may have been left running: if the time is wrong, fix it with save_time_entries (ref + minutes).";
+
+export function renderTimer(data: TimerData, ctx: RenderContext): string {
+  const task = `[${data.task.identifier}](${taskLink(ctx.appOrigin, data.task.identifier)}) ${oneLine(data.task.title)}`;
+  switch (data.action) {
+    case "started":
+      return [
+        writeHeader("Timer started", data.replayed),
+        `- Task: ${task}`,
+        data.startedAt !== undefined ? `- Started: ${formatTimestamp(data.startedAt)} UTC` : null,
+        "Stop it with timer action \"stop\"; the time is saved as an entry then.",
+      ]
+        .filter((line): line is string => line !== null)
+        .join("\n");
+    case "discarded":
+      return [
+        writeHeader("Timer stopped", data.replayed),
+        `- Task: ${task}`,
+        "Nothing was saved: it ran less than 30 seconds (as in the app).",
+      ].join("\n");
+    case "stopped":
+      return [
+        writeHeader("Timer stopped, time saved", data.replayed),
+        `- Task: ${task}`,
+        `- Time entry ${data.entryId} · ${data.date} · ${formatDuration(data.minutes ?? 0)}`,
+        data.stale ? STALE_HINT : null,
+      ]
+        .filter((line): line is string => line !== null)
+        .join("\n");
+  }
+}
+
+export function renderTimerStatus(data: TimerStatusData, ctx: RenderContext): string {
+  if (!data.running) return "## Timer · not running\nStart one with timer action \"start\" and a task.";
+  return [
+    `## Timer · ${data.status}`,
+    `- Task: [${data.task.identifier}](${taskLink(ctx.appOrigin, data.task.identifier)}) ${oneLine(data.task.title)}`,
+    data.startedAt !== null ? `- Running since: ${formatTimestamp(data.startedAt)} UTC` : "- Paused",
+    `- Elapsed: ${formatDuration(data.minutes)}${data.minutes === 0 ? " (stopping now saves nothing: under 30 seconds)" : " (what stopping now saves)"}`,
+    data.stale
+      ? "It has run 8 hours or more, so it may have been left running: after stopping, fix the entry with save_time_entries (ref + minutes) if the time is wrong."
+      : null,
+  ]
+    .filter((line): line is string => line !== null)
+    .join("\n");
 }

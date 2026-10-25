@@ -6,6 +6,8 @@ import { createRefResolver, type RefType } from "./mcpRefs";
 import { runItem } from "./mcpWrites";
 import type { DeleteResult } from "./mcpWriteResults";
 import { removeCommentForAuth } from "../comments";
+import { removeTimeEntryForAuth } from "../timeEntries";
+import { formatDuration } from "../../lib/duration";
 import { loadTaskForWrite } from "../tasks/access";
 import { removeTask } from "../tasks/write";
 
@@ -18,6 +20,10 @@ import { removeTask } from "../tasks/write";
  *   `deleteTimeEntries` (the dialog's "Delete task + logged time");
  *   invoiced or settled time always blocks (archive it in the app).
  * - Comment → `removeCommentForAuth`: your own, or any as an admin.
+ * - Time entry → `removeTimeEntryForAuth`: your own, or any as an admin
+ *   (members cannot even resolve others' entries); an entry settled by a
+ *   close (closed period, draft or final invoice) is refused with the
+ *   app's unblock message.
  * - Other types are refused until their write tools exist.
  *
  * Every ref is resolved (and access-checked) before anything is deleted. A
@@ -26,11 +32,11 @@ import { removeTask } from "../tasks/write";
  *
  * Read budget: ~5 ranges per ref, then the delete cascade (removeTask reads
  * the tree's time entries and org members; each task's comments, activity,
- * attachments and edges).
+ * attachments and edges; a time entry ~6: its close, task and the activity
+ * fan-out).
  */
 
 const UNSUPPORTED: Partial<Record<RefType, string>> = {
-  time_entry: "time entries",
   project: "projects",
   client: "clients",
   member: "members",
@@ -39,7 +45,8 @@ const UNSUPPORTED: Partial<Record<RefType, string>> = {
 /** A resolved ref; `index` is its position in the call's refs (error messages name it). */
 type Target =
   | { index: number; input: string; type: "task"; id: Id<"tasks">; label: string }
-  | { index: number; input: string; type: "comment"; id: Id<"comments">; label: string };
+  | { index: number; input: string; type: "comment"; id: Id<"comments">; label: string }
+  | { index: number; input: string; type: "time_entry"; id: Id<"timeEntries">; label: string };
 
 export async function deleteRecords(
   ctx: MutationCtx,
@@ -68,9 +75,21 @@ export async function deleteRecords(
             id: resolved.comment._id,
             label: `comment on ${resolved.access.task.identifier ?? resolved.access.task._id}`,
           };
+        case "time_entry": {
+          const { entry } = resolved;
+          const task = await ctx.db.get(entry.taskId);
+          const member = await ctx.db.get(entry.userId);
+          return {
+            index,
+            input,
+            type: "time_entry",
+            id: entry._id,
+            label: `time entry ${entry.date} · ${formatDuration(entry.durationMinutes)} · ${member?.name ?? "Former member"} on ${task?.identifier ?? entry.taskId}`,
+          };
+        }
         default:
           throw new ConvexError(
-            `delete removes tasks and comments. "${input}" is one of the ${UNSUPPORTED[resolved.type]}, which cannot be deleted through MCP yet.`,
+            `delete removes tasks, comments and time entries. "${input}" is one of the ${UNSUPPORTED[resolved.type]}, which cannot be deleted through MCP yet.`,
           );
       }
     });
@@ -86,8 +105,10 @@ export async function deleteRecords(
       if (target.type === "task") {
         const access = await loadTaskForWrite(ctx, target.id, auth);
         await removeTask(ctx, access, { deleteEntries: options.deleteTimeEntries });
-      } else {
+      } else if (target.type === "comment") {
         await removeCommentForAuth(ctx, auth, target.id);
+      } else {
+        await removeTimeEntryForAuth(ctx, auth, target.id);
       }
       return "deleted" as const;
     });

@@ -93,8 +93,11 @@ const PRIORITY_BY_NAME: Record<PriorityName, TaskPriority> = {
 
 const WORKSPACE_HINT = 'Use a name listed in fetch("workspace").';
 
-/** Status, label and work-category names → ids, each table read once per call (≤ REF_CAP rows). */
-function referenceNames(ctx: MutationCtx, orgId: string) {
+/**
+ * Status, label and work-category names → ids, each table read once per call
+ * (≤ REF_CAP rows). Shared with save_time_entries (categories).
+ */
+export function referenceNames(ctx: MutationCtx, orgId: string) {
   const load = <T>(rows: Promise<T[]>, noun: string) =>
     rows.then((all) => {
       if (all.length > REF_CAP) {
@@ -142,15 +145,15 @@ function referenceNames(ctx: MutationCtx, orgId: string) {
   };
 }
 
-type ReferenceNames = ReturnType<typeof referenceNames>;
+export type ReferenceNames = ReturnType<typeof referenceNames>;
 
-async function requireTask(resolver: RefResolver, ref: string): Promise<Doc<"tasks">> {
+export async function requireTask(resolver: RefResolver, ref: string): Promise<Doc<"tasks">> {
   const resolved = await resolver.require(ref, "task");
   if (resolved.type !== "task") throw new Error(`Expected a task, resolved a ${resolved.type}`);
   return resolved.access.task;
 }
 
-async function requireMember(resolver: RefResolver, ref: string): Promise<Id<"users">> {
+export async function requireMember(resolver: RefResolver, ref: string): Promise<Id<"users">> {
   const resolved = await resolver.require(ref, "member");
   if (resolved.type !== "member") throw new Error(`Expected a member, resolved a ${resolved.type}`);
   return resolved.user._id;

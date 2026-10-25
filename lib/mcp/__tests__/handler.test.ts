@@ -114,13 +114,21 @@ describe("MCP protocol", () => {
     }));
     expect(listed).toEqual(expected);
     // Guard against both sides being trivially empty.
-    expect(listed.map((t) => t.name)).toEqual(["search", "fetch", "save_tasks", "save_comments", "delete"]);
+    expect(listed.map((t) => t.name)).toEqual([
+      "search",
+      "fetch",
+      "save_tasks",
+      "save_comments",
+      "save_time_entries",
+      "timer",
+      "delete",
+    ]);
     expect(Object.keys(expected.find((t) => t.name === "fetch")!.inputSchema.properties ?? {})).toEqual([
       "refs",
       "include",
       "changes",
     ]);
-    for (const name of ["save_tasks", "save_comments", "delete"]) {
+    for (const name of ["save_tasks", "save_comments", "save_time_entries", "timer", "delete"]) {
       expect(Object.keys(expected.find((t) => t.name === name)!.inputSchema.properties ?? {})).toContain("idempotencyKey");
     }
     expect(Object.keys(expected.find((t) => t.name === "search")!.inputSchema.properties ?? {})).toEqual(
@@ -131,6 +139,8 @@ describe("MCP protocol", () => {
     expect(hints.fetch).toMatchObject({ readOnlyHint: true });
     expect(hints.save_tasks).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: false });
     expect(hints.save_comments).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: false });
+    expect(hints.save_time_entries).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: false });
+    expect(hints.timer).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: false });
     expect(hints.delete).toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: true });
   });
 

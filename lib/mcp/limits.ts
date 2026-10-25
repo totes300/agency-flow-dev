@@ -68,3 +68,11 @@ export type PriorityName = (typeof PRIORITY_NAMES)[number];
 
 /** Markdown accepted per description or comment body (route schema and Convex). */
 export const MARKDOWN_MAX_LENGTH = 50_000;
+
+/**
+ * Minutes per `save_time_entries` entry: whole minutes, at most one day (an
+ * entry is filed under one date). The app ceils to whole minutes too.
+ */
+export const TIME_ENTRY_MINUTES_MAX = 24 * 60;
+/** Characters per time-entry note (plain text). */
+export const TIME_ENTRY_NOTE_MAX = 2_000;

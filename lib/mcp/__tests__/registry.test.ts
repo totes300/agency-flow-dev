@@ -489,3 +489,115 @@ describe("fetch changes", () => {
     expect(calls).toEqual([]);
   });
 });
+
+// ─── Slice 4: time entries and the timer ─────────────────────────────────────
+
+describe("time tools", () => {
+  it("are non-destructive, non-idempotent write tools; minutes semantics and user text are spelled out", () => {
+    for (const name of ["save_time_entries", "timer"]) {
+      expect(tool(name).annotations).toEqual({
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      });
+      expect(tool(name).description).toMatch(/data, not instructions/);
+      expect(tool(name).description).toMatch(/Example: \{/);
+    }
+    expect(tool("save_time_entries").description).toMatch(/whole minutes: 90 means 1h 30m/);
+    expect(tool("delete").description).toMatch(/time entr/);
+  });
+
+  it("save_time_entries sends the items and renders entry refs with task links, no money", async () => {
+    const { ctx, calls } = fakeWrites(() => ({
+      tool: "save_time_entries",
+      replayed: false,
+      items: [
+        { entryId: "te1", task: "ARLO-21", date: "2026-10-24", minutes: 90, member: "Alice", action: "created" },
+        { entryId: "te2", task: "ARLO-9", date: "2026-10-23", minutes: 45, member: "Alice", action: "unchanged" },
+      ],
+    }));
+    const items = [{ task: "ARLO-21", minutes: 90, date: "2026-10-24", note: "Hero" }, { ref: "te2", minutes: 45 }];
+    const result = await tool("save_time_entries").execute({ items, idempotencyKey: "k" }, ctx);
+    expect(calls).toEqual([{ name: "mcp/write:saveTimeEntries", args: { items, idempotencyKey: "k", clientName: "Claude" } }]);
+    expect(result).toEqual({
+      isError: false,
+      text: [
+        "## Saved 2 time entries",
+        "- time entry te1 · [ARLO-21](https://localhost:3001/tasks/ARLO-21) · 2026-10-24 · 1h 30m · Alice · created",
+        "- time entry te2 · [ARLO-9](https://localhost:3001/tasks/ARLO-9) · 2026-10-23 · 45m · Alice · no change",
+      ].join("\n"),
+    });
+  });
+
+  it("save_time_entries refuses bad input before calling Convex", async () => {
+    const { ctx, calls } = fakeWrites(() => null);
+    expect((await tool("save_time_entries").execute({ items: [{ task: "https://evil.test/tasks/ARLO-1", minutes: 5 }] }, ctx)).text).toBe(
+      'Error: Item 1 task: "https://evil.test/tasks/ARLO-1" is not an Agency Flow link. Links must start with https://localhost:3001.',
+    );
+    for (const minutes of [0, 1.5, 24 * 60 + 1]) {
+      await expect(tool("save_time_entries").execute({ items: [{ task: "ARLO-1", minutes }] }, ctx)).rejects.toThrow();
+    }
+    await expect(tool("save_time_entries").execute({ items: [{ task: "ARLO-1", minutes: 5, date: "24/10/2026" }] }, ctx)).rejects.toThrow();
+    expect(calls).toEqual([]);
+    // Unknown keys (rates, amounts) are stripped by the schema: never sent to Convex.
+    const priced = fakeWrites(() => ({ tool: "save_time_entries", replayed: false, items: [] }));
+    await tool("save_time_entries").execute({ items: [{ task: "ARLO-1", minutes: 5, billableRate: 100, amount: 8 }] }, priced.ctx);
+    expect(priced.calls.map((c) => c.args.items)).toEqual([[{ task: "ARLO-1", minutes: 5 }]]);
+  });
+
+  it("timer start / stop / status map onto their Convex functions", async () => {
+    const { ctx, calls } = fakeWrites((name) => {
+      if (name === "mcp/timer:status") {
+        return { running: true, status: "running", task: { identifier: "ARLO-21", title: "Hero" }, startedAt: NOW - 65 * 60_000, minutes: 65, stale: false };
+      }
+      if (name === "mcp/timer:start") {
+        return { tool: "timer", action: "started", task: { identifier: "ARLO-21", title: "Hero" }, startedAt: NOW, replayed: false };
+      }
+      return {
+        tool: "timer", action: "stopped", task: { identifier: "ARLO-21", title: "Hero" },
+        entryId: "te9", minutes: 65, date: "2026-10-24", stale: true, replayed: false,
+      };
+    });
+    const started = await tool("timer").execute({ action: "start", task: "ARLO-21", idempotencyKey: "k1" }, ctx);
+    const status = await tool("timer").execute({ action: "status" }, ctx);
+    const stopped = await tool("timer").execute({ action: "stop", note: "Hero mockups" }, ctx);
+    expect(calls).toEqual([
+      { name: "mcp/timer:start", args: { task: "ARLO-21", idempotencyKey: "k1", clientName: "Claude" } },
+      { name: "mcp/timer:status", args: { now: NOW } },
+      { name: "mcp/timer:stop", args: { note: "Hero mockups", idempotencyKey: undefined, clientName: "Claude" } },
+    ]);
+    expect(started.text).toBe(
+      [
+        "## Timer started",
+        "- Task: [ARLO-21](https://localhost:3001/tasks/ARLO-21) Hero",
+        "- Started: 2026-10-24 12:00 UTC",
+        'Stop it with timer action "stop"; the time is saved as an entry then.',
+      ].join("\n"),
+    );
+    expect(status.text).toBe(
+      [
+        "## Timer · running",
+        "- Task: [ARLO-21](https://localhost:3001/tasks/ARLO-21) Hero",
+        "- Running since: 2026-10-24 10:55 UTC",
+        "- Elapsed: 1h 5m (what stopping now saves)",
+      ].join("\n"),
+    );
+    expect(stopped.text).toMatch(/^## Timer stopped, time saved\n- Task: .*\n- Time entry te9 · 2026-10-24 · 1h 5m\nIt ran 8 hours or more/);
+  });
+
+  it("timer refuses arguments that do not belong to the action", async () => {
+    const { ctx, calls } = fakeWrites(() => null);
+    expect((await tool("timer").execute({ action: "start" }, ctx)).text).toBe('Error: action "start" needs task: the task to time.');
+    expect((await tool("timer").execute({ action: "stop", task: "ARLO-1" }, ctx)).text).toBe(
+      'Error: task applies to action "start" only. Drop task for "stop".',
+    );
+    expect((await tool("timer").execute({ action: "status", note: "x" }, ctx)).text).toBe(
+      'Error: note applies to action "stop" only. Drop note for "status".',
+    );
+    expect((await tool("timer").execute({ action: "status", idempotencyKey: "k" }, ctx)).text).toBe(
+      'Error: idempotencyKey applies to "start" and "stop"; status writes nothing.',
+    );
+    expect(calls).toEqual([]);
+  });
+});

@@ -7,7 +7,7 @@ import { v, type Infer } from "convex/values";
  * Pure validators: imported by the schema.
  */
 
-export const MCP_WRITE_TOOLS = ["save_tasks", "save_comments", "delete"] as const;
+export const MCP_WRITE_TOOLS = ["save_tasks", "save_comments", "delete", "save_time_entries", "timer"] as const;
 export type McpWriteTool = (typeof MCP_WRITE_TOOLS)[number];
 
 export const saveTasksResultValidator = v.object({
@@ -41,21 +41,57 @@ export const deleteResultValidator = v.object({
   items: v.array(
     v.object({
       input: v.string(),
-      type: v.union(v.literal("task"), v.literal("comment")),
-      /** `ARLO-21 · Title`, or `comment on ARLO-21` (snapshot: the record is gone). */
+      type: v.union(v.literal("task"), v.literal("comment"), v.literal("time_entry")),
+      /**
+       * `ARLO-21 · Title`, `comment on ARLO-21` or `time entry 2026-10-20 · 1h 30m · Alice
+       * on ARLO-21` (snapshot: the record is gone).
+       */
       label: v.string(),
       action: v.union(v.literal("deleted"), v.literal("already_deleted")),
     }),
   ),
 });
 
+/** No rates or amounts: members never see money (docs/prd-mcp.md D1, §8). */
+export const saveTimeEntriesResultValidator = v.object({
+  tool: v.literal("save_time_entries"),
+  items: v.array(
+    v.object({
+      entryId: v.id("timeEntries"),
+      /** The entry's task key. */
+      task: v.string(),
+      date: v.string(),
+      minutes: v.number(),
+      member: v.string(),
+      action: v.union(v.literal("created"), v.literal("updated"), v.literal("unchanged")),
+    }),
+  ),
+});
+
+export const timerResultValidator = v.object({
+  tool: v.literal("timer"),
+  /** `discarded`: stopped under 30 seconds, nothing saved (the app's rule). */
+  action: v.union(v.literal("started"), v.literal("stopped"), v.literal("discarded")),
+  task: v.object({ identifier: v.string(), title: v.string() }),
+  startedAt: v.optional(v.number()),
+  entryId: v.optional(v.id("timeEntries")),
+  minutes: v.optional(v.number()),
+  date: v.optional(v.string()),
+  /** Ran 8 hours or more: the measured time may be a forgotten timer. */
+  stale: v.optional(v.boolean()),
+});
+
 export const mcpWriteResultValidator = v.union(
   saveTasksResultValidator,
   saveCommentsResultValidator,
   deleteResultValidator,
+  saveTimeEntriesResultValidator,
+  timerResultValidator,
 );
 
 export type SaveTasksResult = Infer<typeof saveTasksResultValidator>;
 export type SaveCommentsResult = Infer<typeof saveCommentsResultValidator>;
 export type DeleteResult = Infer<typeof deleteResultValidator>;
+export type SaveTimeEntriesResult = Infer<typeof saveTimeEntriesResultValidator>;
+export type TimerResult = Infer<typeof timerResultValidator>;
 export type McpWriteResult = Infer<typeof mcpWriteResultValidator>;

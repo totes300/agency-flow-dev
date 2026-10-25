@@ -5,6 +5,7 @@ import { assertBatch, mcpActor, recordIdempotent, replayIdempotent, requestFinge
 import { saveTasks as saveTaskItems } from "../lib/mcpSaveTasks";
 import { saveComments as saveCommentItems } from "../lib/mcpSaveComments";
 import { deleteRecords } from "../lib/mcpDelete";
+import { saveTimeEntries as saveTimeEntryItems } from "../lib/mcpSaveTimeEntries";
 
 /**
  * MCP write tools (docs/prd-mcp.md §6). Each mutation calls
@@ -88,6 +89,35 @@ export const saveComments = mutation({
     assertBatch(args.items.length, "item");
     const result = await saveCommentItems(ctx, auth, args.items);
     await recordIdempotent(ctx, auth, "save_comments", args.idempotencyKey, fingerprint, result, now);
+    return { ...result, replayed: false };
+  },
+});
+
+export const saveTimeEntries = mutation({
+  args: {
+    items: v.array(
+      v.object({
+        ref: v.optional(v.string()),
+        task: v.optional(v.string()),
+        date: v.optional(v.string()),
+        minutes: v.optional(v.number()),
+        note: v.optional(v.union(v.string(), v.null())),
+        category: v.optional(v.string()),
+        member: v.optional(v.string()),
+      }),
+    ),
+    idempotencyKey: v.optional(v.string()),
+    clientName: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const auth = mcpActor(await getMcpAuthContext(ctx), args.clientName);
+    const now = Date.now();
+    const fingerprint = requestFingerprint("save_time_entries", { items: args.items });
+    const replay = await replayIdempotent(ctx, auth, "save_time_entries", args.idempotencyKey, fingerprint, now);
+    if (replay) return { ...replay, replayed: true };
+    assertBatch(args.items.length, "item");
+    const result = await saveTimeEntryItems(ctx, auth, args.items, now);
+    await recordIdempotent(ctx, auth, "save_time_entries", args.idempotencyKey, fingerprint, result, now);
     return { ...result, replayed: false };
   },
 });

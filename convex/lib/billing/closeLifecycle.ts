@@ -25,6 +25,7 @@ import {
   toScopeProject,
   type BillingEntry,
   type ClosableProject,
+  type CloseContext,
 } from "./closeData";
 import { appendBillingEvent } from "./events";
 import { monthLabel, periodSubjectLabel } from "./labels";
@@ -86,14 +87,16 @@ export type ClosePlan = {
 
 /**
  * Plans the close of the project's committable period. Throws the same
- * errors the commit always has; reads only.
+ * errors the commit always has; reads only. `preloaded` is the project's
+ * close context when the caller already loaded it in this transaction.
  */
 export async function planClose(
   ctx: QueryCtx,
   orgId: string,
   args: { projectId: Id<"projects">; periodStart: string },
+  preloaded?: CloseContext,
 ): Promise<ClosePlan> {
-  const c = await loadCloseContext(ctx, orgId, args.projectId);
+  const c = preloaded ?? (await loadCloseContext(ctx, orgId, args.projectId));
   const orgSettings = await getOrgSettings(ctx, orgId);
   const todayStr = getDateInTimezone(Date.now(), orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK);
 

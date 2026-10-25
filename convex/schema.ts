@@ -916,4 +916,20 @@ export default defineSchema({
     .index("by_createdAt", ["createdAt"])
     // Open previews per user (PREVIEW_OPEN_MAX).
     .index("by_orgId_userId_createdAt", ["orgId", "userId", "createdAt"]),
+
+  // ─── MCP connections (docs/prd-mcp.md D17, §11 Connected apps) ──────────────
+  // One row per org + user + OAuth client that has called /mcp. Clerk's
+  // Backend API cannot list a user's OAuth grants (S4), so Settings →
+  // Connected apps lists these rows. The /mcp route stamps them through
+  // `mcp/connections:touch` (convex/lib/mcpConnections.ts), which writes at
+  // most once per hour per client: `firstUsedAt` is shown as "Connected",
+  // `lastUsedAt` as "Last used". `clientName` is display text only (D15).
+  mcpConnections: defineTable({
+    orgId: v.string(),
+    userId: v.id("users"),
+    clientId: v.string(),
+    clientName: v.string(),
+    firstUsedAt: v.number(),
+    lastUsedAt: v.number(),
+  }).index("by_orgId_userId_clientId", ["orgId", "userId", "clientId"]),
 });

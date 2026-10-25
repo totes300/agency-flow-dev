@@ -1,7 +1,13 @@
 "use client"
 
 import { Suspense, useState, useEffect, useMemo } from "react"
-import { useParams, useSearchParams, useRouter, usePathname, notFound } from "next/navigation"
+import {
+  useParams,
+  useSearchParams,
+  useRouter,
+  usePathname,
+  notFound,
+} from "next/navigation"
 import { useQuery } from "convex/react"
 import { useConvexAuth } from "convex/react"
 import { api } from "@/convex/_generated/api"
@@ -33,10 +39,18 @@ export default function ProjectDetailPage() {
   const router = useRouter()
   const pathname = usePathname()
   const projectId = params.id as Id<"projects">
-  const project = useQuery(api.projects.get, isAuthenticated ? { id: projectId } : "skip")
-  const overview = useQuery(api.timeEntries.projectOverview, isAuthenticated ? { projectId } : "skip")
-  const monthlyData = useQuery(api.timeEntries.projectMonthlyBreakdown, isAuthenticated ? { projectId } : "skip")
-
+  const project = useQuery(
+    api.projects.get,
+    isAuthenticated ? { id: projectId } : "skip",
+  )
+  const overview = useQuery(
+    api.timeEntries.projectOverview,
+    isAuthenticated ? { projectId } : "skip",
+  )
+  const monthlyData = useQuery(
+    api.timeEntries.projectMonthlyBreakdown,
+    isAuthenticated ? { projectId } : "skip",
+  )
 
   useBreadcrumbTitle(project?.name ?? null)
 
@@ -45,7 +59,10 @@ export default function ProjectDetailPage() {
   // and shareable links working (CLAUDE.md: filterable views persist to URL).
   const tabParam = searchParams.get("tab")
   const tab =
-    tabParam === "tasks" || tabParam === "settings" || tabParam === "invoices" || tabParam === "time"
+    tabParam === "tasks" ||
+    tabParam === "settings" ||
+    tabParam === "invoices" ||
+    tabParam === "time"
       ? tabParam
       : "overview"
 
@@ -60,7 +77,7 @@ export default function ProjectDetailPage() {
   // If non-billable project navigated with ?tab=invoices or ?tab=time, fall back to overview
   const isBillable = project ? project.billingType !== "non_billable" : true
   const effectiveTab =
-    ((tab === "invoices" || tab === "time") && !isBillable) ? "overview" : tab
+    (tab === "invoices" || tab === "time") && !isBillable ? "overview" : tab
 
   const projectTaskIds = useMemo(() => {
     if (!monthlyData) return []
@@ -82,7 +99,9 @@ export default function ProjectDetailPage() {
   useEffect(() => {
     if (!scrollTarget || tab !== "settings") return
     const id = requestAnimationFrame(() => {
-      document.getElementById(scrollTarget)?.scrollIntoView({ behavior: "smooth", block: "start" })
+      document
+        .getElementById(scrollTarget)
+        ?.scrollIntoView({ behavior: "smooth", block: "start" })
       setScrollTarget(null)
     })
     return () => cancelAnimationFrame(id)
@@ -92,7 +111,10 @@ export default function ProjectDetailPage() {
   if (project === null) notFound()
 
   return (
-    <div className="flex w-full flex-col gap-6">
+    <div
+      data-full-bleed
+      className="flex min-w-0 flex-col border-t border-border/60"
+    >
       <ProjectDetailHeader
         projectId={projectId}
         project={project}
@@ -101,23 +123,25 @@ export default function ProjectDetailPage() {
       />
 
       {/* Tabs */}
-      <Tabs value={effectiveTab} onValueChange={setTab}>
-        <TabsList>
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="tasks">Tasks</TabsTrigger>
-          {project.billingType !== "non_billable" && (
-            <TabsTrigger value="time">Time</TabsTrigger>
-          )}
-          {project.billingType !== "non_billable" && (
-            <TabsTrigger value="invoices">Invoices</TabsTrigger>
-          )}
-          <TabsTrigger value="settings">Settings</TabsTrigger>
-        </TabsList>
+      <Tabs value={effectiveTab} onValueChange={setTab} className="gap-0">
+        <div className="overflow-x-auto border-b border-border/60 px-4 py-2">
+          <TabsList variant="pill" aria-label="Project sections">
+            <TabsTrigger value="overview">Overview</TabsTrigger>
+            <TabsTrigger value="tasks">Tasks</TabsTrigger>
+            {project.billingType !== "non_billable" && (
+              <TabsTrigger value="time">Time</TabsTrigger>
+            )}
+            {project.billingType !== "non_billable" && (
+              <TabsTrigger value="invoices">Invoices</TabsTrigger>
+            )}
+            <TabsTrigger value="settings">Settings</TabsTrigger>
+          </TabsList>
+        </div>
 
         {/* Mount only the active tab — TabsContent + conditional render keeps
             heavy children (ProjectTime entry list, FixedOverview metrics) out of
             the tree until selected. */}
-        <TabsContent value="overview" className="mt-6">
+        <TabsContent value="overview" className="m-0 min-w-0 p-4 md:p-6">
           {effectiveTab === "overview" && project.billingType === "fixed" && (
             <FixedOverview
               projectId={projectId}
@@ -131,36 +155,44 @@ export default function ProjectDetailPage() {
           {effectiveTab === "overview" && project.billingType === "t_and_m" && (
             <TmOverview projectId={projectId} project={project} />
           )}
-          {effectiveTab === "overview" && project.billingType === "retainer" && (
-            <RetainerOverview
-              projectId={projectId}
-              currency={project.currency}
-            />
-          )}
-          {effectiveTab === "overview" && project.billingType === "non_billable" && (
-            <div className="rounded-lg border bg-muted/30 p-8">
-              <div className="flex flex-col items-center justify-center gap-2 text-center">
-                <p className="text-sm font-medium">Non-billable project</p>
-                <p className="text-xs text-muted-foreground">
-                  This project has no billing configuration. Time logged here is tracked for internal reporting only.
-                </p>
+          {effectiveTab === "overview" &&
+            project.billingType === "retainer" && (
+              <RetainerOverview
+                projectId={projectId}
+                currency={project.currency}
+              />
+            )}
+          {effectiveTab === "overview" &&
+            project.billingType === "non_billable" && (
+              <div className="rounded-lg border bg-muted/30 p-8">
+                <div className="flex flex-col items-center justify-center gap-2 text-center">
+                  <p className="text-sm font-medium">Non-billable project</p>
+                  <p className="text-xs text-muted-foreground">
+                    This project has no billing configuration. Time logged here
+                    is tracked for internal reporting only.
+                  </p>
+                </div>
               </div>
-            </div>
-          )}
+            )}
         </TabsContent>
 
         {/* The project's tasks: the task-view preset `surface: "project"`
             (views, display options, filters as on /tasks; no Client column). */}
-        <TabsContent value="tasks" className="mt-6">
+        <TabsContent value="tasks" className="m-0 min-w-0 p-4 md:p-6">
           {effectiveTab === "tasks" && (
             <Suspense fallback={<TaskTableSkeleton />}>
-              <TaskView surface="project" projectId={projectId} fromLabel={project.name} embedded />
+              <TaskView
+                surface="project"
+                projectId={projectId}
+                fromLabel={project.name}
+                embedded
+              />
             </Suspense>
           )}
         </TabsContent>
 
         {project.billingType !== "non_billable" && (
-          <TabsContent value="time" className="mt-6">
+          <TabsContent value="time" className="m-0 min-w-0 p-4 md:p-6">
             {effectiveTab === "time" && (
               <ProjectTime
                 projectId={projectId}
@@ -178,22 +210,32 @@ export default function ProjectDetailPage() {
         )}
 
         {project.billingType !== "non_billable" && (
-          <TabsContent value="invoices" className="mt-6">
+          <TabsContent value="invoices" className="m-0 min-w-0 p-4 md:p-6">
             {effectiveTab === "invoices" && (
               <ProjectInvoices projectId={projectId} project={project} />
             )}
           </TabsContent>
         )}
 
-        <TabsContent value="settings" className="mt-6">
+        <TabsContent value="settings" className="m-0 min-w-0 p-4 md:p-6">
           {effectiveTab === "settings" && (
             <div className="flex flex-col gap-6">
               <SettingsGeneral projectId={projectId} project={project} />
               {project.billingType === "fixed" && (
-                <SettingsBudgetEstimates projectId={projectId} project={project} teamMembers={project.teamMembers} defaultAssignees={project.defaultAssignees} />
+                <SettingsBudgetEstimates
+                  projectId={projectId}
+                  project={project}
+                  teamMembers={project.teamMembers}
+                  defaultAssignees={project.defaultAssignees}
+                />
               )}
               {project.billingType === "t_and_m" && (
-                <SettingsRates projectId={projectId} project={project} teamMembers={project.teamMembers} defaultAssignees={project.defaultAssignees} />
+                <SettingsRates
+                  projectId={projectId}
+                  project={project}
+                  teamMembers={project.teamMembers}
+                  defaultAssignees={project.defaultAssignees}
+                />
               )}
               {project.billingType === "retainer" && (
                 <SettingsRetainer projectId={projectId} project={project} />
@@ -211,7 +253,9 @@ export default function ProjectDetailPage() {
 
       {/* Task detail — route-driven (?task= / ?detail=); the full page when that is
           the user's mode. The Tasks tab mounts its own (stepping through its rows). */}
-      {effectiveTab !== "tasks" && <TaskDetailDrawer taskIds={projectTaskIds} isAdmin={isAdmin ?? false} />}
+      {effectiveTab !== "tasks" && (
+        <TaskDetailDrawer taskIds={projectTaskIds} isAdmin={isAdmin ?? false} />
+      )}
     </div>
   )
 }

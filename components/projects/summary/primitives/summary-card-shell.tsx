@@ -11,7 +11,7 @@ type SummaryCardShellProps = {
 }
 
 /**
- * Outer shell for the Project Summary card. Bonsai-style single wide card with
+ * Outer shell for the Project Summary card. Compact project overview with
  * 3 vertical columns separated by hairline dividers. Responsive: columns stack
  * on small screens with horizontal dividers instead.
  *
@@ -27,11 +27,11 @@ export function SummaryCardShell({
   className,
 }: SummaryCardShellProps) {
   return (
-    <Card className={cn("gap-0 py-0", className)}>
+    <Card className={cn("gap-0 rounded-lg border border-border/60 py-0 shadow-none ring-0", className)}>
       <div className="flex flex-wrap items-start justify-between gap-3 px-5 pt-4 pb-3">
         <div className="flex flex-col gap-0.5">
           <div className="flex items-center gap-2">
-            <p className="text-base font-semibold text-foreground">{title}</p>
+            <p className="text-sm font-medium text-foreground">{title}</p>
             {badge}
           </div>
           {subtitle && (

@@ -3,31 +3,26 @@
 import { useState, useDeferredValue, useMemo } from "react"
 import { useQuery, useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Switch } from "@/components/ui/switch"
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
+  DirectoryView,
+  DirectoryEmpty,
+} from "@/components/directory/directory-view"
+import {
+  DirectoryMenu,
+  DirectoryMenuOptions,
+} from "@/components/directory/directory-menu"
+import { DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
 import { ConfirmDialog } from "@/components/confirm-dialog"
-import { EmptyState } from "@/components/empty-state"
 import { ProjectsListSkeleton } from "@/components/projects/projects-list-skeleton"
 import { ProjectsTable } from "@/components/projects/projects-table"
 import dynamic from "next/dynamic"
-const ProjectFormModal = dynamic(() => import("@/components/projects/project-form-modal").then(m => ({ default: m.ProjectFormModal })))
+const ProjectFormModal = dynamic(() =>
+  import("@/components/projects/project-form-modal").then((m) => ({
+    default: m.ProjectFormModal,
+  })),
+)
 import { useUndoAction } from "@/lib/hooks/use-undo-action"
-import {
-  FolderIcon,
-  PlusIcon,
-  SearchIcon,
-  ArrowUpDownIcon,
-  ListFilterIcon,
-} from "lucide-react"
+import { ListFilterIcon } from "lucide-react"
 import { toast } from "sonner"
 import { toastArchiveSuccess } from "@/lib/toast-helpers"
 import type { Doc } from "@/convex/_generated/dataModel"
@@ -68,7 +63,8 @@ export default function ProjectsPage() {
           !p.name.toLowerCase().includes(q) &&
           !p.code.toLowerCase().includes(q) &&
           !p.clientName.toLowerCase().includes(q)
-        ) continue
+        )
+          continue
       }
       result.push(p)
     }
@@ -81,20 +77,6 @@ export default function ProjectsPage() {
     })
     return result
   }, [projects, hiddenIds, deferredSearch, sortBy, filterClient, filterType])
-
-  const stats = useMemo(() => {
-    if (!projects) return { active: 0, fixed: 0, t_and_m: 0, retainer: 0, non_billable: 0 }
-    let active = 0, fixed = 0, t_and_m = 0, retainer = 0, non_billable = 0
-    for (const p of projects) {
-      if (hiddenIds.has(p._id) || p.archivedAt) continue
-      active++
-      if (p.billingType === "fixed") fixed++
-      else if (p.billingType === "t_and_m") t_and_m++
-      else if (p.billingType === "retainer") retainer++
-      else if (p.billingType === "non_billable") non_billable++
-    }
-    return { active, fixed, t_and_m, retainer, non_billable }
-  }, [projects, hiddenIds])
 
   if (!projects) return <ProjectsListSkeleton />
 
@@ -117,7 +99,10 @@ export default function ProjectsPage() {
         const result = await archiveProject({ id: projectId })
         // The undo toast already says "<name>" archived — only add noise when
         // a running timer was rescued (or couldn't be).
-        if (result.autoSavedTimers.length > 0 || result.timerSaveFailures.length > 0) {
+        if (
+          result.autoSavedTimers.length > 0 ||
+          result.timerSaveFailures.length > 0
+        ) {
           toastArchiveSuccess(result, `"${project.name}" archived`)
         }
         unhide()
@@ -130,7 +115,9 @@ export default function ProjectsPage() {
   async function handleRestore(project: Doc<"projects">) {
     try {
       await restoreProject({ id: project._id })
-      toast.info("Project restored. Tasks are still archived — restore them individually.")
+      toast.info(
+        "Project restored. Tasks are still archived — restore them individually.",
+      )
     } catch {
       toast.error("Failed to restore project")
     }
@@ -143,146 +130,82 @@ export default function ProjectsPage() {
       setDeleteTarget(null)
       toast.success(`"${deleteTarget.name}" deleted`)
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to delete project")
+      toast.error(
+        err instanceof Error ? err.message : "Failed to delete project",
+      )
     }
   }
 
-  if (projects.length === 0 && !includeArchived) {
-    return (
-      <>
-        <EmptyState
-          icon={FolderIcon}
-          title="No projects yet"
-          description="Create a project to start tracking time and budgets for your clients."
-          action={
-            <Button onClick={() => setCreateOpen(true)}>
-              <PlusIcon className="size-4" />
-              Create your first project
-            </Button>
-          }
-        />
-        <ProjectFormModal open={createOpen} onOpenChange={setCreateOpen} />
-      </>
-    )
-  }
-
   return (
-    <div className="space-y-5">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight">Projects</h1>
-          <p className="text-sm text-muted-foreground">Manage your projects</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <div className="relative">
-            <SearchIcon className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search projects..."
-              className="w-64 pl-9"
+    <DirectoryView
+      name="projects"
+      includeArchived={includeArchived}
+      onIncludeArchivedChange={setIncludeArchived}
+      search={search}
+      onSearchChange={setSearch}
+      onCreate={() => setCreateOpen(true)}
+      controls={
+        <>
+          <DirectoryMenu
+            label="Filter projects"
+            active={filterClient !== "all" || filterType !== "all"}
+            icon={<ListFilterIcon />}
+          >
+            <DirectoryMenuOptions
+              label="Client"
+              value={filterClient}
+              onChange={setFilterClient}
+              options={[
+                { value: "all", label: "All clients" },
+                ...(clientsList ?? []).map((client) => ({
+                  value: client._id,
+                  label: client.name,
+                })),
+              ]}
             />
-          </div>
-          <Button onClick={() => setCreateOpen(true)}>
-            <PlusIcon className="size-4" />
-            New Project
-          </Button>
-        </div>
-      </div>
-
-      {/* Stats + Controls */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center divide-x">
-          <div className="pr-4">
-            <p className="text-xs text-muted-foreground">Active</p>
-            <p className="text-lg font-semibold">{stats.active}</p>
-          </div>
-          <div className="px-4">
-            <p className="text-xs text-muted-foreground">Fixed</p>
-            <p className="text-lg font-semibold">{stats.fixed}</p>
-          </div>
-          <div className="px-4">
-            <p className="text-xs text-muted-foreground">T&M</p>
-            <p className="text-lg font-semibold">{stats.t_and_m}</p>
-          </div>
-          <div className="px-4">
-            <p className="text-xs text-muted-foreground">Retainer</p>
-            <p className="text-lg font-semibold">{stats.retainer}</p>
-          </div>
-          <div className="pl-4">
-            <p className="text-xs text-muted-foreground">Non-Billable</p>
-            <p className="text-lg font-semibold">{stats.non_billable}</p>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <Select value={filterClient} onValueChange={(v) => setFilterClient(v as FilterClient)}>
-            <SelectTrigger className="h-9 w-fit rounded-full px-3.5">
-              <span className="flex items-center gap-1.5">
-                <ListFilterIcon className="size-3.5 shrink-0 text-muted-foreground" />
-                <span className="text-sm text-muted-foreground">Client:</span>
-                <span className="text-sm font-semibold"><SelectValue /></span>
-              </span>
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all" className="py-2 pl-2.5">All</SelectItem>
-              {clientsList?.map((c) => (
-                <SelectItem key={c._id} value={c._id} className="py-2 pl-2.5">{c.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-
-          <Select value={filterType} onValueChange={(v) => setFilterType(v as FilterType)}>
-            <SelectTrigger className="h-9 w-fit rounded-full px-3.5">
-              <span className="flex items-center gap-1.5">
-                <ListFilterIcon className="size-3.5 shrink-0 text-muted-foreground" />
-                <span className="text-sm text-muted-foreground">Type:</span>
-                <span className="text-sm font-semibold"><SelectValue /></span>
-              </span>
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all" className="py-2 pl-2.5">All</SelectItem>
-              <SelectItem value="fixed" className="py-2 pl-2.5">Fixed</SelectItem>
-              <SelectItem value="t_and_m" className="py-2 pl-2.5">T&M</SelectItem>
-              <SelectItem value="retainer" className="py-2 pl-2.5">Retainer</SelectItem>
-              <SelectItem value="non_billable" className="py-2 pl-2.5">Non-Billable</SelectItem>
-            </SelectContent>
-          </Select>
-
-          <Select value={sortBy} onValueChange={(v) => setSortBy(v as SortBy)}>
-            <SelectTrigger className="h-9 w-fit rounded-full px-3.5">
-              <span className="flex items-center gap-1.5">
-                <ArrowUpDownIcon className="size-3.5 shrink-0 text-muted-foreground" />
-                <span className="text-sm text-muted-foreground">Sort:</span>
-                <span className="text-sm font-semibold"><SelectValue /></span>
-              </span>
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="name" className="py-2 pl-2.5">Name</SelectItem>
-              <SelectItem value="client" className="py-2 pl-2.5">Client</SelectItem>
-            </SelectContent>
-          </Select>
-
-          <div className="flex h-9 items-center gap-2.5 rounded-full border border-input px-3.5">
-            <Switch
-              id="show-archived-projects"
-              size="sm"
-              checked={includeArchived}
-              onCheckedChange={setIncludeArchived}
+            <DropdownMenuSeparator />
+            <DirectoryMenuOptions<FilterType>
+              label="Billing type"
+              value={filterType}
+              onChange={setFilterType}
+              options={[
+                { value: "all", label: "All types" },
+                { value: "fixed", label: "Fixed" },
+                { value: "t_and_m", label: "Time & materials" },
+                { value: "retainer", label: "Retainer" },
+                { value: "non_billable", label: "Non-billable" },
+              ]}
             />
-            <Label htmlFor="show-archived-projects" className="whitespace-nowrap text-sm font-normal text-muted-foreground">
-              Archived
-            </Label>
-          </div>
-        </div>
-      </div>
-
+          </DirectoryMenu>
+          <DirectoryMenu
+            label="Project display options"
+            active={sortBy !== "name"}
+          >
+            <DirectoryMenuOptions<SortBy>
+              label="Sort by"
+              value={sortBy}
+              onChange={setSortBy}
+              options={[
+                { value: "name", label: "Name" },
+                { value: "client", label: "Client" },
+              ]}
+            />
+          </DirectoryMenu>
+        </>
+      }
+    >
       {/* Table */}
       {processedProjects.length === 0 ? (
-        <p className="py-8 text-center text-sm text-muted-foreground">
-          {deferredSearch ? "No projects match your search." : "No projects found."}
-        </p>
+        <DirectoryEmpty
+          name="projects"
+          filtered={!!search || filterClient !== "all" || filterType !== "all"}
+          onReset={() => {
+            setSearch("")
+            setFilterClient("all")
+            setFilterType("all")
+          }}
+          onCreate={() => setCreateOpen(true)}
+        />
       ) : (
         <ProjectsTable
           projects={processedProjects}
@@ -298,13 +221,15 @@ export default function ProjectsPage() {
       {/* Delete confirmation */}
       <ConfirmDialog
         open={!!deleteTarget}
-        onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null)
+        }}
         title="Delete project"
         description={`This will permanently delete "${deleteTarget?.name}" and all associated data. This cannot be undone.`}
         confirmLabel="Delete"
         variant="destructive"
         onConfirm={handleDelete}
       />
-    </div>
+    </DirectoryView>
   )
 }

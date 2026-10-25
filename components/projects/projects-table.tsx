@@ -1,10 +1,9 @@
 "use client"
 
 import Link from "next/link"
+import { DirectoryTable } from "@/components/directory/directory-table"
 import { useRouter } from "next/navigation"
-import { Badge } from "@/components/ui/badge"
 import {
-  Table,
   TableHeader,
   TableBody,
   TableHead,
@@ -15,10 +14,12 @@ import { BillingTypeBadge } from "@/components/billing-type-badge"
 import { RowActionMenu } from "@/components/row-action-menu"
 import { ArchivedBadge } from "@/components/archived-badge"
 import {
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu"
 import {
+  FolderIcon,
   PencilIcon,
   ArchiveIcon,
   ArchiveRestoreIcon,
@@ -26,7 +27,10 @@ import {
 } from "lucide-react"
 import type { Doc } from "@/convex/_generated/dataModel"
 
-type ProjectWithClient = Doc<"projects"> & { clientName: string; currency: string }
+type ProjectWithClient = Doc<"projects"> & {
+  clientName: string
+  currency: string
+}
 
 interface ProjectsTableProps {
   projects: ProjectWithClient[]
@@ -44,58 +48,63 @@ export function ProjectsTable({
   const router = useRouter()
 
   return (
-    <div className="rounded-md border">
-      <Table>
-        <TableHeader>
-          <TableRow className="hover:bg-transparent">
-            <TableHead>Name</TableHead>
-            <TableHead className="w-24">Code</TableHead>
-            <TableHead className="w-20">Type</TableHead>
-            <TableHead>Client</TableHead>
-            <TableHead className="w-20">Currency</TableHead>
-            <TableHead className="w-20">Last activity</TableHead>
-            <TableHead className="w-10" />
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {projects.map((project) => (
-            <TableRow
-              key={project._id}
-              className="cursor-pointer transition-colors hover:bg-muted/50"
-              onClick={() => router.push(`/projects/${project._id}`)}
-            >
-              <TableCell>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <Link
-                      href={`/projects/${project._id}`}
-                      className="truncate font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 rounded-sm"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      {project.name}
-                    </Link>
-                    {project.archivedAt && <ArchivedBadge />}
-                  </div>
+    <DirectoryTable aria-label="Projects">
+      <TableHeader>
+        <TableRow className="hover:bg-transparent">
+          <TableHead className="w-[36%]">Project</TableHead>
+          <TableHead className="w-24">Code</TableHead>
+          <TableHead className="w-32">Type</TableHead>
+          <TableHead>Client</TableHead>
+          <TableHead className="w-20">Currency</TableHead>
+          <TableHead className="w-10" />
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {projects.map((project) => (
+          <TableRow
+            key={project._id}
+            className="cursor-pointer transition-colors hover:bg-muted/50"
+            onClick={() => router.push(`/projects/${project._id}`)}
+          >
+            <TableCell>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2.5">
+                  <FolderIcon className="size-4 shrink-0 text-muted-foreground" />
+                  <Link
+                    href={`/projects/${project._id}`}
+                    className="truncate font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 rounded-sm"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {project.name}
+                  </Link>
+                  {project.archivedAt && <ArchivedBadge />}
                 </div>
-              </TableCell>
-              <TableCell>
-                <span className="font-mono text-xs text-muted-foreground">{project.code}</span>
-              </TableCell>
-              <TableCell>
-                <BillingTypeBadge type={project.billingType} />
-              </TableCell>
-              <TableCell>
-                <span className="text-sm">{project.clientName}</span>
-              </TableCell>
-              <TableCell>
-                <Badge variant="secondary">{project.currency}</Badge>
-              </TableCell>
-              <TableCell>
-                <span className="text-sm text-muted-foreground">&mdash;</span>
-              </TableCell>
-              <TableCell>
-                <RowActionMenu>
-                  <DropdownMenuItem onClick={() => router.push(`/projects/${project._id}?tab=settings`)}>
+              </div>
+            </TableCell>
+            <TableCell>
+              <span className="font-mono text-xs text-muted-foreground">
+                {project.code}
+              </span>
+            </TableCell>
+            <TableCell>
+              <BillingTypeBadge type={project.billingType} />
+            </TableCell>
+            <TableCell>
+              <span className="block truncate text-muted-foreground">
+                {project.clientName}
+              </span>
+            </TableCell>
+            <TableCell>
+              <span className="text-muted-foreground">{project.currency}</span>
+            </TableCell>
+            <TableCell>
+              <RowActionMenu>
+                <DropdownMenuGroup>
+                  <DropdownMenuItem
+                    onClick={() =>
+                      router.push(`/projects/${project._id}?tab=settings`)
+                    }
+                  >
                     <PencilIcon className="size-4" />
                     Edit
                   </DropdownMenuItem>
@@ -118,12 +127,12 @@ export function ProjectsTable({
                     <Trash2Icon className="size-4" />
                     Delete
                   </DropdownMenuItem>
-                </RowActionMenu>
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-    </div>
+                </DropdownMenuGroup>
+              </RowActionMenu>
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </DirectoryTable>
   )
 }

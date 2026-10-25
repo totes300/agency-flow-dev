@@ -64,6 +64,35 @@ describe("tiptapToMarkdown", () => {
     expect(tiptapToMarkdown(doc)).toBe("| A | B |\n| --- | --- |\n| 1 | 2\\|3 |\n\n- outer\n  - inner");
   });
 
+  it("renders toggles as <details> with the open state and nested content", () => {
+    const summary = (...content: unknown[]) => ({ type: "detailsSummary", content });
+    const details = (open: boolean, title: unknown, ...body: unknown[]) => ({
+      type: "details",
+      attrs: { open },
+      content: [title, { type: "detailsContent", content: body }],
+    });
+    const doc = {
+      type: "doc",
+      content: [
+        details(
+          true,
+          summary(text("Plan "), text("B", [{ type: "bold" }])),
+          { type: "taskList", content: [{ type: "taskItem", attrs: { checked: false }, content: [p(text("step"))] }] },
+          details(false, summary(text("Inner")), p(text("deep"))),
+        ),
+        details(false, { type: "detailsSummary" }, { type: "paragraph" }),
+        { type: "bulletList", content: [{ type: "listItem", content: [p(text("item")), details(false, summary(text("In a list")), p(text("body")))] }] },
+      ],
+    };
+    expect(tiptapToMarkdown(doc)).toBe(
+      [
+        "<details open>\n<summary>Plan **B**</summary>\n\n- [ ] step\n\n<details>\n<summary>Inner</summary>\n\ndeep\n</details>\n</details>",
+        "<details>\n<summary></summary>\n</details>",
+        "- item\n  <details>\n  <summary>In a list</summary>\n\n  body\n  </details>",
+      ].join("\n\n"),
+    );
+  });
+
   it("tolerates malformed and empty input", () => {
     expect(tiptapToMarkdown(null)).toBe("");
     expect(tiptapToMarkdown({ type: "doc", content: [{ type: "paragraph" }] })).toBe("");

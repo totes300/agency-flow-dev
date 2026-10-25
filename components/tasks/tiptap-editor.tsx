@@ -19,6 +19,7 @@ import { Table } from "@tiptap/extension-table"
 import { TableRow } from "@tiptap/extension-table-row"
 import { TableHeader } from "@tiptap/extension-table-header"
 import { TableCell } from "@tiptap/extension-table-cell"
+import { Details, DetailsContent, DetailsSummary } from "@tiptap/extension-details"
 import { Extension } from "@tiptap/core"
 import { FileHandler } from "@tiptap/extension-file-handler"
 import { Plugin, PluginKey } from "@tiptap/pm/state"
@@ -261,7 +262,12 @@ export function TiptapEditor({
         bulletList: { keepMarks: true, keepAttributes: false },
         orderedList: { keepMarks: true, keepAttributes: false },
       }),
-      Placeholder.configure({ placeholder }),
+      Placeholder.configure({
+        // The toggle's summary gets its own hint (Notion-style "Toggle"); the
+        // doc-level placeholder is unchanged — CSS shows it only on an empty editor.
+        includeChildren: true,
+        placeholder: ({ node }) => (node.type.name === "detailsSummary" ? "Toggle" : placeholder),
+      }),
       Link.configure({
         openOnClick: false,
         HTMLAttributes: { class: "text-primary underline cursor-pointer" },
@@ -283,6 +289,12 @@ export function TiptapEditor({
       TableCell,
       PortableTaskList,
       PortableTaskItem.configure({ nested: true }),
+      // Notion-style toggle: `open` lives in the document (persist), so a
+      // toggle saved collapsed reopens collapsed; the node view's default
+      // class (`is-open`) drives the CSS.
+      Details.configure({ persist: true, openClassName: "is-open" }),
+      DetailsSummary,
+      DetailsContent,
       Markdown,
       MarkdownClipboard,
       Underline,

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { isEmptyTiptapDoc, markdownMentionEmails, markdownToTiptap, MarkdownTooDeepError } from "../markdown-tiptap";
 import { tiptapToMarkdown, unrepresentableFormatting } from "../tiptap-markdown";
+import { extractPlainText } from "../../tiptap-utils";
 
 const text = (value: string, marks?: Array<{ type: string; attrs?: Record<string, unknown> }>) =>
   marks ? { type: "text", text: value, marks } : { type: "text", text: value };
@@ -231,5 +232,80 @@ describe("round-trip fidelity (fetch → edit → save keeps content)", () => {
     };
     expect(unrepresentableFormatting(doc, options)).toEqual(["external images", "highlight", "image size", "text alignment", "underline"]);
     expect(unrepresentableFormatting(markdownToTiptap("**fine**"), options)).toEqual([]);
+  });
+});
+
+describe("<details> toggles", () => {
+  const summary = (...content: unknown[]) => (content.length > 0 ? { type: "detailsSummary", content } : { type: "detailsSummary" });
+  const details = (open: boolean, title: unknown, ...body: unknown[]) => ({
+    type: "details",
+    attrs: { open },
+    content: [title, { type: "detailsContent", content: body.length > 0 ? body : [{ type: "paragraph" }] }],
+  });
+  const task = (checked: boolean, value: string) => ({ type: "taskItem", attrs: { checked }, content: [p(text(value))] });
+
+  it("parses a toggle with a summary and markdown content", () => {
+    const md = ["Intro", "<details>", "<summary>Acceptance **criteria**</summary>", "", "- [x] done", "- [ ] open", "", "Note", "</details>", "After"].join("\n");
+    expect(markdownToTiptap(md).content).toEqual([
+      p(text("Intro")),
+      details(
+        false,
+        summary(text("Acceptance "), text("criteria", [{ type: "bold" }])),
+        { type: "taskList", content: [task(true, "done"), task(false, "open")] },
+        p(text("Note")),
+      ),
+      p(text("After")),
+    ]);
+  });
+
+  it("keeps the open state, accepts the summary on the opening line, and nests", () => {
+    const md = ["<details open><summary>Outer</summary>", "<details>", "<summary>Inner</summary>", "deep", "</details>", "</details>"].join("\n");
+    expect(markdownToTiptap(md).content).toEqual([details(true, summary(text("Outer")), details(false, summary(text("Inner")), p(text("deep"))))]);
+    expect(markdownToTiptap('<details open="">\n<summary>T</summary>\n</details>').content).toEqual([details(true, summary(text("T")))]);
+    expect(markdownToTiptap("<details>\n<summary></summary>\nx\n</details>").content).toEqual([details(false, summary(), p(text("x")))]);
+  });
+
+  it("leaves a malformed toggle as text", () => {
+    expect(markdownToTiptap("<details>\n<summary>No close</summary>\nbody").content).toEqual([
+      p(text("<details>"), { type: "hardBreak" }, text("<summary>No close</summary>"), { type: "hardBreak" }, text("body")),
+    ]);
+    expect(markdownToTiptap("<details>\nno summary\n</details>").content).toEqual([
+      p(text("<details>"), { type: "hardBreak" }, text("no summary"), { type: "hardBreak" }, text("</details>")),
+    ]);
+    expect(markdownToTiptap("<details>\n<summary>Code</summary>\n```\n</details>\n```\n</details>").content).toEqual([
+      details(false, summary(text("Code")), { type: "codeBlock", attrs: { language: null }, content: [text("</details>")] }),
+    ]);
+  });
+
+  it("counts toward the nesting cap", () => {
+    const deep = "<details>\n<summary>d</summary>\n".repeat(30) + "x\n" + "</details>\n".repeat(30);
+    expect(() => markdownToTiptap(deep)).toThrow(MarkdownTooDeepError);
+  });
+
+  it("round-trips a toggle holding a checklist, and a nested open toggle", () => {
+    const md = ["<details>", "<summary>Checklist</summary>", "", "- [x] done", "- [ ] open", "</details>"].join("\n");
+    expect(tiptapToMarkdown(markdownToTiptap(md))).toBe(md);
+    const nested = ["<details open>", "<summary>Outer</summary>", "", "Lead", "", "<details>", "<summary>Inner</summary>", "", "- a", "</details>", "</details>"].join("\n");
+    const doc = markdownToTiptap(nested);
+    expect(tiptapToMarkdown(doc)).toBe(nested);
+    expect(markdownToTiptap(tiptapToMarkdown(doc))).toEqual(doc);
+    const empty = details(false, summary(text("Empty")));
+    expect(markdownToTiptap(tiptapToMarkdown({ type: "doc", content: [empty] })).content).toEqual([empty]);
+  });
+
+  it("escapes literal toggle tags in text so they parse back as text", () => {
+    for (const line of ["<details>", "</details>", "<summary>x</summary>", "<details open>"]) {
+      const doc = { type: "doc", content: [p(text(line))] };
+      expect(tiptapToMarkdown(doc)).toBe(`\\${line}`);
+      expect(markdownToTiptap(tiptapToMarkdown(doc))).toEqual(doc);
+    }
+    expect(markdownToTiptap("a <b> c").content).toEqual([p(text("a <b> c"))]);
+  });
+
+  it("appears in plain text (search, notifications) with summary and content", () => {
+    const doc = markdownToTiptap("<details>\n<summary>Title</summary>\n\n- [ ] inner step\n</details>");
+    const plain = extractPlainText(doc);
+    expect(plain).toContain("Title");
+    expect(plain).toContain("inner step");
   });
 });

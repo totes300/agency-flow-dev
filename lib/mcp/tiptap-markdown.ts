@@ -2,8 +2,8 @@
  * Tiptap JSON → markdown for MCP output (docs/prd-mcp.md §7: detail carries
  * the markdown body). Pure and dependency-free: Convex imports it to send
  * descriptions and comments as compact text. Covers the nodes the app's
- * editor writes (StarterKit, links, images, task lists, tables, mentions);
- * unknown nodes fall back to their text.
+ * editor writes (StarterKit, links, images, task lists, tables, mentions,
+ * `<details>` toggles); unknown nodes fall back to their text.
  *
  * The output parses back with markdown-tiptap.ts without losing content, so
  * fetch → edit → save keeps what it does not touch: plain text is escaped
@@ -61,7 +61,7 @@ export function escapeMarkdownText(text: string): string {
   return out;
 }
 
-/** Escapes what would start a block at the beginning of a line (heading, list, quote, rule, table). */
+/** Escapes what would start a block at the beginning of a line (heading, list, quote, rule, table, toggle tag). */
 function escapeLineStarts(markdown: string): string {
   return markdown
     .split("\n")
@@ -69,7 +69,8 @@ function escapeLineStarts(markdown: string): string {
       if (/^\s*-(\s*-){2,}\s*$/.test(line)) return line.replace("-", "\\-");
       return line
         .replace(/^(\s*)([#>|]|[-+](?=\s|$))/, "$1\\$2")
-        .replace(/^(\s*\d{1,3})([.)])(?=\s|$)/, "$1\\$2");
+        .replace(/^(\s*\d{1,3})([.)])(?=\s|$)/, "$1\\$2")
+        .replace(/^(\s*)(<(?=\/?(?:details|summary)\b))/i, "$1\\$2");
     })
     .join("\n");
 }
@@ -172,6 +173,16 @@ function renderer(options: TiptapMarkdownOptions) {
     return [line(rows[0]), line(Array.from({ length: width }, () => "---")), ...rows.slice(1).map(line)].join("\n");
   }
 
+  /** A toggle in the `<details>` form markdown-tiptap.ts reads back (`open` kept). */
+  function details(node: Node): string {
+    const parts = children(node);
+    const summary = parts.find((c) => c.type === "detailsSummary");
+    const body = blocks(parts.filter((c) => c !== summary).flatMap((c) => (c.type === "detailsContent" ? children(c) : [c])));
+    const open = attr(node, "open") === true ? "<details open>" : "<details>";
+    const title = `<summary>${inline(children(summary ?? {})).replace(/\s*\n\s*/g, " ")}</summary>`;
+    return body.length > 0 ? `${open}\n${title}\n\n${body.join("\n\n")}\n</details>` : `${open}\n${title}\n</details>`;
+  }
+
   function block(node: Node): string {
     switch (node.type) {
       case "paragraph":
@@ -212,6 +223,13 @@ function renderer(options: TiptapMarkdownOptions) {
         return image(node);
       case "table":
         return table(node);
+      case "details":
+        return details(node);
+      case "detailsSummary":
+        // Only reached outside a details node: keep the title as text.
+        return escapeLineStarts(inline(children(node)));
+      case "detailsContent":
+        return blocks(children(node)).join("\n\n");
       default:
         // Unknown block (or a bare inline node at block level): keep its text.
         return node.type === "text" || node.type === "mention" ? inline([node]) : blocks(children(node)).join("\n\n");

@@ -11,6 +11,7 @@ import {
   ListIcon,
   ListOrderedIcon,
   ListChecksIcon,
+  ChevronRightIcon,
   QuoteIcon,
   CodeIcon,
   MinusIcon,
@@ -85,6 +86,14 @@ const SLASH_COMMANDS: SlashCommandItem[] = [
     icon: ListChecksIcon,
     command: (editor, range) => {
       editor.chain().focus().deleteRange(range).toggleTaskList().scrollIntoView().run()
+    },
+  },
+  {
+    title: "Toggle",
+    description: "Collapsible block with a title",
+    icon: ChevronRightIcon,
+    command: (editor, range) => {
+      editor.chain().focus().deleteRange(range).setDetails().scrollIntoView().run()
     },
   },
   {

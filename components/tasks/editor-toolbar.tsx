@@ -20,6 +20,7 @@ import {
   AlignRightIcon,
   ImageIcon,
   TableIcon,
+  ChevronRightIcon,
 } from "lucide-react"
 
 function ToolbarDivider() {
@@ -56,6 +57,13 @@ export function DescriptionToolbar() {
       </ToolbarButton>
       <ToolbarButton active={editor.isActive("taskList")} onClick={() => editor.chain().focus().toggleTaskList().run()} aria-label="Task list">
         <ListChecksIcon className="size-3.5" />
+      </ToolbarButton>
+      <ToolbarButton
+        active={editor.isActive("details")}
+        onClick={() => (editor.isActive("details") ? editor.chain().focus().unsetDetails().run() : editor.chain().focus().setDetails().run())}
+        aria-label="Toggle block"
+      >
+        <ChevronRightIcon className="size-3.5" />
       </ToolbarButton>
 
       <ToolbarDivider />

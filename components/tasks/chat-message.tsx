@@ -86,7 +86,34 @@ function renderTiptapContent(content: unknown): ReactNode {
   return null
 }
 
+/**
+ * Read-only toggle (details node). Mirrors the editor node view's DOM so the
+ * editor's toggle CSS applies; the `open` attr is the initial state.
+ */
+function ToggleBlock({ node }: { node: TiptapNode }) {
+  const [open, setOpen] = useState(node.attrs?.open === true)
+  const summary = node.content?.find((c) => c.type === "detailsSummary")
+  const body = node.content?.find((c) => c.type === "detailsContent")
+  return (
+    <div data-type="details" className={open ? "is-open" : undefined}>
+      <button
+        type="button"
+        aria-label={open ? "Collapse details content" : "Expand details content"}
+        onClick={() => setOpen((v) => !v)}
+      />
+      <div>
+        <summary>{summary?.content?.map((child, i) => renderNode(child, i))}</summary>
+        <div data-type="detailsContent" hidden={!open}>
+          {body?.content?.map((child, i) => renderNode(child, i))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function renderNode(node: TiptapNode, key: number): ReactNode {
+  if (node.type === "details") return <ToggleBlock key={key} node={node} />
+
   if (node.type === "paragraph") {
     const children = node.content?.map((child, i) => renderNode(child, i))
     return <p key={key} className="my-0">{children ?? <br />}</p>

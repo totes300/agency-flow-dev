@@ -192,6 +192,91 @@
   padding-left: 1.5rem;
 }
 
+/* ─── Toggle (details) ───────────────────────────────────────────────────────── */
+/* The Details node view renders <div data-type="details"><button/><div><summary/>
+   <div data-type="detailsContent" hidden?/></div></div> and toggles `is-open`.
+   Notion layout: a small triangle in the gutter, the title beside it, content
+   indented under the title (it sits in the same column, so nesting indents). */
+
+.tiptap-content [data-type="details"] {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.25rem;
+  margin: 0.25rem 0;
+}
+
+.tiptap-content [data-type="details"] > button {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.625em;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 0.15s;
+}
+
+.tiptap-editor[data-variant="document"] .tiptap-content [data-type="details"] > button {
+  height: 1.5em;
+}
+
+.tiptap-content [data-type="details"] > button:hover {
+  background: var(--muted);
+}
+
+.tiptap-content [data-type="details"] > button::before {
+  content: "";
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 4px 0 4px 6px;
+  border-color: transparent transparent transparent currentColor;
+  transition: transform 0.15s ease;
+}
+
+.tiptap-content [data-type="details"].is-open > button::before {
+  transform: rotate(90deg);
+}
+
+.tiptap-content [data-type="details"] > div {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.tiptap-content [data-type="details"] summary {
+  display: block;
+  list-style: none;
+  font-weight: 500;
+  outline: none;
+}
+
+.tiptap-content [data-type="details"] summary::-webkit-details-marker {
+  display: none;
+}
+
+.tiptap-content [data-type="details"] summary.is-empty::before {
+  content: attr(data-placeholder);
+  float: left;
+  color: var(--muted-foreground);
+  pointer-events: none;
+  height: 0;
+}
+
+.tiptap-content [data-type="detailsContent"] {
+  margin-top: 0.125rem;
+}
+
+.tiptap-content [data-type="detailsContent"][hidden] {
+  display: none;
+}
+
 /* ─── Blockquote ─────────────────────────────────────────────────────────────── */
 
 .tiptap-content blockquote {

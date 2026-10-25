@@ -11,8 +11,13 @@
  *   text), `- [ ]` / `- [x]` task lists (when every item is one), nested
  *   lists (indent by two or more spaces), ``` / ~~~ fenced code blocks with
  *   a language, `>` blockquotes, `---` rules, GFM tables (first row =
- *   header cells), and `![alt](src "title")` images alone on a line whose
- *   src is on this workspace's storage (`options.imageSrcPrefixes`);
+ *   header cells), `![alt](src "title")` images alone on a line whose
+ *   src is on this workspace's storage (`options.imageSrcPrefixes`), and
+ *   `<details>` toggles: `<details>` or `<details open>` alone on a line,
+ *   then `<summary>Title</summary>` (own line or right after the opening
+ *   tag), markdown content (parsed with these same rules, so checklists and
+ *   nested toggles work), then `</details>` alone on a line. A `<details>`
+ *   without its summary or closing tag stays text;
  * - inline: `**bold**` / `__bold__`, `*italic*` / `_italic_`, `~~strike~~`,
  *   `` `code` ``, `[text](https://…)` links (http, https and mailto only),
  *   `\` escapes, and `@email` mentions when the caller resolves the email
@@ -68,7 +73,11 @@ const IMAGE_LINE = /^\s*!\[([^\]\n]{0,500})\]\((\S{1,2000}?)(?: "([^"\n]{0,500})
 const TABLE_DELIMITER = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/;
 const TABLE_ROW = /^\s*\|/;
 const SAFE_HREF = /^(https?:\/\/|mailto:)[^\s<>]+$/i;
-const ESCAPABLE = /[\\`*_{}[\]()#+\-.!~>|@]/;
+const ESCAPABLE = /[\\`*_{}[\]()#+\-.!~>|@<]/;
+/** `<details>` / `<details open>` alone on a line, optionally followed by its summary. */
+const DETAILS_OPEN = /^ {0,3}<details(\s+open(?:="[^"]*")?)?\s*>\s*(?:<summary>(.*)<\/summary>\s*)?$/i;
+const DETAILS_CLOSE = /^ {0,3}<\/details>\s*$/i;
+const SUMMARY_LINE = /^ {0,3}<summary>(.*)<\/summary>\s*$/i;
 
 function isBlank(line: string): boolean {
   return line.trim() === "";
@@ -79,7 +88,9 @@ function leadingSpaces(line: string): number {
 }
 
 function isBlockStart(line: string): boolean {
-  return FENCE.test(line) || HEADING.test(line) || RULE.test(line) || QUOTE.test(line) || LIST_ITEM.test(line);
+  return (
+    FENCE.test(line) || HEADING.test(line) || RULE.test(line) || QUOTE.test(line) || LIST_ITEM.test(line) || DETAILS_OPEN.test(line)
+  );
 }
 
 // ─── Inline ──────────────────────────────────────────────────────────────────
@@ -357,6 +368,64 @@ function imageBlock(line: string, options: MarkdownToTiptapOptions): TiptapNode 
   return { type: "image", attrs: { src, alt: alt || null, title: title ?? (alt || null) } };
 }
 
+/**
+ * The toggle starting at `start` (a DETAILS_OPEN line) and the next line
+ * index, or null when it is malformed — no `<summary>` first, or no
+ * `</details>` of its own — so the caller keeps the lines as text. Nested
+ * toggles are matched by depth; fenced code inside is skipped over.
+ */
+function parseDetails(lines: string[], start: number, options: MarkdownToTiptapOptions, depth: number): [TiptapNode, number] | null {
+  const open = DETAILS_OPEN.exec(lines[start])!;
+  let i = start + 1;
+  let summary = open[2];
+  if (summary === undefined) {
+    while (i < lines.length && isBlank(lines[i])) i += 1;
+    const line = i < lines.length ? SUMMARY_LINE.exec(lines[i]) : null;
+    if (!line) return null;
+    summary = line[1];
+    i += 1;
+  }
+
+  let nested = 0;
+  let fence: string | null = null;
+  let close = -1;
+  for (let j = i; j < lines.length; j += 1) {
+    const line = lines[j];
+    const fenceMatch = FENCE.exec(line);
+    if (fence) {
+      if (fenceMatch && fenceMatch[1][0] === fence[0] && fenceMatch[1].length >= fence.length && fenceMatch[2] === "") fence = null;
+      continue;
+    }
+    if (fenceMatch) {
+      fence = fenceMatch[1];
+      continue;
+    }
+    if (DETAILS_OPEN.test(line)) nested += 1;
+    else if (DETAILS_CLOSE.test(line)) {
+      if (nested === 0) {
+        close = j;
+        break;
+      }
+      nested -= 1;
+    }
+  }
+  if (close === -1) return null;
+
+  // The summary is one line of text (with marks); the editor's summary node holds text only.
+  const summaryNodes = parseInline(summary.trim(), [], { ...options, mention: undefined }).filter((n) => n.type === "text");
+  const summaryNode: TiptapNode = { type: "detailsSummary" };
+  if (summaryNodes.length > 0) summaryNode.content = summaryNodes;
+  const content = parseBlocks(lines.slice(i, close), options, depth + 1);
+  return [
+    {
+      type: "details",
+      attrs: { open: open[1] !== undefined },
+      content: [summaryNode, { type: "detailsContent", content: content.length > 0 ? content : [{ type: "paragraph" }] }],
+    },
+    close + 1,
+  ];
+}
+
 function parseBlocks(lines: string[], options: MarkdownToTiptapOptions, depth = 0): TiptapNode[] {
   if (depth > MARKDOWN_MAX_DEPTH) throw new MarkdownTooDeepError();
   const out: TiptapNode[] = [];
@@ -433,6 +502,16 @@ function parseBlocks(lines: string[], options: MarkdownToTiptapOptions, depth = 
       out.push(imageNode);
       i += 1;
       continue;
+    }
+
+    if (DETAILS_OPEN.test(line)) {
+      const details = parseDetails(lines, i, options, depth);
+      if (details) {
+        out.push(details[0]);
+        i = details[1];
+        continue;
+      }
+      // Malformed: the line stays text, as below.
     }
 
     const paragraph: string[] = [];

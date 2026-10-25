@@ -49,8 +49,8 @@ import { periodRangeLabel } from "./billing/projectPeriods";
  *   ~2,000 ranges; with a task filter, the task's comments in one range.
  * - invoices (admins only): one range (≤ 2,001 docs, newest first) plus up
  *   to three per page row (project, client, close).
- * - daily notes: one member's `by_userId_date` range (≤ 121 notes, each at
- *   most 100 KB) plus the member's name.
+ * - daily notes: one member's `by_orgId_userId_date` range in this org
+ *   (≤ 121 notes, each at most 100 KB) plus the member's name.
  * Filters by member email add one range per org member (mcpRefs.ts).
  */
 
@@ -892,8 +892,8 @@ export async function searchDailyNotes(ctx: QueryCtx, auth: AuthContext, args: D
   const { from, to } = args.date;
   const loaded = await ctx.db
     .query("dailyNotes")
-    .withIndex("by_userId_date", (q) => {
-      const own = q.eq("userId", member);
+    .withIndex("by_orgId_userId_date", (q) => {
+      const own = q.eq("orgId", auth.orgId).eq("userId", member);
       if (from !== undefined && to !== undefined) return own.gte("date", from).lte("date", to);
       if (from !== undefined) return own.gte("date", from);
       if (to !== undefined) return own.lte("date", to);
@@ -901,7 +901,7 @@ export async function searchDailyNotes(ctx: QueryCtx, auth: AuthContext, args: D
     })
     .order("desc")
     .take(DAILY_NOTE_SEARCH_CAP + 1);
-  const notes = loaded.slice(0, DAILY_NOTE_SEARCH_CAP).filter((n) => n.orgId === auth.orgId);
+  const notes = loaded.slice(0, DAILY_NOTE_SEARCH_CAP);
   const texts = new Map(notes.map((n) => [n._id, dailyNoteText(n.content)]));
   const matched = notes.filter((n) => updatedMatch(n.updatedAt, args, clock) && textMatch(args.query, texts.get(n._id)));
 

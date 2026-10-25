@@ -248,6 +248,10 @@ describe("save_daily_notes and the daily_note search type", () => {
     await saveNote(t, "alice", { content: "Hero mockups", date: "2026-10-22" });
     await saveNote(t, "bob", { content: "Bob's day", date: "2026-10-22" });
 
+    // The same user's note in another org never shows (org-scoped index).
+    await t.run(async (ctx) =>
+      ctx.db.insert("dailyNotes", { orgId: OTHER, userId: f.alice, date: "2026-10-23", content: JSON.stringify(doc("Elsewhere")), createdAt: 1, updatedAt: 1 }),
+    );
     const own = await noteSearch(t, "alice");
     expect(own.rows.map((r) => [r.date, r.preview, r.own])).toEqual([["2026-10-22", "Hero mockups", true], ["2026-10-20", "Pricing page draft", true]]);
     expect((await noteSearch(t, "alice", { query: "pricing" })).rows.map((r) => r.date)).toEqual(["2026-10-20"]);

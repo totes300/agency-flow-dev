@@ -767,7 +767,10 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_userId_date", ["userId", "date"])
-    .index("by_orgId_userId", ["orgId", "userId"]),
+    .index("by_orgId_userId", ["orgId", "userId"])
+    // Org-scoped date ranges (MCP daily_note search): another org's notes of
+    // the same user never take part of a bounded read.
+    .index("by_orgId_userId_date", ["orgId", "userId", "date"]),
 
   // ─── Typing indicators (ephemeral presence) ──────────────────────────────
   typingIndicators: defineTable({

@@ -165,6 +165,25 @@ describe("save_clients", () => {
     expect((await get(t, f.arlow))!.archivedAt).toBeUndefined();
   });
 
+  it("later items see earlier writes: a new or renamed client:PREFIX resolves in the same call", async () => {
+    const t = createT();
+    const f = await setup(t);
+    const saved = await saveClients(t, "admin", [
+      { name: "Fresh", prefix: "NEW" },
+      { ref: "client:NEW", taxId: "T1" },
+      { ref: "client:ARL", prefix: "ARX" },
+      { ref: "client:ARX", notes: "renamed" },
+      { ref: "client:ARX", archived: true },
+      { ref: "client:ARX", name: "Arlow 2" },
+    ]);
+    expect(saved.items.map((i) => i.action)).toEqual(["created", "updated", "updated", "updated", "updated", "updated"]);
+    const arlow = (await get(t, f.arlow))!;
+    expect(arlow).toMatchObject({ prefix: "ARX", notes: "renamed", name: "Arlow 2" });
+    expect(arlow.archivedAt).toBeDefined();
+    expect((await get(t, saved.items[0].clientId))!.taxId).toBe("T1");
+    await expect(saveClients(t, "admin", [{ ref: "client:ARL", notes: "x" }])).rejects.toThrow("not found");
+  });
+
   it("is all-or-nothing, never resolves another org's client and replays an idempotency key", async () => {
     const t = createT();
     const f = await setup(t);

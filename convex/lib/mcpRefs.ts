@@ -437,7 +437,16 @@ export function createRefResolver(ctx: QueryCtx, auth: AuthContext) {
     return result.resolved;
   }
 
-  return { resolve, require };
+  /**
+   * Forgets the org's clients read for prefix lookups: a write tool calls it
+   * after creating a client or changing a prefix, so a later item of the
+   * same call finds `client:NEW`.
+   */
+  function invalidateClients(): void {
+    clients = null;
+  }
+
+  return { resolve, require, invalidateClients };
 }
 
 export type RefResolver = ReturnType<typeof createRefResolver>;

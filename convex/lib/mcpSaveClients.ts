@@ -31,10 +31,14 @@ import {
  *   cascade, as in the app).
  * - The logo is a file: not part of this tool.
  *
+ * Items run in order and see what earlier items wrote: after a client write
+ * the resolver forgets the org's clients, so a later item finds a new or
+ * renamed `client:PREFIX`, and every edit works on the client as stored now.
+ *
  * Read budget per item (at most MCP_BATCH_MAX = 25): the client ref (one
- * bounded org range per call for `client:` prefixes), then the core — one
- * name range, and for a new or changed prefix one org clients range: well
- * under 100 ranges a batch.
+ * bounded org range for `client:` prefixes, read again after a write), then
+ * the core — one name range, and for a new or changed prefix one org clients
+ * range. Clients are tens per org, so a batch stays far under the limits.
  */
 
 /** Billing fields the client form edits, all plain text. */
@@ -117,7 +121,8 @@ async function editItem(
 ): Promise<Row> {
   const resolved = await resolver.require(item.ref, "client");
   if (resolved.type !== "client") throw new Error(`Expected a client, resolved a ${resolved.type}`);
-  let client = resolved.client;
+  // As stored now: an earlier item of this call may have changed it.
+  let client = (await ctx.db.get(resolved.client._id))!;
   if (item.currency !== undefined && item.currency.trim().toUpperCase() !== client.currency) {
     throw new ConvexError(`A client's currency cannot change after creation (as in the app); ${client.name} bills in ${client.currency}.`);
   }
@@ -171,6 +176,7 @@ export async function saveClients(
         item.ref !== undefined ? editItem(ctx, auth, resolver, { ...item, ref: item.ref }) : createItem(ctx, auth, item),
       ),
     );
+    if (results[results.length - 1].action !== "unchanged") resolver.invalidateClients();
   }
   return { tool: "save_clients", items: results };
 }

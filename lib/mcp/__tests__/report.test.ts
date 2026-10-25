@@ -235,7 +235,7 @@ describe("report rendering", () => {
     expect(parts[1].text).toBe(
       [
         "### By project",
-        `- ARLO · Arlow | site · Arlow (client) · ${ORIGIN}/projects/p1`,
+        `- ARLO · Arlow | site · client: Arlow · ${ORIGIN}/projects/p1`,
         "",
         "| Member | Project | Total | Billable | Non-billable |",
         "| --- | --- | ---: | ---: | ---: |",
@@ -248,7 +248,7 @@ describe("report rendering", () => {
       scope: "self",
       members: [{ ...TIME_BY_MEMBER.members[0], projects: [{ ...TIME_BY_MEMBER.members[0].projects[0], id: null }] }],
     }, ctx);
-    expect(own[1].text).toContain("- ARLO · Arlow | site · Arlow (client)\n");
+    expect(own[1].text).toContain("- ARLO · Arlow | site · client: Arlow\n");
     expect(own[1].text).not.toContain("/projects/");
     expect(own[1].text).toContain("| Alice | ARLO | 2h 45m |");
     // One legend line per project, however many members worked on it.
@@ -337,7 +337,7 @@ describe("report rendering", () => {
     expect(queueText).toContain("- Today: Friday 2026-07-10 (org timezone).");
     // Projects are named and linked once (first appearance, in the groups' order); rows carry the code.
     expect(queueText).toContain(
-      `### Projects\n- RETA · Care · Arlow (client) · ${ORIGIN}/projects/p1\n- BOLT · Bolt · Bolt Inc (client) · ${ORIGIN}/projects/p2\n\n### Ready to invoice · 1`,
+      `### Projects\n- RETA · Care · client: Arlow · ${ORIGIN}/projects/p1\n- BOLT · Bolt · client: Bolt Inc · ${ORIGIN}/projects/p2\n\n### Ready to invoice · 1`,
     );
     expect(queueText.match(/\/projects\/p1/g)).toHaveLength(1);
     expect(queueText).toContain(

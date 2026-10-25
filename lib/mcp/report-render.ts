@@ -87,14 +87,14 @@ type LegendProject = { code: string | null; name: string; client: string | null;
 /**
  * A projects legend for a report whose rows repeat the same project: one
  * line per project, in first-appearance order — `- ARLO · Arlow site ·
- * Arlow (client) · <link>` — so the rows carry the bare code and every
+ * client: Arlow · <link>` — so the rows carry the bare code and every
  * project is still linked once (§7).
  */
 function projectLegend(projects: ReadonlyArray<LegendProject>): string {
   return projects
     .map(
       (p) =>
-        `- ${[p.code ?? oneLine(p.name), p.code ? oneLine(p.name) : null, p.client ? `${oneLine(p.client)} (client)` : null, p.link]
+        `- ${[p.code ?? oneLine(p.name), p.code ? oneLine(p.name) : null, p.client ? `client: ${oneLine(p.client)}` : null, p.link]
           .filter((v): v is string => v !== null)
           .join(" · ")}`,
     )

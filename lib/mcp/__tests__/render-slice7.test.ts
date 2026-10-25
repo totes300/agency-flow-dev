@@ -100,10 +100,10 @@ describe("slice 7a write results", () => {
     );
     expect(
       renderSaveDailyNotes(
-        { tool: "save_daily_notes", replayed: false, noteId: id("n1"), date: "2026-10-24", action: "updated", formattingRemoved: ["underline"] },
+        { tool: "save_daily_notes", replayed: false, noteId: id("n1"), date: "2026-10-24", action: "updated", formattingRemoved: ["underline"], replacedExisting: true },
         ctx,
       ),
-    ).toBe("## Daily note 2026-10-24\n- [daily note 2026-10-24](https://app.test/my-tasks) · ref n1 · updated · formatting removed: underline");
+    ).toBe("## Daily note 2026-10-24\n- [daily note 2026-10-24](https://app.test/my-tasks) · ref n1 · updated · replaced the existing text · formatting removed: underline");
     expect(
       renderMarkRead({
         tool: "mark_read",

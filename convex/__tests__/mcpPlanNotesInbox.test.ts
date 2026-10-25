@@ -210,9 +210,10 @@ describe("save_daily_notes and the daily_note search type", () => {
   it("writes your own note: create, append, replace, unchanged, clear", async () => {
     const t = createT();
     const f = await setup(t);
-    const created = await saveNote(t, "alice", { content: "- Sent mockups", date: "2026-10-24" });
+    const created = await saveNote(t, "alice", { content: "- Sent mockups", date: "2026-10-24", append: false });
     expect(created).toMatchObject({ tool: "save_daily_notes", date: "2026-10-24", action: "created", replayed: false });
-    const appended = await saveNote(t, "alice", { content: `Ask @${email("bob")}`, date: "2026-10-24", append: true });
+    // Appending is the default.
+    const appended = await saveNote(t, "alice", { content: `Ask @${email("bob")}`, date: "2026-10-24" });
     expect(appended).toMatchObject({ action: "updated", noteId: created.noteId });
     const stored = await t.run(async (ctx) => (await ctx.db.get(created.noteId))!);
     expect(stored).toMatchObject({ orgId: ORG, userId: f.alice, date: "2026-10-24" });
@@ -220,16 +221,20 @@ describe("save_daily_notes and the daily_note search type", () => {
     expect(content.content).toHaveLength(2);
     expect(JSON.stringify(content)).toContain(`"type":"mention","attrs":{"id":"${f.bob}"`);
     // The app's upsert with the same content stores the same document.
-    expect((await saveNote(t, "alice", { content: `- Sent mockups\n\nAsk @${email("bob")}`, date: "2026-10-24" })).action).toBe("unchanged");
+    expect((await saveNote(t, "alice", { content: `- Sent mockups\n\nAsk @${email("bob")}`, date: "2026-10-24", append: false })).action).toBe("unchanged");
+    const replaced = await saveNote(t, "alice", { content: "Rewritten", date: "2026-10-23" });
+    expect(replaced.replacedExisting).toBeUndefined();
+    expect((await saveNote(t, "alice", { content: "New text", date: "2026-10-23", append: false })).replacedExisting).toBe(true);
     await inApp(t, "alice").mutation(api.dailyNotes.upsert, { userId: f.alice, date: "2026-10-25", content: stored.content });
     const appNote = await t.run(async (ctx) =>
       (await ctx.db.query("dailyNotes").withIndex("by_userId_date", (q) => q.eq("userId", f.alice).eq("date", "2026-10-25")).first())!,
     );
     expect(appNote.content).toBe(stored.content);
 
-    expect((await saveNote(t, "alice", { content: "", date: "2026-10-24" })).action).toBe("updated");
+    await expect(saveNote(t, "alice", { content: "", date: "2026-10-24" })).rejects.toThrow("nothing to append");
+    expect((await saveNote(t, "alice", { content: "", date: "2026-10-24", append: false })).action).toBe("updated");
     expect((await t.run(async (ctx) => await ctx.db.get(created.noteId)))!.content).toBeUndefined();
-    await expect(saveNote(t, "alice", { content: "  ", date: "2026-10-26" })).rejects.toThrow("nothing to save");
+    await expect(saveNote(t, "alice", { content: "  ", date: "2026-10-26", append: false })).rejects.toThrow("nothing to save");
     await expect(saveNote(t, "alice", { content: "@nobody@x.test hi" })).rejects.toThrow("is not a member");
     // Default date: today in the org timezone.
     const today = await saveNote(t, "bob", { content: "Today" });

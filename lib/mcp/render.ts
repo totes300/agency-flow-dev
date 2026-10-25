@@ -1181,6 +1181,7 @@ export function renderSaveDailyNotes(data: SaveDailyNotesData, ctx: RenderContex
       `[daily note ${data.date}](${dailyNoteLink(ctx.appOrigin)})`,
       `ref ${data.noteId}`,
       SAVE_ACTION[data.action],
+      data.replacedExisting ? "replaced the existing text" : null,
       formattingNote(data.formattingRemoved),
     )}`,
   ].join("\n");

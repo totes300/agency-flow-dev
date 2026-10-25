@@ -169,6 +169,8 @@ export const saveDailyNotesResultValidator = v.object({
   action: savedAction,
   /** Editor formatting markdown cannot carry, dropped by a replacement. */
   formattingRemoved: v.optional(v.array(v.string())),
+  /** append: false over a note that had text: that text is gone (said, never silent). */
+  replacedExisting: v.optional(v.boolean()),
 });
 
 export const markReadResultValidator = v.object({

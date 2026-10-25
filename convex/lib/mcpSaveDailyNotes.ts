@@ -20,10 +20,11 @@ import { unrepresentableFormatting } from "../../lib/mcp/tiptap-markdown";
  *   existing converter (lib/mcp/markdown-tiptap.ts); `@email` becomes the
  *   editor's mention of a member. The panel sends no notifications for a
  *   note, so neither does this tool. The app has no hashtags.
- * - `append: true` adds the text after the note's current content (the
- *   note is created when there is none); otherwise the text replaces the
- *   note, and formatting markdown cannot carry is reported, never dropped
- *   silently. Blank text without `append` clears the note.
+ * - Appending is the default: the text goes after the note's current
+ *   content (the note is created when there is none). `append: false`
+ *   replaces the note; the result then says the existing text was replaced
+ *   and names formatting markdown cannot carry — nothing is lost silently.
+ *   Blank text with `append: false` clears the note.
  * - Same content as stored = "unchanged", nothing written.
  *
  * Read budget: the note's `by_userId_date` range, member emails (one range
@@ -35,7 +36,8 @@ export type SaveDailyNoteArgs = {
   date?: string;
   /** Markdown. */
   content: string;
-  append?: boolean;
+  /** Resolved by the caller: true unless the request said false. */
+  append: boolean;
 };
 
 function contentNodes(json: string | undefined): TiptapNode[] | null {
@@ -62,6 +64,7 @@ export async function saveDailyNote(
 
   let content: string | undefined;
   let formattingRemoved: string[] = [];
+  let replacedExisting = false;
   if (args.append) {
     if (!doc) throw new ConvexError("content is empty: there is nothing to append.");
     const before = existing?.content ? contentNodes(existing.content) : [];
@@ -73,6 +76,7 @@ export async function saveDailyNote(
   } else {
     content = doc ? JSON.stringify(doc) : undefined;
     if (existing?.content && existing.content !== content) {
+      replacedExisting = true;
       formattingRemoved = unrepresentableFormatting(safeParseDoc(existing.content), richTextOptions());
     }
   }
@@ -90,5 +94,6 @@ export async function saveDailyNote(
     date,
     action: existing ? "updated" : "created",
     ...(formattingRemoved.length > 0 ? { formattingRemoved } : {}),
+    ...(replacedExisting ? { replacedExisting } : {}),
   };
 }

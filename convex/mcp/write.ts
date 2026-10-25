@@ -269,7 +269,8 @@ export const saveDailyNotes = mutation({
   handler: async (ctx, args) => {
     const auth = mcpActor(await getMcpAuthContext(ctx), args.clientName);
     const now = Date.now();
-    const request = { date: args.date, content: args.content, append: args.append ?? false };
+    // Appending is the default: replacing a note's text needs append: false.
+    const request = { date: args.date, content: args.content, append: args.append ?? true };
     const fingerprint = requestFingerprint("save_daily_notes", request);
     const replay = await replayIdempotent(ctx, auth, "save_daily_notes", args.idempotencyKey, fingerprint, now);
     if (replay) return { ...replay, replayed: true };

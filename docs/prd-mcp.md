@@ -33,7 +33,7 @@ billing, month close). Agents take over the input work.
 **Goals**
 1. Any Agency Flow user can connect Claude or Codex in one OAuth flow and do, through
    the agent, everything they can do in the app with their role.
-2. A small, agent-oriented, token-efficient tool set: about 15 tools. Schemas and
+2. A small, agent-oriented, token-efficient tool set: 17 tools as built (§6). Schemas and
    descriptions are generated from one registry, with nothing hand-copied.
 3. Zero new authorization logic. Every MCP call runs the same `*ForAuth` cores and
    write paths as the UI, under the same tenancy invariants.
@@ -75,18 +75,51 @@ billing, month close). Agents take over the input work.
 | D15 | **Attribution:** activity rows written through MCP show the real user plus a quiet "via <OAuth client name>" marker, for example "via Claude", "via Codex" or "via Grok Bot". The row also stores the OAuth `clientId`, which the changes feed uses for `exclude_self` (D22). For CIMD clients (Claude, Codex) the name is the host of the client's metadata URL, e.g. "via claude.ai": the server never downloads URLs (§10). Clerk-registered clients show their application name (owner, 2026-10-25). |
 | D16 | **Notifications:** MCP writes trigger exactly the notifications the same write triggers in the app. There is no MCP-specific branch. |
 | D17 | **Connected apps:** shows each client, when it connected and when it was last used, with a Revoke button. **Owner, 2026-10-25:** it lives on a member-accessible `/connected-apps` page opened from the user menu, with the connect help on the same page. Revoke is enforced in Agency Flow: `getMcpAuthContext` refuses every token from a revoked client for that user and org, including one still valid, from the next call. "Allow again" restores access. Clerk cannot list or revoke a user's grants and cannot revoke JWTs (S3/S4). |
-| D18 | **File upload follows the Notion pattern on Convex storage:** a tool returns a Convex upload URL, the client POSTs the bytes, and a write tool attaches the resulting `storageId`. Small text content can also be passed inline. The server never downloads a URL. |
+| D18 | **File upload follows the Notion pattern on Convex storage:** a tool returns an upload URL, the client POSTs the bytes, and a write tool attaches the result. Small text content can also be passed inline. The server never downloads a URL. *As built (§10, §17 slice 7):* `create_upload` returns an `uploadId` and a one-time URL on the Convex site; the server stores the blob bound to org + user + client, and `attach_file` takes the `uploadId`. The client never receives a `storageId`. |
 | D19 | **Removal comes first, in its own PR (slice 0).** The in-app agent and email triage are deleted completely. PRs #14 and #15 (email-triage) are closed without merging. Worksheet AI and BYOK stay. |
 | D20 | **Delivery:** one feature branch, built in slices (§14), with one PR to `main` at the end. Slice 0 is the exception and goes in its own PR. |
 | D21 | **External source refs on tasks.** Examples: `gmail:<threadId>`, `granola:<noteId>`, `slack:<ts>`. A task can carry many. A ref belongs to at most one task in the org. A `save_tasks` item with no `ref` but a known `externalRefs` entry updates that task instead of creating a new one, so duplicates are impossible by construction. Adding a ref that another task already owns is an error that names the owner, for example `gmail:abc is already on ARLO-21`. It is never moved silently. `search` filters by `external_ref`. **An external ref is a first-class task reference everywhere a task ref is accepted** (`ref`, `parent`, `after`/`before`, comment target, `delete`, `fetch`, the `task` search filter). `save_tasks` items run in order in one transaction, so a later item can reference a card an earlier item created, e.g. a card plus its checklist in one call. Checklist items carry their own refs (`gmail:<thread>#1`) to stay rerun-safe. The sources `client` and `project` are reserved ref qualifiers. A task holds at most 100 refs. A ref on an archived task is refused with a hint to restore it (owner, 2026-10-25). |
 | D22 | **Changes feed:** `fetch("changes", { cursor, types[], exclude_self })`, read from `activityLog` (`by_org` index). Each change is one line, for example `ARLO-21 · Csaba · checklist "szűrők" ✓`. The opaque cursor means nothing is processed twice. `exclude_self` drops rows written by the calling user through the calling OAuth client (same user AND same client: a CIMD `client_id` is shared by every user of that client, owner 2026-10-25). `search` also accepts `updated_since`. Webhooks are V2. |
 | D23 | **Idempotency:** every write tool accepts an optional `idempotencyKey`. A repeated call with the same key (same user and org, kept 24 h) returns the first result. The check runs in the same transaction as the write. The key is bound to the request: the same key with a different request is an error, never a silent replay (owner, 2026-10-25). |
 | D24 | **Checklist = sub-tasks.** `save_tasks` creates and ticks items in one call (`done: true` means the project's first completed status) and orders them with `after` / `before` refs (fractional `sortKey`). `fetch` lists them under the parent. The "next step" is the first open sub-task and its assignee. `search` filters on it with `next_assignee`. |
-| D25 | **Client summaries are written by the agent from raw material.** For each task, `report(kind="client_monthly")` returns the title, status, deep link, minutes, time-entry notes and the closing comment. The server makes no LLM call and stores no new field. A `missing_time` report kind lists Review/Done tasks that have no time entries. |
+| D25 | **Client summaries are written by the agent from raw material.** For each task, `report(kind="client_monthly")` returns the title, status, deep link, minutes, time-entry notes and the closing comment. The server makes no LLM call and stores no new field. A `missing_time` report kind lists tasks that have no time entries, in the statuses given by its `statuses` param (default: the org's completed-category statuses; no name matching of "Review" or "Done" — owner, 2026-10-25, §17 slice 5). |
 | D26 | **Unattended access is OAuth only.** Clerk refresh tokens do not expire, so a client that refreshes keeps working without the user present. API keys were considered and rejected for V1. |
 | D27 | **No draft flag.** An agent that wants a card not yet visible to colleagues creates it unassigned in a Backlog status, so no notification fires until someone assigns it. D3 stands. |
 | D28 | **Tasks without a client (leads):** `project` is optional in `save_tasks`. The data model already allows it (`tasks.projectId` is optional): such a task gets the org-level identifier key, and its client is empty because the client always follows the project. Time entries require a project, so a lead that needs logged time goes under an ordinary "Leads" client with a non-billable "Leads" project. That is a data convention, not code. When the lead converts, moving the task to the real project keeps the old identifier as an alias. There is no automatic Inbox project. |
 | D29 | **Comment text in the changes feed:** `comment_added` rows in `fetch("changes")` include the comment's plain text, capped at 500 characters with "…" and the comment ref when longer. Follow-up checks can then read what colleagues wrote without fetching every card. Turn it off with `include_text: false`. |
+
+### Decisions after D29 (owner, 2026-10-25)
+
+Taken during the build and tagged in code; §17 records the slice each came from.
+
+| Tag | Decision | Where in code |
+|---|---|---|
+| D-B | `fetch("workspace")` never returns a partial result: a reference table over its read cap refuses the whole fetch with a model-actionable error, the same rule as reports (§7). | `convex/mcp/fetch.ts` |
+| D-REVOKE | Revoke is enforced in Agency Flow, not in Clerk: Revoke sets `mcpConnections.revokedAt` and `getMcpAuthContext` refuses every token of that org + user + client from the next call, still-valid access tokens included; "Allow again" clears it (D17). | `convex/lib/mcpAuth.ts`, `convex/lib/mcpConnections.ts`, `convex/schema.ts` |
+| D-PAGE | Connected apps is a member-accessible `/connected-apps` page opened from the user menu, listing only the signed-in user's own connections in the active workspace, with the connect help on the same page (D17). | `app/(dashboard)/connected-apps/page.tsx`, `components/connected-apps/*`, `convex/connectedApps.ts` |
+| D-TOKENDIET | The advertised `tools/list` schemas are compacted for token cost (draft-7 JSON Schema without `$schema`, `minLength: 1`, the date pattern or `idempotentHint: false`); `tools/call` still validates every argument with the full zod schema. | `lib/mcp/advertise.ts`, `lib/mcp/__tests__/tools-list.test.ts` |
+| D-DELETEGUARD | A project is deleted only when nothing hangs off it (no time entries, running timer, tasks, invoices or billing closes); a client only when every one of its projects could be. Anything else is archived instead. The same guard runs in the app's Delete and in MCP `delete`. | `convex/lib/projectDelete.ts`, `convex/projects.ts`, `convex/clients.ts`, `convex/lib/mcpDelete.ts` |
+| D-COMMENTATTACH | Files are added to a comment while writing it, so only the comment's author may attach to it, in the app and through MCP. | `convex/commentAttachments.ts`, `convex/lib/mcpFiles.ts` |
+| D-MISSING | `missing_time` takes a `statuses` param; the default is every completed-category status, and names are matched exactly, never guessed (D25). | `convex/lib/mcpReports.ts` |
+
+**App-path rule changes shipped with the MCP branch.** MCP reuses the app's write
+paths (goal 3), so these owner decisions changed the app as well:
+
+- **Delete guards:** deleting a task with invoiced or settled time entries is refused
+  ("Archive it instead", `convex/tasks/write.ts`); a time entry settled by a close is
+  refused; projects and clients follow D-DELETEGUARD above.
+- **Comment attachments are author-only** (D-COMMENTATTACH).
+- **Timer stop writes a `time_entry_logged` activity row** on the task, like a manual
+  entry (`convex/lib/timerEntry.ts`; §17 slice 4).
+- **A timer running in another workspace is refused untouched:** "Your timer is running
+  in another workspace; stop it there." (`convex/lib/timer.ts`, `convex/timer.ts`).
+- **Client prefix:** a typed prefix must be valid (A–Z/0–9, up to 10, saved uppercase)
+  and free (case-insensitive); a prefix another client uses is refused on save
+  (`convex/clients.ts`, `convex/lib/clientPrefix.ts`; §7).
+- **App UI uploads are bound to the uploader:** task and comment attachments go through
+  `fileUploads:generateUploadUrl` (`POST /upload?u=<uploadId>`, org + user bound) and
+  `attachments.save` / `commentAttachments.save` refuse a storage id that is not the
+  caller's own upload (`convex/fileUploads.ts`; `4dd2b0b`, merged 2026-10-25).
 
 ## 4. Architecture
 
@@ -213,14 +246,14 @@ Use this only if S1 proves the direct path impossible.
 ## 6. Tool catalog (V1)
 
 Notion's lesson (blog, July 2025) is that curated, agent-oriented tools and dense
-markdown beat a 1:1 API mapping. Today Notion exposes about 60 tools. We stay at about
-15 because Codex loads every tool definition on every turn, and a batch-first design
-needs fewer calls.
+markdown beat a 1:1 API mapping. Today Notion exposes about 60 tools. We stay at 17
+(the 16 rows below; `create_upload` and `attach_file` share one) because Codex loads
+every tool definition on every turn, and a batch-first design needs fewer calls.
 
 | Tool | Annotations | Purpose |
 |---|---|---|
 | `search` | read-only | Text query plus structured filters: `types[]` (task, project, client, member, time_entry, invoice, daily_note, comment), assignee, status, label, client, project, date range (due / tracked / updated), `updated_since`, `external_ref` (D21), `next_assignee` (D24), `mine`, `cursor`, `limit`. Returns compact rows with references. |
-| `fetch` | read-only | `refs[]` (up to 25) → markdown detail. `include[]` controls depth (subtasks, comments, activity, time, files, attachment_text). Special refs: `workspace`, `inbox`, `me`, and `changes` with `{ cursor, types[], exclude_self, include_text }` (D22, D29). |
+| `fetch` | read-only | `refs[]` (up to 25) → markdown detail. `include[]` controls depth (subtasks, comments, activity, time, plan, files, attachment_text). Special refs: `workspace`, `inbox`, `me`, and `changes` with `{ cursor, types[], exclude_self, include_text }` (D22, D29). |
 | `save_tasks` | write | Batch. An item without `ref` creates a task, unless one of its `externalRefs` already belongs to a task, in which case it updates that task (D21). An item with `ref` patches it. Fields: title, description (markdown), project (optional, D28), parent, status, `done`, `after` / `before` (order), assignees, labels, priority, start/due date, estimate, category, `externalRefs` (add-only). Runs `tasks/write.ts`. |
 | `save_comments` | write | Batch create, or edit your own comment. Mentions are written as `@email`. |
 | `save_time_entries` | write | Batch create/patch of time entries (task, date, minutes, note, category). |
@@ -229,12 +262,12 @@ needs fewer calls.
 | `save_projects` | write | Batch create/patch. Admins only, as in the app. |
 | `save_plan` | write | Planner segments: create, move or resize (member, task, date range). |
 | `save_daily_notes` | write | Create/patch a daily note for a date. |
-| `mark_read` | write, idempotent | Mark inbox items or comments as read. |
-| `delete` | destructive | `refs[]`. The type is inferred from each ref. Uses the app's delete mutations and rules. Slice 3 covers tasks (with `deleteTimeEntries` for the app's "Delete task + logged time") and comments. Slice 4 adds time entries and slice 7 adds projects and clients, each with the app's rules. Archiving goes through `save_tasks` `archived: true/false`. |
+| `mark_read` | write, idempotent | Mark inbox items, or a task's / comment's notifications, as read. The ref `"inbox"` is the app's "Mark all as read", 200 items per call. |
+| `delete` | destructive | `refs[]`. The type is inferred from each ref. Uses the app's delete mutations and rules. Slice 3 covers tasks (with `deleteTimeEntries` for the app's "Delete task + logged time") and comments. Slice 4 adds time entries and slice 7 adds projects and clients, planner bars (the Planner's unschedule) and files (task or comment attachments, by the file id `fetch` lists with `include: ["files"]`), each with the app's rules. Archiving goes through `save_tasks` `archived: true/false`. |
 | `report` | read-only | `kind` plus params (§8). Returns a markdown table and an app link. |
-| `billing_preview` | read-only | `action` (`close_period`, `close_retainer_cycle`, `generate_invoice`, `set_invoice_status`, `revert`) plus params → effect summary and `commitToken`. |
+| `billing_preview` | read-only | `action` plus params → effect summary and `commitToken`. The actions are the app's own buttons (§17 slice 6, owner 2026-10-25): on a project period (`project` + `period`): `close_period`, `reopen_period`; on a project (`project`, optional `amount`): `create_fixed_invoice`; on an invoice (`invoice`): `mark_invoiced`, `mark_paid`, `mark_unpaid`, `revert_to_draft`, `void_invoice`, `delete_draft`. Admins only. |
 | `billing_commit` | destructive | `commitToken` → runs the previewed action (§9). |
-| `create_upload` / `attach_file` | write | `create_upload` returns a Convex upload URL. `attach_file(ref, storageId \| inlineText, filename)` attaches it (§10). |
+| `create_upload` / `attach_file` | write | `create_upload(filename, contentType, sizeBytes)` returns an `uploadId` and a one-time upload URL on the Convex site (valid 1 h); the client POSTs the bytes to it. `attach_file(ref, { uploadId } \| { inlineText, filename })` attaches it within 24 h (§10). The client never sees a storage id. |
 
 Rules for every tool:
 - **Descriptions** are written for the model. Each says when to use the tool, what a
@@ -277,7 +310,7 @@ input into a typed reference. Convex resolves and ownership-checks it (I3).
 - **Reference data never comes back clipped.** If a workspace table exceeds its cap,
   `fetch("workspace")` refuses with a model-actionable error, the same rule as reports
   (owner, 2026-10-24).
-- **Paging:** the default limit is 25 and the maximum 100. The cursor is opaque. A
+- **Paging:** the default limit is 25 (the changes feed: 50) and the maximum 100. The cursor is opaque. A
   result is never silently truncated: when more exist, the output says so and gives the
   cursor.
 - **Size:** keep each result well under Claude Code's 25k-token cap. `include` lets the
@@ -293,7 +326,7 @@ the same self-scope and money stripping as in the app.
 | `timesheet` | `timesheets.collectTimesheetData` + `timesheetPivot` |
 | `time_by_member` | `timeByMemberForAuth` |
 | `client_monthly` | `clientMonthlySummaryForAuth`, extended per task with status, deep link, minutes, time-entry notes and the closing comment (D25) |
-| `missing_time` | new: Review/Done tasks in the period with no time entries (D25) |
+| `missing_time` | new: tasks in the period with no time entries, in the statuses given by the `statuses` param; default = every status in the org's completed category. Status names are matched exactly against the org's statuses, never guessed (D25; §17 slice 5) |
 | `project_overview` | `projectOverviewForAuth` / `getProjectSummaryForAuth` |
 | `project_monthly` | `projectMonthlyBreakdownForAuth` |
 | `retainer_statement` | `getMonthlyReportForAuth` / `getRetainerDataForAuth` |
@@ -315,28 +348,45 @@ Report rules:
    app's action, without writing.
 2. It returns:
    - the effect, as a markdown summary with totals, line counts and any warnings;
-   - `commitToken`, which is signed and short-lived (10 min).
-3. The token encodes the action, the params, `orgId`, `userId` and an **input
-   fingerprint**: a hash of the entries, rates, period state and invoice state the
-   preview read.
+   - `commitToken`, short-lived (10 min). **As built (§17 slice 6, owner 2026-10-25) the
+     token is not signed:** `billing_preview` stores an `mcpBillingPreviews` row and the
+     token is that row's id. The row is bound to `orgId`, `userId` and the OAuth
+     `clientId`, so a token previewed in Claude cannot be committed from Codex. At most
+     50 open (unexpired, uncommitted) previews per user and client; past that a preview
+     is refused rather than an older token invalidated behind the user's back.
+3. The row holds the action, the params, `expiresAt` and an **input fingerprint**
+   (SHA-256) of what the preview read: the entries, rates, period state and invoice
+   state, per action. The `close_period` fingerprint also includes the checklist
+   warnings the user saw, so what was approved is what runs. A second, dateless
+   fingerprint and the invoice issue date are stored to tell a day change apart.
 4. `billing_commit(commitToken)`:
-   - checks the signature, expiry and same user/org;
-   - recomputes the fingerprint and refuses with `"Data changed since preview — run
-     billing_preview again"` if it differs;
-   - otherwise runs the real mutation (`closePeriod`, `closeRetainerCycle`, invoice
-     generation or status, or revert) as the user.
-5. Commit is idempotent per token: a second commit with the same token is a no-op that
-   returns the first result.
+   - looks the row up; a token of another user, org or client is "Unknown commit
+     token"; an expired one is refused;
+   - recomputes the plan and its fingerprint and refuses with `"Data changed since
+     preview — run billing_preview again."` if it differs. When the re-plan itself
+     fails, the message adds `Now: <reason>`; when only the calendar day changed (the
+     invoice would be dated another day than the user saw), it names the new issue
+     date;
+   - otherwise runs the app's own write path for the action as the user, with `via`
+     (D15).
+5. Commit is idempotent per token: a committed row keeps its result for 24 h (the cron
+   then deletes it) and a second commit with the same token replays that first result
+   and writes nothing. D5 stands.
 
 ## 10. Files
 
 - **`create_upload(filename, contentType, sizeBytes)`** checks the app's size and type
-  limits and returns a Convex `generateUploadUrl` result. The client sends the bytes
-  with a POST and receives a `storageId`. Claude Code and Codex can do this from a
-  shell. On claude.ai, upload works only for inline text (S5).
-- **`attach_file(ref, { storageId } | { inlineText, filename })`** attaches to a task or
-  comment through the existing attachment write path. `inlineText` is capped at
-  200 KiB, matching Notion.
+  limits, records the announced file under an unguessable `uploadId` (192 bits, made
+  in an action) bound to org + user + OAuth client, and returns the `uploadId` plus a
+  one-time upload URL `<CONVEX_SITE_URL>/mcp-upload?u=<uploadId>` (valid 1 h;
+  `convex/mcpFileUploads.ts`, `convex/lib/mcpFiles.ts`). The client POSTs the bytes to
+  it; the endpoint stores them once and answers `{ uploaded: true }`. The client never
+  receives a `storageId`. Claude Code and Codex can do this from a shell. On claude.ai,
+  upload works only for inline text (S5).
+- **`attach_file(ref, { uploadId } | { inlineText, filename })`** attaches to a task or
+  your own comment through the existing attachment write path, within 24 h of
+  `create_upload`; the `uploadId` must be the caller's own, in this org. `inlineText` is
+  capped at 200 KiB of UTF-8, matching Notion.
 - **Read:** `fetch(ref, include: ["files", "attachment_text"])`. The PDF/DOCX/text
   extraction (`attachmentContents`) existed only on the closed email-triage branch
   (c3972ab). It is ported in slice 7 (owner, 2026-10-24); until then the include says
@@ -347,8 +397,9 @@ Report rules:
 
 - **Attribution (D15):** add an optional `via` field on `activityLog` (and on comments
   where shown): `{ kind: "mcp", clientId, clientName }`. The UI renders a muted
-  "via <clientName>" next to the actor. `clientName` comes from the Clerk OAuth
-  application name for `client_id`.
+  "via <clientName>" next to the actor. For CIMD clients (Claude, Codex) `clientName`
+  is the host of the client's metadata URL, e.g. "via claude.ai"; Clerk-registered
+  clients show their Clerk application name (D15).
 - **External refs (D21):** a new `taskExternalRefs` table (orgId, ref, taskId, createdAt)
   with indexes `by_orgId_ref` (unique lookup) and `by_taskId`. `fetch` shows a task's
   refs. The drawer may list them later; that is not V1.
@@ -356,8 +407,11 @@ Report rules:
   already uses is refused, in the UI as well as through MCP.
 - **Connected apps (D17):** the `/connected-apps` page lists the user's MCP connections
   from our own `mcpConnections` table: client, first seen, last used, with Revoke / Allow
-  again. Queries cannot write, so the `/mcp` route stamps last-used after a verified
-  request (`mcp/connections:touch`), at most hourly per org + user + client. An app
+  again. Queries cannot write, so the `/mcp` route registers and stamps the connection
+  with `mcp/connections:touch` (`registering: true`) after verifying the token and
+  **before** handling the first request, at most hourly per org + user + client.
+  `getMcpAuthContext` fails closed without a row (`CONNECTION_UNKNOWN` in
+  `convex/lib/mcpAuth.ts`); `touch` is the one caller allowed to create it. An app
   appears after its first request.
 - **Notifications (D16):** nothing new. They follow automatically from reusing the
   write paths.
@@ -435,7 +489,9 @@ The tests for these modules move with them.
   - a task created without a project gets the org identifier key and no client;
   - `next_assignee` follows sub-task order.
 - **Protocol:**
-  - the MCP Inspector against a preview deployment;
+  - the MCP Inspector against dev (`https://localhost:3001/mcp`) or production. Vercel
+    previews get no tokens: Clerk issues them only for the registered resource, so
+    the audience never matches there (runbook §1);
   - a 401 + `WWW-Authenticate` check;
   - `tools/list` matches the registry snapshot.
 - **End-to-end (manual, every slice):**
@@ -487,6 +543,9 @@ The tests for these modules move with them.
   therefore lists our own stamps, and Revoke is enforced in Convex (D17).
 - **S5:** Can claude.ai web upload a file to a URL a tool returns? Expected: no, so only
   inline text works there, which is acceptable for V1.
+  **Outcome (2026-10-25):** no. claude.ai on the web cannot POST to the upload URL, so
+  there `attach_file` works with `inlineText` only; the `create_upload` description says
+  so and points the model at `inlineText`. Claude Code and Codex upload from a shell.
 
 ## 16. Sources (checked 2026-10-24)
 

@@ -53,9 +53,10 @@ export function ConnectHelp({ mcpUrl }: { mcpUrl: string | null }) {
       </div>
 
       <div className="flex flex-col gap-2">
-        <h3 className="font-medium">Claude</h3>
+        <h3 className="font-medium">Claude (claude.ai and Claude Desktop)</h3>
         <p className="text-muted-foreground">
-          In Claude, open Settings → Connectors → Add custom connector, paste the URL and choose Connect. In Claude Code:
+          In claude.ai or Claude Desktop, open Settings → Connectors → Add custom connector, paste the URL and choose
+          Connect. In Claude Code:
         </p>
         <Command>{`claude mcp add --transport http ${MCP_SERVER_NAME} ${mcpUrl}`}</Command>
         <p className="text-muted-foreground">

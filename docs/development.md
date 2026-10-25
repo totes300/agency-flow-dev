@@ -29,6 +29,17 @@ Use separate terminal sessions for the two long-running processes.
 - Connect: `claude mcp add --transport http agency-flow https://localhost:3001/mcp`
   (then `/mcp` to sign in) or `codex mcp add agency-flow --url …` and
   `codex mcp login agency-flow`. `/connected-apps` in the app shows the same steps.
+- Headless evaluation runs (does the agent solve a task with the MCP tools alone?):
+
+  ```bash
+  NODE_EXTRA_CA_CERTS="$HOME/Library/Application Support/mkcert/rootCA.pem" \
+    claude -p "<task>" --strict-mcp-config \
+    --allowedTools "mcp__agency-flow__*" \
+    --disallowedTools Bash,Read,Grep,Glob,Edit,Write
+  ```
+
+  Run it from a directory **outside** the repository; inside it the agent answers
+  from the codebase instead of calling the tools.
 
 ## Common checks
 

@@ -10,7 +10,7 @@ if (!clerkJwtIssuerDomain) {
 const mcpResourceUrl = process.env.MCP_RESOURCE_URL;
 if (!mcpResourceUrl) {
   throw new Error(
-    'Missing MCP_RESOURCE_URL environment variable: set it to the exact MCP URL (e.g. https://localhost:3001/mcp) in .env.local and on the Convex deployment — see docs/development.md, "MCP server (local)".',
+    'Missing MCP_RESOURCE_URL environment variable: set it to the exact MCP URL (e.g. https://localhost:3001/mcp) in .env.local and on the Convex deployment — see docs/development.md, "MCP server (local)" (production: docs/runbooks/mcp-deployment.md §1).',
   );
 }
 

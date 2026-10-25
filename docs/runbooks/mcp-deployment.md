@@ -32,9 +32,15 @@ Nothing here has been done in production yet.
 (Vercel, Convex, Clerk's registered MCP resource): Clerk puts it in the token's
 `aud`, Next.js checks it, Convex checks it, and the discovery document advertises it.
 
+It must be the **canonical production domain**, the one `/connected-apps` shows. The
+project's `*.vercel.app` URL also serves `/mcp`, but every call there fails with 401:
+Clerk issues tokens for the registered resource only, so the audience never matches.
+Never give that URL to users.
+
 | Variable | Where | Notes |
 |---|---|---|
-| `MCP_RESOURCE_URL` | Vercel (Production) | Read at request time by `/mcp` and the discovery routes. A build without it succeeds; MCP requests then fail. |
+| `MCP_RESOURCE_URL` | Vercel (Production) | Read at request time by `/mcp` and the discovery routes. A build without it succeeds; MCP requests then fail. Vercel env changes apply only to new deployments, so set it before the merge (section 3). |
+| `MCP_RESOURCE_URL` | Vercel (Preview), optional | Without it `/mcp` and the discovery routes answer 500 on previews and `/connected-apps` says the server is not configured. Any https URL works; MCP cannot be used on a preview either way (no tokens for that audience). |
 | `MCP_RESOURCE_URL` | Convex production (`npx convex env set --prod MCP_RESOURCE_URL https://<prod-domain>/mcp`) | **`convex/auth.config.ts` throws without it, so a production Convex deploy fails until it is set.** Set it before the first deploy of this branch. |
 | `CLERK_JWT_ISSUER_DOMAIN` | Convex production | Already required by the app. The MCP provider derives its issuer and JWKS (`<issuer>/.well-known/jwks.json`) from it, so it must be the production Clerk issuer (`https://clerk.<domain>`). |
 | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY` | Vercel | Already required. The secret key also resolves OAuth client names for "via <client>" and Connected apps. |
@@ -81,16 +87,22 @@ Steps, each after the owner's yes:
 The Vercel build deploys Convex itself (`vercel.json`: `npx convex deploy --cmd
 'next build'`), so merging to `main` deploys both. Hence:
 
-1. **Before the merge**, set `MCP_RESOURCE_URL` on Convex production and in the
-   Convex default environment variables for Preview (section 1). Otherwise the
-   Convex deploy inside the Vercel build fails at `convex/auth.config.ts`.
+1. **Before the merge**, set `MCP_RESOURCE_URL` in three places: on Convex production,
+   in the Convex default environment variables for Preview (section 1), and on
+   Vercel Production (Vercel env changes apply only to deployments made after them).
+   Without the Convex value the Convex deploy inside the Vercel build fails at
+   `convex/auth.config.ts`; without the Vercel value the deploy succeeds but `/mcp`
+   and the discovery routes answer 500 until the next deploy.
 2. Merge; the Vercel production build deploys Convex. It adds the tables `taskExternalRefs`,
    `mcpIdempotency`, `mcpFileUploads`, `mcpBillingPreviews`, `attachmentContents`
    and `mcpConnections` (Connected apps stamps and revokes), and the cron jobs below.
-3. Set `MCP_RESOURCE_URL` on Vercel Production (before or with the deploy).
-4. Apply the Clerk production steps (section 2).
-5. Run the attachment extraction backfill (section 5).
-6. Verify (section 6).
+   If the Vercel build fails **after** `npx convex deploy` ran, Convex is already on
+   the new version. That is safe: the change is additive (new tables, optional
+   fields, crons) and the old Next.js deployment keeps working against it. Fix
+   forward and redeploy; do not roll Convex back.
+3. Apply the Clerk production steps (section 2).
+4. Run the attachment extraction backfill (section 5).
+5. Verify (section 6).
 
 ## 4. Cron jobs
 
@@ -138,9 +150,10 @@ and shown honestly by `fetch`.
    ```
 
    Expect `401` and `WWW-Authenticate: Bearer … resource_metadata="https://<prod-domain>/.well-known/oauth-protected-resource/mcp"`.
-3. Connect Claude (Settings → Connectors → Add custom connector → the MCP URL) and
-   Codex (`codex mcp add agency-flow --url https://<prod-domain>/mcp`, then
-   `codex mcp login agency-flow`). Pick the organization on the consent screen.
+3. Connect Claude (claude.ai and Claude Desktop: Settings → Connectors → Add custom
+   connector → the MCP URL) and Codex (`codex mcp add agency-flow --url
+   https://<prod-domain>/mcp`, then `codex mcp login agency-flow`). Pick the
+   organization on the consent screen.
 4. Ask each for `fetch("me")` and `fetch("workspace")`: the right org and the role
    from Agency Flow, not from the token.
 5. Create a throwaway task through MCP, check "via <client>" in its activity in the
@@ -155,7 +168,20 @@ and shown honestly by `fetch`.
    `include: ["attachment_text"]` shows the text. Delete the file afterwards.
 8. Member vs admin: as a member, `report` `time_by_member` returns only their own
    time and an admin-only kind (e.g. `close_queue`) is refused; as an admin both work.
-9. Check the Convex and Vercel logs for `[mcp]` errors.
+9. Observability. The route logs one line per tool call, `[mcp] tool <name> <ms>ms
+   ok|error` (no arguments, no user content), and on an internal error a short
+   `ref <8 hex>` next to the tool name; the user sees the same ref in the error
+   text. Refused calls (a `ConvexError`, e.g. "not found", admin-only, revoked) are
+   tool results, not errors, and are not logged as errors.
+   - Vercel → the project's Runtime logs, filter `[mcp]`: per-tool errors, latency,
+     and the error ref a user reports.
+   - Convex → Logs, filter the function path `mcp/`: the Convex side of the same
+     calls, including uncaught errors.
+   - Convex → Functions: p95 duration per `mcp/*` function.
+10. Vercel function max duration for `/mcp` is at least 60 s (the route exports
+    `maxDuration = 60` and the handler is created with the same value; check the
+    function's settings in the Vercel deployment). A lower plan limit cuts long
+    report and billing calls off mid-request.
 
 ## Connected apps and revocation (owner decisions D-PAGE, D-REVOKE, 2026-10-25)
 
@@ -170,8 +196,13 @@ and shown honestly by `fetch`.
   `getMcpAuthContext` refuses every token of that org + user + client from the next
   call, including an access token issued before the revoke and every refreshed one
   (one indexed read per MCP call). It also fails closed without a row: the `/mcp`
-  route registers the connection before a client's first call, so a token used
-  anywhere else is refused. The upload endpoint refuses a revoked connection or a
+  route registers the connection (`mcp/connections:touch`) before a client's first
+  call. That is a precondition the route satisfies, not a boundary against the
+  token holder: the Convex functions `convex/mcp/*` are public, so whoever holds a
+  valid OAuth token can call them (including `touch`) directly, with exactly the
+  access the token's user has in that org. The controls are the token itself,
+  Convex re-checking org, membership, role and revoke on every call, and Revoke.
+  The upload endpoint refuses a revoked connection or a
   removed member (403) and answers 503 while `MCP_DISABLED` is set. The client keeps its stored connection until
   the user disconnects it there (Claude: Settings → Connectors; Codex:
   `codex mcp logout agency-flow`); the page says so.
@@ -195,14 +226,37 @@ and shown honestly by `fetch`.
   tables, e.g. `mcpFileUploads.clientId`). Deploying
   an older Convex version whose schema lacks them fails schema validation. To roll
   Convex back, first strip those fields (a one-off internal mutation) or keep the
-  schema fields and roll back only the functions.
+  schema fields and roll back only the functions. Tables the schema does not list
+  are allowed by Convex (only listed tables are validated), so the new MCP tables
+  do not block a functions-only rollback; the optional fields on existing tables
+  do. The preferred path stays `MCP_DISABLED` plus fix forward.
 - Unregistering the resource in Clerk stops new tokens; it does not stop issued ones
   (use `MCP_DISABLED`).
 - Do not remove `MCP_RESOURCE_URL` from Convex while `convex/auth.config.ts`
   requires it: the next Convex deploy would fail.
 
+## Tool and schema changes
+
+- Changes to `tools/list` are **additive only**: add a tool, an optional parameter
+  or an enum value; never rename or remove one, or make a parameter required, in a
+  release that connected clients are still using.
+- `MCP_SERVER_INFO.version` (`lib/mcp/handler.ts`) follows the `package.json`
+  version. Bump it on every `tools/list` change, so clients and logs can tell the
+  versions apart.
+- `lib/mcp/__tests__/tools-list.test.ts` holds the `tools/list` snapshot and is the
+  gate: an unintended change fails it; an intended one updates the snapshot in the
+  same commit.
+- Clients cache `tools/list` per session. Claude.ai, Claude Desktop and Claude Code
+  pick a change up at their next session; Codex on its next turn. The handler is
+  stateless (no SSE), so it cannot push `notifications/tools/list_changed`; there
+  is nothing to do but wait for the clients to reconnect.
+
 ## Follow-ups
 
+- **Rate limiting.** The app has none for MCP. Before public exposure, add Vercel
+  Firewall rate rules for `/mcp` and `/.well-known/*`, and limit the Convex upload
+  endpoint (`POST /mcp-upload` on the Convex site URL) the same way. Convex's own
+  budgets bound each call's reads, not the number of calls.
 - **Clerk `createRouteMatcher` deprecation** (`@clerk/nextjs` 7.9). Clerk recommends
   replacing middleware path matching with auth checks in each page, route handler
   and server function

@@ -75,11 +75,17 @@ The MCP server (`docs/prd-mcp.md` §5) is a second way in, with its own rules:
   functions: the `client_id` claim decides the surface (I4).
 - A batch write is one mutation: all items succeed or none (I5).
 - Revocation is enforced here, not in Clerk, and fails closed: a token whose org +
-  user + client has no `mcpConnections` row (only the /mcp route's
-  `mcp/connections:touch` creates one) or a revoked row is refused on the next
-  call, the upload endpoint refuses the same way, and
-  `MCP_DISABLED="true"` refuses all MCP calls. Removing a member cuts access on the
-  next call because membership is re-read every time.
+  user + client has a revoked `mcpConnections` row is refused on the next call, the
+  upload endpoint refuses the same way, and `MCP_DISABLED="true"` refuses all MCP
+  calls. Removing a member cuts access on the next call because membership is
+  re-read every time.
+- A call without a connection row is also refused, and the /mcp route creates the
+  row (`mcp/connections:touch`) before it handles a client's first request. Treat
+  that as a precondition the route satisfies, not as a boundary against the token
+  holder: `convex/mcp/*` are public functions, so anyone holding a valid OAuth
+  token can call them, `touch` included, with the access the token's user has in
+  that org. The security controls are the token, the per-call checks above (org,
+  membership, role, revoke) and Revoke.
 
 ## Review checklist
 

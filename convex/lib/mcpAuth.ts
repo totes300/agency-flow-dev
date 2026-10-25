@@ -59,7 +59,11 @@ export const CONNECTION_REVOKED =
  *    a revoked client — its still-valid access token and every refreshed one
  *    — on the next call. The /mcp route creates the row before a client's
  *    first call (`mcp/connections:touch`, the only caller passing
- *    `registering`), so a token used anywhere else is refused.
+ *    `registering`). That is a precondition the route satisfies, not a
+ *    boundary against the token holder: `convex/mcp/*` are public functions
+ *    (`touch` included), so a holder of a valid OAuth token can call them
+ *    directly, with the access the token's user has in that org. The
+ *    controls are the token, steps 1–3 on every call, and Revoke.
  *
  * Queries cannot write, so Connected apps "last used" is not stamped here:
  * the /mcp route calls `mcp/connections:touch` (convex/lib/mcpConnections.ts).

@@ -169,7 +169,10 @@ and shown honestly by `fetch`.
   revoked at all. Revoke therefore sets `mcpConnections.revokedAt`, and
   `getMcpAuthContext` refuses every token of that org + user + client from the next
   call, including an access token issued before the revoke and every refreshed one
-  (one indexed read per MCP call). The client keeps its stored connection until
+  (one indexed read per MCP call). It also fails closed without a row: the `/mcp`
+  route registers the connection before a client's first call, so a token used
+  anywhere else is refused. The upload endpoint refuses a revoked connection or a
+  removed member (403) and answers 503 while `MCP_DISABLED` is set. The client keeps its stored connection until
   the user disconnects it there (Claude: Settings → Connectors; Codex:
   `codex mcp logout agency-flow`); the page says so.
 - "Allow again" clears `revokedAt`; the client's existing tokens work again.

@@ -43,9 +43,10 @@ External agents (Claude, Codex) operate the app through a remote MCP server
   `convex/mcp/*` call `getMcpAuthContext` (`convex/lib/mcpAuth.ts`), UI functions
   call `getAuthContext`, and each refuses the other's token (I4).
 - `getMcpAuthContext` takes the org from the token's `org_id` (picked on Clerk's
-  consent screen), the role only from `orgMembers`, and refuses a connection the
-  user revoked in Connected apps (`mcpConnections`) or every call while
-  `MCP_DISABLED` is set. MCP functions then reuse the app's `*ForAuth` cores and
+  consent screen), the role only from `orgMembers`, and fails closed on the
+  connection (`mcpConnections`, org + user + client): no row (the route registers
+  one before a client's first call) or a row the user revoked in Connected apps is
+  refused, as is every call while `MCP_DISABLED` is set. MCP functions then reuse the app's `*ForAuth` cores and
   write paths, so rules and notifications are the app's.
 - `/connected-apps` lists the user's connections (stamped by the route at most
   hourly) with Revoke / Allow again.

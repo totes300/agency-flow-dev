@@ -74,8 +74,10 @@ The MCP server (`docs/prd-mcp.md` §5) is a second way in, with its own rules:
 - A session JWT cannot call `convex/mcp/*` and an OAuth JWT cannot call UI
   functions: the `client_id` claim decides the surface (I4).
 - A batch write is one mutation: all items succeed or none (I5).
-- Revocation is enforced here, not in Clerk: a revoked `mcpConnections` row (org +
-  user + client) refuses that client's every token on the next call, and
+- Revocation is enforced here, not in Clerk, and fails closed: a token whose org +
+  user + client has no `mcpConnections` row (only the /mcp route's
+  `mcp/connections:touch` creates one) or a revoked row is refused on the next
+  call, the upload endpoint refuses the same way, and
   `MCP_DISABLED="true"` refuses all MCP calls. Removing a member cuts access on the
   next call because membership is re-read every time.
 

@@ -620,6 +620,16 @@ before any `npx convex dev`. Verified after the switch: a 27-step MCP regression
 a real token (every tool, all 11 report kinds) was all OK; the billing hub, project page
 and Linear lists render in the browser.
 
+### Production review (2026-10-25)
+
+Seven specialist reviews (MCP design and token cost, architecture, security and
+tenancy, Convex correctness and limits, domain and billing, a real-agent dogfood run,
+docs and operations) plus a final whole-diff review: 73 findings, no blocker, 13 majors,
+all fixed or deferred with a reason. Fixes landed on `mcp` in `3b06b16`, `f33d4e0`,
+`946a30d`, `dbf5dcf`, `a53c74d`, `25635a7`, `76cc00e`, `8e01413`; the app upload binding
+(`4dd2b0b`) was merged with owner approval. Report, numbers, verdict ("ready after the
+runbook's production setup") and the follow-up list: `docs/reviews/mcp-review-2026-10-25.md`.
+
 ### Known limits (accepted, owner 2026-10-24)
 
 - A Convex read-limit error (4,096 index ranges per function) cannot be caught inside

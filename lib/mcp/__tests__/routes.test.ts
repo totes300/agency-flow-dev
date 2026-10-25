@@ -182,6 +182,40 @@ describe("/mcp: Connected apps last-used stamp", () => {
     error.mockRestore();
   });
 
+  it("a deliberate Convex refusal (e.g. revoked) waits the full hour, silently; a transport error retries after 5 minutes", async () => {
+    const { POST } = await import("@/app/mcp/route");
+    const { ConvexError } = await import("convex/values");
+    const { CONNECTION_REVOKED } = await import("@/convex/lib/mcpAuth");
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const now = vi.spyOn(Date, "now");
+    const T = 1_800_000_000_000;
+
+    // Revoked: no log, and no second stamp within the hour.
+    authenticateRequest.mockResolvedValue({ toAuth: () => signedIn("user_revoked") });
+    fetchMutation.mockRejectedValue(new ConvexError(CONNECTION_REVOKED));
+    now.mockReturnValue(T);
+    await POST(mcpPost(bearer("org_r")));
+    await afterCallbacks[0]();
+    expect(error).not.toHaveBeenCalled();
+    now.mockReturnValue(T + 10 * 60 * 1000);
+    await POST(mcpPost(bearer("org_r")));
+    expect(afterCallbacks).toHaveLength(1);
+
+    // Transport error: logged, retried after 5 minutes.
+    authenticateRequest.mockResolvedValue({ toAuth: () => signedIn("user_network") });
+    fetchMutation.mockRejectedValue(new Error("fetch failed"));
+    now.mockReturnValue(T);
+    await POST(mcpPost(bearer("org_n")));
+    await afterCallbacks[1]();
+    expect(error).toHaveBeenCalledTimes(1);
+    now.mockReturnValue(T + 5 * 60 * 1000);
+    await POST(mcpPost(bearer("org_n")));
+    expect(afterCallbacks).toHaveLength(3);
+
+    now.mockRestore();
+    error.mockRestore();
+  });
+
   it("an unauthenticated or invalid request stamps nothing", async () => {
     const { POST } = await import("@/app/mcp/route");
     authenticateRequest.mockResolvedValue({

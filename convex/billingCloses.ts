@@ -8,8 +8,8 @@ import { ConvexError, v } from "convex/values";
 import { mutation } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel";
 import { requireAdmin } from "./lib/auth";
-import { getLiveCloses, loadCloseContext, toScopeProject } from "./lib/billing/closeData";
-import { commitClose as commit, releaseClose } from "./lib/billing/closeLifecycle";
+import { loadCloseContext, toScopeProject } from "./lib/billing/closeData";
+import { applyReopen, commitClose as commit, planReopen } from "./lib/billing/closeLifecycle";
 import { appendBillingEvent } from "./lib/billing/events";
 import { skipStampFor } from "./lib/billing/scope";
 
@@ -34,32 +34,7 @@ export const reopenClose = mutation({
   args: { projectId: v.id("projects"), periodStart: v.string() },
   handler: async (ctx, args): Promise<{ reopenedCount: number }> => {
     const { orgId, userId } = await requireAdmin(ctx);
-    const close = (await getLiveCloses(ctx, orgId, args.projectId)).find(
-      (c) => c.periodStart <= args.periodStart && c.periodEnd >= args.periodStart,
-    );
-    if (!close || close.status !== "final") throw new ConvexError("This period is not closed.");
-    if (close.invoiceId) {
-      throw new ConvexError("This period is billed on an invoice. Void that invoice to reopen it.");
-    }
-    // Oldest-first in reverse: reopening an earlier period under a later live
-    // close would make the later one cover work that now belongs before it.
-    const later = await ctx.db
-      .query("billingCloses")
-      .withIndex("by_orgId_projectId_periodStart", (q) =>
-        q.eq("orgId", orgId).eq("projectId", close.projectId).gt("periodStart", close.periodStart),
-      )
-      .collect();
-    if (later.some((c) => c.status !== "released")) {
-      throw new ConvexError("Reopen the later closed periods first.");
-    }
-    const reopenedCount = (
-      await ctx.db
-        .query("billingCloseEntries")
-        .withIndex("by_closeId", (q) => q.eq("closeId", close._id))
-        .collect()
-    ).length;
-    await releaseClose(ctx, { orgId, userId }, close, "reopened");
-    return { reopenedCount };
+    return applyReopen(ctx, { orgId, userId }, await planReopen(ctx, orgId, args));
   },
 });
 

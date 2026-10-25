@@ -34,6 +34,7 @@ import {
 import { Separator } from "@/components/ui/separator"
 import { CloseCommitButton } from "@/components/billing/close-commit-button"
 import {
+  closeFlagLabel,
   summarizeCloseFlags,
   type CloseFlagKind,
   type CloseFlagSummary,
@@ -248,7 +249,7 @@ function CheckRow({
             blocking ? "text-destructive" : "text-amber-600 dark:text-amber-500",
           )}
         />
-        {checkLabel(summary)}
+        {closeFlagLabel(summary)}
       </span>
       {summary.kind === "missing-overage-rate" ? (
         <Button variant="link" size="sm" className="h-auto shrink-0 p-0" asChild>
@@ -267,20 +268,4 @@ function CheckRow({
       ) : null}
     </div>
   )
-}
-
-function checkLabel(summary: CloseFlagSummary): string {
-  const n = summary.count
-  switch (summary.kind) {
-    case "missing-overage-rate":
-      return "Over budget, but the project has no overage rate"
-    case "running-timer":
-      return n === 1 ? "A timer is still running" : `${n} timers are still running`
-    case "long-entry":
-      return n === 1 ? "1 entry is over 8h" : `${n} entries are over 8h`
-    case "missing-note":
-      return n === 1 ? "1 entry has no note" : `${n} entries have no note`
-    case "carried-in":
-      return n === 1 ? "1 entry carried in" : `${n} entries carried in`
-  }
 }

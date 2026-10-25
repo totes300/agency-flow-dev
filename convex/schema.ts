@@ -580,6 +580,8 @@ export default defineSchema({
     actorId: v.id("users"),
     at: v.number(),
     data: v.optional(v.record(v.string(), v.union(v.string(), v.number(), v.boolean()))),
+    // Written through an external agent (MCP attribution, docs/prd-mcp.md D15).
+    via: v.optional(activityViaValidator),
   })
     .index("by_orgId_projectId_at", ["orgId", "projectId", "at"])
     .index("by_invoiceId", ["invoiceId"]),

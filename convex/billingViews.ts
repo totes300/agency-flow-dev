@@ -205,9 +205,9 @@ export type CloseQueueData = {
 
 // ─── Shared ──────────────────────────────────────────────────────────────────
 
-type ViewSettings = { timezone: string; todayStr: string; roundingMinutes: number };
+export type ViewSettings = { timezone: string; todayStr: string; roundingMinutes: number };
 
-async function viewSettings(ctx: QueryCtx, orgId: string): Promise<ViewSettings> {
+export async function viewSettings(ctx: QueryCtx, orgId: string): Promise<ViewSettings> {
   const s = await getOrgSettings(ctx, orgId);
   const timezone = s?.timezone ?? ORG_TIMEZONE_FALLBACK;
   return {
@@ -218,7 +218,7 @@ async function viewSettings(ctx: QueryCtx, orgId: string): Promise<ViewSettings>
 }
 
 /** Review flags of an OPEN period (a closed ledger has nothing left to review). */
-function flagsFor(view: PeriodView, runningTimers: RunningTimerInfo[]): CloseFlag[] {
+export function flagsFor(view: PeriodView, runningTimers: RunningTimerInfo[]): CloseFlag[] {
   if (view.liveClose) return [];
   return computeCloseFlags({
     scope: {
@@ -236,7 +236,7 @@ function flagsFor(view: PeriodView, runningTimers: RunningTimerInfo[]): CloseFla
   });
 }
 
-function timersIn(
+export function timersIn(
   timers: ActiveTimer[],
   taskIds: Set<string>,
   period: { start: string; end: string },
@@ -246,7 +246,7 @@ function timersIn(
     .map((t) => ({ userId: t.userId }));
 }
 
-async function projectTaskIds(ctx: QueryCtx, orgId: string, projectId: Id<"projects">) {
+export async function projectTaskIds(ctx: QueryCtx, orgId: string, projectId: Id<"projects">) {
   const tasks = await ctx.db
     .query("tasks")
     .withIndex("by_orgId_projectId", (q) => q.eq("orgId", orgId).eq("projectId", projectId))

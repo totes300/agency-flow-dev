@@ -99,18 +99,7 @@ export const listAllInvoices = query({
 
     const searchTerm = args.search?.trim().toLowerCase();
     if (searchTerm) {
-      invoices = invoices.filter((inv) => {
-        // Unnumbered drafts match the literal term "draft" instead of a
-        // formatted number.
-        const formatted =
-          inv.number != null
-            ? formatInvoiceNumber(inv.prefix, inv.number).toLowerCase()
-            : "draft";
-        return (
-          formatted.includes(searchTerm) ||
-          (inv.subject?.toLowerCase().includes(searchTerm) ?? false)
-        );
-      });
+      invoices = invoices.filter((inv) => invoiceMatchesSearch(inv, searchTerm));
     }
 
     invoices.sort((a, b) => b.createdAt - a.createdAt);
@@ -137,6 +126,22 @@ export const listAllInvoices = query({
     return result;
   },
 });
+
+/**
+ * The invoice list's text search (`listAllInvoices`, MCP `search`): the
+ * formatted number or the subject contains the lowercased term. Unnumbered
+ * drafts match the literal term "draft" instead of a formatted number.
+ */
+export function invoiceMatchesSearch(inv: Doc<"invoices">, lowercasedTerm: string): boolean {
+  const formatted =
+    inv.number != null
+      ? formatInvoiceNumber(inv.prefix, inv.number).toLowerCase()
+      : "draft";
+  return (
+    formatted.includes(lowercasedTerm) ||
+    (inv.subject?.toLowerCase().includes(lowercasedTerm) ?? false)
+  );
+}
 
 /**
  * Returns `true` if at least one invoice exists for the org.
@@ -267,181 +272,185 @@ export const getInvoice = query({
   //      links saved before the URL refactor.
   // The page never has to know which form it received.
   args: { identifier: v.string() },
-  handler: async (ctx, args) => {
-    const { orgId } = await requireAdmin(ctx);
-
-    const invoice = await resolveInvoiceByIdentifier(ctx, orgId, args.identifier);
-    if (!invoice) return null;
-
-    // Fetch line items (display amounts derived from minor units).
-    const lineItems = (
-      await ctx.db
-        .query("invoiceLineItems")
-        .withIndex("by_invoiceId", (q) => q.eq("invoiceId", invoice._id))
-        .collect()
-    )
-      .sort((a, b) => a.sortOrder - b.sortOrder)
-      .map((li) => toLineView(li, invoice.currency));
-
-    // Group line items by workCategoryId for category headers
-    const categoryIds = new Set<string>();
-    for (const li of lineItems) {
-      if (li.workCategoryId) categoryIds.add(li.workCategoryId);
-    }
-
-    // Fetch category names (tenancy-guarded — never cross-tenant even if a
-    // rogue line item ever references a foreign categoryId).
-    const categoryMap = new Map<string, { name: string; color: string }>();
-    for (const catId of categoryIds) {
-      const cat = await ctx.db.get(catId as Id<"workCategories">);
-      if (cat && cat.orgId === orgId) {
-        categoryMap.set(catId, { name: cat.name, color: cat.color });
-      }
-    }
-
-    // Build grouped structure: categories with their line items
-    type CategoryGroup = {
-      categoryId: string | null;
-      categoryName: string;
-      categoryColor: string;
-      lineItems: typeof lineItems;
-      subtotalHours: number;
-    };
-
-    const grouped: CategoryGroup[] = [];
-    const catGroupMap = new Map<string, CategoryGroup>();
-
-    for (const li of lineItems) {
-      const catKey = li.workCategoryId?.toString() ?? "uncategorized";
-      let group = catGroupMap.get(catKey);
-      if (!group) {
-        const catInfo = li.workCategoryId
-          ? categoryMap.get(li.workCategoryId) ?? { name: "Unknown", color: "gray" }
-          : { name: "Other", color: "gray" };
-        group = {
-          categoryId: li.workCategoryId ?? null,
-          categoryName: catInfo.name,
-          categoryColor: catInfo.color,
-          lineItems: [],
-          subtotalHours: 0,
-        };
-        catGroupMap.set(catKey, group);
-        grouped.push(group);
-      }
-      group.lineItems.push(li);
-      // Only time lines have hour quantities; fixed/overage/manual
-      // store amounts or unit counts that must not inflate the hours subtotal.
-      if (li.lineType === "time") group.subtotalHours += li.quantity;
-    }
-
-    // Round subtotal hours (display only)
-    for (const g of grouped) {
-      g.subtotalHours = Math.round(g.subtotalHours * 100) / 100;
-    }
-
-    // Fetch related data (tenancy-guarded — a doc ID collision or data-drift
-    // bug must not leak a foreign project/client through this query).
-    const projectRaw = await ctx.db.get(invoice.projectId);
-    const project =
-      projectRaw && projectRaw.orgId === orgId ? projectRaw : null;
-    const clientRaw = await ctx.db.get(invoice.clientId);
-    const client =
-      clientRaw && clientRaw.orgId === orgId ? clientRaw : null;
-    const orgSettings = await getOrgSettings(ctx, orgId);
-
-    // Count org invoices for first-time brand info nudge (only need to know if <= 1)
-    const orgInvoiceSample = await ctx.db
-      .query("invoices")
-      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
-      .take(2);
-
-    // Fixed Fee: total billed from lineType:"fixed" items across finalized
-    // project invoices only (drafts are provisional).
-    let fixedBilledMinor = 0;
-    if (project && project.billingType === "fixed") {
-      const projectInvoices = await ctx.db
-        .query("invoices")
-        .withIndex("by_projectId", (q) => q.eq("projectId", invoice.projectId))
-        .filter((q) => q.eq(q.field("orgId"), orgId))
-        .collect();
-      for (const inv of projectInvoices) {
-        if (inv.status === "draft" || inv.status === "void") continue;
-        const invItems = await ctx.db
-          .query("invoiceLineItems")
-          .withIndex("by_invoiceId", (q) => q.eq("invoiceId", inv._id))
-          .collect();
-        for (const item of invItems) {
-          if (item.lineType === "fixed") fixedBilledMinor += item.amountMinor;
-        }
-      }
-    }
-
-    // The close that produced the invoice (absent on fixed-fee invoices):
-    // its period, and for a retainer its frozen usage block — same shape as
-    // `billingReports.getMonthlyReport`, rendered by the same component.
-    const closeRaw = invoice.closeId !== undefined ? await ctx.db.get(invoice.closeId) : null;
-    const close = closeRaw && closeRaw.orgId === orgId ? closeRaw : null;
-    const view = toInvoiceView(invoice);
-    const retainerUsage =
-      close && close.kind === "retainer"
-        ? await closeRetainerUsage(ctx, close, view.total)
-        : null;
-
-    return {
-      invoice: view,
-      lineItems,
-      categoryGroups: grouped,
-      orgInvoiceCount: orgInvoiceSample.length,
-      fixedBilled: fromMinor(fixedBilledMinor, invoice.currency),
-      period: close
-        ? {
-            start: close.periodStart,
-            end: close.periodEnd,
-            months: absMonthOf(close.periodEnd) - absMonthOf(close.periodStart) + 1,
-          }
-        : null,
-      retainerUsage,
-      project: project
-        ? {
-            name: project.name,
-            billingType: project.billingType,
-            fixedPrice: project.fixedPrice,
-            monthlyFee: project.monthlyFee,
-          }
-        : null,
-      client: client
-        ? {
-            name: client.name,
-            billingName: client.billingName,
-            billingEmail: client.billingEmail,
-            billingCountry: client.billingCountry,
-            billingCity: client.billingCity,
-            billingZip: client.billingZip,
-            billingStreet: client.billingStreet,
-            billingStreet2: client.billingStreet2,
-            taxId: client.taxId,
-          }
-        : null,
-      brand: orgSettings
-        ? {
-            brandName: orgSettings.brandName,
-            brandAddress: orgSettings.brandAddress,
-            brandTaxId: orgSettings.brandTaxId,
-            brandEmail: orgSettings.brandEmail,
-            brandPhone: orgSettings.brandPhone,
-          }
-        : null,
-      timezone: orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK,
-      // Org-level template surfaces rendered on the invoice document.
-      // Bundled with `getInvoice` so the editor doesn't need a second
-      // `orgSettings.get` round-trip — same trip-saving as `brand`.
-      org: {
-        paymentInstructions: orgSettings?.paymentInstructions,
-        invoiceMessageTemplate: orgSettings?.invoiceMessageTemplate,
-      },
-    };
-  },
+  handler: async (ctx, args) => await getInvoiceForAuth(ctx, await requireAdmin(ctx), args.identifier),
 });
+
+/** `getInvoice` for an already-built auth context (the MCP invoice fetch, docs/prd-mcp.md). Admin-only. */
+export async function getInvoiceForAuth(ctx: QueryCtx, auth: AuthContext, identifier: string) {
+  assertAdmin(auth);
+  const { orgId } = auth;
+
+  const invoice = await resolveInvoiceByIdentifier(ctx, orgId, identifier);
+  if (!invoice) return null;
+
+  // Fetch line items (display amounts derived from minor units).
+  const lineItems = (
+    await ctx.db
+      .query("invoiceLineItems")
+      .withIndex("by_invoiceId", (q) => q.eq("invoiceId", invoice._id))
+      .collect()
+  )
+    .sort((a, b) => a.sortOrder - b.sortOrder)
+    .map((li) => toLineView(li, invoice.currency));
+
+  // Group line items by workCategoryId for category headers
+  const categoryIds = new Set<string>();
+  for (const li of lineItems) {
+    if (li.workCategoryId) categoryIds.add(li.workCategoryId);
+  }
+
+  // Fetch category names (tenancy-guarded — never cross-tenant even if a
+  // rogue line item ever references a foreign categoryId).
+  const categoryMap = new Map<string, { name: string; color: string }>();
+  for (const catId of categoryIds) {
+    const cat = await ctx.db.get(catId as Id<"workCategories">);
+    if (cat && cat.orgId === orgId) {
+      categoryMap.set(catId, { name: cat.name, color: cat.color });
+    }
+  }
+
+  // Build grouped structure: categories with their line items
+  type CategoryGroup = {
+    categoryId: string | null;
+    categoryName: string;
+    categoryColor: string;
+    lineItems: typeof lineItems;
+    subtotalHours: number;
+  };
+
+  const grouped: CategoryGroup[] = [];
+  const catGroupMap = new Map<string, CategoryGroup>();
+
+  for (const li of lineItems) {
+    const catKey = li.workCategoryId?.toString() ?? "uncategorized";
+    let group = catGroupMap.get(catKey);
+    if (!group) {
+      const catInfo = li.workCategoryId
+        ? categoryMap.get(li.workCategoryId) ?? { name: "Unknown", color: "gray" }
+        : { name: "Other", color: "gray" };
+      group = {
+        categoryId: li.workCategoryId ?? null,
+        categoryName: catInfo.name,
+        categoryColor: catInfo.color,
+        lineItems: [],
+        subtotalHours: 0,
+      };
+      catGroupMap.set(catKey, group);
+      grouped.push(group);
+    }
+    group.lineItems.push(li);
+    // Only time lines have hour quantities; fixed/overage/manual
+    // store amounts or unit counts that must not inflate the hours subtotal.
+    if (li.lineType === "time") group.subtotalHours += li.quantity;
+  }
+
+  // Round subtotal hours (display only)
+  for (const g of grouped) {
+    g.subtotalHours = Math.round(g.subtotalHours * 100) / 100;
+  }
+
+  // Fetch related data (tenancy-guarded — a doc ID collision or data-drift
+  // bug must not leak a foreign project/client through this query).
+  const projectRaw = await ctx.db.get(invoice.projectId);
+  const project =
+    projectRaw && projectRaw.orgId === orgId ? projectRaw : null;
+  const clientRaw = await ctx.db.get(invoice.clientId);
+  const client =
+    clientRaw && clientRaw.orgId === orgId ? clientRaw : null;
+  const orgSettings = await getOrgSettings(ctx, orgId);
+
+  // Count org invoices for first-time brand info nudge (only need to know if <= 1)
+  const orgInvoiceSample = await ctx.db
+    .query("invoices")
+    .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+    .take(2);
+
+  // Fixed Fee: total billed from lineType:"fixed" items across finalized
+  // project invoices only (drafts are provisional).
+  let fixedBilledMinor = 0;
+  if (project && project.billingType === "fixed") {
+    const projectInvoices = await ctx.db
+      .query("invoices")
+      .withIndex("by_projectId", (q) => q.eq("projectId", invoice.projectId))
+      .filter((q) => q.eq(q.field("orgId"), orgId))
+      .collect();
+    for (const inv of projectInvoices) {
+      if (inv.status === "draft" || inv.status === "void") continue;
+      const invItems = await ctx.db
+        .query("invoiceLineItems")
+        .withIndex("by_invoiceId", (q) => q.eq("invoiceId", inv._id))
+        .collect();
+      for (const item of invItems) {
+        if (item.lineType === "fixed") fixedBilledMinor += item.amountMinor;
+      }
+    }
+  }
+
+  // The close that produced the invoice (absent on fixed-fee invoices):
+  // its period, and for a retainer its frozen usage block — same shape as
+  // `billingReports.getMonthlyReport`, rendered by the same component.
+  const closeRaw = invoice.closeId !== undefined ? await ctx.db.get(invoice.closeId) : null;
+  const close = closeRaw && closeRaw.orgId === orgId ? closeRaw : null;
+  const view = toInvoiceView(invoice);
+  const retainerUsage =
+    close && close.kind === "retainer"
+      ? await closeRetainerUsage(ctx, close, view.total)
+      : null;
+
+  return {
+    invoice: view,
+    lineItems,
+    categoryGroups: grouped,
+    orgInvoiceCount: orgInvoiceSample.length,
+    fixedBilled: fromMinor(fixedBilledMinor, invoice.currency),
+    period: close
+      ? {
+          start: close.periodStart,
+          end: close.periodEnd,
+          months: absMonthOf(close.periodEnd) - absMonthOf(close.periodStart) + 1,
+        }
+      : null,
+    retainerUsage,
+    project: project
+      ? {
+          name: project.name,
+          billingType: project.billingType,
+          fixedPrice: project.fixedPrice,
+          monthlyFee: project.monthlyFee,
+        }
+      : null,
+    client: client
+      ? {
+          name: client.name,
+          billingName: client.billingName,
+          billingEmail: client.billingEmail,
+          billingCountry: client.billingCountry,
+          billingCity: client.billingCity,
+          billingZip: client.billingZip,
+          billingStreet: client.billingStreet,
+          billingStreet2: client.billingStreet2,
+          taxId: client.taxId,
+        }
+      : null,
+    brand: orgSettings
+      ? {
+          brandName: orgSettings.brandName,
+          brandAddress: orgSettings.brandAddress,
+          brandTaxId: orgSettings.brandTaxId,
+          brandEmail: orgSettings.brandEmail,
+          brandPhone: orgSettings.brandPhone,
+        }
+      : null,
+    timezone: orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK,
+    // Org-level template surfaces rendered on the invoice document.
+    // Bundled with `getInvoice` so the editor doesn't need a second
+    // `orgSettings.get` round-trip — same trip-saving as `brand`.
+    org: {
+      paymentInstructions: orgSettings?.paymentInstructions,
+      invoiceMessageTemplate: orgSettings?.invoiceMessageTemplate,
+    },
+  };
+}
 
 // ─── Editor Mutations ─────────────────────────────────────────────────────────
 

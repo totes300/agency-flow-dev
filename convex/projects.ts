@@ -1,7 +1,13 @@
-import { v, ConvexError } from "convex/values";
+import { v, ConvexError, type ObjectType } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
-import { query, mutation } from "./_generated/server";
-import { getAuthContext, requireAdmin, validateStringLength } from "./lib/auth";
+import { query, mutation, type MutationCtx } from "./_generated/server";
+import {
+  assertAdmin,
+  getAuthContext,
+  requireAdmin,
+  validateStringLength,
+  type AuthContext,
+} from "./lib/auth";
 import { billingTypeValidator, retainerStatusValidator } from "./lib/validators";
 import { generateNextProjectCode, ensureUniqueProjectCode, normalizeProjectCode } from "./lib/helpers";
 import { rewriteProjectIdentifiers } from "./tasks/write";
@@ -122,397 +128,480 @@ export const nextCode = query({
 
 // ─── Mutations ──────────────────────────────────────────────────────────────────
 
-export const create = mutation({
-  args: {
-    clientId: v.id("clients"),
-    name: v.string(),
-    billingType: billingTypeValidator,
-    code: v.optional(v.string()),
-    // Fixed fields
-    fixedPrice: v.optional(v.number()),
-    // Fixed-only optional scope estimate. When provided, seeds
-    // projectCategoryEstimates with these values instead of zeros.
-    categoryEstimates: v.optional(
-      v.array(
-        v.object({
-          workCategoryId: v.id("workCategories"),
-          estimatedMinutes: v.number(),
-        }),
-      ),
+const createProjectArgs = {
+  clientId: v.id("clients"),
+  name: v.string(),
+  billingType: billingTypeValidator,
+  code: v.optional(v.string()),
+  // Fixed fields
+  fixedPrice: v.optional(v.number()),
+  // Fixed-only optional scope estimate. When provided, seeds
+  // projectCategoryEstimates with these values instead of zeros.
+  categoryEstimates: v.optional(
+    v.array(
+      v.object({
+        workCategoryId: v.id("workCategories"),
+        estimatedMinutes: v.number(),
+      }),
     ),
-    // Retainer fields
-    includedMinutesPerMonth: v.optional(v.number()),
-    monthlyFee: v.optional(v.number()),
-    startDate: v.optional(v.string()),
-    cycleLength: v.optional(v.number()),
-    rolloverEnabled: v.optional(v.boolean()),
-    overageRate: v.optional(v.number()),
-    // Team members
-    teamMembers: v.optional(v.array(v.id("users"))),
-  },
-  handler: async (ctx, args) => {
-    const { orgId, userId } = await requireAdmin(ctx);
+  ),
+  // Retainer fields
+  includedMinutesPerMonth: v.optional(v.number()),
+  monthlyFee: v.optional(v.number()),
+  startDate: v.optional(v.string()),
+  cycleLength: v.optional(v.number()),
+  rolloverEnabled: v.optional(v.boolean()),
+  overageRate: v.optional(v.number()),
+  // Team members
+  teamMembers: v.optional(v.array(v.id("users"))),
+};
 
+export type CreateProjectInput = ObjectType<typeof createProjectArgs>;
+
+/**
+ * Creates a project (admins only) with its billing terms — the New Project
+ * form and MCP `save_projects` (docs/prd-mcp.md §6) share this core.
+ */
+export async function createProjectForAuth(
+  ctx: MutationCtx,
+  auth: AuthContext,
+  args: CreateProjectInput,
+): Promise<Id<"projects">> {
+  assertAdmin(auth);
+  const { orgId, userId } = auth;
+
+  const name = args.name.trim();
+  if (!name) throw new ConvexError("Project name is required");
+  validateStringLength(name, 100, "Project name");
+
+  // Validate client exists and belongs to org — currency is derived from client
+  // at read time, not stored on the project (see D1 invariant in schema.ts).
+  const client = await ctx.db.get(args.clientId);
+  if (!client || client.orgId !== orgId) throw new ConvexError("Client not found");
+
+  // Validate team members belong to org
+  if (args.teamMembers && args.teamMembers.length > 0) {
+    await validateAssignees(ctx, orgId, args.teamMembers);
+  }
+
+  // Fixed validation
+  if (args.billingType === "fixed") {
+    if (args.fixedPrice === undefined || args.fixedPrice <= 0) {
+      throw new ConvexError("Fixed fee is required and must be greater than zero");
+    }
+    // Per-row guard: the per-category upsert mutation rejects negatives
+    // (projectCategoryEstimates.ts:46). The create path must match that
+    // invariant — a bad client shouldn't be able to seed negative estimates.
+    if (args.categoryEstimates) {
+      for (const est of args.categoryEstimates) {
+        if (est.estimatedMinutes < 0) {
+          throw new ConvexError("Estimated minutes cannot be negative");
+        }
+      }
+    }
+  }
+
+  // Retainer validation
+  if (args.billingType === "retainer") {
+    if (!args.includedMinutesPerMonth || args.includedMinutesPerMonth <= 0) {
+      throw new ConvexError("Monthly hours is required for retainer projects");
+    }
+    if (!args.startDate || !DATE_REGEX.test(args.startDate)) {
+      throw new ConvexError("Start date is required (YYYY-MM-DD)");
+    }
+    const [y, m, d] = args.startDate.split("-").map(Number);
+    const testDate = new Date(y, m - 1, d);
+    if (testDate.getFullYear() !== y || testDate.getMonth() !== m - 1 || testDate.getDate() !== d) {
+      throw new ConvexError("Invalid date");
+    }
+    const cycleLen = args.cycleLength ?? 1;
+    if (cycleLen < 1 || cycleLen > 12 || !Number.isInteger(cycleLen)) {
+      throw new ConvexError("Cycle length must be 1-12 months");
+    }
+    if (args.monthlyFee !== undefined && args.monthlyFee < 0) {
+      throw new ConvexError("Monthly fee cannot be negative");
+    }
+    if (args.overageRate === undefined || args.overageRate <= 0) {
+      throw new ConvexError("Overage rate is required for retainer projects and must be greater than zero");
+    }
+  }
+
+  // The code is the task identifier key (D2): validate a user-entered one,
+  // else suggest one from the client prefix / client or project name.
+  const userCode = args.code?.trim();
+  let code: string;
+  if (userCode) {
+    code = normalizeProjectCode(userCode);
+    await ensureUniqueProjectCode(ctx, orgId, code);
+  } else {
+    code = await generateNextProjectCode(ctx, orgId, {
+      clientPrefix: client.prefix,
+      clientName: client.name,
+      projectName: name,
+    });
+  }
+
+  const now = Date.now();
+  const projectId = await ctx.db.insert("projects", {
+    orgId,
+    clientId: args.clientId,
+    name,
+    code,
+    billingType: args.billingType,
+    // Currency is derived from client.currency — not stored on project.
+    // Fixed fields
+    ...(args.billingType === "fixed" ? {
+      fixedPrice: args.fixedPrice,
+    } : {}),
+    // Retainer fields
+    ...(args.billingType === "retainer" ? {
+      retainerStatus: "active" as const,
+      includedMinutesPerMonth: args.includedMinutesPerMonth,
+      monthlyFee: args.monthlyFee,
+      overageRate: args.overageRate,
+      startDate: args.startDate,
+      rolloverEnabled: (args.cycleLength ?? 1) >= 2 ? (args.rolloverEnabled ?? true) : false,
+      cycleLength: args.cycleLength ?? 1,
+    } : {}),
+    // Team members
+    ...(args.teamMembers && args.teamMembers.length > 0 ? { teamMembers: args.teamMembers } : {}),
+    createdAt: now,
+    updatedAt: now,
+    createdBy: userId,
+  });
+
+  // Seed category estimate rows for Fixed projects.
+  // If args.categoryEstimates was provided (via the creation modal's scope
+  // step), use those values; otherwise default every active category to 0
+  // minutes so the Budget tab has a row to edit.
+  if (args.billingType === "fixed") {
+    const categories = await ctx.db
+      .query("workCategories")
+      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+      .collect();
+    const activeCategories = categories.filter((c) => !c.archivedAt);
+    const providedMap = new Map(
+      (args.categoryEstimates ?? []).map((e) => [
+        e.workCategoryId.toString(),
+        e.estimatedMinutes,
+      ]),
+    );
+    for (const cat of activeCategories) {
+      const minutes = providedMap.get(cat._id.toString()) ?? 0;
+      await ctx.db.insert("projectCategoryEstimates", {
+        orgId,
+        projectId,
+        workCategoryId: cat._id,
+        estimatedMinutes: minutes,
+        createdAt: now,
+        updatedAt: now,
+        createdBy: userId,
+      });
+    }
+  }
+
+  // No auto-seeding of projectRateOverrides — the resolution chain
+  // falls back to categoryRates when no project override exists.
+  // Overrides are only created when a user explicitly sets a different rate.
+
+  return projectId;
+}
+
+export const create = mutation({
+  args: createProjectArgs,
+  handler: async (ctx, args) => {
+    return await createProjectForAuth(ctx, await getAuthContext(ctx), args);
+  },
+});
+
+const updateProjectArgs = {
+  id: v.id("projects"),
+  name: v.optional(v.string()),
+  code: v.optional(v.string()),
+  fixedPrice: v.optional(v.number()),
+  defaultAssignees: v.optional(v.array(v.object({
+    workCategoryId: v.id("workCategories"),
+    userId: v.id("users"),
+  }))),
+  teamMembers: v.optional(v.array(v.id("users"))),
+};
+
+export type UpdateProjectInput = ObjectType<typeof updateProjectArgs>;
+
+/**
+ * Edits a project's name, code, fixed fee and team (admins only). A code
+ * change rewrites every task identifier of the project (old ones become
+ * aliases); the activity rows carry `auth.via` for an agent write (D15).
+ */
+export async function updateProjectForAuth(
+  ctx: MutationCtx,
+  auth: AuthContext,
+  args: UpdateProjectInput,
+): Promise<void> {
+  assertAdmin(auth);
+  const { orgId, userId } = auth;
+  const project = await ctx.db.get(args.id);
+  if (!project || project.orgId !== orgId) throw new ConvexError("Project not found");
+
+  const updates: Record<string, unknown> = { updatedAt: Date.now() };
+
+  if (args.name !== undefined) {
     const name = args.name.trim();
     if (!name) throw new ConvexError("Project name is required");
     validateStringLength(name, 100, "Project name");
+    updates.name = name;
+  }
 
-    // Validate client exists and belongs to org — currency is derived from client
-    // at read time, not stored on the project (see D1 invariant in schema.ts).
-    const client = await ctx.db.get(args.clientId);
-    if (!client || client.orgId !== orgId) throw new ConvexError("Client not found");
+  let codeRename: string | undefined;
+  // Re-sending the unchanged code (even a legacy "PRJ-042") is a no-op.
+  if (args.code !== undefined && args.code.trim() !== project.code) {
+    const code = normalizeProjectCode(args.code);
+    if (code !== project.code) {
+      await ensureUniqueProjectCode(ctx, orgId, code, args.id.toString());
+      updates.code = code;
+      codeRename = code;
+    }
+  }
 
-    // Validate team members belong to org
-    if (args.teamMembers && args.teamMembers.length > 0) {
+  if (args.teamMembers !== undefined) {
+    if (args.teamMembers.length > 0) {
       await validateAssignees(ctx, orgId, args.teamMembers);
     }
+    updates.teamMembers = args.teamMembers;
+  }
 
-    // Fixed validation
-    if (args.billingType === "fixed") {
-      if (args.fixedPrice === undefined || args.fixedPrice <= 0) {
-        throw new ConvexError("Fixed fee is required and must be greater than zero");
-      }
-      // Per-row guard: the per-category upsert mutation rejects negatives
-      // (projectCategoryEstimates.ts:46). The create path must match that
-      // invariant — a bad client shouldn't be able to seed negative estimates.
-      if (args.categoryEstimates) {
-        for (const est of args.categoryEstimates) {
-          if (est.estimatedMinutes < 0) {
-            throw new ConvexError("Estimated minutes cannot be negative");
-          }
-        }
+  if (args.defaultAssignees !== undefined) {
+    const effectiveTeam = (updates.teamMembers ?? project.teamMembers) as string[] | undefined;
+    const teamSet = new Set((effectiveTeam ?? []).map((id) => String(id)));
+    for (const da of args.defaultAssignees) {
+      if (!teamSet.has(da.userId.toString())) {
+        throw new ConvexError("Default assignee must be a project team member");
       }
     }
+    updates.defaultAssignees = args.defaultAssignees;
+  }
 
-    // Retainer validation
-    if (args.billingType === "retainer") {
-      if (!args.includedMinutesPerMonth || args.includedMinutesPerMonth <= 0) {
-        throw new ConvexError("Monthly hours is required for retainer projects");
-      }
-      if (!args.startDate || !DATE_REGEX.test(args.startDate)) {
-        throw new ConvexError("Start date is required (YYYY-MM-DD)");
-      }
-      const [y, m, d] = args.startDate.split("-").map(Number);
-      const testDate = new Date(y, m - 1, d);
-      if (testDate.getFullYear() !== y || testDate.getMonth() !== m - 1 || testDate.getDate() !== d) {
-        throw new ConvexError("Invalid date");
-      }
-      const cycleLen = args.cycleLength ?? 1;
-      if (cycleLen < 1 || cycleLen > 12 || !Number.isInteger(cycleLen)) {
-        throw new ConvexError("Cycle length must be 1-12 months");
-      }
-      if (args.monthlyFee !== undefined && args.monthlyFee < 0) {
-        throw new ConvexError("Monthly fee cannot be negative");
-      }
-      if (args.overageRate === undefined || args.overageRate <= 0) {
-        throw new ConvexError("Overage rate is required for retainer projects and must be greater than zero");
-      }
+  if (args.fixedPrice !== undefined) {
+    if (project.billingType !== "fixed") {
+      throw new ConvexError("Fixed fee can only be set on fixed projects");
     }
-
-    // The code is the task identifier key (D2): validate a user-entered one,
-    // else suggest one from the client prefix / client or project name.
-    const userCode = args.code?.trim();
-    let code: string;
-    if (userCode) {
-      code = normalizeProjectCode(userCode);
-      await ensureUniqueProjectCode(ctx, orgId, code);
-    } else {
-      code = await generateNextProjectCode(ctx, orgId, {
-        clientPrefix: client.prefix,
-        clientName: client.name,
-        projectName: name,
-      });
+    if (args.fixedPrice <= 0) {
+      throw new ConvexError("Fixed fee must be greater than zero");
     }
-
-    const now = Date.now();
-    const projectId = await ctx.db.insert("projects", {
-      orgId,
-      clientId: args.clientId,
-      name,
-      code,
-      billingType: args.billingType,
-      // Currency is derived from client.currency — not stored on project.
-      // Fixed fields
-      ...(args.billingType === "fixed" ? {
-        fixedPrice: args.fixedPrice,
-      } : {}),
-      // Retainer fields
-      ...(args.billingType === "retainer" ? {
-        retainerStatus: "active" as const,
-        includedMinutesPerMonth: args.includedMinutesPerMonth,
-        monthlyFee: args.monthlyFee,
-        overageRate: args.overageRate,
-        startDate: args.startDate,
-        rolloverEnabled: (args.cycleLength ?? 1) >= 2 ? (args.rolloverEnabled ?? true) : false,
-        cycleLength: args.cycleLength ?? 1,
-      } : {}),
-      // Team members
-      ...(args.teamMembers && args.teamMembers.length > 0 ? { teamMembers: args.teamMembers } : {}),
-      createdAt: now,
-      updatedAt: now,
-      createdBy: userId,
-    });
-
-    // Seed category estimate rows for Fixed projects.
-    // If args.categoryEstimates was provided (via the creation modal's scope
-    // step), use those values; otherwise default every active category to 0
-    // minutes so the Budget tab has a row to edit.
-    if (args.billingType === "fixed") {
-      const categories = await ctx.db
-        .query("workCategories")
-        .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
-        .collect();
-      const activeCategories = categories.filter((c) => !c.archivedAt);
-      const providedMap = new Map(
-        (args.categoryEstimates ?? []).map((e) => [
-          e.workCategoryId.toString(),
-          e.estimatedMinutes,
-        ]),
+    // Never below what's already been invoiced — the next generate would
+    // otherwise emit a negative fixed line / negative-total invoice.
+    const currency = await getProjectCurrency(ctx, project);
+    const billedMinor = await fixedBilledMinor(ctx, orgId, args.id);
+    if (toMinor(args.fixedPrice, currency) < billedMinor) {
+      throw new ConvexError(
+        `Fixed fee cannot be lower than the amount already invoiced (${fromMinor(billedMinor, currency)}). Void the affected invoices first.`,
       );
-      for (const cat of activeCategories) {
-        const minutes = providedMap.get(cat._id.toString()) ?? 0;
-        await ctx.db.insert("projectCategoryEstimates", {
-          orgId,
-          projectId,
-          workCategoryId: cat._id,
-          estimatedMinutes: minutes,
-          createdAt: now,
-          updatedAt: now,
-          createdBy: userId,
-        });
-      }
     }
+    updates.fixedPrice = args.fixedPrice;
+  }
 
-    // No auto-seeding of projectRateOverrides — the resolution chain
-    // falls back to categoryRates when no project override exists.
-    // Overrides are only created when a user explicitly sets a different rate.
-
-    return projectId;
-  },
-});
+  await ctx.db.patch(args.id, updates);
+  // §11.1: a code rename rewrites every identifier in the project; the old
+  // ones become aliases (write path, T5).
+  if (codeRename) await rewriteProjectIdentifiers(ctx, userId, project, codeRename, auth.via);
+}
 
 export const update = mutation({
-  args: {
-    id: v.id("projects"),
-    name: v.optional(v.string()),
-    code: v.optional(v.string()),
-    fixedPrice: v.optional(v.number()),
-    defaultAssignees: v.optional(v.array(v.object({
-      workCategoryId: v.id("workCategories"),
-      userId: v.id("users"),
-    }))),
-    teamMembers: v.optional(v.array(v.id("users"))),
-  },
+  args: updateProjectArgs,
   handler: async (ctx, args) => {
-    const { orgId, userId } = await requireAdmin(ctx);
-    const project = await ctx.db.get(args.id);
-    if (!project || project.orgId !== orgId) throw new ConvexError("Project not found");
-
-    const updates: Record<string, unknown> = { updatedAt: Date.now() };
-
-    if (args.name !== undefined) {
-      const name = args.name.trim();
-      if (!name) throw new ConvexError("Project name is required");
-      validateStringLength(name, 100, "Project name");
-      updates.name = name;
-    }
-
-    let codeRename: string | undefined;
-    // Re-sending the unchanged code (even a legacy "PRJ-042") is a no-op.
-    if (args.code !== undefined && args.code.trim() !== project.code) {
-      const code = normalizeProjectCode(args.code);
-      if (code !== project.code) {
-        await ensureUniqueProjectCode(ctx, orgId, code, args.id.toString());
-        updates.code = code;
-        codeRename = code;
-      }
-    }
-
-    if (args.teamMembers !== undefined) {
-      if (args.teamMembers.length > 0) {
-        await validateAssignees(ctx, orgId, args.teamMembers);
-      }
-      updates.teamMembers = args.teamMembers;
-    }
-
-    if (args.defaultAssignees !== undefined) {
-      const effectiveTeam = (updates.teamMembers ?? project.teamMembers) as string[] | undefined;
-      const teamSet = new Set((effectiveTeam ?? []).map((id) => String(id)));
-      for (const da of args.defaultAssignees) {
-        if (!teamSet.has(da.userId.toString())) {
-          throw new ConvexError("Default assignee must be a project team member");
-        }
-      }
-      updates.defaultAssignees = args.defaultAssignees;
-    }
-
-    if (args.fixedPrice !== undefined) {
-      if (project.billingType !== "fixed") {
-        throw new ConvexError("Fixed fee can only be set on fixed projects");
-      }
-      if (args.fixedPrice <= 0) {
-        throw new ConvexError("Fixed fee must be greater than zero");
-      }
-      // Never below what's already been invoiced — the next generate would
-      // otherwise emit a negative fixed line / negative-total invoice.
-      const currency = await getProjectCurrency(ctx, project);
-      const billedMinor = await fixedBilledMinor(ctx, orgId, args.id);
-      if (toMinor(args.fixedPrice, currency) < billedMinor) {
-        throw new ConvexError(
-          `Fixed fee cannot be lower than the amount already invoiced (${fromMinor(billedMinor, currency)}). Void the affected invoices first.`,
-        );
-      }
-      updates.fixedPrice = args.fixedPrice;
-    }
-
-    await ctx.db.patch(args.id, updates);
-    // §11.1: a code rename rewrites every identifier in the project; the old
-    // ones become aliases (write path, T5).
-    if (codeRename) await rewriteProjectIdentifiers(ctx, userId, project, codeRename);
+    return await updateProjectForAuth(ctx, await getAuthContext(ctx), args);
   },
 });
+
+export type ArchiveProjectResult = {
+  autoSavedTimers: Array<{ userName: string; minutes: number }>;
+  timerSaveFailures: Array<{ userName: string; reason: string }>;
+};
+
+const archiveProjectArgs = { id: v.id("projects") };
+
+export type ArchiveProjectInput = ObjectType<typeof archiveProjectArgs>;
+
+/** Archives a project (admins only), saving running timers on its tasks as entries. */
+export async function archiveProjectForAuth(
+  ctx: MutationCtx,
+  auth: AuthContext,
+  args: ArchiveProjectInput,
+): Promise<ArchiveProjectResult> {
+  assertAdmin(auth);
+  const { orgId, userId } = auth;
+  const project = await ctx.db.get(args.id);
+  if (!project || project.orgId !== orgId) throw new ConvexError("Project not found");
+
+  // Running timers on this project's tasks: auto-save the measured time as
+  // entries instead of wiping it (identical rescue to tasks.archive — the
+  // 2026-07-05 hardening). Returned so the caller's toast can report whose
+  // time was saved / left running.
+  const projectTasks = await ctx.db
+    .query("tasks")
+    .withIndex("by_orgId_projectId", (q) => q.eq("orgId", orgId).eq("projectId", args.id))
+    .collect();
+  const projectTaskIds = new Set(projectTasks.map((t) => t._id.toString()));
+
+  const timerRescue = await autoSaveTimersForTasks(ctx, {
+    orgId,
+    actorUserId: userId,
+    via: auth.via,
+    taskIds: projectTaskIds,
+    noteLabel: "Auto-saved when the project was archived",
+  });
+
+  const now = Date.now();
+  await ctx.db.patch(args.id, { archivedAt: now, updatedAt: now });
+
+  return { autoSavedTimers: timerRescue.saved, timerSaveFailures: timerRescue.failed };
+}
 
 export const archive = mutation({
-  args: { id: v.id("projects") },
+  args: archiveProjectArgs,
   handler: async (ctx, args) => {
-    const { orgId, userId } = await requireAdmin(ctx);
-    const project = await ctx.db.get(args.id);
-    if (!project || project.orgId !== orgId) throw new ConvexError("Project not found");
-
-    // Running timers on this project's tasks: auto-save the measured time as
-    // entries instead of wiping it (identical rescue to tasks.archive — the
-    // 2026-07-05 hardening). Returned so the caller's toast can report whose
-    // time was saved / left running.
-    const projectTasks = await ctx.db
-      .query("tasks")
-      .withIndex("by_orgId_projectId", (q) => q.eq("orgId", orgId).eq("projectId", args.id))
-      .collect();
-    const projectTaskIds = new Set(projectTasks.map((t) => t._id.toString()));
-
-    const timerRescue = await autoSaveTimersForTasks(ctx, {
-      orgId,
-      actorUserId: userId,
-      taskIds: projectTaskIds,
-      noteLabel: "Auto-saved when the project was archived",
-    });
-
-    const now = Date.now();
-    await ctx.db.patch(args.id, { archivedAt: now, updatedAt: now });
-
-    return { autoSavedTimers: timerRescue.saved, timerSaveFailures: timerRescue.failed };
+    return await archiveProjectForAuth(ctx, await getAuthContext(ctx), args);
   },
 });
+
+const restoreProjectArgs = { id: v.id("projects") };
+
+export type RestoreProjectInput = ObjectType<typeof restoreProjectArgs>;
+
+/** Restores an archived project (admins only); its tasks stay archived. */
+export async function restoreProjectForAuth(
+  ctx: MutationCtx,
+  auth: AuthContext,
+  args: RestoreProjectInput,
+): Promise<void> {
+  assertAdmin(auth);
+  const { orgId } = auth;
+  const project = await ctx.db.get(args.id);
+  if (!project || project.orgId !== orgId) throw new ConvexError("Project not found");
+
+  await ctx.db.patch(args.id, { archivedAt: undefined, updatedAt: Date.now() });
+  // Restore does NOT cascade — tasks stay archived
+}
 
 export const restore = mutation({
-  args: { id: v.id("projects") },
+  args: restoreProjectArgs,
   handler: async (ctx, args) => {
-    const { orgId } = await requireAdmin(ctx);
-    const project = await ctx.db.get(args.id);
-    if (!project || project.orgId !== orgId) throw new ConvexError("Project not found");
-
-    await ctx.db.patch(args.id, { archivedAt: undefined, updatedAt: Date.now() });
-    // Restore does NOT cascade — tasks stay archived
+    return await restoreProjectForAuth(ctx, await getAuthContext(ctx), args);
   },
 });
 
+const updateRetainerArgs = {
+  id: v.id("projects"),
+  includedMinutesPerMonth: v.optional(v.number()),
+  monthlyFee: v.optional(v.number()),
+  startDate: v.optional(v.string()),
+  cycleLength: v.optional(v.number()),
+  rolloverEnabled: v.optional(v.boolean()),
+  overageRate: v.optional(v.number()),
+  retainerStatus: v.optional(retainerStatusValidator),
+  confirmed: v.optional(v.boolean()),
+};
+
+export type UpdateRetainerInput = ObjectType<typeof updateRetainerArgs>;
+
+/** Edits a retainer's terms or status (admins only): the Retainer settings and MCP `save_projects`. */
+export async function updateRetainerForAuth(
+  ctx: MutationCtx,
+  auth: AuthContext,
+  args: UpdateRetainerInput,
+): Promise<void> {
+  assertAdmin(auth);
+  const { orgId } = auth;
+  const project = await ctx.db.get(args.id);
+  if (!project || project.orgId !== orgId) throw new ConvexError("Project not found");
+  if (project.billingType !== "retainer") throw new ConvexError("Not a retainer project");
+
+  // A7 / P8: the cycle grid (start date, cycle length, rollover) is locked
+  // while any period is closed — moving it would re-cut periods that are
+  // already settled. Fee, included hours and overage rate stay editable:
+  // they apply to open periods only (closed ones are frozen, D11).
+  const gridChanged =
+    (args.startDate !== undefined && args.startDate !== project.startDate) ||
+    (args.cycleLength !== undefined && args.cycleLength !== (project.cycleLength ?? 1)) ||
+    (args.rolloverEnabled !== undefined && args.rolloverEnabled !== (project.rolloverEnabled ?? false));
+  if (gridChanged && (await getLiveCloses(ctx, orgId, project._id)).length > 0) {
+    throw new ConvexError("Reopen or void the closed periods before changing the billing cycle.");
+  }
+
+  const updates: Record<string, unknown> = { updatedAt: Date.now() };
+
+  // Check if any config-changing fields are being modified (require confirmation)
+  const needsConfirmation =
+    (args.includedMinutesPerMonth !== undefined && args.includedMinutesPerMonth !== project.includedMinutesPerMonth) ||
+    (args.monthlyFee !== undefined && args.monthlyFee !== project.monthlyFee) ||
+    (args.cycleLength !== undefined && args.cycleLength !== project.cycleLength) ||
+    (args.rolloverEnabled !== undefined && args.rolloverEnabled !== project.rolloverEnabled) ||
+    (args.startDate !== undefined && args.startDate !== project.startDate) ||
+    (args.overageRate !== undefined && args.overageRate !== project.overageRate);
+
+  if (needsConfirmation && !args.confirmed) {
+    throw new ConvexError("CONFIRMATION_REQUIRED");
+  }
+
+  if (args.includedMinutesPerMonth !== undefined) {
+    if (args.includedMinutesPerMonth <= 0) throw new ConvexError("Monthly hours must be greater than 0");
+    updates.includedMinutesPerMonth = args.includedMinutesPerMonth;
+  }
+
+  if (args.monthlyFee !== undefined) {
+    if (args.monthlyFee < 0) throw new ConvexError("Monthly fee cannot be negative");
+    updates.monthlyFee = args.monthlyFee;
+  }
+
+  if (args.startDate !== undefined) {
+    if (!DATE_REGEX.test(args.startDate)) throw new ConvexError("Invalid date format");
+    const [y, m, d] = args.startDate.split("-").map(Number);
+    const testDate = new Date(y, m - 1, d);
+    if (testDate.getFullYear() !== y || testDate.getMonth() !== m - 1 || testDate.getDate() !== d) {
+      throw new ConvexError("Invalid date");
+    }
+    updates.startDate = args.startDate;
+  }
+
+  if (args.cycleLength !== undefined) {
+    if (args.cycleLength < 1 || args.cycleLength > 12 || !Number.isInteger(args.cycleLength)) {
+      throw new ConvexError("Cycle length must be 1-12 months");
+    }
+    updates.cycleLength = args.cycleLength;
+  }
+
+  if (args.rolloverEnabled !== undefined) {
+    updates.rolloverEnabled = args.rolloverEnabled;
+  }
+
+  // Same rule `create` enforces: rollover is only meaningful across a
+  // multi-month cycle. Without this, a settings edit could produce a
+  // "1-month rollover" hybrid — monthly billing forced through the
+  // cycle-close flow, with degenerate "Apr–Apr cycle" labels everywhere.
+  {
+    const effectiveCycleLength =
+      (updates.cycleLength as number | undefined) ?? project.cycleLength ?? 1;
+    if (effectiveCycleLength < 2) {
+      updates.rolloverEnabled = false;
+    }
+  }
+
+  if (args.overageRate !== undefined) {
+    if (args.overageRate <= 0) throw new ConvexError("Overage rate must be greater than 0");
+    updates.overageRate = args.overageRate;
+  }
+
+  if (args.retainerStatus !== undefined) {
+    updates.retainerStatus = args.retainerStatus;
+  }
+
+  await ctx.db.patch(args.id, updates);
+}
+
 export const updateRetainer = mutation({
-  args: {
-    id: v.id("projects"),
-    includedMinutesPerMonth: v.optional(v.number()),
-    monthlyFee: v.optional(v.number()),
-    startDate: v.optional(v.string()),
-    cycleLength: v.optional(v.number()),
-    rolloverEnabled: v.optional(v.boolean()),
-    overageRate: v.optional(v.number()),
-    retainerStatus: v.optional(retainerStatusValidator),
-    confirmed: v.optional(v.boolean()),
-  },
+  args: updateRetainerArgs,
   handler: async (ctx, args) => {
-    const { orgId } = await requireAdmin(ctx);
-    const project = await ctx.db.get(args.id);
-    if (!project || project.orgId !== orgId) throw new ConvexError("Project not found");
-    if (project.billingType !== "retainer") throw new ConvexError("Not a retainer project");
-
-    // A7 / P8: the cycle grid (start date, cycle length, rollover) is locked
-    // while any period is closed — moving it would re-cut periods that are
-    // already settled. Fee, included hours and overage rate stay editable:
-    // they apply to open periods only (closed ones are frozen, D11).
-    const gridChanged =
-      (args.startDate !== undefined && args.startDate !== project.startDate) ||
-      (args.cycleLength !== undefined && args.cycleLength !== (project.cycleLength ?? 1)) ||
-      (args.rolloverEnabled !== undefined && args.rolloverEnabled !== (project.rolloverEnabled ?? false));
-    if (gridChanged && (await getLiveCloses(ctx, orgId, project._id)).length > 0) {
-      throw new ConvexError("Reopen or void the closed periods before changing the billing cycle.");
-    }
-
-    const updates: Record<string, unknown> = { updatedAt: Date.now() };
-
-    // Check if any config-changing fields are being modified (require confirmation)
-    const needsConfirmation =
-      (args.includedMinutesPerMonth !== undefined && args.includedMinutesPerMonth !== project.includedMinutesPerMonth) ||
-      (args.monthlyFee !== undefined && args.monthlyFee !== project.monthlyFee) ||
-      (args.cycleLength !== undefined && args.cycleLength !== project.cycleLength) ||
-      (args.rolloverEnabled !== undefined && args.rolloverEnabled !== project.rolloverEnabled) ||
-      (args.startDate !== undefined && args.startDate !== project.startDate) ||
-      (args.overageRate !== undefined && args.overageRate !== project.overageRate);
-
-    if (needsConfirmation && !args.confirmed) {
-      throw new ConvexError("CONFIRMATION_REQUIRED");
-    }
-
-    if (args.includedMinutesPerMonth !== undefined) {
-      if (args.includedMinutesPerMonth <= 0) throw new ConvexError("Monthly hours must be greater than 0");
-      updates.includedMinutesPerMonth = args.includedMinutesPerMonth;
-    }
-
-    if (args.monthlyFee !== undefined) {
-      if (args.monthlyFee < 0) throw new ConvexError("Monthly fee cannot be negative");
-      updates.monthlyFee = args.monthlyFee;
-    }
-
-    if (args.startDate !== undefined) {
-      if (!DATE_REGEX.test(args.startDate)) throw new ConvexError("Invalid date format");
-      const [y, m, d] = args.startDate.split("-").map(Number);
-      const testDate = new Date(y, m - 1, d);
-      if (testDate.getFullYear() !== y || testDate.getMonth() !== m - 1 || testDate.getDate() !== d) {
-        throw new ConvexError("Invalid date");
-      }
-      updates.startDate = args.startDate;
-    }
-
-    if (args.cycleLength !== undefined) {
-      if (args.cycleLength < 1 || args.cycleLength > 12 || !Number.isInteger(args.cycleLength)) {
-        throw new ConvexError("Cycle length must be 1-12 months");
-      }
-      updates.cycleLength = args.cycleLength;
-    }
-
-    if (args.rolloverEnabled !== undefined) {
-      updates.rolloverEnabled = args.rolloverEnabled;
-    }
-
-    // Same rule `create` enforces: rollover is only meaningful across a
-    // multi-month cycle. Without this, a settings edit could produce a
-    // "1-month rollover" hybrid — monthly billing forced through the
-    // cycle-close flow, with degenerate "Apr–Apr cycle" labels everywhere.
-    {
-      const effectiveCycleLength =
-        (updates.cycleLength as number | undefined) ?? project.cycleLength ?? 1;
-      if (effectiveCycleLength < 2) {
-        updates.rolloverEnabled = false;
-      }
-    }
-
-    if (args.overageRate !== undefined) {
-      if (args.overageRate <= 0) throw new ConvexError("Overage rate must be greater than 0");
-      updates.overageRate = args.overageRate;
-    }
-
-    if (args.retainerStatus !== undefined) {
-      updates.retainerStatus = args.retainerStatus;
-    }
-
-    await ctx.db.patch(args.id, updates);
+    return await updateRetainerForAuth(ctx, await getAuthContext(ctx), args);
   },
 });
 
@@ -1105,58 +1194,76 @@ function resolveRetainerPeriodContext(input: {
   };
 }
 
+const removeProjectArgs = { id: v.id("projects") };
+
+export type RemoveProjectInput = ObjectType<typeof removeProjectArgs>;
+
+/**
+ * Deletes a project with its estimates and rate overrides (admins only),
+ * refused while it has time entries or a running timer — the app's Delete
+ * and MCP `delete`.
+ */
+export async function removeProjectForAuth(
+  ctx: MutationCtx,
+  auth: AuthContext,
+  args: RemoveProjectInput,
+): Promise<void> {
+  assertAdmin(auth);
+  const { orgId } = auth;
+  const project = await ctx.db.get(args.id);
+  if (!project || project.orgId !== orgId) throw new ConvexError("Project not found");
+
+  // Block if the project has any time entries
+  const hasEntries = await ctx.db
+    .query("timeEntries")
+    .withIndex("by_orgId_projectId_closeId", (q) => q.eq("orgId", orgId).eq("projectId", args.id))
+    .first();
+  if (hasEntries) {
+    throw new ConvexError("Cannot delete a project with time entries — archive it instead");
+  }
+
+  // Block on running timers too. Deleting the project would leave the
+  // timer dangling — its stop would silently discard the measured hours
+  // (and an auto-save is impossible: entry creation is exactly what the
+  // entries-guard above forbids on delete).
+  const projectTasks = await ctx.db
+    .query("tasks")
+    .withIndex("by_orgId_projectId", (q) => q.eq("orgId", orgId).eq("projectId", args.id))
+    .collect();
+  const projectTaskIds = new Set(projectTasks.map((t) => t._id.toString()));
+  const projectMembers = await ctx.db
+    .query("orgMembers")
+    .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+    .collect();
+  for (const member of projectMembers) {
+    if (!member.userId) continue;
+    const memberUser = await ctx.db.get(member.userId);
+    if (memberUser?.timerTaskId && projectTaskIds.has(memberUser.timerTaskId.toString())) {
+      throw new ConvexError(
+        `${memberUser.name} has a running timer on this project — it must be stopped or discarded first.`,
+      );
+    }
+  }
+
+  // Cascade delete: fetch estimates and rate overrides in parallel
+  const [estimates, rateOverrides] = await Promise.all([
+    ctx.db.query("projectCategoryEstimates").withIndex("by_projectId", (q) => q.eq("projectId", args.id)).collect(),
+    ctx.db.query("projectRateOverrides").withIndex("by_projectId", (q) => q.eq("projectId", args.id)).collect(),
+  ]);
+  for (const est of estimates) {
+    await ctx.db.delete(est._id);
+  }
+  for (const override of rateOverrides) {
+    await ctx.db.delete(override._id);
+  }
+
+  await ctx.db.delete(args.id);
+}
+
 export const remove = mutation({
-  args: { id: v.id("projects") },
+  args: removeProjectArgs,
   handler: async (ctx, args) => {
-    const { orgId } = await requireAdmin(ctx);
-    const project = await ctx.db.get(args.id);
-    if (!project || project.orgId !== orgId) throw new ConvexError("Project not found");
-
-    // Block if the project has any time entries
-    const hasEntries = await ctx.db
-      .query("timeEntries")
-      .withIndex("by_orgId_projectId_closeId", (q) => q.eq("orgId", orgId).eq("projectId", args.id))
-      .first();
-    if (hasEntries) {
-      throw new ConvexError("Cannot delete a project with time entries — archive it instead");
-    }
-
-    // Block on running timers too. Deleting the project would leave the
-    // timer dangling — its stop would silently discard the measured hours
-    // (and an auto-save is impossible: entry creation is exactly what the
-    // entries-guard above forbids on delete).
-    const projectTasks = await ctx.db
-      .query("tasks")
-      .withIndex("by_orgId_projectId", (q) => q.eq("orgId", orgId).eq("projectId", args.id))
-      .collect();
-    const projectTaskIds = new Set(projectTasks.map((t) => t._id.toString()));
-    const projectMembers = await ctx.db
-      .query("orgMembers")
-      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
-      .collect();
-    for (const member of projectMembers) {
-      if (!member.userId) continue;
-      const memberUser = await ctx.db.get(member.userId);
-      if (memberUser?.timerTaskId && projectTaskIds.has(memberUser.timerTaskId.toString())) {
-        throw new ConvexError(
-          `${memberUser.name} has a running timer on this project — it must be stopped or discarded first.`,
-        );
-      }
-    }
-
-    // Cascade delete: fetch estimates and rate overrides in parallel
-    const [estimates, rateOverrides] = await Promise.all([
-      ctx.db.query("projectCategoryEstimates").withIndex("by_projectId", (q) => q.eq("projectId", args.id)).collect(),
-      ctx.db.query("projectRateOverrides").withIndex("by_projectId", (q) => q.eq("projectId", args.id)).collect(),
-    ]);
-    for (const est of estimates) {
-      await ctx.db.delete(est._id);
-    }
-    for (const override of rateOverrides) {
-      await ctx.db.delete(override._id);
-    }
-
-    await ctx.db.delete(args.id);
+    return await removeProjectForAuth(ctx, await getAuthContext(ctx), args);
   },
 });
 

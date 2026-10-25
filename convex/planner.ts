@@ -1,10 +1,11 @@
-import { v, ConvexError } from "convex/values";
+import { v, ConvexError, type ObjectType } from "convex/values";
 import { query, mutation, internalMutation } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import {
   getAuthContext,
   assertCanManagePlanFor,
+  type AuthContext,
 } from "./lib/auth";
 import { assertValidDateString } from "./lib/dateValidation";
 import { createTask } from "./tasks/write";
@@ -386,78 +387,102 @@ async function assertOrgMember(
   }
 }
 
+const createSegmentArgs = {
+  taskId: v.id("tasks"),
+  userId: v.id("users"),
+  startDate: v.string(),
+  endDate: v.string(),
+};
+
+export type CreateSegmentInput = ObjectType<typeof createSegmentArgs>;
+
 /** Schedule a (new) sitting of a task: the ⌥-split drop and, in later
  *  slices, panel drag-to-schedule. Never duplicates the task — segments are
- *  references, so the same taskId simply gains another row. */
+ *  references, so the same taskId simply gains another row.
+ *  Shared by the Planner and MCP `save_plan` (docs/prd-mcp.md §6). */
+export async function createSegmentForAuth(
+  ctx: MutationCtx,
+  auth: AuthContext,
+  args: CreateSegmentInput,
+): Promise<Id<"planSegments">> {
+  const { orgId, userId: createdBy } = auth;
+  assertCanManagePlanFor(auth, args.userId);
+
+  const task = await ctx.db.get(args.taskId);
+  if (!task || task.orgId !== orgId) throw new ConvexError("Task not found");
+  if (task.archivedAt) {
+    throw new ConvexError("Archived tasks cannot be scheduled");
+  }
+
+  await assertOrgMember(ctx, orgId, args.userId);
+  assertSegmentRange(args.startDate, args.endDate);
+
+  const now = Date.now();
+  return await ctx.db.insert("planSegments", {
+    orgId,
+    taskId: args.taskId,
+    userId: args.userId,
+    startDate: args.startDate,
+    endDate: args.endDate,
+    createdAt: now,
+    updatedAt: now,
+    createdBy,
+  });
+}
+
 export const createSegment = mutation({
-  args: {
-    taskId: v.id("tasks"),
-    userId: v.id("users"),
-    startDate: v.string(),
-    endDate: v.string(),
-  },
+  args: createSegmentArgs,
   handler: async (ctx, args) => {
-    const auth = await getAuthContext(ctx);
-    const { orgId, userId: createdBy } = auth;
-    assertCanManagePlanFor(auth, args.userId);
-
-    const task = await ctx.db.get(args.taskId);
-    if (!task || task.orgId !== orgId) throw new ConvexError("Task not found");
-    if (task.archivedAt) {
-      throw new ConvexError("Archived tasks cannot be scheduled");
-    }
-
-    await assertOrgMember(ctx, orgId, args.userId);
-    assertSegmentRange(args.startDate, args.endDate);
-
-    const now = Date.now();
-    return await ctx.db.insert("planSegments", {
-      orgId,
-      taskId: args.taskId,
-      userId: args.userId,
-      startDate: args.startDate,
-      endDate: args.endDate,
-      createdAt: now,
-      updatedAt: now,
-      createdBy,
-    });
+    return await createSegmentForAuth(ctx, await getAuthContext(ctx), args);
   },
 });
+
+const updateSegmentArgs = {
+  id: v.id("planSegments"),
+  userId: v.optional(v.id("users")),
+  startDate: v.optional(v.string()),
+  endDate: v.optional(v.string()),
+  laneOrder: v.optional(v.number()),
+};
+
+export type UpdateSegmentInput = ObjectType<typeof updateSegmentArgs>;
 
 /** Move / resize / reassign / restack one segment. Partial args merge onto
  *  the stored segment; the merged range must satisfy the date invariant.
  *  `laneOrder` is the manual vertical stacking priority within a row
- *  (lower = higher; unset segments fall back to createdAt). */
+ *  (lower = higher; unset segments fall back to createdAt).
+ *  Shared by the Planner and MCP `save_plan`. */
+export async function updateSegmentForAuth(
+  ctx: MutationCtx,
+  auth: AuthContext,
+  args: UpdateSegmentInput,
+): Promise<void> {
+  const { orgId } = auth;
+  const seg = await ctx.db.get(args.id);
+  if (!seg || seg.orgId !== orgId) throw new ConvexError("Segment not found");
+  // Own-segment guard + no-reassign-to-others guard (both no-ops for admins)
+  assertCanManagePlanFor(auth, seg.userId);
+  if (args.userId) assertCanManagePlanFor(auth, args.userId);
+
+  if (args.userId) await assertOrgMember(ctx, orgId, args.userId);
+
+  const startDate = args.startDate ?? seg.startDate;
+  const endDate = args.endDate ?? seg.endDate;
+  assertSegmentRange(startDate, endDate);
+
+  await ctx.db.patch(args.id, {
+    userId: args.userId ?? seg.userId,
+    startDate,
+    endDate,
+    ...(args.laneOrder !== undefined ? { laneOrder: args.laneOrder } : {}),
+    updatedAt: Date.now(),
+  });
+}
+
 export const updateSegment = mutation({
-  args: {
-    id: v.id("planSegments"),
-    userId: v.optional(v.id("users")),
-    startDate: v.optional(v.string()),
-    endDate: v.optional(v.string()),
-    laneOrder: v.optional(v.number()),
-  },
+  args: updateSegmentArgs,
   handler: async (ctx, args) => {
-    const auth = await getAuthContext(ctx);
-    const { orgId } = auth;
-    const seg = await ctx.db.get(args.id);
-    if (!seg || seg.orgId !== orgId) throw new ConvexError("Segment not found");
-    // Own-segment guard + no-reassign-to-others guard (both no-ops for admins)
-    assertCanManagePlanFor(auth, seg.userId);
-    if (args.userId) assertCanManagePlanFor(auth, args.userId);
-
-    if (args.userId) await assertOrgMember(ctx, orgId, args.userId);
-
-    const startDate = args.startDate ?? seg.startDate;
-    const endDate = args.endDate ?? seg.endDate;
-    assertSegmentRange(startDate, endDate);
-
-    await ctx.db.patch(args.id, {
-      userId: args.userId ?? seg.userId,
-      startDate,
-      endDate,
-      ...(args.laneOrder !== undefined ? { laneOrder: args.laneOrder } : {}),
-      updatedAt: Date.now(),
-    });
+    return await updateSegmentForAuth(ctx, await getAuthContext(ctx), args);
   },
 });
 
@@ -512,15 +537,27 @@ export const createTaskWithSegment = mutation({
   },
 });
 
-/** Unschedule one segment (the task itself is untouched). */
+const removeSegmentArgs = { id: v.id("planSegments") };
+
+export type RemoveSegmentInput = ObjectType<typeof removeSegmentArgs>;
+
+/** Unschedule one segment (the task itself is untouched).
+ *  Shared by the Planner and MCP `save_plan`. */
+export async function removeSegmentForAuth(
+  ctx: MutationCtx,
+  auth: AuthContext,
+  args: RemoveSegmentInput,
+): Promise<void> {
+  const seg = await ctx.db.get(args.id);
+  if (!seg || seg.orgId !== auth.orgId) throw new ConvexError("Segment not found");
+  assertCanManagePlanFor(auth, seg.userId);
+  await ctx.db.delete(args.id);
+}
+
 export const removeSegment = mutation({
-  args: { id: v.id("planSegments") },
+  args: removeSegmentArgs,
   handler: async (ctx, args) => {
-    const auth = await getAuthContext(ctx);
-    const seg = await ctx.db.get(args.id);
-    if (!seg || seg.orgId !== auth.orgId) throw new ConvexError("Segment not found");
-    assertCanManagePlanFor(auth, seg.userId);
-    await ctx.db.delete(args.id);
+    return await removeSegmentForAuth(ctx, await getAuthContext(ctx), args);
   },
 });
 

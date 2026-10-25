@@ -45,6 +45,7 @@ import {
   sameNumberScope,
   uniqueIdentifierKey,
   type ActivityEvent,
+  type ActivityVia,
   type NumberScope,
   type TaskCategory,
   type TaskPriority,
@@ -395,12 +396,14 @@ async function moveToProject(
  * A project's code changed (§11.1): every task numbered in the project gets
  * `NEWCODE-n`, the old identifier becomes an alias. Tasks the old paths
  * created without a number get one now. Caller validates `newCode`.
+ * `via` attributes the activity rows to an agent write (docs/prd-mcp.md D15).
  */
 export async function rewriteProjectIdentifiers(
   ctx: MutationCtx,
   actorId: Id<"users">,
   project: Doc<"projects">,
   newCode: string,
+  via?: ActivityVia,
 ): Promise<{ rewritten: number }> {
   if (!isValidIdentifierKey(newCode)) throw new ConvexError(`Invalid project code: ${newCode}`);
   const scope = numberScopeFor(project._id);
@@ -430,6 +433,7 @@ export async function rewriteProjectIdentifiers(
       taskId: t._id,
       orgId: project.orgId,
       userId: actorId,
+      via,
       type: "identifier_changed",
       metadata: { from: t.identifier ?? null, to: identifier, reason: "code_rename" },
     });

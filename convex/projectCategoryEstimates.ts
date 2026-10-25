@@ -1,6 +1,7 @@
-import { v, ConvexError } from "convex/values";
-import { query, mutation } from "./_generated/server";
-import { getAuthContext, requireAdmin } from "./lib/auth";
+import { v, ConvexError, type ObjectType } from "convex/values";
+import { query, mutation, type MutationCtx } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
+import { assertAdmin, getAuthContext, type AuthContext } from "./lib/auth";
 
 export const list = query({
   args: { projectId: v.id("projects") },
@@ -32,63 +33,91 @@ export const list = query({
   },
 });
 
-export const upsert = mutation({
-  args: {
-    projectId: v.id("projects"),
-    workCategoryId: v.id("workCategories"),
-    estimatedMinutes: v.number(),
-  },
-  handler: async (ctx, args) => {
-    const { orgId, userId } = await requireAdmin(ctx);
+const upsertEstimateArgs = {
+  projectId: v.id("projects"),
+  workCategoryId: v.id("workCategories"),
+  estimatedMinutes: v.number(),
+};
 
-    const project = await ctx.db.get(args.projectId);
-    if (!project || project.orgId !== orgId) throw new ConvexError("Project not found");
+export type UpsertProjectCategoryEstimateInput = ObjectType<typeof upsertEstimateArgs>;
 
-    const category = await ctx.db.get(args.workCategoryId);
-    if (!category || category.orgId !== orgId) throw new ConvexError("Category not found");
+/** Sets a project's estimate for one work category (admins only): the Budget settings and MCP `save_projects`. */
+export async function upsertProjectCategoryEstimateForAuth(
+  ctx: MutationCtx,
+  auth: AuthContext,
+  args: UpsertProjectCategoryEstimateInput,
+): Promise<Id<"projectCategoryEstimates">> {
+  assertAdmin(auth);
+  const { orgId, userId } = auth;
 
-    if (args.estimatedMinutes < 0) throw new ConvexError("Estimated minutes cannot be negative");
+  const project = await ctx.db.get(args.projectId);
+  if (!project || project.orgId !== orgId) throw new ConvexError("Project not found");
 
-    // Find existing estimate for this project + category
-    const estimates = await ctx.db
-      .query("projectCategoryEstimates")
-      .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
-      .collect();
+  const category = await ctx.db.get(args.workCategoryId);
+  if (!category || category.orgId !== orgId) throw new ConvexError("Category not found");
 
-    const existing = estimates.find(
-      (e) => e.workCategoryId.toString() === args.workCategoryId.toString()
-    );
+  if (args.estimatedMinutes < 0) throw new ConvexError("Estimated minutes cannot be negative");
 
-    const now = Date.now();
+  // Find existing estimate for this project + category
+  const estimates = await ctx.db
+    .query("projectCategoryEstimates")
+    .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
+    .collect();
 
-    if (existing) {
-      await ctx.db.patch(existing._id, {
-        estimatedMinutes: args.estimatedMinutes,
-        updatedAt: now,
-      });
-      return existing._id;
-    }
+  const existing = estimates.find(
+    (e) => e.workCategoryId.toString() === args.workCategoryId.toString()
+  );
 
-    return await ctx.db.insert("projectCategoryEstimates", {
-      orgId,
-      projectId: args.projectId,
-      workCategoryId: args.workCategoryId,
+  const now = Date.now();
+
+  if (existing) {
+    await ctx.db.patch(existing._id, {
       estimatedMinutes: args.estimatedMinutes,
-      createdAt: now,
       updatedAt: now,
-      createdBy: userId,
     });
+    return existing._id;
+  }
+
+  return await ctx.db.insert("projectCategoryEstimates", {
+    orgId,
+    projectId: args.projectId,
+    workCategoryId: args.workCategoryId,
+    estimatedMinutes: args.estimatedMinutes,
+    createdAt: now,
+    updatedAt: now,
+    createdBy: userId,
+  });
+}
+
+export const upsert = mutation({
+  args: upsertEstimateArgs,
+  handler: async (ctx, args) => {
+    return await upsertProjectCategoryEstimateForAuth(ctx, await getAuthContext(ctx), args);
   },
 });
 
+const removeEstimateArgs = { id: v.id("projectCategoryEstimates") };
+
+export type RemoveProjectCategoryEstimateInput = ObjectType<typeof removeEstimateArgs>;
+
+/** Removes one estimate row (admins only). */
+export async function removeProjectCategoryEstimateForAuth(
+  ctx: MutationCtx,
+  auth: AuthContext,
+  args: RemoveProjectCategoryEstimateInput,
+): Promise<void> {
+  assertAdmin(auth);
+  const { orgId } = auth;
+
+  const estimate = await ctx.db.get(args.id);
+  if (!estimate || estimate.orgId !== orgId) throw new ConvexError("Estimate not found");
+
+  await ctx.db.delete(args.id);
+}
+
 export const remove = mutation({
-  args: { id: v.id("projectCategoryEstimates") },
+  args: removeEstimateArgs,
   handler: async (ctx, args) => {
-    const { orgId } = await requireAdmin(ctx);
-
-    const estimate = await ctx.db.get(args.id);
-    if (!estimate || estimate.orgId !== orgId) throw new ConvexError("Estimate not found");
-
-    await ctx.db.delete(args.id);
+    return await removeProjectCategoryEstimateForAuth(ctx, await getAuthContext(ctx), args);
   },
 });

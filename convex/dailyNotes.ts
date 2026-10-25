@@ -1,6 +1,7 @@
-import { v, ConvexError } from "convex/values";
-import { query, mutation } from "./_generated/server";
-import { getAuthContext } from "./lib/auth";
+import { v, ConvexError, type ObjectType } from "convex/values";
+import { query, mutation, type MutationCtx } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
+import { getAuthContext, type AuthContext } from "./lib/auth";
 import { validateUpsertArgs } from "./lib/dailyNotesHelpers";
 
 // ─── get ─────────────────────────────────────────────────────────────────────
@@ -32,65 +33,80 @@ export const get = query({
 
 // ─── upsert ──────────────────────────────────────────────────────────────────
 
-export const upsert = mutation({
-  args: {
-    userId: v.id("users"),
-    date: v.string(),
-    content: v.optional(v.string()),
-  },
-  handler: async (ctx, { userId, date, content }) => {
-    const auth = await getAuthContext(ctx);
+const upsertDailyNoteArgs = {
+  userId: v.id("users"),
+  date: v.string(),
+  content: v.optional(v.string()),
+};
 
-    // Members can only write their own notes
-    if (!auth.isAdmin && auth.userId !== userId) {
-      throw new ConvexError("You can only edit your own daily notes");
-    }
+export type UpsertDailyNoteInput = ObjectType<typeof upsertDailyNoteArgs>;
 
-    // Cross-tenant guard: verify target user belongs to this org
-    const targetUser = await ctx.db.get(userId);
-    if (!targetUser) {
-      throw new ConvexError("User not found");
-    }
-    if (auth.userId !== userId) {
-      // Admin writing for another user — verify they're in the same org
-      const membership = await ctx.db
-        .query("orgMembers")
-        .withIndex("by_userId", (q) => q.eq("userId", userId))
-        .collect();
-      if (!membership.some((m) => m.orgId === auth.orgId)) {
-        throw new ConvexError("User not found in this organization");
-      }
-    }
+/**
+ * Creates or replaces a member's note for a date (`content` = TipTap JSON
+ * string): members their own, admins anyone's in the org. Shared by the
+ * Daily Notes panel and MCP `save_daily_notes` (docs/prd-mcp.md §6).
+ */
+export async function upsertDailyNoteForAuth(
+  ctx: MutationCtx,
+  auth: AuthContext,
+  { userId, date, content }: UpsertDailyNoteInput,
+): Promise<Id<"dailyNotes">> {
+  // Members can only write their own notes
+  if (!auth.isAdmin && auth.userId !== userId) {
+    throw new ConvexError("You can only edit your own daily notes");
+  }
 
-    validateUpsertArgs(date, content);
-
-    const candidates = await ctx.db
-      .query("dailyNotes")
-      .withIndex("by_userId_date", (q) =>
-        q.eq("userId", userId).eq("date", date)
-      )
+  // Cross-tenant guard: verify target user belongs to this org
+  const targetUser = await ctx.db.get(userId);
+  if (!targetUser) {
+    throw new ConvexError("User not found");
+  }
+  if (auth.userId !== userId) {
+    // Admin writing for another user — verify they're in the same org
+    const membership = await ctx.db
+      .query("orgMembers")
+      .withIndex("by_userId", (q) => q.eq("userId", userId))
       .collect();
-    const existing = candidates.find((n) => n.orgId === auth.orgId);
-
-    const now = Date.now();
-
-    if (existing) {
-      await ctx.db.patch(existing._id, {
-        content,
-        updatedAt: now,
-      });
-      return existing._id;
+    if (!membership.some((m) => m.orgId === auth.orgId)) {
+      throw new ConvexError("User not found in this organization");
     }
+  }
 
-    const id = await ctx.db.insert("dailyNotes", {
-      orgId: auth.orgId,
-      userId,
-      date,
+  validateUpsertArgs(date, content);
+
+  const candidates = await ctx.db
+    .query("dailyNotes")
+    .withIndex("by_userId_date", (q) =>
+      q.eq("userId", userId).eq("date", date)
+    )
+    .collect();
+  const existing = candidates.find((n) => n.orgId === auth.orgId);
+
+  const now = Date.now();
+
+  if (existing) {
+    await ctx.db.patch(existing._id, {
       content,
-      createdAt: now,
       updatedAt: now,
     });
-    return id;
+    return existing._id;
+  }
+
+  const id = await ctx.db.insert("dailyNotes", {
+    orgId: auth.orgId,
+    userId,
+    date,
+    content,
+    createdAt: now,
+    updatedAt: now,
+  });
+  return id;
+}
+
+export const upsert = mutation({
+  args: upsertDailyNoteArgs,
+  handler: async (ctx, args) => {
+    return await upsertDailyNoteForAuth(ctx, await getAuthContext(ctx), args);
   },
 });
 

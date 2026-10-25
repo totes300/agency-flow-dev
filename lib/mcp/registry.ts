@@ -1126,6 +1126,8 @@ export const PROJECT_BILLING_TYPES = ["fixed", "retainer", "t_and_m", "non_billa
 
 const money = z.number().min(0).max(1_000_000_000);
 const categoryName = z.string().min(1).max(100);
+/** Whole minutes, or a duration string the app parses ("20h", "1h30m", "1:30"); D1: the model never converts units. */
+const duration = z.union([z.number().int().min(0).max(1_000_000), z.string().min(1).max(20)]);
 
 const projectItem = z.object({
   ref: ref.optional().describe("The project to edit: code (ARLO), ID or link. Omit to create."),
@@ -1138,29 +1140,38 @@ const projectItem = z.object({
     .min(1)
     .max(10)
     .optional()
-    .describe("The task key prefix (ARLO → ARLO-21), unique. Default on create: suggested from the client. A change renames every task key of the project (old keys keep working); one code change per call."),
+    .describe(
+      "The task key prefix (ARLO → ARLO-21): 1–10 letters or digits starting with a letter, saved uppercase (^[A-Z][A-Z0-9]{0,9}$, e.g. ACMEWEB), unique. Default on create: suggested from the client. A change renames every task key of the project (old keys keep working); one code change per call.",
+    ),
   billingType: z
     .enum(PROJECT_BILLING_TYPES)
     .optional()
     .describe("Required to create: fixed (fixed fee), retainer, t_and_m (time & materials) or non_billable. Never changes later."),
   fixedFee: money.optional().describe("Fixed fee projects: the fee, in the client's currency (required to create; never below what is invoiced)."),
-  includedMinutes: z.number().int().min(1).max(1_000_000).optional().describe("Retainers: hours included per month, in minutes (600 = 10 h)."),
+  includedMinutes: duration
+    .optional()
+    .describe('Retainers: time included per month — minutes (600) or a duration ("10h", "1h30m").'),
   monthlyFee: money.optional().describe("Retainers: the monthly fee, in the client's currency."),
   overageRate: money.optional().describe("Retainers: the hourly rate for time over the included hours (required to create)."),
   startDate: date.optional().describe("Retainers: the first day of the first period (required to create)."),
   cycleLength: z.number().int().min(1).max(12).optional().describe("Retainers: months per billing cycle (default 1)."),
-  rollover: z.boolean().optional().describe("Retainers with a cycle of 2+ months: unused hours roll over within the cycle."),
+  rollover: z
+    .boolean()
+    .optional()
+    .describe("Retainers with a cycle of 2+ months: unused hours roll over within the cycle (true with a 1-month cycle is refused)."),
   retainerActive: z.boolean().optional().describe("Existing retainers: false pauses, true activates (the Retainer settings' status)."),
   estimates: z
-    .array(z.object({ category: categoryName, minutes: z.number().int().min(0).max(1_000_000) }))
+    .array(z.object({ category: categoryName, minutes: duration }))
     .max(100)
     .optional()
-    .describe('Fixed fee projects: the budget per work category, in minutes; replaces the whole list (categories left out are removed).'),
+    .describe('Fixed fee projects: the budget per work category — minutes (600) or a duration ("10h"); replaces the whole list (categories left out are removed).'),
   rates: z
     .array(z.object({ category: categoryName, rate: money.nullable() }))
     .max(100)
     .optional()
-    .describe("Fixed fee and T&M projects: the project's billable rate per work category, in the client's currency; null goes back to the category's default rate."),
+    .describe(
+      "Fixed fee and T&M projects (also when creating them): the project's billable rate per work category, in the client's currency; null goes back to the category's default rate.",
+    ),
   team: z.array(ref).max(100).optional().describe('Member emails or "me"; replaces the project team.'),
   archived: z
     .boolean()
@@ -1183,12 +1194,12 @@ const saveProjectsTool: McpTool = {
     "form and settings, with their rules; all items are saved or none. Admins only, as in the app. An item without ref",
     "creates a project (name, client, billingType and the type's required terms); with ref it changes only the fields",
     "you pass. Terms per billingType: fixed — fixedFee, estimates (budget minutes per category), rates; retainer —",
-    "includedMinutes per month, monthlyFee, overageRate, startDate, cycleLength, rollover, retainerActive (the cycle",
-    "dates are locked while a period is closed; fee, hours and rate apply to open periods only); t_and_m — rates",
-    "(after creation, as in the app); non_billable — none. A field that does not apply is an error. Money is in the",
-    "client's currency; minutes are whole minutes. The client and billing type never change. Category names come from",
+    "includedMinutes per month, monthlyFee, overageRate, startDate, cycleLength, rollover (2+ month cycles),",
+    "retainerActive (the cycle dates are locked while a period is closed; fee, hours and rate apply to open periods",
+    "only); t_and_m — rates (also on create); non_billable — none. A field that does not apply is an error. Money is in",
+    'the client\'s currency; durations are minutes or strings like "20h". The client and billing type never change. Category names come from',
     'fetch("workspace"). Returns the project codes and links; report project_overview shows the result.',
-    'Example: {"items": [{"name": "Arlow site", "client": "client:ARLO", "billingType": "retainer", "includedMinutes": 1200,',
+    'Example: {"items": [{"name": "Arlow site", "client": "client:ARLO", "billingType": "retainer", "includedMinutes": "20h",',
     '"monthlyFee": 2000, "overageRate": 95, "startDate": "2026-11-01"}, {"ref": "KONV", "team": ["me"]}], "idempotencyKey": "<uuid>"}',
   ].join(" "),
   inputSchema: saveProjectsInput,

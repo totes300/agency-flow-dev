@@ -7,6 +7,7 @@ import { runItem } from "./mcpWrites";
 import { referenceNames, requireMember, type ReferenceNames } from "./mcpSaveTasks";
 import type { SaveProjectsResult } from "./mcpWriteResults";
 import { normalizeProjectCode } from "./helpers";
+import { parseDuration } from "../../lib/duration";
 import {
   archiveProjectForAuth,
   createProjectForAuth,
@@ -34,9 +35,11 @@ import { removeProjectRateOverrideForAuth, upsertProjectRateOverrideForAuth } fr
  * - Create = the New Project form: client, name, billing type, optional
  *   code (else suggested from the client), team, and the type's terms —
  *   fixed: `fixedFee` (+ `estimates`); retainer: `includedMinutes`,
- *   `monthlyFee`, `overageRate`, `startDate`, `cycleLength`, `rollover`;
- *   T&M and non-billable: none (T&M rates are set after creation, as in the
- *   form). New retainers start active.
+ *   `monthlyFee`, `overageRate`, `startDate`, `cycleLength`, `rollover`
+ *   (only with a cycle of 2+ months: the app forces it off otherwise, so
+ *   asking for it is an error); T&M: `rates`, saved right after the create
+ *   (the form sets them on the next screen); non-billable: none. New
+ *   retainers start active.
  * - Edit = Settings: name, code (a change rewrites every task key of the
  *   project, old keys stay as aliases — at most one code change per call,
  *   the rewrite touches every task of the project), team, fixed fee (never
@@ -54,7 +57,9 @@ import { removeProjectRateOverrideForAuth, upsertProjectRateOverrideForAuth } fr
  *   "unchanged".
  *
  * Money is in the project's currency (the client's), in major units as the
- * forms take it; minutes are whole minutes. A field that does not apply to
+ * forms take it. Durations (`includedMinutes`, estimate `minutes`) are whole
+ * minutes or a duration string the app parses ("20h", "1h30m", "1:30";
+ * lib/duration.ts), so the model never converts units (D1). A field that does not apply to
  * the billing type is an error, never ignored.
  *
  * Read budget per item (at most MCP_BATCH_MAX = 25): refs ~5, names one
@@ -77,14 +82,15 @@ export type SaveProjectItem = {
   /** Create: required. Edit: must be the project's type. */
   billingType?: ProjectBillingType;
   fixedFee?: number;
-  includedMinutes?: number;
+  /** Minutes, or a duration string ("20h"). */
+  includedMinutes?: number | string;
   monthlyFee?: number;
   overageRate?: number;
   startDate?: string;
   cycleLength?: number;
   rollover?: boolean;
   retainerActive?: boolean;
-  estimates?: Array<{ category: string; minutes: number }>;
+  estimates?: Array<{ category: string; minutes: number | string }>;
   rates?: Array<{ category: string; rate: number | null }>;
   /** Member emails or "me"; replaces the project team. */
   team?: string[];
@@ -122,8 +128,24 @@ function assertFieldsApply(item: SaveProjectItem, billingType: ProjectBillingTyp
   }
 }
 
-function assertWholeMinutes(minutes: number, name: string): void {
-  if (!Number.isInteger(minutes) || minutes < 0) throw new ConvexError(`${name} must be whole minutes (0 or more).`);
+/** Whole minutes from a number of minutes or a duration string ("20h", "1h30m", "1:30"). */
+export function durationMinutes(value: number | string, name: string): number {
+  if (typeof value === "number") {
+    if (!Number.isInteger(value) || value < 0) throw new ConvexError(`${name} must be whole minutes (0 or more), or a duration like "20h".`);
+    return value;
+  }
+  const minutes = parseDuration(value);
+  if (minutes === null) {
+    throw new ConvexError(`${name} "${value.trim().slice(0, 40)}" is not a duration: use minutes (600) or e.g. "10h", "1h30m", "1:30".`);
+  }
+  return minutes;
+}
+
+/** Rollover only exists across a cycle of 2+ months (the app forces it off otherwise): asking for it is an error. */
+function assertRollover(rollover: boolean | undefined, cycleLength: number): void {
+  if (rollover === true && cycleLength < 2) {
+    throw new ConvexError("rollover needs a cycle of 2 or more months (cycleLength); a 1-month retainer bills monthly, as in the app.");
+  }
 }
 
 async function teamIds(resolver: RefResolver, team: readonly string[]): Promise<Id<"users">[]> {
@@ -138,10 +160,10 @@ async function teamIds(resolver: RefResolver, team: readonly string[]): Promise<
 async function estimateRows(names: ReferenceNames, estimates: SaveProjectItem["estimates"]) {
   const rows = new Map<Id<"workCategories">, number>();
   for (const e of estimates ?? []) {
-    assertWholeMinutes(e.minutes, `Estimate minutes for "${e.category}"`);
+    const minutes = durationMinutes(e.minutes, `The estimate for "${e.category}"`);
     const categoryId = await names.category(e.category);
     if (rows.has(categoryId)) throw new ConvexError(`The category "${e.category}" is listed twice in estimates.`);
-    rows.set(categoryId, e.minutes);
+    rows.set(categoryId, minutes);
   }
   return rows;
 }
@@ -236,7 +258,8 @@ async function createItem(
   if (item.retainerActive !== undefined) {
     throw new ConvexError("retainerActive applies to existing retainers: a new retainer starts active.");
   }
-  if (item.includedMinutes !== undefined) assertWholeMinutes(item.includedMinutes, "includedMinutes");
+  const includedMinutes = item.includedMinutes !== undefined ? durationMinutes(item.includedMinutes, "includedMinutes") : undefined;
+  assertRollover(item.rollover, item.cycleLength ?? 1);
   const client = await resolver.require(item.client, "client");
   if (client.type !== "client") throw new Error(`Expected a client, resolved a ${client.type}`);
 
@@ -250,7 +273,7 @@ async function createItem(
     categoryEstimates: estimates
       ? [...estimates].map(([workCategoryId, estimatedMinutes]) => ({ workCategoryId, estimatedMinutes }))
       : undefined,
-    includedMinutesPerMonth: item.includedMinutes,
+    includedMinutesPerMonth: includedMinutes,
     monthlyFee: item.monthlyFee,
     startDate: item.startDate,
     cycleLength: item.cycleLength,
@@ -291,7 +314,8 @@ async function editItem(
     );
   }
   assertFieldsApply(item, project.billingType);
-  if (item.includedMinutes !== undefined) assertWholeMinutes(item.includedMinutes, "includedMinutes");
+  const includedMinutes = item.includedMinutes !== undefined ? durationMinutes(item.includedMinutes, "includedMinutes") : undefined;
+  if (project.billingType === "retainer") assertRollover(item.rollover, item.cycleLength ?? project.cycleLength ?? 1);
 
   let changed = false;
   const extra: Partial<Row> = {};
@@ -325,8 +349,8 @@ async function editItem(
 
   // Settings → Retainer (the dialog's confirmation is the tool call itself, D3).
   const retainer: UpdateRetainerInput = { id: project._id, confirmed: true };
-  if (item.includedMinutes !== undefined && item.includedMinutes !== project.includedMinutesPerMonth) {
-    retainer.includedMinutesPerMonth = item.includedMinutes;
+  if (includedMinutes !== undefined && includedMinutes !== project.includedMinutesPerMonth) {
+    retainer.includedMinutesPerMonth = includedMinutes;
   }
   if (item.monthlyFee !== undefined && item.monthlyFee !== project.monthlyFee) retainer.monthlyFee = item.monthlyFee;
   if (item.overageRate !== undefined && item.overageRate !== project.overageRate) retainer.overageRate = item.overageRate;

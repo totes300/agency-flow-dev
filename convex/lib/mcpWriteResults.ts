@@ -1,4 +1,5 @@
 import { v, type Infer } from "convex/values";
+import { billingTypeValidator } from "./validators";
 
 /**
  * Results of the MCP write tools (docs/prd-mcp.md §6: write tools return the
@@ -137,7 +138,7 @@ export const saveProjectsResultValidator = v.object({
       projectId: v.id("projects"),
       code: v.string(),
       name: v.string(),
-      billingType: v.string(),
+      billingType: billingTypeValidator,
       archived: v.boolean(),
       action: savedAction,
       /** A code change: the previous code (old task keys stay valid as aliases). */

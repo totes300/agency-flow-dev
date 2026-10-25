@@ -315,6 +315,55 @@ describe("save_projects", () => {
     expect(estimates).toEqual([[f.dev, 180]]);
   });
 
+  it("T&M create with rates; durations as strings; rollover rules", async () => {
+    const t = createT();
+    const f = await setup(t);
+    const tm = await saveProjects(t, "admin", [
+      { name: "TM", client: "client:ARL", code: "TMX", billingType: "t_and_m", rates: [{ category: "Design", rate: 130 }], team: ["me"] },
+    ]);
+    expect(tm.items[0]).toMatchObject({ code: "TMX", billingType: "t_and_m", action: "created" });
+    const appTm = await inApp(t, "admin").mutation(api.projects.create, { clientId: f.arlow, name: "TM app", code: "TMA", billingType: "t_and_m", teamMembers: [f.admin] });
+    expect(shape(await get(t, tm.items[0].projectId), "name", "code")).toEqual(shape(await get(t, appTm), "name", "code"));
+    const rate = await t.run(async (ctx) =>
+      (await ctx.db.query("projectRateOverrides").withIndex("by_projectId", (q) => q.eq("projectId", tm.items[0].projectId)).collect()).map((o) => o.billableRate),
+    );
+    expect(rate).toEqual([130]);
+
+    // Durations: "20h" and "1h30m" are the app's parser's minutes; nonsense is refused.
+    const ret = await saveProjects(t, "admin", [
+      { name: "Ret", client: "client:ARL", billingType: "retainer", includedMinutes: "20h", overageRate: 90, startDate: "2026-01-01", cycleLength: 3, rollover: true },
+      { name: "Fix", client: "client:ARL", billingType: "fixed", fixedFee: 100, estimates: [{ category: "Design", minutes: "1h30m" }, { category: "Development", minutes: 0 }] },
+    ]);
+    expect((await get(t, ret.items[0].projectId))!.includedMinutesPerMonth).toBe(1200);
+    const est = await t.run(async (ctx) =>
+      (await ctx.db.query("projectCategoryEstimates").withIndex("by_projectId", (q) => q.eq("projectId", ret.items[1].projectId)).collect())
+        .map((e) => [e.workCategoryId, e.estimatedMinutes]).sort(),
+    );
+    expect(est).toEqual([[f.design, 90], [f.dev, 0]].sort());
+    await expect(saveProjects(t, "admin", [{ ref: ret.items[0].projectId, includedMinutes: "lots" }])).rejects.toThrow("is not a duration");
+
+    // Rollover needs a 2+ month cycle (the app would silently turn it off).
+    await expect(
+      saveProjects(t, "admin", [{ name: "R1", client: "client:ARL", billingType: "retainer", includedMinutes: 60, overageRate: 1, startDate: "2026-01-01", rollover: true }]),
+    ).rejects.toThrow("rollover needs a cycle of 2 or more months");
+    await expect(saveProjects(t, "admin", [{ ref: ret.items[0].projectId, cycleLength: 1, rollover: true }])).rejects.toThrow("rollover needs a cycle");
+
+    // With a live close the cycle is locked: an unchanged rollover/cycle is not sent, so the fee still saves.
+    await t.run(async (ctx) =>
+      ctx.db.insert("billingCloses", {
+        orgId: ORG, projectId: ret.items[0].projectId, kind: "retainer", status: "final", periodStart: "2026-01-01", periodEnd: "2026-03-31",
+        currency: "EUR", roundingMinutes: 1, includedMinutes: 3600, overageRateMinor: 9000, usageMinutes: 0, overageMinutes: 0,
+        amountMinor: 0, committedAt: Date.now(), committedBy: f.admin,
+      } as never),
+    );
+    const fee = await saveProjects(t, "admin", [{ ref: ret.items[0].projectId, monthlyFee: 2500, rollover: true, cycleLength: 3 }]);
+    expect(fee.items[0].action).toBe("updated");
+    expect((await get(t, ret.items[0].projectId))!.monthlyFee).toBe(2500);
+    await expect(saveProjects(t, "admin", [{ ref: ret.items[0].projectId, startDate: "2026-02-01" }])).rejects.toThrow(
+      "Reopen or void the closed periods before changing the billing cycle.",
+    );
+  });
+
   it("archives with the app's timer rescue (via on the saved entry) and restores", async () => {
     const t = createT();
     const f = await setup(t);

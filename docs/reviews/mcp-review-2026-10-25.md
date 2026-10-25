@@ -260,3 +260,16 @@ What still needs the owner, in order (`docs/runbooks/mcp-deployment.md`):
 4. The attachment extraction backfill and the §6 verification list.
 5. Before public exposure beyond the owner's own agents: Vercel Firewall rate rules for
    `/mcp`, `/.well-known/*`, `/mcp-upload` and `/upload` (follow-up).
+
+## Production rollout (2026-10-25, orchestrated after the review)
+
+Owner's one yes covered: Convex production `MCP_RESOURCE_URL`, Vercel env (Production +
+Preview), the Clerk production MCP resource (`configure_mcp_server` turned on CIMD and the
+`aud` claim; DCR stays off), PR #17 merged (`7eee5bd`), Convex deployed by the Vercel
+build. Verified: `/.well-known/oauth-protected-resource/mcp` (resource, issuer
+`https://clerk.konverted.io`, scopes), 401 + `WWW-Authenticate` on `/mcp` (also on the
+`*.vercel.app` URL), Clerk discovery check all MUSTs passed (one SHOULD warning: no scope
+hint in the Bearer challenge), 45 `mcp/*` functions and the cleanup functions live.
+Skipped by owner decision: the extraction backfill (dummy data). Open: Convex Preview
+default env var (dashboard), first real-client connect (owner, consent screen), Clerk
+webhook delivery of organization-membership events (check after the first team change).

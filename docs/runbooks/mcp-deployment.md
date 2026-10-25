@@ -9,7 +9,15 @@ deployment sequence as well.
 > only after the owner's explicit yes** (`docs/prd-mcp.md` §17). Show the exact
 > command or change first.
 
-Nothing here has been done in production yet.
+**Production status (2026-10-25):** done. `MCP_RESOURCE_URL = https://flow.konverted.io/mcp`
+is set on Convex production and on Vercel (Production + Preview); the Clerk production
+instance has the MCP resource registered (CIMD and the `aud` claim on, DCR off; Clerk's
+discovery check: every MUST passed); PR #17 merged as `7eee5bd` and the Vercel build
+deployed Convex production (45 `mcp/*` functions, the four cleanup crons, `/mcp-upload`).
+Verified: discovery document, 401 challenge, Clerk check. Not done: the attachment
+extraction backfill (owner: production holds dummy data only), the Convex **Preview**
+default environment variable (dashboard only; until it is set, Vercel preview builds fail
+at `convex/auth.config.ts`), and the end-to-end OAuth connect from a real client.
 
 ## What the MCP server consists of
 

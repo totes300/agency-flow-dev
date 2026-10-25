@@ -156,6 +156,14 @@ const SettingsUserRates = dynamic(
   { loading: () => <UserRatesSkeleton /> },
 )
 
+const SettingsWebhooks = dynamic(
+  () =>
+    import("@/components/settings/settings-webhooks").then((m) => ({
+      default: m.SettingsWebhooks,
+    })),
+  { loading: () => <Skeleton className="h-[204px] w-full rounded-xl" /> },
+)
+
 // ─── Page ───────────────────────────────────────────────────────────────────────
 
 export default function SettingsPage() {
@@ -177,6 +185,7 @@ export default function SettingsPage() {
           <TabsTrigger value="work-categories">Work Categories</TabsTrigger>
           <TabsTrigger value="user-rates">User Rates</TabsTrigger>
           <TabsTrigger value="integrations">Integrations</TabsTrigger>
+          <TabsTrigger value="webhooks">Webhooks</TabsTrigger>
         </TabsList>
 
         <TabsContent value="general" className="mt-6 space-y-10">
@@ -211,6 +220,10 @@ export default function SettingsPage() {
 
         <TabsContent value="integrations" className="mt-6">
           <SettingsIntegrations />
+        </TabsContent>
+
+        <TabsContent value="webhooks" className="mt-6">
+          <SettingsWebhooks />
         </TabsContent>
       </Tabs>
     </div>

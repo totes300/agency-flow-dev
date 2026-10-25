@@ -20,7 +20,8 @@ import type { AuthContext } from "../lib/auth";
 import { DEFAULT_STATUS_SEED } from "../tasks/model";
 import { createTask, updateTask } from "../tasks/write";
 import { loadTaskForWrite } from "../tasks/access";
-import { changeOf, validateWebhookUrl, WEBHOOK_DELIVERY_TTL_MS, WEBHOOK_RETRY_DELAYS_MS } from "../webhooks";
+import { changeOf, validateWebhookUrl, WEBHOOK_DELIVERY_TTL_MS, WEBHOOK_EVENT_TYPES, WEBHOOK_RETRY_DELAYS_MS } from "../webhooks";
+import { WEBHOOK_PICKER_TYPES } from "../../lib/webhook-events";
 import { connectMembers } from "./helpers/mcpConnections";
 
 const modules = (
@@ -163,6 +164,13 @@ describe("changeOf (W3)", () => {
   });
 });
 
+describe("event families (Settings → Webhooks picker)", () => {
+  it("offer every deliverable type once, except the legacy description_changed", () => {
+    expect(new Set(WEBHOOK_PICKER_TYPES).size).toBe(WEBHOOK_PICKER_TYPES.length);
+    expect([...WEBHOOK_PICKER_TYPES].sort()).toEqual(WEBHOOK_EVENT_TYPES.filter((t) => t !== "description_changed").sort());
+  });
+});
+
 // ─── Scheduling (W2, W5, W8) ─────────────────────────────────────────────────
 
 describe("scheduling", () => {
@@ -289,6 +297,11 @@ describe("delivery", () => {
     // Retries resend the same event id, so receivers can dedupe.
     expect(new Set(sent.map((s) => JSON.parse(s.body).id)).size).toBe(1);
     expect(await inApp(t, "admin").query(api.webhooks.get, {})).toMatchObject({ lastDeliveryStatus: "failed", lastDeliveryHttpStatus: 503 });
+    // The list names the task and when a failed attempt is retried.
+    const recent = await inApp(t, "admin").query(api.webhooks.recentDeliveries, { endpointId: rows[0].endpointId });
+    expect(recent.map((r) => [r.attempt, r.task, r.nextAttemptAt === null])).toEqual([
+      [4, f.identifier, true], [3, f.identifier, false], [2, f.identifier, false], [1, f.identifier, false],
+    ]);
   });
 
   it("a network error is recorded without the response or the URL", async () => {
@@ -329,7 +342,7 @@ describe("admin functions", () => {
     const { secret } = await createEndpoint(t);
     expect(secret).toMatch(/^[A-Za-z0-9_-]{43}$/);
     const endpoint = await inApp(t, "admin").query(api.webhooks.get, {});
-    expect(endpoint).toMatchObject({ url: HOOK, secretHint: secret.slice(-4), enabled: true, excludeClientIds: [] });
+    expect(endpoint).toMatchObject({ url: HOOK, secretHint: secret.slice(-4), enabled: true, excludeClientIds: [], createdByName: "Ada Admin" });
     expect(JSON.stringify(endpoint)).not.toContain(secret);
   });
 
@@ -372,7 +385,7 @@ describe("admin functions", () => {
     const [, t0, mac] = /^t=(\d+),v1=(\w+)$/.exec(sent[0].headers["X-AgencyFlow-Signature"])!;
     expect(mac).toBe(await hmacHex(secret, `${t0}.${sent[0].body}`));
     const recent = await inApp(t, "admin").query(api.webhooks.recentDeliveries, { endpointId });
-    expect(recent).toEqual([expect.objectContaining({ event: "test", status: "ok", httpStatus: 200, attempt: 1 })]);
+    expect(recent).toEqual([expect.objectContaining({ event: "test", status: "ok", httpStatus: 200, attempt: 1, task: null })]);
   });
 
   it("a failing test event is not retried", async () => {

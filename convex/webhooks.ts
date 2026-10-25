@@ -381,7 +381,7 @@ async function ownEndpoint(ctx: QueryCtx | MutationCtx, auth: AuthContext, endpo
   return endpoint;
 }
 
-function publicEndpoint(endpoint: Doc<"webhookEndpoints">) {
+function publicEndpoint(endpoint: Doc<"webhookEndpoints">, createdByName: string | null) {
   return {
     _id: endpoint._id,
     url: endpoint.url,
@@ -390,6 +390,7 @@ function publicEndpoint(endpoint: Doc<"webhookEndpoints">) {
     excludeClientIds: endpoint.excludeClientIds,
     enabled: endpoint.enabled,
     createdAt: endpoint.createdAt,
+    createdByName,
     updatedAt: endpoint.updatedAt,
     lastDeliveryAt: endpoint.lastDeliveryAt ?? null,
     lastDeliveryStatus: endpoint.lastDeliveryStatus ?? null,
@@ -406,7 +407,9 @@ export const get = query({
       .query("webhookEndpoints")
       .withIndex("by_orgId", (q) => q.eq("orgId", auth.orgId))
       .first();
-    return endpoint ? publicEndpoint(endpoint) : null;
+    if (!endpoint) return null;
+    const creator = await ctx.db.get(endpoint.createdBy);
+    return publicEndpoint(endpoint, creator?.name ?? null);
   },
 });
 
@@ -547,7 +550,7 @@ export const queueTest = internalMutation({
   },
 });
 
-/** The endpoint's last 20 delivery attempts, newest first. */
+/** The endpoint's last 20 delivery attempts, newest first, with the event's task ref. */
 export const recentDeliveries = query({
   args: { endpointId: v.id("webhookEndpoints") },
   handler: async (ctx, { endpointId }) => {
@@ -561,14 +564,17 @@ export const recentDeliveries = query({
     const deliveries = [];
     for (const row of rows) {
       const activity = row.activityId ? await ctx.db.get(row.activityId) : null;
+      const task = activity && activity.orgId === auth.orgId ? await ctx.db.get(activity.taskId) : null;
       deliveries.push({
         _id: row._id,
         createdAt: row.createdAt,
         event: row.activityId ? (activity?.type ?? "unknown") : "test",
+        task: task && task.orgId === auth.orgId ? task.identifier : null,
         attempt: row.attempt,
         status: row.status,
         httpStatus: row.httpStatus ?? null,
         error: row.error ?? null,
+        nextAttemptAt: row.nextAttemptAt ?? null,
       });
     }
     return deliveries;

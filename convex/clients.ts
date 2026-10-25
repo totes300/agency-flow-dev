@@ -273,6 +273,11 @@ export async function updateClientForAuth(
         const prefix = normalizeClientPrefix(pfx);
         await assertClientPrefixAvailable(ctx, orgId, prefix, args.id);
         updates.prefix = prefix;
+      } else if (client.prefix === undefined) {
+        // A legacy client carries only `invoicePrefix`; the readers of
+        // `client.prefix` (lib/format.ts, projects.ts) must see it, so the
+        // unchanged effective prefix heals onto `prefix` with this save.
+        updates.prefix = current;
       }
     }
   }

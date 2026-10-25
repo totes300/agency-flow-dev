@@ -51,7 +51,7 @@ export const uploadSlot = internalQuery({
     // connection that is not revoked (D-REVOKE). No details either way.
     const user = await ctx.db.get(row.userId);
     const membership = user && !user.deletedAt ? await findOrgMembership(ctx, row.orgId, user.externalId) : null;
-    const connection = row.clientId !== undefined ? await connectionStatus(ctx, row.orgId, row.userId, row.clientId) : "allowed";
+    const connection = await connectionStatus(ctx, row.orgId, row.userId, row.clientId);
     if (!membership || (membership.userId !== undefined && membership.userId !== row.userId) || connection !== "allowed") {
       return { ok: false, status: 403, error: "Forbidden." };
     }

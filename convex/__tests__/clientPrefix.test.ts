@@ -120,6 +120,21 @@ describe("client prefix uniqueness", () => {
     ).rejects.toThrow(/already used by client "Legacy"/);
   });
 
+  it("a save that re-sends the unchanged legacy invoicePrefix heals it onto prefix", async () => {
+    const t = createT();
+    const { admin: adminId } = await setup(t);
+    const legacy = await t.run(async (ctx) => {
+      const now = Date.now();
+      return await ctx.db.insert("clients", {
+        orgId: ORG, name: "Legacy", currency: "EUR", invoicePrefix: "LEG", createdAt: now, updatedAt: now, createdBy: adminId,
+      });
+    });
+    // The edit form sends the effective prefix with an unrelated change.
+    await t.withIdentity(ADMIN).mutation(api.clients.update, { id: legacy, prefix: "leg", notes: "unrelated edit" });
+    const healed = await t.run(async (ctx) => (await ctx.db.get(legacy))!);
+    expect(healed).toMatchObject({ prefix: "LEG", invoicePrefix: "LEG", notes: "unrelated edit" });
+  });
+
   it("accepts only A–Z/0–9 up to 10 characters, saved uppercase", async () => {
     const t = createT();
     const { admin: adminId } = await setup(t);

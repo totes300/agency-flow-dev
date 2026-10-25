@@ -138,7 +138,11 @@ async function editItem(
   if (item.name !== undefined && item.name.trim() !== client.name) update.name = item.name;
   if (item.prefix !== undefined) {
     const current = effectiveClientPrefix(client);
-    if (current === null || clientPrefixKey(current) !== clientPrefixKey(item.prefix)) update.prefix = item.prefix;
+    // Changed: the core validates it. Unchanged on a legacy client that only
+    // has `invoicePrefix`: sent anyway so the core heals it onto `prefix`.
+    if (current === null || clientPrefixKey(current) !== clientPrefixKey(item.prefix) || client.prefix === undefined) {
+      update.prefix = item.prefix;
+    }
   }
   if (item.usePrefix !== undefined && item.usePrefix !== (client.usePrefix ?? false)) update.usePrefix = item.usePrefix;
   for (const field of CLIENT_TEXT_FIELDS) {

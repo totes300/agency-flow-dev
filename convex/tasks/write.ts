@@ -1189,16 +1189,15 @@ export async function removeTask(
     );
   }
 
-  const affected = new Set([task._id.toString(), ...children.map((c) => c._id.toString())]);
-  const members = await ctx.db
-    .query("orgMembers")
-    .withIndex("by_orgId", (q) => q.eq("orgId", task.orgId))
-    .collect();
-  for (const member of members) {
-    if (!member.userId) continue;
-    const user = await ctx.db.get(member.userId);
-    if (user?.timerTaskId && affected.has(user.timerTaskId.toString())) {
-      await ctx.db.patch(member.userId, {
+  // One `by_timerTaskId` range per deleted task (a user runs at most one
+  // timer, so a task's runners are a handful), never a sweep of the org.
+  for (const t of [task, ...children]) {
+    const runners = await ctx.db
+      .query("users")
+      .withIndex("by_timerTaskId", (q) => q.eq("timerTaskId", t._id))
+      .collect();
+    for (const user of runners) {
+      await ctx.db.patch(user._id, {
         timerTaskId: undefined,
         timerStartedAt: undefined,
         timerAccumulatedMs: undefined,

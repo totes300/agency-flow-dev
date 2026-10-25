@@ -6,7 +6,10 @@
 // - I1: every such function calls getMcpAuthContext before anything else;
 // - I2: no MCP function accepts an org, user or role argument;
 // - I4: identities are read only by the two auth builders, so an OAuth token
-//   cannot reach a UI function through a direct `ctx.auth` read.
+//   cannot reach a UI function through a direct `ctx.auth` read;
+// - the I1/I2 scans cover convex/mcp/ only, so `getMcpAuthContext` must not be
+//   imported anywhere else, and the connection check it relies on
+//   (`connectionStatus`) is read only where the review listed it.
 
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
@@ -162,12 +165,37 @@ describe("convex/mcp invariants", () => {
   }
 });
 
+/** Files under convex/ (relative) whose import statements name `symbol`. */
+function importersOf(symbol: string): string[] {
+  const pattern = new RegExp(`^import\\s[^;]*\\b${symbol}\\b[^;]*\\sfrom\\s`, "m");
+  return sourceFiles(CONVEX_DIR)
+    .filter((file) => pattern.test(readFileSync(file, "utf8")))
+    .map((file) => relative(CONVEX_DIR, file))
+    .sort();
+}
+
 describe("identity reads (I4)", () => {
-  it("only the auth builders call ctx.auth.getUserIdentity", () => {
+  it("only the auth builders call getUserIdentity, however the auth object is reached", () => {
     const readers = sourceFiles(CONVEX_DIR)
-      .filter((file) => /\.auth\.getUserIdentity\(/.test(readFileSync(file, "utf8")))
+      .filter((file) => /\bgetUserIdentity\(/.test(readFileSync(file, "utf8")))
       .map((file) => relative(CONVEX_DIR, file))
       .sort();
     expect(readers).toEqual(["lib/auth.ts", "lib/mcpAuth.ts"]);
+  });
+});
+
+describe("MCP auth reach (the I1/I2 scan covers convex/mcp/ only)", () => {
+  // Files outside convex/mcp/ allowed to import getMcpAuthContext. None today:
+  // every MCP function lives in convex/mcp/, where I1 and I2 are checked.
+  const MCP_AUTH_IMPORTERS_OUTSIDE_MCP: string[] = [];
+
+  it("getMcpAuthContext is imported only under convex/mcp/", () => {
+    const importers = importersOf("getMcpAuthContext");
+    expect(importers.length).toBeGreaterThan(0);
+    expect(importers.filter((file) => !file.startsWith("mcp/"))).toEqual(MCP_AUTH_IMPORTERS_OUTSIDE_MCP);
+  });
+
+  it("connectionStatus is read only by the MCP auth builder and the MCP upload endpoint", () => {
+    expect(importersOf("connectionStatus")).toEqual(["lib/mcpAuth.ts", "mcpFileUploads.ts"]);
   });
 });

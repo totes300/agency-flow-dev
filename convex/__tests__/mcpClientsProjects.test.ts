@@ -173,6 +173,20 @@ describe("save_clients", () => {
     expect((await get(t, f.arlow))!.archivedAt).toBeUndefined();
   });
 
+  it("an edit that re-sends a legacy client's unchanged invoicePrefix heals it onto prefix, as the app does", async () => {
+    const t = createT();
+    const f = await setup(t);
+    const legacy = await t.run(async (ctx) => {
+      const now = Date.now();
+      return await ctx.db.insert("clients", {
+        orgId: ORG, name: "Legacy", currency: "EUR", invoicePrefix: "LEG", createdAt: now, updatedAt: now, createdBy: f.admin,
+      });
+    });
+    const saved = await saveClients(t, "admin", [{ ref: legacy, prefix: "leg", notes: "unrelated edit" }]);
+    expect(saved.items[0]).toMatchObject({ action: "updated", prefix: "LEG" });
+    expect(await get(t, legacy)).toMatchObject({ prefix: "LEG", invoicePrefix: "LEG", notes: "unrelated edit" });
+  });
+
   it("later items see earlier writes: a new or renamed client:PREFIX resolves in the same call", async () => {
     const t = createT();
     const f = await setup(t);

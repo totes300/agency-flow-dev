@@ -158,7 +158,13 @@ function mergeLoaded(...parts: Loaded[]): Loaded {
   };
 }
 
-/** The caller's own edges plus the sub-tasks of their assigned parents (§11.5). */
+/**
+ * The caller's own edges plus the sub-tasks of their assigned parents (§11.5).
+ * Every row is readable by construction (T1, access.ts): `own` rows come off
+ * the caller's own `taskAssignees` range in this org, `via` rows are the
+ * org-indexed sub-tasks of those parents — exactly the two edges
+ * `filterReadableTasks` would read again. Callers use the rows as they are.
+ */
 async function loadMemberVisible(ctx: QueryCtx, auth: AuthContext): Promise<Loaded> {
   const own = await loadAssignedTo(ctx, auth.orgId, auth.userId);
   const via = await loadViaParentSubtasks(ctx, auth.orgId, own.tasks);
@@ -257,6 +263,8 @@ export async function findTaskDocsForAuth(
   const search = args.search?.trim();
 
   let loaded: Loaded;
+  // True when the load itself proved every row readable (loadMemberVisible).
+  let readableByLoad = false;
   if (args.candidates) {
     const needle = search?.toLowerCase();
     loaded = {
@@ -279,10 +287,12 @@ export async function findTaskDocsForAuth(
     const plan = planListLoad({ auth, filters });
     switch (plan.kind) {
       case "assignee":
-        loaded =
-          plan.userId === auth.userId && !auth.isAdmin
-            ? await loadMemberVisible(ctx, auth)
-            : await loadAssignedTo(ctx, orgId, plan.userId);
+        if (plan.userId === auth.userId && !auth.isAdmin) {
+          loaded = await loadMemberVisible(ctx, auth);
+          readableByLoad = true;
+        } else {
+          loaded = await loadAssignedTo(ctx, orgId, plan.userId);
+        }
         break;
       case "project":
         loaded = mergeLoaded(
@@ -302,7 +312,9 @@ export async function findTaskDocsForAuth(
     }
   }
 
-  const readable = await filterReadableTasks(ctx, auth, loaded.tasks);
+  const readable = readableByLoad
+    ? loaded.tasks.filter((t) => t.orgId === orgId)
+    : await filterReadableTasks(ctx, auth, loaded.tasks);
   const matched = readable.filter(
     (t) =>
       !t.archivedAt &&
@@ -542,7 +554,8 @@ export const countTasksByStatus = query({
       const loaded = await loadMemberVisible(ctx, auth);
       // A capped edge set leaves every category incomplete.
       for (const category of TASK_CATEGORIES) categoryTruncated.set(category, loaded.truncated);
-      tasks = await filterReadableTasks(ctx, auth, loaded.tasks);
+      // Readable by construction (loadMemberVisible): no edge re-check.
+      tasks = loaded.tasks.filter((t) => t.orgId === orgId);
     }
     const live = tasks.filter((t) => !t.archivedAt && t.statusCategory !== undefined);
 

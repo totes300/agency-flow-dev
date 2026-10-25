@@ -29,7 +29,11 @@ export default defineSchema({
     taskDetailMode: v.optional(v.union(v.literal("drawer"), v.literal("page"))),
     createdAt: v.number(),
     updatedAt: v.number(),
-  }).index("byExternalId", ["externalId"]),
+  })
+    .index("byExternalId", ["externalId"])
+    // Who runs a timer on a task: a task delete clears them in one range per
+    // task (tasks/write.ts removeTask) instead of reading every org member.
+    .index("by_timerTaskId", ["timerTaskId"]),
 
   // ─── Org Members (synced from Clerk org memberships) ──────────────────────
   orgMembers: defineTable({
@@ -641,7 +645,9 @@ export default defineSchema({
   // by it — tasks/model.ts activityLogValidator.
   activityLog: defineTable(activityLogValidator)
     .index("by_task", ["taskId", "createdAt"])
-    .index("by_org", ["orgId", "createdAt"]),
+    .index("by_org", ["orgId", "createdAt"])
+    // One event type across the org, newest first (MCP comment search).
+    .index("by_org_type", ["orgId", "type", "createdAt"]),
 
   // ─── Attachments (per task, Convex file storage) ────────────────────────────
   attachments: defineTable({
@@ -900,8 +906,8 @@ export default defineSchema({
     orgId: v.string(),
     userId: v.id("users"),
     // The OAuth client that announced it: the endpoint refuses once that
-    // connection is revoked (optional only for rows written before it).
-    clientId: v.optional(v.string()),
+    // connection is revoked.
+    clientId: v.string(),
     fileName: v.string(),
     contentType: v.string(),
     sizeBytes: v.number(),

@@ -40,6 +40,7 @@ import {
   isValidMonthKey,
   lastDayOfMonth,
   monthKeysBetween,
+  REPORT_RANGE_DAYS_MAX,
   type ReportEntryInput,
   type ReportNotedEntryInput,
   type RetainerMonthStatus,
@@ -51,7 +52,8 @@ import { loadCloseContext } from "./lib/billing/closeData";
 
 /** Hard scan ceilings — throwing beats returning a silently-wrong sum. */
 export const MAX_REPORT_ENTRIES = 20_000;
-const MAX_RANGE_DAYS = 366;
+/** Targets up to this many read their own entries (`by_userId_date`) instead of the org's range. */
+const PER_USER_READ_MAX = 5;
 const MAX_MONTH_SPAN = 24;
 
 const NARROW_PERIOD_HINT =
@@ -68,9 +70,9 @@ function assertDateRange(fromDate: string, toDate: string): void {
   const [ty, tm, td] = toDate.split("-").map(Number);
   const days =
     (Date.UTC(ty, tm - 1, td) - Date.UTC(fy, fm - 1, fd)) / 86_400_000 + 1;
-  if (days > MAX_RANGE_DAYS) {
+  if (days > REPORT_RANGE_DAYS_MAX) {
     throw new ConvexError(
-      `Date range too large — maximum ${MAX_RANGE_DAYS} days per call. ` +
+      `Date range too large — maximum ${REPORT_RANGE_DAYS_MAX} days per call. ` +
         "Split the period and combine the results.",
     );
   }
@@ -171,6 +173,37 @@ async function scanEntriesInRange(
   return entries;
 }
 
+/**
+ * The entries of a few users in a range, one `by_userId_date` read each — a
+ * member's own report never scans the whole org's range. Same cap rule.
+ */
+async function scanUserEntriesInRange(
+  ctx: QueryCtx,
+  orgId: string,
+  userIds: readonly string[],
+  fromDate: string,
+  toDate: string,
+): Promise<Doc<"timeEntries">[]> {
+  const entries: Doc<"timeEntries">[] = [];
+  let read = 0;
+  for (const raw of userIds) {
+    const userId = ctx.db.normalizeId("users", raw);
+    if (!userId) continue;
+    const rows = await ctx.db
+      .query("timeEntries")
+      .withIndex("by_userId_date", (q) =>
+        q.eq("userId", userId).gte("date", fromDate).lte("date", toDate),
+      )
+      .take(MAX_REPORT_ENTRIES + 1 - read);
+    read += rows.length;
+    if (read > MAX_REPORT_ENTRIES) {
+      throw new ConvexError(NARROW_PERIOD_HINT);
+    }
+    entries.push(...rows.filter((e) => e.orgId === orgId));
+  }
+  return entries;
+}
+
 // ─── Time by member (Package C) ─────────────────────────────────────────────
 
 /**
@@ -220,7 +253,7 @@ export async function timeByMemberForAuth(
       const id = ctx.db.normalizeId("users", raw);
       if (!id || !userNameById.has(id.toString())) {
         throw new ConvexError(
-          `Unknown user id "${raw}". Use the listTeamMembers tool to get valid member ids.`,
+          `Unknown member "${raw}". Members and their emails are listed in fetch("workspace").`,
         );
       }
       return id.toString();
@@ -233,9 +266,12 @@ export async function timeByMemberForAuth(
   targetUserIds = [...new Set(targetUserIds)];
 
   const allowed = new Set(targetUserIds);
-  const entries = (
-    await scanEntriesInRange(ctx, auth.orgId, args.fromDate, args.toDate)
-  ).filter((e) => allowed.has(e.userId.toString()));
+  const entries =
+    targetUserIds.length <= PER_USER_READ_MAX
+      ? await scanUserEntriesInRange(ctx, auth.orgId, targetUserIds, args.fromDate, args.toDate)
+      : (await scanEntriesInRange(ctx, auth.orgId, args.fromDate, args.toDate)).filter((e) =>
+          allowed.has(e.userId.toString()),
+        );
 
   const taskIds = new Set(entries.map((e) => e.taskId.toString()));
   const projectByTaskId = await buildTaskProjectLookup(
@@ -283,14 +319,15 @@ export const clientMonthlySummary = internalQuery({
 /**
  * `options.tasks` (MCP `report` client_monthly, docs/prd-mcp.md D25) adds one
  * rollup per task worked in the range — its minutes and its time-entry notes,
- * from the same entries as the month totals. Without it the result is
+ * from the same entries as the month totals. `options.projectId` narrows the
+ * loop to one of the client's projects. Without options the result is
  * exactly the internal query's.
  */
 export async function clientMonthlySummaryForAuth(
   ctx: QueryCtx,
   auth: AuthContext,
   args: { clientId: string; fromMonth: string; toMonth: string },
-  options: { tasks?: boolean } = {},
+  options: { tasks?: boolean; projectId?: Id<"projects"> } = {},
 ) {
   assertAdmin(auth);
 
@@ -310,7 +347,7 @@ export async function clientMonthlySummaryForAuth(
   const client = clientId ? await ctx.db.get(clientId) : null;
   if (!client || client.orgId !== auth.orgId) {
     throw new ConvexError(
-      "Client not found. Use the listClients tool to get valid client ids.",
+      "Client not found. Clients (client:PREFIX) are listed in fetch(\"workspace\").",
     );
   }
 
@@ -319,7 +356,10 @@ export async function clientMonthlySummaryForAuth(
       .query("projects")
       .withIndex("by_clientId", (q) => q.eq("clientId", client._id))
       .collect()
-  ).filter((p) => p.orgId === auth.orgId);
+  ).filter((p) => p.orgId === auth.orgId && (options.projectId === undefined || p._id === options.projectId));
+  if (options.projectId !== undefined && projects.length === 0) {
+    throw new ConvexError("That project does not belong to this client. Project codes and their clients are listed in fetch(\"workspace\").");
+  }
 
   const fromDate = `${args.fromMonth}-01`;
   const toDate = lastDayOfMonth(args.toMonth);

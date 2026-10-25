@@ -80,6 +80,8 @@ export type WorksheetScope =
 /** Row shape passed from `collectWorksheetData` to the CSV builders. */
 export type WorksheetTaskRow = {
   taskId: Id<"tasks">;
+  /** The task key (ARLO-21), read with the task — for consumers that link it. */
+  identifier: string;
   title: string;
   categoryName: string | null;
   firstWorked: string; // YYYY-MM-DD
@@ -417,6 +419,7 @@ export async function buildTaskRows(
 
     const row = {
       taskId: task._id,
+      identifier: task.identifier,
       title: task.title,
       categoryName:
         snapshotCategoryNames.length > 0 ? snapshotCategoryNames.join(", ") : null,

@@ -211,8 +211,8 @@ describe("aggregateClientTasks", () => {
       ["t1", 65, 52, 13, 3],
     ]);
     expect(rows[1].notes).toEqual([
-      { date: "2026-06-10", minutes: 13, note: "First" },
-      { date: "2026-06-12", minutes: 47, note: "Second pass" },
+      { date: "2026-06-10", minutes: 13, billable: false, note: "First" },
+      { date: "2026-06-12", minutes: 47, billable: true, note: "Second pass" },
     ]);
     expect(rows[0]).toMatchObject({ projectId: "p2", projectName: "Ads", notes: [] });
   });

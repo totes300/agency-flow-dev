@@ -30,6 +30,7 @@ import {
 
 /** Full row: pivot fields + the Phase 9 AI input (slice 05 summarizes it). */
 export type TimesheetRow = TimesheetPivotRow & {
+  identifier: string;
   projectId: Id<"projects">;
   billableMinutes: number;
   nonBillableMinutes: number;
@@ -98,7 +99,7 @@ export async function collectTimesheetDataForAuth(
   const client = clientId ? await ctx.db.get(clientId) : null;
   if (!client || client.orgId !== authCtx.orgId) {
     throw new ConvexError(
-      "Client not found. Use the listClients tool to get valid client ids.",
+      "Client not found. Clients (client:PREFIX) are listed in fetch(\"workspace\").",
     );
   }
 
@@ -142,7 +143,7 @@ export async function collectTimesheetDataForAuth(
     projects = projects.filter((p) => wanted.has(p._id as string));
     if (projects.length === 0) {
       throw new ConvexError(
-        "None of the given project ids belong to this client. Use the listProjects tool to get valid project ids.",
+        "None of the given projects belong to this client. Project codes and their clients are listed in fetch(\"workspace\").",
       );
     }
   }
@@ -184,6 +185,7 @@ export async function collectTimesheetDataForAuth(
     for (const r of projectRows) {
       rows.push({
         taskId: r.taskId as string,
+        identifier: r.identifier,
         title: r.title,
         projectId: project._id,
         projectName: project.name,

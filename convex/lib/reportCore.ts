@@ -43,6 +43,9 @@ export type TaskProjectRef = {
 
 // ─── Month helpers ───────────────────────────────────────────────────────────
 
+/** Days per report date range: one ceiling for every report core and the MCP `report` tool. */
+export const REPORT_RANGE_DAYS_MAX = 366;
+
 const MONTH_REGEX = /^\d{4}-\d{2}$/;
 
 export function isValidMonthKey(month: string): boolean {
@@ -296,7 +299,7 @@ export type ClientTaskRollup = {
   nonBillableMinutes: number;
   entryCount: number;
   /** Non-empty notes of the task's entries in the range, oldest first (raw text, trimmed). */
-  notes: Array<{ date: string; minutes: number; note: string }>;
+  notes: Array<{ date: string; minutes: number; billable: boolean; note: string }>;
 };
 
 /**
@@ -339,7 +342,7 @@ export function aggregateClientTasks(input: {
       .sort((a, b) => (a.date !== b.date ? (a.date < b.date ? -1 : 1) : (a.startedAt ?? 0) - (b.startedAt ?? 0)))
       .flatMap((e) => {
         const note = e.note?.trim() ?? "";
-        return note ? [{ date: e.date, minutes: e.durationMinutes, note }] : [];
+        return note ? [{ date: e.date, minutes: e.durationMinutes, billable: e.isBillable, note }] : [];
       });
   }
   return [...byTask.values()]

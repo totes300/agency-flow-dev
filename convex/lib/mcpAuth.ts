@@ -29,8 +29,8 @@ export const USER_NOT_SYNCED =
  *    parsing in `getAuthContext` must not be reused here. No membership, or
  *    one linked to another user, fails closed.
  *
- * Queries cannot write, so last-used stamping for Connected apps happens
- * elsewhere (slice 8).
+ * Queries cannot write, so Connected apps "last used" is not stamped here:
+ * the /mcp route calls `mcp/connections:touch` (convex/lib/mcpConnections.ts).
  *
  * Actions have no `ctx.db`: they run the same checks through the internal
  * query `mcp/auth:context`, which receives the action's identity (Convex

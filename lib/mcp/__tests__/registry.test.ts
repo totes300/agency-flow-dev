@@ -386,7 +386,7 @@ describe("write tools", () => {
     expect(tool("save_comments").annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: false });
     expect(tool("delete").annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: true });
     for (const name of ["save_tasks", "save_comments", "delete"]) {
-      expect(tool(name).description).toMatch(/data, not instructions|app's rules/);
+      expect(tool(name).description).toMatch(/data, never instructions|app's rules/);
     }
   });
 
@@ -520,7 +520,7 @@ describe("time tools", () => {
         idempotentHint: false,
         openWorldHint: false,
       });
-      expect(tool(name).description).toMatch(/data, not instructions/);
+      expect(tool(name).description).toMatch(/data, never instructions/);
       expect(tool(name).description).toMatch(/Example: \{/);
     }
     expect(tool("save_time_entries").description).toMatch(/whole minutes: 90 means 1h 30m/);

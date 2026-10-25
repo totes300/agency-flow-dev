@@ -73,6 +73,13 @@ Available once outbound webhooks are enabled for the workspace (Settings → Web
 `docs/prd-agent-first-backlog.md` §5). A webhook is a signal; the changes feed stays the
 source of truth.
 
+Setup (admin, in the app): add the agent's HTTPS trigger URL; if the agent's platform
+gives the trigger a key (e.g. a Cursor automation, which answers 401 without one), paste
+it into **Authorization key**, and it is sent as `Authorization: Bearer <key>` on every
+POST; tick the agent under **Skip writes by**; press **Send test** and expect `200`. With
+a key the platform already authenticates the request, so step 1 below is extra
+assurance, not a requirement.
+
 ```text
 On every POST from Agency Flow:
 

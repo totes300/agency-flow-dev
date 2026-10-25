@@ -20,7 +20,7 @@ import type { AuthContext } from "../lib/auth";
 import { DEFAULT_STATUS_SEED } from "../tasks/model";
 import { createTask, updateTask } from "../tasks/write";
 import { loadTaskForWrite } from "../tasks/access";
-import { changeOf, validateWebhookUrl, WEBHOOK_DELIVERY_TTL_MS, WEBHOOK_EVENT_TYPES, WEBHOOK_RETRY_DELAYS_MS } from "../webhooks";
+import { authKeyHintOf, changeOf, validateWebhookUrl, WEBHOOK_DELIVERY_TTL_MS, WEBHOOK_EVENT_TYPES, WEBHOOK_RETRY_DELAYS_MS } from "../webhooks";
 import { WEBHOOK_PICKER_TYPES } from "../../lib/webhook-events";
 import { connectMembers } from "./helpers/mcpConnections";
 
@@ -108,8 +108,10 @@ async function setup(t: T) {
 
 type Fixture = Awaited<ReturnType<typeof setup>>;
 
-const createEndpoint = (t: T, args: { url?: string; eventTypes?: string[]; excludeClientIds?: string[] } = {}) =>
-  inApp(t, "admin").action(api.webhooks.create, { url: args.url ?? HOOK, eventTypes: args.eventTypes, excludeClientIds: args.excludeClientIds });
+const createEndpoint = (t: T, args: { url?: string; eventTypes?: string[]; excludeClientIds?: string[]; authKey?: string } = {}) =>
+  inApp(t, "admin").action(api.webhooks.create, {
+    url: args.url ?? HOOK, eventTypes: args.eventTypes, excludeClientIds: args.excludeClientIds, authKey: args.authKey,
+  });
 
 const deliveries = (t: T) =>
   t.run(async (ctx) => (await ctx.db.query("webhookDeliveries").collect()).sort((a, b) => a.attempt - b.attempt || a._creationTime - b._creationTime));
@@ -419,6 +421,68 @@ describe("admin functions", () => {
     expect(await inApp(t, "other").query(api.webhooks.get, {})).toBeNull();
     await expect(inApp(t, "other").mutation(api.webhooks.remove, { endpointId })).rejects.toThrow(/not found/);
     await expect(inApp(t, "other").query(api.webhooks.recentDeliveries, { endpointId })).rejects.toThrow(/not found/);
+  });
+});
+
+// ─── Authorization key (receivers that require a bearer key) ─────────────────
+
+describe("authorization key", () => {
+  it("is sent as a Bearer header next to the signature; get shows only a hint", async () => {
+    const t = createT();
+    const f = await setup(t);
+    await createEndpoint(t, { authKey: "  Bearer key_live_abc123  " });
+    await moveToDone(t, f);
+    await runAll(t);
+    expect(sent[0].headers.Authorization).toBe("Bearer key_live_abc123");
+    expect(sent[0].headers["X-AgencyFlow-Signature"]).toMatch(/^t=\d+,v1=/);
+    const endpoint = await inApp(t, "admin").query(api.webhooks.get, {});
+    expect(endpoint).toMatchObject({ authKeyHint: "c123" });
+    expect(JSON.stringify(endpoint)).not.toContain("key_live_abc123");
+  });
+
+  it("no key, no Authorization header", async () => {
+    const t = createT();
+    await setup(t);
+    const { endpointId } = await createEndpoint(t);
+    await inApp(t, "admin").action(api.webhooks.sendTest, { endpointId });
+    expect(sent[0].headers.Authorization).toBeUndefined();
+    expect(await inApp(t, "admin").query(api.webhooks.get, {})).toMatchObject({ authKeyHint: null });
+  });
+
+  it("update sets, keeps (omitted) and clears (null) the key", async () => {
+    const t = createT();
+    await setup(t);
+    const { endpointId } = await createEndpoint(t);
+    await inApp(t, "admin").mutation(api.webhooks.update, { endpointId, authKey: "secret-one" });
+    await inApp(t, "admin").mutation(api.webhooks.update, { endpointId, enabled: true });
+    await inApp(t, "admin").action(api.webhooks.sendTest, { endpointId });
+    expect(sent[0].headers.Authorization).toBe("Bearer secret-one");
+    await inApp(t, "admin").mutation(api.webhooks.update, { endpointId, authKey: null });
+    await inApp(t, "admin").action(api.webhooks.sendTest, { endpointId });
+    expect(sent[1].headers.Authorization).toBeUndefined();
+    expect(await inApp(t, "admin").query(api.webhooks.get, {})).toMatchObject({ authKeyHint: null });
+  });
+
+  it("a short key is set but gets no hint; rotating the secret keeps the key", async () => {
+    const t = createT();
+    await setup(t);
+    const { endpointId } = await createEndpoint(t, { authKey: "short-key" });
+    expect(await inApp(t, "admin").query(api.webhooks.get, {})).toMatchObject({ authKeyHint: "" });
+    await inApp(t, "admin").action(api.webhooks.rotateSecret, { endpointId });
+    await inApp(t, "admin").action(api.webhooks.sendTest, { endpointId });
+    expect(sent[0].headers.Authorization).toBe("Bearer short-key");
+  });
+
+  it("refuses an empty, short, long, non-ASCII or header-injecting key", async () => {
+    const t = createT();
+    await setup(t);
+    const { endpointId } = await createEndpoint(t);
+    for (const authKey of ["Bearer ", "two words", "x".repeat(7), "x".repeat(2001), "k\u00e9y_live_abc", "abcdefgh\r\nX-Injected: 1"]) {
+      await expect(inApp(t, "admin").mutation(api.webhooks.update, { endpointId, authKey })).rejects.toThrow(/key/i);
+    }
+    expect(authKeyHintOf(undefined)).toBeNull();
+    expect(authKeyHintOf("x".repeat(11))).toBe("");
+    expect(authKeyHintOf("key_live_abc123")).toBe("c123");
   });
 });
 

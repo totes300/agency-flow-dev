@@ -2,8 +2,8 @@
 /**
  * Add / Edit webhook endpoint (Settings → Webhooks, mockup
  * docs/mockups/webhooks-settings.html frame C). The URL, the event filter
- * (all, or chosen families/types) and the OAuth clients whose writes are
- * skipped (W5). Validation lives in convex/webhooks.ts; errors come back as
+ * (all, or chosen families/types), an optional bearer key for receivers
+ * that require one, and the OAuth clients whose writes are skipped (W5). Validation lives in convex/webhooks.ts; errors come back as
  * toasts. Create returns the signing secret, handed to `onCreated`.
  */
 import { useState } from "react"
@@ -34,6 +34,18 @@ export type WebhookEndpointValues = {
   url: string
   eventTypes: string[] | null
   excludeClientIds: string[]
+  /** Last 4 characters of the stored key, "" for a short key (set, nothing shown); null when there is none. */
+  authKeyHint: string | null
+}
+
+/**
+ * The `authKey` argument for `update`, from the dialog's state: a typed key
+ * replaces, "Remove key" clears (`null`), otherwise omitted keeps the stored
+ * one. A typed key wins over a pending removal.
+ */
+export function authKeyArg(typed: string, removeKey: boolean): string | null | undefined {
+  if (typed.trim().length > 0) return typed
+  return removeKey ? null : undefined
 }
 
 export function WebhookEndpointDialog({
@@ -74,6 +86,12 @@ function EndpointForm({
   const [mode, setMode] = useState<"all" | "selected">(endpoint?.eventTypes ? "selected" : "all")
   const [selected, setSelected] = useState<Set<string>>(new Set(endpoint?.eventTypes ?? []))
   const [excluded, setExcluded] = useState<Set<string>>(new Set(endpoint?.excludeClientIds ?? []))
+  // Empty = keep the stored key (edit) or none (add); never prefilled with the key itself.
+  const [authKey, setAuthKey] = useState("")
+  const [removeKey, setRemoveKey] = useState(false)
+  const typedKey = authKey.trim().length > 0
+  const storedKey = endpoint?.authKeyHint !== undefined && endpoint?.authKeyHint !== null
+  const hasKey = storedKey && !removeKey
   const [pending, setPending] = useState(false)
 
   const noEvents = mode === "selected" && selected.size === 0
@@ -90,9 +108,20 @@ function EndpointForm({
     const excludeClientIds = [...excluded]
     try {
       if (endpoint) {
-        await update({ endpointId: endpoint.endpointId, url: url.trim(), eventTypes, excludeClientIds })
+        await update({
+          endpointId: endpoint.endpointId,
+          url: url.trim(),
+          eventTypes,
+          excludeClientIds,
+          authKey: authKeyArg(authKey, removeKey),
+        })
       } else {
-        const { secret } = await create({ url: url.trim(), eventTypes: eventTypes ?? undefined, excludeClientIds })
+        const { secret } = await create({
+          url: url.trim(),
+          eventTypes: eventTypes ?? undefined,
+          excludeClientIds,
+          authKey: authKeyArg(authKey, false) ?? undefined,
+        })
         onCreated(secret)
       }
       onDone()
@@ -138,6 +167,50 @@ function EndpointForm({
           />
           <p className="text-xs text-muted-foreground">
             HTTPS with a host name. No IP addresses, localhost or internal hosts.
+          </p>
+        </div>
+
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="webhook-auth-key">
+            Authorization key <span className="font-normal text-muted-foreground">(optional)</span>
+          </Label>
+          <Input
+            id="webhook-auth-key"
+            type="password"
+            autoComplete="new-password"
+            value={authKey}
+            onChange={(e) => setAuthKey(e.target.value)}
+            placeholder={hasKey ? `••••••••${endpoint?.authKeyHint ?? ""} · leave empty to keep` : "Paste the key your receiver gave you"}
+            className="font-mono text-[12.5px]"
+          />
+          <p className="text-xs text-muted-foreground">
+            Only if your receiver asks for one, e.g. a Cursor automation. Sent as{" "}
+            <code className="font-mono">Authorization: Bearer &lt;key&gt;</code>.
+            {hasKey && !typedKey && (
+              <>
+                {" "}
+                <button
+                  type="button"
+                  className="font-medium text-foreground underline-offset-2 hover:underline"
+                  onClick={() => setRemoveKey(true)}
+                >
+                  Remove key
+                </button>
+              </>
+            )}
+            {storedKey && removeKey && !typedKey && (
+              <>
+                {" "}
+                The key will be removed when you save.{" "}
+                <button
+                  type="button"
+                  className="font-medium text-foreground underline-offset-2 hover:underline"
+                  onClick={() => setRemoveKey(false)}
+                >
+                  Keep key
+                </button>
+              </>
+            )}
           </p>
         </div>
 

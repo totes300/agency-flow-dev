@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { deliveryOutcome } from "../webhook-deliveries"
 import { summarizeEventTypes, webhookEventLabel } from "@/lib/webhook-events"
+import { authKeyArg } from "../webhook-endpoint-dialog"
 
 const base = { attempt: 1, httpStatus: null, error: null, nextAttemptAt: null }
 
@@ -21,5 +22,16 @@ describe("event labels", () => {
     expect(summarizeEventTypes(["status_changed", "comment_added"])).toBe("Status changed, Comment added")
     expect(summarizeEventTypes(["status_changed", "comment_added", "time_entry_logged"])).toBe("Status changed, Comment added +1")
     expect(webhookEventLabel("test")).toBe("Test event")
+  })
+})
+
+describe("authKeyArg (edit dialog: keep / replace / remove)", () => {
+  it("omits to keep, sends null to remove, and a typed key wins over a pending removal", () => {
+    expect(authKeyArg("", false)).toBeUndefined()
+    expect(authKeyArg("   ", false)).toBeUndefined()
+    expect(authKeyArg("", true)).toBeNull()
+    expect(authKeyArg("   ", true)).toBeNull()
+    expect(authKeyArg("key_live_abc123", false)).toBe("key_live_abc123")
+    expect(authKeyArg("key_live_abc123", true)).toBe("key_live_abc123")
   })
 })

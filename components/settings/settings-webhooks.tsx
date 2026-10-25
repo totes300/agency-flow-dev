@@ -79,6 +79,7 @@ export function SettingsWebhooks() {
                 url: endpoint.url,
                 eventTypes: endpoint.eventTypes,
                 excludeClientIds: endpoint.excludeClientIds,
+                authKeyHint: endpoint.authKeyHint,
               }
             : undefined
         }
@@ -204,6 +205,13 @@ function EndpointCard({
       </Row>
       <Row label="Signing secret">
         <span className="font-mono text-xs text-muted-foreground">••••••••{endpoint.secretHint}</span>
+      </Row>
+      <Row label="Authorization">
+        {endpoint.authKeyHint !== null ? (
+          <span className="font-mono text-xs text-muted-foreground">Bearer ••••••••{endpoint.authKeyHint}</span>
+        ) : (
+          <span className="text-muted-foreground">None</span>
+        )}
       </Row>
       <Row label="Last delivery">
         <LastDelivery endpoint={endpoint} />

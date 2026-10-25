@@ -51,7 +51,9 @@ must be callable by clients.
   checks; a member's access comes from `taskAssignees` edges (own or the
   parent's), never from the `assigneeIds` cache.
 - Task rows and edges are written only by `convex/tasks/write.ts`.
-- Task search (`search_title`) always filters on `orgId` and the hits are
+- Full-text search (`tasks.search_text`, `comments.search_text`,
+  `attachmentContents.search_text`) always filters on `orgId`; an attachment hit
+  reaches its task through the attachment row, re-checked for the org. Task search always filters on `orgId` and the hits are
   access-filtered before anything is returned (pickers, agent mentions, agent
   tools).
 - Agent tools call the task queries with the running user's identity; an
@@ -86,6 +88,21 @@ The MCP server (`docs/prd-mcp.md` §5) is a second way in, with its own rules:
   token can call them, `touch` included, with the access the token's user has in
   that org. The security controls are the token, the per-call checks above (org,
   membership, role, revoke) and Revoke.
+
+## Outbound webhooks
+
+- Endpoints are per organization and admin-managed through app-session functions
+  (`convex/webhooks.ts`: `getAuthContext` + admin); OAuth tokens cannot call them
+  (I4) and agents cannot configure them. An endpoint id from another org is "not
+  found".
+- Deliveries are queued from `logActivity` only for endpoints of the activity row's
+  own org, and each attempt re-checks that the endpoint still belongs to that org.
+- Payloads are signed with the endpoint's secret (returned only once, at create or
+  rotate) and carry refs and names only: task ref and link, project code, client
+  prefix, actor name and email, the change's short scalar fields. Never task
+  bodies, comment text, notes or file contents.
+- The URL must be `https://` with a host name (no IP literal, localhost, `.internal`
+  or the app's own host); delivery does not follow redirects.
 
 ## Review checklist
 

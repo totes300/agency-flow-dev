@@ -213,7 +213,7 @@ function compareSortKeys(a: Doc<"tasks">, b: Doc<"tasks">): number {
 
 /**
  * Small candidate lists for pickers (Add to Today, time-entry task picker,
- * parent pickers). With `search`: title search, access-filtered. Without:
+ * parent pickers). With `search`: full-text search (title + description), access-filtered. Without:
  * the project's tasks when `projectId` is given, else the caller's assigned
  * tasks. Open tasks only unless `includeClosed`; top-level only unless
  * `includeSubtasks`.
@@ -235,7 +235,7 @@ export const pickerCandidates = query({
     if (search) {
       candidates = await ctx.db
         .query("tasks")
-        .withSearchIndex("search_title", (q) => q.search("title", search).eq("orgId", auth.orgId))
+        .withSearchIndex("search_text", (q) => q.search("searchText", search).eq("orgId", auth.orgId))
         .take(SEARCH_CAP);
     } else if (args.projectId && auth.isAdmin) {
       candidates = (

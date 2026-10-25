@@ -5,6 +5,7 @@ import { Id } from "./_generated/dataModel";
 import { loadTaskForReadOrNull } from "./tasks/access";
 import type { ActivityEvent, ActivityVia } from "./tasks/model";
 import { onActivity } from "./tasks/derived";
+import { scheduleWebhookDeliveries } from "./webhooks";
 
 // ─── Helper (called from other mutations) ───────────────────────────────────────
 
@@ -14,7 +15,8 @@ import { onActivity } from "./tasks/derived";
  * (§5.5, §4.3). Called from tasks/write.ts,
  * comments.ts and timeEntries.ts. `at` defaults to now (seeds pass history).
  * `via` marks a write made through an external agent (callers pass the
- * actor's `AuthContext.via`, docs/prd-mcp.md D15).
+ * actor's `AuthContext.via`, docs/prd-mcp.md D15). Every row is also queued
+ * for the org's webhook endpoints (convex/webhooks.ts, W2).
  */
 export async function logActivity(
   ctx: MutationCtx,
@@ -28,8 +30,9 @@ export async function logActivity(
 ) {
   const { at, ...event } = args;
   const createdAt = at ?? Date.now();
-  await ctx.db.insert("activityLog", { ...event, createdAt });
+  const activityId = await ctx.db.insert("activityLog", { ...event, createdAt });
   await onActivity(ctx, args.taskId, { kind: args.type, actorId: args.userId, at: createdAt });
+  await scheduleWebhookDeliveries(ctx, { orgId: args.orgId, activityId, type: args.type, via: args.via });
 }
 
 // ─── Query ──────────────────────────────────────────────────────────────────────

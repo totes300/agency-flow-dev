@@ -436,6 +436,17 @@ describe("renderRecord (other kinds) and ref errors", () => {
 describe("search sections", () => {
   const page = { total: 1, offset: 0, incomplete: false, notes: [] as string[] };
 
+  it("marks a task found through an attached file (full-text search, S2)", () => {
+    const row = {
+      identifier: "ARLO-21", title: "Fix hero", status: "In progress", statusCategory: "started" as const,
+      priority: "No priority", assignees: ["Ada"], dueDate: null, overdue: false, parent: null,
+    };
+    expect(renderTaskSection({ ...page, today: "2026-10-25", rows: [{ ...row, matchedIn: "brief\nv2.pdf" }] }, CTX)).toContain(
+      '- [ARLO-21](https://localhost:3001/tasks/ARLO-21) · Fix hero · In progress · Ada · matched in file "brief v2.pdf"',
+    );
+    expect(renderTaskSection({ ...page, today: "2026-10-25", rows: [row] }, CTX)).not.toContain("matched in file");
+  });
+
   it("one line per row with ref, title, key fields and link", () => {
     expect(
       renderProjectSection(
@@ -560,6 +571,21 @@ describe("renderChanges (DESIGN-1)", () => {
         "- 2026-10-24 12:03 · ARLO-21 · Csaba · commented",
         'Up to date. Next time, call fetch with refs ["changes"] and changes.cursor "CUR" to get only what changed since.',
       ].join("\n"),
+    );
+  });
+
+  it("tells a deleted task from its row: bare key, what went, via (§7)", () => {
+    const deleted = {
+      at: AT,
+      task: { identifier: "ARLO-21", title: "Logo v2", deleted: true },
+      actor: "Adam",
+      type: "task_deleted",
+      metadata: { identifier: "ARLO-21", title: "Logo v2", projectCode: "ARLO", subtaskCount: 3, deletedTimeEntries: 2 },
+      via: "claude.ai",
+      comment: null,
+    } as ChangesData["changes"][number];
+    expect(renderChanges({ ...data, changes: [deleted] }, CTX)).toContain(
+      '- 2026-10-24 12:00 · ARLO-21 · Adam · deleted task "Logo v2" (3 sub-tasks, 2 time entries) · via claude.ai',
     );
   });
 

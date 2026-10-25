@@ -3,6 +3,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import type { AuthContext } from "./lib/auth";
 import { onComment, onTimeEntryChange } from "./tasks/derived";
 import { createTask, deleteTaskRecord, patchTaskForSeed } from "./tasks/write";
+import { commentSearchText } from "./lib/searchText";
 
 /**
  * DEV-ONLY dummy data for testing the AI task summarizer.
@@ -304,6 +305,7 @@ export const seed = internalMutation({
             orgId,
             userId: authors[c.author],
             content: doc(p(c.text)),
+            searchText: commentSearchText(doc(p(c.text))),
             parentCommentId: c.replyToPrev ? prevCommentId : undefined,
             createdAt: at,
             updatedAt: at,

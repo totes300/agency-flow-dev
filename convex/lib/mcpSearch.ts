@@ -70,6 +70,8 @@ export const EXTERNAL_REF_FILTER_MAX = 25;
 export const INVOICE_SEARCH_CAP = 2000;
 /** Preview length of a comment row. */
 export const COMMENT_PREVIEW_CHARS = 200;
+/** Attachment-text search hits read per task search (S2); each costs ~3 ranges. */
+export const ATTACHMENT_HIT_CAP = 100;
 
 const DAY_MS = 86_400_000;
 
@@ -336,6 +338,41 @@ export async function searchTasks(ctx: QueryCtx, auth: AuthContext, args: TaskSe
     candidates,
   });
 
+  // Attachment text (S2): tasks whose files match, through the same filters
+  // and access rules, after the text hits; a task already matched is not repeated.
+  let incomplete = loadTruncated;
+  const matchedIn = new Map<Id<"tasks">, string>();
+  const query = args.query?.trim();
+  if (query) {
+    const files = await attachmentHits(ctx, auth.orgId, query);
+    incomplete ||= files.truncated;
+    const inCandidates = candidates ? new Set(candidates.tasks.map((t) => t._id)) : undefined;
+    const fileTasks = [...files.tasks.values()]
+      .map((hit) => hit.task)
+      .filter((t) => !matched.some((m) => m._id === t._id) && (inCandidates === undefined || inCandidates.has(t._id)));
+    if (fileTasks.length > 0) {
+      const viaFiles = await findTaskDocsForAuth(ctx, auth, {
+        statusId: status.statusId,
+        category: status.category,
+        includeClosed: status.includeClosed,
+        clientId: client?._id,
+        projectId: project?._id,
+        assigneeId,
+        labelId,
+        dueAfter: args.due.from,
+        dueBefore,
+        where: filterUpdated ? (t) => updatedMatch(t.lastActivityAt ?? t.updatedAt, args, clock) : undefined,
+        candidates: { tasks: fileTasks, truncated: false },
+      });
+      // Keep the files' relevance order.
+      const order = new Map(fileTasks.map((t, i) => [t._id, i] as const));
+      for (const task of viaFiles.matched.sort((a, b) => order.get(a._id)! - order.get(b._id)!)) {
+        matched.push(task);
+        matchedIn.set(task._id, files.tasks.get(task._id)!.fileName);
+      }
+    }
+  }
+
   const shown = page(matched, args);
   const base = await toAgentTaskRows(ctx, auth.orgId, shown);
   // The identifier's key already is the project code: no project column.
@@ -349,16 +386,40 @@ export async function searchTasks(ctx: QueryCtx, auth: AuthContext, args: TaskSe
     dueDate: base[i].dueDate,
     overdue: isOverdue(task, clock.today),
     parent: base[i].parent,
+    ...(matchedIn.has(task._id) ? { matchedIn: matchedIn.get(task._id) } : {}),
   }));
   const result: SearchPage<(typeof rows)[number]> & { today: string } = {
     rows,
     total: matched.length,
     offset: args.offset,
-    incomplete: loadTruncated,
+    incomplete,
     notes: [],
     today: clock.today,
   };
   return result;
+}
+
+/**
+ * Tasks whose attached files' extracted text matches (`attachmentContents`
+ * search index, this org only), each with the first matching file's name, in
+ * relevance order. A file reaches its task through the task or comment
+ * attachment row that references the blob; access is checked by the caller.
+ */
+async function attachmentHits(ctx: QueryCtx, orgId: string, query: string) {
+  const contents = await ctx.db
+    .query("attachmentContents")
+    .withSearchIndex("search_text", (q) => q.search("text", query).eq("orgId", orgId))
+    .take(ATTACHMENT_HIT_CAP + 1);
+  const tasks = new Map<Id<"tasks">, { task: Doc<"tasks">; fileName: string }>();
+  for (const content of contents.slice(0, ATTACHMENT_HIT_CAP)) {
+    const file =
+      (await ctx.db.query("attachments").withIndex("by_fileId", (q) => q.eq("fileId", content.storageId)).first()) ??
+      (await ctx.db.query("commentAttachments").withIndex("by_fileId", (q) => q.eq("fileId", content.storageId)).first());
+    if (!file || file.orgId !== orgId || tasks.has(file.taskId)) continue;
+    const task = await ctx.db.get(file.taskId);
+    if (task && task.orgId === orgId) tasks.set(task._id, { task, fileName: file.fileName });
+  }
+  return { tasks, truncated: contents.length > ATTACHMENT_HIT_CAP };
 }
 
 // ─── Projects, clients, members (workspace reference data) ───────────────────
@@ -670,6 +731,11 @@ async function orgCommentCandidates(ctx: QueryCtx, auth: AuthContext, args: Comm
   }
 
   // Access: only comments on tasks the caller can read (tasks/access.ts).
+  return { candidates: await readableCommentCandidates(ctx, auth, comments), incomplete: events.length > COMMENT_SCAN_CAP };
+}
+
+/** Comments on tasks the caller can read. */
+async function readableCommentCandidates(ctx: QueryCtx, auth: AuthContext, comments: readonly Doc<"comments">[]) {
   const tasks = new Map<Id<"tasks">, Doc<"tasks">>();
   for (const c of comments) {
     if (tasks.has(c.taskId)) continue;
@@ -684,7 +750,20 @@ async function orgCommentCandidates(ctx: QueryCtx, auth: AuthContext, args: Comm
     const task = readable.get(c.taskId);
     if (task) candidates.push(commentCandidate(c, task));
   }
-  return { candidates, incomplete: events.length > COMMENT_SCAN_CAP };
+  return candidates;
+}
+
+/**
+ * Comments whose text matches `query` (`comments.search_text`, this org,
+ * `COMMENT_SCAN_CAP` hits by relevance), on tasks the caller can read.
+ */
+async function textCommentCandidates(ctx: QueryCtx, auth: AuthContext, query: string) {
+  const hits = await ctx.db
+    .query("comments")
+    .withSearchIndex("search_text", (q) => q.search("searchText", query).eq("orgId", auth.orgId))
+    .take(COMMENT_SCAN_CAP + 1);
+  const comments = hits.slice(0, COMMENT_SCAN_CAP).filter((c) => c.orgId === auth.orgId);
+  return { candidates: await readableCommentCandidates(ctx, auth, comments), incomplete: hits.length > COMMENT_SCAN_CAP };
 }
 
 /** Comments on tasks the caller can read, newest first. */
@@ -698,15 +777,21 @@ export async function searchComments(ctx: QueryCtx, auth: AuthContext, args: Com
   const client = await clientFilter(resolver, args.client);
   const project = await projectFilter(resolver, args.project);
 
+  // With a query and no task, the comment search index finds the matches (S1);
+  // otherwise the bounded reads below, matched as a substring.
+  const query = args.query?.trim();
+  const byIndex = !task && !!query;
   const { candidates, incomplete } = task
     ? await taskCommentCandidates(ctx, auth, task)
-    : await orgCommentCandidates(ctx, auth, args);
+    : query
+      ? await textCommentCandidates(ctx, auth, query)
+      : await orgCommentCandidates(ctx, auth, args);
   const matched = candidates.filter((c) => {
     if (author !== undefined && c.userId !== author) return false;
     if (project !== undefined && c.task.projectId !== project._id) return false;
     if (client !== undefined && c.task.clientId !== client._id) return false;
     if (!updatedMatch(c.createdAt, args, clock)) return false;
-    return textMatch(args.query, extractPlainText(c.content));
+    return byIndex || textMatch(args.query, extractPlainText(c.content));
   });
   // Newest first; ties (one transaction) by insertion order, so the order is
   // total and an offset cursor pages stably.

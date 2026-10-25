@@ -149,7 +149,7 @@ async function setupData(t: T) {
     const comment = async (taskId: Id<"tasks">, userId: Id<"users">, text: string, at: number) => {
       const id = await ctx.db.insert("comments", {
         taskId, orgId: ORG, userId, content: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text }] }] },
-        createdAt: at, updatedAt: at,
+        searchText: text, createdAt: at, updatedAt: at,
       });
       await ctx.db.insert("activityLog", { taskId, orgId: ORG, userId, type: "comment_added", metadata: { commentId: id }, createdAt: at });
       return id;

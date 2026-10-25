@@ -197,7 +197,7 @@ export type FindTasksInput = {
   /**
    * Preloaded candidate rows (e.g. MCP's external-ref and next-assignee
    * lookups): used instead of the loaders; access and every filter still
-   * apply, `search` as a case-insensitive title match.
+   * apply, `search` as a case-insensitive match on title + description.
    */
   candidates?: Loaded;
 };
@@ -268,17 +268,20 @@ export async function findTaskDocsForAuth(
   if (args.candidates) {
     const needle = search?.toLowerCase();
     loaded = {
-      tasks: needle ? args.candidates.tasks.filter((t) => t.title.toLowerCase().includes(needle)) : args.candidates.tasks,
+      tasks: needle
+        ? args.candidates.tasks.filter((t) => (t.searchText ?? t.title).toLowerCase().includes(needle))
+        : args.candidates.tasks,
       truncated: args.candidates.truncated,
     };
   } else if (search) {
+    // Full text over title + description, relevance order (S1, S3).
     const hits = await ctx.db
       .query("tasks")
-      .withSearchIndex("search_title", (q) =>
-        categories.length === 1
-          ? q.search("title", search).eq("orgId", orgId).eq("statusCategory", categories[0])
-          : q.search("title", search).eq("orgId", orgId),
-      )
+      .withSearchIndex("search_text", (q) => {
+        let scoped = q.search("searchText", search).eq("orgId", orgId);
+        if (project) scoped = scoped.eq("projectId", project._id);
+        return categories.length === 1 ? scoped.eq("statusCategory", categories[0]) : scoped;
+      })
       .take(SEARCH_CAP + 1);
     loaded = { tasks: hits.slice(0, SEARCH_CAP), truncated: hits.length > SEARCH_CAP };
   } else {

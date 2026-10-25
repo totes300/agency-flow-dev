@@ -156,6 +156,8 @@ export default defineSchema({
     ),
     completedAt: v.optional(v.number()),      // set iff statusCategory is closed (T4)
     archivedAt: v.optional(v.number()),
+    // Title + description plain text for `search_text` (lib/searchText.ts, S5).
+    searchText: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
     createdBy: v.id("users"),
@@ -170,9 +172,10 @@ export default defineSchema({
     .index("by_orgId_identifier", ["orgId", "identifier"])
     .index("by_orgId_completedAt", ["orgId", "completedAt"])
     .index("by_orgId_createdBy", ["orgId", "createdBy"])
-    .searchIndex("search_title", {
-      searchField: "title",
-      filterFields: ["orgId", "statusCategory"],
+    // Full text over title + description (docs/prd-agent-first-backlog.md S1).
+    .searchIndex("search_text", {
+      searchField: "searchText",
+      filterFields: ["orgId", "projectId", "statusCategory"],
     }),
 
   // ─── Task edges (§4.2) — written only by tasks/write.ts (T2) ─────────────
@@ -708,10 +711,13 @@ export default defineSchema({
     resolvedBy: v.optional(v.id("users")),
     // Written through an external agent (MCP attribution, D15).
     via: v.optional(activityViaValidator),
+    // Plain text for `search_text` (lib/searchText.ts, S5).
+    searchText: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
-    .index("by_task", ["taskId", "createdAt"]),
+    .index("by_task", ["taskId", "createdAt"])
+    .searchIndex("search_text", { searchField: "searchText", filterFields: ["orgId", "taskId"] }),
 
   // ─── Comment reactions ────────────────────────────────────────────────────
   commentReactions: defineTable({
@@ -778,7 +784,9 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_orgId_storageId", ["orgId", "storageId"]) // unique: one row per file per org
-    .index("by_storageId", ["storageId"]), // one attachment per blob (assertBlobUnattached)
+    .index("by_storageId", ["storageId"]) // one attachment per blob (assertBlobUnattached)
+    // Full text over extracted file text (S1); hits reach their task through the attachment rows.
+    .searchIndex("search_text", { searchField: "text", filterFields: ["orgId"] }),
 
   // ─── Notifications (inbox — mentions, assignments, comments) ─────────────
   notifications: defineTable({
@@ -975,4 +983,40 @@ export default defineSchema({
     .index("by_orgId_userId_clientId", ["orgId", "userId", "clientId"])
     // Connected apps lists the most recently used first (CONNECTIONS_LIST_MAX).
     .index("by_orgId_userId_lastUsedAt", ["orgId", "userId", "lastUsedAt"]),
+
+  // ─── Outbound webhooks (docs/prd-agent-first-backlog.md §5, W1–W8) ──────────
+  // An admin-managed HTTPS endpoint per org (W1; the table allows more) that
+  // receives every `activityLog` row as a signed POST (convex/webhooks.ts).
+  // `secret` signs the payloads and is returned only by create / rotate.
+  webhookEndpoints: defineTable({
+    orgId: v.string(),
+    url: v.string(),
+    secret: v.string(),                          // base64url, 32 random bytes
+    secretHint: v.string(),                      // last 4 chars, for the UI
+    eventTypes: v.optional(v.array(v.string())), // undefined = every activity type
+    excludeClientIds: v.array(v.string()),       // W5: OAuth clients whose writes are not delivered
+    enabled: v.boolean(),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    lastDeliveryAt: v.optional(v.number()),
+    lastDeliveryStatus: v.optional(v.union(v.literal("ok"), v.literal("failed"))),
+    lastDeliveryHttpStatus: v.optional(v.number()),
+  }).index("by_orgId", ["orgId"]),
+
+  // One row per delivery attempt (W6), kept 7 days. `activityId` is absent
+  // for a "Send test event" delivery.
+  webhookDeliveries: defineTable({
+    orgId: v.string(),
+    endpointId: v.id("webhookEndpoints"),
+    activityId: v.optional(v.id("activityLog")),
+    attempt: v.number(),                         // 1..4
+    status: v.union(v.literal("pending"), v.literal("ok"), v.literal("failed")),
+    httpStatus: v.optional(v.number()),
+    error: v.optional(v.string()),               // short, no response bodies
+    createdAt: v.number(),
+    nextAttemptAt: v.optional(v.number()),       // set on a failed attempt that is retried
+  })
+    .index("by_endpointId_createdAt", ["endpointId", "createdAt"])
+    .index("by_createdAt", ["createdAt"]),
 });

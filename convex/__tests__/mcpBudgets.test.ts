@@ -10,8 +10,14 @@
 //          `by_timerTaskId` index: O(affected tasks), not O(org members)
 //   CVX-4  a member's task search trusts the rows its own edge index proved
 //          readable instead of re-checking every edge
+//   S1     a full-text task search reads one search range for tasks, one
+//          for attachment text and ~3 per attachment hit (≤ 100)
+//   W2     a 25-item `save_tasks` with a webhook endpoint adds one
+//          `webhookEndpoints` range per activity row, nothing more
+//          (docs/prd-agent-first-backlog.md §5.4)
 // The counter wraps `ctx.db` inside `t.run`, so the numbers are exactly what
-// the shared cores (convex/lib/mcpDelete.ts, convex/tasks/lookup.ts) read.
+// the shared cores (convex/lib/mcpDelete.ts, convex/tasks/lookup.ts,
+// convex/lib/mcpSaveTasks.ts) read.
 
 import { describe, it, expect } from "vitest";
 import { convexTest } from "convex-test";
@@ -21,6 +27,8 @@ import type { MutationCtx } from "../_generated/server";
 import type { McpAuthContext } from "../lib/mcpAuth";
 import { deleteRecords } from "../lib/mcpDelete";
 import { findTaskDocsForAuth } from "../tasks/lookup";
+import { saveTasks } from "../lib/mcpSaveTasks";
+import { ATTACHMENT_HIT_CAP, searchTasks } from "../lib/mcpSearch";
 import { statusRow, taskRow } from "./helpers/taskFixtures";
 
 const modules = (
@@ -43,9 +51,10 @@ const TERMINALS = new Set<string | symbol>(["collect", "take", "first", "unique"
  * code under test read: one per `get` (a point read is a range of one row)
  * and one per terminal of a `query(...)` chain. Writes are not ranges.
  */
-function countingCtx(ctx: MutationCtx): { ctx: MutationCtx; ranges: () => number } {
+function countingCtx(ctx: MutationCtx): { ctx: MutationCtx; ranges: () => number; rangesOf: (table: string) => number } {
   let ranges = 0;
-  const wrapChain = (chain: object): object =>
+  const byTable = new Map<string, number>();
+  const wrapChain = (chain: object, table: string): object =>
     new Proxy(chain, {
       get(target, prop, receiver) {
         const value = Reflect.get(target, prop, receiver);
@@ -53,13 +62,14 @@ function countingCtx(ctx: MutationCtx): { ctx: MutationCtx; ranges: () => number
         if (TERMINALS.has(prop)) {
           return (...args: unknown[]) => {
             ranges += 1;
+            byTable.set(table, (byTable.get(table) ?? 0) + 1);
             return value.apply(target, args);
           };
         }
         // withIndex / withSearchIndex / order / filter / fullTableScan: still the same chain.
         return (...args: unknown[]) => {
           const next = value.apply(target, args);
-          return next !== null && typeof next === "object" ? wrapChain(next) : next;
+          return next !== null && typeof next === "object" ? wrapChain(next, table) : next;
         };
       },
     });
@@ -73,12 +83,12 @@ function countingCtx(ctx: MutationCtx): { ctx: MutationCtx; ranges: () => number
         };
       }
       if (prop === "query") {
-        return (...args: unknown[]) => wrapChain((value as (...a: unknown[]) => object).apply(target, args));
+        return (...args: unknown[]) => wrapChain((value as (...a: unknown[]) => object).apply(target, args), String(args[0]));
       }
       return typeof value === "function" ? value.bind(target) : value;
     },
   });
-  return { ctx: { ...ctx, db } as MutationCtx, ranges: () => ranges };
+  return { ctx: { ...ctx, db } as MutationCtx, ranges: () => ranges, rangesOf: (table) => byTable.get(table) ?? 0 };
 }
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
@@ -86,6 +96,8 @@ function countingCtx(ctx: MutationCtx): { ctx: MutationCtx; ranges: () => number
 const MEMBERS = 50;
 const DELETED_TASKS = 25;
 const PARENTS = 600;
+const SAVED_TASKS = 25;
+const BUDGET_FULL_TEXT = 270;
 const SUBTASKS_PER_PARENT = 2;
 
 type Fixture = {
@@ -208,5 +220,59 @@ describe("MCP read budgets", () => {
     // one per sub-task). 1,201 after = 1 + 600 + 600: one get per assigned
     // task and one range per checklist, nothing re-checked.
     expect(ranges).toBeLessThan(1600);
+  });
+  it(`a ${SAVED_TASKS}-item save_tasks with a webhook endpoint adds one range per activity row`, async () => {
+    const t = createT();
+    const f = await t.run(setupOrg);
+    await t.run(async (ctx) => {
+      const now = Date.now();
+      await ctx.db.insert("statuses", statusRow({ orgId: ORG, createdBy: f.admin, name: "Backlog", category: "backlog", isDefault: false }));
+      await ctx.db.insert("webhookEndpoints", {
+        orgId: ORG, url: "https://agent.example.com/hook", secret: "s".repeat(43), secretHint: "ssss",
+        excludeClientIds: [], enabled: true, createdBy: f.admin, createdAt: now, updatedAt: now,
+      });
+    });
+    const result = await t.run(async (raw) => {
+      const auth = await adminAuth(raw, f);
+      const { ctx, ranges, rangesOf } = countingCtx(raw);
+      const items = Array.from({ length: SAVED_TASKS }, (_, i) => ({ title: `Saved ${i}`, assignees: ["me"] }));
+      await saveTasks(ctx, auth, items, Date.now());
+      const events = (await raw.db.query("activityLog").withIndex("by_org", (q) => q.eq("orgId", ORG)).collect()).length;
+      const deliveries = (await raw.db.query("webhookDeliveries").collect()).length;
+      return { ranges: ranges(), webhookRanges: rangesOf("webhookEndpoints"), events, deliveries };
+    });
+    expect(result.deliveries).toBe(result.events);
+    expect(result.webhookRanges).toBe(result.events);
+    // Measured 2026-10-25: 300 ranges for 25 tasks (25 activity rows), of
+    // which 25 are the webhook endpoint reads.
+    expect(result.ranges).toBeLessThan(390);
+  });
+  it(`a full-text task search with ${ATTACHMENT_HIT_CAP} matching files stays bounded`, async () => {
+    const t = createT();
+    const f = await t.run(setupOrg);
+    await t.run(async (ctx) => {
+      const now = Date.now();
+      for (let i = 0; i < ATTACHMENT_HIT_CAP + 10; i += 1) {
+        const taskId = await ctx.db.insert(
+          "tasks",
+          { ...taskRow({ orgId: ORG, title: `Brief ${i}`, statusId: f.statusId, createdBy: f.admin, statusCategory: "started", createdAt: now }), searchText: `Brief ${i}` },
+        );
+        const fileId = await ctx.storage.store(new Blob(["x"]));
+        await ctx.db.insert("attachments", { taskId, orgId: ORG, userId: f.admin, fileId, fileName: `${i}.pdf`, fileSize: 1, mimeType: "application/pdf", createdAt: now });
+        await ctx.db.insert("attachmentContents", { orgId: ORG, storageId: fileId, mimeType: "application/pdf", status: "done", text: "pangolin terms", attempts: 1, createdAt: now });
+      }
+    });
+    const { ranges, result } = await t.run(async (raw) => {
+      const auth = await adminAuth(raw, f);
+      const { ctx, ranges } = countingCtx(raw);
+      const result = await searchTasks(ctx, auth, { offset: 0, limit: 25, query: "pangolin", status: "any", due: {}, updated: {}, now: Date.now() });
+      return { ranges: ranges(), result };
+    });
+    // Worst case: every hit comes through a file, so each also runs the filter pass.
+    expect(result.total).toBe(ATTACHMENT_HIT_CAP);
+    expect(result.incomplete).toBe(true);
+    // Measured 2026-10-25: 204 ranges — two search ranges, ~2 per attachment
+    // hit (its attachment row, its task) and the page's rows. ~30 % headroom.
+    expect(ranges).toBeLessThan(BUDGET_FULL_TEXT);
   });
 });

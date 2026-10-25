@@ -42,6 +42,7 @@ export const CHANGE_TYPES = [
   "identifier_changed",
   "task_archived",
   "task_restored",
+  "task_deleted",
   "comment_added",
   "comment_resolved",
   "comment_reopened",

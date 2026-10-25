@@ -7,7 +7,7 @@
       "type": "object",
       "properties": {
         "query": {
-          "description": "Text: titles, names, codes, emails, notes, comment text, invoice numbers (\"draft\" = unnumbered drafts).",
+          "description": "Full text over titles, descriptions, comments and attachment text (PDF, Word, text); results by relevance. Also names, codes, emails, notes, invoice numbers (\"draft\" = unnumbered drafts).",
           "type": "string"
         },
         "types": {
@@ -193,6 +193,7 @@
                   "identifier_changed",
                   "task_archived",
                   "task_restored",
+                  "task_deleted",
                   "comment_added",
                   "comment_resolved",
                   "comment_reopened",
@@ -990,7 +991,7 @@
   {
     "name": "create_upload",
     "title": "Start an Agency Flow file upload",
-    "description": "Upload a file from disk (text in hand: attach_file inlineText). Returns an uploadId and a one-time URL (1 h): POST the exact bytes with the same Content-Type (e.g. curl from a shell), then attach_file with the uploadId within 24 h. claude.ai on the web cannot POST: use inlineText. No HTML, scripts or executables. Example: {\"filename\": \"brief.pdf\", \"contentType\": \"application/pdf\", \"sizeBytes\": 48213}",
+    "description": "Upload a file from disk (text in hand: attach_file inlineText). Returns an uploadId and a one-time URL (1 h): POST the exact bytes with the same Content-Type (e.g. curl from a shell), then attach_file with the uploadId within 24 h. claude.ai on the web cannot POST: use inlineText. Up to 10 MB; PDF, images (PNG, JPEG, WebP, GIF), Word .docx, text, .md, .csv; HTML, scripts and executables are refused. Example: {\"filename\": \"brief.pdf\", \"contentType\": \"application/pdf\", \"sizeBytes\": 48213}",
     "inputSchema": {
       "type": "object",
       "properties": {

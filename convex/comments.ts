@@ -11,6 +11,7 @@ import {
   extractMentionIds,
   computeCommentRecipients,
 } from "./lib/notificationEvents";
+import { commentSearchText } from "./lib/searchText";
 
 // ─── Query ──────────────────────────────────────────────────────────────────────
 
@@ -150,6 +151,7 @@ export async function createCommentForAuth(
     content,
     parentCommentId: args.parentCommentId,
     via: auth.via,
+    searchText: commentSearchText(content),
     createdAt: now,
     updatedAt: now,
   });
@@ -225,6 +227,7 @@ export async function updateCommentForAuth(
   const content = validateTiptapContent(rawContent);
   await ctx.db.patch(commentId, {
     content,
+    searchText: commentSearchText(content),
     updatedAt: Date.now(),
   });
   return JSON.stringify(content) !== JSON.stringify(comment.content);

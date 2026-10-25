@@ -30,6 +30,7 @@ import {
   type TaskField,
 } from "./access";
 import { onSubtaskChange } from "./derived";
+import { taskSearchText } from "../lib/searchText";
 import {
   DEFAULT_ORG_TASK_KEY,
   EXTERNAL_REFS_PER_TASK_MAX,
@@ -668,6 +669,7 @@ export async function createTask(
     title,
     description,
     hasDescription: hasDescriptionContent(description),
+    searchText: taskSearchText(title, description),
     ...statusFields(status, undefined, now),
     projectId: project?._id,
     clientId: project?.clientId,
@@ -830,6 +832,9 @@ export async function updateTask(
       set.description = description;
       set.hasDescription = hasDescriptionContent(description);
     }
+  }
+  if (set.title !== undefined || set.description !== undefined) {
+    set.searchText = taskSearchText(set.title ?? task.title, "description" in set ? set.description : task.description);
   }
 
   let statusChange: { from: TaskCategory | undefined; to: TaskCategory } | undefined;
@@ -1159,6 +1164,9 @@ export async function deleteTaskRecord(ctx: MutationCtx, task: Doc<"tasks">): Pr
  * always block; unlocked entries need explicit consent. Timers on the tree
  * are cleared (an entry cannot outlive its task).
  */
+/** Longest task title kept in a `task_deleted` row (§7). */
+export const TASK_DELETED_TITLE_MAX = 200;
+
 export async function removeTask(
   ctx: MutationCtx,
   access: TaskAccess,
@@ -1168,7 +1176,7 @@ export async function removeTask(
   const { task, auth } = access;
   const children = await childrenOf(ctx, task);
 
-  let hasEntries = false;
+  let entryCount = 0;
   for (const t of [task, ...children]) {
     const entries = await ctx.db
       .query("timeEntries")
@@ -1180,10 +1188,10 @@ export async function removeTask(
           "This task has invoiced or settled time entries. Archive it instead to keep billing records intact.",
         );
       }
-      hasEntries = true;
+      entryCount += 1;
     }
   }
-  if (hasEntries && !options.deleteEntries) {
+  if (entryCount > 0 && !options.deleteEntries) {
     throw new ConvexError(
       "This task has logged time. Archive it instead, or confirm deleting the time entries with it.",
     );
@@ -1206,8 +1214,26 @@ export async function removeTask(
     }
   }
 
+  const project = task.projectId ? await ctx.db.get(task.projectId) : null;
   for (const child of children) await deleteTaskRecord(ctx, child);
   await deleteTaskRecord(ctx, task);
+
+  // The audit row (§7): who deleted what. Written after the cascade, which
+  // deletes the task's own activity rows, so it is the one row that stays.
+  await logActivity(ctx, {
+    taskId: task._id,
+    orgId: task.orgId,
+    userId: auth.userId,
+    via: auth.via,
+    type: "task_deleted",
+    metadata: {
+      identifier: task.identifier,
+      title: task.title.slice(0, TASK_DELETED_TITLE_MAX),
+      projectCode: project && project.orgId === task.orgId ? project.code : undefined,
+      subtaskCount: children.length,
+      deletedTimeEntries: entryCount,
+    },
+  });
 
   if (task.parentTaskId) {
     const parent = await ctx.db.get(task.parentTaskId);
@@ -1307,7 +1333,17 @@ export async function placeSubtask(
  * writes the model fields (identifier, counters) and the edges.
  */
 export async function insertTaskForSeed(ctx: MutationCtx, doc: TaskDocFields): Promise<Id<"tasks">> {
-  return await ctx.db.insert("tasks", doc);
+  return await ctx.db.insert("tasks", { ...doc, searchText: taskSearchText(doc.title, doc.description) });
+}
+
+/**
+ * Backfill only (convex/search.ts, S5): writes `searchText` on a task that
+ * has none. False when it already had one.
+ */
+export async function backfillTaskSearchText(ctx: MutationCtx, task: Doc<"tasks">): Promise<boolean> {
+  if (task.searchText !== undefined) return false;
+  await ctx.db.patch(task._id, { searchText: taskSearchText(task.title, task.description) });
+  return true;
 }
 
 /**

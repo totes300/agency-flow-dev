@@ -123,8 +123,9 @@ Defined in `convex/crons.ts`; they deploy with the functions. Each runs hourly:
 | `mcp billing preview cleanup` | Billing previews older than 24 h (tokens commit within 10 minutes, §9). |
 | `mcp upload cleanup` | Upload announcements after 25 h, and the blobs of uploads that were never attached (§10). |
 | `app upload cleanup` | The same for the app UI's `fileUploads` rows (`convex/fileUploads.ts`). |
+| `webhook delivery cleanup` | Webhook delivery attempts older than 7 days (W6, section "Webhooks"). |
 
-After the deploy, confirm all three are listed in the Convex dashboard (Schedules →
+After the deploy, confirm all of them are listed in the Convex dashboard (Schedules →
 Cron jobs) and that their first runs succeed.
 
 ## 5. Attachment extraction backfill
@@ -142,6 +143,23 @@ extraction actions, and continues itself through the scheduler. It is idempotent
 files that already have a row are skipped, so a second run is harmless. Watch the
 logs for `attachmentContents` errors; a failed file is recorded with a fixed reason
 and shown honestly by `fetch`.
+
+## 5b. Search text backfill (full-text search, 2026-10-25)
+
+Full-text search (`docs/prd-agent-first-backlog.md` §6) reads `tasks.searchText`
+and `comments.searchText`, written with every new task and comment. Records written
+before this release have none, so search does not find them — the app's task
+pickers included — until this runs once, right after the Convex deploy (production
+only with the owner's yes):
+
+```bash
+npx convex run --prod search:backfillSearchText '{}'
+```
+
+It pages through tasks, then comments (200 per run, scheduler continuation) and is
+idempotent: a record that already has `searchText` is skipped. It logs
+`[search] backfillSearchText done: <n> documents filled`; a second run logs 0.
+Attachment text needs no backfill: it is indexed as extracted (§5).
 
 ## 6. Verification
 
@@ -175,7 +193,10 @@ and shown honestly by `fetch`.
 7. Upload: `create_upload` for a small text file, `curl -X POST --data-binary @file
    -H 'Content-Type: text/plain' '<upload URL>'` (the URL is on `<CONVEX_SITE_URL>/mcp-upload?u=…`),
    then `attach_file` with the uploadId; `fetch` the task with
-   `include: ["attachment_text"]` shows the text. Delete the file afterwards.
+   `include: ["attachment_text"]` shows the text. Repeat with a PNG and a PDF (the
+   `create_upload` description lists the accepted types and the 10 MB cap); a second
+   `attach_file` with the same `idempotencyKey` answers "Replayed" and the task still
+   has the same number of files. Delete the files afterwards.
 8. Member vs admin: as a member, `report` `time_by_member` returns only their own
    time and an admin-only kind (e.g. `close_queue`) is refused; as an admin both work.
 9. Observability. The route logs one line per tool call, `[mcp] tool <name> <ms>ms
@@ -193,6 +214,31 @@ and shown honestly by `fetch`.
     `maxDuration = 60` and the handler is created with the same value; check the
     function's settings in the Vercel deployment). A lower plan limit cuts long
     report and billing calls off mid-request.
+
+## Webhooks (D-WEBHOOK, 2026-10-25)
+
+Outbound webhooks (`convex/webhooks.ts`, `docs/prd-agent-first-backlog.md` §5) deploy
+with the Convex functions; there is no environment variable to set. `MCP_RESOURCE_URL`
+supplies the app origin for task links and for the "not the app itself" URL check.
+
+- **Tables:** `webhookEndpoints` (one per org, admin-managed in Settings → Webhooks;
+  holds the signing secret, which no query returns) and `webhookDeliveries` (one row
+  per attempt, kept 7 days by the `webhook delivery cleanup` cron).
+- **Flow:** `logActivity` queues every activity row for the org's enabled endpoint
+  (type filter, excluded OAuth clients); `webhooks:deliver` POSTs it signed, with a
+  10 s timeout, and retries after 30 s, 5 min and 30 min before leaving it failed.
+  A failing endpoint never blocks or fails the write.
+- **Reading failures:** filter the Convex logs on `[webhook]`; each attempt logs one
+  line, `[webhook] delivery <id> attempt <n> ok|failed`, never the URL, secret or
+  response. The row's `error` is short (`HTTP 503`, `Network error`, `Timed out after
+  10 s`, `Endpoint removed or disabled`); the endpoint shows the last outcome.
+- **Receivers must verify the signature:** recompute HMAC-SHA256 with the secret over
+  `"<t>.<raw body>"` from `X-AgencyFlow-Signature: t=<unix seconds>,v1=<hex>`, compare
+  in constant time, reject when `|now − t| > 300 s`, and dedupe on the payload `id`
+  (the event id, identical on retries). `docs/agent-recipes.md` recipe 3 is the
+  agent-side routine.
+- **Accepted V1 risk:** a public host name that resolves to a private address passes
+  the URL check (W7); delivery follows no redirects.
 
 ## Connected apps and revocation (owner decisions D-PAGE, D-REVOKE, 2026-10-25)
 

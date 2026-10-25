@@ -207,7 +207,7 @@ function EndpointCard({
         <span className="font-mono text-xs text-muted-foreground">••••••••{endpoint.secretHint}</span>
       </Row>
       <Row label="Authorization">
-        {endpoint.authKeyHint ? (
+        {endpoint.authKeyHint !== null ? (
           <span className="font-mono text-xs text-muted-foreground">Bearer ••••••••{endpoint.authKeyHint}</span>
         ) : (
           <span className="text-muted-foreground">None</span>

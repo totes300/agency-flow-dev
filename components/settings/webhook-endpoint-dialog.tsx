@@ -34,8 +34,18 @@ export type WebhookEndpointValues = {
   url: string
   eventTypes: string[] | null
   excludeClientIds: string[]
-  /** Last 4 characters of the stored key; null when there is none. */
+  /** Last 4 characters of the stored key, "" for a short key (set, nothing shown); null when there is none. */
   authKeyHint: string | null
+}
+
+/**
+ * The `authKey` argument for `update`, from the dialog's state: a typed key
+ * replaces, "Remove key" clears (`null`), otherwise omitted keeps the stored
+ * one. A typed key wins over a pending removal.
+ */
+export function authKeyArg(typed: string, removeKey: boolean): string | null | undefined {
+  if (typed.trim().length > 0) return typed
+  return removeKey ? null : undefined
 }
 
 export function WebhookEndpointDialog({
@@ -79,7 +89,9 @@ function EndpointForm({
   // Empty = keep the stored key (edit) or none (add); never prefilled with the key itself.
   const [authKey, setAuthKey] = useState("")
   const [removeKey, setRemoveKey] = useState(false)
-  const hasKey = !!endpoint?.authKeyHint && !removeKey
+  const typedKey = authKey.trim().length > 0
+  const storedKey = endpoint?.authKeyHint !== undefined && endpoint?.authKeyHint !== null
+  const hasKey = storedKey && !removeKey
   const [pending, setPending] = useState(false)
 
   const noEvents = mode === "selected" && selected.size === 0
@@ -95,17 +107,21 @@ function EndpointForm({
         : WEBHOOK_PICKER_TYPES.filter((t) => selected.has(t))
     const excludeClientIds = [...excluded]
     try {
-      const key = authKey.trim() ? authKey : undefined
       if (endpoint) {
         await update({
           endpointId: endpoint.endpointId,
           url: url.trim(),
           eventTypes,
           excludeClientIds,
-          authKey: key ?? (removeKey ? null : undefined),
+          authKey: authKeyArg(authKey, removeKey),
         })
       } else {
-        const { secret } = await create({ url: url.trim(), eventTypes: eventTypes ?? undefined, excludeClientIds, authKey: key })
+        const { secret } = await create({
+          url: url.trim(),
+          eventTypes: eventTypes ?? undefined,
+          excludeClientIds,
+          authKey: authKeyArg(authKey, false) ?? undefined,
+        })
         onCreated(secret)
       }
       onDone()
@@ -161,16 +177,16 @@ function EndpointForm({
           <Input
             id="webhook-auth-key"
             type="password"
-            autoComplete="off"
+            autoComplete="new-password"
             value={authKey}
             onChange={(e) => setAuthKey(e.target.value)}
-            placeholder={hasKey ? `••••••••${endpoint?.authKeyHint} · leave empty to keep` : "Paste the key your receiver gave you"}
+            placeholder={hasKey ? `••••••••${endpoint?.authKeyHint ?? ""} · leave empty to keep` : "Paste the key your receiver gave you"}
             className="font-mono text-[12.5px]"
           />
           <p className="text-xs text-muted-foreground">
             Only if your receiver asks for one, e.g. a Cursor automation. Sent as{" "}
             <code className="font-mono">Authorization: Bearer &lt;key&gt;</code>.
-            {hasKey && authKey.length === 0 && (
+            {hasKey && !typedKey && (
               <>
                 {" "}
                 <button
@@ -182,7 +198,19 @@ function EndpointForm({
                 </button>
               </>
             )}
-            {removeKey && !authKey && " The key will be removed when you save."}
+            {storedKey && removeKey && !typedKey && (
+              <>
+                {" "}
+                The key will be removed when you save.{" "}
+                <button
+                  type="button"
+                  className="font-medium text-foreground underline-offset-2 hover:underline"
+                  onClick={() => setRemoveKey(false)}
+                >
+                  Keep key
+                </button>
+              </>
+            )}
           </p>
         </div>
 

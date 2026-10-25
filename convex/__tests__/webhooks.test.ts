@@ -20,7 +20,7 @@ import type { AuthContext } from "../lib/auth";
 import { DEFAULT_STATUS_SEED } from "../tasks/model";
 import { createTask, updateTask } from "../tasks/write";
 import { loadTaskForWrite } from "../tasks/access";
-import { changeOf, validateWebhookUrl, WEBHOOK_DELIVERY_TTL_MS, WEBHOOK_EVENT_TYPES, WEBHOOK_RETRY_DELAYS_MS } from "../webhooks";
+import { authKeyHintOf, changeOf, validateWebhookUrl, WEBHOOK_DELIVERY_TTL_MS, WEBHOOK_EVENT_TYPES, WEBHOOK_RETRY_DELAYS_MS } from "../webhooks";
 import { WEBHOOK_PICKER_TYPES } from "../../lib/webhook-events";
 import { connectMembers } from "./helpers/mcpConnections";
 
@@ -460,15 +460,29 @@ describe("authorization key", () => {
     await inApp(t, "admin").mutation(api.webhooks.update, { endpointId, authKey: null });
     await inApp(t, "admin").action(api.webhooks.sendTest, { endpointId });
     expect(sent[1].headers.Authorization).toBeUndefined();
+    expect(await inApp(t, "admin").query(api.webhooks.get, {})).toMatchObject({ authKeyHint: null });
   });
 
-  it("refuses an empty or malformed key", async () => {
+  it("a short key is set but gets no hint; rotating the secret keeps the key", async () => {
+    const t = createT();
+    await setup(t);
+    const { endpointId } = await createEndpoint(t, { authKey: "short-key" });
+    expect(await inApp(t, "admin").query(api.webhooks.get, {})).toMatchObject({ authKeyHint: "" });
+    await inApp(t, "admin").action(api.webhooks.rotateSecret, { endpointId });
+    await inApp(t, "admin").action(api.webhooks.sendTest, { endpointId });
+    expect(sent[0].headers.Authorization).toBe("Bearer short-key");
+  });
+
+  it("refuses an empty, short, long, non-ASCII or header-injecting key", async () => {
     const t = createT();
     await setup(t);
     const { endpointId } = await createEndpoint(t);
-    for (const authKey of ["Bearer ", "two words", "x".repeat(2001)]) {
+    for (const authKey of ["Bearer ", "two words", "x".repeat(7), "x".repeat(2001), "k\u00e9y_live_abc", "abcdefgh\r\nX-Injected: 1"]) {
       await expect(inApp(t, "admin").mutation(api.webhooks.update, { endpointId, authKey })).rejects.toThrow(/key/i);
     }
+    expect(authKeyHintOf(undefined)).toBeNull();
+    expect(authKeyHintOf("x".repeat(11))).toBe("");
+    expect(authKeyHintOf("key_live_abc123")).toBe("c123");
   });
 });
 

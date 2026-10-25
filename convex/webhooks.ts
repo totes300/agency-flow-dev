@@ -45,7 +45,10 @@ const RECENT_DELIVERIES = 20;
 const CLEANUP_BATCH = 500;
 const URL_MAX_LENGTH = 2048;
 const EXCLUDE_CLIENTS_MAX = 20;
+const AUTH_KEY_MIN = 8;
 const AUTH_KEY_MAX = 2000;
+/** A key shorter than this gets no hint: its last 4 characters would be most of it. */
+const AUTH_KEY_HINT_MIN = 12;
 const CONNECTIONS_READ_MAX = 500;
 /** Longest string kept in a payload's `change`. */
 const CHANGE_STRING_MAX = 200;
@@ -129,14 +132,27 @@ function checkClientIds(clientIds: readonly string[]): void {
 
 /**
  * The receiver's bearer key as stored: trimmed, without a pasted "Bearer "
- * prefix; one token of printable characters, no spaces.
+ * prefix; one token of 8–2000 printable ASCII characters, no spaces. The
+ * character check is also the header-injection guard (no CR/LF) and keeps
+ * `fetch` from refusing the header value.
  */
 export function normalizeAuthKey(raw: string): string {
   const key = raw.replace(/^\s*bearer(\s+|$)/i, "").trim();
   if (key.length === 0) throw new ConvexError("The authorization key is empty.");
+  if (key.length < AUTH_KEY_MIN) throw new ConvexError(`The authorization key is shorter than ${AUTH_KEY_MIN} characters.`);
   if (key.length > AUTH_KEY_MAX) throw new ConvexError(`The authorization key is longer than ${AUTH_KEY_MAX} characters.`);
   if (!/^[\x21-\x7e]+$/.test(key)) throw new ConvexError("The authorization key must be one word of printable characters, without spaces.");
   return key;
+}
+
+/**
+ * What the UI may show of a stored key: null when there is none, the last 4
+ * characters when the key is long enough for that to give nothing away, else
+ * "" (set, but no characters shown).
+ */
+export function authKeyHintOf(authKey: string | undefined): string | null {
+  if (!authKey) return null;
+  return authKey.length >= AUTH_KEY_HINT_MIN ? authKey.slice(-4) : "";
 }
 
 function checkUrl(url: string): void {
@@ -400,7 +416,7 @@ function publicEndpoint(endpoint: Doc<"webhookEndpoints">, createdByName: string
     _id: endpoint._id,
     url: endpoint.url,
     secretHint: endpoint.secretHint,
-    authKeyHint: endpoint.authKey ? endpoint.authKey.slice(-4) : null,
+    authKeyHint: authKeyHintOf(endpoint.authKey),
     eventTypes: endpoint.eventTypes ?? null,
     excludeClientIds: endpoint.excludeClientIds,
     enabled: endpoint.enabled,

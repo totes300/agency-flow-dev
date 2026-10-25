@@ -74,7 +74,7 @@ billing, month close). Agents take over the input work.
 | D14 | **Convex validates the OAuth JWT itself**, as a second auth provider. The fallback, if spike S1 fails, is §5.4. |
 | D15 | **Attribution:** activity rows written through MCP show the real user plus a quiet "via <OAuth client name>" marker, for example "via Claude", "via Codex" or "via Grok Bot". The row also stores the OAuth `clientId`, which the changes feed uses for `exclude_self` (D22). For CIMD clients (Claude, Codex) the name is the host of the client's metadata URL, e.g. "via claude.ai": the server never downloads URLs (§10). Clerk-registered clients show their application name (owner, 2026-10-25). |
 | D16 | **Notifications:** MCP writes trigger exactly the notifications the same write triggers in the app. There is no MCP-specific branch. |
-| D17 | **Settings → Connected apps:** shows each client, when it connected and when it was last used, with a Revoke button. |
+| D17 | **Connected apps:** shows each client, when it connected and when it was last used, with a Revoke button. **Owner, 2026-10-25:** it lives on a member-accessible `/connected-apps` page opened from the user menu, with the connect help on the same page. Revoke is enforced in Agency Flow: `getMcpAuthContext` refuses every token from a revoked client for that user and org, including one still valid, from the next call. "Allow again" restores access. Clerk cannot list or revoke a user's grants and cannot revoke JWTs (S3/S4). |
 | D18 | **File upload follows the Notion pattern on Convex storage:** a tool returns a Convex upload URL, the client POSTs the bytes, and a write tool attaches the resulting `storageId`. Small text content can also be passed inline. The server never downloads a URL. |
 | D19 | **Removal comes first, in its own PR (slice 0).** The in-app agent and email triage are deleted completely. PRs #14 and #15 (email-triage) are closed without merging. Worksheet AI and BYOK stay. |
 | D20 | **Delivery:** one feature branch, built in slices (§14), with one PR to `main` at the end. Slice 0 is the exception and goes in its own PR. |
@@ -148,9 +148,10 @@ Claude / Codex ──Streamable HTTP + Bearer (Clerk OAuth JWT)──▶ Next.js
 - **Scopes:** request `user:org:read`, which adds the org selector to consent and puts
   `org_id` in the access token. There is one product scope (D11).
 - **Token format:** JWT, because Convex must be able to verify it (D14).
-  - Revoking a connection deletes the grant and refresh token.
-  - The access token stays valid until it expires (default 1 day; shorten it if Clerk
-    allows, see S3).
+  - Revoking a connection in `/connected-apps` blocks that client for the user and org in
+    `getMcpAuthContext` from the next call, including tokens still valid (D17, owner
+    2026-10-25). Clerk's grant and refresh token stay alive; the user also disconnects
+    in the client to remove them. Access tokens last 1 day and cannot be shortened (S3).
   - `getMcpAuthContext` re-checks membership on every call, so removing a user from
     the org cuts access immediately.
   - Refresh tokens do not expire, so unattended agents keep working as long as their
@@ -353,9 +354,11 @@ Report rules:
   refs. The drawer may list them later; that is not V1.
 - **Client prefix uniqueness (§7):** saving a client with a prefix another client
   already uses is refused, in the UI as well as through MCP.
-- **Connected apps (D17):** a Settings section listing the user's OAuth grants (Clerk
-  Backend API): client, connected-at and last-used, with Revoke. Last-used is stamped
-  by `getMcpAuthContext`, throttled to once per hour per client.
+- **Connected apps (D17):** the `/connected-apps` page lists the user's MCP connections
+  from our own `mcpConnections` table: client, first seen, last used, with Revoke / Allow
+  again. Queries cannot write, so the `/mcp` route stamps last-used after a verified
+  request (`mcp/connections:touch`), at most hourly per org + user + client. An app
+  appears after its first request.
 - **Notifications (D16):** nothing new. They follow automatically from reusing the
   write paths.
 - **Setup docs:** a short in-app help page showing the MCP URL, how to add it in Claude
@@ -474,9 +477,14 @@ The tests for these modules move with them.
   and every SDK import `mcp-handler` uses was checked against 1.32.2.
 - **S3:** Can the OAuth access-token lifetime be shortened in Clerk (for example to
   1 h), and does Clerk rotate refresh tokens for public clients?
+  **Outcome (2026-10-25):** no lifetime setting (access tokens 1 day, refresh tokens never
+  expire, per Clerk docs); refresh-token rotation for public clients is not documented.
 - **S4:** Does the Clerk Backend API list and revoke a user's OAuth grants per client
   (for Connected apps)? If not, list from our own last-used stamps and revoke through
   the API that exists.
+  **Outcome (2026-10-25):** no. Clerk's only revoke needs the client's refresh token or an
+  opaque token plus an OAuth application id, and CIMD clients have none. Connected apps
+  therefore lists our own stamps, and Revoke is enforced in Convex (D17).
 - **S5:** Can claude.ai web upload a file to a URL a tool returns? Expected: no, so only
   inline text works there, which is acceptable for V1.
 
@@ -564,6 +572,13 @@ and Linear lists render in the browser.
   accept any `_storage` id without proving the caller uploaded it (the app's generateUploadUrl flow
   records no owner). MCP uploads are bound server-side (slice 7b). Closing the app path needs the
   same upload-binding for the UI.
+- Revoke is enforced only in Agency Flow; the Clerk grant and refresh token stay alive.
+  An app appears in Connected apps only after its first request, and last-used moves at
+  most hourly.
+- `proxy.ts` keeps Clerk's deprecated `createRouteMatcher` (the replacement spreads auth
+  checks into every page); its behaviour is locked by `lib/__tests__/proxy.test.ts`.
+- Dynamic client registration (DCR) is off in dev; CIMD covers Claude and Codex. Prod keeps
+  it off unless a client needs it (owner confirms at the prod step).
 - The member path of task search costs about one read range per assigned task. This is
   shared with the UI and only matters at around 2,000 tasks per member. Optimise it
   together with the UI if that ever becomes real.

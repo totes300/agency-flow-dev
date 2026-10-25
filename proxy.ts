@@ -2,6 +2,12 @@ import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
 import { adminRoutePatterns } from "@/lib/route-access";
 
+// `createRouteMatcher` is deprecated in @clerk/nextjs 7.9: Clerk recommends
+// auth checks in each page, route handler and server function instead of
+// path matching here. That migration touches every route, so it is deferred
+// (docs/runbooks/mcp-deployment.md, "Follow-ups"); lib/__tests__/proxy.test.ts
+// locks this file's behaviour for it. Convex enforces authorization either way.
+
 const isPublicRoute = createRouteMatcher([
   "/",
   "/sign-in(.*)",

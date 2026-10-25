@@ -20,6 +20,13 @@ export const TIMER_STALE_MS = 8 * 60 * 60 * 1000; // 8 hours
 export const TIMER_MIN_SAVE_MS = 30_000;
 
 /**
+ * Timer state lives on the global `users` row, so a member of several orgs
+ * may have a timer on a task of another org. It is refused, never cleared or
+ * described, from any other org: the timer belongs to that workspace.
+ */
+export const TIMER_IN_OTHER_WORKSPACE = "Your timer is running in another workspace; stop it there.";
+
+/**
  * Compute elapsed milliseconds for a single running segment.
  * Returns 0 if result would be negative.
  */
@@ -55,6 +62,13 @@ export function timerElapsedMs(
       ? totalElapsedMs(timer.timerStartedAt ?? now, now, accumulated)
       : accumulated;
   return Math.min(raw, MAX_TIMER_MS);
+}
+
+/** `01:30` — the duration format of the `time_entry_*` activity rows. */
+export function formatDurationHHMM(minutes: number): string {
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
 /**

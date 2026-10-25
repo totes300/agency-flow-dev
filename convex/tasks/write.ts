@@ -1077,6 +1077,7 @@ export async function archiveTask(ctx: MutationCtx, access: TaskAccess): Promise
   return await autoSaveTimersForTasks(ctx, {
     orgId: task.orgId,
     actorUserId: auth.userId,
+    via: auth.via,
     taskIds: new Set([task._id.toString(), ...children.map((c) => c._id.toString())]),
     noteLabel: "Auto-saved when the task was archived",
   });

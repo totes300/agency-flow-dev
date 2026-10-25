@@ -3,7 +3,7 @@ import { query, mutation, type MutationCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { getAuthContext, type AuthContext } from "./lib/auth";
 import { roundMinutes } from "./lib/rounding";
-import { getDateInTimezone, ORG_TIMEZONE_FALLBACK } from "./lib/timer";
+import { formatDurationHHMM, getDateInTimezone, ORG_TIMEZONE_FALLBACK } from "./lib/timer";
 import { getOrgSettings, getProjectCurrency, resolveRateSnapshot, resolveEntryCategory } from "./lib/orgHelpers";
 import { validateAssignees } from "./lib/task_helpers";
 import { assertValidDateString } from "./lib/dateValidation";
@@ -14,12 +14,6 @@ import { ceilToIncrement, fromMinor, priceMinutesMinor, toMinor } from "./lib/bi
 import { logActivity } from "./activityLog";
 import { onTimeEntryChange } from "./tasks/derived";
 import { getProjectEntries } from "./lib/projectEntries";
-
-function formatDurationHHMM(minutes: number): string {
-  const h = Math.floor(minutes / 60);
-  const m = minutes % 60;
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
-}
 
 /**
  * Validate that an explicit work category belongs to the caller's org before

@@ -10,6 +10,7 @@ import {
   getDateInTimezone,
   timerElapsedMs,
   ORG_TIMEZONE_FALLBACK,
+  TIMER_IN_OTHER_WORKSPACE,
   TIMER_MIN_SAVE_MS,
   TIMER_STALE_MS,
 } from "./lib/timer";
@@ -78,6 +79,8 @@ export async function startTimerForAuth(
 
   // Reject if a timer is already running (client must stop first)
   if (user.timerTaskId && user.timerStatus) {
+    const running = await ctx.db.get(user.timerTaskId);
+    if (running && running.orgId !== orgId) throw new ConvexError(TIMER_IN_OTHER_WORKSPACE);
     throw new ConvexError("A timer is already running. Stop it before starting a new one.");
   }
 
@@ -182,7 +185,10 @@ export const previewRateForTask = query({
  *   whole mutation rolls back and the timer KEEPS RUNNING — fix the config,
  *   stop again. Nothing is lost either way.
  * - Under 30 seconds (and no override): nothing worth saving — the timer is
- *   cleared and `discarded: true` is returned so the client can say so.
+ *   cleared and `discarded: true` is returned so the client can say so
+ *   (`discardReason` "too_short"; "task_missing" for a dangling timer).
+ * - A timer on a task of another org (timer state is per user, not per org)
+ *   is refused untouched: it is stopped from its own workspace.
  *
  * Shared by `stop` below and MCP `timer`.
  */
@@ -211,15 +217,18 @@ export async function stopTimerForAuth(
 
   // Task/project must exist to persist an entry. They should (task delete
   // and archive clear timers), but if a data race left a dangling timer,
-  // clear it and report instead of throwing forever.
+  // clear it and report instead of throwing forever. A live task of another
+  // org is not dangling: leave it alone and say nothing about it.
   const task = await ctx.db.get(user.timerTaskId);
+  if (task && task.orgId !== orgId) throw new ConvexError(TIMER_IN_OTHER_WORKSPACE);
   const project = task?.projectId ? await ctx.db.get(task.projectId) : null;
-  if (!task || task.orgId !== orgId || !project) {
+  if (!task || !project) {
     await clearTimerFields(ctx, userId);
     return {
       taskId: user.timerTaskId,
       entryId: null,
       discarded: true as const,
+      discardReason: "task_missing" as const,
       elapsedMs,
       roundedMinutes: 0,
       taskName: task?.title ?? "Unknown",
@@ -238,6 +247,7 @@ export async function stopTimerForAuth(
       taskId: task._id,
       entryId: null,
       discarded: true as const,
+      discardReason: "too_short" as const,
       elapsedMs,
       roundedMinutes: 0,
       taskName: task.title,
@@ -256,6 +266,7 @@ export async function stopTimerForAuth(
       orgId,
       ownerId: userId,
       createdBy: userId,
+      via: auth.via,
       task,
       project,
       rawMinutes: args.overrideMinutes ?? msToMinutes(elapsedMs),

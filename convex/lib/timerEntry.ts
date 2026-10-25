@@ -7,6 +7,12 @@
  * auto-save (a running timer on an archived task is committed, not wiped).
  * One implementation = one rounding/anchoring/guard policy, no drift.
  *
+ * Every timer entry logs `time_entry_logged` on its task like a manual one
+ * (owner decision 2026-10-25), by the actor (`createdBy`: the owner on stop,
+ * the archiving admin on auto-save) with `via` for an agent write
+ * (docs/prd-mcp.md D15), so timer time shows in the activity panel and the
+ * MCP changes feed.
+ *
  * Date anchoring rule:
  *   - Prefer the session's real start day (`sessionStartedAt`) so overnight
  *     sessions file under the day the work began (Toggl/Harvest behavior).
@@ -22,10 +28,19 @@
 import { ConvexError } from "convex/values";
 import type { MutationCtx } from "../_generated/server";
 import type { Doc, Id } from "../_generated/dataModel";
-import { getDateInTimezone, msToMinutes, MAX_TIMER_MS, ORG_TIMEZONE_FALLBACK } from "./timer";
+import {
+  formatDurationHHMM,
+  getDateInTimezone,
+  msToMinutes,
+  ORG_TIMEZONE_FALLBACK,
+  timerElapsedMs,
+  TIMER_MIN_SAVE_MS,
+} from "./timer";
 import { roundMinutes } from "./rounding";
 import { resolveRateSnapshot, resolveEntryCategory } from "./orgHelpers";
 import { onTimeEntryChange } from "../tasks/derived";
+import { logActivity } from "../activityLog";
+import type { ActivityVia } from "../tasks/model";
 
 export async function insertTimerEntry(
   ctx: MutationCtx,
@@ -35,6 +50,8 @@ export async function insertTimerEntry(
     ownerId: Id<"users">;
     /** Actor — same as owner on stop; the admin on archive auto-save. */
     createdBy: Id<"users">;
+    /** The actor's agent attribution (MCP), stamped on the activity row. */
+    via?: ActivityVia;
     task: Doc<"tasks">;
     project: Doc<"projects">;
     rawMinutes: number;
@@ -111,6 +128,19 @@ export async function insertTimerEntry(
 
   await onTimeEntryChange(ctx, opts.task._id, rounded);
 
+  await logActivity(ctx, {
+    taskId: opts.task._id,
+    orgId: opts.orgId,
+    userId: opts.createdBy,
+    via: opts.via,
+    type: "time_entry_logged",
+    metadata: {
+      entryId,
+      duration: formatDurationHHMM(rounded),
+      note: opts.note?.trim() || null,
+    },
+  });
+
   return { entryId, durationMinutes: rounded, date, snapshotCategoryId };
 }
 
@@ -132,6 +162,8 @@ export async function autoSaveTimersForTasks(
     orgId: string;
     /** The admin performing the archive — recorded as `createdBy`. */
     actorUserId: Id<"users">;
+    /** The actor's agent attribution (MCP archive), for the activity rows. */
+    via?: ActivityVia;
     /** Task IDs being archived (task + subtasks), stringified. */
     taskIds: Set<string>;
     noteLabel: string;
@@ -162,16 +194,10 @@ export async function autoSaveTimersForTasks(
       continue;
     }
 
-    const accumulated = user.timerAccumulatedMs ?? 0;
     const running = user.timerStatus === "running" && user.timerStartedAt;
-    // Same 16h ceiling as timer.stop — the rescue must never mint MORE
-    // minutes than the owner's own stop would have.
-    const elapsedMs = Math.min(
-      running
-        ? now - (user.timerStartedAt as number) + accumulated
-        : accumulated,
-      MAX_TIMER_MS,
-    );
+    // timer.stop's own measurement (16h ceiling included) — the rescue must
+    // never mint MORE minutes than the owner's own stop would have.
+    const elapsedMs = timerElapsedMs(user, now);
 
     const clear = () =>
       ctx.db.patch(member.userId as Id<"users">, {
@@ -181,7 +207,7 @@ export async function autoSaveTimersForTasks(
         timerStatus: undefined,
       });
 
-    if (elapsedMs < 30_000) {
+    if (elapsedMs < TIMER_MIN_SAVE_MS) {
       await clear();
       continue;
     }
@@ -198,6 +224,7 @@ export async function autoSaveTimersForTasks(
         orgId: opts.orgId,
         ownerId: member.userId,
         createdBy: opts.actorUserId,
+        via: opts.via,
         task,
         project,
         rawMinutes: msToMinutes(elapsedMs),

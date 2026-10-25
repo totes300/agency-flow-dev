@@ -8,7 +8,7 @@ import { getDateInTimezone } from "./timer";
 import { addDaysToDateString } from "./todayPlan";
 import { createRefResolver, type RefResolver } from "./mcpRefs";
 import { commentPreview, isOverdue, orgClock, timeEntryRow, userNames, type OrgClock } from "./mcpRecords";
-import { listTaskCommentsForAuth } from "../comments";
+import { TASK_COMMENT_CAP } from "../comments";
 import { externalRefOwner, normalizeExternalRef } from "./mcpExternalRefs";
 import { filterReadableTasks } from "../tasks/access";
 import { findTaskDocsForAuth, toAgentTaskRows, type FindTasksInput } from "../tasks/lookup";
@@ -579,20 +579,31 @@ type CommentCandidate = {
   task: Doc<"tasks">;
   userId: Id<"users">;
   createdAt: number;
+  /** Insertion order: breaks `createdAt` ties (comments written in one transaction). */
+  creationTime: number;
   content: unknown;
 };
 
-/** Comments of one readable task (its `by_task` range, capped by the comments core). */
+function commentCandidate(c: Doc<"comments">, task: Doc<"tasks">): CommentCandidate {
+  return { id: c._id, task, userId: c.userId, createdAt: c.createdAt, creationTime: c._creationTime, content: c.content };
+}
+
+/**
+ * Comments of one readable task (`taskFilter` checked access), newest
+ * first from its `by_task` range — the latest TASK_COMMENT_CAP when more
+ * exist (the comments core reads oldest first).
+ */
 async function taskCommentCandidates(ctx: QueryCtx, auth: AuthContext, task: Doc<"tasks">) {
-  const result = await listTaskCommentsForAuth(ctx, auth, task._id);
-  const candidates: CommentCandidate[] = (result?.comments ?? []).map((c) => ({
-    id: c._id,
-    task,
-    userId: c.userId,
-    createdAt: c.createdAt,
-    content: c.content,
-  }));
-  return { candidates, incomplete: result?.truncated ?? false };
+  const rows = await ctx.db
+    .query("comments")
+    .withIndex("by_task", (q) => q.eq("taskId", task._id))
+    .order("desc")
+    .take(TASK_COMMENT_CAP + 1);
+  const candidates = rows
+    .slice(0, TASK_COMMENT_CAP)
+    .filter((c) => c.orgId === auth.orgId)
+    .map((c) => commentCandidate(c, task));
+  return { candidates, incomplete: rows.length > TASK_COMMENT_CAP };
 }
 
 /**
@@ -646,7 +657,7 @@ async function orgCommentCandidates(ctx: QueryCtx, auth: AuthContext, args: Comm
   const candidates: CommentCandidate[] = [];
   for (const c of comments) {
     const task = readable.get(c.taskId);
-    if (task) candidates.push({ id: c._id, task, userId: c.userId, createdAt: c.createdAt, content: c.content });
+    if (task) candidates.push(commentCandidate(c, task));
   }
   return { candidates, incomplete: events.length > COMMENT_SCAN_CAP };
 }
@@ -672,7 +683,9 @@ export async function searchComments(ctx: QueryCtx, auth: AuthContext, args: Com
     if (!updatedMatch(c.createdAt, args, clock)) return false;
     return textMatch(args.query, extractPlainText(c.content));
   });
-  matched.sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id));
+  // Newest first; ties (one transaction) by insertion order, so the order is
+  // total and an offset cursor pages stably.
+  matched.sort((a, b) => b.createdAt - a.createdAt || b.creationTime - a.creationTime);
 
   const nameOf = userNames(ctx);
   const rows = [];

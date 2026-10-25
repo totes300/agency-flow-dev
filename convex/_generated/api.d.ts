@@ -9,6 +9,7 @@
  */
 
 import type * as __tests___helpers_billingWorld from "../__tests__/helpers/billingWorld.js";
+import type * as __tests___helpers_mcpConnections from "../__tests__/helpers/mcpConnections.js";
 import type * as __tests___helpers_orgSnapshot from "../__tests__/helpers/orgSnapshot.js";
 import type * as __tests___helpers_taskFixtures from "../__tests__/helpers/taskFixtures.js";
 import type * as activityLog from "../activityLog.js";
@@ -166,6 +167,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   "__tests__/helpers/billingWorld": typeof __tests___helpers_billingWorld;
+  "__tests__/helpers/mcpConnections": typeof __tests___helpers_mcpConnections;
   "__tests__/helpers/orgSnapshot": typeof __tests___helpers_orgSnapshot;
   "__tests__/helpers/taskFixtures": typeof __tests___helpers_taskFixtures;
   activityLog: typeof activityLog;

@@ -6,7 +6,8 @@ import { advertisedTool } from "./advertise";
 import { MCP_SERVER_INSTRUCTIONS } from "./instructions";
 import { protectedResourceMetadataPath } from "./config";
 import { appOriginOf } from "./links";
-import { MCP_TOOLS, type McpActionRunner, type McpMutationRunner, type McpQueryRunner } from "./registry";
+import { MCP_TOOLS, mcpErrorMessage, type McpActionRunner, type McpMutationRunner, type McpQueryRunner } from "./registry";
+import pkg from "../../package.json";
 
 /**
  * Builds the Streamable HTTP MCP handler (no SSE) behind bearer auth. Kept
@@ -34,7 +35,8 @@ export type McpConvexAccess = Pick<
   "queryRunnerFor" | "mutationRunnerFor" | "actionRunnerFor" | "clientNameFor"
 >;
 
-export const MCP_SERVER_INFO = { name: "agency-flow", version: "0.1.0" };
+/** The app's package.json version, so `initialize` names the deployed build. */
+export const MCP_SERVER_INFO = { name: "agency-flow", version: pkg.version };
 
 /**
  * Registers every registry tool (tools/call validates with their zod
@@ -57,14 +59,24 @@ export function registerMcpTools(server: McpServer, access: McpConvexAccess, app
           return { content: [{ type: "text", text: "Not authenticated." }], isError: true };
         }
         const clientId = extra.authInfo?.clientId;
-        const result = await tool.execute(input, {
-          runQuery: access.queryRunnerFor(token),
-          runMutation: access.mutationRunnerFor(token),
-          runAction: access.actionRunnerFor(token),
-          appOrigin,
-          now: Date.now,
-          clientName: async () => (clientId ? await access.clientNameFor(clientId) : undefined),
-        });
+        const startedAt = Date.now();
+        let result: { text: string; isError: boolean };
+        try {
+          result = await tool.execute(input, {
+            runQuery: access.queryRunnerFor(token),
+            runMutation: access.mutationRunnerFor(token),
+            runAction: access.actionRunnerFor(token),
+            appOrigin,
+            now: Date.now,
+            clientName: async () => (clientId ? await access.clientNameFor(clientId) : undefined),
+          });
+        } catch (error) {
+          // A renderer or tool bug: the model gets the generic text with a
+          // log ref (lib/mcp/registry.ts mcpErrorMessage), never the raw error.
+          result = { text: `Error: ${mcpErrorMessage(error, tool.name)}`, isError: true };
+        }
+        // One line per call for operations: tool, duration, outcome. No arguments, no user content.
+        console.info("[mcp] tool", tool.name, `${Date.now() - startedAt}ms`, result.isError ? "error" : "ok");
         return { content: [{ type: "text", text: result.text }], isError: result.isError };
       },
     );

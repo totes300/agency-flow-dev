@@ -215,7 +215,10 @@ describe("fetch records: task references (I3, T1)", () => {
     };
     expect(await message("admin", f.id.X)).toBe(`${f.id.X} not found. Use search to find tasks.`);
     expect(await message("admin", f.X)).toBe(`${f.X} not found. Use search to find tasks.`);
-    expect(await message("admin", "ARLO-999")).toBe("ARLO-999 not found. Use search to find tasks.");
+    // A number past the project's highest key gets the nearest-key hint (DESIGN-8).
+    expect(await message("admin", "ARLO-999")).toMatch(
+      /^ARLO-999 not found\. Did you mean ARLO-\d+\? Keys go up to ARLO-\d+\. Use search to find tasks\.$/,
+    );
     // Alice cannot read U (admin's task): exactly like a missing task.
     expect(await message("alice", f.id.U)).toBe(`${f.id.U} not found. Use search to find tasks.`);
     expect(await message("bob", f.id.A)).toBe(`${f.id.A} not found. Use search to find tasks.`);
@@ -510,10 +513,11 @@ describe("search time entries, comments and reference data", () => {
     await expect(commentSearch(t, "alice", { task: f.id.U })).rejects.toThrow(/not found/);
   });
 
-  it("the comment scan is bounded and says incomplete when it hits its cap", async () => {
+  it("newer non-comment activity does not hide comments from the org-wide scan", async () => {
     const t = createT();
     const f = await setup(t);
-    // 500 newer activity rows push every comment_added row past the scan cap.
+    // 500 newer activity rows of other types: the scan reads comment_added rows
+    // only (activityLog.by_org_type), so every comment is still found.
     await t.run(async (ctx) => {
       for (let i = 0; i < 500; i++) {
         await ctx.db.insert("activityLog", {
@@ -522,7 +526,8 @@ describe("search time entries, comments and reference data", () => {
       }
     });
     const result = await commentSearch(t, "admin");
-    expect(result).toMatchObject({ rows: [], total: 0, incomplete: true });
+    expect(result.incomplete).toBe(false);
+    expect(result.rows.map((r) => r.id)).toEqual(expect.arrayContaining([f.cA, f.cU, f.cP]));
     // A task filter reads that task's comments directly.
     expect((await commentSearch(t, "admin", { task: f.id.A })).rows.map((r) => r.id)).toEqual([f.cA]);
   });

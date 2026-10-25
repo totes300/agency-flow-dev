@@ -5,6 +5,7 @@ import type { AuthContext } from "./auth";
 import { clientPrefixKey, referenceClientPrefix } from "./helpers";
 import { loadTaskForReadOrNull, type TaskAccess } from "../tasks/access";
 import { resolveTaskRef } from "../tasks/lookup";
+import { parseIdentifier } from "../tasks/model";
 import { visibleTimeEntries } from "../timeEntries";
 import { REF_CAP } from "../workspaceRefs";
 import { externalRefOwner } from "./mcpExternalRefs";
@@ -40,7 +41,8 @@ import { parseRef, REF_TABLES, type RefTable } from "../../lib/mcp/refs";
  * is ambiguous and returns the candidates; the resolver never guesses.
  *
  * Read budget (Convex: 4,096 index ranges per call): a task ref costs about
- * 5 ranges (an external ref one more: its `by_orgId_ref` row); a client prefix one bounded range; an email one range plus one
+ * 5 ranges (an external ref one more: its `by_orgId_ref` row; a miss one or
+ * two more for the "did you mean" hint); a client prefix one bounded range; an email one range plus one
  * per org member (bounded by REF_CAP), read once per call.
  */
 
@@ -278,6 +280,35 @@ export function createRefResolver(ctx: QueryCtx, auth: AuthContext) {
     return ctx.db.normalizeId(table, raw) !== null;
   }
 
+  /**
+   * For a task key whose project code (or the org task key) exists in this
+   * org but whose number was never allocated: the highest number there, so a
+   * mistyped or guessed number is caught in one step. Empty for an unknown
+   * key and for a number that was allocated (deleted or unreadable: still
+   * "not found", nothing more). One project read by code; the org settings
+   * only when no project has the code.
+   */
+  async function taskKeyHint(identifier: string): Promise<string> {
+    const parsed = parseIdentifier(identifier);
+    if (!parsed) return "";
+    const project = await ctx.db
+      .query("projects")
+      .withIndex("by_orgId_code", (q) => q.eq("orgId", orgId).eq("code", parsed.key))
+      .first();
+    let next = project?.nextTaskNumber;
+    if (!project) {
+      const settings = await ctx.db
+        .query("orgSettings")
+        .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+        .unique();
+      if (settings?.taskKey?.toUpperCase() !== parsed.key) return "";
+      next = settings.nextTaskNumber;
+    }
+    const max = (next ?? 1) - 1;
+    if (max < 1 || parsed.number <= max) return "";
+    return ` Did you mean ${parsed.key}-${max}? Keys go up to ${parsed.key}-${max}.`;
+  }
+
   /** A project by code or (fallback / `client:`) a client by prefix — never guessing between duplicates. */
   async function projectOrClient(rawKey: string, asClient: boolean, input: string, clientFallback: boolean): Promise<Resolution> {
     if (!asClient) {
@@ -361,6 +392,10 @@ export function createRefResolver(ctx: QueryCtx, auth: AuthContext) {
         }
         if (access) return { ok: true, resolved: { type: "task", access } };
         if (invoice) return { ok: true, resolved: { type: "invoice", invoice } };
+        if (allows("task")) {
+          const hint = await taskKeyHint(ref.identifier);
+          if (hint) return { ok: false, message: `${parsed.input} not found.${hint} ${NOT_FOUND_HINT.task}` };
+        }
         return notFound(allows("task") ? "task" : "invoice");
       }
 

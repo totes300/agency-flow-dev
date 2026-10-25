@@ -120,7 +120,7 @@ describe("parseRef", () => {
   it("rejects empty and unrecognized refs with a model-actionable message", () => {
     expect(parseRef("   ")).toEqual({ ok: false, input: "", error: "Empty reference." });
     expect(parsed("Arlo website")).toBe(
-      'Unrecognized reference "Arlo website". Use a task key (ARLO-21) or a task\'s external ref (gmail:<threadId>), project code (ARLO), client prefix (client:KONV), member email, invoice number (INV-007, admins), record ID, an Agency Flow link, or "me" / "workspace".',
+      'Unrecognized reference "Arlo website". Use a task key (ARLO-21) or a task\'s external ref (gmail:<threadId>), project code (ARLO), client prefix (client:KONV), member email, invoice number (INV-007, admins), record ID, an Agency Flow link, or "me" / "workspace". Project codes and client prefixes: fetch({"refs":["workspace"]}). To find a record by name: search with types ["project"] or ["client"].',
     );
     expect(parsed("PRJ-042-x")).toMatch(/^Unrecognized reference/);
     expect(parsed("abcdefghijklmno")).toMatch(/^Unrecognized reference/); // 11–19 chars: neither key nor ID

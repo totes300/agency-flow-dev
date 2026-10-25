@@ -238,7 +238,11 @@ export function parseRef(raw: string, options: { appOrigin?: string } = {}): Ref
   if (INVOICE_NUMBER_PATTERN.test(input)) {
     return { ok: true, input, ref: { kind: "invoice", number: input } };
   }
-  return { ok: false, input, error: `Unrecognized reference "${input}". Use ${REF_FORMS}.` };
+  return {
+    ok: false,
+    input,
+    error: `Unrecognized reference "${input}". Use ${REF_FORMS}. Project codes and client prefixes: fetch({"refs":["workspace"]}). To find a record by name: search with types ["project"] or ["client"].`,
+  };
 }
 
 /** Parses each ref once, dropping exact duplicates while keeping input order. */

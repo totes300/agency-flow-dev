@@ -58,10 +58,11 @@ async function toolsList(): Promise<{ raw: string; tools: ListedTool[] }> {
 /**
  * Upper bound for the whole tools/list result (JSON characters). Codex loads
  * every definition on every turn (§6). Owner decision D-TOKENDIET
- * (2026-10-25): at most 30,000 characters (~7k tokens), down from ~51,000.
- * Raise it only deliberately.
+ * (2026-10-25): at most 30,000 characters (~7k tokens), down from ~51,000;
+ * the review's schema compaction (DESIGN-4) brought the list to ~26,600, so
+ * the bound sits ~5 % above that. Raise it only deliberately.
  */
-const TOOLS_LIST_MAX_CHARS = 30_000;
+const TOOLS_LIST_MAX_CHARS = 28_000;
 
 describe("tools/list", () => {
   it("matches the committed snapshot", async () => {
@@ -108,15 +109,29 @@ describe("tools/list", () => {
       expect(tool(name).description, name).toMatch(/Refs: ARLO-21, gmail:<id>, ARLO, client:KONV/);
     }
     const key = tool("save_tasks").inputSchema.properties?.idempotencyKey as { description: string };
-    expect(key.description).toMatch(/replays the first result; reused for a different call: refused/);
+    expect(key.description).toBe("Random per-call value (e.g. a UUID); reuse only to retry this exact call.");
   });
 
-  it("advertises compact schemas: no $schema, no minLength 1, dates as format date", async () => {
-    const { raw } = await toolsList();
+  it("advertises compact schemas: no $schema, no minLength 1, no length caps, nullable as a type list, dates as format date", async () => {
+    const { raw, tools } = await toolsList();
     expect(raw).not.toContain('"$schema"');
     expect(raw).not.toContain('"minLength":1,');
+    for (const keyword of ["maxLength", "maxItems", "minItems"]) expect(raw).not.toContain(`"${keyword}"`);
+    expect(raw).not.toContain('"type":"null"');
     expect(raw).not.toContain('"idempotentHint":false');
     expect(raw).toContain('"format":"date"');
+    // Numeric bounds carry meaning and stay.
+    expect(raw).toContain('"minimum":1');
+    const items = (tools.find((t) => t.name === "save_tasks")!.inputSchema.properties!.items as { items: { properties: Record<string, unknown> } }).items.properties;
+    expect(items.project).toEqual({
+      description: "Create: omit for a task without a project. Update: omitted = unchanged, null removes it (admins).",
+      type: ["string", "null"],
+    });
+    expect(items.estimateMinutes).toEqual({ type: ["integer", "null"], minimum: 0, maximum: 1000000 });
+    expect(items.dueDate).toEqual({ type: ["string", "null"], format: "date" });
+    // A real union (search external_ref: one ref or a list) is left as it is.
+    const externalRef = tools.find((t) => t.name === "search")!.inputSchema.properties!.external_ref as { anyOf?: unknown[]; description: string };
+    expect(externalRef.anyOf).toHaveLength(2);
   });
 
   it("is consistent across tools: titles, examples, hints, idempotency keys", async () => {

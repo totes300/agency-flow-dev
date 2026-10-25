@@ -162,7 +162,7 @@ describe("save_tasks: external refs (D21)", () => {
     const [record] = (await as(t, "admin").query(api.mcp.fetch.records, { refs: [key], include: [], now: Date.now() })).results;
     expect(record.ok && record.record.type === "task" && record.record.externalRefs).toEqual({ refs: ["gmail:thread-1", "granola:n1"], truncated: false });
     await saveTasks(t, "admin", [{ ref: key, done: true }]);
-    const found = await as(t, "admin").query(api.mcp.search.tasks, { ...TASK_SEARCH, externalRef: "gmail:thread-1", now: Date.now() });
+    const found = await as(t, "admin").query(api.mcp.search.tasks, { ...TASK_SEARCH, externalRefs: ["gmail:thread-1"], now: Date.now() });
     expect(found.rows.map((r) => r.identifier)).toEqual([key]);
   });
 
@@ -194,7 +194,7 @@ describe("save_tasks: external refs (D21)", () => {
     const mine = await saveTasks(t, "admin", [{ title: "My card", externalRefs: ["gmail:shared"] }]);
     expect(mine.items[0]).toMatchObject({ action: "created", title: "My card" });
     expect(mine.items[0].identifier).not.toBe(elsewhere.items[0].identifier);
-    const found = await as(t, "other").query(api.mcp.search.tasks, { ...TASK_SEARCH, externalRef: "gmail:shared", now: Date.now() });
+    const found = await as(t, "other").query(api.mcp.search.tasks, { ...TASK_SEARCH, externalRefs: ["gmail:shared"], now: Date.now() });
     expect(found.rows.map((r) => r.title)).toEqual(["Other org card"]);
   });
 });

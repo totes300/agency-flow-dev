@@ -9,6 +9,10 @@ import { getMcpResourceUrl } from "@/lib/mcp/config";
 import { createAgencyFlowMcpHandler } from "@/lib/mcp/handler";
 import { connectionKey, createLastUsedThrottle } from "@/lib/mcp/last-used";
 import { CONNECTION_LAST_USED_INTERVAL_MS } from "@/lib/mcp/limits";
+import { CONNECTION_REVOKED, MCP_SWITCHED_OFF } from "@/convex/lib/mcpAuth";
+
+/** Route segment config: the same 60 s the MCP handler is created with (lib/mcp/handler.ts). */
+export const maxDuration = 60;
 
 /**
  * The Agency Flow MCP server (docs/prd-mcp.md §4): Streamable HTTP at /mcp.
@@ -39,10 +43,16 @@ async function registerConnection(info: AuthInfo): Promise<void> {
     const clientName = await resolveClientName(info.clientId);
     await fetchMutation(api.mcp.connections.touch, { clientName }, { token: info.token });
   } catch (error) {
-    // A ConvexError is Convex refusing on purpose (revoked connection, no
-    // organization, user not synced, not a member, MCP switched off): the
-    // tool call is refused the same way, so wait the full interval quietly.
-    if (error instanceof ConvexError) return;
+    // A ConvexError is Convex refusing on purpose; the tool call is refused
+    // the same way. Only a refusal that stays true for the hour (revoked
+    // connection, MCP switched off) waits the full interval quietly. Every
+    // other one (user not synced, not a member, no organization) can be
+    // fixed by the user within minutes, so the next request tries again
+    // and registers them at once.
+    if (error instanceof ConvexError) {
+      if (error.data !== CONNECTION_REVOKED && error.data !== MCP_SWITCHED_OFF) lastUsed.forget(key);
+      return;
+    }
     // Anything else (network, deployment): try again on the next request,
     // so a new connection is not left unregistered.
     lastUsed.forget(key);

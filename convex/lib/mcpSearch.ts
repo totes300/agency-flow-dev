@@ -36,15 +36,15 @@ import { periodRangeLabel } from "./billing/projectPeriods";
  * every db.get / query is one range):
  * - tasks: the shared task core (findTaskDocsForAuth) — a few ranges for
  *   admins; for members one range per assigned task (edge cap 2,000) plus
- *   their access checks — then up to ~6 per row on the page. `external_ref`
- *   is one range plus one task read; `next_assignee` reads the member's
+ *   their access checks — then up to ~6 per row on the page. Each
+ *   `external_ref` (≤ 25) is one range plus one task read; `next_assignee` reads the member's
  *   assigned tasks (≤ 1,000) and the checklists of at most 100 parents
  *   (≤ 201 sub-tasks each): ~1,200 ranges and ~21,000 documents at most;
  * - projects / clients: one range (≤ 2,001 docs) plus one per page row;
  *   members: one range plus one per org member;
  * - time entries: one range (≤ 2,001 docs) plus one per distinct project
  *   (client filter), ~2 per page row and one per distinct category;
- * - comments: one activity range (≤ 501 rows), then per comment one get,
+ * - comments: one `comment_added` activity range (≤ 501 rows), then per comment one get,
  *   per distinct task one get and (members) up to two edge checks: at most
  *   ~2,000 ranges; with a task filter, the task's comments in one range.
  * - invoices (admins only): one range (≤ 2,001 docs, newest first) plus up
@@ -59,10 +59,13 @@ export const SEARCH_OFFSET_MAX = 10_000;
 /** Time entries read per search before filtering. */
 export const TIME_SEARCH_CAP = 2000;
 /**
- * Activity rows scanned per comment search (comments are found via their
- * `comment_added` row); sized to the 4,096-range budget above.
+ * `comment_added` activity rows scanned per comment search (comments are
+ * found via that row, `activityLog.by_org_type`); sized to the 4,096-range
+ * budget above.
  */
 export const COMMENT_SCAN_CAP = 500;
+/** External refs per task search (`external_ref` as a list, OR): one bounded read each. */
+export const EXTERNAL_REF_FILTER_MAX = 25;
 /** Invoices read per search before filtering (newest first). */
 export const INVOICE_SEARCH_CAP = 2000;
 /** Preview length of a comment row. */
@@ -175,7 +178,8 @@ function refTable<T>(rows: T[], noun: string): T[] {
 // ─── Tasks ───────────────────────────────────────────────────────────────────
 
 export type TaskSearchArgs = PageArgs & {
-  externalRef?: string;
+  /** OR: the tasks carrying any of these external refs (at most EXTERNAL_REF_FILTER_MAX). */
+  externalRefs?: string[];
   nextAssignee?: string;
   query?: string;
   assignee?: string;
@@ -279,16 +283,24 @@ export async function searchTasks(ctx: QueryCtx, auth: AuthContext, args: TaskSe
   const assigneeId = await personFilter(resolver, auth, args);
   const client = await clientFilter(resolver, args.client);
   const project = await projectFilter(resolver, args.project);
-  // An external ref names one task whatever its status: "any" unless a status is given.
-  const status = await statusFilter(ctx, auth.orgId, args.status ?? (args.externalRef !== undefined ? "any" : undefined));
+  // External refs name tasks whatever their status: "any" unless a status is given.
+  const status = await statusFilter(ctx, auth.orgId, args.status ?? (args.externalRefs !== undefined ? "any" : undefined));
   const labelId = await labelFilter(ctx, auth.orgId, args.label);
 
   // Candidate sets from the D21 / D24 lookups; access and the other filters still apply.
   let candidates: Loaded | undefined;
-  if (args.externalRef !== undefined) {
-    const owner = await externalRefOwner(ctx, auth.orgId, normalizeExternalRef(args.externalRef));
-    const task = owner ? await ctx.db.get(owner) : null;
-    candidates = { tasks: task ? [task] : [], truncated: false };
+  if (args.externalRefs !== undefined) {
+    if (args.externalRefs.length === 0 || args.externalRefs.length > EXTERNAL_REF_FILTER_MAX) {
+      throw new ConvexError(`external_ref takes 1 to ${EXTERNAL_REF_FILTER_MAX} refs.`);
+    }
+    // One `by_orgId_ref` read per ref (OR); a ref nobody carries matches nothing.
+    const tasks: Doc<"tasks">[] = [];
+    for (const ref of new Set(args.externalRefs.map(normalizeExternalRef))) {
+      const owner = await externalRefOwner(ctx, auth.orgId, ref);
+      const task = owner ? await ctx.db.get(owner) : null;
+      if (task && !tasks.some((t) => t._id === task._id)) tasks.push(task);
+    }
+    candidates = { tasks, truncated: false };
   }
   if (args.nextAssignee !== undefined) {
     const member = await resolver.require(args.nextAssignee, "member");
@@ -620,9 +632,10 @@ async function taskCommentCandidates(ctx: QueryCtx, auth: AuthContext, task: Doc
 
 /**
  * Comments on readable tasks found through their `comment_added` activity
- * rows (`activityLog.by_org`, newest first, `COMMENT_SCAN_CAP` rows): comments
- * have no org index. The "updated" filters narrow that scan by when the
- * comment was written.
+ * rows (`activityLog.by_org_type`, newest first, `COMMENT_SCAN_CAP` rows):
+ * comments have no org index. The index is per event type, so the cap counts
+ * comments only — other activity, however busy, hides none. The "updated"
+ * filters narrow that scan by when the comment was written.
  */
 async function orgCommentCandidates(ctx: QueryCtx, auth: AuthContext, args: CommentSearchArgs) {
   // Index range in epoch ms, widened by a day on each side for timezones;
@@ -635,8 +648,8 @@ async function orgCommentCandidates(ctx: QueryCtx, auth: AuthContext, args: Comm
   const upper = args.updated.to !== undefined ? Date.parse(`${args.updated.to}T00:00:00Z`) + 2 * DAY_MS : undefined;
   const events = await ctx.db
     .query("activityLog")
-    .withIndex("by_org", (q) => {
-      const scoped = q.eq("orgId", auth.orgId);
+    .withIndex("by_org_type", (q) => {
+      const scoped = q.eq("orgId", auth.orgId).eq("type", "comment_added");
       if (lower !== undefined && upper !== undefined) return scoped.gt("createdAt", lower).lt("createdAt", upper);
       if (lower !== undefined) return scoped.gt("createdAt", lower);
       if (upper !== undefined) return scoped.lt("createdAt", upper);
@@ -648,7 +661,7 @@ async function orgCommentCandidates(ctx: QueryCtx, auth: AuthContext, args: Comm
   const comments: Doc<"comments">[] = [];
   const seen = new Set<Id<"comments">>();
   for (const event of events.slice(0, COMMENT_SCAN_CAP)) {
-    if (event.type !== "comment_added") continue;
+    if (event.type !== "comment_added") continue; // narrows the metadata type; the index already selected these
     const id = event.metadata.commentId;
     if (seen.has(id)) continue;
     seen.add(id);

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { getFunctionName } from "convex/server";
 import type { Id } from "@/convex/_generated/dataModel";
 import {
@@ -138,10 +138,11 @@ describe("attach_file", () => {
     const { ctx } = fake(() => {
       throw new (class extends Error {})("boom");
     });
-    expect(await tool("attach_file").execute({ ref: "ARLO-21", inlineText: "x", filename: "a.md" }, ctx)).toEqual({
-      text: "Error: Internal error.",
-      isError: true,
-    });
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = await tool("attach_file").execute({ ref: "ARLO-21", inlineText: "x", filename: "a.md" }, ctx);
+    log.mockRestore();
+    expect(result.isError).toBe(true);
+    expect(result.text).toMatch(/^Error: Internal error \(ref [0-9a-f]{8}\)\. Retry once; if it repeats, report the ref\.$/);
   });
 
   it("renders where the file went and whether its text can be read", () => {

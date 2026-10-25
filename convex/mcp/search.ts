@@ -29,7 +29,7 @@ export const tasks = query({
   args: {
     offset: v.number(),
     limit: v.number(),
-    externalRef: v.optional(v.string()),
+    externalRefs: v.optional(v.array(v.string())),
     nextAssignee: v.optional(v.string()),
     assignee: v.optional(v.string()),
     mine: v.optional(v.boolean()),

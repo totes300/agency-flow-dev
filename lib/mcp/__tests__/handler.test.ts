@@ -4,7 +4,7 @@
 // Convex replaced by stubs: 401 challenges, tools/list from the registry and
 // a tools/call that passes the bearer token through to Convex.
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { getFunctionName } from "convex/server";
 import { z } from "zod";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
@@ -35,6 +35,10 @@ const handler = createAgencyFlowMcpHandler({
           priority: "High", assignees: ["Ada"], dueDate: "2026-10-20", overdue: true, parent: null,
         };
         return { rows: [row], total: 1, offset: 0, incomplete: false, notes: [], today: "2026-10-24" };
+      }
+      if (name === "mcp/fetch:records") {
+        // A malformed record: the renderer throws outside the per-ref try (the budget pass).
+        return { timezone: "UTC", today: "2026-10-24", results: [{ input: "ARLO-1", ok: true, record: null }] };
       }
       if (name !== "mcp/fetch:me") throw new Error("unexpected query");
       return {
@@ -224,6 +228,33 @@ describe("MCP protocol", () => {
       content: [{ type: "text", text: "## Me\n- User: Ada <ada@x.test>\n- Org: org_1\n- Role: admin\n- Today: Saturday 2026-10-24 (UTC)\n- Timer: not running" }],
     });
     expect(seenTokens).toEqual([GOOD_TOKEN]);
+  });
+
+  it("a renderer exception never reaches the model raw: generic text with a log ref, and one log line per call", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const res = await handler(
+      rpc(
+        { jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "fetch", arguments: { refs: ["ARLO-1"] } } },
+        GOOD_TOKEN,
+      ),
+    );
+    const { result } = await rpcResult(res);
+    const text = (result!.content as Array<{ text: string }>)[0].text;
+    expect(result!.isError).toBe(true);
+    expect(text).toMatch(/^Error: Internal error \(ref [0-9a-f]{8}\)\. Retry once; if it repeats, report the ref\.$/);
+    expect(text).not.toMatch(/TypeError|null/);
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(error.mock.calls[0].slice(0, 3)).toEqual(["[mcp] tool error", "fetch", "ref"]);
+    // The per-call line: tool, duration, outcome — no arguments.
+    expect(info).toHaveBeenCalledTimes(1);
+    expect(info.mock.calls[0][0]).toBe("[mcp] tool");
+    expect(info.mock.calls[0][1]).toBe("fetch");
+    expect(info.mock.calls[0][2]).toMatch(/^\d+ms$/);
+    expect(info.mock.calls[0][3]).toBe("error");
+    expect(JSON.stringify(info.mock.calls)).not.toContain("ARLO-1");
+    error.mockRestore();
+    info.mockRestore();
   });
 
   it("runs search with deep links on the resource URL's origin", async () => {

@@ -77,7 +77,7 @@ describe("/.well-known/oauth-authorization-server", () => {
     expect(upstream.mock.calls[0][0]).toBe(`https://${FAPI_HOST}/.well-known/oauth-authorization-server`);
   });
 
-  it("answers 502 on an upstream error and does not cache it", async () => {
+  it("answers 502 on an upstream error, keeping the failure 30 s so Clerk is not hit on every request", async () => {
     const upstream = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(new Response("down", { status: 503 }))
@@ -86,8 +86,24 @@ describe("/.well-known/oauth-authorization-server", () => {
     const failed = await GET();
     expect(failed.status).toBe(502);
     expect(failed.headers.get("cache-control")).toBe("no-store");
-    const retried = await GET();
-    expect(retried.status).toBe(200);
+    // Within the failure window: the cached failure, no upstream call.
+    expect((await GET()).status).toBe(502);
+    expect(upstream).toHaveBeenCalledTimes(1);
+    // After it: upstream again, and a success is cached as before.
+    const { getAuthorizationServerMetadata, FAILURE_TTL_MS } = await import("../auth-server-metadata");
+    expect(await getAuthorizationServerMetadata(Date.now() + FAILURE_TTL_MS + 1)).toEqual({ issuer: `https://${FAPI_HOST}` });
+    expect(upstream).toHaveBeenCalledTimes(2);
+    expect((await GET()).status).toBe(200);
+    expect(upstream).toHaveBeenCalledTimes(2);
+  });
+
+  it("a thrown fetch (unreachable) is cached as a failure the same way", async () => {
+    const upstream = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("ECONNREFUSED"));
+    const { getAuthorizationServerMetadata, FAILURE_TTL_MS } = await import("../auth-server-metadata");
+    expect(await getAuthorizationServerMetadata(1_000)).toBeNull();
+    expect(await getAuthorizationServerMetadata(1_000 + FAILURE_TTL_MS - 1)).toBeNull();
+    expect(upstream).toHaveBeenCalledTimes(1);
+    expect(await getAuthorizationServerMetadata(1_000 + FAILURE_TTL_MS)).toBeNull();
     expect(upstream).toHaveBeenCalledTimes(2);
   });
 });
@@ -192,6 +208,40 @@ describe("/mcp: Connected apps registration", () => {
     expect(JSON.stringify(error.mock.calls)).not.toContain(token);
     await POST(mcpPost(token));
     expect(fetchMutation).toHaveBeenCalledTimes(3);
+    error.mockRestore();
+  });
+
+  it("a refusal the user can fix (not synced, no org, not a member) is retried on the next request; revoked / switched off wait the hour", async () => {
+    const { POST } = await import("@/app/mcp/route");
+    const { ConvexError } = await import("convex/values");
+    const { USER_NOT_SYNCED, NO_ORG_SELECTED, MCP_SWITCHED_OFF } = await import("@/convex/lib/mcpAuth");
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    // Not synced yet: the user signs in to the app and retries — registered at once.
+    authenticateRequest.mockResolvedValue({ toAuth: () => signedIn("user_unsynced") });
+    fetchMutation.mockRejectedValueOnce(new ConvexError(USER_NOT_SYNCED)).mockResolvedValue(undefined);
+    const token = bearer("org_s");
+    expect((await POST(mcpPost(token))).status).toBe(200);
+    expect((await POST(mcpPost(token))).status).toBe(200);
+    expect(fetchMutation).toHaveBeenCalledTimes(2);
+    // Now registered: the hour applies.
+    await POST(mcpPost(token));
+    expect(fetchMutation).toHaveBeenCalledTimes(2);
+
+    authenticateRequest.mockResolvedValue({ toAuth: () => signedIn("user_no_org") });
+    fetchMutation.mockRejectedValue(new ConvexError(NO_ORG_SELECTED));
+    await POST(mcpPost(bearer("org_o")));
+    await POST(mcpPost(bearer("org_o")));
+    expect(fetchMutation).toHaveBeenCalledTimes(4);
+
+    // Switched off stays true for the hour: one attempt.
+    authenticateRequest.mockResolvedValue({ toAuth: () => signedIn("user_off") });
+    fetchMutation.mockRejectedValue(new ConvexError(MCP_SWITCHED_OFF));
+    await POST(mcpPost(bearer("org_off")));
+    await POST(mcpPost(bearer("org_off")));
+    expect(fetchMutation).toHaveBeenCalledTimes(5);
+    // Deliberate refusals are quiet.
+    expect(error).not.toHaveBeenCalled();
     error.mockRestore();
   });
 

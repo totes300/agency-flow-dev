@@ -231,6 +231,61 @@ describe("search tool", () => {
       isError: true,
     });
   });
+
+  it('status "open" / "any" are task keywords: no error with other types, a no-op for invoices', async () => {
+    const calls: Calls = [];
+    const runQuery = (async (query, args) => {
+      const name = getFunctionName(query);
+      calls.push({ name, args: args as Record<string, unknown> });
+      const a = args as { offset: number; limit: number };
+      if (name === "mcp/search:tasks") return taskPage(1, a);
+      if (name === "mcp/search:members") return { rows: [], total: 0, offset: 0, incomplete: false, notes: [] };
+      if (name === "mcp/search:invoices") return { rows: [], total: 0, offset: 0, incomplete: false, notes: [], totals: [], today: "2026-10-24" };
+      throw new Error(`unexpected query ${name}`);
+    }) as McpQueryRunner;
+    const ctx: McpToolContext = { runQuery, appOrigin: ORIGIN, now: () => NOW, ...noWrites };
+    expect((await search.execute({ types: ["task", "member"], status: "any" }, ctx)).isError).toBe(false);
+    expect(calls.map((c) => c.name)).toEqual(["mcp/search:tasks", "mcp/search:members"]);
+    expect(calls[0].args.status).toBe("any");
+    calls.length = 0;
+    expect((await search.execute({ types: ["task", "invoice"], status: "Open" }, ctx)).isError).toBe(false);
+    expect(calls.map((c) => [c.name, c.args.status])).toEqual([["mcp/search:tasks", "Open"], ["mcp/search:invoices", undefined]]);
+    // A real status name with a non-task type is still refused.
+    expect((await search.execute({ types: ["task", "member"], status: "Done" }, ctx)).text).toBe(
+      'Error: Filter "status" does not apply to member. Search those types separately, or drop the filter.',
+    );
+  });
+
+  it("external_ref takes one ref or a list (OR), passed to Convex as externalRefs", async () => {
+    const { ctx, calls } = fakeConvex({ taskTotal: 1 });
+    await search.execute({ external_ref: "gmail:a1" }, ctx);
+    expect(calls[0].args.externalRefs).toEqual(["gmail:a1"]);
+    await search.execute({ external_ref: ["gmail:a1", "gmail:b2"] }, ctx);
+    expect(calls[1].args.externalRefs).toEqual(["gmail:a1", "gmail:b2"]);
+    expect(search.inputSchema.safeParse({ external_ref: [] }).success).toBe(false);
+    expect(search.inputSchema.safeParse({ external_ref: Array.from({ length: 26 }, (_, i) => `gmail:${i}00`) }).success).toBe(false);
+    expect(search.inputSchema.safeParse({ external_ref: Array.from({ length: 25 }, (_, i) => `gmail:${i}00`) }).success).toBe(true);
+    expect((search.inputSchema.shape.external_ref as { description?: string }).description).toMatch(/One or more external refs \(OR\)/i);
+  });
+
+  it("runs the types in parallel and keeps the requested order in the output", async () => {
+    const events: string[] = [];
+    const runQuery = (async (query, args) => {
+      const name = getFunctionName(query);
+      events.push(`${name} start`);
+      const a = args as { offset: number; limit: number };
+      if (name === "mcp/search:tasks") {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        events.push(`${name} done`);
+        return taskPage(1, a);
+      }
+      return { rows: [], total: 0, offset: 0, incomplete: false, notes: [] };
+    }) as McpQueryRunner;
+    const result = await search.execute({ types: ["task", "member"], query: "x" }, { runQuery, appOrigin: ORIGIN, now: () => NOW, ...noWrites });
+    // The second query started before the slow first one answered; the output still lists tasks first.
+    expect(events).toEqual(["mcp/search:tasks start", "mcp/search:members start", "mcp/search:tasks done"]);
+    expect(result.text.indexOf("### Tasks")).toBeLessThan(result.text.indexOf("### Members"));
+  });
 });
 
 describe("fitRows", () => {
@@ -349,25 +404,84 @@ describe("mcpErrorMessage", () => {
     log.mockRestore();
   });
 
-  it("logs other errors server-side and shows the model a generic message", () => {
+  it("logs other errors server-side under a short ref and shows the model a generic message with that ref", () => {
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     const error = new Error("socket hang up");
-    expect(mcpErrorMessage(error)).toBe("Internal error.");
-    expect(log).toHaveBeenCalledWith("[mcp] tool error:", error);
+    const text = mcpErrorMessage(error, "save_tasks");
+    const ref = /^Internal error \(ref ([0-9a-f]{8})\)\. Retry once; if it repeats, report the ref\.$/.exec(text)?.[1];
+    expect(ref).toBeDefined();
+    expect(log).toHaveBeenCalledWith("[mcp] tool error", "save_tasks", "ref", ref, error);
+    // Every call gets its own ref, so two reports never collide.
+    expect(mcpErrorMessage(error)).not.toBe(text);
     log.mockRestore();
   });
 
-  it("read limits: named on dev; production's redacted Server Error gets an honest maybe-narrow hint", () => {
+  it("read limits: named on dev; production's redacted Server Error gets an honest maybe-narrow hint; both carry the ref", () => {
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     expect(mcpErrorMessage(new Error("Too many index ranges read in a single function execution (limit: 4096)"))).toMatch(
-      /^This request needed more data than one call may read/,
+      /^This request needed more data than one call may read\. Narrow it \(more filters, a date range, a task filter\) or fetch fewer refs and includes\. \(ref [0-9a-f]{8}\)$/,
     );
-    const redacted = "Internal error (details are hidden). If this request reads a lot, narrowing it (more filters, a shorter period, fewer refs or includes) may help.";
-    expect(mcpErrorMessage(new Error("[Request ID: 3f2a9c] Server Error"))).toBe(redacted);
-    expect(mcpErrorMessage(new Error("Server Error"))).toBe(redacted);
-    expect(mcpErrorMessage(new Error("[Request ID: 3f2a9c] Server Error\n  Called by client"))).toBe(redacted);
-    expect(mcpErrorMessage(new Error("Server Error while rendering"))).toBe("Internal error.");
+    const redacted =
+      /^Internal error \(ref [0-9a-f]{8}; details are hidden\)\. If this request reads a lot, narrowing it \(more filters, a shorter period, fewer refs or includes\) may help\.$/;
+    expect(mcpErrorMessage(new Error("[Request ID: 3f2a9c] Server Error"))).toMatch(redacted);
+    expect(mcpErrorMessage(new Error("Server Error"))).toMatch(redacted);
+    expect(mcpErrorMessage(new Error("[Request ID: 3f2a9c] Server Error\n  Called by client"))).toMatch(redacted);
+    expect(mcpErrorMessage(new Error("Server Error while rendering"))).toMatch(/^Internal error \(ref [0-9a-f]{8}\)\. Retry once/);
     log.mockRestore();
+  });
+});
+
+describe("read retries", () => {
+  /** Fails the first call to `name` with a transport error, answers afterwards. */
+  function flaky(name: string, answer: unknown) {
+    let failed = false;
+    const calls: string[] = [];
+    const runQuery = (async (query) => {
+      const n = getFunctionName(query);
+      calls.push(n);
+      if (n === name && !failed) {
+        failed = true;
+        throw new Error("fetch failed");
+      }
+      if (n === name) return answer;
+      throw new Error(`unexpected query ${n}`);
+    }) as McpQueryRunner;
+    return { ctx: { runQuery, appOrigin: ORIGIN, now: () => NOW, ...noWrites } as McpToolContext, calls };
+  }
+
+  it("a once-failing search query is retried and succeeds, with no error in the output", async () => {
+    const { ctx, calls } = flaky("mcp/search:tasks", taskPage(1, { offset: 0, limit: 25 }));
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = await tool("search").execute({ mine: true }, ctx);
+    log.mockRestore();
+    expect(result.isError).toBe(false);
+    expect(result.text).toContain("ARLO-1");
+    expect(calls).toEqual(["mcp/search:tasks", "mcp/search:tasks"]);
+  });
+
+  it("a once-failing fetch read is retried; a twice-failing one is reported as temporary with a ref", async () => {
+    const { ctx, calls } = flaky("mcp/fetch:me", ME);
+    expect((await tool("fetch").execute({ refs: ["me"] }, ctx)).text).toContain("## Me");
+    expect(calls).toEqual(["mcp/fetch:me", "mcp/fetch:me"]);
+
+    const runQuery = (async () => {
+      throw new Error("fetch failed");
+    }) as McpQueryRunner;
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = await tool("fetch").execute({ refs: ["ARLO-1"] }, { runQuery, appOrigin: ORIGIN, now: () => NOW, ...noWrites });
+    expect(log).toHaveBeenCalledTimes(1);
+    log.mockRestore();
+    expect(result).toEqual({
+      text: expect.stringMatching(/^Temporary error reading "ARLO-1" \(ref [0-9a-f]{8}\); call fetch again for it\.$/),
+      isError: true,
+    });
+  });
+
+  it("a Convex user error is never retried", async () => {
+    const { ctx, calls } = fakeConvex({ error: new ConvexError("No organization selected") });
+    const result = await tool("search").execute({ mine: true }, ctx);
+    expect(result).toEqual({ text: "Error searching tasks: No organization selected", isError: true });
+    expect(calls).toHaveLength(1);
   });
 });
 

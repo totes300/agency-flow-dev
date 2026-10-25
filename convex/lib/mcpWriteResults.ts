@@ -62,12 +62,13 @@ export const deleteResultValidator = v.object({
         v.literal("project"),
         v.literal("client"),
         v.literal("plan_segment"),
+        v.literal("file"),
       ),
       /**
        * `ARLO-21 · Title`, `comment on ARLO-21`, `time entry 2026-10-20 · 1h 30m · Alice
-       * on ARLO-21`, `project ARLO · Arlow site`, `client client:ARL · Arlow` or
-       * `planner bar 2026-10-26 – 2026-10-28 · Alice on ARLO-21`
-       * (snapshot: the record is gone).
+       * on ARLO-21`, `project ARLO · Arlow site`, `client client:ARL · Arlow`,
+       * `planner bar 2026-10-26 – 2026-10-28 · Alice on ARLO-21` or
+       * `file "brief.pdf" on ARLO-21` (snapshot: the record is gone).
        */
       label: v.string(),
       action: v.union(v.literal("deleted"), v.literal("already_deleted")),

@@ -663,6 +663,83 @@ describe("fetch include files / attachment_text", () => {
   });
 });
 
+describe("delete files (task and comment attachments)", () => {
+  const remove = (t: T, caller: Caller, refs: string[]) =>
+    as(t, caller).mutation(api.mcp.write.remove, { refs, clientName: "Claude" });
+
+  it("deletes a task file by its file id with the app's rules: own or admin; blob and text go with it", async () => {
+    const t = createT();
+    const f = await setup(t);
+    await attachText(t, "alice", f.id.A, "alice file", "a.txt");
+    await attachText(t, "admin", f.id.A, "admin file", "b.txt");
+    const [aliceFile, adminFile] = await taskFiles(t, f.A);
+    const blobs = await blobCount(t);
+    expect(await contentRows(t)).toHaveLength(2);
+
+    // A member may not delete someone else's file (the app's rule), and nothing changes.
+    await expect(remove(t, "alice", [adminFile._id])).rejects.toThrow(/only delete your own attachments/);
+    expect(await taskFiles(t, f.A)).toHaveLength(2);
+
+    const own = await remove(t, "alice", [aliceFile._id]);
+    expect(own).toMatchObject({ items: [{ type: "file", action: "deleted", label: `file "a.txt" on ${f.id.A}` }] });
+    const byAdmin = await remove(t, "admin", [adminFile._id]);
+    expect(byAdmin.items[0]).toMatchObject({ type: "file", action: "deleted" });
+    expect(await taskFiles(t, f.A)).toEqual([]);
+    expect(await blobCount(t)).toBe(blobs - 2);
+    expect(await contentRows(t)).toEqual([]);
+  });
+
+  it("deletes a comment file; a file on an unreadable task or in another org is not found", async () => {
+    const t = createT();
+    const f = await setup(t);
+    await attachText(t, "alice", f.aliceComment, "on a comment", "c.txt");
+    await attachText(t, "other", f.otherComment, "theirs", "x.txt");
+    const [commentFile] = await commentFiles(t, f.aliceComment);
+    const [theirFile] = await commentFiles(t, f.otherComment);
+
+    // Bob cannot read task A, so its files are "not found" — never "forbidden" (I3).
+    await expect(remove(t, "bob", [commentFile._id])).rejects.toThrow(/not found\. File ids are listed by fetch/);
+    await expect(remove(t, "admin", [theirFile._id])).rejects.toThrow(/not found/);
+
+    const result = await remove(t, "admin", [commentFile._id]);
+    expect(result.items[0]).toMatchObject({ type: "file", action: "deleted", label: `file "c.txt" on a comment on ${f.id.A}` });
+    expect(await commentFiles(t, f.aliceComment)).toEqual([]);
+    expect(await commentFiles(t, f.otherComment)).toHaveLength(1);
+    expect((await contentRows(t)).map((r) => r.orgId)).toEqual([OTHER]);
+  });
+
+  it("a file deleted with its task earlier in the same call reports already deleted; all-or-nothing", async () => {
+    const t = createT();
+    const f = await setup(t);
+    await attachText(t, "admin", f.id.B, "b file", "b.txt");
+    await attachText(t, "alice", f.id.A, "alice file", "a.txt");
+    await attachText(t, "admin", f.id.A, "admin file", "c.txt");
+    const [bFile] = await taskFiles(t, f.B);
+    const [aliceFile, adminFile] = await taskFiles(t, f.A);
+
+    // The second file is refused while deleting: the first one is rolled back (I5).
+    await expect(remove(t, "alice", [aliceFile._id, adminFile._id])).rejects.toThrow(/Item 2 .*only delete your own/);
+    expect(await taskFiles(t, f.A)).toHaveLength(2);
+
+    const result = await remove(t, "admin", [f.id.B, bFile._id]);
+    expect(result.items.map((i) => [i.type, i.action])).toEqual([["task", "deleted"], ["file", "already_deleted"]]);
+  });
+
+  it("the app's remove mutations keep their behaviour through the shared cores", async () => {
+    const t = createT();
+    const f = await setup(t);
+    await attachText(t, "admin", f.id.A, "admin file", "b.txt");
+    const [file] = await taskFiles(t, f.A);
+    await expect(inApp(t, "alice", "org:member").mutation(api.attachments.remove, { id: file._id })).rejects.toThrow(
+      /only delete your own attachments/,
+    );
+    await expect(inApp(t, "other", "org:admin").mutation(api.attachments.remove, { id: file._id })).rejects.toThrow(/Attachment not found/);
+    await inApp(t, "admin", "org:admin").mutation(api.attachments.remove, { id: file._id });
+    expect(await taskFiles(t, f.A)).toEqual([]);
+    expect(await contentRows(t)).toEqual([]);
+  });
+});
+
 describe("fetch project: billing terms", () => {
   const project = async (t: T, caller: Caller, ref: string) => {
     const { results } = await as(t, caller).query(api.mcp.fetch.records, { refs: [ref], include: [], now: Date.now() });

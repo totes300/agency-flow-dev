@@ -1415,7 +1415,7 @@ const deleteInput = z.object({
     .array(ref)
     .min(1)
     .max(MCP_BATCH_MAX)
-    .describe(`1–${MCP_BATCH_MAX} task, comment, time entry, project, client or planner bar refs, deleted together or not at all.`),
+    .describe(`1–${MCP_BATCH_MAX} task, comment, time entry, project, client, planner bar or file refs, deleted together or not at all.`),
   deleteTimeEntries: z
     .boolean()
     .optional()
@@ -1429,14 +1429,16 @@ const deleteTool: McpTool = {
   name: "delete",
   title: "Delete Agency Flow records",
   description: [
-    "Permanently delete tasks (with their sub-tasks, comments and files), comments, time entries, projects, clients or",
-    "planner bars (unscheduling; the task stays), with the app's rules: deleting tasks, projects and clients is admin-only;",
-    "anyone may delete their own comments, time entries and planner bars, admins any. A task with logged time is refused unless deleteTimeEntries is true;",
+    "Permanently delete tasks (with their sub-tasks, comments and files), comments, time entries, projects, clients,",
+    "planner bars (unscheduling; the task stays) or files (task and comment attachments, with their extracted text),",
+    "with the app's rules: deleting tasks, projects and clients is admin-only; anyone may delete their own comments,",
+    "time entries, planner bars and files, admins any. A task with logged time is refused unless deleteTimeEntries is true;",
     "invoiced or settled time always refuses (archive the task in the app instead), and a time entry in a closed",
     "period or on an invoice cannot be deleted (the error says how to unblock). Only an empty project can be deleted:",
     "tasks, time entries, a running timer, invoices or billing closes refuse it (archive it with save_projects instead);",
     "a client only when all its projects could be, and deleting it deletes those projects too. The type comes from",
-    "each ref (time entries and bars by ID; a bare key is a project code, clients are client:KONV). All refs succeed or none.",
+    "each ref (time entries and bars by ID, files by the file id fetch lists with include [\"files\"]; a bare key is a",
+    "project code, clients are client:KONV). All refs succeed or none.",
     'Example: {"refs": ["ARLO-21", "https://app.example/tasks/ARLO-9?comment=k57abc…", "<time entry id>"]}',
   ].join(" "),
   inputSchema: deleteInput,

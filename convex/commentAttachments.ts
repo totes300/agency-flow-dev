@@ -5,7 +5,7 @@ import { getAuthContext, type AuthContext } from "./lib/auth";
 import { loadTaskForReadOrNull } from "./tasks/access";
 import { isMimeTypeBlocked } from "./lib/content_validation";
 import { deleteContentForStorage, requestExtraction } from "./attachmentContents";
-import { assertBlobUnattached, type AttachmentFileInput } from "./attachments";
+import { ATTACHMENT_DELETE_OWN_ONLY, assertBlobUnattached, type AttachmentFileInput } from "./attachments";
 import { MAX_FILE_SIZE } from "../lib/attachment";
 
 export const MAX_FILES_PER_COMMENT = 5;
@@ -195,22 +195,35 @@ export const save = mutation({
   },
 });
 
+/**
+ * Removes a comment attachment with the app's rules: in the caller's org,
+ * the caller's own or any as an admin. The blob and its extracted text
+ * (attachmentContents.ts) go with the row. Shared by `remove` below and MCP
+ * `delete` (which resolves the file on a task the caller can read first).
+ */
+export async function removeCommentAttachmentForAuth(
+  ctx: MutationCtx,
+  auth: AuthContext,
+  id: Id<"commentAttachments">,
+): Promise<void> {
+  const att = await ctx.db.get(id);
+  if (!att || att.orgId !== auth.orgId) {
+    throw new ConvexError("Attachment not found");
+  }
+
+  if (!auth.isAdmin && att.userId !== auth.userId) {
+    throw new ConvexError(ATTACHMENT_DELETE_OWN_ONLY);
+  }
+
+  await ctx.storage.delete(att.fileId);
+  await deleteContentForStorage(ctx, att.orgId, att.fileId);
+  await ctx.db.delete(id);
+}
+
 export const remove = mutation({
   args: { id: v.id("commentAttachments") },
   handler: async (ctx, args) => {
-    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
-
-    const att = await ctx.db.get(args.id);
-    if (!att || att.orgId !== orgId) {
-      throw new ConvexError("Attachment not found");
-    }
-
-    if (!isAdmin && att.userId !== userId) {
-      throw new ConvexError("You can only delete your own attachments");
-    }
-
-    await ctx.storage.delete(att.fileId);
-    await deleteContentForStorage(ctx, att.orgId, att.fileId);
-    await ctx.db.delete(args.id);
+    const auth = await getAuthContext(ctx);
+    await removeCommentAttachmentForAuth(ctx, auth, args.id);
   },
 });

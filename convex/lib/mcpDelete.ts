@@ -14,6 +14,10 @@ import { removeProjectForAuth } from "../projects";
 import { removeClientForAuth } from "../clients";
 import { removeSegmentForAuth } from "../planner";
 import { referenceClientPrefix } from "./helpers";
+import { removeTaskAttachmentForAuth } from "../attachments";
+import { removeCommentAttachmentForAuth } from "../commentAttachments";
+import { loadTaskForReadOrNull } from "../tasks/access";
+import { parseRef } from "../../lib/mcp/refs";
 
 /**
  * MCP `delete` (docs/prd-mcp.md §6, D6): exactly the app's delete paths and
@@ -37,6 +41,11 @@ import { referenceClientPrefix } from "./helpers";
  *   project); its contacts, projects, estimates and overrides go with it.
  * - Planner bar → `removeSegmentForAuth`, the Planner's unschedule: admins
  *   any bar, members only their own (the task is untouched).
+ * - File (a task or comment attachment, by the file id `fetch` lists with
+ *   include ["files"]) → `removeTaskAttachmentForAuth` /
+ *   `removeCommentAttachmentForAuth`, the drawer's file "Delete": your own,
+ *   or any as an admin; the blob and its extracted text go with it. A file
+ *   on a task the caller cannot read is "not found" (I3).
  * - Members and daily notes have no delete in the app; invoices are deleted
  *   through billing_preview / billing_commit.
  *
@@ -64,7 +73,43 @@ type Target =
   | { index: number; input: string; type: "time_entry"; id: Id<"timeEntries">; label: string }
   | { index: number; input: string; type: "project"; id: Id<"projects">; label: string }
   | { index: number; input: string; type: "client"; id: Id<"clients">; label: string }
-  | { index: number; input: string; type: "plan_segment"; id: Id<"planSegments">; label: string };
+  | { index: number; input: string; type: "plan_segment"; id: Id<"planSegments">; label: string }
+  | { index: number; input: string; type: "file"; id: Id<"attachments">; label: string }
+  | { index: number; input: string; type: "comment_file"; id: Id<"commentAttachments">; label: string };
+
+/** What delete removes, for model-facing errors. */
+const DELETABLE = "tasks, comments, time entries, projects, clients, planner bars and files";
+
+const FILE_NOT_FOUND = 'File ids are listed by fetch with include ["files"].';
+
+/**
+ * A file id (task or comment attachment), or null when `input` is no
+ * attachment ID at all (then the ref resolver takes it). The file must be in
+ * the caller's org on a task they can read; anything else is "not found".
+ */
+async function fileTarget(
+  ctx: MutationCtx,
+  auth: McpAuthContext,
+  index: number,
+  input: string,
+): Promise<Target | null> {
+  const parsed = parseRef(input);
+  if (!parsed.ok || parsed.ref.kind !== "id" || parsed.ref.table) return null;
+  const raw = parsed.ref.id;
+  const notFound = () => new ConvexError(`${parsed.input} not found. ${FILE_NOT_FOUND}`);
+  const taskFileId = ctx.db.normalizeId("attachments", raw);
+  const commentFileId = taskFileId ? null : ctx.db.normalizeId("commentAttachments", raw);
+  if (!taskFileId && !commentFileId) return null;
+  const file = taskFileId ? await ctx.db.get(taskFileId) : await ctx.db.get(commentFileId!);
+  if (!file || file.orgId !== auth.orgId) throw notFound();
+  const access = await loadTaskForReadOrNull(ctx, file.taskId, auth);
+  if (!access) throw notFound();
+  const taskKey = access.task.identifier ?? access.task._id;
+  if (taskFileId) {
+    return { index, input, type: "file", id: taskFileId, label: `file "${file.fileName}" on ${taskKey}` };
+  }
+  return { index, input, type: "comment_file", id: commentFileId!, label: `file "${file.fileName}" on a comment on ${taskKey}` };
+}
 
 export async function deleteRecords(
   ctx: MutationCtx,
@@ -77,6 +122,8 @@ export async function deleteRecords(
   const seen = new Set<string>();
   for (const [index, input] of refs.entries()) {
     const target = await runItem(index, input, async (): Promise<Target> => {
+      const file = await fileTarget(ctx, auth, index, input);
+      if (file) return file;
       const resolution = await resolver.resolve(input);
       if (!resolution.ok) throw new ConvexError(resolution.message);
       const resolved = resolution.resolved;
@@ -129,11 +176,11 @@ export async function deleteRecords(
         }
         case "invoice":
           throw new ConvexError(
-            `delete removes tasks, comments, time entries, projects, clients and planner bars. "${input}" is an invoice: a never-numbered draft is deleted with billing_preview (action delete_draft) and billing_commit.`,
+            `delete removes ${DELETABLE}. "${input}" is an invoice: a never-numbered draft is deleted with billing_preview (action delete_draft) and billing_commit.`,
           );
         default:
           throw new ConvexError(
-            `delete removes tasks, comments, time entries, projects, clients and planner bars. "${input}" is ${UNSUPPORTED[resolved.type]}.`,
+            `delete removes ${DELETABLE}. "${input}" is ${UNSUPPORTED[resolved.type]}.`,
           );
       }
     });
@@ -157,12 +204,17 @@ export async function deleteRecords(
         await removeProjectForAuth(ctx, auth, { id: target.id });
       } else if (target.type === "client") {
         await removeClientForAuth(ctx, auth, { id: target.id });
+      } else if (target.type === "file") {
+        await removeTaskAttachmentForAuth(ctx, auth, target.id);
+      } else if (target.type === "comment_file") {
+        await removeCommentAttachmentForAuth(ctx, auth, target.id);
       } else {
         await removeSegmentForAuth(ctx, auth, { id: target.id });
       }
       return "deleted" as const;
     });
-    items.push({ input: target.input, type: target.type, label: target.label, action });
+    const type = target.type === "comment_file" ? "file" : target.type;
+    items.push({ input: target.input, type, label: target.label, action });
   }
   return { tool: "delete", items };
 }

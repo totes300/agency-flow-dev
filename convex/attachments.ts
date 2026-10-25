@@ -231,20 +231,36 @@ export const save = mutation({
   },
 });
 
+/** The app's rule for removing a file: your own, or any as an admin. */
+export const ATTACHMENT_DELETE_OWN_ONLY = "You can only delete your own attachments";
+
+/**
+ * Removes a task attachment with the app's rules: in the caller's org, the
+ * caller's own or any as an admin. The blob and its extracted text
+ * (attachmentContents.ts) go with the row. Shared by `remove` below and MCP
+ * `delete` (which resolves the file on a task the caller can read first).
+ */
+export async function removeTaskAttachmentForAuth(
+  ctx: MutationCtx,
+  auth: AuthContext,
+  id: Id<"attachments">,
+): Promise<void> {
+  const att = await ctx.db.get(id);
+  if (!att || att.orgId !== auth.orgId) throw new ConvexError("Attachment not found");
+
+  if (!auth.isAdmin && att.userId !== auth.userId) {
+    throw new ConvexError(ATTACHMENT_DELETE_OWN_ONLY);
+  }
+
+  await ctx.storage.delete(att.fileId);
+  await deleteContentForStorage(ctx, att.orgId, att.fileId);
+  await ctx.db.delete(id);
+}
+
 export const remove = mutation({
   args: { id: v.id("attachments") },
   handler: async (ctx, args) => {
-    const { orgId, userId, isAdmin } = await getAuthContext(ctx);
-
-    const att = await ctx.db.get(args.id);
-    if (!att || att.orgId !== orgId) throw new ConvexError("Attachment not found");
-
-    if (!isAdmin && att.userId !== userId) {
-      throw new ConvexError("You can only delete your own attachments");
-    }
-
-    await ctx.storage.delete(att.fileId);
-    await deleteContentForStorage(ctx, att.orgId, att.fileId);
-    await ctx.db.delete(args.id);
+    const auth = await getAuthContext(ctx);
+    await removeTaskAttachmentForAuth(ctx, auth, args.id);
   },
 });

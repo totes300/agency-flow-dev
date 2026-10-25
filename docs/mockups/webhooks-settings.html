@@ -3,236 +3,366 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Settings → Webhooks (mockup)</title>
+<title>Settings → Webhooks (mockup v2)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
-  /* Static mockup of Settings → Webhooks (docs/prd-agent-first-backlog.md §5.6).
-     Mirrors the app's shadcn tokens (neutral, light) and the Integrations tab:
-     same page width (max-w-3xl), line tabs, one card, outline/ghost buttons.
-     Every control maps to a shared component noted in the side comments. */
+  /* Settings → Webhooks, mockup v2 (docs/prd-agent-first-backlog.md §5.6).
+     Built from the app's light tokens (app/globals.css) and shared components:
+     Tabs(line), SectionCard, Button(default/outline/ghost, sm), Switch,
+     DropdownMenu, Dialog, Input/InputGroup, RadioGroup, Checkbox, Collapsible.
+     Frames: A empty · B configured · C edit dialog · D secret dialog. */
   :root {
-    --bg: #ffffff; --fg: #0a0a0a; --muted: #737373; --muted-bg: #f5f5f5;
-    --border: #e5e5e5; --card: #ffffff; --primary: #171717; --primary-fg: #fafafa;
-    --ring: #a3a3a3; --destructive: #dc2626; --ok: #16a34a; --fail: #dc2626;
+    --background: oklch(1 0 0);
+    --foreground: oklch(0.248 0.002 90);
+    --muted: oklch(0.98 0.002 247.84);
+    --muted-foreground: oklch(0.5806 0.0084 80.71);
+    --accent: oklch(0.97 0 0);
+    --primary: oklch(0.604 0.161 252.33);
+    --border: oklch(0.922 0 0);
+    --destructive: oklch(0.577 0.245 27.325);
+    --success: oklch(0.517 0.174 142.495);
+    --sidebar: oklch(0.967 0.001 286.375);
+    --sidebar-accent: oklch(0.928 0.003 286.3);
+    --radius: 10px;
+    --mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--fg);
-    font: 14px/1.45 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
-  .page { max-width: 768px; margin: 32px auto 80px; padding: 0 16px; display: flex; flex-direction: column; gap: 24px; }
-  h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.01em; margin: 0; }
-  h2 { font-size: 16px; font-weight: 600; margin: 0; }
-  h3 { font-size: 14px; font-weight: 600; margin: 0; }
+  html, body { margin: 0; }
+  body { background: #eceef0; color: var(--foreground);
+    font: 400 13px/1.5 Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased; }
   p { margin: 0; }
-  .muted { color: var(--muted); }
-  .xs { font-size: 12px; }
-  .tabs { display: flex; gap: 20px; border-bottom: 1px solid var(--border); overflow-x: auto; }
-  .tab { padding: 8px 0; color: var(--muted); white-space: nowrap; border-bottom: 2px solid transparent; margin-bottom: -1px; }
-  .tab.active { color: var(--fg); border-color: var(--fg); font-weight: 500; }
-  .stack { display: flex; flex-direction: column; gap: 8px; }
-  .card { border: 1px solid var(--border); border-radius: 10px; background: var(--card); }
-  .card-body { padding: 20px; display: flex; flex-direction: column; gap: 20px; }
-  .row { display: flex; align-items: center; gap: 8px; }
-  .between { justify-content: space-between; }
-  .field { display: grid; grid-template-columns: 180px 1fr; gap: 16px; align-items: start; }
-  .field > .label { padding-top: 7px; font-weight: 500; }
-  .field .hint { margin-top: 4px; }
-  .input { height: 34px; width: 100%; border: 1px solid var(--border); border-radius: 6px; padding: 0 10px;
-    font: inherit; color: var(--fg); background: #fff; }
-  .input.mono, code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
-  .select { height: 34px; width: 100%; border: 1px solid var(--border); border-radius: 6px; padding: 0 10px;
-    display: flex; align-items: center; justify-content: space-between; background: #fff; cursor: default; }
-  .select .chev { color: var(--muted); }
-  .btn { height: 32px; padding: 0 12px; border-radius: 6px; font: inherit; font-weight: 500; font-size: 13px;
-    display: inline-flex; align-items: center; gap: 6px; cursor: pointer; border: 1px solid transparent; background: none; color: var(--fg); }
+  code, .mono { font-family: var(--mono); font-size: 12px; }
+  svg.i { width: 15px; height: 15px; flex: none; stroke: currentColor; fill: none; stroke-width: 1.75;
+    stroke-linecap: round; stroke-linejoin: round; }
+  .muted { color: var(--muted-foreground); }
+
+  /* Mockup canvas: frames with a quiet caption */
+  .canvas { max-width: 1240px; margin: 0 auto; padding: 32px 24px 64px; display: grid; gap: 40px; }
+  .frame-cap { font-size: 11px; font-weight: 500; letter-spacing: .02em; color: #8a8f98; margin: 0 0 10px 2px; }
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; align-items: start; }
+
+  /* App shell: grey sidebar canvas, one inset white panel */
+  .shell { display: grid; grid-template-columns: 208px 1fr; background: var(--sidebar); border-radius: 12px;
+    overflow: hidden; border: 1px solid #dfe1e4; min-height: 640px; }
+  .sb { padding: 12px 8px; display: flex; flex-direction: column; gap: 2px; color: #3f4248; }
+  .sb .ws { display: flex; align-items: center; gap: 8px; padding: 6px 8px 12px; font-weight: 600; }
+  .sb .ws .logo { width: 18px; height: 18px; border-radius: 5px; background: #222; }
+  .sb a { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 6px; color: inherit; text-decoration: none; }
+  .sb a.on { background: var(--sidebar-accent); color: #111; font-weight: 500; }
+  .sb .grp { margin: 14px 8px 4px; font-size: 11px; color: #8a8f98; }
+  .panel { background: var(--background); margin: 8px 8px 8px 0; border-radius: 10px; border: 1px solid #e3e5e8;
+    padding: 28px 32px 40px; }
+  .content { max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; gap: 22px; }
+  h1 { font-size: 18px; font-weight: 600; letter-spacing: -0.01em; margin: 0; }
+  .tabs { display: flex; gap: 18px; border-bottom: 1px solid var(--border); margin-top: 14px; overflow-x: auto; }
+  .tabs span { padding: 8px 0 9px; color: var(--muted-foreground); white-space: nowrap; border-bottom: 1.5px solid transparent; margin-bottom: -1px; }
+  .tabs span.on { color: var(--foreground); border-color: var(--foreground); font-weight: 500; }
+
+  .sec-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }
+  .sec-head h2 { font-size: 14px; font-weight: 600; margin: 0 0 2px; }
+  .sec-sub { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; }
+  .sec-sub h3 { font-size: 13px; font-weight: 600; margin: 0; }
+
+  .card { border: 1px solid var(--border); border-radius: 12px; background: #fff; overflow: hidden; }
+
+  /* Buttons (components/ui/button.tsx, size sm = h-7) */
+  .btn { height: 28px; padding: 0 10px; border-radius: 8px; font: 500 12.5px/1 Inter, sans-serif; display: inline-flex;
+    align-items: center; gap: 6px; border: 1px solid transparent; background: none; color: var(--foreground); cursor: pointer; white-space: nowrap; }
+  .btn.primary { background: var(--primary); color: #fff; }
   .btn.outline { border-color: var(--border); background: #fff; }
-  .btn.primary { background: var(--primary); color: var(--primary-fg); }
-  .btn.ghost:hover, .btn.outline:hover { background: var(--muted-bg); }
-  .btn.danger { color: var(--destructive); }
-  .switch { width: 32px; height: 18px; border-radius: 999px; background: var(--primary); position: relative; flex: none; }
-  .switch::after { content: ""; position: absolute; top: 2px; left: 16px; width: 14px; height: 14px; border-radius: 50%; background: #fff; }
-  .divider { height: 1px; background: var(--border); margin: 0 -20px; }
-  .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; flex: none; }
-  .dot.ok { background: var(--ok); } .dot.fail { background: var(--fail); } .dot.pending { background: #a3a3a3; }
-  table { width: 100%; border-collapse: collapse; }
-  th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; padding: 6px 8px; border-bottom: 1px solid var(--border); }
-  td { padding: 8px; border-bottom: 1px solid #f0f0f0; font-size: 13px; }
-  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
-  .section-title { display: flex; align-items: baseline; justify-content: space-between; }
-  .state-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: #a3a3a3; margin: 24px 0 -8px; }
-  .popover { border: 1px solid var(--border); border-radius: 8px; background: #fff; box-shadow: 0 6px 24px rgba(0,0,0,.08);
-    width: 300px; padding: 4px; font-size: 13px; }
-  .popover .search { border: 0; border-bottom: 1px solid var(--border); border-radius: 0; height: 32px; padding: 0 8px; width: 100%; font: inherit; }
-  .opt { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 4px; }
-  .opt:hover { background: var(--muted-bg); }
-  .opt.group { font-weight: 500; }
-  .opt.child { padding-left: 30px; color: #404040; }
-  .opt .count { margin-left: auto; color: var(--muted); font-size: 12px; }
-  .check { width: 14px; height: 14px; border: 1px solid #a3a3a3; border-radius: 3px; flex: none; display: grid; place-items: center; font-size: 10px; }
-  .check.on { background: var(--primary); border-color: var(--primary); color: #fff; }
-  .check.mixed { background: var(--primary); border-color: var(--primary); color: #fff; }
-  .dialog-backdrop { background: rgba(0,0,0,.04); border-radius: 12px; padding: 32px 16px; display: grid; place-items: center; }
-  .dialog { width: 100%; max-width: 460px; background: #fff; border: 1px solid var(--border); border-radius: 10px;
-    padding: 20px; display: flex; flex-direction: column; gap: 14px; box-shadow: 0 10px 40px rgba(0,0,0,.10); }
-  .secret { display: flex; gap: 6px; }
-  .secret .input { background: var(--muted-bg); }
-  .note { border-left: 2px solid var(--border); padding-left: 10px; }
-  .side { display: grid; grid-template-columns: 1fr 300px; gap: 24px; align-items: start; }
-  @media (max-width: 720px) {
-    .field { grid-template-columns: 1fr; gap: 6px; }
-    .field > .label { padding-top: 0; }
-    .side { grid-template-columns: 1fr; }
-    .hide-sm { display: none; }
+  .btn.ghost:hover, .btn.outline:hover { background: var(--muted); }
+  .btn.icon { width: 28px; padding: 0; justify-content: center; }
+  .btn.link { padding: 0; height: auto; color: var(--muted-foreground); font-weight: 500; }
+  .btn.link:hover { color: var(--foreground); }
+
+  .switch { width: 28px; height: 16px; border-radius: 999px; background: var(--primary); position: relative; flex: none; }
+  .switch::after { content: ""; position: absolute; top: 2px; left: 14px; width: 12px; height: 12px; border-radius: 50%; background: #fff;
+    box-shadow: 0 1px 2px rgba(0,0,0,.2); }
+
+  /* Endpoint header */
+  .ep-head { display: flex; align-items: center; gap: 12px; padding: 14px 16px; }
+  .ep-icon { width: 30px; height: 30px; border-radius: 8px; background: var(--muted); border: 1px solid var(--border);
+    display: grid; place-items: center; color: #5b5f66; flex: none; }
+  .ep-url { font-family: var(--mono); font-size: 12.5px; color: var(--foreground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ep-meta { font-size: 12px; color: var(--muted-foreground); }
+  .grow { flex: 1; min-width: 0; }
+  .row { display: flex; align-items: center; gap: 8px; }
+
+  /* Key/value rows (Linear settings rows) */
+  .kv { display: grid; grid-template-columns: 168px 1fr auto; align-items: center; gap: 12px; min-height: 40px;
+    padding: 8px 16px; border-top: 1px solid var(--border); }
+  .kv .k { color: var(--muted-foreground); }
+  .kv .v { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; flex: none; }
+  .dot.ok { background: var(--success); } .dot.fail { background: var(--destructive); }
+
+  /* Deliveries list */
+  .dl { display: grid; grid-template-columns: 18px minmax(0,1.3fr) 84px minmax(0,1fr) 56px; align-items: center; gap: 12px;
+    height: 38px; padding: 0 16px; border-top: 1px solid var(--border); }
+  .dl:first-child { border-top: 0; }
+  .dl:hover { background: var(--muted); }
+  .dl .ref { font-family: var(--mono); font-size: 12px; color: var(--muted-foreground); }
+  .dl .res { color: var(--muted-foreground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dl .t { text-align: right; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+  .ok-i { color: var(--success); } .fail-i { color: var(--destructive); } .wait-i { color: #9aa0a6; }
+
+  /* Empty */
+  .empty { padding: 40px 24px; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; }
+  .empty .ep-icon { width: 36px; height: 36px; }
+  .empty h3 { margin: 4px 0 0; font-size: 13px; font-weight: 600; }
+  .empty p { max-width: 380px; color: var(--muted-foreground); }
+
+  /* Menu (DropdownMenu) */
+  .menu { position: absolute; right: 12px; top: 46px; width: 196px; background: #fff; border: 1px solid var(--border); border-radius: 10px;
+    box-shadow: 0 8px 28px rgba(16,24,40,.12); padding: 4px; z-index: 2; }
+  .menu div { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; }
+  .menu div:hover, .menu div.hl { background: var(--accent); }
+  .menu hr { border: 0; border-top: 1px solid var(--border); margin: 4px -4px; }
+  .menu .danger { color: var(--destructive); }
+
+  /* Dialog */
+  .scrim { background: rgba(15,17,20,.28); border-radius: 12px; padding: 40px 24px; display: grid; place-items: center; min-height: 640px; }
+  .dialog { width: 100%; max-width: 520px; background: #fff; border-radius: 14px; box-shadow: 0 18px 60px rgba(16,24,40,.22);
+    display: flex; flex-direction: column; }
+  .dialog .hd { padding: 18px 20px 4px; }
+  .dialog .hd h3 { margin: 0; font-size: 14px; font-weight: 600; }
+  .dialog .hd p { color: var(--muted-foreground); margin-top: 2px; }
+  .dialog .bd { padding: 14px 20px; display: flex; flex-direction: column; gap: 18px; }
+  .dialog .ft { padding: 12px 20px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 8px; }
+  label.l { display: block; font-weight: 500; margin-bottom: 6px; }
+  .hint { font-size: 12px; color: var(--muted-foreground); margin-top: 6px; }
+  .input { height: 32px; width: 100%; border: 1px solid var(--border); border-radius: 8px; padding: 0 10px; font: 400 13px Inter, sans-serif;
+    color: var(--foreground); background: #fff; display: flex; align-items: center; }
+  .input.mono { font-family: var(--mono); font-size: 12.5px; }
+  .input.focus { border-color: var(--primary); box-shadow: 0 0 0 3px color-mix(in oklch, var(--primary) 18%, transparent); }
+  .ig { display: flex; align-items: center; border: 1px solid var(--border); border-radius: 8px; background: var(--muted); height: 34px; padding-left: 10px; }
+  .ig .val { flex: 1; font-family: var(--mono); font-size: 12px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .radio { display: flex; flex-direction: column; gap: 8px; }
+  .radio div { display: flex; align-items: center; gap: 8px; }
+  .rb { width: 14px; height: 14px; border-radius: 50%; border: 1px solid #b9bdc3; display: grid; place-items: center; flex: none; }
+  .rb.on { border-color: var(--primary); }
+  .rb.on::after { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--primary); }
+  .cb { width: 14px; height: 14px; border-radius: 4px; border: 1px solid #b9bdc3; display: grid; place-items: center; flex: none; color: #fff; }
+  .cb.on, .cb.mix { background: var(--primary); border-color: var(--primary); }
+  .cb svg { width: 10px; height: 10px; stroke-width: 3; }
+  .events { border: 1px solid var(--border); border-radius: 10px; margin-top: 10px; overflow: hidden; }
+  .fam { border-top: 1px solid var(--border); }
+  .fam:first-child { border-top: 0; }
+  .fam-h { display: flex; align-items: center; gap: 8px; padding: 8px 12px; font-weight: 500; }
+  .fam-h .n { margin-left: auto; font-size: 12px; color: var(--muted-foreground); font-weight: 400; }
+  .fam-items { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 12px; padding: 0 12px 10px 34px; }
+  .fam-items div { display: flex; align-items: center; gap: 8px; padding: 3px 0; color: #3f4248; }
+  .apps div { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+  .collapse { display: flex; align-items: center; gap: 6px; color: var(--muted-foreground); font-weight: 500; }
+
+  @media (max-width: 980px) { .pair { grid-template-columns: 1fr; } }
+  @media (max-width: 760px) {
+    .shell { grid-template-columns: 1fr; } .sb { display: none; } .panel { margin: 8px; padding: 20px 16px 32px; }
+    .kv { grid-template-columns: 1fr auto; } .kv .k { grid-column: 1 / -1; }
+    .dl { grid-template-columns: 18px 1fr 56px; } .dl .ref, .dl .res { display: none; }
+    .fam-items { grid-template-columns: 1fr; }
   }
 </style>
 </head>
 <body>
-<div class="page">
+<!-- Lucide icon sprites -->
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="webhook" viewBox="0 0 24 24"><path d="M18 16.98h-5.99c-1.1 0-1.95.94-2.48 1.9A4 4 0 0 1 2 17c.01-.7.2-1.4.57-2"/><path d="m6 17 3.13-5.78c.53-.97.1-2.18-.5-3.1a4 4 0 1 1 6.89-4.06"/><path d="m12 6 3.13 5.73C15.66 12.7 16.9 13 18 13a4 4 0 0 1 0 8"/></symbol>
+  <symbol id="more" viewBox="0 0 24 24"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></symbol>
+  <symbol id="ok" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></symbol>
+  <symbol id="fail" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/></symbol>
+  <symbol id="clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></symbol>
+  <symbol id="copy" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></symbol>
+  <symbol id="send" viewBox="0 0 24 24"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/></symbol>
+  <symbol id="pencil" viewBox="0 0 24 24"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/></symbol>
+  <symbol id="rotate" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></symbol>
+  <symbol id="trash" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></symbol>
+  <symbol id="check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+  <symbol id="chev" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+  <symbol id="home" viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></symbol>
+  <symbol id="list" viewBox="0 0 24 24"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></symbol>
+  <symbol id="gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></symbol>
+</svg>
+
+<div class="canvas">
+
+  <!-- ═══════════════ B · Configured (the everyday view) ═══════════════ -->
   <div>
-    <h1>Settings</h1>
-    <p class="muted">Manage your organization settings.</p>
-  </div>
+    <p class="frame-cap">B · Endpoint configured — the everyday view (menu shown open)</p>
+    <div class="shell">
+      <nav class="sb">
+        <div class="ws"><span class="logo"></span>Konverted</div>
+        <a><svg class="i"><use href="#home"/></svg>Inbox</a>
+        <a><svg class="i"><use href="#list"/></svg>My Tasks</a>
+        <a><svg class="i"><use href="#list"/></svg>Tasks</a>
+        <div class="grp">Workspace</div>
+        <a><svg class="i"><use href="#list"/></svg>Projects</a>
+        <a><svg class="i"><use href="#list"/></svg>Billing</a>
+        <a class="on"><svg class="i"><use href="#gear"/></svg>Settings</a>
+      </nav>
+      <main class="panel">
+        <div class="content">
+          <div>
+            <h1>Settings</h1>
+            <div class="tabs">
+              <span>General</span><span>Team</span><span>Statuses</span><span>Labels</span>
+              <span>Work Categories</span><span>User Rates</span><span>Integrations</span><span class="on">Webhooks</span>
+            </div>
+          </div>
 
-  <!-- TabsList variant="line": a new admin-only "Webhooks" tab after Integrations -->
-  <div class="tabs">
-    <span class="tab">General</span><span class="tab">Team</span><span class="tab">Statuses</span>
-    <span class="tab">Labels</span><span class="tab">Work Categories</span><span class="tab">User Rates</span>
-    <span class="tab">Integrations</span><span class="tab active">Webhooks</span>
-  </div>
+          <div class="sec-head">
+            <div>
+              <h2>Webhooks</h2>
+              <p class="muted">A signed POST to your agent within seconds of any task change. It names the task; your agent reads the rest through MCP.</p>
+            </div>
+          </div>
 
-  <div class="stack">
-    <h2>Webhooks</h2>
-    <p class="muted">Agency Flow POSTs a short, signed event to your endpoint whenever something changes on a task —
-      so an agent can react within seconds instead of polling. The event names the task; read the details with the
-      MCP <code>fetch</code>.</p>
-  </div>
+          <div class="card" style="position:relative; overflow:visible">
+            <div class="ep-head">
+              <span class="ep-icon"><svg class="i"><use href="#webhook"/></svg></span>
+              <div class="grow">
+                <div class="ep-url">https://agent.konverted.io/hooks/agency-flow</div>
+                <div class="ep-meta">Added 25 Oct by Adam Toth</div>
+              </div>
+              <button class="btn outline"><svg class="i" style="width:13px;height:13px"><use href="#send"/></svg>Send test</button>
+              <span class="switch" title="Enabled"></span>
+              <button class="btn ghost icon" style="background:var(--muted)"><svg class="i"><use href="#more"/></svg></button>
+            </div>
+            <div class="menu">
+              <div class="hl"><svg class="i"><use href="#pencil"/></svg>Edit endpoint</div>
+              <div><svg class="i"><use href="#rotate"/></svg>Rotate secret</div>
+              <hr>
+              <div class="danger"><svg class="i"><use href="#trash"/></svg>Delete endpoint</div>
+            </div>
+            <div class="kv"><span class="k">Events</span><span class="v">All events</span><span></span></div>
+            <div class="kv"><span class="k">Skips writes by</span><span class="v">claude.ai</span><span></span></div>
+            <div class="kv"><span class="k">Signing secret</span><span class="v mono muted">••••••••aT6Q</span><span></span></div>
+            <div class="kv"><span class="k">Last delivery</span><span class="v row"><span class="dot ok"></span>Delivered 2 min ago<span class="muted">· 200</span></span><span></span></div>
+          </div>
 
-  <!-- ─────────────────────────── State 1: no endpoint ─────────────────────────── -->
-  <div class="state-label">State 1 · nothing set up</div>
-  <div class="card"><div class="card-body">
-    <div class="row between">
-      <div class="stack" style="gap:4px">
-        <h3>No endpoint yet</h3>
-        <p class="muted">Add one HTTPS URL. You'll see its signing secret once.</p>
-      </div>
-      <button class="btn primary">Add endpoint</button>
+          <div>
+            <div class="sec-sub"><h3>Recent deliveries</h3><span class="muted" style="font-size:12px">Last 20 · kept 7 days</span></div>
+            <div class="card">
+              <div class="dl"><svg class="i ok-i"><use href="#ok"/></svg><span>Status changed</span><span class="ref">ARLO-21</span><span class="res">200</span><span class="t">17:03</span></div>
+              <div class="dl"><svg class="i ok-i"><use href="#ok"/></svg><span>Comment added</span><span class="ref">ARLO-19</span><span class="res">200 · attempt 2</span><span class="t">16:58</span></div>
+              <div class="dl"><svg class="i fail-i"><use href="#fail"/></svg><span>Comment added</span><span class="ref">ARLO-19</span><span class="res">503 · retry at 16:58</span><span class="t">16:58</span></div>
+              <div class="dl"><svg class="i wait-i"><use href="#clock"/></svg><span>Assignee added</span><span class="ref">KONV-7</span><span class="res">Pending · attempt 4 of 4</span><span class="t">16:31</span></div>
+              <div class="dl"><svg class="i ok-i"><use href="#ok"/></svg><span>Test event</span><span class="ref"></span><span class="res">200</span><span class="t">16:12</span></div>
+            </div>
+          </div>
+        </div>
+      </main>
     </div>
-  </div></div>
+  </div>
 
-  <!-- ─────────────────────────── State 2: configured ─────────────────────────── -->
-  <div class="state-label">State 2 · endpoint configured</div>
-  <div class="card"><div class="card-body">
-    <!-- Header: enabled Switch + last delivery as quiet text (dot + words, no pill) -->
-    <div class="row between">
-      <div class="row" style="gap:10px">
-        <span class="switch" aria-label="Enabled"></span>
-        <div class="stack" style="gap:0">
-          <h3>Enabled</h3>
-          <span class="muted xs row" style="gap:6px"><span class="dot ok"></span>Last delivery 2 min ago · 200</span>
+  <div class="pair">
+    <!-- ═══════════════ A · Empty ═══════════════ -->
+    <div>
+      <p class="frame-cap">A · Nothing set up (content area only)</p>
+      <div class="panel" style="margin:0">
+        <div class="content" style="gap:16px">
+          <div>
+            <h2 style="font-size:14px;font-weight:600;margin:0 0 2px">Webhooks</h2>
+            <p class="muted">A signed POST to your agent within seconds of any task change. It names the task; your agent reads the rest through MCP.</p>
+          </div>
+          <div class="card">
+            <div class="empty">
+              <span class="ep-icon"><svg class="i"><use href="#webhook"/></svg></span>
+              <h3>No endpoint yet</h3>
+              <p>Add your agent's HTTPS URL. Every task change is sent there, signed with a secret only you see.</p>
+              <button class="btn primary" style="margin-top:6px">Add endpoint</button>
+            </div>
+          </div>
         </div>
       </div>
-      <div class="row">
-        <button class="btn ghost">Send test event</button>
-        <button class="btn ghost danger">Delete</button>
-      </div>
     </div>
 
-    <div class="divider"></div>
-
-    <!-- Input -->
-    <div class="field">
-      <div class="label">Endpoint URL</div>
-      <div>
-        <input class="input mono" value="https://agent.konverted.io/hooks/agency-flow">
-        <p class="muted xs hint">HTTPS only. No IP addresses, localhost or internal hosts.</p>
-      </div>
-    </div>
-
-    <!-- Popover + Command (faceted multi-select, as the Notion-style filter menus) -->
-    <div class="field">
-      <div class="label">Events</div>
-      <div>
-        <div class="select"><span>All events</span><span class="chev">⌄</span></div>
-        <p class="muted xs hint">Every task change by default. Narrow it to what your agent acts on.</p>
-      </div>
-    </div>
-
-    <div class="field">
-      <div class="label">Don't notify for writes by</div>
-      <div>
-        <div class="select"><span>claude.ai</span><span class="chev">⌄</span></div>
-        <p class="muted xs hint">Your agent isn't woken by what it just wrote. From this workspace's Connected apps.</p>
-      </div>
-    </div>
-
-    <!-- Secret: hint only; Rotate opens the shown-once dialog -->
-    <div class="field">
-      <div class="label">Signing secret</div>
-      <div class="row between">
-        <code class="muted">••••••••••••aT6Q</code>
-        <button class="btn ghost">Rotate</button>
-      </div>
-    </div>
-
-    <div class="row" style="justify-content:flex-end; gap:8px">
-      <button class="btn outline">Cancel</button>
-      <button class="btn primary">Save</button>
-    </div>
-  </div></div>
-
-  <!-- Recent deliveries: quiet table, plain text, dot + word status -->
-  <div class="stack">
-    <div class="section-title">
-      <h3>Recent deliveries</h3>
-      <span class="muted xs">Last 20 · kept 7 days</span>
-    </div>
-    <table>
-      <thead><tr><th>Time</th><th>Event</th><th>Status</th><th class="num">HTTP</th><th class="num hide-sm">Attempt</th></tr></thead>
-      <tbody>
-        <tr><td>17:03:11</td><td>status_changed</td><td><span class="row" style="gap:6px"><span class="dot ok"></span>Delivered</span></td><td class="num">200</td><td class="num hide-sm">1</td></tr>
-        <tr><td>16:58:40</td><td>comment_added</td><td><span class="row" style="gap:6px"><span class="dot ok"></span>Delivered</span></td><td class="num">200</td><td class="num hide-sm">2</td></tr>
-        <tr><td>16:58:10</td><td>comment_added</td><td><span class="row" style="gap:6px"><span class="dot fail"></span>Failed · retrying 16:58:40</span></td><td class="num">503</td><td class="num hide-sm">1</td></tr>
-        <tr><td>16:41:02</td><td>test</td><td><span class="row" style="gap:6px"><span class="dot ok"></span>Delivered</span></td><td class="num">200</td><td class="num hide-sm">1</td></tr>
-        <tr><td>16:12:55</td><td>assignee_added</td><td><span class="row" style="gap:6px"><span class="dot fail"></span>Failed · Timed out after 10 s</span></td><td class="num">—</td><td class="num hide-sm">4</td></tr>
-      </tbody>
-    </table>
-  </div>
-
-  <!-- ─────────────── State 3: events picker open / secret shown once ─────────────── -->
-  <div class="state-label">State 3 · events picker open · secret shown once</div>
-  <div class="side">
-    <div class="stack">
-      <p class="muted xs">Events picker (Popover + Command). Families toggle all their events; a family with some
-        events chosen shows a dash. The trigger then reads e.g. "Status, Comments +1".</p>
-      <div class="popover">
-        <input class="search" placeholder="Filter events…">
-        <div class="opt"><span class="check"></span>All events<span class="count">26</span></div>
-        <div class="opt group"><span class="check mixed">–</span>Task<span class="count">2 of 17</span></div>
-        <div class="opt child"><span class="check on">✓</span>Task created</div>
-        <div class="opt child"><span class="check on">✓</span>Due date changed</div>
-        <div class="opt child"><span class="check"></span>Title changed</div>
-        <div class="opt child muted">… 14 more</div>
-        <div class="opt group"><span class="check on">✓</span>Status<span class="count">1</span></div>
-        <div class="opt group"><span class="check"></span>Assignee<span class="count">2</span></div>
-        <div class="opt group"><span class="check on">✓</span>Comment<span class="count">3</span></div>
-        <div class="opt group"><span class="check"></span>Time<span class="count">3</span></div>
-      </div>
-    </div>
-
-    <div class="dialog-backdrop">
-      <!-- Dialog after Create / Rotate -->
-      <div class="dialog">
-        <h3>Copy your signing secret</h3>
-        <p class="muted">This is the only time it's shown. Store it with your agent; it verifies the
-          <code>X-AgencyFlow-Signature</code> header.</p>
-        <div class="secret">
-          <input class="input mono" value="q3Vt9-XcN2pL0aW7yRk4sD8fH1jM6bZ5eU0oT2iaT6Q" readonly>
-          <button class="btn outline">Copy</button>
+    <!-- ═══════════════ D · Secret, shown once ═══════════════ -->
+    <div>
+      <p class="frame-cap">D · After Add / Rotate — the secret, shown once</p>
+      <div class="scrim" style="min-height:0">
+        <div class="dialog">
+          <div class="hd">
+            <h3>Save your signing secret</h3>
+            <p>You won't see it again. Your agent uses it to check that a request came from Agency Flow.</p>
+          </div>
+          <div class="bd">
+            <div class="ig"><span class="val">q3Vt9XcN2pL0aW7yRk4sD8fH1jM6bZ5eU0oT2iaT6Q</span>
+              <button class="btn ghost icon" title="Copy"><svg class="i" style="width:14px;height:14px"><use href="#copy"/></svg></button></div>
+            <div class="collapse"><svg class="i" style="width:13px;height:13px"><use href="#chev"/></svg>How to verify a delivery</div>
+          </div>
+          <div class="ft"><button class="btn primary">I've saved it</button></div>
         </div>
-        <p class="muted xs note">Signature: HMAC-SHA256 of <code>&lt;t&gt;.&lt;body&gt;</code>, header
-          <code>t=&lt;unix seconds&gt;,v1=&lt;hex&gt;</code>. Reject if older than 5 minutes; dedupe on <code>id</code>.</p>
-        <div class="row" style="justify-content:flex-end"><button class="btn primary">Done</button></div>
       </div>
     </div>
   </div>
+
+  <!-- ═══════════════ C · Edit dialog ═══════════════ -->
+  <div>
+    <p class="frame-cap">C · Add / Edit endpoint — "Only selected" chosen to show the event list</p>
+    <div class="scrim">
+      <div class="dialog" style="max-width:560px">
+        <div class="hd">
+          <h3>Edit endpoint</h3>
+          <p>Changes apply to the next event.</p>
+        </div>
+        <div class="bd">
+          <div>
+            <label class="l">Endpoint URL</label>
+            <div class="input mono focus">https://agent.konverted.io/hooks/agency-flow</div>
+            <p class="hint">HTTPS with a host name. No IP addresses, localhost or internal hosts.</p>
+          </div>
+
+          <div>
+            <label class="l">Events</label>
+            <div class="radio">
+              <div><span class="rb"></span>All events</div>
+              <div><span class="rb on"></span>Only selected</div>
+            </div>
+            <div class="events">
+              <div class="fam">
+                <div class="fam-h"><span class="cb on"><svg class="i"><use href="#check"/></svg></span>Status<span class="n">1</span></div>
+              </div>
+              <div class="fam">
+                <div class="fam-h"><span class="cb on"><svg class="i"><use href="#check"/></svg></span>Comments<span class="n">3</span></div>
+              </div>
+              <div class="fam">
+                <div class="fam-h"><span class="cb"></span>Assignees<span class="n">2</span></div>
+              </div>
+              <div class="fam">
+                <div class="fam-h"><span class="cb mix"><svg class="i"><use href="#minus"/></svg></span>Task details<span class="n">2 of 17</span></div>
+                <div class="fam-items">
+                  <div><span class="cb on"><svg class="i"><use href="#check"/></svg></span>Task created</div>
+                  <div><span class="cb"></span>Title changed</div>
+                  <div><span class="cb on"><svg class="i"><use href="#check"/></svg></span>Due date changed</div>
+                  <div><span class="cb"></span>Priority changed</div>
+                  <div><span class="cb"></span>Archived</div>
+                  <div class="muted">+ 12 more</div>
+                </div>
+              </div>
+              <div class="fam">
+                <div class="fam-h"><span class="cb"></span>Time<span class="n">3</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <label class="l">Skip writes by</label>
+            <div class="apps">
+              <div><span class="cb on"><svg class="i"><use href="#check"/></svg></span>claude.ai</div>
+              <div><span class="cb"></span>Grok Bot</div>
+            </div>
+            <p class="hint">So your agent isn't woken by its own writes. Apps from this workspace's Connected apps.</p>
+          </div>
+        </div>
+        <div class="ft"><button class="btn ghost">Cancel</button><button class="btn primary">Save</button></div>
+      </div>
+    </div>
+  </div>
+
 </div>
 </body>
 </html>

@@ -12,6 +12,18 @@ const authenticateRequest = vi.fn();
 const clerkClient = vi.fn(async () => ({ authenticateRequest }));
 vi.mock("@clerk/nextjs/server", () => ({ clerkClient }));
 
+// Connected apps stamping (D17): `after` callbacks are collected and run by
+// the test; Convex calls are recorded.
+const afterCallbacks: Array<() => Promise<void>> = [];
+vi.mock("next/server", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/server")>()),
+  after: (callback: () => Promise<void>) => {
+    afterCallbacks.push(callback);
+  },
+}));
+const fetchMutation = vi.fn();
+vi.mock("convex/nextjs", () => ({ fetchMutation, fetchQuery: vi.fn(), fetchAction: vi.fn() }));
+
 const RESOURCE_URL = "https://localhost:3001/mcp";
 const METADATA_URL = "https://localhost:3001/.well-known/oauth-protected-resource/mcp";
 // Publishable keys encode the Frontend API host (`<host>$`, base64).
@@ -109,6 +121,76 @@ describe("/mcp", () => {
       acceptsToken: "oauth_token",
       audience: RESOURCE_URL,
     });
+    error.mockRestore();
+  });
+});
+
+describe("/mcp: Connected apps last-used stamp", () => {
+  const CLIENT_ID = "https://claude.ai/oauth/claude-code-client-metadata";
+  /** A JWT-shaped bearer token carrying `org_id` (Clerk verified it in production). */
+  const bearer = (org: string) =>
+    `h.${Buffer.from(JSON.stringify({ org_id: org })).toString("base64url")}.s`;
+  const signedIn = (userId: string) => ({
+    tokenType: "oauth_token",
+    isAuthenticated: true,
+    userId,
+    clientId: CLIENT_ID,
+    scopes: ["user:org:read"],
+  });
+
+  beforeEach(() => {
+    afterCallbacks.length = 0;
+    fetchMutation.mockReset();
+  });
+
+  it("stamps after a verified request, as the user, at most once an hour per org + user + client", async () => {
+    const { POST } = await import("@/app/mcp/route");
+    authenticateRequest.mockResolvedValue({ toAuth: () => signedIn("user_stamp") });
+    const token = bearer("org_a");
+
+    const res = await POST(mcpPost(token));
+    expect(res.status).toBe(200);
+    expect(afterCallbacks).toHaveLength(1);
+    expect(fetchMutation).not.toHaveBeenCalled(); // runs after the response
+    await afterCallbacks[0]();
+    expect(fetchMutation).toHaveBeenCalledTimes(1);
+    const [, args, options] = fetchMutation.mock.calls[0];
+    expect(args).toEqual({ clientName: "claude.ai" });
+    expect(options).toEqual({ token });
+
+    // The same connection again: no second stamp from this instance.
+    await POST(mcpPost(token));
+    expect(afterCallbacks).toHaveLength(1);
+    // Another org or user is another connection.
+    await POST(mcpPost(bearer("org_b")));
+    authenticateRequest.mockResolvedValue({ toAuth: () => signedIn("user_other") });
+    await POST(mcpPost(token));
+    expect(afterCallbacks).toHaveLength(3);
+  });
+
+  it("a failed stamp never fails the request and is logged without the token", async () => {
+    const { POST } = await import("@/app/mcp/route");
+    authenticateRequest.mockResolvedValue({ toAuth: () => signedIn("user_fail") });
+    fetchMutation.mockRejectedValue(new Error("You are not a member of this organization"));
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const token = bearer("org_fail");
+    const res = await POST(mcpPost(token));
+    expect(res.status).toBe(200);
+    await afterCallbacks[0]();
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(error.mock.calls)).not.toContain(token);
+    error.mockRestore();
+  });
+
+  it("an unauthenticated or invalid request stamps nothing", async () => {
+    const { POST } = await import("@/app/mcp/route");
+    authenticateRequest.mockResolvedValue({
+      toAuth: () => ({ tokenType: "oauth_token", isAuthenticated: false, userId: null, clientId: null, scopes: null }),
+    });
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    await POST(mcpPost());
+    await POST(mcpPost("forged"));
+    expect(afterCallbacks).toEqual([]);
     error.mockRestore();
   });
 });

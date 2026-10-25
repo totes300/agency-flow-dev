@@ -1191,10 +1191,14 @@ export function renderMarkRead(data: MarkReadData): string {
   const lines = data.items.map((i) => {
     const what =
       i.type === "inbox"
-        ? `inbox: ${i.count ?? 0} unread ${i.count === 1 ? "item" : "items"} marked read`
+        ? `inbox: ${i.count ?? 0} unread ${i.count === 1 ? "item" : "items"} marked read${
+            i.more ? ' — more may remain: call mark_read with "inbox" again' : ""
+          }`
         : i.type === "task"
           ? `${oneLine(i.label)}: comments, changes and its inbox items`
-          : `inbox item on ${oneLine(i.label)}`;
+          : i.type === "comment"
+            ? `comment ${oneLine(i.input)} → ${oneLine(i.label)}: read with its task (comments, changes and its inbox items)`
+            : `inbox item on ${oneLine(i.label)}`;
     return `- ${fields(what, i.action === "marked_read" ? (i.type === "inbox" ? null : "marked read") : "already read")}`;
   });
   return [writeHeader("Marked read", data.replayed), ...lines].join("\n");

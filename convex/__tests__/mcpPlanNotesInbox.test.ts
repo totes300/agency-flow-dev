@@ -358,8 +358,35 @@ describe("fetch(inbox) and mark_read", () => {
     expect((await inbox(t, "alice")).unreadCount).toBe(0);
     expect((await markRead(t, "alice", ["inbox"])).items[0]).toMatchObject({ action: "already_read", count: 0 });
 
+    // A comment ref is read with its task (the app's granularity); other kinds are refused.
+    const commentId = await t.run(async (ctx) =>
+      await createCommentForAuth(ctx, await loadTaskForWrite(ctx, f.A, f.adminAuth), { content: doc("One more") }),
+    );
+    const byComment = await markRead(t, "alice", [commentId]);
+    expect(byComment.items[0]).toMatchObject({ type: "comment", action: "marked_read", label: `${f.id.A} · Alice task` });
+    expect((await inbox(t, "alice")).unreadCount).toBe(0);
+    await expect(markRead(t, "alice", ["ARLO"])).rejects.toThrow("mark_read takes inbox items");
+
     // Idempotency key: replay returns the first result.
     const k1 = await markRead(t, "alice", ["inbox"], { idempotencyKey: "m1" });
     expect(await markRead(t, "alice", ["inbox"], { idempotencyKey: "m1" })).toEqual({ ...k1, replayed: true });
+  });
+
+  it('"inbox" marks at most 200 per call and says when more may remain', async () => {
+    const t = createT();
+    const f = await setup(t);
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 205; i += 1) {
+        await ctx.db.insert("notifications", {
+          orgId: ORG, recipientId: f.alice, actorId: f.admin, type: "assigned", taskId: f.A, previewText: "Alice task",
+          inboxState: "unread", createdAt: 1_000 + i, updatedAt: 1_000 + i,
+        });
+      }
+    });
+    const first = await markRead(t, "alice", ["inbox"]);
+    expect(first.items[0]).toMatchObject({ type: "inbox", count: 200, more: true });
+    const second = await markRead(t, "alice", ["inbox"]);
+    expect(second.items[0]).toMatchObject({ count: 5 });
+    expect(second.items[0].more).toBeUndefined();
   });
 });

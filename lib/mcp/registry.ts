@@ -1313,7 +1313,7 @@ const markReadInput = z.object({
     .array(ref)
     .min(1)
     .max(MCP_BATCH_MAX)
-    .describe(`1–${MCP_BATCH_MAX} refs: inbox item refs from fetch("inbox"), task refs, or "inbox".`),
+    .describe(`1–${MCP_BATCH_MAX} refs: inbox item refs from fetch("inbox"), task or comment refs, or "inbox".`),
   idempotencyKey,
 });
 
@@ -1324,8 +1324,9 @@ const markReadTool: McpTool = {
   title: "Mark Agency Flow inbox items read",
   description: [
     'Mark things read exactly as the app does: an inbox item ref (from fetch("inbox")) marks that item read; a task',
-    "ref (ARLO-21) is like opening the task — its unread comments and changes are cleared and its inbox items read;",
-    '"inbox" is "Mark all as read". Your own inbox only. Already-read items are reported, nothing changes; all refs',
+    "ref (ARLO-21) — or a comment ref or link, read with its task as in the app — is like opening the task: its unread",
+    'comments and changes are cleared and its inbox items read; "inbox" is "Mark all as read" (up to 200 per call; the',
+    "result says when to call again). Your own inbox only. Already-read items are reported, nothing changes; all refs",
     "succeed or none.",
     'Example: {"refs": ["<inbox item ref>", "ARLO-21"]}; {"refs": ["inbox"]}',
   ].join(" "),

@@ -111,7 +111,8 @@ describe("slice 7a write results", () => {
         items: [
           { input: "x", type: "notification", label: "ARLO-21 · Hero", action: "marked_read" },
           { input: "ARLO-9", type: "task", label: "ARLO-9 · Copy", action: "already_read" },
-          { input: "inbox", type: "inbox", label: "inbox", action: "marked_read", count: 3 },
+          { input: "k9", type: "comment", label: "ARLO-9 · Copy", action: "marked_read" },
+          { input: "inbox", type: "inbox", label: "inbox", action: "marked_read", count: 200, more: true },
         ],
       }),
     ).toBe(
@@ -119,7 +120,8 @@ describe("slice 7a write results", () => {
         "## Marked read",
         "- inbox item on ARLO-21 · Hero · marked read",
         "- ARLO-9 · Copy: comments, changes and its inbox items · already read",
-        "- inbox: 3 unread items marked read",
+        "- comment k9 → ARLO-9 · Copy: read with its task (comments, changes and its inbox items) · marked read",
+        '- inbox: 200 unread items marked read — more may remain: call mark_read with "inbox" again',
       ].join("\n"),
     );
   });

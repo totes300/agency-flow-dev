@@ -9,10 +9,12 @@ import type { MarkReadResult } from "./mcpWriteResults";
 import { loadTaskForReadOrNull } from "../tasks/access";
 import { getUserState, markViewedForAuth } from "../tasks/userState";
 import {
+  MARK_ALL_READ_CAP,
   markAllNotificationsReadForAuth,
   markNotificationsReadForAuth,
   type NotificationType,
 } from "../notifications";
+import type { TaskAccess } from "../tasks/access";
 import { capText } from "../../lib/mcp/tiptap-markdown";
 import { decodeInboxCursor, encodeInboxCursor, type InboxPosition } from "../../lib/mcp/cursor";
 import { CHANGE_COMMENT_TEXT_MAX, INBOX_LIMIT_MAX } from "../../lib/mcp/limits";
@@ -32,9 +34,11 @@ import { parseRef } from "../../lib/mcp/refs";
  * mentions, the snapshot the app stored at notification time.
  *
  * `mark_read` runs the app's actions: a notification → the Inbox's "mark as
- * read" (`markNotificationsReadForAuth`); a task → opening it
- * (`markViewedForAuth`: its unread comments and changes are cleared, and its
- * inbox notifications read); `"inbox"` → "Mark all as read" (up to 200).
+ * read" (`markNotificationsReadForAuth`); a task — or a comment, which the
+ * app reads per task — → opening the task (`markViewedForAuth`: its unread
+ * comments and changes are cleared, and its inbox notifications read);
+ * `"inbox"` → "Mark all as read" (up to 200 per call; the result says when
+ * more may remain).
  * Idempotent: something already read reports "already read" and writes
  * nothing (a task is still stamped viewed, as opening it again would).
  *
@@ -42,8 +46,8 @@ import { parseRef } from "../../lib/mcp/refs";
  * ranges each) plus 101 unread rows for the count, then per row one task,
  * one actor, one comment and (per distinct task) up to three access reads,
  * two per distinct mentioned user — under ~800 ranges for 100 rows.
- * mark_read: ~5 per task ref plus its unread slice (≤ 100 rows), one per
- * notification.
+ * mark_read: ~5 per task or comment ref plus the task's own notifications,
+ * one per notification, up to 200 for "inbox".
  */
 
 /** Unread notifications counted for the header (the app's badge shows "99+" past its slice). */
@@ -202,18 +206,42 @@ async function taskLabel(ctx: MutationCtx, taskId: Id<"tasks">): Promise<string>
 async function taskHasUnread(ctx: MutationCtx, auth: McpAuthContext, task: Doc<"tasks">): Promise<boolean> {
   const state = await getUserState(ctx, task._id, auth.userId);
   if (state && (state.unreadComments > 0 || state.hasUnseenChanges)) return true;
+  // This task's notifications only (a task has few), not a global slice.
   const unread = await ctx.db
     .query("notifications")
-    .withIndex("by_recipient_org_state", (q) => q.eq("recipientId", auth.userId).eq("orgId", auth.orgId).eq("inboxState", "unread"))
-    .take(INBOX_UNREAD_COUNT_CAP);
-  return unread.some((n) => n.taskId === task._id);
+    .withIndex("by_task", (q) => q.eq("taskId", task._id))
+    .filter((q) =>
+      q.and(q.eq(q.field("recipientId"), auth.userId), q.eq(q.field("orgId"), auth.orgId), q.eq(q.field("inboxState"), "unread")),
+    )
+    .first();
+  return unread !== null;
+}
+
+/** Opening the task, as the app does when you read its comments. */
+async function viewTask(
+  ctx: MutationCtx,
+  auth: McpAuthContext,
+  access: TaskAccess,
+  now: number,
+): Promise<{ label: string; action: MarkRow["action"] }> {
+  const { task } = access;
+  const unread = await taskHasUnread(ctx, auth, task);
+  await markViewedForAuth(ctx, access, now);
+  return { label: `${task.identifier ?? task._id} · ${task.title}`, action: unread ? "marked_read" : "already_read" };
 }
 
 async function markOne(ctx: MutationCtx, auth: McpAuthContext, resolver: ReturnType<typeof createRefResolver>, input: string, now: number): Promise<MarkRow> {
   const parsed = parseRef(input);
   if (parsed.ok && parsed.ref.kind === "special" && parsed.ref.name === "inbox") {
     const count = await markAllNotificationsReadForAuth(ctx, auth);
-    return { input, type: "inbox", label: "inbox", action: count > 0 ? "marked_read" : "already_read", count };
+    return {
+      input,
+      type: "inbox",
+      label: "inbox",
+      action: count > 0 ? "marked_read" : "already_read",
+      count,
+      ...(count >= MARK_ALL_READ_CAP ? { more: true } : {}),
+    };
   }
   const raw = input.trim();
   const notificationId = ctx.db.normalizeId("notifications", raw);
@@ -227,15 +255,15 @@ async function markOne(ctx: MutationCtx, auth: McpAuthContext, resolver: ReturnT
     await markNotificationsReadForAuth(ctx, auth, [notificationId]);
     return { input, type: "notification", label, action: "marked_read" };
   }
-  if (ctx.db.normalizeId("comments", raw)) {
-    throw new ConvexError("Comments are read per task, as when you open the task in the app: pass the task's ref instead.");
-  }
-  const resolved = await resolver.require(input, "task");
-  if (resolved.type !== "task") throw new Error(`Expected a task, resolved a ${resolved.type}`);
-  const { task } = resolved.access;
-  const unread = await taskHasUnread(ctx, auth, task);
-  await markViewedForAuth(ctx, resolved.access, now);
-  return { input, type: "task", label: `${task.identifier ?? task._id} · ${task.title}`, action: unread ? "marked_read" : "already_read" };
+  const resolution = await resolver.resolve(input);
+  if (!resolution.ok) throw new ConvexError(resolution.message);
+  const resolved = resolution.resolved;
+  if (resolved.type === "task") return { input, type: "task", ...(await viewTask(ctx, auth, resolved.access, now)) };
+  // A comment is read with its task: the app has no per-comment read state.
+  if (resolved.type === "comment") return { input, type: "comment", ...(await viewTask(ctx, auth, resolved.access, now)) };
+  throw new ConvexError(
+    `mark_read takes inbox items (from fetch("inbox")), tasks, comments or "inbox"; "${input.trim()}" is a ${resolved.type.replace("_", " ")}.`,
+  );
 }
 
 /** Runs every ref in order; the first failing ref aborts the whole call (I5). */

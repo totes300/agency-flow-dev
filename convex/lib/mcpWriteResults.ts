@@ -178,12 +178,14 @@ export const markReadResultValidator = v.object({
   items: v.array(
     v.object({
       input: v.string(),
-      type: v.union(v.literal("notification"), v.literal("task"), v.literal("inbox")),
-      /** `ARLO-21 · Title` (task, notification) or `inbox`. */
+      type: v.union(v.literal("notification"), v.literal("task"), v.literal("comment"), v.literal("inbox")),
+      /** `ARLO-21 · Title` (task, comment — its task —, notification) or `inbox`. */
       label: v.string(),
       action: v.union(v.literal("marked_read"), v.literal("already_read")),
       /** inbox: how many unread notifications were marked. */
       count: v.optional(v.number()),
+      /** inbox: the per-call cap was reached, so unread items may remain. */
+      more: v.optional(v.boolean()),
     }),
   ),
 });

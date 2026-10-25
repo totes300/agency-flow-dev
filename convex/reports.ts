@@ -50,7 +50,7 @@ import { getProjectEntries } from "./lib/projectEntries";
 import { loadCloseContext } from "./lib/billing/closeData";
 
 /** Hard scan ceilings — throwing beats returning a silently-wrong sum. */
-const MAX_REPORT_ENTRIES = 20_000;
+export const MAX_REPORT_ENTRIES = 20_000;
 const MAX_RANGE_DAYS = 366;
 const MAX_MONTH_SPAN = 24;
 

@@ -76,3 +76,25 @@ export const MARKDOWN_MAX_LENGTH = 50_000;
 export const TIME_ENTRY_MINUTES_MAX = 24 * 60;
 /** Characters per time-entry note (plain text). */
 export const TIME_ENTRY_NOTE_MAX = 2_000;
+
+/**
+ * `report` kinds (docs/prd-mcp.md §8): each runs one deterministic Convex
+ * core and returns rows the route renders as a markdown table (D1).
+ */
+export const REPORT_KINDS = [
+  "timesheet",
+  "time_by_member",
+  "client_monthly",
+  "missing_time",
+  "project_overview",
+  "project_monthly",
+  "retainer_statement",
+  "retainer_health",
+  "close_queue",
+  "invoice_metrics",
+  "org_finance",
+] as const;
+export type ReportKind = (typeof REPORT_KINDS)[number];
+
+/** Days per report date range: the ceiling of the report cores (convex/reports.ts). */
+export const REPORT_RANGE_DAYS_MAX = 366;

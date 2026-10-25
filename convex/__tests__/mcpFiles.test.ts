@@ -1,8 +1,8 @@
 // @vitest-environment edge-runtime
 //
 // MCP slice 7b (docs/prd-mcp.md D18, §10, §13): create_upload, attach_file
-// (storageId and inline text) and fetch include files / attachment_text,
-// with OAuth identities.
+// (storageId and inline text), fetch include files / attachment_text and a
+// project's billing terms, with OAuth identities.
 //   create_upload: the app's size / type limits, an announcement per call
 //   attach_file: only an announced upload of the same user and org (I3),
 //     used once; task = the app's write access, comment = its author only;
@@ -10,6 +10,7 @@
 //     no blob left behind on failure or replay; D23 idempotency
 //   fetch: every extraction status said honestly, text capped per file,
 //     cross-org and unreadable tasks not found; deleting a task drops the text
+//   project terms: admins see the save_projects fields, members no billing
 
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import { convexTest } from "convex-test";
@@ -482,5 +483,60 @@ describe("fetch include files / attachment_text", () => {
     await as(t, "admin").mutation(api.mcp.write.remove, { refs: [f.id.B], clientName: "Claude" });
     expect(await contentRows(t)).toEqual([]);
     expect(await taskFiles(t, f.B)).toEqual([]);
+  });
+});
+
+describe("fetch project: billing terms", () => {
+  const project = async (t: T, caller: Caller, ref: string) => {
+    const { results } = await as(t, caller).query(api.mcp.fetch.records, { refs: [ref], include: [], now: Date.now() });
+    const r = results[0];
+    if (!r.ok || r.record.type !== "project") throw new Error("expected a project");
+    return r.record;
+  };
+
+  it("admins read a retainer's terms as save_projects fields", async () => {
+    const t = createT();
+    await setup(t);
+    expect((await project(t, "admin", "RET")).terms).toEqual({
+      billingType: "retainer", currency: "EUR", status: "active", monthlyFee: 2000, includedMinutes: 1200, overageRate: 95,
+      startDate: "2026-01-01", cycleLength: 3, rollover: true,
+    });
+  });
+
+  it("fixed: fee, estimates and rates; T&M: rates (project override, else the default in the project's currency)", async () => {
+    const t = createT();
+    await setup(t);
+    expect((await project(t, "admin", "FIX")).terms).toEqual({
+      billingType: "fixed",
+      currency: "EUR",
+      fixedFee: 10000,
+      categories: [
+        { category: "Design", archived: false, estimateMinutes: 600, rate: 70, rateSource: "default", defaultRate: 70 },
+        { category: "Development", archived: false, estimateMinutes: null, rate: 100, rateSource: "project", defaultRate: 90 },
+        { category: "Copywriting", archived: false, estimateMinutes: null, rate: null, rateSource: "none", defaultRate: null },
+      ],
+    });
+    expect((await project(t, "admin", "ARLO")).terms).toEqual({
+      billingType: "t_and_m",
+      currency: "EUR",
+      categories: [
+        { category: "Design", archived: false, estimateMinutes: null, rate: 80, rateSource: "project", defaultRate: 70 },
+        { category: "Development", archived: false, estimateMinutes: null, rate: 90, rateSource: "default", defaultRate: 90 },
+        { category: "Copywriting", archived: false, estimateMinutes: null, rate: null, rateSource: "none", defaultRate: null },
+        // An archived category stays listed while it has an override.
+        { category: "Old", archived: true, estimateMinutes: null, rate: 60, rateSource: "project", defaultRate: null },
+      ],
+    });
+    expect((await project(t, "admin", "NB")).terms).toEqual({ billingType: "non_billable", currency: "EUR" });
+  });
+
+  it("members get no billing data at all", async () => {
+    const t = createT();
+    await setup(t);
+    for (const code of ["RET", "FIX", "ARLO", "NB"]) {
+      const record = await project(t, "alice", code);
+      expect(record.terms).toBeNull();
+      expect(JSON.stringify(record)).not.toMatch(/2000|10000|monthlyFee|fixedFee|rate|billing/i);
+    }
   });
 });

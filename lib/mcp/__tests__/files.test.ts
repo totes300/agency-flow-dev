@@ -8,11 +8,18 @@ import {
   type McpQueryRunner,
   type McpToolContext,
 } from "../registry";
-import { renderAttachFile, renderCreateUpload, renderTaskRecord, type TaskRecord } from "../render";
+import {
+  renderAttachFile,
+  renderCreateUpload,
+  renderRecord,
+  renderTaskRecord,
+  type FetchedRecord,
+  type TaskRecord,
+} from "../render";
 
 // Slice 7b in the registry and renderers (docs/prd-mcp.md §10): create_upload
-// and attach_file dispatch, input rules, the upload instructions and
-// attachment text sections.
+// and attach_file dispatch, input rules, the upload instructions, attachment
+// text sections and a project's billing terms.
 
 const ORIGIN = "https://localhost:3001";
 const NOW = Date.UTC(2026, 9, 25, 12);
@@ -278,5 +285,73 @@ describe("attachment text in a task record", () => {
     const plain = renderTaskRecord({ ...TASK, files: { rows: [file("a.pdf", null)], truncated: false, withText: false } }, CTX);
     expect(plain).toContain("### Files (1)");
     expect(plain).not.toContain("Attachment text");
+  });
+});
+
+describe("project billing terms", () => {
+  const base = {
+    type: "project" as const,
+    id: "p1" as Id<"projects">,
+    code: "ARLO",
+    name: "Arlow site",
+    client: { id: "c1" as Id<"clients">, name: "Arlow", prefix: "ARL" },
+    archived: false,
+  };
+  const head = "## Project ARLO · Arlow site\n- Link: https://localhost:3001/projects/p1\n- Code: ARLO (task keys ARLO-N)\n- Client: client:ARL · Arlow\n- Archived: no";
+
+  it("retainer: every term with its save_projects field", () => {
+    const record: FetchedRecord = {
+      ...base,
+      terms: {
+        billingType: "retainer" as const, currency: "EUR", status: "active" as const, monthlyFee: 2000, includedMinutes: 1230,
+        overageRate: 95, startDate: "2026-01-01", cycleLength: 3, rollover: true,
+      },
+    };
+    expect(renderRecord(record, CTX)).toBe(
+      [
+        `${head}\n- Billing type: retainer`,
+        [
+          "### Billing terms (save_projects fields, EUR)",
+          "- retainerActive: true (active)",
+          "- monthlyFee: €2,000.00",
+          "- includedMinutes: 20h 30m per month (1230 minutes)",
+          "- overageRate: €95.00/h",
+          "- startDate: 2026-01-01",
+          "- cycleLength: 3 months",
+          "- rollover: true",
+        ].join("\n"),
+      ].join("\n\n"),
+    );
+  });
+
+  it("fixed and T&M: per-category estimates and rates, with where each rate comes from", () => {
+    const categories = [
+      { category: "Design", archived: false, estimateMinutes: 600, rate: 80, rateSource: "project" as const, defaultRate: 70 },
+      { category: "Development", archived: false, estimateMinutes: null, rate: 90, rateSource: "default" as const, defaultRate: 90 },
+      { category: "Old", archived: true, estimateMinutes: null, rate: null, rateSource: "none" as const, defaultRate: null },
+    ];
+    expect(renderRecord({ ...base, terms: { billingType: "fixed" as const, currency: "USD", fixedFee: 10000, categories } }, CTX)).toBe(
+      [
+        `${head}\n- Billing type: fixed (fixed fee)`,
+        [
+          "### Billing terms (save_projects fields, USD)",
+          "- fixedFee: $10,000.00",
+          "- estimates and rates per work category:",
+          "  - Design · estimate 10h · $80.00/h (project rate; default $70.00/h)",
+          "  - Development · no estimate · $90.00/h (workspace default)",
+          "  - Old · archived · no estimate · no rate set",
+        ].join("\n"),
+      ].join("\n\n"),
+    );
+    const tm = renderRecord({ ...base, terms: { billingType: "t_and_m" as const, currency: "EUR", categories } }, CTX);
+    expect(tm).toContain("- Billing type: t_and_m (time & materials)");
+    expect(tm).toContain("- rates per work category:\n  - Design · €80.00/h (project rate; default €70.00/h)");
+    expect(renderRecord({ ...base, terms: { billingType: "non_billable" as const, currency: "EUR" } }, CTX)).toBe(
+      `${head}\n- Billing type: non_billable (no billing terms)`,
+    );
+  });
+
+  it("members: no billing data", () => {
+    expect(renderRecord({ ...base, terms: null }, CTX)).toBe(`${head}\n- Billing: admin-only, as in the app.`);
   });
 });

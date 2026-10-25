@@ -1,21 +1,34 @@
-import { query, mutation, type MutationCtx } from "./_generated/server";
+import { query, mutation, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { v, ConvexError, type ObjectType } from "convex/values";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { assertAdmin, getAuthContext, requireAdmin, type AuthContext } from "./lib/auth";
+
+/**
+ * A project's billable rate overrides (admins only: the Rates settings and
+ * MCP `fetch`); empty for a project outside the caller's org.
+ */
+export async function listProjectRateOverridesForAuth(
+  ctx: QueryCtx,
+  auth: Pick<AuthContext, "orgId" | "isAdmin">,
+  projectId: Id<"projects">,
+): Promise<Doc<"projectRateOverrides">[]> {
+  assertAdmin(auth);
+  const { orgId } = auth;
+
+  // Verify project belongs to org
+  const project = await ctx.db.get(projectId);
+  if (!project || project.orgId !== orgId) return [];
+
+  return await ctx.db
+    .query("projectRateOverrides")
+    .withIndex("by_projectId", (q) => q.eq("projectId", projectId))
+    .collect();
+}
 
 export const listForProject = query({
   args: { projectId: v.id("projects") },
   handler: async (ctx, args) => {
-    const { orgId } = await requireAdmin(ctx);
-
-    // Verify project belongs to org
-    const project = await ctx.db.get(args.projectId);
-    if (!project || project.orgId !== orgId) return [];
-
-    return await ctx.db
-      .query("projectRateOverrides")
-      .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
-      .collect();
+    return await listProjectRateOverridesForAuth(ctx, await requireAdmin(ctx), args.projectId);
   },
 });
 

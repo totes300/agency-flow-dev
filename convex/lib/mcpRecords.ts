@@ -14,6 +14,7 @@ import { rankTaskSegments } from "./plannerMath";
 import { visibleTimeEntries } from "../timeEntries";
 import type { Resolved } from "./mcpRefs";
 import { listTaskExternalRefs } from "./mcpExternalRefs";
+import { projectTermsForAuth } from "./mcpProjectTerms";
 import { capText, mentionedUserIds, tiptapToMarkdown } from "../../lib/mcp/tiptap-markdown";
 import { loadContent } from "../attachmentContents";
 import { ATTACHMENT_TEXT_FETCH_MAX, capText as capStoredText, contentMessage } from "../../lib/attachments/contents";
@@ -29,9 +30,10 @@ import type { FetchInclude } from "../../lib/mcp/limits";
  * returns data, the Next.js route renders markdown. Everything is read
  * through the app's cores with the caller's auth (`*ForAuth`), so a member
  * sees exactly what the app shows them. No money: rates, fees and amounts
- * are never part of a record — except invoices, which only admins can
- * resolve (as the app's /invoices route) and which come from the invoice
- * page's own core (`getInvoiceForAuth`), amounts in minor units.
+ * are never part of a record — except for admins: invoices (as the app's
+ * /invoices route, from the invoice page's own core `getInvoiceForAuth`,
+ * amounts in minor units) and a project's billing terms (as its Settings
+ * tab, convex/lib/mcpProjectTerms.ts, amounts in major units as stored).
  *
  * Bodies (descriptions, comments) are never cut here: the route fits a
  * result into its size budget by showing fewer list rows, and says so.
@@ -439,6 +441,8 @@ export async function buildRecord(
         name: project.name,
         client: await clientSummary(ctx, orgId, project.clientId),
         archived: project.archivedAt !== undefined,
+        /** Billing type and terms: admins only (the Settings tab); null for members — no billing data. */
+        terms: await projectTermsForAuth(ctx, auth, project._id),
       };
     }
 

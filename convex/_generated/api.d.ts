@@ -75,6 +75,7 @@ import type * as lib_mcpDelete from "../lib/mcpDelete.js";
 import type * as lib_mcpExternalRefs from "../lib/mcpExternalRefs.js";
 import type * as lib_mcpFiles from "../lib/mcpFiles.js";
 import type * as lib_mcpInbox from "../lib/mcpInbox.js";
+import type * as lib_mcpProjectTerms from "../lib/mcpProjectTerms.js";
 import type * as lib_mcpRecords from "../lib/mcpRecords.js";
 import type * as lib_mcpRefs from "../lib/mcpRefs.js";
 import type * as lib_mcpReports from "../lib/mcpReports.js";
@@ -228,6 +229,7 @@ declare const fullApi: ApiFromModules<{
   "lib/mcpExternalRefs": typeof lib_mcpExternalRefs;
   "lib/mcpFiles": typeof lib_mcpFiles;
   "lib/mcpInbox": typeof lib_mcpInbox;
+  "lib/mcpProjectTerms": typeof lib_mcpProjectTerms;
   "lib/mcpRecords": typeof lib_mcpRecords;
   "lib/mcpRefs": typeof lib_mcpRefs;
   "lib/mcpReports": typeof lib_mcpReports;

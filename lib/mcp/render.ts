@@ -661,14 +661,21 @@ export function renderRecord(record: FetchedRecord, ctx: RenderContext): string 
       ]
         .filter((line): line is string => line !== null)
         .join("\n");
-    case "project":
-      return [
+    case "project": {
+      const head = [
         `## Project ${record.code} · ${oneLine(record.name)}`,
         `- Link: ${projectLink(ctx.appOrigin, record.id)}`,
         `- Code: ${record.code} (task keys ${record.code}-N)`,
         `- Client: ${record.client ? clientLabel(record.client) : "none"}`,
         `- Archived: ${record.archived ? "yes" : "no"}`,
-      ].join("\n");
+        record.terms
+          ? `- Billing type: ${record.terms.billingType}${BILLING_TYPE_HINT[record.terms.billingType]}`
+          : "- Billing: admin-only, as in the app.",
+      ]
+        .filter((line): line is string => line !== null)
+        .join("\n");
+      return record.terms && record.terms.billingType !== "non_billable" ? `${head}\n\n${renderProjectTerms(record.terms)}` : head;
+    }
     case "client": {
       const projects = record.projects.map(
         (p) => `- [${p.code}](${projectLink(ctx.appOrigin, p.id)}) · ${oneLine(p.name)}${p.archived ? " · archived" : ""}`,
@@ -715,6 +722,77 @@ export function renderRecord(record: FetchedRecord, ctx: RenderContext): string 
         record.text ? userContent(record.text) : "(empty)",
       ].join("\n");
   }
+}
+
+type ProjectRecord = Extract<FetchedRecord, { type: "project" }>;
+type ProjectTerms = NonNullable<ProjectRecord["terms"]>;
+
+const BILLING_TYPE_HINT: Record<ProjectTerms["billingType"], string> = {
+  fixed: " (fixed fee)",
+  retainer: "",
+  t_and_m: " (time & materials)",
+  non_billable: " (no billing terms)",
+};
+
+/** An amount in major units as stored on the project (formatted, never computed: D1). */
+function moneyMajor(amount: number, currency: string): string {
+  return /^[A-Z]{3}$/.test(currency) ? formatCurrencyPrecise(amount, currency) : `${amount.toFixed(2)} ${currency}`;
+}
+
+function categoryRate(row: Extract<ProjectTerms, { categories: unknown }>["categories"][number], currency: string): string {
+  if (row.rate === null) return "no rate set";
+  const rate = `${moneyMajor(row.rate, currency)}/h`;
+  if (row.rateSource === "default") return `${rate} (workspace default)`;
+  return `${rate} (project rate; ${row.defaultRate !== null ? `default ${moneyMajor(row.defaultRate, currency)}/h` : "no default"})`;
+}
+
+/**
+ * A project's billing terms (admins), labelled with the save_projects field
+ * each value is written with, so an agent reads the current value before
+ * it changes one.
+ */
+function renderProjectTerms(terms: Exclude<ProjectTerms, { billingType: "non_billable" }>): string {
+  const lines = [`### Billing terms (save_projects fields, ${terms.currency})`];
+  const set = (value: string | null) => value ?? "not set";
+  switch (terms.billingType) {
+    case "retainer":
+      lines.push(
+        `- retainerActive: ${terms.status === "active" ? "true (active)" : "false (paused)"}`,
+        `- monthlyFee: ${set(terms.monthlyFee !== null ? moneyMajor(terms.monthlyFee, terms.currency) : null)}`,
+        `- includedMinutes: ${set(terms.includedMinutes !== null ? `${formatDuration(terms.includedMinutes)} per month (${terms.includedMinutes} minutes)` : null)}`,
+        `- overageRate: ${set(terms.overageRate !== null ? `${moneyMajor(terms.overageRate, terms.currency)}/h` : null)}`,
+        `- startDate: ${set(terms.startDate)}`,
+        `- cycleLength: ${terms.cycleLength} ${terms.cycleLength === 1 ? "month" : "months"}`,
+        `- rollover: ${terms.rollover ? "true" : "false"}`,
+      );
+      break;
+    case "fixed":
+      lines.push(
+        `- fixedFee: ${set(terms.fixedFee !== null ? moneyMajor(terms.fixedFee, terms.currency) : null)}`,
+        "- estimates and rates per work category:",
+        ...(terms.categories.length > 0
+          ? terms.categories.map(
+              (c) =>
+                `  - ${fields(
+                  oneLine(c.category),
+                  c.archived && "archived",
+                  c.estimateMinutes !== null ? `estimate ${formatDuration(c.estimateMinutes)}` : "no estimate",
+                  categoryRate(c, terms.currency),
+                )}`,
+            )
+          : ["  - none (no work categories)"]),
+      );
+      break;
+    case "t_and_m":
+      lines.push(
+        "- rates per work category:",
+        ...(terms.categories.length > 0
+          ? terms.categories.map((c) => `  - ${fields(oneLine(c.category), c.archived && "archived", categoryRate(c, terms.currency))}`)
+          : ["  - none (no work categories)"]),
+      );
+      break;
+  }
+  return lines.join("\n");
 }
 
 /** Lines listed per invoice record; the totals always cover every line. */

@@ -1,35 +1,47 @@
 import { v, ConvexError, type ObjectType } from "convex/values";
-import { query, mutation, type MutationCtx } from "./_generated/server";
+import { query, mutation, type MutationCtx, type QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { assertAdmin, getAuthContext, type AuthContext } from "./lib/auth";
+
+/**
+ * A project's category estimates with category name and color (the Budget
+ * settings and MCP `fetch`); empty for a project outside the caller's org.
+ */
+export async function listProjectCategoryEstimatesForAuth(
+  ctx: QueryCtx,
+  auth: Pick<AuthContext, "orgId">,
+  projectId: Id<"projects">,
+) {
+  const { orgId } = auth;
+
+  const project = await ctx.db.get(projectId);
+  if (!project || project.orgId !== orgId) return [];
+
+  const estimates = await ctx.db
+    .query("projectCategoryEstimates")
+    .withIndex("by_projectId", (q) => q.eq("projectId", projectId))
+    .collect();
+
+  // Enrich with category name + color
+  const enriched = await Promise.all(
+    estimates.map(async (est) => {
+      const category = await ctx.db.get(est.workCategoryId);
+      const safeCategory = category && category.orgId === orgId ? category : null;
+      return {
+        ...est,
+        categoryName: safeCategory?.name ?? "Unknown",
+        categoryColor: safeCategory?.color ?? "default",
+      };
+    })
+  );
+
+  return enriched;
+}
 
 export const list = query({
   args: { projectId: v.id("projects") },
   handler: async (ctx, args) => {
-    const { orgId } = await getAuthContext(ctx);
-
-    const project = await ctx.db.get(args.projectId);
-    if (!project || project.orgId !== orgId) return [];
-
-    const estimates = await ctx.db
-      .query("projectCategoryEstimates")
-      .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
-      .collect();
-
-    // Enrich with category name + color
-    const enriched = await Promise.all(
-      estimates.map(async (est) => {
-        const category = await ctx.db.get(est.workCategoryId);
-        const safeCategory = category && category.orgId === orgId ? category : null;
-        return {
-          ...est,
-          categoryName: safeCategory?.name ?? "Unknown",
-          categoryColor: safeCategory?.color ?? "default",
-        };
-      })
-    );
-
-    return enriched;
+    return await listProjectCategoryEstimatesForAuth(ctx, await getAuthContext(ctx), args.projectId);
   },
 });
 

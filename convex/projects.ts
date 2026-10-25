@@ -1,6 +1,6 @@
 import { v, ConvexError, type ObjectType } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
-import { query, mutation, type MutationCtx } from "./_generated/server";
+import { query, mutation, type MutationCtx, type QueryCtx } from "./_generated/server";
 import {
   assertAdmin,
   getAuthContext,
@@ -101,21 +101,33 @@ export const list = query({
   },
 });
 
+/**
+ * A project of the caller's org with its client's name and currency (the
+ * project page's read), or null. Shared by `get` below and MCP `fetch`
+ * (which shows the billing terms to admins only).
+ */
+export async function getProjectForAuth(
+  ctx: QueryCtx,
+  auth: Pick<AuthContext, "orgId">,
+  projectId: Id<"projects">,
+): Promise<ResolvedProjectDetail | null> {
+  const project = await ctx.db.get(projectId);
+  if (!project || project.orgId !== auth.orgId) return null;
+
+  const client = await ctx.db.get(project.clientId);
+  return {
+    ...project,
+    clientName: client?.name ?? "Unknown",
+    // Resolved currency — single source of truth is client.currency.
+    currency: client?.currency ?? "USD",
+  };
+}
+
 export const get = query({
   args: { id: v.id("projects") },
   // See `list` for the rationale behind the explicit return annotation.
   handler: async (ctx, args): Promise<ResolvedProjectDetail | null> => {
-    const { orgId } = await getAuthContext(ctx);
-    const project = await ctx.db.get(args.id);
-    if (!project || project.orgId !== orgId) return null;
-
-    const client = await ctx.db.get(project.clientId);
-    return {
-      ...project,
-      clientName: client?.name ?? "Unknown",
-      // Resolved currency — single source of truth is client.currency.
-      currency: client?.currency ?? "USD",
-    };
+    return await getProjectForAuth(ctx, await getAuthContext(ctx), args.id);
   },
 });
 

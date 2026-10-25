@@ -338,6 +338,7 @@ describe("renderRecord (other kinds) and ref errors", () => {
         name: "Arlow site",
         client: { id: "c1" as Id<"clients">, name: "Arlow", prefix: null },
         archived: false,
+        terms: null,
       },
       {
         type: "client",
@@ -376,7 +377,7 @@ describe("renderRecord (other kinds) and ref errors", () => {
     ];
     const [project, client, member, commentText, entry] = records.map((r) => renderRecord(r, CTX));
     expect(project).toBe(
-      "## Project ARLO · Arlow site\n- Link: https://localhost:3001/projects/p1\n- Code: ARLO (task keys ARLO-N)\n- Client: Arlow\n- Archived: no",
+      "## Project ARLO · Arlow site\n- Link: https://localhost:3001/projects/p1\n- Code: ARLO (task keys ARLO-N)\n- Client: Arlow\n- Archived: no\n- Billing: admin-only, as in the app.",
     );
     expect(client).toBe(
       "## Client Arlow\n- Link: https://localhost:3001/clients/c1\n- Ref: client:ARL\n- Archived: no\n\n### Projects (1)\n- [ARLO](https://localhost:3001/projects/p1) · Arlow site · archived",

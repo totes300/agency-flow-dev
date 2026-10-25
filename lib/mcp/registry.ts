@@ -625,7 +625,7 @@ const fetchTool: McpTool = {
     "Fetch Agency Flow records by reference and get compact markdown: a heading, fields, the body and",
     "the sections you include, with the app link. Records: tasks, comments, time entries, projects, clients, members,",
     "daily notes (by ref from search), planner bars (by ref from include plan), invoices (admins: lines and totals, by",
-    "number INV-007, ID or link).",
+    "number INV-007, ID or link). A project shows admins its billing terms as save_projects fields (fee, included time, rates…).",
     `References: ${REF_FORMS}. A bare key (ARLO) is a project code; clients are client:KONV.`,
     'Special refs: "me" (your user, organization, role, today\'s date in the workspace timezone and your running',
     'timer), "workspace" (statuses, labels, work',

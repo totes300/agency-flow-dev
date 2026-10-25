@@ -2,6 +2,7 @@ import { ConvexError } from "convex/values";
 import type { ActionCtx, MutationCtx, QueryCtx } from "../_generated/server";
 import { internal } from "../_generated/api";
 import { findOrgMembership, oauthClientIdOf, type AuthContext } from "./auth";
+import { isConnectionRevoked } from "./mcpConnections";
 
 /**
  * Auth context for `convex/mcp/*`: the same shape as `getAuthContext` plus the
@@ -16,6 +17,10 @@ export const NO_ORG_SELECTED =
 export const USER_NOT_SYNCED =
   "Your Agency Flow account is not set up yet. Sign in to Agency Flow in the browser once, then retry.";
 
+/** The user revoked this client in Connected apps (owner decision D-REVOKE). */
+export const CONNECTION_REVOKED =
+  "Access for this app was revoked in Agency Flow (Connected apps). To use it again, choose Allow again there.";
+
 /**
  * The only MCP entry point (docs/prd-mcp.md §5.2). Every `convex/mcp/*`
  * function calls it first (I1) and takes no org, user or role arguments (I2).
@@ -28,6 +33,10 @@ export const USER_NOT_SYNCED =
  *    `orgMembers` (D12): OAuth tokens carry no org role, so the session-token
  *    parsing in `getAuthContext` must not be reused here. No membership, or
  *    one linked to another user, fails closed.
+ * 4. The connection (org + user + client) must not be revoked in Connected
+ *    apps (D-REVOKE): one indexed read. Clerk cannot revoke a grant without
+ *    the client's token, so this is what stops a revoked client — its
+ *    still-valid access token and every refreshed one — on the next call.
  *
  * Queries cannot write, so Connected apps "last used" is not stamped here:
  * the /mcp route calls `mcp/connections:touch` (convex/lib/mcpConnections.ts).
@@ -68,6 +77,10 @@ export async function getMcpAuthContext(
   const membership = await findOrgMembership(ctx, orgId, identity.subject);
   if (!membership || (membership.userId !== undefined && membership.userId !== user._id)) {
     throw new ConvexError("You are not a member of this organization");
+  }
+
+  if (await isConnectionRevoked(ctx, orgId, user._id, clientId)) {
+    throw new ConvexError(CONNECTION_REVOKED);
   }
 
   return {

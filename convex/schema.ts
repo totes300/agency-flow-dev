@@ -924,6 +924,10 @@ export default defineSchema({
   // `mcp/connections:touch` (convex/lib/mcpConnections.ts), which writes at
   // most once per hour per client: `firstUsedAt` is shown as "Connected",
   // `lastUsedAt` as "Last used". `clientName` is display text only (D15).
+  // `revokedAt` (owner decision D-REVOKE, 2026-10-25): Clerk cannot revoke a
+  // grant without the client's token, so Revoke is enforced here —
+  // getMcpAuthContext refuses this org + user + client while it is set;
+  // "Allow again" clears it.
   mcpConnections: defineTable({
     orgId: v.string(),
     userId: v.id("users"),
@@ -931,5 +935,6 @@ export default defineSchema({
     clientName: v.string(),
     firstUsedAt: v.number(),
     lastUsedAt: v.number(),
+    revokedAt: v.optional(v.number()),
   }).index("by_orgId_userId_clientId", ["orgId", "userId", "clientId"]),
 });

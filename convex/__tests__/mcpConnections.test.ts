@@ -1,16 +1,22 @@
 // @vitest-environment edge-runtime
 //
-// MCP slice 8 (docs/prd-mcp.md D17, §11): Settings → Connected apps.
+// MCP slice 8 (docs/prd-mcp.md D17, §11): Connected apps.
 //   touch (the /mcp route, OAuth token): creates the connection on first use,
 //     writes "last used" at most once an hour per org + user + client
 //   listMine (the app, session token): only the caller's own connections in
 //     the caller's org; each surface refuses the other token type (I4)
+//   revoke / allowAgain (owner decision D-REVOKE): a revoked org + user +
+//     client is refused by getMcpAuthContext on its next call, at the cost
+//     of one indexed read; Allow again restores it; nobody else is affected
 
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import { convexTest } from "convex-test";
 import schema from "../schema";
 import { api } from "../_generated/api";
+import type { Id } from "../_generated/dataModel";
+import type { QueryCtx } from "../_generated/server";
 import { LAST_USED_INTERVAL_MS } from "../lib/mcpConnections";
+import { CONNECTION_REVOKED, getMcpAuthContext } from "../lib/mcpAuth";
 
 const modules = (
   import.meta as ImportMeta & {
@@ -119,9 +125,9 @@ describe("connectedApps:listMine", () => {
     await viaMcp(t, "clerk_mel", ORG, CLAUDE).mutation(api.mcp.connections.touch, {});
 
     const ada = await inApp(t, "clerk_ada", ORG, "org:admin").query(api.connectedApps.listMine, {});
-    expect(ada.map((c) => [c.clientName, c.connectedAt, c.lastUsedAt])).toEqual([
-      ["claude.ai", T0 + 1000, T0 + 1000],
-      ["Codex", T0, T0],
+    expect(ada.map((c) => [c.clientName, c.connectedAt, c.lastUsedAt, c.revokedAt])).toEqual([
+      ["claude.ai", T0 + 1000, T0 + 1000, null],
+      ["Codex", T0, T0, null],
     ]);
     const adaElsewhere = await inApp(t, "clerk_ada", OTHER, "org:member").query(api.connectedApps.listMine, {});
     expect(adaElsewhere.map((c) => c.clientName)).toEqual(["claude.ai"]);
@@ -135,5 +141,109 @@ describe("connectedApps:listMine", () => {
     const t = createT();
     await setup(t);
     await expect(viaMcp(t, "clerk_ada", ORG, CLAUDE).query(api.connectedApps.listMine, {})).rejects.toThrow();
+  });
+});
+
+describe("revoke / allow again (D-REVOKE)", () => {
+  const me = (t: T, subject: string, orgId: string, clientId: string, claims: Record<string, unknown> = {}) =>
+    t
+      .withIdentity({ subject, issuer: "https://clerk.test", client_id: clientId, org_id: orgId, ...claims })
+      .query(api.mcp.fetch.me, { now: T0 });
+
+  /** The connection of org + user + client, created by a first call. */
+  async function connectionOf(t: T, subject: string, orgId: string, clientId: string): Promise<Id<"mcpConnections">> {
+    await viaMcp(t, subject, orgId, clientId).mutation(api.mcp.connections.touch, {});
+    const row = await t.run(async (ctx) => {
+      const user = await ctx.db.query("users").withIndex("byExternalId", (q) => q.eq("externalId", subject)).unique();
+      return await ctx.db
+        .query("mcpConnections")
+        .withIndex("by_orgId_userId_clientId", (q) => q.eq("orgId", orgId).eq("userId", user!._id).eq("clientId", clientId))
+        .unique();
+    });
+    return row!._id;
+  }
+
+  it("a revoked client is refused on its next call — any of its tokens — and Allow again restores it", async () => {
+    const t = createT();
+    await setup(t);
+    const id = await connectionOf(t, "clerk_ada", ORG, CLAUDE);
+    expect((await me(t, "clerk_ada", ORG, CLAUDE)).role).toBe("admin");
+
+    await inApp(t, "clerk_ada", ORG, "org:admin").mutation(api.connectedApps.revoke, { id });
+    // The access token issued before the revoke (still valid for up to a day) and a refreshed one.
+    await expect(me(t, "clerk_ada", ORG, CLAUDE, { jti: "issued-before", iat: T0 / 1000 - 600 })).rejects.toThrow(CONNECTION_REVOKED);
+    await expect(me(t, "clerk_ada", ORG, CLAUDE, { jti: "refreshed", iat: T0 / 1000 + 600 })).rejects.toThrow(CONNECTION_REVOKED);
+    // Writes and actions are refused too, and the stamp writes nothing.
+    vi.setSystemTime(T0 + 2 * LAST_USED_INTERVAL_MS);
+    await expect(viaMcp(t, "clerk_ada", ORG, CLAUDE).mutation(api.mcp.connections.touch, {})).rejects.toThrow(CONNECTION_REVOKED);
+    await expect(
+      viaMcp(t, "clerk_ada", ORG, CLAUDE).action(api.mcp.files.createUpload, { filename: "a.txt", contentType: "text/plain", sizeBytes: 3 }),
+    ).rejects.toThrow(CONNECTION_REVOKED);
+    const listed = await inApp(t, "clerk_ada", ORG, "org:admin").query(api.connectedApps.listMine, {});
+    expect(listed[0]).toMatchObject({ revokedAt: T0, lastUsedAt: T0 });
+
+    await inApp(t, "clerk_ada", ORG, "org:admin").mutation(api.connectedApps.allowAgain, { id });
+    expect((await me(t, "clerk_ada", ORG, CLAUDE)).role).toBe("admin");
+    expect((await inApp(t, "clerk_ada", ORG, "org:admin").query(api.connectedApps.listMine, {}))[0].revokedAt).toBeNull();
+  });
+
+  it("only that org + user + client is blocked", async () => {
+    const t = createT();
+    await setup(t);
+    const id = await connectionOf(t, "clerk_ada", ORG, CLAUDE);
+    await connectionOf(t, "clerk_mel", ORG, CLAUDE);
+    await inApp(t, "clerk_ada", ORG, "org:admin").mutation(api.connectedApps.revoke, { id });
+    await expect(me(t, "clerk_ada", ORG, CLAUDE)).rejects.toThrow(CONNECTION_REVOKED);
+    // Another client of the same user, the same client in another org, another user of the same client.
+    expect((await me(t, "clerk_ada", ORG, CODEX)).role).toBe("admin");
+    expect((await me(t, "clerk_ada", OTHER, CLAUDE)).role).toBe("member");
+    expect((await me(t, "clerk_mel", ORG, CLAUDE)).role).toBe("member");
+  });
+
+  it("members and admins manage only their own connections; MCP tokens cannot revoke", async () => {
+    const t = createT();
+    await setup(t);
+    const melsId = await connectionOf(t, "clerk_mel", ORG, CLAUDE);
+    const adasElsewhere = await connectionOf(t, "clerk_ada", OTHER, CLAUDE);
+    await expect(inApp(t, "clerk_ada", ORG, "org:admin").mutation(api.connectedApps.revoke, { id: melsId })).rejects.toThrow(
+      /Connection not found/,
+    );
+    // Ada's own row, but in another org than the active one.
+    await expect(inApp(t, "clerk_ada", ORG, "org:admin").mutation(api.connectedApps.revoke, { id: adasElsewhere })).rejects.toThrow(
+      /Connection not found/,
+    );
+    await expect(viaMcp(t, "clerk_mel", ORG, CLAUDE).mutation(api.connectedApps.revoke, { id: melsId })).rejects.toThrow();
+    // A member revokes their own.
+    await inApp(t, "clerk_mel", ORG, "org:member").mutation(api.connectedApps.revoke, { id: melsId });
+    await expect(me(t, "clerk_mel", ORG, CLAUDE)).rejects.toThrow(CONNECTION_REVOKED);
+    expect((await me(t, "clerk_ada", OTHER, CLAUDE)).role).toBe("member");
+  });
+
+  it("the revoked check costs one indexed read of mcpConnections and writes nothing", async () => {
+    const t = createT();
+    await setup(t);
+    await connectionOf(t, "clerk_ada", ORG, CLAUDE);
+    const reads: string[] = [];
+    await t
+      .withIdentity({ subject: "clerk_ada", issuer: "https://clerk.test", client_id: CLAUDE, org_id: ORG })
+      .run(async (ctx) => {
+        const db = new Proxy(ctx.db, {
+          get(target, prop, receiver) {
+            if (prop === "query") {
+              return (table: string) => {
+                reads.push(table);
+                return target.query(table as "mcpConnections");
+              };
+            }
+            if (prop === "insert" || prop === "patch" || prop === "replace" || prop === "delete") {
+              throw new Error(`getMcpAuthContext must not write (${String(prop)})`);
+            }
+            const value = Reflect.get(target, prop, receiver);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+        await getMcpAuthContext({ ...ctx, db } as unknown as QueryCtx);
+      });
+    expect(reads.filter((table) => table === "mcpConnections")).toEqual(["mcpConnections"]);
   });
 });

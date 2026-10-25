@@ -16,7 +16,7 @@ import { api } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
 import { LAST_USED_INTERVAL_MS } from "../lib/mcpConnections";
-import { CONNECTION_REVOKED, getMcpAuthContext } from "../lib/mcpAuth";
+import { CONNECTION_REVOKED, MCP_SWITCHED_OFF, getMcpAuthContext } from "../lib/mcpAuth";
 
 const modules = (
   import.meta as ImportMeta & {
@@ -245,5 +245,29 @@ describe("revoke / allow again (D-REVOKE)", () => {
         await getMcpAuthContext({ ...ctx, db } as unknown as QueryCtx);
       });
     expect(reads.filter((table) => table === "mcpConnections")).toEqual(["mcpConnections"]);
+  });
+});
+
+describe("MCP_DISABLED: the global stop", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('refuses every MCP query, mutation and action while MCP_DISABLED is "true"; the app is unaffected', async () => {
+    const t = createT();
+    await setup(t);
+    await viaMcp(t, "clerk_ada", ORG, CLAUDE).mutation(api.mcp.connections.touch, {});
+    vi.stubEnv("MCP_DISABLED", "true");
+    const mcp = viaMcp(t, "clerk_ada", ORG, CLAUDE);
+    await expect(mcp.query(api.mcp.fetch.me, { now: T0 })).rejects.toThrow(MCP_SWITCHED_OFF);
+    await expect(mcp.mutation(api.mcp.connections.touch, {})).rejects.toThrow(MCP_SWITCHED_OFF);
+    await expect(
+      mcp.action(api.mcp.files.createUpload, { filename: "a.txt", contentType: "text/plain", sizeBytes: 3 }),
+    ).rejects.toThrow(MCP_SWITCHED_OFF);
+    expect(await inApp(t, "clerk_ada", ORG, "org:admin").query(api.connectedApps.listMine, {})).toHaveLength(1);
+
+    // Any other value leaves MCP on.
+    vi.stubEnv("MCP_DISABLED", "false");
+    expect((await mcp.query(api.mcp.fetch.me, { now: T0 })).role).toBe("admin");
   });
 });

@@ -17,6 +17,18 @@ export const NO_ORG_SELECTED =
 export const USER_NOT_SYNCED =
   "Your Agency Flow account is not set up yet. Sign in to Agency Flow in the browser once, then retry.";
 
+/**
+ * The global MCP stop (docs/runbooks/mcp-deployment.md, Rollback): with the
+ * Convex environment variable MCP_DISABLED set to "true", every MCP call is
+ * refused before anything is read. App session functions are unaffected.
+ */
+export const MCP_SWITCHED_OFF =
+  "The Agency Flow MCP server is switched off for now. Use the Agency Flow app, or try again later.";
+
+export function isMcpDisabled(): boolean {
+  return process.env.MCP_DISABLED === "true";
+}
+
 /** The user revoked this client in Connected apps (owner decision D-REVOKE). */
 export const CONNECTION_REVOKED =
   "Access for this app was revoked in Agency Flow (Connected apps). To use it again, choose Allow again there.";
@@ -25,6 +37,7 @@ export const CONNECTION_REVOKED =
  * The only MCP entry point (docs/prd-mcp.md §5.2). Every `convex/mcp/*`
  * function calls it first (I1) and takes no org, user or role arguments (I2).
  *
+ * 0. MCP_DISABLED="true" (Convex env) refuses every call: the global stop.
  * 1. The identity must be a Clerk OAuth access token (`client_id` claim, see
  *    `oauthClientIdOf`); app session tokens are refused (I4).
  * 2. `orgId` is the verified `org_id` claim, present when the user picked an
@@ -50,6 +63,9 @@ export async function getMcpAuthContext(
 ): Promise<McpAuthContext> {
   if (!("db" in ctx)) {
     return await ctx.runQuery(internal.mcp.auth.context, {});
+  }
+  if (isMcpDisabled()) {
+    throw new ConvexError(MCP_SWITCHED_OFF);
   }
   const identity = await ctx.auth.getUserIdentity();
   if (!identity) {

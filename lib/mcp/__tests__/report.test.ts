@@ -111,7 +111,7 @@ describe("report tool (registry)", () => {
     expect(report.annotations).toMatchObject({ readOnlyHint: true, openWorldHint: false });
     expect(Object.keys(report.operations).sort()).toEqual([...REPORT_KINDS].sort());
     expect(Object.keys(REPORT_SPECS).sort()).toEqual([...REPORT_KINDS].sort());
-    for (const kind of REPORT_KINDS) expect(report.description).toContain(`${kind}:`.replace("close_queue:", "close_queue,"));
+    for (const kind of REPORT_KINDS) expect(report.description).toContain(`${kind}:`);
     for (const operation of Object.values(report.operations)) {
       expect(getFunctionName("query" in operation ? operation.query : operation.mutation)).toMatch(/^mcp\/report:/);
     }
@@ -275,28 +275,48 @@ describe("report rendering", () => {
     expect(text).not.toMatch(/180|€80|\$100\.00 \|.*€/);
 
     const queue: CloseQueueReport = {
-      actionableCount: 2,
-      months: [
+      today: "2026-07-10",
+      needsActionCount: 2,
+      pastDueCount: 1,
+      tiles: {
+        unbilled: { byCurrency: [{ currency: "EUR", minor: 8250 }, { currency: "USD", minor: 16000 }], readyCount: 1, draftCount: 1 },
+        outstanding: { byCurrency: [{ currency: "USD", minor: 50000 }], pastDueCount: 1, invoicedCount: 0 },
+        paidThisMonth: { byCurrency: [], count: 0 },
+        monthsToClose: { count: 1, waitingCount: 1 },
+      },
+      rows: [
         {
-          monthKey: "2026-06",
-          label: "June 2026",
-          openCount: 2,
-          closedCount: 1,
-          totalCount: 3,
-          totalsByCurrency: [{ currency: "EUR", amount: 82.5 }, { currency: "USD", amount: 160 }],
-          rows: [
-            {
-              projectId: "p1" as Id<"projects">, projectCode: "RETA", projectName: "Care", clientName: "Arlow", billingType: "retainer",
-              periodToken: "2026-06", periodLabel: "June 2026", amount: 82.5, currency: "EUR", isCloseRow: false,
-              overageHours: 0.9, loggedMinutes: 655, includedMinutes: 600, entryCount: 2, flagCount: 0, configIssue: null, pendingPeriods: 1,
-            },
-          ],
+          group: "ready_to_invoice", projectId: "p1" as Id<"projects">, projectCode: "RETA", projectName: "Care", clientName: "Arlow",
+          billingType: "retainer", currency: "EUR",
+          period: { key: "2026-06", label: "June 2026", state: "Ready to invoice", usageMinutes: 655, includedMinutes: 600, overageMinutes: 55 },
+          invoice: null, amountMinor: 8250, action: { label: "Review & invoice", blockedReason: null },
+        },
+        {
+          group: "ready_to_close", projectId: "p1" as Id<"projects">, projectCode: "RETA", projectName: "Care", clientName: "Arlow",
+          billingType: "retainer", currency: "EUR",
+          period: { key: "2026-07", label: "July 2026", state: "Ready to close", usageMinutes: 0, includedMinutes: 600, overageMinutes: 0 },
+          invoice: null, amountMinor: 0, action: { label: "Review & close", blockedReason: "Close June 2026 first" },
+        },
+        {
+          group: "past_due", projectId: "p2" as Id<"projects">, projectCode: "BOLT", projectName: "Bolt", clientName: "Bolt Inc",
+          billingType: "t_and_m", currency: "USD",
+          period: { key: "2026-05", label: "May 2026", state: "Past due", usageMinutes: 300, includedMinutes: null, overageMinutes: 0 },
+          invoice: { id: "i1" as Id<"invoices">, number: "INV-004", status: "past_due", issueDate: "2026-06-01", dueDate: "2026-06-30", daysOverdue: 10 },
+          amountMinor: 50000, action: { label: "Mark as paid", blockedReason: null },
         },
       ],
     };
     const queueText = renderCloseQueue(queue, ctx)[0].text;
-    expect(queueText).toContain("### June 2026 · 2 open · 1 of 3 closed · total €82.50 · $160.00");
-    expect(queueText).toContain(`[close](${ORIGIN}/billing/close/p1/2026-06)`);
+    expect(queueText).toContain("## Billing hub · Needs action · 2 periods need action · 1 past due");
+    expect(queueText).toContain("- Unbilled: €82.50 · $160.00 (1 ready · 1 draft)");
+    expect(queueText).toContain("- Months to close: 1 (1 waiting on an earlier month)");
+    expect(queueText).toContain("### Ready to invoice · 1");
+    expect(queueText).toContain(
+      `| June 2026 | [RETA](${ORIGIN}/projects/p1) · Care | Arlow | retainer | 10h 55m / 10h | €82.50 |  | Review & invoice | [workspace](${ORIGIN}/billing/close/p1/2026-06) |`,
+    );
+    expect(queueText).toContain("Review & close (blocked: Close June 2026 first)");
+    expect(queueText).toContain(`| INV-004 · due 2026-06-30 · 10 days overdue | Mark as paid | [invoice](${ORIGIN}/invoices/INV-004) |`);
+    expect(queueText).not.toContain("### Needs rate");
 
     const metrics = renderInvoiceMetrics(
       { buckets: [{ bucket: "outstanding", count: 2, totals: [{ currency: "EUR", total: 10 }, { currency: "USD", total: 5 }] }] },

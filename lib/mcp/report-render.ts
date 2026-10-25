@@ -2,11 +2,13 @@ import type { FunctionReturnType } from "convex/server";
 import type { api } from "@/convex/_generated/api";
 import { formatDuration } from "@/lib/duration";
 import { formatCurrencyPrecise } from "@/lib/format";
+import { fromMinor } from "@/convex/lib/billing/money";
 import { formatInvoiceRef } from "@/lib/reports/views";
 import {
   billingLink,
   clientLink,
   closeWorkspaceLink,
+  invoiceLink,
   projectLink,
   statementLink,
   taskLink,
@@ -583,31 +585,75 @@ export function renderRetainerHealth(data: RetainerHealthReport, ctx: RenderCont
   return [{ text: `${head}\n\n${table}` }];
 }
 
+/** The hub's group names and hints (components/billing/needs-action-list.tsx), in month-end order. */
+const NEEDS_ACTION_GROUP: Record<string, { name: string; hint: string }> = {
+  needs_rate: { name: "Needs rate", hint: "Set the overage rate before this period can be billed." },
+  ready_to_invoice: { name: "Ready to invoice", hint: "Ended periods with billable work. Review creates the draft invoice." },
+  ready_to_close: { name: "Ready to close", hint: "Ended, within budget. Closing freezes the month and its report." },
+  draft: { name: "Drafts", hint: "Draft invoices waiting to be finalized." },
+  past_due: { name: "Past due", hint: "Invoiced, past the due date." },
+};
+
+function minorList(rows: ReadonlyArray<{ currency: string; minor: number }>): string {
+  return rows.length > 0 ? rows.map((r) => money(fromMinor(r.minor, r.currency), r.currency)).join(" · ") : "none";
+}
+
 export function renderCloseQueue(data: CloseQueueReport, ctx: RenderContext): ReportPart[] {
+  const t = data.tiles;
   const head = lines(
-    `## Close queue · ${data.actionableCount} ${data.actionableCount === 1 ? "period" : "periods"} to close`,
+    `## Billing hub · Needs action · ${data.needsActionCount} ${data.needsActionCount === 1 ? "period needs" : "periods need"} action · ${data.pastDueCount} past due`,
     `- Link: ${billingLink(ctx.appOrigin)}`,
-    "- Amount = what closing bills now; Ready to close rows ended within budget and bill nothing. Oldest periods first.",
+    `- Today: ${data.today} (org timezone). Only the oldest ended open period of a project can be closed; later ones wait ("Close … first").`,
+    `- Unbilled: ${minorList(t.unbilled.byCurrency)} (${t.unbilled.readyCount} ready · ${t.unbilled.draftCount} draft)`,
+    `- Outstanding: ${minorList(t.outstanding.byCurrency)} (${t.outstanding.pastDueCount} past due · ${t.outstanding.invoicedCount} invoiced)`,
+    `- Paid this month: ${minorList(t.paidThisMonth.byCurrency)} (${t.paidThisMonth.count} ${t.paidThisMonth.count === 1 ? "invoice" : "invoices"})`,
+    `- Months to close: ${t.monthsToClose.count}${t.monthsToClose.waitingCount > 0 ? ` (${t.monthsToClose.waitingCount} waiting on an earlier month)` : ""}`,
   );
-  if (data.months.length === 0) return [{ text: `${head}\n\nNothing to close.` }];
-  const sections = data.months.map((m) => {
+  if (data.rows.length === 0) return [{ text: `${head}\n\nAll caught up: nothing needs action.` }];
+  const groups = Object.keys(NEEDS_ACTION_GROUP)
+    .map((group) => ({ group, rows: data.rows.filter((r) => r.group === group) }))
+    .filter((g) => g.rows.length > 0);
+  const sections = groups.map(({ group, rows }) => {
+    const copy = NEEDS_ACTION_GROUP[group];
     const table = markdownTable(
-      ["Project", "Client", "Period", "Type", "Amount", "Billable time", "Entries", "Flags", "Waiting behind", "Workspace"],
-      m.rows.map((r) => [
-        cell(r.projectCode ?? r.projectName),
-        cell(r.clientName),
-        cell(r.periodLabel),
-        r.isCloseRow ? "Ready to close" : `${BILLING_TYPE[r.billingType] ?? r.billingType}${r.configIssue ? " (set an overage rate first)" : ""}`,
-        money(r.amount, r.currency),
-        minutes(r.loggedMinutes),
-        String(r.entryCount),
-        String(r.flagCount),
-        String(r.pendingPeriods),
-        `[close](${closeWorkspaceLink(ctx.appOrigin, r.projectId, r.periodToken)})`,
-      ]),
-      [4, 5, 6, 7, 8],
+      ["Period", "Project", "Client", "Type", "Hours", "Amount", "Invoice", "Action", "Open"],
+      rows.map((r) => {
+        const p = r.period;
+        const inv = r.invoice;
+        const hours = p
+          ? p.includedMinutes !== null
+            ? `${minutes(p.usageMinutes)} / ${minutes(p.includedMinutes)}`
+            : minutes(p.usageMinutes)
+          : "";
+        const invoice = inv
+          ? [
+              inv.number ?? "Draft",
+              inv.dueDate && inv.status !== "draft" ? `due ${inv.dueDate}` : null,
+              inv.daysOverdue !== null ? `${inv.daysOverdue} ${inv.daysOverdue === 1 ? "day" : "days"} overdue` : null,
+            ]
+              .filter((v): v is string => v !== null)
+              .join(" · ")
+          : "";
+        const open = inv
+          ? `[invoice](${invoiceLink(ctx.appOrigin, inv.number ?? inv.id)})`
+          : p
+            ? `[workspace](${closeWorkspaceLink(ctx.appOrigin, r.projectId, p.key)})`
+            : "";
+        return [
+          p ? cell(p.label) : "Fixed fee",
+          r.projectCode ? `[${r.projectCode}](${projectLink(ctx.appOrigin, r.projectId)}) · ${cell(r.projectName)}` : cell(r.projectName),
+          cell(r.clientName),
+          BILLING_TYPE[r.billingType] ?? r.billingType,
+          hours,
+          r.group === "needs_rate" ? "—" : money(fromMinor(r.amountMinor, r.currency), r.currency),
+          invoice,
+          r.action ? (r.action.blockedReason ? `${r.action.label} (blocked: ${r.action.blockedReason})` : r.action.label) : "",
+          open,
+        ];
+      }),
+      [4, 5],
     );
-    return `### ${m.label} · ${m.openCount} open · ${m.closedCount} of ${m.totalCount} closed · total ${moneyList(m.totalsByCurrency)}\n${table}`;
+    return `### ${copy.name} · ${rows.length}\n${copy.hint}\n\n${table}`;
   });
   return [{ text: [head, ...sections].join("\n\n") }];
 }

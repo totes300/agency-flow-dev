@@ -374,21 +374,31 @@ describe("numbers match the app (§14 row 5 exit)", () => {
     }
   });
 
-  it("close_queue = the internal close queue; invoice_metrics = the internal invoice metrics", async () => {
+  it("close_queue = the Billing hub's Needs action (getNeedsAction); invoice_metrics = the internal invoice metrics", async () => {
     const t = createT();
     await setup(t);
+    // One draft finalized and past its due date, so every hub group but Needs rate is present.
+    const before = await inApp(t, "admin").query(api.billingViews.getNeedsAction, {});
+    const draftId = before.rows.find((r) => r.group === "draft")!.invoice!.id;
+    await inApp(t, "admin").mutation(api.invoices.changeInvoiceStatus, { id: draftId, newStatus: "invoiced" });
+    await t.run(async (ctx) => ctx.db.patch(draftId, { dueDate: "2026-06-30" }));
     const mcp = await as(t, "admin").query(api.mcp.report.closeQueue, {});
-    const app = await inApp(t, "admin").query(internal.billingViews.getCloseQueue, {});
-    expect(mcp.actionableCount).toBe(app.actionableCount);
-    expect(mcp.months.map((m) => [m.monthKey, m.openCount, m.closedCount, m.totalCount])).toEqual(
-      app.months.map((m) => [m.monthKey, m.openCount, m.closedCount, m.totalCount]),
+    const hub = await inApp(t, "admin").query(api.billingViews.getNeedsAction, {});
+    expect(new Set(mcp.rows.map((r) => r.group))).toEqual(new Set(["ready_to_invoice", "ready_to_close", "past_due"]));
+    expect([mcp.needsActionCount, mcp.pastDueCount, mcp.today]).toEqual([hub.needsActionCount, hub.pastDueCount, hub.today]);
+    expect(mcp.rows.length).toBeGreaterThan(0);
+    expect(mcp.rows.map((r) => [r.group, r.projectName, r.period?.key ?? null, r.invoice?.id ?? null, r.amountMinor, r.currency, r.action?.label ?? null])).toEqual(
+      hub.rows.map((r) => [r.group, r.projectName, r.period?.key ?? null, r.invoice?.id ?? null, r.amountMinor, r.currency, r.action?.label ?? null]),
     );
-    const rows = (data: { months: Array<{ rows: Array<{ projectName: string; periodToken: string; amount: number; currency: string; loggedMinutes: number; isCloseRow: boolean }> }> }) =>
-      data.months.flatMap((m) => m.rows.map((r) => [r.projectName, r.periodToken, r.amount, r.currency, r.loggedMinutes, r.isCloseRow]));
-    expect(rows(mcp)).toEqual(rows(app));
-    expect(mcp.months.map((m) => Object.fromEntries(m.totalsByCurrency.map((x) => [x.currency, x.amount])))).toEqual(
-      app.months.map((m) => m.totalsByCurrency),
-    );
+    const sums = (rows: Array<{ currency: string; minor: number }>) => Object.fromEntries(rows.map((x) => [x.currency, x.minor]));
+    expect(sums(mcp.tiles.unbilled.byCurrency)).toEqual(hub.tiles.unbilled.minorByCurrency);
+    expect(sums(mcp.tiles.outstanding.byCurrency)).toEqual(hub.tiles.outstanding.minorByCurrency);
+    expect(sums(mcp.tiles.paidThisMonth.byCurrency)).toEqual(hub.tiles.paidThisMonth.minorByCurrency);
+    expect(mcp.tiles.monthsToClose).toEqual(hub.tiles.monthsToClose);
+    for (const r of mcp.rows) {
+      if (r.group === "past_due") expect(r.invoice!.daysOverdue).toBe(10); // due 2026-06-30, today 2026-07-10
+      else expect(r.invoice?.daysOverdue ?? null).toBeNull();
+    }
 
     const metrics = await as(t, "admin").query(api.mcp.report.invoiceMetrics, {});
     const appMetrics = await inApp(t, "admin").query(internal.invoices.getInvoiceMetrics, {});

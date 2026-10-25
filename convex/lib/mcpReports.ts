@@ -21,7 +21,9 @@ import {
 import { collectTimesheetDataForAuth } from "../timesheets";
 import { projectMonthlyBreakdownForAuth, projectOverviewForAuth } from "../timeEntries";
 import { getMonthlyReportForAuth } from "../billingReports";
-import { getCloseQueueForAuth } from "../billingViews";
+import { getNeedsActionForAuth } from "../billingViews";
+import { PERIOD_STATE_COPY } from "./billing/periodState";
+import { daysPastDue } from "./mcpRefs";
 import { getInvoiceMetricsForAuth } from "../invoices";
 import { isClosedCategory } from "../tasks/model";
 import { loadAssignedTo } from "../tasks/read";
@@ -855,51 +857,72 @@ export async function retainerHealthReport(ctx: QueryCtx, auth: AuthContext, arg
 // ─── close_queue / invoice_metrics / org_finance ────────────────────────────
 
 /**
- * One row per project period due to invoice or close (`getCloseQueueForAuth`,
- * the close queue the billing suites keep as their N11 fixture; the app's hub
- * view of the same work is `billingViews.getNeedsAction`). Admin-only.
+ * The Billing hub's Needs action view (`getNeedsActionForAuth`, the same read
+ * model as /billing and the sidebar badge, docs/prd-project-billing-redesign.md
+ * §6.2): one row per period that needs action plus past-due invoices, grouped
+ * Needs rate → Ready to invoice → Ready to close → Draft → Past due, with the
+ * hub's tiles. Money per currency in minor units. Admin-only.
  */
 export async function closeQueueReport(ctx: QueryCtx, auth: AuthContext) {
   requireAdminReport(auth, "close_queue");
-  const data = await getCloseQueueForAuth(ctx, auth);
+  const data = await getNeedsActionForAuth(ctx, auth);
   const codes = projectCodes(ctx, auth.orgId);
-  const months = [];
-  for (const m of data.months) {
-    const rows = [];
-    for (const r of m.rows) {
-      rows.push({
-        projectId: r.projectId,
-        projectCode: await codes(r.projectId),
-        projectName: r.projectName,
-        clientName: r.clientName,
-        billingType: r.billingType,
-        periodToken: r.periodToken,
-        periodLabel: r.periodLabel,
-        amount: r.amount,
-        currency: r.currency,
-        isCloseRow: r.isCloseRow,
-        overageHours: r.overageHours,
-        loggedMinutes: r.loggedMinutes,
-        includedMinutes: r.includedMinutes,
-        entryCount: r.entryCount,
-        flagCount: r.flagCount,
-        configIssue: r.configIssue,
-        pendingPeriods: r.pendingPeriods,
-      });
-    }
-    months.push({
-      monthKey: m.monthKey,
-      label: m.label,
-      openCount: m.openCount,
-      closedCount: m.closedCount,
-      totalCount: m.totalCount,
-      totalsByCurrency: Object.entries(m.totalsByCurrency)
-        .map(([currency, amount]) => ({ currency, amount }))
-        .sort((a, b) => a.currency.localeCompare(b.currency)),
-      rows,
+  const byCurrency = (m: Record<string, number>) =>
+    Object.entries(m)
+      .map(([currency, minor]) => ({ currency, minor }))
+      .sort((a, b) => a.currency.localeCompare(b.currency));
+  const rows = [];
+  for (const r of data.rows) {
+    const p = r.period;
+    const inv = r.invoice;
+    rows.push({
+      group: r.group,
+      projectId: r.projectId,
+      projectCode: await codes(r.projectId),
+      projectName: r.projectName,
+      clientName: r.clientName,
+      billingType: r.billingType,
+      currency: r.currency,
+      period: p
+        ? {
+            key: p.key,
+            label: p.label,
+            state: PERIOD_STATE_COPY[p.state].chip,
+            usageMinutes: p.usageMinutes,
+            includedMinutes: p.includedMinutes,
+            overageMinutes: p.overageMinutes,
+          }
+        : null,
+      invoice: inv
+        ? {
+            id: inv.id,
+            number: inv.number,
+            status: inv.status,
+            issueDate: inv.issueDate,
+            dueDate: inv.dueDate,
+            daysOverdue: inv.status === "past_due" && inv.dueDate ? daysPastDue(inv.dueDate, data.today) : null,
+          }
+        : null,
+      amountMinor: r.amountMinor,
+      action: r.action ? { label: r.action.label, blockedReason: r.action.blocked?.reason ?? null } : null,
     });
   }
-  return { months, actionableCount: data.actionableCount };
+  return {
+    today: data.today,
+    needsActionCount: data.needsActionCount,
+    pastDueCount: data.pastDueCount,
+    tiles: {
+      unbilled: { byCurrency: byCurrency(data.tiles.unbilled.minorByCurrency), readyCount: data.tiles.unbilled.readyCount, draftCount: data.tiles.unbilled.draftCount },
+      outstanding: {
+        byCurrency: byCurrency(data.tiles.outstanding.minorByCurrency),
+        pastDueCount: data.tiles.outstanding.pastDueCount,
+        invoicedCount: data.tiles.outstanding.invoicedCount,
+      },
+      paidThisMonth: { byCurrency: byCurrency(data.tiles.paidThisMonth.minorByCurrency), count: data.tiles.paidThisMonth.count },
+      monthsToClose: data.tiles.monthsToClose,
+    },
+    rows,
+  };
 }
 
 /** Org-wide invoice buckets (`getInvoiceMetricsForAuth`), per currency, plus outstanding (unpaid + past due). Admin-only. */

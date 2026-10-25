@@ -97,6 +97,14 @@ export function invoiceKey(invoice: Doc<"invoices">): string | null {
   return invoice.number != null ? formatInvoiceNumber(invoice.prefix, invoice.number) : null;
 }
 
+/**
+ * Whole days an invoice is past its due date (YYYY-MM-DD, org timezone),
+ * at least 1 — the hub's "N days overdue".
+ */
+export function daysPastDue(dueDate: string, todayOrgTz: string): number {
+  return Math.max(1, Math.round((Date.parse(`${todayOrgTz}T00:00:00Z`) - Date.parse(`${dueDate}T00:00:00Z`)) / 86_400_000));
+}
+
 /** A message naming every candidate by its unique ID, so the model can retry exactly. */
 export function ambiguousMessage(input: string, candidates: readonly RefCandidate[]): string {
   const list = candidates

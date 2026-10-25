@@ -329,9 +329,9 @@ async function buildQueue(ctx: QueryCtx, orgId: string): Promise<CloseQueueData>
 
 /**
  * One row per project's committable period — the pre-redesign queue. No UI
- * reads it any more (the hub is `getNeedsAction`); it stays internal as the
- * N11 consistency fixture of the billing suites, and its core
- * (`getCloseQueueForAuth`) backs the MCP `close_queue` report.
+ * reads it any more (the hub is `getNeedsAction`, which also backs the MCP
+ * `close_queue` report); it stays internal as the N11 consistency fixture of
+ * the billing suites.
  */
 export const getCloseQueue = internalQuery({
   args: {},
@@ -339,8 +339,7 @@ export const getCloseQueue = internalQuery({
 });
 
 /**
- * `getCloseQueue` for an already-built auth context (the internal fixture and
- * the MCP `report` kind `close_queue`, docs/prd-mcp.md). Admin-only.
+ * `getCloseQueue` for an already-built auth context (the internal fixture). Admin-only.
  */
 export async function getCloseQueueForAuth(ctx: QueryCtx, auth: AuthContext): Promise<CloseQueueData> {
   assertAdmin(auth);
@@ -543,11 +542,14 @@ function groupOf(state: PeriodState): NeedsActionGroup | null {
 /** Billing hub → Needs action: one row per period that needs action, plus the tiles. */
 export const getNeedsAction = query({
   args: {},
-  handler: async (ctx): Promise<NeedsActionData> => {
-    const { orgId } = await requireAdmin(ctx);
-    return buildNeedsAction(ctx, orgId);
-  },
+  handler: async (ctx): Promise<NeedsActionData> => await getNeedsActionForAuth(ctx, await requireAdmin(ctx)),
 });
+
+/** `getNeedsAction` for an already-built auth context (the MCP `close_queue` report, docs/prd-mcp.md). Admin-only. */
+export async function getNeedsActionForAuth(ctx: QueryCtx, auth: AuthContext): Promise<NeedsActionData> {
+  assertAdmin(auth);
+  return buildNeedsAction(ctx, auth.orgId);
+}
 
 /** Sidebar badge (§5.5): needs-action periods and past-due invoices, one pass. */
 export const getNavSignals = query({

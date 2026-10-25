@@ -356,6 +356,19 @@ describe("mcpErrorMessage", () => {
     expect(log).toHaveBeenCalledWith("[mcp] tool error:", error);
     log.mockRestore();
   });
+
+  it("read limits: named on dev; production's redacted Server Error gets an honest maybe-narrow hint", () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(mcpErrorMessage(new Error("Too many index ranges read in a single function execution (limit: 4096)"))).toMatch(
+      /^This request needed more data than one call may read/,
+    );
+    const redacted = "Internal error (details are hidden). If this request reads a lot, narrowing it (more filters, a shorter period, fewer refs or includes) may help.";
+    expect(mcpErrorMessage(new Error("[Request ID: 3f2a9c] Server Error"))).toBe(redacted);
+    expect(mcpErrorMessage(new Error("Server Error"))).toBe(redacted);
+    expect(mcpErrorMessage(new Error("[Request ID: 3f2a9c] Server Error\n  Called by client"))).toBe(redacted);
+    expect(mcpErrorMessage(new Error("Server Error while rendering"))).toBe("Internal error.");
+    log.mockRestore();
+  });
 });
 
 // ─── Slice 3: write tools and the changes feed ───────────────────────────────

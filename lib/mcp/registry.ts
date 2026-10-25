@@ -213,14 +213,21 @@ export function mcpErrorMessage(error: unknown): string {
   if (error instanceof ConvexError && typeof error.data === "string") return error.data;
   console.error("[mcp] tool error:", error);
   // Convex per-call read limits (4,096 index ranges, 32,000 documents, 16 MiB):
-  // the reads are bounded, but say what to do if one still trips.
+  // the reads are bounded, but say what to do if one still trips. A dev
+  // deployment names the limit; production redacts every non-ConvexError to
+  // "Server Error", so there the cause is unknown and the hint says so.
   if (error instanceof Error && READ_LIMIT_ERROR.test(error.message)) {
     return "This request needed more data than one call may read. Narrow it (more filters, a date range, a task filter) or fetch fewer refs and includes.";
+  }
+  if (error instanceof Error && REDACTED_SERVER_ERROR.test(error.message)) {
+    return "Internal error (details are hidden). If this request reads a lot, narrowing it (more filters, a shorter period, fewer refs or includes) may help.";
   }
   return "Internal error.";
 }
 
 const READ_LIMIT_ERROR = /too many (reads|bytes read|documents read|index ranges)|read limit/i;
+/** How Convex reports a non-ConvexError from a production deployment (the message is redacted). */
+const REDACTED_SERVER_ERROR = /(^|\]\s*)Server Error(\s+Called by client)?\s*$/;
 
 /** The first reference in `refs` that cannot be a reference (e.g. a link to another host), as an error. */
 function refInputProblem(refs: ReadonlyArray<readonly [string, string | null | undefined]>, appOrigin: string): string | null {

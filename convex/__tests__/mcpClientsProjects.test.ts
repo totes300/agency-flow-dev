@@ -20,6 +20,7 @@ import type { AuthContext } from "../lib/auth";
 import { DEFAULT_STATUS_SEED } from "../tasks/model";
 import { createTask } from "../tasks/write";
 import { connectMembers } from "./helpers/mcpConnections";
+import { BILLING_TYPE_NOT_SET_NOTE } from "../lib/mcpSaveProjects";
 
 const modules = (
   import.meta as ImportMeta & {
@@ -129,6 +130,32 @@ const counts = (t: T) =>
     estimates: (await ctx.db.query("projectCategoryEstimates").collect()).length,
     overrides: (await ctx.db.query("projectRateOverrides").collect()).length,
   }));
+
+/** Billing history fixtures: a logged entry, a draft invoice, a final close on a project. */
+async function entry(t: T, f: Awaited<ReturnType<typeof setup>>, projectId: Id<"projects">, taskId: Id<"tasks">) {
+  await t.run(async (ctx) => {
+    await ctx.db.insert("timeEntries", {
+      orgId: ORG, projectId, taskId, userId: f.alice, date: "2026-10-20", startedAt: Date.now(), durationMinutes: 30,
+      isBillable: true, method: "manual", costRate: 1, billableRate: 1, rateCurrency: "EUR",
+      createdAt: Date.now(), updatedAt: Date.now(), createdBy: f.alice,
+    });
+  });
+}
+const invoiceOn = (t: T, f: Awaited<ReturnType<typeof setup>>, projectId: Id<"projects">, clientId: Id<"clients">) =>
+  t.run(async (ctx) =>
+    await ctx.db.insert("invoices", {
+      orgId: ORG, projectId, clientId, prefix: "INV", status: "draft", currency: "EUR",
+      subtotalMinor: 0, totalMinor: 0, issueDate: "2026-10-01", createdAt: Date.now(), updatedAt: Date.now(), createdBy: f.admin,
+    } as never),
+  );
+const closeOn = (t: T, f: Awaited<ReturnType<typeof setup>>, projectId: Id<"projects">) =>
+  t.run(async (ctx) =>
+    await ctx.db.insert("billingCloses", {
+      orgId: ORG, projectId, kind: "t_and_m", status: "final", periodStart: "2026-09-01", periodEnd: "2026-09-30",
+      currency: "EUR", roundingMinutes: 1, includedMinutes: 0, overageRateMinor: 0, usageMinutes: 0, overageMinutes: 0,
+      amountMinor: 0, committedAt: Date.now(), committedBy: f.admin,
+    } as never),
+  );
 
 describe("save_clients", () => {
   it("is admin-only: a member is refused and nothing is written", async () => {
@@ -295,12 +322,12 @@ describe("save_projects", () => {
     const same = await saveProjects(t, "admin", [{ ref: "ARW", code: "ARW", name: "Arlow web", team: [email("alice"), "me"], billingType: "t_and_m" }]);
     expect(same.items[0].action).toBe("unchanged");
 
-    // One code change per call; the client and billing type never change; fields must apply.
+    // One code change per call; the client never changes (the billing type: see
+    // "billing type change" below); fields must apply.
     const two = await saveProjects(t, "admin", [{ name: "P2", client: "client:ARL", billingType: "non_billable", code: "PTWO" }]);
     await expect(saveProjects(t, "admin", [{ ref: "ARW", code: "ARX" }, { ref: two.items[0].projectId, code: "PTHREE" }])).rejects.toThrow(
       "Change at most one project code per call",
     );
-    await expect(saveProjects(t, "admin", [{ ref: "ARW", billingType: "fixed" }])).rejects.toThrow("billing type cannot change");
     await expect(saveProjects(t, "admin", [{ ref: "ARW", client: f.otherClient }])).rejects.toThrow("not found");
     await expect(saveProjects(t, "admin", [{ ref: "ARW", fixedFee: 10 }])).rejects.toThrow("fixedFee applies to fixed-fee projects");
     await expect(saveProjects(t, "admin", [{ ref: "ARW", monthlyFee: 10 }])).rejects.toThrow("apply to retainer projects");
@@ -419,31 +446,139 @@ describe("save_projects", () => {
   });
 });
 
-describe("delete projects and clients (D6, D-DELETEGUARD)", () => {
-  async function entry(t: T, f: Awaited<ReturnType<typeof setup>>, projectId: Id<"projects">, taskId: Id<"tasks">) {
-    await t.run(async (ctx) => {
-      await ctx.db.insert("timeEntries", {
-        orgId: ORG, projectId, taskId, userId: f.alice, date: "2026-10-20", startedAt: Date.now(), durationMinutes: 30,
-        isBillable: true, method: "manual", costRate: 1, billableRate: 1, rateCurrency: "EUR",
-        createdAt: Date.now(), updatedAt: Date.now(), createdBy: f.alice,
-      });
+describe("billing type change (D-BILLINGTYPE, owner 2026-10-25)", () => {
+  const TERMS = ["fixedPrice", "retainerStatus", "includedMinutesPerMonth", "monthlyFee", "overageRate", "startDate", "rolloverEnabled", "cycleLength"] as const;
+  /** The billing term fields a project document carries (set ones only). */
+  const terms = (doc: Doc<"projects">) => Object.fromEntries(TERMS.map((k) => [k, doc[k]]).filter(([, v]) => v !== undefined));
+  const children = (t: T, projectId: Id<"projects">) =>
+    t.run(async (ctx) => ({
+      estimates: (await ctx.db.query("projectCategoryEstimates").withIndex("by_projectId", (q) => q.eq("projectId", projectId)).collect())
+        .map((e) => [e.workCategoryId, e.estimatedMinutes]).sort(),
+      overrides: (await ctx.db.query("projectRateOverrides").withIndex("by_projectId", (q) => q.eq("projectId", projectId)).collect())
+        .map((o) => [o.workCategoryId, o.billableRate]),
+    }));
+  const canChange = async (t: T, id: Id<"projects">) => (await inApp(t, "admin").query(api.projects.get, { id }))!.canChangeBillingType;
+
+  it("a create without billingType starts non-billable and says so; terms without a type are refused", async () => {
+    const t = createT();
+    await setup(t);
+    const saved = await saveProjects(t, "admin", [{ name: "Terms later", client: "client:ARL" }]);
+    expect(saved.items[0]).toMatchObject({ billingType: "non_billable", action: "created", note: BILLING_TYPE_NOT_SET_NOTE });
+    expect(terms((await get(t, saved.items[0].projectId))!)).toEqual({});
+    const typed = await saveProjects(t, "admin", [{ name: "Typed", client: "client:ARL", billingType: "t_and_m" }]);
+    expect(typed.items[0].note).toBeUndefined();
+    await expect(saveProjects(t, "admin", [{ name: "X", client: "client:ARL", fixedFee: 100 }])).rejects.toThrow(
+      "billingType is required with fixedFee",
+    );
+    await expect(saveProjects(t, "admin", [{ name: "X", client: "client:ARL", includedMinutes: 60, rates: [] }])).rejects.toThrow(
+      "billingType is required with rates, includedMinutes",
+    );
+  });
+
+  it("changes the type with the new terms while there is no billing history: app and MCP write the same document, stale terms are cleared", async () => {
+    const t = createT();
+    const f = await setup(t);
+    const [a, b] = (
+      await saveProjects(t, "admin", [
+        { name: "A", client: "client:ARL", code: "AAA" },
+        { name: "B", client: "client:ARL", code: "BBB" },
+      ])
+    ).items.map((i) => i.projectId);
+    const taskA = await t.run(async (ctx) => await createTask(ctx, f.adminAuth, { title: "A1", projectId: a }, { notify: false }));
+    await entry(t, f, a, taskA);
+    const entryBefore = await t.run(async (ctx) =>
+      (await ctx.db.query("timeEntries").withIndex("by_orgId_projectId_closeId", (q) => q.eq("orgId", ORG).eq("projectId", a)).collect())[0],
+    );
+    expect(await canChange(t, a)).toBe(true);
+
+    // non-billable → retainer: the app's Settings (projects.update) and MCP write the same document.
+    await inApp(t, "admin").mutation(api.projects.update, {
+      id: a, billingType: "retainer", includedMinutesPerMonth: 600, monthlyFee: 1500, overageRate: 90, startDate: "2026-11-01", cycleLength: 3,
     });
-  }
-  const invoiceOn = (t: T, f: Awaited<ReturnType<typeof setup>>, projectId: Id<"projects">, clientId: Id<"clients">) =>
-    t.run(async (ctx) =>
-      await ctx.db.insert("invoices", {
-        orgId: ORG, projectId, clientId, prefix: "INV", status: "draft", currency: "EUR",
-        subtotalMinor: 0, totalMinor: 0, issueDate: "2026-10-01", createdAt: Date.now(), updatedAt: Date.now(), createdBy: f.admin,
-      } as never),
+    const viaMcp = await saveProjects(t, "admin", [
+      { ref: "BBB", billingType: "retainer", includedMinutes: "10h", monthlyFee: 1500, overageRate: 90, startDate: "2026-11-01", cycleLength: 3 },
+    ]);
+    expect(viaMcp.items[0]).toMatchObject({ code: "BBB", billingType: "retainer", action: "updated" });
+    const docA = (await get(t, a))!;
+    expect(terms(docA)).toEqual({
+      retainerStatus: "active", includedMinutesPerMonth: 600, monthlyFee: 1500, overageRate: 90, startDate: "2026-11-01", rolloverEnabled: true, cycleLength: 3,
+    });
+    // (A has a task, hence a nextTaskNumber; B has none.)
+    expect(shape(await get(t, b), "name", "code")).toEqual(shape(docA, "name", "code", "nextTaskNumber"));
+    // Logged time is untouched: its billable flag and rate snapshot are per entry.
+    expect(await t.run(async (ctx) => await ctx.db.get(entryBefore._id))).toEqual(entryBefore);
+
+    // retainer → fixed: the retainer terms go, the fee is set, Budget rows are seeded as a
+    // fixed create does (listed + the other active categories at 0); rate overrides stay.
+    await inApp(t, "admin").mutation(api.projectRateOverrides.upsert, { projectId: a, workCategoryId: f.design, billableRate: 140 });
+    await inApp(t, "admin").mutation(api.projects.update, {
+      id: a, billingType: "fixed", fixedPrice: 9000, categoryEstimates: [{ workCategoryId: f.design, estimatedMinutes: 300 }],
+    });
+    await saveProjects(t, "admin", [
+      { ref: "BBB", billingType: "fixed", fixedFee: 9000, estimates: [{ category: "Design", minutes: "5h" }], rates: [{ category: "Design", rate: 140 }] },
+    ]);
+    expect(terms((await get(t, a))!)).toEqual({ fixedPrice: 9000 });
+    expect(shape(await get(t, b), "name", "code")).toEqual(shape(await get(t, a), "name", "code", "nextTaskNumber"));
+    expect(await children(t, a)).toEqual({ estimates: [[f.design, 300], [f.dev, 0]].sort(), overrides: [[f.design, 140]] });
+    expect(await children(t, b)).toEqual(await children(t, a));
+
+    // fixed → T&M: the fee and the Budget rows go; rate overrides stay (both types take rates).
+    await saveProjects(t, "admin", [{ ref: "AAA", billingType: "t_and_m" }]);
+    expect(terms((await get(t, a))!)).toEqual({});
+    expect(await children(t, a)).toEqual({ estimates: [], overrides: [[f.design, 140]] });
+
+    // T&M → non-billable: the rate overrides go too (no type that takes rates).
+    await inApp(t, "admin").mutation(api.projects.update, { id: a, billingType: "non_billable" });
+    expect((await get(t, a))!.billingType).toBe("non_billable");
+    expect(await children(t, a)).toEqual({ estimates: [], overrides: [] });
+
+    // The same type is not a change; a change validates the new terms as create does; fields must apply to the NEW type.
+    expect((await saveProjects(t, "admin", [{ ref: "AAA", billingType: "non_billable" }])).items[0].action).toBe("unchanged");
+    await expect(saveProjects(t, "admin", [{ ref: "AAA", billingType: "fixed" }])).rejects.toThrow("Fixed fee is required");
+    await expect(saveProjects(t, "admin", [{ ref: "AAA", billingType: "retainer", includedMinutes: 60, overageRate: 90 }])).rejects.toThrow(
+      "Start date is required",
     );
-  const closeOn = (t: T, f: Awaited<ReturnType<typeof setup>>, projectId: Id<"projects">) =>
-    t.run(async (ctx) =>
-      await ctx.db.insert("billingCloses", {
-        orgId: ORG, projectId, kind: "t_and_m", status: "final", periodStart: "2026-09-01", periodEnd: "2026-09-30",
-        currency: "EUR", roundingMinutes: 1, includedMinutes: 0, overageRateMinor: 0, usageMinutes: 0, overageMinutes: 0,
-        amountMinor: 0, committedAt: Date.now(), committedBy: f.admin,
-      } as never),
+    await expect(
+      inApp(t, "admin").mutation(api.projects.update, { id: a, billingType: "retainer", includedMinutesPerMonth: 60, startDate: "2026-01-01" }),
+    ).rejects.toThrow("Overage rate is required");
+    await expect(saveProjects(t, "admin", [{ ref: "AAA", billingType: "fixed", fixedFee: 10, monthlyFee: 5 }])).rejects.toThrow(
+      "monthlyFee apply to retainer projects",
     );
+    // Without a type change, retainer terms and estimates belong to their own settings.
+    await expect(inApp(t, "admin").mutation(api.projects.update, { id: a, monthlyFee: 5 })).rejects.toThrow("monthlyFee is edited in the Retainer settings");
+    await expect(inApp(t, "admin").mutation(api.projects.update, { id: a, categoryEstimates: [] })).rejects.toThrow("edited in the Budget settings");
+    expect(terms((await get(t, a))!)).toEqual({});
+    expect((await get(t, a))!.billingType).toBe("non_billable");
+  });
+
+  it("is refused once a close (any status) or an invoice exists, in the app too; projects.get says so", async () => {
+    const t = createT();
+    const f = await setup(t);
+    const [closed, invoiced] = (
+      await saveProjects(t, "admin", [
+        { name: "Closed", client: "client:ARL", code: "CLOS", billingType: "t_and_m" },
+        { name: "Invoiced", client: "client:ARL", code: "INVD", billingType: "t_and_m" },
+      ])
+    ).items.map((i) => i.projectId);
+    expect(await canChange(t, closed)).toBe(true);
+    const close = await closeOn(t, f, closed);
+    await invoiceOn(t, f, invoiced, f.arlow);
+    for (const id of [closed, invoiced]) {
+      expect(await canChange(t, id)).toBe(false);
+      await expect(saveProjects(t, "admin", [{ ref: id, billingType: "fixed", fixedFee: 100 }])).rejects.toThrow(
+        "billing type cannot change once billing has started",
+      );
+      await expect(inApp(t, "admin").mutation(api.projects.update, { id, billingType: "non_billable" })).rejects.toThrow("billing type cannot change");
+      expect((await get(t, id))!.billingType).toBe("t_and_m");
+    }
+    // A released close is history too; unrelated edits still work, and the same type is not a change.
+    await t.run((ctx) => ctx.db.patch(close, { status: "released", releasedAt: Date.now(), releasedReason: "reopened" }));
+    await expect(saveProjects(t, "admin", [{ ref: "CLOS", billingType: "non_billable" }])).rejects.toThrow("billing type cannot change");
+    expect((await saveProjects(t, "admin", [{ ref: "CLOS", name: "Closed 2", billingType: "t_and_m" }])).items[0]).toMatchObject({ action: "updated", name: "Closed 2" });
+  });
+});
+
+describe("delete projects and clients (D6, D-DELETEGUARD)", () => {
   /** An empty T&M project under `client`, created through MCP. */
   const emptyProject = async (t: T, client: string, name: string) =>
     (await saveProjects(t, "admin", [{ name, client, billingType: "t_and_m" }])).items[0];

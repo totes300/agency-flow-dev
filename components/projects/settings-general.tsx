@@ -19,6 +19,8 @@ type ProjectData = {
   currency: string
   billingType: BillingType
   fixedPrice?: number
+  /** From api.projects.get: the type may change until the first close or invoice (D-BILLINGTYPE). */
+  canChangeBillingType?: boolean
 }
 
 export function SettingsGeneral({
@@ -108,7 +110,11 @@ export function SettingsGeneral({
         <div className="mt-3 flex items-center gap-2 text-sm">
           <span className="text-muted-foreground">Billing type:</span>
           <BillingTypeBadge type={project.billingType} />
-          <span className="text-xs text-muted-foreground">(set at creation)</span>
+          <span className="text-xs text-muted-foreground">
+            {project.canChangeBillingType
+              ? "(changeable until the first close or invoice; through the MCP for now)"
+              : "(fixed: billing has started)"}
+          </span>
         </div>
       </CardContent>
       <CardFooter className="justify-end">

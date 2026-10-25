@@ -83,6 +83,31 @@ export async function getLiveCloses(
   return closes.filter((c) => c.status !== "released");
 }
 
+/**
+ * Whether billing has started on a project: a close (any status, released
+ * included) or an invoice (any status) exists for it. While false, the
+ * project's billing type and its terms may still change (owner decision
+ * D-BILLINGTYPE, docs/prd-mcp.md, 2026-10-25); once true they are frozen, as
+ * those closes and invoices were priced by them. Used by `projects.update`
+ * and MCP `save_projects`. Two indexed `.first()` reads.
+ */
+export async function projectHasBillingHistory(
+  ctx: Reader,
+  orgId: string,
+  projectId: Id<"projects">,
+): Promise<boolean> {
+  const close = await ctx.db
+    .query("billingCloses")
+    .withIndex("by_orgId_projectId_periodStart", (q) => q.eq("orgId", orgId).eq("projectId", projectId))
+    .first();
+  if (close) return true;
+  const invoice = await ctx.db
+    .query("invoices")
+    .withIndex("by_projectId", (q) => q.eq("projectId", projectId))
+    .first();
+  return invoice !== null;
+}
+
 export type CloseContext = {
   project: ClosableProject;
   client: Doc<"clients">;

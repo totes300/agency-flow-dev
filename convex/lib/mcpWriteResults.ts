@@ -21,6 +21,7 @@ export const MCP_WRITE_TOOLS = [
   "mark_read",
   "create_upload",
   "attach_file",
+  "invite_members",
 ] as const;
 export type McpWriteTool = (typeof MCP_WRITE_TOOLS)[number];
 
@@ -150,6 +151,12 @@ export const saveProjectsResultValidator = v.object({
       action: savedAction,
       /** A code change: the previous code (old task keys stay valid as aliases). */
       previousCode: v.optional(v.string()),
+      /**
+       * Something the caller should know about this row, rendered after the
+       * action: a create without `billingType` says it started non-billable
+       * and how to set the type (D-BILLINGTYPE).
+       */
+      note: v.optional(v.string()),
       autoSavedTimers: v.optional(v.array(timerRescue)),
       timerSaveFailures: v.optional(v.array(timerRescueFailure)),
     }),
@@ -229,6 +236,26 @@ export const attachFileResultValidator = v.object({
   textStatus: v.union(v.literal("pending"), v.literal("done"), v.literal("unsupported"), v.literal("failed")),
 });
 
+/**
+ * The Convex half of `invite_members` (docs/prd-mcp.md D-INVITE): the admin
+ * check and the per-email verdicts. The Next.js route then sends every
+ * `invite` item to Clerk; `orgId` and `inviterClerkUserId` come from the
+ * verified token so the route never takes them from the client.
+ */
+export const inviteMembersResultValidator = v.object({
+  tool: v.literal("invite_members"),
+  orgId: v.string(),
+  inviterClerkUserId: v.string(),
+  items: v.array(
+    v.object({
+      email: v.string(),
+      role: v.union(v.literal("admin"), v.literal("member")),
+      /** `invite`: send the Clerk invitation; `already_member`: the email belongs to a member of this workspace. */
+      status: v.union(v.literal("invite"), v.literal("already_member")),
+    }),
+  ),
+});
+
 export const mcpWriteResultValidator = v.union(
   saveTasksResultValidator,
   saveCommentsResultValidator,
@@ -242,6 +269,7 @@ export const mcpWriteResultValidator = v.union(
   markReadResultValidator,
   createUploadResultValidator,
   attachFileResultValidator,
+  inviteMembersResultValidator,
 );
 
 export type SaveTasksResult = Infer<typeof saveTasksResultValidator>;
@@ -256,4 +284,5 @@ export type SaveDailyNotesResult = Infer<typeof saveDailyNotesResultValidator>;
 export type MarkReadResult = Infer<typeof markReadResultValidator>;
 export type CreateUploadResult = Infer<typeof createUploadResultValidator>;
 export type AttachFileResult = Infer<typeof attachFileResultValidator>;
+export type InviteMembersResult = Infer<typeof inviteMembersResultValidator>;
 export type McpWriteResult = Infer<typeof mcpWriteResultValidator>;

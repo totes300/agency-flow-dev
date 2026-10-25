@@ -16,7 +16,7 @@ import { getDateInTimezone, ORG_TIMEZONE_FALLBACK } from "./lib/timer";
 import { getOrgSettings, getProjectCurrency } from "./lib/orgHelpers";
 import { fixedBilledMinor } from "./lib/billing/invoiceLifecycle";
 import { fromMinor, toMinor } from "./lib/billing/money";
-import { getLiveCloses, loadCloseContext } from "./lib/billing/closeData";
+import { getLiveCloses, loadCloseContext, projectHasBillingHistory } from "./lib/billing/closeData";
 import {
   absMonthOf,
   getCyclePeriods,
@@ -126,8 +126,13 @@ export async function getProjectForAuth(
 export const get = query({
   args: { id: v.id("projects") },
   // See `list` for the rationale behind the explicit return annotation.
-  handler: async (ctx, args): Promise<ResolvedProjectDetail | null> => {
-    return await getProjectForAuth(ctx, await getAuthContext(ctx), args.id);
+  handler: async (ctx, args): Promise<(ResolvedProjectDetail & { canChangeBillingType: boolean }) | null> => {
+    const auth = await getAuthContext(ctx);
+    const project = await getProjectForAuth(ctx, auth, args.id);
+    if (!project) return null;
+    // D-BILLINGTYPE: the type is editable until billing starts (`update` is
+    // the source of truth; this only tells the form whether to offer it).
+    return { ...project, canChangeBillingType: !(await projectHasBillingHistory(ctx, auth.orgId, project._id)) };
   },
 });
 
@@ -141,11 +146,12 @@ export const nextCode = query({
 
 // ─── Mutations ──────────────────────────────────────────────────────────────────
 
-const createProjectArgs = {
-  clientId: v.id("clients"),
-  name: v.string(),
-  billingType: billingTypeValidator,
-  code: v.optional(v.string()),
+/**
+ * The terms a billing type takes, as the New Project form sends them. Shared
+ * by `create` and by a billing type change in `update` (D-BILLINGTYPE), so
+ * both validate and store them the same way.
+ */
+const billingTermArgs = {
   // Fixed fields
   fixedPrice: v.optional(v.number()),
   // Fixed-only optional scope estimate. When provided, seeds
@@ -165,38 +171,42 @@ const createProjectArgs = {
   cycleLength: v.optional(v.number()),
   rolloverEnabled: v.optional(v.boolean()),
   overageRate: v.optional(v.number()),
-  // Team members
-  teamMembers: v.optional(v.array(v.id("users"))),
 };
 
-export type CreateProjectInput = ObjectType<typeof createProjectArgs>;
+type BillingTermsInput = ObjectType<typeof billingTermArgs> & { billingType: Doc<"projects">["billingType"] };
 
-/**
- * Creates a project (admins only) with its billing terms — the New Project
- * form and MCP `save_projects` (docs/prd-mcp.md §6) share this core.
- */
-export async function createProjectForAuth(
-  ctx: MutationCtx,
-  auth: AuthContext,
-  args: CreateProjectInput,
-): Promise<Id<"projects">> {
-  assertAdmin(auth);
-  const { orgId, userId } = auth;
+/** The project document fields that hold a billing type's terms. */
+type BillingTermFields = Pick<
+  Doc<"projects">,
+  | "fixedPrice"
+  | "retainerStatus"
+  | "includedMinutesPerMonth"
+  | "monthlyFee"
+  | "overageRate"
+  | "startDate"
+  | "rolloverEnabled"
+  | "cycleLength"
+>;
 
-  const name = args.name.trim();
-  if (!name) throw new ConvexError("Project name is required");
-  validateStringLength(name, 100, "Project name");
+/** The retainer term arguments; `projects.update` takes them only with a type change. */
+const RETAINER_TERM_ARGS = [
+  "includedMinutesPerMonth",
+  "monthlyFee",
+  "startDate",
+  "cycleLength",
+  "rolloverEnabled",
+  "overageRate",
+] as const satisfies readonly (keyof BillingTermsInput)[];
 
-  // Validate client exists and belongs to org — currency is derived from client
-  // at read time, not stored on the project (see D1 invariant in schema.ts).
-  const client = await ctx.db.get(args.clientId);
-  if (!client || client.orgId !== orgId) throw new ConvexError("Client not found");
+export const BILLING_TYPE_LABEL: Record<Doc<"projects">["billingType"], string> = {
+  fixed: "fixed fee",
+  retainer: "retainer",
+  t_and_m: "time & materials",
+  non_billable: "non-billable",
+};
 
-  // Validate team members belong to org
-  if (args.teamMembers && args.teamMembers.length > 0) {
-    await validateAssignees(ctx, orgId, args.teamMembers);
-  }
-
+/** The New Project form's validation of a billing type's terms (also run by a type change). */
+function validateBillingTerms(args: BillingTermsInput): void {
   // Fixed validation
   if (args.billingType === "fixed") {
     if (args.fixedPrice === undefined || args.fixedPrice <= 0) {
@@ -238,6 +248,104 @@ export async function createProjectForAuth(
       throw new ConvexError("Overage rate is required for retainer projects and must be greater than zero");
     }
   }
+}
+
+/**
+ * The document fields for `args.billingType`'s terms: the type's own terms
+ * set, every other type's `undefined` — so a patch with them clears the
+ * previous type's terms on a type change. A retainer starts active.
+ */
+function billingTermFields(args: BillingTermsInput): BillingTermFields {
+  const fixed = args.billingType === "fixed";
+  const retainer = args.billingType === "retainer";
+  return {
+    fixedPrice: fixed ? args.fixedPrice : undefined,
+    retainerStatus: retainer ? "active" : undefined,
+    includedMinutesPerMonth: retainer ? args.includedMinutesPerMonth : undefined,
+    monthlyFee: retainer ? args.monthlyFee : undefined,
+    overageRate: retainer ? args.overageRate : undefined,
+    startDate: retainer ? args.startDate : undefined,
+    rolloverEnabled: retainer ? ((args.cycleLength ?? 1) >= 2 ? (args.rolloverEnabled ?? true) : false) : undefined,
+    cycleLength: retainer ? (args.cycleLength ?? 1) : undefined,
+  };
+}
+
+/**
+ * Seeds the Budget rows of a fixed project: the provided estimates (the
+ * creation modal's scope step), every other active category at 0 minutes so
+ * the Budget tab has a row to edit.
+ */
+async function seedFixedEstimates(
+  ctx: MutationCtx,
+  auth: Pick<AuthContext, "orgId" | "userId">,
+  projectId: Id<"projects">,
+  categoryEstimates: BillingTermsInput["categoryEstimates"],
+  now: number,
+): Promise<void> {
+  const categories = await ctx.db
+    .query("workCategories")
+    .withIndex("by_orgId", (q) => q.eq("orgId", auth.orgId))
+    .collect();
+  const activeCategories = categories.filter((c) => !c.archivedAt);
+  const providedMap = new Map(
+    (categoryEstimates ?? []).map((e) => [
+      e.workCategoryId.toString(),
+      e.estimatedMinutes,
+    ]),
+  );
+  for (const cat of activeCategories) {
+    const minutes = providedMap.get(cat._id.toString()) ?? 0;
+    await ctx.db.insert("projectCategoryEstimates", {
+      orgId: auth.orgId,
+      projectId,
+      workCategoryId: cat._id,
+      estimatedMinutes: minutes,
+      createdAt: now,
+      updatedAt: now,
+      createdBy: auth.userId,
+    });
+  }
+}
+
+const createProjectArgs = {
+  clientId: v.id("clients"),
+  name: v.string(),
+  billingType: billingTypeValidator,
+  code: v.optional(v.string()),
+  ...billingTermArgs,
+  // Team members
+  teamMembers: v.optional(v.array(v.id("users"))),
+};
+
+export type CreateProjectInput = ObjectType<typeof createProjectArgs>;
+
+/**
+ * Creates a project (admins only) with its billing terms — the New Project
+ * form and MCP `save_projects` (docs/prd-mcp.md §6) share this core.
+ */
+export async function createProjectForAuth(
+  ctx: MutationCtx,
+  auth: AuthContext,
+  args: CreateProjectInput,
+): Promise<Id<"projects">> {
+  assertAdmin(auth);
+  const { orgId, userId } = auth;
+
+  const name = args.name.trim();
+  if (!name) throw new ConvexError("Project name is required");
+  validateStringLength(name, 100, "Project name");
+
+  // Validate client exists and belongs to org — currency is derived from client
+  // at read time, not stored on the project (see D1 invariant in schema.ts).
+  const client = await ctx.db.get(args.clientId);
+  if (!client || client.orgId !== orgId) throw new ConvexError("Client not found");
+
+  // Validate team members belong to org
+  if (args.teamMembers && args.teamMembers.length > 0) {
+    await validateAssignees(ctx, orgId, args.teamMembers);
+  }
+
+  validateBillingTerms(args);
 
   // The code is the task identifier key (D2): validate a user-entered one,
   // else suggest one from the client prefix / client or project name.
@@ -255,6 +363,8 @@ export async function createProjectForAuth(
   }
 
   const now = Date.now();
+  // Only the type's own terms are stored (the others are undefined and dropped).
+  const terms = Object.fromEntries(Object.entries(billingTermFields(args)).filter(([, value]) => value !== undefined));
   const projectId = await ctx.db.insert("projects", {
     orgId,
     clientId: args.clientId,
@@ -262,20 +372,7 @@ export async function createProjectForAuth(
     code,
     billingType: args.billingType,
     // Currency is derived from client.currency — not stored on project.
-    // Fixed fields
-    ...(args.billingType === "fixed" ? {
-      fixedPrice: args.fixedPrice,
-    } : {}),
-    // Retainer fields
-    ...(args.billingType === "retainer" ? {
-      retainerStatus: "active" as const,
-      includedMinutesPerMonth: args.includedMinutesPerMonth,
-      monthlyFee: args.monthlyFee,
-      overageRate: args.overageRate,
-      startDate: args.startDate,
-      rolloverEnabled: (args.cycleLength ?? 1) >= 2 ? (args.rolloverEnabled ?? true) : false,
-      cycleLength: args.cycleLength ?? 1,
-    } : {}),
+    ...terms,
     // Team members
     ...(args.teamMembers && args.teamMembers.length > 0 ? { teamMembers: args.teamMembers } : {}),
     createdAt: now,
@@ -284,33 +381,8 @@ export async function createProjectForAuth(
   });
 
   // Seed category estimate rows for Fixed projects.
-  // If args.categoryEstimates was provided (via the creation modal's scope
-  // step), use those values; otherwise default every active category to 0
-  // minutes so the Budget tab has a row to edit.
   if (args.billingType === "fixed") {
-    const categories = await ctx.db
-      .query("workCategories")
-      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
-      .collect();
-    const activeCategories = categories.filter((c) => !c.archivedAt);
-    const providedMap = new Map(
-      (args.categoryEstimates ?? []).map((e) => [
-        e.workCategoryId.toString(),
-        e.estimatedMinutes,
-      ]),
-    );
-    for (const cat of activeCategories) {
-      const minutes = providedMap.get(cat._id.toString()) ?? 0;
-      await ctx.db.insert("projectCategoryEstimates", {
-        orgId,
-        projectId,
-        workCategoryId: cat._id,
-        estimatedMinutes: minutes,
-        createdAt: now,
-        updatedAt: now,
-        createdBy: userId,
-      });
-    }
+    await seedFixedEstimates(ctx, auth, projectId, args.categoryEstimates, now);
   }
 
   // No auto-seeding of projectRateOverrides — the resolution chain
@@ -331,7 +403,13 @@ const updateProjectArgs = {
   id: v.id("projects"),
   name: v.optional(v.string()),
   code: v.optional(v.string()),
-  fixedPrice: v.optional(v.number()),
+  /**
+   * A different type changes the project's billing type together with its
+   * terms (the other `billingTermArgs`), while the project has no billing
+   * history (D-BILLINGTYPE). Without a type change only `fixedPrice` applies.
+   */
+  billingType: v.optional(billingTypeValidator),
+  ...billingTermArgs,
   defaultAssignees: v.optional(v.array(v.object({
     workCategoryId: v.id("workCategories"),
     userId: v.id("users"),
@@ -342,9 +420,22 @@ const updateProjectArgs = {
 export type UpdateProjectInput = ObjectType<typeof updateProjectArgs>;
 
 /**
- * Edits a project's name, code, fixed fee and team (admins only). A code
- * change rewrites every task identifier of the project (old ones become
- * aliases); the activity rows carry `auth.via` for an agent write (D15).
+ * Edits a project's name, code, fixed fee, billing type and team (admins
+ * only). A code change rewrites every task identifier of the project (old
+ * ones become aliases); the activity rows carry `auth.via` for an agent
+ * write (D15).
+ *
+ * A billing type change (owner decision D-BILLINGTYPE, 2026-10-25) is
+ * allowed while the project has no billing history — no close and no
+ * invoice (`projectHasBillingHistory`) — and applies the New Project form's
+ * validation to the new type's terms. It clears the previous type's terms:
+ * `fixedPrice` (unless the new type is fixed); `retainerStatus`,
+ * `includedMinutesPerMonth`, `monthlyFee`, `overageRate`, `startDate`,
+ * `rolloverEnabled`, `cycleLength` (unless retainer); the Budget estimate
+ * rows (unless fixed — a change to fixed seeds them as create does); the
+ * per-category rate overrides when the new type takes none (retainer,
+ * non-billable; fixed and T&M keep them). Time entries are untouched: their
+ * billable flag and rate snapshot are per entry.
  */
 export async function updateProjectForAuth(
   ctx: MutationCtx,
@@ -356,7 +447,28 @@ export async function updateProjectForAuth(
   const project = await ctx.db.get(args.id);
   if (!project || project.orgId !== orgId) throw new ConvexError("Project not found");
 
-  const updates: Record<string, unknown> = { updatedAt: Date.now() };
+  const now = Date.now();
+  const updates: Record<string, unknown> = { updatedAt: now };
+
+  const newType = args.billingType !== undefined && args.billingType !== project.billingType ? args.billingType : undefined;
+  if (newType !== undefined) {
+    if (await projectHasBillingHistory(ctx, orgId, project._id)) {
+      throw new ConvexError(
+        `A project's billing type cannot change once billing has started (it has a closed period or an invoice); ${project.code} is ${BILLING_TYPE_LABEL[project.billingType]}.`,
+      );
+    }
+    const terms: BillingTermsInput = { ...args, billingType: newType };
+    validateBillingTerms(terms);
+    Object.assign(updates, billingTermFields(terms), { billingType: newType });
+  } else {
+    const retainerTerm = RETAINER_TERM_ARGS.find((key) => args[key] !== undefined);
+    if (retainerTerm !== undefined) {
+      throw new ConvexError(`${retainerTerm} is edited in the Retainer settings, or together with a billing type change`);
+    }
+    if (args.categoryEstimates !== undefined) {
+      throw new ConvexError("Category estimates are edited in the Budget settings, or together with a billing type change");
+    }
+  }
 
   if (args.name !== undefined) {
     const name = args.name.trim();
@@ -394,7 +506,9 @@ export async function updateProjectForAuth(
     updates.defaultAssignees = args.defaultAssignees;
   }
 
-  if (args.fixedPrice !== undefined) {
+  // The fixed fee of a project that stays fixed (a type change to fixed
+  // validated it above, and no invoice exists then).
+  if (args.fixedPrice !== undefined && newType === undefined) {
     if (project.billingType !== "fixed") {
       throw new ConvexError("Fixed fee can only be set on fixed projects");
     }
@@ -417,6 +531,28 @@ export async function updateProjectForAuth(
   // §11.1: a code rename rewrites every identifier in the project; the old
   // ones become aliases (write path, T5).
   if (codeRename) await rewriteProjectIdentifiers(ctx, userId, project, codeRename, auth.via);
+
+  if (newType !== undefined) {
+    // The rows the previous type owned go; a change to fixed seeds the
+    // Budget rows as create does.
+    if (project.billingType === "fixed") {
+      const estimates = await ctx.db
+        .query("projectCategoryEstimates")
+        .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
+        .collect();
+      for (const est of estimates) await ctx.db.delete(est._id);
+    }
+    if (newType === "fixed") {
+      await seedFixedEstimates(ctx, auth, project._id, args.categoryEstimates, now);
+    }
+    if (newType !== "fixed" && newType !== "t_and_m") {
+      const overrides = await ctx.db
+        .query("projectRateOverrides")
+        .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
+        .collect();
+      for (const override of overrides) await ctx.db.delete(override._id);
+    }
+  }
 }
 
 export const update = mutation({

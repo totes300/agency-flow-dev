@@ -9,6 +9,7 @@ import type { SaveProjectsResult } from "./mcpWriteResults";
 import { normalizeProjectCode } from "./helpers";
 import { parseDuration } from "../../lib/duration";
 import {
+  BILLING_TYPE_LABEL,
   archiveProjectForAuth,
   createProjectForAuth,
   restoreProjectForAuth,
@@ -39,7 +40,9 @@ import { removeProjectRateOverrideForAuth, upsertProjectRateOverrideForAuth } fr
  *   (only with a cycle of 2+ months: the app forces it off otherwise, so
  *   asking for it is an error); T&M: `rates`, saved right after the create
  *   (the form sets them on the next screen); non-billable: none. New
- *   retainers start active.
+ *   retainers start active. `billingType` may be omitted when the terms are
+ *   not known yet (D-BILLINGTYPE): the project starts non-billable and the
+ *   result row says so; terms without a type are an error.
  * - Edit = Settings: name, code (a change rewrites every task key of the
  *   project, old keys stay as aliases — at most one code change per call,
  *   the rewrite touches every task of the project), team, fixed fee (never
@@ -50,9 +53,15 @@ import { removeProjectRateOverrideForAuth, upsertProjectRateOverrideForAuth } fr
  *   category estimates — listed categories are set, the others removed.
  * - `rates` (fixed and T&M, the Rates settings): per category, a project
  *   override of the billable rate; `null` goes back to the category default.
- * - The client and the billing type never change after creation (the app
- *   has no path for it); `archived` archives (running timers on the
- *   project's tasks are saved as entries, as in the app) or restores.
+ * - A different `billingType` on an edit changes the type together with its
+ *   terms, through the same core as the app's Settings (`projects.update`):
+ *   allowed while the project has no billing history (no close, no
+ *   invoice — `projectHasBillingHistory`), with the New Project form's
+ *   validation of the new terms; the previous type's terms are cleared
+ *   (see `updateProjectForAuth`). Time entries stay as logged.
+ * - The client never changes after creation (the app has no path for it);
+ *   `archived` archives (running timers on the project's tasks are saved as
+ *   entries, as in the app) or restores.
  * - Only fields that differ are written; an item that changes nothing is
  *   "unchanged".
  *
@@ -79,7 +88,11 @@ export type SaveProjectItem = {
   /** Create: the client (client:KONV, ID or link). Edit: must be the project's client. */
   client?: string;
   code?: string;
-  /** Create: required. Edit: must be the project's type. */
+  /**
+   * Create: the type; omitted = non-billable until the terms are known.
+   * Edit: a different type changes it (with its terms) while the project has
+   * no close or invoice.
+   */
   billingType?: ProjectBillingType;
   fixedFee?: number;
   /** Minutes, or a duration string ("20h"). */
@@ -101,18 +114,18 @@ type Row = SaveProjectsResult["items"][number];
 
 export const ADMIN_ONLY_PROJECTS = "Projects are created and edited by admins only, as in the app.";
 
-const BILLING_LABEL: Record<ProjectBillingType, string> = {
-  fixed: "fixed fee",
-  retainer: "retainer",
-  t_and_m: "time & materials",
-  non_billable: "non-billable",
-};
+/** The result row's note for a create that left the billing type to be set later. */
+export const BILLING_TYPE_NOT_SET_NOTE =
+  "billing type not set (non_billable); set it with save_projects when the terms are known";
 
 const RETAINER_FIELDS = ["includedMinutes", "monthlyFee", "overageRate", "startDate", "cycleLength", "rollover", "retainerActive"] as const;
 
+/** The term fields of a create; with no `billingType` they have no type to belong to. */
+const TERM_FIELDS = ["fixedFee", "estimates", "rates", ...RETAINER_FIELDS] as const;
+
 /** Refuses the fields the app's forms never send for this billing type. */
 function assertFieldsApply(item: SaveProjectItem, billingType: ProjectBillingType): void {
-  const label = BILLING_LABEL[billingType];
+  const label = BILLING_TYPE_LABEL[billingType];
   if (item.fixedFee !== undefined && billingType !== "fixed") {
     throw new ConvexError(`fixedFee applies to fixed-fee projects; this one is ${label}.`);
   }
@@ -249,12 +262,22 @@ async function createItem(
   if (item.archived === true) {
     throw new ConvexError("archived applies to existing projects: create the project first, then archive it by ref.");
   }
-  if (item.name === undefined || item.client === undefined || item.billingType === undefined) {
+  if (item.name === undefined || item.client === undefined) {
     throw new ConvexError(
-      "name, client and billingType are required to create a project. To edit one, pass its ref (code, ID or link).",
+      "name and client are required to create a project (and billingType, unless the terms are not known yet: it then starts non-billable). To edit one, pass its ref (code, ID or link).",
     );
   }
-  assertFieldsApply(item, item.billingType);
+  // D-BILLINGTYPE: no type yet = non-billable until the terms are known.
+  if (item.billingType === undefined) {
+    const terms = TERM_FIELDS.filter((f) => item[f] !== undefined);
+    if (terms.length > 0) {
+      throw new ConvexError(
+        `billingType is required with ${terms.join(", ")}: name the type these terms belong to, or omit them to start non-billable.`,
+      );
+    }
+  }
+  const billingType = item.billingType ?? "non_billable";
+  assertFieldsApply(item, billingType);
   if (item.retainerActive !== undefined) {
     throw new ConvexError("retainerActive applies to existing retainers: a new retainer starts active.");
   }
@@ -267,7 +290,7 @@ async function createItem(
   const input: CreateProjectInput = {
     clientId: client.client._id,
     name: item.name,
-    billingType: item.billingType,
+    billingType,
     code: item.code,
     fixedPrice: item.fixedFee,
     categoryEstimates: estimates
@@ -287,7 +310,7 @@ async function createItem(
     await applyRates(ctx, auth, names, project, item.rates);
     project = (await ctx.db.get(projectId))!;
   }
-  return row(project, "created");
+  return row(project, "created", item.billingType === undefined ? { note: BILLING_TYPE_NOT_SET_NOTE } : {});
 }
 
 async function editItem(
@@ -308,14 +331,16 @@ async function editItem(
       throw new ConvexError("A project's client cannot change (as in the app). Create a new project under the other client.");
     }
   }
-  if (item.billingType !== undefined && item.billingType !== project.billingType) {
-    throw new ConvexError(
-      `A project's billing type cannot change after creation (as in the app); ${project.code} is ${BILLING_LABEL[project.billingType]}.`,
-    );
-  }
-  assertFieldsApply(item, project.billingType);
+  // D-BILLINGTYPE: a different type changes it with its terms (the core
+  // refuses once the project has a close or an invoice); the fields must
+  // apply to the type the project is about to have.
+  const newType = item.billingType !== undefined && item.billingType !== project.billingType ? item.billingType : undefined;
+  const billingType = newType ?? project.billingType;
+  assertFieldsApply(item, billingType);
   const includedMinutes = item.includedMinutes !== undefined ? durationMinutes(item.includedMinutes, "includedMinutes") : undefined;
-  if (project.billingType === "retainer") assertRollover(item.rollover, item.cycleLength ?? project.cycleLength ?? 1);
+  if (billingType === "retainer") {
+    assertRollover(item.rollover, item.cycleLength ?? (newType === undefined ? project.cycleLength : undefined) ?? 1);
+  }
 
   let changed = false;
   const extra: Partial<Row> = {};
@@ -335,7 +360,27 @@ async function editItem(
     }
     update.code = item.code;
   }
-  if (item.fixedFee !== undefined && item.fixedFee !== project.fixedPrice) update.fixedPrice = item.fixedFee;
+  if (newType !== undefined) {
+    // The type and the new type's terms change together (the create-time
+    // validation runs in the core; `estimates` seed the Budget rows as a
+    // fixed create does).
+    update.billingType = newType;
+    if (item.fixedFee !== undefined) update.fixedPrice = item.fixedFee;
+    if (includedMinutes !== undefined) update.includedMinutesPerMonth = includedMinutes;
+    if (item.monthlyFee !== undefined) update.monthlyFee = item.monthlyFee;
+    if (item.overageRate !== undefined) update.overageRate = item.overageRate;
+    if (item.startDate !== undefined) update.startDate = item.startDate;
+    if (item.cycleLength !== undefined) update.cycleLength = item.cycleLength;
+    if (item.rollover !== undefined) update.rolloverEnabled = item.rollover;
+    if (item.estimates !== undefined) {
+      update.categoryEstimates = [...(await estimateRows(names, item.estimates))].map(([workCategoryId, estimatedMinutes]) => ({
+        workCategoryId,
+        estimatedMinutes,
+      }));
+    }
+  } else if (item.fixedFee !== undefined && item.fixedFee !== project.fixedPrice) {
+    update.fixedPrice = item.fixedFee;
+  }
   if (item.team !== undefined) {
     const ids = await teamIds(resolver, item.team);
     const current = project.teamMembers ?? [];
@@ -345,6 +390,8 @@ async function editItem(
     await updateProjectForAuth(ctx, auth, update);
     if (update.code !== undefined) extra.previousCode = project.code;
     changed = true;
+    // The retainer diff below compares against the terms just written.
+    if (newType !== undefined) project = (await ctx.db.get(project._id))!;
   }
 
   // Settings → Retainer (the dialog's confirmation is the tool call itself, D3).
@@ -367,7 +414,8 @@ async function editItem(
   }
 
   project = (await ctx.db.get(project._id))!;
-  if (item.estimates !== undefined && (await applyEstimates(ctx, auth, names, project, item.estimates))) changed = true;
+  // A change to fixed seeded the estimates above (unlisted categories at 0, as create does).
+  if (item.estimates !== undefined && newType === undefined && (await applyEstimates(ctx, auth, names, project, item.estimates))) changed = true;
   if (item.rates !== undefined && (await applyRates(ctx, auth, names, project, item.rates))) changed = true;
 
   if (item.archived === true && project.archivedAt === undefined) {

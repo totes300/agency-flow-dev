@@ -1468,7 +1468,7 @@ const createUploadInput = z.object({
   idempotencyKey,
 });
 
-const createUploadOperations = { create: mutationOperation(api.mcp.files.createUpload, renderCreateUpload) };
+const createUploadOperations = { create: actionOperation(api.mcp.files.createUpload, renderCreateUpload) };
 
 const createUploadTool: McpTool = {
   name: "create_upload",
@@ -1487,12 +1487,17 @@ const createUploadTool: McpTool = {
   operations: createUploadOperations,
   execute: async (raw, ctx) => {
     const input = createUploadInput.parse(raw);
-    return await runWrite(createUploadOperations.create, ctx, () => ({
-      filename: input.filename,
-      contentType: input.contentType,
-      sizeBytes: input.sizeBytes,
-      idempotencyKey: input.idempotencyKey,
-    }));
+    try {
+      const data = await ctx.runAction(createUploadOperations.create.action, {
+        filename: input.filename,
+        contentType: input.contentType,
+        sizeBytes: input.sizeBytes,
+        idempotencyKey: input.idempotencyKey,
+      });
+      return { text: createUploadOperations.create.render(data, { appOrigin: ctx.appOrigin }), isError: false };
+    } catch (error) {
+      return { text: `Error: ${mcpErrorMessage(error)}`, isError: true };
+    }
   },
 };
 

@@ -4,8 +4,8 @@ import type { Id } from "../_generated/dataModel";
 import { internal } from "../_generated/api";
 import { getMcpAuthContext } from "../lib/mcpAuth";
 import { recordIdempotent, replayIdempotent, requestFingerprint } from "../lib/mcpWrites";
-import { attachFile, createUpload as createUploadCore, prepareInlineText } from "../lib/mcpFiles";
-import type { AttachFileResult } from "../lib/mcpWriteResults";
+import { attachFile, createUpload as createUploadCore, newUploadId, prepareInlineText } from "../lib/mcpFiles";
+import type { AttachFileResult, CreateUploadResult } from "../lib/mcpWriteResults";
 
 /**
  * MCP file tools (docs/prd-mcp.md D18, §10): `create_upload` and
@@ -16,12 +16,41 @@ import type { AttachFileResult } from "../lib/mcpWriteResults";
  * (via, D15) is taken.
  */
 
-/** `create_upload`: a Convex upload URL for one announced file. */
-export const createUpload = mutation({
+/**
+ * `create_upload`: the upload URL for one announced file. An action, because
+ * the uploadId is a capability: it is generated here with Web Crypto
+ * (randomness in queries and mutations is seeded and deterministic) and
+ * handed to `recordUpload`, which checks the file, writes the row and keeps
+ * idempotency — a replay returns the first call's uploadId and URL, and the
+ * id generated for the replay is simply never used.
+ */
+export const createUpload = action({
   args: {
     filename: v.string(),
     contentType: v.string(),
     sizeBytes: v.number(),
+    idempotencyKey: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await getMcpAuthContext(ctx);
+    const result: CreateUploadResult & { replayed: boolean } = await ctx.runMutation(internal.mcp.files.recordUpload, {
+      filename: args.filename,
+      contentType: args.contentType,
+      sizeBytes: args.sizeBytes,
+      uploadId: newUploadId(),
+      idempotencyKey: args.idempotencyKey,
+    });
+    return result;
+  },
+});
+
+/** The write half of `createUpload`, as the action's caller (internal: the uploadId is the action's). */
+export const recordUpload = internalMutation({
+  args: {
+    filename: v.string(),
+    contentType: v.string(),
+    sizeBytes: v.number(),
+    uploadId: v.string(),
     idempotencyKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -35,6 +64,7 @@ export const createUpload = mutation({
       ctx,
       auth,
       { fileName: args.filename, contentType: args.contentType, sizeBytes: args.sizeBytes },
+      args.uploadId,
       now,
     );
     await recordIdempotent(ctx, auth, "create_upload", args.idempotencyKey, fingerprint, result, now);

@@ -142,7 +142,7 @@ async function setup(t: T) {
 }
 
 const createUpload = (t: T, caller: Caller, args: { filename: string; contentType: string; sizeBytes: number; idempotencyKey?: string }) =>
-  as(t, caller).mutation(api.mcp.files.createUpload, args);
+  as(t, caller).action(api.mcp.files.createUpload, args);
 const attach = (t: T, caller: Caller, ref: string, uploadId: string, idempotencyKey?: string) =>
   as(t, caller).mutation(api.mcp.files.attach, { ref, uploadId, idempotencyKey });
 const attachText = (t: T, caller: Caller, ref: string, inlineText: string, filename = "source.md", idempotencyKey?: string) =>
@@ -247,11 +247,34 @@ describe("create_upload", () => {
     await expect(createUpload(t, "admin", { ...args, sizeBytes: 6 })).rejects.toThrow(/different request/);
   });
 
+  it("the uploadId comes from the action: the mutation only records the id it is given, generating no randomness", async () => {
+    const t = createT();
+    await setup(t);
+    const given = "givenUploadId_0123456789abcdef";
+    const random = vi.spyOn(crypto, "getRandomValues");
+    const recorded = await as(t, "admin").mutation(internal.mcp.files.recordUpload, {
+      filename: "a.pdf", contentType: "application/pdf", sizeBytes: 5, uploadId: given,
+    });
+    expect(random).not.toHaveBeenCalled();
+    random.mockRestore();
+    expect(recorded).toMatchObject({ uploadId: given, uploadUrl: `${SITE}/mcp-upload?u=${given}` });
+    expect((await uploadRow(t, given))!.orgId).toBe(ORG);
+    // An id that is not a newUploadId (< 128 bits of base64url) is refused.
+    await expect(
+      as(t, "admin").mutation(internal.mcp.files.recordUpload, { filename: "a.pdf", contentType: "application/pdf", sizeBytes: 5, uploadId: "short" }),
+    ).rejects.toThrow();
+    // The public action generates a fresh 192-bit id per call.
+    const spy = vi.spyOn(crypto, "getRandomValues");
+    await createUpload(t, "admin", { filename: "a.pdf", contentType: "application/pdf", sizeBytes: 5 });
+    expect(spy).toHaveBeenCalledWith(expect.objectContaining({ length: 24 }));
+    spy.mockRestore();
+  });
+
   it("a session (app) token is refused by every mcp/files function", async () => {
     const t = createT();
     const f = await setup(t);
     const app = inApp(t, "admin", "org:admin");
-    await expect(app.mutation(api.mcp.files.createUpload, { filename: "a.pdf", contentType: "application/pdf", sizeBytes: 5 })).rejects.toThrow(
+    await expect(app.action(api.mcp.files.createUpload, { filename: "a.pdf", contentType: "application/pdf", sizeBytes: 5 })).rejects.toThrow(
       /MCP functions require an OAuth access token/,
     );
     await expect(app.mutation(api.mcp.files.attach, { ref: f.id.A, uploadId: "x" })).rejects.toThrow(/OAuth access token/);

@@ -76,7 +76,7 @@ describe("create_upload", () => {
     );
     expect(calls).toEqual([
       {
-        kind: "mutation",
+        kind: "action",
         name: "mcp/files:createUpload",
         args: { filename: "brief.pdf", contentType: "application/pdf", sizeBytes: 48213, idempotencyKey: "k" },
       },

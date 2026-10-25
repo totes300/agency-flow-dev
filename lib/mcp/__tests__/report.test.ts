@@ -334,6 +334,7 @@ describe("report rendering", () => {
     const st = renderRetainerStatement(statement, ctx).map((p) => p.text).join("\n\n");
     expect(st).toContain(`- Link: ${ORIGIN}/projects/p1/reports/2026-03`);
     expect(st).toContain("| End balance | -55m |");
+    expect(st).toContain("- Invoice: draft invoice");
     expect(st).toContain("| Amount due (overage) | €90.00 |");
     expect(st).toContain("| 2026-02 (carried in) | Design | yes | 30m |");
   });

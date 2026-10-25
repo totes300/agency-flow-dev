@@ -4,6 +4,7 @@ import { getMcpAuthContext } from "../lib/mcpAuth";
 import { createRefResolver, type RefCandidate } from "../lib/mcpRefs";
 import { buildRecord, orgClock } from "../lib/mcpRecords";
 import { listChanges } from "../lib/mcpChanges";
+import { listInbox } from "../lib/mcpInbox";
 import { timerState } from "../lib/mcpTimer";
 import { isValidClientPrefix } from "../lib/clientPrefix";
 import { FETCH_INCLUDES, MAX_REFS, type FetchInclude } from "../../lib/mcp/limits";
@@ -99,7 +100,8 @@ export const workspace = query({
 
 /**
  * `fetch(refs[])` for records: tasks, comments, time entries, projects,
- * clients and members, by any reference form (docs/prd-mcp.md §7). Every
+ * clients, members, invoices and daily notes, by any reference form
+ * (docs/prd-mcp.md §7). Every
  * ref is resolved and access-checked in the caller's org (I3); a missing,
  * foreign or unreadable record is "not found", an ambiguous short key or
  * email returns its candidates. Results keep the input order, one per ref.
@@ -161,5 +163,22 @@ export const changes = query({
   handler: async (ctx, args) => {
     const auth = await getMcpAuthContext(ctx);
     return await listChanges(ctx, auth, args);
+  },
+});
+
+/**
+ * `fetch("inbox")` (D9): the caller's own inbox — unread first, then read,
+ * newest first — one page after `cursor` (convex/lib/mcpInbox.ts). `now` is
+ * the caller's clock.
+ */
+export const inbox = query({
+  args: {
+    cursor: v.optional(v.string()),
+    limit: v.number(),
+    now: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const auth = await getMcpAuthContext(ctx);
+    return await listInbox(ctx, auth, args);
   },
 });

@@ -433,7 +433,7 @@ describe("delete (D6)", () => {
       });
     });
     await expect(remove(t, "admin", [f.id.A])).rejects.toThrow("This task has logged time");
-    await expect(remove(t, "admin", [f.id.A, "ARLO"])).rejects.toThrow("delete removes tasks, comments and time entries");
+    await expect(remove(t, "admin", [f.id.A, email("alice")])).rejects.toThrow("is a member: members are removed in the organization settings");
     expect(await taskBy(t, f.id.A)).toBeTruthy();
     const deleted = await remove(t, "admin", [f.id.A], { deleteTimeEntries: true });
     expect(deleted.items[0]).toMatchObject({ type: "task", action: "deleted" });

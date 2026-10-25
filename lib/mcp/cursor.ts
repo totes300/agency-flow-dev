@@ -107,3 +107,37 @@ export function decodeChangesCursor(raw: string): ChangesPosition | null {
   if (typeof c !== "number" || !Number.isFinite(c) || c < 0) return null;
   return { createdAt: t, creationTime: c };
 }
+
+// ─── Inbox cursor (fetch("inbox"), docs/prd-mcp.md D9) ──────────────────────
+
+const INBOX_CURSOR_VERSION = 1;
+
+/**
+ * A position in the caller's inbox: the last item shown, as its section
+ * (unread items come first, then read ones) and its `createdAt` /
+ * `_creationTime` (the `notifications.by_recipient_org_state` order, newest
+ * first). The next page continues strictly after it.
+ */
+export type InboxPosition = { state: "unread" | "read"; createdAt: number; creationTime: number };
+
+export function encodeInboxCursor(position: InboxPosition): string {
+  return toBase64Url(
+    JSON.stringify({ v: INBOX_CURSOR_VERSION, k: "inbox", s: position.state, t: position.createdAt, c: position.creationTime }),
+  );
+}
+
+/** The decoded position, or null when the cursor is malformed or of another kind. */
+export function decodeInboxCursor(raw: string): InboxPosition | null {
+  let data: unknown;
+  try {
+    data = JSON.parse(fromBase64Url(raw.trim()));
+  } catch {
+    return null;
+  }
+  if (!data || typeof data !== "object") return null;
+  const { v, k, s, t, c } = data as { v?: unknown; k?: unknown; s?: unknown; t?: unknown; c?: unknown };
+  if (v !== INBOX_CURSOR_VERSION || k !== "inbox" || (s !== "unread" && s !== "read")) return null;
+  if (typeof t !== "number" || !Number.isFinite(t) || t < 0) return null;
+  if (typeof c !== "number" || !Number.isFinite(c) || c < 0) return null;
+  return { state: s, createdAt: t, creationTime: c };
+}

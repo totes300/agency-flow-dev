@@ -1,3 +1,4 @@
+import { getISOWeek, getISOWeekYear } from "date-fns";
 import { taskPagePath } from "@/lib/task-detail";
 
 /**
@@ -16,6 +17,10 @@ import { taskPagePath } from "@/lib/task-detail";
  *   (/projects/<id>/reports/YYYY-MM) and a Close workspace
  *   (/billing/close/<projectId>/YYYY-MM)
  * - invoice: /invoices/INV-007 (a never-numbered draft: /invoices/<id>)
+ * - planner: /planner?week=2026-W44&users=<userId> (the week of a bar, on
+ *   its member's row)
+ * - daily note: the My Tasks notes panel (/my-tasks; another member's:
+ *   /my-tasks?user=<userId>, admins)
  * Time entries have no page of their own; they link to their task.
  * Projects, clients, billing, invoices and other members' My Tasks are admin pages in the app.
  */
@@ -66,4 +71,26 @@ export function closeWorkspaceLink(origin: string, projectId: string, period: st
 /** An invoice page; `ref` is its number (INV-007) or, for a never-numbered draft, its ID. */
 export function invoiceLink(origin: string, ref: string): string {
   return `${origin}/invoices/${encodeURIComponent(ref)}`;
+}
+
+/** The ISO week token the Planner's `week` param takes (`2026-W44`) of a YYYY-MM-DD date. */
+export function isoWeekOf(date: string): string {
+  const [y, m, d] = date.split("-").map(Number);
+  const day = new Date(y, m - 1, d);
+  return `${getISOWeekYear(day)}-W${String(getISOWeek(day)).padStart(2, "0")}`;
+}
+
+/** The Planner at the week of `date` (YYYY-MM-DD), optionally filtered to one member's row. */
+export function plannerLink(origin: string, date: string, userId?: string): string {
+  const params = new URLSearchParams({ week: isoWeekOf(date) });
+  if (userId) params.set("users", userId);
+  return `${origin}/planner?${params.toString()}`;
+}
+
+/**
+ * Where a daily note is read in the app: your My Tasks notes panel, or
+ * (admins) another member's — `otherMemberId` names that member.
+ */
+export function dailyNoteLink(origin: string, otherMemberId?: string): string {
+  return otherMemberId ? memberLink(origin, otherMemberId) : `${origin}/my-tasks`;
 }

@@ -25,6 +25,8 @@ import { parseRef, REF_TABLES, type RefTable } from "../../lib/mcp/refs";
  * - projects: ID or project code (a bare short key, case-insensitive);
  * - clients: ID or `client:PREFIX` (case-insensitive; valid prefixes only);
  * - members: ID, email (case-insensitive), with a membership in the org;
+ * - daily notes: ID, the caller's own — admins any member's (as the app's
+ *   Daily Notes panel and `/my-tasks?user=`);
  * - invoices (admins only, as in the app): ID, invoice page link or invoice
  *   number (`INV-007`, matched like the page URL). A number shaped like a
  *   task key is tried as both; when both exist the candidates come back.
@@ -41,7 +43,7 @@ import { parseRef, REF_TABLES, type RefTable } from "../../lib/mcp/refs";
  * per org member (bounded by REF_CAP), read once per call.
  */
 
-export type RefType = "task" | "comment" | "time_entry" | "project" | "client" | "member" | "invoice";
+export type RefType = "task" | "comment" | "time_entry" | "project" | "client" | "member" | "invoice" | "daily_note";
 
 export type Resolved =
   | { type: "task"; access: TaskAccess }
@@ -50,7 +52,8 @@ export type Resolved =
   | { type: "project"; project: Doc<"projects"> }
   | { type: "client"; client: Doc<"clients"> }
   | { type: "member"; user: Doc<"users">; role: "admin" | "member" }
-  | { type: "invoice"; invoice: Doc<"invoices"> };
+  | { type: "invoice"; invoice: Doc<"invoices"> }
+  | { type: "daily_note"; note: Doc<"dailyNotes"> };
 
 /** One record an ambiguous reference could mean; `id` references it uniquely. */
 export type RefCandidate = { type: RefType; id: string; key: string | null; name: string };
@@ -67,6 +70,7 @@ const TABLE_TYPE: Record<RefTable, RefType> = {
   clients: "client",
   users: "member",
   invoices: "invoice",
+  dailyNotes: "daily_note",
 };
 
 const TYPE_NOUN: Record<RefType, string> = {
@@ -77,6 +81,7 @@ const TYPE_NOUN: Record<RefType, string> = {
   client: "client",
   member: "member",
   invoice: "invoice",
+  daily_note: "daily note",
 };
 
 const NOT_FOUND_HINT: Record<RefType, string> = {
@@ -87,6 +92,7 @@ const NOT_FOUND_HINT: Record<RefType, string> = {
   client: 'Client prefixes (client:KEY) are listed in fetch("workspace").',
   member: 'Members are listed in fetch("workspace").',
   invoice: 'Use search with types ["invoice"] to find invoices.',
+  daily_note: 'Use search with types ["daily_note"] to find daily notes.',
 };
 
 /** Members never see invoices (the app's /invoices and /billing are admin routes). */
@@ -122,6 +128,8 @@ function candidateOf(resolved: Resolved): RefCandidate {
       return { type: "member", id: resolved.user._id, key: null, name: resolved.user.name };
     case "invoice":
       return { type: "invoice", id: resolved.invoice._id, key: invoiceKey(resolved.invoice), name: resolved.invoice.subject ?? "Invoice" };
+    case "daily_note":
+      return { type: "daily_note", id: resolved.note._id, key: null, name: resolved.note.date };
   }
 }
 
@@ -230,6 +238,14 @@ export function createRefResolver(ctx: QueryCtx, auth: AuthContext) {
         const id = ctx.db.normalizeId("invoices", raw);
         const invoice = id && auth.isAdmin ? await ctx.db.get(id) : null;
         return invoice && invoice.orgId === orgId ? { type: "invoice", invoice } : null;
+      }
+      case "dailyNotes": {
+        // As dailyNotes.get: members their own notes, admins anyone's in the org.
+        const id = ctx.db.normalizeId("dailyNotes", raw);
+        const note = id ? await ctx.db.get(id) : null;
+        return note && note.orgId === orgId && (auth.isAdmin || note.userId === auth.userId)
+          ? { type: "daily_note", note }
+          : null;
       }
     }
   }

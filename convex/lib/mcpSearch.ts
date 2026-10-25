@@ -17,6 +17,8 @@ import { loadAssignedTo, loadSubtasksOf, type Loaded } from "../tasks/read";
 import { visibleTimeEntries } from "../timeEntries";
 import { REF_CAP } from "../workspaceRefs";
 import { extractPlainText } from "../../lib/tiptap-utils";
+import { capText, tiptapToMarkdown } from "../../lib/mcp/tiptap-markdown";
+import { safeParseDoc } from "./notificationEvents";
 import { INVOICE_SEARCH_STATUSES, SEARCH_LIMIT_MAX, type InvoiceSearchStatus } from "../../lib/mcp/limits";
 import { invoiceMatchesSearch } from "../invoices";
 import { invoiceDisplayStatus, type InvoiceDisplayStatus } from "./billing/periodState";
@@ -47,6 +49,8 @@ import { periodRangeLabel } from "./billing/projectPeriods";
  *   ~2,000 ranges; with a task filter, the task's comments in one range.
  * - invoices (admins only): one range (≤ 2,001 docs, newest first) plus up
  *   to three per page row (project, client, close).
+ * - daily notes: one member's `by_userId_date` range (≤ 121 notes, each at
+ *   most 100 KB) plus the member's name.
  * Filters by member email add one range per org member (mcpRefs.ts).
  */
 
@@ -845,4 +849,89 @@ export async function searchInvoices(
     today: clock.today,
   };
   return result;
+}
+
+// ─── Daily notes ─────────────────────────────────────────────────────────────
+
+/**
+ * Notes read per daily-note search before filtering, newest date first. A
+ * note is at most 100 KB of editor JSON (dailyNotesHelpers), so this keeps
+ * one search under Convex's 16 MiB read limit; a date range reaches older
+ * notes.
+ */
+export const DAILY_NOTE_SEARCH_CAP = 120;
+/** Preview length of a daily-note row. */
+export const DAILY_NOTE_PREVIEW_CHARS = 200;
+
+export const DAILY_NOTES_OWN_ONLY = "Members can search only their own daily notes, as in the app.";
+
+export type DailyNoteSearchArgs = PageArgs & {
+  query?: string;
+  assignee?: string;
+  mine?: boolean;
+  date: DateRangeArgs;
+  updated: DateRangeArgs;
+  updatedSince?: number;
+  now: number;
+};
+
+/**
+ * Daily notes as the app shows them (dailyNotes.get / list): your own, or —
+ * admins only — one member's (`assignee`), as an admin opens a member's My
+ * Tasks. One member per search, newest date first; the text matches the
+ * note's content.
+ */
+export async function searchDailyNotes(ctx: QueryCtx, auth: AuthContext, args: DailyNoteSearchArgs) {
+  assertPage(args);
+  assertRange(args.date, "date");
+  assertRange(args.updated, "updated");
+  const clock = await orgClock(ctx, auth.orgId, args.now);
+  const member = (await personFilter(createRefResolver(ctx, auth), auth, args)) ?? auth.userId;
+  if (member !== auth.userId && !auth.isAdmin) throw new ConvexError(DAILY_NOTES_OWN_ONLY);
+
+  const { from, to } = args.date;
+  const loaded = await ctx.db
+    .query("dailyNotes")
+    .withIndex("by_userId_date", (q) => {
+      const own = q.eq("userId", member);
+      if (from !== undefined && to !== undefined) return own.gte("date", from).lte("date", to);
+      if (from !== undefined) return own.gte("date", from);
+      if (to !== undefined) return own.lte("date", to);
+      return own;
+    })
+    .order("desc")
+    .take(DAILY_NOTE_SEARCH_CAP + 1);
+  const notes = loaded.slice(0, DAILY_NOTE_SEARCH_CAP).filter((n) => n.orgId === auth.orgId);
+  const texts = new Map(notes.map((n) => [n._id, dailyNoteText(n.content)]));
+  const matched = notes.filter((n) => updatedMatch(n.updatedAt, args, clock) && textMatch(args.query, texts.get(n._id)));
+
+  const name = await userNames(ctx)(member);
+  const rows = page(matched, args).map((n) => {
+    const preview = capText((texts.get(n._id) ?? "").replace(/\s+/g, " ").trim(), DAILY_NOTE_PREVIEW_CHARS);
+    return {
+      id: n._id,
+      date: n.date,
+      member: { id: member, name },
+      own: member === auth.userId,
+      updatedAt: n.updatedAt,
+      preview: preview.text,
+      previewTruncated: preview.truncated,
+    };
+  });
+  const result: SearchPage<(typeof rows)[number]> & { timezone: string } = {
+    rows,
+    total: matched.length,
+    offset: args.offset,
+    incomplete: loaded.length > DAILY_NOTE_SEARCH_CAP,
+    notes: [],
+    timezone: clock.timezone,
+  };
+  return result;
+}
+
+/** A note's plain markdown (legacy non-JSON content as stored). */
+function dailyNoteText(content: string | undefined): string {
+  if (!content) return "";
+  const doc = safeParseDoc(content);
+  return doc ? tiptapToMarkdown(doc) : content;
 }

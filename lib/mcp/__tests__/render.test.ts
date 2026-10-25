@@ -210,6 +210,7 @@ const TASK: TaskRecord = {
     ownOnly: true,
     truncated: false,
   },
+  plan: null,
   files: {
     rows: [{ name: "brief [v2].pdf", size: 2048, mimeType: "application/pdf", url: "https://files.test/brief", onComment: true }],
     truncated: false,
@@ -284,7 +285,7 @@ describe("renderTaskRecord", () => {
 
   it("leaves out sections that were not included", () => {
     const text = renderTaskRecord(
-      { ...TASK, subtasks: null, comments: null, activity: null, time: null, files: null, attachmentText: null, description: null },
+      { ...TASK, subtasks: null, comments: null, activity: null, time: null, plan: null, files: null, attachmentText: null, description: null },
       CTX,
     );
     expect(text).not.toContain("###");

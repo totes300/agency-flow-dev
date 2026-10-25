@@ -10,6 +10,7 @@ import { listTaskAttachmentsForAuth } from "../attachments";
 import { listCommentAttachmentsForAuth } from "../commentAttachments";
 import { getTaskDetailForAuth } from "../tasks/lookup";
 import { isClosedCategory } from "../tasks/model";
+import { rankTaskSegments } from "./plannerMath";
 import { visibleTimeEntries } from "../timeEntries";
 import type { Resolved } from "./mcpRefs";
 import { listTaskExternalRefs } from "./mcpExternalRefs";
@@ -37,8 +38,9 @@ import type { FetchInclude } from "../../lib/mcp/limits";
  * Read budget per record (Convex: 4,096 index ranges, 32,000 documents per
  * call; the route fetches one ref per call): a task with every include is
  * about 30 ranges plus one per distinct comment author / activity actor /
- * time-entry member or category, two per distinct mentioned user, and at most ~3,100 documents (comments 501, activity
- * 501, time entries 2,001, files 51 + 51, sub-tasks 201, external refs 51).
+ * time-entry member / planner-bar member or category, two per distinct mentioned user, and at most ~3,200 documents
+ * (comments 501, activity 501, time entries 2,001, plan 101, files 51 + 51, sub-tasks 201, external refs 51).
+ * A daily note is one read plus its author and mentioned users.
  */
 
 /** Most recent comments / activity events / time entries returned per task. */
@@ -51,6 +53,8 @@ export const FILES_MAX = 50;
 export const NOTE_MAX_CHARS = 300;
 /** Projects listed on a client record. */
 export const CLIENT_PROJECTS_MAX = 50;
+/** Planner bars listed per task (include "plan"). */
+export const PLAN_ROWS_MAX = 100;
 
 export type OrgClock = { timezone: string; today: string };
 
@@ -198,6 +202,7 @@ async function taskRecord(ctx: QueryCtx, auth: AuthContext, taskId: Id<"tasks">,
     comments: include.has("comments") ? await taskComments(ctx, auth, taskId, markdown) : null,
     activity: include.has("activity") ? await taskActivity(ctx, auth, taskId) : null,
     time: include.has("time") ? await taskTime(ctx, auth, taskId) : null,
+    plan: include.has("plan") ? await taskPlan(ctx, auth, taskId) : null,
     files: include.has("files") || include.has("attachment_text") ? await taskFiles(ctx, auth, taskId) : null,
     // The attachment text extraction (attachmentContents) does not exist yet:
     // say so explicitly rather than pretend a file has no text.
@@ -271,6 +276,34 @@ async function taskTime(ctx: QueryCtx, auth: AuthContext, taskId: Id<"tasks">) {
     ownOnly: !auth.isAdmin,
     truncated: rows.length > TASK_TIME_CAP,
   };
+}
+
+/**
+ * The task's Planner bars, as the drawer's Plan section (`planner.taskSegments`):
+ * every org member reads the shared board. Sorted by start, with the part
+ * badges the board shows (1/2, 2/2).
+ */
+async function taskPlan(ctx: QueryCtx, auth: AuthContext, taskId: Id<"tasks">) {
+  const segments = await ctx.db
+    .query("planSegments")
+    .withIndex("by_orgId_taskId", (q) => q.eq("orgId", auth.orgId).eq("taskId", taskId))
+    .take(PLAN_ROWS_MAX + 1);
+  const shown = segments.slice(0, PLAN_ROWS_MAX);
+  const rank = rankTaskSegments(shown);
+  const nameOf = userNames(ctx);
+  const rows = [];
+  for (const s of [...shown].sort((a, b) => a.startDate.localeCompare(b.startDate) || a.endDate.localeCompare(b.endDate))) {
+    rows.push({
+      id: s._id,
+      member: await nameOf(s.userId),
+      mine: s.userId === auth.userId,
+      startDate: s.startDate,
+      endDate: s.endDate,
+      partIndex: rank.get(s._id)?.partIndex ?? 1,
+      partCount: rank.get(s._id)?.partCount ?? 1,
+    });
+  }
+  return { rows, truncated: segments.length > PLAN_ROWS_MAX };
 }
 
 async function taskFiles(ctx: QueryCtx, auth: AuthContext, taskId: Id<"tasks">) {
@@ -440,6 +473,21 @@ export async function buildRecord(
         })),
         note: inv.note ?? null,
         messageToClient: inv.messageToClient ?? null,
+      };
+    }
+
+    case "daily_note": {
+      // The resolver already applied the app's rule (own notes; admins any member's).
+      const { note } = resolved;
+      const doc = safeParseDoc(note.content);
+      return {
+        type: "daily_note" as const,
+        id: note._id,
+        date: note.date,
+        member: { id: note.userId, name: await userNames(ctx)(note.userId) },
+        own: note.userId === auth.userId,
+        updatedAt: note.updatedAt,
+        text: doc ? await richTextMarkdown(ctx, orgId).content(doc) : (note.content ?? "").trim(),
       };
     }
   }

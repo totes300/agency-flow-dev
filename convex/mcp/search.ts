@@ -4,6 +4,7 @@ import { getMcpAuthContext } from "../lib/mcpAuth";
 import {
   searchClients,
   searchComments,
+  searchDailyNotes,
   searchInvoices,
   searchMembers,
   searchProjects,
@@ -142,5 +143,24 @@ export const invoices = query({
   handler: async (ctx, args) => {
     const auth = await getMcpAuthContext(ctx);
     return await searchInvoices(ctx, auth, args);
+  },
+});
+
+/** Daily notes: your own, or one member's for admins (as in the app). */
+export const dailyNotes = query({
+  args: {
+    offset: v.number(),
+    limit: v.number(),
+    assignee: v.optional(v.string()),
+    mine: v.optional(v.boolean()),
+    query: v.optional(v.string()),
+    date: range,
+    updated: range,
+    updatedSince: v.optional(v.number()),
+    now: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const auth = await getMcpAuthContext(ctx);
+    return await searchDailyNotes(ctx, auth, args);
   },
 });

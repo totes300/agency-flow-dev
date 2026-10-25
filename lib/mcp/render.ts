@@ -6,7 +6,7 @@ import { INVOICE_STATUS_COPY } from "@/convex/lib/billing/periodState";
 import { formatFileSize } from "@/lib/attachment";
 import { formatDuration } from "@/lib/duration";
 import { formatCurrencyPrecise } from "@/lib/format";
-import { clientLink, invoiceLink, memberLink, projectLink, taskLink } from "./links";
+import { clientLink, dailyNoteLink, invoiceLink, memberLink, plannerLink, projectLink, taskLink } from "./links";
 
 /**
  * Compact markdown renderers for MCP tool results (docs/prd-mcp.md §7, D10).
@@ -31,6 +31,8 @@ export type MemberPage = FunctionReturnType<typeof api.mcp.search.members>;
 export type TimeEntryPage = FunctionReturnType<typeof api.mcp.search.timeEntries>;
 export type CommentPage = FunctionReturnType<typeof api.mcp.search.comments>;
 export type InvoicePage = FunctionReturnType<typeof api.mcp.search.invoices>;
+export type DailyNotePage = FunctionReturnType<typeof api.mcp.search.dailyNotes>;
+export type InboxData = FunctionReturnType<typeof api.mcp.fetch.inbox>;
 
 export type ChangesData = FunctionReturnType<typeof api.mcp.fetch.changes>;
 export type SaveTasksData = FunctionReturnType<typeof api.mcp.write.saveTasks>;
@@ -39,6 +41,11 @@ export type DeleteData = FunctionReturnType<typeof api.mcp.write.remove>;
 export type SaveTimeEntriesData = FunctionReturnType<typeof api.mcp.write.saveTimeEntries>;
 export type TimerData = FunctionReturnType<typeof api.mcp.timer.start>;
 export type TimerStatusData = FunctionReturnType<typeof api.mcp.timer.status>;
+export type SaveClientsData = FunctionReturnType<typeof api.mcp.write.saveClients>;
+export type SaveProjectsData = FunctionReturnType<typeof api.mcp.write.saveProjects>;
+export type SavePlanData = FunctionReturnType<typeof api.mcp.write.savePlan>;
+export type SaveDailyNotesData = FunctionReturnType<typeof api.mcp.write.saveDailyNotes>;
+export type MarkReadData = FunctionReturnType<typeof api.mcp.write.markRead>;
 
 /** What renderers need besides the data: where the app lives and the org's clock. */
 export type RenderContext = {
@@ -350,7 +357,7 @@ function activityText(type: string, metadata: unknown): string {
 }
 
 /** How many rows of each list a task detail shows (the rest is named, never dropped silently). */
-type ShownCounts = { subtasks: number; comments: number; activity: number; time: number; files: number };
+type ShownCounts = { subtasks: number; comments: number; activity: number; time: number; plan: number; files: number };
 
 /** A search call that lists the rest, as the model should write it. */
 function searchHint(type: "comment" | "time_entry", identifier: string): string {
@@ -459,6 +466,25 @@ function taskSections(record: TaskRecord, ctx: RenderContext, shown: ShownCounts
         .join("\n"),
     );
   }
+  if (record.plan) {
+    const all = record.plan.rows;
+    const visible = all.slice(0, shown.plan);
+    const lines = visible.map((b) =>
+      `- ${fields(
+        `bar ${b.id}`,
+        oneLine(b.member),
+        b.startDate === b.endDate ? b.startDate : `${b.startDate} – ${b.endDate}`,
+        b.partCount > 1 ? `part ${b.partIndex}/${b.partCount}` : null,
+        b.mine && "yours",
+      )}`,
+    );
+    const missing = visible.length < all.length || record.plan.truncated;
+    const note = missing
+      ? `\n(${visible.length} of ${record.plan.truncated ? "more than " : ""}${all.length} shown. Open the Planner for every bar.)`
+      : "";
+    const planner = all.length > 0 ? `\nPlanner: ${plannerLink(ctx.appOrigin, all[0].startDate)}` : "";
+    parts.push(`### Plan (${all.length}${record.plan.truncated ? "+" : ""})\n${lines.length > 0 ? lines.join("\n") : "not scheduled"}${note}${planner}`);
+  }
   if (record.files) {
     const all = record.files.rows;
     const visible = all.slice(0, shown.files);
@@ -521,7 +547,7 @@ function taskHeader(record: TaskRecord, ctx: RenderContext): string {
 }
 
 /** Lists shortened first, least useful first; the description is never cut, only left out whole. */
-const SHORTEN_ORDER: ReadonlyArray<keyof ShownCounts> = ["activity", "files", "time", "comments", "subtasks"];
+const SHORTEN_ORDER: ReadonlyArray<keyof ShownCounts> = ["activity", "plan", "files", "time", "comments", "subtasks"];
 
 /**
  * A task in full: heading, fields, the description and the included
@@ -536,6 +562,7 @@ export function renderTaskRecord(record: TaskRecord, ctx: RenderContext): string
     comments: record.comments?.rows.length ?? 0,
     activity: record.activity?.rows.length ?? 0,
     time: record.time?.rows.length ?? 0,
+    plan: record.plan?.rows.length ?? 0,
     files: record.files?.rows.length ?? 0,
   };
   const render = (withDescription: boolean) =>
@@ -616,6 +643,15 @@ export function renderRecord(record: FetchedRecord, ctx: RenderContext): string 
       ].join("\n");
     case "invoice":
       return renderInvoiceRecord(record, ctx);
+    case "daily_note":
+      return [
+        `## Daily note ${record.date} · ${oneLine(record.member.name)}`,
+        `- Link: ${dailyNoteLink(ctx.appOrigin, record.own ? undefined : record.member.id)} (the Daily Notes panel; pick the date there)`,
+        `- Ref: ${record.id}`,
+        `- Updated: ${formatTimestamp(record.updatedAt, ctx.timezone)}`,
+        "",
+        record.text ? userContent(record.text) : "(empty)",
+      ].join("\n");
   }
 }
 
@@ -788,6 +824,73 @@ export function renderInvoiceSection(page: InvoicePage, ctx: RenderContext): str
     page.rows.map((r) => renderInvoiceRow(r, ctx)),
     extra,
   );
+}
+
+export function renderDailyNoteRow(row: DailyNotePage["rows"][number], ctx: RenderContext): string {
+  return `- ${fields(
+    `[daily note ${row.date}](${dailyNoteLink(ctx.appOrigin, row.own ? undefined : row.member.id)})`,
+    oneLine(row.member.name),
+    row.preview ? `"${row.preview}${row.previewTruncated ? "…" : ""}"` : "(empty)",
+    `ref ${row.id}`,
+  )}`;
+}
+
+export function renderDailyNoteSection(page: DailyNotePage, ctx: RenderContext): string {
+  return searchSection(
+    "Daily notes",
+    "a date range (date_from / date_to)",
+    page,
+    page.rows.map((r) => renderDailyNoteRow(r, ctx)),
+    page.rows.length > 0 ? ["Fetch a note's ref for its full text."] : [],
+  );
+}
+
+// ─── Inbox (fetch("inbox"), D9) ──────────────────────────────────────────────
+
+const INBOX_TEXT: Record<InboxData["items"][number]["type"], string> = {
+  mention_comment: "mentioned you in a comment",
+  mention_description: "mentioned you in the description",
+  assigned: "assigned you",
+  comment: "commented",
+  comment_reply: "replied to your comment",
+};
+
+/**
+ * The caller's inbox, unread first: one line per item (when · unread · task
+ * · who did what · item ref), comment text as a user-content block. The
+ * cursor line says how to continue.
+ */
+export function renderInbox(data: InboxData, ctx: RenderContext): string {
+  const unread = `${data.unreadCount}${data.unreadCapped ? "+" : ""} unread`;
+  const header =
+    data.items.length === 0
+      ? `## Inbox · ${unread} · nothing ${data.unreadCount > 0 ? "more " : ""}to show`
+      : `## Inbox · ${unread} (unread first, newest first, times in ${data.timezone})`;
+  const lines = data.items.map((i) => {
+    const head = `- ${fields(
+      formatTimestamp(i.at, data.timezone),
+      i.unread ? "unread" : "read",
+      `[${i.task.identifier}](${taskLink(ctx.appOrigin, i.task.identifier, i.commentId)})`,
+      shortTitle(i.task.title),
+      `${oneLine(i.actor)} ${INBOX_TEXT[i.type]}`,
+      `item ${i.id}`,
+    )}`;
+    if (!i.text) return head;
+    const note = i.text.deleted
+      ? "\n(The comment has since been deleted; this is the preview from when you were notified.)"
+      : i.text.truncated && i.commentId
+        ? `\n(Shortened to 500 characters… fetch ${i.commentId} for the full comment.)`
+        : "";
+    return `${head}\n${userContent(i.text.text || "(no text)")}${note}`;
+  });
+  const next = data.cursor
+    ? `More items: call fetch with refs ["inbox"] and inbox.cursor "${data.cursor}".`
+    : "End of the inbox (archived and snoozed items are not listed, as in the app).";
+  const hint =
+    data.items.some((i) => i.unread)
+      ? 'Mark items read with mark_read (item refs, a task ref for all of its comments, or "inbox" for everything).'
+      : null;
+  return [header, ...lines, next, hint].filter((line): line is string => line !== null).join("\n");
 }
 
 // ─── Changes feed (fetch("changes"), D22, D29) ───────────────────────────────
@@ -1005,4 +1108,84 @@ export function renderTimerStatus(data: TimerStatusData, ctx: RenderContext): st
   const header = timer.state === "running" || timer.state === "paused" ? `## Timer · ${timer.state}` : "## Timer";
   const hint = timer.state === "idle" ? ['Start one with timer action "start" and a task.'] : [];
   return [header, ...timerLines(timer, timezone, ctx), ...hint].join("\n");
+}
+
+const BILLING_TYPE_LABEL: Record<string, string> = {
+  fixed: "fixed fee",
+  retainer: "retainer",
+  t_and_m: "time & materials",
+  non_billable: "non-billable",
+};
+
+export function renderSaveClients(data: SaveClientsData, ctx: RenderContext): string {
+  const lines = data.items.map(
+    (i) =>
+      `- ${fields(
+        `[${linkText(clientRef(i.prefix, i.clientId))}](${clientLink(ctx.appOrigin, i.clientId)})`,
+        oneLine(i.name),
+        i.archived && "archived",
+        SAVE_ACTION[i.action],
+      )}`,
+  );
+  return [writeHeader(`Saved ${data.items.length} ${data.items.length === 1 ? "client" : "clients"}`, data.replayed), ...lines].join("\n");
+}
+
+/** Project refs and links; terms are not repeated (fetch or report project_overview shows them). */
+export function renderSaveProjects(data: SaveProjectsData, ctx: RenderContext): string {
+  const lines = data.items.flatMap((i) => [
+    `- ${fields(
+      `[${i.code}](${projectLink(ctx.appOrigin, i.projectId)})`,
+      oneLine(i.name),
+      BILLING_TYPE_LABEL[i.billingType] ?? i.billingType,
+      i.archived && "archived",
+      SAVE_ACTION[i.action],
+      i.previousCode ? `code ${i.previousCode} → ${i.code}: task keys renamed, old keys still work` : null,
+    )}`,
+    ...(i.autoSavedTimers ?? []).map((t) => `  - running timer saved as an entry: ${oneLine(t.member)} · ${formatDuration(t.minutes)}`),
+    ...(i.timerSaveFailures ?? []).map((t) => `  - timer left running (could not save): ${oneLine(t.member)} · ${oneLine(t.reason)}`),
+  ]);
+  return [writeHeader(`Saved ${data.items.length} ${data.items.length === 1 ? "project" : "projects"}`, data.replayed), ...lines].join("\n");
+}
+
+const PLAN_ACTION: Record<SavePlanData["items"][number]["action"], string> = { ...SAVE_ACTION, removed: "removed from the plan" };
+
+export function renderSavePlan(data: SavePlanData, ctx: RenderContext): string {
+  const lines = data.items.map(
+    (i) =>
+      `- ${fields(
+        `bar ${i.segmentId}`,
+        `[${i.task.identifier}](${taskLink(ctx.appOrigin, i.task.identifier)})`,
+        oneLine(i.task.title),
+        oneLine(i.member.name),
+        i.startDate === i.endDate ? i.startDate : `${i.startDate} – ${i.endDate}`,
+        PLAN_ACTION[i.action],
+        `[planner](${plannerLink(ctx.appOrigin, i.startDate, i.member.id)})`,
+      )}`,
+  );
+  return [writeHeader(`Saved ${data.items.length} plan ${data.items.length === 1 ? "bar" : "bars"}`, data.replayed), ...lines].join("\n");
+}
+
+export function renderSaveDailyNotes(data: SaveDailyNotesData, ctx: RenderContext): string {
+  return [
+    writeHeader(`Daily note ${data.date}`, data.replayed),
+    `- ${fields(
+      `[daily note ${data.date}](${dailyNoteLink(ctx.appOrigin)})`,
+      `ref ${data.noteId}`,
+      SAVE_ACTION[data.action],
+      formattingNote(data.formattingRemoved),
+    )}`,
+  ].join("\n");
+}
+
+export function renderMarkRead(data: MarkReadData): string {
+  const lines = data.items.map((i) => {
+    const what =
+      i.type === "inbox"
+        ? `inbox: ${i.count ?? 0} unread ${i.count === 1 ? "item" : "items"} marked read`
+        : i.type === "task"
+          ? `${oneLine(i.label)}: comments, changes and its inbox items`
+          : `inbox item on ${oneLine(i.label)}`;
+    return `- ${fields(what, i.action === "marked_read" ? (i.type === "inbox" ? null : "marked read") : "already read")}`;
+  });
+  return [writeHeader("Marked read", data.replayed), ...lines].join("\n");
 }

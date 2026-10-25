@@ -12,7 +12,7 @@ export const SEARCH_LIMIT_DEFAULT = 25;
 export const SEARCH_LIMIT_MAX = 100;
 
 /** `fetch` include[] sections (docs/prd-mcp.md §6). */
-export const FETCH_INCLUDES = ["subtasks", "comments", "activity", "time", "files", "attachment_text"] as const;
+export const FETCH_INCLUDES = ["subtasks", "comments", "activity", "time", "plan", "files", "attachment_text"] as const;
 export type FetchInclude = (typeof FETCH_INCLUDES)[number];
 
 /**
@@ -56,6 +56,10 @@ export const CHANGES_LIMIT_DEFAULT = 50;
 export const CHANGES_LIMIT_MAX = 100;
 /** Comment text shown per `comment_added` change (D29); longer text ends with "…" and the comment ref. */
 export const CHANGE_COMMENT_TEXT_MAX = 500;
+
+/** Inbox items per `fetch("inbox")` page (default / max). */
+export const INBOX_LIMIT_DEFAULT = 25;
+export const INBOX_LIMIT_MAX = 100;
 
 /** Items (or refs) per batch write call: each item runs a full write path (docs/prd-mcp.md §6). */
 export const MCP_BATCH_MAX = 25;

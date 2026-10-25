@@ -205,9 +205,13 @@ describe("search tool", () => {
     expect((await search.execute({ updated_since: "yesterday" }, ctx)).text).toMatch(/updated_since must be an ISO 8601/);
     expect(calls).toEqual([]);
     // Unsupported types fail schema validation with a model-actionable message.
-    await expect(search.execute({ types: ["daily_note"] }, ctx)).rejects.toThrow(
-      /Supported types: task, project, client, member, time_entry, comment, invoice. Daily notes cannot be searched yet./,
+    await expect(search.execute({ types: ["note"] }, ctx)).rejects.toThrow(
+      /Supported types: task, project, client, member, time_entry, comment, invoice, daily_note./,
     );
+    expect(await search.execute({ types: ["daily_note"], status: "Done" }, ctx)).toEqual({
+      text: 'Error: Filter "status" does not apply to daily_note. Search those types separately, or drop the filter.',
+      isError: true,
+    });
     expect(await search.execute({ types: ["invoice"], label: "Launch" }, ctx)).toEqual({
       text: 'Error: Filter "label" does not apply to invoice. Search those types separately, or drop the filter.',
       isError: true,

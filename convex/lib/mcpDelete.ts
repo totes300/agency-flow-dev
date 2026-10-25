@@ -10,6 +10,9 @@ import { removeTimeEntryForAuth } from "../timeEntries";
 import { formatDuration } from "../../lib/duration";
 import { loadTaskForWrite } from "../tasks/access";
 import { removeTask } from "../tasks/write";
+import { removeProjectForAuth } from "../projects";
+import { removeClientForAuth } from "../clients";
+import { referenceClientPrefix } from "./helpers";
 
 /**
  * MCP `delete` (docs/prd-mcp.md §6, D6): exactly the app's delete paths and
@@ -24,7 +27,15 @@ import { removeTask } from "../tasks/write";
  *   (members cannot even resolve others' entries); an entry settled by a
  *   close (closed period, draft or final invoice) is refused with the
  *   app's unblock message.
- * - Other types are refused until their write tools exist.
+ * - Project → `removeProjectForAuth`, the project page's "Delete": admins
+ *   only; refused while the project has time entries ("archive it
+ *   instead") or a running timer; its estimates and rate overrides go with
+ *   it. As in the app, its tasks and invoices are not checked or removed.
+ * - Client → `removeClientForAuth`, the client page's "Delete": admins only;
+ *   refused while any of its projects has an invoice, time entries or a
+ *   running timer; its contacts, projects and their estimates go with it.
+ * - Members and daily notes have no delete in the app; invoices are deleted
+ *   through billing_preview / billing_commit.
  *
  * Every ref is resolved (and access-checked) before anything is deleted. A
  * comment or sub-task already removed with an earlier ref in the same call
@@ -33,20 +44,23 @@ import { removeTask } from "../tasks/write";
  * Read budget: ~5 ranges per ref, then the delete cascade (removeTask reads
  * the tree's time entries and org members; each task's comments, activity,
  * attachments and edges; a time entry ~6: its close, task and the activity
- * fan-out).
+ * fan-out; a project its first time entry, its tasks, the org members and
+ * their users, estimates and overrides; a client the same per project plus
+ * one invoice probe each and its contacts — the app's own reads).
  */
 
 const UNSUPPORTED: Partial<Record<RefType, string>> = {
-  project: "projects",
-  client: "clients",
-  member: "members",
+  member: "a member: members are removed in the organization settings, not deleted here",
+  daily_note: "a daily note: the app has no delete for notes; clear it with save_daily_notes (blank content)",
 };
 
 /** A resolved ref; `index` is its position in the call's refs (error messages name it). */
 type Target =
   | { index: number; input: string; type: "task"; id: Id<"tasks">; label: string }
   | { index: number; input: string; type: "comment"; id: Id<"comments">; label: string }
-  | { index: number; input: string; type: "time_entry"; id: Id<"timeEntries">; label: string };
+  | { index: number; input: string; type: "time_entry"; id: Id<"timeEntries">; label: string }
+  | { index: number; input: string; type: "project"; id: Id<"projects">; label: string }
+  | { index: number; input: string; type: "client"; id: Id<"clients">; label: string };
 
 export async function deleteRecords(
   ctx: MutationCtx,
@@ -87,13 +101,22 @@ export async function deleteRecords(
             label: `time entry ${entry.date} · ${formatDuration(entry.durationMinutes)} · ${member?.name ?? "Former member"} on ${task?.identifier ?? entry.taskId}`,
           };
         }
+        case "project": {
+          const { project } = resolved;
+          return { index, input, type: "project", id: project._id, label: `project ${project.code} · ${project.name}` };
+        }
+        case "client": {
+          const { client } = resolved;
+          const prefix = referenceClientPrefix(client);
+          return { index, input, type: "client", id: client._id, label: `client ${prefix ? `client:${prefix} · ` : ""}${client.name}` };
+        }
         case "invoice":
           throw new ConvexError(
-            `delete removes tasks, comments and time entries. "${input}" is an invoice: a never-numbered draft is deleted with billing_preview (action delete_draft) and billing_commit.`,
+            `delete removes tasks, comments, time entries, projects and clients. "${input}" is an invoice: a never-numbered draft is deleted with billing_preview (action delete_draft) and billing_commit.`,
           );
         default:
           throw new ConvexError(
-            `delete removes tasks, comments and time entries. "${input}" is one of the ${UNSUPPORTED[resolved.type]}, which cannot be deleted through MCP yet.`,
+            `delete removes tasks, comments, time entries, projects and clients. "${input}" is ${UNSUPPORTED[resolved.type]}.`,
           );
       }
     });
@@ -111,8 +134,12 @@ export async function deleteRecords(
         await removeTask(ctx, access, { deleteEntries: options.deleteTimeEntries });
       } else if (target.type === "comment") {
         await removeCommentForAuth(ctx, auth, target.id);
-      } else {
+      } else if (target.type === "time_entry") {
         await removeTimeEntryForAuth(ctx, auth, target.id);
+      } else if (target.type === "project") {
+        await removeProjectForAuth(ctx, auth, { id: target.id });
+      } else {
+        await removeClientForAuth(ctx, auth, { id: target.id });
       }
       return "deleted" as const;
     });

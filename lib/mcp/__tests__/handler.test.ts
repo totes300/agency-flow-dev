@@ -124,6 +124,11 @@ describe("MCP protocol", () => {
       "save_comments",
       "save_time_entries",
       "timer",
+      "save_clients",
+      "save_projects",
+      "save_plan",
+      "save_daily_notes",
+      "mark_read",
       "delete",
       "report",
       "billing_preview",
@@ -133,8 +138,20 @@ describe("MCP protocol", () => {
       "refs",
       "include",
       "changes",
+      "inbox",
     ]);
-    for (const name of ["save_tasks", "save_comments", "save_time_entries", "timer", "delete"]) {
+    for (const name of [
+      "save_tasks",
+      "save_comments",
+      "save_time_entries",
+      "timer",
+      "save_clients",
+      "save_projects",
+      "save_plan",
+      "save_daily_notes",
+      "mark_read",
+      "delete",
+    ]) {
       expect(Object.keys(expected.find((t) => t.name === name)!.inputSchema.properties ?? {})).toContain("idempotencyKey");
     }
     expect(Object.keys(expected.find((t) => t.name === "search")!.inputSchema.properties ?? {})).toEqual(
@@ -147,6 +164,10 @@ describe("MCP protocol", () => {
     expect(hints.save_comments).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: false });
     expect(hints.save_time_entries).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: false });
     expect(hints.timer).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: false });
+    for (const name of ["save_clients", "save_projects", "save_plan", "save_daily_notes"]) {
+      expect(hints[name]).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: false });
+    }
+    expect(hints.mark_read).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: true });
     expect(hints.delete).toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: true });
     expect(hints.report).toMatchObject({ readOnlyHint: true });
     expect(hints.billing_preview).toMatchObject({ readOnlyHint: true });

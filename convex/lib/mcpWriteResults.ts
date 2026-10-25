@@ -7,7 +7,18 @@ import { v, type Infer } from "convex/values";
  * Pure validators: imported by the schema.
  */
 
-export const MCP_WRITE_TOOLS = ["save_tasks", "save_comments", "delete", "save_time_entries", "timer"] as const;
+export const MCP_WRITE_TOOLS = [
+  "save_tasks",
+  "save_comments",
+  "delete",
+  "save_time_entries",
+  "timer",
+  "save_clients",
+  "save_projects",
+  "save_plan",
+  "save_daily_notes",
+  "mark_read",
+] as const;
 export type McpWriteTool = (typeof MCP_WRITE_TOOLS)[number];
 
 export const saveTasksResultValidator = v.object({
@@ -41,10 +52,17 @@ export const deleteResultValidator = v.object({
   items: v.array(
     v.object({
       input: v.string(),
-      type: v.union(v.literal("task"), v.literal("comment"), v.literal("time_entry")),
+      type: v.union(
+        v.literal("task"),
+        v.literal("comment"),
+        v.literal("time_entry"),
+        v.literal("project"),
+        v.literal("client"),
+      ),
       /**
-       * `ARLO-21 · Title`, `comment on ARLO-21` or `time entry 2026-10-20 · 1h 30m · Alice
-       * on ARLO-21` (snapshot: the record is gone).
+       * `ARLO-21 · Title`, `comment on ARLO-21`, `time entry 2026-10-20 · 1h 30m · Alice
+       * on ARLO-21`, `project ARLO · Arlow site` or `client client:ARL · Arlow`
+       * (snapshot: the record is gone).
        */
       label: v.string(),
       action: v.union(v.literal("deleted"), v.literal("already_deleted")),
@@ -89,12 +107,94 @@ export const timerResultValidator = v.object({
   stale: v.optional(v.boolean()),
 });
 
+const savedAction = v.union(v.literal("created"), v.literal("updated"), v.literal("unchanged"));
+
+export const saveClientsResultValidator = v.object({
+  tool: v.literal("save_clients"),
+  items: v.array(
+    v.object({
+      clientId: v.id("clients"),
+      name: v.string(),
+      /** The reference prefix (`client:KONV`); null when it has no valid one. */
+      prefix: v.union(v.string(), v.null()),
+      archived: v.boolean(),
+      action: savedAction,
+    }),
+  ),
+});
+
+/** Time a project archive saved from running timers (the app's toast). */
+const timerRescue = v.object({ member: v.string(), minutes: v.number() });
+const timerRescueFailure = v.object({ member: v.string(), reason: v.string() });
+
+/** No rates or amounts: a write result never repeats money (D1). */
+export const saveProjectsResultValidator = v.object({
+  tool: v.literal("save_projects"),
+  items: v.array(
+    v.object({
+      projectId: v.id("projects"),
+      code: v.string(),
+      name: v.string(),
+      billingType: v.string(),
+      archived: v.boolean(),
+      action: savedAction,
+      /** A code change: the previous code (old task keys stay valid as aliases). */
+      previousCode: v.optional(v.string()),
+      autoSavedTimers: v.optional(v.array(timerRescue)),
+      timerSaveFailures: v.optional(v.array(timerRescueFailure)),
+    }),
+  ),
+});
+
+export const savePlanResultValidator = v.object({
+  tool: v.literal("save_plan"),
+  items: v.array(
+    v.object({
+      segmentId: v.id("planSegments"),
+      task: v.object({ identifier: v.string(), title: v.string() }),
+      member: v.object({ id: v.id("users"), name: v.string() }),
+      startDate: v.string(),
+      endDate: v.string(),
+      action: v.union(v.literal("created"), v.literal("updated"), v.literal("unchanged"), v.literal("removed")),
+    }),
+  ),
+});
+
+export const saveDailyNotesResultValidator = v.object({
+  tool: v.literal("save_daily_notes"),
+  noteId: v.id("dailyNotes"),
+  date: v.string(),
+  action: savedAction,
+  /** Editor formatting markdown cannot carry, dropped by a replacement. */
+  formattingRemoved: v.optional(v.array(v.string())),
+});
+
+export const markReadResultValidator = v.object({
+  tool: v.literal("mark_read"),
+  items: v.array(
+    v.object({
+      input: v.string(),
+      type: v.union(v.literal("notification"), v.literal("task"), v.literal("inbox")),
+      /** `ARLO-21 · Title` (task, notification) or `inbox`. */
+      label: v.string(),
+      action: v.union(v.literal("marked_read"), v.literal("already_read")),
+      /** inbox: how many unread notifications were marked. */
+      count: v.optional(v.number()),
+    }),
+  ),
+});
+
 export const mcpWriteResultValidator = v.union(
   saveTasksResultValidator,
   saveCommentsResultValidator,
   deleteResultValidator,
   saveTimeEntriesResultValidator,
   timerResultValidator,
+  saveClientsResultValidator,
+  saveProjectsResultValidator,
+  savePlanResultValidator,
+  saveDailyNotesResultValidator,
+  markReadResultValidator,
 );
 
 export type SaveTasksResult = Infer<typeof saveTasksResultValidator>;
@@ -102,4 +202,9 @@ export type SaveCommentsResult = Infer<typeof saveCommentsResultValidator>;
 export type DeleteResult = Infer<typeof deleteResultValidator>;
 export type SaveTimeEntriesResult = Infer<typeof saveTimeEntriesResultValidator>;
 export type TimerResult = Infer<typeof timerResultValidator>;
+export type SaveClientsResult = Infer<typeof saveClientsResultValidator>;
+export type SaveProjectsResult = Infer<typeof saveProjectsResultValidator>;
+export type SavePlanResult = Infer<typeof savePlanResultValidator>;
+export type SaveDailyNotesResult = Infer<typeof saveDailyNotesResultValidator>;
+export type MarkReadResult = Infer<typeof markReadResultValidator>;
 export type McpWriteResult = Infer<typeof mcpWriteResultValidator>;

@@ -22,6 +22,7 @@ import type { Doc, Id } from "../_generated/dataModel";
 import type { AuthContext } from "../lib/auth";
 import { DEFAULT_STATUS_SEED } from "../tasks/model";
 import { createTask } from "../tasks/write";
+import { tzWallToEpoch } from "../../lib/workday";
 
 const modules = (
   import.meta as ImportMeta & {
@@ -109,9 +110,11 @@ async function setup(t: T) {
     const B = await mk("Bob task", [bob]);
     const AB = await mk("Shared task", [alice, bob]);
     const noProject = await createTask(ctx, adminAuth, { title: "Lead", assigneeIds: [alice] }, { notify: false });
+    const otherAuth: AuthContext = { userId: other, orgId: OTHER, orgRole: "admin", isAdmin: true, user: (await ctx.db.get(other))! };
+    const foreignTask = await createTask(ctx, otherAuth, { title: "Foreign secret task", assigneeIds: [other] }, { notify: false });
     const identifier = async (id: Id<"tasks">) => (await ctx.db.get(id))!.identifier!;
     return {
-      admin, alice, bob, other, design, dev, arlo,
+      admin, alice, bob, other, design, dev, arlo, client, foreignTask,
       A, B, AB,
       id: { A: await identifier(A), B: await identifier(B), AB: await identifier(AB), noProject: await identifier(noProject) },
     };
@@ -145,15 +148,28 @@ function ledger(e: Doc<"timeEntries">) {
   };
 }
 
-/** Puts an entry into a live close: final without invoice (a closed period) or a draft. */
-async function lock(t: T, entryId: Id<"timeEntries">, status: "final" | "draft") {
+/**
+ * Puts an entry into a live close: final without invoice (a closed period),
+ * a draft, or final with an issued invoice.
+ */
+async function lock(t: T, entryId: Id<"timeEntries">, status: "final" | "draft" | "invoiced") {
   await t.run(async (ctx) => {
     const e = (await ctx.db.get(entryId))!;
     const closeId = await ctx.db.insert("billingCloses", {
-      orgId: e.orgId, projectId: e.projectId, kind: "t_and_m", periodStart: "2026-09-01", periodEnd: "2026-09-30", status,
+      orgId: e.orgId, projectId: e.projectId, kind: "t_and_m", periodStart: "2026-09-01", periodEnd: "2026-09-30",
+      status: status === "draft" ? "draft" : "final",
       currency: "EUR", roundingMinutes: 15, includedMinutes: 0, overageRateMinor: 0, usageMinutes: e.durationMinutes,
       overageMinutes: 0, amountMinor: 0, committedAt: Date.now(), committedBy: e.createdBy,
     });
+    if (status === "invoiced") {
+      const project = (await ctx.db.get(e.projectId))!;
+      const invoiceId = await ctx.db.insert("invoices", {
+        orgId: e.orgId, projectId: e.projectId, clientId: project.clientId, number: 7, prefix: "INV", status: "invoiced",
+        currency: "EUR", subtotalMinor: 0, totalMinor: 0, issueDate: "2026-10-01", closeId,
+        createdAt: Date.now(), updatedAt: Date.now(), createdBy: e.createdBy,
+      });
+      await ctx.db.patch(closeId, { invoiceId });
+    }
     await ctx.db.patch(entryId, { closeId });
   });
 }
@@ -228,7 +244,7 @@ describe("save_time_entries: logging", () => {
     const result = await save(t, "alice", [{ task: f.id.A, minutes: 60 }]);
     expect(JSON.stringify(result)).not.toMatch(/rate|amount|cost|currency/i);
     const { items } = await save(t, "alice", [{ ref: result.items[0].entryId, minutes: 75 }]);
-    expect(Object.keys(items[0]).sort()).toEqual(["action", "date", "entryId", "member", "minutes", "task"]);
+    expect(Object.keys(items[0]).sort()).toEqual(["action", "billable", "category", "date", "entryId", "member", "minutes", "task"]);
   });
 });
 
@@ -284,10 +300,16 @@ describe("save_time_entries: editing", () => {
     const { items } = await save(t, "alice", [
       { task: f.id.A, minutes: 30, date: "2026-09-10" },
       { task: f.id.A, minutes: 30, date: "2026-09-11" },
+      { task: f.id.A, minutes: 30, date: "2026-09-12" },
     ]);
-    const [closed, draft] = items.map((i) => i.entryId);
+    const [closed, draft, invoiced] = items.map((i) => i.entryId);
     await lock(t, closed, "final");
     await lock(t, draft, "draft");
+    await lock(t, invoiced, "invoiced");
+    await expect(save(t, "alice", [{ ref: invoiced, minutes: 10 }])).rejects.toThrow(
+      "Cannot edit a time entry linked to an invoice — void the invoice first",
+    );
+    await expect(remove(t, "admin", [invoiced])).rejects.toThrow("Cannot delete a time entry linked to an invoice — void the invoice first");
     await expect(save(t, "alice", [{ ref: closed, minutes: 10 }])).rejects.toThrow(
       "Cannot edit a time entry in a closed period — reopen the period first",
     );
@@ -296,7 +318,7 @@ describe("save_time_entries: editing", () => {
     );
     await expect(remove(t, "admin", [closed])).rejects.toThrow("Cannot delete a time entry in a closed period — reopen the period first");
     await expect(remove(t, "alice", [draft])).rejects.toThrow("Cannot delete a time entry that's on a draft invoice — delete the draft first");
-    expect(await entries(t)).toHaveLength(2);
+    expect(await entries(t)).toHaveLength(3);
   });
 });
 
@@ -403,8 +425,13 @@ describe("timer", () => {
 
     const status = await as(t, "alice").query(api.mcp.timer.status, { now: sessionStart + 65 * 60_000 + 30_000 });
     expect(status).toEqual({
-      running: true, status: "running", task: { identifier: f.id.AB, title: "Shared task" }, startedAt: sessionStart, minutes: 66, stale: false,
+      timezone: "UTC",
+      timer: {
+        state: "running", task: { identifier: f.id.AB, title: "Shared task" }, currentRunSince: sessionStart, resumed: false, minutes: 66, stale: false,
+      },
     });
+    // fetch("me") shows the same timer, read-only.
+    expect((await as(t, "alice").query(api.mcp.fetch.me, { now: sessionStart + 65 * 60_000 + 30_000 })).timer).toEqual(status.timer);
 
     const stopped = await as(t, "alice").mutation(api.mcp.timer.stop, { note: "Hero", clientName: "Claude" });
     const app = await inApp(t, "bob").mutation(api.timer.stop, { note: "Hero" });
@@ -419,20 +446,27 @@ describe("timer", () => {
     // Each owner's own chain: Alice's default (Development), Bob's falls back to the task (Design).
     expect([mcpEntry.snapshotCategoryId, appEntry.snapshotCategoryId]).toEqual([f.dev, f.design]);
     expect(await inApp(t, "alice").query(api.timer.getState, {})).toBeNull();
-    expect(await as(t, "alice").query(api.mcp.timer.status, { now: Date.now() })).toEqual({ running: false });
+    expect(await as(t, "alice").query(api.mcp.timer.status, { now: Date.now() })).toEqual({ timezone: "UTC", timer: { state: "idle" } });
+    // D-STOPLOG: both stops logged the entry; via only on the MCP one.
+    const logged = (await activity(t)).filter((r) => r.type === "time_entry_logged");
+    expect(logged.map((r) => [r.userId, r.metadata, r.via?.clientName ?? null])).toEqual([
+      [f.alice, { entryId: stopped.entryId, duration: "01:06", note: "Hero" }, "Claude"],
+      [f.bob, { entryId: app.entryId, duration: "01:06", note: "Hero" }, null],
+    ]);
     await expect(as(t, "alice").mutation(api.mcp.timer.stop, {})).rejects.toThrow("No active timer");
   });
 
-  it("stops under 30 seconds without saving; members time only tasks they can open", async () => {
+  it("stops under 30 seconds without saving; members time only tasks they can open; foreign tasks are not found", async () => {
     const t = createT();
     const f = await setup(t);
     await expect(as(t, "alice").mutation(api.mcp.timer.start, { task: f.id.B })).rejects.toThrow(`${f.id.B} not found`);
+    await expect(as(t, "admin").mutation(api.mcp.timer.start, { task: f.foreignTask })).rejects.toThrow(`${f.foreignTask} not found`);
     await expect(as(t, "alice").mutation(api.mcp.timer.start, { task: f.id.noProject })).rejects.toThrow(
       "Assign a project to this task before starting a timer",
     );
     await as(t, "alice").mutation(api.mcp.timer.start, { task: f.id.A });
     const stopped = await as(t, "alice").mutation(api.mcp.timer.stop, {});
-    expect(stopped).toMatchObject({ action: "discarded", task: { identifier: f.id.A } });
+    expect(stopped).toMatchObject({ action: "discarded", discardReason: "too_short", task: { identifier: f.id.A } });
     expect(stopped.entryId).toBeUndefined();
     expect(await entries(t)).toHaveLength(0);
   });
@@ -450,6 +484,141 @@ describe("timer", () => {
     const stop = await as(t, "alice").mutation(api.mcp.timer.stop, { idempotencyKey: "s2" });
     expect(await as(t, "alice").mutation(api.mcp.timer.stop, { idempotencyKey: "s2" })).toEqual({ ...stop, replayed: true });
     expect(await entries(t)).toHaveLength(1);
+  });
+});
+
+describe("timer across workspaces (timer state is per user)", () => {
+  it("a timer on another org's task is refused untouched from this org, and nothing of it leaks", async () => {
+    const t = createT();
+    const f = await setup(t);
+    // Alice is also a member of OTHER and runs a timer there.
+    const startedAt = Date.now() - 20 * 60_000;
+    await t.run(async (ctx) => {
+      await ctx.db.insert("orgMembers", { orgId: OTHER, clerkUserId: "clerk_alice", userId: f.alice, role: "member", joinedAt: Date.now() });
+      await ctx.db.patch(f.alice, { timerTaskId: f.foreignTask, timerStartedAt: startedAt, timerAccumulatedMs: 0, timerStatus: "running" });
+    });
+    const elsewhere = "Your timer is running in another workspace; stop it there.";
+    const status = await as(t, "alice").query(api.mcp.timer.status, { now: Date.now() });
+    expect(status).toEqual({ timezone: "UTC", timer: { state: "elsewhere" } });
+    const me = await as(t, "alice").query(api.mcp.fetch.me, { now: Date.now() });
+    expect(me.timer).toEqual({ state: "elsewhere" });
+    await expect(as(t, "alice").mutation(api.mcp.timer.start, { task: f.id.A, idempotencyKey: "x1" })).rejects.toThrow(elsewhere);
+    await expect(as(t, "alice").mutation(api.mcp.timer.stop, { idempotencyKey: "x2" })).rejects.toThrow(elsewhere);
+    // The app's own stop from this org refuses the same way.
+    await expect(inApp(t, "alice").mutation(api.timer.stop, {})).rejects.toThrow(elsewhere);
+    const user = await t.run(async (ctx) => (await ctx.db.get(f.alice))!);
+    expect(user).toMatchObject({ timerTaskId: f.foreignTask, timerStartedAt: startedAt, timerStatus: "running" });
+    expect(JSON.stringify([status, me])).not.toMatch(/Foreign secret task|KON|ELSE/);
+    expect(await t.run(async (ctx) => await ctx.db.query("mcpIdempotency").collect())).toEqual([]);
+    expect(await entries(t)).toHaveLength(0);
+
+    // Its own workspace sees it as usual.
+    const there = await t
+      .withIdentity({ subject: "clerk_alice", issuer: "https://clerk.test", client_id: "client_claude", org_id: OTHER })
+      .query(api.mcp.timer.status, { now: Date.now() });
+    expect(there.timer).toMatchObject({ state: "running", task: { title: "Foreign secret task" } });
+  });
+
+  it("a timer whose task was deleted is cleared on stop and says why", async () => {
+    const t = createT();
+    const f = await setup(t);
+    await as(t, "alice").mutation(api.mcp.timer.start, { task: f.id.A });
+    await t.run(async (ctx) => ctx.db.delete(f.A));
+    expect((await as(t, "alice").query(api.mcp.timer.status, { now: Date.now() })).timer).toEqual({ state: "orphaned" });
+    const stopped = await as(t, "alice").mutation(api.mcp.timer.stop, {});
+    expect(stopped).toEqual({ tool: "timer", action: "discarded", discardReason: "task_missing", replayed: false });
+    expect((await t.run(async (ctx) => (await ctx.db.get(f.alice))!)).timerTaskId).toBeUndefined();
+  });
+
+  it("an archive auto-save logs the entry by the archiving admin, with via through MCP", async () => {
+    const t = createT();
+    const f = await setup(t);
+    await inApp(t, "bob").mutation(api.timer.start, { taskId: f.B });
+    await t.run(async (ctx) => ctx.db.patch(f.bob, { timerStartedAt: Date.now() - 10 * 60_000 }));
+    await as(t, "admin").mutation(api.mcp.write.saveTasks, { items: [{ ref: f.id.B, archived: true }], clientName: "Claude" });
+    const [saved] = await entries(t);
+    expect(saved).toMatchObject({ userId: f.bob, createdBy: f.admin, method: "timer", note: "Auto-saved when the task was archived" });
+    const logged = (await activity(t)).filter((r) => r.type === "time_entry_logged");
+    expect(logged.map((r) => [r.taskId, r.userId, r.via?.clientName])).toEqual([[f.B, f.admin, "Claude"]]);
+  });
+});
+
+describe("save_time_entries: billable, categories, timezone, foreign refs", () => {
+  it("billable defaults to the task's and can be set or changed like the app's form", async () => {
+    const t = createT();
+    const f = await setup(t);
+    const { items } = await save(t, "alice", [
+      { task: f.id.A, minutes: 30 },
+      { task: f.id.A, minutes: 30, billable: false },
+    ]);
+    const [inherit, off] = await Promise.all(items.map((i) => entry(t, i.entryId)));
+    expect(inherit).toMatchObject({ isBillable: true, billableRate: 100 });
+    expect(off).toMatchObject({ isBillable: false, billableRate: 0 });
+    expect(items.map((i) => [i.billable, i.category])).toEqual([[true, "Development"], [false, "Development"]]);
+    const flipped = await save(t, "alice", [{ ref: items[1].entryId, billable: true }]);
+    expect(flipped.items[0]).toMatchObject({ action: "updated", billable: true });
+    expect(await entry(t, items[1].entryId)).toMatchObject({ isBillable: true, billableRate: 100 });
+  });
+
+  it("an unchanged archived category is no change; a new archived one is refused", async () => {
+    const t = createT();
+    const f = await setup(t);
+    const id = (await save(t, "alice", [{ task: f.id.A, minutes: 30, category: "Design" }])).items[0].entryId;
+    await t.run(async (ctx) => ctx.db.patch(f.design, { archivedAt: Date.now() }));
+    expect((await save(t, "alice", [{ ref: id, category: " design ", minutes: 30 }])).items[0]).toMatchObject({
+      action: "unchanged", category: "Design",
+    });
+    const other = (await save(t, "alice", [{ task: f.id.A, minutes: 10 }])).items[0].entryId;
+    await expect(save(t, "alice", [{ ref: other, category: "Design" }])).rejects.toThrow('The work category "Design" is archived');
+  });
+
+  it("shows the category on fetched and searched time entries", async () => {
+    const t = createT();
+    const f = await setup(t);
+    const id = (await save(t, "alice", [{ task: f.id.A, minutes: 30 }])).items[0].entryId;
+    const [record] = (await as(t, "alice").query(api.mcp.fetch.records, { refs: [id], include: [], now: Date.now() })).results;
+    expect(record.ok && record.record.type === "time_entry" && record.record.category).toBe("Development");
+    const found = await as(t, "alice").query(api.mcp.search.timeEntries, {
+      offset: 0, limit: 5, now: Date.now(), tracked: {}, updated: {}, task: f.id.A,
+    });
+    expect(found.rows.map((r) => r.category)).toEqual(["Development"]);
+  });
+
+  it("defaults to today in a non-UTC org timezone and clamps a long entry to that midnight", async () => {
+    const t = createT();
+    const f = await setup(t);
+    const tz = "Pacific/Auckland";
+    await t.run(async (ctx) => {
+      const settings = (await ctx.db.query("orgSettings").withIndex("by_orgId", (q) => q.eq("orgId", ORG)).unique())!;
+      await ctx.db.patch(settings._id, { timezone: tz });
+    });
+    const today = new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+    const { items } = await save(t, "alice", [{ task: f.id.A, minutes: 24 * 60 }]);
+    expect(items[0].date).toBe(today);
+    const [y, m, d] = today.split("-").map(Number);
+    expect((await entry(t, items[0].entryId)).startedAt).toBe(tzWallToEpoch(y, m, d, 0, 0, 0, tz));
+    expect((await as(t, "alice").query(api.mcp.fetch.me, { now: Date.now() })).today).toBe(today);
+  });
+
+  it("a foreign time-entry ID is not found for delete and edit, and stays", async () => {
+    const t = createT();
+    const f = await setup(t);
+    const foreign = await t.run(async (ctx) => {
+      const project = (await ctx.db.query("projects").withIndex("by_orgId_code", (q) => q.eq("orgId", OTHER).eq("code", "ELSE")).first())
+        ?? null;
+      const projectId = project?._id ?? (await ctx.db.insert("projects", {
+        orgId: OTHER, clientId: await ctx.db.insert("clients", { orgId: OTHER, name: "Else", currency: "EUR", createdAt: 0, updatedAt: 0, createdBy: f.other }),
+        name: "Else", code: "ELSE", billingType: "t_and_m", createdAt: 0, updatedAt: 0, createdBy: f.other,
+      }));
+      return await ctx.db.insert("timeEntries", {
+        orgId: OTHER, projectId, taskId: f.foreignTask, userId: f.other, date: "2026-10-20", startedAt: Date.UTC(2026, 9, 20, 9),
+        durationMinutes: 30, isBillable: true, method: "manual", costRate: 1, billableRate: 1, rateCurrency: "EUR",
+        createdAt: 0, updatedAt: 0, createdBy: f.other,
+      });
+    });
+    await expect(remove(t, "admin", [foreign])).rejects.toThrow(`${foreign} not found`);
+    await expect(save(t, "admin", [{ ref: foreign, minutes: 5 }])).rejects.toThrow(`${foreign} not found`);
+    expect((await entry(t, foreign)).durationMinutes).toBe(30);
   });
 });
 

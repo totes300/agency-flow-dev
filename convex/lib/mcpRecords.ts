@@ -31,7 +31,7 @@ import type { FetchInclude } from "../../lib/mcp/limits";
  * Read budget per record (Convex: 4,096 index ranges, 32,000 documents per
  * call; the route fetches one ref per call): a task with every include is
  * about 30 ranges plus one per distinct comment author / activity actor /
- * time-entry member, two per distinct mentioned user, and at most ~3,100 documents (comments 501, activity
+ * time-entry member or category, two per distinct mentioned user, and at most ~3,100 documents (comments 501, activity
  * 501, time entries 2,001, files 51 + 51, sub-tasks 201, external refs 51).
  */
 
@@ -63,6 +63,19 @@ export function userNames(ctx: QueryCtx) {
     const name = (await ctx.db.get(id))?.name ?? "Former member";
     cache.set(id, name);
     return name;
+  };
+}
+
+/** Work category names of the org, memoized for one call (null: none, or not this org's). */
+export function categoryNames(ctx: QueryCtx, orgId: string) {
+  const cache = new Map<Id<"workCategories">, string | null>();
+  return async (id: Id<"workCategories"> | undefined): Promise<string | null> => {
+    if (id === undefined) return null;
+    if (!cache.has(id)) {
+      const category = await ctx.db.get(id);
+      cache.set(id, category && category.orgId === orgId ? category.name : null);
+    }
+    return cache.get(id) ?? null;
   };
 }
 
@@ -241,8 +254,9 @@ async function taskTime(ctx: QueryCtx, auth: AuthContext, taskId: Id<"tasks">) {
     (a, b) => b.date.localeCompare(a.date) || b.startedAt - a.startedAt,
   );
   const nameOf = userNames(ctx);
+  const categoryOf = categoryNames(ctx, auth.orgId);
   const recent = [];
-  for (const e of visible.slice(0, RECENT_ROWS)) recent.push(await timeEntryRow(ctx, auth.orgId, e, nameOf));
+  for (const e of visible.slice(0, RECENT_ROWS)) recent.push(await timeEntryRow(ctx, auth.orgId, e, nameOf, categoryOf));
   return {
     rows: recent,
     total: visible.length,
@@ -284,6 +298,7 @@ export async function timeEntryRow(
   orgId: string,
   entry: Doc<"timeEntries">,
   nameOf: (id: Id<"users">) => Promise<string>,
+  categoryOf: (id: Id<"workCategories"> | undefined) => Promise<string | null>,
 ) {
   const task = await ctx.db.get(entry.taskId);
   const note = entry.note ? capText(entry.note.replace(/\s+/g, " ").trim(), NOTE_MAX_CHARS) : null;
@@ -295,6 +310,8 @@ export async function timeEntryRow(
     note: note?.text ?? null,
     noteTruncated: note?.truncated ?? false,
     billable: entry.isBillable,
+    /** The entry's own billing category (snapshot), not the task's. */
+    category: await categoryOf(entry.snapshotCategoryId),
     task: task && task.orgId === orgId ? { identifier: task.identifier, title: task.title } : null,
   };
 }
@@ -331,7 +348,7 @@ export async function buildRecord(
     }
 
     case "time_entry": {
-      const row = await timeEntryRow(ctx, orgId, resolved.entry, userNames(ctx));
+      const row = await timeEntryRow(ctx, orgId, resolved.entry, userNames(ctx), categoryNames(ctx, orgId));
       const project = await projectSummary(ctx, orgId, resolved.entry.projectId);
       return { type: "time_entry" as const, ...row, project };
     }

@@ -32,6 +32,9 @@ const ME: MeData = {
   user: { name: "Ada Admin", email: "ada@x.test" },
   org: { id: "org_1", name: "Konverted" },
   role: "admin",
+  today: "2026-10-24",
+  timezone: "Europe/Budapest",
+  timer: { state: "idle" },
 };
 
 const WORKSPACE: WorkspaceData = {
@@ -549,10 +552,19 @@ describe("time tools", () => {
   it("timer start / stop / status map onto their Convex functions", async () => {
     const { ctx, calls } = fakeWrites((name) => {
       if (name === "mcp/timer:status") {
-        return { running: true, status: "running", task: { identifier: "ARLO-21", title: "Hero" }, startedAt: NOW - 65 * 60_000, minutes: 65, stale: false };
+        return {
+          timezone: "Europe/Budapest",
+          timer: {
+            state: "running", task: { identifier: "ARLO-21", title: "Hero" }, currentRunSince: NOW - 65 * 60_000,
+            resumed: false, minutes: 65, stale: false,
+          },
+        };
       }
       if (name === "mcp/timer:start") {
-        return { tool: "timer", action: "started", task: { identifier: "ARLO-21", title: "Hero" }, startedAt: NOW, replayed: false };
+        return {
+          tool: "timer", action: "started", task: { identifier: "ARLO-21", title: "Hero" }, startedAt: NOW,
+          timezone: "Europe/Budapest", replayed: false,
+        };
       }
       return {
         tool: "timer", action: "stopped", task: { identifier: "ARLO-21", title: "Hero" },
@@ -571,15 +583,14 @@ describe("time tools", () => {
       [
         "## Timer started",
         "- Task: [ARLO-21](https://localhost:3001/tasks/ARLO-21) Hero",
-        "- Started: 2026-10-24 12:00 UTC",
+        "- Started: 2026-10-24 14:00 (Europe/Budapest)",
         'Stop it with timer action "stop"; the time is saved as an entry then.',
       ].join("\n"),
     );
     expect(status.text).toBe(
       [
         "## Timer · running",
-        "- Task: [ARLO-21](https://localhost:3001/tasks/ARLO-21) Hero",
-        "- Running since: 2026-10-24 10:55 UTC",
+        "- Timer: [ARLO-21](https://localhost:3001/tasks/ARLO-21) Hero · running since 2026-10-24 12:55",
         "- Elapsed: 1h 5m (what stopping now saves)",
       ].join("\n"),
     );
@@ -599,5 +610,23 @@ describe("time tools", () => {
       'Error: idempotencyKey applies to "start" and "stop"; status writes nothing.',
     );
     expect(calls).toEqual([]);
+  });
+});
+
+describe("timer output states", () => {
+  it("says why a stop saved nothing, and never names a timer in another workspace", async () => {
+    const results: Record<string, unknown> = {
+      "mcp/timer:stop": { tool: "timer", action: "discarded", discardReason: "task_missing", replayed: false },
+      "mcp/timer:status": { timezone: "UTC", timer: { state: "elsewhere" } },
+    };
+    const { ctx } = fakeWrites((name) => results[name]);
+    expect((await tool("timer").execute({ action: "stop" }, ctx)).text).toBe(
+      "## Timer stopped\nNothing was saved: the timer's task or project no longer exists, so the timer was cleared.",
+    );
+    expect((await tool("timer").execute({ action: "status" }, ctx)).text).toBe(
+      "## Timer\n- Timer: Your timer is running in another workspace; stop it there.",
+    );
+    results["mcp/timer:stop"] = { tool: "timer", action: "discarded", discardReason: "too_short", task: { identifier: "ARLO-1", title: "T" }, replayed: false };
+    expect((await tool("timer").execute({ action: "stop" }, ctx)).text).toMatch(/less than 30 seconds/);
   });
 });

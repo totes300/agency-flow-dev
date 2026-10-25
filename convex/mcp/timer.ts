@@ -2,7 +2,8 @@ import { v } from "convex/values";
 import { mutation, query } from "../_generated/server";
 import { getMcpAuthContext } from "../lib/mcpAuth";
 import { mcpActor, recordIdempotent, replayIdempotent, requestFingerprint } from "../lib/mcpWrites";
-import { startTimer, stopTimer, timerStatus } from "../lib/mcpTimer";
+import { startTimer, stopTimer, timerState } from "../lib/mcpTimer";
+import { orgClock } from "../lib/mcpRecords";
 
 /**
  * MCP `timer` (docs/prd-mcp.md §6): start, stop and status of the caller's
@@ -53,6 +54,7 @@ export const status = query({
   args: { now: v.number() },
   handler: async (ctx, args) => {
     const auth = await getMcpAuthContext(ctx);
-    return await timerStatus(ctx, auth, args.now);
+    const { timezone } = await orgClock(ctx, auth.orgId, args.now);
+    return { timer: await timerState(ctx, auth, args.now), timezone };
   },
 });

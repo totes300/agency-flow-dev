@@ -63,6 +63,9 @@ export const saveTimeEntriesResultValidator = v.object({
       date: v.string(),
       minutes: v.number(),
       member: v.string(),
+      /** The entry's work category name; absent when it has none. */
+      category: v.optional(v.string()),
+      billable: v.optional(v.boolean()),
       action: v.union(v.literal("created"), v.literal("updated"), v.literal("unchanged")),
     }),
   ),
@@ -70,9 +73,14 @@ export const saveTimeEntriesResultValidator = v.object({
 
 export const timerResultValidator = v.object({
   tool: v.literal("timer"),
-  /** `discarded`: stopped under 30 seconds, nothing saved (the app's rule). */
+  /** `discarded`: nothing saved (see `discardReason`). */
   action: v.union(v.literal("started"), v.literal("stopped"), v.literal("discarded")),
-  task: v.object({ identifier: v.string(), title: v.string() }),
+  /** Absent when a discarded timer's task no longer exists. */
+  task: v.optional(v.object({ identifier: v.string(), title: v.string() })),
+  /** Why nothing was saved: under 30 seconds, or the timer's task / project is gone. */
+  discardReason: v.optional(v.union(v.literal("too_short"), v.literal("task_missing"))),
+  /** The org timezone, for rendering `startedAt`. */
+  timezone: v.optional(v.string()),
   startedAt: v.optional(v.number()),
   entryId: v.optional(v.id("timeEntries")),
   minutes: v.optional(v.number()),

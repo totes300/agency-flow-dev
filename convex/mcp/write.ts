@@ -103,6 +103,7 @@ export const saveTimeEntries = mutation({
         minutes: v.optional(v.number()),
         note: v.optional(v.union(v.string(), v.null())),
         category: v.optional(v.string()),
+        billable: v.optional(v.boolean()),
         member: v.optional(v.string()),
       }),
     ),

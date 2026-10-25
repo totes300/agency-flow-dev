@@ -93,18 +93,21 @@ describe("getMcpAuthContext via fetch(me)", () => {
   it("takes the admin role from orgMembers (OAuth tokens carry no role)", async () => {
     const t = createT();
     await setup(t);
-    const me = await t.withIdentity(oauthIdentity("clerk_admin", ORG_ID)).query(api.mcp.fetch.me, {});
+    const me = await t.withIdentity(oauthIdentity("clerk_admin", ORG_ID)).query(api.mcp.fetch.me, { now: Date.now() });
     expect(me).toEqual({
       user: { name: "Ada Admin", email: "clerk_admin@x.test" },
       org: { id: ORG_ID, name: null },
       role: "admin",
+      today: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+      timezone: expect.any(String),
+      timer: { state: "idle" },
     });
   });
 
   it("takes the member role from orgMembers", async () => {
     const t = createT();
     await setup(t);
-    const me = await t.withIdentity(oauthIdentity("clerk_member", ORG_ID)).query(api.mcp.fetch.me, {});
+    const me = await t.withIdentity(oauthIdentity("clerk_member", ORG_ID)).query(api.mcp.fetch.me, { now: Date.now() });
     expect(me.role).toBe("member");
   });
 
@@ -112,7 +115,7 @@ describe("getMcpAuthContext via fetch(me)", () => {
     const t = createT();
     await setup(t);
     await expect(
-      t.withIdentity(sessionIdentity("clerk_admin", ORG_ID, "org:admin")).query(api.mcp.fetch.me, {}),
+      t.withIdentity(sessionIdentity("clerk_admin", ORG_ID, "org:admin")).query(api.mcp.fetch.me, { now: Date.now() }),
     ).rejects.toThrow("MCP functions require an OAuth access token");
     await expect(
       t.withIdentity(sessionIdentity("clerk_admin", ORG_ID, "org:admin")).query(api.mcp.fetch.workspace, {}),
@@ -122,14 +125,14 @@ describe("getMcpAuthContext via fetch(me)", () => {
   it("refuses an unauthenticated call", async () => {
     const t = createT();
     await setup(t);
-    await expect(t.query(api.mcp.fetch.me, {})).rejects.toThrow("Not authenticated");
+    await expect(t.query(api.mcp.fetch.me, { now: Date.now() })).rejects.toThrow("Not authenticated");
   });
 
   it("refuses a token without org_id", async () => {
     const t = createT();
     await setup(t);
     await expect(
-      t.withIdentity(oauthIdentity("clerk_admin")).query(api.mcp.fetch.me, {}),
+      t.withIdentity(oauthIdentity("clerk_admin")).query(api.mcp.fetch.me, { now: Date.now() }),
     ).rejects.toThrow(NO_ORG_SELECTED);
   });
 
@@ -137,7 +140,7 @@ describe("getMcpAuthContext via fetch(me)", () => {
     const t = createT();
     await setup(t);
     await expect(
-      t.withIdentity(oauthIdentity("clerk_ghost", ORG_ID)).query(api.mcp.fetch.me, {}),
+      t.withIdentity(oauthIdentity("clerk_ghost", ORG_ID)).query(api.mcp.fetch.me, { now: Date.now() }),
     ).rejects.toThrow(USER_NOT_SYNCED);
   });
 
@@ -146,7 +149,7 @@ describe("getMcpAuthContext via fetch(me)", () => {
     const { member } = await setup(t);
     await t.run(async (ctx) => ctx.db.patch(member, { deletedAt: Date.now() }));
     await expect(
-      t.withIdentity(oauthIdentity("clerk_member", ORG_ID)).query(api.mcp.fetch.me, {}),
+      t.withIdentity(oauthIdentity("clerk_member", ORG_ID)).query(api.mcp.fetch.me, { now: Date.now() }),
     ).rejects.toThrow(USER_NOT_SYNCED);
   });
 
@@ -154,7 +157,7 @@ describe("getMcpAuthContext via fetch(me)", () => {
     const t = createT();
     await setup(t);
     const hostile = { ...oauthIdentity("clerk_member", ORG_ID), org_role: "org:admin", orgRole: "org:admin" };
-    const me = await t.withIdentity(hostile).query(api.mcp.fetch.me, {});
+    const me = await t.withIdentity(hostile).query(api.mcp.fetch.me, { now: Date.now() });
     expect(me.role).toBe("member");
   });
 
@@ -168,7 +171,7 @@ describe("getMcpAuthContext via fetch(me)", () => {
         .unique();
       await ctx.db.patch(row!._id, { userId: undefined });
     });
-    const me = await t.withIdentity(oauthIdentity("clerk_member", ORG_ID)).query(api.mcp.fetch.me, {});
+    const me = await t.withIdentity(oauthIdentity("clerk_member", ORG_ID)).query(api.mcp.fetch.me, { now: Date.now() });
     expect(me).toMatchObject({ user: { name: "Mel Member" }, role: "member" });
   });
 
@@ -176,7 +179,7 @@ describe("getMcpAuthContext via fetch(me)", () => {
     const t = createT();
     await setup(t);
     await expect(
-      t.withIdentity(oauthIdentity("clerk_nomember", ORG_ID)).query(api.mcp.fetch.me, {}),
+      t.withIdentity(oauthIdentity("clerk_nomember", ORG_ID)).query(api.mcp.fetch.me, { now: Date.now() }),
     ).rejects.toThrow("You are not a member of this organization");
   });
 
@@ -199,7 +202,7 @@ describe("getMcpAuthContext via fetch(me)", () => {
       await ctx.db.delete(row!._id);
     });
     await expect(
-      t.withIdentity(oauthIdentity("clerk_member", ORG_ID)).query(api.mcp.fetch.me, {}),
+      t.withIdentity(oauthIdentity("clerk_member", ORG_ID)).query(api.mcp.fetch.me, { now: Date.now() }),
     ).rejects.toThrow("You are not a member of this organization");
   });
 
@@ -214,7 +217,7 @@ describe("getMcpAuthContext via fetch(me)", () => {
       await ctx.db.patch(row!._id, { userId: admin });
     });
     await expect(
-      t.withIdentity(oauthIdentity("clerk_member", ORG_ID)).query(api.mcp.fetch.me, {}),
+      t.withIdentity(oauthIdentity("clerk_member", ORG_ID)).query(api.mcp.fetch.me, { now: Date.now() }),
     ).rejects.toThrow("You are not a member of this organization");
   });
 });

@@ -7,7 +7,7 @@ import { referenceClientPrefix } from "./helpers";
 import { getDateInTimezone } from "./timer";
 import { addDaysToDateString } from "./todayPlan";
 import { createRefResolver, type RefResolver } from "./mcpRefs";
-import { commentPreview, isOverdue, orgClock, timeEntryRow, userNames, type OrgClock } from "./mcpRecords";
+import { categoryNames, commentPreview, isOverdue, orgClock, timeEntryRow, userNames, type OrgClock } from "./mcpRecords";
 import { TASK_COMMENT_CAP } from "../comments";
 import { externalRefOwner, normalizeExternalRef } from "./mcpExternalRefs";
 import { filterReadableTasks } from "../tasks/access";
@@ -38,7 +38,7 @@ import { SEARCH_LIMIT_MAX } from "../../lib/mcp/limits";
  * - projects / clients: one range (≤ 2,001 docs) plus one per page row;
  *   members: one range plus one per org member;
  * - time entries: one range (≤ 2,001 docs) plus one per distinct project
- *   (client filter) and ~2 per page row;
+ *   (client filter), ~2 per page row and one per distinct category;
  * - comments: one activity range (≤ 501 rows), then per comment one get,
  *   per distinct task one get and (members) up to two edge checks: at most
  *   ~2,000 ranges; with a task filter, the task's comments in one range.
@@ -547,8 +547,9 @@ export async function searchTimeEntries(ctx: QueryCtx, auth: AuthContext, args: 
   matched.sort((a, b) => b.date.localeCompare(a.date) || b.startedAt - a.startedAt || a._id.localeCompare(b._id));
 
   const nameOf = userNames(ctx);
+  const categoryOf = categoryNames(ctx, auth.orgId);
   const rows = [];
-  for (const e of page(matched, args)) rows.push(await timeEntryRow(ctx, auth.orgId, e, nameOf));
+  for (const e of page(matched, args)) rows.push(await timeEntryRow(ctx, auth.orgId, e, nameOf, categoryOf));
   const result: SearchPage<(typeof rows)[number]> & { totalMinutes: number } = {
     rows,
     total: matched.length,

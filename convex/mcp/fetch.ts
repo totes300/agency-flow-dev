@@ -4,6 +4,7 @@ import { getMcpAuthContext } from "../lib/mcpAuth";
 import { createRefResolver, type RefCandidate } from "../lib/mcpRefs";
 import { buildRecord, orgClock } from "../lib/mcpRecords";
 import { listChanges } from "../lib/mcpChanges";
+import { timerState } from "../lib/mcpTimer";
 import { isValidClientPrefix } from "../lib/clientPrefix";
 import { FETCH_INCLUDES, MAX_REFS, type FetchInclude } from "../../lib/mcp/limits";
 import { getOrgSettings } from "../lib/orgHelpers";
@@ -24,16 +25,25 @@ const WORKSPACE_TABLE_LABELS: Record<WorkspaceRefTable, string> = {
  * They return compact data; the Next.js route renders the markdown.
  */
 
-/** `fetch("me")`: who the connection acts as, in which org, with which role. */
+/**
+ * `fetch("me")`: who the connection acts as, in which org, with which role;
+ * today's date in the org timezone (so "yesterday" never depends on the
+ * agent's clock) and the caller's timer (read-only, mcpTimer.ts). `now`
+ * comes from the route: queries take the clock as an argument.
+ */
 export const me = query({
-  args: {},
-  handler: async (ctx) => {
+  args: { now: v.number() },
+  handler: async (ctx, args) => {
     const auth = await getMcpAuthContext(ctx);
     const settings = await getOrgSettings(ctx, auth.orgId);
+    const clock = await orgClock(ctx, auth.orgId, args.now);
     return {
       user: { name: auth.user.name, email: auth.user.email ?? null },
       org: { id: auth.orgId, name: settings?.brandName ?? null },
       role: auth.orgRole,
+      today: clock.today,
+      timezone: clock.timezone,
+      timer: await timerState(ctx, auth, args.now),
     };
   },
 });

@@ -36,7 +36,10 @@ const handler = createAgencyFlowMcpHandler({
         return { rows: [row], total: 1, offset: 0, incomplete: false, notes: [], today: "2026-10-24" };
       }
       if (name !== "mcp/fetch:me") throw new Error("unexpected query");
-      return { user: { name: "Ada", email: "ada@x.test" }, org: { id: "org_1", name: null }, role: "admin" };
+      return {
+        user: { name: "Ada", email: "ada@x.test" }, org: { id: "org_1", name: null }, role: "admin",
+        today: "2026-10-24", timezone: "UTC", timer: { state: "idle" },
+      };
     }) as McpQueryRunner,
   mutationRunnerFor: (token) =>
     (async (mutation, args) => {
@@ -155,7 +158,7 @@ describe("MCP protocol", () => {
     const { result } = await rpcResult(res);
     expect(result).toMatchObject({
       isError: false,
-      content: [{ type: "text", text: "## Me\n- User: Ada <ada@x.test>\n- Org: org_1\n- Role: admin" }],
+      content: [{ type: "text", text: "## Me\n- User: Ada <ada@x.test>\n- Org: org_1\n- Role: admin\n- Today: 2026-10-24 (UTC)\n- Timer: not running" }],
     });
     expect(seenTokens).toEqual([GOOD_TOKEN]);
   });

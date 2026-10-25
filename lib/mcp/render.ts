@@ -59,12 +59,19 @@ function section(title: string, lines: string[], note = ""): string {
   return `### ${title}${note}\n${body}`;
 }
 
-export function renderMe(data: MeData): string {
+export function renderMe(data: MeData, ctx: RenderContext): string {
   const user = data.user.email
     ? `${oneLine(data.user.name)} <${data.user.email}>`
     : oneLine(data.user.name);
   const org = data.org.name ? `${oneLine(data.org.name)} (${data.org.id})` : data.org.id;
-  return ["## Me", `- User: ${user}`, `- Org: ${org}`, `- Role: ${data.role}`].join("\n");
+  return [
+    "## Me",
+    `- User: ${user}`,
+    `- Org: ${org}`,
+    `- Role: ${data.role}`,
+    `- Today: ${data.today} (${data.timezone})`,
+    ...timerLines(data.timer, data.timezone, ctx),
+  ].join("\n");
 }
 
 export function renderWorkspace(data: WorkspaceData): string {
@@ -242,6 +249,7 @@ export function renderTimeEntryRow(row: TimeRow, ctx: RenderContext): string {
     oneLine(row.member),
     timeTask(row, ctx),
     timeNote(row),
+    row.category ? oneLine(row.category) : null,
     row.billable ? "billable" : "non-billable",
   )}`;
 }
@@ -389,7 +397,15 @@ function taskSections(record: TaskRecord, ctx: RenderContext, shown: ShownCounts
     const visible = rows.slice(0, shown.time);
     const meta = listMeta(visible.length, rows.length, total, truncated, `For all entries: ${searchHint("time_entry", record.identifier)}.`);
     const lines = visible.map((r) =>
-      `- ${fields(r.id, r.date, formatDuration(r.minutes), oneLine(r.member), timeNote(r), r.billable ? "billable" : "non-billable")}`,
+      `- ${fields(
+        r.id,
+        r.date,
+        formatDuration(r.minutes),
+        oneLine(r.member),
+        timeNote(r),
+        r.category ? oneLine(r.category) : null,
+        r.billable ? "billable" : "non-billable",
+      )}`,
     );
     parts.push(
       [`### Time${meta.suffix}${scope}`, sum, meta.note, lines.length > 0 ? lines.join("\n") : "none"]
@@ -515,6 +531,7 @@ export function renderRecord(record: FetchedRecord, ctx: RenderContext): string 
         `- Member: ${oneLine(record.member)}`,
         `- Task: ${record.task ? `${record.task.identifier} · ${oneLine(record.task.title)}` : "not available"}`,
         `- Project: ${record.project ? keyed(record.project.code, record.project.name) : "none"}`,
+        `- Work category: ${record.category ? oneLine(record.category) : "none"}`,
         `- Billable: ${record.billable ? "yes" : "no"}`,
         record.note ? `- Note: "${record.note}${record.noteTruncated ? "…" : ""}"` : null,
       ]
@@ -768,6 +785,8 @@ export function renderSaveTimeEntries(data: SaveTimeEntriesData, ctx: RenderCont
         i.date,
         formatDuration(i.minutes),
         oneLine(i.member),
+        i.category !== undefined ? oneLine(i.category) : null,
+        i.billable === undefined ? null : i.billable ? "billable" : "non-billable",
         SAVE_ACTION[i.action],
       )}`,
   );
@@ -777,33 +796,78 @@ export function renderSaveTimeEntries(data: SaveTimeEntriesData, ctx: RenderCont
   ].join("\n");
 }
 
-const STALE_HINT =
-  "It ran 8 hours or more, so it may have been left running: if the time is wrong, fix it with save_time_entries (ref + minutes).";
+type TimerTask = { identifier: string; title: string };
+type TimerState = TimerStatusData["timer"];
+
+function timerTask(task: TimerTask, ctx: RenderContext): string {
+  return `[${task.identifier}](${taskLink(ctx.appOrigin, task.identifier)}) ${oneLine(task.title)}`;
+}
+
+const TIMER_ELSEWHERE = "Your timer is running in another workspace; stop it there.";
+const TIMER_ORPHANED = 'Your timer points at a task that no longer exists; timer action "stop" clears it.';
+
+/** The timer's facts as list lines (shared by timer status and fetch("me")); times in the org timezone. */
+function timerLines(timer: TimerState, timezone: string, ctx: RenderContext): string[] {
+  switch (timer.state) {
+    case "idle":
+      return ["- Timer: not running"];
+    case "elsewhere":
+      return [`- Timer: ${TIMER_ELSEWHERE}`];
+    case "orphaned":
+      return [`- Timer: ${TIMER_ORPHANED}`];
+    case "running":
+    case "paused": {
+      const run =
+        timer.currentRunSince === null
+          ? "paused"
+          : timer.resumed
+            ? `current run since ${formatTimestamp(timer.currentRunSince, timezone)} (resumed after a pause; earlier time counts too)`
+            : `running since ${formatTimestamp(timer.currentRunSince, timezone)}`;
+      return [
+        `- Timer: ${timerTask(timer.task, ctx)} · ${run}`,
+        `- Elapsed: ${formatDuration(timer.minutes)}${timer.minutes === 0 ? " (stopping now saves nothing: under 30 seconds)" : " (what stopping now saves)"}`,
+        ...(timer.stale
+          ? [
+              "- It has run 8 hours or more, so it may have been left running: after stopping, fix the entry with save_time_entries (ref + minutes) if the time is wrong.",
+            ]
+          : []),
+      ];
+    }
+  }
+}
 
 export function renderTimer(data: TimerData, ctx: RenderContext): string {
-  const task = `[${data.task.identifier}](${taskLink(ctx.appOrigin, data.task.identifier)}) ${oneLine(data.task.title)}`;
+  const task = data.task ? `- Task: ${timerTask(data.task, ctx)}` : null;
   switch (data.action) {
     case "started":
       return [
         writeHeader("Timer started", data.replayed),
-        `- Task: ${task}`,
-        data.startedAt !== undefined ? `- Started: ${formatTimestamp(data.startedAt)} UTC` : null,
-        "Stop it with timer action \"stop\"; the time is saved as an entry then.",
+        task,
+        data.startedAt !== undefined
+          ? `- Started: ${formatTimestamp(data.startedAt, data.timezone)}${data.timezone ? ` (${data.timezone})` : " UTC"}`
+          : null,
+        'Stop it with timer action "stop"; the time is saved as an entry then.',
       ]
         .filter((line): line is string => line !== null)
         .join("\n");
     case "discarded":
       return [
         writeHeader("Timer stopped", data.replayed),
-        `- Task: ${task}`,
-        "Nothing was saved: it ran less than 30 seconds (as in the app).",
-      ].join("\n");
+        task,
+        data.discardReason === "task_missing"
+          ? "Nothing was saved: the timer's task or project no longer exists, so the timer was cleared."
+          : "Nothing was saved: it ran less than 30 seconds (as in the app).",
+      ]
+        .filter((line): line is string => line !== null)
+        .join("\n");
     case "stopped":
       return [
         writeHeader("Timer stopped, time saved", data.replayed),
-        `- Task: ${task}`,
+        task,
         `- Time entry ${data.entryId} · ${data.date} · ${formatDuration(data.minutes ?? 0)}`,
-        data.stale ? STALE_HINT : null,
+        data.stale
+          ? "It ran 8 hours or more, so it may have been left running: if the time is wrong, fix it with save_time_entries (ref + minutes)."
+          : null,
       ]
         .filter((line): line is string => line !== null)
         .join("\n");
@@ -811,16 +875,8 @@ export function renderTimer(data: TimerData, ctx: RenderContext): string {
 }
 
 export function renderTimerStatus(data: TimerStatusData, ctx: RenderContext): string {
-  if (!data.running) return "## Timer · not running\nStart one with timer action \"start\" and a task.";
-  return [
-    `## Timer · ${data.status}`,
-    `- Task: [${data.task.identifier}](${taskLink(ctx.appOrigin, data.task.identifier)}) ${oneLine(data.task.title)}`,
-    data.startedAt !== null ? `- Running since: ${formatTimestamp(data.startedAt)} UTC` : "- Paused",
-    `- Elapsed: ${formatDuration(data.minutes)}${data.minutes === 0 ? " (stopping now saves nothing: under 30 seconds)" : " (what stopping now saves)"}`,
-    data.stale
-      ? "It has run 8 hours or more, so it may have been left running: after stopping, fix the entry with save_time_entries (ref + minutes) if the time is wrong."
-      : null,
-  ]
-    .filter((line): line is string => line !== null)
-    .join("\n");
+  const { timer, timezone } = data;
+  const header = timer.state === "running" || timer.state === "paused" ? `## Timer · ${timer.state}` : "## Timer";
+  const hint = timer.state === "idle" ? ['Start one with timer action "start" and a task.'] : [];
+  return [header, ...timerLines(timer, timezone, ctx), ...hint].join("\n");
 }

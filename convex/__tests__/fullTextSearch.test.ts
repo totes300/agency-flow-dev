@@ -20,7 +20,7 @@ import { createTask, updateTask } from "../tasks/write";
 import { loadTaskForWrite } from "../tasks/access";
 import { createCommentForAuth } from "../comments";
 import { SEARCH_CAP } from "../tasks/read";
-import { SEARCH_TEXT_MAX } from "../lib/searchText";
+import { SEARCH_TEXT_MAX, searchableText } from "../lib/searchText";
 import { connectMembers } from "./helpers/mcpConnections";
 
 const modules = (
@@ -129,6 +129,48 @@ async function attachText(t: T, f: Fixture, taskId: Id<"tasks">, fileName: strin
     });
   });
 }
+
+// ─── Plain text (lib/searchText.ts) ──────────────────────────────────────────
+
+describe("searchableText", () => {
+  const p = (...content: unknown[]) => ({ type: "paragraph", content });
+  const text = (value: string) => ({ type: "text", text: value });
+  const item = (...content: unknown[]) => ({ type: "listItem", content });
+  const cell = (value: string) => ({ type: "tableCell", content: [p(text(value))] });
+
+  it("writes a mention as @label, else @id, inline with its words", () => {
+    const content = { type: "doc", content: [p(text("Ping "), { type: "mention", attrs: { id: "u1", label: "Alice" } }, text(" and "), { type: "mention", attrs: { id: "u2" } })] };
+    expect(searchableText(content)).toBe("Ping @Alice and @u2");
+  });
+
+  it("turns a hard break into a space, so the words around it stay apart", () => {
+    expect(searchableText({ type: "doc", content: [p(text("line one"), { type: "hardBreak" }, text("line two"))] })).toBe("line one line two");
+  });
+
+  it("puts every item of a nested list on its own line", () => {
+    const content = {
+      type: "doc",
+      content: [
+        { type: "bulletList", content: [item(p(text("parent")), { type: "orderedList", content: [item(p(text("child one"))), item(p(text("child two")))] }), item(p(text("sibling")))] },
+      ],
+    };
+    expect(searchableText(content)).toBe("parent\nchild one\nchild two\nsibling");
+  });
+
+  it("puts every table cell on its own line", () => {
+    const content = {
+      type: "doc",
+      content: [{ type: "table", content: [{ type: "tableRow", content: [cell("Item"), cell("Price")] }, { type: "tableRow", content: [cell("Logo"), cell("900")] }] }],
+    };
+    expect(searchableText(content)).toBe("Item\nPrice\nLogo\n900");
+  });
+
+  it("skips empty blocks and non-documents", () => {
+    expect(searchableText({ type: "doc", content: [p(), p(text("only"))] })).toBe("only");
+    expect(searchableText(null)).toBe("");
+    expect(searchableText("plain string")).toBe("");
+  });
+});
 
 // ─── Write paths (S5) ────────────────────────────────────────────────────────
 
@@ -274,6 +316,27 @@ describe("full-text comment search", () => {
     expect((await searchComments(t, "alice", { query: "capybara" })).rows).toHaveLength(0);
     expect((await searchComments(t, "admin", { query: "capybara" })).rows).toHaveLength(1);
   });
+
+  it("a query and a date range together keep only matching comments in the range", async () => {
+    const t = createT();
+    const f = await setup(t);
+    const { id } = await mkTask(t, f, { title: "Task" });
+    await t.run(async (ctx) => {
+      const access = await loadTaskForWrite(ctx, id, f.adminAuth);
+      for (const [body, at] of [
+        ["ocelot in January", "2026-01-10T12:00:00Z"],
+        ["ocelot in March", "2026-03-10T12:00:00Z"],
+        ["no match in March", "2026-03-11T12:00:00Z"],
+      ] as const) {
+        const commentId = await createCommentForAuth(ctx, access, { content: doc(body) });
+        await ctx.db.patch(commentId, { createdAt: Date.parse(at) });
+      }
+    });
+    const march = await searchComments(t, "admin", { query: "ocelot", updated: { from: "2026-03-01", to: "2026-03-31" } });
+    expect(march.rows.map((r) => r.text)).toEqual(["ocelot in March"]);
+    const both = await searchComments(t, "admin", { query: "ocelot", updated: { from: "2026-01-01" } });
+    expect(both.rows.map((r) => r.text)).toEqual(["ocelot in March", "ocelot in January"]);
+  });
 });
 
 // ─── Backfill (S5) ───────────────────────────────────────────────────────────
@@ -305,5 +368,37 @@ describe("backfillSearchText", () => {
       c: (await ctx.db.get(commentId))!.searchText,
     }));
     expect(rows).toEqual({ a: "Old task\nlegacy body", b: "kept as is", c: "legacy comment" });
+  });
+
+  it("continues across pages of 200 until every task and comment is filled", async () => {
+    const t = createT();
+    const f = await setup(t);
+    const TASKS = 205;
+    const ids = await t.run(async (ctx) => {
+      const taskIds: Id<"tasks">[] = [];
+      for (let i = 0; i < TASKS; i += 1) {
+        taskIds.push(await createTask(ctx, f.adminAuth, { title: `Bulk ${i}`, projectId: f.arlo, assigneeIds: [] }, { notify: false }));
+      }
+      const commentId = await createCommentForAuth(ctx, await loadTaskForWrite(ctx, taskIds[0], f.adminAuth), { content: doc("bulk comment") });
+      for (const id of taskIds) await ctx.db.patch(id, { searchText: undefined });
+      await ctx.db.patch(commentId, { searchText: undefined });
+      return { taskIds, commentId };
+    });
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    let logged: unknown[][];
+    vi.useFakeTimers();
+    try {
+      await t.mutation(internal.search.backfillSearchText, {});
+      await t.finishAllScheduledFunctions(() => vi.runAllTimers());
+      logged = [...log.mock.calls];
+    } finally {
+      vi.useRealTimers();
+      log.mockRestore();
+    }
+    const missing = await t.run(async (ctx) => (await ctx.db.query("tasks").collect()).filter((task) => task.searchText === undefined));
+    expect(missing).toHaveLength(0);
+    expect(await t.run(async (ctx) => (await ctx.db.get(ids.taskIds[TASKS - 1]))!.searchText)).toBe(`Bulk ${TASKS - 1}`);
+    expect(await t.run(async (ctx) => (await ctx.db.get(ids.commentId))!.searchText)).toBe("bulk comment");
+    expect(logged).toContainEqual([`[search] backfillSearchText done: ${TASKS + 1} documents filled`]);
   });
 });

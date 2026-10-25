@@ -28,6 +28,13 @@ import { activityLogValidator, type ActivityType, type ActivityVia } from "./tas
  * - `deliver` (action, default runtime) signs and POSTs with a 10 s timeout;
  *   a failure is retried after 30 s, 5 min and 30 min as new attempt rows,
  *   then left failed (W6). Each retry resends the same event `id`.
+ * - Delivery outcomes are written only to `webhookDeliveries`, never to the
+ *   endpoint row: every activity write reads that row, so stamping it per
+ *   attempt made concurrent writes in the org retry (W8). The endpoint's
+ *   "last delivery" is read from its newest finished attempt.
+ * - An attempt whose action died between `startAttempt` and `recordAttempt`
+ *   (timeout, deploy) is closed by the hourly cleanup as "Attempt
+ *   interrupted", and retried like a failed one.
  * - Admin functions use the app session (`getAuthContext` + admin), so OAuth
  *   tokens are refused (I4); the secret is made in actions (randomness in
  *   mutations is deterministic) and returned only by create / rotate.
@@ -39,10 +46,19 @@ const MAX_ATTEMPTS = WEBHOOK_RETRY_DELAYS_MS.length + 1;
 /** Delivery rows are kept 7 days (W6). */
 export const WEBHOOK_DELIVERY_TTL_MS = 7 * 24 * 60 * 60_000;
 const REQUEST_TIMEOUT_MS = 10_000;
+/**
+ * A started attempt still pending after this long lost its action (the
+ * request itself times out after 10 s); the hourly cleanup closes it.
+ */
+export const WEBHOOK_ATTEMPT_INTERRUPTED_MS = 5 * 60_000;
 /** W1 shows one endpoint per org; reads stay bounded if the table ever holds more. */
 const ENDPOINTS_PER_ORG_MAX = 10;
 const RECENT_DELIVERIES = 20;
 const CLEANUP_BATCH = 500;
+/** Interrupted attempts closed per cleanup run; each may queue a retry. */
+const INTERRUPTED_BATCH = 100;
+/** Recent attempt rows read to find the endpoint's last finished delivery. */
+const LAST_DELIVERY_SCAN = 50;
 const URL_MAX_LENGTH = 2048;
 const EXCLUDE_CLIENTS_MAX = 20;
 const AUTH_KEY_MIN = 8;
@@ -221,12 +237,17 @@ type WebhookPayload = {
 
 type DeliveryJob = { url: string; secret: string; authKey: string | null; attempt: number; payload: WebhookPayload };
 
+/** The task ref an activity row recorded (e.g. `task_deleted`), for when the task is gone. */
+function recordedIdentifier(row: Doc<"activityLog">): string | null {
+  const identifier = (row.metadata as { identifier?: unknown }).identifier;
+  return typeof identifier === "string" ? identifier : null;
+}
+
 async function taskPart(ctx: QueryCtx, row: Doc<"activityLog">): Promise<NonNullable<WebhookPayload["task"]>> {
   const task = await ctx.db.get(row.taskId);
   if (!task || task.orgId !== row.orgId) {
     // A deleted task: its activity row is the record; the ref is the last one known.
-    const identifier = (row.metadata as { identifier?: unknown }).identifier;
-    return { ref: typeof identifier === "string" ? identifier : row.taskId };
+    return { ref: recordedIdentifier(row) ?? row.taskId };
   }
   const origin = appOrigin();
   const part: NonNullable<WebhookPayload["task"]> = {
@@ -263,7 +284,8 @@ async function eventPayload(ctx: QueryCtx, row: Doc<"activityLog">): Promise<Web
 /**
  * The attempt's job, or null when there is nothing to send: the row is gone
  * or already done, or its endpoint was removed or (for an event) disabled —
- * such a row is closed as failed here, with no retry.
+ * such a row is closed as failed here, with no retry. A job marks the
+ * attempt started (`startedAt`).
  */
 export const startAttempt = internalMutation({
   args: { deliveryId: v.id("webhookDeliveries") },
@@ -287,14 +309,40 @@ export const startAttempt = internalMutation({
     } else {
       payload = { id: deliveryId, event: "test", at: new Date(delivery.createdAt).toISOString(), org: delivery.orgId };
     }
+    await ctx.db.patch(deliveryId, { startedAt: Date.now() });
     return { url: endpoint.url, secret: endpoint.secret, authKey: endpoint.authKey ?? null, attempt: delivery.attempt, payload };
   },
 });
 
+type AttemptOutcome = { ok: boolean; httpStatus?: number; error?: string };
+
 /**
- * Records an attempt's outcome on its row and the endpoint; a failed event
- * attempt below the limit queues the next one (W6). Test events are never
- * retried.
+ * Closes a pending attempt with its outcome; a failed event attempt below the
+ * limit, on an endpoint still enabled, queues the next one (W6). Test events
+ * are never retried. Writes only delivery rows (W8).
+ */
+async function closeAttempt(ctx: MutationCtx, delivery: Doc<"webhookDeliveries">, { ok, httpStatus, error }: AttemptOutcome) {
+  await ctx.db.patch(delivery._id, { status: ok ? "ok" : "failed", httpStatus, error });
+  if (ok || !delivery.activityId || delivery.attempt >= MAX_ATTEMPTS) return;
+  const endpoint = await ctx.db.get(delivery.endpointId);
+  if (!endpoint || endpoint.orgId !== delivery.orgId || !endpoint.enabled) return;
+  const now = Date.now();
+  const delay = WEBHOOK_RETRY_DELAYS_MS[delivery.attempt - 1];
+  await ctx.db.patch(delivery._id, { nextAttemptAt: now + delay });
+  const next = await ctx.db.insert("webhookDeliveries", {
+    orgId: delivery.orgId,
+    endpointId: delivery.endpointId,
+    activityId: delivery.activityId,
+    attempt: delivery.attempt + 1,
+    status: "pending",
+    createdAt: now,
+  });
+  await ctx.scheduler.runAfter(delay, internal.webhooks.deliver, { deliveryId: next });
+}
+
+/**
+ * Records an attempt's outcome. An attempt already closed (by the cleanup, as
+ * interrupted) is left as it is: its retry is already queued.
  */
 export const recordAttempt = internalMutation({
   args: {
@@ -303,27 +351,10 @@ export const recordAttempt = internalMutation({
     httpStatus: v.optional(v.number()),
     error: v.optional(v.string()),
   },
-  handler: async (ctx, { deliveryId, ok, httpStatus, error }) => {
+  handler: async (ctx, { deliveryId, ...outcome }) => {
     const delivery = await ctx.db.get(deliveryId);
-    if (!delivery) return null;
-    const now = Date.now();
-    const status = ok ? ("ok" as const) : ("failed" as const);
-    await ctx.db.patch(deliveryId, { status, httpStatus, error });
-    const endpoint = await ctx.db.get(delivery.endpointId);
-    if (!endpoint || endpoint.orgId !== delivery.orgId) return null;
-    await ctx.db.patch(endpoint._id, { lastDeliveryAt: now, lastDeliveryStatus: status, lastDeliveryHttpStatus: httpStatus });
-    if (ok || !delivery.activityId || delivery.attempt >= MAX_ATTEMPTS || !endpoint.enabled) return null;
-    const delay = WEBHOOK_RETRY_DELAYS_MS[delivery.attempt - 1];
-    await ctx.db.patch(deliveryId, { nextAttemptAt: now + delay });
-    const next = await ctx.db.insert("webhookDeliveries", {
-      orgId: delivery.orgId,
-      endpointId: delivery.endpointId,
-      activityId: delivery.activityId,
-      attempt: delivery.attempt + 1,
-      status: "pending",
-      createdAt: now,
-    });
-    await ctx.scheduler.runAfter(delay, internal.webhooks.deliver, { deliveryId: next });
+    if (!delivery || delivery.status !== "pending") return null;
+    await closeAttempt(ctx, delivery, outcome);
     return null;
   },
 });
@@ -378,18 +409,37 @@ export const deliver = internalAction({
   },
 });
 
-/** Deletes delivery rows older than 7 days, oldest first (W6). Runs hourly (crons.ts). */
+/**
+ * Closes attempts started more than 5 minutes ago and still pending as
+ * "Attempt interrupted" (retried like any failure); true when more may be left.
+ */
+async function closeInterruptedAttempts(ctx: MutationCtx): Promise<boolean> {
+  const cutoff = Date.now() - WEBHOOK_ATTEMPT_INTERRUPTED_MS;
+  // A queued attempt not yet started has no `startedAt` and sorts below 0.
+  const stale = await ctx.db
+    .query("webhookDeliveries")
+    .withIndex("by_status_startedAt", (q) => q.eq("status", "pending").gt("startedAt", 0).lte("startedAt", cutoff))
+    .take(INTERRUPTED_BATCH);
+  for (const row of stale) await closeAttempt(ctx, row, { ok: false, error: "Attempt interrupted" });
+  return stale.length === INTERRUPTED_BATCH;
+}
+
+/**
+ * Closes interrupted attempts, then deletes delivery rows older than 7 days,
+ * oldest first (W6). Runs hourly (crons.ts).
+ */
 export const cleanupExpired = internalMutation({
   args: {},
   returns: v.null(),
   handler: async (ctx) => {
+    const moreInterrupted = await closeInterruptedAttempts(ctx);
     const cutoff = Date.now() - WEBHOOK_DELIVERY_TTL_MS;
     const expired = await ctx.db
       .query("webhookDeliveries")
       .withIndex("by_createdAt", (q) => q.lte("createdAt", cutoff))
       .take(CLEANUP_BATCH);
     for (const row of expired) await ctx.db.delete(row._id);
-    if (expired.length === CLEANUP_BATCH) {
+    if (moreInterrupted || expired.length === CLEANUP_BATCH) {
       await ctx.scheduler.runAfter(0, internal.webhooks.cleanupExpired, {});
     }
     return null;
@@ -411,7 +461,28 @@ async function ownEndpoint(ctx: QueryCtx | MutationCtx, auth: AuthContext, endpo
   return endpoint;
 }
 
-function publicEndpoint(endpoint: Doc<"webhookEndpoints">, createdByName: string | null) {
+type LastDelivery = { at: number; status: "ok" | "failed"; httpStatus: number | null };
+
+/**
+ * The endpoint's last finished attempt, by when it ran, among its recent rows
+ * (W6 "last delivery state"; the endpoint row is never stamped, W8).
+ */
+async function lastDeliveryOf(ctx: QueryCtx, endpointId: Id<"webhookEndpoints">): Promise<LastDelivery | null> {
+  const rows = await ctx.db
+    .query("webhookDeliveries")
+    .withIndex("by_endpointId_createdAt", (q) => q.eq("endpointId", endpointId))
+    .order("desc")
+    .take(LAST_DELIVERY_SCAN);
+  let last: LastDelivery | null = null;
+  for (const row of rows) {
+    if (row.status === "pending") continue;
+    const at = row.startedAt ?? row.createdAt;
+    if (!last || at > last.at) last = { at, status: row.status, httpStatus: row.httpStatus ?? null };
+  }
+  return last;
+}
+
+function publicEndpoint(endpoint: Doc<"webhookEndpoints">, createdByName: string | null, last: LastDelivery | null) {
   return {
     _id: endpoint._id,
     url: endpoint.url,
@@ -423,9 +494,9 @@ function publicEndpoint(endpoint: Doc<"webhookEndpoints">, createdByName: string
     createdAt: endpoint.createdAt,
     createdByName,
     updatedAt: endpoint.updatedAt,
-    lastDeliveryAt: endpoint.lastDeliveryAt ?? null,
-    lastDeliveryStatus: endpoint.lastDeliveryStatus ?? null,
-    lastDeliveryHttpStatus: endpoint.lastDeliveryHttpStatus ?? null,
+    lastDeliveryAt: last?.at ?? null,
+    lastDeliveryStatus: last?.status ?? null,
+    lastDeliveryHttpStatus: last?.httpStatus ?? null,
   };
 }
 
@@ -440,7 +511,7 @@ export const get = query({
       .first();
     if (!endpoint) return null;
     const creator = await ctx.db.get(endpoint.createdBy);
-    return publicEndpoint(endpoint, creator?.name ?? null);
+    return publicEndpoint(endpoint, creator?.name ?? null, await lastDeliveryOf(ctx, endpoint._id));
   },
 });
 
@@ -603,13 +674,15 @@ export const recentDeliveries = query({
       .take(RECENT_DELIVERIES);
     const deliveries = [];
     for (const row of rows) {
-      const activity = row.activityId ? await ctx.db.get(row.activityId) : null;
-      const task = activity && activity.orgId === auth.orgId ? await ctx.db.get(activity.taskId) : null;
+      const found = row.activityId ? await ctx.db.get(row.activityId) : null;
+      const activity = found && found.orgId === auth.orgId ? found : null;
+      const task = activity ? await ctx.db.get(activity.taskId) : null;
       deliveries.push({
         _id: row._id,
         createdAt: row.createdAt,
         event: row.activityId ? (activity?.type ?? "unknown") : "test",
-        task: task && task.orgId === auth.orgId ? task.identifier : null,
+        // A deleted task (e.g. `task_deleted`): the ref its event recorded.
+        task: task && task.orgId === auth.orgId ? task.identifier : activity ? recordedIdentifier(activity) : null,
         attempt: row.attempt,
         status: row.status,
         httpStatus: row.httpStatus ?? null,

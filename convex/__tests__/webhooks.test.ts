@@ -18,9 +18,17 @@ import { api, internal } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
 import type { AuthContext } from "../lib/auth";
 import { DEFAULT_STATUS_SEED } from "../tasks/model";
-import { createTask, updateTask } from "../tasks/write";
+import { createTask, removeTask, updateTask } from "../tasks/write";
 import { loadTaskForWrite } from "../tasks/access";
-import { authKeyHintOf, changeOf, validateWebhookUrl, WEBHOOK_DELIVERY_TTL_MS, WEBHOOK_EVENT_TYPES, WEBHOOK_RETRY_DELAYS_MS } from "../webhooks";
+import {
+  authKeyHintOf,
+  changeOf,
+  validateWebhookUrl,
+  WEBHOOK_ATTEMPT_INTERRUPTED_MS,
+  WEBHOOK_DELIVERY_TTL_MS,
+  WEBHOOK_EVENT_TYPES,
+  WEBHOOK_RETRY_DELAYS_MS,
+} from "../webhooks";
 import { WEBHOOK_PICKER_TYPES } from "../../lib/webhook-events";
 import { connectMembers } from "./helpers/mcpConnections";
 
@@ -125,6 +133,14 @@ const moveToDone = (t: T, f: Fixture) =>
 
 const runAll = (t: T) => t.finishAllScheduledFunctions(() => vi.runAllTimers());
 
+/** Runs only the scheduled functions due now (one attempt, not its retries). */
+const runDue = async (t: T) => {
+  vi.advanceTimersByTime(0);
+  await t.finishInProgressScheduledFunctions();
+};
+
+const endpointRow = (t: T) => t.run(async (ctx) => (await ctx.db.query("webhookEndpoints").first())!);
+
 async function hmacHex(secret: string, message: string): Promise<string> {
   const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   const mac = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(message)));
@@ -139,8 +155,12 @@ describe("validateWebhookUrl (W7)", () => {
     ["https://127.0.0.1/hook", "IP"],
     ["https://[::1]/hook", "IP"],
     ["https://10.0.0.8/hook", "IP"],
+    // Decimal and hex IPv4 forms: the URL parser normalizes them to 127.0.0.1.
+    ["https://2130706433/", "IP"],
+    ["https://0x7f000001/", "IP"],
     ["https://localhost/hook", "localhost"],
     ["https://api.localhost/hook", "localhost"],
+    ["https://localhost./", "localhost"],
     ["https://metadata.internal/hook", "internal"],
     ["https://flow.test/api/hook", "Agency Flow"],
     ["not a url", "URL"],
@@ -333,6 +353,156 @@ describe("delivery", () => {
     await runAll(t);
     expect(sent).toHaveLength(0);
   });
+
+  it("disabling the endpoint mid-retry stops further attempts", async () => {
+    const t = createT();
+    const f = await setup(t);
+    const { endpointId } = await createEndpoint(t);
+    respond = async () => new Response("nope", { status: 503 });
+    await moveToDone(t, f);
+    await runDue(t);
+    expect(sent).toHaveLength(1);
+    expect((await deliveries(t)).map((r) => [r.attempt, r.status])).toEqual([[1, "failed"], [2, "pending"]]);
+
+    await inApp(t, "admin").mutation(api.webhooks.update, { endpointId, enabled: false });
+    await runAll(t);
+    expect(sent).toHaveLength(1);
+    const rows = await deliveries(t);
+    expect(rows.map((r) => [r.attempt, r.status, r.error])).toEqual([
+      [1, "failed", "HTTP 503"], [2, "failed", "Endpoint removed or disabled"],
+    ]);
+  });
+
+  it("an event deleted before delivery closes the attempt, unsent and not retried", async () => {
+    const t = createT();
+    const f = await setup(t);
+    await createEndpoint(t);
+    await moveToDone(t, f);
+    const [row] = await deliveries(t);
+    await t.run(async (ctx) => await ctx.db.delete(row.activityId!));
+    await runAll(t);
+    expect(sent).toHaveLength(0);
+    expect(await deliveries(t)).toEqual([expect.objectContaining({ attempt: 1, status: "failed", error: "Event not found" })]);
+  });
+
+  it("a task_deleted event carries the last known ref and no link; the log names the task", async () => {
+    const t = createT();
+    const f = await setup(t);
+    const { endpointId } = await createEndpoint(t, { eventTypes: ["task_deleted"] });
+    await t.run(async (ctx) => await removeTask(ctx, await loadTaskForWrite(ctx, f.task, f.adminAuth)));
+    await runAll(t);
+    expect(sent).toHaveLength(1);
+    const payload = JSON.parse(sent[0].body);
+    expect(payload).toMatchObject({ event: "task_deleted", actor: { name: "Ada Admin" } });
+    expect(payload.task).toEqual({ ref: f.identifier });
+    expect(payload.change).toEqual({ identifier: f.identifier, title: "Logo v2", projectCode: "ARLO", subtaskCount: 0, deletedTimeEntries: 0 });
+    const recent = await inApp(t, "admin").query(api.webhooks.recentDeliveries, { endpointId });
+    expect(recent).toEqual([expect.objectContaining({ event: "task_deleted", task: f.identifier, status: "ok" })]);
+  });
+
+  it("delivery outcomes never write the endpoint row (no OCC on activity writes, W8)", async () => {
+    const t = createT();
+    const f = await setup(t);
+    await createEndpoint(t);
+    const before = await endpointRow(t);
+    respond = async () => new Response("nope", { status: 503 });
+    await moveToDone(t, f);
+    await runDue(t);
+    // Mid-chain: the newest row is the pending retry; the last delivery is the failed attempt.
+    expect(await inApp(t, "admin").query(api.webhooks.get, {})).toMatchObject({
+      lastDeliveryStatus: "failed", lastDeliveryHttpStatus: 503, lastDeliveryAt: expect.any(Number),
+    });
+    respond = async () => new Response(null, { status: 204 });
+    await runAll(t);
+    expect(await endpointRow(t)).toEqual(before);
+    const endpoint = await inApp(t, "admin").query(api.webhooks.get, {});
+    expect(endpoint).toMatchObject({ lastDeliveryStatus: "ok", lastDeliveryHttpStatus: 204 });
+    // The time is when the attempt ran, not when its row was queued.
+    const ok = (await deliveries(t)).find((r) => r.status === "ok")!;
+    expect(endpoint!.lastDeliveryAt).toBe(ok.startedAt);
+    expect(ok.startedAt! - ok.createdAt).toBe(WEBHOOK_RETRY_DELAYS_MS[0]);
+  });
+
+  it("no delivery yet: get reports none", async () => {
+    const t = createT();
+    await setup(t);
+    await createEndpoint(t);
+    expect(await inApp(t, "admin").query(api.webhooks.get, {})).toMatchObject({
+      lastDeliveryAt: null, lastDeliveryStatus: null, lastDeliveryHttpStatus: null,
+    });
+  });
+});
+
+// ─── Interrupted attempts ────────────────────────────────────────────────────
+
+describe("interrupted attempts", () => {
+  /** An event, an endpoint and an attempt row that `deliver` started and never finished. */
+  async function interrupted(t: T, f: Fixture, attempt = 1, withEvent = true) {
+    await moveToDone(t, f);
+    const { endpointId } = await createEndpoint(t);
+    const activityId = await t.run(async (ctx) => (await ctx.db.query("activityLog").order("desc").first())!._id);
+    const deliveryId = await t.run(async (ctx) =>
+      await ctx.db.insert("webhookDeliveries", {
+        orgId: ORG, endpointId, ...(withEvent ? { activityId } : {}), attempt, status: "pending", createdAt: Date.now(),
+      }),
+    );
+    // The action's first step ran (the attempt is marked started), then it died.
+    expect(await t.mutation(internal.webhooks.startAttempt, { deliveryId })).not.toBeNull();
+    return { endpointId, deliveryId };
+  }
+
+  it("the hourly cleanup closes a stale started attempt and queues the next one", async () => {
+    const t = createT();
+    const f = await setup(t);
+    const { deliveryId } = await interrupted(t, f);
+    vi.advanceTimersByTime(WEBHOOK_ATTEMPT_INTERRUPTED_MS + 1000);
+    await t.mutation(internal.webhooks.cleanupExpired, {});
+    const rows = await deliveries(t);
+    expect(rows.map((r) => [r.attempt, r.status, r.error])).toEqual([[1, "failed", "Attempt interrupted"], [2, "pending", undefined]]);
+    expect(rows[0].nextAttemptAt! - rows[1].createdAt).toBe(WEBHOOK_RETRY_DELAYS_MS[0]);
+    await runAll(t);
+    expect(sent).toHaveLength(1);
+    expect((await deliveries(t)).map((r) => r.status)).toEqual(["failed", "ok"]);
+
+    // A late outcome from the dead attempt changes nothing.
+    await t.mutation(internal.webhooks.recordAttempt, { deliveryId, ok: true, httpStatus: 200 });
+    expect((await deliveries(t)).map((r) => [r.attempt, r.status, r.error])).toEqual([[1, "failed", "Attempt interrupted"], [2, "ok", undefined]]);
+  });
+
+  it("leaves a fresh started attempt alone, and a queued, unstarted retry at any age", async () => {
+    const t = createT();
+    const f = await setup(t);
+    const { endpointId } = await interrupted(t, f);
+    const activityId = (await deliveries(t))[0].activityId!;
+    // A retry waiting for its delay: queued, never started.
+    await t.run(async (ctx) =>
+      await ctx.db.insert("webhookDeliveries", { orgId: ORG, endpointId, activityId, attempt: 3, status: "pending", createdAt: Date.now() }),
+    );
+    vi.advanceTimersByTime(WEBHOOK_ATTEMPT_INTERRUPTED_MS - 1000);
+    await t.mutation(internal.webhooks.cleanupExpired, {});
+    expect((await deliveries(t)).map((r) => [r.attempt, r.status])).toEqual([[1, "pending"], [3, "pending"]]);
+    vi.advanceTimersByTime(2000);
+    await t.mutation(internal.webhooks.cleanupExpired, {});
+    expect((await deliveries(t)).map((r) => [r.attempt, r.status])).toEqual([[1, "failed"], [2, "pending"], [3, "pending"]]);
+  });
+
+  it("the last attempt and a test event are closed, not retried", async () => {
+    const t = createT();
+    const f = await setup(t);
+    await interrupted(t, f, 4);
+    vi.advanceTimersByTime(WEBHOOK_ATTEMPT_INTERRUPTED_MS + 1000);
+    await t.mutation(internal.webhooks.cleanupExpired, {});
+    expect((await deliveries(t)).map((r) => [r.attempt, r.status, r.nextAttemptAt])).toEqual([[4, "failed", undefined]]);
+
+    const t2 = createT();
+    const f2 = await setup(t2);
+    await interrupted(t2, f2, 1, false);
+    vi.advanceTimersByTime(WEBHOOK_ATTEMPT_INTERRUPTED_MS + 1000);
+    await t2.mutation(internal.webhooks.cleanupExpired, {});
+    await runAll(t2);
+    expect(await deliveries(t2)).toEqual([expect.objectContaining({ status: "failed", error: "Attempt interrupted" })]);
+    expect(sent).toHaveLength(0);
+  });
 });
 
 // ─── Admin functions ─────────────────────────────────────────────────────────
@@ -374,6 +544,14 @@ describe("admin functions", () => {
     await expect(inApp(t, "admin").mutation(api.webhooks.update, { endpointId, url: "http://agent.example.com" })).rejects.toThrow(/https/);
     await inApp(t, "admin").mutation(api.webhooks.update, { endpointId, url: "https://other.example.com/x", eventTypes: null });
     expect(await inApp(t, "admin").query(api.webhooks.get, {})).toMatchObject({ url: "https://other.example.com/x" });
+  });
+
+  it("update refuses an empty event-type list and keeps the filter", async () => {
+    const t = createT();
+    await setup(t);
+    const { endpointId } = await createEndpoint(t, { eventTypes: ["comment_added"] });
+    await expect(inApp(t, "admin").mutation(api.webhooks.update, { endpointId, eventTypes: [] })).rejects.toThrow(/at least one event type/);
+    expect(await inApp(t, "admin").query(api.webhooks.get, {})).toMatchObject({ eventTypes: ["comment_added"] });
   });
 
   it("sendTest posts a signed test event and logs it; recentDeliveries lists it", async () => {

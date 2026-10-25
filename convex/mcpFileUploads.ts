@@ -3,6 +3,9 @@ import { httpAction, internalMutation, internalQuery } from "./_generated/server
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { baseMimeType } from "./lib/mcpFiles";
+import { findOrgMembership } from "./lib/auth";
+import { MCP_SWITCHED_OFF, isMcpDisabled } from "./lib/mcpAuth";
+import { connectionStatus } from "./lib/mcpConnections";
 import { UPLOAD_ROW_TTL_MS, UPLOAD_URL_TTL_MS } from "../lib/mcp/limits";
 
 /**
@@ -19,6 +22,10 @@ import { UPLOAD_ROW_TTL_MS, UPLOAD_URL_TTL_MS } from "../lib/mcp/limits";
  *   10 MB, Convex HTTP actions accept 20 MB);
  * - the blob is stored and its storageId written onto the announcement
  *   (`markStored`); a racing second POST loses and its blob is deleted.
+ *
+ * - the announcing user must still be a member of the org and their
+ *   connection (org + user + OAuth client) not revoked: else 403 with no
+ *   details; while MCP_DISABLED is set, every upload is a 503.
  *
  * The response carries nothing secret (no storageId): the client attaches
  * with attach_file(uploadId). Errors only ever describe the caller's own
@@ -40,6 +47,14 @@ export const uploadSlot = internalQuery({
       ? await ctx.db.query("mcpFileUploads").withIndex("by_uploadId", (q) => q.eq("uploadId", uploadId)).unique()
       : null;
     if (!row) return { ok: false, status: 404, error: UNKNOWN };
+    // The uploader must still be allowed in: a member of the org, through a
+    // connection that is not revoked (D-REVOKE). No details either way.
+    const user = await ctx.db.get(row.userId);
+    const membership = user && !user.deletedAt ? await findOrgMembership(ctx, row.orgId, user.externalId) : null;
+    const connection = row.clientId !== undefined ? await connectionStatus(ctx, row.orgId, row.userId, row.clientId) : "allowed";
+    if (!membership || (membership.userId !== undefined && membership.userId !== row.userId) || connection !== "allowed") {
+      return { ok: false, status: 403, error: "Forbidden." };
+    }
     if (row.storageId !== undefined) return { ok: false, status: 409, error: "This upload URL was already used. Call create_upload for a new one." };
     if (row.createdAt + UPLOAD_URL_TTL_MS < now) {
       return { ok: false, status: 410, error: "This upload URL expired (they work for 1 hour). Call create_upload again." };
@@ -85,6 +100,7 @@ async function readCapped(request: Request, max: number): Promise<Uint8Array[] |
 }
 
 export const upload = httpAction(async (ctx, request) => {
+  if (isMcpDisabled()) return reply(503, { error: MCP_SWITCHED_OFF });
   const uploadId = new URL(request.url).searchParams.get("u") ?? "";
   const slot: Slot = await ctx.runQuery(internal.mcpFileUploads.uploadSlot, { uploadId, now: Date.now() });
   if (!slot.ok) return reply(slot.status, { error: slot.error });

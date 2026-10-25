@@ -108,6 +108,7 @@ export async function createUpload(
     uploadId,
     orgId: auth.orgId,
     userId: auth.userId,
+    clientId: auth.clientId,
     fileName,
     contentType,
     sizeBytes: input.sizeBytes,

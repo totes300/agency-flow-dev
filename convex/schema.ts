@@ -879,6 +879,9 @@ export default defineSchema({
     uploadId: v.string(),
     orgId: v.string(),
     userId: v.id("users"),
+    // The OAuth client that announced it: the endpoint refuses once that
+    // connection is revoked (optional only for rows written before it).
+    clientId: v.optional(v.string()),
     fileName: v.string(),
     contentType: v.string(),
     sizeBytes: v.number(),

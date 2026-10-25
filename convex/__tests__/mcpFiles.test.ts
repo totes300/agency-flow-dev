@@ -327,6 +327,43 @@ describe("the upload endpoint (POST /mcp-upload)", () => {
     expect((await uploadRow(t, started.uploadId))!.storageId).toBeUndefined();
   });
 
+  it("records the announcing client; refuses (403, no details) once that connection is revoked or the user left the org", async () => {
+    const t = createT();
+    const f = await setup(t);
+    const revoked = await createUpload(t, "admin", { filename: "a.txt", contentType: "text/plain", sizeBytes: 5 });
+    const leaver = await createUpload(t, "alice", { filename: "b.txt", contentType: "text/plain", sizeBytes: 5 });
+    expect((await uploadRow(t, revoked.uploadId))!.clientId).toBe("client_claude");
+    const before = await blobCount(t);
+    await t.run(async (ctx) => {
+      const connection = await ctx.db
+        .query("mcpConnections")
+        .withIndex("by_orgId_userId_clientId", (q) => q.eq("orgId", ORG).eq("userId", f.admin).eq("clientId", "client_claude"))
+        .unique();
+      await ctx.db.patch(connection!._id, { revokedAt: Date.now() });
+      const membership = await ctx.db
+        .query("orgMembers")
+        .withIndex("by_orgId_clerkUserId", (q) => q.eq("orgId", ORG).eq("clerkUserId", "clerk_alice"))
+        .unique();
+      await ctx.db.delete(membership!._id);
+    });
+    expect(await post(t, revoked.uploadUrl, "hello", "text/plain")).toEqual({ status: 403, body: { error: "Forbidden." } });
+    expect(await post(t, leaver.uploadUrl, "hello", "text/plain")).toEqual({ status: 403, body: { error: "Forbidden." } });
+    expect(await blobCount(t)).toBe(before);
+  });
+
+  it("answers 503 while MCP_DISABLED is set; nothing is stored", async () => {
+    const t = createT();
+    await setup(t);
+    const started = await createUpload(t, "admin", { filename: "a.txt", contentType: "text/plain", sizeBytes: 5 });
+    const before = await blobCount(t);
+    vi.stubEnv("MCP_DISABLED", "true");
+    const res = await post(t, started.uploadUrl, "hello", "text/plain");
+    expect(res.status).toBe(503);
+    expect(await blobCount(t)).toBe(before);
+    vi.stubEnv("MCP_DISABLED", "");
+    expect((await post(t, started.uploadUrl, "hello", "text/plain")).status).toBe(200);
+  });
+
   it("the cleanup deletes the blob of an upload stored but never attached, keeps attached files", async () => {
     const t = createT();
     const f = await setup(t);

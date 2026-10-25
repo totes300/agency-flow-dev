@@ -975,4 +975,40 @@ export default defineSchema({
     .index("by_orgId_userId_clientId", ["orgId", "userId", "clientId"])
     // Connected apps lists the most recently used first (CONNECTIONS_LIST_MAX).
     .index("by_orgId_userId_lastUsedAt", ["orgId", "userId", "lastUsedAt"]),
+
+  // ─── Outbound webhooks (docs/prd-agent-first-backlog.md §5, W1–W8) ──────────
+  // An admin-managed HTTPS endpoint per org (W1; the table allows more) that
+  // receives every `activityLog` row as a signed POST (convex/webhooks.ts).
+  // `secret` signs the payloads and is returned only by create / rotate.
+  webhookEndpoints: defineTable({
+    orgId: v.string(),
+    url: v.string(),
+    secret: v.string(),                          // base64url, 32 random bytes
+    secretHint: v.string(),                      // last 4 chars, for the UI
+    eventTypes: v.optional(v.array(v.string())), // undefined = every activity type
+    excludeClientIds: v.array(v.string()),       // W5: OAuth clients whose writes are not delivered
+    enabled: v.boolean(),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    lastDeliveryAt: v.optional(v.number()),
+    lastDeliveryStatus: v.optional(v.union(v.literal("ok"), v.literal("failed"))),
+    lastDeliveryHttpStatus: v.optional(v.number()),
+  }).index("by_orgId", ["orgId"]),
+
+  // One row per delivery attempt (W6), kept 7 days. `activityId` is absent
+  // for a "Send test event" delivery.
+  webhookDeliveries: defineTable({
+    orgId: v.string(),
+    endpointId: v.id("webhookEndpoints"),
+    activityId: v.optional(v.id("activityLog")),
+    attempt: v.number(),                         // 1..4
+    status: v.union(v.literal("pending"), v.literal("ok"), v.literal("failed")),
+    httpStatus: v.optional(v.number()),
+    error: v.optional(v.string()),               // short, no response bodies
+    createdAt: v.number(),
+    nextAttemptAt: v.optional(v.number()),       // set on a failed attempt that is retried
+  })
+    .index("by_endpointId_createdAt", ["endpointId", "createdAt"])
+    .index("by_createdAt", ["createdAt"]),
 });

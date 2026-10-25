@@ -157,6 +157,7 @@ import type * as timesheets from "../timesheets.js";
 import type * as typingIndicators from "../typingIndicators.js";
 import type * as userRates from "../userRates.js";
 import type * as users from "../users.js";
+import type * as webhooks from "../webhooks.js";
 import type * as workCategories from "../workCategories.js";
 import type * as workday from "../workday.js";
 import type * as worksheets from "../worksheets.js";
@@ -319,6 +320,7 @@ declare const fullApi: ApiFromModules<{
   typingIndicators: typeof typingIndicators;
   userRates: typeof userRates;
   users: typeof users;
+  webhooks: typeof webhooks;
   workCategories: typeof workCategories;
   workday: typeof workday;
   worksheets: typeof worksheets;

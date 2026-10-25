@@ -15,4 +15,7 @@ crons.interval("mcp upload cleanup", { hours: 1 }, internal.mcpFileUploads.clean
 // App uploads (fileUploads.ts) attach within 24 h; rows and unattached blobs go after 25 h.
 crons.interval("app upload cleanup", { hours: 1 }, internal.fileUploads.cleanupExpired, {});
 
+// Webhook delivery attempts are kept 7 days (docs/prd-agent-first-backlog.md W6).
+crons.interval("webhook delivery cleanup", { hours: 1 }, internal.webhooks.cleanupExpired, {});
+
 export default crons;

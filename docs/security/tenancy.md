@@ -87,6 +87,21 @@ The MCP server (`docs/prd-mcp.md` §5) is a second way in, with its own rules:
   that org. The security controls are the token, the per-call checks above (org,
   membership, role, revoke) and Revoke.
 
+## Outbound webhooks
+
+- Endpoints are per organization and admin-managed through app-session functions
+  (`convex/webhooks.ts`: `getAuthContext` + admin); OAuth tokens cannot call them
+  (I4) and agents cannot configure them. An endpoint id from another org is "not
+  found".
+- Deliveries are queued from `logActivity` only for endpoints of the activity row's
+  own org, and each attempt re-checks that the endpoint still belongs to that org.
+- Payloads are signed with the endpoint's secret (returned only once, at create or
+  rotate) and carry refs and names only: task ref and link, project code, client
+  prefix, actor name and email, the change's short scalar fields. Never task
+  bodies, comment text, notes or file contents.
+- The URL must be `https://` with a host name (no IP literal, localhost, `.internal`
+  or the app's own host); delivery does not follow redirects.
+
 ## Review checklist
 
 - Can the caller choose the organization used for authorization?

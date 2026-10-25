@@ -123,8 +123,9 @@ Defined in `convex/crons.ts`; they deploy with the functions. Each runs hourly:
 | `mcp billing preview cleanup` | Billing previews older than 24 h (tokens commit within 10 minutes, §9). |
 | `mcp upload cleanup` | Upload announcements after 25 h, and the blobs of uploads that were never attached (§10). |
 | `app upload cleanup` | The same for the app UI's `fileUploads` rows (`convex/fileUploads.ts`). |
+| `webhook delivery cleanup` | Webhook delivery attempts older than 7 days (W6, section "Webhooks"). |
 
-After the deploy, confirm all three are listed in the Convex dashboard (Schedules →
+After the deploy, confirm all of them are listed in the Convex dashboard (Schedules →
 Cron jobs) and that their first runs succeed.
 
 ## 5. Attachment extraction backfill
@@ -196,6 +197,31 @@ and shown honestly by `fetch`.
     `maxDuration = 60` and the handler is created with the same value; check the
     function's settings in the Vercel deployment). A lower plan limit cuts long
     report and billing calls off mid-request.
+
+## Webhooks (D-WEBHOOK, 2026-10-25)
+
+Outbound webhooks (`convex/webhooks.ts`, `docs/prd-agent-first-backlog.md` §5) deploy
+with the Convex functions; there is no environment variable to set. `MCP_RESOURCE_URL`
+supplies the app origin for task links and for the "not the app itself" URL check.
+
+- **Tables:** `webhookEndpoints` (one per org, admin-managed in Settings → Webhooks;
+  holds the signing secret, which no query returns) and `webhookDeliveries` (one row
+  per attempt, kept 7 days by the `webhook delivery cleanup` cron).
+- **Flow:** `logActivity` queues every activity row for the org's enabled endpoint
+  (type filter, excluded OAuth clients); `webhooks:deliver` POSTs it signed, with a
+  10 s timeout, and retries after 30 s, 5 min and 30 min before leaving it failed.
+  A failing endpoint never blocks or fails the write.
+- **Reading failures:** filter the Convex logs on `[webhook]`; each attempt logs one
+  line, `[webhook] delivery <id> attempt <n> ok|failed`, never the URL, secret or
+  response. The row's `error` is short (`HTTP 503`, `Network error`, `Timed out after
+  10 s`, `Endpoint removed or disabled`); the endpoint shows the last outcome.
+- **Receivers must verify the signature:** recompute HMAC-SHA256 with the secret over
+  `"<t>.<raw body>"` from `X-AgencyFlow-Signature: t=<unix seconds>,v1=<hex>`, compare
+  in constant time, reject when `|now − t| > 300 s`, and dedupe on the payload `id`
+  (the event id, identical on retries). `docs/agent-recipes.md` recipe 3 is the
+  agent-side routine.
+- **Accepted V1 risk:** a public host name that resolves to a private address passes
+  the URL check (W7); delivery follows no redirects.
 
 ## Connected apps and revocation (owner decisions D-PAGE, D-REVOKE, 2026-10-25)
 

@@ -49,6 +49,9 @@ export type SaveDailyNotesData = FunctionReturnType<typeof api.mcp.write.saveDai
 export type MarkReadData = FunctionReturnType<typeof api.mcp.write.markRead>;
 export type CreateUploadData = FunctionReturnType<typeof api.mcp.files.createUpload>;
 export type AttachFileData = FunctionReturnType<typeof api.mcp.files.attach>;
+export type InviteMembersData = FunctionReturnType<typeof api.mcp.members.inviteCheck>;
+/** One `invite_members` verdict after the Clerk round: Convex's `already_member`, or what Clerk answered. */
+export type InviteOutcome = "invited" | "already_member" | "already_invited" | { error: string };
 
 /** What renderers need besides the data: where the app lives and the org's clock. */
 export type RenderContext = {
@@ -1359,6 +1362,8 @@ export function renderSaveProjects(data: SaveProjectsData, ctx: RenderContext): 
       i.archived && "archived",
       SAVE_ACTION[i.action],
       i.previousCode ? `code ${i.previousCode} → ${i.code}: task keys renamed, old keys still work` : null,
+      // D-BILLINGTYPE: a create without billingType says it started non-billable.
+      i.note ? oneLine(i.note) : null,
     )}`,
     ...(i.autoSavedTimers ?? []).map((t) => `  - running timer saved as an entry: ${oneLine(t.member)} · ${formatDuration(t.minutes)}`),
     ...(i.timerSaveFailures ?? []).map((t) => `  - timer left running (could not save): ${oneLine(t.member)} · ${oneLine(t.reason)}`),
@@ -1410,6 +1415,34 @@ export function renderMarkRead(data: MarkReadData): string {
     return `- ${fields(what, i.action === "marked_read" ? (i.type === "inbox" ? null : "marked read") : "already read")}`;
   });
   return [writeHeader("Marked read", data.replayed), ...lines].join("\n");
+}
+
+// ─── invite_members ──────────────────────────────────────────────────────────
+
+/**
+ * One line per email (D-INVITE). Membership arrives through the Clerk
+ * webhook once the invitee accepts, so the tail says where to look meanwhile.
+ */
+export function renderInviteMembers(data: {
+  replayed: boolean;
+  items: ReadonlyArray<{ email: string; role: "admin" | "member"; outcome: InviteOutcome }>;
+}): string {
+  const lines = data.items.map((i) => {
+    const what =
+      i.outcome === "invited"
+        ? `invited (${i.role})`
+        : i.outcome === "already_member"
+          ? "already a member"
+          : i.outcome === "already_invited"
+            ? "already invited"
+            : `error: ${oneLine(i.outcome.error)}`;
+    return `- ${fields(oneLine(i.email), what)}`;
+  });
+  return [
+    writeHeader("Invitations", data.replayed),
+    ...lines,
+    'Pending invitations appear in Clerk; the member appears in fetch("workspace") after accepting.',
+  ].join("\n");
 }
 
 // ─── Files (create_upload / attach_file) ─────────────────────────────────────

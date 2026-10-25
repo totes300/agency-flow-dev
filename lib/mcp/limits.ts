@@ -83,6 +83,14 @@ export const UPLOAD_ATTACH_WINDOW_MS = 24 * 60 * 60 * 1000;
 /** Upload rows are kept 25 hours (past the attach window), then cleaned up with any unattached blob. */
 export const UPLOAD_ROW_TTL_MS = 25 * 60 * 60 * 1000;
 
+/**
+ * `invite_members` (docs/prd-mcp.md D-INVITE): the two Clerk organization
+ * roles the app knows (`orgMembers.role`), and the longest email accepted.
+ */
+export const INVITE_ROLES = ["admin", "member"] as const;
+export type InviteRole = (typeof INVITE_ROLES)[number];
+export const INVITE_EMAIL_MAX_LENGTH = 254;
+
 /** Markdown accepted per description or comment body (route schema and Convex). */
 export const MARKDOWN_MAX_LENGTH = 50_000;
 

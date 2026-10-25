@@ -417,7 +417,10 @@ export function createRefResolver(ctx: QueryCtx, auth: AuthContext) {
         if (!allows("member")) return wrongType("an email");
         const matches = (await orgMembers()).filter((m) => m.user.email?.toLowerCase() === ref.email);
         if (matches.length === 0) {
-          return { ok: false, message: `${parsed.input} is not a member of this workspace. ${NOT_FOUND_HINT.member}` };
+          return {
+            ok: false,
+            message: `${parsed.input} is not a member of this workspace. ${NOT_FOUND_HINT.member} Admins can invite them with invite_members.`,
+          };
         }
         if (matches.length > 1) {
           const candidates = matches.map((m) => ({ type: "member" as const, id: m.user._id, key: null, name: m.user.name }));

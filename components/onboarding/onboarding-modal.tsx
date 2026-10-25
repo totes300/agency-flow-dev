@@ -30,6 +30,16 @@ import type { StatusDraft, CategoryDraft } from "./shared"
 
 const STEPS = ["General", "Statuses", "Work Categories"]
 
+/** The browser's IANA timezone, or null when the runtime cannot tell. */
+function browserTimezone(): string | null {
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
+    return tz && tz.length <= 100 ? tz : null
+  } catch {
+    return null
+  }
+}
+
 export function OnboardingModal() {
   const createOrgSettings = useMutation(api.orgSettings.create)
 
@@ -39,7 +49,10 @@ export function OnboardingModal() {
 
   // Step 0: General
   const [currency, setCurrency] = useState<Currency>(DEFAULT_CURRENCY)
-  const [timezone, setTimezone] = useState(DEFAULT_TIMEZONE)
+  // The browser's timezone by default (this modal mounts client-side only,
+  // behind the org-settings query in onboarding-gate.tsx); Convex still
+  // requires an explicit value.
+  const [timezone, setTimezone] = useState(() => browserTimezone() ?? DEFAULT_TIMEZONE)
   const [rounding, setRounding] = useState<RoundingMinutes>(DEFAULT_ROUNDING)
 
   // Step 1: Statuses

@@ -61,6 +61,16 @@ describe("slice 7a tools in the registry", () => {
     expect(calls.length).toBe(before);
   });
 
+  it("invite_members refuses without a Clerk invite runner, before any Convex call", async () => {
+    const { ctx, calls } = fake(() => ({}));
+    expect(await tool("invite_members").execute({ items: [{ email: "ada@x.test", role: "member" }] }, ctx)).toEqual({
+      text: "Error: Invitations are not available on this server.",
+      isError: true,
+    });
+    expect(calls).toEqual([]);
+    expect(tool("invite_members").inputSchema.safeParse({ items: [{ email: "ada@x.test", role: "owner" }] }).success).toBe(false);
+  });
+
   it("schemas: billing types, currencies and the remove flag are enums; minutes are whole", () => {
     const projects = tool("save_projects").inputSchema;
     expect(projects.safeParse({ items: [{ name: "X", billingType: "hourly" }] }).success).toBe(false);

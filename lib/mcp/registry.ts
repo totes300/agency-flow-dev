@@ -14,6 +14,8 @@ import {
   INBOX_LIMIT_DEFAULT,
   INLINE_TEXT_MAX_BYTES,
   INBOX_LIMIT_MAX,
+  INVITE_EMAIL_MAX_LENGTH,
+  INVITE_ROLES,
   INVOICE_ACTIONS,
   INVOICE_SEARCH_STATUSES,
   MAX_REFS,
@@ -28,6 +30,7 @@ import {
   TIME_ENTRY_MINUTES_MAX,
   TIME_ENTRY_NOTE_MAX,
   type BillingAction,
+  type InviteRole,
   type ReportKind,
 } from "./limits";
 import { parseRef, parseRefs } from "./refs";
@@ -40,6 +43,7 @@ import {
   renderDailyNoteSection,
   renderDelete,
   renderInbox,
+  renderInviteMembers,
   renderMarkRead,
   renderInvoiceSection,
   renderMe,
@@ -59,6 +63,8 @@ import {
   renderTimer,
   renderTimerStatus,
   renderWorkspace,
+  type InviteMembersData,
+  type InviteOutcome,
   type RenderContext,
 } from "./render";
 import {
@@ -125,7 +131,35 @@ export type McpToolContext = {
    * Display text only: Convex sanitizes it and never authorizes on it.
    */
   clientName: () => Promise<string | undefined>;
+  /**
+   * Performs one Clerk organization invitation for `invite_members`
+   * (D-INVITE), after Convex authorized the call. Supplied by the route
+   * (lib/mcp/clerk-invitations.ts); absent only in unit tests that never
+   * invite, where the tool refuses.
+   */
+  invite?: ClerkInviteRunner;
 };
+
+/**
+ * One Clerk organization invitation the route performs for `invite_members`.
+ * Every field comes from Convex's `inviteCheck` result — the org and the
+ * inviter from the verified token — never from the client's arguments.
+ */
+export type ClerkInviteRequest = {
+  organizationId: string;
+  emailAddress: string;
+  role: InviteRole;
+  /** The calling admin's Clerk user id (the invitation's inviter). */
+  inviterClerkUserId: string;
+};
+
+/** What Clerk did with one invitation; `message` is Clerk's own text, shown to the model. */
+export type ClerkInviteOutcome =
+  | { status: "invited" | "already_invited" | "already_member" }
+  | { status: "error"; message: string };
+
+/** Never throws: a Clerk failure is an `error` outcome. */
+export type ClerkInviteRunner = (request: ClerkInviteRequest) => Promise<ClerkInviteOutcome>;
 
 export type McpToolResult = { text: string; isError: boolean };
 
@@ -838,7 +872,11 @@ async function runWrite<Mutation extends FunctionReference<"mutation">>(
 const taskItem = z.object({
   ref: ref.optional().describe("Task to update; omit to create."),
   title: z.string().min(1).max(500).optional(),
-  description: z.string().max(MARKDOWN_MAX_LENGTH).optional().describe("Markdown; replaces it. @email mentions."),
+  description: z
+    .string()
+    .max(MARKDOWN_MAX_LENGTH)
+    .optional()
+    .describe('Markdown (headings, lists, "- [ ] item" checklists, tables, code, quotes, <details><summary>Title</summary>…</details> toggles); replaces the body. @email mentions.'),
   project: ref.nullable().optional().describe("Create: omit for a task without a project. Update: omitted = unchanged, null removes it (admins)."),
   parent: ref.optional().describe("Create as a checklist item (sub-task) of this task."),
   status: z.string().min(1).max(100).optional(),
@@ -925,8 +963,9 @@ const saveCommentsTool: McpTool = {
   name: "save_comments",
   title: "Write Agency Flow comments",
   description: [
-    "Comment on a task, reply to a comment, or edit your own. Body is markdown; @email mentions and notifies a",
-    `member (\\@ for a literal @). ${WRITE_TAIL} ${DATA_TAIL}`,
+    "Comment on a task, reply to a comment, or edit your own. Body is markdown (headings, lists, \"- [ ] item\"",
+    "checklists, tables, code, quotes, <details><summary>Title</summary>…</details> toggles); @email mentions and notifies a member (\\@ for a literal @).",
+    `${WRITE_TAIL} ${DATA_TAIL}`,
     'Example: {"items": [{"task": "ARLO-21", "body": "Mockups sent. @csaba@konverted.io can you review?"}]}',
   ].join(" "),
   inputSchema: saveCommentsInput,
@@ -1187,10 +1226,11 @@ const saveProjectsTool: McpTool = {
   name: "save_projects",
   title: "Create or update Agency Flow projects",
   description: [
-    "Create or edit projects (admins). Create needs name, client, billingType and its terms: fixed — fixedFee,",
-    "[estimates], [rates]; retainer — includedMinutes, monthlyFee, overageRate, startDate, [cycleLength], [rollover];",
-    "t_and_m — [rates]; non_billable — none. A term the type does not take is an error; client and billingType never",
-    `change. Money is in the client's currency; durations are minutes or "20h". ${WRITE_TAIL}`,
+    "Create or edit projects (admins). Create needs name and client; billingType and its terms may follow later",
+    "(default non_billable; changeable until the project has a close or invoice): fixed — fixedFee, [estimates],",
+    "[rates]; retainer — includedMinutes, monthlyFee, overageRate, startDate, [cycleLength], [rollover]; t_and_m —",
+    "[rates]; non_billable — none. A term the type does not take is an error; client never changes. Money is in",
+    `the client's currency; durations are minutes or "20h". ${WRITE_TAIL}`,
     'Example: {"items": [{"name": "Arlow site", "client": "client:ARLO", "billingType": "retainer", "includedMinutes": "20h", "monthlyFee": 2000, "overageRate": 95, "startDate": "2026-11-01"}]}',
   ].join(" "),
   inputSchema: saveProjectsInput,
@@ -1270,7 +1310,7 @@ const savePlanTool: McpTool = {
 
 const saveDailyNotesInput = z.object({
   date: date.optional().describe("Default today."),
-  content: z.string().max(MARKDOWN_MAX_LENGTH).describe("Markdown."),
+  content: z.string().max(MARKDOWN_MAX_LENGTH).describe('Markdown (headings, lists, "- [ ] item" checklists, tables, code, quotes, <details><summary>Title</summary>…</details> toggles).'),
   append: z.boolean().optional().describe('Default true; false replaces the note ("" clears it).'),
   idempotencyKey,
 });
@@ -1462,6 +1502,89 @@ const attachFileTool: McpTool = {
     } catch (error) {
       return { text: `Error: ${mcpErrorMessage(error, "attach_file")}`, isError: true };
     }
+  },
+};
+
+// ─── invite_members (admins; Convex authorizes, the route calls Clerk — D-INVITE) ──
+
+const inviteItem = z.object({
+  email: z.string().min(1).max(INVITE_EMAIL_MAX_LENGTH),
+  role: z.enum(INVITE_ROLES).describe("Workspace role after accepting."),
+});
+
+const inviteMembersInput = z.object({
+  items: z.array(inviteItem).min(1).max(MCP_BATCH_MAX),
+  idempotencyKey,
+});
+
+/** Convex's verdicts merged with Clerk's answers; without a Clerk round (a replay) every `invite` reads as sent. */
+function inviteOutcomesOf(data: InviteMembersData, clerk: ReadonlyMap<string, ClerkInviteOutcome>) {
+  return {
+    replayed: data.replayed,
+    items: data.items.map((item) => {
+      const outcome: InviteOutcome =
+        item.status === "already_member" ? "already_member" : outcomeOf(clerk.get(item.email) ?? { status: "invited" });
+      return { email: item.email, role: item.role, outcome };
+    }),
+  };
+}
+
+function outcomeOf(outcome: ClerkInviteOutcome): InviteOutcome {
+  return outcome.status === "error" ? { error: outcome.message } : outcome.status;
+}
+
+const inviteMembersOperations = {
+  check: mutationOperation(api.mcp.members.inviteCheck, (data: InviteMembersData) =>
+    renderInviteMembers(inviteOutcomesOf(data, new Map())),
+  ),
+};
+
+const inviteMembersTool: McpTool = {
+  name: "invite_members",
+  title: "Invite members to the Agency Flow workspace",
+  description: [
+    "Invite people to this workspace by email (admins): each gets a Clerk organization invitation and appears in",
+    'fetch("workspace") after accepting. Existing members and pending invitations are reported, not re-sent.',
+    'Example: {"items": [{"email": "ada@konverted.io", "role": "member"}]}',
+  ].join(" "),
+  inputSchema: inviteMembersInput,
+  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  operations: inviteMembersOperations,
+  execute: async (raw, ctx) => {
+    const input = inviteMembersInput.parse(raw);
+    if (!ctx.invite) return { text: "Error: Invitations are not available on this server.", isError: true };
+    let data: InviteMembersData;
+    try {
+      data = await runMutationOperation(inviteMembersOperations.check, ctx, {
+        items: input.items,
+        idempotencyKey: input.idempotencyKey,
+        clientName: await ctx.clientName(),
+      });
+    } catch (error) {
+      return { text: `Error: ${mcpErrorMessage(error, getFunctionName(inviteMembersOperations.check.mutation))}`, isError: true };
+    }
+    // A replay never reaches Clerk again (D23): the first call sent these invitations.
+    const clerk = new Map<string, ClerkInviteOutcome>();
+    if (!data.replayed) {
+      for (const item of data.items) {
+        if (item.status !== "invite") continue;
+        try {
+          clerk.set(
+            item.email,
+            await ctx.invite({
+              organizationId: data.orgId,
+              emailAddress: item.email,
+              role: item.role,
+              inviterClerkUserId: data.inviterClerkUserId,
+            }),
+          );
+        } catch (error) {
+          clerk.set(item.email, { status: "error", message: mcpErrorMessage(error, "invite_members") });
+        }
+      }
+    }
+    const failed = [...clerk.values()].filter((o) => o.status === "error").length;
+    return { text: renderInviteMembers(inviteOutcomesOf(data, clerk)), isError: clerk.size > 0 && failed === clerk.size };
   },
 };
 
@@ -1766,6 +1889,7 @@ export const MCP_TOOLS: readonly McpTool[] = [
   deleteTool,
   createUploadTool,
   attachFileTool,
+  inviteMembersTool,
   reportTool,
   billingPreviewTool,
   billingCommitTool,

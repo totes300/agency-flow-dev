@@ -6,11 +6,19 @@
 
 import { describe, it, expect, vi } from "vitest";
 import { getFunctionName } from "convex/server";
+import { ConvexError } from "convex/values";
 import { z } from "zod";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { createAgencyFlowMcpHandler } from "../handler";
 import { advertisedInputSchema } from "../advertise";
-import { MCP_TOOLS, type McpActionRunner, type McpMutationRunner, type McpQueryRunner } from "../registry";
+import {
+  MCP_TOOLS,
+  type ClerkInviteOutcome,
+  type ClerkInviteRequest,
+  type McpActionRunner,
+  type McpMutationRunner,
+  type McpQueryRunner,
+} from "../registry";
 
 const RESOURCE_URL = "https://localhost:3001/mcp";
 const METADATA_URL = "https://localhost:3001/.well-known/oauth-protected-resource/mcp";
@@ -18,6 +26,11 @@ const GOOD_TOKEN = "good-token";
 
 const seenTokens: string[] = [];
 const seenMutations: Array<{ name: string; args: Record<string, unknown> }> = [];
+const seenInvites: ClerkInviteRequest[] = [];
+/** Per-email Clerk answers for the invite stub (default: invited); an Error makes the stub throw. */
+const inviteAnswers = new Map<string, ClerkInviteOutcome | Error>();
+/** What the mutation stub answers an invite_members call (an Error is thrown); set per test. */
+let inviteCheckResult: Record<string, unknown> | Error | null = null;
 
 const handler = createAgencyFlowMcpHandler({
   resourceUrl: RESOURCE_URL,
@@ -50,6 +63,10 @@ const handler = createAgencyFlowMcpHandler({
     (async (mutation, args) => {
       seenTokens.push(token);
       seenMutations.push({ name: getFunctionName(mutation), args: args as Record<string, unknown> });
+      if (getFunctionName(mutation) === "mcp/members:inviteCheck") {
+        if (!inviteCheckResult || inviteCheckResult instanceof Error) throw inviteCheckResult ?? new Error("inviteCheckResult not set");
+        return inviteCheckResult;
+      }
       return {
         tool: "save_comments",
         replayed: false,
@@ -61,6 +78,13 @@ const handler = createAgencyFlowMcpHandler({
       throw new Error("unexpected action");
     }) as McpActionRunner,
   clientNameFor: async (clientId) => (clientId === "client_test" ? "Test Client" : undefined),
+  // invite_members: the Clerk call is a stub that records its requests and answers per email.
+  clerkInvite: async (request) => {
+    seenInvites.push(request);
+    const answer = inviteAnswers.get(request.emailAddress);
+    if (answer instanceof Error) throw answer;
+    return answer ?? { status: "invited" };
+  },
 });
 
 function rpc(body: unknown, token?: string): Request {
@@ -154,6 +178,7 @@ describe("MCP protocol", () => {
       "delete",
       "create_upload",
       "attach_file",
+      "invite_members",
       "report",
       "billing_preview",
       "billing_commit",
@@ -192,6 +217,7 @@ describe("MCP protocol", () => {
       expect(hints[name]).toEqual({ readOnlyHint: false, destructiveHint: false, openWorldHint: false });
     }
     expect(hints.mark_read).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: true });
+    expect(hints.invite_members).toEqual({ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false });
     expect(hints.delete).toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: true });
     expect(hints.report).toMatchObject({ readOnlyHint: true });
     expect(hints.billing_preview).toMatchObject({ readOnlyHint: true });
@@ -318,5 +344,116 @@ describe("MCP write tools", () => {
         args: { items: [{ task: "ARLO-21", body: "Done" }], idempotencyKey: "k1", clientName: "Test Client" },
       },
     ]);
+  });
+});
+
+describe("invite_members (D-INVITE: Convex authorizes, the route calls Clerk)", () => {
+  const ORG = "org_1";
+  const INVITER = "user_admin";
+  const call = (args: Record<string, unknown>) =>
+    handler(rpc({ jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "invite_members", arguments: args } }, GOOD_TOKEN));
+  const verdicts = (items: Array<{ email: string; role: "admin" | "member"; status: "invite" | "already_member" }>, replayed = false) => ({
+    tool: "invite_members",
+    orgId: ORG,
+    inviterClerkUserId: INVITER,
+    items,
+    replayed,
+  });
+
+  function reset() {
+    seenMutations.length = 0;
+    seenInvites.length = 0;
+    inviteAnswers.clear();
+    inviteCheckResult = null;
+  }
+
+  it("invites every email Convex cleared, with the org and inviter from Convex, and reports members and pending invitations", async () => {
+    reset();
+    inviteCheckResult = verdicts([
+      { email: "ada@x.test", role: "member", status: "invite" },
+      { email: "bob@x.test", role: "admin", status: "already_member" },
+      { email: "cy@x.test", role: "admin", status: "invite" },
+    ]);
+    inviteAnswers.set("cy@x.test", { status: "already_invited" });
+    const { result } = await rpcResult(await call({ items: [{ email: "Ada@x.test", role: "member" }, { email: "bob@x.test", role: "admin" }, { email: "cy@x.test", role: "admin" }], idempotencyKey: "inv1" }));
+    expect(result).toEqual({
+      isError: false,
+      content: [
+        {
+          type: "text",
+          text: [
+            "## Invitations",
+            "- ada@x.test · invited (member)",
+            "- bob@x.test · already a member",
+            "- cy@x.test · already invited",
+            'Pending invitations appear in Clerk; the member appears in fetch("workspace") after accepting.',
+          ].join("\n"),
+        },
+      ],
+    });
+    // The raw items reach Convex (it normalizes and authorizes); Clerk is called only for `invite` verdicts.
+    expect(seenMutations).toEqual([
+      {
+        name: "mcp/members:inviteCheck",
+        args: {
+          items: [{ email: "Ada@x.test", role: "member" }, { email: "bob@x.test", role: "admin" }, { email: "cy@x.test", role: "admin" }],
+          idempotencyKey: "inv1",
+          clientName: "Test Client",
+        },
+      },
+    ]);
+    expect(seenInvites).toEqual([
+      { organizationId: ORG, emailAddress: "ada@x.test", role: "member", inviterClerkUserId: INVITER },
+      { organizationId: ORG, emailAddress: "cy@x.test", role: "admin", inviterClerkUserId: INVITER },
+    ]);
+  });
+
+  it("a Clerk error is one line with Clerk's message; the call is an error only when every invitation failed", async () => {
+    reset();
+    inviteCheckResult = verdicts([
+      { email: "ada@x.test", role: "member", status: "invite" },
+      { email: "dan@x.test", role: "member", status: "invite" },
+    ]);
+    inviteAnswers.set("dan@x.test", { status: "error", message: "Invitations are disabled for this organization." });
+    const { result } = await rpcResult(await call({ items: [{ email: "ada@x.test", role: "member" }, { email: "dan@x.test", role: "member" }] }));
+    expect(result).toMatchObject({ isError: false });
+    expect((result!.content as Array<{ text: string }>)[0].text).toContain(
+      "- dan@x.test · error: Invitations are disabled for this organization.",
+    );
+
+    reset();
+    inviteCheckResult = verdicts([{ email: "dan@x.test", role: "member", status: "invite" }]);
+    inviteAnswers.set("dan@x.test", new Error("Clerk down"));
+    const failed = await rpcResult(await call({ items: [{ email: "dan@x.test", role: "member" }] }));
+    expect(failed.result).toMatchObject({ isError: true });
+    // A thrown runner never leaks internals: the generic text with a log ref.
+    expect((failed.result!.content as Array<{ text: string }>)[0].text).toMatch(/- dan@x\.test · error: Internal error \(ref [0-9a-f]{8}\)/);
+  });
+
+  it("a replayed idempotencyKey renders the first verdicts and never calls Clerk again", async () => {
+    reset();
+    inviteCheckResult = verdicts([{ email: "ada@x.test", role: "member", status: "invite" }], true);
+    const { result } = await rpcResult(await call({ items: [{ email: "ada@x.test", role: "member" }], idempotencyKey: "inv1" }));
+    expect(result).toMatchObject({ isError: false });
+    expect((result!.content as Array<{ text: string }>)[0].text).toBe(
+      [
+        "## Invitations",
+        "Replayed: this idempotencyKey was already used, so nothing was written again. The first call's result:",
+        "- ada@x.test · invited (member)",
+        'Pending invitations appear in Clerk; the member appears in fetch("workspace") after accepting.',
+      ].join("\n"),
+    );
+    expect(seenInvites).toEqual([]);
+  });
+
+  it("a Convex refusal (member caller, bad email) is returned as is and Clerk is never called", async () => {
+    reset();
+    inviteCheckResult = new ConvexError("Members are invited by admins only, as in the app.");
+    const { result } = await rpcResult(await call({ items: [{ email: "ada@x.test", role: "member" }] }));
+    expect(result).toEqual({
+      isError: true,
+      content: [{ type: "text", text: "Error: Members are invited by admins only, as in the app." }],
+    });
+    expect(seenInvites).toEqual([]);
   });
 });

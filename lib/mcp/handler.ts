@@ -6,7 +6,14 @@ import { advertisedTool } from "./advertise";
 import { MCP_SERVER_INSTRUCTIONS } from "./instructions";
 import { protectedResourceMetadataPath } from "./config";
 import { appOriginOf } from "./links";
-import { MCP_TOOLS, mcpErrorMessage, type McpActionRunner, type McpMutationRunner, type McpQueryRunner } from "./registry";
+import {
+  MCP_TOOLS,
+  mcpErrorMessage,
+  type ClerkInviteRunner,
+  type McpActionRunner,
+  type McpMutationRunner,
+  type McpQueryRunner,
+} from "./registry";
 import pkg from "../../package.json";
 
 /**
@@ -27,12 +34,18 @@ export type McpHandlerOptions = {
   actionRunnerFor: (token: string) => McpActionRunner;
   /** The display name of an OAuth client (attribution only, D15); never throws. */
   clientNameFor: (clientId: string) => Promise<string | undefined>;
+  /**
+   * Creates one Clerk organization invitation for `invite_members`
+   * (D-INVITE) with the org and inviter Convex returned from the verified
+   * token; never throws. The route supplies lib/mcp/clerk-invitations.ts.
+   */
+  clerkInvite: ClerkInviteRunner;
 };
 
 /** What the tools need from the route besides the request. */
 export type McpConvexAccess = Pick<
   McpHandlerOptions,
-  "queryRunnerFor" | "mutationRunnerFor" | "actionRunnerFor" | "clientNameFor"
+  "queryRunnerFor" | "mutationRunnerFor" | "actionRunnerFor" | "clientNameFor" | "clerkInvite"
 >;
 
 /** The app's package.json version, so `initialize` names the deployed build. */
@@ -69,6 +82,7 @@ export function registerMcpTools(server: McpServer, access: McpConvexAccess, app
             appOrigin,
             now: Date.now,
             clientName: async () => (clientId ? await access.clientNameFor(clientId) : undefined),
+            invite: access.clerkInvite,
           });
         } catch (error) {
           // A renderer or tool bug: the model gets the generic text with a

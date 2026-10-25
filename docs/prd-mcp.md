@@ -101,6 +101,8 @@ Taken during the build and tagged in code; §17 records the slice each came from
 | D-DELETEGUARD | A project is deleted only when nothing hangs off it (no time entries, running timer, tasks, invoices or billing closes); a client only when every one of its projects could be. Anything else is archived instead. The same guard runs in the app's Delete and in MCP `delete`. | `convex/lib/projectDelete.ts`, `convex/projects.ts`, `convex/clients.ts`, `convex/lib/mcpDelete.ts` |
 | D-COMMENTATTACH | Files are added to a comment while writing it, so only the comment's author may attach to it, in the app and through MCP. | `convex/commentAttachments.ts`, `convex/lib/mcpFiles.ts` |
 | D-MISSING | `missing_time` takes a `statuses` param; the default is every completed-category status, and names are matched exactly, never guessed (D25). | `convex/lib/mcpReports.ts` |
+| D-INVITE | 2026-10-25: admins invite members through MCP via Clerk organization invitations (`invite_members`); membership still arrives through the webhook. Convex authorizes and returns the verified org and inviter; the route performs the Clerk call and never takes an org from the client (§4, I3/I4). | `convex/mcp/members.ts`, `convex/lib/mcpMembers.ts`, `lib/mcp/clerk-invitations.ts`, `app/mcp/route.ts` |
+| D-BILLINGTYPE | (2026-10-25) A project's billing type and its terms may change while the project has **no billing history** — no billing close of any status and no invoice (`projectHasBillingHistory`); the change applies the New Project form's validation to the new terms and clears the previous type's. One predicate, enforced in `projects.update` for the app and for MCP `save_projects` alike; once billing started the type is frozen as before. `save_projects` create may omit `billingType`: the project starts `non_billable` and the result row says so (`note`), so an agent can create before the terms are known and set the type later. | `convex/lib/billing/closeData.ts`, `convex/projects.ts`, `convex/lib/mcpSaveProjects.ts` |
 
 **App-path rule changes shipped with the MCP branch.** MCP reuses the app's write
 paths (goal 3), so these owner decisions changed the app as well:
@@ -259,7 +261,7 @@ every tool definition on every turn, and a batch-first design needs fewer calls.
 | `save_time_entries` | write | Batch create/patch of time entries (task, date, minutes, note, category). |
 | `timer` | write | `start(task)`, `stop`, `status`. |
 | `save_clients` | write | Batch create/patch. Admins only, as in the app. |
-| `save_projects` | write | Batch create/patch. Admins only, as in the app. |
+| `save_projects` | write | Batch create/patch. Admins only, as in the app. A create may omit `billingType` (starts non-billable); a patch changes the type with its terms while the project has no close or invoice (D-BILLINGTYPE). |
 | `save_plan` | write | Planner segments: create, move or resize (member, task, date range). |
 | `save_daily_notes` | write | Create/patch a daily note for a date. |
 | `mark_read` | write, idempotent | Mark inbox items, or a task's / comment's notifications, as read. The ref `"inbox"` is the app's "Mark all as read", 200 items per call. |
@@ -267,6 +269,7 @@ every tool definition on every turn, and a batch-first design needs fewer calls.
 | `report` | read-only | `kind` plus params (§8). Returns a markdown table and an app link. |
 | `billing_preview` | read-only | `action` plus params → effect summary and `commitToken`. The actions are the app's own buttons (§17 slice 6, owner 2026-10-25): on a project period (`project` + `period`): `close_period`, `reopen_period`; on a project (`project`, optional `amount`): `create_fixed_invoice`; on an invoice (`invoice`): `mark_invoiced`, `mark_paid`, `mark_unpaid`, `revert_to_draft`, `void_invoice`, `delete_draft`. Admins only. |
 | `billing_commit` | destructive | `commitToken` → runs the previewed action (§9). |
+| `invite_members` | write, idempotent | `items[]` (up to 25) of `{ email, role: admin \| member }`. Admins only. Convex (`mcp/members:inviteCheck`) authorizes, normalizes the emails and refuses existing members; the Next.js route then creates one Clerk organization invitation per cleared email with the org and inviter from the verified token. Inviting the same email twice is a no-op ("already invited"); membership arrives through the Clerk webhook when the invitee accepts (D-INVITE). |
 | `create_upload` / `attach_file` | write | `create_upload(filename, contentType, sizeBytes)` returns an `uploadId` and a one-time upload URL on the Convex site (valid 1 h); the client POSTs the bytes to it. `attach_file(ref, { uploadId } \| { inlineText, filename })` attaches it within 24 h (§10). The client never sees a storage id. |
 
 Rules for every tool:

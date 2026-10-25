@@ -9,7 +9,7 @@ import { describe, it, expect } from "vitest";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { createAgencyFlowMcpHandler } from "../handler";
 import { MCP_SERVER_INSTRUCTIONS } from "../instructions";
-import type { McpActionRunner, McpMutationRunner, McpQueryRunner } from "../registry";
+import type { ClerkInviteRunner, McpActionRunner, McpMutationRunner, McpQueryRunner } from "../registry";
 
 const RESOURCE_URL = "https://localhost:3001/mcp";
 const TOKEN = "good-token";
@@ -26,6 +26,7 @@ const handler = createAgencyFlowMcpHandler({
   mutationRunnerFor: () => unexpected as McpMutationRunner,
   actionRunnerFor: () => unexpected as McpActionRunner,
   clientNameFor: async () => undefined,
+  clerkInvite: unexpected as ClerkInviteRunner,
 });
 
 type ListedTool = {
@@ -72,7 +73,7 @@ describe("tools/list", () => {
 
   it("stays within its size budget", async () => {
     const { raw, tools } = await toolsList();
-    expect(tools).toHaveLength(17);
+    expect(tools).toHaveLength(18);
     expect(raw.length).toBeLessThanOrEqual(TOOLS_LIST_MAX_CHARS);
   });
 

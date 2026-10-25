@@ -14,6 +14,11 @@ import type { Currency, RoundingMinutes } from "@/convex/lib/constants"
 import { COMMON_TIMEZONES, ROUNDING_LABELS } from "@/lib/display-constants"
 import { ROUNDING_OPTIONS } from "@/convex/lib/constants"
 
+/** The common timezones, plus the current one (e.g. the browser's default) when it is not among them. */
+function timezoneOptions(current: string): readonly string[] {
+  return (COMMON_TIMEZONES as readonly string[]).includes(current) ? COMMON_TIMEZONES : [current, ...COMMON_TIMEZONES]
+}
+
 export function StepGeneral({
   timezone,
   currency,
@@ -38,7 +43,7 @@ export function StepGeneral({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {COMMON_TIMEZONES.map((tz) => (
+            {timezoneOptions(timezone).map((tz) => (
               <SelectItem key={tz} value={tz}>
                 {tz.replace(/_/g, " ")}
               </SelectItem>

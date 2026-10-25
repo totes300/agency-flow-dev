@@ -292,7 +292,7 @@ describe("fetch records: other kinds (I3)", () => {
     expect(flagged.results[0]).toMatchObject({ ok: true, record: { type: "project", code: "ARLO", team: [], includeIgnored: true } });
     expect(flagged.results[1].ok && flagged.results[1].record.type === "task" && "includeIgnored" in flagged.results[1].record).toBe(false);
     expect(results[1]).toMatchObject({ ok: true, record: { type: "client", name: "Konverted", prefix: "KONV", projects: [{ code: "KSITE" }] } });
-    expect(results[2]).toMatchObject({ ok: false, message: 'CAROL_unused@x.test is not a member of this workspace. Members are listed in fetch("workspace").' });
+    expect(results[2]).toMatchObject({ ok: false, message: 'CAROL_unused@x.test is not a member of this workspace. Members are listed in fetch("workspace"). Admins can invite them with invite_members.' });
     expect(results[3]).toMatchObject({ ok: true, record: { type: "member", name: "Bob", role: "member" } });
     expect(results[4]).toMatchObject({ ok: true, record: { type: "member", name: "Carol" } });
     // No money on project records.

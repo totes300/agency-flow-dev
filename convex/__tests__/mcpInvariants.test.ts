@@ -29,6 +29,15 @@ const FUNCTION_CONSTRUCTORS = [
 
 const FORBIDDEN_ARGS = /\b(orgId|org_id|userId|clerkUserId|role|orgRole|isAdmin|tokenIdentifier)\b/;
 
+/**
+ * Argument names that look like a caller identity but are not one, per
+ * function: `invite_members` takes the INVITEE's role (admin | member); the
+ * caller's role still comes from getMcpAuthContext only.
+ */
+const ARG_NAME_EXCEPTIONS: Record<string, readonly string[]> = {
+  "mcp/members.ts:inviteCheck": ["role"],
+};
+
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
     const path = join(dir, name);
@@ -159,7 +168,11 @@ describe("convex/mcp invariants", () => {
       it(`${fnLabel} takes no org, user or role argument (I2)`, () => {
         const args = propertyBlock(info.config, "args");
         expect(args).not.toBeNull();
-        expect(args!).not.toMatch(FORBIDDEN_ARGS);
+        const checked = (ARG_NAME_EXCEPTIONS[fnLabel] ?? []).reduce(
+          (text, name) => text.replace(new RegExp(`\\b${name}\\s*:`, "g"), "_:"),
+          args!,
+        );
+        expect(checked).not.toMatch(FORBIDDEN_ARGS);
       });
     }
   }

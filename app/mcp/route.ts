@@ -5,6 +5,7 @@ import { fetchAction, fetchMutation, fetchQuery } from "convex/nextjs";
 import { ConvexError } from "convex/values";
 import { api } from "@/convex/_generated/api";
 import { resolveClientName } from "@/lib/mcp/clerk-client-name";
+import { inviteToClerkOrganization } from "@/lib/mcp/clerk-invitations";
 import { getMcpResourceUrl } from "@/lib/mcp/config";
 import { createAgencyFlowMcpHandler } from "@/lib/mcp/handler";
 import { connectionKey, createLastUsedThrottle } from "@/lib/mcp/last-used";
@@ -83,6 +84,9 @@ function getHandler(): (req: Request) => Promise<Response> {
     actionRunnerFor: (token) => (action, args) => fetchAction(action, args, { token }),
     // Display name for "via <client>" only; Convex takes the client ID from the token.
     clientNameFor: resolveClientName,
+    // invite_members: Convex (mcp/members:inviteCheck) authorized the call and
+    // returned the verified org and inviter; this only performs the Clerk call.
+    clerkInvite: inviteToClerkOrganization,
   });
   return handler;
 }

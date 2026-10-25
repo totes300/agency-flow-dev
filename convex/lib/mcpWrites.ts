@@ -174,7 +174,7 @@ export async function markdownToRichText(resolver: RefResolver, markdown: string
       const resolved = await resolver.resolve(email, "member");
       if (!resolved.ok || resolved.resolved.type !== "member") {
         throw new ConvexError(
-          `@${email} is not a member of this workspace. Mention members by the email listed in fetch("workspace"), or write \\@ to keep the text as written.`,
+          `@${email} is not a member of this workspace. Mention members by the email listed in fetch("workspace"), or write \\@ to keep the text as written. Admins can invite them with invite_members.`,
         );
       }
       mentions.set(email, { id: resolved.resolved.user._id, label: resolved.resolved.user.name });

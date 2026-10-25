@@ -529,9 +529,9 @@ building email ingestion and a reminder engine in the app.
 
 | Slice | Status | Commits | Review | Notes / deviations |
 |---|---|---|---|---|
-| A upload docs + live check | not started | | | |
+| A upload docs + live check | **Done** 2026-10-25 | see git log `feat(mcp): state upload limits` | self-review; tsc root + convex clean, `npm test` 2141 pass / 3 known | tools/list 27,312 → 27,400 chars (bound 28,000). Blocked list matches the sentence (no change). Live check on dev (headless `claude -p`, 3 runs): ZZUP-1 under client:ZZUP; PNG (75 B) + PDF (605 B) via create_upload → curl 200 → attach_file; fetch files + attachment_text showed both and the PDF text; second attach_file with the same idempotencyKey "Replayed", still 2 files; task, project, client deleted, searches empty, fetch ZZUP-1 not found. Observed: attaching does not move "Last activity" (no activity row for attachments, D15 — by design). No Convex change, so no dev deploy |
 | B webhooks backend | not started | | | |
 | B webhooks UI (after mockup) | not started | | | |
 | C full-text search | not started | | | |
 | D deletion audit | not started | | | |
-| E agent recipes | not started | | | |
+| E agent recipes | **Done** 2026-10-25 | with A | self-review against the registry (field names, filters, includes) | `docs/agent-recipes.md`; recipe 3 marked "available once webhooks are enabled" until B ships |

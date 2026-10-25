@@ -906,8 +906,9 @@ export default defineSchema({
     orgId: v.string(),
     userId: v.id("users"),
     // The OAuth client that announced it: the endpoint refuses once that
-    // connection is revoked.
-    clientId: v.string(),
+    // connection is revoked. Optional only for rows written before the
+    // client was recorded (slice 7b); such a row is refused, never allowed.
+    clientId: v.optional(v.string()),
     fileName: v.string(),
     contentType: v.string(),
     sizeBytes: v.number(),

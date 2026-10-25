@@ -235,7 +235,7 @@ describe("fetch records: task references (I3, T1)", () => {
       expect.objectContaining({ id: f.cP, author: "Carol", text: "Hero copy is ready", resolved: false }),
     ]);
     // attachment_text implies the file list (with text per file; none here).
-    expect(r.record.files).toEqual({ rows: [], truncated: false, withText: true });
+    expect(r.record.files).toEqual({ rows: [], truncated: false, withText: true, selected: false });
     // Not requested → not loaded.
     expect(r.record.activity).toBeNull();
     expect(r.record.time).toBeNull();

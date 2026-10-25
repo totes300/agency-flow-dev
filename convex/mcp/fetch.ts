@@ -105,7 +105,9 @@ export const workspace = query({
  * ref is resolved and access-checked in the caller's org (I3); a missing,
  * foreign or unreadable record is "not found", an ambiguous short key or
  * email returns its candidates. Results keep the input order, one per ref.
- * `now` is the caller's clock (queries never read it) for "overdue". The
+ * `now` is the caller's clock (queries never read it) for "overdue".
+ * `file` (one task ref only) reads a single attachment's text from an
+ * offset — the page-through for long files. The
  * route calls this once per ref, so one heavy task stays within Convex's
  * per-call read limits on its own (budget: convex/lib/mcpRecords.ts).
  */
@@ -113,12 +115,16 @@ export const records = query({
   args: {
     refs: v.array(v.string()),
     include: v.array(v.union(...FETCH_INCLUDES.map((i) => v.literal(i)))),
+    file: v.optional(v.object({ id: v.optional(v.string()), name: v.optional(v.string()), offset: v.optional(v.number()) })),
     now: v.number(),
   },
   handler: async (ctx, args) => {
     const auth = await getMcpAuthContext(ctx);
     if (args.refs.length > MAX_REFS) {
       throw new ConvexError(`Fetch at most ${MAX_REFS} refs per call.`);
+    }
+    if (args.file !== undefined && args.refs.length !== 1) {
+      throw new ConvexError("file reads one attachment of one task: pass exactly one task ref.");
     }
     const clock = await orgClock(ctx, auth.orgId, args.now);
     const include = new Set<FetchInclude>(args.include);
@@ -135,7 +141,7 @@ export const records = query({
         });
         continue;
       }
-      const record = await buildRecord(ctx, auth, resolution.resolved, include, clock);
+      const record = await buildRecord(ctx, auth, resolution.resolved, include, clock, args.file);
       results.push(
         record
           ? { input, ok: true as const, record }

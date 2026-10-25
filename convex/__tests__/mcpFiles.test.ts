@@ -177,8 +177,14 @@ const commentFiles = (t: T, commentId: Id<"comments">) =>
 const blobCount = (t: T) => t.run(async (ctx) => (await ctx.db.system.query("_storage").collect()).length);
 const contentRows = (t: T) => t.run(async (ctx) => await ctx.db.query("attachmentContents").collect());
 
-async function fetchTask(t: T, caller: Caller, ref: string, include: Array<"files" | "attachment_text"> = ["attachment_text"]) {
-  const { results } = await as(t, caller).query(api.mcp.fetch.records, { refs: [ref], include, now: Date.now() });
+async function fetchTask(
+  t: T,
+  caller: Caller,
+  ref: string,
+  include: Array<"files" | "attachment_text"> = ["attachment_text"],
+  file?: { id?: string; name?: string; offset?: number },
+) {
+  const { results } = await as(t, caller).query(api.mcp.fetch.records, { refs: [ref], include, file, now: Date.now() });
   return results[0];
 }
 
@@ -532,14 +538,16 @@ describe("fetch include files / attachment_text", () => {
     if (!r.ok || r.record.type !== "task") throw new Error("expected a task");
     expect(r.record.files!.withText).toBe(true);
     const byName = Object.fromEntries(r.record.files!.rows.map((row) => [row.name, row]));
-    expect(byName["brief.pdf"].text).toMatchObject({ status: "done", text: "Kész, ha: 4 banner sizes", pageCount: 2, cut: false, message: "Text extracted." });
+    expect(byName["brief.pdf"].text).toMatchObject({ status: "done", text: "Kész, ha: 4 banner sizes", pageCount: 2, offset: 0, nextOffset: null, message: "Text extracted." });
     expect(byName["brief.docx"].text).toMatchObject({ status: "done", text: null });
     expect(byName["brief.docx"].text!.message).toMatch(/contains no text/);
     expect(byName["banner.png"].text).toMatchObject({ status: "done", text: null, width: 1200, height: 628 });
     expect(byName["banner.png"].text!.message).toMatch(/1200×628 px\. Only the size is known/);
     expect(byName["locked.pdf"].text).toMatchObject({ status: "failed", text: null });
     expect(byName["locked.pdf"].text!.message).toMatch(/failed \(PDF is password-protected\).*unknown/);
-    expect(byName["long.txt"].text).toMatchObject({ status: "done", cut: true, extractionTruncated: true, totalChars: body.length });
+    expect(byName["long.txt"].text).toMatchObject({
+      status: "done", offset: 0, nextOffset: ATTACHMENT_TEXT_FETCH_MAX, extractionTruncated: true, totalChars: body.length,
+    });
     expect(byName["long.txt"].text!.text).toHaveLength(ATTACHMENT_TEXT_FETCH_MAX);
     expect(byName["pending.txt"].text).toMatchObject({ status: "pending", text: null });
     expect(byName["pending.txt"].text!.message).toMatch(/still being read/);
@@ -555,6 +563,51 @@ describe("fetch include files / attachment_text", () => {
     if (!plain.ok || plain.record.type !== "task") throw new Error("expected a task");
     expect(plain.record.files!.withText).toBe(false);
     expect(plain.record.files!.rows.every((row) => row.text === null)).toBe(true);
+  });
+
+  it("pages one file's stored text by offset (by file id or name) up to the end", async () => {
+    const t = createT();
+    const f = await setup(t);
+    await attachText(t, "admin", f.id.A, "first", "notes.txt");
+    await attachText(t, "alice", f.aliceComment, "second", "notes.txt");
+    const body = Array.from({ length: 30_000 }, (_, i) => String.fromCharCode(97 + (i % 26))).join("");
+    const { attachmentId } = await attachText(t, "admin", f.id.A, "placeholder", "long.txt");
+    const [att] = (await taskFiles(t, f.A)).filter((a) => a._id === attachmentId);
+    await completeWith(t, att.fileId, "long.txt", { kind: "done", text: body, truncated: false });
+
+    const page = async (file: { id?: string; name?: string; offset?: number }) => {
+      const r = await fetchTask(t, "alice", f.id.A, [], file);
+      if (!r.ok || r.record.type !== "task") throw new Error(r.ok ? "expected a task" : r.message);
+      expect(r.record.files).toMatchObject({ selected: true, withText: true });
+      expect(r.record.files!.rows).toHaveLength(1);
+      return r.record.files!.rows[0];
+    };
+    const pages: string[] = [];
+    let offset: number | null = 0;
+    while (offset !== null) {
+      const row = await page({ id: attachmentId, offset });
+      expect(row.text).toMatchObject({ offset, totalChars: 30_000 });
+      pages.push(row.text!.text!);
+      offset = row.text!.nextOffset;
+    }
+    expect(pages.map((p) => p.length)).toEqual([ATTACHMENT_TEXT_FETCH_MAX, ATTACHMENT_TEXT_FETCH_MAX, 30_000 - 2 * ATTACHMENT_TEXT_FETCH_MAX]);
+    expect(pages.join("")).toBe(body);
+    // By (case-insensitive, unique) name; past the end is an empty last page.
+    expect((await page({ name: "LONG.txt", offset: 29_990 })).text).toMatchObject({ text: body.slice(29_990), nextOffset: null });
+    expect((await page({ name: "long.txt", offset: 99_999 })).text).toMatchObject({ text: "", offset: 30_000, nextOffset: null });
+    // Two files named notes.txt (task + comment): the ids are offered.
+    const ambiguous = await fetchTask(t, "alice", f.id.A, [], { name: "notes.txt" }).catch((e: Error) => e);
+    expect(String(ambiguous)).toMatch(/Several files on .* are named "notes.txt": pass file.id/);
+    await expect(fetchTask(t, "alice", f.id.A, [], { id: "nope" })).rejects.toThrow(/No file with id nope/);
+    await expect(fetchTask(t, "alice", f.id.A, [], { name: "missing.pdf" })).rejects.toThrow(/No file named "missing.pdf"/);
+    // A file of another task is not found on this one; non-task refs and several refs are refused.
+    await expect(fetchTask(t, "admin", f.id.B, [], { id: attachmentId })).rejects.toThrow(/No file with id/);
+    await expect(fetchTask(t, "admin", "ARLO", [], { id: attachmentId })).rejects.toThrow(/pass a task ref/);
+    await expect(
+      as(t, "admin").query(api.mcp.fetch.records, { refs: [f.id.A, f.id.B], include: [], file: { id: attachmentId }, now: Date.now() }),
+    ).rejects.toThrow(/exactly one task ref/);
+    // Bob cannot read the task at all.
+    expect((await fetchTask(t, "bob", f.id.A, [], { id: attachmentId })).ok).toBe(false);
   });
 
   it("cross-org and unreadable tasks are not found; another org's content row is never read", async () => {

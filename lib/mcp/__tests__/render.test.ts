@@ -214,6 +214,7 @@ const TASK: TaskRecord = {
   files: {
     rows: [
       {
+        id: "att1",
         name: "brief [v2].pdf",
         size: 2048,
         mimeType: "application/pdf",
@@ -225,6 +226,7 @@ const TASK: TaskRecord = {
     ],
     truncated: false,
     withText: false,
+    selected: false,
   },
 };
 
@@ -287,7 +289,7 @@ describe("renderTaskRecord", () => {
           "Total of all 1 entry: 1h 30m",
           '- e1 · 2026-10-20 · 1h 30m · Alice · "Hero layout" · Design · billable',
         ].join("\n"),
-        "### Files (1)\n- [brief \\[v2\\].pdf](https://files.test/brief) · 2.0 KB · application/pdf · on comment [cm1](https://localhost:3001/tasks/ARLO-21?comment=cm1)",
+        "### Files (1)\n- [brief \\[v2\\].pdf](https://files.test/brief) · 2.0 KB · application/pdf · on comment [cm1](https://localhost:3001/tasks/ARLO-21?comment=cm1) · file id att1",
       ].join("\n\n"),
     );
   });

@@ -145,6 +145,7 @@ describe("MCP protocol", () => {
       "include",
       "changes",
       "inbox",
+      "file",
     ]);
     for (const name of [
       "save_tasks",

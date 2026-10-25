@@ -178,8 +178,9 @@ const text = (over: Partial<FileText>): FileText => ({
   status: "done",
   message: "Text extracted.",
   text: null,
+  offset: 0,
+  nextOffset: null,
   totalChars: 0,
-  cut: false,
   extractionTruncated: false,
   pageCount: null,
   width: null,
@@ -188,6 +189,7 @@ const text = (over: Partial<FileText>): FileText => ({
 });
 
 const file = (name: string, t: FileText | null, commentId: Id<"comments"> | null = null): FileRow => ({
+  id: `id-${name}`,
   name,
   size: 1024,
   mimeType: "application/pdf",
@@ -234,24 +236,22 @@ const TASK = {
   files: null,
 } satisfies TaskRecord;
 
+const FILES = (rows: FileRow[], selected = false) => ({ rows, truncated: false, withText: true, selected });
+
 describe("attachment text in a task record", () => {
-  it("fences file text as data and says plainly when the contents are unknown", () => {
+  it("fences file text as data, says plainly when the contents are unknown and gives the next page's call", () => {
     const record: TaskRecord = {
       ...TASK,
-      files: {
-        rows: [
-          file("brief.pdf", text({ text: "Kész, ha: ```4``` sizes", totalChars: 22, pageCount: 2 })),
-          file("banner.png", text({ message: "Image 1200×628 px. Only the size is known; the picture itself was not read.", width: 1200, height: 628 })),
-          file("locked.pdf", text({ status: "failed", message: "Reading this file failed (PDF is password-protected). Its contents are unknown — say so plainly; do not guess." })),
-          file("long.txt", text({ text: "a".repeat(10), totalChars: 48213, cut: true }), "cm1" as Id<"comments">),
-        ],
-        truncated: false,
-        withText: true,
-      },
+      files: FILES([
+        file("brief.pdf", text({ text: "Kész, ha: ```4``` sizes", totalChars: 22, pageCount: 2 })),
+        file("banner.png", text({ message: "Image 1200×628 px. Only the size is known; the picture itself was not read.", width: 1200, height: 628 })),
+        file("locked.pdf", text({ status: "failed", message: "Reading this file failed (PDF is password-protected). Its contents are unknown — say so plainly; do not guess." })),
+        file("long.txt", text({ text: "a".repeat(10), totalChars: 48213, nextOffset: 10 }), "cm1" as Id<"comments">),
+      ]),
     };
     const out = renderTaskRecord(record, CTX);
     expect(out).toContain(
-      "- [long.txt](https://files.test/long.txt) · 1.0 KB · application/pdf · on comment [cm1](https://localhost:3001/tasks/ARLO-21?comment=cm1)",
+      "- [long.txt](https://files.test/long.txt) · 1.0 KB · application/pdf · on comment [cm1](https://localhost:3001/tasks/ARLO-21?comment=cm1) · file id id-long.txt",
     );
     expect(out).toContain(
       [
@@ -266,29 +266,73 @@ describe("attachment text in a task record", () => {
         "Reading this file failed (PDF is password-protected). Its contents are unknown — say so plainly; do not guess.",
         "#### long.txt · done",
         "Text extracted.",
-        "First 10 of 48,213 characters shown; open the file link for the rest.",
+        "Characters 1–10 of 48,213.",
         "```user-content\naaaaaaaaaa\n```",
+        'Next page: fetch {"refs": ["ARLO-21"], "file": {"id": "id-long.txt", "offset": 10}}',
       ].join("\n"),
     );
   });
 
-  it("over the budget names the files whose text is left out instead of cutting it", () => {
-    const big = (name: string) => file(name, text({ text: name.repeat(1).padEnd(3000, "x"), totalChars: 3000 }));
-    const record: TaskRecord = { ...TASK, files: { rows: [big("a.txt"), big("b.txt"), big("c.txt"), big("d.txt")], truncated: false, withText: true } };
-    const out = renderTaskRecord(record, { ...CTX, budget: 5000 });
-    expect(out.length).toBeLessThanOrEqual(5000);
-    expect(out).toMatch(/Not shown, to keep this result small: the text of .*d\.txt\. Fetch this task alone with only include \["attachment_text"\]\./);
-    // Shown texts are whole.
-    expect(out).toContain(`${"a.txt".padEnd(3000, "x")}\n\`\`\``);
+  it("a single-file page: where it sits in the text, the next call, and the end of the stored text", () => {
+    const middle = renderTaskRecord(
+      { ...TASK, files: FILES([file("long.txt", text({ text: "bbbb", offset: 12000, nextOffset: 12004, totalChars: 30000 }))], true) },
+      CTX,
+    );
+    expect(middle).toContain("### File\n- [long.txt]");
+    expect(middle).not.toContain("### Files");
+    expect(middle).toContain("Characters 12,001–12,004 of 30,000.");
+    expect(middle).toContain('Next page: fetch {"refs": ["ARLO-21"], "file": {"id": "id-long.txt", "offset": 12004}}');
+    const last = renderTaskRecord(
+      { ...TASK, files: FILES([file("long.txt", text({ text: "cc", offset: 49998, totalChars: 50000, extractionTruncated: true }))], true) },
+      CTX,
+    );
+    expect(last).toContain("Characters 49,999–50,000 of 50,000.");
+    expect(last).not.toContain("Next page");
+    expect(last).toContain("End of the stored text: reading kept the first 50,000 characters of this file; open the file link for the rest.");
+  });
+
+  it("over the budget keeps as many whole texts as fit (largest left out first) and names the rest with a single-file call", () => {
+    const sized = (name: string, size: number) => file(name, text({ text: name.padEnd(size, "x"), totalChars: size }));
+    const record: TaskRecord = {
+      ...TASK,
+      files: FILES([sized("a.txt", 1500), sized("big.txt", 3500), sized("c.txt", 1500), sized("d.txt", 1500)]),
+    };
+    const out = renderTaskRecord(record, { ...CTX, budget: 6500 });
+    expect(out.length).toBeLessThanOrEqual(6500);
+    // Greedy: the one big text is left out; every small one stays whole.
+    for (const name of ["a.txt", "c.txt", "d.txt"]) expect(out).toContain(`${name.padEnd(1500, "x")}\n${"`".repeat(3)}`);
+    expect(out).toContain(
+      'Not shown, to keep this result small — read each file alone:\n- big.txt: fetch {"refs": ["ARLO-21"], "file": {"id": "id-big.txt"}}',
+    );
   });
 
   it("a task without files says so; files alone show no text section", () => {
-    expect(renderTaskRecord({ ...TASK, files: { rows: [], truncated: false, withText: true } }, CTX)).toContain(
-      "### Attachment text\nThe task has no files.",
-    );
-    const plain = renderTaskRecord({ ...TASK, files: { rows: [file("a.pdf", null)], truncated: false, withText: false } }, CTX);
+    expect(renderTaskRecord({ ...TASK, files: FILES([]) }, CTX)).toContain("### Attachment text\nThe task has no files.");
+    const plain = renderTaskRecord({ ...TASK, files: { rows: [file("a.pdf", null)], truncated: false, withText: false, selected: false } }, CTX);
     expect(plain).toContain("### Files (1)");
     expect(plain).not.toContain("Attachment text");
+  });
+});
+
+describe("fetch file option", () => {
+  const RECORDS = { timezone: "UTC", today: "2026-10-25", results: [{ input: "ARLO-21", ok: true, record: { ...TASK, files: FILES([], true) } }] };
+
+  it("passes one file selection to mcp/fetch:records for the one task ref", async () => {
+    const { ctx, calls } = fake(() => RECORDS);
+    const result = await tool("fetch").execute({ refs: ["ARLO-21"], file: { id: "f1", offset: 12000 } }, ctx);
+    expect(result.isError).toBe(false);
+    expect(calls).toEqual([
+      { kind: "query", name: "mcp/fetch:records", args: { refs: ["ARLO-21"], include: [], file: { id: "f1", offset: 12000 }, now: NOW } },
+    ]);
+  });
+
+  it("refuses a selection without id or name, or with several or special refs", async () => {
+    const { ctx, calls } = fake(() => RECORDS);
+    expect((await tool("fetch").execute({ refs: ["ARLO-21"], file: { offset: 5 } }, ctx)).text).toMatch(/needs id/);
+    expect((await tool("fetch").execute({ refs: ["ARLO-21", "ARLO-22"], file: { id: "f1" } }, ctx)).text).toMatch(/exactly one task ref/);
+    expect((await tool("fetch").execute({ refs: ["inbox"], file: { id: "f1" } }, ctx)).text).toMatch(/exactly one task ref/);
+    expect(tool("fetch").inputSchema.safeParse({ refs: ["ARLO-21"], file: { id: "f", offset: 50_001 } }).success).toBe(false);
+    expect(calls).toEqual([]);
   });
 });
 

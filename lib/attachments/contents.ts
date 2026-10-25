@@ -292,6 +292,23 @@ export type ContentFields = {
 };
 
 /**
+ * One page of stored text from `offset` (clamped to the text), at most `max`
+ * characters, never splitting a surrogate pair; `nextOffset` is where the
+ * next page starts, null at the end.
+ */
+export function pageStoredText(
+  text: string,
+  offset: number,
+  max: number,
+): { text: string; offset: number; nextOffset: number | null } {
+  const start = Math.min(Math.max(0, Math.floor(offset)), text.length);
+  let end = Math.min(text.length, start + max);
+  const code = text.charCodeAt(end - 1);
+  if (end < text.length && end > start + 1 && code >= 0xd800 && code <= 0xdbff) end -= 1;
+  return { text: text.slice(start, end), offset: start, nextOffset: end < text.length ? end : null };
+}
+
+/**
  * The plain sentence the agent reads next to the status. Every non-`done`
  * case says outright that the content is unknown, so the model never claims
  * to have read a file it couldn't.

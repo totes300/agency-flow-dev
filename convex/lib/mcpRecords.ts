@@ -1,3 +1,4 @@
+import { ConvexError } from "convex/values";
 import type { QueryCtx } from "../_generated/server";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { AuthContext } from "./auth";
@@ -17,7 +18,7 @@ import { listTaskExternalRefs } from "./mcpExternalRefs";
 import { projectTermsForAuth } from "./mcpProjectTerms";
 import { capText, mentionedUserIds, tiptapToMarkdown } from "../../lib/mcp/tiptap-markdown";
 import { loadContent } from "../attachmentContents";
-import { ATTACHMENT_TEXT_FETCH_MAX, capText as capStoredText, contentMessage } from "../../lib/attachments/contents";
+import { ATTACHMENT_TEXT_FETCH_MAX, contentMessage, pageStoredText } from "../../lib/attachments/contents";
 import { safeParseDoc } from "./notificationEvents";
 import { getInvoiceForAuth } from "../invoices";
 import { invoiceDisplayStatus } from "./billing/periodState";
@@ -153,7 +154,14 @@ export function isOverdue(task: Pick<Doc<"tasks">, "dueDate" | "statusCategory">
   return task.dueDate !== undefined && task.dueDate < today && !isClosedCategory(task.statusCategory);
 }
 
-async function taskRecord(ctx: QueryCtx, auth: AuthContext, taskId: Id<"tasks">, include: ReadonlySet<FetchInclude>, clock: OrgClock) {
+async function taskRecord(
+  ctx: QueryCtx,
+  auth: AuthContext,
+  taskId: Id<"tasks">,
+  include: ReadonlySet<FetchInclude>,
+  clock: OrgClock,
+  file: FileSelection | undefined,
+) {
   const found = await getTaskDetailForAuth(ctx, auth, taskId);
   if (!found) return null;
   const { detail, access } = found;
@@ -211,8 +219,8 @@ async function taskRecord(ctx: QueryCtx, auth: AuthContext, taskId: Id<"tasks">,
     // attachment_text implies the file list: each file then carries its
     // extracted text (or why there is none).
     files:
-      include.has("files") || include.has("attachment_text")
-        ? await taskFiles(ctx, auth, taskId, include.has("attachment_text"))
+      include.has("files") || include.has("attachment_text") || file !== undefined
+        ? await taskFiles(ctx, auth, task, include.has("attachment_text"), file)
         : null,
   };
   return record;
@@ -313,23 +321,31 @@ async function taskPlan(ctx: QueryCtx, auth: AuthContext, taskId: Id<"tasks">) {
   return { rows, truncated: segments.length > PLAN_ROWS_MAX };
 }
 
+/** A single file of a task to read (fetch `file`): by attachment id or file name, from `offset`. */
+export type FileSelection = { id?: string; name?: string; offset?: number };
+
 /**
  * What an agent may read of a file (attachmentContents, ported extraction):
- * the status with an honest sentence, the text (capped per file, marked as
- * cut) for PDF / DOCX / text files, the size for images. `status:
- * "not_processed"` = no row (attached before extraction existed).
+ * the status with an honest sentence, one page of the stored text from
+ * `offset` (at most ATTACHMENT_TEXT_FETCH_MAX characters, `nextOffset` when
+ * more is stored) for PDF / DOCX / text files, the size for images.
+ * `status: "not_processed"` = no row (attached before extraction existed).
  */
-async function fileText(ctx: QueryCtx, orgId: string, fileId: Id<"_storage">) {
+async function fileText(ctx: QueryCtx, orgId: string, fileId: Id<"_storage">, offset: number) {
   const row = await loadContent(ctx, orgId, fileId);
-  const shown = row?.status === "done" && row.text ? capStoredText(row.text, ATTACHMENT_TEXT_FETCH_MAX) : null;
+  const stored = row?.status === "done" && row.text ? row.text : null;
+  const page = stored !== null ? pageStoredText(stored, offset, ATTACHMENT_TEXT_FETCH_MAX) : null;
   return {
     status: row?.status ?? ("not_processed" as const),
     message: contentMessage(row),
-    text: shown?.text ?? null,
+    /** This page of the stored text; null when none was extracted. */
+    text: page?.text ?? null,
+    /** Where this page starts in the stored text. */
+    offset: page?.offset ?? 0,
+    /** Where the next page starts; null at the end of the stored text. */
+    nextOffset: page?.nextOffset ?? null,
     /** Characters stored for this file (the extraction keeps at most 50,000). */
-    totalChars: row?.text?.length ?? 0,
-    /** Only the first ATTACHMENT_TEXT_FETCH_MAX characters are returned. */
-    cut: shown?.truncated ?? false,
+    totalChars: stored?.length ?? 0,
     /** The extraction itself stopped at its 50,000-character cap. */
     extractionTruncated: row?.truncated ?? false,
     pageCount: row?.pageCount ?? null,
@@ -338,11 +354,51 @@ async function fileText(ctx: QueryCtx, orgId: string, fileId: Id<"_storage">) {
   };
 }
 
-async function taskFiles(ctx: QueryCtx, auth: AuthContext, taskId: Id<"tasks">, withText: boolean) {
-  const own = await listTaskAttachmentsForAuth(ctx, auth, taskId, FILES_MAX);
-  const onComments = await listCommentAttachmentsForAuth(ctx, auth, taskId, FILES_MAX);
-  const all = [
+type FileEntry = {
+  id: string;
+  fileId: Id<"_storage">;
+  name: string;
+  size: number;
+  mimeType: string;
+  url: string | null;
+  commentId: Id<"comments"> | null;
+};
+
+/** The one file a `file` selection names on this task, or a model-actionable error. */
+function selectFile(entries: readonly FileEntry[], selection: FileSelection, taskKey: string): FileEntry {
+  if (selection.id !== undefined) {
+    const id = selection.id.trim();
+    const byId = entries.find((e) => e.id === id);
+    if (!byId) throw new ConvexError(`No file with id ${selection.id} on ${taskKey}. File ids are listed by fetch with include ["files"].`);
+    if (selection.name !== undefined && byId.name !== selection.name) {
+      throw new ConvexError(`File ${selection.id} on ${taskKey} is named "${byId.name}", not "${selection.name}". Pass id or name.`);
+    }
+    return byId;
+  }
+  const wanted = (selection.name ?? "").trim().toLowerCase();
+  const matches = entries.filter((e) => e.name.toLowerCase() === wanted);
+  if (matches.length === 1) return matches[0];
+  if (matches.length === 0) {
+    const names = entries.map((e) => `"${e.name}"`).slice(0, 20).join(", ");
+    throw new ConvexError(`No file named "${selection.name}" on ${taskKey}.${names ? ` Its files: ${names}.` : " It has no files."}`);
+  }
+  throw new ConvexError(
+    `Several files on ${taskKey} are named "${selection.name}": pass file.id — ${matches.map((m) => m.id).join(", ")}.`,
+  );
+}
+
+async function taskFiles(
+  ctx: QueryCtx,
+  auth: AuthContext,
+  task: { _id: Id<"tasks">; identifier?: string },
+  withText: boolean,
+  selection: FileSelection | undefined,
+) {
+  const own = await listTaskAttachmentsForAuth(ctx, auth, task._id, FILES_MAX);
+  const onComments = await listCommentAttachmentsForAuth(ctx, auth, task._id, FILES_MAX);
+  const all: FileEntry[] = [
     ...(own?.attachments ?? []).map((a) => ({
+      id: a._id as string,
       fileId: a.fileId,
       name: a.fileName,
       size: a.fileSize,
@@ -351,6 +407,7 @@ async function taskFiles(ctx: QueryCtx, auth: AuthContext, taskId: Id<"tasks">, 
       commentId: null,
     })),
     ...(onComments?.attachments ?? []).map((a) => ({
+      id: a._id as string,
       fileId: a.fileId,
       name: a.fileName,
       size: a.fileSize,
@@ -359,15 +416,23 @@ async function taskFiles(ctx: QueryCtx, auth: AuthContext, taskId: Id<"tasks">, 
       commentId: a.commentId,
     })),
   ];
+  const listTruncated = all.length > FILES_MAX || (own?.truncated ?? false) || (onComments?.truncated ?? false);
+  const chosen = selection ? [selectFile(all, selection, task.identifier ?? task._id)] : all.slice(0, FILES_MAX);
   const rows = [];
-  for (const { fileId, ...file } of all.slice(0, FILES_MAX)) {
-    rows.push({ ...file, onComment: file.commentId !== null, text: withText ? await fileText(ctx, auth.orgId, fileId) : null });
+  for (const { fileId, ...file } of chosen) {
+    rows.push({
+      ...file,
+      onComment: file.commentId !== null,
+      text: withText || selection ? await fileText(ctx, auth.orgId, fileId, selection?.offset ?? 0) : null,
+    });
   }
   return {
     rows,
-    truncated: all.length > FILES_MAX || (own?.truncated ?? false) || (onComments?.truncated ?? false),
-    /** include attachment_text: every row carries `text`. */
-    withText,
+    truncated: selection ? false : listTruncated,
+    /** include attachment_text (or a file selection): every row carries `text`. */
+    withText: withText || selection !== undefined,
+    /** A single file was asked for (fetch `file`): `rows` holds only it. */
+    selected: selection !== undefined,
   };
 }
 
@@ -405,11 +470,15 @@ export async function buildRecord(
   resolved: Resolved,
   include: ReadonlySet<FetchInclude>,
   clock: OrgClock,
+  file?: FileSelection,
 ) {
   const { orgId } = auth;
+  if (file !== undefined && resolved.type !== "task") {
+    throw new ConvexError("file selects an attachment of a task: pass a task ref.");
+  }
   switch (resolved.type) {
     case "task":
-      return await taskRecord(ctx, auth, resolved.access.task._id, include, clock);
+      return await taskRecord(ctx, auth, resolved.access.task._id, include, clock, file);
 
     case "comment": {
       const { comment, access } = resolved;

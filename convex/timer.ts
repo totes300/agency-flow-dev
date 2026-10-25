@@ -3,14 +3,21 @@ import { query, mutation } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { loadTaskForReadOrNull } from "./tasks/access";
-import { getAuthContext } from "./lib/auth";
-import { computeElapsedMs, totalElapsedMs, msToMinutes, getDateInTimezone, MAX_TIMER_MS, ORG_TIMEZONE_FALLBACK } from "./lib/timer";
+import { getAuthContext, type AuthContext } from "./lib/auth";
+import {
+  computeElapsedMs,
+  msToMinutes,
+  getDateInTimezone,
+  timerElapsedMs,
+  ORG_TIMEZONE_FALLBACK,
+  TIMER_MIN_SAVE_MS,
+  TIMER_STALE_MS,
+} from "./lib/timer";
 import { roundMinutes } from "./lib/rounding";
 import { getOrgSettings, resolveRateSnapshot, resolveEntryCategory } from "./lib/orgHelpers";
 import { assertValidDateString } from "./lib/dateValidation";
 import { insertTimerEntry } from "./lib/timerEntry";
 
-const STALE_THRESHOLD_MS = 8 * 60 * 60 * 1000; // 8 hours
 const MAX_OVERRIDE_MINUTES = 24 * 60; // sanity ceiling for stale-dialog input
 
 // ─── Helpers ────────────────────────────────────────────────────────────────────
@@ -56,51 +63,64 @@ export const getState = query({
 
 // ─── Mutations ──────────────────────────────────────────────────────────────────
 
+/**
+ * Starts the caller's timer on a task (one timer per user: a running or
+ * paused timer must be stopped first). Members only on tasks they can work
+ * on; the rate for the category that will apply at stop is checked up front.
+ * Shared by `start` below and MCP `timer`.
+ */
+export async function startTimerForAuth(
+  ctx: MutationCtx,
+  auth: AuthContext,
+  taskId: Id<"tasks">,
+): Promise<void> {
+  const { userId, orgId, user } = auth;
+
+  // Reject if a timer is already running (client must stop first)
+  if (user.timerTaskId && user.timerStatus) {
+    throw new ConvexError("A timer is already running. Stop it before starting a new one.");
+  }
+
+  // Member: only on tasks they can work on (assigned, or a sub-task of an
+  // assigned parent — tasks/access.ts, §11.5).
+  const access = await loadTaskForReadOrNull(ctx, taskId, auth);
+  if (!access) throw new ConvexError("Task not found");
+  const { task } = access;
+  if (task.archivedAt) throw new ConvexError("Cannot start timer on an archived task");
+  if (!task.projectId) throw new ConvexError("Assign a project to this task before starting a timer");
+
+  // Validate rates upfront so the user discovers missing rates before
+  // spending time, not when they try to commit the entry.
+  const project = await ctx.db.get(task.projectId);
+  if (!project) throw new ConvexError("Project not found");
+  // Pre-check the rate for the category that will actually apply at stop
+  // (the timer owner's default chain), not the task's raw category.
+  const workCategoryId = await resolveEntryCategory(ctx, {
+    ownerUserId: userId,
+    orgId,
+    task,
+  });
+  await resolveRateSnapshot(ctx, {
+    userId,
+    orgId,
+    workCategoryId,
+    project,
+    isBillable: task.billable,
+  });
+
+  const now = Date.now();
+  await ctx.db.patch(userId, {
+    timerTaskId: taskId,
+    timerStartedAt: now,
+    timerAccumulatedMs: 0,
+    timerStatus: "running" as const,
+  });
+}
+
 export const start = mutation({
   args: { taskId: v.id("tasks") },
   handler: async (ctx, args) => {
-    const auth = await getAuthContext(ctx);
-    const { userId, orgId, user } = auth;
-
-    // Reject if a timer is already running (client must stop first)
-    if (user.timerTaskId && user.timerStatus) {
-      throw new ConvexError("A timer is already running. Stop it before starting a new one.");
-    }
-
-    // Member: only on tasks they can work on (assigned, or a sub-task of an
-    // assigned parent — tasks/access.ts, §11.5).
-    const access = await loadTaskForReadOrNull(ctx, args.taskId, auth);
-    if (!access) throw new ConvexError("Task not found");
-    const { task } = access;
-    if (task.archivedAt) throw new ConvexError("Cannot start timer on an archived task");
-    if (!task.projectId) throw new ConvexError("Assign a project to this task before starting a timer");
-
-    // Validate rates upfront so the user discovers missing rates before
-    // spending time, not when they try to commit the entry.
-    const project = await ctx.db.get(task.projectId);
-    if (!project) throw new ConvexError("Project not found");
-    // Pre-check the rate for the category that will actually apply at stop
-    // (the timer owner's default chain), not the task's raw category.
-    const workCategoryId = await resolveEntryCategory(ctx, {
-      ownerUserId: userId,
-      orgId,
-      task,
-    });
-    await resolveRateSnapshot(ctx, {
-      userId,
-      orgId,
-      workCategoryId,
-      project,
-      isBillable: task.billable,
-    });
-
-    const now = Date.now();
-    await ctx.db.patch(userId, {
-      timerTaskId: args.taskId,
-      timerStartedAt: now,
-      timerAccumulatedMs: 0,
-      timerStatus: "running" as const,
-    });
+    await startTimerForAuth(ctx, await getAuthContext(ctx), args.taskId);
   },
 });
 
@@ -163,112 +183,114 @@ export const previewRateForTask = query({
  *   stop again. Nothing is lost either way.
  * - Under 30 seconds (and no override): nothing worth saving — the timer is
  *   cleared and `discarded: true` is returned so the client can say so.
+ *
+ * Shared by `stop` below and MCP `timer`.
  */
+export async function stopTimerForAuth(
+  ctx: MutationCtx,
+  auth: AuthContext,
+  args: { overrideMinutes?: number; note?: string },
+) {
+  const { userId, orgId, user } = auth;
+
+  if (!user.timerTaskId || !user.timerStatus) {
+    throw new ConvexError("No active timer");
+  }
+  if (args.overrideMinutes !== undefined && args.overrideMinutes <= 0) {
+    throw new ConvexError("Duration must be greater than 0");
+  }
+  if (
+    args.overrideMinutes !== undefined &&
+    args.overrideMinutes > MAX_OVERRIDE_MINUTES
+  ) {
+    throw new ConvexError("Duration cannot exceed 24 hours for one session.");
+  }
+
+  const elapsedMs = timerElapsedMs(user, Date.now());
+  const isStale = elapsedMs >= TIMER_STALE_MS;
+
+  // Task/project must exist to persist an entry. They should (task delete
+  // and archive clear timers), but if a data race left a dangling timer,
+  // clear it and report instead of throwing forever.
+  const task = await ctx.db.get(user.timerTaskId);
+  const project = task?.projectId ? await ctx.db.get(task.projectId) : null;
+  if (!task || task.orgId !== orgId || !project) {
+    await clearTimerFields(ctx, userId);
+    return {
+      taskId: user.timerTaskId,
+      entryId: null,
+      discarded: true as const,
+      elapsedMs,
+      roundedMinutes: 0,
+      taskName: task?.title ?? "Unknown",
+      projectName: null,
+      clientName: null,
+      isBillable: false,
+      isStale,
+    };
+  }
+  const client = await ctx.db.get(project.clientId);
+
+  // Under 30s with no explicit override: not worth an entry.
+  if (args.overrideMinutes === undefined && elapsedMs < TIMER_MIN_SAVE_MS) {
+    await clearTimerFields(ctx, userId);
+    return {
+      taskId: task._id,
+      entryId: null,
+      discarded: true as const,
+      elapsedMs,
+      roundedMinutes: 0,
+      taskName: task.title,
+      projectName: project.name,
+      clientName: client?.name ?? null,
+      isBillable: task.billable,
+      isStale,
+    };
+  }
+
+  const orgSettings = await getOrgSettings(ctx, orgId);
+  const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
+
+  const { entryId, durationMinutes, date, snapshotCategoryId } =
+    await insertTimerEntry(ctx, {
+      orgId,
+      ownerId: userId,
+      createdBy: userId,
+      task,
+      project,
+      rawMinutes: args.overrideMinutes ?? msToMinutes(elapsedMs),
+      sessionStartedAt:
+        user.timerStatus === "running" ? user.timerStartedAt : undefined,
+      note: args.note,
+      isBillable: task.billable,
+      timezone,
+    });
+
+  await clearTimerFields(ctx, userId);
+
+  return {
+    taskId: task._id,
+    entryId,
+    discarded: false as const,
+    elapsedMs,
+    roundedMinutes: durationMinutes,
+    date,
+    taskName: task.title,
+    projectName: project.name,
+    clientName: client?.name ?? null,
+    isBillable: task.billable,
+    isStale,
+    snapshotCategoryId,
+  };
+}
+
 export const stop = mutation({
   args: {
     overrideMinutes: v.optional(v.number()),
     note: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const { userId, orgId, user } = await getAuthContext(ctx);
-
-    if (!user.timerTaskId || !user.timerStatus) {
-      throw new ConvexError("No active timer");
-    }
-    if (args.overrideMinutes !== undefined && args.overrideMinutes <= 0) {
-      throw new ConvexError("Duration must be greater than 0");
-    }
-    if (
-      args.overrideMinutes !== undefined &&
-      args.overrideMinutes > MAX_OVERRIDE_MINUTES
-    ) {
-      throw new ConvexError("Duration cannot exceed 24 hours for one session.");
-    }
-
-    const now = Date.now();
-    const accumulated = user.timerAccumulatedMs ?? 0;
-    const startedAt = user.timerStartedAt ?? now;
-
-    const rawElapsedMs =
-      user.timerStatus === "running"
-        ? totalElapsedMs(startedAt, now, accumulated)
-        : accumulated;
-    const elapsedMs = Math.min(rawElapsedMs, MAX_TIMER_MS);
-    const isStale = elapsedMs >= STALE_THRESHOLD_MS;
-
-    // Task/project must exist to persist an entry. They should (task delete
-    // and archive clear timers), but if a data race left a dangling timer,
-    // clear it and report instead of throwing forever.
-    const task = await ctx.db.get(user.timerTaskId);
-    const project = task?.projectId ? await ctx.db.get(task.projectId) : null;
-    if (!task || task.orgId !== orgId || !project) {
-      await clearTimerFields(ctx, userId);
-      return {
-        taskId: user.timerTaskId,
-        entryId: null,
-        discarded: true as const,
-        elapsedMs,
-        roundedMinutes: 0,
-        taskName: task?.title ?? "Unknown",
-        projectName: null,
-        clientName: null,
-        isBillable: false,
-        isStale,
-      };
-    }
-    const client = await ctx.db.get(project.clientId);
-
-    // Under 30s with no explicit override: not worth an entry.
-    if (args.overrideMinutes === undefined && elapsedMs < 30_000) {
-      await clearTimerFields(ctx, userId);
-      return {
-        taskId: task._id,
-        entryId: null,
-        discarded: true as const,
-        elapsedMs,
-        roundedMinutes: 0,
-        taskName: task.title,
-        projectName: project.name,
-        clientName: client?.name ?? null,
-        isBillable: task.billable,
-        isStale,
-      };
-    }
-
-    const orgSettings = await getOrgSettings(ctx, orgId);
-    const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
-
-    const { entryId, durationMinutes, date, snapshotCategoryId } =
-      await insertTimerEntry(ctx, {
-        orgId,
-        ownerId: userId,
-        createdBy: userId,
-        task,
-        project,
-        rawMinutes: args.overrideMinutes ?? msToMinutes(elapsedMs),
-        sessionStartedAt:
-          user.timerStatus === "running" ? user.timerStartedAt : undefined,
-        note: args.note,
-        isBillable: task.billable,
-        timezone,
-      });
-
-    await clearTimerFields(ctx, userId);
-
-    return {
-      taskId: task._id,
-      entryId,
-      discarded: false as const,
-      elapsedMs,
-      roundedMinutes: durationMinutes,
-      date,
-      taskName: task.title,
-      projectName: project.name,
-      clientName: client?.name ?? null,
-      isBillable: task.billable,
-      isStale,
-      snapshotCategoryId,
-    };
+    return await stopTimerForAuth(ctx, await getAuthContext(ctx), args);
   },
 });
 

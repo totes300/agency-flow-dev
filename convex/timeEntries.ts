@@ -1,5 +1,5 @@
 import { v, ConvexError } from "convex/values";
-import { query, mutation } from "./_generated/server";
+import { query, mutation, type MutationCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { getAuthContext, type AuthContext } from "./lib/auth";
 import { roundMinutes } from "./lib/rounding";
@@ -244,6 +244,350 @@ export const sumByProject = query({
   },
 });
 
+// ─── Write cores (shared by the mutations below and MCP save_time_entries) ───
+
+export type CreateTimeEntryInput = {
+  taskId: Id<"tasks">;
+  durationMinutes: number;
+  /** Wall-clock start, epoch ms. */
+  startedAt: number;
+  note?: string;
+  isBillable?: boolean;
+  date?: string;
+  /** Admin logging on behalf of another member. */
+  userId?: Id<"users">;
+  /** Explicit category override. */
+  workCategoryId?: Id<"workCategories">;
+};
+
+/**
+ * Logs a manual time entry as `auth`: members for themselves, admins for any
+ * member; the category via the member-default chain and the rate snapshot for
+ * the entry's owner; the `time_entry_logged` activity row (with `auth.via`
+ * for an agent write, docs/prd-mcp.md D15).
+ */
+export async function createTimeEntryForAuth(
+  ctx: MutationCtx,
+  auth: AuthContext,
+  args: CreateTimeEntryInput,
+): Promise<Id<"timeEntries">> {
+  // Determine the user this entry belongs to
+  let entryUserId = auth.userId;
+  if (args.userId && args.userId !== auth.userId) {
+    if (!auth.isAdmin) {
+      throw new ConvexError("Only admins can log time for other users");
+    }
+    await validateAssignees(ctx, auth.orgId, [args.userId]);
+    entryUserId = args.userId;
+  }
+
+  if (args.date) assertValidDateString(args.date);
+
+  const task = await ctx.db.get(args.taskId);
+  if (!task || task.orgId !== auth.orgId) throw new ConvexError("Task not found");
+  if (task.archivedAt) throw new ConvexError("Cannot log time on an archived task");
+  if (!task.projectId) throw new ConvexError("Assign a project first");
+
+  const project = await ctx.db.get(task.projectId);
+  if (!project) throw new ConvexError("Project not found");
+
+  // Get org settings
+  const orgSettings = await getOrgSettings(ctx, auth.orgId);
+  const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
+
+  // RAW LEDGER (2026-07-05 rounding-policy decision): store the duration
+  // as entered, whole-minute ceil only. The workspace rounding setting is
+  // an invoice-time rule and never mutates the ledger.
+  const rounded = roundMinutes(args.durationMinutes, 1);
+  if (rounded <= 0) throw new ConvexError("Duration must be greater than 0");
+
+  // Invariant: date === getDateInTimezone(startedAt, orgTz). startedAt wins.
+  const date = getDateInTimezone(args.startedAt, timezone);
+  if (args.date !== undefined && args.date !== date) {
+    throw new ConvexError(
+      `date (${args.date}) does not match startedAt's day (${date}).`,
+    );
+  }
+
+  // No closed-period date guard (billing refactor, story 28): time logged
+  // into an already-closed period is open and carries into the next close.
+
+  // Determine billable before rate resolution — non-billable entries skip rate enforcement
+  const isBillable = args.isBillable ?? task.billable;
+
+  // Billing category (member-default chain). Owner is the entry's user, never
+  // the acting admin. An explicit selection must be org-validated before use.
+  if (args.workCategoryId) {
+    await assertCategoryInOrg(ctx, auth.orgId, args.workCategoryId);
+  }
+  const snapshotCategoryId = await resolveEntryCategory(ctx, {
+    ownerUserId: entryUserId,
+    orgId: auth.orgId,
+    task,
+    explicit: args.workCategoryId,
+  });
+
+  // Rate snapshot (new model) — same category used for the row snapshot below.
+  const rateSnapshot = await resolveRateSnapshot(ctx, {
+    userId: entryUserId,
+    orgId: auth.orgId,
+    workCategoryId: snapshotCategoryId,
+    project,
+    isBillable,
+  });
+
+  const now = Date.now();
+  const entryId = await ctx.db.insert("timeEntries", {
+    orgId: auth.orgId,
+    projectId: project._id,
+    taskId: args.taskId,
+    userId: entryUserId,
+    date,
+    startedAt: args.startedAt,
+    durationMinutes: rounded,
+    note: args.note?.trim() || undefined,
+    isBillable,
+    method: "manual",
+    costRate: rateSnapshot.costRate,
+    billableRate: rateSnapshot.billableRate,
+    rateCurrency: rateSnapshot.rateCurrency,
+    snapshotCategoryId,
+    createdAt: now,
+    updatedAt: now,
+    createdBy: auth.userId,
+  });
+
+  await onTimeEntryChange(ctx, args.taskId, rounded);
+
+  await logActivity(ctx, {
+    taskId: args.taskId,
+    orgId: auth.orgId,
+    userId: auth.userId,
+    via: auth.via,
+    type: "time_entry_logged",
+    metadata: {
+      entryId,
+      duration: formatDurationHHMM(rounded),
+      note: args.note?.trim() || null,
+    },
+  });
+
+  return entryId;
+}
+
+export type UpdateTimeEntryInput = {
+  id: Id<"timeEntries">;
+  durationMinutes?: number;
+  note?: string | null;
+  date?: string;
+  startedAt?: number;
+  isBillable?: boolean;
+  taskId?: Id<"tasks">;
+  /** Explicit category change. */
+  workCategoryId?: Id<"workCategories">;
+};
+
+/**
+ * Edits a time entry as `auth`: members their own, admins any in the org.
+ * An entry settled by a live close (`closeId`: closed period, draft or final
+ * invoice) is refused with the unblock path. A duration change logs
+ * `time_entry_edited` (with `auth.via`, D15).
+ */
+export async function updateTimeEntryForAuth(
+  ctx: MutationCtx,
+  auth: AuthContext,
+  args: UpdateTimeEntryInput,
+): Promise<void> {
+  const { userId, orgId, isAdmin } = auth;
+
+  const entry = await ctx.db.get(args.id);
+  if (!entry || entry.orgId !== orgId) throw new ConvexError("Time entry not found");
+
+  // Permission check
+  if (!isAdmin && entry.userId !== userId) {
+    throw new ConvexError("You can only edit your own time entries");
+  }
+
+  // Close lock (N1): an entry settled by a live close is read-only.
+  if (entry.closeId !== undefined) {
+    throw new ConvexError(await closeLockMessage(ctx, entry.closeId, "edit"));
+  }
+
+  if (args.date !== undefined) assertValidDateString(args.date);
+
+  // Explicit category change must be org-validated before it touches the row.
+  if (args.workCategoryId !== undefined) {
+    await assertCategoryInOrg(ctx, orgId, args.workCategoryId);
+  }
+
+  const updates: Record<string, unknown> = { updatedAt: Date.now() };
+
+  if (args.durationMinutes !== undefined) {
+    // Raw ledger: whole-minute ceil only (see create above).
+    const rounded = roundMinutes(args.durationMinutes, 1);
+    if (rounded <= 0) throw new ConvexError("Duration must be greater than 0");
+    updates.durationMinutes = rounded;
+  }
+
+  if (args.note !== undefined) {
+    updates.note = args.note === null ? undefined : args.note.trim() || undefined;
+  }
+
+  // Invariant (see create): date === getDateInTimezone(startedAt, orgTz).
+  // Server doesn't re-anchor; clients call reanchorStartedAt and send both.
+  let nextDate = entry.date;
+  if (args.date !== undefined || args.startedAt !== undefined) {
+    const orgSettings = await getOrgSettings(ctx, orgId);
+    const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
+    const nextStartedAt = args.startedAt ?? entry.startedAt;
+    nextDate = args.date ?? entry.date;
+    const derivedDate = getDateInTimezone(nextStartedAt, timezone);
+    if (nextDate !== derivedDate) {
+      throw new ConvexError(
+        `date (${nextDate}) does not match startedAt's day (${derivedDate}). When changing date, also send a re-anchored startedAt.`,
+      );
+    }
+    if (args.startedAt !== undefined) updates.startedAt = nextStartedAt;
+    if (args.date !== undefined) updates.date = nextDate;
+  }
+
+  // Resolve target task if a change was requested. All downstream rate
+  // re-resolution (billable toggle OR task swap) must point at the SAME
+  // task doc, so fetch once.
+  const targetTaskId = args.taskId ?? entry.taskId;
+  const taskChanged = args.taskId !== undefined && args.taskId !== entry.taskId;
+
+  let targetTask: Doc<"tasks"> | null = null;
+  async function loadTargetTask(): Promise<Doc<"tasks">> {
+    if (targetTask) return targetTask;
+    const fetched = await ctx.db.get(targetTaskId);
+    if (!fetched || fetched.orgId !== orgId) {
+      throw new ConvexError("Task not found");
+    }
+    targetTask = fetched;
+    return fetched;
+  }
+
+  if (taskChanged) {
+    const task = await loadTargetTask();
+    if (task.archivedAt) {
+      throw new ConvexError("Cannot move time to an archived task");
+    }
+    if (!task.projectId) {
+      throw new ConvexError("Target task must belong to a project");
+    }
+    // Preserve the "same project" invariant: moving a time entry across
+    // projects would break project-level reporting and rate cascades.
+    const oldTask = await ctx.db.get(entry.taskId);
+    if (!oldTask || oldTask.projectId !== task.projectId) {
+      throw new ConvexError("Target task must belong to the same project");
+    }
+    updates.taskId = task._id;
+    // Sticky category (locked decision): a task move never re-derives
+    // snapshotCategoryId. The entry keeps the discipline it was logged under.
+  }
+
+  if (args.isBillable !== undefined) {
+    updates.isBillable = args.isBillable;
+  }
+
+  // Re-resolve the rate snapshot only when the entry's OWN category changes
+  // (explicit edit) or billability toggles. A task move does NOT re-resolve:
+  // the category is sticky and the same-project invariant keeps the rate
+  // cascade identical. The category feeding both the rate lookup and the
+  // stored snapshot is the explicit selection, else the entry's current
+  // (sticky) category — never the task's.
+  const categoryChanged =
+    args.workCategoryId !== undefined && args.workCategoryId !== entry.snapshotCategoryId;
+  const billableChanged =
+    args.isBillable !== undefined && args.isBillable !== entry.isBillable;
+  const effectiveIsBillable = args.isBillable ?? entry.isBillable;
+
+  if (categoryChanged || billableChanged) {
+    const nextCategoryId = args.workCategoryId ?? entry.snapshotCategoryId;
+    const task = await loadTargetTask();
+    if (!task.projectId) throw new ConvexError("Task has no project");
+    const project = await ctx.db.get(task.projectId);
+    if (!project) throw new ConvexError("Project not found");
+
+    const snapshot = await resolveRateSnapshot(ctx, {
+      userId: entry.userId,
+      orgId,
+      workCategoryId: nextCategoryId,
+      project,
+      isBillable: effectiveIsBillable,
+    });
+    updates.costRate = snapshot.costRate;
+    updates.billableRate = snapshot.billableRate;
+    updates.rateCurrency = snapshot.rateCurrency;
+    updates.snapshotCategoryId = nextCategoryId;
+  }
+
+  await ctx.db.patch(args.id, updates);
+
+  // trackedMinutes (§5.5): a move takes the old minutes off the source
+  // task and puts the new ones on the target.
+  const nextMinutes = (updates.durationMinutes as number | undefined) ?? entry.durationMinutes;
+  const nextTaskId = (updates.taskId as Id<"tasks"> | undefined) ?? entry.taskId;
+  if (nextTaskId !== entry.taskId) {
+    await onTimeEntryChange(ctx, entry.taskId, -entry.durationMinutes);
+    await onTimeEntryChange(ctx, nextTaskId, nextMinutes);
+  } else {
+    await onTimeEntryChange(ctx, entry.taskId, nextMinutes - entry.durationMinutes);
+  }
+
+  if (args.durationMinutes !== undefined && updates.durationMinutes !== entry.durationMinutes) {
+    await logActivity(ctx, {
+      taskId: entry.taskId,
+      orgId,
+      userId,
+      via: auth.via,
+      type: "time_entry_edited",
+      metadata: {
+        entryId: args.id,
+        oldDuration: formatDurationHHMM(entry.durationMinutes),
+        newDuration: formatDurationHHMM(updates.durationMinutes as number),
+      },
+    });
+  }
+}
+
+/**
+ * Deletes a time entry as `auth`: members their own, admins any in the org;
+ * close-locked entries are refused (same rule as `updateTimeEntryForAuth`).
+ * Logs `time_entry_deleted` (with `auth.via`, D15).
+ */
+export async function removeTimeEntryForAuth(
+  ctx: MutationCtx,
+  auth: AuthContext,
+  id: Id<"timeEntries">,
+): Promise<void> {
+  const { userId, orgId, isAdmin } = auth;
+  const entry = await ctx.db.get(id);
+  if (!entry || entry.orgId !== orgId) throw new ConvexError("Time entry not found");
+
+  if (!isAdmin && entry.userId !== userId) {
+    throw new ConvexError("You can only delete your own time entries");
+  }
+
+  // Close lock (N1), same rule as `update`.
+  if (entry.closeId !== undefined) {
+    throw new ConvexError(await closeLockMessage(ctx, entry.closeId, "delete"));
+  }
+
+  await logActivity(ctx, {
+    taskId: entry.taskId,
+    orgId,
+    userId,
+    via: auth.via,
+    type: "time_entry_deleted",
+    metadata: { entryId: id, duration: formatDurationHHMM(entry.durationMinutes) },
+  });
+
+  await ctx.db.delete(id);
+  await onTimeEntryChange(ctx, entry.taskId, -entry.durationMinutes);
+}
+
 // ─── Mutations ──────────────────────────────────────────────────────────────────
 
 export const create = mutation({
@@ -258,109 +602,7 @@ export const create = mutation({
     workCategoryId: v.optional(v.id("workCategories")), // explicit category override
   },
   handler: async (ctx, args) => {
-    const auth = await getAuthContext(ctx);
-
-    // Determine the user this entry belongs to
-    let entryUserId = auth.userId;
-    if (args.userId && args.userId !== auth.userId) {
-      if (!auth.isAdmin) {
-        throw new ConvexError("Only admins can log time for other users");
-      }
-      await validateAssignees(ctx, auth.orgId, [args.userId]);
-      entryUserId = args.userId;
-    }
-
-    if (args.date) assertValidDateString(args.date);
-
-    const task = await ctx.db.get(args.taskId);
-    if (!task || task.orgId !== auth.orgId) throw new ConvexError("Task not found");
-    if (task.archivedAt) throw new ConvexError("Cannot log time on an archived task");
-    if (!task.projectId) throw new ConvexError("Assign a project first");
-
-    const project = await ctx.db.get(task.projectId);
-    if (!project) throw new ConvexError("Project not found");
-
-    // Get org settings
-    const orgSettings = await getOrgSettings(ctx, auth.orgId);
-    const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
-
-    // RAW LEDGER (2026-07-05 rounding-policy decision): store the duration
-    // as entered, whole-minute ceil only. The workspace rounding setting is
-    // an invoice-time rule and never mutates the ledger.
-    const rounded = roundMinutes(args.durationMinutes, 1);
-    if (rounded <= 0) throw new ConvexError("Duration must be greater than 0");
-
-    // Invariant: date === getDateInTimezone(startedAt, orgTz). startedAt wins.
-    const date = getDateInTimezone(args.startedAt, timezone);
-    if (args.date !== undefined && args.date !== date) {
-      throw new ConvexError(
-        `date (${args.date}) does not match startedAt's day (${date}).`,
-      );
-    }
-
-    // No closed-period date guard (billing refactor, story 28): time logged
-    // into an already-closed period is open and carries into the next close.
-
-    // Determine billable before rate resolution — non-billable entries skip rate enforcement
-    const isBillable = args.isBillable ?? task.billable;
-
-    // Billing category (member-default chain). Owner is the entry's user, never
-    // the acting admin. An explicit selection must be org-validated before use.
-    if (args.workCategoryId) {
-      await assertCategoryInOrg(ctx, auth.orgId, args.workCategoryId);
-    }
-    const snapshotCategoryId = await resolveEntryCategory(ctx, {
-      ownerUserId: entryUserId,
-      orgId: auth.orgId,
-      task,
-      explicit: args.workCategoryId,
-    });
-
-    // Rate snapshot (new model) — same category used for the row snapshot below.
-    const rateSnapshot = await resolveRateSnapshot(ctx, {
-      userId: entryUserId,
-      orgId: auth.orgId,
-      workCategoryId: snapshotCategoryId,
-      project,
-      isBillable,
-    });
-
-    const now = Date.now();
-    const entryId = await ctx.db.insert("timeEntries", {
-      orgId: auth.orgId,
-      projectId: project._id,
-      taskId: args.taskId,
-      userId: entryUserId,
-      date,
-      startedAt: args.startedAt,
-      durationMinutes: rounded,
-      note: args.note?.trim() || undefined,
-      isBillable,
-      method: "manual",
-      costRate: rateSnapshot.costRate,
-      billableRate: rateSnapshot.billableRate,
-      rateCurrency: rateSnapshot.rateCurrency,
-      snapshotCategoryId,
-      createdAt: now,
-      updatedAt: now,
-      createdBy: auth.userId,
-    });
-
-    await onTimeEntryChange(ctx, args.taskId, rounded);
-
-    await logActivity(ctx, {
-      taskId: args.taskId,
-      orgId: auth.orgId,
-      userId: auth.userId,
-      type: "time_entry_logged",
-      metadata: {
-        entryId,
-        duration: formatDurationHHMM(rounded),
-        note: args.note?.trim() || null,
-      },
-    });
-
-    return entryId;
+    return await createTimeEntryForAuth(ctx, await getAuthContext(ctx), args);
   },
 });
 
@@ -376,187 +618,14 @@ export const update = mutation({
     workCategoryId: v.optional(v.id("workCategories")), // explicit category change
   },
   handler: async (ctx, args) => {
-    const { userId, orgId, isAdmin } = await getAuthContext(ctx);
-
-    const entry = await ctx.db.get(args.id);
-    if (!entry || entry.orgId !== orgId) throw new ConvexError("Time entry not found");
-
-    // Permission check
-    if (!isAdmin && entry.userId !== userId) {
-      throw new ConvexError("You can only edit your own time entries");
-    }
-
-    // Close lock (N1): an entry settled by a live close is read-only.
-    if (entry.closeId !== undefined) {
-      throw new ConvexError(await closeLockMessage(ctx, entry.closeId, "edit"));
-    }
-
-    if (args.date !== undefined) assertValidDateString(args.date);
-
-    // Explicit category change must be org-validated before it touches the row.
-    if (args.workCategoryId !== undefined) {
-      await assertCategoryInOrg(ctx, orgId, args.workCategoryId);
-    }
-
-    const updates: Record<string, unknown> = { updatedAt: Date.now() };
-
-    if (args.durationMinutes !== undefined) {
-      // Raw ledger: whole-minute ceil only (see create above).
-      const rounded = roundMinutes(args.durationMinutes, 1);
-      if (rounded <= 0) throw new ConvexError("Duration must be greater than 0");
-      updates.durationMinutes = rounded;
-    }
-
-    if (args.note !== undefined) {
-      updates.note = args.note === null ? undefined : args.note.trim() || undefined;
-    }
-
-    // Invariant (see create): date === getDateInTimezone(startedAt, orgTz).
-    // Server doesn't re-anchor; clients call reanchorStartedAt and send both.
-    let nextDate = entry.date;
-    if (args.date !== undefined || args.startedAt !== undefined) {
-      const orgSettings = await getOrgSettings(ctx, orgId);
-      const timezone = orgSettings?.timezone ?? ORG_TIMEZONE_FALLBACK;
-      const nextStartedAt = args.startedAt ?? entry.startedAt;
-      nextDate = args.date ?? entry.date;
-      const derivedDate = getDateInTimezone(nextStartedAt, timezone);
-      if (nextDate !== derivedDate) {
-        throw new ConvexError(
-          `date (${nextDate}) does not match startedAt's day (${derivedDate}). When changing date, also send a re-anchored startedAt.`,
-        );
-      }
-      if (args.startedAt !== undefined) updates.startedAt = nextStartedAt;
-      if (args.date !== undefined) updates.date = nextDate;
-    }
-
-    // Resolve target task if a change was requested. All downstream rate
-    // re-resolution (billable toggle OR task swap) must point at the SAME
-    // task doc, so fetch once.
-    const targetTaskId = args.taskId ?? entry.taskId;
-    const taskChanged = args.taskId !== undefined && args.taskId !== entry.taskId;
-
-    let targetTask: Doc<"tasks"> | null = null;
-    async function loadTargetTask(): Promise<Doc<"tasks">> {
-      if (targetTask) return targetTask;
-      const fetched = await ctx.db.get(targetTaskId);
-      if (!fetched || fetched.orgId !== orgId) {
-        throw new ConvexError("Task not found");
-      }
-      targetTask = fetched;
-      return fetched;
-    }
-
-    if (taskChanged) {
-      const task = await loadTargetTask();
-      if (task.archivedAt) {
-        throw new ConvexError("Cannot move time to an archived task");
-      }
-      if (!task.projectId) {
-        throw new ConvexError("Target task must belong to a project");
-      }
-      // Preserve the "same project" invariant: moving a time entry across
-      // projects would break project-level reporting and rate cascades.
-      const oldTask = await ctx.db.get(entry.taskId);
-      if (!oldTask || oldTask.projectId !== task.projectId) {
-        throw new ConvexError("Target task must belong to the same project");
-      }
-      updates.taskId = task._id;
-      // Sticky category (locked decision): a task move never re-derives
-      // snapshotCategoryId. The entry keeps the discipline it was logged under.
-    }
-
-    if (args.isBillable !== undefined) {
-      updates.isBillable = args.isBillable;
-    }
-
-    // Re-resolve the rate snapshot only when the entry's OWN category changes
-    // (explicit edit) or billability toggles. A task move does NOT re-resolve:
-    // the category is sticky and the same-project invariant keeps the rate
-    // cascade identical. The category feeding both the rate lookup and the
-    // stored snapshot is the explicit selection, else the entry's current
-    // (sticky) category — never the task's.
-    const categoryChanged =
-      args.workCategoryId !== undefined && args.workCategoryId !== entry.snapshotCategoryId;
-    const billableChanged =
-      args.isBillable !== undefined && args.isBillable !== entry.isBillable;
-    const effectiveIsBillable = args.isBillable ?? entry.isBillable;
-
-    if (categoryChanged || billableChanged) {
-      const nextCategoryId = args.workCategoryId ?? entry.snapshotCategoryId;
-      const task = await loadTargetTask();
-      if (!task.projectId) throw new ConvexError("Task has no project");
-      const project = await ctx.db.get(task.projectId);
-      if (!project) throw new ConvexError("Project not found");
-
-      const snapshot = await resolveRateSnapshot(ctx, {
-        userId: entry.userId,
-        orgId,
-        workCategoryId: nextCategoryId,
-        project,
-        isBillable: effectiveIsBillable,
-      });
-      updates.costRate = snapshot.costRate;
-      updates.billableRate = snapshot.billableRate;
-      updates.rateCurrency = snapshot.rateCurrency;
-      updates.snapshotCategoryId = nextCategoryId;
-    }
-
-    await ctx.db.patch(args.id, updates);
-
-    // trackedMinutes (§5.5): a move takes the old minutes off the source
-    // task and puts the new ones on the target.
-    const nextMinutes = (updates.durationMinutes as number | undefined) ?? entry.durationMinutes;
-    const nextTaskId = (updates.taskId as Id<"tasks"> | undefined) ?? entry.taskId;
-    if (nextTaskId !== entry.taskId) {
-      await onTimeEntryChange(ctx, entry.taskId, -entry.durationMinutes);
-      await onTimeEntryChange(ctx, nextTaskId, nextMinutes);
-    } else {
-      await onTimeEntryChange(ctx, entry.taskId, nextMinutes - entry.durationMinutes);
-    }
-
-    if (args.durationMinutes !== undefined && updates.durationMinutes !== entry.durationMinutes) {
-      await logActivity(ctx, {
-        taskId: entry.taskId,
-        orgId,
-        userId,
-        type: "time_entry_edited",
-        metadata: {
-          entryId: args.id,
-          oldDuration: formatDurationHHMM(entry.durationMinutes),
-          newDuration: formatDurationHHMM(updates.durationMinutes as number),
-        },
-      });
-    }
+    await updateTimeEntryForAuth(ctx, await getAuthContext(ctx), args);
   },
 });
 
 export const remove = mutation({
   args: { id: v.id("timeEntries") },
   handler: async (ctx, args) => {
-    const { userId, orgId, isAdmin } = await getAuthContext(ctx);
-
-    const entry = await ctx.db.get(args.id);
-    if (!entry || entry.orgId !== orgId) throw new ConvexError("Time entry not found");
-
-    if (!isAdmin && entry.userId !== userId) {
-      throw new ConvexError("You can only delete your own time entries");
-    }
-
-    // Close lock (N1), same rule as `update`.
-    if (entry.closeId !== undefined) {
-      throw new ConvexError(await closeLockMessage(ctx, entry.closeId, "delete"));
-    }
-
-    await logActivity(ctx, {
-      taskId: entry.taskId,
-      orgId,
-      userId,
-      type: "time_entry_deleted",
-      metadata: { entryId: args.id, duration: formatDurationHHMM(entry.durationMinutes) },
-    });
-
-    await ctx.db.delete(args.id);
-    await onTimeEntryChange(ctx, entry.taskId, -entry.durationMinutes);
+    await removeTimeEntryForAuth(ctx, await getAuthContext(ctx), args.id);
   },
 });
 

@@ -13,6 +13,12 @@ export const ORG_TIMEZONE_FALLBACK = "America/New_York";
  */
 export const MAX_TIMER_MS = 16 * 60 * 60 * 1000; // 16 hours
 
+/** A session this long may be a forgotten timer (the app's stale-timer dialog). */
+export const TIMER_STALE_MS = 8 * 60 * 60 * 1000; // 8 hours
+
+/** Shorter sessions are not worth an entry: stop clears the timer without saving. */
+export const TIMER_MIN_SAVE_MS = 30_000;
+
 /**
  * Compute elapsed milliseconds for a single running segment.
  * Returns 0 if result would be negative.
@@ -32,6 +38,23 @@ export function totalElapsedMs(
   accumulatedMs: number,
 ): number {
   return accumulatedMs + computeElapsedMs(startedAt, now);
+}
+
+/**
+ * The measured length of a user's timer session at `now`: running segments
+ * plus paused accumulation, capped at `MAX_TIMER_MS`. What `timer.stop`
+ * saves (and the MCP timer status shows).
+ */
+export function timerElapsedMs(
+  timer: { timerStatus?: "running" | "paused"; timerStartedAt?: number; timerAccumulatedMs?: number },
+  now: number,
+): number {
+  const accumulated = timer.timerAccumulatedMs ?? 0;
+  const raw =
+    timer.timerStatus === "running"
+      ? totalElapsedMs(timer.timerStartedAt ?? now, now, accumulated)
+      : accumulated;
+  return Math.min(raw, MAX_TIMER_MS);
 }
 
 /**

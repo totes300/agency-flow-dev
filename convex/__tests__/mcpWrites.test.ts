@@ -209,6 +209,22 @@ describe("save_tasks: batches, idempotency, leads", () => {
     expect(await t.run(async (ctx) => await ctx.db.query("taskExternalRefs").collect())).toEqual([]);
   });
 
+  it("idempotency fingerprints are SHA-256; a row with the old 16-character hash counts as absent (fresh write)", async () => {
+    const t = createT();
+    await setup(t);
+    await saveTasks(t, "admin", [{ title: "Hashed" }], { idempotencyKey: "sha-1" });
+    const [row] = await t.run(async (ctx) => await ctx.db.query("mcpIdempotency").collect());
+    expect(row.fingerprint).toMatch(/^[0-9a-f]{64}$/);
+    // A row written before the change: its hash cannot be compared, so the retry runs and replaces it.
+    await t.run(async (ctx) => ctx.db.patch(row._id, { fingerprint: "0123456789abcdef" }));
+    const count = (await allTasks(t)).length;
+    const retried = await saveTasks(t, "admin", [{ title: "Hashed" }], { idempotencyKey: "sha-1" });
+    expect(retried.replayed).toBe(false);
+    expect(await allTasks(t)).toHaveLength(count + 1);
+    const rows = await t.run(async (ctx) => await ctx.db.query("mcpIdempotency").collect());
+    expect(rows.map((r) => r.fingerprint.length)).toEqual([64]);
+  });
+
   it("a replayed idempotencyKey returns the first result and writes nothing (D23)", async () => {
     const t = createT();
     const f = await setup(t);

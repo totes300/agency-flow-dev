@@ -6,6 +6,7 @@ import type { McpWriteResult, McpWriteTool } from "./mcpWriteResults";
 import { sanitizeClientName } from "../../lib/mcp/client-name";
 import { stableJson } from "../../lib/mcp/cursor";
 import { IDEMPOTENCY_KEY_MAX_LENGTH, MARKDOWN_MAX_LENGTH, MCP_BATCH_MAX } from "../../lib/mcp/limits";
+import { sha256Hex } from "../../lib/mcp/sha256";
 import {
   isEmptyTiptapDoc,
   markdownMentionEmails,
@@ -39,20 +40,21 @@ export function mcpActor(auth: McpAuthContext, clientName: string | undefined): 
 
 /**
  * Identifies one write request: the tool plus its canonical arguments
- * (everything but the key and the client's display name). A 64-bit hash
- * (two FNV-1a passes); it only has to tell apart requests sent with the
- * same key by the same user.
+ * (everything but the key and the client's display name), as SHA-256 hex —
+ * the same hash as the billing preview fingerprint.
  */
 export function requestFingerprint(tool: McpWriteTool, args: unknown): string {
-  const text = stableJson({ tool, args });
-  let a = 0x811c9dc5;
-  let b = 0x01000193 ^ text.length;
-  for (let i = 0; i < text.length; i += 1) {
-    const code = text.charCodeAt(i);
-    a = Math.imul(a ^ code, 0x01000193) >>> 0;
-    b = Math.imul(b ^ code, 0x5bd1e995) >>> 0;
-  }
-  return `${a.toString(16).padStart(8, "0")}${b.toString(16).padStart(8, "0")}`;
+  return sha256Hex(stableJson({ tool, args }));
+}
+
+/**
+ * Rows written before the fingerprint became SHA-256 (64 hex characters)
+ * held a 16-character hash that can no longer be compared. Such a row is
+ * treated as absent — the retry runs as a fresh write and replaces it — and
+ * all of them expire within 24 h anyway.
+ */
+function comparableFingerprint(fingerprint: string): boolean {
+  return fingerprint.length === 64;
 }
 
 function assertKey(key: string): void {
@@ -87,7 +89,7 @@ export async function replayIdempotent<Tool extends McpWriteTool>(
   if (key === undefined) return null;
   assertKey(key);
   const row = await findKey(ctx, auth, key);
-  if (!row || row.createdAt <= now - IDEMPOTENCY_TTL_MS) return null;
+  if (!row || row.createdAt <= now - IDEMPOTENCY_TTL_MS || !comparableFingerprint(row.fingerprint)) return null;
   if (row.tool !== tool || row.result.tool !== tool || row.fingerprint !== fingerprint) {
     throw new ConvexError(
       "This idempotencyKey was already used for a different request; use a new key for a new write.",

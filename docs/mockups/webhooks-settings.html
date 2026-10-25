@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Settings → Webhooks (mockup)</title>
+<style>
+  /* Static mockup of Settings → Webhooks (docs/prd-agent-first-backlog.md §5.6).
+     Mirrors the app's shadcn tokens (neutral, light) and the Integrations tab:
+     same page width (max-w-3xl), line tabs, one card, outline/ghost buttons.
+     Every control maps to a shared component noted in the side comments. */
+  :root {
+    --bg: #ffffff; --fg: #0a0a0a; --muted: #737373; --muted-bg: #f5f5f5;
+    --border: #e5e5e5; --card: #ffffff; --primary: #171717; --primary-fg: #fafafa;
+    --ring: #a3a3a3; --destructive: #dc2626; --ok: #16a34a; --fail: #dc2626;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+    font: 14px/1.45 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .page { max-width: 768px; margin: 32px auto 80px; padding: 0 16px; display: flex; flex-direction: column; gap: 24px; }
+  h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.01em; margin: 0; }
+  h2 { font-size: 16px; font-weight: 600; margin: 0; }
+  h3 { font-size: 14px; font-weight: 600; margin: 0; }
+  p { margin: 0; }
+  .muted { color: var(--muted); }
+  .xs { font-size: 12px; }
+  .tabs { display: flex; gap: 20px; border-bottom: 1px solid var(--border); overflow-x: auto; }
+  .tab { padding: 8px 0; color: var(--muted); white-space: nowrap; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+  .tab.active { color: var(--fg); border-color: var(--fg); font-weight: 500; }
+  .stack { display: flex; flex-direction: column; gap: 8px; }
+  .card { border: 1px solid var(--border); border-radius: 10px; background: var(--card); }
+  .card-body { padding: 20px; display: flex; flex-direction: column; gap: 20px; }
+  .row { display: flex; align-items: center; gap: 8px; }
+  .between { justify-content: space-between; }
+  .field { display: grid; grid-template-columns: 180px 1fr; gap: 16px; align-items: start; }
+  .field > .label { padding-top: 7px; font-weight: 500; }
+  .field .hint { margin-top: 4px; }
+  .input { height: 34px; width: 100%; border: 1px solid var(--border); border-radius: 6px; padding: 0 10px;
+    font: inherit; color: var(--fg); background: #fff; }
+  .input.mono, code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+  .select { height: 34px; width: 100%; border: 1px solid var(--border); border-radius: 6px; padding: 0 10px;
+    display: flex; align-items: center; justify-content: space-between; background: #fff; cursor: default; }
+  .select .chev { color: var(--muted); }
+  .btn { height: 32px; padding: 0 12px; border-radius: 6px; font: inherit; font-weight: 500; font-size: 13px;
+    display: inline-flex; align-items: center; gap: 6px; cursor: pointer; border: 1px solid transparent; background: none; color: var(--fg); }
+  .btn.outline { border-color: var(--border); background: #fff; }
+  .btn.primary { background: var(--primary); color: var(--primary-fg); }
+  .btn.ghost:hover, .btn.outline:hover { background: var(--muted-bg); }
+  .btn.danger { color: var(--destructive); }
+  .switch { width: 32px; height: 18px; border-radius: 999px; background: var(--primary); position: relative; flex: none; }
+  .switch::after { content: ""; position: absolute; top: 2px; left: 16px; width: 14px; height: 14px; border-radius: 50%; background: #fff; }
+  .divider { height: 1px; background: var(--border); margin: 0 -20px; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; flex: none; }
+  .dot.ok { background: var(--ok); } .dot.fail { background: var(--fail); } .dot.pending { background: #a3a3a3; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  td { padding: 8px; border-bottom: 1px solid #f0f0f0; font-size: 13px; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .section-title { display: flex; align-items: baseline; justify-content: space-between; }
+  .state-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: #a3a3a3; margin: 24px 0 -8px; }
+  .popover { border: 1px solid var(--border); border-radius: 8px; background: #fff; box-shadow: 0 6px 24px rgba(0,0,0,.08);
+    width: 300px; padding: 4px; font-size: 13px; }
+  .popover .search { border: 0; border-bottom: 1px solid var(--border); border-radius: 0; height: 32px; padding: 0 8px; width: 100%; font: inherit; }
+  .opt { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 4px; }
+  .opt:hover { background: var(--muted-bg); }
+  .opt.group { font-weight: 500; }
+  .opt.child { padding-left: 30px; color: #404040; }
+  .opt .count { margin-left: auto; color: var(--muted); font-size: 12px; }
+  .check { width: 14px; height: 14px; border: 1px solid #a3a3a3; border-radius: 3px; flex: none; display: grid; place-items: center; font-size: 10px; }
+  .check.on { background: var(--primary); border-color: var(--primary); color: #fff; }
+  .check.mixed { background: var(--primary); border-color: var(--primary); color: #fff; }
+  .dialog-backdrop { background: rgba(0,0,0,.04); border-radius: 12px; padding: 32px 16px; display: grid; place-items: center; }
+  .dialog { width: 100%; max-width: 460px; background: #fff; border: 1px solid var(--border); border-radius: 10px;
+    padding: 20px; display: flex; flex-direction: column; gap: 14px; box-shadow: 0 10px 40px rgba(0,0,0,.10); }
+  .secret { display: flex; gap: 6px; }
+  .secret .input { background: var(--muted-bg); }
+  .note { border-left: 2px solid var(--border); padding-left: 10px; }
+  .side { display: grid; grid-template-columns: 1fr 300px; gap: 24px; align-items: start; }
+  @media (max-width: 720px) {
+    .field { grid-template-columns: 1fr; gap: 6px; }
+    .field > .label { padding-top: 0; }
+    .side { grid-template-columns: 1fr; }
+    .hide-sm { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <div>
+    <h1>Settings</h1>
+    <p class="muted">Manage your organization settings.</p>
+  </div>
+
+  <!-- TabsList variant="line": a new admin-only "Webhooks" tab after Integrations -->
+  <div class="tabs">
+    <span class="tab">General</span><span class="tab">Team</span><span class="tab">Statuses</span>
+    <span class="tab">Labels</span><span class="tab">Work Categories</span><span class="tab">User Rates</span>
+    <span class="tab">Integrations</span><span class="tab active">Webhooks</span>
+  </div>
+
+  <div class="stack">
+    <h2>Webhooks</h2>
+    <p class="muted">Agency Flow POSTs a short, signed event to your endpoint whenever something changes on a task —
+      so an agent can react within seconds instead of polling. The event names the task; read the details with the
+      MCP <code>fetch</code>.</p>
+  </div>
+
+  <!-- ─────────────────────────── State 1: no endpoint ─────────────────────────── -->
+  <div class="state-label">State 1 · nothing set up</div>
+  <div class="card"><div class="card-body">
+    <div class="row between">
+      <div class="stack" style="gap:4px">
+        <h3>No endpoint yet</h3>
+        <p class="muted">Add one HTTPS URL. You'll see its signing secret once.</p>
+      </div>
+      <button class="btn primary">Add endpoint</button>
+    </div>
+  </div></div>
+
+  <!-- ─────────────────────────── State 2: configured ─────────────────────────── -->
+  <div class="state-label">State 2 · endpoint configured</div>
+  <div class="card"><div class="card-body">
+    <!-- Header: enabled Switch + last delivery as quiet text (dot + words, no pill) -->
+    <div class="row between">
+      <div class="row" style="gap:10px">
+        <span class="switch" aria-label="Enabled"></span>
+        <div class="stack" style="gap:0">
+          <h3>Enabled</h3>
+          <span class="muted xs row" style="gap:6px"><span class="dot ok"></span>Last delivery 2 min ago · 200</span>
+        </div>
+      </div>
+      <div class="row">
+        <button class="btn ghost">Send test event</button>
+        <button class="btn ghost danger">Delete</button>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- Input -->
+    <div class="field">
+      <div class="label">Endpoint URL</div>
+      <div>
+        <input class="input mono" value="https://agent.konverted.io/hooks/agency-flow">
+        <p class="muted xs hint">HTTPS only. No IP addresses, localhost or internal hosts.</p>
+      </div>
+    </div>
+
+    <!-- Popover + Command (faceted multi-select, as the Notion-style filter menus) -->
+    <div class="field">
+      <div class="label">Events</div>
+      <div>
+        <div class="select"><span>All events</span><span class="chev">⌄</span></div>
+        <p class="muted xs hint">Every task change by default. Narrow it to what your agent acts on.</p>
+      </div>
+    </div>
+
+    <div class="field">
+      <div class="label">Don't notify for writes by</div>
+      <div>
+        <div class="select"><span>claude.ai</span><span class="chev">⌄</span></div>
+        <p class="muted xs hint">Your agent isn't woken by what it just wrote. From this workspace's Connected apps.</p>
+      </div>
+    </div>
+
+    <!-- Secret: hint only; Rotate opens the shown-once dialog -->
+    <div class="field">
+      <div class="label">Signing secret</div>
+      <div class="row between">
+        <code class="muted">••••••••••••aT6Q</code>
+        <button class="btn ghost">Rotate</button>
+      </div>
+    </div>
+
+    <div class="row" style="justify-content:flex-end; gap:8px">
+      <button class="btn outline">Cancel</button>
+      <button class="btn primary">Save</button>
+    </div>
+  </div></div>
+
+  <!-- Recent deliveries: quiet table, plain text, dot + word status -->
+  <div class="stack">
+    <div class="section-title">
+      <h3>Recent deliveries</h3>
+      <span class="muted xs">Last 20 · kept 7 days</span>
+    </div>
+    <table>
+      <thead><tr><th>Time</th><th>Event</th><th>Status</th><th class="num">HTTP</th><th class="num hide-sm">Attempt</th></tr></thead>
+      <tbody>
+        <tr><td>17:03:11</td><td>status_changed</td><td><span class="row" style="gap:6px"><span class="dot ok"></span>Delivered</span></td><td class="num">200</td><td class="num hide-sm">1</td></tr>
+        <tr><td>16:58:40</td><td>comment_added</td><td><span class="row" style="gap:6px"><span class="dot ok"></span>Delivered</span></td><td class="num">200</td><td class="num hide-sm">2</td></tr>
+        <tr><td>16:58:10</td><td>comment_added</td><td><span class="row" style="gap:6px"><span class="dot fail"></span>Failed · retrying 16:58:40</span></td><td class="num">503</td><td class="num hide-sm">1</td></tr>
+        <tr><td>16:41:02</td><td>test</td><td><span class="row" style="gap:6px"><span class="dot ok"></span>Delivered</span></td><td class="num">200</td><td class="num hide-sm">1</td></tr>
+        <tr><td>16:12:55</td><td>assignee_added</td><td><span class="row" style="gap:6px"><span class="dot fail"></span>Failed · Timed out after 10 s</span></td><td class="num">—</td><td class="num hide-sm">4</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ─────────────── State 3: events picker open / secret shown once ─────────────── -->
+  <div class="state-label">State 3 · events picker open · secret shown once</div>
+  <div class="side">
+    <div class="stack">
+      <p class="muted xs">Events picker (Popover + Command). Families toggle all their events; a family with some
+        events chosen shows a dash. The trigger then reads e.g. "Status, Comments +1".</p>
+      <div class="popover">
+        <input class="search" placeholder="Filter events…">
+        <div class="opt"><span class="check"></span>All events<span class="count">26</span></div>
+        <div class="opt group"><span class="check mixed">–</span>Task<span class="count">2 of 17</span></div>
+        <div class="opt child"><span class="check on">✓</span>Task created</div>
+        <div class="opt child"><span class="check on">✓</span>Due date changed</div>
+        <div class="opt child"><span class="check"></span>Title changed</div>
+        <div class="opt child muted">… 14 more</div>
+        <div class="opt group"><span class="check on">✓</span>Status<span class="count">1</span></div>
+        <div class="opt group"><span class="check"></span>Assignee<span class="count">2</span></div>
+        <div class="opt group"><span class="check on">✓</span>Comment<span class="count">3</span></div>
+        <div class="opt group"><span class="check"></span>Time<span class="count">3</span></div>
+      </div>
+    </div>
+
+    <div class="dialog-backdrop">
+      <!-- Dialog after Create / Rotate -->
+      <div class="dialog">
+        <h3>Copy your signing secret</h3>
+        <p class="muted">This is the only time it's shown. Store it with your agent; it verifies the
+          <code>X-AgencyFlow-Signature</code> header.</p>
+        <div class="secret">
+          <input class="input mono" value="q3Vt9-XcN2pL0aW7yRk4sD8fH1jM6bZ5eU0oT2iaT6Q" readonly>
+          <button class="btn outline">Copy</button>
+        </div>
+        <p class="muted xs note">Signature: HMAC-SHA256 of <code>&lt;t&gt;.&lt;body&gt;</code>, header
+          <code>t=&lt;unix seconds&gt;,v1=&lt;hex&gt;</code>. Reject if older than 5 minutes; dedupe on <code>id</code>.</p>
+        <div class="row" style="justify-content:flex-end"><button class="btn primary">Done</button></div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

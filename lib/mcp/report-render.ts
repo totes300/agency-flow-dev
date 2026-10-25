@@ -17,6 +17,7 @@ import {
 } from "./links";
 import { clientRef, formatTimestamp, linkText, userContent, type RenderContext } from "./render";
 import type { ReportKind } from "./limits";
+import { oneLine, tableCell } from "./markdown-text";
 
 /**
  * Markdown for `report` results (docs/prd-mcp.md §8, D1, D10). Convex
@@ -47,15 +48,6 @@ export type OrgFinanceReport = FunctionReturnType<typeof api.mcp.report.orgFinan
 export type ReportPart = { text: string; optional?: string };
 
 // ─── Formatting ──────────────────────────────────────────────────────────────
-
-function oneLine(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
-}
-
-/** A table cell: one line, pipes escaped. */
-function cell(value: string | null | undefined): string {
-  return value ? oneLine(value).replace(/\\/g, "\\\\").replace(/\|/g, "\\|") : "";
-}
 
 /** Raw minutes as a duration ("1h 30m"), signed for balances. */
 export function minutes(value: number): string {
@@ -190,9 +182,9 @@ export function renderTimesheet(data: TimesheetReport, ctx: RenderContext): Repo
   data.rows.forEach((r, i) => {
     body.push([
       taskCell(r.identifier, ctx),
-      cell(r.title),
-      cell(r.project),
-      cell(r.category ?? "Uncategorized"),
+      tableCell(r.title),
+      tableCell(r.project),
+      tableCell(r.category ?? "Uncategorized"),
       r.firstWorked,
       r.lastWorked,
       minutes(r.billableMinutes),
@@ -203,7 +195,7 @@ export function renderTimesheet(data: TimesheetReport, ctx: RenderContext): Repo
     const subtotal = subtotals.get(r.project);
     if (data.projects.length > 1 && subtotal && next?.project !== r.project) {
       body.push([
-        `**${cell(r.project)} subtotal**`,
+        `**${tableCell(r.project)} subtotal**`,
         "",
         "",
         "",
@@ -223,7 +215,7 @@ export function renderTimesheet(data: TimesheetReport, ctx: RenderContext): Repo
   );
   const categories = markdownTable(
     ["Category", "Total"],
-    data.categories.map((c) => [cell(c.name), minutes(c.minutes)]),
+    data.categories.map((c) => [tableCell(c.name), minutes(c.minutes)]),
     [1],
   );
   return [{ text: `${head}\n\n${table}` }, { text: `### By category\n${categories}` }];
@@ -245,8 +237,8 @@ export function renderTimeByMember(data: TimeByMemberReport, ctx: RenderContext)
   const table = markdownTable(
     ["Member", "Email", "Total", "Billable", "Non-billable", "Entries"],
     data.members.map((m) => [
-      cell(m.name),
-      cell(m.email ?? ""),
+      tableCell(m.name),
+      tableCell(m.email ?? ""),
       minutes(m.minutes),
       minutes(m.billableMinutes),
       minutes(m.nonBillableMinutes),
@@ -256,10 +248,10 @@ export function renderTimeByMember(data: TimeByMemberReport, ctx: RenderContext)
   );
   const projectRows = data.members.flatMap((m) =>
     m.projects.map((p) => [
-      cell(m.name),
+      tableCell(m.name),
       p.code ? (p.id ? `[${p.code}](${projectLink(ctx.appOrigin, p.id)})` : p.code) : "",
-      cell(p.name),
-      cell(p.client ?? ""),
+      tableCell(p.name),
+      tableCell(p.client ?? ""),
       minutes(p.minutes),
       minutes(p.billableMinutes),
       minutes(p.nonBillableMinutes),
@@ -314,7 +306,7 @@ export function renderClientMonthly(data: ClientMonthlyReport, ctx: RenderContex
     );
   }
   const projectRows = data.months.flatMap((m) =>
-    m.byProject.map((p) => [...(single ? [] : [m.month]), cell(p.code ?? p.name), cell(p.name), minutes(p.minutes)]),
+    m.byProject.map((p) => [...(single ? [] : [m.month]), tableCell(p.code ?? p.name), tableCell(p.name), minutes(p.minutes)]),
   );
   if (projectRows.length > 0) {
     sections.push(
@@ -329,10 +321,10 @@ export function renderClientMonthly(data: ClientMonthlyReport, ctx: RenderContex
       data.tasks.map((t) => [
         taskCell(t.identifier, ctx),
         t.parent ?? "",
-        cell(t.title),
-        cell(`${t.status ?? "unknown"}${t.archived ? " (archived)" : ""}`),
+        tableCell(t.title),
+        tableCell(`${t.status ?? "unknown"}${t.archived ? " (archived)" : ""}`),
         t.completedOn ?? "",
-        cell(t.project ?? ""),
+        tableCell(t.project ?? ""),
         minutes(t.minutes),
         minutes(t.billableMinutes),
         String(t.entryCount),
@@ -384,17 +376,17 @@ export function renderMissingTime(data: MissingTimeReport, ctx: RenderContext): 
     ["Task", "Title", "Status", "Since", "Project", "Client", "Assignees"],
     data.rows.map((r) => [
       taskCell(r.identifier, ctx),
-      cell(r.title),
-      cell(r.status),
+      tableCell(r.title),
+      tableCell(r.status),
       r.date,
-      cell(r.project ?? ""),
-      cell(r.client ?? ""),
-      cell(r.assignees.length > 0 ? r.assignees.join(", ") : "unassigned"),
+      tableCell(r.project ?? ""),
+      tableCell(r.client ?? ""),
+      tableCell(r.assignees.length > 0 ? r.assignees.join(", ") : "unassigned"),
     ]),
   );
   const byAssignee = markdownTable(
     ["Assignee", "Tasks"],
-    data.byAssignee.map((a) => [cell(a.name), String(a.count)]),
+    data.byAssignee.map((a) => [tableCell(a.name), String(a.count)]),
     [1],
   );
   return [{ text: lines(head, "", table, "", `### By assignee\n${byAssignee}`, unchecked && "", unchecked) }];
@@ -448,7 +440,7 @@ export function renderProjectOverview(data: ProjectOverviewReport, ctx: RenderCo
   );
   const categories = markdownTable(
     ["Category", "Total", "Billable"],
-    s.categories.map((c) => [cell(c.categoryName), minutes(c.minutes), minutes(c.billableMinutes)]),
+    s.categories.map((c) => [tableCell(c.categoryName), minutes(c.minutes), minutes(c.billableMinutes)]),
     [1, 2],
   );
   return [
@@ -484,7 +476,7 @@ export function renderProjectMonthly(data: ProjectMonthlyReport, ctx: RenderCont
   const categoryRows = data.months.flatMap((m) =>
     (m.categories ?? []).map((c) => [
       m.month,
-      cell(c.categoryName),
+      tableCell(c.categoryName),
       c.billable ? "yes" : "no",
       minutes(c.minutes),
       c.billable ? money(c.amount, cur) : "",
@@ -534,9 +526,9 @@ export function renderRetainerStatement(data: RetainerStatementReport, ctx: Rend
     [1, 2, 3],
   );
   const categoryRows = [
-    ...st.categories.map((c) => [data.month, cell(c.categoryName), c.billable ? "yes" : "no", minutes(c.minutes)]),
+    ...st.categories.map((c) => [data.month, tableCell(c.categoryName), c.billable ? "yes" : "no", minutes(c.minutes)]),
     ...data.carried.flatMap((g) =>
-      g.categories.map((c) => [`${g.month} (carried in)`, cell(c.categoryName), c.billable ? "yes" : "no", minutes(c.minutes)]),
+      g.categories.map((c) => [`${g.month} (carried in)`, tableCell(c.categoryName), c.billable ? "yes" : "no", minutes(c.minutes)]),
     ),
   ];
   const parts: ReportPart[] = [
@@ -566,8 +558,8 @@ export function renderRetainerHealth(data: RetainerHealthReport, ctx: RenderCont
   const table = markdownTable(
     ["Project", "Client", "Status", "Included", "Used", "Month-end balance", "Cycle to date", "Overage due", "Closed", "Invoice", "Statement"],
     data.rows.map((r) => [
-      cell(r.projectCode ?? r.projectName),
-      cell(r.clientName),
+      tableCell(r.projectCode ?? r.projectName),
+      tableCell(r.clientName),
       RETAINER_STATUS[r.status] ?? r.status,
       minutes(r.includedMinutesPerMonth),
       minutes(r.usedMinutes),
@@ -640,9 +632,9 @@ export function renderCloseQueue(data: CloseQueueReport, ctx: RenderContext): Re
             ? `[workspace](${closeWorkspaceLink(ctx.appOrigin, r.projectId, p.key)})`
             : "";
         return [
-          p ? cell(p.label) : "Fixed fee",
-          r.projectCode ? `[${r.projectCode}](${projectLink(ctx.appOrigin, r.projectId)}) · ${cell(r.projectName)}` : cell(r.projectName),
-          cell(r.clientName),
+          p ? tableCell(p.label) : "Fixed fee",
+          r.projectCode ? `[${r.projectCode}](${projectLink(ctx.appOrigin, r.projectId)}) · ${tableCell(r.projectName)}` : tableCell(r.projectName),
+          tableCell(r.clientName),
           BILLING_TYPE[r.billingType] ?? r.billingType,
           hours,
           r.group === "needs_rate" ? "—" : money(fromMinor(r.amountMinor, r.currency), r.currency),
@@ -729,8 +721,8 @@ export function renderOrgFinance(data: OrgFinanceReport, ctx: RenderContext): Re
     ["Code", "Project", "Client", "Currency", "Time", "Billable", "Labor cost", "Billable value"],
     data.projects.map((p) => [
       p.code ? `[${p.code}](${projectLink(ctx.appOrigin, p.projectId)})` : "",
-      cell(p.projectName),
-      cell(p.clientName),
+      tableCell(p.projectName),
+      tableCell(p.clientName),
       p.currency,
       minutes(p.minutes),
       minutes(p.billableMinutes),

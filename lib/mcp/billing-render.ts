@@ -4,6 +4,7 @@ import { INVOICE_STATUS_COPY, type InvoiceDisplayStatus } from "@/convex/lib/bil
 import { formatDuration } from "@/lib/duration";
 import { closeWorkspaceLink, invoiceLink, projectLink } from "./links";
 import { clientRef, moneyMinor, type RenderContext } from "./render";
+import { oneLine, tableCell } from "./markdown-text";
 
 /**
  * Markdown for `billing_preview` / `billing_commit` (docs/prd-mcp.md §9,
@@ -30,14 +31,6 @@ const BILLING_TYPE: Record<string, string> = {
 };
 
 const LINE_TYPE: Record<string, string> = { time: "Time", overage: "Overage", fixed: "Fixed fee", manual: "Manual" };
-
-function oneLine(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
-}
-
-function cell(value: string): string {
-  return oneLine(value).replace(/\\/g, "\\\\").replace(/\|/g, "\\|");
-}
 
 function entries(count: number): string {
   return `${count} ${count === 1 ? "entry" : "entries"}`;
@@ -165,7 +158,7 @@ function invoiceSection(e: Effect, ctx: RenderContext): string | null {
           "| ---: | --- | --- | ---: | ---: | ---: |",
           ...shown.map(
             (l, i) =>
-              `| ${i + 1} | ${cell(l.description)} | ${LINE_TYPE[l.lineType] ?? l.lineType} | ${
+              `| ${i + 1} | ${tableCell(l.description)} | ${LINE_TYPE[l.lineType] ?? l.lineType} | ${
                 l.quantityMinutes !== null ? `${formatDuration(l.quantityMinutes)} (${l.quantity} h)` : String(l.quantity)
               } | ${money(l.unitPriceMinor)} | ${money(l.amountMinor)} |`,
           ),

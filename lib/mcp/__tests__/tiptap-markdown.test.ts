@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { capText, descriptionToMarkdown, tiptapToMarkdown } from "../tiptap-markdown";
+import { capText, tiptapToMarkdown } from "../tiptap-markdown";
 
 const text = (value: string, marks?: Array<{ type: string; attrs?: Record<string, unknown> }>) => ({
   type: "text",
@@ -68,15 +68,6 @@ describe("tiptapToMarkdown", () => {
     expect(tiptapToMarkdown(null)).toBe("");
     expect(tiptapToMarkdown({ type: "doc", content: [{ type: "paragraph" }] })).toBe("");
     expect(tiptapToMarkdown({ type: "doc", content: [null, { type: "weird", content: [text("kept")] }] })).toBe("kept");
-  });
-});
-
-describe("descriptionToMarkdown", () => {
-  it("parses stored JSON and passes legacy plain text through", () => {
-    expect(descriptionToMarkdown(JSON.stringify({ type: "doc", content: [p(text("Hello"))] }))).toBe("Hello");
-    expect(descriptionToMarkdown("  plain old text ")).toBe("plain old text");
-    expect(descriptionToMarkdown("")).toBeNull();
-    expect(descriptionToMarkdown(JSON.stringify({ type: "doc", content: [] }))).toBeNull();
   });
 });
 

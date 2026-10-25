@@ -235,24 +235,6 @@ export function tiptapToMarkdown(content: unknown, options: TiptapMarkdownOption
 }
 
 /**
- * A stored task description (Tiptap JSON string) as markdown. Legacy plain
- * string descriptions pass through as-is. Null when empty.
- */
-export function descriptionToMarkdown(
-  description: string | null | undefined,
-  options: TiptapMarkdownOptions = {},
-): string | null {
-  if (!description) return null;
-  let text: string;
-  try {
-    text = tiptapToMarkdown(JSON.parse(description), options);
-  } catch {
-    text = description.trim();
-  }
-  return text === "" ? null : text;
-}
-
-/**
  * Formatting in `content` that markdown (and so an MCP rewrite) cannot
  * carry: underline, highlight, text alignment, image size, and images not
  * on this workspace's storage (`imageSrcPrefixes`). Labels, sorted.

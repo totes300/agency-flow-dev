@@ -7,6 +7,7 @@ import { formatFileSize } from "@/lib/attachment";
 import { formatDuration } from "@/lib/duration";
 import { formatCurrencyPrecise } from "@/lib/format";
 import { clientLink, dailyNoteLink, invoiceLink, memberLink, plannerLink, projectLink, taskLink } from "./links";
+import { oneLine } from "./markdown-text";
 
 /**
  * Compact markdown renderers for MCP tool results (docs/prd-mcp.md §7, D10).
@@ -57,10 +58,6 @@ export type RenderContext = {
   budget?: number;
 };
 
-/** Names are user input: keep every list item on one line. */
-function oneLine(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
-}
 
 function archivedNote(rows: readonly { archived: boolean }[]): string {
   const archived = rows.filter((r) => r.archived).length;

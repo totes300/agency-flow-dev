@@ -77,9 +77,17 @@ export const navigation: NavGroup[] = [
 // Re-export admin route patterns — canonical list lives in lib/route-access.ts
 export { adminRoutePatterns as adminOnlyPatterns } from "@/lib/route-access"
 
+// Pages outside the sidebar (reached from the user menu).
+const userMenuRouteLabels: Record<string, string> = {
+  "/connected-apps": "Connected apps",
+}
+
 // Derived from navigation — used by breadcrumbs in dashboard layout
-export const routeLabels: Record<string, string> = Object.fromEntries(
-  navigation.flatMap((group) =>
-    group.items.map((item) => [item.url, item.title])
-  )
-)
+export const routeLabels: Record<string, string> = {
+  ...Object.fromEntries(
+    navigation.flatMap((group) =>
+      group.items.map((item) => [item.url, item.title])
+    )
+  ),
+  ...userMenuRouteLabels,
+}

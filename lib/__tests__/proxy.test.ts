@@ -6,7 +6,8 @@
 // - public: the landing page, sign-in / sign-up, /mcp (it answers its own
 //   401 + WWW-Authenticate) and the two OAuth discovery documents;
 // - everything else requires a signed-in session (`auth.protect()`);
-// - admin routes redirect members to /tasks.
+// - admin routes redirect members to /tasks; /connected-apps (every member's
+//   own MCP connections, D-PAGE) is not one.
 
 import { describe, it, expect, vi } from "vitest";
 import { NextRequest } from "next/server";
@@ -44,7 +45,7 @@ describe("proxy.ts", () => {
     expect(response).toBeUndefined();
   });
 
-  it.each(["/mcp/other", "/mcp-upload", "/.well-known/oauth-protected-resource", "/tasks", "/my-tasks", "/planner"])(
+  it.each(["/mcp/other", "/mcp-upload", "/.well-known/oauth-protected-resource", "/tasks", "/my-tasks", "/planner", "/connected-apps"])(
     "%s requires a session",
     async (path) => {
       const { protect, response } = await run(path);
